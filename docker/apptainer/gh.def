@@ -1,0 +1,76 @@
+Bootstrap: docker
+From: {{ BASE_IMAGE }}
+
+%arguments
+    BASE_IMAGE=nvidia/cuda:12.8.0-devel-ubuntu22.04
+    PY_VER=3.13
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export PATH=/usr/local/bin:$PATH
+    export GPU_NAME=GH200
+
+%post
+    set -e
+    export PY_VER={{ PY_VER }}
+    export DEBIAN_FRONTEND=noninteractive
+
+    rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia-ml.list || true
+
+    # ─────────────────────────────────────────────────────────
+    # Basic build & runtime dependencies
+    # ─────────────────────────────────────────────────────────
+    apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        build-essential cmake git ninja-build g++ make patchelf \
+        rdma-core libibverbs-dev libnuma-dev libgfortran5 \
+        libgflags-dev libgtest-dev libgomp1 libelf-dev \
+        pkg-config zlib1g-dev curl unzip
+
+    # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python{{ PY_VER }} \
+        python{{ PY_VER }}-dev \
+        python{{ PY_VER }}-venv \
+        python3-setuptools \
+        python3-distutils
+
+    # ───── Bootstrap pip for Python {{ PY_VER }} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python{{ PY_VER }}
+
+    # ln -sf /usr/bin/pip{{ PY_VER }} /usr/local/bin/pip
+    # ln -sf /usr/bin/python{{ PY_VER }} /usr/local/bin/python{{ PY_VER }}
+
+    # ───── Clean up apt cache ─────
+    rm -rf /var/lib/apt/lists/*
+
+    # ───── Install PyTorch with CUDA support ─────
+    CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+')
+
+    if [ "$CUDA_MAJOR" -ge 13 ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    else
+        TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+    fi
+
+    echo "Detected CUDA major version: ${CUDA_MAJOR}, using index: ${TORCH_INDEX}"
+
+
+    python{{ PY_VER }} -m pip install --no-cache-dir torch torchvision torchaudio --index-url "${TORCH_INDEX}"
+
+    # ─────────────────────────────────────────────────────────
+    # Install Python build back-end (for Python ${PY_VER})
+    # ─────────────────────────────────────────────────────────
+    python{{ PY_VER }} -m pip install --no-cache-dir build auditwheel pybind11 nanobind
+    python{{ PY_VER }} -m pip install --no-cache-dir --upgrade setuptools
+
+    # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+    ln -sf /usr/bin/python{{ PY_VER }} /usr/local/bin/python3
+    ln -sf /usr/bin/python{{ PY_VER }}-config /usr/local/bin/python3-config
+
+    mkdir -p /io
+
+%runscript
+    exec bash "$@"

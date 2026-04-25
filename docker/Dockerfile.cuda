@@ -15,7 +15,7 @@ RUN apt-get update && \
         software-properties-common \
         build-essential cmake git ninja-build g++ make patchelf \
         rdma-core libibverbs-dev libnuma-dev \
-        libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
+        libgflags-dev libgtest-dev libelf-dev \
         pkg-config zlib1g-dev curl unzip && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
@@ -33,8 +33,15 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ───── Install PyTorch with CUDA support ─────
-RUN python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu128
+RUN CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
+    if [ "$CUDA_MAJOR" -ge 13 ]; then \
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"; \
+    else \
+        TORCH_INDEX="https://download.pytorch.org/whl/cu128"; \
+    fi && \
+    echo "Detected CUDA major version: ${CUDA_MAJOR}, using index: ${TORCH_INDEX}" && \
+    python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
+        --index-url "${TORCH_INDEX}"
 
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})

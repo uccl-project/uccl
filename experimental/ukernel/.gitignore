@@ -1,4 +1,8 @@
 test_main
-./src/compute/test_persistent
-./src/compute/benchmarks/bench_info
-./src/compute/benchmarks/bench_full_fifo
+./src/device/test_device_runtime
+./src/device/benchmarks/bench_info
+./src/device/benchmarks/bench_device_full_fifo
+./src/device/benchmarks/bench_device_fifo
+./src/device/benchmarks/bench_device_sm_fifo
+./*.so
+bench_transport

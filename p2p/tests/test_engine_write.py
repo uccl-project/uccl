@@ -5,13 +5,11 @@ using the new one-sided metadata handshake.
 """
 
 from __future__ import annotations
-import sys, os, time, socket, struct, multiprocessing
+import sys, os, time, multiprocessing
 from typing import Tuple
 
 # You must first import torch before importing uccl for AMD GPUs
 import torch
-
-os.environ["UCCL_RCMODE"] = "1"
 
 try:
     from uccl import p2p
@@ -20,19 +18,9 @@ except ImportError as e:
     raise
 
 
-def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
-    """Return (ip, port, remote_gpu_idx)."""
-    if len(meta) == 10:  # IPv4
-        ip_b, port_b, gpu_b = meta[:4], meta[4:6], meta[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(meta) == 22:  # IPv6
-        ip_b, port_b, gpu_b = meta[:16], meta[16:18], meta[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
-    else:
-        raise ValueError(f"Unexpected endpoint-metadata length {len(meta)}")
-    port = struct.unpack("!H", port_b)[0]
-    gpu = struct.unpack("i", gpu_b)[0]
-    return ip, port, gpu
+def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, str]:
+    """Return (ip, port, remote_gpu_bdf)."""
+    return p2p.Endpoint.parse_metadata(meta)
 
 
 def test_local():
@@ -44,7 +32,7 @@ def test_local():
         ep_meta = ep_meta_q.recv()
         ip, port, r_gpu = parse_endpoint_meta(ep_meta)
 
-        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ep = p2p.Endpoint(local_gpu_idx=0)
         ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
         assert ok, "connect failed"
         print(f"[Server] connected (conn_id={conn_id})")
@@ -65,7 +53,7 @@ def test_local():
         print("✓ Server write data correctly")
 
     def client_proc(ep_meta_q, fifo_meta_q):
-        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ep = p2p.Endpoint(local_gpu_idx=0)
         ep_meta_q.send(bytes(ep.get_metadata()))
 
         ok, r_ip, r_gpu, conn_id = ep.accept()

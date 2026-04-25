@@ -83,6 +83,89 @@ class RdmaDeviceManager {
   size_t deviceCount() const { return devices_.size(); }
 
   std::vector<size_t> get_best_dev_idx(int gpu_idx) {
+    // Allow user to override NIC selection via environment variable.
+    // UCCL_P2P_RDMA_DEV can be a comma-separated list of device names
+    // (e.g. "irdma-mkp0,irdma-mkp1") and/or numeric indices (e.g. "4,5")
+    // into the `ibv_get_device_list` order.
+    char const* env_dev = getenv("UCCL_P2P_RDMA_DEV");
+    if (env_dev) {
+      std::string env_str(env_dev);
+
+      auto add_unique_idx = [&](size_t idx, std::vector<size_t>& out) {
+        if (std::find(out.begin(), out.end(), idx) == out.end())
+          out.push_back(idx);
+      };
+
+      std::vector<size_t> selected_dev_indices;
+      selected_dev_indices.reserve(devices_.size());
+
+      std::stringstream ss(env_str);
+      std::string token;
+      while (std::getline(ss, token, ',')) {
+        // Trim ASCII whitespace around the token.
+        auto start = token.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) continue;
+        auto end = token.find_last_not_of(" \t\n\r");
+        token = token.substr(start, end - start + 1);
+        if (token.empty()) continue;
+
+        bool found = false;
+
+        // Try numeric index token first (must match the whole token).
+        try {
+          size_t pos = 0;
+          size_t idx = std::stoul(token, &pos);
+          if (pos == token.size()) {
+            if (idx < devices_.size()) {
+              add_unique_idx(idx, selected_dev_indices);
+              UCCL_LOG(INFO, UCCL_RDMA)
+                  << "UCCL_P2P_RDMA_DEV override: token '" << token
+                  << "' -> using device index " << idx << " ("
+                  << devices_[idx]->name() << ")";
+              found = true;
+            }
+          }
+        } catch (...) {
+        }
+
+        // If numeric parse didn't match / was out of range, try matching by
+        // name.
+        if (!found) {
+          for (size_t i = 0; i < devices_.size(); i++) {
+            if (devices_[i]->name() == token) {
+              add_unique_idx(i, selected_dev_indices);
+              UCCL_LOG(INFO, UCCL_RDMA)
+                  << "UCCL_P2P_RDMA_DEV override: token '" << token
+                  << "' -> using device " << token << " (index " << i << ")";
+              found = true;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          UCCL_LOG(WARN) << "UCCL_P2P_RDMA_DEV token '" << token
+                         << "' not found (neither index nor device name)";
+        }
+      }
+
+      if (!selected_dev_indices.empty()) {
+        std::stringstream summary;
+        summary << "UCCL_P2P_RDMA_DEV override: using device indices [";
+        for (size_t i = 0; i < selected_dev_indices.size(); i++) {
+          if (i != 0) summary << ", ";
+          auto idx = selected_dev_indices[i];
+          summary << idx;
+        }
+        summary << "]";
+        UCCL_LOG(INFO, UCCL_RDMA) << summary.str();
+        return selected_dev_indices;
+      }
+
+      UCCL_LOG(WARN) << "UCCL_P2P_RDMA_DEV=" << env_str
+                     << " not usable, falling back to auto-selection";
+    }
+
     // Ranked by GPU idx
     auto gpu_cards = uccl::get_gpu_cards();
     // Ranked by RDMA NIC name (not the ibv_get_device_list order)
@@ -101,12 +184,12 @@ class RdmaDeviceManager {
     }
 
     if (dist.empty()) {
-      LOG(WARNING) << "no NIC found, defaulting to empty";
+      UCCL_LOG(WARN) << "no NIC found, defaulting to empty";
     } else {
       auto strategy = createDeviceSelectionStrategy();
       auto selected = strategy->selectNICs(dist, gpu_idx);
       if (selected.empty()) {
-        LOG(WARNING) << "no candidate NIC found, defaulting to first";
+        UCCL_LOG(WARN) << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
         selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
@@ -124,8 +207,8 @@ class RdmaDeviceManager {
         }
       }
       if (dev_idx < 0) {
-        LOG(FATAL) << "Selected RDMA NIC '" << nic_name
-                   << "' not found in verbs device list";
+        UCCL_LOG(FATAL) << "Selected RDMA NIC '" << nic_name
+                        << "' not found in verbs device list";
       }
       selected_dev_indices.push_back(dev_idx);
     }
@@ -137,14 +220,14 @@ class RdmaDeviceManager {
          << ")";
       if (i < selected_nic_names.size() - 1) ss << ", ";
     }
-    LOG(INFO) << ss.str();
+    UCCL_LOG(INFO, UCCL_RDMA) << ss.str();
 
     return selected_dev_indices;
   }
 
   int get_numa_node(size_t id) {
     if (id >= devices_.size()) {
-      LOG(WARNING) << "Invalid device id: " << id;
+      UCCL_LOG(WARN) << "Invalid device id: " << id;
       return -1;
     }
     std::string device_name = devices_[id]->name();

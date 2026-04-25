@@ -19,6 +19,7 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   local_mem->mr_array = local_mh->mr_array;
 
   auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
+  req->compress_ctx = local_mh->compress_ctx;
   req->to_rank_id = conn->uccl_conn_id_.flow_id;
 
   req->send_type =
@@ -171,7 +172,8 @@ inline void stop_accept(RDMAEndPoint const& s) { s->stop_accept(); }
 
 inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
                        struct P2PMhandle* mhandle) {
-  return s->uccl_regmr(data, len, mhandle->mr_array) >= 0;
+  return s->uccl_regmr(data, len, mhandle->mr_array, mhandle->cache_refs,
+                       mhandle->compress_ctx) >= 0;
 }
 
 inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
@@ -183,6 +185,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
   auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
   auto send_req =
       std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+  send_req->compress_ctx = mhandle->compress_ctx;
   ureq->type = ReqType::ReqTx;
   send_req->to_rank_id = conn->uccl_conn_id_.flow_id;
   ureq->engine_idx = s->sendWithoutInnerQueue(send_req);
@@ -200,6 +203,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
       std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
   recv_mem->mr_array = mhandles->mr_array;
   auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
+  recv_req->compress_ctx = mhandles->compress_ctx;
   ureq->type = ReqType::ReqRx;
   ureq->engine_idx = s->recv(conn->uccl_conn_id_.flow_id, recv_req);
   ureq->n = conn->uccl_conn_id_.flow_id;
@@ -216,7 +220,7 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
     s->recvRoutine();
     return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
   }
-  LOG(ERROR) << "Invalid request type: " << ureq->type;
+  UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
   return false;
 }
 
@@ -251,7 +255,7 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
-  s->uccl_deregmr(mhandle->mr_array);
+  s->uccl_deregmr(mhandle->cache_refs);
 }
 
 inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {

@@ -260,7 +260,7 @@ def test_main(
                     )
 
                     # Checks
-                    recv_gbl_rank_prefix_sum = handle[-4]
+                    recv_gbl_rank_prefix_sum = handle[-6]
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(
                         0
                     ), f"{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}"
@@ -539,16 +539,14 @@ def test_loop(
 
     if torch.version.cuda:
         num_sms = 24
-        num_nvlink_bytes, num_rdma_bytes = compute_buffer_sizes(
-            num_sms, args.hidden, num_ranks
-        )
     elif torch.version.hip:
-        # TODO: Apply dynamic buffer sizing for HIP once validated
         num_sms = 64 if num_nodes < 4 else 32
-        num_nvlink_bytes = int(2e9)
-        num_rdma_bytes = int(1e9)
     else:
         raise ValueError("Unsupported platform")
+
+    num_nvlink_bytes, num_rdma_bytes = compute_buffer_sizes(
+        num_sms, args.hidden, num_ranks
+    )
 
     if local_rank == 0:
         print(

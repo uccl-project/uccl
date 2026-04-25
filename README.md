@@ -47,7 +47,7 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
     * More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
 
-* **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
+* **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target transfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines.
 
   <details>
   <summary>UCCL-P2P performance comparison</summary>
@@ -75,31 +75,34 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
   - ✅ Supporting AMD GPUs
-  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
+  - ✅ Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
 - ✅ Efficient and portable expert-parallel communication
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
-  - 🚧 Better flow control to avoid congestion
-  - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
+  - ✅ Better flow control to avoid congestion
+  - ☐ Supporting other AI accelerators, such as TPUs and Trainium
 - 🚧 Re-architecting NCCL to unleash network hardware performance
-  - 🚧 Scalable and efficient CPU proxy
-  - ☐ Fast async collectives with compute-communication ordering guarantee
+  - 🚧 SM-efficient communication kernels
+  - 🚧 Fine-grained compute-communication overlapping
   - ☐ Device kernels in vendor-agnostic Triton language
-- ☐ Dynamic membership with GPU servers joining and exiting
+- 🚧 Efficient consumer GPU communication
+  - 🚧 Faster collectives on 4090/5090/GB10
+  - 🚧 Expert-parallel communication on 4090/5090/GB10
 
 ## Quick Start
 
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+git clone https://github.com/uccl-project/uccl.git && cd uccl
 
-# Eg, bash build.sh cuda ep --install
-bash build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
+# Eg, bash build.sh cu12 ep --install
+bash build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
-> - By default, `build.sh cuda|rocm` targets CUDA 12.8 or ROCm 7.1, but you can also specify `cuda13|rocm6` to target CUDA 13.0 or ROCm 6.4.
+> - By default, `build.sh cu12` targets CUDA 12.8 and `build.sh roc7` targets ROCm 7.1, but you can also specify `cu13|roc6` to target CUDA 13.0 or ROCm 6.4.
+> - UCCL uses [nanobind](https://github.com/wjakob/nanobind) for C++/Python bindings. On Python 3.12+, wheels are tagged `cp312-abi3` (stable ABI, one wheel for all 3.12+ interpreters); on older Pythons, wheels are CPython-version-specific.
 > - When building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
@@ -123,7 +126,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 First clone the UCCL repo and init submodules: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
+git clone https://github.com/uccl-project/uccl.git
 export UCCL_HOME=$(pwd)/uccl
 ```
 
@@ -133,7 +136,7 @@ To build UCCL for development, you need to install some common dependencies:
 # Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
-                 net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
+                 net-tools libgtest-dev libgflags-dev \
                  libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
                  libopenmpi-dev libibverbs-dev clang-format -y
 
@@ -165,19 +168,19 @@ For quick installation with docker, you can directly dive into:
 The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
-@article{uccl_transport,
-  title={An Extensible Software Transport Layer for GPU Networking},
+@article{uccl_tran,
+  title={UCCL-Tran: An Extensible Software Transport Layer for Machine Learning Workloads},
   author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and Ren, Fengyuan and Xu, Zhiying and Raiciu, Costin and Stoica, Ion},
-  journal={arXiv preprint arXiv:2504.17307},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
 ```bibtex
 @article{uccl_ep,
   title={UCCL-EP: Portable Expert-Parallel Communication},
   author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
-  journal={arXiv preprint arXiv:2512.19849},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
 ## Acknowledgement

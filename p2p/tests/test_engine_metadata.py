@@ -32,7 +32,7 @@ def test_local():
     meta_parent, meta_child = multiprocessing.Pipe()
 
     def server_process(q):
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=0)
         metadata = engine.get_metadata()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"Parsed IP: {ip}")
@@ -62,14 +62,12 @@ def test_local():
 
     def client_process(q):
         metadata = q.recv()
-        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
-        print(
-            f"Client parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
-        )
+        ip, port, remote_bdf = p2p.Endpoint.parse_metadata(metadata)
+        print(f"Client parsed server IP: {ip}, port: {port}, remote_bdf: {remote_bdf}")
 
-        engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=1)
         success, conn_id = engine.connect(
-            remote_ip_addr=ip, remote_gpu_idx=remote_gpu_idx, remote_port=port
+            remote_ip_addr=ip, remote_gpu_bdf=remote_bdf, remote_port=port
         )
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")

@@ -1,0 +1,954 @@
+#include "../include/config.h"
+#include "../include/gpu_rt.h"
+#include "../include/transport.h"
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+#include <thread>
+#include <vector>
+
+using namespace UKernel::Transport;
+
+static inline uint64_t now_ns() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+// IPC can sustain a larger in-flight window in this benchmark, while the UCCL
+// path becomes unstable when bidirectional send+recv pressure reaches the
+// backend queue limit.
+static constexpr int kIpcThroughputWindow = 8;
+static constexpr int kUcclThroughputWindow = 4;
+static constexpr int kTcpThroughputWindow = 1;
+static constexpr uint64_t kBenchNamedMrGeneration = 1;
+static constexpr uint64_t kBenchIpcBindingVersion = 1;
+
+static PreferredTransport parse_transport(char const* value) {
+  if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
+  if (strcmp(value, "ipc") == 0) return PreferredTransport::Ipc;
+  if (strcmp(value, "uccl") == 0) return PreferredTransport::Uccl;
+  if (strcmp(value, "tcp") == 0) return PreferredTransport::Tcp;
+  fprintf(stderr,
+          "Error: unsupported transport '%s' (expected auto|ipc|uccl|tcp)\n",
+          value);
+  std::exit(1);
+}
+
+enum class IpcPathMode { Auto, Relay };
+
+static IpcPathMode parse_ipc_path(char const* value) {
+  if (strcmp(value, "auto") == 0) return IpcPathMode::Auto;
+  if (strcmp(value, "relay") == 0) return IpcPathMode::Relay;
+  fprintf(stderr, "Error: unsupported ipc path '%s' (expected auto|relay)\n",
+          value);
+  std::exit(1);
+}
+
+static int throughput_window_for(PeerTransportKind kind) {
+  if (kind == PeerTransportKind::Uccl) return kUcclThroughputWindow;
+  if (kind == PeerTransportKind::Tcp) return kTcpThroughputWindow;
+  return kIpcThroughputWindow;
+}
+
+static void print_latency(std::vector<uint64_t> const& v) {
+  if (v.empty()) return;
+
+  std::vector<uint64_t> sorted = v;
+  std::sort(sorted.begin(), sorted.end());
+
+  auto p = [&](double q) -> uint64_t {
+    size_t i = static_cast<size_t>(q * sorted.size());
+    if (i >= sorted.size()) i = sorted.size() - 1;
+    return sorted[i];
+  };
+
+  printf(
+      "  Latency (us): min %.2f | p50 %.2f | p90 %.2f | p99 %.2f | max %.2f\n",
+      sorted.front() / 1000.0, p(0.5) / 1000.0, p(0.9) / 1000.0,
+      p(0.99) / 1000.0, sorted.back() / 1000.0);
+}
+
+static bool setup_bidirectional_peer(Communicator& comm, int rank,
+                                     int peer_rank) {
+  if (rank < peer_rank) {
+    return comm.connect(peer_rank) && comm.accept(peer_rank);
+  }
+  return comm.accept(peer_rank) && comm.connect(peer_rank);
+}
+
+static bool wait_all(Communicator& comm, std::vector<unsigned>& reqs) {
+  if (reqs.empty()) return true;
+  bool ok = comm.wait_finish(reqs);
+  reqs.clear();
+  return ok;
+}
+
+static std::vector<uint8_t> make_pattern(size_t msg_size, uint8_t seed) {
+  std::vector<uint8_t> buf(msg_size);
+  for (size_t i = 0; i < msg_size; ++i) {
+    buf[i] = static_cast<uint8_t>((i + seed) % 256);
+  }
+  return buf;
+}
+
+static bool allocate_device_slots(int count, size_t msg_size,
+                                  std::vector<void*>& slots) {
+  slots.assign(count, nullptr);
+  for (int i = 0; i < count; ++i) {
+    if (gpuMalloc(&slots[i], msg_size) != gpuSuccess || slots[i] == nullptr) {
+      for (void* ptr : slots) {
+        if (ptr != nullptr) (void)gpuFree(ptr);
+      }
+      slots.clear();
+      return false;
+    }
+  }
+  return true;
+}
+
+static void free_device_slots(std::vector<void*>& slots) {
+  for (void* ptr : slots) {
+    if (ptr != nullptr) GPU_RT_CHECK(gpuFree(ptr));
+  }
+  slots.clear();
+}
+
+static std::vector<MR> register_slot_mrs(Communicator& comm,
+                                         std::vector<void*> const& slots,
+                                         size_t msg_size) {
+  std::vector<MR> mrs;
+  mrs.reserve(slots.size());
+  for (void* ptr : slots) {
+    mrs.push_back(comm.reg_mr(ptr, msg_size));
+  }
+  return mrs;
+}
+
+static void deregister_slot_mrs(Communicator& comm,
+                                std::vector<void*> const& slots) {
+  for (void* ptr : slots) {
+    if (ptr != nullptr) comm.dereg_mr(ptr);
+  }
+}
+
+static bool validate_recv_slots(char const* role, int rank,
+                                std::vector<void*> const& slots,
+                                std::vector<char> const& touched,
+                                std::vector<uint8_t> const& expected) {
+  std::vector<uint8_t> host(expected.size());
+  for (size_t i = 0; i < slots.size(); ++i) {
+    if (!touched[i]) continue;
+    if (gpuMemcpy(host.data(), slots[i], expected.size(),
+                  gpuMemcpyDeviceToHost) != gpuSuccess) {
+      fprintf(stderr, "[%s %d] Failed to copy recv slot %zu to host\n", role,
+              rank, i);
+      return false;
+    }
+    if (std::memcmp(host.data(), expected.data(), expected.size()) != 0) {
+      fprintf(stderr, "[%s %d] Data validation failed for recv slot %zu\n",
+              role, rank, i);
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
+                                     std::vector<MR> const& local_recv_mrs,
+                                     std::vector<MR>& remote_recv_mrs,
+                                     bool notify_first) {
+  NamedMRInfos local_infos{};
+  local_infos.generation = kBenchNamedMrGeneration;
+  local_infos.entries.reserve(local_recv_mrs.size());
+  for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
+    NamedMR named{};
+    named.buffer_id = static_cast<uint32_t>(i);
+    named.mr = local_recv_mrs[i];
+    local_infos.entries.push_back(named);
+  }
+
+  auto decode_remote_infos = [&](NamedMRInfos const& remote_infos) -> bool {
+    remote_recv_mrs.assign(local_recv_mrs.size(), MR{});
+    std::vector<char> seen(local_recv_mrs.size(), 0);
+    for (auto const& entry : remote_infos.entries) {
+      size_t idx = static_cast<size_t>(entry.buffer_id);
+      if (idx >= remote_recv_mrs.size()) return false;
+      remote_recv_mrs[idx] = entry.mr;
+      seen[idx] = 1;
+    }
+    for (char v : seen) {
+      if (!v) return false;
+    }
+    return true;
+  };
+
+  NamedMRInfos remote_infos{};
+  if (notify_first) {
+    if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
+      return false;
+    if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
+      return false;
+    return decode_remote_infos(remote_infos);
+  }
+
+  if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
+    return false;
+  if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
+    return false;
+  return decode_remote_infos(remote_infos);
+}
+
+static uint32_t remote_recv_slot_id(PeerTransportKind kind,
+                                    std::vector<MR> const& remote_recv_mrs,
+                                    int slot) {
+  if (kind != PeerTransportKind::Uccl && kind != PeerTransportKind::Ipc) {
+    return 0;
+  }
+  return remote_recv_mrs.at(static_cast<size_t>(slot)).id;
+}
+
+static std::optional<RemoteSlice> remote_recv_slice(
+    PeerTransportKind kind, std::vector<MR> const& remote_recv_mrs, int slot) {
+  uint32_t remote_id = remote_recv_slot_id(kind, remote_recv_mrs, slot);
+  if (remote_id == 0) return std::nullopt;
+  if (kind == PeerTransportKind::Ipc) {
+    // This benchmark keeps the recv slots stable for the communicator lifetime.
+    // Publish a fixed versioned IPC buffer view up front so sends can exercise
+    // the by-mem_id direct path instead of the request-level handshake.
+    return RemoteSlice{remote_id, 0, {}, kBenchIpcBindingVersion};
+  }
+  return RemoteSlice{remote_id, 0};
+}
+
+static bool publish_ipc_recv_buffers(Communicator& comm, int peer_rank,
+                                     PeerTransportKind kind,
+                                     std::vector<MR> const& local_recv_mrs,
+                                     std::vector<void*> const& recv_slots,
+                                     size_t msg_size) {
+  if (kind != PeerTransportKind::Ipc) return true;
+  for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
+    if (!comm.notify_ipc_buffer(peer_rank, local_recv_mrs[i].id, recv_slots[i],
+                                msg_size, kBenchIpcBindingVersion)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool prefetch_remote_ipc_recv_buffers(
+    Communicator& comm, int peer_rank, PeerTransportKind kind,
+    std::vector<MR> const& remote_recv_mrs) {
+  if (kind != PeerTransportKind::Ipc) return true;
+  for (auto const& remote_mr : remote_recv_mrs) {
+    if (remote_mr.id == 0) return false;
+    if (!comm.wait_ipc_buffer(peer_rank, remote_mr.id,
+                              kBenchIpcBindingVersion)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static unsigned submit_send(Communicator& comm, int peer_rank,
+                            uint32_t local_send_mr_id, size_t msg_size,
+                            PeerTransportKind kind,
+                            std::vector<MR> const& remote_recv_mrs, int slot) {
+  return comm.isend(peer_rank, LocalSlice{local_send_mr_id, 0, msg_size},
+                    remote_recv_slice(kind, remote_recv_mrs, slot));
+}
+
+static unsigned submit_recv(Communicator& comm, int peer_rank,
+                            uint32_t local_recv_mr_id, size_t msg_size) {
+  return comm.irecv(peer_rank, LocalSlice{local_recv_mr_id, 0, msg_size});
+}
+
+static bool sync_before_bidirectional(Communicator& comm, int rank,
+                                      int peer_rank, PeerTransportKind kind,
+                                      uint32_t local_send_mr_id,
+                                      uint32_t local_recv_mr_id,
+                                      std::vector<MR> const& remote_recv_mrs,
+                                      size_t msg_size) {
+  if (rank < peer_rank) {
+    unsigned recv_req =
+        submit_recv(comm, peer_rank, local_recv_mr_id, msg_size);
+    if (recv_req == 0) return false;
+    if (!comm.wait_finish(recv_req)) return false;
+
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr_id, msg_size,
+                                    kind, remote_recv_mrs, 0);
+    if (send_req == 0) return false;
+    return comm.wait_finish(send_req);
+  }
+
+  unsigned send_req = submit_send(comm, peer_rank, local_send_mr_id, msg_size,
+                                  kind, remote_recv_mrs, 0);
+  if (send_req == 0) return false;
+  if (!comm.wait_finish(send_req)) return false;
+
+  unsigned recv_req = submit_recv(comm, peer_rank, local_recv_mr_id, msg_size);
+  if (recv_req == 0) return false;
+  return comm.wait_finish(recv_req);
+}
+
+void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
+                size_t msg_size, int num_iterations, int num_warmup,
+                std::string const& local_ip, uint16_t listen_port,
+                PreferredTransport preferred_transport) {
+  printf("[Sender %d] Initializing...\n", rank);
+
+  // Create configuration
+  auto config = std::make_shared<CommunicatorConfig>();
+  config->exchanger_ip = local_ip;
+  config->exchanger_port = listen_port;
+  config->local_id = rank;
+  config->preferred_transport = preferred_transport;
+
+  // Create communicator
+  Communicator comm(gpu_id, rank, world_size, config);
+
+  // Establish homogeneous full-duplex transport path with peer.
+  printf("[Sender %d] Establishing bidirectional peer flows with %d...\n", rank,
+         peer_rank);
+  if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
+    fprintf(
+        stderr,
+        "[Sender %d] Failed to establish bidirectional flows with peer %d\n",
+        rank, peer_rank);
+    return;
+  }
+
+  printf("[Sender %d] Bidirectional flows ready with peer %d\n", rank,
+         peer_rank);
+  PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
+  int throughput_window = throughput_window_for(transport_kind);
+  printf("[Sender %d] Active transport to peer %d: %s (throughput window=%d)\n",
+         rank, peer_rank, peer_transport_kind_name(transport_kind),
+         throughput_window);
+
+  GPU_RT_CHECK(gpuSetDevice(gpu_id));
+
+  void* send_buf = nullptr;
+  std::vector<void*> recv_slots;
+  if (gpuMalloc(&send_buf, msg_size) != gpuSuccess || send_buf == nullptr) {
+    fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
+    return;
+  }
+  if (!allocate_device_slots(throughput_window, msg_size, recv_slots)) {
+    fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
+    (void)gpuFree(send_buf);
+    return;
+  }
+  auto cleanup = [&]() {
+    if (send_buf != nullptr) {
+      comm.dereg_mr(send_buf);
+      GPU_RT_CHECK(gpuFree(send_buf));
+    }
+    deregister_slot_mrs(comm, recv_slots);
+    free_device_slots(recv_slots);
+  };
+
+  std::vector<uint8_t> host_buf = make_pattern(msg_size, 0);
+  std::vector<uint8_t> expected_recv = make_pattern(msg_size, 97);
+  GPU_RT_CHECK(
+      gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice));
+  for (void* recv_slot : recv_slots) {
+    GPU_RT_CHECK(gpuMemset(recv_slot, 0, msg_size));
+  }
+
+  MR local_send_mr = comm.reg_mr(send_buf, msg_size);
+  std::vector<MR> local_recv_mrs =
+      register_slot_mrs(comm, recv_slots, msg_size);
+
+  printf("[Sender %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
+         local_send_mr.id, throughput_window);
+
+  std::vector<MR> remote_recv_mrs;
+  if (transport_kind == PeerTransportKind::Ipc ||
+      transport_kind == PeerTransportKind::Uccl) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                  local_recv_mrs, recv_slots, msg_size)) {
+      fprintf(stderr, "[Sender %d] Failed to publish IPC receive buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
+                                  remote_recv_mrs, true)) {
+      fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!prefetch_remote_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                          remote_recv_mrs)) {
+      fprintf(stderr, "[Sender %d] Failed to prefetch remote IPC buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
+  }
+
+  printf("[Sender %d] Remote memory info received\n", rank);
+
+  // Warmup phase
+  printf("[Sender %d] Warmup (%d iterations)...\n", rank, num_warmup);
+  std::vector<char> warmup_touched(static_cast<size_t>(throughput_window), 0);
+  for (int i = 0; i < num_warmup; ++i) {
+    int slot = i % throughput_window;
+    warmup_touched[static_cast<size_t>(slot)] = 1;
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    comm.wait_finish(send_req);
+
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    comm.wait_finish(recv_req);
+  }
+  if (!validate_recv_slots("Sender", rank, recv_slots, warmup_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+  printf("[Sender %d] Warmup complete\n", rank);
+
+  // Latency test (ping-pong)
+  printf("[Sender %d] Latency test (%d iterations)...\n", rank, num_iterations);
+  std::vector<uint64_t> latencies;
+  latencies.reserve(num_iterations);
+  std::vector<char> latency_touched(static_cast<size_t>(throughput_window), 0);
+
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    latency_touched[static_cast<size_t>(slot)] = 1;
+    uint64_t t0 = now_ns();
+
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    comm.wait_finish(send_req);
+
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    comm.wait_finish(recv_req);
+
+    uint64_t t1 = now_ns();
+    latencies.push_back(t1 - t0);
+  }
+  if (!validate_recv_slots("Sender", rank, recv_slots, latency_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+
+  printf("[Sender %d] Latency results:\n", rank);
+  print_latency(latencies);
+
+  // Throughput test (one-way send)
+  printf("[Sender %d] Throughput test (%d iterations)...\n", rank,
+         num_iterations);
+
+  uint64_t t0 = now_ns();
+  std::vector<unsigned> send_reqs;
+  send_reqs.reserve(throughput_window);
+
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    unsigned req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                               transport_kind, remote_recv_mrs, slot);
+    if (req == 0) {
+      fprintf(stderr,
+              "[Sender %d] isend failed during throughput test at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
+    }
+    send_reqs.push_back(req);
+    if (static_cast<int>(send_reqs.size()) == throughput_window &&
+        !wait_all(comm, send_reqs)) {
+      fprintf(stderr, "[Sender %d] wait_finish failed during throughput test\n",
+              rank);
+      cleanup();
+      return;
+    }
+  }
+
+  // Wait for all sends to complete
+  if (!wait_all(comm, send_reqs)) {
+    fprintf(stderr, "[Sender %d] wait_finish failed during throughput test\n",
+            rank);
+    cleanup();
+    return;
+  }
+
+  uint64_t t1 = now_ns();
+  double elapsed_sec = (t1 - t0) * 1e-9;
+  double total_gb =
+      (double)(msg_size * num_iterations) / (1024.0 * 1024.0 * 1024.0);
+  double throughput_gbps =
+      (double)(msg_size * num_iterations) * 8.0 / elapsed_sec / 1e9;
+
+  printf("[Sender %d] Throughput results:\n", rank);
+  printf("  Total data: %.2f GB\n", total_gb);
+  printf("  Time: %.3f sec\n", elapsed_sec);
+  printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec,
+         throughput_gbps);
+  printf("  Messages/sec: %.2f M\n", num_iterations / elapsed_sec / 1e6);
+
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 local_send_mr.id, local_recv_mrs[0].id,
+                                 remote_recv_mrs, msg_size)) {
+    fprintf(stderr,
+            "[Sender %d] phase sync failed before bidirectional throughput\n",
+            rank);
+    cleanup();
+    return;
+  }
+
+  // Bidirectional throughput test
+  printf("[Sender %d] Bidirectional throughput test (%d iterations)...\n", rank,
+         num_iterations);
+
+  t0 = now_ns();
+  send_reqs.clear();
+  std::vector<unsigned> recv_reqs;
+  send_reqs.reserve(throughput_window);
+  recv_reqs.reserve(throughput_window);
+  std::vector<char> bidi_touched(static_cast<size_t>(throughput_window), 0);
+
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    bidi_touched[static_cast<size_t>(slot)] = 1;
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    if (send_req == 0 || recv_req == 0) {
+      fprintf(stderr,
+              "[Sender %d] request submission failed during bidirectional "
+              "throughput at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
+    }
+    send_reqs.push_back(send_req);
+    recv_reqs.push_back(recv_req);
+    if (static_cast<int>(send_reqs.size()) == throughput_window) {
+      if (!wait_all(comm, send_reqs) || !wait_all(comm, recv_reqs)) {
+        fprintf(
+            stderr,
+            "[Sender %d] wait_finish failed during bidirectional throughput\n",
+            rank);
+        cleanup();
+        return;
+      }
+    }
+  }
+
+  if (!wait_all(comm, send_reqs) || !wait_all(comm, recv_reqs)) {
+    fprintf(stderr,
+            "[Sender %d] wait_finish failed during bidirectional throughput\n",
+            rank);
+    cleanup();
+    return;
+  }
+  if (!validate_recv_slots("Sender", rank, recv_slots, bidi_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+
+  t1 = now_ns();
+  elapsed_sec = (t1 - t0) * 1e-9;
+  total_gb =
+      (double)(msg_size * num_iterations * 2) / (1024.0 * 1024.0 * 1024.0);
+  throughput_gbps =
+      (double)(msg_size * num_iterations * 2) * 8.0 / elapsed_sec / 1e9;
+
+  printf("[Sender %d] Bidirectional throughput results:\n", rank);
+  printf("  Total data: %.2f GB\n", total_gb);
+  printf("  Time: %.3f sec\n", elapsed_sec);
+  printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec,
+         throughput_gbps);
+
+  cleanup();
+
+  printf("[Sender %d] Done.\n", rank);
+}
+
+void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
+                  size_t msg_size, int num_iterations, int num_warmup,
+                  std::string const& local_ip, uint16_t listen_port,
+                  PreferredTransport preferred_transport) {
+  printf("[Receiver %d] Initializing...\n", rank);
+
+  // Create configuration
+  auto config = std::make_shared<CommunicatorConfig>();
+  config->exchanger_ip = local_ip;
+  config->exchanger_port = listen_port;
+  config->local_id = rank;
+  config->preferred_transport = preferred_transport;
+
+  // Create communicator
+  Communicator comm(gpu_id, rank, world_size, config);
+
+  // Establish homogeneous full-duplex transport path with peer.
+  printf("[Receiver %d] Establishing bidirectional peer flows with %d...\n",
+         rank, peer_rank);
+  if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
+    fprintf(
+        stderr,
+        "[Receiver %d] Failed to establish bidirectional flows with peer %d\n",
+        rank, peer_rank);
+    return;
+  }
+
+  printf("[Receiver %d] Bidirectional flows ready with peer %d\n", rank,
+         peer_rank);
+  PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
+  int throughput_window = throughput_window_for(transport_kind);
+  printf(
+      "[Receiver %d] Active transport to peer %d: %s (throughput window=%d)\n",
+      rank, peer_rank, peer_transport_kind_name(transport_kind),
+      throughput_window);
+
+  GPU_RT_CHECK(gpuSetDevice(gpu_id));
+
+  void* send_buf = nullptr;
+  std::vector<void*> recv_slots;
+  if (gpuMalloc(&send_buf, msg_size) != gpuSuccess || send_buf == nullptr) {
+    fprintf(stderr, "[Receiver %d] Failed to allocate GPU memory\n", rank);
+    return;
+  }
+  if (!allocate_device_slots(throughput_window, msg_size, recv_slots)) {
+    fprintf(stderr, "[Receiver %d] Failed to allocate GPU memory\n", rank);
+    (void)gpuFree(send_buf);
+    return;
+  }
+  auto cleanup = [&]() {
+    if (send_buf != nullptr) {
+      comm.dereg_mr(send_buf);
+      GPU_RT_CHECK(gpuFree(send_buf));
+    }
+    deregister_slot_mrs(comm, recv_slots);
+    free_device_slots(recv_slots);
+  };
+
+  std::vector<uint8_t> host_buf = make_pattern(msg_size, 97);
+  std::vector<uint8_t> expected_recv = make_pattern(msg_size, 0);
+  GPU_RT_CHECK(
+      gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice));
+  for (void* recv_slot : recv_slots) {
+    GPU_RT_CHECK(gpuMemset(recv_slot, 0, msg_size));
+  }
+
+  MR local_send_mr = comm.reg_mr(send_buf, msg_size);
+  std::vector<MR> local_recv_mrs =
+      register_slot_mrs(comm, recv_slots, msg_size);
+
+  printf("[Receiver %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
+         local_send_mr.id, throughput_window);
+
+  std::vector<MR> remote_recv_mrs;
+  if (transport_kind == PeerTransportKind::Ipc ||
+      transport_kind == PeerTransportKind::Uccl) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                  local_recv_mrs, recv_slots, msg_size)) {
+      fprintf(stderr, "[Receiver %d] Failed to publish IPC receive buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
+                                  remote_recv_mrs, false)) {
+      fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!prefetch_remote_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                          remote_recv_mrs)) {
+      fprintf(stderr, "[Receiver %d] Failed to prefetch remote IPC buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
+  }
+
+  printf("[Receiver %d] Remote memory info received\n", rank);
+
+  // Warmup phase
+  printf("[Receiver %d] Warmup (%d iterations)...\n", rank, num_warmup);
+  std::vector<char> warmup_touched(static_cast<size_t>(throughput_window), 0);
+  for (int i = 0; i < num_warmup; ++i) {
+    int slot = i % throughput_window;
+    warmup_touched[static_cast<size_t>(slot)] = 1;
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    comm.wait_finish(recv_req);
+
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    comm.wait_finish(send_req);
+  }
+  if (!validate_recv_slots("Receiver", rank, recv_slots, warmup_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+  printf("[Receiver %d] Warmup complete\n", rank);
+
+  // Latency test (ping-pong) - receiver side
+  printf("[Receiver %d] Latency test (%d iterations)...\n", rank,
+         num_iterations);
+  std::vector<char> latency_touched(static_cast<size_t>(throughput_window), 0);
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    latency_touched[static_cast<size_t>(slot)] = 1;
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    comm.wait_finish(recv_req);
+
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    comm.wait_finish(send_req);
+  }
+  if (!validate_recv_slots("Receiver", rank, recv_slots, latency_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+  printf("[Receiver %d] Latency test complete\n", rank);
+
+  // Throughput test - just receive
+  printf("[Receiver %d] Throughput test (%d iterations)...\n", rank,
+         num_iterations);
+  std::vector<unsigned> recv_reqs;
+  recv_reqs.reserve(throughput_window);
+  std::vector<char> throughput_touched(static_cast<size_t>(throughput_window),
+                                       0);
+
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    throughput_touched[static_cast<size_t>(slot)] = 1;
+    unsigned req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    if (req == 0) {
+      fprintf(stderr,
+              "[Receiver %d] irecv failed during throughput test at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
+    }
+    recv_reqs.push_back(req);
+    if (static_cast<int>(recv_reqs.size()) == throughput_window &&
+        !wait_all(comm, recv_reqs)) {
+      fprintf(stderr,
+              "[Receiver %d] wait_finish failed during throughput test\n",
+              rank);
+      cleanup();
+      return;
+    }
+  }
+
+  // Wait for all receives
+  if (!wait_all(comm, recv_reqs)) {
+    fprintf(stderr, "[Receiver %d] wait_finish failed during throughput test\n",
+            rank);
+    cleanup();
+    return;
+  }
+  if (!validate_recv_slots("Receiver", rank, recv_slots, throughput_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+  printf("[Receiver %d] Throughput test complete\n", rank);
+
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 local_send_mr.id, local_recv_mrs[0].id,
+                                 remote_recv_mrs, msg_size)) {
+    fprintf(stderr,
+            "[Receiver %d] phase sync failed before bidirectional throughput\n",
+            rank);
+    cleanup();
+    return;
+  }
+
+  // Bidirectional throughput test
+  printf("[Receiver %d] Bidirectional throughput test (%d iterations)...\n",
+         rank, num_iterations);
+  recv_reqs.clear();
+  std::vector<unsigned> send_reqs;
+  recv_reqs.reserve(throughput_window);
+  send_reqs.reserve(throughput_window);
+  std::vector<char> bidi_touched(static_cast<size_t>(throughput_window), 0);
+
+  for (int i = 0; i < num_iterations; ++i) {
+    int slot = i % throughput_window;
+    bidi_touched[static_cast<size_t>(slot)] = 1;
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
+                                    transport_kind, remote_recv_mrs, slot);
+    if (send_req == 0 || recv_req == 0) {
+      fprintf(stderr,
+              "[Receiver %d] request submission failed during bidirectional "
+              "throughput at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
+    }
+    recv_reqs.push_back(recv_req);
+    send_reqs.push_back(send_req);
+    if (static_cast<int>(recv_reqs.size()) == throughput_window) {
+      if (!wait_all(comm, recv_reqs) || !wait_all(comm, send_reqs)) {
+        fprintf(stderr,
+                "[Receiver %d] wait_finish failed during bidirectional "
+                "throughput\n",
+                rank);
+        cleanup();
+        return;
+      }
+    }
+  }
+
+  if (!wait_all(comm, recv_reqs) || !wait_all(comm, send_reqs)) {
+    fprintf(
+        stderr,
+        "[Receiver %d] wait_finish failed during bidirectional throughput\n",
+        rank);
+    cleanup();
+    return;
+  }
+  if (!validate_recv_slots("Receiver", rank, recv_slots, bidi_touched,
+                           expected_recv)) {
+    cleanup();
+    return;
+  }
+  printf("[Receiver %d] Bidirectional throughput test complete\n", rank);
+
+  cleanup();
+
+  printf("[Receiver %d] Done.\n", rank);
+}
+
+void print_usage(char const* prog) {
+  printf("Usage: %s [options]\n\n", prog);
+  printf("Options:\n");
+  printf("  --rank <n>          Rank of this process (0 or 1)\n");
+  printf("  --peer-rank <n>     Rank of peer process\n");
+  printf("  --gpu-id <n>        GPU ID to use\n");
+  printf("  --msg-size <bytes>  Message size (default: 1024)\n");
+  printf("  --iterations <n>    Number of iterations (default: 1000)\n");
+  printf("  --warmup <n>        Number of warmup iterations (default: 100)\n");
+  printf("  --ip <addr>         Local IP address (default: 127.0.0.1)\n");
+  printf("  --port <n>          Listen port (default: 6979)\n");
+  printf(
+      "  --transport <kind>  Transport override: auto|ipc|uccl|tcp (default: "
+      "auto)\n");
+  printf("  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
+  printf("  --help              Show this help\n");
+}
+
+int main(int argc, char** argv) {
+  int rank = -1;
+  int peer_rank = -1;
+  int gpu_id = 0;
+  size_t msg_size = 1024;
+  int num_iterations = 1000;
+  int num_warmup = 100;
+  std::string local_ip = "127.0.0.1";
+  uint16_t listen_port = 6979;
+  PreferredTransport preferred_transport = PreferredTransport::Auto;
+  IpcPathMode ipc_path = IpcPathMode::Auto;
+
+  // Parse arguments
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "--rank") == 0 && i + 1 < argc) {
+      rank = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--peer-rank") == 0 && i + 1 < argc) {
+      peer_rank = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--gpu-id") == 0 && i + 1 < argc) {
+      gpu_id = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--msg-size") == 0 && i + 1 < argc) {
+      msg_size = atol(argv[++i]);
+    } else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
+      num_iterations = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc) {
+      num_warmup = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--ip") == 0 && i + 1 < argc) {
+      local_ip = argv[++i];
+    } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+      listen_port = static_cast<uint16_t>(atoi(argv[++i]));
+    } else if (strcmp(argv[i], "--transport") == 0 && i + 1 < argc) {
+      preferred_transport = parse_transport(argv[++i]);
+    } else if (strcmp(argv[i], "--ipc-path") == 0 && i + 1 < argc) {
+      ipc_path = parse_ipc_path(argv[++i]);
+    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      print_usage(argv[0]);
+      return 0;
+    }
+  }
+
+  if (ipc_path == IpcPathMode::Relay) {
+    setenv("UHM_IPC_FORCE_RELAY", "1", 1);
+  } else {
+    unsetenv("UHM_IPC_FORCE_RELAY");
+  }
+
+  // Validate arguments
+  if (rank < 0 || peer_rank < 0) {
+    fprintf(stderr, "Error: --rank and --peer-rank must be specified\n");
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  if (rank == peer_rank) {
+    fprintf(stderr, "Error: rank and peer-rank must be different\n");
+    return 1;
+  }
+
+  int world_size = 2;
+
+  printf("============================================================\n");
+  printf("Transport Benchmark\n");
+  printf("============================================================\n");
+  printf("Rank: %d, Peer: %d, World: %d\n", rank, peer_rank, world_size);
+  printf("GPU: %d, Message size: %zu bytes\n", gpu_id, msg_size);
+  printf("Iterations: %d, Warmup: %d\n", num_iterations, num_warmup);
+  printf("IP: %s, Port: %d\n", local_ip.c_str(), listen_port);
+  printf(
+      "Transport override: %s\n",
+      preferred_transport == PreferredTransport::Auto
+          ? "auto"
+          : (preferred_transport == PreferredTransport::Ipc
+                 ? "ipc"
+                 : (preferred_transport == PreferredTransport::Uccl ? "uccl"
+                                                                    : "tcp")));
+  printf("IPC path mode: %s\n",
+         ipc_path == IpcPathMode::Relay ? "relay" : "auto");
+  printf("============================================================\n\n");
+
+  // Run as sender or receiver
+  if (rank < peer_rank) {
+    // Lower rank acts as sender
+    run_sender(gpu_id, rank, peer_rank, world_size, msg_size, num_iterations,
+               num_warmup, local_ip, listen_port, preferred_transport);
+  } else {
+    // Higher rank acts as receiver
+    run_receiver(gpu_id, rank, peer_rank, world_size, msg_size, num_iterations,
+                 num_warmup, local_ip, listen_port, preferred_transport);
+  }
+
+  return 0;
+}

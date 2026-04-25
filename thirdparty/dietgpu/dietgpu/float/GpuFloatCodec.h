@@ -7,12 +7,10 @@
 
 #pragma once
 
-#include <cuda.h>
 #include "dietgpu/ans/GpuANSCodec.h"
+#include "dietgpu/utils/StackDeviceMemory.h"
 
 namespace dietgpu {
-
-class StackDeviceMemory;
 
 // The various floating point types we support for compression
 enum class FloatType : uint32_t {
@@ -20,6 +18,8 @@ enum class FloatType : uint32_t {
   kFloat16 = 1,
   kBFloat16 = 2,
   kFloat32 = 3,
+  kFloat8E4M3FN = 4,
+  kFloat8E5M2 = 5,
 };
 
 // Returns the maximum possible compressed size in bytes of an array of `size`
@@ -291,4 +291,36 @@ void floatGetCompressedInfoDevice(
     // stream on the current device on which this runs
     cudaStream_t stream);
 
-} // namespace dietgpu
+struct FloatCompressSplitContext {
+  dietgpu::FloatType float_type;
+  // ---- immutable per-batch inputs ----
+  GpuMemoryReservation<uintptr_t> params_dev;  // [in, inSize, out]
+  uint32_t maxSize = 0;
+
+  // ---- split outputs (RAII-managed, freed when context is destroyed) ----
+  GpuMemoryReservation<uint8_t> toComp_dev;
+  GpuMemoryReservation<uint32_t> histogram_dev;
+  uint32_t compRowStride = 0;
+
+  FloatCompressSplitContext() = default;
+  explicit FloatCompressSplitContext(FloatType ft)
+      : float_type(ft), maxSize(0), compRowStride(0) {}
+};
+void floatCompressSplitOneBatch(dietgpu::StackDeviceMemory& res,
+                                dietgpu::FloatCompressConfig const& config,
+                                cudaStream_t stream,
+                                FloatCompressSplitContext& ctx);
+
+void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
+                                 dietgpu::FloatCompressConfig const& config,
+                                 FloatCompressSplitContext& ctx,
+                                 uint32_t* outSize_dev, cudaStream_t stream);
+uint32_t getUncompDataSizeFromByteSize(FloatType floatType, uint32_t datasize);
+
+inline size_t getElementCountFromBytes(FloatType ft, size_t bytes);
+
+inline bool isFloat8Type(FloatType ft) {
+  return ft == FloatType::kFloat8E4M3FN || ft == FloatType::kFloat8E5M2;
+}
+
+}  // namespace dietgpu

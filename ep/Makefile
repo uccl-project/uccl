@@ -31,9 +31,25 @@ else
   GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
-PYTHON            ?= python3
-PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-EXT_SUFFIX        := .abi3.so
+# Nanobind configuration
+PYTHON             ?= python3
+NB_DIR             := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
+NB_INCLUDES        := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include \
+                      -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+# Stable ABI requires Python >= 3.12
+PY_STABLE_ABI_OK   := $(shell $(PYTHON) -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+ifeq ($(PY_STABLE_ABI_OK),1)
+NB_ABI_FLAGS       := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+EXT_SUFFIX         := .abi3.so
+else
+NB_ABI_FLAGS       :=
+EXT_SUFFIX         := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+endif
+NB_SRC_DIR         := $(NB_DIR)/src
+NB_SRCS            := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
+                      nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
+                      trampoline.cpp implicit.cpp
+NB_OBJECTS         := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
@@ -51,7 +67,7 @@ DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 
 SM ?= $(DETECTED_SM)
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
-LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
+LDFLAGS := -lpthread  -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
@@ -68,13 +84,14 @@ ifeq ($(PER_EXPERT_BATCHING),1)
   override NVCCFLAGS += -DPER_EXPERT_BATCHING
 endif
 
+
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp src/fifo.cpp
-SRC_CU  := src/bench_kernel.cu src/peer_copy.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp
+SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
 
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
 OBJ_CU  := $(SRC_CU:.cu=.o)
@@ -90,18 +107,22 @@ all: $(EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_ABI_FLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Linking rules
+# Binding source compilation
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_ABI_FLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) -MMD -MP -c $< -o $@
 
-$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
+# Nanobind core sources (compiled with minimal flags)
+nb_%.o: $(NB_SRC_DIR)/%.cpp
+	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
+
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
-	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
+	    $(INCLUDES) $(NB_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
 	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
@@ -109,15 +130,23 @@ $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 
 py: $(PYTARGET) $(EP_EXT)
 
-# Install the module
+# Repo uccl package dir (so in-repo runs use the same build)
+UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
+
 install: $(EP_EXT)
 	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/ep.cpython-*.so $(INSTALL_DIR)/ep.abi3.so
 	@cp $(EP_EXT) $(INSTALL_DIR)/
-	@echo "Installation complete. Modules installed as: $(INSTALL_DIR)/$(PYTARGET), $(INSTALL_DIR)/$(EP_EXT)"
+	@echo "Installed $(EP_EXT) -> $(INSTALL_DIR)/"
+	@if [ -d "$(UCCL_UCCL)" ]; then \
+		rm -f "$(UCCL_UCCL)"/ep.cpython-*.so "$(UCCL_UCCL)"/ep.abi3.so; \
+		cp $(EP_EXT) "$(UCCL_UCCL)/"; \
+		echo "Installed $(EP_EXT) -> $(UCCL_UCCL)/ (for in-repo runs)"; \
+	fi
 
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
+	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS) \
 	      $(EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 

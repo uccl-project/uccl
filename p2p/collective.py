@@ -48,7 +48,6 @@ class CollectiveContext:
 
     def __init__(
         self,
-        num_cpus: int = 4,
         local_gpu_idx: Optional[int] = None,
         use_copy_engine_for_intra: Optional[bool] = False,
     ):
@@ -56,7 +55,6 @@ class CollectiveContext:
         Initialize collective context. Requires torch.distributed to be initialized.
 
         Args:
-            num_cpus: Number of CPU threads for RDMA operations
             local_gpu_idx: Optional override for local GPU index. If None, will be derived from torch.distributed
             use_copy_engine_for_intra: Whether to use the copy engine for intra-node communication
         """
@@ -68,7 +66,6 @@ class CollectiveContext:
         self.world_size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.dist_backend = "gloo" if use_copy_engine_for_intra else "nccl"
-        self.num_cpus = num_cpus
         self.use_copy_engine_for_intra = use_copy_engine_for_intra
 
         # Derive local GPU index from distributed context
@@ -139,7 +136,7 @@ class CollectiveContext:
             return
 
         # Create endpoint
-        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
+        self.ep = p2p.Endpoint(self.local_gpu_idx)
         print(f"[Rank {self.rank}] Created p2p.Endpoint on GPU {self.local_gpu_idx}")
         local_metadata = self.ep.get_metadata()
 
@@ -321,12 +318,26 @@ class CollectiveContext:
         size = tensor.numel() * tensor.element_size()
         return ptr, size
 
-    def _register_memory(self, ptr: int, size: int) -> int:
+    def float_type_from_tensor(self, t: torch.Tensor) -> p2p.FloatType:
+        if t.dtype == torch.float16:
+            return p2p.FloatType.kFloat16
+        elif t.dtype == torch.bfloat16:
+            return p2p.FloatType.kBFloat16
+        elif t.dtype == torch.float32:
+            return p2p.FloatType.kFloat32
+        elif t.dtype == torch.float8_e4m3fn:
+            return p2p.FloatType.kFloat8E4M3FN
+        elif t.dtype == torch.float8_e5m2:
+            return p2p.FloatType.kFloat8E5M2
+        else:
+            return p2p.FloatType.kUndefined
+
+    def _register_memory(self, ptr: int, size: int, float_type: p2p.FloatType) -> int:
         """Register memory and cache the memory region information."""
         existing_mr_id = self._check_register(ptr, size)
         if existing_mr_id is not None:
             return existing_mr_id
-        ok, mr_id = self.ep.reg(ptr, size)
+        ok, mr_id = self.ep.reg(ptr, size, float_type)
         if not ok:
             raise RuntimeError("Failed to register memory")
         self.memory_regions.add(ptr, ptr + size, mr_id)
@@ -351,7 +362,7 @@ class CollectiveContext:
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
         ptr, size = self._get_buffer_info(tensor)
-        return self._register_memory(ptr, size)
+        return self._register_memory(ptr, size, self.float_type_from_tensor(tensor))
 
     def deregister_tensor(self, tensor: torch.Tensor) -> bool:
         """Deregister a previously registered tensor."""
@@ -750,15 +761,12 @@ _default_context: Optional[CollectiveContext] = None
 
 
 def init_collective(
-    num_cpus: int = 4,
     local_gpu_idx: Optional[int] = None,
     use_copy_engine_for_intra: Optional[bool] = False,
 ):
     """Initialize the default collective context."""
     global _default_context
-    _default_context = CollectiveContext(
-        num_cpus, local_gpu_idx, use_copy_engine_for_intra
-    )
+    _default_context = CollectiveContext(local_gpu_idx, use_copy_engine_for_intra)
     _default_context.init()
 
 

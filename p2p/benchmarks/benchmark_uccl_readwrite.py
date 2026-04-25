@@ -6,9 +6,6 @@ import torch
 import numpy as np
 import os
 
-# Only RC mode is supported for now.
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError:
@@ -135,7 +132,7 @@ def _run_client(args, ep, remote_metadata):
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok
-    print(f"[Client] Connected to {ip}:{port} id={conn_id}")
+    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) id={conn_id}")
 
     for sz in args.sizes:
         if args.lazy:
@@ -288,7 +285,6 @@ def main():
     )
     p.add_argument("--lazy", action="store_true")
     p.add_argument("--local-gpu-idx", type=int, default=0)
-    p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
         "--sizes",
@@ -327,9 +323,9 @@ def main():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     if args.lazy:
-        ep = p2p.Endpoint(args.num_cpus)
+        ep = p2p.Endpoint()
     else:
-        ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+        ep = p2p.Endpoint(args.local_gpu_idx)
     local_metadata = ep.get_metadata()
 
     if rank == 0:

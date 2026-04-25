@@ -32,8 +32,8 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 ### Building and Installing UCCL
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
-bash build.sh [cuda|rocm] all --install
+git clone https://github.com/uccl-project/uccl.git && cd uccl
+bash build.sh [cu12|cu13|roc7|roc6] all --install
 ```
 
 ---

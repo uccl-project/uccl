@@ -43,6 +43,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
+  constexpr int kWriteAddrShift =
+      use_normal_mode ? kWriteAddrShiftNormal : kWriteAddrShiftLowLatency;
+  constexpr unsigned long long kWriteAddrAlignMask =
+      (1ull << kWriteAddrShift) - 1ull;
 
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
@@ -58,18 +62,34 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     TransferCmd cmd{};
     cmd.cmd_type =
         make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
-    cmd.req_rptr = rptr_val;
-    cmd.req_lptr = lptr_val;
+    // Normal mode may target int-based metadata buffers, while low-latency
+    // mode stays int4-aligned.
+    EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
+                     (use_normal_mode ? "req_rptr is not aligned for packed "
+                                        "WRITE offset (high-throughput mode)"
+                                      : "req_rptr is not aligned for packed "
+                                        "WRITE offset (low-latency mode)"));
+    EP_DEVICE_ASSERT((lptr_val & kWriteAddrAlignMask) == 0 &&
+                     (use_normal_mode ? "req_lptr is not aligned for packed "
+                                        "WRITE offset (high-throughput mode)"
+                                      : "req_lptr is not aligned for packed "
+                                        "WRITE offset (low-latency mode)"));
+    cmd.req_rptr = rptr_val >> kWriteAddrShift;
+    cmd.req_lptr = lptr_val >> kWriteAddrShift;
     cmd.bytes = bytes_val;
     cmd.dst_rank = dst_rank;
     if constexpr (use_normal_mode) {
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
     } else {
-      cmd.expert_idx = expert_idx;
-      // Low-latency WRITE: use atomic_val byte for num_tokens (1..255).
-      EP_DEVICE_ASSERT(num_tokens > 0 && num_tokens <= 255);
-      cmd.atomic_val = static_cast<uint8_t>(num_tokens);
+      // Low-latency WRITE: pack expert_idx (10b) + num_tokens (13b) into the
+      // expert_idx union slot + atomic_val byte. See ring_buffer.cuh.
+      EP_DEVICE_ASSERT(expert_idx <= kLLExpertMask);
+      EP_DEVICE_ASSERT(num_tokens > 0 &&
+                       num_tokens <= static_cast<int>(kLLNumTokensMax));
+      cmd.expert_idx =
+          pack_ll_expert_slot(expert_idx, static_cast<uint32_t>(num_tokens));
+      cmd.atomic_val = static_cast<uint8_t>(num_tokens & 0xFF);
     }
     h->atomic_set_and_commit(cmd, &slot);
   }
@@ -92,8 +112,20 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
       cmd.cmd_type =
           make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
-      cmd.req_rptr = rptr_val;
-      cmd.req_lptr = lptr_val;
+      // Normal mode may target int-based metadata buffers, while low-latency
+      // mode stays int4-aligned.
+      EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
+                       (use_normal_mode ? "req_rptr is not aligned for packed "
+                                          "WRITE offset (high-throughput mode)"
+                                        : "req_rptr is not aligned for packed "
+                                          "WRITE offset (low-latency mode)"));
+      EP_DEVICE_ASSERT((lptr_val & kWriteAddrAlignMask) == 0 &&
+                       (use_normal_mode ? "req_lptr is not aligned for packed "
+                                          "WRITE offset (high-throughput mode)"
+                                        : "req_lptr is not aligned for packed "
+                                          "WRITE offset (low-latency mode)"));
+      cmd.req_rptr = rptr_val >> kWriteAddrShift;
+      cmd.req_lptr = lptr_val >> kWriteAddrShift;
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
       if (bytes_val >> 24) {
@@ -117,10 +149,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
         cmd.atomic_offset = atomic_offset;
         cmd.atomic_val = atomic_val;
       } else {
-        cmd.expert_idx = expert_idx;
-        // Low-latency WRITE: use atomic_val byte for num_tokens (1..255).
-        EP_DEVICE_ASSERT(num_tokens > 0 && num_tokens <= 255);
-        cmd.atomic_val = static_cast<uint8_t>(num_tokens);
+        // Low-latency WRITE: pack expert_idx (10b) + num_tokens (13b).
+        EP_DEVICE_ASSERT(expert_idx <= kLLExpertMask);
+        EP_DEVICE_ASSERT(num_tokens > 0 &&
+                         num_tokens <= static_cast<int>(kLLNumTokensMax));
+        cmd.expert_idx =
+            pack_ll_expert_slot(expert_idx, static_cast<uint32_t>(num_tokens));
+        cmd.atomic_val = static_cast<uint8_t>(num_tokens & 0xFF);
       }
       h->atomic_set_and_commit(cmd, &slot);
       break;

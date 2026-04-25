@@ -1,23 +1,24 @@
 #pragma once
 #include "define.h"
-#include "rdma_channel.h"
+#include "rdma_data_channel.h"
 #include "ring_spsc.h"
+#include "util/debug.h"
 
-class SendControlChannel : public RDMAChannel {
+class SendControlChannel : public RDMADataChannel {
  public:
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, channel_id) {}
+      : RDMADataChannel(ctx, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               ChannelMetaData const& remote_meta,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, remote_meta, channel_id) {}
+      : RDMADataChannel(ctx, remote_meta, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, channel_id) {
+      : RDMADataChannel(ctx, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         mem_block);
   }
@@ -26,7 +27,7 @@ class SendControlChannel : public RDMAChannel {
                               ChannelMetaData const& remote_meta,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, remote_meta, channel_id) {
+      : RDMADataChannel(ctx, remote_meta, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         mem_block);
   }
@@ -44,7 +45,8 @@ class SendControlChannel : public RDMAChannel {
     SendReqMeta meta;
     int index = getOneSendRequestMeta(meta);
     if (index < 0) {
-      LOG(INFO) << "getOneSendRequest - Ring buffer is empty, cannot pop";
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "getOneSendRequest - Ring buffer is empty, cannot pop";
       return false;
     }
 
@@ -53,23 +55,25 @@ class SendControlChannel : public RDMAChannel {
     // req should already have local_mem set, just update remote_mem
     req->remote_mem = remote_mem;
     req->channel_id = meta.channel_id;
-    req->imm_data = index;
+    req->imm_data.set_index(index);
 
     // Log the received request with all information
-    LOG(INFO) << "getOneSendRequest - Received request: " << *req;
-    LOG(INFO) << "  SendReqMeta from ring buffer: " << meta;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "getOneSendRequest - Received request: " << *req;
+    UCCL_LOG(INFO, UCCL_RDMA) << "  SendReqMeta from ring buffer: " << meta;
 
     return true;
   }
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (RDMAChannel::poll_once(cq_datas)) {
+    if (RDMADataChannel::pollOnce(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
-        LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
-                  << cq_data;
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "SendControlChannel::noblockingPoll - Polled completion: "
+            << cq_data;
         if (cq_data.hasIMM()) {
-          rb_->modify_and_advance_write(cq_data.imm, check_in_progress,
+          rb_->modify_and_advance_write(cq_data.imm.index(), check_in_progress,
                                         set_in_progress);
         }
       }
@@ -82,12 +86,12 @@ class SendControlChannel : public RDMAChannel {
   std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
 };
 
-class RecvControlChannel : public RDMAChannel {
+class RecvControlChannel : public RDMADataChannel {
  public:
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, channel_id) {
+      : RDMADataChannel(ctx, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         local_info_);
@@ -97,7 +101,7 @@ class RecvControlChannel : public RDMAChannel {
                               MetaInfoToExchange const& remote_meta,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : RDMAChannel(ctx, remote_meta.channel_meta, channel_id) {
+      : RDMADataChannel(ctx, remote_meta.channel_meta, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         local_info_);
@@ -109,17 +113,19 @@ class RecvControlChannel : public RDMAChannel {
 
   int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
     SendReqMeta req_meta(rev_req);
-    LOG(INFO) << "postSendReq - Created SendReqMeta: " << req_meta;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "postSendReq - Created SendReqMeta: " << req_meta;
 
     int index = rb_->push_with_convert(req_meta, to_ring_meta);
     if (index < 0) {
-      LOG(INFO) << "postSendReq - Failed to push to ring buffer, index: "
-                << index;
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "postSendReq - Failed to push to ring buffer, index: " << index;
       return index;
     }
 
-    LOG(INFO) << "postSendReq - Successfully pushed to ring buffer at index: "
-              << index;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "postSendReq - Successfully pushed to ring buffer at index: "
+        << index;
     if (!remote_mem_ptr_) {
       remote_mem_ptr_ = std::make_shared<RemoteMemInfo>(
           empty_rb_->getElementAddress(index), empty_rb_->sizeInBytes(),
@@ -142,28 +148,36 @@ class RecvControlChannel : public RDMAChannel {
         std::make_shared<RDMASendRequest>(local_mem_ptr_, remote_mem_ptr_,
                                           index);
     send_ptr->channel_id = kControlChannelID;
-    RDMAChannel::send(send_ptr);
+    RDMADataChannel::send(send_ptr);
     return index;
   }
 
-  void recv_done(uint64_t index) {
+  std::shared_ptr<SendReqMeta> recv_done(uint64_t index) {
     // Increment the received chunk count
     rb_->modify_at(index, increment_received_chunk);
 
     // Check if all chunks have been received
     if (rb_->check_at(index, check_all_chunks_received)) {
       // All chunks received, mark as done and remove completed items
+      auto req = std::make_shared<SendReqMeta>(rb_->at(index).meta);
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "recv_done - All chunks received for index: " << index
+          << ", marking as done.";
+
       rb_->modify_at(index, set_is_done);
       rb_->remove_while(check_is_done);
+      return req;
     }
+    return nullptr;
   }
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (RDMAChannel::poll_once(cq_datas)) {
+    if (RDMADataChannel::pollOnce(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
-        LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
-                  << cq_data;
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "RecvControlChannel::noblockingPoll - Polled completion: "
+            << cq_data;
       }
       return true;
     }

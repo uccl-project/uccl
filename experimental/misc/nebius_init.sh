@@ -12,7 +12,7 @@ package_update: true
 runcmd:
   # Base packages (system-level, as root)
   - [bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get update"]
-  - [bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get install -y git linux-tools-$(uname -r) linux-headers-$(uname -r) dkms clang llvm cmake m4 build-essential net-tools libgoogle-glog-dev libgtest-dev libgflags-dev libelf-dev libpcap-dev libc6-dev-i386 libpci-dev libopenmpi-dev libibverbs-dev clang-format wget ca-certificates"]
+  - [bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get install -y git linux-tools-$(uname -r) linux-headers-$(uname -r) dkms clang llvm cmake m4 build-essential net-tools libgtest-dev libgflags-dev libelf-dev libpcap-dev libc6-dev-i386 libpci-dev libopenmpi-dev libibverbs-dev clang-format wget ca-certificates"]
 
   # Install Miniconda (user-local)
   - [sudo, "-u", "ubuntu", bash, -lc, "cd /home/ubuntu && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O Miniconda3-latest-Linux-x86_64.sh"]

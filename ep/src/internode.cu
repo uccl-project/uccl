@@ -475,6 +475,7 @@ constexpr int get_num_topk_rdma_ranks(int num_rdma_ranks) {
 
 template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTMABytesPerWarp, int kNumDispatchRDMASenderWarps,
+          bool kUseAggressiveAtomic,
           int kNumTopkRDMARanks = get_num_topk_rdma_ranks(kNumRDMARanks)>
 __global__ void __launch_bounds__(
     ((kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE), 1)
@@ -753,8 +754,9 @@ __global__ void __launch_bounds__(
         // Wait the remote buffer to be released
         while (rdma_tail_idx - cached_rdma_channel_head >=
                num_max_rdma_chunked_recv_tokens) {
-          cached_rdma_channel_head = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+          cached_rdma_channel_head =
+              static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                  rdma_channel_head.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -803,8 +805,9 @@ __global__ void __launch_bounds__(
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
-        cached_rdma_channel_head = static_cast<int>(
-            ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+        cached_rdma_channel_head =
+            static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                rdma_channel_head.buffer(lane_id)));
 
         // Timeout check with live head readback for diagnostics
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -1198,8 +1201,9 @@ __global__ void __launch_bounds__(
         if (__shfl_sync(WARP_MASK, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
-            cached_rdma_channel_tail = static_cast<int>(
-                ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
+            cached_rdma_channel_tail =
+                static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(WARP_MASK,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1340,8 +1344,8 @@ __global__ void __launch_bounds__(
       __syncwarp();
       __threadfence_system();  // ensure TMA data visible before publishing tail
       if (lane_id == 0)
-        st_release_sys_global(nvl_channel_tail.buffer(),
-                              cached_nvl_channel_tail);
+        st_release_sys_global<kUseAggressiveAtomic>(nvl_channel_tail.buffer(),
+                                                    cached_nvl_channel_tail);
     }
     // Retired
     __syncwarp();
@@ -1454,8 +1458,11 @@ __global__ void __launch_bounds__(
         // Ready to copy
         if (cached_channel_head_idx != cached_channel_tail_idx) break;
 
-        cached_channel_tail_idx = __shfl_sync(
-            WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
+        cached_channel_tail_idx =
+            __shfl_sync(WARP_MASK,
+                        ld_acquire_sys_global<kUseAggressiveAtomic>(
+                            nvl_channel_tail.buffer()),
+                        0);
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
@@ -1619,23 +1626,24 @@ void dispatch(
   EP_HOST_ASSERT(static_cast<int>(num_scales) * scale_hidden_stride <
                  std::numeric_limits<int>::max());
 #endif
-
+  static bool const aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+  // NOTE(zhenhuang12): always use low latency mode in uccl-ep
 #define DISPATCH_LAUNCH_CASE(num_rdma_ranks)                                   \
   {                                                                            \
     auto dispatch_func =                                                       \
-        low_latency_mode                                                       \
+        aggressive_atomic_enabled                                              \
             ? (is_cached_dispatch                                              \
                    ? dispatch<true, num_rdma_ranks, true, kNumTMABytesPerWarp, \
-                              kNumDispatchRDMASenderWarps>                     \
+                              kNumDispatchRDMASenderWarps, true>               \
                    : dispatch<true, num_rdma_ranks, false,                     \
                               kNumTMABytesPerWarp,                             \
-                              kNumDispatchRDMASenderWarps>)                    \
-            : (is_cached_dispatch ? dispatch<false, num_rdma_ranks, true,      \
-                                             kNumTMABytesPerWarp,              \
-                                             kNumDispatchRDMASenderWarps>      \
-                                  : dispatch<false, num_rdma_ranks, false,     \
-                                             kNumTMABytesPerWarp,              \
-                                             kNumDispatchRDMASenderWarps>);    \
+                              kNumDispatchRDMASenderWarps, true>)              \
+            : (is_cached_dispatch                                              \
+                   ? dispatch<true, num_rdma_ranks, true, kNumTMABytesPerWarp, \
+                              kNumDispatchRDMASenderWarps, false>              \
+                   : dispatch<true, num_rdma_ranks, false,                     \
+                              kNumTMABytesPerWarp,                             \
+                              kNumDispatchRDMASenderWarps, false>);            \
     SET_SHARED_MEMORY_FOR_TMA(dispatch_func);                                  \
     LAUNCH_KERNEL(                                                             \
         &cfg, dispatch_func, reinterpret_cast<int4*>(recv_x), recv_x_scales,   \
@@ -2146,7 +2154,7 @@ __forceinline__ __device__ int combine_token(
 template <
     bool kLowLatencyMode, int kNumRDMARanks, typename dtype_t,
     int kNumCombineForwarderWarps, int kNumTMABytesPerSenderWarp,
-    int kNumTMABytesPerForwarderWarp,
+    int kNumTMABytesPerForwarderWarp, bool kUseAggressiveAtomic = false,
     int kNumTopkRDMARanks = get_num_topk_rdma_ranks(kNumRDMARanks),
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
@@ -2429,8 +2437,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 #endif
       __syncwarp();
       if (lane_id < kNumRDMARanks and is_lane_ready)
-        st_release_sys_global(nvl_channel_tail.buffer() + lane_id,
-                              cached_channel_tail_idx);
+        st_release_sys_global<kUseAggressiveAtomic>(
+            nvl_channel_tail.buffer() + lane_id, cached_channel_tail_idx);
     }
   } else {
     // Combiners and coordinators
@@ -2603,8 +2611,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           // Inequality: `num_max_rdma_chunked_recv_tokens - (tail - head) >=
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
-              token_start_idx -
-              ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank));
+              token_start_idx - ld_acquire_sys_global<kUseAggressiveAtomic>(
+                                    rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2616,7 +2624,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }
@@ -2648,7 +2657,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           start_time = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
-                ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
+                ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    nvl_channel_tail.buffer(lane_id));
 
             // Timeout check
             if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -2841,8 +2851,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
         // Wait lanes to be ready
         auto start_time = clock64();
         while (cached_channel_tail_idx <= expected_head) {
-          cached_channel_tail_idx = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_tail.buffer(lane_id)));
+          cached_channel_tail_idx =
+              static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                  rdma_channel_tail.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
@@ -2988,16 +2999,18 @@ void combine(cudaDataType_t type, void* combined_x,
                kNumTMABytesPerForwarderWarp * kNumCombineForwarderWarps);
 #endif
 
+  static bool const aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+
 #define COMBINE_LAUNCH_CASE(num_rdma_ranks)                                 \
   {                                                                         \
     auto combine_func =                                                     \
-        low_latency_mode                                                    \
+        aggressive_atomic_enabled                                           \
             ? combine<true, num_rdma_ranks, nv_bfloat16,                    \
                       kNumCombineForwarderWarps, kNumTMABytesPerSenderWarp, \
-                      kNumTMABytesPerForwarderWarp>                         \
-            : combine<false, num_rdma_ranks, nv_bfloat16,                   \
+                      kNumTMABytesPerForwarderWarp, true>                   \
+            : combine<true, num_rdma_ranks, nv_bfloat16,                    \
                       kNumCombineForwarderWarps, kNumTMABytesPerSenderWarp, \
-                      kNumTMABytesPerForwarderWarp>;                        \
+                      kNumTMABytesPerForwarderWarp, false>;                 \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                \
     LAUNCH_KERNEL(                                                          \
         &cfg, combine_func, reinterpret_cast<int4*>(combined_x),            \

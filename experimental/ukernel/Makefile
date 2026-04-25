@@ -3,32 +3,64 @@ CUDA_PATH      ?= /usr/local/cuda
 override CXX   := /usr/bin/g++
 NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
+DEBUG          ?= 0
 
-# ThunderKittens
-TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
+# skip ThunderKittens now
+# TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
 
-# GPU architecture - use sm_90a for TMA/wgmma support
-SM ?= 90a
+# GPU architecture
+# Default test builds target common datacenter GPUs used in this repo.
+DEFAULT_SMS := 80 86 89
+ifeq ($(origin SM), undefined)
+NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
+ENABLE_TMA := 0
+SUBMAKE_SM :=
+else
+SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+NVCC_ARCH_FLAGS := -arch=sm_$(SM)
+ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
+SUBMAKE_SM := SM=$(SM)
+endif
 
 # Base compilation flags
-CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC \
-              -I$(CUDA_PATH)/include -I$(CONDA_LIB_HOME)/../include
+ifeq ($(DEBUG),1)
+CXX_OPT_FLAGS  := -O0 -g
+NVCC_OPT_FLAGS := -O0 -g
+else
+CXX_OPT_FLAGS  := -O3
+NVCC_OPT_FLAGS := -O3
+endif
 
-NVCCFLAGS  := -g -O0 -std=c++20 \
-              --compiler-options "-fPIC -Wall -pthread -I$(CONDA_LIB_HOME)/../include" \
+CXXFLAGS   := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
+              -I$(CONDA_LIB_HOME)/../include \
+              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+
+NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
+              --compiler-options "-fPIC -Wall -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -pthread -I$(CONDA_LIB_HOME)/../include" \
               --expt-extended-lambda \
               --expt-relaxed-constexpr \
-              -I$(TK_ROOT)/include \
               -DKITTENS_HOPPER \
-              -arch=sm_$(SM) \
+              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) \
+              $(NVCC_ARCH_FLAGS) \
               -ccbin $(CXX)
+#             -I$(TK_ROOT)/include \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
               -lcudart -lcuda \
-              -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
+              -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include -Isrc/transport -Isrc/compute -Isrc/compute/fifo
+# Local includes must come first to avoid conflicts with UCCL headers
+LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
+
+# System and external library includes
+INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
+GDRCOPY_LIBDIR ?=
+ifneq ($(strip $(GDRCOPY_LIBDIR)),)
+GDRCOPY_LIBDIR_FLAGS := -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR)
+else
+GDRCOPY_LIBDIR_FLAGS :=
+endif
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -41,111 +73,129 @@ NVCCFLAGS  += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
 LDFLAGS    += $(REDIS_LIBS)
 endif
 
-# pytorch // pybind
-PYTHON ?= python3
+# UCCL collective support
+UCCL_ROOT := $(abspath ../../)
+UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
+UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
+UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 
-PYTHON_VERSION := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('LDVERSION'))")
-PYTHON_INCLUDES := $(shell $(PYTHON) -c "import sysconfig; print('-I' + sysconfig.get_path('include'))")
-PYTHON_LIBDIR := $(shell $(PYTHON) -c "import sysconfig; print('-L' + sysconfig.get_config_var('LIBDIR'))")
+CXXFLAGS += $(UCCL_CFLAGS)
+NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
+LDFLAGS += $(UCCL_LDFLAGS)
 
-PYBIND_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-
-PYTORCH_INCLUDES := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import include_paths; \
-print(' '.join(['-I'+p for p in include_paths()]))")
-
-PYTORCH_LIBDIR := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import library_paths; \
-print(' '.join(['-L'+p for p in library_paths()]))")
-
-PYTORCH_RPATH := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import library_paths; \
-print(':'.join(library_paths()))")
-
-CXXFLAGS += \
-    $(PYTHON_INCLUDES) \
-    $(PYBIND_INCLUDES) \
-    $(PYTORCH_INCLUDES) \
-    -DTORCH_API_INCLUDE_EXTENSION_H \
-    -Wno-attributes -Wno-ignored-attributes
-
-NVCCFLAGS += \
-    $(PYTHON_INCLUDES) \
-    $(PYBIND_INCLUDES) \
-    $(PYTORCH_INCLUDES) \
-    -DTORCH_API_INCLUDE_EXTENSION_H
-
-TORCH_LDFLAGS := \
-    $(PYTORCH_LIBDIR) \
-    -ltorch_python -ltorch_cuda -ltorch_cpu -ltorch -lc10_cuda -lc10 \
-    -lpython$(PYTHON_VERSION)
-
-LDFLAGS += -Wl,-rpath,$(PYTORCH_RPATH)
-
-# Source files
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute')
-SRC_CU  := $(shell find src -name '*.cu')
-TEST_DIR := tests
-SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
+# Source files - exclude module-local tests and device-only helper trees that
+# are built by their module Makefiles.
+#
+# NOTE: keep a hard deny-list for legacy transport implementations so they
+# never get linked alongside the new adapter-based transport sources.
+RAW_SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
+LEGACY_TRANSPORT_CPP := \
+	src/transport/ipc_channel.cc \
+	src/transport/tcp_transport_adapter.cc \
+	src/transport/uccl_transport_adapter.cc
+SRC_CPP := $(filter-out $(LEGACY_TRANSPORT_CPP),$(RAW_SRC_CPP))
+SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
-OBJ_TEST := $(SRC_TEST:.cc=.o)
 
-PYBIND_SRC := src/python_bindings.cc
-PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
-PYBIND_SO  := py/ukernel.so
+# Benchmark files
+BENCH_TRANSPORT_SRC := benchmarks/bench_transport.cc
+BENCH_TRANSPORT_OBJ := $(BENCH_TRANSPORT_SRC:.cc=.o)
+BENCH_TRANSPORT_BIN := bench_transport
+BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
+BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
+BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
+BENCH_GDRCOPY_CXXFLAGS := $(CXXFLAGS) -DENABLE_CUDA
+BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
+BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+                      $(GDRCOPY_LIBDIR_FLAGS) \
+                      -lcudart -lcuda -lgdrapi
+BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 
 # Targets
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
-TARGET_TEST := test_main
 
-# Build both static, shared, and test by default
-all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST) $(PYBIND_SO)
+# Build the core ukernel artifacts plus top-level benchmarks.
+all: $(STATIC_LIB) $(SHARED_LIB) bench
 
-# Compilation rules
+# Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+%.o: %.cpp
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 %.o: %.cu
-	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+ensure-uccl-rdma:
+	@if [ ! -f "$(UCCL_RDMA_STATIC)" ]; then \
+		echo "[ukernel] building collective/rdma..."; \
+		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
+	fi
 
 # Static library
-$(STATIC_LIB): $(OBJ_CC)
+$(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
 # Shared library
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-$(PYBIND_SO): $(PYBIND_OBJ) $(STATIC_LIB)
-	$(CXX) -shared $(CXXFLAGS) $^ \
-	       $(LDFLAGS) $(TORCH_LDFLAGS) \
-	       -o $@
+# Benchmark build rules
+$(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Test executable
-$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) $(LDFLAGS) -o $@
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
-# Run tests
-run_test: $(TARGET_TEST)
-	./$(TARGET_TEST)
+$(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
+	$(CXX) $(BENCH_GDRCOPY_CXXFLAGS) $(BENCH_GDRCOPY_INCLUDES) -MMD -MP -c $< -o $@
+
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-uccl-rdma
+	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
+
+bench: $(BENCH_BINS)
+
+device_test:
+	$(MAKE) -C src/device test $(SUBMAKE_SM)
+
+ccl_test:
+	$(MAKE) -C src/ccl test $(SUBMAKE_SM)
+
+transport_test:
+	$(MAKE) -C src/transport test
+
+transport_suite:
+	$(MAKE) -C src/transport suite
+
+device_bench:
+	$(MAKE) -C src/device bench $(SUBMAKE_SM)
 
 # Clean
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) \
-	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(PYBIND_SO) \
-	      *.d src/*.d src/transport/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
+	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
+	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
+	find src -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
+	rm -f src/ccl/test_components
+	$(MAKE) -C src/ccl clean
+	$(MAKE) -C src/device clean
+	$(MAKE) -C src/transport clean
 
 # Include dependencies
--include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
+-include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d)
 
-# [TODO: Yihan]Build only TK GEMM operator , need python binding later
-tk_gemm: src/compute/operator.o
-	@echo "TK GEMM operator compiled: src/compute/operator.o"
+# [TODO: Yihan] Build only TK GEMM operator if a dedicated binding returns later.
+# tk_gemm: src/device/persistent_kernel_ops.o
+# 	@echo "TK GEMM operator compiled: src/device/persistent_kernel_ops.o"
 
-src/compute/operator.o: src/compute/operator.cu
-	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
+# src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
+# 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test tk_gemm
+.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
+
+transport_bench: $(BENCH_TRANSPORT_BIN)

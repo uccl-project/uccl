@@ -102,7 +102,7 @@ class SwiftCC {
 
     update_rtt(delay);
 
-    // LOG_EVERY_N(ERROR, 100) << "Average RTT: " << rtt_ << " us, min:" <<
+    // UCCL_LOG_EVERY_N(ERROR, 100) << "Average RTT: " << rtt_ << " us, min:" <<
     // min_rtt << " us";
 
     double target_delay = get_target_delay();

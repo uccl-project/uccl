@@ -6,7 +6,7 @@ CUDA_HOME:=/usr/local/cuda
 EFA_HOME?=/opt/amazon/efa
 
 INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include -I$(ABS_REPO_ROOT)/include
-LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread  -lgflags -lgtest -lz -lelf
 LIBS_SHARED = ${LIBS}
 # Added -MMD -MP for automatic dependency generation
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA -MMD -MP
@@ -58,7 +58,7 @@ scattered_memcpy_test: scattered_memcpy_test.cc $(lib_obj)
 	g++ scattered_memcpy_test.cc -o scattered_memcpy_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 scattered_memcpy.o: scattered_memcpy.cu scattered_memcpy.cuh
-	nvcc -c scattered_memcpy.cu -o scattered_memcpy.o -arch=sm_70 -Xcompiler -fPIC
+	nvcc -c scattered_memcpy.cu -o scattered_memcpy.o -arch=sm_80 -Xcompiler -fPIC
 
 %.o: %.cc
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)

@@ -73,6 +73,7 @@ def _run_server(args):
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
+        collective.deregister_tensor(tensor)
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
@@ -101,6 +102,7 @@ def _run_client(args):
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
+        collective.deregister_tensor(tensor)
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
@@ -337,7 +339,6 @@ def main():
     p = argparse.ArgumentParser(
         description="Benchmark UCCL Collective API bandwidth (GPU only)"
     )
-    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
     p.add_argument(
         "--sizes",
         type=parse_size_list,
@@ -401,7 +402,7 @@ def main():
 
     try:
         # Initialize UCCL collective context (local_gpu_idx auto-detected from torch.distributed)
-        collective.init_collective(args.num_cpus)
+        collective.init_collective()
 
         # Get the actual GPU index used by the collective
         ctx = collective.get_collective()

@@ -1,12 +1,10 @@
 #include "uccl_engine.h"
-#ifdef UCCL_P2P_USE_TCPX
-#include "nccl_tcpx_endpoint.h"
-#elif defined(UCCL_P2P_USE_NCCL)
 #include "engine.h"
+#include "rdma/epoll_client.h"
+#ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #else
 #include "endpoint_wrapper.h"
-#include "engine.h"
 #endif
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -28,18 +26,15 @@
 #include <unordered_map>
 #include <utility>
 
-#ifdef UCCL_P2P_USE_TCPX
-// nccl_tcpx_endpoint does not declare inside_python; define it here for
-// uccl_engine.
-thread_local bool inside_python = false;
-
-using Endpoint = nccl_tcpx::Endpoint;
-#else
 using Endpoint = ::Endpoint;
-#endif
 
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
+  std::thread local_accept_thread;
+  std::atomic<bool> local_accept_started{false};
+  // Standalone OOB client for cross-process local notifications when the
+  // transport endpoint does not provide one (e.g. NCCL/TCP build).
+  std::shared_ptr<EpollClient> local_oob_client;
 };
 
 struct uccl_conn {
@@ -50,6 +45,8 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
+  bool is_local = false;      // True for intra-node (IPC) connections
+  bool same_process = false;  // True for same-process local transfers
 };
 
 typedef struct {
@@ -60,12 +57,11 @@ typedef struct {
 typedef struct {
   uint64_t mr_id;
   size_t size;
+  IpcTransferInfo ipc_info = {};  // Pre-computed IPC handle for GPU buffers
+  bool has_ipc = false;           // True if IPC handle is valid (GPU memory)
 } mem_reg_entry_t;
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
-
-std::vector<notify_msg_t> notify_msg_list;
-std::mutex notify_msg_list_mutex;
 
 // Helper function to find the base address and mr_id for any address within a
 // registered region
@@ -80,57 +76,58 @@ bool find_mem_reg(uintptr_t addr, uintptr_t& base_addr, uint64_t& mr_id) {
   return false;
 }
 
-// Helper function for the listener thread
-void listener_thread_func(uccl_conn_t* conn) {
-  std::cout << "Listener thread: Waiting for notifs" << std::endl;
+// Look up the pre-computed IpcTransferInfo for any address within a registered
+// GPU buffer region.  Adjusts offset and size to match the requested range.
+// Returns false if the address is not registered or has no IPC handle (e.g.
+// host memory).
+static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
+                                  IpcTransferInfo& out_info) {
+  uintptr_t base_addr;
+  uint64_t mr_id_unused;
+  if (!find_mem_reg(addr, base_addr, mr_id_unused)) return false;
+  auto const& entry = mem_reg_info.at(base_addr);
+  if (!entry.has_ipc) return false;
+  out_info = entry.ipc_info;
+  // Shift the offset within the IPC allocation to point at the sub-range.
+  out_info.offset += (addr - base_addr);
+  out_info.size = size;
+  return true;
+}
 
-  while (conn->listener_running) {
-    struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-               sizeof(timeout));
+// Deserialize IpcTransferInfo from an opaque buffer.
+static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
+  memset(&info, 0, sizeof(info));
+  size_t off = 0;
+  memcpy(&info.handle, buf + off, sizeof(info.handle));
+  off += sizeof(info.handle);
+  memcpy(&info.offset, buf + off, sizeof(info.offset));
+  off += sizeof(info.offset);
+  memcpy(&info.size, buf + off, sizeof(info.size));
+  off += sizeof(info.size);
+  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);
+}
 
-    md_t md;
-    ssize_t total_received = 0;
-    ssize_t recv_size = 0;
-    char* buffer = reinterpret_cast<char*>(&md);
-
-    while (total_received < sizeof(md_t)) {
-      recv_size = recv(conn->sock_fd, buffer + total_received,
-                       sizeof(md_t) - total_received, 0);
-
-      if (recv_size <= 0) {
-        if (!conn->listener_running) {
-          return;
-        }
-        break;
-      }
-      total_received += recv_size;
-    }
-
-    if (total_received != sizeof(md_t)) {
-      if (!conn->listener_running) {
-        return;
-      }
-      continue;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-      notify_msg_t notify_msg = {};
-      strncpy(notify_msg.name, md.notify_data.name,
-              sizeof(notify_msg.name) - 1);
-      memcpy(notify_msg.msg, md.notify_data.msg, sizeof(notify_msg.msg));
-      notify_msg_list.push_back(notify_msg);
-    }
-  }
+// Check UCCL_P2P_DISABLE_IPC=1 to force all transfers through the network
+// transport (RDMA or TCP) even for intra-node peers.  Useful for CI testing.
+static bool ipc_disabled() {
+  static bool disabled = [] {
+    char const* val = std::getenv("UCCL_P2P_DISABLE_IPC");
+    bool dis = val && std::string(val) == "1";
+    if (dis)
+      std::cerr << "UCCL P2P: IPC disabled, all transfers will use "
+                   "network transport"
+                << std::endl;
+    return dis;
+  }();
+  return disabled;
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+  (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint());
   return eng;
 }
 
@@ -142,22 +139,94 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port) {
+                                 char const* remote_gpu, int remote_port,
+                                 bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
-  bool ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
-                                      remote_port, conn_id);
+
+  // Detect intra-node connection: if the target IP matches our own IP.
+  // When UCCL_P2P_DISABLE_IPC=1, treat cross-process connections as remote.
+  // Same-process self-connections always use the local path (connect_local)
+  // regardless of DISABLE_IPC, since NCCL can't self-connect via network.
+  std::string local_ip = uccl::get_oob_ip();
+  bool is_local =
+      (same_process || !ipc_disabled()) && (std::string(ip_addr) == local_ip);
+
+  // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
+  // or a CUDA device index string (e.g. "0").
+  std::string remote_bdf;
+  if (remote_gpu && std::strchr(remote_gpu, ':')) {
+    remote_bdf = uccl::normalize_pci_bus_id(remote_gpu);
+  } else {
+    int gpu_idx = remote_gpu ? std::atoi(remote_gpu) : 0;
+    char bdf_buf[64];
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), gpu_idx));
+    remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
+  }
+
+  // Decide whether to use IPC (connect_local) or network (connect).
+  //
+  // RDMA build:
+  //   - Same-process: IPC (direct ring access)
+  //   - Cross-process diff-GPU same-node: IPC
+  //   - Cross-process same-GPU same-node: network (shm ring self-skip issue)
+  //   - Remote inter-node: network (RDMA)
+  //
+  // NCCL/TCP build:
+  //   - Same-process: IPC (direct ring access)
+  //   - Cross-process same-node: network (NCCL). Data still uses IPC via
+  //     NIXL ipc_bufs since conn->is_local is set true.
+  //     NOTE: same-GPU cross-process is unsupported with NCCL/TCP because
+  //     ncclCommInitRank rejects two ranks on the same physical GPU.
+  //   - Remote inter-node: network (NCCL)
+#if !defined(UCCL_P2P_USE_NCCL)
+  bool use_ipc = is_local && (same_process ||
+                              remote_bdf != engine->endpoint->get_gpu_bus_id());
+#else
+  bool use_ipc = is_local && same_process;
+#endif
+
+  bool ok;
+  if (use_ipc) {
+    ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
+    conn->sock_fd = -1;
+    // Cross-process local: connect_local doesn't establish OOB, so create a
+    // standalone OOB client for notification delivery.
+    if (ok && !same_process) {
+      auto oob_client = engine->endpoint->get_oob_client();
+      if (!oob_client) {
+        if (!engine->local_oob_client) {
+          engine->local_oob_client = std::make_shared<EpollClient>();
+          engine->local_oob_client->start();
+        }
+        oob_client = engine->local_oob_client;
+      }
+      if (oob_client) {
+        conn->oob_conn_key =
+            oob_client->connect_to_server(std::string(ip_addr), remote_port);
+      }
+    }
+  } else {
+    // Remote inter-node: use RDMA/NCCL network connection.
+    ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
+                                   conn_id);
+    if (ok) {
+      conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+#if !defined(UCCL_P2P_USE_NCCL)
+      conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+#endif
+    }
+  }
+
   if (!ok) {
     delete conn;
     return nullptr;
   }
   conn->conn_id = conn_id;
-  conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
-  conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
-#endif
   conn->engine = engine;
+  conn->is_local = is_local;
+  conn->same_process = same_process;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   return conn;
@@ -166,6 +235,15 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+#if !defined(UCCL_P2P_USE_NCCL)
+  // RDMA: start both RDMA accept and local IPC accept threads so that
+  // cross-process local peers can connect via connect_local concurrently
+  // with the blocking RDMA accept for remote peers.
+  engine->endpoint->start_passive_accept();
+#endif
+  // NCCL/TCP: no passive accept threads. Same-process uses connect_local
+  // directly. Cross-process uses NCCL network (connect_local causes
+  // double-free with NCCL endpoint).
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -179,7 +257,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+#if !defined(UCCL_P2P_USE_NCCL)
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
   conn->engine = engine;
@@ -198,6 +276,24 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   mem_reg_entry_t entry;
   entry.mr_id = mr_id;
   entry.size = size;
+
+  // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
+  // can look it up without a per-transfer gpuIpcGetMemHandle call.
+  int dev_idx = uccl::get_dev_idx((void*)data);
+  if (dev_idx >= 0) {
+    gpuSetDevice(dev_idx);
+    static constexpr size_t kIpcAlignment = 1ul << 20;
+    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
+    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
+                                        reinterpret_cast<void*>(aligned));
+    if (err == gpuSuccess) {
+      entry.ipc_info.offset = data - aligned;
+      entry.ipc_info.size = size;
+      entry.ipc_info.gpu_idx = dev_idx;
+      entry.has_ipc = true;
+    }
+  }
+
   mem_reg_info[data] = entry;
   return 0;
 }
@@ -205,6 +301,19 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
+
+  if (conn->is_local) {
+    IpcTransferInfo info;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
+    return conn->engine->endpoint->read_ipc_async(
+               conn->conn_id, const_cast<void*>(data), size, info, transfer_id)
+               ? 0
+               : -1;
+  }
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(data), size,
@@ -217,9 +326,40 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> fifo_items, int num_iovs,
-                            uint64_t* transfer_id) {
+                            uint64_t* transfer_id,
+                            std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#if defined(UCCL_P2P_USE_NCCL)
+  // The NIXL UCCL backend always uses the vector API, even for a single iov.
+  // For the NCCL/TCPX path, bypass the generic readv proxy-thread machinery in
+  // that case and issue the scalar read directly.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->read_async(conn->conn_id, mr_ids[0],
+                                              dst_v[0], size_v[0],
+                                              fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
+  // Local IPC path (both same-process and cross-process)
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
+    std::vector<IpcTransferInfo> info_v(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
+      }
+    }
+    return conn->engine->endpoint->readv_ipc_async(
+               conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
+               ? 0
+               : -1;
+  }
+
+  // Remote RDMA
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, fifo_items, num_iovs,
                                              transfer_id)
@@ -248,34 +388,73 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
 
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
+  if (conn->is_local) {
+    // Same-process local path: both buffers are in our address space.
+    // Set direct_addr so write_ipc_async skips gpuIpcOpenMemHandle and
+    // uses the virtual address directly, while keeping its stream/event
+    // optimizations.
+    IpcTransferInfo info;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
+    return conn->engine->endpoint->write_ipc_async(conn->conn_id, data, size,
+                                                   info, transfer_id)
+               ? 0
+               : -1;
+  }
 
   return conn->engine->endpoint->write_async(conn->conn_id, mr,
                                              const_cast<void*>(data), size,
                                              fifo_item, transfer_id)
              ? 0
              : -1;
-#endif
 }
 
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> dst_v,
                              std::vector<size_t> size_v,
                              std::vector<FifoItem> fifo_items, int num_iovs,
-                             uint64_t* transfer_id) {
+                             uint64_t* transfer_id,
+                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
+#if defined(UCCL_P2P_USE_NCCL)
+  // Mirror the single-iov fast path for writes so the merged NCCL endpoint
+  // does not force 1-buffer transfers through the vector proxy path.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->write_async(conn->conn_id, mr_ids[0],
+                                               dst_v[0], size_v[0],
+                                               fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
+  // Local IPC path (both same-process and cross-process)
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
+    std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
+    std::vector<IpcTransferInfo> info_v(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
+      }
+    }
+    return conn->engine->endpoint->writev_ipc_async(
+               conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
+               ? 0
+               : -1;
+  }
+
+  // Remote RDMA
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
              ? 0
              : -1;
-#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -292,14 +471,9 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-#if defined(UCCL_P2P_USE_TCPX)
-  // TCPX uses a separate listener thread
-  conn->listener_thread = new std::thread(listener_thread_func, conn);
-#elif defined(UCCL_P2P_USE_NCCL)
-  // NCCL handles notifications in the control thread, no separate listener
-  // needed
+  // Notifications are handled by backend control channels; no separate
+  // listener thread is needed.
   conn->listener_thread = nullptr;
-#endif
 
   return 0;
 }
@@ -335,6 +509,10 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   conn->listener_thread = nullptr;
 
   return 0;
+}
+
+bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
+  return conn && conn->is_local;
 }
 
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
@@ -380,12 +558,6 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-#if defined(UCCL_P2P_USE_TCPX)
-  std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-  std::vector<notify_msg_t> result = std::move(notify_msg_list);
-  notify_msg_list.clear();
-  return result;
-#else
   std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
@@ -400,32 +572,45 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   notify_list.clear();
 
   return result;
-#endif
 }
 
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#if defined(UCCL_P2P_USE_TCPX)
-  md_t md;
-  md.notify_data = *notify_msg;
-
-  return send(conn->sock_fd, &md, sizeof(md_t), 0);
-#elif defined(UCCL_P2P_USE_NCCL)
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
 
-  auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
-  if (!tcp_endpoint) {
-    LOG(ERROR) << "Failed to get TCP endpoint for notification";
-    return -1;
+  // Same-process local connection: push notification directly to the local
+  // list — no network path needed regardless of transport.
+  if (conn->same_process) {
+    std::lock_guard<std::mutex> lock(notify_mutex);
+    notify_list.push_back(oob_msg);
+    return 0;
   }
 
-  uint64_t flow_id = conn->conn_id;
-  return tcp_endpoint->send_notification(flow_id, oob_msg);
+  // Cross-process local connection: send via OOB client (works for both
+  // RDMA and TCP builds).  The oob_conn_key was set up in uccl_engine_connect.
+  if (conn->is_local && !conn->oob_conn_key.empty()) {
+    auto oob_client = conn->engine->endpoint->get_oob_client();
+    if (!oob_client) {
+      oob_client = conn->engine->local_oob_client;
+    }
+    if (!oob_client) {
+      std::cerr << "No OOB client available for local notification"
+                << std::endl;
+      return -1;
+    }
+    std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+    return oob_client->send_meta(conn->oob_conn_key, payload)
+               ? sizeof(NotifyMsg)
+               : -1;
+  }
+
+#if defined(UCCL_P2P_USE_NCCL)
+  return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
 #else
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"
@@ -439,12 +624,6 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     return -1;
   }
 
-  NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-
   std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
 
@@ -452,38 +631,100 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 #endif
 }
 
+// Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
+// Layout: handle(64) + offset(8) + size(8) + gpu_idx(4) = 84 bytes.
+static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
+  memset(buf, 0, IPC_INFO_SIZE);
+  size_t off = 0;
+  memcpy(buf + off, &info.handle, sizeof(info.handle));
+  off += sizeof(info.handle);  // 64
+  memcpy(buf + off, &info.offset, sizeof(info.offset));
+  off += sizeof(info.offset);  // 8
+  memcpy(buf + off, &info.size, sizeof(info.size));
+  off += sizeof(info.size);  // 8
+  memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);  // 4
+}
+
+int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
+                             char* ipc_buf, bool* has_ipc) {
+  if (!engine || !ipc_buf || !has_ipc) return -1;
+  *has_ipc = false;
+  if (ipc_disabled()) return 0;
+  auto it = mem_reg_info.find(addr);
+  if (it == mem_reg_info.end()) return -1;
+  if (!it->second.has_ipc) return 0;
+  serialize_ipc_info(it->second.ipc_info, ipc_buf);
+  *has_ipc = true;
+  return 0;
+}
+
+int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+                                uintptr_t base_addr, size_t size) {
+  if (!ipc_buf) return -1;
+  IpcTransferInfo info;
+  deserialize_ipc_info(ipc_buf, info);
+  info.offset += (addr - base_addr);
+  info.size = size;
+  serialize_ipc_info(info, ipc_buf);
+  return 0;
+}
+
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec =
-        engine->endpoint->get_unified_metadata();
+    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
 
     std::string result;
-    if (metadata_vec.size() == 10) {  // IPv4 format
-      std::string ip_addr = std::to_string(metadata_vec[0]) + "." +
-                            std::to_string(metadata_vec[1]) + "." +
-                            std::to_string(metadata_vec[2]) + "." +
-                            std::to_string(metadata_vec[3]);
-      uint16_t port = (metadata_vec[4] << 8) | metadata_vec[5];
-      int gpu_idx;
-      std::memcpy(&gpu_idx, &metadata_vec[6], sizeof(int));
-
-      result = "" + ip_addr + ":" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
-    } else if (metadata_vec.size() == 22) {  // IPv6 format
-      char ip6_str[INET6_ADDRSTRLEN];
-      struct in6_addr ip6_addr;
-      std::memcpy(&ip6_addr, metadata_vec.data(), 16);
-      inet_ntop(AF_INET6, &ip6_addr, ip6_str, sizeof(ip6_str));
-
-      uint16_t port = (metadata_vec[16] << 8) | metadata_vec[17];
-      int gpu_idx;
-      std::memcpy(&gpu_idx, &metadata_vec[18], sizeof(int));
-
-      result = "" + std::string(ip6_str) + "]:" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
-    } else {  // Fallback: return hex representation
+    // New metadata format: [IP (4/16)] [port (2)] [bdf_len (1)] [bdf_str (N)]
+    if (metadata_vec.size() >= 7 && metadata_vec.size() <= 30) {
+      // Try to detect IPv4 vs IPv6 by parsing the BDF length field
+      // IPv4: offset 6 has bdf_len; IPv6: offset 18 has bdf_len
+      size_t ip_len;
+      std::string ip_addr;
+      if (metadata_vec.size() >= 7) {
+        uint8_t candidate_bdf_len = metadata_vec[6];
+        if (7 + candidate_bdf_len == metadata_vec.size()) {
+          // IPv4 format
+          ip_len = 4;
+          ip_addr = std::to_string(metadata_vec[0]) + "." +
+                    std::to_string(metadata_vec[1]) + "." +
+                    std::to_string(metadata_vec[2]) + "." +
+                    std::to_string(metadata_vec[3]);
+        } else if (metadata_vec.size() >= 19) {
+          uint8_t candidate_bdf_len6 = metadata_vec[18];
+          if (19 + candidate_bdf_len6 == metadata_vec.size()) {
+            ip_len = 16;
+            char ip6_str[INET6_ADDRSTRLEN];
+            struct in6_addr ip6_a;
+            std::memcpy(&ip6_a, metadata_vec.data(), 16);
+            inet_ntop(AF_INET6, &ip6_a, ip6_str, sizeof(ip6_str));
+            ip_addr = "[" + std::string(ip6_str) + "]";
+          } else {
+            ip_len = 0;
+          }
+        } else {
+          ip_len = 0;
+        }
+      } else {
+        ip_len = 0;
+      }
+      if (ip_len > 0) {
+        uint16_t port = (metadata_vec[ip_len] << 8) | metadata_vec[ip_len + 1];
+        uint8_t bdf_len = metadata_vec[ip_len + 2];
+        std::string bdf(metadata_vec.begin() + ip_len + 3,
+                        metadata_vec.begin() + ip_len + 3 + bdf_len);
+        result = ip_addr + ":" + std::to_string(port) + "?" + bdf;
+      } else {
+        // Fallback: hex
+        for (size_t i = 0; i < metadata_vec.size(); ++i) {
+          char hex[3];
+          snprintf(hex, sizeof(hex), "%02x", metadata_vec[i]);
+          result += hex;
+        }
+      }
+    } else {
       result = "";
       for (size_t i = 0; i < metadata_vec.size(); ++i) {
         char hex[3];

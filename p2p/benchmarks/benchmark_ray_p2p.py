@@ -57,7 +57,7 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _run_server(args, ep, peer_rank: int):
+def _run_server(args, ep, peer_rank: int, buffer_device: str):
     """Server side: receives data via WRITE/READ operations."""
     peer = peer_rank
 
@@ -77,7 +77,9 @@ def _run_server(args, ep, peer_rank: int):
                 size_per_block = sz // args.num_iovs
                 buf_v = []
                 for _ in range(args.num_iovs):
-                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf = _make_buffer(
+                        size_per_block, buffer_device, args.local_gpu_idx
+                    )
                     buf_v.append(buf)
 
                 remote_descs = ep.register_memory(buf_v)
@@ -85,12 +87,13 @@ def _run_server(args, ep, peer_rank: int):
                 _send_bytes(remote_descs_serialized, dst=peer)
 
                 dist.barrier()
+                ep.deregister_memory(remote_descs)
         else:
             # Raw mode (default): register memory and send descriptors only once
             size_per_block = sz // args.num_iovs
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             remote_descs = ep.register_memory(buf_v)
@@ -100,13 +103,12 @@ def _run_server(args, ep, peer_rank: int):
 
             # Wait for all iterations to complete
             dist.barrier()
-
-        print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
+            ep.deregister_memory(remote_descs)
 
     print("[Server] Benchmark complete")
 
 
-def _run_client(args, ep, peer_rank: int, mode: str):
+def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
     """Client side: sends data via WRITE/READ operations."""
     peer = peer_rank
 
@@ -116,6 +118,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
     remote_metadata = _recv_bytes(src=peer)
     print(f"[Client] Exchanged metadata with server")
 
+    conn_id = None
     for sz in args.sizes:
         size_per_block = sz // args.num_iovs
 
@@ -124,7 +127,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             # Warmup iteration
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
@@ -141,6 +144,8 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             while not is_done:
                 _, is_done = ep.poll_async(transfer_id)
             dist.barrier()
+            ep.deregister_memory(local_descs)
+            ep.remove_remote_endpoint(conn_id)
 
             # Benchmark iterations
             start = time.perf_counter()
@@ -148,7 +153,9 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             for _ in range(args.iters):
                 buf_v = []
                 for _ in range(args.num_iovs):
-                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf = _make_buffer(
+                        size_per_block, buffer_device, args.local_gpu_idx
+                    )
                     buf_v.append(buf)
 
                 local_descs = ep.register_memory(buf_v)
@@ -169,13 +176,15 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
                 total += sz
                 dist.barrier()
+                ep.deregister_memory(local_descs)
+                ep.remove_remote_endpoint(conn_id)
 
             elapsed = time.perf_counter() - start
         else:
             # Raw mode (default): setup once, reuse for all iterations
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
@@ -207,6 +216,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
             elapsed = time.perf_counter() - start
             dist.barrier()
+            ep.deregister_memory(local_descs)
 
         print(
             f"[Client/{mode.upper()}] {_pretty(sz):>8} : "
@@ -214,6 +224,11 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             f"{total / elapsed / 1e9:6.2f} GB/s | "
             f"{elapsed / args.iters:6.6f} s"
         )
+
+    # Clean up connection once after all sizes (raw mode reuses it across sizes)
+    if not args.normal and conn_id is not None:
+        ep.remove_remote_endpoint(conn_id)
+
     print(f"[Client/{mode.upper()}] Benchmark complete")
 
 
@@ -241,6 +256,9 @@ def _run_phase(args, ep, mode: str):
         raise ValueError(f"bad mode: {mode}")
 
     peer = server_rank if rank == client_rank else client_rank
+    sender_device = args.sender_device
+    receiver_device = args.receiver_device
+    buffer_device = sender_device if rank == client_rank else receiver_device
 
     dist.barrier()
     if rank == 0:
@@ -248,13 +266,16 @@ def _run_phase(args, ep, mode: str):
         print(
             f"PHASE: {mode.upper()}  (client=rank{client_rank}, server=rank{server_rank})"
         )
+        print(
+            f"Buffer devices: sender={sender_device.upper()} receiver={receiver_device.upper()}"
+        )
         print("=" * 60)
     dist.barrier()
 
     if rank == client_rank:
-        _run_client(args, ep, peer_rank=peer, mode=mode)
+        _run_client(args, ep, peer_rank=peer, mode=mode, buffer_device=buffer_device)
     else:
-        _run_server(args, ep, peer_rank=peer)
+        _run_server(args, ep, peer_rank=peer, buffer_device=buffer_device)
 
     dist.barrier()
 
@@ -262,8 +283,29 @@ def _run_phase(args, ep, mode: str):
 def main():
     p = argparse.ArgumentParser("UCCL Ray P2P benchmark using transfer API")
     p.add_argument("--local-gpu-idx", type=int, default=0)
-    p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
+    p.add_argument(
+        "--sender-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for the sender. Defaults to --device.",
+    )
+    p.add_argument(
+        "--receiver-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for the receiver. Defaults to --device.",
+    )
+    p.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Use CPU (pinned) memory for buffers (shorthand for --device cpu)",
+    )
+    p.add_argument(
+        "--intra",
+        action="store_true",
+        help="Run as an intra-node benchmark. Uses rank as local GPU index.",
+    )
     p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
     )
@@ -289,7 +331,7 @@ def main():
         ],
         help="Comma-separated list of message sizes in bytes",
     )
-    p.add_argument("--iters", type=int, default=10, help="Number of iterations")
+    p.add_argument("--iters", type=int, default=50, help="Number of iterations")
     p.add_argument(
         "--num-iovs",
         type=int,
@@ -297,10 +339,17 @@ def main():
         help="Number of iovs to transfer in a single call",
     )
     args = p.parse_args()
+    if args.cpu:
+        args.device = "cpu"
+    if args.sender_device is None:
+        args.sender_device = args.device
+    if args.receiver_device is None:
+        args.receiver_device = args.device
 
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
     print("Phases: WRITE then READ (auto, no --mode)")
+    print("Topology:", "intra-node" if args.intra else "inter-node")
     if args.normal:
         print("Normal mode: re-register and exchange metadata every iteration")
     else:
@@ -308,14 +357,21 @@ def main():
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     print(f"Iterations: {args.iters}")
     print(f"Number of IOVs: {args.num_iovs}")
+    print(
+        f"Sender device: {args.sender_device} | Receiver device: {args.receiver_device}"
+    )
     print("=" * 60)
 
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
+    if args.intra:
+        args.local_gpu_idx = rank
+    if torch.cuda.is_available():
+        torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx)
     ep.start_passive_accept()
 
     _run_phase(args, ep, mode="write")

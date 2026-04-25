@@ -15,7 +15,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <sstream>
 #include <vector>
@@ -355,7 +355,7 @@ struct FloatANSProviderInline {
   using FTI = FloatTypeInfo<FT>;
 
   __host__ FloatANSProviderInline(int num, const void** in) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       in_[i] = in[i];
     }
@@ -530,7 +530,7 @@ struct FloatOutProviderInline {
       const void** in,
       void** out,
       const uint32_t* outCapacity) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       in_[i] = in[i];
       out_[i] = out[i];
@@ -611,8 +611,14 @@ FloatDecompressStatus floatDecompressDevice(
       case FloatType::kFloat32:
         RUN_FUSED(FloatType::kFloat32);
         break;
+      case FloatType::kFloat8E4M3FN:
+        RUN_FUSED(FloatType::kFloat8E4M3FN);
+        break;
+      case FloatType::kFloat8E5M2:
+        RUN_FUSED(FloatType::kFloat8E5M2);
+        break;
       default:
-        CHECK(false);
+        UCCL_CHECK(false);
         break;
     }
 
@@ -685,8 +691,14 @@ FloatDecompressStatus floatDecompressDevice(
       case FloatType::kFloat32:
         RUN_DECODE(FloatType::kFloat32);
         break;
+      case FloatType::kFloat8E4M3FN:
+        RUN_DECODE(FloatType::kFloat8E4M3FN);
+        break;
+      case FloatType::kFloat8E5M2:
+        RUN_DECODE(FloatType::kFloat8E5M2);
+        break;
       default:
-        CHECK(false);
+        UCCL_CHECK(false);
         break;
     }
 
@@ -735,6 +747,13 @@ FloatDecompressStatus floatDecompressDevice(
   CUDA_TEST_ERROR();
 
   return status;
+}
+
+// Kernel to double uint32 values (adjusts outSize from pairs to fp8 words)
+__global__ void doubleUint32Values(uint32_t* values, uint32_t n) {
+  uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n)
+    values[i] *= 2;
 }
 
 } // namespace dietgpu

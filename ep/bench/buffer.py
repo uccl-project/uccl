@@ -1,4 +1,5 @@
 import os
+from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
@@ -22,6 +23,7 @@ try:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 except ImportError:
     from utils import (
@@ -29,6 +31,7 @@ except ImportError:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 
 
@@ -62,7 +65,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
-        is_intranode: bool = False,
+        is_intranode: Optional[bool] = None,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -82,25 +85,54 @@ class Buffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
+            is_intranode: whether to force intranode-only proxy mode. If set to `None`, infer it from the
+                process-group topology automatically. Explicit `True` is rejected when the group spans multiple nodes.
         """
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
             device_index = torch.cuda.current_device()
 
-        rdma_buffer_is_host_allocated = False
-        if num_rdma_bytes > 0 and hasattr(ep, "get_rdma_buffer"):
-            # Keep platform-specific RDMA allocation policy.
-            self.scratch, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+        if hasattr(ep, "get_rdma_buffer"):
+            # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
+            # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
+            # segmented caching-allocator mapping.
+            scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
                 num_rdma_bytes, device_index
             )
+            self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
-            # Keep a valid pointer even when RDMA is disabled.
-            self.scratch = torch.empty(
-                max(num_rdma_bytes, 1), dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
+            rdma_buffer_is_host_allocated = False
+            if num_rdma_bytes > 0:
+                if hasattr(ep, "can_register_rdma_gpu_buffer"):
+                    rdma_buffer_is_host_allocated = not bool(
+                        ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
+                    )
+                elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
+                    rdma_buffer_is_host_allocated = bool(
+                        ep.rdma_buffer_should_use_host_alloc(
+                            device_index, num_rdma_bytes
+                        )
+                    )
+
+            if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
+                # Host-pinned fallback for platforms/NICs that cannot register GPU memory.
+                self.scratch = torch.zeros(
+                    (num_rdma_bytes,),
+                    dtype=torch.uint8,
+                    device="cpu",
+                    pin_memory=True,
+                )
+            else:
+                # Device buffer for normal RDMA path. Keep a valid pointer even when RDMA is disabled.
+                self.scratch = torch.zeros(
+                    max(num_rdma_bytes, 1),
+                    dtype=torch.uint8,
+                    device=f"cuda:{device_index}",
+                )
 
         rdma_buffer_ptr = self.scratch.data_ptr()
+        _local_world = int(os.environ.get("LOCAL_WORLD_SIZE", -1))
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
@@ -129,10 +161,10 @@ class Buffer:
             num_rdma_bytes,
             low_latency_mode,
             explicitly_destroy,
-            int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
+            _local_world,
         )
         if num_rdma_bytes:
-            self.runtime.set_rdma_buffer(rdma_buffer_ptr)
+            self.runtime.set_rdma_buffer(rdma_buffer_ptr, rdma_buffer_is_host_allocated)
 
         # Synchronize device IDs
         device_ids = [
@@ -170,6 +202,13 @@ class Buffer:
 
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
+
+    def _ll_compute_stream_ptr(self, device: torch.device):
+        """
+        Return the current CUDA stream pointer for low-latency runtime calls.
+        """
+        current = torch.cuda.current_stream(device=device)
+        return int(current.cuda_stream)
 
     def reset_rdma_buffer(self):
         """
@@ -217,7 +256,8 @@ class Buffer:
         Returns:
             event: the captured event.
         """
-        return EventOverlap(EventHandle())
+        stream_ptr = int(torch.cuda.current_stream().cuda_stream)
+        return EventOverlap(EventHandle(stream_ptr))
 
     # noinspection PyTypeChecker
     def low_latency_dispatch(
@@ -295,7 +335,7 @@ class Buffer:
         packed_recv_x = torch.empty(
             (num_local_experts, num_recv_tokens, x.size(1)),
             device=x.device,
-            dtype=torch.float8_e4m3fn if use_fp8 else torch.bfloat16,
+            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
         )
         packed_recv_count = torch.empty(
             (num_local_experts,), device=x.device, dtype=torch.int32
@@ -325,6 +365,7 @@ class Buffer:
             packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
             packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
 
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
         event, hook = self.runtime.low_latency_dispatch(
             x.data_ptr(),
             x.size(0),
@@ -347,6 +388,7 @@ class Buffer:
                 if dispatch_wait_recv_cost_stats is None
                 else dispatch_wait_recv_cost_stats.data_ptr()
             ),
+            compute_stream_ptr,
             int(num_max_dispatch_tokens_per_rank),
             int(num_experts),
             bool(use_fp8),
@@ -449,6 +491,7 @@ class Buffer:
             if out is not None
             else torch.empty((topk_idx.size(0), hidden), device=x.device, dtype=x.dtype)
         )
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
         event, hook = self.runtime.low_latency_combine(
             x_for_combine.data_ptr(),
             x_for_combine.size(0),
@@ -469,6 +512,7 @@ class Buffer:
                 if combine_wait_recv_cost_stats is None
                 else combine_wait_recv_cost_stats.data_ptr()
             ),
+            compute_stream_ptr,
             int(num_max_dispatch_tokens_per_rank),
             int(num_experts),
             bool(use_logfmt),
@@ -550,12 +594,14 @@ class Buffer:
         Returns:
             stream: the communication stream.
         """
-        ts: torch.Stream = self.runtime.get_comm_stream()
-        return torch.cuda.Stream(
-            stream_id=ts.stream_id,
-            device_index=ts.device_index,
-            device_type=ts.device_type,
-        )
+        ts = self.runtime.get_comm_stream()
+        if isinstance(ts, torch.Stream):
+            return torch.cuda.Stream(
+                stream_id=ts.stream_id,
+                device_index=ts.device_index,
+                device_type=ts.device_type,
+            )
+        return torch.cuda.ExternalStream(int(ts))
 
     def get_local_buffer_tensor(
         self,
@@ -585,7 +631,15 @@ class Buffer:
             torch.float64,
             torch.bool,
         }, f"Unsupported dtype for get_local_buffer_tensor: {dtype}"
-        tensor = self.runtime.get_local_buffer_tensor(dtype, offset, use_rdma_buffer)
+        if use_rdma_buffer:
+            tensor = self.scratch.view(dtype)
+            if offset > 0:
+                tensor = tensor[offset:]
+        else:
+            raise RuntimeError(
+                "get_local_buffer_tensor(use_rdma_buffer=False) is not available "
+                "without Torch C++ tensor bindings"
+            )
         if size is None:
             return tensor
 
@@ -601,6 +655,26 @@ class Buffer:
             assert len(bias) == 2
             bias_0, bias_1 = bias
         return bias_0, bias_1
+
+    @staticmethod
+    def _dtype_code(dtype: torch.dtype) -> int:
+        table = {
+            torch.uint8: 0,
+            torch.int8: 1,
+            torch.int16: 2,
+            torch.int32: 3,
+            torch.int64: 4,
+            torch.float16: 5,
+            torch.bfloat16: 6,
+            torch.float32: 7,
+            torch.float64: 8,
+            torch.bool: 9,
+            torch.float8_e4m3fn: 10,
+            torch.float8_e4m3fnuz: 10,
+        }
+        if dtype not in table:
+            raise ValueError(f"Unsupported dtype for uccl combine: {dtype}")
+        return table[dtype]
 
     @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
@@ -688,31 +762,75 @@ class Buffer:
             is_token_in_rank: `[num_tokens, num_ranks]` with `torch.bool`, whether a token be sent to a rank.
             event: the event after executing the kernel (valid only if `async_finish` is set).
         """
-        (
+        if allocate_on_comm_stream:
+            assert previous_event is not None and async_finish
+
+        alloc_ctx = (
+            torch.cuda.stream(self.get_comm_stream())
+            if allocate_on_comm_stream
+            else nullcontext()
+        )
+        with alloc_ctx:
+            num_tokens_per_rank = torch.empty(
+                (self.group_size,), dtype=torch.int, device=topk_idx.device
+            )
+            num_tokens_per_rdma_rank = (
+                torch.empty(
+                    (self.runtime.get_num_rdma_ranks(),),
+                    dtype=torch.int,
+                    device=topk_idx.device,
+                )
+                if self.runtime.get_num_rdma_ranks() > 1
+                else None
+            )
+            num_tokens_per_expert = torch.empty(
+                (num_experts,), dtype=torch.int, device=topk_idx.device
+            )
+            is_token_in_rank = torch.empty(
+                (topk_idx.size(0), self.group_size),
+                dtype=torch.bool,
+                device=topk_idx.device,
+            )
+
+        event = self.runtime.get_dispatch_layout(
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            num_experts,
+            num_tokens_per_rank.data_ptr(),
+            (
+                0
+                if num_tokens_per_rdma_rank is None
+                else num_tokens_per_rdma_rank.data_ptr()
+            ),
+            num_tokens_per_expert.data_ptr(),
+            is_token_in_rank.data_ptr(),
+            getattr(previous_event, "event", None),
+            async_finish,
+            allocate_on_comm_stream,
+            self._ll_compute_stream_ptr(topk_idx.device),
+        )
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
+            topk_idx,
             num_tokens_per_rank,
             num_tokens_per_rdma_rank,
             num_tokens_per_expert,
             is_token_in_rank,
-            event,
-        ) = (
-            self.runtime.get_dispatch_layout(topk_idx, num_experts)
-            if previous_event is None
-            and not async_finish
-            and not allocate_on_comm_stream
-            else self.runtime.get_dispatch_layout(
-                topk_idx,
-                num_experts,
-                getattr(previous_event, "event", None),
-                async_finish,
-                allocate_on_comm_stream,
-            )
         )
         return (
             num_tokens_per_rank,
             num_tokens_per_rdma_rank,
             num_tokens_per_expert,
             is_token_in_rank,
-            EventOverlap(event),
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
         )
 
     # noinspection PyTypeChecker
@@ -809,30 +927,88 @@ class Buffer:
                 rank_prefix_matrix,
                 channel_prefix_matrix,
                 recv_channel_prefix_matrix,
+                num_recv_tokens,
                 recv_src_idx,
                 is_token_in_rank,
                 send_head,
             ) = handle
-            num_recv_tokens = recv_src_idx.size(0)
-            recv_x, recv_x_scales, _, _, _, _, _, _, _, _, event = (
-                self.runtime.intranode_dispatch(
-                    x,
-                    x_scales,
-                    None,
-                    None,
-                    None,
-                    is_token_in_rank,
-                    None,
-                    num_recv_tokens,
-                    rank_prefix_matrix,
-                    channel_prefix_matrix,
-                    expert_alignment,
-                    num_worst_tokens,
-                    config,
-                    getattr(previous_event, "event", None),
-                    async_finish,
-                    allocate_on_comm_stream,
+            num_topk = 0
+            num_scales = (
+                0
+                if x_scales is None
+                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            )
+            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
+            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
+            alloc_recv_tokens = max(num_recv_tokens, 1)
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
+            )
+            with alloc_ctx:
+                recv_x = torch.empty(
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
                 )
+                recv_x_scales = (
+                    None
+                    if x_scales is None
+                    else torch.empty(
+                        (
+                            (alloc_recv_tokens,)
+                            if x_scales.dim() == 1
+                            else (alloc_recv_tokens, num_scales)
+                        ),
+                        device=x.device,
+                        dtype=x_scales.dtype,
+                    )
+                )
+            event = self.runtime.intranode_dispatch(
+                x.data_ptr(),
+                x.size(0),
+                x.size(1),
+                x.element_size(),
+                0 if x_scales is None else x_scales.data_ptr(),
+                int(num_scales),
+                int(scale_token_stride),
+                int(scale_hidden_stride),
+                0,
+                int(num_topk),
+                0,
+                is_token_in_rank.data_ptr(),
+                rank_prefix_matrix.data_ptr(),
+                channel_prefix_matrix.data_ptr(),
+                0,
+                int(num_worst_tokens),
+                True,
+                config,
+                int(num_recv_tokens),
+                recv_x.data_ptr(),
+                0 if recv_x_scales is None else recv_x_scales.data_ptr(),
+                0,
+                0,
+                recv_channel_prefix_matrix.data_ptr(),
+                recv_src_idx.data_ptr(),
+                send_head.data_ptr(),
+                getattr(previous_event, "event", None),
+                async_finish,
+                allocate_on_comm_stream,
+                self._ll_compute_stream_ptr(x.device),
+            )
+            recv_x = recv_x[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                handle,
+                recv_x,
+                recv_x_scales,
             )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
@@ -840,7 +1016,10 @@ class Buffer:
                 None,
                 None,
                 None,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
         else:
             assert (
@@ -848,43 +1027,152 @@ class Buffer:
                 and is_token_in_rank is not None
                 and num_tokens_per_expert is not None
             )
-            (
-                recv_x,
-                recv_x_scales,
-                recv_topk_idx,
-                recv_topk_weights,
-                num_recv_tokens_per_expert_list,
+            num_channels = int(getattr(config, "num_sms", Buffer.num_sms)) // 2
+            rank_prefix_matrix = torch.empty(
+                (self.group_size, self.group_size), dtype=torch.int32, device=x.device
+            )
+            channel_prefix_matrix = torch.empty(
+                (self.group_size, num_channels), dtype=torch.int32, device=x.device
+            )
+            num_recv_tokens, num_recv_tokens_per_expert_list, _ = (
+                self.runtime.intranode_prepare(
+                    num_tokens_per_rank.data_ptr(),
+                    is_token_in_rank.data_ptr(),
+                    num_tokens_per_expert.data_ptr(),
+                    x.size(0),
+                    num_tokens_per_expert.size(0),
+                    rank_prefix_matrix.data_ptr(),
+                    channel_prefix_matrix.data_ptr(),
+                    expert_alignment,
+                    num_worst_tokens,
+                    config,
+                    getattr(previous_event, "event", None),
+                    False,
+                    False,
+                    self._ll_compute_stream_ptr(x.device),
+                )
+            )
+            num_scales = (
+                0
+                if x_scales is None
+                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            )
+            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
+            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
+            alloc_recv_tokens = max(num_recv_tokens, 1)
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
+            )
+            with alloc_ctx:
+                recv_x = torch.empty(
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                )
+                recv_src_idx = torch.empty(
+                    (alloc_recv_tokens,), dtype=torch.int32, device=x.device
+                )
+                recv_channel_prefix_matrix = torch.empty(
+                    (self.group_size, num_channels), dtype=torch.int32, device=x.device
+                )
+                send_head = torch.empty(
+                    (x.size(0), self.group_size), dtype=torch.int32, device=x.device
+                )
+                recv_topk_idx = None
+                recv_topk_weights = None
+                if topk_idx is not None:
+                    recv_topk_idx = torch.empty(
+                        (alloc_recv_tokens, topk_idx.size(1)),
+                        dtype=topk_idx.dtype,
+                        device=x.device,
+                    )
+                    recv_topk_weights = torch.empty(
+                        (alloc_recv_tokens, topk_weights.size(1)),
+                        dtype=topk_weights.dtype,
+                        device=x.device,
+                    )
+                recv_x_scales = (
+                    None
+                    if x_scales is None
+                    else torch.empty(
+                        (
+                            (alloc_recv_tokens,)
+                            if x_scales.dim() == 1
+                            else (alloc_recv_tokens, num_scales)
+                        ),
+                        device=x.device,
+                        dtype=x_scales.dtype,
+                    )
+                )
+            event = self.runtime.intranode_dispatch(
+                x.data_ptr(),
+                x.size(0),
+                x.size(1),
+                x.element_size(),
+                0 if x_scales is None else x_scales.data_ptr(),
+                int(num_scales),
+                int(scale_token_stride),
+                int(scale_hidden_stride),
+                0 if topk_idx is None else topk_idx.data_ptr(),
+                0 if topk_idx is None else int(topk_idx.size(1)),
+                0 if topk_weights is None else topk_weights.data_ptr(),
+                is_token_in_rank.data_ptr(),
+                rank_prefix_matrix.data_ptr(),
+                channel_prefix_matrix.data_ptr(),
+                int(num_tokens_per_expert.size(0)),
+                int(num_worst_tokens),
+                False,
+                config,
+                int(num_recv_tokens),
+                recv_x.data_ptr(),
+                0 if recv_x_scales is None else recv_x_scales.data_ptr(),
+                0 if recv_topk_idx is None else recv_topk_idx.data_ptr(),
+                0 if recv_topk_weights is None else recv_topk_weights.data_ptr(),
+                recv_channel_prefix_matrix.data_ptr(),
+                recv_src_idx.data_ptr(),
+                send_head.data_ptr(),
+                None,
+                async_finish,
+                allocate_on_comm_stream,
+                self._ll_compute_stream_ptr(x.device),
+            )
+            recv_x = recv_x[:num_recv_tokens]
+            recv_src_idx = recv_src_idx[:num_recv_tokens]
+            if recv_topk_idx is not None:
+                recv_topk_idx = recv_topk_idx[:num_recv_tokens]
+            if recv_topk_weights is not None:
+                recv_topk_weights = recv_topk_weights[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
+            handle = (
                 rank_prefix_matrix,
                 channel_prefix_matrix,
                 recv_channel_prefix_matrix,
-                recv_src_idx,
+                # Keep the logical count separate from the storage tensor so
+                # cached dispatch avoids a GPU sync while cached combine still
+                # gets a valid src_idx pointer when the count is 0.
+                num_recv_tokens,
+                recv_src_idx if num_recv_tokens > 0 else recv_src_idx.new_empty((1,)),
+                is_token_in_rank,
                 send_head,
-                event,
-            ) = self.runtime.intranode_dispatch(
+            )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
                 x,
                 x_scales,
                 topk_idx,
                 topk_weights,
                 num_tokens_per_rank,
-                is_token_in_rank,
                 num_tokens_per_expert,
-                0,
-                None,
-                None,
-                expert_alignment,
-                num_worst_tokens,
-                config,
-                getattr(previous_event, "event", None),
-                async_finish,
-                allocate_on_comm_stream,
-            )
-            handle = (
-                rank_prefix_matrix,
-                channel_prefix_matrix,
-                recv_channel_prefix_matrix,
-                recv_src_idx,
-                is_token_in_rank,
-                send_head,
+                handle,
+                recv_x,
+                recv_x_scales,
+                recv_topk_idx,
+                recv_topk_weights,
             )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
@@ -892,7 +1180,10 @@ class Buffer:
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
 
     # noinspection PyTypeChecker
@@ -949,6 +1240,7 @@ class Buffer:
             rank_prefix_matrix,
             _,
             channel_prefix_matrix,
+            _,
             src_idx,
             is_recv_token_in_rank,
             send_head,
@@ -956,21 +1248,86 @@ class Buffer:
         bias_0, bias_1 = Buffer._unpack_bias(bias)
 
         # Launch the kernel
-        recv_x, recv_topk_weights, event = self.runtime.intranode_combine(
+        num_recv_tokens = send_head.size(0)
+        num_topk = 0 if topk_weights is None else int(topk_weights.size(1))
+        num_x_rows = x.size(0)
+        if num_x_rows == 0:
+            x = x.new_empty((1, x.size(1)))
+        if src_idx.size(0) == 0:
+            src_idx = src_idx.new_empty(
+                (1,), dtype=src_idx.dtype, device=src_idx.device
+            )
+        if topk_weights is not None and topk_weights.size(0) == 0:
+            topk_weights = topk_weights.new_empty(
+                (1, num_topk), dtype=topk_weights.dtype, device=topk_weights.device
+            )
+        alloc_recv_tokens = max(num_recv_tokens, 1)
+        alloc_ctx = (
+            torch.cuda.stream(self.get_comm_stream())
+            if allocate_on_comm_stream
+            else nullcontext()
+        )
+        with alloc_ctx:
+            recv_x = torch.empty(
+                (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+            )
+            recv_topk_weights = (
+                None
+                if topk_weights is None
+                else torch.empty(
+                    (alloc_recv_tokens, num_topk),
+                    device=x.device,
+                    dtype=topk_weights.dtype,
+                )
+            )
+        event = self.runtime.intranode_combine(
+            x.data_ptr(),
+            num_x_rows,
+            x.size(1),
+            Buffer._dtype_code(x.dtype),
+            x.element_size(),
+            0 if topk_weights is None else topk_weights.data_ptr(),
+            num_topk,
+            0 if bias_0 is None else bias_0.data_ptr(),
+            0 if bias_1 is None else bias_1.data_ptr(),
+            src_idx.data_ptr(),
+            num_recv_tokens,
+            rank_prefix_matrix.data_ptr(),
+            channel_prefix_matrix.data_ptr(),
+            send_head.data_ptr(),
+            config,
+            recv_x.data_ptr(),
+            0 if recv_topk_weights is None else recv_topk_weights.data_ptr(),
+            getattr(previous_event, "event", None),
+            async_finish,
+            allocate_on_comm_stream,
+            self._ll_compute_stream_ptr(x.device),
+        )
+        recv_x = recv_x[:num_recv_tokens]
+        if recv_topk_weights is not None:
+            recv_topk_weights = recv_topk_weights[:num_recv_tokens]
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
             x,
             topk_weights,
             bias_0,
             bias_1,
-            src_idx,
-            rank_prefix_matrix,
-            channel_prefix_matrix,
-            send_head,
-            config,
-            getattr(previous_event, "event", None),
-            async_finish,
-            allocate_on_comm_stream,
+            handle,
+            recv_x,
+            recv_topk_weights,
         )
-        return recv_x, recv_topk_weights, EventOverlap(event)
+        return (
+            recv_x,
+            recv_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
+        )
 
     # noinspection PyTypeChecker
     def internode_dispatch(
@@ -1003,8 +1360,15 @@ class Buffer:
         """
         assert config is not None
 
-        # Launch the kernel with cached or non-cached mode
         x, x_scales = x if isinstance(x, tuple) else (x, None)
+        num_scales = (
+            0 if x_scales is None else (1 if x_scales.dim() == 1 else x_scales.size(1))
+        )
+        scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
+        scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
+        num_topk = 0 if topk_idx is None else int(topk_idx.size(1))
+        num_rdma_ranks = self.runtime.get_num_rdma_ranks()
+        num_channels = int(getattr(config, "num_sms", Buffer.num_sms)) // 2
         if handle is not None:
             assert topk_idx is None and topk_weights is None
             (
@@ -1015,88 +1379,258 @@ class Buffer:
                 recv_rdma_rank_prefix_sum,
                 recv_gbl_channel_prefix_matrix,
                 recv_gbl_rank_prefix_sum,
+                num_recv_tokens,
+                num_rdma_recv_tokens,
                 recv_src_meta,
                 send_rdma_head,
                 send_nvl_head,
             ) = handle
-            num_recv_tokens = recv_src_meta.size(0)
-            num_rdma_recv_tokens = send_nvl_head.size(0)
-            recv_x, recv_x_scales, _, _, _, _, _, _, _, _, _, _, _, _, event = (
-                self.runtime.internode_dispatch(
-                    x,
-                    x_scales,
-                    topk_idx,
-                    topk_weights,
-                    None,
-                    None,
-                    is_token_in_rank,
-                    None,
-                    num_recv_tokens,
-                    num_rdma_recv_tokens,
-                    rdma_channel_prefix_matrix,
-                    recv_rdma_rank_prefix_sum,
-                    gbl_channel_prefix_matrix,
-                    recv_gbl_rank_prefix_sum,
-                    expert_alignment,
-                    num_worst_tokens,
-                    config,
-                    getattr(previous_event, "event", None),
-                    async_finish,
-                    allocate_on_comm_stream,
-                )
+            # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+            # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+            alloc_recv_tokens = max(num_recv_tokens, 1)
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
             )
+            with alloc_ctx:
+                recv_x = torch.empty(
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                )
+                recv_x_scales = (
+                    None
+                    if x_scales is None
+                    else torch.empty(
+                        (
+                            (alloc_recv_tokens,)
+                            if x_scales.dim() == 1
+                            else (alloc_recv_tokens, num_scales)
+                        ),
+                        device=x.device,
+                        dtype=x_scales.dtype,
+                    )
+                )
+            event = self.runtime.internode_dispatch(
+                x.data_ptr(),
+                x.size(0),
+                x.size(1),
+                x.element_size(),
+                0 if x_scales is None else x_scales.data_ptr(),
+                int(num_scales),
+                int(scale_token_stride),
+                int(scale_hidden_stride),
+                0,
+                int(num_topk),
+                0,
+                is_token_in_rank.data_ptr(),
+                rdma_channel_prefix_matrix.data_ptr(),
+                recv_rdma_rank_prefix_sum.data_ptr(),
+                gbl_channel_prefix_matrix.data_ptr(),
+                recv_gbl_rank_prefix_sum.data_ptr(),
+                0,
+                int(num_worst_tokens),
+                True,
+                int(num_rdma_recv_tokens),
+                config,
+                recv_x.data_ptr(),
+                0 if recv_x_scales is None else recv_x_scales.data_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                getattr(previous_event, "event", None),
+                async_finish,
+                allocate_on_comm_stream,
+                self._ll_compute_stream_ptr(x.device),
+            )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                handle,
+                recv_x,
+                recv_x_scales,
+            )
+            # Slice back to the real number of received tokens.
+            recv_x = recv_x[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 None,
                 None,
                 None,
                 None,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
         else:
             assert (
                 num_tokens_per_rank is not None
+                and num_tokens_per_rdma_rank is not None
                 and is_token_in_rank is not None
                 and num_tokens_per_expert is not None
             )
+            rdma_channel_prefix_matrix = torch.empty(
+                (num_rdma_ranks, num_channels), dtype=torch.int32, device=x.device
+            )
+            recv_rdma_rank_prefix_sum = torch.empty(
+                (num_rdma_ranks,), dtype=torch.int32, device=x.device
+            )
+            gbl_channel_prefix_matrix = torch.empty(
+                (self.group_size, num_channels), dtype=torch.int32, device=x.device
+            )
+            recv_gbl_rank_prefix_sum = torch.empty(
+                (self.group_size,), dtype=torch.int32, device=x.device
+            )
             (
-                recv_x,
-                recv_x_scales,
-                recv_topk_idx,
-                recv_topk_weights,
+                num_recv_tokens,
+                num_rdma_recv_tokens,
                 num_recv_tokens_per_expert_list,
-                rdma_channel_prefix_matrix,
-                gbl_channel_prefix_matrix,
-                recv_rdma_channel_prefix_matrix,
-                recv_rdma_rank_prefix_sum,
-                recv_gbl_channel_prefix_matrix,
-                recv_gbl_rank_prefix_sum,
-                recv_src_meta,
-                send_rdma_head,
-                send_nvl_head,
-                event,
-            ) = self.runtime.internode_dispatch(
-                x,
-                x_scales,
-                topk_idx,
-                topk_weights,
-                num_tokens_per_rank,
-                num_tokens_per_rdma_rank,
-                is_token_in_rank,
-                num_tokens_per_expert,
-                0,
-                0,
-                None,
-                None,
-                None,
-                None,
-                expert_alignment,
-                num_worst_tokens,
+                _,
+            ) = self.runtime.internode_prepare(
+                num_tokens_per_rank.data_ptr(),
+                num_tokens_per_rdma_rank.data_ptr(),
+                num_tokens_per_expert.data_ptr(),
+                is_token_in_rank.data_ptr(),
+                x.size(0),
+                x.size(1),
+                x.element_size(),
+                int(num_scales),
+                int(num_topk),
+                int(num_tokens_per_expert.size(0)),
+                int(expert_alignment),
+                int(num_worst_tokens),
                 config,
+                rdma_channel_prefix_matrix.data_ptr(),
+                recv_rdma_rank_prefix_sum.data_ptr(),
+                gbl_channel_prefix_matrix.data_ptr(),
+                recv_gbl_rank_prefix_sum.data_ptr(),
                 getattr(previous_event, "event", None),
+                False,
+                False,
+                self._ll_compute_stream_ptr(x.device),
+            )
+            # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+            # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+            alloc_recv_tokens = max(num_recv_tokens, 1)
+            alloc_rdma_recv_tokens = max(num_rdma_recv_tokens, 1)
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
+            )
+            with alloc_ctx:
+                recv_x = torch.empty(
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                )
+                recv_x_scales = (
+                    None
+                    if x_scales is None
+                    else torch.empty(
+                        (
+                            (alloc_recv_tokens,)
+                            if x_scales.dim() == 1
+                            else (alloc_recv_tokens, num_scales)
+                        ),
+                        device=x.device,
+                        dtype=x_scales.dtype,
+                    )
+                )
+                recv_topk_idx = (
+                    None
+                    if topk_idx is None
+                    else torch.empty(
+                        (alloc_recv_tokens, topk_idx.size(1)),
+                        dtype=topk_idx.dtype,
+                        device=x.device,
+                    )
+                )
+                recv_topk_weights = (
+                    None
+                    if topk_weights is None
+                    else torch.empty(
+                        (alloc_recv_tokens, topk_weights.size(1)),
+                        dtype=topk_weights.dtype,
+                        device=x.device,
+                    )
+                )
+                recv_src_meta = torch.empty(
+                    (alloc_recv_tokens, self.runtime.get_source_meta_bytes()),
+                    dtype=torch.uint8,
+                    device=x.device,
+                )
+                recv_rdma_channel_prefix_matrix = torch.empty(
+                    (num_rdma_ranks, num_channels), dtype=torch.int32, device=x.device
+                )
+                recv_gbl_channel_prefix_matrix = torch.empty(
+                    (self.group_size, num_channels), dtype=torch.int32, device=x.device
+                )
+                send_rdma_head = torch.empty(
+                    (x.size(0), num_rdma_ranks), dtype=torch.int32, device=x.device
+                )
+                send_nvl_head = torch.empty(
+                    (alloc_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
+                    dtype=torch.int32,
+                    device=x.device,
+                )
+            event = self.runtime.internode_dispatch(
+                x.data_ptr(),
+                x.size(0),
+                x.size(1),
+                x.element_size(),
+                0 if x_scales is None else x_scales.data_ptr(),
+                int(num_scales),
+                int(scale_token_stride),
+                int(scale_hidden_stride),
+                0 if topk_idx is None else topk_idx.data_ptr(),
+                int(num_topk),
+                0 if topk_weights is None else topk_weights.data_ptr(),
+                is_token_in_rank.data_ptr(),
+                rdma_channel_prefix_matrix.data_ptr(),
+                recv_rdma_rank_prefix_sum.data_ptr(),
+                gbl_channel_prefix_matrix.data_ptr(),
+                recv_gbl_rank_prefix_sum.data_ptr(),
+                int(num_tokens_per_expert.size(0)),
+                int(num_worst_tokens),
+                False,
+                int(num_rdma_recv_tokens),
+                config,
+                recv_x.data_ptr(),
+                0 if recv_x_scales is None else recv_x_scales.data_ptr(),
+                0 if recv_topk_idx is None else recv_topk_idx.data_ptr(),
+                0 if recv_topk_weights is None else recv_topk_weights.data_ptr(),
+                recv_src_meta.data_ptr(),
+                recv_rdma_channel_prefix_matrix.data_ptr(),
+                recv_gbl_channel_prefix_matrix.data_ptr(),
+                send_rdma_head.data_ptr(),
+                send_nvl_head.data_ptr(),
+                None,
                 async_finish,
                 allocate_on_comm_stream,
+                self._ll_compute_stream_ptr(x.device),
             )
+            # Slice recv tensors back to the real number of received tokens.
+            recv_x = recv_x[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
+            if recv_topk_idx is not None:
+                recv_topk_idx = recv_topk_idx[:num_recv_tokens]
+            if recv_topk_weights is not None:
+                recv_topk_weights = recv_topk_weights[:num_recv_tokens]
+            recv_src_meta = recv_src_meta[:num_recv_tokens]
+            # Keep at least 1 row so data_ptr() is never null (zero-token combine
+            # assertion guard, matching the alloc_rdma_recv_tokens pattern above).
+            send_nvl_head = send_nvl_head[: max(num_rdma_recv_tokens, 1)]
             handle = (
                 is_token_in_rank,
                 rdma_channel_prefix_matrix,
@@ -1105,9 +1639,30 @@ class Buffer:
                 recv_rdma_rank_prefix_sum,
                 recv_gbl_channel_prefix_matrix,
                 recv_gbl_rank_prefix_sum,
+                num_recv_tokens,
+                num_rdma_recv_tokens,
                 recv_src_meta,
                 send_rdma_head,
                 send_nvl_head,
+            )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                topk_idx,
+                topk_weights,
+                num_tokens_per_rank,
+                num_tokens_per_rdma_rank,
+                num_tokens_per_expert,
+                handle,
+                recv_x,
+                recv_x_scales,
+                recv_topk_idx,
+                recv_topk_weights,
             )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
@@ -1115,7 +1670,10 @@ class Buffer:
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
 
     # noinspection PyTypeChecker
@@ -1145,31 +1703,96 @@ class Buffer:
             rdma_rank_prefix_sum,
             gbl_channel_prefix_matrix,
             gbl_rank_prefix_sum,
+            _,
+            _,
             src_meta,
             send_rdma_head,
             send_nvl_head,
         ) = handle
         bias_0, bias_1 = Buffer._unpack_bias(bias)
 
-        # Launch the kernel
-        combined_x, combined_topk_weights, event = self.runtime.internode_combine(
+        num_combined_tokens = int(is_combined_token_in_rank.size(0))
+        num_topk = 0 if topk_weights is None else int(topk_weights.size(1))
+
+        # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+        # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+        alloc_combined_tokens = max(num_combined_tokens, 1)
+        num_x_rows = x.size(0)
+        if num_x_rows == 0:
+            x = x.new_empty((1, x.size(1)))
+        if src_meta.size(0) == 0:
+            src_meta = src_meta.new_empty((1,) + src_meta.shape[1:])
+
+        alloc_ctx = (
+            torch.cuda.stream(self.get_comm_stream())
+            if allocate_on_comm_stream
+            else nullcontext()
+        )
+        with alloc_ctx:
+            combined_x = torch.empty(
+                (alloc_combined_tokens, x.size(1)), device=x.device, dtype=x.dtype
+            )
+            combined_topk_weights = (
+                None
+                if topk_weights is None
+                else torch.empty(
+                    (alloc_combined_tokens, num_topk),
+                    device=x.device,
+                    dtype=topk_weights.dtype,
+                )
+            )
+        event = self.runtime.internode_combine(
+            x.data_ptr(),
+            num_x_rows,
+            x.size(1),
+            Buffer._dtype_code(x.dtype),
+            x.element_size(),
+            0 if topk_weights is None else topk_weights.data_ptr(),
+            num_topk,
+            0 if bias_0 is None else bias_0.data_ptr(),
+            0 if bias_1 is None else bias_1.data_ptr(),
+            src_meta.data_ptr(),
+            num_combined_tokens,
+            is_combined_token_in_rank.data_ptr(),
+            rdma_channel_prefix_matrix.data_ptr(),
+            rdma_rank_prefix_sum.data_ptr(),
+            gbl_channel_prefix_matrix.data_ptr(),
+            send_rdma_head.data_ptr(),
+            send_nvl_head.data_ptr(),
+            config,
+            combined_x.data_ptr(),
+            0 if combined_topk_weights is None else combined_topk_weights.data_ptr(),
+            getattr(previous_event, "event", None),
+            async_finish,
+            allocate_on_comm_stream,
+            self._ll_compute_stream_ptr(x.device),
+        )
+        # Slice back to the real number of combined tokens.
+        combined_x = combined_x[:num_combined_tokens]
+        if combined_topk_weights is not None:
+            combined_topk_weights = combined_topk_weights[:num_combined_tokens]
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
             x,
             topk_weights,
             bias_0,
             bias_1,
-            src_meta,
-            is_combined_token_in_rank,
-            rdma_channel_prefix_matrix,
-            rdma_rank_prefix_sum,
-            gbl_channel_prefix_matrix,
-            send_rdma_head,
-            send_nvl_head,
-            config,
-            getattr(previous_event, "event", None),
-            async_finish,
-            allocate_on_comm_stream,
+            handle,
+            combined_x,
+            combined_topk_weights,
         )
-        return combined_x, combined_topk_weights, EventOverlap(event)
+        return (
+            combined_x,
+            combined_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
+        )
 
     def clean_low_latency_buffer(
         self, num_max_dispatch_tokens_per_rank: int, hidden: int, num_experts: int
@@ -1185,6 +1808,10 @@ class Buffer:
             hidden: the hidden dimension of each token.
             num_experts: the number of all experts.
         """
+        compute_stream_ptr = self._ll_compute_stream_ptr(torch.device("cuda"))
         self.runtime.clean_low_latency_buffer(
-            num_max_dispatch_tokens_per_rank, hidden, num_experts
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_experts,
+            compute_stream_ptr,
         )
