@@ -13,18 +13,26 @@ GPU_IDS=0,1
 TRANSPORT=auto
 BYTES=$((64 * 1024))
 UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-transport-$(date +%s)-$$}
+UHM_OOB_NAMESPACE=${UHM_OOB_NAMESPACE:-ccl-transport-oob-${UHM_HOST_ID_OVERRIDE}-${EXCHANGER_PORT}}
 
 cleanup_ipc_shm() {
   local host_id_override="$1"
   rm -f /dev/shm/uk_t_oob_"${host_id_override}"_l*
 }
 
-echo "[transport backend suite] torchrun nproc_per_node=${NPROC_PER_NODE} bytes=${BYTES} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${EXCHANGER_PORT}"
+cleanup() {
+  cleanup_ipc_shm "${UHM_HOST_ID_OVERRIDE}" || true
+}
+trap cleanup EXIT
 
 cleanup_ipc_shm "${UHM_HOST_ID_OVERRIDE}"
 
+echo "[transport backend suite] torchrun nproc_per_node=${NPROC_PER_NODE} bytes=${BYTES} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${EXCHANGER_PORT}"
+
 CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
   UHM_HOST_ID_OVERRIDE="${UHM_HOST_ID_OVERRIDE}" \
+  UHM_OOB_NAMESPACE="${UHM_OOB_NAMESPACE}" \
+  UHM_OOB_CLEAN_START=0 \
   torchrun \
     --no-python \
     --nproc-per-node "${NPROC_PER_NODE}" \
@@ -37,7 +45,5 @@ CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
     --bytes "${BYTES}" \
     --exchanger-ip "${MASTER_ADDR}" \
     --exchanger-port "${EXCHANGER_PORT}"
-
-cleanup_ipc_shm "${UHM_HOST_ID_OVERRIDE}"
 
 echo "[transport backend suite] transport backend checks passed"

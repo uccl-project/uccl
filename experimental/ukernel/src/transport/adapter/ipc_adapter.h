@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../oob/oob.h"
+#include "../oob/shmring_exchanger.h"
 #include "../util/jring.h"
 #include "config.h"
 #include "gpu_rt.h"
@@ -182,6 +182,7 @@ class IpcAdapter final : public TransportAdapter {
 
   std::string ring_namespace_;
   std::mutex match_seq_mu_;
+  std::vector<std::mutex> peer_connect_mu_;
   // Two directed-edge counters per peer:
   // dir=0 -> low-rank to high-rank, dir=1 -> high-rank to low-rank.
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
