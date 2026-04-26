@@ -84,11 +84,65 @@ IBV_DL_FUNC(int, ibv_modify_qp,
 // ibv_create_qp, ibv_qp_to_qp_ex are declared in verbs.h and resolved
 // via RTLD_GLOBAL dlopen of libibverbs.so in the constructor above.
 
-// NOTE: ibv_query_port, ibv_reg_mr, ibv_reg_dmabuf_mr are compat-layer
-// functions declared in verbs.h with inline wrappers. They call through
-// to the real library via verbs_get_ctx()->ops, so they don't need
-// our dlsym wrappers. The symbols are resolved by the compat functions
-// in verbs.h that call ibv_cmd_* internally.
+// ── --wrap functions ────────────────────────────────────────────────────────
+// These 7 functions are declared in verbs.h with compat-layer wrappers,
+// preventing us from defining them directly. We use the linker's --wrap
+// feature: the Makefile passes -Wl,--wrap=ibv_query_port etc., which
+// redirects calls to __wrap_ibv_query_port → our dlsym implementation.
+
+struct ibv_device** __wrap_ibv_get_device_list(int* num_devices) {
+  using FnType = struct ibv_device** (*)(int*);
+  static FnType fn =
+      reinterpret_cast<FnType>(ibv_resolve("ibv_get_device_list"));
+  return fn(num_devices);
+}
+
+int __wrap_ibv_query_port(struct ibv_context* context, uint8_t port_num,
+                          struct _compat_ibv_port_attr* port_attr) {
+  using FnType =
+      int (*)(struct ibv_context*, uint8_t, struct _compat_ibv_port_attr*);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_query_port"));
+  return fn(context, port_num, port_attr);
+}
+
+struct ibv_mr* __wrap_ibv_reg_mr(struct ibv_pd* pd, void* addr, size_t length,
+                                 int access) {
+  using FnType = struct ibv_mr* (*)(struct ibv_pd*, void*, size_t, int);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_reg_mr"));
+  return fn(pd, addr, length, access);
+}
+
+struct ibv_mr* __wrap_ibv_reg_dmabuf_mr(struct ibv_pd* pd, uint64_t offset,
+                                        size_t length, uint64_t iova, int fd,
+                                        int access) {
+  using FnType =
+      struct ibv_mr* (*)(struct ibv_pd*, uint64_t, size_t, uint64_t, int, int);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_reg_dmabuf_mr"));
+  return fn(pd, offset, length, iova, fd, access);
+}
+
+struct ibv_cq* __wrap_ibv_create_cq(struct ibv_context* context, int cqe,
+                                    void* cq_context,
+                                    struct ibv_comp_channel* channel,
+                                    int comp_vector) {
+  using FnType = struct ibv_cq* (*)(struct ibv_context*, int, void*,
+                                    struct ibv_comp_channel*, int);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_create_cq"));
+  return fn(context, cqe, cq_context, channel, comp_vector);
+}
+
+struct ibv_qp* __wrap_ibv_create_qp(struct ibv_pd* pd,
+                                    struct ibv_qp_init_attr* qp_init_attr) {
+  using FnType = struct ibv_qp* (*)(struct ibv_pd*, struct ibv_qp_init_attr*);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_create_qp"));
+  return fn(pd, qp_init_attr);
+}
+
+struct ibv_qp_ex* __wrap_ibv_qp_to_qp_ex(struct ibv_qp* qp) {
+  using FnType = struct ibv_qp_ex* (*)(struct ibv_qp*);
+  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_qp_to_qp_ex"));
+  return fn(qp);
+}
 
 // Address handle
 IBV_DL_FUNC(struct ibv_ah*, ibv_create_ah,

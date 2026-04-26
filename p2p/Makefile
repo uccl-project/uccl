@@ -76,12 +76,19 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-# libibverbs is linked but loaded lazily at runtime - the dlsym wrappers in
-# ibverbs_dl.cc handle most symbols; the compat-layer symbols (ibv_query_port,
-# ibv_reg_mr etc.) are resolved from the linked libibverbs when the .so loads.
-# libnccl and libefa are NOT linked - fully dlsym'd at runtime.
+# NO transport libraries linked (-libverbs, -lnccl, -lefa).
+# All ibv_* / nccl* / efadv_* symbols are provided by the dlsym wrappers
+# in rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/providers/efa/efadv_dl.cc.
+# The --wrap flags redirect compat-layer calls from verbs.h to our wrappers.
+IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
+                  -Wl,--wrap=ibv_query_port \
+                  -Wl,--wrap=ibv_reg_mr \
+                  -Wl,--wrap=ibv_reg_dmabuf_mr \
+                  -Wl,--wrap=ibv_create_cq \
+                  -Wl,--wrap=ibv_create_qp \
+                  -Wl,--wrap=ibv_qp_to_qp_ex
 LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
-          -lz -lelf -lpthread -ldl -libverbs $(DIETGPU_LIBS)
+          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)

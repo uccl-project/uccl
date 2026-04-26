@@ -1,33 +1,25 @@
-# Makefile for UCCL P2P Engine nanobind project
+# Makefile for UCCL P2P Engine nanobind project (ROCm/AMD)
+#
+# Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
+# libibverbs, librccl, and libefa are loaded dynamically at runtime via
+# dlopen/dlsym (see include/*_wrapper.h). No transport libraries are linked.
+#
+# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
 
-# EFA optional integration
-USE_EFA ?= $(shell echo $${USE_EFA:-0})
-
-# TCPX optional integration
-USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
-
-# TCP optional integration
-USE_TCP ?= $(shell echo $${USE_TCP:-0})
-
-# NCCL optional integration
-USE_NCCL ?= $(shell echo $${USE_NCCL:-0})
-
-ENABLE_NCCL := 0
-ifneq ($(filter 1,$(USE_TCPX) $(USE_TCP) $(USE_NCCL)),)
-ENABLE_NCCL := 1
-endif
-
-# Compiler and flags
-HIP_HOME?=/opt/rocm
-HIP_INC  := $(HIP_HOME)/include
-HIP_LIB  := $(HIP_HOME)/lib
-CONDA_LIB_HOME?=/usr/lib
-CXX := g++
-CXXFLAGS := 
-
-# ---------------- DietGPU ----------------
+# DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
 
+# Compiler and flags
+HIP_HOME ?= /opt/rocm
+HIP_INC  := $(HIP_HOME)/include
+HIP_LIB  := $(HIP_HOME)/lib
+CONDA_LIB_HOME ?= /usr/lib
+EFA_HOME ?= /opt/amazon/efa
+NCCL_HOME ?= /opt/rocm
+
+CXX := g++
+
+# ---------------- DietGPU ----------------
 DIETGPU_ROOT      := ../thirdparty/dietgpu
 DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
 DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
@@ -36,28 +28,29 @@ ifeq ($(USE_DIETGPU),1)
 	DIETGPU_INC  := -I$(DIETGPU_ROOT)
 	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
 	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
-					-Wl,-rpath,'$$ORIGIN/lib'
-	CXXFLAGS += -DUSE_DIETGPU
+	                -Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS_DIETGPU := -DUSE_DIETGPU
 else
 	DIETGPU_INC  :=
 	DIETGPU_LIBS :=
+	CXXFLAGS_DIETGPU :=
 endif
 
-ifeq ($(USE_EFA),1)
-	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
-endif
-
-CXXFLAGS += -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
+# NOTE: -libverbs, -lrccl, -lefa are NOT linked at compile time.
+# Headers are included for type definitions only.
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include \
+	-I$(HIP_INC) -I$(EFA_HOME)/include -I$(NCCL_HOME)/include \
+	-I${CONDA_LIB_HOME}/../include \
+	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
+	-D__HIP_PLATFORM_AMD__ \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
-	$(CXXFLAGS_TRANS)
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME}
 
 # Python and nanobind configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
 NB_DIR          := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
 NB_INCLUDES     := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
-# Stable ABI requires Python >= 3.12
 PY_STABLE_ABI_OK := $(shell $(PYTHON) -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
 ifeq ($(PY_STABLE_ABI_OK),1)
 NB_ABI_FLAGS    := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
@@ -73,54 +66,51 @@ NB_SRCS         := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
 NB_OBJECTS      := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
 PYTHON_LDFLAGS  := $(shell $(PYTHON_CONFIG) --ldflags)
 
-# Python installation path
+# Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-CXXFLAGS       += -D__HIP_PLATFORM_AMD__
+# NO transport libraries linked. --wrap redirects compat-layer calls.
+IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
+                  -Wl,--wrap=ibv_query_port \
+                  -Wl,--wrap=ibv_reg_mr \
+                  -Wl,--wrap=ibv_reg_dmabuf_mr \
+                  -Wl,--wrap=ibv_create_cq \
+                  -Wl,--wrap=ibv_create_qp \
+                  -Wl,--wrap=ibv_qp_to_qp_ex
+LDFLAGS = -L$(HIP_LIB) -lamdhip64 -Wl,-rpath,$(HIP_LIB) \
+          -L${CONDA_LIB_HOME} \
+          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
-# Add NCCL endpoint flag
-ifeq ($(ENABLE_NCCL),1)
-	CXXFLAGS += -DUCCL_P2P_USE_NCCL
-	CXXFLAGS += -DUCCL_P2P_USE_RCCL
-endif
-LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-                  -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} \
-                  -lz -lelf -libverbs -lpthread
-ifeq ($(ENABLE_NCCL),1)
-	LDFLAGS += -lrccl
-endif
-
-# Target and source files
-P2P_PYTHON_EXT   := p2p$(PYEXT)
+# Target and source files - always compile ALL sources
+P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-SOURCES := engine.cc engine_api.cc
-OBJECTS := $(SOURCES:.cc=.o)
-CORE_OBJECT := engine.o
-ifeq ($(ENABLE_NCCL),1)
-SOURCES += nccl/nccl_endpoint.cc
-OBJECTS += nccl/nccl_endpoint.o
-CORE_OBJECT += nccl/nccl_endpoint.o
-endif
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
+SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o
+
+# dlsym wrapper objects
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/providers/efa/efadv_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/providers/efa/efadv_dl.o
+
+OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-# Build the shared library
-$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS)
-	$(CXX) $(OBJECTS) $(NB_OBJECTS) \
+$(P2P_PYTHON_EXT): $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS)
+	$(CXX) $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(DL_OBJECTS)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(DL_OBJECTS) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB)
@@ -133,9 +123,14 @@ nb_%.o: $(NB_SRC_DIR)/%.cpp
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
 
-# Compile NCCL-over-TCP source files
+# Compile NCCL source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
+
+# Compile RDMA provider source files
+rdma/providers/efa/%.o: rdma/providers/efa/%.cc
+	@mkdir -p rdma/providers/efa
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
 
 define safe_install
@@ -146,7 +141,6 @@ define safe_install
 		  exit 0; }
 endef
 
-# Install the module
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
@@ -154,69 +148,29 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
-	make clean -j$(nproc)
-	rm -f nccl/*.o
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
+	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/efa/*.o rdma/providers/efa/*.d
 
 # Test the module
 test: $(P2P_PYTHON_EXT)
-	$(PYTHON) test_engine_write.py
+	$(PYTHON) tests/test_engine_write.py
 
 # Install nanobind if not available
 install-deps:
 	pip3 install nanobind
 
-# ---------------------------------------------------------------------------
-# Runtime transport selection: build all backends + thin dispatcher
-# ---------------------------------------------------------------------------
-DISPATCH_SRC := uccl_p2p_dispatch.cc
-DISPATCH_OBJ := uccl_p2p_dispatch.o
-
-all-transport: dispatch-lib transport-rdma transport-efa transport-nccl
-
-$(DISPATCH_OBJ): $(DISPATCH_SRC) uccl_p2p_ops.h uccl_engine.h include/common.h
-	$(CXX) -O3 -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) -c $< -o $@
-
-dispatch-lib: $(DISPATCH_OBJ)
-	$(CXX) -shared -fPIC $< -o libuccl_p2p.so -ldl
-
-clean-backend:
-	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d
-
-transport-rdma:
-	@$(MAKE) -f Makefile.rocm clean-backend
-	@$(MAKE) -f Makefile.rocm P2P_SHARED_LIB=libuccl_p2p_rdma.so libuccl_p2p_rdma.so
-
-transport-efa:
-	@$(MAKE) -f Makefile.rocm clean-backend
-	@$(MAKE) -f Makefile.rocm P2P_SHARED_LIB=libuccl_p2p_efa.so USE_EFA=1 libuccl_p2p_efa.so
-
-transport-nccl:
-	@$(MAKE) -f Makefile.rocm clean-backend
-	@$(MAKE) -f Makefile.rocm P2P_SHARED_LIB=libuccl_p2p_nccl.so USE_NCCL=1 libuccl_p2p_nccl.so
-
-install-all-transport:
-	$(call safe_install,libuccl_p2p.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_nccl.so,$(LIBDIR),755)
-	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	@echo "Transport backends installed!"
-
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all               - Build the nanobind module (stable ABI)"
-	@echo "  all-transport     - Build all transport backends + dispatcher"
-	@echo "  install           - Install the module to Python site-packages"
-	@echo "  install-all-transport - Install dispatcher + all backends"
-	@echo "  clean             - Remove build artifacts"
-	@echo "  test              - Run the test script"
-	@echo "  install-deps      - Install nanobind dependency"
-	@echo "  help              - Show this help message"
+	@echo "  all          - Build the nanobind module and shared library"
+	@echo "  install      - Install the module to Python site-packages"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  test         - Run the test script"
+	@echo "  install-deps - Install nanobind dependency"
+	@echo "  help         - Show this help message"
+	@echo ""
 
-.PHONY: all all-transport dispatch-lib transport-rdma transport-efa \
-        transport-nccl clean clean-backend test install-deps help install \
-        install-all-transport
+.PHONY: all clean test install-deps help install
