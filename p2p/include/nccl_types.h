@@ -53,16 +53,15 @@ extern "C" {
 #endif
 
 ncclResult_t ncclGetUniqueId(ncclUniqueId* uniqueId);
-ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
-                              ncclUniqueId commId, int rank);
+ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId,
+                              int rank);
 ncclResult_t ncclCommDestroy(ncclComm_t comm);
-ncclResult_t ncclSend(const void* sendbuff, size_t count,
-                      ncclDataType_t datatype, int peer,
-                      ncclComm_t comm, cudaStream_t stream);
-ncclResult_t ncclRecv(void* recvbuff, size_t count,
-                      ncclDataType_t datatype, int peer,
-                      ncclComm_t comm, cudaStream_t stream);
-const char* ncclGetErrorString(ncclResult_t result);
+ncclResult_t ncclSend(void const* sendbuff, size_t count,
+                      ncclDataType_t datatype, int peer, ncclComm_t comm,
+                      cudaStream_t stream);
+ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
+                      int peer, ncclComm_t comm, cudaStream_t stream);
+char const* ncclGetErrorString(ncclResult_t result);
 
 #ifdef __cplusplus
 }

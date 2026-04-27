@@ -16,7 +16,8 @@
 
 #define MAX_CQE 1024
 
-// SFINAE helpers: conditionally set fields that may not exist in older SDK versions
+// SFINAE helpers: conditionally set fields that may not exist in older SDK
+// versions
 template <typename T, typename = void>
 struct has_sl : std::false_type {};
 template <typename T>
@@ -26,8 +27,8 @@ struct has_sl<T, std::void_t<decltype(std::declval<T>().sl)>> : std::true_type {
 template <typename T, typename = void>
 struct has_flags : std::false_type {};
 template <typename T>
-struct has_flags<T, std::void_t<decltype(std::declval<T>().flags)>> : std::true_type {
-};
+struct has_flags<T, std::void_t<decltype(std::declval<T>().flags)>>
+    : std::true_type {};
 
 template <typename T>
 inline void set_efa_sl(T& attr, uint8_t default_sl) {
