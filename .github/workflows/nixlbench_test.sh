@@ -17,8 +17,11 @@ CONDA_ENV="uccl-ci-sandbox"
 
 NIXL_SRC_DIR="/tmp/nixl_ci_$$"
 ABSEIL_DIR="/tmp/abseil_ci_$$"
-NIXL_REPO="https://github.com/ai-dynamo/nixl.git"
 ABSEIL_TAG="20240116.2"
+
+# TODO : Revert to upstream branch once PR1428 gets merged
+NIXL_REPO="https://github.com/praveingk/nixl.git"
+NIXL_BRANCH="uccl-local-xfer"
 
 ARCH=$(uname -m)
 [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
@@ -44,11 +47,10 @@ echo "=== Activating conda env: ${CONDA_ENV} ==="
 source "${MINICONDA_DIR}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV}"
 
-# ── Build UCCL p2p and install all transport backends ────────────────────────
-echo "=== Building UCCL p2p (all transports) ==="
+# ── Build UCCL p2p and install ────────────────────────
+echo "=== Building UCCL p2p ==="
 cd "${UCCL_ROOT}/p2p"
-make clean PYTHON=python3 || true
-make all-transport PYTHON=python3
+make -j"$(nproc)" PYTHON=python3
 make install PYTHON=python3 LIBDIR="${NIXL_INSTALL_DIR}/lib" PREFIX="${NIXL_INSTALL_DIR}"
 
 export LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${LIBRARY_PATH:-}"
@@ -72,7 +74,7 @@ export PKG_CONFIG_PATH="${NIXL_INSTALL_DIR}/lib/pkgconfig:${NIXL_INSTALL_DIR}/li
 
 # ── Clone NIXL ────────────────────────────────────────────────────────────────
 echo "=== Cloning latest NIXL ==="
-git clone --depth 1 "${NIXL_REPO}" "${NIXL_SRC_DIR}"
+git clone --depth 1 -b "${NIXL_BRANCH}" "${NIXL_REPO}" "${NIXL_SRC_DIR}"
 
 # ── Build NIXL with UCCL plugin ───────────────────────────────────────────────
 echo "=== Building NIXL (UCCL plugin only) ==="

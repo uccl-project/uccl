@@ -433,8 +433,8 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
 
-  // 2 bytes port + 4 bytes local_gpu_idx_
-  size_t total_len = ip_len + 2 + sizeof(int);
+  // 2 bytes port + 1 byte BDF length + 0 bytes (empty BDF for unified)
+  size_t total_len = ip_len + 2 + 1;
   std::vector<uint8_t> metadata(total_len);
 
   // Copy IP
@@ -454,8 +454,8 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   uint16_t net_port = htons(port);
   std::memcpy(metadata.data() + ip_len, &net_port, 2);
 
-  // Copy local_gpu_idx_ in host byte order
-  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+  // Empty BDF for unified metadata
+  metadata[ip_len + 2] = 0;
 
   return metadata;
 }

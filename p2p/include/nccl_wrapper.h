@@ -1,13 +1,13 @@
 #pragma once
 // Runtime dlsym wrapper for libnccl (or librccl on ROCm).
-// Keeps #include <nccl.h> for types and enums (ncclChar, ncclSuccess, etc.).
+// Uses nccl_types.h for type definitions - no nccl.h needed at compile time.
 // Custom library path: set UCCL_NCCL_SO environment variable.
 
+#include "nccl_types.h"
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
 #include <dlfcn.h>
-#include <nccl.h>
 
 namespace uccl {
 namespace nccl_dl {

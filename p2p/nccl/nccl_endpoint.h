@@ -7,11 +7,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#if defined(UCCL_P2P_USE_RCCL)
-#include <rccl/rccl.h>
-#else
-#include <nccl.h>
-#endif
+#include "include/nccl_types.h"
 
 #include "include/common.h"
 

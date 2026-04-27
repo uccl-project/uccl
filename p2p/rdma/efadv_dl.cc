@@ -1,7 +1,7 @@
 // Linker-level dlsym wrapper for libefa functions.
 // Provides efadv_* symbols via dlopen/dlsym instead of linking -lefa.
 
-#include "include/efadv_wrapper.h"
+#include "../include/efadv_wrapper.h"
 #include <infiniband/efadv.h>
 
 static void* efa_resolve(char const* name) {

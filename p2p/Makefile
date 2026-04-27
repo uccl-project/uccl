@@ -14,8 +14,6 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
 
 # Building with the following settings:
 # NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
@@ -24,7 +22,7 @@ LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
-	-I$(EFA_HOME)/include -I$(NCCL_INC) \
+	-I$(EFA_HOME)/include \
 	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
@@ -184,10 +182,5 @@ help:
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
 	@echo ""
-	@echo "Runtime options (no rebuild needed):"
-	@echo "  UCCL_P2P_TRANSPORT=rdma|nccl|efa  (default: rdma)"
-	@echo "  UCCL_P2P_DISABLE_IPC=1            (force network transport)"
-	@echo "  UCCL_IBV_SO=/path/to/libibverbs.so (custom ibverbs path)"
-	@echo "  UCCL_NCCL_SO=/path/to/libnccl.so  (custom nccl path)"
 
 .PHONY: all clean test install-deps help install

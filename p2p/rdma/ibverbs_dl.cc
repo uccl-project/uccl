@@ -4,7 +4,7 @@
 //
 // These are C functions (extern "C") to match the libibverbs ABI.
 
-#include "include/ibverbs_wrapper.h"
+#include "../include/ibverbs_wrapper.h"
 #include <infiniband/verbs.h>
 
 // Undefine macros from verbs.h so we can define our own wrapper functions.

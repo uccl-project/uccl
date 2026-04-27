@@ -2,7 +2,6 @@
 // Provides nccl* symbols via dlopen/dlsym instead of linking -lnccl.
 
 #include "include/nccl_wrapper.h"
-#include <nccl.h>
 
 static void* nccl_resolve(char const* name) {
   return uccl::nccl_dl::resolve(name);

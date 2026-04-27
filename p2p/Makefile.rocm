@@ -15,7 +15,7 @@ HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME ?= /usr/lib
 EFA_HOME ?= /opt/amazon/efa
-NCCL_HOME ?= /opt/rocm
+
 
 CXX := g++
 
@@ -39,7 +39,7 @@ endif
 # NOTE: -libverbs, -lrccl, -lefa are NOT linked at compile time.
 # Headers are included for type definitions only.
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include \
-	-I$(HIP_INC) -I$(EFA_HOME)/include -I$(NCCL_HOME)/include \
+	-I$(HIP_INC) -I$(EFA_HOME)/include \
 	-I${CONDA_LIB_HOME}/../include \
 	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
 	-D__HIP_PLATFORM_AMD__ \
