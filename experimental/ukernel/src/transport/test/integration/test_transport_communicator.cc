@@ -131,8 +131,8 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   auto peer_kind = comm->peer_transport_kind(kClientRank);
   (void)peer_kind;
 
-  unsigned recv_req =
-      comm->irecv(kClientRank, LocalSlice{kServerRecvBufferId, 0, kMessageBytes});
+  unsigned recv_req = comm->irecv(
+      kClientRank, LocalSlice{kServerRecvBufferId, 0, kMessageBytes});
   require(recv_req != 0, "server irecv failed");
   require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
 
@@ -161,7 +161,8 @@ int run_ipc_buffer_metadata_client(
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
 
   constexpr uint32_t kValidIpcId = 4242;
-  require(comm->reg_ipc(kValidIpcId, buf, 4096, true), "reg_ipc should succeed");
+  require(comm->reg_ipc(kValidIpcId, buf, 4096, true),
+          "reg_ipc should succeed");
 
   constexpr uint32_t kInvalidIpcId = 9999;
   require(comm->reg_ipc(kInvalidIpcId, nullptr, 0, true),

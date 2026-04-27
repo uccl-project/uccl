@@ -80,8 +80,9 @@ class Communicator {
   bool wait_ipc(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
   IPCItem get_ipc(uint32_t buffer_id);
   IPCItem get_ipc(int owner_rank, uint32_t buffer_id);
-  bool try_resolve_remote_ipc_pointer(int remote_rank, uint32_t remote_buffer_id,
-                                      size_t offset, size_t bytes, void** out_ptr,
+  bool try_resolve_remote_ipc_pointer(int remote_rank,
+                                      uint32_t remote_buffer_id, size_t offset,
+                                      size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
   // SHM bounce.
@@ -234,7 +235,6 @@ class Communicator {
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> uccl_registered_mrs_;
   std::atomic<uint32_t> next_ephemeral_buffer_id_{0x80000000u};
-
 };
 
 }  // namespace Transport

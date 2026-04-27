@@ -345,7 +345,8 @@ unsigned UcclTransportAdapter::recv_async(
   }
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = recv_async_uccl(peer_rank, recv_ptr, len, recv_buffer_id, request_id);
+  int ret =
+      recv_async_uccl(peer_rank, recv_ptr, len, recv_buffer_id, request_id);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
     release_request_slot_locked(request_id);

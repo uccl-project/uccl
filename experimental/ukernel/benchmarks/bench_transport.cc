@@ -128,7 +128,8 @@ static std::vector<MR> register_slot_mrs(Communicator& comm,
   buffer_ids.reserve(slots.size());
   for (size_t i = 0; i < slots.size(); ++i) {
     void* ptr = slots[i];
-    uint32_t const buffer_id = kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
+    uint32_t const buffer_id =
+        kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
     if (!comm.reg_mr(buffer_id, ptr, msg_size, true)) {
       return {};
     }
@@ -153,7 +154,7 @@ static bool validate_recv_slots(char const* role, int rank,
   for (size_t i = 0; i < slots.size(); ++i) {
     if (!touched[i]) continue;
     if (gpuMemcpy(host.data(), slots[i], expected.size(),
-                   gpuMemcpyDeviceToHost) != gpuSuccess) {
+                  gpuMemcpyDeviceToHost) != gpuSuccess) {
       fprintf(stderr, "[%s %d] Failed to copy recv slot %zu to host\n", role,
               rank, i);
       return false;
@@ -172,7 +173,8 @@ static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
                                      std::vector<MR>& remote_recv_mrs) {
   remote_recv_mrs.assign(recv_slots, MR{});
   for (size_t i = 0; i < recv_slots; ++i) {
-    uint32_t const buffer_id = kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
+    uint32_t const buffer_id =
+        kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
     if (!comm.wait_mr(peer_rank, buffer_id)) return false;
     remote_recv_mrs[i] = comm.get_mr(peer_rank, buffer_id);
   }

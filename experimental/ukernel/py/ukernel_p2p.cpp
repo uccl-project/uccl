@@ -100,20 +100,24 @@ class Communicator {
   bool accept_peer(int peer_rank) { return comm_->accept(peer_rank); }
 
   bool reg_rdma(uint32_t buffer_id, nb::handle tensor, bool publish = true) {
-    if (buffer_id == 0) throw std::invalid_argument("buffer_id must be non-zero");
+    if (buffer_id == 0)
+      throw std::invalid_argument("buffer_id must be non-zero");
     torch::Tensor t = tensor_from_python(tensor, "tensor");
-    if (!t.is_cuda()) throw std::invalid_argument("reg_rdma requires CUDA tensor");
+    if (!t.is_cuda())
+      throw std::invalid_argument("reg_rdma requires CUDA tensor");
     if (!t.is_contiguous()) {
       throw std::invalid_argument("reg_rdma requires contiguous tensor");
     }
     size_t total_bytes =
         static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
-    if (total_bytes == 0) throw std::invalid_argument("reg_rdma requires non-empty tensor");
+    if (total_bytes == 0)
+      throw std::invalid_argument("reg_rdma requires non-empty tensor");
     void* ptr = t.data_ptr();
     if (!comm_->reg_mr(buffer_id, ptr, total_bytes, publish)) return false;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      tensor_bindings_[ptr] = PinnedTensor{std::move(t), buffer_id, total_bytes};
+      tensor_bindings_[ptr] =
+          PinnedTensor{std::move(t), buffer_id, total_bytes};
       rdma_buffer_to_ptr_[buffer_id] = ptr;
     }
     return true;
@@ -134,20 +138,24 @@ class Communicator {
   }
 
   bool reg_ipc(uint32_t buffer_id, nb::handle tensor, bool publish = true) {
-    if (buffer_id == 0) throw std::invalid_argument("buffer_id must be non-zero");
+    if (buffer_id == 0)
+      throw std::invalid_argument("buffer_id must be non-zero");
     torch::Tensor t = tensor_from_python(tensor, "tensor");
-    if (!t.is_cuda()) throw std::invalid_argument("reg_ipc requires CUDA tensor");
+    if (!t.is_cuda())
+      throw std::invalid_argument("reg_ipc requires CUDA tensor");
     if (!t.is_contiguous()) {
       throw std::invalid_argument("reg_ipc requires contiguous tensor");
     }
     size_t total_bytes =
         static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
-    if (total_bytes == 0) throw std::invalid_argument("reg_ipc requires non-empty tensor");
+    if (total_bytes == 0)
+      throw std::invalid_argument("reg_ipc requires non-empty tensor");
     void* ptr = t.data_ptr();
     if (!comm_->reg_ipc(buffer_id, ptr, total_bytes, publish)) return false;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      tensor_bindings_[ptr] = PinnedTensor{std::move(t), buffer_id, total_bytes};
+      tensor_bindings_[ptr] =
+          PinnedTensor{std::move(t), buffer_id, total_bytes};
       ipc_buffer_to_ptr_[buffer_id] = ptr;
     }
     return true;
@@ -196,7 +204,8 @@ class Communicator {
     if (binding.has_value()) {
       buffer_id = binding->buffer_id;
     } else {
-      buffer_id = next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+      buffer_id =
+          next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
         throw std::runtime_error("isend failed to register temporary MR");
       }
@@ -208,13 +217,12 @@ class Communicator {
       dst_buffer_id = binding->buffer_id;
     }
     if (dst_buffer_id != 0) {
-      dst_hint = UKernel::Transport::RemoteSlice{dst_buffer_id, remote_offset,
-                                                 {}};
+      dst_hint =
+          UKernel::Transport::RemoteSlice{dst_buffer_id, remote_offset, {}};
     }
-    uint64_t req =
-        comm_->isend(peer_rank,
-                     UKernel::Transport::LocalSlice{buffer_id, offset, len},
-                     dst_hint);
+    uint64_t req = comm_->isend(
+        peer_rank, UKernel::Transport::LocalSlice{buffer_id, offset, len},
+        dst_hint);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);
@@ -245,7 +253,8 @@ class Communicator {
     if (binding.has_value()) {
       buffer_id = binding->buffer_id;
     } else {
-      buffer_id = next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+      buffer_id =
+          next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
         throw std::runtime_error("irecv failed to register temporary MR");
       }
@@ -346,7 +355,8 @@ class Communicator {
     size_t bytes = 0;
   };
 
-  std::optional<PinnedTensor> find_tensor_binding(void* ptr, size_t bytes) const {
+  std::optional<PinnedTensor> find_tensor_binding(void* ptr,
+                                                  size_t bytes) const {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = tensor_bindings_.find(ptr);
     if (it == tensor_bindings_.end()) return std::nullopt;
@@ -427,8 +437,7 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
       .def("barrier", &Communicator::barrier,
-           nb::arg("barrier_namespace") = "default",
-           nb::arg("timeout_ms") = -1)
+           nb::arg("barrier_namespace") = "default", nb::arg("timeout_ms") = -1)
       .def("send", &Communicator::send, nb::arg("peer_rank"), nb::arg("tensor"),
            nb::arg("remote_buffer_id") = 0, nb::arg("remote_offset") = 0)
       .def("recv", &Communicator::recv, nb::arg("peer_rank"),

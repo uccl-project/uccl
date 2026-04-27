@@ -38,12 +38,12 @@ void test_memory_manager() {
   std::vector<uint8_t> buf_a(512, 0x11);
   std::vector<uint8_t> buf_b(1024, 0x22);
 
-  auto tracked_a = mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(),
-                                       buf_a.size());
-  auto tracked_a_again = mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(),
-                                             buf_a.size());
-  auto tracked_b = mrm.create_local_mr(/*buffer_id=*/12, buf_b.data(),
-                                       buf_b.size());
+  auto tracked_a =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size());
+  auto tracked_a_again =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size());
+  auto tracked_b =
+      mrm.create_local_mr(/*buffer_id=*/12, buf_b.data(), buf_b.size());
   MR mr_a = tracked_a.mr;
   MR mr_a_again = tracked_a_again.mr;
   MR mr_b = tracked_b.mr;
@@ -107,8 +107,8 @@ void test_memory_manager() {
   require(mrm.delete_mr(/*buffer_id=*/11),
           "first local MR delete should succeed");
 
-  auto resized = mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(),
-                                     buf_a.size() / 2);
+  auto resized =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size() / 2);
   require(resized.buffer_id == tracked_a.buffer_id,
           "same buffer_id should keep stable id after resize");
   require(mrm.get_mr(buf_a.data()).buffer_id == resized.buffer_id,

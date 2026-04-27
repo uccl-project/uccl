@@ -191,7 +191,8 @@ class IpcAdapter final : public TransportAdapter {
   Communicator* comm_;
   int local_gpu_idx_ = -1;
   std::mutex remote_handle_mu_;
-  std::unordered_map<int, std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
+  std::unordered_map<int,
+                     std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
       remote_handle_cache_;
 };
 

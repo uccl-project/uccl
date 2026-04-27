@@ -220,8 +220,7 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
     for (BufferId id : buffer_ids) {
       RegisteredBuffer& buffer = binding.buffer(id);
       if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-          buffer.remotely_accessible &&
-          !communicator_->wait_mr(peer, id)) {
+          buffer.remotely_accessible && !communicator_->wait_mr(peer, id)) {
         throw std::runtime_error("transport backend wait_mr failed for peer " +
                                  std::to_string(peer) + ", buffer " +
                                  std::to_string(id));

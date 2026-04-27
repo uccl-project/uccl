@@ -283,13 +283,12 @@ class ProcessGroup {
         executor_(
             ExecutorBackends{&transport_backend_, &device_backend_, nullptr},
             [this](int remote_rank, uint32_t remote_buffer_id, size_t offset,
-                   size_t bytes,
-                   void** out_ptr, int* out_device_idx) {
+                   size_t bytes, void** out_ptr, int* out_device_idx) {
               if (out_ptr == nullptr) return false;
               UKernel::Transport::IPCItem ipc{};
               try {
-                ipc = transport_backend_.communicator().get_ipc(remote_rank,
-                                                                remote_buffer_id);
+                ipc = transport_backend_.communicator().get_ipc(
+                    remote_rank, remote_buffer_id);
               } catch (...) {
                 return false;
               }

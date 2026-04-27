@@ -1,8 +1,8 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
-#include "adapter/uccl_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
+#include "adapter/uccl_adapter.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
@@ -128,13 +128,13 @@ std::string tcp_p2p_key(int src_rank, int dst_rank) {
 }
 
 std::string ipc_global_buffer_key(int owner_rank, uint32_t buffer_id) {
-  return "ipc:rank:" + std::to_string(owner_rank) + ":buf:" +
-         std::to_string(buffer_id);
+  return "ipc:rank:" + std::to_string(owner_rank) +
+         ":buf:" + std::to_string(buffer_id);
 }
 
 std::string mr_global_buffer_key(int owner_rank, uint32_t buffer_id) {
-  return "mr:rank:" + std::to_string(owner_rank) + ":buf:" +
-         std::to_string(buffer_id);
+  return "mr:rank:" + std::to_string(owner_rank) +
+         ":buf:" + std::to_string(buffer_id);
 }
 
 std::string oob_scoped_key(std::string const& ns, std::string const& key) {
@@ -172,8 +172,7 @@ void validate_dst_hint_for_transport(PeerTransportKind kind,
   }
   // IPC/TCP use common (`buffer_id`, `offset`) hint and ignore `write`.
   // UCCL validates write-capacity hints when provided.
-  if (kind == PeerTransportKind::Uccl &&
-      hint.has_write_hint() &&
+  if (kind == PeerTransportKind::Uccl && hint.has_write_hint() &&
       hint.write.capacity != 0 && hint.write.capacity < src_bytes) {
     throw std::invalid_argument(
         "dst_hint.write.capacity is smaller than send size");
@@ -215,7 +214,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       peer_states_(static_cast<size_t>(world_size)),
       config_(config) {
   if (!config_) {
-    config_ = std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env());
+    config_ =
+        std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env());
   }
   if (config_->oob_namespace.empty()) {
     config_->oob_namespace = "default";
@@ -597,9 +597,9 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
   return *uccl_adapter_;
 }
 
-bool Communicator::exchange_uccl_peer_info(
-    int rank, UcclTransportAdapter& uccl_adapter,
-    UCCLP2PInfo* out_remote_p2p_info) {
+bool Communicator::exchange_uccl_peer_info(int rank,
+                                           UcclTransportAdapter& uccl_adapter,
+                                           UCCLP2PInfo* out_remote_p2p_info) {
   if (out_remote_p2p_info == nullptr) return false;
 
   int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
@@ -624,7 +624,8 @@ bool Communicator::exchange_uccl_peer_info(
     return false;
   }
 
-  UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, local_gpu_idx_);
+  UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
+                             local_gpu_idx_);
   std::string p2p_key = uccl_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
 
@@ -679,8 +680,7 @@ bool Communicator::try_fallback_tcp_connect(
                             tcp_adapter.get_listen_port());
   std::string p2p_key = tcp_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
-  if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key,
-               local_p2p_info))
+  if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key, local_p2p_info))
     return false;
 
   TcpP2PInfo remote_p2p_info;
@@ -705,8 +705,8 @@ bool Communicator::try_fallback_tcp_connect(
   return true;
 }
 
-bool Communicator::try_fallback_tcp_accept(
-    int rank, CommunicatorMeta const& local_meta) {
+bool Communicator::try_fallback_tcp_accept(int rank,
+                                           CommunicatorMeta const& local_meta) {
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
   if (tcp_adapter.has_peer(rank)) {
@@ -1002,7 +1002,8 @@ bool Communicator::ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr,
 
     auto item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
     if (item.valid) {
-      base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
+      base_ptr =
+          reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
       mr_len = static_cast<size_t>(item.mr.length);
       is_direct_local_mr = true;
     }
@@ -1147,8 +1148,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   // Auto-enrich one-sided write hint from exchanged remote MR metadata when the
   // caller only provides {remote buffer_id, offset}. This keeps Python/CCL APIs
   // simple while still enabling UCCL fast paths.
-  if (peer_kind == PeerTransportKind::Uccl &&
-      effective_dst_hint.has_value() && !effective_dst_hint->has_write_hint() &&
+  if (peer_kind == PeerTransportKind::Uccl && effective_dst_hint.has_value() &&
+      !effective_dst_hint->has_write_hint() &&
       effective_dst_hint->buffer_id != 0) {
     try {
       MR remote_mr = get_mr(rank, effective_dst_hint->buffer_id);
@@ -1164,8 +1165,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
         }
         enriched.write.addr = addr;
         enriched.write.key = remote_mr.key;
-        enriched.write.capacity = static_cast<uint32_t>(
-            std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+        enriched.write.capacity = static_cast<uint32_t>(std::min<uint64_t>(
+            remaining, std::numeric_limits<uint32_t>::max()));
         effective_dst_hint = enriched;
       }
     } catch (std::exception const&) {
@@ -1348,9 +1349,8 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     return info;
   };
 
-  unsigned result =
-      adapter->recv_async(rank, local_ptr, dst.bytes, dst.buffer_id,
-                          bounce_provider);
+  unsigned result = adapter->recv_async(rank, local_ptr, dst.bytes,
+                                        dst.buffer_id, bounce_provider);
   if (result == 0) {
     slot->state.store(TrackedRequest::SlotState::Releasing,
                       std::memory_order_release);
@@ -1694,7 +1694,8 @@ bool Communicator::dereg_ipc(uint32_t buffer_id) {
   return true;
 }
 
-bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id, int timeout_ms) {
+bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
+                            int timeout_ms) {
   if (buffer_id == 0) return false;
   if (owner_rank == global_rank_) {
     std::lock_guard<std::mutex> lk(resource_mu_);
@@ -1790,7 +1791,8 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
     gpuError_t restore_err = gpuSetDevice(original_device);
     if (restore_err != gpuSuccess) return false;
     if (open_err != gpuSuccess || item.direct_ptr == nullptr) return false;
-    if (!ipc_manager_.register_remote_ipc(remote_rank, remote_buffer_id, item)) {
+    if (!ipc_manager_.register_remote_ipc(remote_rank, remote_buffer_id,
+                                          item)) {
       return false;
     }
   }
