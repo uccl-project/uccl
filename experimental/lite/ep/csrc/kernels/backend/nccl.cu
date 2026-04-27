@@ -4,6 +4,7 @@
 #include <string>
 #include <optional>
 #include <algorithm>
+#include <utility>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <sstream>
@@ -28,7 +29,7 @@ size_t align_up(const size_t value, const size_t alignment) {
     return ((value + alignment - 1) / alignment) * alignment;
 }
 
-void* alloc_host_window(const size_t size, const size_t alignment) {
+std::pair<void*, void*> alloc_host_window(const size_t size, const size_t alignment) {
     CUdevice device;
     CUDA_DRIVER_CHECK(lazy_cuCtxGetDevice(&device));
     int numa_node = 0;
@@ -61,22 +62,18 @@ void* alloc_host_window(const size_t size, const size_t alignment) {
     access_desc[1].location.id = numa_node;
     access_desc[1].flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
     CUDA_DRIVER_CHECK(lazy_cuMemSetAccess(reinterpret_cast<CUdeviceptr>(ptr), alloc_size, access_desc, 2));
+    CUDA_DRIVER_CHECK(lazy_cuMemRelease(handle));
     std::memset(ptr, 0, alloc_size);
-    return ptr;
+    return {ptr, ptr};
 }
 
 void free_host_window(void* ptr) {
     if (ptr == nullptr)
         return;
 
-    CUmemGenericAllocationHandle handle;
-    CUDA_DRIVER_CHECK(lazy_cuMemRetainAllocationHandle(&handle, ptr));
-    CUDA_DRIVER_CHECK(lazy_cuMemRelease(handle));
-
     size_t size = 0;
     CUDA_DRIVER_CHECK(lazy_cuMemGetAddressRange_v2(nullptr, &size, reinterpret_cast<CUdeviceptr>(ptr)));
     CUDA_DRIVER_CHECK(lazy_cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), size));
-    CUDA_DRIVER_CHECK(lazy_cuMemRelease(handle));
     CUDA_DRIVER_CHECK(lazy_cuMemAddressFree(reinterpret_cast<CUdeviceptr>(ptr), size));
 }
 
@@ -197,14 +194,14 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
     // NOTES: `ncclCommWindowRegister` is collective: it internally calls bootstrapBarrier
     // across all ranks, so no explicit barrier is needed after this call.
     if (use_host_window) {
-        raw_window_ptr = alloc_host_window(size, alignment);
+        EP_HOST_ASSERT(get_env("EP_FORCE_NO_NVLINK", 0) != 0 and
+                       "EP_FORCE_HOST_WINDOW currently requires EP_FORCE_NO_NVLINK=1");
+        std::tie(raw_window_ptr, mapped_window_ptr) = alloc_host_window(size, alignment);
     } else {
         NCCL_CHECK(ncclMemAlloc(&raw_window_ptr, size));
     }
     NCCL_CHECK(ncclCommWindowRegister(comm, raw_window_ptr, size, &window, NCCL_WIN_DEFAULT));
-    if (use_host_window) {
-        mapped_window_ptr = raw_window_ptr;
-    } else {
+    if (not use_host_window) {
         NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, actual_lsa_rank, &mapped_window_ptr));
     }
 

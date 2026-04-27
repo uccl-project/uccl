@@ -77,6 +77,8 @@ public:
             flags += " -DDISABLE_AGGRESSIVE_PTX_INSTRS";
         if (get_env("EP_FORCE_NO_NVLINK", 0))
             flags += " -DEP_FORCE_NO_NVLINK";
+        if (get_env("EP_FORCE_HOST_WINDOW", 0))
+            flags += " -DEP_FORCE_HOST_WINDOW";
     }
 
     virtual ~Compiler() = default;

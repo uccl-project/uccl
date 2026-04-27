@@ -8,6 +8,12 @@
 
 namespace deep_ep::elastic::handle {
 
+#ifdef EP_FORCE_HOST_WINDOW
+using EP_GIN_SEGMENT_TYPE = ncclGin_SegmentHostNuma;
+#else
+using EP_GIN_SEGMENT_TYPE = ncclGin_SegmentDevice;
+#endif
+
 struct NCCLGin {
 #define IS_TEAM_WORLD(code) if constexpr (std::is_same_v<team_t, ncclTeamTagWorld>) { code }
 #define IS_TEAM_LSA(code) if constexpr (std::is_same_v<team_t, ncclTeamTagLsa>) { code }
@@ -135,7 +141,7 @@ struct NCCLGin {
         gin.wait(request);
     }
 
-    template <typename team_t, typename coop_t = ncclCoopThread, typename segment_t = ncclGin_SegmentDevice>
+    template <typename team_t, typename coop_t = ncclCoopThread, typename segment_t = EP_GIN_SEGMENT_TYPE>
     __device__ __forceinline__
     void get(void* src_ptr, void* dst_ptr, const int& num_bytes, const int& src_rank_idx,
              const int& extra_options = 0) const {
@@ -178,7 +184,8 @@ struct NCCLGin {
     }
 
     template <typename team_t,
-              typename remote_action_t = ncclGin_None>
+              typename remote_action_t = ncclGin_None,
+              typename segment_t = EP_GIN_SEGMENT_TYPE>
     __device__ __forceinline__
     void put(void* recv_sym_ptr, void* send_sym_ptr, const int& num_bytes, const int& dst_rank_idx,
              const int& extra_options = 0,
@@ -198,7 +205,8 @@ struct NCCLGin {
                     ncclGin_None(),
                     cuda::thread_scope_thread,
                     cuda::thread_scope_device,
-                    ncclGinOptFlagsDefault | extra_options);
+                    ncclGinOptFlagsDefault | extra_options,
+                    segment_t());
         });
     }
 
