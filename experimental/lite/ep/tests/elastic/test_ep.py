@@ -56,6 +56,17 @@ def fold_expanded(expanded: Union[Tuple[torch.Tensor], torch.Tensor],
     return folded
 
 
+def get_legacy_low_latency_bytes(topk_idx: torch.Tensor, hidden: int,
+                                 use_fp8_dispatch: bool) -> Tuple[int, int]:
+    num_selections = (topk_idx != -1).sum().item()
+    num_bf16_bytes = hidden * 2
+    num_fp8_bytes = hidden + align(hidden, 128) // 128 * 4 + 16
+    return (
+        num_selections * (num_fp8_bytes if use_fp8_dispatch else num_bf16_bytes),
+        num_selections * num_bf16_bytes,
+    )
+
+
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespace):
     # Settings
@@ -221,6 +232,9 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             def get_trace_path(prefix: str):
                 return None if not args.dump_profile_traces else f'{args.dump_profile_traces}/{prefix}_rank{buffer.rank_idx}.json'
 
+            legacy_dispatch_bytes, legacy_combine_bytes = get_legacy_low_latency_bytes(
+                topk_idx, hidden, use_fp8_dispatch)
+
             # Calculate the number of tokens that are sent to the other scaleout peers
             dst_scaleout_rank_idx = topk_idx // (num_experts // num_scaleout_ranks)
             num_scaleout_send_tokens = 0
@@ -245,6 +259,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'dispatch: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
                     f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                    f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
                     f'copy: {2 * num_recv_tokens * num_bytes_per_dispatch_token / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
             # Test expanded dispatch performance
@@ -256,6 +271,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'expanded dispatch: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
                     f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                    f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
                     f'copy: {(num_recv_tokens * (num_bytes_per_dispatch_token_meta + num_bytes_per_dispatch_token) + num_expanded_tokens * num_bytes_per_dispatch_token) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
             # Test cached dispatch performance
@@ -266,6 +282,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'cached dispatch: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
                     f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                    f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
                     f'copy: {2 * num_scaleup_bytes / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
             # Test combine performance
@@ -328,6 +345,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'combine: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
                     f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                    f'legacy: {legacy_combine_bytes / t / 1e9:.0f} GB/s, {legacy_combine_bytes:.0f} bytes | '
                     f'reduce: {(num_bias_bytes + num_reduction_read_bytes + num_reduction_write_bytes) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
             # Test reduced combine performance
@@ -339,6 +357,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'reduced combine: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
                     f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                    f'legacy: {legacy_combine_bytes / t / 1e9:.0f} GB/s, {legacy_combine_bytes:.0f} bytes | '
                     f'reduce: {(num_bias_bytes + num_reduction_read_bytes + num_reduction_write_bytes) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
             dist_print(once_in_node=True)
 
