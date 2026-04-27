@@ -159,6 +159,9 @@ class Communicator {
   bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
                                    uint64_t expected_binding_version) const;
   void invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
+  bool register_remote_ipc_info(int remote_rank, uint32_t ipc_id,
+                                IpcBufferInfo const& info,
+                                bool eager_open_direct_ptr);
   void try_open_remote_ipc_buffer(int remote_rank, IPCItem const& state);
   void cleanup_tracked_request(TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);

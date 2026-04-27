@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -55,6 +56,15 @@ std::string get_local_ip() {
   char buf[INET_ADDRSTRLEN];
   ::inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf));
   return buf;
+}
+
+void notify_eventfd_nonblocking(int fd) {
+  if (fd < 0) return;
+  uint64_t one = 1;
+  ssize_t rc = 0;
+  do {
+    rc = ::write(fd, &one, sizeof(one));
+  } while (rc < 0 && errno == EINTR);
 }
 
 bool has_env_value(char const* name) {
@@ -141,6 +151,21 @@ int mr_timeout_ms() {
   return get_timeout_ms("UHM_MR_TIMEOUT_MS", kDefaultMrTimeoutMs);
 }
 
+Exchanger::WaitOptions make_wait_options(int timeout_ms, int delay_ms) {
+  return Exchanger::WaitOptions{timeout_to_retries(timeout_ms, delay_ms),
+                                delay_ms};
+}
+
+Exchanger::WaitOptions make_wait_options_until(
+    std::chrono::steady_clock::time_point deadline, int delay_ms) {
+  auto const now = std::chrono::steady_clock::now();
+  if (deadline <= now) return Exchanger::WaitOptions{0, delay_ms};
+  auto const remaining_ms = static_cast<int>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+          .count());
+  return make_wait_options(remaining_ms, delay_ms);
+}
+
 std::string uccl_p2p_key(int src_rank, int dst_rank) {
   return "uccl_p2p_info_" + std::to_string(src_rank) + "_to_" +
          std::to_string(dst_rank);
@@ -163,6 +188,18 @@ std::string ipc_buffer_versioned_key(int src_rank, int dst_rank,
          std::to_string(binding_version);
 }
 
+IPCItem ipc_item_from_info(IpcBufferInfo const& info, uint32_t ipc_id) {
+  IPCItem state{};
+  state.handle = info.handle;
+  state.binding_version = info.binding_version;
+  state.base_offset = static_cast<uintptr_t>(info.base_offset);
+  state.bytes = static_cast<size_t>(info.bytes);
+  state.device_idx = info.device_idx;
+  state.valid = info.valid;
+  state.ipc_id = ipc_id;
+  return state;
+}
+
 void validate_dst_hint_for_transport(PeerTransportKind kind,
                                      std::optional<RemoteSlice> const& dst_hint,
                                      size_t src_bytes) {
@@ -180,31 +217,27 @@ void validate_dst_hint_for_transport(PeerTransportKind kind,
 }
 
 template <typename Info>
-bool publish_local_then_fetch_remote(Exchanger& exchanger,
-                                     std::string const& local_key,
-                                     Info const& local_info,
-                                     std::string const& remote_key,
-                                     Info& remote_info, int timeout_ms) {
-  if (!exchanger.publish(local_key, local_info)) return false;
-  return exchanger.wait_and_fetch(
-      remote_key, remote_info,
-      timeout_to_retries(timeout_ms, kBootstrapPollDelayMs),
-      kBootstrapPollDelayMs);
+bool publish_local_then_wait_remote(Exchanger& exchanger,
+                                    std::string const& local_key,
+                                    Info const& local_info,
+                                    std::string const& remote_key,
+                                    Info& remote_info, int timeout_ms) {
+  if (!exchanger.put(local_key, local_info)) return false;
+  return exchanger.wait(remote_key, remote_info,
+                        make_wait_options(timeout_ms, kBootstrapPollDelayMs));
 }
 
 template <typename Info>
-bool fetch_remote_then_publish_local(Exchanger& exchanger,
-                                     std::string const& remote_key,
-                                     Info& remote_info,
-                                     std::string const& local_key,
-                                     Info const& local_info, int timeout_ms) {
-  if (!exchanger.wait_and_fetch(
-          remote_key, remote_info,
-          timeout_to_retries(timeout_ms, kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
+bool wait_remote_then_publish_local(Exchanger& exchanger,
+                                    std::string const& remote_key,
+                                    Info& remote_info,
+                                    std::string const& local_key,
+                                    Info const& local_info, int timeout_ms) {
+  if (!exchanger.wait(remote_key, remote_info,
+                      make_wait_options(timeout_ms, kBootstrapPollDelayMs))) {
     return false;
   }
-  return exchanger.publish(local_key, local_info);
+  return exchanger.put(local_key, local_info);
 }
 
 bool detect_local_rdma_capable() {
@@ -250,11 +283,12 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   std::cout << "[INFO] Using socket-based bootstrap exchanger as "
             << (is_server ? "server" : "client") << " " << config_->exchanger_ip
             << std::endl;
-  exchanger_client_ = std::make_shared<SockExchanger>(
-      (global_rank_ == 0), config_->exchanger_ip, config_->exchanger_port);
+  exchanger_client_ = std::make_shared<HierarchicalExchanger>(
+      (global_rank_ == 0), config_->exchanger_ip, config_->exchanger_port,
+      /*timeout_ms=*/3000, /*max_line_bytes=*/1 * 1024 * 1024,
+      config_->local_id);
   if (!exchanger_client_->valid()) {
-    fprintf(stderr, "[ERROR] Failed to connect to Exchanger\n");
-    return;
+    throw std::runtime_error("failed to initialize hierarchical exchanger");
   }
 
   shm_manager_.emplace();
@@ -286,7 +320,7 @@ void Communicator::exchange_peer_metas() {
   }
 
   std::string meta_key = "meta:" + std::to_string(global_rank_);
-  if (!exchanger_client_->publish(meta_key, local)) {
+  if (!exchanger_client_->put(meta_key, local)) {
     fprintf(stderr, "[ERROR] Failed to publish local CommunicatorMeta \n");
   }
 
@@ -295,10 +329,9 @@ void Communicator::exchange_peer_metas() {
   for (int i = 0; i < world_size_; i++) {
     if (i == global_rank_) continue;
     std::string key = "meta:" + std::to_string(i);
-    if (exchanger_client_->wait_and_fetch(
+    if (exchanger_client_->wait(
             key, remote,
-            timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-            kBootstrapPollDelayMs)) {
+            make_wait_options(bootstrap_timeout_ms(), kBootstrapPollDelayMs))) {
       std::lock_guard<std::mutex> lk(peer_mu_);
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
@@ -324,10 +357,7 @@ Communicator::~Communicator() {
   if (progress_started_.load()) {
     progress_running_.store(false);
     progress_cv_.notify_all();
-    if (completion_event_fd_ >= 0) {
-      uint64_t one = 1;
-      (void)::write(completion_event_fd_, &one, sizeof(one));
-    }
+    notify_eventfd_nonblocking(completion_event_fd_);
     if (progress_thread_.joinable()) {
       progress_thread_.join();
     }
@@ -534,10 +564,7 @@ bool Communicator::dequeue_active_request(unsigned* out_req_id) {
 
 void Communicator::notify_request_completion() {
   completion_seq_.fetch_add(1, std::memory_order_release);
-  if (completion_event_fd_ >= 0) {
-    uint64_t one = 1;
-    (void)::write(completion_event_fd_, &one, sizeof(one));
-  }
+  notify_eventfd_nonblocking(completion_event_fd_);
 }
 
 UcclTransportAdapter& Communicator::ensure_uccl_adapter(
@@ -620,13 +647,12 @@ bool Communicator::try_fallback_tcp_connect(
                             tcp_adapter.get_listen_port());
   std::string p2p_key = tcp_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
-  if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
+  if (!exchanger_client_->put(p2p_key, local_p2p_info)) return false;
 
   TcpP2PInfo remote_p2p_info;
-  if (!exchanger_client_->wait_and_fetch(
+  if (!exchanger_client_->wait(
           peer_p2p_key, remote_p2p_info,
-          timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
+          make_wait_options(bootstrap_timeout_ms(), kBootstrapPollDelayMs))) {
     return false;
   }
 
@@ -661,16 +687,15 @@ bool Communicator::try_fallback_tcp_accept(
   std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
 
   TcpP2PInfo remote_p2p_info;
-  if (!exchanger_client_->wait_and_fetch(
+  if (!exchanger_client_->wait(
           peer_p2p_key, remote_p2p_info,
-          timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
+          make_wait_options(bootstrap_timeout_ms(), kBootstrapPollDelayMs))) {
     return false;
   }
 
   TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                             tcp_adapter.get_listen_port());
-  if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
+  if (!exchanger_client_->put(p2p_key, local_p2p_info)) return false;
 
   PeerConnectSpec spec{};
   spec.peer_rank = rank;
@@ -737,7 +762,7 @@ bool Communicator::connect(int rank) {
       std::string p2p_key = uccl_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(
+      if (!publish_local_then_wait_remote(
               *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
               remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
@@ -783,7 +808,7 @@ bool Communicator::connect(int rank) {
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
       TcpP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(
+      if (!publish_local_then_wait_remote(
               *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
               remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
@@ -857,7 +882,7 @@ bool Communicator::accept(int rank) {
       std::string p2p_key = uccl_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!fetch_remote_then_publish_local(
+      if (!wait_remote_then_publish_local(
               *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
               local_p2p_info, bootstrap_timeout_ms())) {
         return false;
@@ -889,6 +914,7 @@ bool Communicator::accept(int rank) {
     if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
+      ipc_adapter_->close_peer(rank);
       return false;
     }
     mark_peer_path_ready(rank, PeerTransportKind::Ipc);
@@ -903,7 +929,7 @@ bool Communicator::accept(int rank) {
       TcpP2PInfo remote_p2p_info;
       TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                                 tcp_adapter.get_listen_port());
-      if (!fetch_remote_then_publish_local(
+      if (!wait_remote_then_publish_local(
               *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
               local_p2p_info, bootstrap_timeout_ms())) {
         return false;
@@ -1567,7 +1593,7 @@ bool Communicator::notify_named_mrs(int remote_rank, uint64_t generation,
   //             << " key=" << entry.mr.key << std::endl;
   // }
 
-  return exchanger_client_->publish(key, payload);
+  return exchanger_client_->put(key, payload);
 }
 
 bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
@@ -1580,8 +1606,7 @@ bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
                     std::to_string(global_rank_) + ":" +
                     std::to_string(generation);
   int timeout_ms = mr_timeout_ms();
-  if (!exchanger_client_->wait_and_fetch(
-          key, infos, timeout_to_retries(timeout_ms, 1), 1)) {
+  if (!exchanger_client_->wait(key, infos, make_wait_options(timeout_ms, 1))) {
     std::cerr << "[WARN] Timeout waiting for named MR table from rank "
               << remote_rank << std::endl;
     return false;
@@ -1657,11 +1682,10 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   }
 
   auto const latest_key = ipc_buffer_key(global_rank_, remote_rank, ipc_id);
-  if (!exchanger_client_->publish(latest_key, info)) return false;
-  if (binding_version == 0) return true;
+  if (!exchanger_client_->put(latest_key, info)) return false;
   auto const versioned_key = ipc_buffer_versioned_key(global_rank_, remote_rank,
                                                       ipc_id, binding_version);
-  return exchanger_client_->publish(versioned_key, info);
+  return exchanger_client_->put(versioned_key, info);
 }
 
 IPCItem Communicator::export_local_ipc_buffer(void* local_buf, size_t len) {
@@ -1680,36 +1704,23 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
   IpcBufferInfo info{};
   auto const latest_key = ipc_buffer_key(remote_rank, global_rank_, ipc_id);
+  auto const deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(bootstrap_timeout_ms());
   if (expected_binding_version != 0) {
     auto const versioned_key = ipc_buffer_versioned_key(
         remote_rank, global_rank_, ipc_id, expected_binding_version);
     // Prefer deterministic versioned key to avoid stale latest-key reads.
-    if (exchanger_client_->wait_and_fetch(
+    if (exchanger_client_->wait(
             versioned_key, info,
-            timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-            kBootstrapPollDelayMs)) {
-      IPCItem state{};
-      state.handle = info.handle;
-      state.binding_version = info.binding_version;
-      state.base_offset = static_cast<uintptr_t>(info.base_offset);
-      state.bytes = static_cast<size_t>(info.bytes);
-      state.device_idx = info.device_idx;
-      state.valid = info.valid;
-      state.ipc_id = ipc_id;
-      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
-      if (ok) {
-        try_open_remote_ipc_buffer(remote_rank, state);
-      }
-      return ok;
+            make_wait_options_until(deadline, kBootstrapPollDelayMs))) {
+      return register_remote_ipc_info(remote_rank, ipc_id, info,
+                                      /*eager_open_direct_ptr=*/true);
     }
   }
-  auto const deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(bootstrap_timeout_ms());
   while (true) {
-    if (!exchanger_client_->wait_and_fetch(
+    if (!exchanger_client_->wait(
             latest_key, info,
-            timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-            kBootstrapPollDelayMs)) {
+            make_wait_options_until(deadline, kBootstrapPollDelayMs))) {
       return false;
     }
     if (expected_binding_version == 0 ||
@@ -1723,19 +1734,9 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
         std::chrono::milliseconds(kBootstrapPollDelayMs));
   }
 
-  IPCItem state{};
-  state.handle = info.handle;
-  state.binding_version = info.binding_version;
-  state.base_offset = static_cast<uintptr_t>(info.base_offset);
-  state.bytes = static_cast<size_t>(info.bytes);
-  state.device_idx = info.device_idx;
-  state.valid = info.valid;
-  state.ipc_id = ipc_id;
-  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
-  if (ok && expected_binding_version != 0) {
-    try_open_remote_ipc_buffer(remote_rank, state);
-  }
-  return ok;
+  bool const eager_open_direct_ptr = (expected_binding_version != 0);
+  return register_remote_ipc_info(remote_rank, ipc_id, info,
+                                  eager_open_direct_ptr);
 }
 
 bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1745,45 +1746,35 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
   if (expected_binding_version != 0) {
     auto const versioned_key = ipc_buffer_versioned_key(
         remote_rank, global_rank_, ipc_id, expected_binding_version);
-    if (exchanger_client_->fetch(versioned_key, info)) {
-      IPCItem state{};
-      state.handle = info.handle;
-      state.binding_version = info.binding_version;
-      state.base_offset = static_cast<uintptr_t>(info.base_offset);
-      state.bytes = static_cast<size_t>(info.bytes);
-      state.device_idx = info.device_idx;
-      state.valid = info.valid;
-      if (state.valid && info.binding_version != expected_binding_version) {
+    if (exchanger_client_->get(versioned_key, info)) {
+      if (info.valid && info.binding_version != expected_binding_version) {
         invalidate_remote_ipc_buffer(remote_rank, ipc_id);
         return false;
       }
-      state.ipc_id = ipc_id;
-      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
-      if (ok && expected_binding_version != 0) {
-        try_open_remote_ipc_buffer(remote_rank, state);
-      }
-      return ok;
+      return register_remote_ipc_info(remote_rank, ipc_id, info,
+                                      /*eager_open_direct_ptr=*/true);
     }
   }
-  if (!exchanger_client_->fetch(
-          ipc_buffer_key(remote_rank, global_rank_, ipc_id), info)) {
+  if (!exchanger_client_->get(ipc_buffer_key(remote_rank, global_rank_, ipc_id),
+                              info)) {
     return false;
   }
-  IPCItem state{};
-  state.handle = info.handle;
-  state.binding_version = info.binding_version;
-  state.base_offset = static_cast<uintptr_t>(info.base_offset);
-  state.bytes = static_cast<size_t>(info.bytes);
-  state.device_idx = info.device_idx;
-  state.valid = info.valid;
-  if (state.valid && expected_binding_version != 0 &&
+  if (info.valid && expected_binding_version != 0 &&
       info.binding_version != expected_binding_version) {
     invalidate_remote_ipc_buffer(remote_rank, ipc_id);
     return false;
   }
-  state.ipc_id = ipc_id;
-  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
-  if (ok && expected_binding_version != 0) {
+  bool const eager_open_direct_ptr = (expected_binding_version != 0);
+  return register_remote_ipc_info(remote_rank, ipc_id, info,
+                                  eager_open_direct_ptr);
+}
+
+bool Communicator::register_remote_ipc_info(int remote_rank, uint32_t ipc_id,
+                                            IpcBufferInfo const& info,
+                                            bool eager_open_direct_ptr) {
+  IPCItem state = ipc_item_from_info(info, ipc_id);
+  bool const ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+  if (ok && eager_open_direct_ptr) {
     try_open_remote_ipc_buffer(remote_rank, state);
   }
   return ok;
@@ -1799,10 +1790,22 @@ void Communicator::try_open_remote_ipc_buffer(int remote_rank,
       [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+  bool can_use_direct_peer = (state.device_idx == local_gpu_idx_);
+  if (!can_use_direct_peer && state.device_idx >= 0) {
+    int can_access_peer = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                        state.device_idx));
+    can_use_direct_peer = (can_access_peer != 0);
+  }
+  if (!can_use_direct_peer) return;
+
   void* direct_ptr = nullptr;
   gpuError_t open_err = gpuIpcOpenMemHandle(&direct_ptr, state.handle,
                                             gpuIpcMemLazyEnablePeerAccess);
-  if (open_err != gpuSuccess || direct_ptr == nullptr) return;
+  if (open_err != gpuSuccess || direct_ptr == nullptr) {
+    (void)gpuGetLastError();
+    return;
+  }
 
   IPCItem opened = state;
   opened.direct_ptr = direct_ptr;
@@ -1842,12 +1845,22 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
       [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+  bool can_use_direct_peer = (state.device_idx == local_gpu_idx_);
+  if (!can_use_direct_peer && state.device_idx >= 0) {
+    int can_access_peer = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                        state.device_idx));
+    can_use_direct_peer = (can_access_peer != 0);
+  }
+  if (!can_use_direct_peer) return false;
+
   if (state.direct_ptr == nullptr) {
     gpuError_t open_err = gpuIpcOpenMemHandle(&state.direct_ptr, state.handle,
                                               gpuIpcMemLazyEnablePeerAccess);
     if (open_err != gpuSuccess) {
       // Treat IPC open failure as recoverable here so upper layers can
       // fallback to host-bounce relay instead of aborting.
+      (void)gpuGetLastError();
       return false;
     }
     state.ipc_id = ipc_id;
