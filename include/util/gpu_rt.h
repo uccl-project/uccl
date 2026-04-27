@@ -8,6 +8,8 @@
 #define gpuGetErrorString cudaGetErrorString
 #define gpuStream_t cudaStream_t
 #define gpuStreamNonBlocking cudaStreamNonBlocking
+#define gpuStreamLegacy cudaStreamLegacy
+#define gpuStreamPerThread cudaStreamPerThread
 #define gpuStreamCreate cudaStreamCreate
 #define gpuStreamCreateWithFlags cudaStreamCreateWithFlags
 #define gpuStreamSynchronize cudaStreamSynchronize
@@ -93,6 +95,8 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuGetErrorString hipGetErrorString
 #define gpuStream_t hipStream_t
 #define gpuStreamNonBlocking hipStreamNonBlocking
+#define gpuStreamLegacy hipStreamLegacy
+#define gpuStreamPerThread hipStreamPerThread
 #define gpuStreamCreate hipStreamCreate
 #define gpuStreamCreateWithFlags hipStreamCreateWithFlags
 #define gpuStreamSynchronize hipStreamSynchronize
