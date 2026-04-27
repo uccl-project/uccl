@@ -68,6 +68,7 @@ GPUDirect RDMA, and one GIN QP. Values are averages across ranks.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1n x 2g | l40: GPU2,3 | 6.00 GB/s | 616.961 us | 6.00 GB/s | 580.603 us | 6.00 GB/s | 2507.500 us |
 | 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s | 863.959 us | 6.25 GB/s | 1027.750 us | 4.00 GB/s | 3510.250 us |
+| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s | 586.572 us | 7.00 GB/s | 547.059 us | 6.00 GB/s | 2609.000 us |
 | 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s | 926.900 us | 6.00 GB/s | 1048.000 us | 4.00 GB/s | 3469.750 us |
 | 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s | 1904.750 us | 5.00 GB/s | 2074.875 us | 5.25 GB/s | 2680.375 us |
 
@@ -75,6 +76,7 @@ Raw logs:
 
 - `/tmp/deepep_matrix_1n2g.log`
 - `/tmp/deepep_matrix_1n4g.log`
+- `/tmp/deepep_matrix_2n1g.log`
 - `/tmp/deepep_matrix_2n2g.log`
 - `/tmp/deepep_matrix_2n4g.log`
 

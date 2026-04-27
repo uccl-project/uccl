@@ -222,6 +222,7 @@ Configuration:
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1n x 2g | l40: GPU2,3 | 2 | 6.00 GB/s | 616.961 us | 6.00 GB/s | 580.603 us | 6.00 GB/s | 2507.500 us | `/tmp/deepep_matrix_1n2g.log` |
 | 1n x 4g | l40: GPU0,1,2,3 | 4 | 7.75 GB/s | 863.959 us | 6.25 GB/s | 1027.750 us | 4.00 GB/s | 3510.250 us | `/tmp/deepep_matrix_1n4g.log` |
+| 2n x 1g | l40/l41: GPU2 | 2 | 6.00 GB/s | 586.572 us | 7.00 GB/s | 547.059 us | 6.00 GB/s | 2609.000 us | `/tmp/deepep_matrix_2n1g.log` |
 | 2n x 2g | l40/l41: GPU2,3 | 4 | 7.00 GB/s | 926.900 us | 6.00 GB/s | 1048.000 us | 4.00 GB/s | 3469.750 us | `/tmp/deepep_matrix_2n2g.log` |
 | 2n x 4g | l40/l41: GPU0,1,2,3 | 8 | 5.00 GB/s | 1904.750 us | 5.00 GB/s | 2074.875 us | 5.25 GB/s | 2680.375 us | `/tmp/deepep_matrix_2n4g.log` |
 
@@ -275,6 +276,10 @@ cd experimental/lite/ep
 
 bash run_multinode.sh --gpus-per-node 2 --gpu-list 2,3 \
   --master-port 34620 \
+  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
+
+bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
+  --master-port 34811 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
 
 bash run_multinode.sh --gpus-per-node 4 --gpu-list 0,1,2,3 \
