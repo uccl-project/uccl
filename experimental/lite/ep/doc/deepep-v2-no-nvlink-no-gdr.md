@@ -237,6 +237,28 @@ Notes:
 - The performance is intentionally conservative because no-GDR proxy GIN uses
   one QP and avoids multiple-reduction combine for correctness.
 
+### No direct P2P + no GPUDirect RDMA intra-node results
+
+This mode adds:
+
+```bash
+NCCL_P2P_DISABLE=1
+NCCL_SHM_DISABLE=0
+NCCL_NET_DISABLE_INTRA=1
+NCCL_NET_GDR_LEVEL=0
+```
+
+With these settings, NCCL's ordinary intra-node channels can be forced to SHM
+(`via SHM/direct/direct` in NCCL logs), but the DeepEPv2 data path still requires
+NCCL GIN and remains `GIN_IB_PROXY`. If IB is fully disabled, GIN initialization
+fails with `GIN is unavailable`; there is no validated GIN-over-SHM path in this
+NCCL build.
+
+| Setup | Physical GPUs | Ranks | Dispatch BW | Dispatch latency | Expanded dispatch BW | Expanded dispatch latency | Cached dispatch BW | Cached dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency | Log |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1n x 2g | l40: GPU2,3 | 2 | 6.00 GB/s | 615.182 us | 6.00 GB/s | 616.032 us | 6.00 GB/s | 613.049 us | 6.00 GB/s | 577.398 us | 6.00 GB/s | 2549.000 us | `/tmp/deepep_gin_shm_1n2g.log` |
+| 1n x 4g | l40: GPU0,1,2,3 | 4 | 7.75 GB/s | 862.379 us | 8.00 GB/s | 861.427 us | 8.00 GB/s | 860.244 us | 6.50 GB/s | 1015.250 us | 4.00 GB/s | 3507.750 us | `/tmp/deepep_gin_shm_1n4g.log` |
+
 ## Reproduction commands
 
 Single-node:
@@ -255,6 +277,12 @@ export DISABLE_SM90_FEATURES=1
 export EP_TEST_DISABLE_FP8=1
 export EP_FORCE_PROCESS_EXIT=1
 export EP_JIT_CACHE_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/jit-cache
+
+# Optional: disable direct P2P and force NCCL ordinary intra-node channels to SHM.
+# GIN itself remains GIN_IB_PROXY.
+export NCCL_P2P_DISABLE=1
+export NCCL_SHM_DISABLE=0
+export NCCL_NET_DISABLE_INTRA=1
 
 CUDA_VISIBLE_DEVICES=2,3 MASTER_PORT=34453 \
   /home/yangz/nfs/miniconda3/envs/uccl/bin/python tests/elastic/test_ep.py \

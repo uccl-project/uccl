@@ -87,6 +87,22 @@ Raw logs:
 - `/tmp/deepep_matrix_2n2g.log`
 - `/tmp/deepep_matrix_2n4g.log`
 
+### No direct P2P + no GPUDirect RDMA
+
+These runs add `NCCL_P2P_DISABLE=1`, `NCCL_SHM_DISABLE=0`, and
+`NCCL_NET_DISABLE_INTRA=1` to the normal no-GDR mode. NCCL ordinary intra-node
+channels show `via SHM/direct/direct`, but DeepEPv2 GIN remains `GIN_IB_PROXY`.
+
+| Setup | Physical GPUs | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1n x 2g | l40: GPU2,3 | 6.00 GB/s | 615.182 us | 6.00 GB/s | 577.398 us | 6.00 GB/s | 2549.000 us |
+| 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s | 862.379 us | 6.50 GB/s | 1015.250 us | 4.00 GB/s | 3507.750 us |
+
+Raw logs:
+
+- `/tmp/deepep_gin_shm_1n2g.log`
+- `/tmp/deepep_gin_shm_1n4g.log`
+
 ## Modification guidelines
 
 - Keep no-NVLink behavior gated by `EP_FORCE_NO_NVLINK=1`.
