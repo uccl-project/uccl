@@ -69,15 +69,16 @@ Constraint: `num_experts` must be divisible by total GPU count.
 ## Benchmark (L4, 128 tok x 7168 hid x top-8 x 64 exp)
 
 The table below uses DeepEPv2 NCCL GIN proxy mode, BF16 tests, no NVLink, no
-GPUDirect RDMA, and one GIN QP. Values are averages across ranks.
+GPUDirect RDMA, and one GIN QP. Values are averages across ranks. `Legacy BW`
+uses the old DeepEP low-latency numerator (`valid_topk * hidden * 2` for BF16).
 
-| Setup | Physical GPUs | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1n x 2g | l40: GPU2,3 | 6.00 GB/s | 616.961 us | 6.00 GB/s | 580.603 us | 6.00 GB/s | 2507.500 us |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s | 863.959 us | 6.25 GB/s | 1027.750 us | 4.00 GB/s | 3510.250 us |
-| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s | 586.572 us | 7.00 GB/s | 547.059 us | 6.00 GB/s | 2609.000 us |
-| 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s | 926.900 us | 6.00 GB/s | 1048.000 us | 4.00 GB/s | 3469.750 us |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s | 1904.750 us | 5.00 GB/s | 2074.875 us | 5.25 GB/s | 2680.375 us |
+| Setup | Physical GPUs | Dispatch BW | Combine BW | Reduced combine BW | Legacy BW (D / C / RC) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1n x 2g | l40: GPU2,3 | 6.00 GB/s @ 616.961 us | 6.00 GB/s @ 580.603 us | 6.00 GB/s @ 2507.500 us | 23.70 / 25.19 / 5.83 GB/s |
+| 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s @ 863.959 us | 6.25 GB/s @ 1027.750 us | 4.00 GB/s @ 3510.250 us | 16.79 / 14.12 / 4.13 GB/s |
+| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s @ 586.572 us | 7.00 GB/s @ 547.059 us | 6.00 GB/s @ 2609.000 us | 24.93 / 26.73 / 5.60 GB/s |
+| 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s @ 926.900 us | 6.00 GB/s @ 1048.000 us | 4.00 GB/s @ 3469.750 us | 15.65 / 13.84 / 4.18 GB/s |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s @ 1904.750 us | 5.00 GB/s @ 2074.875 us | 5.25 GB/s @ 2680.375 us | 7.50 / 6.88 / 5.33 GB/s |
 
 Raw logs:
 
@@ -90,13 +91,15 @@ Raw logs:
 ### GPUDirect RDMA enabled
 
 These inter-node runs set `NCCL_NET_GDR_LEVEL=SYS` and keep `NCCL_GIN_TYPE=2`
-(`GIN_IB_PROXY`). The 2n x 1g debug log contains `via NET/IB/0/GDRDMA`.
+(`GIN_IB_PROXY`). The 2n x 1g debug log contains `via NET/IB/0/GDRDMA`. These
+recorded GDR runs did not explicitly add `NCCL_P2P_DISABLE=1`, but the DeepEP
+data path is still forced through the no-NVLink policy.
 
-| Setup | Physical GPUs | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s | 582.707 us | 7.00 GB/s | 547.618 us | 6.00 GB/s | 2603.500 us |
-| 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s | 927.808 us | 6.00 GB/s | 1041.000 us | 5.00 GB/s | 2879.500 us |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s | 1896.875 us | 5.00 GB/s | 2083.625 us | 5.00 GB/s | 2961.625 us |
+| Setup | Physical GPUs | Dispatch BW | Combine BW | Reduced combine BW | Legacy BW (D / C / RC) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s @ 582.707 us | 7.00 GB/s @ 547.618 us | 6.00 GB/s @ 2603.500 us | 25.09 / 26.70 / 5.62 GB/s |
+| 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s @ 927.808 us | 6.00 GB/s @ 1041.000 us | 5.00 GB/s @ 2879.500 us | 15.64 / 13.94 / 5.04 GB/s |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s @ 1896.875 us | 5.00 GB/s @ 2083.625 us | 5.00 GB/s @ 2961.625 us | 7.53 / 6.85 / 4.82 GB/s |
 
 Raw logs:
 
@@ -110,10 +113,10 @@ These runs add `NCCL_P2P_DISABLE=1`, `NCCL_SHM_DISABLE=0`, and
 `NCCL_NET_DISABLE_INTRA=1` to the normal no-GDR mode. NCCL ordinary intra-node
 channels show `via SHM/direct/direct`, but DeepEPv2 GIN remains `GIN_IB_PROXY`.
 
-| Setup | Physical GPUs | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1n x 2g | l40: GPU2,3 | 6.00 GB/s | 615.182 us | 6.00 GB/s | 577.398 us | 6.00 GB/s | 2549.000 us |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s | 862.379 us | 6.50 GB/s | 1015.250 us | 4.00 GB/s | 3507.750 us |
+| Setup | Physical GPUs | Dispatch BW | Combine BW | Reduced combine BW | Legacy BW (D / C / RC) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1n x 2g | l40: GPU2,3 | 6.00 GB/s @ 615.182 us | 6.00 GB/s @ 577.398 us | 6.00 GB/s @ 2549.000 us | 23.77 / 25.33 / 5.74 GB/s |
+| 1n x 4g | l40: GPU0,1,2,3 | 7.75 GB/s @ 862.379 us | 6.50 GB/s @ 1015.250 us | 4.00 GB/s @ 3507.750 us | 16.82 / 14.29 / 4.14 GB/s |
 
 Raw logs:
 

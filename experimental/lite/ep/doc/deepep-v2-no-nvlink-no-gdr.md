@@ -213,18 +213,22 @@ Configuration:
 - Correctness checks: enabled (`--skip-check` was not used)
 - Precision path: BF16 (`EP_TEST_DISABLE_FP8=1`)
 - Runtime: `EP_FORCE_NO_NVLINK=1`, `NCCL_NET_GDR_LEVEL=0`, `NCCL_GIN_TYPE=2`
+- PCIe direct P2P is not explicitly disabled in NCCL for this matrix.
 - QPs: forced to `1/1`
 - Bandwidth columns below are the `SU` bottleneck bandwidth printed by DeepEP.
   `SO` is `0 GB/s` in this direct non-hybrid logical layout.
+- Legacy BW columns use the old DeepEP low-latency benchmark numerator:
+  valid top-k selections times the per-selection payload bytes. For the BF16
+  path here, that is `valid_topk * hidden * 2` bytes per rank.
 - Values are averages across ranks in that run.
 
-| Setup | Physical GPUs | Ranks | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency | Log |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1n x 2g | l40: GPU2,3 | 2 | 6.00 GB/s | 616.961 us | 6.00 GB/s | 580.603 us | 6.00 GB/s | 2507.500 us | `/tmp/deepep_matrix_1n2g.log` |
-| 1n x 4g | l40: GPU0,1,2,3 | 4 | 7.75 GB/s | 863.959 us | 6.25 GB/s | 1027.750 us | 4.00 GB/s | 3510.250 us | `/tmp/deepep_matrix_1n4g.log` |
-| 2n x 1g | l40/l41: GPU2 | 2 | 6.00 GB/s | 586.572 us | 7.00 GB/s | 547.059 us | 6.00 GB/s | 2609.000 us | `/tmp/deepep_matrix_2n1g.log` |
-| 2n x 2g | l40/l41: GPU2,3 | 4 | 7.00 GB/s | 926.900 us | 6.00 GB/s | 1048.000 us | 4.00 GB/s | 3469.750 us | `/tmp/deepep_matrix_2n2g.log` |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 8 | 5.00 GB/s | 1904.750 us | 5.00 GB/s | 2074.875 us | 5.25 GB/s | 2680.375 us | `/tmp/deepep_matrix_2n4g.log` |
+| Setup | Physical GPUs | Ranks | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency | Legacy BW (D / C / RC) | Log |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1n x 2g | l40: GPU2,3 | 2 | 6.00 GB/s | 616.961 us | 6.00 GB/s | 580.603 us | 6.00 GB/s | 2507.500 us | 23.70 / 25.19 / 5.83 GB/s | `/tmp/deepep_matrix_1n2g.log` |
+| 1n x 4g | l40: GPU0,1,2,3 | 4 | 7.75 GB/s | 863.959 us | 6.25 GB/s | 1027.750 us | 4.00 GB/s | 3510.250 us | 16.79 / 14.12 / 4.13 GB/s | `/tmp/deepep_matrix_1n4g.log` |
+| 2n x 1g | l40/l41: GPU2 | 2 | 6.00 GB/s | 586.572 us | 7.00 GB/s | 547.059 us | 6.00 GB/s | 2609.000 us | 24.93 / 26.73 / 5.60 GB/s | `/tmp/deepep_matrix_2n1g.log` |
+| 2n x 2g | l40/l41: GPU2,3 | 4 | 7.00 GB/s | 926.900 us | 6.00 GB/s | 1048.000 us | 4.00 GB/s | 3469.750 us | 15.65 / 13.84 / 4.18 GB/s | `/tmp/deepep_matrix_2n2g.log` |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 8 | 5.00 GB/s | 1904.750 us | 5.00 GB/s | 2074.875 us | 5.25 GB/s | 2680.375 us | 7.50 / 6.88 / 5.33 GB/s | `/tmp/deepep_matrix_2n4g.log` |
 
 Notes:
 
@@ -248,13 +252,23 @@ NCCL_GIN_TYPE=2
 ```
 
 The 2n x 1g debug log confirms NCCL network channels such as
-`via NET/IB/0/GDRDMA`. Values are averages across ranks.
+`via NET/IB/0/GDRDMA`. These are the previously recorded GDR runs; they did
+not explicitly add `NCCL_P2P_DISABLE=1`, although the DeepEP data path is still
+forced through the no-NVLink policy. Values are averages across ranks.
 
 | Setup | Physical GPUs | Ranks | Dispatch BW | Dispatch latency | Expanded dispatch BW | Expanded dispatch latency | Cached dispatch BW | Cached dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency | Log |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 2n x 1g | l40/l41: GPU2 | 2 | 6.00 GB/s | 582.707 us | 6.00 GB/s | 583.630 us | 6.00 GB/s | 581.384 us | 7.00 GB/s | 547.618 us | 6.00 GB/s | 2603.500 us | `/tmp/deepep_gdr_2n1g.log` |
 | 2n x 2g | l40/l41: GPU2,3 | 4 | 7.00 GB/s | 927.808 us | 7.00 GB/s | 927.287 us | 7.00 GB/s | 926.298 us | 6.00 GB/s | 1041.000 us | 5.00 GB/s | 2879.500 us | `/tmp/deepep_gdr_2n2g.log` |
 | 2n x 4g | l40/l41: GPU0,1,2,3 | 8 | 5.00 GB/s | 1896.875 us | 5.00 GB/s | 1911.750 us | 5.00 GB/s | 1906.375 us | 5.00 GB/s | 2083.625 us | 5.00 GB/s | 2961.625 us | `/tmp/deepep_gdr_2n4g.log` |
+
+Legacy BW (D / ED / CD / C / RC):
+
+| Setup | Legacy BW |
+| --- | ---: |
+| 2n x 1g | 25.09 / 25.05 / 25.15 / 26.70 / 5.62 GB/s |
+| 2n x 2g | 15.64 / 15.65 / 15.66 / 13.94 / 5.04 GB/s |
+| 2n x 4g | 7.53 / 7.47 / 7.49 / 6.85 / 4.82 GB/s |
 
 ### No direct P2P + no GPUDirect RDMA intra-node results
 
@@ -277,6 +291,13 @@ NCCL build.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 1n x 2g | l40: GPU2,3 | 2 | 6.00 GB/s | 615.182 us | 6.00 GB/s | 616.032 us | 6.00 GB/s | 613.049 us | 6.00 GB/s | 577.398 us | 6.00 GB/s | 2549.000 us | `/tmp/deepep_gin_shm_1n2g.log` |
 | 1n x 4g | l40: GPU0,1,2,3 | 4 | 7.75 GB/s | 862.379 us | 8.00 GB/s | 861.427 us | 8.00 GB/s | 860.244 us | 6.50 GB/s | 1015.250 us | 4.00 GB/s | 3507.750 us | `/tmp/deepep_gin_shm_1n4g.log` |
+
+Legacy BW (D / ED / CD / C / RC):
+
+| Setup | Legacy BW |
+| --- | ---: |
+| 1n x 2g | 23.77 / 23.74 / 23.85 / 25.33 / 5.74 GB/s |
+| 1n x 4g | 16.82 / 16.84 / 16.86 / 14.29 / 4.14 GB/s |
 
 ## Reproduction commands
 
