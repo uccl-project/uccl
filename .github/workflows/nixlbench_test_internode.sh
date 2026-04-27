@@ -39,7 +39,7 @@ cleanup() {
     echo "=== Cleanup ==="
 
     # Kill any remaining nixlbench processes
-    pkill -f nixlbench 2>/dev/null || true
+    pkill nixlbench 2>/dev/null || true
 
     # Stop etcd if this node started it
     if [ -n "${ETCD_PID}" ]; then
