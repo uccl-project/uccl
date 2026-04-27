@@ -16,17 +16,31 @@
 
 #define MAX_CQE 1024
 
-// SFINAE helper: set efa_attr.sl if the field exists in this SDK version.
+// SFINAE helpers: conditionally set fields that may not exist in older SDK versions
 template <typename T, typename = void>
 struct has_sl : std::false_type {};
 template <typename T>
 struct has_sl<T, std::void_t<decltype(std::declval<T>().sl)>> : std::true_type {
 };
 
+template <typename T, typename = void>
+struct has_flags : std::false_type {};
+template <typename T>
+struct has_flags<T, std::void_t<decltype(std::declval<T>().flags)>> : std::true_type {
+};
+
 template <typename T>
 inline void set_efa_sl(T& attr, uint8_t default_sl) {
   if constexpr (has_sl<T>::value) {
     attr.sl = get_sl_from_env(default_sl);
+  }
+}
+
+template <typename T>
+inline void set_efa_flags(T& attr) {
+  if constexpr (has_flags<T>::value) {
+    attr.flags = 0;
+    attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
   }
 }
 
@@ -65,9 +79,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   struct efadv_qp_init_attr efa_attr = {};
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
   set_efa_sl(efa_attr, EFA_SERVICE_LEVEL);
-  efa_attr.flags = 0;
-  // If set, Receive WRs will not be consumed for P2P write with imm.
-  efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+  set_efa_flags(efa_attr);
 
   *qp =
       efadv_create_qp_ex(ctx->getCtx(), &qp_attr, &efa_attr, sizeof(efa_attr));
