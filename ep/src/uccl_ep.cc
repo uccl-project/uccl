@@ -693,7 +693,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: CPU recv timeout");
         }
       }
@@ -941,7 +941,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
