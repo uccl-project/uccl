@@ -57,6 +57,7 @@ class Communicator {
                     exchanger_ip,
                     exchanger_port,
                     local_id,
+                    "default",
                     parse_transport(transport),
                 }))) {
     GPU_RT_CHECK(gpuSetDevice(gpu_id));

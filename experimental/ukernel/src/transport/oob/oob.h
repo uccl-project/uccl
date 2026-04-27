@@ -62,7 +62,6 @@ struct CommunicatorMeta {
 };
 
 struct MR {
-  uint32_t id = 0;
   uint64_t address = 0;
   uint64_t length = 0;
   uint32_t lkey = 0;
@@ -132,9 +131,8 @@ struct IpcBufferInfo {
 UK_OOB_DEFINE_VISIT_FIELDS(CommunicatorMeta, f("host_id", v.host_id);
                            f("ip", v.ip); f("local_id", v.local_id);
                            f("rdma_capable", v.rdma_capable);)
-UK_OOB_DEFINE_VISIT_FIELDS(MR, f("id", v.id); f("address", v.address);
-                           f("length", v.length); f("lkey", v.lkey);
-                           f("key", v.key);)
+UK_OOB_DEFINE_VISIT_FIELDS(MR, f("address", v.address); f("length", v.length);
+                           f("lkey", v.lkey); f("key", v.key);)
 UK_OOB_DEFINE_VISIT_FIELDS(NamedMR, f("buffer_id", v.buffer_id); f("mr", v.mr);)
 UK_OOB_DEFINE_VISIT_FIELDS(NamedMRInfos, f("generation", v.generation);
                            f("entries", v.entries);)

@@ -34,8 +34,8 @@ void test_exchangeable_round_trip() {
 
   NamedMRInfos infos{};
   infos.generation = 42;
-  infos.entries.push_back(NamedMR{3, MR{1, 0x1000ULL, 256, 0, 11}});
-  infos.entries.push_back(NamedMR{7, MR{2, 0x2000ULL, 512, 0, 22}});
+  infos.entries.push_back(NamedMR{3, MR{0x1000ULL, 256, 0, 11}});
+  infos.entries.push_back(NamedMR{7, MR{0x2000ULL, 512, 0, 22}});
   NamedMRInfos infos_rt;
   require(infos.serialize(encoded), "NamedMRInfos serialize failed");
   require(infos_rt.deserialize(encoded), "NamedMRInfos deserialize failed");

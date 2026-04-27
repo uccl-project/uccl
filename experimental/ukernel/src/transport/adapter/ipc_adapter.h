@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../oob/oob.h"
+#include "../memory/ipc_manager.h"
+#include "../oob/shmring_exchanger.h"
 #include "../util/jring.h"
 #include "config.h"
 #include "gpu_rt.h"

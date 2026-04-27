@@ -18,7 +18,7 @@ MRItem MRManager::create_local_mr(uint32_t buffer_id, void* ptr, size_t len) {
   }
 
   MRItem created{};
-  created.mr.id = buffer_id;
+  created.buffer_id = buffer_id;
   created.mr.address = reinterpret_cast<uint64_t>(ptr);
   created.mr.length = static_cast<uint64_t>(len);
   created.mr.lkey = 0;
@@ -33,12 +33,12 @@ MRItem MRManager::create_local_mr(uint32_t buffer_id, void* ptr, size_t len) {
 }
 
 bool MRManager::register_remote_mr(int rank, MRItem const& item) {
-  if (!item.valid || item.mr.id == 0) return false;
+  if (!item.valid || item.buffer_id == 0) return false;
   std::lock_guard<std::mutex> lk(remote_mu_);
   MRItem v = item;
   v.is_local = false;
   v.rank = rank;
-  remote_by_rank_[rank][v.mr.id] = v;
+  remote_by_rank_[rank][v.buffer_id] = v;
   return true;
 }
 
@@ -47,11 +47,11 @@ void MRManager::register_remote_mrs(int rank,
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto& dst = remote_by_rank_[rank];
   for (auto const& item : items) {
-    if (!item.valid || item.mr.id == 0) continue;
+    if (!item.valid || item.buffer_id == 0) continue;
     MRItem v = item;
     v.is_local = false;
     v.rank = rank;
-    dst[v.mr.id] = v;
+    dst[v.buffer_id] = v;
   }
 }
 
@@ -135,7 +135,7 @@ bool MRManager::delete_mr(int remote_rank, uint32_t remote_buffer_id) {
   return rank_it->second.erase(remote_buffer_id) > 0;
 }
 
-void MRManager::delete_mr(int remote_rank) {
+void MRManager::delete_remote_mrs(int remote_rank) {
   std::lock_guard<std::mutex> lk(remote_mu_);
   remote_by_rank_.erase(remote_rank);
 }

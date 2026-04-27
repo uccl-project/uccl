@@ -14,6 +14,7 @@
 
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
+using MR = UKernel::Transport::MR;
 using LocalSlice = UKernel::Transport::LocalSlice;
 using RemoteSlice = UKernel::Transport::RemoteSlice;
 
@@ -91,16 +92,17 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
 
   require(comm->reg_mr(kClientSendBufferId, sendbuf_d, kMessageBytes, false),
           "client reg_mr failed");
-  uint32_t remote_recv_mr_id = 0;
+  uint32_t remote_recv_buffer_id = 0;
   auto peer_kind = comm->peer_transport_kind(kServerRank);
   if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl) {
     require(comm->wait_mr(kServerRank, kServerRecvBufferId),
             "client wait_mr failed");
-    remote_recv_mr_id = comm->get_mr(kServerRank, kServerRecvBufferId).id;
+    (void)comm->get_mr(kServerRank, kServerRecvBufferId);
+    remote_recv_buffer_id = kServerRecvBufferId;
   }
   std::optional<RemoteSlice> dst_hint = std::nullopt;
-  if (remote_recv_mr_id != 0) {
-    dst_hint = RemoteSlice{remote_recv_mr_id, 0};
+  if (remote_recv_buffer_id != 0) {
+    dst_hint = RemoteSlice{remote_recv_buffer_id, 0};
   }
   unsigned send_req = comm->isend(
       kServerRank, LocalSlice{kClientSendBufferId, 0, kMessageBytes}, dst_hint);
@@ -241,7 +243,7 @@ void test_transport_communicator_local() {
     MR mr0 = comm->get_mr(kLocalBufferId);
     require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#1 failed");
     MR mr1 = comm->get_mr(kLocalBufferId);
-    require(mr0.id == mr1.id,
+    require(mr0.address == mr1.address && mr0.length == mr1.length,
             "reg_mr should be idempotent for the same buffer");
     require(
         comm->get_mr(kLocalBufferId).address == reinterpret_cast<uint64_t>(buf),
@@ -250,8 +252,8 @@ void test_transport_communicator_local() {
     require(comm->dereg_mr(kLocalBufferId), "dereg_mr failed");
     require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#2 failed");
     MR mr2 = comm->get_mr(kLocalBufferId);
-    require(mr2.id != mr0.id,
-            "re-registering after dereg_mr should allocate a new MR id");
+    require(mr2.address == mr0.address && mr2.length == mr0.length,
+            "re-registering after dereg_mr should preserve MR metadata");
   });
 }
 

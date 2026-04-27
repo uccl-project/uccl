@@ -393,16 +393,17 @@ Communicator::~Communicator() {
   }
 
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
-    uint64_t const buffer_id = item.mr.id;
+    uint64_t const registered_id = buffer_id;
     if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
       std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_registered_mrs_.find(buffer_id) != uccl_registered_mrs_.end()) {
-        uccl_adapter_->deregister_memory(buffer_id);
-        uccl_registered_mrs_.erase(buffer_id);
+      if (uccl_registered_mrs_.find(registered_id) !=
+          uccl_registered_mrs_.end()) {
+        uccl_adapter_->deregister_memory(registered_id);
+        uccl_registered_mrs_.erase(registered_id);
       }
-      uccl_direct_reg_failed_mrs_.erase(buffer_id);
+      uccl_direct_reg_failed_mrs_.erase(registered_id);
     }
-    (void)mr_manager_.delete_mr(buffer_id);
+    (void)mr_manager_.delete_mr(static_cast<uint32_t>(buffer_id));
   }
 
   std::vector<uint32_t> local_ipc_buffer_ids;
@@ -1221,16 +1222,16 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     BounceBufferInfo info;
     info.ptr = bounce_owner->ptr;
     if (needs_uccl_registration) {
-      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
+      // Request-scoped bounce buffer_id. The MR is deleted in request cleanup.
       uint32_t temp_buffer_id =
           next_ephemeral_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       if (temp_buffer_id == 0) {
         temp_buffer_id =
             next_ephemeral_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       }
-      auto mr = mr_manager_.create_local_mr(temp_buffer_id, bounce_owner->ptr,
-                                            bytes);
-      info.buffer_id = mr.mr.id;
+      (void)mr_manager_.create_local_mr(temp_buffer_id, bounce_owner->ptr,
+                                        bytes);
+      info.buffer_id = temp_buffer_id;
     }
     if (bounce_owner->shareable) {
       info.shm_name = shm_manager.get_local_shm(bounce_owner->shm_id).shm_name;
@@ -1330,16 +1331,16 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     BounceBufferInfo info;
     info.ptr = slot->bounce.ptr;
     if (needs_uccl_registration) {
-      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
+      // Request-scoped bounce buffer_id. The MR is deleted in request cleanup.
       uint32_t temp_buffer_id =
           next_ephemeral_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       if (temp_buffer_id == 0) {
         temp_buffer_id =
             next_ephemeral_buffer_id_.fetch_add(1, std::memory_order_relaxed);
       }
-      auto mr =
-          mr_manager_.create_local_mr(temp_buffer_id, slot->bounce.ptr, bytes);
-      info.buffer_id = mr.mr.id;
+      (void)mr_manager_.create_local_mr(temp_buffer_id, slot->bounce.ptr,
+                                        bytes);
+      info.buffer_id = temp_buffer_id;
     }
     if (slot->bounce.shareable) {
       info.shm_name = shm_manager.get_local_shm(slot->bounce.shm_id).shm_name;
@@ -1530,7 +1531,7 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
                           bool publish) {
   if (buffer_id == 0 || local_buf == nullptr || len == 0) return false;
   MR mr = mr_manager_.create_local_mr(buffer_id, local_buf, len).mr;
-  if (mr.id == 0) return false;
+  if (mr.address == 0 || mr.length == 0) return false;
 
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
@@ -1559,7 +1560,7 @@ bool Communicator::dereg_mr(uint32_t buffer_id) {
       found = true;
     }
   }
-  uint32_t const registered_id = static_cast<uint32_t>(local_mr.id);
+  uint32_t const registered_id = buffer_id;
 
   if (registered_id != 0 && uccl_adapter_ && uccl_adapter_->is_initialized()) {
     std::lock_guard<std::mutex> lk(uccl_reg_mu_);
@@ -1591,7 +1592,10 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   bool found = false;
   MR mr{};
   for (auto const& entry : payload.entries) {
-    if (entry.buffer_id != buffer_id || entry.mr.id == 0) continue;
+    if (entry.buffer_id != buffer_id || entry.mr.address == 0 ||
+        entry.mr.length == 0) {
+      continue;
+    }
     mr = entry.mr;
     found = true;
     break;
@@ -1599,6 +1603,7 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   if (!found) return false;
 
   MRItem item{};
+  item.buffer_id = buffer_id;
   item.mr = mr;
   item.is_local = false;
   item.rank = owner_rank;

@@ -12,6 +12,7 @@ namespace UKernel {
 namespace Transport {
 
 struct MRItem {
+  uint32_t buffer_id = 0;
   MR mr{};
   bool is_local = false;
   int rank = -1;
@@ -31,7 +32,7 @@ class MRManager {
   bool delete_mr(void* local_ptr);
   bool delete_mr(uint32_t local_buffer_id);
   bool delete_mr(int remote_rank, uint32_t remote_buffer_id);
-  void delete_mr(int remote_rank);
+  void delete_remote_mrs(int remote_rank);
 
   std::vector<std::pair<uint32_t, MRItem>> list_local_mrs() const;
 

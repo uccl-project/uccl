@@ -48,35 +48,40 @@ void test_memory_manager() {
   MR mr_a_again = tracked_a_again.mr;
   MR mr_b = tracked_b.mr;
 
-  require(mr_a.id == mr_a_again.id, "local MR id should be stable");
-  require(mr_a.id != mr_b.id, "different buffers should produce different ids");
-  require(mrm.get_mr(buf_a.data()).mr.id == mr_a.id,
+  require(tracked_a.buffer_id == tracked_a_again.buffer_id,
+          "local buffer_id should be stable");
+  require(tracked_a.buffer_id != tracked_b.buffer_id,
+          "different buffers should produce different buffer_ids");
+  require(mrm.get_mr(buf_a.data()).buffer_id == tracked_a.buffer_id,
           "exact local MR lookup failed");
-  require(mrm.get_mr(buf_a.data() + 128).mr.id == mr_a.id,
+  require(mrm.get_mr(buf_a.data() + 128).buffer_id == tracked_a.buffer_id,
           "range-based local MR lookup failed");
-  require(mrm.get_mr(mr_b.id).mr.address ==
+  require(mrm.get_mr(/*buffer_id=*/tracked_b.buffer_id).mr.address ==
               reinterpret_cast<uint64_t>(buf_b.data()),
-          "MR lookup by id failed");
+          "MR lookup by buffer_id failed");
 
-  MR remote0{7, 0x1000ULL, 128, 0, 77};
-  MR remote1{8, 0x2000ULL, 256, 0, 88};
-  MR remote2{9, 0x3000ULL, 512, 0, 99};
+  MR remote0{0x1000ULL, 128, 0, 77};
+  MR remote1{0x2000ULL, 256, 0, 88};
+  MR remote2{0x3000ULL, 512, 0, 99};
   MRItem ri0{};
+  ri0.buffer_id = 7;
   ri0.mr = remote0;
   ri0.valid = true;
   MRItem ri1{};
+  ri1.buffer_id = 8;
   ri1.mr = remote1;
   ri1.valid = true;
   MRItem ri2{};
+  ri2.buffer_id = 9;
   ri2.mr = remote2;
   ri2.valid = true;
   mrm.register_remote_mrs(/*remote_rank=*/3, {ri0, ri1});
   mrm.register_remote_mrs(/*remote_rank=*/3, {ri0, ri1, ri2});
-  require(mrm.get_mr(3, remote0.id).mr.address == remote0.address,
+  require(mrm.get_mr(3, ri0.buffer_id).mr.address == remote0.address,
           "cached remote MR lookup for first entry failed");
-  require(mrm.get_mr(3, remote1.id).mr.address == remote1.address,
+  require(mrm.get_mr(3, ri1.buffer_id).mr.address == remote1.address,
           "cached remote MR lookup for second entry failed");
-  require(mrm.get_mr(3, remote2.id).mr.address == remote2.address,
+  require(mrm.get_mr(3, ri2.buffer_id).mr.address == remote2.address,
           "cached remote MR lookup failed");
 
   gpuIpcMemHandle_t handle{};
@@ -104,9 +109,9 @@ void test_memory_manager() {
 
   auto resized = mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(),
                                      buf_a.size() / 2);
-  require(resized.mr.id == mr_a.id,
-          "same buffer_id should keep stable MR id after resize");
-  require(mrm.get_mr(buf_a.data()).mr.id == resized.mr.id,
+  require(resized.buffer_id == tracked_a.buffer_id,
+          "same buffer_id should keep stable id after resize");
+  require(mrm.get_mr(buf_a.data()).buffer_id == resized.buffer_id,
           "resized exact lookup should resolve to new MR");
   require(!mrm.get_mr(buf_a.data() + buf_a.size() / 2 + 1).valid,
           "lookup beyond resized range should fail");
