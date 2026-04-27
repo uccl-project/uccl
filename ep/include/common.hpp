@@ -3,6 +3,8 @@
 
 #include "util/gpu_rt.h"
 #include <atomic>
+#include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -146,6 +148,31 @@ static inline bool get_aggressive_atomic_enabled() {
     return env ? static_cast<uint32_t>(atoi(env)) : 0;
   }();
   return val != 0;
+}
+
+// Runtime override for the CPU-side recv timeout.
+// Long training steps (e.g. Megatron-LM with large grad accumulation, heavy
+// checkpoint I/O, or EP groups initializing sequentially under PP >= 2) can
+// exceed the compile-time `NUM_CPU_TIMEOUT_SECS` default (100 s) and falsely
+// trigger "DeepEP error: CPU recv timeout" / "timeout (dispatch CPU)".
+static inline int get_cpu_timeout_secs(int fallback_secs) {
+  static int const val = [fallback_secs]() -> int {
+    char const* env = getenv("UCCL_EP_CPU_TIMEOUT_SECS");
+    if (env == nullptr || *env == '\0') return fallback_secs;
+    char* end = nullptr;
+    errno = 0;
+    long v = strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || v <= 0) {
+      fprintf(stderr,
+              "[UCCL] Warning: invalid UCCL_EP_CPU_TIMEOUT_SECS='%s', "
+              "using default %d seconds\n",
+              env, fallback_secs);
+      return fallback_secs;
+    }
+    if (v > INT_MAX) v = INT_MAX;
+    return static_cast<int>(v);
+  }();
+  return val;
 }
 
 #endif  // COMMON_HPP
