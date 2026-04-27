@@ -95,8 +95,8 @@ SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o
 
 # dlsym wrapper objects
-DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/providers/efa/efadv_dl.cc
-DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/providers/efa/efadv_dl.o
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
 
 OBJECTS := $(SOURCES:.cc=.o)
 

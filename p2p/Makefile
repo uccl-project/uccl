@@ -76,7 +76,7 @@ INCDIR ?= $(PREFIX)/include
 
 # NO transport libraries linked (-libverbs, -lnccl, -lefa).
 # All ibv_* / nccl* / efadv_* symbols are provided by the dlsym wrappers
-# in rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/providers/efa/efadv_dl.cc.
+# in rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/efadv_dl.cc.
 # The --wrap flags redirect compat-layer calls from verbs.h to our wrappers.
 IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_query_port \
@@ -95,8 +95,8 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 # dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
-DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/providers/efa/efadv_dl.cc
-DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/providers/efa/efadv_dl.o
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(DL_OBJECTS)
 OBJECTS := $(SOURCES:.cc=.o)
