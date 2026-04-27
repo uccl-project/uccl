@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../memory/ipc_manager.h"
 #include "../oob/shmring_exchanger.h"
 #include "../util/jring.h"
 #include "config.h"
@@ -10,11 +11,13 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -22,21 +25,11 @@ namespace Transport {
 
 class Communicator;
 
-// Per-peer-pair POSIX SHM layout: two cache-line-aligned done_seq slots,
-// one per direction (lo→hi and hi→lo), plus an opener_ready handshake flag.
-// The opener (higher rank) writes opener_ready = 1 after mmap; the creator
-// (lower rank) polls it after connect_to returns to ensure both sides are
-// live before activating the done_seq fast path.
-struct IpcChannelPair {
-  alignas(64) std::atomic<uint64_t> done_seq_lo_to_hi{0};
-  alignas(64) std::atomic<uint64_t> done_seq_hi_to_lo{0};
-  alignas(64) std::atomic<uint32_t> opener_ready{0};
-};
-
 class IpcAdapter final : public TransportAdapter {
  public:
   // Lifecycle.
-  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id);
+  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id,
+             int local_gpu_idx);
   ~IpcAdapter() override;
   void shutdown();
 
@@ -48,11 +41,11 @@ class IpcAdapter final : public TransportAdapter {
 
   // Async data-plane requests.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       std::optional<RemoteSlice> remote_hint,
                       BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
   // Request completion API.
@@ -145,26 +138,35 @@ class IpcAdapter final : public TransportAdapter {
   IpcRequestSlot* resolve_request_slot_const(unsigned request_id) const;
   void release_request_slot(unsigned request_id);
 
-  struct PeerDoneChannel {
-    IpcChannelPair* shm_base = nullptr;
-    std::atomic<uint64_t>* local_ptr =
-        nullptr;  // we write after send completes
-    std::atomic<uint64_t>* remote_ptr =
-        nullptr;  // we read to detect peer send done
-    std::string shm_name;
-    bool is_creator = false;
-  };
-
   // Task queue / worker execution.
   bool enqueue_request(unsigned request_id, IpcReqType type);
   bool send_one(IpcRequestSlot* creq);
   bool recv_one(IpcRequestSlot* creq);
+  bool find_or_open_remote_ipc_handle(int remote_rank,
+                                      gpuIpcMemHandle_t const& handle,
+                                      size_t offset, size_t bytes,
+                                      int remote_gpu_idx, IPCItem* out);
+  void clear_remote_handle_cache();
   void send_thread_func();
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
-  bool setup_done_channel(int peer_rank);
-  void teardown_done_channel(int peer_rank);
-  void wait_done_channel_peer_ready(int peer_rank);
+
+  using IpcHandleKey = std::array<uint8_t, sizeof(gpuIpcMemHandle_t)>;
+  struct IpcHandleHash {
+    size_t operator()(IpcHandleKey const& k) const noexcept {
+      uint64_t hash = 1469598103934665603ull;
+      for (uint8_t b : k) {
+        hash ^= b;
+        hash *= 1099511628211ull;
+      }
+      return static_cast<size_t>(hash);
+    }
+  };
+  static IpcHandleKey make_ipc_handle_key(gpuIpcMemHandle_t const& h) {
+    IpcHandleKey k{};
+    std::memcpy(k.data(), &h, k.size());
+    return k;
+  }
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -172,17 +174,13 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;
   std::thread recv_thread_;
-  std::mutex send_cv_mu_;
-  std::condition_variable send_cv_;
-  std::mutex recv_cv_mu_;
-  std::condition_variable recv_cv_;
+  std::mutex cv_mu_;
+  std::condition_variable cv_;
   std::atomic<int> pending_send_{0};
   std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;
 
-  std::string ring_namespace_;
   std::mutex match_seq_mu_;
-  std::vector<std::mutex> peer_connect_mu_;
   // Two directed-edge counters per peer:
   // dir=0 -> low-rank to high-rank, dir=1 -> high-rank to low-rank.
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
@@ -191,7 +189,11 @@ class IpcAdapter final : public TransportAdapter {
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
   Communicator* comm_;
-  std::vector<PeerDoneChannel> done_channels_;
+  int local_gpu_idx_ = -1;
+  std::mutex remote_handle_mu_;
+  std::unordered_map<int,
+                     std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
+      remote_handle_cache_;
 };
 
 }  // namespace Transport
