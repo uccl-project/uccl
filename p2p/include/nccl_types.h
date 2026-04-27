@@ -6,7 +6,7 @@
 // These definitions must match the NCCL ABI. They are stable across
 // NCCL 2.x versions.
 
-#if defined(UCCL_P2P_USE_RCCL)
+#if defined(__HIP_PLATFORM_AMD__)
 #include <hip/hip_runtime_api.h>
 typedef hipStream_t cudaStream_t;
 #else
