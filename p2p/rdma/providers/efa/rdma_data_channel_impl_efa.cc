@@ -39,8 +39,10 @@ inline void set_efa_sl(T& attr, uint8_t default_sl) {
 template <typename T>
 inline void set_efa_flags(T& attr) {
   if constexpr (has_flags<T>::value) {
+#ifdef EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV
     attr.flags = 0;
     attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+#endif
   }
 }
 
