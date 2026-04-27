@@ -60,12 +60,12 @@ void test_tcp_connect_and_transfer() {
   fill_pattern(sendbuf, 0x33);
 
   unsigned recv_req = server.recv_async(/*peer_rank=*/1, recvbuf.data(),
-                                        recvbuf.size(), /*local_mr_id=*/0,
+                                        recvbuf.size(), /*local_buffer_id=*/0,
                                         /*bounce_provider=*/nullptr);
   require(recv_req != 0, "server recv_async should succeed");
   unsigned send_req =
       client.send_async(/*peer_rank=*/0, sendbuf.data(), sendbuf.size(),
-                        /*local_mr_id=*/0, std::nullopt,
+                        /*local_buffer_id=*/0, std::nullopt,
                         /*bounce_provider=*/nullptr);
   require(send_req != 0, "client send_async should succeed");
 
@@ -84,11 +84,11 @@ void test_tcp_invalid_peer_paths() {
   std::vector<uint8_t> buf(64, 0);
 
   require(adapter.send_async(/*peer_rank=*/1, buf.data(), buf.size(),
-                             /*local_mr_id=*/0, std::nullopt,
+                             /*local_buffer_id=*/0, std::nullopt,
                              /*bounce_provider=*/nullptr) == 0,
           "send_async without peer should fail");
   require(adapter.recv_async(/*peer_rank=*/1, buf.data(), buf.size(),
-                             /*local_mr_id=*/0,
+                             /*local_buffer_id=*/0,
                              /*bounce_provider=*/nullptr) == 0,
           "recv_async without peer should fail");
   require(adapter.poll_completion(/*request_id=*/999),

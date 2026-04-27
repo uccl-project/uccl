@@ -54,11 +54,11 @@ class CommunicatorTransportBackend final : public Backend {
                         size_t bytes) const;
   void const* resolve_const(CollectiveBinding const& binding,
                             BufferRef const& ref, size_t bytes) const;
-  uint32_t resolve_local_mem_id(CollectiveBinding const& binding,
-                                BufferRef const& ref, size_t bytes) const;
+  uint32_t resolve_local_buffer_id(CollectiveBinding const& binding,
+                               BufferRef const& ref, size_t bytes) const;
   int resolve_peer_rank(ExecOp const& op) const;
-  uint32_t resolve_remote_mem_id(CollectiveBinding const& binding,
-                                 BufferRef const& ref) const;
+  uint32_t resolve_remote_buffer_id(CollectiveBinding const& binding,
+                                BufferRef const& ref) const;
   void ensure_plan_paths(ExecutionPlan const& plan) const;
   void ensure_peer_paths(int peer_rank) const;
   void on_transport_completion(unsigned request_id);
@@ -76,7 +76,6 @@ class CommunicatorTransportBackend final : public Backend {
   mutable std::mutex path_mu_;
   uint64_t backend_cache_key_ = 0;
   mutable std::vector<bool> peer_paths_ready_;
-  mutable uint64_t next_binding_version_ = 1;
 };
 
 }  // namespace CCL

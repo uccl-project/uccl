@@ -33,11 +33,11 @@ inline void init_registered_buffer(RegisteredBuffer& buffer, size_t bytes,
   buffer.layout.sizes = {static_cast<int64_t>(bytes)};
   buffer.layout.strides = {1};
   buffer.local_ptr = local_ptr;
-  buffer.local_mr_id = 1;
+  buffer.local_buffer_id = 1;
   buffer.peer_views.resize(static_cast<size_t>(nranks));
   for (int peer = 0; peer < nranks; ++peer) {
     auto& peer_view = buffer.peer_views[static_cast<size_t>(peer)];
-    peer_view.mr_id = static_cast<uint32_t>(peer + 1);
+    peer_view.buffer_id = static_cast<uint32_t>(peer + 1);
     peer_view.same_node = true;
   }
 }

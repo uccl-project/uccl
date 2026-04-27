@@ -110,8 +110,6 @@ struct TcpP2PInfo {
 };
 
 struct IpcBufferInfo {
-  uint32_t ipc_id = 0;
-  uint64_t binding_version = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -143,9 +141,7 @@ UK_OOB_DEFINE_VISIT_FIELDS(NamedMRInfos, f("generation", v.generation);
 UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
                            f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
-UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("ipc_id", v.ipc_id);
-                           f("binding_version", v.binding_version);
-                           f("handle", v.handle);
+UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("handle", v.handle);
                            f("base_offset", v.base_offset); f("bytes", v.bytes);
                            f("device_idx", v.device_idx); f("valid", v.valid);)
 
@@ -391,7 +387,6 @@ class ShmExchanger : public Exchanger {
     static uint64_t hash_key(std::string_view key);
   };
   static constexpr uint32_t kShmMagic = 0x554B4F42;  // "UKOB"
-  static constexpr uint32_t kShmVersion = 6;
   static constexpr uint32_t kMaxSlots = 1024;
   static constexpr uint32_t kMaxKeyBytes = 256;
   static constexpr uint32_t kMaxValueBytes = 8192;
@@ -411,7 +406,6 @@ class ShmExchanger : public Exchanger {
 
   struct KvShmHeader {
     uint32_t magic = 0;
-    uint32_t version = 0;
     uint64_t write_seq = 0;
     uint32_t owner_pid = 0;
     uint32_t init_done = 0;

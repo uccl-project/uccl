@@ -3,65 +3,37 @@
 namespace UKernel {
 namespace Transport {
 
-void MRManager::bind_backend(RegisterFn register_fn,
-                             DeregisterFn deregister_fn) {
-  std::lock_guard<std::mutex> lk(local_mu_);
-  register_fn_ = std::move(register_fn);
-  deregister_fn_ = std::move(deregister_fn);
-}
-
-void MRManager::sync_local_backend() {
-  std::lock_guard<std::mutex> lk(local_mu_);
-  if (!register_fn_) return;
-  for (auto& [ptr, item] : local_by_ptr_) {
-    (void)ptr;
-    if (!item.valid || item.backend_registered) continue;
-    item.backend_registered = register_fn_(
-        item.mr.id,
-        reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address)),
-        static_cast<size_t>(item.mr.length));
-  }
-}
-
-MRItem MRManager::create_local_mr(void* ptr, size_t len) {
-  if (ptr == nullptr || len == 0) return {};
+MRItem MRManager::create_local_mr(uint32_t buffer_id, void* ptr, size_t len) {
+  if (buffer_id == 0 || ptr == nullptr || len == 0) return {};
   std::lock_guard<std::mutex> lk(local_mu_);
 
-  auto existing_it = local_by_ptr_.find(ptr);
-  if (existing_it != local_by_ptr_.end()) {
-    MRItem const& existing = existing_it->second;
-    if (static_cast<size_t>(existing.mr.length) == len) {
-      if (!existing.backend_registered && register_fn_) {
-        existing_it->second.backend_registered =
-            register_fn_(existing.mr.id, ptr, len);
-      }
-      return existing_it->second;
+  auto it = local_by_buffer_id_.find(buffer_id);
+  if (it != local_by_buffer_id_.end()) {
+    MRItem& existing = it->second;
+    if (existing.mr.address == reinterpret_cast<uint64_t>(ptr) &&
+        static_cast<size_t>(existing.mr.length) == len) {
+      return existing;
     }
-    if (existing.backend_registered && deregister_fn_) {
-      deregister_fn_(existing.mr.id);
-    }
-    local_ptr_by_id_.erase(existing.mr.id);
-    local_by_ptr_.erase(existing_it);
+    local_buffer_id_by_ptr_.erase(static_cast<uintptr_t>(existing.mr.address));
   }
 
   MRItem created{};
-  created.mr.id = next_mr_id_++;
+  created.mr.id = buffer_id;
   created.mr.address = reinterpret_cast<uint64_t>(ptr);
   created.mr.length = static_cast<uint64_t>(len);
   created.mr.lkey = 0;
+  created.mr.key = 0;
   created.is_local = true;
   created.rank = -1;
-  created.backend_registered =
-      register_fn_ ? register_fn_(created.mr.id, ptr, len) : false;
   created.valid = true;
 
-  local_by_ptr_[ptr] = created;
-  local_ptr_by_id_[created.mr.id] = ptr;
+  local_by_buffer_id_[buffer_id] = created;
+  local_buffer_id_by_ptr_[reinterpret_cast<uintptr_t>(ptr)] = buffer_id;
   return created;
 }
 
 bool MRManager::register_remote_mr(int rank, MRItem const& item) {
-  if (!item.valid) return false;
+  if (!item.valid || item.mr.id == 0) return false;
   std::lock_guard<std::mutex> lk(remote_mu_);
   MRItem v = item;
   v.is_local = false;
@@ -75,7 +47,7 @@ void MRManager::register_remote_mrs(int rank,
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto& dst = remote_by_rank_[rank];
   for (auto const& item : items) {
-    if (!item.valid) continue;
+    if (!item.valid || item.mr.id == 0) continue;
     MRItem v = item;
     v.is_local = false;
     v.rank = rank;
@@ -84,13 +56,18 @@ void MRManager::register_remote_mrs(int rank,
 }
 
 MRItem MRManager::get_mr(void* local_ptr) const {
+  if (local_ptr == nullptr) return {};
   std::lock_guard<std::mutex> lk(local_mu_);
-  auto exact = local_by_ptr_.find(local_ptr);
-  if (exact != local_by_ptr_.end()) return exact->second;
 
   uintptr_t query = reinterpret_cast<uintptr_t>(local_ptr);
-  for (auto const& [ptr, item] : local_by_ptr_) {
-    (void)ptr;
+  auto exact_it = local_buffer_id_by_ptr_.find(query);
+  if (exact_it != local_buffer_id_by_ptr_.end()) {
+    auto item_it = local_by_buffer_id_.find(exact_it->second);
+    if (item_it != local_by_buffer_id_.end()) return item_it->second;
+  }
+
+  for (auto const& [buffer_id, item] : local_by_buffer_id_) {
+    (void)buffer_id;
     uintptr_t begin = static_cast<uintptr_t>(item.mr.address);
     uintptr_t end = begin + static_cast<uintptr_t>(item.mr.length);
     if (query >= begin && query < end) return item;
@@ -98,41 +75,64 @@ MRItem MRManager::get_mr(void* local_ptr) const {
   return {};
 }
 
-MRItem MRManager::get_mr(uint32_t local_mr_id) const {
+MRItem MRManager::get_mr(uint32_t local_buffer_id) const {
+  if (local_buffer_id == 0) return {};
   std::lock_guard<std::mutex> lk(local_mu_);
-  auto ptr_it = local_ptr_by_id_.find(local_mr_id);
-  if (ptr_it == local_ptr_by_id_.end()) return {};
-  auto item_it = local_by_ptr_.find(ptr_it->second);
-  if (item_it == local_by_ptr_.end()) return {};
-  return item_it->second;
+  auto it = local_by_buffer_id_.find(local_buffer_id);
+  if (it == local_by_buffer_id_.end()) return {};
+  return it->second;
 }
 
-MRItem MRManager::get_mr(int remote_rank, uint32_t remote_mr_id) const {
+MRItem MRManager::get_mr(int remote_rank, uint32_t remote_buffer_id) const {
+  if (remote_buffer_id == 0) return {};
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto rank_it = remote_by_rank_.find(remote_rank);
   if (rank_it == remote_by_rank_.end()) return {};
-  auto it = rank_it->second.find(remote_mr_id);
+  auto it = rank_it->second.find(remote_buffer_id);
   if (it == rank_it->second.end()) return {};
   return it->second;
 }
 
 bool MRManager::delete_mr(void* local_ptr) {
+  if (local_ptr == nullptr) return false;
   std::lock_guard<std::mutex> lk(local_mu_);
-  auto it = local_by_ptr_.find(local_ptr);
-  if (it == local_by_ptr_.end()) return false;
-  if (it->second.backend_registered && deregister_fn_) {
-    deregister_fn_(it->second.mr.id);
+
+  uintptr_t query = reinterpret_cast<uintptr_t>(local_ptr);
+  auto exact_it = local_buffer_id_by_ptr_.find(query);
+  if (exact_it != local_buffer_id_by_ptr_.end()) {
+    uint32_t buffer_id = exact_it->second;
+    local_buffer_id_by_ptr_.erase(exact_it);
+    return local_by_buffer_id_.erase(buffer_id) > 0;
   }
-  local_ptr_by_id_.erase(it->second.mr.id);
-  local_by_ptr_.erase(it);
+
+  for (auto it = local_by_buffer_id_.begin(); it != local_by_buffer_id_.end();
+       ++it) {
+    uintptr_t begin = static_cast<uintptr_t>(it->second.mr.address);
+    uintptr_t end = begin + static_cast<uintptr_t>(it->second.mr.length);
+    if (query < begin || query >= end) continue;
+    local_buffer_id_by_ptr_.erase(begin);
+    local_by_buffer_id_.erase(it);
+    return true;
+  }
+  return false;
+}
+
+bool MRManager::delete_mr(uint32_t local_buffer_id) {
+  if (local_buffer_id == 0) return false;
+  std::lock_guard<std::mutex> lk(local_mu_);
+  auto it = local_by_buffer_id_.find(local_buffer_id);
+  if (it == local_by_buffer_id_.end()) return false;
+  local_buffer_id_by_ptr_.erase(static_cast<uintptr_t>(it->second.mr.address));
+  local_by_buffer_id_.erase(it);
   return true;
 }
 
-bool MRManager::delete_mr(int remote_rank, uint32_t remote_mr_id) {
+bool MRManager::delete_mr(int remote_rank, uint32_t remote_buffer_id) {
+  if (remote_buffer_id == 0) return false;
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto rank_it = remote_by_rank_.find(remote_rank);
   if (rank_it == remote_by_rank_.end()) return false;
-  return rank_it->second.erase(remote_mr_id) > 0;
+  return rank_it->second.erase(remote_buffer_id) > 0;
 }
 
 void MRManager::delete_mr(int remote_rank) {
@@ -140,11 +140,11 @@ void MRManager::delete_mr(int remote_rank) {
   remote_by_rank_.erase(remote_rank);
 }
 
-std::vector<std::pair<void*, MRItem>> MRManager::list_local_mrs() const {
+std::vector<std::pair<uint32_t, MRItem>> MRManager::list_local_mrs() const {
   std::lock_guard<std::mutex> lk(local_mu_);
-  std::vector<std::pair<void*, MRItem>> out;
-  out.reserve(local_by_ptr_.size());
-  for (auto const& kv : local_by_ptr_) {
+  std::vector<std::pair<uint32_t, MRItem>> out;
+  out.reserve(local_by_buffer_id_.size());
+  for (auto const& kv : local_by_buffer_id_) {
     out.push_back(kv);
   }
   return out;

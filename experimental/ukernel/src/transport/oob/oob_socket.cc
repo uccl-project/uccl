@@ -442,11 +442,9 @@ bool ShmExchanger::init_shared_store() {
   shm_ = reinterpret_cast<KvShmHeader*>(mapped);
 
   bool need_init = created || shm_->magic != kShmMagic ||
-                   shm_->version != kShmVersion ||
                    shm_->slot_capacity != kMaxSlots;
   if (need_init) {
     shm_->magic = kShmMagic;
-    shm_->version = kShmVersion;
     shm_->slot_capacity = kMaxSlots;
     shm_->write_seq = 0;
     shm_->owner_pid = 0;

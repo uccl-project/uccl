@@ -15,9 +15,6 @@
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
 using LocalSlice = UKernel::Transport::LocalSlice;
-using MR = UKernel::Transport::MR;
-using NamedMR = UKernel::Transport::NamedMR;
-using NamedMRInfos = UKernel::Transport::NamedMRInfos;
 using RemoteSlice = UKernel::Transport::RemoteSlice;
 
 static constexpr int kWorldSize = 2;
@@ -34,7 +31,8 @@ using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
 
 constexpr size_t kMessageBytes = 4 * 1024;
-constexpr uint64_t kNamedMrGeneration = 1;
+constexpr uint32_t kClientSendBufferId = 1001;
+constexpr uint32_t kServerRecvBufferId = 2001;
 
 void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
   for (size_t i = 0; i < buf.size(); ++i) {
@@ -91,23 +89,21 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
   GPU_RT_CHECK(gpuMemcpy(sendbuf_d, send_host.data(), send_host.size(),
                          gpuMemcpyHostToDevice));
 
-  MR send_mr = comm->reg_mr(sendbuf_d, kMessageBytes);
-  NamedMRInfos remote_recv_infos{};
-  if (comm->peer_transport_kind(kServerRank) ==
-      UKernel::Transport::PeerTransportKind::Uccl) {
-    require(comm->wait_named_mrs(kServerRank, kNamedMrGeneration,
-                                 remote_recv_infos),
-            "client wait_named_mrs failed");
+  require(comm->reg_mr(kClientSendBufferId, sendbuf_d, kMessageBytes, false),
+          "client reg_mr failed");
+  uint32_t remote_recv_mr_id = 0;
+  auto peer_kind = comm->peer_transport_kind(kServerRank);
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl) {
+    require(comm->wait_mr(kServerRank, kServerRecvBufferId),
+            "client wait_mr failed");
+    remote_recv_mr_id = comm->get_mr(kServerRank, kServerRecvBufferId).id;
   }
-  uint32_t remote_recv_mr_id = remote_recv_infos.entries.empty()
-                                   ? 0
-                                   : remote_recv_infos.entries.front().mr.id;
   std::optional<RemoteSlice> dst_hint = std::nullopt;
   if (remote_recv_mr_id != 0) {
     dst_hint = RemoteSlice{remote_recv_mr_id, 0};
   }
   unsigned send_req = comm->isend(
-      kServerRank, LocalSlice{send_mr.id, 0, kMessageBytes}, dst_hint);
+      kServerRank, LocalSlice{kClientSendBufferId, 0, kMessageBytes}, dst_hint);
   require(send_req != 0, "client isend failed");
   require(comm->wait_finish(send_req), "client wait_finish(send) failed");
 
@@ -128,18 +124,13 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(recvbuf_d); });
   GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, kMessageBytes));
 
-  MR recv_mr = comm->reg_mr(recvbuf_d, kMessageBytes);
-  if (comm->peer_transport_kind(kClientRank) ==
-      UKernel::Transport::PeerTransportKind::Uccl) {
-    NamedMRInfos infos{};
-    infos.generation = kNamedMrGeneration;
-    infos.entries.push_back(NamedMR{0, recv_mr});
-    require(comm->notify_named_mrs(kClientRank, kNamedMrGeneration, infos),
-            "server notify_named_mrs failed");
-  }
+  require(comm->reg_mr(kServerRecvBufferId, recvbuf_d, kMessageBytes, true),
+          "server reg_mr failed");
+  auto peer_kind = comm->peer_transport_kind(kClientRank);
+  (void)peer_kind;
 
   unsigned recv_req =
-      comm->irecv(kClientRank, LocalSlice{recv_mr.id, 0, kMessageBytes});
+      comm->irecv(kClientRank, LocalSlice{kServerRecvBufferId, 0, kMessageBytes});
   require(recv_req != 0, "server irecv failed");
   require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
 
@@ -168,21 +159,20 @@ int run_ipc_buffer_metadata_client(
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
 
   constexpr uint32_t kValidIpcId = 4242;
-  require(comm->notify_ipc_buffer(kServerRank, kValidIpcId, buf, 4096),
-          "notify_ipc_buffer should succeed");
+  require(comm->reg_ipc(kValidIpcId, buf, 4096, true), "reg_ipc should succeed");
 
   constexpr uint32_t kInvalidIpcId = 9999;
-  require(comm->notify_ipc_buffer(kServerRank, kInvalidIpcId, nullptr, 0),
+  require(comm->reg_ipc(kInvalidIpcId, nullptr, 0, true),
           "invalid ipc metadata publish should still succeed");
 
   constexpr uint32_t kAckIpcId = 7777;
-  require(comm->wait_ipc_buffer(kServerRank, kAckIpcId),
-          "client wait_ipc_buffer(ack) should succeed");
+  require(comm->wait_ipc(kServerRank, kAckIpcId),
+          "client wait_ipc(ack) should succeed");
   // Publish a completion marker so the server keeps the exchanger process
   // alive until the client has observed the ack.
   constexpr uint32_t kClientDoneIpcId = 8888;
-  require(comm->notify_ipc_buffer(kServerRank, kClientDoneIpcId, nullptr, 0),
-          "client notify_ipc_buffer(done) should succeed");
+  require(comm->reg_ipc(kClientDoneIpcId, nullptr, 0, true),
+          "client reg_ipc(done) should succeed");
 
   std::cout << "[CLIENT][ipc-buffer-meta] OK" << std::endl;
   return 0;
@@ -198,37 +188,35 @@ int run_ipc_buffer_metadata_server(
   require(comm->same_host(kClientRank),
           "ipc-buffer-meta requires same-host peers");
 
-  void* resolved = nullptr;
-  int device_idx = -1;
-
   constexpr uint32_t kValidIpcId = 4242;
-  require(comm->wait_ipc_buffer(kClientRank, kValidIpcId),
-          "wait_ipc_buffer should succeed");
-  require(comm->resolve_ipc_buffer_pointer(kClientRank, kValidIpcId, 128, 256,
-                                           &resolved, &device_idx),
-          "resolve_ipc_buffer_pointer should succeed");
-  require(resolved != nullptr, "resolved remote pointer should not be null");
-  require(device_idx == kClientGpu,
-          "resolved remote pointer should preserve device index");
-  require(!comm->resolve_ipc_buffer_pointer(kClientRank, kValidIpcId, 4096, 1,
-                                            &resolved, &device_idx),
-          "out-of-range ipc pointer resolution should fail");
+  require(comm->wait_ipc(kClientRank, kValidIpcId), "wait_ipc should succeed");
+  auto ipc = comm->get_ipc(kClientRank, kValidIpcId);
+  require(ipc.direct_ptr != nullptr,
+          "get_ipc should resolve a non-null direct_ptr for valid IPC");
+  require(ipc.device_idx == kClientGpu,
+          "get_ipc should preserve remote device index");
+  bool out_of_range_ok = (4096 > ipc.bytes || 1 > (ipc.bytes - 4096));
+  require(out_of_range_ok, "out-of-range span check should fail");
 
   constexpr uint32_t kInvalidIpcId = 9999;
-  require(comm->wait_ipc_buffer(kClientRank, kInvalidIpcId),
+  require(comm->wait_ipc(kClientRank, kInvalidIpcId),
           "invalid ipc metadata fetch should succeed");
-  require(!comm->resolve_ipc_buffer_pointer(kClientRank, kInvalidIpcId, 0, 1,
-                                            &resolved, &device_idx),
-          "invalid ipc metadata should not resolve to a pointer");
+  bool invalid_failed = false;
+  try {
+    (void)comm->get_ipc(kClientRank, kInvalidIpcId);
+  } catch (...) {
+    invalid_failed = true;
+  }
+  require(invalid_failed, "invalid ipc metadata should not resolve to IPC");
 
   constexpr uint32_t kAckIpcId = 7777;
-  require(comm->notify_ipc_buffer(kClientRank, kAckIpcId, nullptr, 0),
-          "server notify_ipc_buffer(ack) should succeed");
+  require(comm->reg_ipc(kAckIpcId, nullptr, 0, true),
+          "server reg_ipc(ack) should succeed");
   // Wait for client completion marker to avoid tearing down the in-process
   // exchanger before the client has consumed the ack.
   constexpr uint32_t kClientDoneIpcId = 8888;
-  require(comm->wait_ipc_buffer(kClientRank, kClientDoneIpcId),
-          "server wait_ipc_buffer(done) should succeed");
+  require(comm->wait_ipc(kClientRank, kClientDoneIpcId),
+          "server wait_ipc(done) should succeed");
 
   std::cout << "[SERVER][ipc-buffer-meta] OK" << std::endl;
   return 0;
@@ -248,18 +236,20 @@ void test_transport_communicator_local() {
     GPU_RT_CHECK(gpuMalloc(&buf, 4096));
     auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
 
-    MR mr0 = comm->reg_mr(buf, 4096);
-    MR mr1 = comm->reg_mr(buf, 4096);
+    constexpr uint32_t kLocalBufferId = 1;
+    require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#0 failed");
+    MR mr0 = comm->get_mr(kLocalBufferId);
+    require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#1 failed");
+    MR mr1 = comm->get_mr(kLocalBufferId);
     require(mr0.id == mr1.id,
             "reg_mr should be idempotent for the same buffer");
-    require(comm->get_local_mr(static_cast<char*>(buf) + 128).id == mr0.id,
-            "communicator local MR range lookup failed");
     require(
-        comm->get_local_mr(mr0.id).address == reinterpret_cast<uint64_t>(buf),
-        "communicator local MR lookup by id failed");
+        comm->get_mr(kLocalBufferId).address == reinterpret_cast<uint64_t>(buf),
+        "communicator local MR lookup by buffer_id failed");
 
-    require(comm->dereg_mr(buf), "dereg_mr failed");
-    MR mr2 = comm->reg_mr(buf, 4096);
+    require(comm->dereg_mr(kLocalBufferId), "dereg_mr failed");
+    require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#2 failed");
+    MR mr2 = comm->get_mr(kLocalBufferId);
     require(mr2.id != mr0.id,
             "re-registering after dereg_mr should allocate a new MR id");
   });

@@ -39,9 +39,9 @@ class UcclTransportAdapter final : public TransportAdapter {
   int get_best_dev_idx(int gpu_idx) const;
 
   // Memory registration.
-  bool is_memory_registered(uint64_t mr_id) const;
-  bool register_memory(uint64_t mr_id, void* ptr, size_t len);
-  void deregister_memory(uint64_t mr_id);
+  bool is_memory_registered(uint32_t buffer_id) const;
+  bool register_memory(uint32_t buffer_id, void* ptr, size_t len);
+  void deregister_memory(uint32_t buffer_id);
   bool is_initialized() const { return endpoint_ != nullptr; }
 
   // TransportAdapter path-state overrides.
@@ -52,11 +52,11 @@ class UcclTransportAdapter final : public TransportAdapter {
 
   // TransportAdapter async data path overrides.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       std::optional<RemoteSlice> remote_hint,
                       BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
   // TransportAdapter completion overrides.
@@ -94,7 +94,7 @@ class UcclTransportAdapter final : public TransportAdapter {
 
   std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
   std::unordered_map<int, PeerContext> peer_contexts_;
-  std::unordered_map<uint64_t, ::uccl::Mhandle*> mr_id_to_mhandle_;
+  std::unordered_map<uint32_t, ::uccl::Mhandle*> buffer_id_to_mhandle_;
 
   // Internal peer-connection helpers.
   bool connect_to_peer(int peer_rank, std::string remote_ip,
@@ -108,11 +108,11 @@ class UcclTransportAdapter final : public TransportAdapter {
 
   // Internal async submit helpers.
   int send_async_uccl(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id, uint64_t remote_mr_id,
+                      uint32_t local_buffer_id, uint32_t remote_buffer_id,
                       uint64_t request_id,
                       RemoteSlice const* remote_slice = nullptr);
   int recv_async_uccl(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id, uint64_t request_id);
+                      uint32_t local_buffer_id, uint64_t request_id);
 
   // Internal peer-state helpers.
   bool has_send_peer(int peer_rank) const;
