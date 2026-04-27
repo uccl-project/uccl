@@ -6,7 +6,12 @@
 // These definitions must match the NCCL ABI. They are stable across
 // NCCL 2.x versions.
 
+#if defined(UCCL_P2P_USE_RCCL)
+#include <hip/hip_runtime_api.h>
+typedef hipStream_t cudaStream_t;
+#else
 #include <cuda_runtime_api.h>
+#endif
 
 #define NCCL_UNIQUE_ID_BYTES 128
 
