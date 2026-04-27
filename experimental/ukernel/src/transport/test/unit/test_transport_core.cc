@@ -37,55 +37,51 @@ void test_memory_manager() {
   UKernel::Transport::IPCManager ipcm;
   std::vector<uint8_t> buf_a(512, 0x11);
   std::vector<uint8_t> buf_b(1024, 0x22);
-  std::vector<uint32_t> reg_ids;
-  std::vector<uint32_t> dereg_ids;
 
-  mrm.bind_backend(
-      [&](uint32_t mr_id, void* ptr, size_t len) {
-        require(ptr != nullptr && len > 0, "backend register args invalid");
-        reg_ids.push_back(mr_id);
-        return true;
-      },
-      [&](uint32_t mr_id) { dereg_ids.push_back(mr_id); });
-
-  auto tracked_a = mrm.create_local_mr(buf_a.data(), buf_a.size());
-  auto tracked_a_again = mrm.create_local_mr(buf_a.data(), buf_a.size());
-  auto tracked_b = mrm.create_local_mr(buf_b.data(), buf_b.size());
+  auto tracked_a =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size());
+  auto tracked_a_again =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size());
+  auto tracked_b =
+      mrm.create_local_mr(/*buffer_id=*/12, buf_b.data(), buf_b.size());
   MR mr_a = tracked_a.mr;
   MR mr_a_again = tracked_a_again.mr;
   MR mr_b = tracked_b.mr;
 
-  require(mr_a.id == mr_a_again.id, "local MR id should be stable");
-  require(mr_a.id != mr_b.id, "different buffers should produce different ids");
-  require(reg_ids.size() == 2,
-          "backend register should run once per unique local buffer");
-  require(mrm.get_mr(buf_a.data()).mr.id == mr_a.id,
+  require(tracked_a.buffer_id == tracked_a_again.buffer_id,
+          "local buffer_id should be stable");
+  require(tracked_a.buffer_id != tracked_b.buffer_id,
+          "different buffers should produce different buffer_ids");
+  require(mrm.get_mr(buf_a.data()).buffer_id == tracked_a.buffer_id,
           "exact local MR lookup failed");
-  require(mrm.get_mr(buf_a.data() + 128).mr.id == mr_a.id,
+  require(mrm.get_mr(buf_a.data() + 128).buffer_id == tracked_a.buffer_id,
           "range-based local MR lookup failed");
-  require(mrm.get_mr(mr_b.id).mr.address ==
+  require(mrm.get_mr(/*buffer_id=*/tracked_b.buffer_id).mr.address ==
               reinterpret_cast<uint64_t>(buf_b.data()),
-          "MR lookup by id failed");
+          "MR lookup by buffer_id failed");
 
-  MR remote0{7, 0x1000ULL, 128, 0, 77};
-  MR remote1{8, 0x2000ULL, 256, 0, 88};
-  MR remote2{9, 0x3000ULL, 512, 0, 99};
+  MR remote0{0x1000ULL, 128, 0, 77};
+  MR remote1{0x2000ULL, 256, 0, 88};
+  MR remote2{0x3000ULL, 512, 0, 99};
   MRItem ri0{};
+  ri0.buffer_id = 7;
   ri0.mr = remote0;
   ri0.valid = true;
   MRItem ri1{};
+  ri1.buffer_id = 8;
   ri1.mr = remote1;
   ri1.valid = true;
   MRItem ri2{};
+  ri2.buffer_id = 9;
   ri2.mr = remote2;
   ri2.valid = true;
   mrm.register_remote_mrs(/*remote_rank=*/3, {ri0, ri1});
   mrm.register_remote_mrs(/*remote_rank=*/3, {ri0, ri1, ri2});
-  require(mrm.get_mr(3, remote0.id).mr.address == remote0.address,
+  require(mrm.get_mr(3, ri0.buffer_id).mr.address == remote0.address,
           "cached remote MR lookup for first entry failed");
-  require(mrm.get_mr(3, remote1.id).mr.address == remote1.address,
+  require(mrm.get_mr(3, ri1.buffer_id).mr.address == remote1.address,
           "cached remote MR lookup for second entry failed");
-  require(mrm.get_mr(3, remote2.id).mr.address == remote2.address,
+  require(mrm.get_mr(3, ri2.buffer_id).mr.address == remote2.address,
           "cached remote MR lookup failed");
 
   gpuIpcMemHandle_t handle{};
@@ -99,7 +95,7 @@ void test_memory_manager() {
   cache.base_offset = 64;
   cache.bytes = 2048;
   cache.device_idx = 5;
-  require(ipcm.register_remote_ipc(4, cache),
+  require(ipcm.register_remote_ipc(4, /*buffer_id=*/0, cache),
           "failed to register remote IPC cache");
   IPCItem cached = ipcm.get_ipc(4, handle);
   require(cached.direct_ptr == cache.direct_ptr &&
@@ -108,60 +104,27 @@ void test_memory_manager() {
               cached.device_idx == cache.device_idx,
           "remote IPC cache round-trip mismatch");
 
-  require(mrm.delete_mr(buf_a.data()), "first local MR delete should succeed");
-  require(dereg_ids.size() == 1 && dereg_ids.back() == mr_a.id,
-          "backend deregister should run when local MR is deleted");
+  require(mrm.delete_mr(/*buffer_id=*/11),
+          "first local MR delete should succeed");
 
-  auto resized = mrm.create_local_mr(buf_a.data(), buf_a.size() / 2);
-  require(resized.mr.id != mr_a.id,
-          "resized registration should allocate a new MR id");
-  require(reg_ids.size() == 3 && reg_ids.back() == resized.mr.id,
-          "resized local MR should trigger backend register for new id");
-  require(mrm.get_mr(buf_a.data()).mr.id == resized.mr.id,
+  auto resized =
+      mrm.create_local_mr(/*buffer_id=*/11, buf_a.data(), buf_a.size() / 2);
+  require(resized.buffer_id == tracked_a.buffer_id,
+          "same buffer_id should keep stable id after resize");
+  require(mrm.get_mr(buf_a.data()).buffer_id == resized.buffer_id,
           "resized exact lookup should resolve to new MR");
   require(!mrm.get_mr(buf_a.data() + buf_a.size() / 2 + 1).valid,
           "lookup beyond resized range should fail");
 
-  require(mrm.delete_mr(buf_a.data()),
+  require(mrm.delete_mr(/*buffer_id=*/11),
           "resized local MR delete should succeed");
-  require(dereg_ids.size() == 2 && dereg_ids.back() == resized.mr.id,
-          "resized local MR delete should trigger backend deregister");
   require(!mrm.get_mr(buf_a.data()).valid,
           "released local buffer should not be queryable");
 
-  require(!mrm.delete_mr(buf_a.data()),
+  require(!mrm.delete_mr(/*buffer_id=*/11),
           "released resized buffer should no longer be tracked");
 
-  require(mrm.delete_mr(buf_b.data()), "single-use MR should be deletable");
-  require(dereg_ids.size() == 3 && dereg_ids.back() == mr_b.id,
-          "single-use local MR delete should trigger backend deregister");
-
-  // Verify "create first, bind/sync later" path.
-  MRManager late_bound;
-  std::vector<uint32_t> late_reg_ids;
-  std::vector<uint32_t> late_dereg_ids;
-  std::vector<uint8_t> buf_c(256, 0x33);
-
-  auto tracked_c = late_bound.create_local_mr(buf_c.data(), buf_c.size());
-  require(tracked_c.valid, "late-bound test local MR should be valid");
-
-  late_bound.bind_backend(
-      [&](uint32_t mr_id, void* ptr, size_t len) {
-        require(ptr == buf_c.data() && len == buf_c.size(),
-                "late-bound backend register args mismatch");
-        late_reg_ids.push_back(mr_id);
-        return true;
-      },
-      [&](uint32_t mr_id) { late_dereg_ids.push_back(mr_id); });
-  late_bound.sync_local_backend();
-
-  require(late_reg_ids.size() == 1 && late_reg_ids.back() == tracked_c.mr.id,
-          "sync_local_backend should register pre-existing local MR");
-  require(late_bound.delete_mr(buf_c.data()),
-          "late-bound local MR delete should succeed");
-  require(
-      late_dereg_ids.size() == 1 && late_dereg_ids.back() == tracked_c.mr.id,
-      "late-bound local MR delete should trigger backend deregister");
+  require(mrm.delete_mr(/*buffer_id=*/12), "single-use MR should be deletable");
 }
 
 void test_peer_transport_kind() {

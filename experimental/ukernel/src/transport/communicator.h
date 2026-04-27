@@ -6,6 +6,7 @@
 #include "memory/shm_manager.h"
 #include "oob/oob.h"
 #include "request.h"
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -54,43 +55,35 @@ class Communicator {
   // Identity.
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
+  // Runtime-selectable OOB namespace for communication-group isolation.
+  void set_oob_namespace(std::string ns);
+  std::string oob_namespace() const;
+  // OOB global barrier across ranks in this communicator.
+  bool barrier(std::string const& barrier_namespace = "default",
+               int timeout_ms = -1);
 
   // Completion notification hook.
   std::shared_ptr<void> register_completion_notifier(
       std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
 
-  // MR metadata exchange.
-  MR reg_mr(void* local_buf, size_t len);
-  bool dereg_mr(void* local_buf);
-  bool notify_named_mrs(int remote_rank, uint64_t generation,
-                        NamedMRInfos const& infos);
-  bool wait_named_mrs(int remote_rank, uint64_t generation,
-                      NamedMRInfos& infos);
-  MR get_local_mr(void* local_buf);
-  MR get_local_mr(uint32_t mr_id);
-  MR get_remote_mr(int remote_rank, uint32_t mr_id);
+  // Async resource API (buffer_id keyed).
+  bool reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
+              bool publish = true);
+  bool dereg_mr(uint32_t buffer_id);
+  bool wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
+  MR get_mr(uint32_t buffer_id) const;
+  MR get_mr(int owner_rank, uint32_t buffer_id) const;
 
-  // IPC metadata exchange.
-  bool notify_ipc_buffer(int remote_rank, uint32_t ipc_id, void* local_buf,
-                         size_t len, uint64_t binding_version = 0);
-  bool wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                       uint64_t expected_binding_version = 0);
-  bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
-                                  size_t offset, size_t bytes, void** out_ptr,
-                                  int* out_device_idx);
-  IPCItem export_local_ipc_buffer(void* local_buf, size_t len);
-
-  bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                 IPCItem const& ipc);
-  IPCItem get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
-
-  // Adapter-facing IPC metadata helpers.
-  int local_gpu_idx() const { return local_gpu_idx_; }
-  bool ipc_has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                       uint64_t expected_binding_version) const;
-  bool ipc_fetch_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                   uint64_t expected_binding_version = 0);
-  void ipc_invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
+  bool reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
+               bool publish = true);
+  bool dereg_ipc(uint32_t buffer_id);
+  bool wait_ipc(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
+  IPCItem get_ipc(uint32_t buffer_id);
+  IPCItem get_ipc(int owner_rank, uint32_t buffer_id);
+  bool try_resolve_remote_ipc_pointer(int remote_rank,
+                                      uint32_t remote_buffer_id, size_t offset,
+                                      size_t bytes, void** out_ptr,
+                                      int* out_device_idx);
 
   // SHM bounce.
   void* get_or_open_bounce_shm(std::string const& shm_name);
@@ -136,12 +129,22 @@ class Communicator {
     std::shared_ptr<SHMItem> bounce_owner;
   };
 
-  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
-                                            CommunicatorMeta const& peer_meta);
+  // Adapter bootstrap / selection.
+  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
+  bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
+                               UCCLP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
+
+  // Peer-state lifecycle.
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool has_peer_path(int rank) const;
   void mark_peer_path_ready(int rank, PeerTransportKind kind);
+  void exchange_peer_metas();
+  ResolvedPeer resolve_peer(int rank) const;
+  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
+  bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta);
+
+  // Request tracking / progress.
   bool poll_request_completion(unsigned id, bool blocking);
   TrackedRequest* allocate_request_slot(unsigned* out_req_id);
   TrackedRequest* resolve_request_slot(unsigned req_id) const;
@@ -152,25 +155,16 @@ class Communicator {
   static uint32_t request_slot_index(unsigned req_id);
   static uint32_t request_generation(unsigned req_id);
   void notify_request_completion();
+
+  // UCCL MR lifecycle.
   void register_existing_local_mrs_with_uccl();
-  bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
-  bool fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                        uint64_t expected_binding_version = 0);
-  bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                   uint64_t expected_binding_version) const;
-  void invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
-  bool register_remote_ipc_info(int remote_rank, uint32_t ipc_id,
-                                IpcBufferInfo const& info,
-                                bool eager_open_direct_ptr);
-  void try_open_remote_ipc_buffer(int remote_rank, IPCItem const& state);
+  bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
+
+  // Request cleanup helpers.
   void cleanup_tracked_request(TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
   SHMManager& require_shm_manager(char const* caller);
-  void exchange_peer_metas();
-  ResolvedPeer resolve_peer(int rank) const;
-  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
-  bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta,
-                               CommunicatorMeta const& remote_meta);
+
   // Background progress loop: advances completion state for all in-flight
   // requests and emits user completion callbacks for requests that finish.
   void progress_loop();
@@ -195,7 +189,9 @@ class Communicator {
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;
   std::shared_ptr<CommunicatorConfig> config_;
+  mutable std::mutex config_mu_;
   std::shared_ptr<Exchanger> exchanger_client_;
+  std::atomic<uint64_t> barrier_seq_{0};
 
   // Adapter dispatch.
   TransportAdapter* get_adapter(PeerTransportKind kind);
@@ -214,7 +210,11 @@ class Communicator {
   std::atomic<uint32_t> active_tail_{0};
   int completion_event_fd_ = -1;
   std::atomic<uint64_t> completion_seq_{0};
-  mutable std::mutex mr_exchange_mu_;
+  mutable std::mutex resource_mu_;
+  std::unordered_map<uint32_t, MR> local_buffer_to_mr_;
+  std::unordered_map<int, std::unordered_map<uint32_t, MR>>
+      remote_buffer_to_mr_;
+  std::unordered_map<uint32_t, IPCItem> local_buffer_to_ipc_;
 
   // Despite the historical name, this thread now serves as the communicator's
   // background progress engine. register_completion_notifier() only attaches
@@ -230,24 +230,11 @@ class Communicator {
   };
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
-  struct PublishedIpcBuffer {
-    uintptr_t base_addr = 0;
-    size_t bytes = 0;
-    uint64_t binding_version = 0;
-    bool valid = false;
-  };
-
-  // UCCL registration cache.
+  // UCCL registration caches.
   mutable std::mutex uccl_reg_mu_;
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> uccl_registered_mrs_;
-
-  // IPC binding versions.
-  mutable std::mutex ipc_gen_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, uint64_t>>
-      local_ipc_binding_versions_;
-  std::unordered_map<int, std::unordered_map<uint32_t, PublishedIpcBuffer>>
-      local_ipc_published_buffers_;
+  std::atomic<uint32_t> next_ephemeral_buffer_id_{0x80000000u};
 };
 
 }  // namespace Transport

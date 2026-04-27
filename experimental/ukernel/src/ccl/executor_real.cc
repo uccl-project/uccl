@@ -3,6 +3,7 @@
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include "executor_impl.h"
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -24,10 +25,11 @@ Executor::Executor(ExecutorConfig const& config) : impl_(nullptr) {
           config.smem_size,
       }));
   impl_->resolve_ipc_buffer_pointer =
-      [communicator](int remote_rank, uint32_t mr_id, size_t offset,
+      [communicator](int remote_rank, uint32_t remote_buffer_id, size_t offset,
                      size_t bytes, void** out_ptr, int* out_device_idx) {
-        return communicator->resolve_ipc_buffer_pointer(
-            remote_rank, mr_id, offset, bytes, out_ptr, out_device_idx);
+        return communicator->try_resolve_remote_ipc_pointer(
+            remote_rank, remote_buffer_id, offset, bytes, out_ptr,
+            out_device_idx);
       };
 }
 

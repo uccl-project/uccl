@@ -35,13 +35,12 @@ void IPCManager::close_local_import_if_open(IPCItem& item) {
   }
 }
 
-bool IPCManager::register_remote_ipc(int rank, IPCItem const& ipc) {
+bool IPCManager::register_remote_ipc(int rank, uint32_t buffer_id,
+                                     IPCItem const& ipc) {
   std::lock_guard<std::mutex> lk(remote_mu_);
   IPCItem item = ipc;
   item.is_local = false;
-  if (item.ipc_id != 0) {
-    rank_ipc_id_cache_[rank][item.ipc_id] = item;
-  }
+  if (buffer_id != 0) rank_buffer_id_cache_[rank][buffer_id] = item;
   if (has_handle(item.handle)) {
     rank_handle_cache_[rank][make_ipc_handle_key(item.handle)] = item;
   }
@@ -108,11 +107,11 @@ IPCItem IPCManager::get_ipc(int rank, gpuIpcMemHandle_t handle) const {
   return it->second;
 }
 
-IPCItem IPCManager::get_ipc(int rank, uint32_t ipc_id) const {
+IPCItem IPCManager::get_ipc(int rank, uint32_t buffer_id) const {
   std::lock_guard<std::mutex> lk(remote_mu_);
-  auto rank_it = rank_ipc_id_cache_.find(rank);
-  if (rank_it == rank_ipc_id_cache_.end()) return {};
-  auto it = rank_it->second.find(ipc_id);
+  auto rank_it = rank_buffer_id_cache_.find(rank);
+  if (rank_it == rank_buffer_id_cache_.end()) return {};
+  auto it = rank_it->second.find(buffer_id);
   if (it == rank_it->second.end()) return {};
   return it->second;
 }
@@ -145,20 +144,25 @@ bool IPCManager::delete_ipc(int rank, gpuIpcMemHandle_t handle) {
   IPCItem item = it->second;
   close_local_import_if_open(item);
   rank_it->second.erase(it);
-  if (item.ipc_id != 0) {
-    auto id_rank_it = rank_ipc_id_cache_.find(rank);
-    if (id_rank_it != rank_ipc_id_cache_.end()) {
-      id_rank_it->second.erase(item.ipc_id);
+  auto id_rank_it = rank_buffer_id_cache_.find(rank);
+  if (id_rank_it != rank_buffer_id_cache_.end()) {
+    for (auto id_it = id_rank_it->second.begin();
+         id_it != id_rank_it->second.end();) {
+      if (make_ipc_handle_key(id_it->second.handle) == key) {
+        id_it = id_rank_it->second.erase(id_it);
+      } else {
+        ++id_it;
+      }
     }
   }
   return true;
 }
 
-bool IPCManager::delete_ipc(int rank, uint32_t ipc_id) {
+bool IPCManager::delete_ipc(int rank, uint32_t buffer_id) {
   std::lock_guard<std::mutex> lk(remote_mu_);
-  auto rank_it = rank_ipc_id_cache_.find(rank);
-  if (rank_it == rank_ipc_id_cache_.end()) return false;
-  auto it = rank_it->second.find(ipc_id);
+  auto rank_it = rank_buffer_id_cache_.find(rank);
+  if (rank_it == rank_buffer_id_cache_.end()) return false;
+  auto it = rank_it->second.find(buffer_id);
   if (it == rank_it->second.end()) return false;
 
   IPCItem item = it->second;
@@ -204,9 +208,9 @@ void IPCManager::delete_ipc(int rank) {
   };
 
   close_from_map(rank_handle_cache_);
-  close_from_map(rank_ipc_id_cache_);
+  close_from_map(rank_buffer_id_cache_);
   rank_handle_cache_.erase(rank);
-  rank_ipc_id_cache_.erase(rank);
+  rank_buffer_id_cache_.erase(rank);
 }
 
 }  // namespace Transport
