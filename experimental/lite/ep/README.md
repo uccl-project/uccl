@@ -36,8 +36,6 @@ Despite its lightweight design, DeepEP's performance matches or exceeds hardware
 - Reducing intermediate buffer sizes by leveraging EP replay to handle load imbalance
 - All-gather updates and reduce-scatter implementations for DP & TP
 
-For the legacy V1 documentation (NVSHMEM-based), see [docs/legacy.md](docs/legacy.md).
-
 ## Performance
 
 Following V3's configuration, we tested with 8K tokens per batch, 7168 hidden dimensions, top 8 experts, FP8 dispatching, and BF16 combining, and obtained the following results:
@@ -55,8 +53,6 @@ Notes: the results are logical bandwidth. For example, under the `EP 8 x 2` case
 Comparing with V1, **V2 achieves up to 1.3x peak performance, while saving up to 4x SM count**.
 
 We omit results for larger EP configurations for the time being, but encourage interested users to benchmark them directly. Based on our internal experience, we expect the kernel to continue saturating hardware bandwidth at scale.
-
-For V1 performance data, see [docs/legacy.md](docs/legacy.md#performance).
 
 ## Quick start
 
@@ -89,10 +85,6 @@ We recommend using pip to install NCCL so that DeepEP can automatically locate i
 ```bash
 pip install "nvidia-nccl-cu13>=2.30.4" --no-deps
 ```
-
-### Install NVSHMEM dependency
-
-DeepEP also depends on NVSHMEM to provide support for legacy methods. Please refer to our [NVSHMEM Installation Guide](docs/nvshmem.md) for instructions.
 
 ### Development
 
@@ -369,10 +361,9 @@ The library provides some environment variables, which may be useful:
     - `EP_DISABLE_BARRIER_PROFILING`: `0` or `1`, disable barrier-based communication profiling in benchmarks, `0` by default
 - Build
     - `EP_NCCL_ROOT_DIR`: string, path to the NCCL installation directory; auto-detected from the Python environment if not set
-    - `EP_NVSHMEM_ROOT_DIR`: string, path to the NVSHMEM installation directory; auto-detected from the Python environment if not set
     - `TORCH_CUDA_ARCH_LIST`: string, list of target CUDA architectures, e.g. `"9.0"`
-    - `DISABLE_SM90_FEATURES`: `0` or `1`, disable SM90 features for legacy methods, `0` by default
-    - `DISABLE_AGGRESSIVE_PTX_INSTRS`: `0` or `1`, disable aggressive load/store instructions in legacy methods, `0` by default
+    - `DISABLE_SM90_FEATURES`: `0` or `1`, disable SM90-only launch and PTX features for SM89 fallback builds, `0` by default
+    - `DISABLE_AGGRESSIVE_PTX_INSTRS`: `0` or `1`, disable aggressive load/store instructions for wider CUDA compatibility, `0` by default
 
 Some environment variables are **persistent**: they are captured at build time and baked into the installed package as default values. At import time, these defaults are applied automatically unless overridden by current environment variables. The persistent variables are: `EP_JIT_CACHE_DIR`, `EP_JIT_PRINT_COMPILER_COMMAND`, `EP_NUM_TOPK_IDX_BITS`, `EP_NCCL_ROOT_DIR`.
 
@@ -431,7 +422,6 @@ sudo mlxconfig -y -d mlx5_$i set PCI_ATOMIC_MODE=4
 
 ## Community forks
 
-- [uccl/uccl-ep](https://github.com/uccl-project/uccl/tree/main/ep) - Enables running DeepEP on heterogeneous GPUs (e.g., Nvidia, AMD) and NICs (e.g., EFA, Broadcom, CX7)
 - [Infrawaves/DeepEP_ibrc_dual-ports_multiQP](https://github.com/Infrawaves/DeepEP_ibrc_dual-ports_multiQP) - Adds multi-QP solution and dual-port NIC support in IBRC transport
 - [antgroup/DeepXTrace](https://github.com/antgroup/DeepXTrace) - A diagnostic analyzer for efficient and precise localization of slow ranks
 - [ROCm/mori](https://github.com/ROCm/mori) - AMD's next-generation communication library for performance-critical AI workloads (e.g., Wide EP, KVCache transfer, Collectives)

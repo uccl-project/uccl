@@ -51,11 +51,18 @@ make -j SM=89
 make -j install
 ```
 
-Benchmark workflows are packaged as project skills:
+Single-node benchmark:
 
-- `bench-lite-ep-intra`: single-node benchmark, default 2 GPUs.
-- `bench-lite-ep-inter`: multi-node benchmark across `l40` and `l41`, default
-  2 total GPUs.
+```bash
+make test-intra
+```
+
+Multi-node benchmark:
+
+```bash
+bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
+  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
+```
 
 Constraint: `num_experts` must be divisible by total GPU count.
 

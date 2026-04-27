@@ -11,7 +11,7 @@ def find_pkg_root(name: str, lib_name: Optional[str] = None, optional: bool = Fa
     Checks environment variables `EP_{NAME}_ROOT_DIR` and `{NAME}_DIR` first.
 
     Arguments:
-        name: the package name (e.g., `'nccl'`, `'nvshmem'`).
+        name: the package name (e.g., `'nccl'`).
         lib_name: the library filename to search for within the package files.
         optional: if ``False``, raises an assertion error when the package is not found.
 
@@ -66,17 +66,3 @@ def find_nccl_root(optional: bool = False):
         root: the NCCL root directory.
     """
     return find_pkg_root('nccl', lib_name='libnccl.so', optional=optional)
-
-
-@functools.lru_cache()
-def find_nvshmem_root(optional: bool = False):
-    """
-    Find the NVSHMEM installation root directory, cached.
-
-    Arguments:
-        optional: if `False`, raises an assertion error when NVSHMEM is not found.
-
-    Returns:
-        root: the NVSHMEM root directory.
-    """
-    return find_pkg_root('nvshmem', optional=optional)

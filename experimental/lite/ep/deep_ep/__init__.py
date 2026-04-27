@@ -87,13 +87,6 @@ init_jit()
 
 
 # Import APIs after initialization
-try:
-    from .buffers.legacy import Buffer
-    # noinspection PyUnresolvedReferences
-    from deep_ep._C import Config
-except (ImportError, AttributeError):
-    Buffer = None
-    Config = None
 from .buffers.elastic import ElasticBuffer, EPHandle
 # noinspection PyUnresolvedReferences
 from .utils.event import EventOverlap, EventHandle

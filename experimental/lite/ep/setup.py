@@ -20,14 +20,6 @@ find_pkgs = importlib.util.module_from_spec(find_pkgs_spec)
 find_pkgs_spec.loader.exec_module(find_pkgs)
 
 
-# Wheel specific: the wheels only include the SO name of the host library `libnvshmem_host.so.X`
-def get_nvshmem_host_lib_name(base_dir):
-    path = Path(base_dir).joinpath('lib')
-    for file in path.rglob('libnvshmem_host.so.*'):
-        return file.name
-    raise ModuleNotFoundError('libnvshmem_host.so not found')
-
-
 def get_package_version():
     with open(Path(current_dir) / 'deep_ep' / '__init__.py', 'r') as f:
         version_match = re.search(r'^__version__\s*=\s*(.*)$', f.read(), re.MULTILINE)
@@ -105,8 +97,6 @@ class CustomBuildPy(build_py):
 
 
 if __name__ == '__main__':
-    build_legacy = bool(int(os.getenv('DEEP_EP_BUILD_LEGACY', '0')))
-    nvshmem_root_dir = find_pkgs.find_nvshmem_root(optional=not build_legacy)
     nccl_root_dir = find_pkgs.find_nccl_root()
     arch_list = detect_torch_cuda_arch_list()
     os.environ['TORCH_CUDA_ARCH_LIST'] = arch_list
@@ -123,21 +113,7 @@ if __name__ == '__main__':
         '/usr/local/cuda/include/cccl',
     ]) + include_paths()
     library_dirs = []
-    nvcc_dlink = []
     extra_link_args = ['-lcuda']
-
-    # NVSHMEM flags
-    if build_legacy:
-        sources.extend(['csrc/kernels/legacy/layout.cu', 'csrc/kernels/legacy/intranode.cu',
-                        'csrc/kernels/legacy/internode.cu', 'csrc/kernels/legacy/internode_ll.cu',
-                        'csrc/kernels/backend/nvshmem.cu'])
-        include_dirs.extend([f'{nvshmem_root_dir}/include'])
-        library_dirs.extend([f'{nvshmem_root_dir}/lib'])
-        nvcc_dlink.extend(['-dlink', f'-L{nvshmem_root_dir}/lib', '-lnvshmem_device'])
-        extra_link_args.extend([f'-l:libnvshmem_host.so', '-l:libnvshmem_device.a', f'-Wl,-rpath,{nvshmem_root_dir}/lib'])
-    else:
-        cxx_flags.append('-DDEEP_EP_DISABLE_LEGACY')
-        nvcc_flags.append('-DDEEP_EP_DISABLE_LEGACY')
 
     # NCCL flags
     nccl_lib_name = find_library_name(nccl_root_dir, 'libnccl.so*')
@@ -166,7 +142,7 @@ if __name__ == '__main__':
         cxx_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
         nvcc_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
 
-    # Legacy environment name
+    # Backward-compatible environment name
     if 'TOPK_IDX_BITS' in os.environ:
         assert 'EP_NUM_TOPK_IDX_BITS' not in os.environ
         os.environ['EP_NUM_TOPK_IDX_BITS'] = os.environ['TOPK_IDX_BITS']
@@ -182,8 +158,6 @@ if __name__ == '__main__':
         'cxx': cxx_flags,
         'nvcc': nvcc_flags,
     }
-    if len(nvcc_dlink) > 0:
-        extra_compile_args['nvcc_dlink'] = nvcc_dlink
 
     # Summary
     print('Build summary:')
@@ -193,8 +167,6 @@ if __name__ == '__main__':
     print(f' > Compilation flags: {extra_compile_args}')
     print(f' > Link flags: {extra_link_args}')
     print(f' > Arch list: {os.environ["TORCH_CUDA_ARCH_LIST"]}')
-    print(f' > Build legacy/NVSHMEM path: {build_legacy}')
-    print(f' > NVSHMEM path: {nvshmem_root_dir}')
     print(f' > NCCL path: {nccl_root_dir}')
     # Print persistent env variables
     persistent_envs = []

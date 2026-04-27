@@ -72,7 +72,7 @@ public:
         // TODO: make it more general, e.g. `EP_JIT_EXTRA_FLAGS`
         if (int num_topk_idx_bits = get_env("EP_NUM_TOPK_IDX_BITS", 0); num_topk_idx_bits != 0)
             flags += fmt::format(" -DEP_NUM_TOPK_IDX_BITS={}", num_topk_idx_bits);
-        flags += " -DDEEP_EP_DISABLE_LEGACY -DDEEP_EP_USE_NCCL_SIGNAL_BARRIER -DDEEP_EP_USE_VA_SIGNAL_BARRIER -DDEEP_EP_EXPLICIT_LSA_BASE -DDEEP_EP_PUT_VALUE_BARRIER -DDEEP_EP_SYSTEM_FENCE_BEFORE_GIN_PUT";
+        flags += " -DDEEP_EP_USE_NCCL_SIGNAL_BARRIER -DDEEP_EP_USE_VA_SIGNAL_BARRIER -DDEEP_EP_EXPLICIT_LSA_BASE -DDEEP_EP_PUT_VALUE_BARRIER -DDEEP_EP_SYSTEM_FENCE_BEFORE_GIN_PUT";
         if (get_env("DISABLE_AGGRESSIVE_PTX_INSTRS", 1))
             flags += " -DDISABLE_AGGRESSIVE_PTX_INSTRS";
         if (get_env("EP_FORCE_NO_NVLINK", 0))

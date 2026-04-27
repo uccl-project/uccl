@@ -36,8 +36,8 @@ LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-d
 
 | Area | Files | What changed | Why it is needed |
 | --- | --- | --- | --- |
-| DeepEPv2 import | `deep_ep/`, `csrc/`, `tests/elastic/`, `tests/utils/`, `LICENSE.deepep_v2`, `README.md` | Added DeepEPv2 PR605 package/runtime/tests and preserved the old lite docs as `README.lite-uccl.md`. | Replaces the old `uccl.ep` path with DeepEPv2 `ElasticBuffer`. |
-| Build/install | `setup.py`, `Makefile` | Builds `deep_ep._C`, makes legacy NVSHMEM optional, supports NCCL 2.30.4 root/rpath, defaults SM89 fallback for L4, and adds a no-GDR test target. | Upstream needs NCCL host/device GIN APIs from 2.30.4; bundled PyTorch NCCL was insufficient. |
+| DeepEPv2 import | `deep_ep/`, `csrc/`, `tests/elastic/`, `tests/utils/`, `LICENSE.deepep_v2`, `README.md` | Added DeepEPv2 PR605 package/runtime/tests and removed the old UCCL-EP source, wrappers, benches, and preserved-doc copy. | Replaces the old `uccl.ep` path with DeepEPv2 `ElasticBuffer`. |
+| Build/install | `setup.py`, `Makefile` | Builds `deep_ep._C`, removes the legacy NVSHMEM build branch, supports NCCL 2.30.4 root/rpath, defaults SM89 fallback for L4, and adds a no-GDR test target. | Upstream needs NCCL host/device GIN APIs from 2.30.4; bundled PyTorch NCCL was insufficient. |
 | NCCL runtime backend | `csrc/kernels/backend/nccl.cu`, `api.cuh`, `lazy_driver.hpp` | Reworked communicator/window setup, no-NVLink logical domains, proxy GIN requirements, optional host-window experiment, and lazy CUDA driver symbols. | Upstream assumes LSA/NVLink domains and GDR-like behavior; L4 no-GDR needs a pure GIN proxy path. |
 | GIN address helper | `deep_ep/include/deep_ep/common/handle.cuh` | Added explicit local base pointer support, no-NVLink accessibility rules, and `put_value`. | GIN offsets must be relative to the NCCL-registered window, not an unavailable remote LSA pointer. |
 | Workspace layout | `deep_ep/include/deep_ep/common/layout.cuh` | Reserved per-rank GIN barrier slots in workspace. | Needed for a barrier that works with proxy GIN without relying on NCCL indexed signals. |
@@ -45,6 +45,7 @@ LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-d
 | Dispatch/combine kernels | `deep_ep/include/deep_ep/impls/dispatch.cuh`, `combine.cuh`, `barrier.cuh`, `hybrid_dispatch.cuh`, `hybrid_combine.cuh` | Construct `NCCLGin` with explicit workspace base, add GIN flush/fence ordering where send buffers are consumed by proxy GIN, and keep final barriers. | Prevents proxy GIN from reading stale GPU send-buffer contents and ensures offsets are correct. |
 | SM89 fallback | `deep_ep/include/deep_ep/common/ptx.cuh`, `csrc/jit/launch_runtime.hpp`, generated kernels | Added fallbacks for SM90-only `elect.sync`, TMA/mbarrier, PDL, cluster launch, and register allocation paths. | L4 is SM89; upstream PR605 targets Hopper/SM90-style device instructions. |
 | Runtime policy | `deep_ep/buffers/elastic.py`, `tests/elastic/test_ep.py` | `EP_FORCE_NO_NVLINK=1` forces non-hybrid direct mode, disables multiple-reduction combine, and clamps to one GIN QP; tests mirror those settings. | Multiple QPs plus proxy GIN `flush` were not sufficient to order remote completion; single QP preserves correctness. |
+| Legacy cleanup | `src/`, `include/`, `bench/`, `deep_ep_wrapper/`, `csrc/legacy/`, `csrc/kernels/legacy/`, `deep_ep/buffers/legacy.py`, `csrc/kernels/backend/nvshmem.cu` | Removed the old UCCL-EP implementation and the unused DeepEP V1/NVSHMEM build path from this lite tree. | Keeps the package focused on the validated DeepEPv2/NCCL GIN path and avoids stale code paths that are no longer tested. |
 | Launcher | `run_multinode.sh` | Uses l40+l41, physical GPU list, NCCL 2.30.4, proxy GIN by default, no GDR, and process-exit workaround. | Provides reproducible multi-node runs on the target machines. |
 | JIT cache | `csrc/jit/compiler.hpp` | Adds cache invalidation flags and waits for cache visibility after concurrent atomic rename on NFS. | Multi-rank JIT compilation on NFS can otherwise lose the winner's generated cubin briefly. |
 
@@ -195,7 +196,6 @@ left as an explicit experiment, not part of the validated path.
 These are mostly selectors or cache invalidators; they do not by themselves make
 the no-GDR mode correct:
 
-- `DEEP_EP_DISABLE_LEGACY`: removes the NVSHMEM/legacy build path by default.
 - `DISABLE_SM90_FEATURES`: selects the SM89-compatible code paths.
 - `EP_FORCE_NO_NVLINK`: selects no-NVLink runtime policy and JIT code paths.
 - `DEEP_EP_*` JIT signature defines: invalidate stale cached cubins after the

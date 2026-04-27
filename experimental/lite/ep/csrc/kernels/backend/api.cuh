@@ -7,26 +7,6 @@
 #include <nccl.h>
 #include <nccl_device.h>
 
-// TODO: make a unified API
-namespace deep_ep::nvshmem {
-
-std::vector<uint8_t> get_unique_id();
-
-int init(const std::vector<uint8_t>& root_unique_id_val,
-         const int& rank,
-         const int& num_ranks,
-         const int& team_split_stride);
-
-void* alloc(const size_t& size, const size_t& alignment);
-
-void free(void* ptr);
-
-void barrier(const bool& with_cpu_sync, const std::optional<cudaStream_t>& stream_opt = std::nullopt);
-
-void finalize();
-
-}  // deep_ep::nvshmem
-
 namespace deep_ep::nccl {
 
 pybind11::bytearray get_local_unique_id();

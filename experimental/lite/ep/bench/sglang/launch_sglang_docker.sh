@@ -1,1 +1,0 @@
-docker run -it --gpus all --shm-size 32g   -v /opt/dlami/nvme/.cache:/root/.cache   -v /home/ubuntu/efs/ziming_dev/uccl:/workspace/uccl   -v /home/ubuntu/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528/snapshots/4236a6af538feda4548eca9ab308586007567f52:/workspace/models/DeepSeek-R1-0528   --ipc=host --network=host --privileged   sglang:latest

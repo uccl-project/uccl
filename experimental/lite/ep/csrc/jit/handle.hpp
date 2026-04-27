@@ -23,9 +23,6 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
     LibraryHandle library;
     KernelHandle kernel{};
     CUDA_RUNTIME_CHECK(cudaLibraryLoadFromFile(&library, cubin_path.c_str(), nullptr, nullptr, 0, nullptr, nullptr, 0));
-#ifndef DEEP_EP_DISABLE_LEGACY
-    nvshmemx_culibrary_init(library);
-#endif
     CUDA_RUNTIME_CHECK(cudaLibraryGetKernel(&kernel, library, func_name.c_str()));
 
     if (library_opt != nullptr)
@@ -34,9 +31,6 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
 }
 
 static void unload_library(const LibraryHandle& library) {
-#ifndef DEEP_EP_DISABLE_LEGACY
-    nvshmemx_culibrary_finalize(library);
-#endif
     const auto error = cudaLibraryUnload(library);
     EP_HOST_ASSERT(error == cudaSuccess or error == cudaErrorCudartUnloading);
 }
