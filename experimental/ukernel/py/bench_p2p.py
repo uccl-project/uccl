@@ -330,8 +330,7 @@ def main() -> None:
                 assert ok, "[uccl] connect_local(1->0) failed"
         else:
             local_meta = bytes(uc_ep.get_metadata())
-            _, _, local_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(local_meta)
-            local_gpu_bdf = str(local_gpu_bdf)
+            _, _, _ = uccl_p2p.Endpoint.parse_metadata(local_meta)
             remote_meta = _exchange_uccl_metadata(local_meta, rank)
             if rank == 0:
                 ip, port, remote_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
