@@ -170,6 +170,61 @@ jobs:
               2>&1 | tee nixlbench.log
           EOF
 
+      - name: Run P2P nixlbench inter-node (RDMA + NCCL)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -o BatchMode=yes spark0 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            export UCCL_P2P_RDMA_GID_INDEX=3
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+
+            bash .github/workflows/nixlbench_test_internode.sh \
+              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
+              --host-etcd \
+              2>&1 | tee nixlbench_internode_spark0.log
+          EOF
+          PID_SPARK0=$!
+
+          sleep 5
+
+          ssh -o BatchMode=yes spark1 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "spark1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            export UCCL_P2P_RDMA_GID_INDEX=3
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+
+            bash .github/workflows/nixlbench_test_internode.sh \
+              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
+              2>&1 | tee nixlbench_internode_spark1.log
+          EOF
+          PID_SPARK1=$!
+
+          wait $PID_SPARK0; STATUS_SPARK0=$?
+          echo "spark0 exit code: $STATUS_SPARK0"
+
+          wait $PID_SPARK1; STATUS_SPARK1=$?
+          echo "spark1 exit code: $STATUS_SPARK1"
+
+          if [ $STATUS_SPARK0 -ne 0 ] || [ $STATUS_SPARK1 -ne 0 ]; then
+            echo "Inter-node nixlbench tests FAILED!"
+            exit 1
+          fi
+
       - name: Fetch remote logs
         if: always()
         shell: bash
@@ -177,11 +232,17 @@ jobs:
           set -eu
           scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gb10-build.log || true
           scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gb10-nixlbench.log || true
+          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log ./gb10-nixlbench-internode-spark0.log || true
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log ./gb10-nixlbench-internode-spark1.log || true
           ssh -o BatchMode=yes spark1 << 'EOF'
             rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log
           EOF
           ssh -o BatchMode=yes spark0 << 'EOF'
             rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log
+            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log
+          EOF
+          ssh -o BatchMode=yes spark1 << 'EOF'
+            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log
           EOF
 
       - name: Upload log artifact
@@ -192,4 +253,6 @@ jobs:
           path: |
             gb10-build.log
             gb10-nixlbench.log
+            gb10-nixlbench-internode-spark0.log
+            gb10-nixlbench-internode-spark1.log
           if-no-files-found: warn

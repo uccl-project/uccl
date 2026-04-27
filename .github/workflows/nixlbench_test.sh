@@ -134,8 +134,6 @@ ETCDCTL_API=3 etcdctl --endpoints="http://127.0.0.1:${ETCD_PORT}" endpoint healt
 # Test matrix (single node, 2 processes each):
 #   1. RDMA + IPC        (default intra-node path)
 #   2. RDMA without IPC  (forced RDMA loopback)
-#   3. NCCL + IPC        (TCP control plane + IPC data)
-#   4. NCCL without IPC  (forced NCCL data path)
 
 NIXLBENCH_ARGS=(
     --etcd_endpoints "http://127.0.0.1:${ETCD_PORT}"
@@ -193,8 +191,6 @@ OVERALL_RC=0
 
 run_nixlbench_test "RDMA + IPC"         rdma 0 || OVERALL_RC=1
 run_nixlbench_test "RDMA without IPC"   rdma 1 || OVERALL_RC=1
-run_nixlbench_test "NCCL + IPC"         nccl 0 || OVERALL_RC=1
-run_nixlbench_test "NCCL without IPC"   nccl 1 || OVERALL_RC=1
 
 echo ""
 echo "================================================================"
