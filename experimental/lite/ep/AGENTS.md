@@ -87,6 +87,23 @@ Raw logs:
 - `/tmp/deepep_matrix_2n2g.log`
 - `/tmp/deepep_matrix_2n4g.log`
 
+### GPUDirect RDMA enabled
+
+These inter-node runs set `NCCL_NET_GDR_LEVEL=SYS` and keep `NCCL_GIN_TYPE=2`
+(`GIN_IB_PROXY`). The 2n x 1g debug log contains `via NET/IB/0/GDRDMA`.
+
+| Setup | Physical GPUs | Dispatch BW | Dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2n x 1g | l40/l41: GPU2 | 6.00 GB/s | 582.707 us | 7.00 GB/s | 547.618 us | 6.00 GB/s | 2603.500 us |
+| 2n x 2g | l40/l41: GPU2,3 | 7.00 GB/s | 927.808 us | 6.00 GB/s | 1041.000 us | 5.00 GB/s | 2879.500 us |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.00 GB/s | 1896.875 us | 5.00 GB/s | 2083.625 us | 5.00 GB/s | 2961.625 us |
+
+Raw logs:
+
+- `/tmp/deepep_gdr_2n1g.log`
+- `/tmp/deepep_gdr_2n2g.log`
+- `/tmp/deepep_gdr_2n4g.log`
+
 ### No direct P2P + no GPUDirect RDMA
 
 These runs add `NCCL_P2P_DISABLE=1`, `NCCL_SHM_DISABLE=0`, and

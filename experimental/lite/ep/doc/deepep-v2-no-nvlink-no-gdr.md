@@ -237,6 +237,25 @@ Notes:
 - The performance is intentionally conservative because no-GDR proxy GIN uses
   one QP and avoids multiple-reduction combine for correctness.
 
+### GPUDirect RDMA enabled inter-node results
+
+This mode keeps the same DeepEPv2 no-NVLink policy and GIN proxy backend, but
+enables GPUDirect RDMA by setting:
+
+```bash
+NCCL_NET_GDR_LEVEL=SYS
+NCCL_GIN_TYPE=2
+```
+
+The 2n x 1g debug log confirms NCCL network channels such as
+`via NET/IB/0/GDRDMA`. Values are averages across ranks.
+
+| Setup | Physical GPUs | Ranks | Dispatch BW | Dispatch latency | Expanded dispatch BW | Expanded dispatch latency | Cached dispatch BW | Cached dispatch latency | Combine BW | Combine latency | Reduced combine BW | Reduced combine latency | Log |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 2n x 1g | l40/l41: GPU2 | 2 | 6.00 GB/s | 582.707 us | 6.00 GB/s | 583.630 us | 6.00 GB/s | 581.384 us | 7.00 GB/s | 547.618 us | 6.00 GB/s | 2603.500 us | `/tmp/deepep_gdr_2n1g.log` |
+| 2n x 2g | l40/l41: GPU2,3 | 4 | 7.00 GB/s | 927.808 us | 7.00 GB/s | 927.287 us | 7.00 GB/s | 926.298 us | 6.00 GB/s | 1041.000 us | 5.00 GB/s | 2879.500 us | `/tmp/deepep_gdr_2n2g.log` |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 8 | 5.00 GB/s | 1896.875 us | 5.00 GB/s | 1911.750 us | 5.00 GB/s | 1906.375 us | 5.00 GB/s | 2083.625 us | 5.00 GB/s | 2961.625 us | `/tmp/deepep_gdr_2n4g.log` |
+
 ### No direct P2P + no GPUDirect RDMA intra-node results
 
 This mode adds:
@@ -312,5 +331,10 @@ bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
 
 bash run_multinode.sh --gpus-per-node 4 --gpu-list 0,1,2,3 \
   --master-port 34706 \
+  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
+
+# GPUDirect RDMA enabled inter-node mode:
+NCCL_NET_GDR_LEVEL=SYS bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
+  --master-port 35101 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
 ```
