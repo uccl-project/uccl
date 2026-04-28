@@ -392,11 +392,24 @@ dispatch_impl(
                 if (stored_dst_slot_idx >= 0 and dst_ptr == nullptr) {
 #ifdef EP_FORCE_HOST_WINDOW
                     if (host_buffer != nullptr) {
+                        // Host staging: single-thread copy GPU→host bounce buffer
+                        auto host_send_ptr = host_send_buffer.get_token_buffer(token_idx).get_base_ptr();
                         const int num_bytes = tma_buffer.get_num_bytes<false>();
-                        // Just do a no-op fence test — no actual copy
-                        // if (ptx::elect_one_sync()) __threadfence_system();
-                        gin.put<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                                        send_buffer_ptr, num_bytes, stored_dst_rank_idx);
+                        if (ptx::elect_one_sync()) {
+                            for (int b = 0; b < num_bytes; b += 16)
+                                *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_send_ptr) + b) =
+                                    *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(send_buffer_ptr) + b);
+                            __threadfence_system();
+                        }
+                        if (host_nccl_window != nullptr) {
+                            gin.put_via_host<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                                                     host_send_ptr, host_nccl_window, host_base,
+                                                     num_bytes, stored_dst_rank_idx);
+                        } else {
+                            // Fallback: host window not registered, use GPU send buffer for RDMA
+                            gin.put<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                                            send_buffer_ptr, num_bytes, stored_dst_rank_idx);
+                        }
                     } else
 #endif
                     {

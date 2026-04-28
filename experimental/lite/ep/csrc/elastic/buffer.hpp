@@ -114,7 +114,7 @@ public:
         workspace_layout_wo_expert = std::make_shared<layout::WorkspaceLayout>(
             workspace, nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks, 0);
         buffer = static_cast<uint8_t*>(workspace) + layout::WorkspaceLayout::get_num_bytes();
-        host_buffer = nullptr;  // DIAGNOSTIC: force nullptr to verify else-path works with this JIT cache
+        host_buffer = nccl_context->host_window_mapped_ptr;  // nullptr if not using host staging
         CUDA_RUNTIME_CHECK(cudaMemset(workspace, 0, layout::WorkspaceLayout::get_num_bytes()));
 
         // Allocate host workspaces

@@ -215,15 +215,20 @@ combine_impl(nv_bfloat16* x,
                             if (host_buffer != nullptr) {
                                 auto host_send_ptr = host_send_buffer.get_rank_buffer(src_rank_idx)
                                     .get_token_buffer(src_token_idx * kNumTopk + k).get_base_ptr();
-                                for (int b = ptx::get_lane_idx() * 16; b < kNumHiddenBytes; b += 32 * 16)
-                                    *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_send_ptr) + b) =
-                                        *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(send_token_buffer.get_base_ptr()) + b);
-                                __syncwarp();
-                                __threadfence_system();
-                                __syncwarp();
-                                // TODO: use put_via_host once host window registration issue is resolved
-                                gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
-                                                kNumHiddenBytes, src_rank_idx);
+                                if (ptx::elect_one_sync()) {
+                                    for (int b = 0; b < kNumHiddenBytes; b += 16)
+                                        *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_send_ptr) + b) =
+                                            *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(send_token_buffer.get_base_ptr()) + b);
+                                    __threadfence_system();
+                                }
+                                if (host_nccl_window != nullptr) {
+                                    gin.put_via_host<team_t>(token_buffer.get_base_ptr(), host_send_ptr,
+                                                             host_nccl_window, host_base,
+                                                             kNumHiddenBytes, src_rank_idx);
+                                } else {
+                                    gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
+                                                    kNumHiddenBytes, src_rank_idx);
+                                }
                             } else
 #endif
                             {
@@ -260,9 +265,14 @@ combine_impl(nv_bfloat16* x,
                     *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_master.get_base_ptr()) + b) =
                         *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(master_token_buffer.get_base_ptr()) + b);
                 __threadfence_system();
-                // TODO: use put_via_host once host window registration issue is resolved
-                gin.put<team_t>(dst_ptr, master_token_buffer.get_base_ptr(),
-                                num_bytes, src_rank_idx);
+                if (host_nccl_window != nullptr) {
+                    gin.put_via_host<team_t>(dst_ptr, host_master.get_base_ptr(),
+                                             host_nccl_window, host_base,
+                                             num_bytes, src_rank_idx);
+                } else {
+                    gin.put<team_t>(dst_ptr, master_token_buffer.get_base_ptr(),
+                                    num_bytes, src_rank_idx);
+                }
             } else
 #endif
             {

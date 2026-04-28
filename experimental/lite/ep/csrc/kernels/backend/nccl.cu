@@ -204,17 +204,11 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
         EP_HOST_ASSERT(get_env("EP_FORCE_NO_NVLINK", 0) != 0 and
                        "EP_FORCE_HOST_WINDOW currently requires EP_FORCE_NO_NVLINK=1");
         std::tie(host_window_raw_ptr, host_window_mapped_ptr) = alloc_host_window(host_bounce_size, alignment);
-        // Verify GPU can write to host bounce buffer
-        CUDA_RUNTIME_CHECK(cudaMemset(host_window_mapped_ptr, 0xAB, 256));
-        CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
-        if (static_cast<uint8_t*>(host_window_mapped_ptr)[0] == 0xAB)
-            printf("EP host bounce GPU write test (pre-register): OK (addr=%p)\n", host_window_mapped_ptr);
-        else
-            printf("EP host bounce GPU write test (pre-register): FAILED\n");
-        CUDA_RUNTIME_CHECK(cudaMemset(host_window_mapped_ptr, 0, host_bounce_size));
-        CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
-        // SKIP window registration — registering a second window breaks GIN operations
+        // Note: skip ncclCommWindowRegister for now — it interferes with GIN barrier signals
+        // Without registration, put_via_host falls back to regular gin.put from GPU
         // NCCL_CHECK(ncclCommWindowRegister(comm, host_window_raw_ptr, host_bounce_size, &host_window, NCCL_WIN_DEFAULT));
+        if (get_env("EP_BUFFER_DEBUG", 0))
+            printf("EP host bounce window allocated: %zu bytes at %p (no NCCL register)\n", host_bounce_size, host_window_mapped_ptr);
     }
 
     // Get LSA pointers for all LSA peers
