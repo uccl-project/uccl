@@ -143,6 +143,7 @@ run_test() {
     timeout 120 env UCCL_P2P_TRANSPORT="${transport}" \
         NCCL_DEBUG="${NCCL_DEBUG}" \
         NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}" \
+        NCCL_IB_DISABLE=1 \
         NCCL_COMM_TIMEOUT=30 \
         nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1
 
@@ -170,14 +171,14 @@ if [ $OVERALL_STATUS -ne 0 ]; then
     exit 1
 fi
 
-# sleep 2
+sleep 2
 
-# run_test "nccl" || OVERALL_STATUS=1
+run_test "nccl" || OVERALL_STATUS=1
 
-# if [ $OVERALL_STATUS -ne 0 ]; then
-#     echo "=== NCCL test FAILED ==="
-#     exit 1
-# fi
+if [ $OVERALL_STATUS -ne 0 ]; then
+    echo "=== NCCL test FAILED ==="
+    exit 1
+fi
 
 echo ""
 echo "=== All inter-node nixlbench tests PASSED ==="
