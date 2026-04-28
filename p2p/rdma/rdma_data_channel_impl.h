@@ -92,11 +92,8 @@ class RDMADataChannelImpl {
 };
 
 // Forward declarations for implementations
-#ifdef UCCL_P2P_USE_EFA
 class EFAChannelImpl;
-#else
 class IBChannelImpl;
-#endif
 
 // Factory function declaration (defined in rdma_data_channel.h after
 // including provider headers)

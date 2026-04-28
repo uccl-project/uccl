@@ -23,8 +23,6 @@
 #
 #   Build feature flags:
 #     USE_TCPX                      Enable TCPX transport (default "0")
-#     USE_EFA                       Enable EFA transport (default "0")
-#     USE_IB                        Enable InfiniBand transport (default "0")
 #     USE_TCP                       Enable TCP transport (default "0")
 #     USE_DIETGPU                   Enable DietGPU compression (default "0")
 #     USE_INTEL_RDMA_NIC            Enable Intel RDMA NIC / irdma driver (default "0")
