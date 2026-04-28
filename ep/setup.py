@@ -138,7 +138,7 @@ if __name__ == "__main__":
         "-Wno-attributes",
         "-Wno-unused-result",
         "-Wno-unused-function",
-        "-DNB_DOMAIN=uccl_ep"
+        "-DNB_DOMAIN=uccl_ep",
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
