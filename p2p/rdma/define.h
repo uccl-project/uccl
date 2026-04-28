@@ -924,7 +924,7 @@ enum class CompressStrategy {
 };
 
 inline CompressStrategy getCompressStrategyFromEnv() {
-  char const* env = std::getenv("P2P_COMPRESS_STRATEGY");
+  char const* env = std::getenv("UCCL_P2P_COMPRESS_STRATEGY");
 
   // default strategy
   if (!env || env[0] == '\0') {
