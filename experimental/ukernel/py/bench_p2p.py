@@ -23,34 +23,64 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    comm.pin_tensor(send_buf)
-    comm.pin_tensor(recv_buf)
+    send_buffer_id = 1
+    recv_buffer_id = 2
+    selected_transport = comm.peer_transport(peer)
+    if not comm.reg_rdma(send_buffer_id, send_buf, publish=True):
+        raise RuntimeError("reg_rdma(send) failed")
+    if not comm.reg_rdma(recv_buffer_id, recv_buf, publish=True):
+        raise RuntimeError("reg_rdma(recv) failed")
+    ipc_registered = False
+    if selected_transport == "ipc":
+        if not comm.reg_ipc(send_buffer_id, send_buf, publish=True):
+            raise RuntimeError("reg_ipc(send) failed")
+        if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
+            raise RuntimeError("reg_ipc(recv) failed")
+        if not comm.wait_ipc(peer, send_buffer_id):
+            raise RuntimeError("wait_ipc(peer send buffer) failed")
+        if not comm.wait_ipc(peer, recv_buffer_id):
+            raise RuntimeError("wait_ipc(peer recv buffer) failed")
+        ipc_registered = True
+
+    # Global synchronization after publishing transport metadata.
+    if not comm.barrier("p2p_resource_ready", 30000):
+        raise RuntimeError("ukernel barrier(p2p_resource_ready) failed")
+
+    def do_send():
+        # Sender writes into peer's recv buffer id.
+        comm.send(peer, send_buf, remote_buffer_id=recv_buffer_id, remote_offset=0)
+
+    def do_recv():
+        comm.recv(peer, recv_buf)
 
     rank = comm.rank
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)  # echo back
+            do_recv()
+            do_send()  # echo back
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)
+            do_recv()
+            do_send()
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            do_send()
+            do_recv()
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            do_send()
+            do_recv()
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
-    comm.unpin_tensor(send_buf)
-    comm.unpin_tensor(recv_buf)
+    if ipc_registered:
+        comm.unreg_ipc(send_buffer_id)
+        comm.unreg_ipc(recv_buffer_id)
+    comm.unreg_rdma(send_buffer_id)
+    comm.unreg_rdma(recv_buffer_id)
     return elapsed
 
 
@@ -114,18 +144,14 @@ def _recv_bytes(src: int) -> bytes:
     return bytes(t.tolist())
 
 
-def _exchange_uccl_metadata(local_metadata: bytes, local_gpu_idx: int, rank: int):
+def _exchange_uccl_metadata(local_metadata: bytes, rank: int):
     if rank == 0:
         _send_bytes(local_metadata, dst=1)
-        _send_i64(local_gpu_idx, dst=1)
         remote_metadata = _recv_bytes(src=1)
-        remote_gpu_idx = _recv_i64(src=1)
     else:
         remote_metadata = _recv_bytes(src=0)
-        remote_gpu_idx = _recv_i64(src=0)
         _send_bytes(local_metadata, dst=0)
-        _send_i64(local_gpu_idx, dst=0)
-    return remote_metadata, remote_gpu_idx
+    return remote_metadata
 
 
 def _exchange_local_gpu_idx(local_gpu_idx: int, rank: int) -> int:
@@ -304,18 +330,21 @@ def main() -> None:
                 assert ok, "[uccl] connect_local(1->0) failed"
         else:
             local_meta = bytes(uc_ep.get_metadata())
-            remote_meta, remote_gpu_idx = _exchange_uccl_metadata(local_meta, local_rank, rank)
+            _, _, _ = uccl_p2p.Endpoint.parse_metadata(local_meta)
+            remote_meta = _exchange_uccl_metadata(local_meta, rank)
             if rank == 0:
-                ip, port, _ = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_idx, remote_port=port)
+                ip, port, remote_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
+                remote_gpu_bdf = str(remote_gpu_bdf)
+                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_bdf, remote_port=port)
                 assert ok, "[uccl] connect(0->1) failed"
                 ok, _, _, uc_recv_conn_id = uc_ep.accept()
                 assert ok, "[uccl] accept(1->0) failed"
             else:
                 ok, _, _, uc_recv_conn_id = uc_ep.accept()
                 assert ok, "[uccl] accept(0->1) failed"
-                ip, port, _ = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_idx, remote_port=port)
+                ip, port, remote_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
+                remote_gpu_bdf = str(remote_gpu_bdf)
+                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_bdf, remote_port=port)
                 assert ok, "[uccl] connect(1->0) failed"
         dist.barrier()
         if rank == 0:

@@ -471,6 +471,8 @@ class Endpoint {
 
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
+  std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
+
  private:
   int local_gpu_idx_;       // CUDA device ordinal (within visible set)
   std::string gpu_bus_id_;  // PCI Bus ID string (cross-process identity)

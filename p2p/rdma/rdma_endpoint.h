@@ -35,8 +35,14 @@ class NICEndpoint {
     oob_client_ = std::make_shared<EpollClient>();
 
     allocator_ = std::make_shared<MemoryAllocator>();
-    assert(oob_server_->start());
-    assert(oob_client_->start());
+    if (unlikely(!oob_server_->start())) {
+      UCCL_LOG(ERROR) << "Failed to start OOB server";
+      throw std::runtime_error("Failed to start OOB server");
+    }
+    if (unlikely(!oob_client_->start())) {
+      UCCL_LOG(ERROR) << "Failed to start OOB client";
+      throw std::runtime_error("Failed to start OOB client");
+    }
     initCompressor();
   }
   // Destructor

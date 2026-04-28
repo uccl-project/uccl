@@ -44,13 +44,14 @@ bool enqueue_one_request_id(jring_t* ring, unsigned elem,
 }  // namespace
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
-                       int self_local_id)
+                       int self_local_id, int local_gpu_idx)
     : next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
       shm_control_(std::make_shared<ShmRingExchanger>(
           comm->rank(), comm->world_size(), std::move(ring_namespace),
           self_local_id)),
-      comm_(comm) {
+      comm_(comm),
+      local_gpu_idx_(local_gpu_idx) {
   send_task_ring_ =
       UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
   recv_task_ring_ =
@@ -61,7 +62,7 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
   recv_thread_ = std::thread([this] { recv_thread_func(); });
 
   int n_streams = 2;
-  GPU_RT_CHECK(gpuSetDevice(comm->local_gpu_idx()));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   ipc_streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(
@@ -91,11 +92,12 @@ void IpcAdapter::shutdown() {
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   for (auto& stream : ipc_streams_) {
     if (stream != nullptr) GPU_RT_CHECK(gpuStreamDestroy(stream));
   }
   ipc_streams_.clear();
+  clear_remote_handle_cache();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
   if (send_task_ring_) {
@@ -275,20 +277,20 @@ bool IpcAdapter::enqueue_request(unsigned request_id, IpcReqType type) {
 }
 
 unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
-                                uint64_t local_mr_id,
+                                uint32_t local_buffer_id,
                                 std::optional<RemoteSlice> remote_hint,
                                 BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
 
-  uint32_t remote_mem_id = 0;
+  uint32_t remote_buffer_id = 0;
   size_t remote_offset = 0;
   if (remote_hint.has_value()) {
-    remote_mem_id = remote_hint->mem_id;
+    remote_buffer_id = remote_hint->buffer_id;
     remote_offset = remote_hint->offset;
   }
   uint64_t match_seq = next_send_match_seq(peer_rank);
   RemoteSlice remote_slice{};
-  remote_slice.mem_id = remote_mem_id;
+  remote_slice.buffer_id = remote_buffer_id;
   remote_slice.offset = remote_offset;
   if (remote_hint.has_value()) {
     remote_slice.write = remote_hint->write;
@@ -312,9 +314,9 @@ unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
 }
 
 unsigned IpcAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
-                                uint64_t local_mr_id,
+                                uint32_t local_buffer_id,
                                 BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
 
   void* bounce_ptr = nullptr;
   std::string bounce_shm_name;
@@ -367,6 +369,62 @@ bool IpcAdapter::request_failed(unsigned id) {
 
 void IpcAdapter::release_request(unsigned id) { release_request_slot(id); }
 
+bool IpcAdapter::find_or_open_remote_ipc_handle(int remote_rank,
+                                                gpuIpcMemHandle_t const& handle,
+                                                size_t offset, size_t bytes,
+                                                int remote_gpu_idx,
+                                                IPCItem* out) {
+  if (out == nullptr) return false;
+  auto key = make_ipc_handle_key(handle);
+  {
+    std::lock_guard<std::mutex> lk(remote_handle_mu_);
+    auto rank_it = remote_handle_cache_.find(remote_rank);
+    if (rank_it != remote_handle_cache_.end()) {
+      auto it = rank_it->second.find(key);
+      if (it != rank_it->second.end()) {
+        *out = it->second;
+        return out->direct_ptr != nullptr;
+      }
+    }
+  }
+
+  void* base = nullptr;
+  gpuError_t err =
+      gpuIpcOpenMemHandle(&base, handle, gpuIpcMemLazyEnablePeerAccess);
+  if (err != gpuSuccess) {
+    return false;
+  }
+
+  IPCItem opened{};
+  opened.handle = handle;
+  opened.direct_ptr = base;
+  opened.base_offset = static_cast<uintptr_t>(offset);
+  opened.bytes = bytes;
+  opened.device_idx = remote_gpu_idx;
+  opened.valid = true;
+
+  {
+    std::lock_guard<std::mutex> lk(remote_handle_mu_);
+    remote_handle_cache_[remote_rank][key] = opened;
+  }
+  *out = opened;
+  return true;
+}
+
+void IpcAdapter::clear_remote_handle_cache() {
+  std::lock_guard<std::mutex> lk(remote_handle_mu_);
+  for (auto& rank_kv : remote_handle_cache_) {
+    for (auto& handle_kv : rank_kv.second) {
+      auto& item = handle_kv.second;
+      if (item.direct_ptr != nullptr) {
+        GPU_RT_CHECK(gpuIpcCloseMemHandle(item.direct_ptr));
+        item.direct_ptr = nullptr;
+      }
+    }
+  }
+  remote_handle_cache_.clear();
+}
+
 bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   if (!creq) return false;
   int to_rank = creq->peer_rank;
@@ -381,7 +439,7 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   auto dev_reset = UKernel::Transport::finally(
       [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
     uint64_t out_seq = 0;
     uint32_t status = 0;
@@ -415,12 +473,12 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       size_t copy_size =
           i == n_streams - 1 ? creq->size_bytes - i * chunk_size : chunk_size;
-      if (remote_gpu_idx == comm_->local_gpu_idx()) {
+      if (remote_gpu_idx == local_gpu_idx_) {
         GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
                                     gpuMemcpyDeviceToDevice, ipc_streams_[i]));
       } else {
         GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, remote_gpu_idx, chunk_src,
-                                        comm_->local_gpu_idx(), copy_size,
+                                        local_gpu_idx_, copy_size,
                                         ipc_streams_[i]));
       }
     }
@@ -450,7 +508,7 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
     IpcCacheWire relay_cache{};
     relay_cache.size = creq->size_bytes;
     relay_cache.is_send = 1;
-    relay_cache.remote_gpu_idx_ = comm_->local_gpu_idx();
+    relay_cache.remote_gpu_idx_ = local_gpu_idx_;
     relay_cache.offset = 0;
     relay_cache.use_bounce_buffer = 1;
     std::strncpy(relay_cache.bounce_shm_name, relay_bounce_shm_name.c_str(),
@@ -471,41 +529,41 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
     return true;
   };
 
-  // IPC direct-path safety rule:
-  // only attempt by-mem_id fast path when binding_version is explicit.
-  // Otherwise force handshake to avoid stale metadata reuse.
-  if (creq->remote_slice.mem_id != 0 &&
-      creq->remote_slice.binding_version != 0) {
+  if (creq->remote_slice.buffer_id != 0) {
     auto try_direct_by_remote_slice = [&](void** out_dst,
                                           int* out_remote_gpu) -> bool {
-      if (!comm_->resolve_ipc_buffer_pointer(
-              to_rank, creq->remote_slice.mem_id, creq->remote_slice.offset,
-              creq->size_bytes, out_dst, out_remote_gpu)) {
+      IPCItem remote_ipc{};
+      try {
+        remote_ipc = comm_->get_ipc(to_rank, creq->remote_slice.buffer_id);
+      } catch (...) {
         return false;
       }
-      bool can_use_direct_peer = !ipc_force_relay_enabled() &&
-                                 (*out_remote_gpu == comm_->local_gpu_idx());
+      if (!remote_ipc.valid || remote_ipc.direct_ptr == nullptr) {
+        return false;
+      }
+      if (creq->remote_slice.offset > remote_ipc.bytes ||
+          creq->size_bytes > remote_ipc.bytes - creq->remote_slice.offset) {
+        return false;
+      }
+      *out_dst = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(remote_ipc.direct_ptr) +
+          remote_ipc.base_offset + creq->remote_slice.offset);
+      *out_remote_gpu = remote_ipc.device_idx;
+      bool can_use_direct_peer =
+          !ipc_force_relay_enabled() && (*out_remote_gpu == local_gpu_idx_);
       if (!can_use_direct_peer && !ipc_force_relay_enabled() &&
           *out_remote_gpu >= 0) {
         int can_access_peer = 0;
-        GPU_RT_CHECK(gpuDeviceCanAccessPeer(
-            &can_access_peer, comm_->local_gpu_idx(), *out_remote_gpu));
+        GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                            *out_remote_gpu));
         can_use_direct_peer = (can_access_peer != 0);
       }
       return can_use_direct_peer;
     };
 
-    bool have_fresh_meta = comm_->ipc_has_fresh_remote_ipc_buffer(
-        to_rank, creq->remote_slice.mem_id, creq->remote_slice.binding_version);
-    if (!have_fresh_meta) {
-      have_fresh_meta = comm_->ipc_fetch_remote_ipc_buffer(
-          to_rank, creq->remote_slice.mem_id,
-          creq->remote_slice.binding_version);
-      if (!have_fresh_meta) {
-        comm_->ipc_invalidate_remote_ipc_buffer(to_rank,
-                                                creq->remote_slice.mem_id);
-      }
-    }
+    bool have_fresh_meta =
+        comm_->wait_ipc(to_rank, creq->remote_slice.buffer_id,
+                        /*timeout_ms=*/0);
 
     void* cached_dst = nullptr;
     int cached_remote_gpu = -1;
@@ -513,12 +571,12 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
         have_fresh_meta &&
         try_direct_by_remote_slice(&cached_dst, &cached_remote_gpu);
     if (can_use_direct && cached_dst != nullptr && cached_remote_gpu >= 0) {
-      bool can_use_direct_peer = !ipc_force_relay_enabled() &&
-                                 (cached_remote_gpu == comm_->local_gpu_idx());
+      bool can_use_direct_peer =
+          !ipc_force_relay_enabled() && (cached_remote_gpu == local_gpu_idx_);
       if (!can_use_direct_peer && !ipc_force_relay_enabled()) {
         int can_access_peer = 0;
-        GPU_RT_CHECK(gpuDeviceCanAccessPeer(
-            &can_access_peer, comm_->local_gpu_idx(), cached_remote_gpu));
+        GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                            cached_remote_gpu));
         can_use_direct_peer = (can_access_peer != 0);
       }
       if (can_use_direct_peer) {
@@ -567,12 +625,12 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
 
   bool can_use_direct_peer =
       !ipc_force_relay_enabled() &&
-      (got.remote_gpu_idx_ == static_cast<uint32_t>(comm_->local_gpu_idx()));
+      (got.remote_gpu_idx_ == static_cast<uint32_t>(local_gpu_idx_));
   if (!can_use_direct_peer) {
     int can_access_peer = 0;
     if (!ipc_force_relay_enabled()) {
       GPU_RT_CHECK(
-          gpuDeviceCanAccessPeer(&can_access_peer, comm_->local_gpu_idx(),
+          gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
                                  static_cast<int>(got.remote_gpu_idx_)));
       can_use_direct_peer = (can_access_peer != 0);
     }
@@ -582,21 +640,13 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
     return relay_via_bounce(seq);
   }
 
-  IPCItem ipc = comm_->get_remote_ipc_cache(to_rank, got.handle);
-  void* base = ipc.direct_ptr;
-  if (base == nullptr) {
-    GPU_RT_CHECK(
-        gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
-
-    IPCItem new_ipc{};
-    new_ipc.handle = got.handle;
-    new_ipc.direct_ptr = base;
-    new_ipc.base_offset = got.offset;
-    new_ipc.bytes = got.size;
-    new_ipc.device_idx = static_cast<int>(got.remote_gpu_idx_);
-    new_ipc.valid = true;
-    comm_->register_remote_ipc_cache(to_rank, got.handle, new_ipc);
+  IPCItem ipc{};
+  if (!find_or_open_remote_ipc_handle(to_rank, got.handle, got.offset, got.size,
+                                      static_cast<int>(got.remote_gpu_idx_),
+                                      &ipc)) {
+    return false;
   }
+  void* base = ipc.direct_ptr;
 
   void* dst_ptr =
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + got.offset);
@@ -670,7 +720,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
       return false;
     }
 
-    GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     void* actual_dst = creq->data();
     GPU_RT_CHECK(gpuMemcpy(actual_dst, relay_bounce_ptr, creq->size_bytes,
                            gpuMemcpyHostToDevice));
@@ -711,11 +761,11 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   }
   if (stop_.load(std::memory_order_acquire) || !got_cache_req) return false;
 
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   IpcCacheWire transfer_info{};
   transfer_info.size = creq->size_bytes;
   transfer_info.is_send = 0;
-  transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx();
+  transfer_info.remote_gpu_idx_ = local_gpu_idx_;
   void* actual_dst = creq->data();
 
   void* base = nullptr;
