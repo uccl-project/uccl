@@ -311,6 +311,16 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
+        # Default the "aggressive atomic" path to ON for AMD builds so the
+        # cross-GPU tail-pointer stores in intranode/internode dispatch and
+        # combine actually drain prior vector-memory writes (s_waitcnt vmcnt).
+        # Vanilla acquire/release sys-scope atomics on CDNA do not, which
+        # causes the combine receiver to spin-wait on a stale shared_tail
+        # forever. Users can still opt out with
+        # UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC=0 at runtime.
+        cxx_flags.append("-DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1")
+        nvcc_flags.append("-DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1")
+
         # ROCm root discovery for TheRock-style installs.
         # When ROCm comes from pip wheels (rocm-sdk), there is no /opt/rocm.
         # Honor explicit HIP_HOME first, else query rocm-sdk, else /opt/rocm.
