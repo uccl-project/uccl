@@ -98,9 +98,9 @@ bool fence_default_stream(int device, gpuStream_t stream) {
   if (gpuSetDevice(device) != gpuSuccess) return false;
 
   // Fence both legacy and per-thread default streams.
-  if (!record_and_wait(cudaStreamLegacy, stream)) return false;
-  if (cudaStreamPerThread != cudaStreamLegacy) {
-    if (!record_and_wait(cudaStreamPerThread, stream)) return false;
+  if (!record_and_wait(gpuStreamLegacy, stream)) return false;
+  if (gpuStreamPerThread != gpuStreamLegacy) {
+    if (!record_and_wait(gpuStreamPerThread, stream)) return false;
   }
   return true;
 #endif

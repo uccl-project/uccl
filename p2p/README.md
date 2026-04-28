@@ -60,14 +60,9 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 </details>
 
-To build AWS EFA support, you can: 
-```bash
-USE_EFA=1 bash build.sh cu12 p2p --install
-# or
-make -j USE_EFA=1 install
-```
+To enable AWS EFA support, you can do the same as above, and specify `UCCL_P2P_TRANSPORT=efa` during runtime. 
 
-To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md).
+To enable GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md).
 
 To build with DietGPU float compression support, you can:
 ```bash
