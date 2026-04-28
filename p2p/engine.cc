@@ -4,6 +4,7 @@
 #include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
+#include <cc/cc_state.h>
 #include <netinet/in.h>
 #include <chrono>
 #include <cstddef>
@@ -214,8 +215,12 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
     numa_node_ = tcp::get_tcp_numa_node_from_iface();
   } else {
+    // Enable the polling thread when congestion control is active.
+    bool cc_polling =
+        uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
+        uccl::cc::CongestionControlState::Mode::kNone;
     ep_ = std::shared_ptr<NICEndpoint>(
-        new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+        new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
