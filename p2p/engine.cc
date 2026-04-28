@@ -262,6 +262,13 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
 
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
+
+  // Save the current device before the loop so we can restore it afterwards.
+  // The loop calls gpuSetDevice(i) for each GPU, leaving the active device as
+  // GPU ngpus-1, which would corrupt gpu_bus_id_ and the advertised BDF.
+  int cur_dev = 0;
+  GPU_RT_CHECK(gpuGetDevice(&cur_dev));
+
   ipc_streams_.resize(ngpus);
   for (int i = 0; i < ngpus; ++i) {
     GPU_RT_CHECK(gpuSetDevice(i));
@@ -271,10 +278,9 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
           gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
     }
   }
+  GPU_RT_CHECK(gpuSetDevice(cur_dev));
 
   // Get the current GPU's BDF for metadata (needed before lazy engine init).
-  int cur_dev = 0;
-  GPU_RT_CHECK(gpuGetDevice(&cur_dev));
   char bdf_buf[64];
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
