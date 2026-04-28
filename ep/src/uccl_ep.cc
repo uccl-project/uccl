@@ -220,13 +220,13 @@ nb::object make_rdma_buffer_dlpack_capsule(void* ptr, std::size_t bytes,
   ctx->managed.deleter = rdma_buffer_dlpack_deleter;
   ctx->managed.dl_tensor.data = ptr;
   ctx->managed.dl_tensor.device = {
-      is_host_allocated ? kDLCPU
+    is_host_allocated ? kDLCPU
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-                        : kDLROCM,
+                      : kDLROCM,
 #else
-                        : kDLCUDA,
+                      : kDLCUDA,
 #endif
-      is_host_allocated ? 0 : device_index,
+    is_host_allocated ? 0 : device_index,
   };
   ctx->managed.dl_tensor.ndim = 1;
   ctx->managed.dl_tensor.dtype = {kDLUInt, 8, 1};
