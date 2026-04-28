@@ -2407,4 +2407,6 @@ NB_MODULE(ep, m) {
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
       .def_ro("thread_idx", &FifoProxy::thread_idx);
+
+  nb::set_leak_warnings(false);
 }
