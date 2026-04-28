@@ -305,6 +305,12 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
+        # Ensure AMD platform macro is available in pure C++ sources (e.g.
+        # rdma.cpp) that don't include HIP headers.  hipcc defines this
+        # automatically for .cu files, but the host compiler does not.
+        cxx_flags.append("-D__HIP_PLATFORM_AMD__")
+        nvcc_flags.append("-D__HIP_PLATFORM_AMD__")
+
         if int(os.getenv("DISABLE_BUILTIN_SHLF_SYNC", 1)):
             # Disable built-in warp shuffle sync will have better performance in internode_combine kernel
             cxx_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")

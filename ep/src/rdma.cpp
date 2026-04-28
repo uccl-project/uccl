@@ -3426,7 +3426,19 @@ static void post_atomic_operations_native_rdma(
   }
 }
 
-// Wrapper that selects implementation based on use_normal_mode
+// Wrapper that selects implementation based on use_normal_mode.
+//
+// AMD (non-EFA): native RDMA atomics (IBV_WR_ATOMIC_FETCH_AND_ADD).
+//   The internode RDMA channel head/tail counters require accumulating
+//   semantics (each chunk does an atomic_add of `num_tokens_to_issue`),
+//   which can't be emulated by RDMA Write because GPU resets the slots
+//   between dispatch/combine rounds without notifying the CPU.  Native
+//   atomics also avoid the cross-PCIe-agent ordering hazard between an
+//   NIC RDMA Write and a CPU fetch_add to GPU VRAM on MI300/MI355.
+// CUDA (non-EFA): RDMA_WRITE_WITH_IMM (zero-length write + IMM data).
+//   NVIDIA GPUs guarantee PCIe write ordering across agents, so the
+//   CPU-side fetch_add after CQE completion is safe.
+// EFA: RDMA_WRITE_WITH_IMM (same as CUDA path).
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
@@ -3435,7 +3447,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-#ifndef EFA
+#if !defined(EFA) && (defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__))
     post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
 #else
@@ -3443,7 +3455,7 @@ void post_atomic_operations(ProxyCtx& S,
                                        my_rank, thread_idx, acked_wrs);
 #endif
   } else {
-#ifndef EFA
+#if !defined(EFA) && (defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__))
     post_atomic_operations_fast_mode_native_rdma(
         S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
 #else
