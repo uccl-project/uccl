@@ -35,8 +35,8 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 ```bash
 cd $UCCL_HOME/p2p
 make clean
-make USE_TCPX=1 -j
-sudo make USE_TCPX=1 install
+make -j
+sudo make install
 sudo ldconfig
 ```
 
@@ -100,7 +100,7 @@ export NCCL_DEBUG_SUBSYS=ENV
 
 # Nixl plugin config
 export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl
-export UCCL_RCMODE=1
+export UCCL_P2P_TRANSPORT=tcpx
 # export NIXL_LOG_LEVEL=debug
 ```
 

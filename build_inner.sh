@@ -22,8 +22,6 @@
 #     UCCL_LOCAL_VERSION            Local version suffix appended to wheel filename (PEP 440)
 #
 #   Build feature flags:
-#     USE_TCPX                      Enable TCPX transport (default "0")
-#     USE_TCP                       Enable TCP transport (default "0")
 #     USE_DIETGPU                   Enable DietGPU compression (default "0")
 #     USE_INTEL_RDMA_NIC            Enable Intel RDMA NIC / irdma driver (default "0")
 #     PER_EXPERT_BATCHING           Enable per-expert batching (default "0")
@@ -179,14 +177,10 @@ build_p2p() {
   echo "[container] Copying P2P .so, collective.py and utils.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
-  if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
-    cp p2p/libuccl_p2p.so uccl/lib/
-    cp p2p/p2p.*.so uccl/
-    cp p2p/collective.py uccl/
-    cp p2p/utils.py uccl/
-  else
-    echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
-  fi
+  cp p2p/libuccl_p2p.so uccl/lib/
+  cp p2p/p2p.*.so uccl/
+  cp p2p/collective.py uccl/
+  cp p2p/utils.py uccl/
   rename_to_abi3 uccl
 }
 

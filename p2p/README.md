@@ -71,7 +71,7 @@ USE_DIETGPU=1 make -j install
 USE_DIETGPU=1 bash build.sh cu12 p2p --install
 ```
 
-DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
+DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `UCCL_P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
 
 ## Performance Benchmarks
 
@@ -90,6 +90,7 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx NCCL_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
+* You can specify `UCCL_P2P_TRANSPORT=ib|efa|nccl|tcp|tcpx` at runtime to choose different network backends. The default is `ib` that works for NVIDIA, Broadcom, AMD, and Intel RDMA NICs. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
 * To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
@@ -106,16 +107,17 @@ Notes:
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
 | UCCL_P2P_RDMA_DEV | RDMA devices forced to use (instead of auto-selecting based on PCIe affinity) | none (eg, `irdma-mkp0,irdma-mkp1`) |
-| P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
+| UCCL_P2P_TRANSPORT | Network backend to use at runtime | ib (others: efa/nccl/tcp/tcpx) |
+| UCCL_P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
 
-`P2P_COMPRESS_STRATEGY` accepted values:
+`UCCL_P2P_COMPRESS_STRATEGY` accepted values:
 * `none` / `off` / `0` — no compression
 * `split` / `split_only` — pipelined: transfer the uncompressed portion of the float data immediately, then ANS-encode and transfer the remainder
 * `encode` / `split_encode` / `full` / `1` — blocking: ANS-encode all float data first, then transfer everything once encoding is complete
 
 Example:
 ```bash
-P2P_COMPRESS_STRATEGY=encode torchrun --nnodes=2 --nproc_per_node=1 \
+UCCL_P2P_COMPRESS_STRATEGY=encode torchrun --nnodes=2 --nproc_per_node=1 \
     --node-rank=0 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
 ```
 
