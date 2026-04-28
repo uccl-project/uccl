@@ -119,7 +119,6 @@ public:
         void* buffer;
         void* workspace; void* mapped_host_workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
-        ncclWindow_t host_nccl_window; void* host_buffer;
 
         jit::LaunchArgs launch_args;
     };
@@ -179,8 +178,7 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
-                args.scaleup_rank_idx,
-                args.host_nccl_window, args.host_buffer));
+                args.scaleup_rank_idx));
         } else {
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
                 kernel, config,
@@ -196,8 +194,7 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
-                args.scaleout_rank_idx, args.scaleup_rank_idx,
-                args.host_nccl_window, args.host_buffer
+                args.scaleout_rank_idx, args.scaleup_rank_idx
             ));
         }
     }
@@ -238,9 +235,7 @@ static void launch_dispatch(void* x, void* sf,
                             const bool& cached_mode,
                             const bool& deterministic,
                             const bool& do_cpu_sync,
-                            const at::cuda::CUDAStream& stream,
-                            const ncclWindow_t& host_nccl_window = nullptr,
-                            void* host_buffer = nullptr) {
+                            const at::cuda::CUDAStream& stream) {
     // Cached mode does not support expert token counting
     if (cached_mode)
         EP_HOST_ASSERT(cumulative_local_expert_recv_stats == nullptr);
@@ -304,7 +299,6 @@ static void launch_dispatch(void* x, void* sf,
         .buffer = buffer,
         .workspace = workspace, .mapped_host_workspace = mapped_host_workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
-        .host_nccl_window = host_nccl_window, .host_buffer = host_buffer,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)};
     const auto code = DispatchRuntime::generate(args);

@@ -19,7 +19,6 @@ class ElasticBuffer {
     // Buffer registered for both scaleout and scaleup
     int64_t num_buffer_bytes;
     void* buffer;
-    void* host_buffer;  // Host bounce buffer for host-staging mode (nullptr if not used)
 
     // Destructor settings
     bool explicitly_destroy;
@@ -101,8 +100,7 @@ public:
         this->nccl_context = std::make_shared<nccl::NCCLSymmetricMemoryContext>(
             nccl_comm, num_ranks, rank_idx,
             layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes, kBufferAlignment,
-            allow_hybrid_mode, sl_idx, num_allocated_qps,
-            /* host_bounce_size */ num_buffer_bytes);
+            allow_hybrid_mode, sl_idx, num_allocated_qps);
 
         // Timeout
         this->num_cpu_timeout_secs = num_cpu_timeout_secs;
@@ -114,7 +112,6 @@ public:
         workspace_layout_wo_expert = std::make_shared<layout::WorkspaceLayout>(
             workspace, nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks, 0);
         buffer = static_cast<uint8_t*>(workspace) + layout::WorkspaceLayout::get_num_bytes();
-        host_buffer = nccl_context->host_window_mapped_ptr;  // nullptr if not using host staging
         CUDA_RUNTIME_CHECK(cudaMemset(workspace, 0, layout::WorkspaceLayout::get_num_bytes()));
 
         // Allocate host workspaces
@@ -938,8 +935,7 @@ public:
                         num_smem_bytes,
                         num_qps, num_gpu_timeout_cycles,
                         cached_mode, deterministic, do_cpu_sync,
-                        comm_stream,
-                        nccl_context->host_window, host_buffer);
+                        comm_stream);
 
         // Received token counters
         int num_recv_tokens = 0, num_expanded_tokens = 0;
@@ -1233,8 +1229,7 @@ public:
             num_sms, jit::device_runtime->get_num_smem_bytes(),
             num_channels,
             use_expanded_layout, allow_multiple_reduction,
-            comm_stream,
-            nccl_context->host_window, host_buffer);
+            comm_stream);
 
         // Allocate output tensors
         auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());

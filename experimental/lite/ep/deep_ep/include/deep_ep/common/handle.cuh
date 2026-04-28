@@ -8,12 +8,6 @@
 
 namespace deep_ep::elastic::handle {
 
-#ifdef EP_FORCE_HOST_WINDOW
-using EP_GIN_SEGMENT_TYPE = ncclGin_SegmentHostNuma;
-#else
-using EP_GIN_SEGMENT_TYPE = ncclGin_SegmentDevice;
-#endif
-
 struct NCCLGin {
 #define IS_TEAM_WORLD(code) if constexpr (std::is_same_v<team_t, ncclTeamTagWorld>) { code }
 #define IS_TEAM_LSA(code) if constexpr (std::is_same_v<team_t, ncclTeamTagLsa>) { code }
@@ -141,7 +135,7 @@ struct NCCLGin {
         gin.wait(request);
     }
 
-    template <typename team_t, typename coop_t = ncclCoopThread, typename segment_t = EP_GIN_SEGMENT_TYPE>
+    template <typename team_t, typename coop_t = ncclCoopThread, typename segment_t = ncclGin_SegmentDevice>
     __device__ __forceinline__
     void get(void* src_ptr, void* dst_ptr, const int& num_bytes, const int& src_rank_idx,
              const int& extra_options = 0) const {
@@ -184,8 +178,7 @@ struct NCCLGin {
     }
 
     template <typename team_t,
-              typename remote_action_t = ncclGin_None,
-              typename segment_t = EP_GIN_SEGMENT_TYPE>
+              typename remote_action_t = ncclGin_None>
     __device__ __forceinline__
     void put(void* recv_sym_ptr, void* send_sym_ptr, const int& num_bytes, const int& dst_rank_idx,
              const int& extra_options = 0,
@@ -205,34 +198,7 @@ struct NCCLGin {
                     ncclGin_None(),
                     cuda::thread_scope_thread,
                     cuda::thread_scope_device,
-                    ncclGinOptFlagsDefault | extra_options,
-                    segment_t());
-        });
-    }
-
-    // Put via host bounce window: source is in host_window, destination is in gpu nccl_window
-    template <typename team_t,
-              typename remote_action_t = ncclGin_None>
-    __device__ __forceinline__
-    void put_via_host(void* recv_sym_ptr, void* host_send_ptr,
-                      const ncclWindow_t& host_nccl_window, const uint64_t& host_base_ptr,
-                      const int& num_bytes, const int& dst_rank_idx,
-                      const int& extra_options = 0,
-                      const remote_action_t& remote_action = remote_action_t()) const {
-        IS_TEAM_WORLD_RAIL({
-            gin.put(TEAM_WORLD_RAIL(),
-                    dst_rank_idx,
-                    nccl_window, reinterpret_cast<int64_t>(recv_sym_ptr) - lsa_base_ptr,
-                    host_nccl_window, reinterpret_cast<int64_t>(host_send_ptr) - host_base_ptr,
-                    num_bytes,
-                    remote_action,
-                    ncclGin_None(),
-                    ncclCoopThread(),
-                    ncclGin_None(),
-                    cuda::thread_scope_thread,
-                    cuda::thread_scope_device,
-                    ncclGinOptFlagsDefault | extra_options,
-                    ncclGin_SegmentHostNuma());
+                    ncclGinOptFlagsDefault | extra_options);
         });
     }
 

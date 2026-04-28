@@ -25,7 +25,6 @@ struct NCCLSymmetricMemoryContext {
 private:
     // Can not use this unmapped pointer from outside
     void* raw_window_ptr;
-    bool use_host_window;
 
 public:
     // Global
@@ -48,11 +47,6 @@ public:
     void* mapped_window_ptr;
     std::vector<void*> nvl_window_ptrs;
 
-    // Host bounce window (for EP_FORCE_HOST_WINDOW host-staging mode)
-    ncclWindow_t host_window;
-    void* host_window_raw_ptr;
-    void* host_window_mapped_ptr;
-
     // Configs
     int num_allocated_qps;
 
@@ -60,8 +54,7 @@ public:
                                const int& num_ranks, const int& rank_idx,
                                const size_t& size, const size_t& alignment,
                                const bool& allow_hybrid_mode,
-                               const int& sl_idx, const int& num_allocated_qps,
-                               const size_t& host_bounce_size = 0);
+                               const int& sl_idx, const int& num_allocated_qps);
 
     // TODO: finish this with `explicit_destroy`
     // ~NCCLSymmetricMemoryContext();

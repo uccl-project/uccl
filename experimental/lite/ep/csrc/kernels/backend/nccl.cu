@@ -3,8 +3,6 @@
 #include <vector>
 #include <string>
 #include <optional>
-#include <algorithm>
-#include <utility>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <sstream>
@@ -17,67 +15,10 @@
 #include <deep_ep/common/exception.cuh>
 
 #include "api.cuh"
-#include "../../utils/lazy_driver.hpp"
 #include "../../utils/system.hpp"
 
 
 namespace deep_ep::nccl {
-
-namespace {
-
-size_t align_up(const size_t value, const size_t alignment) {
-    return ((value + alignment - 1) / alignment) * alignment;
-}
-
-std::pair<void*, void*> alloc_host_window(const size_t size, const size_t alignment) {
-    CUdevice device;
-    CUDA_DRIVER_CHECK(lazy_cuCtxGetDevice(&device));
-    int numa_node = 0;
-    const auto numa_result = lazy_cuDeviceGetAttribute(&numa_node, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, device);
-    if (numa_result != CUDA_SUCCESS or numa_node < 0)
-        numa_node = 0;
-
-    CUmemAllocationProp prop = {};
-    prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-    prop.location.type = CU_MEM_LOCATION_TYPE_HOST_NUMA;
-    prop.location.id = numa_node;
-    prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
-
-    size_t granularity = 0;
-    CUDA_DRIVER_CHECK(lazy_cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM));
-    const auto alloc_size = align_up(size, std::max(alignment, granularity));
-
-    CUmemGenericAllocationHandle handle;
-    CUDA_DRIVER_CHECK(lazy_cuMemCreate(&handle, alloc_size, &prop, 0));
-
-    void* ptr = nullptr;
-    CUDA_DRIVER_CHECK(lazy_cuMemAddressReserve(reinterpret_cast<CUdeviceptr*>(&ptr), alloc_size, granularity, 0, 0));
-    CUDA_DRIVER_CHECK(lazy_cuMemMap(reinterpret_cast<CUdeviceptr>(ptr), alloc_size, 0, handle, 0));
-
-    CUmemAccessDesc access_desc[2] = {};
-    access_desc[0].location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    access_desc[0].location.id = device;
-    access_desc[0].flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-    access_desc[1].location.type = CU_MEM_LOCATION_TYPE_HOST_NUMA;
-    access_desc[1].location.id = numa_node;
-    access_desc[1].flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-    CUDA_DRIVER_CHECK(lazy_cuMemSetAccess(reinterpret_cast<CUdeviceptr>(ptr), alloc_size, access_desc, 2));
-    CUDA_DRIVER_CHECK(lazy_cuMemRelease(handle));
-    std::memset(ptr, 0, alloc_size);
-    return {ptr, ptr};
-}
-
-void free_host_window(void* ptr) {
-    if (ptr == nullptr)
-        return;
-
-    size_t size = 0;
-    CUDA_DRIVER_CHECK(lazy_cuMemGetAddressRange_v2(nullptr, &size, reinterpret_cast<CUdeviceptr>(ptr)));
-    CUDA_DRIVER_CHECK(lazy_cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), size));
-    CUDA_DRIVER_CHECK(lazy_cuMemAddressFree(reinterpret_cast<CUdeviceptr>(ptr), size));
-}
-
-}  // namespace
 
 pybind11::bytearray get_local_unique_id() {
     ncclUniqueId unique_id;
@@ -127,9 +68,7 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
                                                        const int& num_ranks, const int& rank_idx,
                                                        const size_t& size, const size_t& alignment,
                                                        const bool& allow_hybrid_mode,
-                                                       const int& sl_idx, const int& num_allocated_qps,
-                                                       const size_t& host_bounce_size):
-    use_host_window(get_env<int>("EP_FORCE_HOST_WINDOW", 0) != 0),
+                                                       const int& sl_idx, const int& num_allocated_qps):
     rank_idx(rank_idx), num_ranks(num_ranks), num_allocated_qps(num_allocated_qps) {
     if (get_env("EP_BUFFER_DEBUG", 0)) {
         int nccl_version;
@@ -191,25 +130,12 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
     }
     is_scaleup_nvlink = num_scaleup_ranks == num_nvl_ranks;
 
-    // Create main GPU window (always GPU memory)
+    // Create window
+    // NOTES: `ncclCommWindowRegister` is collective: it internally calls bootstrapBarrier
+    // across all ranks, so no explicit barrier is needed after this call.
     NCCL_CHECK(ncclMemAlloc(&raw_window_ptr, size));
     NCCL_CHECK(ncclCommWindowRegister(comm, raw_window_ptr, size, &window, NCCL_WIN_DEFAULT));
     NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, actual_lsa_rank, &mapped_window_ptr));
-
-    // Create host bounce window (for host-staging mode) — separate registration
-    host_window = nullptr;
-    host_window_raw_ptr = nullptr;
-    host_window_mapped_ptr = nullptr;
-    if (use_host_window and host_bounce_size > 0) {
-        EP_HOST_ASSERT(get_env("EP_FORCE_NO_NVLINK", 0) != 0 and
-                       "EP_FORCE_HOST_WINDOW currently requires EP_FORCE_NO_NVLINK=1");
-        std::tie(host_window_raw_ptr, host_window_mapped_ptr) = alloc_host_window(host_bounce_size, alignment);
-        // Note: skip ncclCommWindowRegister for now — it interferes with GIN barrier signals
-        // Without registration, put_via_host falls back to regular gin.put from GPU
-        // NCCL_CHECK(ncclCommWindowRegister(comm, host_window_raw_ptr, host_bounce_size, &host_window, NCCL_WIN_DEFAULT));
-        if (get_env("EP_BUFFER_DEBUG", 0))
-            printf("EP host bounce window allocated: %zu bytes at %p (no NCCL register)\n", host_bounce_size, host_window_mapped_ptr);
-    }
 
     // Get LSA pointers for all LSA peers
     // TODO: check whether this is correct for network with RDMA
@@ -233,13 +159,7 @@ void* NCCLSymmetricMemoryContext::get_sym_ptr(void* ptr, const int& dst_rank_idx
 }
 
 void NCCLSymmetricMemoryContext::finalize() const {
-    // Deregister host bounce window
-    if (host_window) {
-        NCCL_CHECK(ncclCommWindowDeregister(comm, host_window));
-        free_host_window(host_window_raw_ptr);
-    }
-
-    // Deregister main GPU window and free buffer
+    // Deregister window and free buffer
     NCCL_CHECK(ncclCommWindowDeregister(comm, window));
     NCCL_CHECK(ncclMemFree(raw_window_ptr));
 
