@@ -32,7 +32,8 @@ combine_impl(nv_bfloat16* x,
              const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
              void* buffer, void* workspace,
              const int rank_idx,
-             int num_reduced_tokens) {
+             int num_reduced_tokens,
+             const ncclWindow_t host_nccl_window, void* host_buffer) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);
@@ -56,6 +57,12 @@ combine_impl(nv_bfloat16* x,
         token_layout, kNumRanks,
         kNumMaxTokensPerRank * (kDoExpandedSend ? kNumTopk : 1),
         recv_buffer.get_buffer_end_ptr());
+    // Host bounce send buffer for host-staging mode
+    const auto host_send_buffer = layout::BufferLayout<false>(
+        token_layout, kNumRanks,
+        kNumMaxTokensPerRank * (kDoExpandedSend ? kNumTopk : 1),
+        host_buffer ? static_cast<uint8_t*>(host_buffer) + (static_cast<uint8_t*>(recv_buffer.get_buffer_end_ptr()) - static_cast<uint8_t*>(buffer)) : nullptr);
+    const uint64_t host_base = host_buffer ? reinterpret_cast<uint64_t>(host_buffer) : 0;
 
     // Init TMA
     ptx::arrival_phase phase = 0;
@@ -204,8 +211,25 @@ combine_impl(nv_bfloat16* x,
                             ptx::fence_acq_rel_sys();
 
                             // Issue RDMA
-                            gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
-                                            kNumHiddenBytes, src_rank_idx);
+#ifdef EP_FORCE_HOST_WINDOW
+                            if (host_buffer != nullptr) {
+                                auto host_send_ptr = host_send_buffer.get_rank_buffer(src_rank_idx)
+                                    .get_token_buffer(src_token_idx * kNumTopk + k).get_base_ptr();
+                                for (int b = ptx::get_lane_idx() * 16; b < kNumHiddenBytes; b += 32 * 16)
+                                    *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_send_ptr) + b) =
+                                        *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(send_token_buffer.get_base_ptr()) + b);
+                                __syncwarp();
+                                __threadfence_system();
+                                __syncwarp();
+                                // TODO: use put_via_host once host window registration issue is resolved
+                                gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
+                                                kNumHiddenBytes, src_rank_idx);
+                            } else
+#endif
+                            {
+                                gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
+                                                kNumHiddenBytes, src_rank_idx);
+                            }
                         }
                     }
                     __syncwarp();
@@ -228,8 +252,23 @@ combine_impl(nv_bfloat16* x,
             ptx::tma_store_wait();
             const auto dst_ptr = recv_buffer.get_rank_buffer(kUseRankLayout ? rank_idx : src_topk_idx)
                 .get_token_buffer(src_token_idx).get_base_ptr();
-            gin.put<team_t>(dst_ptr, master_token_buffer.get_base_ptr(),
-                            master_token_buffer.get_num_bytes<false>(), src_rank_idx);
+#ifdef EP_FORCE_HOST_WINDOW
+            if (host_buffer != nullptr) {
+                auto host_master = host_send_buffer.get_rank_buffer(src_rank_idx).get_token_buffer(src_token_idx);
+                const int num_bytes = master_token_buffer.get_num_bytes<false>();
+                for (int b = 0; b < num_bytes; b += 16)
+                    *reinterpret_cast<int4*>(static_cast<uint8_t*>(host_master.get_base_ptr()) + b) =
+                        *reinterpret_cast<const int4*>(static_cast<const uint8_t*>(master_token_buffer.get_base_ptr()) + b);
+                __threadfence_system();
+                // TODO: use put_via_host once host window registration issue is resolved
+                gin.put<team_t>(dst_ptr, master_token_buffer.get_base_ptr(),
+                                num_bytes, src_rank_idx);
+            } else
+#endif
+            {
+                gin.put<team_t>(dst_ptr, master_token_buffer.get_base_ptr(),
+                                master_token_buffer.get_num_bytes<false>(), src_rank_idx);
+            }
         }
     }
 

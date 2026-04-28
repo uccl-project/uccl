@@ -40,7 +40,8 @@ dispatch_impl(
     const int sf_token_stride, const int sf_hidden_stride,
     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window, void* buffer,
     void* workspace, void* mapped_host_workspace,
-    const int rank_idx
+    const int rank_idx,
+    const ncclWindow_t host_nccl_window, void* host_buffer
 ) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumRanks == 0, "Invalid number of experts or ranks");
@@ -262,6 +263,10 @@ dispatch_impl(
             math::advance_ptr<int>(smem, kNumSmemBytesForNotify)).get_rank_buffer(dispatch_warp_idx).get_token_buffer(0);
         auto recv_buffer = layout::BufferLayout<false>(token_layout, kNumRanks, kNumMaxTokensPerRank, buffer);
         auto send_buffer = layout::BufferLayout<false>(token_layout, 1, kNumMaxTokensPerRank, recv_buffer.get_buffer_end_ptr());
+        // Host bounce send buffer: same layout as send_buffer but in host-pinned memory
+        auto host_send_buffer = layout::BufferLayout<false>(token_layout, 1, kNumMaxTokensPerRank,
+            host_buffer ? static_cast<uint8_t*>(host_buffer) + (static_cast<uint8_t*>(recv_buffer.get_buffer_end_ptr()) - static_cast<uint8_t*>(buffer)) : nullptr);
+        const uint64_t host_base = host_buffer ? reinterpret_cast<uint64_t>(host_buffer) : 0;
         recv_buffer = recv_buffer.get_rank_buffer(rank_idx);
 
         // Init TMA
@@ -385,8 +390,19 @@ dispatch_impl(
 
                 // NOTES: we should skip the NVLink accessible ranks
                 if (stored_dst_slot_idx >= 0 and dst_ptr == nullptr) {
-                    gin.put<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                                    send_buffer_ptr, tma_buffer.get_num_bytes<false>(), stored_dst_rank_idx);
+#ifdef EP_FORCE_HOST_WINDOW
+                    if (host_buffer != nullptr) {
+                        const int num_bytes = tma_buffer.get_num_bytes<false>();
+                        // Just do a no-op fence test — no actual copy
+                        // if (ptx::elect_one_sync()) __threadfence_system();
+                        gin.put<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                                        send_buffer_ptr, num_bytes, stored_dst_rank_idx);
+                    } else
+#endif
+                    {
+                        gin.put<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                                        send_buffer_ptr, tma_buffer.get_num_bytes<false>(), stored_dst_rank_idx);
+                    }
                 }
                 __syncwarp();
             }

@@ -38,6 +38,7 @@ public:
         void* workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
         int num_reduced_tokens;
+        ncclWindow_t host_nccl_window; void* host_buffer;
 
         jit::LaunchArgs launch_args;
     };
@@ -90,7 +91,8 @@ static void __instantiate_kernel() {{
                                                      args.nccl_dev_comm, args.nccl_window,
                                                      args.buffer, args.workspace,
                                                      args.scaleup_rank_idx,
-                                                     args.num_reduced_tokens));
+                                                     args.num_reduced_tokens,
+                                                     args.host_nccl_window, args.host_buffer));
         } else {
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(kernel, config,
                                                      args.x, args.topk_weights,
@@ -101,7 +103,8 @@ static void __instantiate_kernel() {{
                                                      args.nccl_dev_comm, args.nccl_window,
                                                      args.buffer, args.workspace,
                                                      args.scaleout_rank_idx, args.scaleup_rank_idx,
-                                                     args.num_reduced_tokens));
+                                                     args.num_reduced_tokens,
+                                                     args.host_nccl_window, args.host_buffer));
         }
     }
 };
@@ -129,7 +132,9 @@ static void* launch_combine(void* x,
                             const int& num_sms, const int& num_smem_bytes,
                             const int& num_channels,
                             const bool& use_expanded_layout, const bool& allow_multiple_reduction,
-                            const at::cuda::CUDAStream& stream) {
+                            const at::cuda::CUDAStream& stream,
+                            const ncclWindow_t& host_nccl_window = nullptr,
+                            void* host_buffer = nullptr) {
     // Maximize shared memory utilization
     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
     auto num_warps = std::min(num_smem_bytes / token_layout.get_num_bytes<true>(), 32);
@@ -170,6 +175,7 @@ static void* launch_combine(void* x,
         .buffer = buffer, .workspace = workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
         .num_reduced_tokens = num_reduced_tokens,
+        .host_nccl_window = host_nccl_window, .host_buffer = host_buffer,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)
     };

@@ -127,7 +127,8 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
                                                        const int& num_ranks, const int& rank_idx,
                                                        const size_t& size, const size_t& alignment,
                                                        const bool& allow_hybrid_mode,
-                                                       const int& sl_idx, const int& num_allocated_qps):
+                                                       const int& sl_idx, const int& num_allocated_qps,
+                                                       const size_t& host_bounce_size):
     use_host_window(get_env<int>("EP_FORCE_HOST_WINDOW", 0) != 0),
     rank_idx(rank_idx), num_ranks(num_ranks), num_allocated_qps(num_allocated_qps) {
     if (get_env("EP_BUFFER_DEBUG", 0)) {
@@ -190,19 +191,30 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
     }
     is_scaleup_nvlink = num_scaleup_ranks == num_nvl_ranks;
 
-    // Create window
-    // NOTES: `ncclCommWindowRegister` is collective: it internally calls bootstrapBarrier
-    // across all ranks, so no explicit barrier is needed after this call.
-    if (use_host_window) {
+    // Create main GPU window (always GPU memory)
+    NCCL_CHECK(ncclMemAlloc(&raw_window_ptr, size));
+    NCCL_CHECK(ncclCommWindowRegister(comm, raw_window_ptr, size, &window, NCCL_WIN_DEFAULT));
+    NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, actual_lsa_rank, &mapped_window_ptr));
+
+    // Create host bounce window (for host-staging mode) — separate registration
+    host_window = nullptr;
+    host_window_raw_ptr = nullptr;
+    host_window_mapped_ptr = nullptr;
+    if (use_host_window and host_bounce_size > 0) {
         EP_HOST_ASSERT(get_env("EP_FORCE_NO_NVLINK", 0) != 0 and
                        "EP_FORCE_HOST_WINDOW currently requires EP_FORCE_NO_NVLINK=1");
-        std::tie(raw_window_ptr, mapped_window_ptr) = alloc_host_window(size, alignment);
-    } else {
-        NCCL_CHECK(ncclMemAlloc(&raw_window_ptr, size));
-    }
-    NCCL_CHECK(ncclCommWindowRegister(comm, raw_window_ptr, size, &window, NCCL_WIN_DEFAULT));
-    if (not use_host_window) {
-        NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, actual_lsa_rank, &mapped_window_ptr));
+        std::tie(host_window_raw_ptr, host_window_mapped_ptr) = alloc_host_window(host_bounce_size, alignment);
+        // Verify GPU can write to host bounce buffer
+        CUDA_RUNTIME_CHECK(cudaMemset(host_window_mapped_ptr, 0xAB, 256));
+        CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+        if (static_cast<uint8_t*>(host_window_mapped_ptr)[0] == 0xAB)
+            printf("EP host bounce GPU write test (pre-register): OK (addr=%p)\n", host_window_mapped_ptr);
+        else
+            printf("EP host bounce GPU write test (pre-register): FAILED\n");
+        CUDA_RUNTIME_CHECK(cudaMemset(host_window_mapped_ptr, 0, host_bounce_size));
+        CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+        // SKIP window registration — registering a second window breaks GIN operations
+        // NCCL_CHECK(ncclCommWindowRegister(comm, host_window_raw_ptr, host_bounce_size, &host_window, NCCL_WIN_DEFAULT));
     }
 
     // Get LSA pointers for all LSA peers
@@ -227,13 +239,15 @@ void* NCCLSymmetricMemoryContext::get_sym_ptr(void* ptr, const int& dst_rank_idx
 }
 
 void NCCLSymmetricMemoryContext::finalize() const {
-    // Deregister window and free buffer
-    NCCL_CHECK(ncclCommWindowDeregister(comm, window));
-    if (use_host_window) {
-        free_host_window(raw_window_ptr);
-    } else {
-        NCCL_CHECK(ncclMemFree(raw_window_ptr));
+    // Deregister host bounce window
+    if (host_window) {
+        NCCL_CHECK(ncclCommWindowDeregister(comm, host_window));
+        free_host_window(host_window_raw_ptr);
     }
+
+    // Deregister main GPU window and free buffer
+    NCCL_CHECK(ncclCommWindowDeregister(comm, window));
+    NCCL_CHECK(ncclMemFree(raw_window_ptr));
 
     // Destroy device communicator
     NCCL_CHECK(ncclDevCommDestroy(comm, &dev_comm));

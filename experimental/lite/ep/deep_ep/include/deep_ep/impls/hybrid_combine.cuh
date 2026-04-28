@@ -39,7 +39,8 @@ hybrid_combine_impl(nv_bfloat16* x,
                     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
                     void* buffer, void* workspace,
                     const int scaleout_rank_idx, const int scaleup_rank_idx,
-                    int num_reduced_tokens) {
+                    int num_reduced_tokens,
+                    const ncclWindow_t host_nccl_window, void* host_buffer) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);

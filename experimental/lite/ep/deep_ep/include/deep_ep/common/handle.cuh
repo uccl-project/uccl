@@ -210,6 +210,32 @@ struct NCCLGin {
         });
     }
 
+    // Put via host bounce window: source is in host_window, destination is in gpu nccl_window
+    template <typename team_t,
+              typename remote_action_t = ncclGin_None>
+    __device__ __forceinline__
+    void put_via_host(void* recv_sym_ptr, void* host_send_ptr,
+                      const ncclWindow_t& host_nccl_window, const uint64_t& host_base_ptr,
+                      const int& num_bytes, const int& dst_rank_idx,
+                      const int& extra_options = 0,
+                      const remote_action_t& remote_action = remote_action_t()) const {
+        IS_TEAM_WORLD_RAIL({
+            gin.put(TEAM_WORLD_RAIL(),
+                    dst_rank_idx,
+                    nccl_window, reinterpret_cast<int64_t>(recv_sym_ptr) - lsa_base_ptr,
+                    host_nccl_window, reinterpret_cast<int64_t>(host_send_ptr) - host_base_ptr,
+                    num_bytes,
+                    remote_action,
+                    ncclGin_None(),
+                    ncclCoopThread(),
+                    ncclGin_None(),
+                    cuda::thread_scope_thread,
+                    cuda::thread_scope_device,
+                    ncclGinOptFlagsDefault | extra_options,
+                    ncclGin_SegmentHostNuma());
+        });
+    }
+
     template <typename team_t, typename dtype_t>
     __device__ __forceinline__
     void put_value(dtype_t* sym_ptr, const dtype_t& value, const int& dst_rank_idx,
