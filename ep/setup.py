@@ -9,6 +9,7 @@ import site
 from pathlib import Path
 
 import torch
+import torch.utils.cpp_extension as torch_cpp_extension
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 from setuptools import Command
@@ -300,6 +301,14 @@ if __name__ == "__main__":
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
+
+
+        hipcc =  torch.utils.cpp_extension._join_rocm_home('bin', 'hipcc')
+        os.environ["CC"] = hipcc
+        os.environ["CXX"] = hipcc
+        
+        nvcc_flags.append("-fgpu-rdc")
+        extra_link_args.append("-fgpu-rdc")
 
         # Disable SM90 features on AMD
         cxx_flags.append("-DDISABLE_SM90_FEATURES")

@@ -31,7 +31,9 @@ struct SharedData {
   uint32_t barrier[MAX_NUM_BARRIERS];
 };
 
-__shared__ SharedData shared_data;
+// Keep this header-defined `__shared__` variable inline so `-fgpu-rdc` builds
+// do not emit a strong host-side shadow symbol from every translation unit.
+inline __shared__ SharedData shared_data;
 
 __device__ __forceinline__ void barrier_init(int barrier_id) {
   shared_data.barrier[barrier_id] = 0;
