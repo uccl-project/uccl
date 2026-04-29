@@ -69,12 +69,25 @@ We omit results for larger EP configurations for the time being, but encourage i
 
 ### L4 / no-NVLink / no-GPUDirect RDMA mode
 
-This lite-EP port carries an SM89 fallback path for NVIDIA L4 and can run DeepEPv2 through NCCL GIN proxy mode without NVLink, IBGDA, UCCL-EP, or GPUDirect RDMA. Set `EP_FORCE_NO_NVLINK=1`, `NCCL_NET_GDR_LEVEL=0`, and `NCCL_GIN_TYPE=2` to use this path. In this mode the buffer forces direct non-hybrid communication, disables multiple-reduction combine, and clamps data traffic to one GIN QP because NCCL GIN `flush` only releases source buffers and does not by itself order remote completion across multiple QPs.
+This lite-EP port carries an SM89 fallback path for NVIDIA L4 and can run
+DeepEPv2 without NVLink or GPUDirect RDMA through a UCCL-EP style CPU proxy
+transport. Set `EP_USE_UCCL_PROXY=1`, `UCCL_FORCE_NO_GDR=1`,
+`EP_FORCE_NO_NVLINK=1`, and `NCCL_NET_GDR_LEVEL=0` to use this path. NCCL is
+still loaded for communicator/bootstrap compatibility, but EP data movement uses
+host-pinned mapped windows, GPU-to-CPU D2H command rings, CPU memcpy for
+same-node peers, and ibverbs RDMA writes from CPU proxy threads for remote-node
+peers. In this mode the buffer forces direct non-hybrid communication, disables
+multiple-reduction combine, and clamps data traffic to one QP.
 
-The checked l40/l41 launcher uses physical GPU2/GPU3 on both nodes:
+The checked l40/l41 launcher can run one or four physical GPUs per node:
 
 ```bash
-bash run_multinode.sh --gpus-per-node 2 \
+bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
+  --python-bin /home/yangz/nfs/miniconda3/bin/python3 \
+  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only"
+
+bash run_multinode.sh --gpus-per-node 4 --gpu-list 0,1,2,3 \
+  --python-bin /home/yangz/nfs/miniconda3/bin/python3 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only"
 ```
 

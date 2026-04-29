@@ -139,13 +139,22 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
     const int& sm_idx, const int& thread_idx) {
     const auto global_warp_idx = sm_idx * kNumWarps + (thread_idx / 32);
     const int& rank_idx = (std::is_same_v<team_t, ncclTeamTagWorld>) ? scaleup_rank_idx : scaleout_rank_idx;
+#ifdef EP_USE_UCCL_PROXY
+    const int num_qps = gin_handle.uccl_num_d2h_channel_addrs;
+#else
     const int num_qps = kNumQPs == kFlushAllAllocatedQPs ? gin_handle.nccl_dev_comm.ginContextCount : kNumQPs;
+#endif
 
     // Flush all QPs by all SMs (only needed for release semantics)
     if constexpr (kFlushStores) {
+#ifdef EP_USE_UCCL_PROXY
+        if (global_warp_idx == 0)
+            gin_handle.gin.flush(ncclCoopWarp());
+#else
         for (int i = global_warp_idx; i < num_qps; i += kNumSMs * kNumWarps) {
             ncclGin(gin_handle.nccl_dev_comm, i, NCCL_GIN_RESOURCE_SHARING_CTA).flush(ncclCoopWarp());
         }
+#endif
         // NOTES: we can not use `kNumSMs` to judge, as maybe only part of the SMs will call this function
         (gridDim.x > 1) ? cooperative_groups::this_grid().sync() : __syncthreads();
     }
@@ -153,13 +162,33 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
     if (sm_idx == 0) {
         // Use QP 0 to do barrier
         const auto gin = handle::NCCLGin(gin_handle.nccl_dev_comm, gin_handle.nccl_window, 0,
-                                         NCCL_GIN_RESOURCE_SHARING_CTA,
-                                         reinterpret_cast<void*>(gin_handle.lsa_base_ptr));
+                                          NCCL_GIN_RESOURCE_SHARING_CTA,
+                                          reinterpret_cast<void*>(gin_handle.lsa_base_ptr),
+#ifdef EP_USE_UCCL_PROXY
+                                          gin_handle.uccl_d2h_channel_addrs,
+                                          gin_handle.uccl_num_d2h_channel_addrs,
+                                          rank_idx,
+                                          gin_handle.uccl_signal_shadow
+#else
+                                          nullptr, 0, -1
+#endif
+        );
         const auto send_shadow_ptr = gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(rank_idx));
+#ifdef EP_USE_UCCL_PROXY
+        if (thread_idx == 0)
+            ++(*send_shadow_ptr);
+        __syncthreads();
+        for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
+            const auto send_target = *send_shadow_ptr;
+            if (i != rank_idx)
+                gin.put_value<team_t>(workspace.get_gin_barrier_signal_ptr(rank_idx), send_target, i);
+        }
+#else
         const auto send_target = ++(*send_shadow_ptr);
         for (int i = thread_idx; i < kNumRanks; i += kNumThreads)
             if (i != rank_idx)
                 gin.put_value<team_t>(workspace.get_gin_barrier_signal_ptr(rank_idx), send_target, i);
+#endif
         __syncthreads();
 
         for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
@@ -170,7 +199,11 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
             const auto target = ++(*shadow_ptr);
 
             timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
+#ifdef EP_USE_UCCL_PROXY
+                const auto signal = uccl::ld_cv_u64(workspace.get_gin_barrier_signal_ptr(i));
+#else
                 const auto signal = ptx::ld_acquire_sys<uint64_t>(workspace.get_gin_barrier_signal_ptr(i));
+#endif
                 if (signal >= target)
                     return true;
 

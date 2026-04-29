@@ -29,10 +29,13 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 combine_impl(nv_bfloat16* x,
              float* topk_weights,
              int* src_metadata, int* psum_num_recv_tokens_per_scaleup_rank,
-             const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
-             void* buffer, void* workspace,
-             const int rank_idx,
-             int num_reduced_tokens) {
+              const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
+              void* buffer, void* workspace,
+               const int rank_idx,
+               int num_reduced_tokens,
+               const uint64_t* uccl_d2h_channel_addrs,
+               const int uccl_num_d2h_channel_addrs,
+               uint64_t* uccl_signal_shadow) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);
@@ -71,7 +74,9 @@ combine_impl(nv_bfloat16* x,
     // Gin handle
     // We treat each warp as a "channel"
     const auto [qp_idx, sharing_mode] = comm::get_qp_mode<kNumSMs, kNumQPs, kNumWarps>(sm_idx, warp_idx);
-    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace);
+    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
+                                     uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
+                                     uccl_signal_shadow);
 
     // Full barrier to ensure the remote buffer is available
     const auto workspace_layout = layout::WorkspaceLayout(workspace, 1, kNumRanks, kNumExperts);

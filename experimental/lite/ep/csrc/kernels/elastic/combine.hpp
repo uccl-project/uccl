@@ -38,6 +38,9 @@ public:
         void* workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
         int num_reduced_tokens;
+        const uint64_t* uccl_d2h_channel_addrs;
+        int uccl_num_d2h_channel_addrs;
+        uint64_t* uccl_signal_shadow;
 
         jit::LaunchArgs launch_args;
     };
@@ -87,10 +90,13 @@ static void __instantiate_kernel() {{
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(kernel, config,
                                                      args.x, args.topk_weights,
                                                      args.src_metadata, args.psum_num_recv_tokens_per_scaleup_rank,
-                                                     args.nccl_dev_comm, args.nccl_window,
-                                                     args.buffer, args.workspace,
-                                                     args.scaleup_rank_idx,
-                                                     args.num_reduced_tokens));
+                                                      args.nccl_dev_comm, args.nccl_window,
+                                                      args.buffer, args.workspace,
+                                                       args.scaleup_rank_idx,
+                                                       args.num_reduced_tokens,
+                                                       args.uccl_d2h_channel_addrs,
+                                                       args.uccl_num_d2h_channel_addrs,
+                                                       args.uccl_signal_shadow));
         } else {
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(kernel, config,
                                                      args.x, args.topk_weights,
@@ -127,9 +133,12 @@ static void* launch_combine(void* x,
                             const int& scaleout_rank_idx, const int& scaleup_rank_idx,
                             const bool& is_scaleup_nvlink,
                             const int& num_sms, const int& num_smem_bytes,
-                            const int& num_channels,
-                            const bool& use_expanded_layout, const bool& allow_multiple_reduction,
-                            const at::cuda::CUDAStream& stream) {
+                             const int& num_channels,
+                              const bool& use_expanded_layout, const bool& allow_multiple_reduction,
+                              const uint64_t* uccl_d2h_channel_addrs,
+                              const int& uccl_num_d2h_channel_addrs,
+                              uint64_t* uccl_signal_shadow,
+                              const at::cuda::CUDAStream& stream) {
     // Maximize shared memory utilization
     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
     auto num_warps = std::min(num_smem_bytes / token_layout.get_num_bytes<true>(), 32);
@@ -170,6 +179,9 @@ static void* launch_combine(void* x,
         .buffer = buffer, .workspace = workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
         .num_reduced_tokens = num_reduced_tokens,
+        .uccl_d2h_channel_addrs = uccl_d2h_channel_addrs,
+        .uccl_num_d2h_channel_addrs = uccl_num_d2h_channel_addrs,
+        .uccl_signal_shadow = uccl_signal_shadow,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)
     };

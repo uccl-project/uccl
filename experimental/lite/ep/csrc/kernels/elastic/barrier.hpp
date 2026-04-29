@@ -24,6 +24,9 @@ public:
         ncclWindow_t nccl_window;
         void* workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
+        const uint64_t* uccl_d2h_channel_addrs;
+        int uccl_num_d2h_channel_addrs;
+        uint64_t* uccl_signal_shadow;
 
         jit::LaunchArgs launch_args;
     };
@@ -47,18 +50,23 @@ static void __instantiate_kernel() {{
         EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
             kernel, config,
             args.nccl_dev_comm, args.nccl_window,
-            args.workspace, args.scaleout_rank_idx, args.scaleup_rank_idx
+            args.workspace, args.scaleout_rank_idx, args.scaleup_rank_idx,
+            args.uccl_d2h_channel_addrs, args.uccl_num_d2h_channel_addrs,
+            args.uccl_signal_shadow
         ));
     }
 };
 
 static void launch_barrier(const ncclDevComm_t& nccl_dev_comm, const ncclWindow_t& nccl_window,
-                           void* workspace,
-                           const int& scaleout_rank_idx, const int& scaleup_rank_idx,
-                           const int& num_scaleout_ranks, const int& num_scaleup_ranks,
-                           const int64_t& num_timeout_cycles,
-                           const bool& is_scaleup_nvlink,
-                           const at::cuda::CUDAStream& stream) {
+                            void* workspace,
+                            const int& scaleout_rank_idx, const int& scaleup_rank_idx,
+                            const int& num_scaleout_ranks, const int& num_scaleup_ranks,
+                            const int64_t& num_timeout_cycles,
+                             const bool& is_scaleup_nvlink,
+                             const uint64_t* uccl_d2h_channel_addrs,
+                             const int& uccl_num_d2h_channel_addrs,
+                             uint64_t* uccl_signal_shadow,
+                             const at::cuda::CUDAStream& stream) {
     // Number of threads equals to the number of ranks
     constexpr auto kNumThreads = 512;
 
@@ -73,6 +81,9 @@ static void launch_barrier(const ncclDevComm_t& nccl_dev_comm, const ncclWindow_
         .nccl_window = nccl_window,
         .workspace = workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
+        .uccl_d2h_channel_addrs = uccl_d2h_channel_addrs,
+        .uccl_num_d2h_channel_addrs = uccl_num_d2h_channel_addrs,
+        .uccl_signal_shadow = uccl_signal_shadow,
         .launch_args = jit::LaunchArgs(num_sms, kNumThreads, 0, 1, true)};
     const auto code = BarrierRuntime::generate(args);
     const auto runtime = jit::compiler->build("barrier", code);

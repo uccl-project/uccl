@@ -77,6 +77,11 @@ public:
             flags += " -DDISABLE_AGGRESSIVE_PTX_INSTRS";
         if (get_env("EP_FORCE_NO_NVLINK", 0))
             flags += " -DEP_FORCE_NO_NVLINK";
+        if (get_env("EP_USE_UCCL_PROXY", 0) or get_env("UCCL_FORCE_NO_GDR", 0))
+            flags += fmt::format(" -DEP_USE_UCCL_PROXY -DEP_UCCL_PROXY_TRANSPORT_VERSION=24 -I {}/../csrc/uccl/include -I {}/../../../../include",
+                                 library_root_path.c_str(), library_root_path.c_str());
+        if (get_env("EP_UCCL_DEVICE_TRACE", 0))
+            flags += " -DEP_UCCL_DEVICE_TRACE";
     }
 
     virtual ~Compiler() = default;

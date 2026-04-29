@@ -108,6 +108,8 @@ if __name__ == '__main__':
     sources = ['csrc/python_api.cpp']
     include_dirs = existing_include_dirs([
         f'{current_dir}/deep_ep/include',
+        f'{current_dir}/csrc/uccl/include',
+        f'{current_dir}/../../../include',
         f'{current_dir}/third-party/fmt/include',
         f'{sys.prefix}/include',
         '/usr/local/cuda/include/cccl',
@@ -124,6 +126,15 @@ if __name__ == '__main__':
 
     # CUDA driver sources
     sources.extend(['csrc/kernels/backend/cuda_driver.cu'])
+
+    # UCCL CPU proxy runtime for no-GPUDirect-RDMA EP transport
+    sources.extend([
+        'csrc/uccl/src/common.cpp',
+        'csrc/uccl/src/proxy.cpp',
+        'csrc/uccl/src/rdma.cpp',
+        'csrc/uccl/src/uccl_proxy.cpp',
+    ])
+    extra_link_args.extend(['-libverbs', '-lpthread'])
 
     if disable_sm90_features:
         cxx_flags.append('-DDISABLE_SM90_FEATURES')

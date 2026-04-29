@@ -40,7 +40,10 @@ dispatch_impl(
     const int sf_token_stride, const int sf_hidden_stride,
     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window, void* buffer,
     void* workspace, void* mapped_host_workspace,
-    const int rank_idx
+    const int rank_idx,
+    const uint64_t* uccl_d2h_channel_addrs,
+    const int uccl_num_d2h_channel_addrs,
+    uint64_t* uccl_signal_shadow
 ) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumRanks == 0, "Invalid number of experts or ranks");
@@ -67,7 +70,9 @@ dispatch_impl(
     // We treat each warp as a "channel"
     const auto [qp_idx, sharing_mode] = comm::get_qp_mode<kNumSMs, kNumQPs, kNumDispatchWarps, (kNumNotifyWarps > 0)>(
         sm_idx, warp_idx - kNumNotifyWarps, warp_idx < kNumNotifyWarps);
-    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace);
+    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
+                                     uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
+                                     uccl_signal_shadow);
 
     // Barrier without TMA store flush, without prologue grid sync
     comm::gpu_barrier<kIsScaleupNVLink, 1, kNumRanks,
@@ -187,8 +192,14 @@ dispatch_impl(
             for (int i = thread_idx; i < kNumRanks + kNumExperts; i += kNumNotifyThreads) {
                 comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
                     // NOTES: the global memory type has 64 bits
+#ifdef EP_USE_UCCL_PROXY
+                    const auto count = static_cast<int>(static_cast<int64_t>(
+                        uccl::ld_cv_u64(reinterpret_cast<uint64_t*>(
+                            workspace_layout.get_scaleup_rank_expert_count_ptr<false>() + i))));
+#else
                     const auto count = static_cast<int>(
                         ptx::ld_volatile<int64_t>(workspace_layout.get_scaleup_rank_expert_count_ptr<false>() + i));
+#endif
                     const auto decoded = math::encode_decode_positive(count);
                     if (math::is_decoded_positive_ready(decoded)) {
                         workspace_layout.get_scaleup_rank_expert_count_ptr<false>()[i] = 0;

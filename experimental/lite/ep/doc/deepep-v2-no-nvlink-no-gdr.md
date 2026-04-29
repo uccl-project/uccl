@@ -1,208 +1,71 @@
-# DeepEPv2 no-NVLink/no-GPUDirect RDMA migration notes
+# DeepEPv2 UCCL proxy no-GPUDirect-RDMA notes
 
-This document records the changes made to migrate `experimental/lite/ep` from the
-old UCCL-EP/DeepEPv1-style implementation to DeepEPv2 PR605's NCCL GIN
-`ElasticBuffer` path, and the extra adaptations needed to make it run on L4
-without NVLink, IBGDA, UCCL-EP, or GPUDirect RDMA.
+This document records the validated no-GPUDirect-RDMA path for
+`experimental/lite/ep`, the DeepEPv2 Lite `ElasticBuffer` codebase. The current
+implementation ports the UCCL-EP CPU proxy architecture into DeepEPv2. It does
+not use NCCL GIN for EP data movement.
 
-The important conclusion is that NCCL GIN made the migration possible, but the
-upstream DeepEPv2 code still needed runtime and kernel changes for this
-environment. It was not a macro-only change.
+## Runtime mode
 
-## Runtime mode used on L4
-
-The validated mode uses:
+Validated L4 mode:
 
 ```bash
+EP_USE_UCCL_PROXY=1
+UCCL_FORCE_NO_GDR=1
 EP_FORCE_NO_NVLINK=1
 NCCL_NET_GDR_LEVEL=0
-NCCL_GIN_TYPE=2
 DISABLE_SM90_FEATURES=1
 EP_TEST_DISABLE_FP8=1
 EP_NCCL_ROOT_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/deps_nccl_2304/nvidia/nccl
 LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/torch-stubs/libtorch_nvshmem.so
+LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${LD_LIBRARY_PATH:-}
 ```
 
-- `NCCL_GIN_TYPE=2` is NCCL GIN proxy mode. The default GDAKI mode timed out or
-  wedged in this no-GPUDirect setup.
-- `NCCL_NET_GDR_LEVEL=0` disables GPUDirect RDMA.
-- `EP_FORCE_NO_NVLINK=1` makes the runtime treat all peer GPU traffic as
-  network/proxy GIN traffic rather than NVLink/LSA traffic.
-- `DISABLE_SM90_FEATURES=1` enables SM89 fallbacks for NVIDIA L4.
-- `EP_TEST_DISABLE_FP8=1` keeps the validation path BF16. FP8 can be revisited
-  separately; the migration target here was DeepEPv2 correctness in no-GDR mode.
+NCCL remains present for communicator/bootstrap compatibility. With
+`EP_USE_UCCL_PROXY=1`, DeepEPv2 dispatch/combine uses UCCL D2H rings plus CPU
+proxy threads for the EP transport.
 
-## File-level modification summary
+## Architecture
 
-| Area | Files | What changed | Why it is needed |
-| --- | --- | --- | --- |
-| DeepEPv2 import | `deep_ep/`, `csrc/`, `tests/elastic/`, `tests/utils/`, `LICENSE.deepep_v2`, `README.md` | Added DeepEPv2 PR605 package/runtime/tests and removed the old UCCL-EP source, wrappers, benches, and preserved-doc copy. | Replaces the old `uccl.ep` path with DeepEPv2 `ElasticBuffer`. |
-| Build/install | `setup.py`, `Makefile` | Builds `deep_ep._C`, removes the legacy NVSHMEM build branch, supports NCCL 2.30.4 root/rpath, defaults SM89 fallback for L4, and adds a no-GDR test target. | Upstream needs NCCL host/device GIN APIs from 2.30.4; bundled PyTorch NCCL was insufficient. |
-| NCCL runtime backend | `csrc/kernels/backend/nccl.cu`, `api.cuh`, `lazy_driver.hpp` | Reworked communicator/window setup, no-NVLink logical domains, proxy GIN requirements, optional host-window experiment, and lazy CUDA driver symbols. | Upstream assumes LSA/NVLink domains and GDR-like behavior; L4 no-GDR needs a pure GIN proxy path. |
-| GIN address helper | `deep_ep/include/deep_ep/common/handle.cuh` | Added explicit local base pointer support, no-NVLink accessibility rules, and `put_value`. | GIN offsets must be relative to the NCCL-registered window, not an unavailable remote LSA pointer. |
-| Workspace layout | `deep_ep/include/deep_ep/common/layout.cuh` | Reserved per-rank GIN barrier slots in workspace. | Needed for a barrier that works with proxy GIN without relying on NCCL indexed signals. |
-| Barrier | `deep_ep/include/deep_ep/common/comm.cuh` | Replaced failing GIN signal/readSignal barrier with `put_value` into peer workspace + local polling. | NCCL GIN proxy did not reliably deliver/read the upstream signal barrier cross-node in no-GDR mode. |
-| Dispatch/combine kernels | `deep_ep/include/deep_ep/impls/dispatch.cuh`, `combine.cuh`, `barrier.cuh`, `hybrid_dispatch.cuh`, `hybrid_combine.cuh` | Construct `NCCLGin` with explicit workspace base, add GIN flush/fence ordering where send buffers are consumed by proxy GIN, and keep final barriers. | Prevents proxy GIN from reading stale GPU send-buffer contents and ensures offsets are correct. |
-| SM89 fallback | `deep_ep/include/deep_ep/common/ptx.cuh`, `csrc/jit/launch_runtime.hpp`, generated kernels | Added fallbacks for SM90-only `elect.sync`, TMA/mbarrier, PDL, cluster launch, and register allocation paths. | L4 is SM89; upstream PR605 targets Hopper/SM90-style device instructions. |
-| Runtime policy | `deep_ep/buffers/elastic.py`, `tests/elastic/test_ep.py` | `EP_FORCE_NO_NVLINK=1` forces non-hybrid direct mode, disables multiple-reduction combine, and clamps to one GIN QP; tests mirror those settings. | Multiple QPs plus proxy GIN `flush` were not sufficient to order remote completion; single QP preserves correctness. |
-| Legacy cleanup | `src/`, `include/`, `bench/`, `deep_ep_wrapper/`, `csrc/legacy/`, `csrc/kernels/legacy/`, `deep_ep/buffers/legacy.py`, `csrc/kernels/backend/nvshmem.cu` | Removed the old UCCL-EP implementation and the unused DeepEP V1/NVSHMEM build path from this lite tree. | Keeps the package focused on the validated DeepEPv2/NCCL GIN path and avoids stale code paths that are no longer tested. |
-| Launcher | `run_multinode.sh` | Uses l40+l41, physical GPU list, NCCL 2.30.4, proxy GIN by default, no GDR, and process-exit workaround. | Provides reproducible multi-node runs on the target machines. |
-| JIT cache | `csrc/jit/compiler.hpp` | Adds cache invalidation flags and waits for cache visibility after concurrent atomic rename on NFS. | Multi-rank JIT compilation on NFS can otherwise lose the winner's generated cubin briefly. |
+- DeepEPv2 communication/workspace windows are allocated in POSIX shared
+  host-pinned memory.
+- CUDA maps those host windows so GPU kernels can access them over PCIe.
+- GPU kernels post WRITE, PUT_VALUE, and QUIET commands into host-mapped D2H
+  rings.
+- CPU proxy threads poll the rings and execute host memcpy for same-node peers
+  or ibverbs RDMA writes for remote-node peers.
+- CPU proxy completion advances ring acknowledgement state; GPU kernels wait on
+  that state before reusing send buffers.
+- Same-rank operations are bypassed locally; same-node peer operations still use
+  the CPU proxy/shared-memory path required by the no-GDR design.
 
-## Code changes that are not just macros
+## Main integration points
 
-### 1. No-NVLink topology and registered-window mapping
+| Area | Files | Purpose |
+| --- | --- | --- |
+| Python bootstrap | `deep_ep/buffers/elastic.py` | Enables UCCL mode, exchanges peer metadata with `all_gather_object`, and creates per-run shared-memory IDs. |
+| C++ runtime | `csrc/elastic/buffer.hpp` | Allocates host-pinned mapped windows, starts/stops proxy threads, and passes UCCL context into kernels. |
+| UCCL runtime | `csrc/uccl/` | Provides shared-buffer allocation, D2H rings, CPU proxy threads, RDMA setup, and ibverbs operations. |
+| Device transport | `deep_ep/include/deep_ep/common/handle.cuh` | Implements the UCCL transport shim for `put`, `put_value`, and `flush/quiet`. |
+| Barrier | `deep_ep/include/deep_ep/common/comm.cuh` | Uses UCCL `put_value` plus host-mapped polling for DeepEPv2 barriers. |
+| Kernels | `deep_ep/include/deep_ep/impls/{dispatch,combine,barrier}.cuh` and `csrc/kernels/elastic/*.hpp` | Threads UCCL D2H addresses and signal state through DeepEPv2 dispatch/combine/barrier kernels. |
+| Build/JIT | `setup.py`, `csrc/jit/compiler.hpp` | Builds UCCL proxy sources and adds UCCL JIT cache keys/includes. |
+| Launcher | `run_multinode.sh` | Runs l40+l41 tests with UCCL no-GDR defaults. |
 
-`csrc/kernels/backend/nccl.cu` changes the physical/logical domain model when
-`EP_FORCE_NO_NVLINK=1`:
+## Important fixes made during validation
 
-- `get_physical_domain_size()` returns `(num_ranks, 1)`, i.e. every rank is a
-  non-NVLink peer.
-- The runtime sets `num_nvl_ranks=1`, `nvl_rank_idx=0`,
-  `num_rdma_ranks=num_ranks`, and `rdma_rank_idx=rank_idx`.
-- In non-hybrid mode it maps all ranks into one scale-up domain:
-  `num_scaleout_ranks=1`, `num_scaleup_ranks=num_ranks`.
-- `nvl_window_ptrs` contains only the local mapped window pointer in no-NVLink
-  mode, so peer access goes through GIN instead of LSA pointer translation.
-
-This is a real runtime behavior change. Without it, upstream DeepEPv2 tries to
-interpret local LSA/NVLink domains that do not exist on L4 PCIe-only machines.
-
-### 2. NCCL GIN proxy communicator setup
-
-The same backend queries NCCL communicator properties and configures
-`ncclDevCommRequirements_t`. For proxy GIN it intentionally does not set a
-custom `ginQueueDepth`, because proxy mode rejects that field. The launcher
-defaults `NCCL_GIN_TYPE=2`, selecting NCCL's proxy backend.
-
-This was necessary because the default NCCL selection on these nodes chose a
-GDAKI-like path that assumes GPU-direct signaling/progress behavior and timed
-out in no-GDR runs.
-
-### 3. Explicit GIN base pointer and offset calculation
-
-`common/handle.cuh` extends `NCCLGin` with an optional `local_base_ptr`.
-All GIN `put`, `get`, `putValue`, and VA-signal offsets are computed as:
-
-```cpp
-reinterpret_cast<uint64_t>(ptr) - lsa_base_ptr
-```
-
-where `lsa_base_ptr` is now explicitly set to the local registered workspace
-base when constructed by dispatch/combine/barrier kernels.
-
-This matters because in no-NVLink mode `ncclGetLsaPointer()` is not a valid way
-to derive a remote-accessible base for all peers. The registered window offset
-must match the pointer passed to `ncclCommWindowRegister`.
-
-### 4. No-NVLink peer accessibility
-
-`NCCLGin::is_nvlink_accessible()` is changed under `EP_FORCE_NO_NVLINK` so only
-the local rank is considered symmetric-pointer accessible. Every other peer
-returns `nullptr` and falls back to GIN put/get.
-
-That prevents accidental local-store/TMA bypass to peer memory when no NVLink
-or peer LSA mapping exists.
-
-### 5. Proxy-safe GIN barrier
-
-Upstream DeepEPv2 used GIN signal/readSignal-style barriers. On l40/l41 with
-proxy GIN and `NCCL_NET_GDR_LEVEL=0`, those barriers either timed out or failed
-to order subsequent kernels.
-
-The new barrier in `common/comm.cuh`:
-
-1. Flushes the data QP(s) for source-buffer reuse.
-2. On SM0, uses QP0 to write a monotonically increasing per-rank value into each
-   peer's registered workspace via `gin.put_value`.
-3. Polls local `workspace.get_gin_barrier_signal_ptr(peer_rank)` with
-   `ld_acquire_sys` until every peer's value reaches the expected generation.
-
-`common/layout.cuh` reserves `kNumMaxRanks * sizeof(uint64_t)` for these
-barrier slots and shifts the following workspace sections.
-
-This is one of the key code changes: it avoids relying on NCCL proxy signal
-delivery and instead uses normal GIN put-value traffic into the same registered
-window as the data path.
-
-### 6. Dispatch/combine send-buffer ordering
-
-In `dispatch.cuh` and `combine.cuh`, before issuing GIN puts from GPU send
-buffers, the kernels now wait for the local TMA/global stores and add a
-system-scope fence:
-
-```cpp
-ptx::tma_store_wait();
-ptx::fence_acq_rel_sys();
-```
-
-This is needed because NCCL proxy GIN has a CPU/proxy progress path. Without the
-fence, the proxy can observe the descriptor and consume the source buffer before
-all GPU writes to that buffer are globally visible.
-
-### 7. Single-QP conservative policy
-
-NCCL documents GIN `flush` as making source buffers safe to reuse; it does not
-guarantee that remote memory for all preceding puts on all QPs is settled before
-a later barrier on a different QP. In practice, multi-QP proxy GIN produced
-combine correctness mismatches.
-
-Therefore `deep_ep/buffers/elastic.py` forces:
-
-- `num_allocated_qps = 1`
-- `get_theoretical_num_qps(...) = 1`
-- explicit dispatch/combine `num_qps = 1`
-
-whenever `EP_FORCE_NO_NVLINK=1`.
-
-This is a throughput tradeoff, not a functional requirement of DeepEPv2 in
-general. It is the conservative correctness setting for this no-GDR proxy path.
-
-### 8. Disabling multiple-reduction combine in no-GDR proxy mode
-
-The upstream multiple-reduction path was correct in normal DeepEPv2 environments
-but produced reduced-combine mismatches in this no-GDR proxy setup. The fallback
-sets `allow_multiple_reduction=False`, which uses the single-reduction/expanded
-send path. This increases communication volume but keeps BF16 combine results
-bitwise-correct against the test reference.
-
-Both `ElasticBuffer` construction and `tests/elastic/test_ep.py` override the
-setting when `EP_FORCE_NO_NVLINK=1`, so benchmark commands cannot accidentally
-run the unsafe path.
-
-### 9. SM89 fallback implementation
-
-The upstream kernels use SM90 features such as `elect.sync`, TMA/mbarrier, PDL,
-cluster launch attributes, and warpgroup register allocation controls. For L4:
-
-- `ptx::elect_one_sync()` falls back to lane 0 election.
-- TMA load/store helpers fall back to ordinary byte/global copies.
-- mbarrier helpers become no-ops or phase flips.
-- PDL calls are compiled out under `DISABLE_SM90_FEATURES`.
-- JIT launch disables cluster dimensions and PDL when `DISABLE_SM90_FEATURES`
-  is set.
-
-This is code-level behavior, even though it is selected by a compile-time macro.
-
-### 10. Host-window experiment kept off
-
-`EP_FORCE_HOST_WINDOW` adds an experimental CPU-backed CUDA VMM allocation path
-for the registered NCCL window. It is default off because full EP data buffers
-backed by host NUMA memory caused illegal-address failures on L4. The code is
-left as an explicit experiment, not part of the validated path.
-
-## Macro/config-only changes
-
-These are mostly selectors or cache invalidators; they do not by themselves make
-the no-GDR mode correct:
-
-- `DISABLE_SM90_FEATURES`: selects the SM89-compatible code paths.
-- `EP_FORCE_NO_NVLINK`: selects no-NVLink runtime policy and JIT code paths.
-- `DEEP_EP_*` JIT signature defines: invalidate stale cached cubins after the
-  barrier/base/fence changes.
-- `EP_SUPPRESS_NCCL_CHECK`: allows running with PyTorch already having loaded a
-  different NCCL while `LD_PRELOAD` supplies NCCL 2.30.4. The real requirement is
-  still to preload/link NCCL 2.30.4 for GIN host APIs.
+- Removed legacy DeepEPv1 rank-pair filtering based on `MAX_NUM_GPUS`; DeepEPv2
+  world ranks must connect according to actual node/IP topology.
+- Routed self-target WRITE/PUT_VALUE/ATOMIC commands to local/shared-memory
+  handling instead of posting RDMA to self.
+- Avoided full-warp shuffle helpers in UCCL `put`, because DeepEPv2 can call
+  transport puts inside divergent top-k branches.
+- Allowed each active deduplicated lane to post its own payload command, which
+  is required for `topk > 1`.
+- Added unique per-run POSIX shared-memory IDs and non-creator size waits to
+  avoid stale or partially initialized shared-memory mappings.
+- UCCL `quiet` posts and waits across all D2H rings so GPU kernels do not reuse
+  send buffers before CPU/verbs completion.
 
 ## Benchmark matrix
 
@@ -212,42 +75,22 @@ Configuration:
 - Test: `tests/elastic/test_ep.py --test-first-only`
 - Correctness checks: enabled (`--skip-check` was not used)
 - Precision path: BF16 (`EP_TEST_DISABLE_FP8=1`)
-- Runtime: `EP_FORCE_NO_NVLINK=1`, `NCCL_GIN_TYPE=2`
+- Runtime: `EP_USE_UCCL_PROXY=1`, `UCCL_FORCE_NO_GDR=1`,
+  `EP_FORCE_NO_NVLINK=1`, `NCCL_NET_GDR_LEVEL=0`
 - QPs: forced to `1/1`
-- Cells are `DeepEPv2 SU BW / legacy BW @ latency`. The legacy numerator is
-  the old DeepEP low-latency benchmark numerator: `valid_topk * hidden * 2` for
-  BF16. Values are averages across ranks.
-- `PCIe P2P` means `NCCL_P2P_DISABLE` is not set. `No PCIe P2P (host staging)`
-  means `NCCL_P2P_DISABLE=1`, `NCCL_SHM_DISABLE=0`, and
-  `NCCL_NET_DISABLE_INTRA=1`.
-- The 4g cases necessarily use GPU0-3.
-
-### PCIe P2P + GPUDirect RDMA
+- Cells are `DeepEPv2 SU BW / legacy BW @ latency`, averaged across ranks. The
+  legacy numerator is the old DeepEP low-latency benchmark numerator:
+  `valid_topk * hidden * 2` for BF16.
 
 | Setup | Physical GPUs | Dispatch | Combine | Reduced combine | Log |
 | --- | --- | ---: | ---: | ---: | --- |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.76 GB/s @ 615.406 us | 6.33 / 25.31 GB/s @ 577.792 us | 5.66 / 5.65 GB/s @ 2587.500 us | `/tmp/deepep_pcie_p2p_gdr_1n2g.log` |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.66 / 16.81 GB/s @ 862.835 us | 6.46 / 14.25 GB/s @ 1017.750 us | 4.21 / 4.20 GB/s @ 3454.250 us | `/tmp/deepep_pcie_p2p_gdr_1n4g.log` |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.09 GB/s @ 582.707 us | 6.68 / 26.70 GB/s @ 547.618 us | 5.63 / 5.62 GB/s @ 2603.500 us | `/tmp/deepep_gdr_2n1g.log` |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.16 / 7.53 GB/s @ 1896.875 us | 4.68 / 6.85 GB/s @ 2083.625 us | 4.83 / 4.82 GB/s @ 2961.625 us | `/tmp/deepep_gdr_2n4g.log` |
+| 1n x 2g | l40: GPU2,3 | 0.80 / 3.17 GB/s @ 4614.500 us | 0.49 / 1.95 GB/s @ 7491.000 us | 0.72 / 0.72 GB/s @ 20348.000 us | `/tmp/uccl_1n2g_final_perf.log` |
+| 1n x 4g | l40: GPU0,1,2,3 | 1.12 / 2.47 GB/s @ 5875.250 us | 0.39 / 0.86 GB/s @ 16896.250 us | 0.30 / 0.30 GB/s @ 47774.750 us | `/tmp/uccl_1n4g_final_perf.log` |
+| 2n x 1g | l40/l41: GPU2 | 0.64 / 2.54 GB/s @ 5756.500 us | 0.39 / 1.58 GB/s @ 9268.500 us | 0.56 / 0.56 GB/s @ 25953.500 us | `/tmp/uccl_2n1g_final_perf.log` |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 1.18 / 1.73 GB/s @ 8276.250 us | 0.17 / 0.24 GB/s @ 58363.250 us | 0.14 / 0.14 GB/s @ 99801.750 us | `/tmp/uccl_2n4g_final_perf.log` |
 
-### No PCIe P2P (host staging) + GPUDirect RDMA
-
-| Setup | Physical GPUs | Dispatch | Combine | Reduced combine | Log |
-| --- | --- | ---: | ---: | ---: | --- |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.76 GB/s @ 615.418 us | 6.34 / 25.33 GB/s @ 577.179 us | 5.78 / 5.77 GB/s @ 2535.500 us | `/tmp/deepep_no_p2p_gdr_1n2g.log` |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.64 / 16.77 GB/s @ 865.096 us | 6.42 / 14.15 GB/s @ 1025.250 us | 4.16 / 4.15 GB/s @ 3496.000 us | `/tmp/deepep_no_p2p_gdr_1n4g.log` |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.10 GB/s @ 582.590 us | 6.67 / 26.68 GB/s @ 548.011 us | 5.67 / 5.66 GB/s @ 2585.500 us | `/tmp/deepep_no_p2p_gdr_2n1g.log` |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.18 / 7.56 GB/s @ 1889.500 us | 4.70 / 6.89 GB/s @ 2072.875 us | 5.33 / 5.32 GB/s @ 2682.500 us | `/tmp/deepep_no_p2p_gdr_2n4g.log` |
-
-### No PCIe P2P (host staging) + no GPUDirect RDMA
-
-| Setup | Physical GPUs | Dispatch | Combine | Reduced combine | Log |
-| --- | --- | ---: | ---: | ---: | --- |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.77 GB/s @ 615.182 us | 6.33 / 25.33 GB/s @ 577.398 us | 5.75 / 5.74 GB/s @ 2549.000 us | `/tmp/deepep_gin_shm_1n2g.log` |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.66 / 16.82 GB/s @ 862.379 us | 6.48 / 14.29 GB/s @ 1015.250 us | 4.15 / 4.14 GB/s @ 3507.750 us | `/tmp/deepep_gin_shm_1n4g.log` |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.09 GB/s @ 582.734 us | 6.69 / 26.75 GB/s @ 546.591 us | 5.76 / 5.74 GB/s @ 2546.000 us | `/tmp/deepep_no_p2p_no_gdr_2n1g.log` |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.15 / 7.51 GB/s @ 1901.625 us | 4.71 / 6.89 GB/s @ 2072.000 us | 5.34 / 5.33 GB/s @ 2678.125 us | `/tmp/deepep_no_p2p_no_gdr_2n4g.log` |
+Correctness-only validation was also rerun for the same four configurations
+with `--skip-perf-test`.
 
 ## Reproduction commands
 
@@ -260,29 +103,22 @@ export EP_NCCL_ROOT_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/deps_ncc
 export LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${LD_LIBRARY_PATH:-}
 export LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/torch-stubs/libtorch_nvshmem.so
 export EP_SUPPRESS_NCCL_CHECK=1
+export EP_USE_UCCL_PROXY=1
+export UCCL_FORCE_NO_GDR=1
 export EP_FORCE_NO_NVLINK=1
 export NCCL_NET_GDR_LEVEL=0
-export NCCL_GIN_TYPE=2
 export DISABLE_SM90_FEATURES=1
 export EP_TEST_DISABLE_FP8=1
 export EP_FORCE_PROCESS_EXIT=1
 export EP_JIT_CACHE_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/jit-cache
 
-# Optional: disable direct P2P and force NCCL ordinary intra-node channels to SHM.
-# GIN itself remains GIN_IB_PROXY.
-export NCCL_P2P_DISABLE=1
-export NCCL_SHM_DISABLE=0
-export NCCL_NET_DISABLE_INTRA=1
-
-CUDA_VISIBLE_DEVICES=2,3 MASTER_PORT=34453 \
-  /home/yangz/nfs/miniconda3/envs/uccl/bin/python tests/elastic/test_ep.py \
-  --num-processes 2 --allow-hybrid-mode 0 \
+CUDA_VISIBLE_DEVICES=2,3 /home/yangz/nfs/miniconda3/bin/python3 \
+  tests/elastic/test_ep.py --num-processes=2 \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
   --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 MASTER_PORT=34531 \
-  /home/yangz/nfs/miniconda3/envs/uccl/bin/python tests/elastic/test_ep.py \
-  --num-processes 4 --allow-hybrid-mode 0 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 /home/yangz/nfs/miniconda3/bin/python3 \
+  tests/elastic/test_ep.py --num-processes=4 \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
   --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120
 ```
@@ -292,20 +128,11 @@ Multi-node:
 ```bash
 cd experimental/lite/ep
 
-bash run_multinode.sh --gpus-per-node 2 --gpu-list 2,3 \
-  --master-port 34620 \
-  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
-
 bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
-  --master-port 34811 \
+  --python-bin /home/yangz/nfs/miniconda3/bin/python3 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
 
 bash run_multinode.sh --gpus-per-node 4 --gpu-list 0,1,2,3 \
-  --master-port 34706 \
-  --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
-
-# GPUDirect RDMA enabled inter-node mode:
-NCCL_NET_GDR_LEVEL=SYS bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
-  --master-port 35101 \
+  --python-bin /home/yangz/nfs/miniconda3/bin/python3 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
 ```

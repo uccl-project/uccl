@@ -6,6 +6,10 @@
 #include <deep_ep/common/exception.cuh>
 #include <deep_ep/common/ptx.cuh>
 
+#ifdef EP_USE_UCCL_PROXY
+#include <uccl_device_runtime.cuh>
+#endif
+
 namespace deep_ep::elastic::handle {
 
 struct NCCLGin {
@@ -18,8 +22,40 @@ struct NCCLGin {
 
     const ncclDevComm_t& nccl_dev_comm;
     const ncclWindow_t& nccl_window;
+#ifndef EP_USE_UCCL_PROXY
     ncclGin gin;
     ncclTeam team_world, team_lsa, team_rail;
+#else
+    struct UcclGinProxy {
+        const uint64_t* d2h_channel_addrs = nullptr;
+        int num_d2h_channel_addrs = 0;
+        uint64_t* signal_shadow_base = nullptr;
+
+        __device__ __forceinline__
+        UcclGinProxy(const uint64_t* d2h_channel_addrs = nullptr,
+                     const int& num_d2h_channel_addrs = 0,
+                     uint64_t* signal_shadow_base = nullptr):
+            d2h_channel_addrs(d2h_channel_addrs),
+            num_d2h_channel_addrs(num_d2h_channel_addrs),
+            signal_shadow_base(signal_shadow_base) {}
+
+        __device__ __forceinline__
+        uint64_t* getSignalShadowPtr(const ncclGinSignal_t& signal_idx) const {
+            return signal_shadow_base + static_cast<int>(signal_idx);
+        }
+
+        template <typename coop_t>
+        __device__ __forceinline__ void flush(const coop_t&) const {
+            uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs);
+        }
+
+        __device__ __forceinline__ void wait(ncclGinRequest_t&) const {}
+    } gin;
+    int local_rank_idx;
+    const uint64_t* uccl_d2h_channel_addrs;
+    int uccl_num_d2h_channel_addrs;
+    uint64_t* uccl_signal_shadow;
+#endif
     uint64_t lsa_base_ptr;
 
     // TODO(NCCL): QP index should just be a hint or the users maintain the mapping?
@@ -27,18 +63,36 @@ struct NCCLGin {
     NCCLGin(const ncclDevComm_t& nccl_dev_comm, const ncclWindow_t& nccl_window,
             const int& qp_idx = 0,
             const ncclGinResourceSharingMode& resource_sharing_mode = NCCL_GIN_RESOURCE_SHARING_GPU,
-            const void* local_base_ptr = nullptr):
+            const void* local_base_ptr = nullptr,
+            const uint64_t* uccl_d2h_channel_addrs = nullptr,
+            const int& uccl_num_d2h_channel_addrs = 0,
+            const int& local_rank_idx = -1,
+            uint64_t* uccl_signal_shadow = nullptr):
         nccl_dev_comm(nccl_dev_comm), nccl_window(nccl_window),
+#ifndef EP_USE_UCCL_PROXY
         gin(ncclGin(nccl_dev_comm, qp_idx, resource_sharing_mode)),
         team_world(ncclTeamWorld(nccl_dev_comm)), team_lsa(ncclTeamLsa(nccl_dev_comm)), team_rail(ncclTeamRail(nccl_dev_comm)) {
         // TODO: what if we only have 1 NVLink rank
         lsa_base_ptr = local_base_ptr != nullptr ?
             reinterpret_cast<uint64_t>(local_base_ptr) :
             reinterpret_cast<uint64_t>(ncclGetLsaPointer(nccl_window, 0, team_lsa.rank));
+#else
+        gin(uccl_d2h_channel_addrs,
+            uccl_num_d2h_channel_addrs,
+            uccl_signal_shadow),
+        local_rank_idx(local_rank_idx),
+        uccl_d2h_channel_addrs(uccl_d2h_channel_addrs),
+        uccl_num_d2h_channel_addrs(uccl_num_d2h_channel_addrs),
+        uccl_signal_shadow(uccl_signal_shadow) {
+        lsa_base_ptr = reinterpret_cast<uint64_t>(local_base_ptr);
+#endif
     }
 
     template <typename team_t>
     __device__ __forceinline__ bool is_nvlink_accessible(const int& dst_rank_idx) const {
+#ifdef EP_USE_UCCL_PROXY
+        return dst_rank_idx == local_rank_idx;
+#else
 #ifdef EP_FORCE_NO_NVLINK
         IS_TEAM_LSA({
             return dst_rank_idx == team_lsa.rank;
@@ -65,6 +119,7 @@ struct NCCLGin {
             // TODO(NCCL): some ranks may be connected by NVLink, e.g., "2 + 2 + 4"
             return team_rail.rank == dst_rank_idx;
         })
+#endif
     }
 
     // ReSharper disable once CppNotAllPathsReturnValue
@@ -78,6 +133,9 @@ struct NCCLGin {
     template <typename team_t, typename dtype_t = void*>
     __device__ __forceinline__
     dtype_t* get_sym_ptr(dtype_t* ptr, const int& dst_rank_idx) const {
+#ifdef EP_USE_UCCL_PROXY
+        return dst_rank_idx == local_rank_idx ? ptr : nullptr;
+#else
         IS_TEAM_RAIL({
             return team_rail.rank == dst_rank_idx ? ptr : nullptr;
         })
@@ -103,6 +161,7 @@ struct NCCLGin {
                 nccl_window, get_sym_offset(ptr), dst_nvl_rank_idx);
             return static_cast<dtype_t*>(dst_ptr);
         });
+#endif
     }
 
     // NOTES: take care of this function when `team_t` is not LSA
@@ -117,6 +176,9 @@ struct NCCLGin {
             // NOTES: local rank (or even NVLink-connected) for tag rail can also bypass
             ptx::red_add_rel_sys(dst_ptr, value);
         } else {
+#ifdef EP_USE_UCCL_PROXY
+            EP_DEVICE_ASSERT(false and "UCCL proxy red_add_rel is not implemented");
+#else
             EP_DEVICE_ASSERT((not std::is_same_v<team_t, ncclTeamTagLsa>));
             EP_DEVICE_ASSERT((std::is_same_v<dtype_t, int64_t>) or (std::is_same_v<dtype_t, uint64_t>));
             // TODO(NCCL): support all dtypes
@@ -125,8 +187,9 @@ struct NCCLGin {
                        ncclCoopThread(),
                        ncclGin_None(),
                        cuda::thread_scope_thread,
-                       cuda::thread_scope_device,
-                       ncclGinOptFlagsDefault | extra_options);
+                        cuda::thread_scope_device,
+                        ncclGinOptFlagsDefault | extra_options);
+#endif
         }
     }
 
@@ -139,6 +202,7 @@ struct NCCLGin {
     __device__ __forceinline__
     void get(void* src_ptr, void* dst_ptr, const int& num_bytes, const int& src_rank_idx,
              const int& extra_options = 0) const {
+#ifndef EP_USE_UCCL_PROXY
         IS_TEAM_WORLD_RAIL({
             gin.get(
                 TEAM_WORLD_RAIL(),
@@ -152,12 +216,16 @@ struct NCCLGin {
                 segment_t()
             );
         });
+#else
+        EP_DEVICE_ASSERT(false and "UCCL proxy get is not implemented");
+#endif
     }
 
     template <typename team_t, typename coop_t = ncclCoopThread>
     __device__ __forceinline__
     void flush_async(const int& src_rank_idx, ncclGinRequest_t* request,
                      const int& extra_options = 0) const {
+#ifndef EP_USE_UCCL_PROXY
         IS_TEAM_WORLD_RAIL({
             gin.flushAsync(
                 TEAM_WORLD_RAIL(),
@@ -167,14 +235,21 @@ struct NCCLGin {
                 ncclGinOptFlagsDefault | extra_options
             );
         });
+#else
+        gin.flush(coop_t());
+#endif
     }
 
     template <typename team_t, typename remote_action_t>
     __device__ __forceinline__
     void signal(const int& dst_rank_idx, const remote_action_t& remote_action) const {
+#ifndef EP_USE_UCCL_PROXY
         IS_TEAM_WORLD_RAIL({
             gin.signal(TEAM_WORLD_RAIL(), dst_rank_idx, remote_action);
         });
+#else
+        EP_DEVICE_ASSERT(false and "UCCL proxy signal is not implemented");
+#endif
     }
 
     template <typename team_t,
@@ -183,6 +258,7 @@ struct NCCLGin {
     void put(void* recv_sym_ptr, void* send_sym_ptr, const int& num_bytes, const int& dst_rank_idx,
              const int& extra_options = 0,
              const remote_action_t& remote_action = remote_action_t()) const {
+#ifndef EP_USE_UCCL_PROXY
         // NOTES: local or NVLink put will also go through NIC via this API
         IS_TEAM_WORLD_RAIL({
             gin.put(TEAM_WORLD_RAIL(),
@@ -200,6 +276,32 @@ struct NCCLGin {
                     cuda::thread_scope_device,
                     ncclGinOptFlagsDefault | extra_options);
         });
+#else
+        const int lane_idx = ptx::get_lane_idx();
+        const auto dst_ptr = get_sym_ptr<team_t>(static_cast<uint8_t*>(recv_sym_ptr), dst_rank_idx);
+        if (dst_ptr != nullptr) {
+            for (int i = 0; i < num_bytes; ++i)
+                dst_ptr[i] = static_cast<uint8_t*>(send_sym_ptr)[i];
+            return;
+        }
+
+        const int channel_idx =
+            static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+            static_cast<int>(threadIdx.x);
+        (void)lane_idx;
+        uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+            reinterpret_cast<uint64_t>(recv_sym_ptr) - lsa_base_ptr,
+            reinterpret_cast<uint64_t>(send_sym_ptr) - lsa_base_ptr,
+            static_cast<size_t>(num_bytes),
+            dst_rank_idx,
+            channel_idx,
+            0,
+            0,
+             uccl_d2h_channel_addrs,
+             uccl_num_d2h_channel_addrs,
+             false,
+             0);
+#endif
     }
 
     template <typename team_t, typename dtype_t>
@@ -210,6 +312,15 @@ struct NCCLGin {
         if (dst_ptr != nullptr) {
             ptx::st_relaxed_sys(dst_ptr, value);
         } else {
+#ifdef EP_USE_UCCL_PROXY
+            EP_DEVICE_ASSERT(sizeof(dtype_t) <= sizeof(uint64_t));
+            const int channel_idx = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                                    static_cast<int>(threadIdx.x);
+            uccl::nvshmemi_ibgda_put_value_nbi(
+                reinterpret_cast<uint64_t>(sym_ptr) - lsa_base_ptr,
+                static_cast<uint64_t>(value), sizeof(dtype_t), dst_rank_idx,
+                channel_idx, uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs);
+#else
             EP_DEVICE_ASSERT((not std::is_same_v<team_t, ncclTeamTagLsa>));
             gin.putValue(TEAM_WORLD_RAIL(),
                          dst_rank_idx,
@@ -221,6 +332,7 @@ struct NCCLGin {
                          cuda::thread_scope_thread,
                          cuda::thread_scope_device,
                          ncclGinOptFlagsDefault | extra_options);
+#endif
         }
     }
 

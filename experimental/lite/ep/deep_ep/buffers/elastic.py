@@ -1,5 +1,7 @@
 import os
 import math
+import socket
+import uuid
 import torch
 import torch.distributed as dist
 from typing import Callable, Optional, Tuple, Union, List, Sequence
@@ -163,6 +165,10 @@ class ElasticBuffer:
         self.group = group
         self.rank_idx = group.rank()
         self.num_ranks = group.size()
+        self.use_uccl_proxy = int(os.environ.get('EP_USE_UCCL_PROXY', os.environ.get('UCCL_FORCE_NO_GDR', '0')))
+        if self.use_uccl_proxy:
+            os.environ['EP_FORCE_NO_NVLINK'] = '1'
+            os.environ.setdefault('NCCL_NET_GDR_LEVEL', '0')
         force_no_nvlink = int(os.environ.get('EP_FORCE_NO_NVLINK', '0'))
         if force_no_nvlink:
             allow_hybrid_mode = False
@@ -212,16 +218,55 @@ class ElasticBuffer:
 
         # Create CPP handle
         self.explicitly_destroy = explicitly_destroy
+        if 'LOCAL_WORLD_SIZE' in os.environ:
+            local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
+            num_nodes = max(1, self.num_ranks // local_world_size)
+        else:
+            num_nodes = int(os.environ.get('WORLD_SIZE', '1'))
+            local_world_size = max(1, self.num_ranks // num_nodes)
+        local_rank = self.rank_idx % local_world_size
+        node_idx = self.rank_idx // local_world_size
+        uccl_shm_id = os.environ.get('EP_UCCL_SHM_ID')
+        if self.use_uccl_proxy and uccl_shm_id is None:
+            uccl_shm_id_obj = [None]
+            if self.rank_idx == 0:
+                uccl_shm_id_obj[0] = f"{os.environ.get('MASTER_PORT', '0')}_{self.num_ranks}_{uuid.uuid4().hex}"
+            dist.broadcast_object_list(uccl_shm_id_obj, src=0, group=group)
+            uccl_shm_id = uccl_shm_id_obj[0]
+        if uccl_shm_id is None:
+            uccl_shm_id = f"{os.environ.get('MASTER_PORT', '0')}_{self.num_ranks}"
         self.runtime = _C.ElasticBuffer(group.rank(), group.size(),
-                                        self.nccl_comm_handle.get(),
-                                        num_bytes,
+                                         self.nccl_comm_handle.get(),
+                                         num_bytes,
                                         deterministic,
                                         allow_hybrid_mode,
                                         allow_multiple_reduction,
-                                        prefer_overlap_with_compute,
-                                        sl_idx, num_allocated_qps,
-                                        num_cpu_timeout_secs, num_gpu_timeout_secs,
-                                        self.explicitly_destroy)
+                                         prefer_overlap_with_compute,
+                                         sl_idx, num_allocated_qps,
+                                         num_cpu_timeout_secs, num_gpu_timeout_secs,
+                                         self.explicitly_destroy,
+                                         node_idx, local_rank, local_world_size,
+                                         uccl_shm_id)
+
+        if self.use_uccl_proxy:
+            local_ptr, local_nbytes, listen_ports, _ = self.runtime.get_uccl_local_metadata()
+            local_ip = self._get_uccl_local_ip()
+            local_meta = {
+                'rank': self.rank_idx,
+                'ptr': int(local_ptr),
+                'nbytes': int(local_nbytes),
+                'ip': local_ip,
+                'listen_ports': list(listen_ports),
+            }
+            all_meta = [None] * self.num_ranks
+            dist.all_gather_object(all_meta, local_meta, group=group)
+            all_meta.sort(key=lambda item: item['rank'])
+            self.runtime.sync_uccl_peers(
+                [item['rank'] for item in all_meta],
+                [item['ptr'] for item in all_meta],
+                [item['nbytes'] for item in all_meta],
+                [item['ip'] for item in all_meta],
+                [item['listen_ports'] for item in all_meta])
 
         # Logical rank indices
         self.num_scaleout_ranks, self.num_scaleup_ranks = self.get_logical_domain_size()
@@ -235,6 +280,20 @@ class ElasticBuffer:
         torch.cuda.synchronize()
         group.barrier()
         torch.cuda.synchronize()
+
+    @staticmethod
+    def _get_uccl_local_ip() -> str:
+        override = os.environ.get('EP_UCCL_HOST_IP')
+        if override:
+            return override
+        master_addr = os.environ.get('MASTER_ADDR', '127.0.0.1')
+        master_port = int(os.environ.get('MASTER_PORT', '8361'))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((master_addr, master_port))
+            return sock.getsockname()[0]
+        finally:
+            sock.close()
 
     def destroy(self) -> None:
         """

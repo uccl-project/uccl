@@ -119,6 +119,9 @@ public:
         void* buffer;
         void* workspace; void* mapped_host_workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
+        const uint64_t* uccl_d2h_channel_addrs;
+        int uccl_num_d2h_channel_addrs;
+        uint64_t* uccl_signal_shadow;
 
         jit::LaunchArgs launch_args;
     };
@@ -178,7 +181,10 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
-                args.scaleup_rank_idx));
+                args.scaleup_rank_idx,
+                args.uccl_d2h_channel_addrs,
+                args.uccl_num_d2h_channel_addrs,
+                args.uccl_signal_shadow));
         } else {
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
                 kernel, config,
@@ -233,9 +239,12 @@ static void launch_dispatch(void* x, void* sf,
                             const int& num_smem_bytes,
                             const int& num_qps, const int64_t& num_timeout_cycles,
                             const bool& cached_mode,
-                            const bool& deterministic,
-                            const bool& do_cpu_sync,
-                            const at::cuda::CUDAStream& stream) {
+                             const bool& deterministic,
+                             const bool& do_cpu_sync,
+                             const uint64_t* uccl_d2h_channel_addrs,
+                             const int& uccl_num_d2h_channel_addrs,
+                             uint64_t* uccl_signal_shadow,
+                             const at::cuda::CUDAStream& stream) {
     // Cached mode does not support expert token counting
     if (cached_mode)
         EP_HOST_ASSERT(cumulative_local_expert_recv_stats == nullptr);
@@ -299,6 +308,9 @@ static void launch_dispatch(void* x, void* sf,
         .buffer = buffer,
         .workspace = workspace, .mapped_host_workspace = mapped_host_workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
+        .uccl_d2h_channel_addrs = uccl_d2h_channel_addrs,
+        .uccl_num_d2h_channel_addrs = uccl_num_d2h_channel_addrs,
+        .uccl_signal_shadow = uccl_signal_shadow,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)};
     const auto code = DispatchRuntime::generate(args);

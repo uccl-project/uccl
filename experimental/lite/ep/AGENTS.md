@@ -1,38 +1,41 @@
 # DeepEP-Lite
 
-`experimental/lite/ep` is now based on DeepEPv2 PR605's NCCL GIN
-`ElasticBuffer` path rather than the old `uccl.ep`/DeepEPv1-lite path.
+`experimental/lite/ep` is the DeepEPv2 Lite `ElasticBuffer` codebase. The
+validated no-GPUDirect-RDMA path in this branch uses a UCCL-EP style CPU proxy
+transport, not NCCL GIN for the EP data path.
 
 Target environment:
 
 - NVIDIA L4 / `sm_89`
 - no NVLink
 - no GPUDirect RDMA
-- no IBGDA or UCCL-EP dependency in the migrated path
-- NCCL GIN proxy mode (`NCCL_GIN_TYPE=2`)
+- DeepEPv2 dispatch/combine kernels
+- UCCL CPU proxy with host-pinned shared windows and ibverbs
 
-Detailed migration notes and the latest benchmark matrix are in
-`doc/deepep-v2-no-nvlink-no-gdr.md`.
-
-## Required no-GDR runtime mode
+## Required UCCL no-GDR runtime mode
 
 ```bash
+EP_USE_UCCL_PROXY=1
+UCCL_FORCE_NO_GDR=1
 EP_FORCE_NO_NVLINK=1
 NCCL_NET_GDR_LEVEL=0
-NCCL_GIN_TYPE=2
 DISABLE_SM90_FEATURES=1
 EP_TEST_DISABLE_FP8=1
 EP_NCCL_ROOT_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/deps_nccl_2304/nvidia/nccl
 LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/torch-stubs/libtorch_nvshmem.so
+LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${LD_LIBRARY_PATH:-}
 ```
 
 Notes:
 
-- `NCCL_GIN_TYPE=2` selects NCCL GIN proxy mode. The default GDAKI-style path
-  timed out or wedged on l40/l41 without GPUDirect RDMA.
-- `EP_FORCE_NO_NVLINK=1` also forces a conservative correctness policy:
-  single GIN QP and no multiple-reduction combine.
-- `DISABLE_SM90_FEATURES=1` selects SM89 fallbacks for L4.
+- NCCL is still loaded for communicator/bootstrap compatibility, but
+  `EP_USE_UCCL_PROXY=1` switches the EP transport to the UCCL CPU proxy path.
+- GPU-visible RDMA/workspace windows are allocated in POSIX shared host-pinned
+  memory and mapped into CUDA. GPU kernels post D2H ring commands; CPU proxy
+  threads perform host memcpy for same-node peers or ibverbs RDMA writes for
+  remote-node peers.
+- `EP_FORCE_NO_NVLINK=1` forces the conservative DeepEPv2 policy used here:
+  one QP and no multiple-reduction combine.
 
 ## Build and test
 
@@ -51,60 +54,50 @@ make -j SM=89
 make -j install
 ```
 
-Single-node benchmark:
+Single-node example:
 
 ```bash
-make test-intra
+CUDA_VISIBLE_DEVICES=2,3 /home/yangz/nfs/miniconda3/bin/python3 \
+  tests/elastic/test_ep.py --num-processes=2 \
+  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
+  --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120
 ```
 
-Multi-node benchmark:
+Multi-node example:
 
 ```bash
 bash run_multinode.sh --gpus-per-node 1 --gpu-list 2 \
+  --python-bin /home/yangz/nfs/miniconda3/bin/python3 \
   --test-args "--allow-hybrid-mode 0 --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only --num-cpu-timeout-secs=120 --num-gpu-timeout-secs=120"
 ```
 
 Constraint: `num_experts` must be divisible by total GPU count.
 
-## Benchmark (L4, 128 tok x 7168 hid x top-8 x 64 exp)
+## UCCL no-GPUDirect-RDMA benchmark (L4, 128 tok x 7168 hid x top-8 x 64 exp)
 
-All runs use DeepEPv2 NCCL GIN proxy mode, BF16 tests, no NVLink, and one GIN
-QP. Cells are `DeepEPv2 SU BW / legacy BW @ latency`, averaged across ranks.
-Legacy BW uses the old DeepEP low-latency numerator (`valid_topk * hidden * 2`
-for BF16).
-
-### PCIe P2P + GPUDirect RDMA
-
-| Setup | Physical GPUs | Dispatch | Combine | Reduced combine |
-| --- | --- | ---: | ---: | ---: |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.76 GB/s @ 615.406 us | 6.33 / 25.31 GB/s @ 577.792 us | 5.66 / 5.65 GB/s @ 2587.500 us |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.66 / 16.81 GB/s @ 862.835 us | 6.46 / 14.25 GB/s @ 1017.750 us | 4.21 / 4.20 GB/s @ 3454.250 us |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.09 GB/s @ 582.707 us | 6.68 / 26.70 GB/s @ 547.618 us | 5.63 / 5.62 GB/s @ 2603.500 us |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.16 / 7.53 GB/s @ 1896.875 us | 4.68 / 6.85 GB/s @ 2083.625 us | 4.83 / 4.82 GB/s @ 2961.625 us |
-
-### No PCIe P2P (host staging) + GPUDirect RDMA
+All runs used DeepEPv2 `tests/elastic/test_ep.py --test-first-only` with
+correctness checks enabled, BF16 (`EP_TEST_DISABLE_FP8=1`), no NVLink, one QP,
+and UCCL CPU proxy no-GDR mode. Cells are `DeepEPv2 SU BW / legacy BW @
+latency`, averaged across ranks. Legacy BW uses the old DeepEP low-latency
+numerator (`valid_topk * hidden * 2` for BF16).
 
 | Setup | Physical GPUs | Dispatch | Combine | Reduced combine |
 | --- | --- | ---: | ---: | ---: |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.76 GB/s @ 615.418 us | 6.34 / 25.33 GB/s @ 577.179 us | 5.78 / 5.77 GB/s @ 2535.500 us |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.64 / 16.77 GB/s @ 865.096 us | 6.42 / 14.15 GB/s @ 1025.250 us | 4.16 / 4.15 GB/s @ 3496.000 us |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.10 GB/s @ 582.590 us | 6.67 / 26.68 GB/s @ 548.011 us | 5.67 / 5.66 GB/s @ 2585.500 us |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.18 / 7.56 GB/s @ 1889.500 us | 4.70 / 6.89 GB/s @ 2072.875 us | 5.33 / 5.32 GB/s @ 2682.500 us |
+| 1n x 2g | l40: GPU2,3 | 0.80 / 3.17 GB/s @ 4614.500 us | 0.49 / 1.95 GB/s @ 7491.000 us | 0.72 / 0.72 GB/s @ 20348.000 us |
+| 1n x 4g | l40: GPU0,1,2,3 | 1.12 / 2.47 GB/s @ 5875.250 us | 0.39 / 0.86 GB/s @ 16896.250 us | 0.30 / 0.30 GB/s @ 47774.750 us |
+| 2n x 1g | l40/l41: GPU2 | 0.64 / 2.54 GB/s @ 5756.500 us | 0.39 / 1.58 GB/s @ 9268.500 us | 0.56 / 0.56 GB/s @ 25953.500 us |
+| 2n x 4g | l40/l41: GPU0,1,2,3 | 1.18 / 1.73 GB/s @ 8276.250 us | 0.17 / 0.24 GB/s @ 58363.250 us | 0.14 / 0.14 GB/s @ 99801.750 us |
 
-### No PCIe P2P (host staging) + no GPUDirect RDMA
-
-| Setup | Physical GPUs | Dispatch | Combine | Reduced combine |
-| --- | --- | ---: | ---: | ---: |
-| 1n x 2g | l40: GPU2,3 | 5.97 / 23.77 GB/s @ 615.182 us | 6.33 / 25.33 GB/s @ 577.398 us | 5.75 / 5.74 GB/s @ 2549.000 us |
-| 1n x 4g | l40: GPU0,1,2,3 | 7.66 / 16.82 GB/s @ 862.379 us | 6.48 / 14.29 GB/s @ 1015.250 us | 4.15 / 4.14 GB/s @ 3507.750 us |
-| 2n x 1g | l40/l41: GPU2 | 6.30 / 25.09 GB/s @ 582.734 us | 6.69 / 26.75 GB/s @ 546.591 us | 5.76 / 5.74 GB/s @ 2546.000 us |
-| 2n x 4g | l40/l41: GPU0,1,2,3 | 5.15 / 7.51 GB/s @ 1901.625 us | 4.71 / 6.89 GB/s @ 2072.000 us | 5.34 / 5.33 GB/s @ 2678.125 us |
+Correctness-only validation was also rerun for the same four configurations
+with `--skip-perf-test`.
 
 ## Modification guidelines
 
-- Keep no-NVLink behavior gated by `EP_FORCE_NO_NVLINK=1`.
-- Do not re-enable multiple-reduction combine or multiple QPs in this mode
-  without rerunning correctness on l40+l41 no-GDR proxy GIN.
+- Keep UCCL transport changes scoped to `experimental/lite/ep`.
+- Do not modify top-level `ep/` for DeepEPv2 work; it is legacy DeepEP v1
+  UCCL-EP reference code.
+- Keep the no-GDR path gated by `EP_USE_UCCL_PROXY=1` and `UCCL_FORCE_NO_GDR=1`.
+- Do not re-enable NVLink/LSA peer bypass, multiple QPs, or multiple-reduction
+  combine in this mode without rerunning correctness on l40+l41.
 - Guard SM90-only instructions/features behind `DISABLE_SM90_FEATURES` or
   equivalent architecture checks.
-- Keep NCCL 2.30.4+ available at build and runtime for GIN host/device APIs.

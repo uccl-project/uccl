@@ -1,15 +1,21 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <algorithm>
+#include <array>
 #include <memory>
+#include <string>
 #include <vector>
 #include <pybind11/functional.h>
+#include <pybind11/stl.h>
 
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/compiled.cuh>
 
 #include "../kernels/backend/api.cuh"
 #include "../kernels/elastic/api.hpp"
+#include "../uccl/include/shared_buffer.hpp"
+#include "../uccl/include/uccl_proxy.hpp"
 #include "../utils/event.hpp"
 #include "utils.hpp"
 
@@ -52,6 +58,19 @@ class ElasticBuffer {
     // NCCL context
     std::shared_ptr<nccl::NCCLSymmetricMemoryContext> nccl_context;
 
+    // UCCL CPU proxy context for no-GPUDirect-RDMA EP data transport
+    bool use_uccl_proxy = false;
+    bool uccl_proxies_started = false;
+    int rank_idx = 0, num_ranks = 0;
+    int node_idx = 0, local_rank = 0, local_world_size = 1;
+    std::string uccl_shm_id;
+    SharedBuffer uccl_window;
+    SharedBuffer uccl_atomic_window;
+    std::vector<std::unique_ptr<UcclProxy>> uccl_proxies;
+    std::vector<uint64_t> uccl_d2h_channel_addrs_host;
+    uint64_t* uccl_d2h_channel_addrs_device = nullptr;
+    uint64_t* uccl_signal_shadow_device = nullptr;
+
     // Some EP hybrid mode settings
     static constexpr int kNumMaxChannelsPerSM = 8;
     static constexpr int kNumMaxSMs = 160;
@@ -87,7 +106,9 @@ public:
                   const bool& prefer_overlap_with_compute,
                   const int& sl_idx, const int& num_allocated_qps,
                   const int& num_cpu_timeout_secs, const int& num_gpu_timeout_secs,
-                  const bool& explicitly_destroy):
+                  const bool& explicitly_destroy,
+                  const int& node_idx, const int& local_rank, const int& local_world_size,
+                  const std::string& uccl_shm_id):
         num_buffer_bytes(num_buffer_bytes),
         explicitly_destroy(explicitly_destroy),
         comm_stream(get_global_comm_stream()),
@@ -95,6 +116,21 @@ public:
         allow_hybrid_mode(allow_hybrid_mode),
         allow_multiple_reduction(allow_multiple_reduction),
         prefer_overlap_with_compute(prefer_overlap_with_compute) {
+        this->rank_idx = rank_idx;
+        this->num_ranks = num_ranks;
+        this->node_idx = node_idx;
+        this->local_rank = local_rank;
+        this->local_world_size = local_world_size;
+        this->uccl_shm_id = uccl_shm_id.empty() ? "default" : uccl_shm_id;
+        use_uccl_proxy = get_env<int>("EP_USE_UCCL_PROXY", 0) != 0 or
+                         get_env<int>("UCCL_FORCE_NO_GDR", 0) != 0;
+        if (use_uccl_proxy) {
+            EP_HOST_ASSERT(get_env<int>("EP_FORCE_NO_NVLINK", 0) != 0 and
+                           "UCCL proxy mode requires EP_FORCE_NO_NVLINK=1");
+            EP_HOST_ASSERT(local_world_size > 0);
+            EP_HOST_ASSERT(local_rank >= 0 and local_rank < local_world_size);
+        }
+
         // Init NCCL runtime
         static constexpr int kBufferAlignment = 16;
         this->nccl_context = std::make_shared<nccl::NCCLSymmetricMemoryContext>(
@@ -109,6 +145,51 @@ public:
 
         // Assign workspaces and buffers
         workspace = this->nccl_context->mapped_window_ptr;
+        if (use_uccl_proxy) {
+            int device_idx = 0;
+            CUDA_RUNTIME_CHECK(cudaGetDevice(&device_idx));
+            const auto total_window_bytes = layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes;
+            uccl_window = allocate_shared_buffer(
+                ("deepepv2_window_" + this->uccl_shm_id).c_str(),
+                total_window_bytes, local_rank, local_world_size, device_idx);
+            uccl_atomic_window = allocate_shared_buffer(
+                ("deepepv2_atomic_" + this->uccl_shm_id).c_str(),
+                kAtomicBufferSize, local_rank, local_world_size, device_idx);
+            workspace = uccl_window.my_device_ptr();
+
+            const int num_nodes = std::max(1, num_ranks / local_world_size);
+            uccl_proxies.reserve(kNumProxyThs);
+            for (int i = 0; i < kNumProxyThs; ++i) {
+                auto proxy = std::make_unique<UcclProxy>(
+                    i,
+                    reinterpret_cast<uintptr_t>(uccl_window.my_host_ptr()),
+                    total_window_bytes,
+                    rank_idx, node_idx, local_rank,
+                    0, num_ranks, num_nodes,
+                    true, false, true,
+                    reinterpret_cast<uintptr_t>(uccl_window.mmap_ptr),
+                    total_window_bytes,
+                    reinterpret_cast<uintptr_t>(uccl_atomic_window.mmap_ptr),
+                    kAtomicBufferSize,
+                    local_world_size);
+                auto addrs = proxy->get_d2h_channel_addrs();
+                uccl_d2h_channel_addrs_host.insert(
+                    uccl_d2h_channel_addrs_host.end(), addrs.begin(), addrs.end());
+                uccl_proxies.emplace_back(std::move(proxy));
+            }
+            CUDA_RUNTIME_CHECK(cudaMalloc(
+                &uccl_d2h_channel_addrs_device,
+                uccl_d2h_channel_addrs_host.size() * sizeof(uint64_t)));
+            CUDA_RUNTIME_CHECK(cudaMemcpy(
+                uccl_d2h_channel_addrs_device,
+                uccl_d2h_channel_addrs_host.data(),
+                uccl_d2h_channel_addrs_host.size() * sizeof(uint64_t),
+                cudaMemcpyHostToDevice));
+            CUDA_RUNTIME_CHECK(cudaMalloc(&uccl_signal_shadow_device,
+                                          num_ranks * sizeof(uint64_t)));
+            CUDA_RUNTIME_CHECK(cudaMemset(uccl_signal_shadow_device, 0,
+                                          num_ranks * sizeof(uint64_t)));
+        }
         workspace_layout_wo_expert = std::make_shared<layout::WorkspaceLayout>(
             workspace, nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks, 0);
         buffer = static_cast<uint8_t*>(workspace) + layout::WorkspaceLayout::get_num_bytes();
@@ -138,10 +219,31 @@ public:
         EP_HOST_ASSERT(not destroyed);
 
         // Finish all works on all GPUs
-        barrier(true, true);
+        if (not use_uccl_proxy or uccl_proxies_started)
+            barrier(true, true);
+
+        if (uccl_proxies_started) {
+            for (auto& proxy: uccl_proxies)
+                proxy->stop();
+            uccl_proxies_started = false;
+        }
+
+        if (uccl_d2h_channel_addrs_device != nullptr) {
+            CUDA_RUNTIME_CHECK(cudaFree(uccl_d2h_channel_addrs_device));
+            uccl_d2h_channel_addrs_device = nullptr;
+        }
+        if (uccl_signal_shadow_device != nullptr) {
+            CUDA_RUNTIME_CHECK(cudaFree(uccl_signal_shadow_device));
+            uccl_signal_shadow_device = nullptr;
+        }
 
         // Deallocate host workspaces
         CUDA_RUNTIME_CHECK(cudaFreeHost(host_workspace));
+
+        if (use_uccl_proxy) {
+            free_shared_buffer(uccl_atomic_window);
+            free_shared_buffer(uccl_window);
+        }
 
         // Destroy NCCL context
         nccl_context->finalize();
@@ -162,6 +264,53 @@ public:
         return {nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks};
     }
 
+    std::tuple<uint64_t, int64_t, std::vector<int>, std::vector<uint64_t>> get_uccl_local_metadata() const {
+        EP_HOST_ASSERT(use_uccl_proxy);
+        std::vector<int> ports;
+        ports.reserve(uccl_proxies.size());
+        for (const auto& proxy: uccl_proxies)
+            ports.push_back(proxy->get_listen_port());
+        return {
+            reinterpret_cast<uint64_t>(uccl_window.my_host_ptr()),
+            static_cast<int64_t>(uccl_window.per_rank_size),
+            ports,
+            uccl_d2h_channel_addrs_host
+        };
+    }
+
+    void sync_uccl_peers(const std::vector<int>& ranks,
+                         const std::vector<uint64_t>& ptrs,
+                         const std::vector<int64_t>& nbytes,
+                         const std::vector<std::string>& ips,
+                         const std::vector<std::vector<int>>& listen_ports) {
+        EP_HOST_ASSERT(use_uccl_proxy);
+        EP_HOST_ASSERT(not uccl_proxies_started);
+        EP_HOST_ASSERT(ranks.size() == static_cast<size_t>(num_ranks));
+        EP_HOST_ASSERT(ptrs.size() == ranks.size());
+        EP_HOST_ASSERT(nbytes.size() == ranks.size());
+        EP_HOST_ASSERT(ips.size() == ranks.size());
+        EP_HOST_ASSERT(listen_ports.size() == ranks.size());
+
+        std::vector<PeerMeta> peers(num_ranks);
+        for (size_t i = 0; i < ranks.size(); ++i) {
+            EP_HOST_ASSERT(ranks[i] >= 0 and ranks[i] < num_ranks);
+            auto& peer = peers[ranks[i]];
+            peer.rank = ranks[i];
+            peer.ptr = static_cast<uintptr_t>(ptrs[i]);
+            peer.nbytes = static_cast<size_t>(nbytes[i]);
+            peer.ip = ips[i];
+            EP_HOST_ASSERT(listen_ports[i].size() == kNumProxyThs);
+            for (int j = 0; j < kNumProxyThs; ++j)
+                peer.listen_ports[j] = listen_ports[i][j];
+        }
+
+        for (auto& proxy: uccl_proxies) {
+            proxy->set_peers_meta(peers);
+            proxy->start_dual();
+        }
+        uccl_proxies_started = true;
+    }
+
     // ReSharper disable once CppMemberFunctionMayBeStatic
     void barrier(const bool& use_comm_stream, const bool& with_cpu_sync) const {
         const auto compute_stream = at::cuda::getCurrentCUDAStream();
@@ -177,10 +326,13 @@ public:
         launch_barrier(nccl_context->dev_comm, nccl_context->window,
                        workspace,
                        nccl_context->scaleout_rank_idx, nccl_context->scaleup_rank_idx,
-                       nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
-                       num_gpu_timeout_cycles,
-                       nccl_context->is_scaleup_nvlink,
-                       stream);
+                        nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                        num_gpu_timeout_cycles,
+                        nccl_context->is_scaleup_nvlink,
+                         uccl_d2h_channel_addrs_device,
+                         static_cast<int>(uccl_d2h_channel_addrs_host.size()),
+                         uccl_signal_shadow_device,
+                         stream);
 
         // Let CPU wait
         if (with_cpu_sync)
@@ -933,9 +1085,12 @@ public:
                         nccl_context->is_scaleup_nvlink,
                         num_sms, num_channels_per_sm,
                         num_smem_bytes,
-                        num_qps, num_gpu_timeout_cycles,
-                        cached_mode, deterministic, do_cpu_sync,
-                        comm_stream);
+                         num_qps, num_gpu_timeout_cycles,
+                         cached_mode, deterministic, do_cpu_sync,
+                           uccl_d2h_channel_addrs_device,
+                           static_cast<int>(uccl_d2h_channel_addrs_host.size()),
+                           uccl_signal_shadow_device,
+                           comm_stream);
 
         // Received token counters
         int num_recv_tokens = 0, num_expanded_tokens = 0;
@@ -1226,10 +1381,13 @@ public:
             nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
             nccl_context->scaleout_rank_idx, nccl_context->scaleup_rank_idx,
             nccl_context->is_scaleup_nvlink,
-            num_sms, jit::device_runtime->get_num_smem_bytes(),
-            num_channels,
-            use_expanded_layout, allow_multiple_reduction,
-            comm_stream);
+             num_sms, jit::device_runtime->get_num_smem_bytes(),
+             num_channels,
+             use_expanded_layout, allow_multiple_reduction,
+              uccl_d2h_channel_addrs_device,
+              static_cast<int>(uccl_d2h_channel_addrs_host.size()),
+              uccl_signal_shadow_device,
+              comm_stream);
 
         // Allocate output tensors
         auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
@@ -1274,11 +1432,13 @@ public:
 
 static void register_apis(pybind11::module_& m) {
     pybind11::class_<ElasticBuffer>(m, "ElasticBuffer")
-        .def(pybind11::init<int, int, int64_t, int64_t, bool, bool, bool, bool, int, int, int, int, bool>())
+        .def(pybind11::init<int, int, int64_t, int64_t, bool, bool, bool, bool, int, int, int, int, bool, int, int, int, std::string>())
         .def("destroy", &ElasticBuffer::destroy)
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)
         .def("get_logical_domain_size", &ElasticBuffer::get_logical_domain_size)
+        .def("get_uccl_local_metadata", &ElasticBuffer::get_uccl_local_metadata)
+        .def("sync_uccl_peers", &ElasticBuffer::sync_uccl_peers)
         .def("barrier", &ElasticBuffer::barrier)
         .def("engram_write", &ElasticBuffer::engram_write)
         .def("engram_fetch", &ElasticBuffer::engram_fetch)
