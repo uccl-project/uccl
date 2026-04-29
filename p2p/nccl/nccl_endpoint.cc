@@ -98,9 +98,9 @@ bool fence_default_stream(int device, gpuStream_t stream) {
   if (gpuSetDevice(device) != gpuSuccess) return false;
 
   // Fence both legacy and per-thread default streams.
-  if (!record_and_wait(cudaStreamLegacy, stream)) return false;
-  if (cudaStreamPerThread != cudaStreamLegacy) {
-    if (!record_and_wait(cudaStreamPerThread, stream)) return false;
+  if (!record_and_wait(gpuStreamLegacy, stream)) return false;
+  if (gpuStreamPerThread != gpuStreamLegacy) {
+    if (!record_and_wait(gpuStreamPerThread, stream)) return false;
   }
   return true;
 #endif
@@ -263,14 +263,16 @@ bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
   // comm_index selects which NCCL communicator (0 or 1) to init.
   if (comm_index < 0 || comm_index > 1) return false;
   if (gpuSetDevice(conn.local_gpu_idx) != gpuSuccess) return false;
-  if (gpuStreamCreateWithFlags(&conn.stream[comm_index],
-                               gpuStreamNonBlocking) != gpuSuccess) {
-    return false;
-  }
   ncclResult_t rc = ncclCommInitRank(&conn.comm[comm_index], 2, uid, conn.rank);
   if (rc != ncclSuccess) {
     std::cerr << "[tcp] ncclCommInitRank failed: " << ncclGetErrorString(rc)
               << std::endl;
+    return false;
+  }
+  if (gpuStreamCreateWithFlags(&conn.stream[comm_index],
+                               gpuStreamNonBlocking) != gpuSuccess) {
+    ncclCommDestroy(conn.comm[comm_index]);
+    conn.comm[comm_index] = nullptr;
     return false;
   }
   return true;
@@ -278,9 +280,12 @@ bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
 
 bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
                               ncclUniqueId const& uid_rank1) {
-  // Two communicators: one is used for the "send" direction, one for "recv".
+  // TCPX works reliably with the single-communicator send/recv pattern used by
+  // nccl-tests' sendrecv_perf. Reusing one communicator/stream for both
+  // directions avoids the extra proxy connect path that fails during TCPX
+  // initialization when we create a second communicator for the same peer.
+  (void)uid_rank1;
   if (!init_comm_(conn, uid_rank0, 0)) return false;
-  if (!init_comm_(conn, uid_rank1, 1)) return false;
   return true;
 }
 
@@ -344,15 +349,15 @@ void TCPEndpoint::control_loop_(Conn* conn) {
 }
 
 int TCPEndpoint::comm_index_for_send_(Conn const& conn) const {
-  // Each side sends on its own rank's communicator.
-  if (conn.rank == 0 || conn.rank == 1) return conn.rank;
+  // Use a single communicator for both directions.
+  (void)conn;
   return 0;
 }
 
 int TCPEndpoint::comm_index_for_recv_(Conn const& conn) const {
-  // Each side receives on the peer rank's communicator.
-  if (conn.remote_rank == 0 || conn.remote_rank == 1) return conn.remote_rank;
-  return 1;
+  // Use a single communicator for both directions.
+  (void)conn;
+  return 0;
 }
 
 bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,

@@ -200,19 +200,18 @@ NB_MODULE(p2p, m) {
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
-             int remote_gpu_idx, int remote_port) {
+             std::string const& remote_gpu_bdf, int remote_port) {
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.connect(remote_ip_addr, remote_gpu_idx,
-                                     remote_port, conn_id);
+              success = self.connect(remote_ip_addr, 0, remote_port, conn_id);
             }
             return nb::make_tuple(success, conn_id);
           },
           "Connect to a remote server", nb::arg("remote_ip_addr"),
-          nb::arg("remote_gpu_idx"), nb::arg("remote_port") = -1)
+          nb::arg("remote_gpu_bdf"), nb::arg("remote_port") = -1)
       .def(
           "add_remote_endpoint",
           [](Endpoint& self, nb::bytes metadata_bytes) {
@@ -255,10 +254,10 @@ NB_MODULE(p2p, m) {
           [](nb::bytes metadata_bytes) {
             std::string buf(metadata_bytes.c_str(), metadata_bytes.size());
             std::vector<uint8_t> metadata(buf.begin(), buf.end());
-            auto [ip, port, gpu_idx] = Endpoint::parse_metadata(metadata);
-            return nb::make_tuple(ip, port, gpu_idx);
+            auto [ip, port, gpu_bdf] = Endpoint::parse_metadata(metadata);
+            return nb::make_tuple(ip, port, gpu_bdf);
           },
-          "Parse endpoint metadata to extract IP address, port, and GPU index",
+          "Parse endpoint metadata to extract IP address, port, and GPU BDF",
           nb::arg("metadata"))
       .def(
           "accept",
@@ -490,8 +489,8 @@ NB_MODULE(p2p, m) {
                     nb::gil_scoped_release release;
                     InsidePythonGuard guard;
                     success =
-                        self.connect(conn->ip_addr_, conn->remote_gpu_idx_,
-                                     conn->remote_port_, loopback_conn_id);
+                        self.connect(conn->ip_addr_, 0, conn->remote_port_,
+                                     loopback_conn_id);
                   }
                   if (!success) {
                     return nb::make_tuple(false, uint64_t{0});
@@ -1143,35 +1142,35 @@ NB_MODULE(p2p, m) {
           "RDMA-WRITE",
           nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
           nb::arg("size_v"), nb::arg("num_iovs"))
-      // IPC-specific functions for local connections via Unix Domain Sockets
+      // IPC-specific functions for local (same-node) connections via CUDA IPC
       .def(
           "connect_local",
-          [](Endpoint& self, int remote_gpu_idx) {
+          [](Endpoint& self, std::string const& remote_gpu_bdf) {
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.connect_local(remote_gpu_idx, conn_id);
+              success = self.connect_local(remote_gpu_bdf, conn_id);
             }
             return nb::make_tuple(success, conn_id);
           },
-          "Connect to a local process via Unix Domain Socket",
-          nb::arg("remote_gpu_idx"))
+          "Connect to a local process via shared memory",
+          nb::arg("remote_gpu_bdf"))
       .def(
           "accept_local",
           [](Endpoint& self) {
-            int remote_gpu_idx;
+            std::string remote_gpu_bdf;
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.accept_local(remote_gpu_idx, conn_id);
+              success = self.accept_local(remote_gpu_bdf, conn_id);
             }
-            return nb::make_tuple(success, remote_gpu_idx, conn_id);
+            return nb::make_tuple(success, remote_gpu_bdf, conn_id);
           },
-          "Accept an incoming local connection via Unix Domain Socket")
+          "Accept an incoming local connection via shared memory")
       .def(
           "send_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {

@@ -1,64 +1,33 @@
 #pragma once
 
-#include <algorithm>
 #include <cstdlib>
 #include <string>
 
-#define DEFAULT_RDMA_CHUNK_SIZE 1024 * 1024
-#define DEFAULT_QP_PER_EP 1
-#define DEFAULT_CQ_PER_EP 1
-#define DEFAULT_CQ_POLLER_THREADS 1
-#define DEFAULT_CQ_DEPTH 2048
-#define DEFAULT_MAX_RETRY_TIMES 10
-#define DEFAULT_RESOLVE_TIMEOUT_MS 2000
-#define DEFAULT_QP_MAX_SEND_WR 2048
-#define DEFAULT_QP_MAX_RECV_WR 2048
-#define DEFAUTL_QP_MAX_SGE 1
 #define DEFAULT_EXCHANGER_SERVER_IP "0.0.0.0"
 #define DEFAULT_EXCHANGER_SERVER_PORT 6979
 
 namespace UKernel {
 namespace Transport {
 
-enum class TransportBackend { BasicRDMA, UCCL };
+enum class PreferredTransport { Auto, Ipc, Uccl, Tcp };
 
 struct CommunicatorConfig {
-  int rdma_chunk_size;
-  int qp_count_per_ep;
-  int cq_count_per_ep;
-  int cq_poller_threads;
-  int cq_depth;
-  int max_retry_times;
-  int resolve_timeout_ms;
-  int qp_max_send_wr;
-  int qp_max_recv_wr;
-  int qp_max_sge;
-  std::string exchanger_ip;
-  int exchanger_port;
-  TransportBackend backend;
+  std::string exchanger_ip = DEFAULT_EXCHANGER_SERVER_IP;
+  int exchanger_port = DEFAULT_EXCHANGER_SERVER_PORT;
+  int local_id = -1;
+  std::string oob_namespace = "default";
+  PreferredTransport preferred_transport = PreferredTransport::Auto;
 
-  CommunicatorConfig()
-      : rdma_chunk_size(getEnvOrDefault("UKERNEL_RDMA_CHUNK_SIZE",
-                                        DEFAULT_RDMA_CHUNK_SIZE)),
-        qp_count_per_ep(getEnvOrDefault("UKERNEL_QP_COUNT", DEFAULT_QP_PER_EP)),
-        cq_count_per_ep(getEnvOrDefault("UKERNEL_CQ_COUNT", DEFAULT_CQ_PER_EP)),
-        cq_poller_threads(getEnvOrDefault("UKERNEL_CQ_POLLER_THREADS",
-                                          DEFAULT_CQ_POLLER_THREADS)),
-        cq_depth(getEnvOrDefault("UKERNEL_CQ_DEPTH", DEFAULT_CQ_DEPTH)),
-        max_retry_times(getEnvOrDefault("UKERNEL_MAX_RETRY_TIMES",
-                                        DEFAULT_MAX_RETRY_TIMES)),
-        resolve_timeout_ms(getEnvOrDefault("UKERNEL_RESOLVE_TIMEOUT_MS",
-                                           DEFAULT_RESOLVE_TIMEOUT_MS)),
-        qp_max_send_wr(
-            getEnvOrDefault("UKERNEL_QP_MAX_SEND_WR", DEFAULT_QP_MAX_SEND_WR)),
-        qp_max_recv_wr(
-            getEnvOrDefault("UKERNEL_QP_MAX_RECV_WR", DEFAULT_QP_MAX_RECV_WR)),
-        qp_max_sge(getEnvOrDefault("UKERNEL_QP_MAX_SGE", DEFAUTL_QP_MAX_SGE)),
-        exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
-                                     DEFAULT_EXCHANGER_SERVER_IP)),
-        exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
-                                       DEFAULT_EXCHANGER_SERVER_PORT)),
-        backend(getBackendFromEnv()) {}
+  static CommunicatorConfig from_env() {
+    CommunicatorConfig config;
+    config.exchanger_ip =
+        getEnvOrDefault("UHM_EXCHANGER_SERVER_IP", DEFAULT_EXCHANGER_SERVER_IP);
+    config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
+                                            DEFAULT_EXCHANGER_SERVER_PORT);
+    config.local_id = getLocalIdOrDefault();
+    config.oob_namespace = getEnvOrDefault("UHM_OOB_NAMESPACE", "default");
+    return config;
+  }
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {
@@ -80,24 +49,25 @@ struct CommunicatorConfig {
     return default_val;
   }
 
-  static TransportBackend getBackendFromEnv() {
-    char const* val = std::getenv("UKERNEL_TRANSPORT_BACKEND");
-    if (val) {
-      std::string backend_str(val);
-      // Convert to lowercase for case-insensitive comparison
-      std::transform(backend_str.begin(), backend_str.end(),
-                     backend_str.begin(), ::tolower);
-      if (backend_str == "basic" || backend_str == "basicrdma" ||
-          backend_str == "basic_rdma") {
-        return TransportBackend::BasicRDMA;
+  static int getLocalIdOrDefault() {
+    constexpr char const* kEnvNames[] = {
+        "UHM_LOCAL_ID",    "OMPI_COMM_WORLD_LOCAL_RANK",
+        "MPI_LOCALRANKID", "SLURM_LOCALID",
+        "LOCAL_RANK",
+    };
+    for (char const* env_name : kEnvNames) {
+      char const* val = std::getenv(env_name);
+      if (!val || val[0] == '\0') continue;
+      try {
+        return std::stoi(val);
+      } catch (...) {
       }
-      // Default to UCCL for any other value
     }
-    return TransportBackend::UCCL;
+    return -1;
   }
 };
 
 }  // namespace Transport
 
-namespace Compute {}
+namespace Device {}
 }  // namespace UKernel

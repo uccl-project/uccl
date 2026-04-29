@@ -8,13 +8,44 @@
 
 #define GID_INDEX_EFA 0
 #define LID_EFA 0
-#define MAX_INLINE_DATA 0
-#define SERVICE_LEVEL 8
+#define EFA_MAX_INLINE_DATA 0
+#define EFA_SERVICE_LEVEL 8
 #define QKEY 0x15695
 
-#define RNR_RETRY 3
+#define EFA_RNR_RETRY 3
 
 #define MAX_CQE 1024
+
+static constexpr uint16_t kEfaUnsolicitedWriteRecvFlag = 1u << 0;
+
+// SFINAE helpers: conditionally set fields that may not exist in older SDK
+// versions
+template <typename T, typename = void>
+struct has_sl : std::false_type {};
+template <typename T>
+struct has_sl<T, std::void_t<decltype(std::declval<T>().sl)>> : std::true_type {
+};
+
+template <typename T, typename = void>
+struct has_flags : std::false_type {};
+template <typename T>
+struct has_flags<T, std::void_t<decltype(std::declval<T>().flags)>>
+    : std::true_type {};
+
+template <typename T>
+inline void set_efa_sl(T& attr, uint8_t default_sl) {
+  if constexpr (has_sl<T>::value) {
+    attr.sl = get_sl_from_env(default_sl);
+  }
+}
+
+template <typename T>
+inline void set_efa_flags(T& attr) {
+  if constexpr (has_flags<T>::value) {
+    attr.flags = 0;
+    attr.flags |= kEfaUnsolicitedWriteRecvFlag;
+  }
+}
 
 inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                    struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
@@ -50,10 +81,8 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct efadv_qp_init_attr efa_attr = {};
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  efa_attr.sl = get_sl_from_env(SERVICE_LEVEL);
-  efa_attr.flags = 0;
-  // If set, Receive WRs will not be consumed for P2P write with imm.
-  efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
+  set_efa_sl(efa_attr, EFA_SERVICE_LEVEL);
+  set_efa_flags(efa_attr);
 
   *qp =
       efadv_create_qp_ex(ctx->getCtx(), &qp_attr, &efa_attr, sizeof(efa_attr));
@@ -66,19 +95,33 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   attr.port_num = kPortNum;
   attr.qkey = QKEY;
   attr.pkey_index = 0;
-  assert(ibv_modify_qp(*qp, &attr,
-                       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                           IBV_QP_QKEY) == 0);
+  int const init_qp_rc = ibv_modify_qp(
+      *qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY);
+  if (unlikely(init_qp_rc != 0)) {
+    UCCL_LOG(ERROR) << "ibv_modify_qp INIT failed, rc=" << init_qp_rc
+                    << ", errno=" << errno << " (" << strerror(errno) << ")";
+    throw std::runtime_error("ibv_modify_qp INIT failed");
+  }
 
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTR;
-  assert(ibv_modify_qp(*qp, &attr, IBV_QP_STATE) == 0);
+  int const rtr_rc = ibv_modify_qp(*qp, &attr, IBV_QP_STATE);
+  if (unlikely(rtr_rc != 0)) {
+    UCCL_LOG(ERROR) << "ibv_modify_qp RTR failed, rc=" << rtr_rc
+                    << ", errno=" << errno << " (" << strerror(errno) << ")";
+    throw std::runtime_error("ibv_modify_qp RTR failed");
+  }
 
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.rnr_retry = RNR_RETRY;
-  assert(ibv_modify_qp(*qp, &attr,
-                       IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
+  attr.rnr_retry = EFA_RNR_RETRY;
+  int const rts_rc = ibv_modify_qp(
+      *qp, &attr, IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN);
+  if (unlikely(rts_rc != 0)) {
+    UCCL_LOG(ERROR) << "ibv_modify_qp RTS failed, rc=" << rts_rc
+                    << ", errno=" << errno << " (" << strerror(errno) << ")";
+    throw std::runtime_error("ibv_modify_qp RTS failed");
+  }
 
   local_meta->gid = ctx->detectGid(GID_INDEX_EFA);
   local_meta->qpn = (*qp)->qp_num;
@@ -169,7 +212,7 @@ inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
 inline void EFAChannelImpl::initPreAllocResources() {}
 
 inline uint32_t EFAChannelImpl::getMaxInlineData() const {
-  return MAX_INLINE_DATA;
+  return EFA_MAX_INLINE_DATA;
 }
 
 #endif  // RDMA_DATA_CHANNEL_IMPL_EFA_CC_INCLUDED

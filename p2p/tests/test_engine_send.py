@@ -7,8 +7,6 @@ import sys
 import os
 import numpy as np
 import multiprocessing
-import socket
-import struct
 import time
 import torch
 from typing import Tuple
@@ -23,19 +21,9 @@ except ImportError as e:
     sys.exit(1)
 
 
-def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, int]:
-    """Return (ip, port, remote_gpu_idx)."""
-    if len(meta) == 10:  # IPv4
-        ip_b, port_b, gpu_b = meta[:4], meta[4:6], meta[6:10]
-        ip = socket.inet_ntop(socket.AF_INET, ip_b)
-    elif len(meta) == 22:  # IPv6
-        ip_b, port_b, gpu_b = meta[:16], meta[16:18], meta[18:22]
-        ip = socket.inet_ntop(socket.AF_INET6, ip_b)
-    else:
-        raise ValueError(f"Unexpected endpoint-metadata length {len(meta)}")
-    port = struct.unpack("!H", port_b)[0]
-    gpu = struct.unpack("i", gpu_b)[0]
-    return ip, port, gpu
+def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, str]:
+    """Return (ip, port, remote_gpu_bdf)."""
+    return p2p.Endpoint.parse_metadata(meta)
 
 
 def test_local():
@@ -73,7 +61,7 @@ def test_local():
 
         ip, r_port, r_gpu = parse_endpoint_meta(ep_meta)
         success, conn_id = engine.connect(
-            remote_ip_addr=ip, remote_gpu_idx=r_gpu, remote_port=r_port
+            remote_ip_addr=ip, remote_gpu_bdf=r_gpu, remote_port=r_port
         )
         assert success
         print(f"Client connected successfully: conn_id={conn_id}")

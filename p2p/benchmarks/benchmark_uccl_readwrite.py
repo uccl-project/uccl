@@ -6,9 +6,6 @@ import torch
 import numpy as np
 import os
 
-# Only RC mode is supported for now.
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError:
@@ -135,7 +132,7 @@ def _run_client(args, ep, remote_metadata):
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok
-    print(f"[Client] Connected to {ip}:{port} id={conn_id}")
+    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) id={conn_id}")
 
     for sz in args.sizes:
         if args.lazy:

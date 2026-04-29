@@ -1,12 +1,10 @@
 # Makefile for UCCL P2P Engine nanobind project (stable ABI)
-
-# TCPX optional integration
-USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
-# EFA optional integration
-USE_EFA ?= $(shell echo $${USE_EFA:-0})
-
-# TCP endpoint integration
-USE_TCP ?= $(shell echo $${USE_TCP:-0})
+#
+# Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
+# libibverbs, libnccl, and libefa are loaded dynamically at runtime via
+# dlopen/dlsym (see include/*_wrapper.h). No transport libraries are linked.
+#
+# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
 
 # DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -18,31 +16,16 @@ CUDA_LIB  := $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
 
 # Building with the following settings:
+# NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
 INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lz -lelf
-LIBS2 =
+LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
+	-I$(EFA_HOME)/include \
 	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
-
-ifeq ($(USE_TCPX),1)
-	CXXFLAGS += -DUCCL_P2P_USE_TCPX
-	LIBS2 +=  -lpthread -ldl
-else ifeq ($(USE_EFA),1)
-	CXXFLAGS += -DUCCL_P2P_USE_EFA
-	INC += -I${EFA_HOME}/include
-	LIBS += -L ${EFA_HOME}/lib -lefa
-else
-	LIBS2 +=  -lz -lelf -lpthread -libverbs -ldl
-endif
-
-# Add NCCL-over-TCP endpoint flag
-ifeq ($(USE_TCP),1)
-	CXXFLAGS += -DUCCL_P2P_USE_NCCL
-endif
 
 # ---------------- DietGPU ----------------
 DIETGPU_ROOT      := ../thirdparty/dietgpu
@@ -91,63 +74,38 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2) $(DIETGPU_LIBS)
+# NO transport libraries linked (-libverbs, -lnccl, -lefa).
+# All ibv_* / nccl* / efadv_* symbols are provided by the dlsym wrappers
+# in rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/efadv_dl.cc.
+# The --wrap flags redirect compat-layer calls from verbs.h to our wrappers.
+IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
+                  -Wl,--wrap=ibv_query_port \
+                  -Wl,--wrap=ibv_reg_mr \
+                  -Wl,--wrap=ibv_reg_dmabuf_mr \
+                  -Wl,--wrap=ibv_create_cq \
+                  -Wl,--wrap=ibv_create_qp \
+                  -Wl,--wrap=ibv_qp_to_qp_ex
+LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
+          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
-ifeq ($(USE_TCP),1)
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
-NCCL_LIB  ?= $(NCCL_HOME)/lib
-CXXFLAGS  += -I$(NCCL_INC)
-LDFLAGS   += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
-endif
-
-# Target and source files
+# Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-ifeq ($(USE_TCPX),1)
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
-NCCL_LIB  ?= $(NCCL_HOME)/lib
-P2P_SHARED_LIB := libuccl_p2p.so
-SOURCES := nccl_tcpx_endpoint.cc
-CORE_OBJECTS := $(SOURCES:.cc=.o)
-CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
-LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
-OBJECTS := $(CORE_OBJECTS)
-else ifeq ($(USE_TCP),1)
+# dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
-CORE_OBJECT := engine.o nccl/nccl_endpoint.o
-else
-SOURCES := engine.cc engine_api.cc
-CORE_OBJECT := engine.o
-endif
-
-ifeq ($(USE_TCPX),1)
-OBJECTS := $(CORE_OBJECTS)
-else
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(DL_OBJECTS)
 OBJECTS := $(SOURCES:.cc=.o)
-endif
 
-# Build the shared libraries
-ifeq ($(USE_TCPX),1)
-# Default target
-all: $(P2P_SHARED_LIB)
-
-# only build plugin for tcpx now, TODO: add tcpx to p2p	  
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
-	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB)
-else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS)
-	$(CXX) $(OBJECTS) $(NB_OBJECTS) \
+$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS) $(DL_OBJECTS)
+	$(CXX) $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
@@ -157,7 +115,6 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
-endif
 
 # Compile nanobind source files for stable ABI
 nb_%.o: $(NB_SRC_DIR)/%.cpp
@@ -167,9 +124,14 @@ nb_%.o: $(NB_SRC_DIR)/%.cpp
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
 
-# Compile NCCL-over-TCP source files
+# Compile NCCL source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
+
+# Compile RDMA provider source files
+rdma/providers/efa/%.o: rdma/providers/efa/%.cc
+	@mkdir -p rdma/providers/efa
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
 
 # Auto-generated header dependencies
@@ -184,12 +146,6 @@ define safe_install
 		  exit 0; }
 endef
 
-ifeq ($(USE_TCPX),1)
-install: $(P2P_SHARED_LIB)
-	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
-	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	@echo "Installation complete!"
-else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
@@ -199,22 +155,18 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
 	@echo "Installation complete!"
-endif
+
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
-	rm -f nccl/*.o nccl/*.d
-ifneq ($(USE_TCPX),1)
+	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/efa/*.o rdma/providers/efa/*.d
 	rm -f $(P2P_PYTHON_EXT)
-endif
 
 # Test the module
 test:
-ifneq ($(USE_TCPX),1)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
-endif
 
 # Install nanobind if not available
 install-deps:
@@ -223,11 +175,12 @@ install-deps:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all          - Build the nanobind module (stable ABI)"
+	@echo "  all          - Build the nanobind module and shared library"
 	@echo "  install      - Install the module to Python site-packages"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
+	@echo ""
 
 .PHONY: all clean test install-deps help install

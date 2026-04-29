@@ -22,7 +22,10 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -119,6 +122,167 @@ static int64_t dtype_size_bytes(int dtype) {
   }
 }
 
+namespace {
+
+enum DLDeviceType : int32_t {
+  kDLCPU = 1,
+  kDLCUDA = 2,
+  kDLROCM = 10,
+};
+
+enum DLDataTypeCode : uint8_t {
+  kDLUInt = 1,
+};
+
+struct DLDevice {
+  DLDeviceType device_type;
+  int32_t device_id;
+};
+
+struct DLDataType {
+  uint8_t code;
+  uint8_t bits;
+  uint16_t lanes;
+};
+
+struct DLTensor {
+  void* data;
+  DLDevice device;
+  int32_t ndim;
+  DLDataType dtype;
+  int64_t* shape;
+  int64_t* strides;
+  uint64_t byte_offset;
+};
+
+struct DLManagedTensor {
+  DLTensor dl_tensor;
+  void* manager_ctx;
+  void (*deleter)(DLManagedTensor* self);
+};
+
+struct RdmaBufferDlpack {
+  DLManagedTensor managed{};
+  int64_t shape[1]{};
+  void* ptr{nullptr};
+  std::size_t bytes{0};
+  int device_index{0};
+  bool is_host_allocated{false};
+};
+
+void free_rdma_raw_buffer(void* ptr, int device_index, bool is_host_allocated) {
+  if (!ptr) return;
+  if (is_host_allocated) {
+    CUDA_CHECK(cudaFreeHost(ptr));
+    return;
+  }
+  CUDA_CHECK(cudaSetDevice(device_index));
+  CUDA_CHECK(cudaFree(ptr));
+}
+
+void free_rdma_raw_buffer_nothrow(void* ptr, int device_index,
+                                  bool is_host_allocated) {
+  if (!ptr) return;
+  if (is_host_allocated) {
+    (void)cudaFreeHost(ptr);
+    return;
+  }
+  (void)cudaSetDevice(device_index);
+  (void)cudaFree(ptr);
+}
+
+void rdma_buffer_dlpack_deleter(DLManagedTensor* managed) {
+  if (!managed) return;
+  auto* ctx = static_cast<RdmaBufferDlpack*>(managed->manager_ctx);
+  if (!ctx) return;
+  free_rdma_raw_buffer_nothrow(ctx->ptr, ctx->device_index,
+                               ctx->is_host_allocated);
+  delete ctx;
+}
+
+void rdma_buffer_capsule_destructor(PyObject* capsule) {
+  if (!PyCapsule_IsValid(capsule, "dltensor")) return;
+  auto* managed =
+      static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule, "dltensor"));
+  if (managed && managed->deleter) managed->deleter(managed);
+}
+
+nb::object make_rdma_buffer_dlpack_capsule(void* ptr, std::size_t bytes,
+                                           int device_index,
+                                           bool is_host_allocated) {
+  auto* ctx = new RdmaBufferDlpack();
+  ctx->ptr = ptr;
+  ctx->bytes = bytes;
+  ctx->device_index = device_index;
+  ctx->is_host_allocated = is_host_allocated;
+  ctx->shape[0] = static_cast<int64_t>(bytes);
+  ctx->managed.manager_ctx = ctx;
+  ctx->managed.deleter = rdma_buffer_dlpack_deleter;
+  ctx->managed.dl_tensor.data = ptr;
+  ctx->managed.dl_tensor.device = {
+    is_host_allocated ? kDLCPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                      : kDLROCM,
+#else
+                      : kDLCUDA,
+#endif
+    is_host_allocated ? 0 : device_index,
+  };
+  ctx->managed.dl_tensor.ndim = 1;
+  ctx->managed.dl_tensor.dtype = {kDLUInt, 8, 1};
+  ctx->managed.dl_tensor.shape = ctx->shape;
+  ctx->managed.dl_tensor.strides = nullptr;
+  ctx->managed.dl_tensor.byte_offset = 0;
+
+  PyObject* capsule =
+      PyCapsule_New(&ctx->managed, "dltensor", rdma_buffer_capsule_destructor);
+  if (!capsule) {
+    rdma_buffer_dlpack_deleter(&ctx->managed);
+    throw nb::python_error();
+  }
+  return nb::steal<nb::object>(capsule);
+}
+
+std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
+    std::size_t num_rdma_bytes, int device_index) {
+  std::size_t const alloc_bytes = std::max<std::size_t>(num_rdma_bytes, 1);
+  bool is_host_allocated = false;
+  void* ptr = nullptr;
+
+  CUDA_CHECK(cudaSetDevice(device_index));
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  CUDA_CHECK(hipExtMallocWithFlags(&ptr, alloc_bytes, hipDeviceMallocUncached));
+  CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+#elif defined(EFA) || defined(USE_DMABUF)
+  CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
+  CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+#else
+  bool const use_host_alloc =
+      num_rdma_bytes > 0 &&
+      !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
+  if (!use_host_alloc) {
+    CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
+    CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+  } else {
+    CUDA_CHECK(cudaMallocHost(&ptr, alloc_bytes));
+    std::memset(ptr, 0, alloc_bytes);
+    is_host_allocated = true;
+  }
+#endif
+
+  try {
+    return {make_rdma_buffer_dlpack_capsule(ptr, alloc_bytes, device_index,
+                                            is_host_allocated),
+            is_host_allocated};
+  } catch (...) {
+    free_rdma_raw_buffer(ptr, device_index, is_host_allocated);
+    throw;
+  }
+}
+
+}  // namespace
+
 static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
     int device_index) {
   std::lock_guard<std::mutex> lk(g_proxies_mu);
@@ -137,7 +301,11 @@ static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
 }
 
 bool is_sm90_compiled() {
-#ifndef DISABLE_SM90_FEATURES
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // disable sm90 features for HIP to avoid tma stuffs, but AMD supports fp8
+  // features
+  return true;
+#elif !defined(DISABLE_SM90_FEATURES)
   return true;
 #else
   return false;
@@ -350,12 +518,13 @@ class Buffer {
       std::uintptr_t is_token_in_rank_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(num_topk > 0);
     EP_HOST_ASSERT(num_experts > 0);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    // NOTE(zhenhuang12): No runime cost. Python now owns the actual tensor
+    // allocation stream before passing raw pointers into C++, so this flag is
+    // advisory on the C++ side.
+    static_cast<void>(allocate_on_comm_stream);
 
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
@@ -493,9 +662,7 @@ class Buffer {
     EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream) {
-      EP_HOST_ASSERT(async);
-    }
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -546,7 +713,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: CPU recv timeout");
         }
       }
@@ -586,8 +753,7 @@ class Buffer {
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     int num_channels = config.num_sms / 2;
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -666,8 +832,7 @@ class Buffer {
     int num_channels = config.num_sms / 2;
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -745,8 +910,7 @@ class Buffer {
     EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -810,7 +974,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
@@ -856,8 +1020,7 @@ class Buffer {
     int const hidden_int4 =
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -956,8 +1119,7 @@ class Buffer {
     int const hidden_int4 =
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -1586,6 +1748,17 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
+
+  m.def(
+      "get_rdma_buffer",
+      [](std::size_t num_rdma_bytes, int device_index) {
+        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index);
+      },
+      nb::arg("num_rdma_bytes"), nb::arg("device_index"),
+      R"doc(
+        Allocate the RDMA scratch buffer outside PyTorch's CUDA allocator and
+        return it as a DLPack capsule plus an `is_host_allocated` flag.
+      )doc");
 
   m.def(
       "can_register_rdma_gpu_buffer",
@@ -2264,4 +2437,6 @@ NB_MODULE(ep, m) {
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
       .def_ro("thread_idx", &FifoProxy::thread_idx);
+
+  nb::set_leak_warnings(false);
 }

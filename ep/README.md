@@ -24,7 +24,7 @@ make -j install
 Alternatively, you can build `uccl.ep` wheel using docker then install:
 ```bash
 # Under uccl
-bash build.sh cuda ep --install
+bash build.sh cu12 ep --install
 ```
 > Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
@@ -38,7 +38,7 @@ python setup.py install
 Alternatively, you can build `uccl.ep` wheel for ROCm7 using docker then install:
 ```bash
 # Under uccl
-bash build.sh rocm ep --install
+bash build.sh roc7 ep --install
 ```
 
 ## Test import `uccl.ep`
@@ -132,6 +132,7 @@ Notes:
 | UCCL_IB_MAX_INFLIGHT_LOW_LATENCY | Max inflight writes per GPU/NIC in LL | 32 |
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
 | UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
+| UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual fences instead of acquire/release semantics (AMD only) | 0 (disabled) |
 
 
 ## Results
@@ -165,10 +166,21 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 
 |   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
 |:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
-| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304GB/s (xGMI)     |
+| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304 GB/s (xGMI)     |
 | Internode |      16      |    74 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   78 GB/s (RDMA)    |
 | Internode |      32      |    60 GB/s (RDMA)    |     32      |    61 GB/s (RDMA)    |  32      |   60 GB/s (RDMA)    |
 | Internode |      64      |    52 GB/s (RDMA)    |     32      |    53 GB/s (RDMA)    |  64      |   51 GB/s (RDMA)    |
+
+
+#### On AMD MI355X with Pollara AI NIC InfiniBand
+
+|   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
+|:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
+| Intranode |       8      |    299 GB/s (xGMI)   |     8       |   336 GB/s (xGMI)    |  8       |  333 GB/s (xGMI)     |
+| Internode |      16      |    82 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   82 GB/s (RDMA)    |
+| Internode |      32      |    59 GB/s (RDMA)    |     32      |    58 GB/s (RDMA)    |  32      |   59 GB/s (RDMA)    |
+| Internode |      64      |    50 GB/s (RDMA)    |     32      |    49 GB/s (RDMA)    |  64      |   49 GB/s (RDMA)    |
+
 
 #### On AMD MI300X with Broadcom Thor2
 

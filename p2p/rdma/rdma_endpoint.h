@@ -9,6 +9,8 @@
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
+#include <unordered_map>
+#include <unordered_set>
 
 class NICEndpoint {
  public:
@@ -33,8 +35,14 @@ class NICEndpoint {
     oob_client_ = std::make_shared<EpollClient>();
 
     allocator_ = std::make_shared<MemoryAllocator>();
-    assert(oob_server_->start());
-    assert(oob_client_->start());
+    if (unlikely(!oob_server_->start())) {
+      UCCL_LOG(ERROR) << "Failed to start OOB server";
+      throw std::runtime_error("Failed to start OOB server");
+    }
+    if (unlikely(!oob_client_->start())) {
+      UCCL_LOG(ERROR) << "Failed to start OOB client";
+      throw std::runtime_error("Failed to start OOB client");
+    }
     initCompressor();
   }
   // Destructor
@@ -73,12 +81,25 @@ class NICEndpoint {
       return false;
     }
 
+    // Register once per unique RdmaContext (contexts sharing the same NIC
+    // device are the same shared_ptr — see initializeContexts).  This avoids
+    // redundant MR registrations that waste resources: with DMA-BUF, each
+    // duplicate consumes a GPU DMA mapping VA slot; with nvidia_peermem,
+    // each duplicate pins the same pages again under a separate PD.
+    std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
         UCCL_LOG(ERROR) << "Error: context at context_id " << context_id
                         << " is null";
         return false;
+      }
+
+      auto it = registered.find(context.get());
+      if (it != registered.end()) {
+        // Same NIC device — reuse the already-registered MR.
+        reg_block->setMRByContextID(context_id, it->second);
+        continue;
       }
 
       struct ibv_mr* mr = context->regMem(reg_block->addr, reg_block->size);
@@ -90,6 +111,7 @@ class NICEndpoint {
         return false;
       }
       reg_block->setMRByContextID(context_id, mr);
+      registered[context.get()] = mr;
     }
 
     return true;
@@ -100,9 +122,12 @@ class NICEndpoint {
       UCCL_LOG(ERROR) << "Error: deregMem called with null reg_block";
       return false;
     }
+    // Deduplicate MR pointers — shared contexts have the same MR in
+    // multiple slots, so we must not double-free.
+    std::unordered_set<ibv_mr*> freed;
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = reg_block->getMRByContextID(ctx);
-      if (mr) {
+      if (mr && freed.insert(mr).second) {
         RdmaContext::deregMem(mr);
       }
     }
@@ -358,42 +383,66 @@ class NICEndpoint {
   }
 
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array,
+                        std::vector<MrCacheHandleRef>& cache_refs,
                         CompressCtx compress_ctx = nullptr) {
     if (unlikely(!data)) {
       UCCL_LOG(ERROR) << "Error: uccl_regmr called with null data";
       return -1;
     }
     Compressor::getInstance().prepareSplitContext(data, len, compress_ctx);
+    // Register once per unique RdmaContext to avoid redundant MR
+    // registrations: with DMA-BUF each duplicate consumes a GPU DMA mapping
+    // VA slot; with nvidia_peermem each duplicate re-pins pages under a
+    // separate PD.  On single-NIC systems all 4 context slots share one
+    // RdmaContext, reducing registrations from 4 to 1.
+    cache_refs.clear();
+    std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
         UCCL_LOG(ERROR) << "Error: context at context_id " << context_id
                         << " is null";
+        for (auto const& ref : cache_refs) {
+          ref.context->releaseCachedMr(ref.entry);
+        }
+        cache_refs.clear();
         return -1;
       }
 
-      // Register memory region for this context
-      struct ibv_mr* mr = context->regMem(data, len);
+      auto it = registered.find(context.get());
+      if (it != registered.end()) {
+        // Same NIC device — reuse the already-registered MR.
+        mr_array.setKeyByContextID(context_id, it->second);
+        continue;
+      }
+
+      MrCacheEntry* entry = context->acquireCachedMr(data, len);
+      struct ibv_mr* mr = entry ? entry->mr : nullptr;
 
       if (unlikely(!mr)) {
         UCCL_LOG(ERROR) << "Error " << errno << " " << strerror(errno)
                         << ": ibv_reg_mr_iova2 failed for data at " << data
                         << " size " << len << " context_id " << context_id;
+        for (auto const& ref : cache_refs) {
+          ref.context->releaseCachedMr(ref.entry);
+        }
+        cache_refs.clear();
         return -1;
       }
 
       // Store the MR in the mr_map using context_id as key
       mr_array.setKeyByContextID(context_id, mr);
+      registered[context.get()] = mr;
+      cache_refs.push_back({context, entry});
     }
 
     return 0;
   }
 
-  inline void uccl_deregmr(MRArray const& mr_array) {
-    for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-      ibv_mr* mr = mr_array.getKeyByContextID(ctx);
-      if (likely(mr != nullptr)) {
-        RdmaContext::deregMem(mr);
+  inline void uccl_deregmr(std::vector<MrCacheHandleRef> const& cache_refs) {
+    for (auto const& ref : cache_refs) {
+      if (likely(ref.context != nullptr)) {
+        ref.context->releaseCachedMr(ref.entry);
       }
     }
   }
@@ -497,8 +546,29 @@ class NICEndpoint {
     auto& device_manager = RdmaDeviceManager::instance();
     assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
 
+    // Share RdmaContext objects across context slots that map to the same
+    // physical NIC device.  Each unique ibv_context + ibv_pd triggers a
+    // separate memory registration (ibv_reg_mr or ibv_reg_dmabuf_mr).
+    // With DMA-BUF, each registration creates a GPU DMA mapping VA entry;
+    // with nvidia_peermem, each registration pins GPU pages under a separate
+    // PD.  Sharing avoids exhausting these resources when multiple
+    // subsystems (DeepEP, NCCL, NIXL) co-exist on the same GPU+NIC.
+    std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
+    int unique_count = 0;
+
     for (int i = 0; i < kNICContextNumber; ++i) {
       size_t device_id = device_ids[i % device_ids.size()];
+
+      auto it = device_ctx_map.find(device_id);
+      if (it != device_ctx_map.end()) {
+        // Same device as an earlier context — share it.
+        contexts_.push_back(it->second);
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "NICEndpoint: Context " << i << " shares device " << device_id
+            << " (" << device_manager.getDevice(device_id)->name() << ")";
+        continue;
+      }
+
       auto device = device_manager.getDevice(device_id);
       if (!device) {
         UCCL_LOG(ERROR) << "Error: Device " << device_id << " not found";
@@ -507,12 +577,17 @@ class NICEndpoint {
       }
       auto context = std::make_shared<RdmaContext>(device, contexts_.size());
       contexts_.push_back(context);
+      device_ctx_map[device_id] = context;
+      unique_count++;
       UCCL_LOG(INFO, UCCL_RDMA)
           << "NICEndpoint: Created context " << i << " for device " << device_id
           << " (" << device->name() << ")";
     }
 
     assert(contexts_.size() == kNICContextNumber);
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "NICEndpoint: " << kNICContextNumber << " context slots, "
+        << unique_count << " unique device(s)";
   }
 
   void process_meta(std::string const& input, std::string& output,
@@ -646,7 +721,8 @@ class NICEndpoint {
         return it->second;
       }
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
     {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
@@ -677,7 +753,8 @@ class NICEndpoint {
       auto it = send_channel_groups_.find(rank_id);
       if (it != send_channel_groups_.end()) return it->second;
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(

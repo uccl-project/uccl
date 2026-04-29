@@ -1,63 +1,42 @@
 #pragma once
 
-#include <atomic>
-#include <memory>
+#include <cstddef>
+#include <cstdint>
 
 namespace UKernel {
 namespace Transport {
 
-enum class RequestType { NONE, SEND, RECV };
-
-struct Request {
-  unsigned id;
-  void* buf;
-  size_t offset;  // default 0
-  size_t len;
-  uint16_t local_mr_id;
-  uint16_t remote_mr_id;
-  bool on_gpu;
-  RequestType request_type;
-
-  std::atomic<bool> running{false};
-  std::atomic<bool> finished{false};
-  std::atomic<bool> failed{false};
-  std::atomic<bool> notified{false};
-  static std::atomic<unsigned> global_id_counter;
-
-  std::atomic<int> pending_signaled{0};  // How many qps we used
-
-  void on_comm_done();
-
-  Request(unsigned id, void* buf, size_t offset, size_t len,
-          uint16_t local_mr_id, uint16_t remote_mr_id, bool gpu,
-          RequestType reqtype = RequestType::SEND)
-      : id(id),
-        buf(buf),
-        offset(offset),
-        len(len),
-        local_mr_id(local_mr_id),
-        remote_mr_id(remote_mr_id),
-        on_gpu(gpu),
-        request_type(reqtype) {}
+struct LocalSlice {
+  uint32_t buffer_id = 0;
+  size_t offset = 0;
+  size_t bytes = 0;
 };
 
-static inline unsigned make_request_id(uint16_t receiver_rank, uint8_t mr_id,
-                                       uint16_t seq, bool is_red = false) {
-  unsigned base = ((static_cast<unsigned>(receiver_rank) & 0xFFF)
-                   << 20) |  // [30:20] 11 bits → receiver_rank (2048)
-                  ((static_cast<unsigned>(mr_id) & 0xFF)
-                   << 12) |       // [19:12] 8 bits  → mr_id (255)
-                  (seq & 0xFFF);  // [11:0]  12 bits → seq (4096)
+struct RemoteWriteHint {
+  // One-sided remote write hint used by UCCL only.
+  // `addr`/`key` identify remote target memory, other fields are transport-
+  // specific FIFO metadata.
+  uint64_t addr = 0;
+  uint32_t key = 0;
+  uint32_t capacity = 0;
+  uint32_t rid = 0;
+  uint32_t engine_offset = 0;
 
-  return is_red ? (0x80000000u | base) : base;
-}
+  bool usable() const { return addr != 0 && key != 0; }
+};
 
-static inline void parse_request_id(unsigned req_id, uint16_t& receiver_rank,
-                                    uint8_t& mr_id, uint16_t& seq) {
-  receiver_rank = (req_id >> 20) & 0xFFF;
-  mr_id = (req_id >> 12) & 0xFF;
-  seq = req_id & 0xFFF;
-}
+struct RemoteSlice {
+  // Cross-transport destination hint contract:
+  // 1) Common semantic: destination is [remote MR `buffer_id`] + `offset`.
+  // 2) IPC/TCP/UCCL all support this common hint (`buffer_id`, `offset`).
+  // 3) UCCL may additionally use `write` for one-sided write fast path.
+  //    IPC/TCP ignore `write`.
+  uint32_t buffer_id = 0;
+  size_t offset = 0;
+  RemoteWriteHint write{};
+
+  bool has_write_hint() const { return write.usable(); }
+};
 
 }  // namespace Transport
 }  // namespace UKernel

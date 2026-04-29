@@ -1,5 +1,7 @@
 #pragma once
 
+#include "include/common.h"
+#include "include/nccl_types.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -7,13 +9,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#if defined(UCCL_P2P_USE_RCCL)
-#include <rccl/rccl.h>
-#else
-#include <nccl.h>
-#endif
-
-#include "include/common.h"
 
 namespace uccl {
 

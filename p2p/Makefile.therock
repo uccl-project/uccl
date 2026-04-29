@@ -7,7 +7,7 @@ HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 RDMA_HOME := ../collective/rdma
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lz -lelf -libverbs -lpthread
 

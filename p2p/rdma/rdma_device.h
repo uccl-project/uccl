@@ -17,20 +17,17 @@ class RDMADeviceSelectionStrategy {
       int gpu_idx) = 0;
 };
 
-// Include device selection strategy based on build configuration
-#ifdef UCCL_P2P_USE_EFA
+#include "include/transport_type.h"
 #include "providers/efa/rdma_device_selection_efa.h"
-#else
 #include "providers/ib/rdma_device_selection_ib.h"
-#endif
 
+// Factory: select IB or EFA device strategy at runtime.
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
 createDeviceSelectionStrategy() {
-#ifdef UCCL_P2P_USE_EFA
-  return std::make_unique<EFADeviceSelectionStrategy>();
-#else
-  return std::make_unique<IBDeviceSelectionStrategy>();
-#endif
+  if (uccl::is_efa_transport())
+    return std::make_unique<EFADeviceSelectionStrategy>();
+  else
+    return std::make_unique<IBDeviceSelectionStrategy>();
 }
 
 class RdmaDevice {
@@ -84,33 +81,86 @@ class RdmaDeviceManager {
 
   std::vector<size_t> get_best_dev_idx(int gpu_idx) {
     // Allow user to override NIC selection via environment variable.
-    // UCCL_P2P_RDMA_DEV can be a device name (e.g. "irdma-mkp0") or
-    // a numeric index (e.g. "4") into the ibv_get_device_list order.
+    // UCCL_P2P_RDMA_DEV can be a comma-separated list of device names
+    // (e.g. "irdma-mkp0,irdma-mkp1") and/or numeric indices (e.g. "4,5")
+    // into the `ibv_get_device_list` order.
     char const* env_dev = getenv("UCCL_P2P_RDMA_DEV");
     if (env_dev) {
       std::string env_str(env_dev);
-      // Try numeric index first
-      try {
-        size_t idx = std::stoul(env_str);
-        if (idx < devices_.size()) {
-          UCCL_LOG(INFO, UCCL_RDMA)
-              << "UCCL_P2P_RDMA_DEV override: using device index " << idx
-              << " (" << devices_[idx]->name() << ")";
-          return {idx};
+
+      auto add_unique_idx = [&](size_t idx, std::vector<size_t>& out) {
+        if (std::find(out.begin(), out.end(), idx) == out.end())
+          out.push_back(idx);
+      };
+
+      std::vector<size_t> selected_dev_indices;
+      selected_dev_indices.reserve(devices_.size());
+
+      std::stringstream ss(env_str);
+      std::string token;
+      while (std::getline(ss, token, ',')) {
+        // Trim ASCII whitespace around the token.
+        auto start = token.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) continue;
+        auto end = token.find_last_not_of(" \t\n\r");
+        token = token.substr(start, end - start + 1);
+        if (token.empty()) continue;
+
+        bool found = false;
+
+        // Try numeric index token first (must match the whole token).
+        try {
+          size_t pos = 0;
+          size_t idx = std::stoul(token, &pos);
+          if (pos == token.size()) {
+            if (idx < devices_.size()) {
+              add_unique_idx(idx, selected_dev_indices);
+              UCCL_LOG(INFO, UCCL_RDMA)
+                  << "UCCL_P2P_RDMA_DEV override: token '" << token
+                  << "' -> using device index " << idx << " ("
+                  << devices_[idx]->name() << ")";
+              found = true;
+            }
+          }
+        } catch (...) {
         }
-      } catch (...) {
-      }
-      // Try matching by name
-      for (size_t i = 0; i < devices_.size(); i++) {
-        if (devices_[i]->name() == env_str) {
-          UCCL_LOG(INFO, UCCL_RDMA)
-              << "UCCL_P2P_RDMA_DEV override: using device " << env_str
-              << " (index " << i << ")";
-          return {i};
+
+        // If numeric parse didn't match / was out of range, try matching by
+        // name.
+        if (!found) {
+          for (size_t i = 0; i < devices_.size(); i++) {
+            if (devices_[i]->name() == token) {
+              add_unique_idx(i, selected_dev_indices);
+              UCCL_LOG(INFO, UCCL_RDMA)
+                  << "UCCL_P2P_RDMA_DEV override: token '" << token
+                  << "' -> using device " << token << " (index " << i << ")";
+              found = true;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          UCCL_LOG(WARN) << "UCCL_P2P_RDMA_DEV token '" << token
+                         << "' not found (neither index nor device name)";
         }
       }
+
+      if (!selected_dev_indices.empty()) {
+        std::stringstream summary;
+        summary << "UCCL_P2P_RDMA_DEV override: using device indices [";
+        for (size_t i = 0; i < selected_dev_indices.size(); i++) {
+          if (i != 0) summary << ", ";
+          auto idx = selected_dev_indices[i];
+          summary << idx;
+        }
+        summary << "]";
+        UCCL_LOG(INFO, UCCL_RDMA) << summary.str();
+        return selected_dev_indices;
+      }
+
       UCCL_LOG(WARN) << "UCCL_P2P_RDMA_DEV=" << env_str
-                     << " not found, falling back to auto-selection";
+                     << " not usable, falling back to auto-selection";
     }
 
     // Ranked by GPU idx
