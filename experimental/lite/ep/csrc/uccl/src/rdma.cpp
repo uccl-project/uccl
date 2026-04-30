@@ -1399,13 +1399,15 @@ static void post_rdma_async_batched_normal_mode(
       std::abort();
     }
     size_t const k = wr_ids.size();
+    size_t const num_data_qps = ctx->data_qps_by_channel.size();
     std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
     ring_to_indices.reserve(k);
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
       size_t ring_idx =
           static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
-      ring_to_indices[ring_idx].push_back(i);
+      size_t qp_ring_idx = num_data_qps ? (ring_idx % num_data_qps) : 0;
+      ring_to_indices[qp_ring_idx].push_back(i);
     }
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
@@ -1578,9 +1580,6 @@ static void post_rdma_async_batched_normal_mode(
             wr.opcode = IBV_WR_RDMA_WRITE;
             wrs.push_back(wr);
           }
-          // Only signal the last sub-WR per command; QP ordering
-          // guarantees prior sub-WRs are complete when it completes.
-          wrs.back().send_flags = IBV_SEND_SIGNALED;
 #else
           ibv_sge sge{};
           sge.addr = laddr;
@@ -1594,7 +1593,6 @@ static void post_rdma_async_batched_normal_mode(
           wr.wr.rdma.remote_addr = remote_addr;
           wr.wr.rdma.rkey = ctx->remote_rkey;
           wr.opcode = IBV_WR_RDMA_WRITE;
-          wr.send_flags = IBV_SEND_SIGNALED;
           wrs.push_back(wr);
 #endif
 
@@ -1636,6 +1634,12 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t w = 0; w < wrs.size(); ++w) {
           wrs[w].sg_list = &sges[w];
           wrs[w].next = (w + 1 < wrs.size()) ? &wrs[w + 1] : nullptr;
+        }
+        if (!wrs.empty()) {
+          wrs.back().send_flags |= IBV_SEND_SIGNALED;
+          if (!ring_wrids.empty()) {
+            S.batched_wr_completions[wrs.back().wr_id] = std::move(ring_wrids);
+          }
         }
 
         // Post the chain
@@ -1725,9 +1729,6 @@ static void post_rdma_async_batched_normal_mode(
             wr.opcode = IBV_WR_RDMA_WRITE;
             wrs.push_back(wr);
           }
-          // Only signal the last sub-WR per command; QP ordering
-          // guarantees prior sub-WRs are complete when it completes.
-          wrs.back().send_flags = IBV_SEND_SIGNALED;
 #else
           ibv_sge sge{};
           sge.addr = laddr;
@@ -1741,7 +1742,6 @@ static void post_rdma_async_batched_normal_mode(
           wr.wr.rdma.remote_addr = remote_addr;
           wr.wr.rdma.rkey = ctx->remote_rkey;
           wr.opcode = IBV_WR_RDMA_WRITE;
-          wr.send_flags = IBV_SEND_SIGNALED;
           wrs.push_back(wr);
 #endif
 
@@ -1772,6 +1772,12 @@ static void post_rdma_async_batched_normal_mode(
           wrs[w].sg_list = &sges[w];
           wrs[w].next = (w + 1 < wrs.size()) ? &wrs[w + 1] : nullptr;
         }
+        if (!wrs.empty()) {
+          wrs.back().send_flags |= IBV_SEND_SIGNALED;
+          if (!ring_wrids.empty()) {
+            S.batched_wr_completions[wrs.back().wr_id] = std::move(ring_wrids);
+          }
+        }
 
         // Post the chain
         ibv_send_wr* bad = nullptr;
@@ -1784,7 +1790,6 @@ static void post_rdma_async_batched_normal_mode(
                     bad->wr_id);
           std::abort();
         }
-        // All WRs in this group are signaled; no batched WR bookkeeping needed.
       }
 #endif
     }
@@ -2093,7 +2098,13 @@ void local_process_completions(ProxyCtx& S,
           }
         }
 #endif
-        acked_wrs.insert(wc[i].wr_id);
+        auto batch_it = S.batched_wr_completions.find(wc[i].wr_id);
+        if (batch_it != S.batched_wr_completions.end()) {
+          for (auto batch_wrid : batch_it->second) acked_wrs.insert(batch_wrid);
+          S.batched_wr_completions.erase(batch_it);
+        } else {
+          acked_wrs.insert(wc[i].wr_id);
+        }
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&

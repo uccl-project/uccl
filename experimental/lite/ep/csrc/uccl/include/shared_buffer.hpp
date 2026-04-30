@@ -118,7 +118,7 @@ inline SharedBuffer allocate_shared_buffer(
   // Register the entire region with CUDA for GPU access.
   cudaSetDevice(device_index);
   auto err = cudaHostRegister(sb.mmap_ptr, sb.total_size,
-                              cudaHostRegisterMapped);
+                               cudaHostRegisterMapped);
   if (err != cudaSuccess) {
     fprintf(stderr, "cudaHostRegister failed: %s\n", cudaGetErrorString(err));
     std::abort();

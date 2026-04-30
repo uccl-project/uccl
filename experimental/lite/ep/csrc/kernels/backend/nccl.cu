@@ -88,8 +88,8 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
     ncclCommProperties props = NCCL_COMM_PROPERTIES_INITIALIZER;
     NCCL_CHECK(ncclCommQueryProperties(comm, &props));
     const auto gin_type = allow_hybrid_mode ? props.railedGinType : props.ginType;
-    const bool use_uccl_proxy = get_env<int>("EP_USE_UCCL_PROXY", 0) != 0 or
-                                get_env<int>("UCCL_FORCE_NO_GDR", 0) != 0;
+    const bool use_uccl_proxy =
+        get_env<int>("EP_UCCL_PROXY_ACTIVE", get_env<int>("UCCL_FORCE_NO_GDR", 0)) != 0;
     if (not use_uccl_proxy) {
         EP_HOST_ASSERT(
             gin_type != NCCL_GIN_TYPE_NONE and

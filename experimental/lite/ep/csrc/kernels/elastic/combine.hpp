@@ -104,10 +104,13 @@ static void __instantiate_kernel() {{
                                                      args.psum_num_recv_tokens_per_scaleup_rank,
                                                      args.token_metadata_at_forward,
                                                      args.channel_linked_list,
-                                                     args.nccl_dev_comm, args.nccl_window,
-                                                     args.buffer, args.workspace,
-                                                     args.scaleout_rank_idx, args.scaleup_rank_idx,
-                                                     args.num_reduced_tokens));
+                                                      args.nccl_dev_comm, args.nccl_window,
+                                                      args.buffer, args.workspace,
+                                                      args.scaleout_rank_idx, args.scaleup_rank_idx,
+                                                      args.num_reduced_tokens,
+                                                      args.uccl_d2h_channel_addrs,
+                                                      args.uccl_num_d2h_channel_addrs,
+                                                      args.uccl_signal_shadow));
         }
     }
 };

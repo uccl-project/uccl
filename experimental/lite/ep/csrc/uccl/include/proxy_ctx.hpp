@@ -190,6 +190,7 @@ struct ProxyCtx {
 
   /* low_latency_buffer_idx, expert_idx, dst_rank */
   std::unordered_map<uint64_t, WriteStruct> wr_id_to_write_struct;
+  std::unordered_map<uint64_t, std::vector<uint64_t>> batched_wr_completions;
   TokenCounter<DispatchTokenKey> dispatch_sent_counter;
   TokenCounter<DispatchTokenKey> combine_sent_counter;
   TokenCounter<NormalTokenKey> normal_sent_counter;

@@ -165,17 +165,25 @@ class ElasticBuffer:
         self.group = group
         self.rank_idx = group.rank()
         self.num_ranks = group.size()
-        self.use_uccl_proxy = int(os.environ.get('EP_USE_UCCL_PROXY', os.environ.get('UCCL_FORCE_NO_GDR', '0')))
-        if self.use_uccl_proxy:
+        self.force_no_gdr = int(os.environ.get('UCCL_FORCE_NO_GDR', '0'))
+        self.request_uccl_proxy = int(os.environ.get('EP_USE_UCCL_PROXY', '0')) or self.force_no_gdr
+        self.use_uccl_proxy = self.force_no_gdr
+        if self.request_uccl_proxy:
             os.environ['EP_FORCE_NO_NVLINK'] = '1'
-            os.environ.setdefault('NCCL_NET_GDR_LEVEL', '0')
+            os.environ.setdefault('NCCL_NET_GDR_LEVEL', '0' if self.force_no_gdr else '5')
         force_no_nvlink = int(os.environ.get('EP_FORCE_NO_NVLINK', '0'))
         if force_no_nvlink:
-            allow_hybrid_mode = False
-            # The SM89/no-NVLink fallback uses NCCL proxy GIN without GPU-direct
-            # access. Keep combine correctness by using the single-reduction
-            # layout, which only trades extra traffic for precision/safety.
-            allow_multiple_reduction = False
+            if self.request_uccl_proxy:
+                # In UCCL mode, "no NVLink" means every rank is an RDMA
+                # scaleout rank with a singleton scaleup domain. Disabling
+                # hybrid mode would collapse 2n x 1g into 1 x 2g.
+                allow_hybrid_mode = True
+            else:
+                allow_hybrid_mode = False
+                # The SM89/no-NVLink fallback uses NCCL proxy GIN without GPU-direct
+                # access. Keep combine correctness by using the single-reduction
+                # layout, which only trades extra traffic for precision/safety.
+                allow_multiple_reduction = False
         self.allow_hybrid_mode = allow_hybrid_mode
         self.allow_multiple_reduction = allow_multiple_reduction
         self.prefer_overlap_with_compute = prefer_overlap_with_compute
@@ -227,7 +235,7 @@ class ElasticBuffer:
         local_rank = self.rank_idx % local_world_size
         node_idx = self.rank_idx // local_world_size
         uccl_shm_id = os.environ.get('EP_UCCL_SHM_ID')
-        if self.use_uccl_proxy and uccl_shm_id is None:
+        if self.request_uccl_proxy and uccl_shm_id is None:
             uccl_shm_id_obj = [None]
             if self.rank_idx == 0:
                 uccl_shm_id_obj[0] = f"{os.environ.get('MASTER_PORT', '0')}_{self.num_ranks}_{uuid.uuid4().hex}"
@@ -238,15 +246,16 @@ class ElasticBuffer:
         self.runtime = _C.ElasticBuffer(group.rank(), group.size(),
                                          self.nccl_comm_handle.get(),
                                          num_bytes,
-                                        deterministic,
-                                        allow_hybrid_mode,
-                                        allow_multiple_reduction,
+                                         deterministic,
+                                         allow_hybrid_mode,
+                                         allow_multiple_reduction,
                                          prefer_overlap_with_compute,
                                          sl_idx, num_allocated_qps,
                                          num_cpu_timeout_secs, num_gpu_timeout_secs,
                                          self.explicitly_destroy,
                                          node_idx, local_rank, local_world_size,
                                          uccl_shm_id)
+        self.use_uccl_proxy = bool(self.runtime.is_uccl_proxy_active())
 
         if self.use_uccl_proxy:
             local_ptr, local_nbytes, listen_ports, _ = self.runtime.get_uccl_local_metadata()
@@ -302,6 +311,10 @@ class ElasticBuffer:
         assert self.explicitly_destroy
 
         if self.runtime is not None:
+            if self.runtime.is_uccl_proxy_active():
+                torch.cuda.synchronize()
+                self.group.barrier()
+                torch.cuda.synchronize()
             self.runtime.destroy()
             self.runtime = None  # Cannot use anymore
             self.nccl_comm_handle = None
@@ -400,6 +413,11 @@ class ElasticBuffer:
             use_comm_stream: whether to use the communication stream (otherwise uses the current compute stream).
             with_cpu_sync: whether to also call `cudaDeviceSynchronize` before and after the barrier.
         """
+        if self.runtime.is_uccl_proxy_active():
+            torch.cuda.synchronize()
+            self.group.barrier()
+            torch.cuda.synchronize()
+            return
         self.runtime.barrier(use_comm_stream, with_cpu_sync)
 
     @staticmethod
@@ -685,8 +703,13 @@ class ElasticBuffer:
             nvlink_traffic += self.num_nvlink_ranks / self.num_ranks * (1 - 1 / self.num_nvlink_ranks)  # Except local bypass
             rdma_traffic += (self.num_ranks - self.num_nvlink_ranks) / self.num_ranks
 
+        def get_link_time(traffic: float, bandwidth_gbs: float) -> float:
+            if traffic == 0:
+                return 0
+            return traffic / bandwidth_gbs if bandwidth_gbs > 0 else float('inf')
+
         # Found the bounded one
-        if self.num_scaleout_ranks > 1 and (rdma_traffic / rdma_gbs) > (nvlink_traffic / nvlink_gbs):
+        if self.num_scaleout_ranks > 1 and get_link_time(rdma_traffic, rdma_gbs) > get_link_time(nvlink_traffic, nvlink_gbs):
             bounded_traffic, bounded_gbs = rdma_traffic, rdma_gbs
         else:
             bounded_traffic, bounded_gbs = nvlink_traffic, nvlink_gbs

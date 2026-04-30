@@ -148,6 +148,7 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
     // Flush all QPs by all SMs (only needed for release semantics)
     if constexpr (kFlushStores) {
 #ifdef EP_USE_UCCL_PROXY
+        (gridDim.x > 1) ? cooperative_groups::this_grid().sync() : __syncthreads();
         if (global_warp_idx == 0)
             gin_handle.gin.flush(ncclCoopWarp());
 #else

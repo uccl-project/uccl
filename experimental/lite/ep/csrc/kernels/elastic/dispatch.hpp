@@ -200,7 +200,10 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
-                args.scaleout_rank_idx, args.scaleup_rank_idx
+                args.scaleout_rank_idx, args.scaleup_rank_idx,
+                args.uccl_d2h_channel_addrs,
+                args.uccl_num_d2h_channel_addrs,
+                args.uccl_signal_shadow
             ));
         }
     }

@@ -45,7 +45,10 @@ hybrid_dispatch_impl(
     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
     void* buffer,
     void* workspace, void* mapped_host_workspace,
-    const int scaleout_rank_idx, const int scaleup_rank_idx) {
+    const int scaleout_rank_idx, const int scaleup_rank_idx,
+    const uint64_t* uccl_d2h_channel_addrs,
+    const int uccl_num_d2h_channel_addrs,
+    uint64_t* uccl_signal_shadow) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     constexpr int kNumExpertsPerScaleout = kNumExperts / kNumScaleoutRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumScaleupRanks == 0, "Invalid number of experts or ranks");
@@ -75,7 +78,10 @@ hybrid_dispatch_impl(
     // Each warp is a channel
     const auto [qp_idx, sharing_mode] = comm::get_qp_mode<kNumSMs, kNumQPs, kNumChannelsPerSM, (kNumNotifyWarps > 0)>(
         sm_idx, (warp_idx - kNumNotifyWarps) % kNumChannelsPerSM, warp_idx < kNumNotifyWarps);
-    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace);
+    const auto gin = handle::NCCLGin(
+        nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
+        uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
+        uccl_signal_shadow, scaleout_rank_idx, scaleup_rank_idx);
 
     // Global parallel barriers for scale-out subteam and scale-up subteam
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
@@ -196,7 +202,12 @@ hybrid_dispatch_impl(
                     const auto ptr = get_ptr_func(j);
                     int decoded;
                     comm::timeout_while<kNumTimeoutCycles>([&](const bool& is_last_check){
+#ifdef EP_USE_UCCL_PROXY
+                        decoded = math::encode_decode_positive(
+                            static_cast<int>(uccl::ld_cv_u32(reinterpret_cast<const uint32_t*>(ptr))));
+#else
                         decoded = math::encode_decode_positive(ptx::ld_acquire_sys<int>(ptr));
+#endif
                         if (math::is_decoded_positive_ready(decoded))
                             return true;
 
@@ -339,7 +350,11 @@ hybrid_dispatch_impl(
 
                 // NOTES: the "release" scope will be `sys` for the local rank (we may involve NVLink so not `gpu`)
                 // For RDMA requests, "release" is ensured by "atomic"
+#ifdef EP_USE_UCCL_PROXY
+                gin.put_value<ncclTeamTagRail>(ptr, signaled_tail, lane_idx);
+#else
                 gin.red_add_rel<ncclTeamTagRail>(ptr, signaled_tail - old_signaled_tail, lane_idx);
+#endif
                 stored_old_scaleout_tail = stored_scaleout_tail;
             }
             __syncwarp();
@@ -512,8 +527,13 @@ hybrid_dispatch_impl(
 
                 // Read new signaled tails
                 if (lane_idx < kNumScaleoutRanks) {
-                    const auto signaled_tail = ptx::ld_acquire_sys<int64_t>(
-                        workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx));
+                    const auto wait_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
+#ifdef EP_USE_UCCL_PROXY
+                    const auto signaled_tail =
+                        static_cast<int64_t>(uccl::ld_cv_u64(reinterpret_cast<const uint64_t*>(wait_ptr)));
+#else
+                    const auto signaled_tail = ptx::ld_acquire_sys<int64_t>(wait_ptr);
+#endif
                     math::unpack2<int, int64_t>(signaled_tail, stored_finish_flag, stored_scaleout_tail_idx);
                 }
                 __syncwarp();

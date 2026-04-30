@@ -44,17 +44,29 @@ struct NCCLGin {
             return signal_shadow_base + static_cast<int>(signal_idx);
         }
 
-        template <typename coop_t>
-        __device__ __forceinline__ void flush(const coop_t&) const {
+        __device__ __forceinline__ void flush(const ncclCoopWarp&) const {
+            if (ptx::get_lane_idx() == 0)
+                uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs);
+            __syncwarp();
+        }
+
+        __device__ __forceinline__ void flush(const ncclCoopThread&) const {
             uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs);
         }
 
         __device__ __forceinline__ void wait(ncclGinRequest_t&) const {}
     } gin;
     int local_rank_idx;
+    int local_scaleout_rank_idx;
+    int local_scaleup_rank_idx;
     const uint64_t* uccl_d2h_channel_addrs;
     int uccl_num_d2h_channel_addrs;
     uint64_t* uccl_signal_shadow;
+
+    __device__ __forceinline__ int get_uccl_channel_idx() const {
+        return static_cast<int>(blockIdx.x) * (static_cast<int>(blockDim.x) / 32) +
+               (static_cast<int>(threadIdx.x) / 32);
+    }
 #endif
     uint64_t lsa_base_ptr;
 
@@ -67,7 +79,9 @@ struct NCCLGin {
             const uint64_t* uccl_d2h_channel_addrs = nullptr,
             const int& uccl_num_d2h_channel_addrs = 0,
             const int& local_rank_idx = -1,
-            uint64_t* uccl_signal_shadow = nullptr):
+            uint64_t* uccl_signal_shadow = nullptr,
+            const int& local_scaleout_rank_idx = -1,
+            const int& local_scaleup_rank_idx = -1):
         nccl_dev_comm(nccl_dev_comm), nccl_window(nccl_window),
 #ifndef EP_USE_UCCL_PROXY
         gin(ncclGin(nccl_dev_comm, qp_idx, resource_sharing_mode)),
@@ -81,6 +95,8 @@ struct NCCLGin {
             uccl_num_d2h_channel_addrs,
             uccl_signal_shadow),
         local_rank_idx(local_rank_idx),
+        local_scaleout_rank_idx(local_scaleout_rank_idx >= 0 ? local_scaleout_rank_idx : local_rank_idx),
+        local_scaleup_rank_idx(local_scaleup_rank_idx >= 0 ? local_scaleup_rank_idx : local_rank_idx),
         uccl_d2h_channel_addrs(uccl_d2h_channel_addrs),
         uccl_num_d2h_channel_addrs(uccl_num_d2h_channel_addrs),
         uccl_signal_shadow(uccl_signal_shadow) {
@@ -91,7 +107,15 @@ struct NCCLGin {
     template <typename team_t>
     __device__ __forceinline__ bool is_nvlink_accessible(const int& dst_rank_idx) const {
 #ifdef EP_USE_UCCL_PROXY
-        return dst_rank_idx == local_rank_idx;
+        IS_TEAM_LSA({
+            return dst_rank_idx == local_scaleup_rank_idx;
+        })
+        IS_TEAM_RAIL({
+            return dst_rank_idx == local_scaleout_rank_idx;
+        })
+        IS_TEAM_WORLD({
+            return dst_rank_idx == local_rank_idx;
+        })
 #else
 #ifdef EP_FORCE_NO_NVLINK
         IS_TEAM_LSA({
@@ -134,7 +158,15 @@ struct NCCLGin {
     __device__ __forceinline__
     dtype_t* get_sym_ptr(dtype_t* ptr, const int& dst_rank_idx) const {
 #ifdef EP_USE_UCCL_PROXY
-        return dst_rank_idx == local_rank_idx ? ptr : nullptr;
+        IS_TEAM_LSA({
+            return dst_rank_idx == local_scaleup_rank_idx ? ptr : nullptr;
+        })
+        IS_TEAM_RAIL({
+            return dst_rank_idx == local_scaleout_rank_idx ? ptr : nullptr;
+        })
+        IS_TEAM_WORLD({
+            return dst_rank_idx == local_rank_idx ? ptr : nullptr;
+        })
 #else
         IS_TEAM_RAIL({
             return team_rail.rank == dst_rank_idx ? ptr : nullptr;
@@ -285,9 +317,7 @@ struct NCCLGin {
             return;
         }
 
-        const int channel_idx =
-            static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
-            static_cast<int>(threadIdx.x);
+        const int channel_idx = get_uccl_channel_idx();
         (void)lane_idx;
         uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
             reinterpret_cast<uint64_t>(recv_sym_ptr) - lsa_base_ptr,
@@ -314,8 +344,7 @@ struct NCCLGin {
         } else {
 #ifdef EP_USE_UCCL_PROXY
             EP_DEVICE_ASSERT(sizeof(dtype_t) <= sizeof(uint64_t));
-            const int channel_idx = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
-                                    static_cast<int>(threadIdx.x);
+            const int channel_idx = get_uccl_channel_idx();
             uccl::nvshmemi_ibgda_put_value_nbi(
                 reinterpret_cast<uint64_t>(sym_ptr) - lsa_base_ptr,
                 static_cast<uint64_t>(value), sizeof(dtype_t), dst_rank_idx,

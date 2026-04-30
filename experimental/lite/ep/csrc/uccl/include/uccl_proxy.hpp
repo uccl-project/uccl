@@ -20,7 +20,7 @@ class UcclProxy {
             bool gpu_buffer_is_host_allocated = false,
             uintptr_t shared_rdma_base = 0, size_t shared_rdma_per_rank = 0,
             uintptr_t shared_atomic_base = 0, size_t shared_atomic_per_rank = 0,
-            int local_world_size = 0);
+            int local_world_size = 0, bool owns_gpu_buffer = true);
   ~UcclProxy();
 
   void start_sender();

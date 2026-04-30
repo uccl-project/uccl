@@ -21,8 +21,10 @@ from deep_ep.utils.testing import bench_kineto
 # noinspection PyUnusedLocal,PyShadowingNames
 def enumerate_ep_modes():
     fp8_modes = (0, ) if int(os.environ.get('EP_TEST_DISABLE_FP8', '0')) else (1, 0)
-    for do_handle_copy in (1, 0):
-        for expert_alignment in (128, 1):
+    handle_copy_modes = (int(os.environ['EP_TEST_DO_HANDLE_COPY']), ) if 'EP_TEST_DO_HANDLE_COPY' in os.environ else (1, 0)
+    expert_alignment_modes = (int(os.environ['EP_TEST_EXPERT_ALIGNMENT']), ) if 'EP_TEST_EXPERT_ALIGNMENT' in os.environ else (128, 1)
+    for do_handle_copy in handle_copy_modes:
+        for expert_alignment in expert_alignment_modes:
             for use_fp8_dispatch in fp8_modes:
                 for num_bias in (0, 1, 2):
                     for with_previous_event in (0, 1):
@@ -40,6 +42,11 @@ def launch(buffer: deep_ep.ElasticBuffer, name: str,
     values = getattr(buffer, name)(**params)
     values[-1].current_stream_wait() if async_with_compute_stream else ()
     return values
+
+
+def trace_step(buffer: deep_ep.ElasticBuffer, message: str):
+    if os.environ.get('EP_TEST_TRACE_STEPS', '0') != '0':
+        print(f'[EP_TEST_TRACE] rank={buffer.rank_idx}: {message}', flush=True)
 
 
 def fold_expanded(expanded: Union[Tuple[torch.Tensor], torch.Tensor],
@@ -73,6 +80,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
     num_scaleout_ranks, num_scaleup_ranks = buffer.get_logical_domain_size()
     num_max_tokens_per_rank, num_tokens, hidden = args.num_tokens, max(1, args.num_tokens - dist.get_rank()), args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
+    basic_only = os.environ.get('EP_TEST_BASIC_ONLY', '0') != '0'
     num_local_experts = num_experts // buffer.num_ranks
     num_sms = buffer.get_theoretical_num_sms(num_experts, num_topk) if args.num_sms == 0 else args.num_sms
     num_qps = buffer.get_theoretical_num_qps(num_sms) if args.num_qps == 0 else args.num_qps
@@ -147,6 +155,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             torch.cuda.synchronize()
 
         # Do dispatch
+        trace_step(buffer, 'before dispatch')
         dispatch_args = dict(
             x=x, topk_idx=topk_idx, topk_weights=topk_weights,
             num_sms=num_sms, num_qps=num_qps,
@@ -157,29 +166,40 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             do_handle_copy=do_handle_copy, do_cpu_sync=args.do_cpu_sync)
         recv_x, recv_topk_idx, recv_topk_weights, handle, dispatch_event = \
             launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, dispatch_args)
+        trace_step(buffer, 'after dispatch')
         recv_x_bf16 = per_token_cast_back(recv_x[0], recv_x[1]) if use_fp8_dispatch else recv_x
 
-        # Expanding mode
-        expanded_dispatch_args = dispatch_args | dict(do_expand=True, use_tma_aligned_col_major_sf=True)
-        expanded_recv_x, expanded_recv_topk_idx, expanded_recv_topk_weights, expanded_handle, expanded_dispatch_event = \
-            launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, expanded_dispatch_args)
-        expanded_recv_x_bf16 = per_token_cast_back(expanded_recv_x[0], expanded_recv_x[1]) if use_fp8_dispatch else expanded_recv_x
+        if not basic_only:
+            # Expanding mode
+            trace_step(buffer, 'before expanded dispatch')
+            expanded_dispatch_args = dispatch_args | dict(do_expand=True, use_tma_aligned_col_major_sf=True)
+            expanded_recv_x, expanded_recv_topk_idx, expanded_recv_topk_weights, expanded_handle, expanded_dispatch_event = \
+                launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, expanded_dispatch_args)
+            trace_step(buffer, 'after expanded dispatch')
+            expanded_recv_x_bf16 = per_token_cast_back(expanded_recv_x[0], expanded_recv_x[1]) if use_fp8_dispatch else expanded_recv_x
 
-        # Cached mode
-        cached_dispatch_args = dict(
-            x=x,
-            num_sms=num_sms, num_qps=num_qps,
-            async_with_compute_stream=async_with_compute_stream,
-            allocate_on_comm_stream=allocate_on_comm_stream,
-            handle=handle)
-        cached_recv_x, cached_recv_topk_idx, cached_recv_topk_weights, cached_handle, cached_dispatch_event = \
-            launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, cached_dispatch_args)
-        
+            # Cached mode
+            trace_step(buffer, 'before cached dispatch')
+            cached_dispatch_args = dict(
+                x=x,
+                num_sms=num_sms, num_qps=num_qps,
+                async_with_compute_stream=async_with_compute_stream,
+                allocate_on_comm_stream=allocate_on_comm_stream,
+                handle=handle)
+            cached_recv_x, cached_recv_topk_idx, cached_recv_topk_weights, cached_handle, cached_dispatch_event = \
+                launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, cached_dispatch_args)
+            trace_step(buffer, 'after cached dispatch')
+
         # Count the number of received tokens
+        trace_step(buffer, 'before token counts')
         num_recv_tokens = handle.psum_num_recv_tokens_per_scaleup_rank[-1].item()
-        assert num_recv_tokens == expanded_handle.psum_num_recv_tokens_per_scaleup_rank[-1].item(), \
-               'Expand should not affect the number of received tokens.'
-        num_expanded_tokens = expanded_handle.psum_num_recv_tokens_per_expert[-1].item()
+        if not basic_only:
+            assert num_recv_tokens == expanded_handle.psum_num_recv_tokens_per_scaleup_rank[-1].item(), \
+                'Expand should not affect the number of received tokens.'
+            num_expanded_tokens = expanded_handle.psum_num_recv_tokens_per_expert[-1].item()
+        else:
+            num_expanded_tokens = 0
+        trace_step(buffer, 'after token counts')
 
         # Construction the input data for DeepEP combine
         src_token_global_idx = handle.recv_src_metadata[:num_recv_tokens, 0]
@@ -193,18 +213,20 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
         input_for_combine = torch.empty_like(recv_x_bf16, dtype=torch.bfloat16, device='cuda')
         input_for_combine[:num_recv_tokens] = local_reduced_y
 
-        expanded_src_token_global_idx = expanded_handle.recv_src_metadata[:num_recv_tokens, 0]
-        if not args.skip_check:
-            sorted_expanded_src_token_global_idx = torch.sort(expanded_src_token_global_idx).values
-            assert torch.equal(ref_recv_src_token_idx, sorted_expanded_src_token_global_idx), \
-                f'{ref_recv_src_token_idx=}, {sorted_expanded_src_token_global_idx=}'
-        local_y_expand = generate_pre_combine_data(expanded_src_token_global_idx, num_max_tokens_per_rank, num_topk, hidden)  # [num_recv_tokens, topk, hidden]
-        # We put an extra row to conveniently handle the -1 index
-        input_for_expand_combine = torch.empty((expanded_recv_x_bf16.shape[0] + 1, hidden), dtype=torch.bfloat16, device='cuda')
-        input_for_expand_combine[expanded_handle.recv_src_metadata[:num_recv_tokens, 2:].flatten()] = local_y_expand.view(-1, hidden)
-        input_for_expand_combine = input_for_expand_combine[:-1, ...]
+        if not basic_only:
+            expanded_src_token_global_idx = expanded_handle.recv_src_metadata[:num_recv_tokens, 0]
+            if not args.skip_check:
+                sorted_expanded_src_token_global_idx = torch.sort(expanded_src_token_global_idx).values
+                assert torch.equal(ref_recv_src_token_idx, sorted_expanded_src_token_global_idx), \
+                    f'{ref_recv_src_token_idx=}, {sorted_expanded_src_token_global_idx=}'
+            local_y_expand = generate_pre_combine_data(expanded_src_token_global_idx, num_max_tokens_per_rank, num_topk, hidden)  # [num_recv_tokens, topk, hidden]
+            # We put an extra row to conveniently handle the -1 index
+            input_for_expand_combine = torch.empty((expanded_recv_x_bf16.shape[0] + 1, hidden), dtype=torch.bfloat16, device='cuda')
+            input_for_expand_combine[expanded_handle.recv_src_metadata[:num_recv_tokens, 2:].flatten()] = local_y_expand.view(-1, hidden)
+            input_for_expand_combine = input_for_expand_combine[:-1, ...]
 
         # Do combine
+        trace_step(buffer, 'before combine')
         combine_args = dict(
             x=input_for_combine, topk_weights=recv_topk_weights, bias=bias,
             handle=handle,
@@ -214,21 +236,26 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
         )
         combined_x, combined_topk_weights, combine_event = \
             launch(buffer, 'combine', with_previous_event, async_with_compute_stream, combine_args)
+        trace_step(buffer, 'after combine')
 
-        # Reduced combine
-        reduced_combine_args = dict(
-            x=input_for_expand_combine, bias=bias,
-            handle=expanded_handle,
-            num_sms=num_sms, num_qps=num_qps,
-            async_with_compute_stream=async_with_compute_stream,
-            allocate_on_comm_stream=allocate_on_comm_stream,
-        )
-        reduced_combined_x, reduced_combined_topk_weights, reduced_combine_event = \
-            launch(buffer, 'combine', with_previous_event, async_with_compute_stream, reduced_combine_args)
+        if not basic_only:
+            # Reduced combine
+            trace_step(buffer, 'before reduced combine')
+            reduced_combine_args = dict(
+                x=input_for_expand_combine, bias=bias,
+                handle=expanded_handle,
+                num_sms=num_sms, num_qps=num_qps,
+                async_with_compute_stream=async_with_compute_stream,
+                allocate_on_comm_stream=allocate_on_comm_stream,
+            )
+            reduced_combined_x, reduced_combined_topk_weights, reduced_combine_event = \
+                launch(buffer, 'combine', with_previous_event, async_with_compute_stream, reduced_combine_args)
+            trace_step(buffer, 'after reduced combine')
 
         assert not (args.dump_profile_traces and args.skip_perf_test), '`--skip-perf-test` should not be specified when `--dump-profile-traces` is provided'
         if not args.skip_perf_test:
             # Profiling
+            bench_num_tests = int(os.environ.get('EP_BENCH_NUM_TESTS', '30'))
             def get_trace_path(prefix: str):
                 return None if not args.dump_profile_traces else f'{args.dump_profile_traces}/{prefix}_rank{buffer.rank_idx}.json'
 
@@ -253,8 +280,9 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             num_scaleup_bytes = num_bytes_per_dispatch_token * num_scaleup_recv_tokens  # Received via scaleup
             num_scaleout_bytes = num_bytes_per_dispatch_token * num_scaleout_send_tokens    # Send via scaleout
             t, copy_t = bench_kineto(lambda: buffer.dispatch(**dispatch_args),
-                                    kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
-                                    barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('dispatch'))
+                                     kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
+                                     num_tests=bench_num_tests,
+                                     barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('dispatch'))
             dist_print(f'   * EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
                     f'dispatch: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
@@ -262,28 +290,31 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
                     f'copy: {2 * num_recv_tokens * num_bytes_per_dispatch_token / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
-            # Test expanded dispatch performance
-            num_bytes_per_dispatch_token_meta = safe_div(count_bytes(expanded_handle.recv_src_metadata), expanded_handle.recv_src_metadata.size(0))
-            t, copy_t = bench_kineto(lambda: buffer.dispatch(**expanded_dispatch_args),
-                                    kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
-                                    barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('expanded_dispatch'))
-            dist_print(f'   - EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
-                    f'expanded dispatch: '
-                    f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
-                    f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
-                    f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
-                    f'copy: {(num_recv_tokens * (num_bytes_per_dispatch_token_meta + num_bytes_per_dispatch_token) + num_expanded_tokens * num_bytes_per_dispatch_token) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
+            if not basic_only:
+                # Test expanded dispatch performance
+                num_bytes_per_dispatch_token_meta = safe_div(count_bytes(expanded_handle.recv_src_metadata), expanded_handle.recv_src_metadata.size(0))
+                t, copy_t = bench_kineto(lambda: buffer.dispatch(**expanded_dispatch_args),
+                                         kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
+                                         num_tests=bench_num_tests,
+                                         barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('expanded_dispatch'))
+                dist_print(f'   - EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
+                        f'expanded dispatch: '
+                        f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
+                        f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                        f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
+                        f'copy: {(num_recv_tokens * (num_bytes_per_dispatch_token_meta + num_bytes_per_dispatch_token) + num_expanded_tokens * num_bytes_per_dispatch_token) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
-            # Test cached dispatch performance
-            t, copy_t = bench_kineto(lambda: buffer.dispatch(**cached_dispatch_args),
-                                    kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
-                                    barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('cached_dispatch'))
-            dist_print(f'   # EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
-                    f'cached dispatch: '
-                    f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
-                    f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
-                    f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
-                    f'copy: {2 * num_scaleup_bytes / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
+                # Test cached dispatch performance
+                t, copy_t = bench_kineto(lambda: buffer.dispatch(**cached_dispatch_args),
+                                         kernel_names=('dispatch_impl', 'dispatch_copy_epilogue_impl'),
+                                         num_tests=bench_num_tests,
+                                         barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('cached_dispatch'))
+                dist_print(f'   # EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
+                        f'cached dispatch: '
+                        f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
+                        f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                        f'legacy: {legacy_dispatch_bytes / t / 1e9:.0f} GB/s, {legacy_dispatch_bytes:.0f} bytes | '
+                        f'copy: {2 * num_scaleup_bytes / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
             # Test combine performance
             num_bytes_per_combine_token = safe_div(count_bytes(recv_x_bf16, recv_topk_weights), recv_x_bf16.size(0))
@@ -339,8 +370,9 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
 
             num_scaleout_bytes, num_scaleup_bytes, num_reduction_read_bytes = get_combine_bytes(False)
             t, copy_t = bench_kineto(lambda: buffer.combine(**combine_args),
-                                    kernel_names=('combine_impl', 'combine_reduce_epilogue_impl'),
-                                    barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('combine'))
+                                     kernel_names=('combine_impl', 'combine_reduce_epilogue_impl'),
+                                     num_tests=bench_num_tests,
+                                     barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('combine'))
             dist_print(f'   @ EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
                     f'combine: '
                     f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
@@ -348,22 +380,24 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                     f'legacy: {legacy_combine_bytes / t / 1e9:.0f} GB/s, {legacy_combine_bytes:.0f} bytes | '
                     f'reduce: {(num_bias_bytes + num_reduction_read_bytes + num_reduction_write_bytes) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
 
-            # Test reduced combine performance
-            num_scaleout_bytes, num_scaleup_bytes, num_reduction_read_bytes = get_combine_bytes(True)
-            t, copy_t = bench_kineto(lambda: buffer.combine(**reduced_combine_args),
-                                    kernel_names=('combine_impl', 'combine_reduce_epilogue_impl'),
-                                    barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('reduced_combine'))
-            dist_print(f'   + EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
-                    f'reduced combine: '
-                    f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
-                    f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
-                    f'legacy: {legacy_combine_bytes / t / 1e9:.0f} GB/s, {legacy_combine_bytes:.0f} bytes | '
-                    f'reduce: {(num_bias_bytes + num_reduction_read_bytes + num_reduction_write_bytes) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
+            if not basic_only:
+                # Test reduced combine performance
+                num_scaleout_bytes, num_scaleup_bytes, num_reduction_read_bytes = get_combine_bytes(True)
+                t, copy_t = bench_kineto(lambda: buffer.combine(**reduced_combine_args),
+                                         kernel_names=('combine_impl', 'combine_reduce_epilogue_impl'),
+                                         num_tests=bench_num_tests,
+                                         barrier_comm_profiling=True, barrier=buffer.barrier, trace_path=get_trace_path('reduced_combine'))
+                dist_print(f'   + EP: {buffer.rank_idx:3}/{buffer.num_ranks} | '
+                        f'reduced combine: '
+                        f'{num_scaleout_bytes / t / 1e9:.0f} GB/s (SO), '
+                        f'{num_scaleup_bytes / t / 1e9:.0f} GB/s (SU), {t * 1e6:.3f} us, {num_scaleup_bytes:.0f} bytes | '
+                        f'legacy: {legacy_combine_bytes / t / 1e9:.0f} GB/s, {legacy_combine_bytes:.0f} bytes | '
+                        f'reduce: {(num_bias_bytes + num_reduction_read_bytes + num_reduction_write_bytes) / copy_t / 1e9:.0f} GB/s, {copy_t * 1e6:.3f} us')
             dist_print(once_in_node=True)
 
         # Checks
         # NOTES: we do checks after the performance tests, as we may modify some tensors
-        if not args.skip_check:
+        if not args.skip_check and not basic_only:
             # Handle copy checks
             assert (topk_idx.data_ptr() != handle.topk_idx.data_ptr()) == do_handle_copy
             assert (topk_idx.data_ptr() != cached_handle.topk_idx.data_ptr()) == do_handle_copy

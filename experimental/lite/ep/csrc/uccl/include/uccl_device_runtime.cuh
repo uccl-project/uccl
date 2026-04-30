@@ -76,6 +76,15 @@ __device__ __forceinline__ uint64_t ld_cv_u64(uint64_t const* ptr) {
   return ans;
 }
 
+__device__ __forceinline__ uint32_t ld_cv_u32(uint32_t const* ptr) {
+  uint32_t ans;
+  asm volatile("ld.global.cv.u32 %0, [%1];"
+               : "=r"(ans)
+               : "l"(ptr)
+               : "memory");
+  return ans;
+}
+
 struct alignas(128) DeviceToHostCmdBuffer {
   uint64_t head = 0;
   uint64_t tail = 0;
@@ -201,7 +210,11 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_value_nbi(
     int channel_idx, const uint64_t* d2h_channel_addrs,
     int num_d2h_channel_addrs) {
   if (num_d2h_channel_addrs <= 0) return;
-  int d2h_channel_idx = channel_idx % num_d2h_channel_addrs;
+  int logical_channel_idx = channel_idx % num_d2h_channel_addrs;
+  int thread_idx = logical_channel_idx % kNumProxyThs;
+  int per_thread_d2h_channel_idx = logical_channel_idx / kNumProxyThs;
+  EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
+  int d2h_channel_idx = thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
   auto* h = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
   TransferCmd cmd{};
@@ -248,43 +261,53 @@ __device__ __forceinline__ void wait_until_cmd_consumed(
   }
 }
 
+__device__ __forceinline__ void wait_until_tail_reaches(
+    DeviceToHostCmdBuffer* h, uint64_t target, int nvl_rank = -1,
+    int label = -1) {
+  auto last_print = clock64();
+  while (true) {
+    uint64_t cur_tail = h->volatile_tail();
+    if (cur_tail >= target) break;
+    if ((clock64() - last_print) > kPrintCycleInterval) {
+#ifdef EP_UCCL_DEVICE_TRACE
+      printf("[wait_until_tail_reaches nvl:%d label:%d] waiting head=%lu tail=%lu target=%lu\n",
+             nvl_rank, label,
+             static_cast<unsigned long>(h->volatile_head()),
+             static_cast<unsigned long>(cur_tail),
+             static_cast<unsigned long>(target));
+#endif
+      last_print = clock64();
+    }
+  }
+}
+
 __device__ __forceinline__ void nvshmemi_ibgda_quiet(
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int nvl_rank = -1, int label = -1) {
   EP_DEVICE_ASSERT(num_d2h_channel_addrs % kChannelPerProxy == 0);
   EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
-  uint64_t slots[kNumProxyThs * kChannelPerProxy];
-  int num_posted = 0;
+  uint64_t targets[kNumProxyThs * kChannelPerProxy];
   for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
        ++d2h_channel_idx) {
     auto* h = reinterpret_cast<DeviceToHostCmdBuffer*>(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
-    while (true) {
-      uint64_t cur_head = h->volatile_head();
-      uint64_t cur_tail = h->volatile_tail();
-      if (cur_head - cur_tail < 1) {
-        TransferCmd cmd{};
-        cmd.cmd_type = CmdType::QUIET;
-        uint64_t slot = cur_head;
-        h->atomic_set_and_commit(cmd, &slot);
+    targets[d2h_channel_idx] = h->volatile_head();
 #ifdef EP_UCCL_DEVICE_TRACE
-        if (slot < 8) {
-          printf("[UCCL_DEVICE_TRACE] QUIET ch=%d ring=%p slot=%lu head=%lu tail=%lu\n",
-                 d2h_channel_idx, h, static_cast<unsigned long>(slot),
-                 static_cast<unsigned long>(h->volatile_head()),
-                 static_cast<unsigned long>(h->volatile_tail()));
-        }
-#endif
-        slots[num_posted++] = slot;
-        break;
-      }
+    if (targets[d2h_channel_idx] != h->volatile_tail()) {
+      printf("[UCCL_DEVICE_TRACE] QUIET-DRAIN ch=%d ring=%p target=%lu head=%lu tail=%lu\n",
+             d2h_channel_idx, h,
+             static_cast<unsigned long>(targets[d2h_channel_idx]),
+             static_cast<unsigned long>(h->volatile_head()),
+             static_cast<unsigned long>(h->volatile_tail()));
     }
+#endif
   }
 
-  for (int i = 0; i < num_posted; ++i) {
+  for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
+       ++d2h_channel_idx) {
     auto* h = reinterpret_cast<DeviceToHostCmdBuffer*>(
-        static_cast<uintptr_t>(d2h_channel_addrs[i]));
-    wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::QUIET, label);
+        static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
+    wait_until_tail_reaches(h, targets[d2h_channel_idx], nvl_rank, label);
   }
 }
 

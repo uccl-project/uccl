@@ -66,7 +66,7 @@ public:
             flags += " -Xcompiler -rdynamic -lineinfo";
         if (get_env("EP_GIN_GDAKI_DEBUG", 0))
             flags += " -DNCCL_DEVICE_GIN_GDAKI_ENABLE_DEBUG=1";
-        flags += fmt::format(" -I {}/include", nccl_root.c_str());
+        flags += fmt::format(" -I {}/include -DNCCL_OS_LINUX", nccl_root.c_str());
 
         // Some special flags for EP
         // TODO: make it more general, e.g. `EP_JIT_EXTRA_FLAGS`
@@ -77,8 +77,8 @@ public:
             flags += " -DDISABLE_AGGRESSIVE_PTX_INSTRS";
         if (get_env("EP_FORCE_NO_NVLINK", 0))
             flags += " -DEP_FORCE_NO_NVLINK";
-        if (get_env("EP_USE_UCCL_PROXY", 0) or get_env("UCCL_FORCE_NO_GDR", 0))
-            flags += fmt::format(" -DEP_USE_UCCL_PROXY -DEP_UCCL_PROXY_TRANSPORT_VERSION=24 -I {}/../csrc/uccl/include -I {}/../../../../include",
+        if (get_env("EP_UCCL_PROXY_ACTIVE", get_env("UCCL_FORCE_NO_GDR", 0)))
+            flags += fmt::format(" -DEP_USE_UCCL_PROXY -DEP_UCCL_PROXY_TRANSPORT_VERSION=45 -I {}/../csrc/uccl/include -I {}/../../../../include",
                                  library_root_path.c_str(), library_root_path.c_str());
         if (get_env("EP_UCCL_DEVICE_TRACE", 0))
             flags += " -DEP_UCCL_DEVICE_TRACE";

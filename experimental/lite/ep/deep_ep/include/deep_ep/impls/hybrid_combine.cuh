@@ -39,7 +39,10 @@ hybrid_combine_impl(nv_bfloat16* x,
                     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
                     void* buffer, void* workspace,
                     const int scaleout_rank_idx, const int scaleup_rank_idx,
-                    int num_reduced_tokens) {
+                    int num_reduced_tokens,
+                    const uint64_t* uccl_d2h_channel_addrs,
+                    const int uccl_num_d2h_channel_addrs,
+                    uint64_t* uccl_signal_shadow) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);
@@ -88,7 +91,11 @@ hybrid_combine_impl(nv_bfloat16* x,
     // Each warp is a channel
     const auto [qp_idx, sharing_mode] =
         comm::get_qp_mode<kNumSMs, kNumQPs, kNumChannelsPerSM>(sm_idx, warp_idx % kNumChannelsPerSM);
-    const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace);
+    const auto rank_idx = scaleout_rank_idx * kNumScaleupRanks + scaleup_rank_idx;
+    const auto gin = handle::NCCLGin(
+        nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
+        uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
+        uccl_signal_shadow, scaleout_rank_idx, scaleup_rank_idx);
 
     // Global parallel barriers for scale-out subteam and scale-up subteam
     // NOTES: this barrier needs a grid sync, as there are channel scale-up tail cleaning before
@@ -583,14 +590,23 @@ hybrid_combine_impl(nv_bfloat16* x,
         if (lane_idx < kNumScaleoutRanks) {
             // Update remote tails
             const auto expected_signal = math::pack2<int, int64_t>(1, 0);
-            gin.red_add_rel<ncclTeamTagRail>(
-                workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
-                expected_signal, lane_idx);
+            const auto signal_ptr =
+                workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx);
+#ifdef EP_USE_UCCL_PROXY
+            gin.put_value<ncclTeamTagRail>(signal_ptr, expected_signal, lane_idx);
+#else
+            gin.red_add_rel<ncclTeamTagRail>(signal_ptr, expected_signal, lane_idx);
+#endif
 
             // Wait tail arrival
             const auto wait_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
             comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
+#ifdef EP_USE_UCCL_PROXY
+                const auto signal =
+                    static_cast<int64_t>(uccl::ld_cv_u64(reinterpret_cast<const uint64_t*>(wait_ptr)));
+#else
                 const auto signal = ptx::ld_acquire_sys<int64_t>(wait_ptr);
+#endif
                 if (signal == expected_signal) {
                     // Clean for next usages
                     *wait_ptr = 0;

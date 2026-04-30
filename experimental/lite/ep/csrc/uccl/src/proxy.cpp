@@ -273,9 +273,12 @@ void Proxy::init_common() {
     c.atomic_old_values_mr = ctx_.atomic_old_values_mr;
 
     if (peer == my_rank) continue;
-    // Skip RDMA connection for intra-node peers when using shared-memory
-    // intra-node path, or when NVLink/P2P is available (non-PCIE_INTRANODE).
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
+    // Host-window mode uses shared-memory memcpy for intra-node peers. GDR mode
+    // has no shared host window, so same-node peers still need QPs.
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[my_rank].ip) {
+      continue;
+    }
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
                          cfg_.use_normal_mode, atomic_buffer_ptr_);
@@ -287,7 +290,11 @@ void Proxy::init_common() {
   // Out-of-band exchange info per pair: start receiver thread first
   int num_expected_conns = 0;
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip) continue;
+    if (peer == my_rank) continue;
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[my_rank].ip) {
+      continue;
+    }
     ++num_expected_conns;
   }
 
@@ -301,8 +308,11 @@ void Proxy::init_common() {
 
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip)
+    if (peer == my_rank) continue;
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[my_rank].ip) {
       continue;
+    }
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
     send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
@@ -314,8 +324,11 @@ void Proxy::init_common() {
 
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip)
+    if (peer == my_rank) continue;
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[my_rank].ip) {
       continue;
+    }
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
               "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
@@ -329,7 +342,10 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[my_rank].ip) {
+      continue;
+    }
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -513,7 +529,10 @@ void Proxy::run_dual() {
   }
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
-    if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
+    if (cfg_.shared_rdma_base != nullptr &&
+        peers_[peer].ip == peers_[cfg_.rank].ip) {
+      continue;
+    }
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
@@ -742,19 +761,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           cudaDeviceSynchronize();
           std::abort();
         }
-        // In shared-memory mode, intra-node commands are expected and routed
-        // in post_gpu_commands_mixed.  Only abort when no intra-node handler.
-        if (cfg_.shared_rdma_base == nullptr &&
-            peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
-          fprintf(
-              stderr,
-              "[ERROR] Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d, "
-              "cmd_entry.cmd_type: %d, cur_head: %lu, i: %lu\n",
-              cmd_entry.dst_rank, cfg_.rank,
-              static_cast<int>(cmd_entry.cmd_type), cur_head, i);
-          cudaDeviceSynchronize();
-          std::abort();
-        }
       }
 
       // Use a unique ID combining ring buffer index and command index
@@ -788,6 +794,10 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 #endif
     // Post all commands: writes, atomics, barriers, quiets
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
+    // Shared-memory intra-node commands complete synchronously in
+    // post_gpu_commands_mixed(); publish their completions without waiting for
+    // the next proxy polling iteration.
+    notify_gpu_completion(my_tail);
 #ifdef MEASURE_PER_OP_LATENCY
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
@@ -1157,12 +1167,11 @@ void Proxy::post_gpu_commands_mixed(
     std::vector<ibv_sge> sges(put_value_cmds.size());
     std::vector<ibv_send_wr> wrs(put_value_cmds.size());
     std::vector<uint64_t> values(put_value_cmds.size());
-    std::unordered_map<int, std::vector<size_t>> indices_by_dst;
+    std::unordered_map<ibv_qp*, std::vector<size_t>> indices_by_qp;
 
     for (size_t i = 0; i < put_value_cmds.size(); ++i) {
       auto const& cmd = put_value_cmds[i];
       int dst_rank = static_cast<int>(cmd.dst_rank);
-      indices_by_dst[dst_rank].push_back(i);
       if (dst_rank == cfg_.rank || dst_rank >= static_cast<int>(ctxs_for_all_ranks_.size())) {
         fprintf(stderr, "[ERROR] Invalid PUT_VALUE dst=%d rank=%d\n", dst_rank, cfg_.rank);
         std::abort();
@@ -1172,6 +1181,17 @@ void Proxy::post_gpu_commands_mixed(
         fprintf(stderr, "[ERROR] PUT_VALUE destination ctx missing for dst=%d\n", dst_rank);
         std::abort();
       }
+      size_t ring_idx = static_cast<size_t>(put_value_wrs[i] >> 32);
+      size_t local_ring_count = ctx->data_qps_by_channel.size();
+      ibv_qp* qp = local_ring_count
+                       ? ctx->data_qps_by_channel[ring_idx % local_ring_count]
+                       : ctx->qp;
+      if (!qp) {
+        fprintf(stderr, "[ERROR] PUT_VALUE destination QP missing for dst=%d ring=%zu\n",
+                dst_rank, ring_idx);
+        std::abort();
+      }
+      indices_by_qp[qp].push_back(i);
       uint16_t bytes = cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
       if (bytes > sizeof(uint64_t)) {
         fprintf(stderr, "[ERROR] PUT_VALUE bytes=%u exceeds 8\n", bytes);
@@ -1197,7 +1217,7 @@ void Proxy::post_gpu_commands_mixed(
       wrs[i].sg_list = &sges[i];
       wrs[i].num_sge = 1;
       wrs[i].opcode = IBV_WR_RDMA_WRITE;
-      wrs[i].send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+      wrs[i].send_flags = IBV_SEND_INLINE;
       wrs[i].wr.rdma.remote_addr = remote_addr;
       wrs[i].wr.rdma.rkey = ctx->remote_rkey;
       if (std::getenv("UCCL_PROXY_TRACE")) {
@@ -1210,16 +1230,21 @@ void Proxy::post_gpu_commands_mixed(
       }
     }
 
-    for (auto& [dst_rank, indices] : indices_by_dst) {
-      ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
+    for (auto& [qp, indices] : indices_by_qp) {
       for (size_t j = 0; j < indices.size(); ++j) {
         size_t idx = indices[j];
         wrs[idx].next = (j + 1 < indices.size()) ? &wrs[indices[j + 1]] : nullptr;
       }
+      size_t last_idx = indices.back();
+      wrs[last_idx].send_flags |= IBV_SEND_SIGNALED;
+      std::vector<uint64_t> batch_wrids;
+      batch_wrids.reserve(indices.size());
+      for (size_t idx : indices) batch_wrids.push_back(put_value_wrs[idx]);
+      ctx_.batched_wr_completions[wrs[last_idx].wr_id] = std::move(batch_wrids);
       ibv_send_wr* bad_wr = nullptr;
-      if (int ret = ibv_post_send(ctx->qp, &wrs[indices.front()], &bad_wr); ret != 0) {
-        fprintf(stderr, "[ERROR] ibv_post_send PUT_VALUE failed dst=%d: %s (%d)\n",
-                dst_rank, strerror(ret), ret);
+      if (int ret = ibv_post_send(qp, &wrs[indices.front()], &bad_wr); ret != 0) {
+        fprintf(stderr, "[ERROR] ibv_post_send PUT_VALUE failed: %s (%d)\n",
+                strerror(ret), ret);
         std::abort();
       }
     }

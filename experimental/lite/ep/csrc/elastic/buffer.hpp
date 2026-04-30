@@ -3,6 +3,8 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,12 +62,17 @@ class ElasticBuffer {
 
     // UCCL CPU proxy context for no-GPUDirect-RDMA EP data transport
     bool use_uccl_proxy = false;
+    bool uccl_use_host_window = false;
+    bool uccl_use_shared_window = false;
     bool uccl_proxies_started = false;
     int rank_idx = 0, num_ranks = 0;
     int node_idx = 0, local_rank = 0, local_world_size = 1;
     std::string uccl_shm_id;
     SharedBuffer uccl_window;
     SharedBuffer uccl_atomic_window;
+    void* uccl_gpu_window = nullptr;
+    void* uccl_host_window = nullptr;
+    void* uccl_host_window_device = nullptr;
     std::vector<std::unique_ptr<UcclProxy>> uccl_proxies;
     std::vector<uint64_t> uccl_d2h_channel_addrs_host;
     uint64_t* uccl_d2h_channel_addrs_device = nullptr;
@@ -122,20 +129,32 @@ public:
         this->local_rank = local_rank;
         this->local_world_size = local_world_size;
         this->uccl_shm_id = uccl_shm_id.empty() ? "default" : uccl_shm_id;
-        use_uccl_proxy = get_env<int>("EP_USE_UCCL_PROXY", 0) != 0 or
-                         get_env<int>("UCCL_FORCE_NO_GDR", 0) != 0;
-        if (use_uccl_proxy) {
-            EP_HOST_ASSERT(get_env<int>("EP_FORCE_NO_NVLINK", 0) != 0 and
-                           "UCCL proxy mode requires EP_FORCE_NO_NVLINK=1");
-            EP_HOST_ASSERT(local_world_size > 0);
-            EP_HOST_ASSERT(local_rank >= 0 and local_rank < local_world_size);
+        const bool request_uccl_proxy =
+            get_env<int>("EP_USE_UCCL_PROXY", 0) != 0 or
+            get_env<int>("UCCL_FORCE_NO_GDR", 0) != 0;
+        const bool force_no_gdr = get_env<int>("UCCL_FORCE_NO_GDR", 0) != 0;
+        const bool force_host_window = get_env<int>("EP_FORCE_HOST_WINDOW", 0) != 0;
+        const auto total_window_bytes =
+            layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes;
+        int device_idx = 0;
+        if (request_uccl_proxy) {
+            CUDA_RUNTIME_CHECK(cudaGetDevice(&device_idx));
+            uccl_use_host_window =
+                force_no_gdr ||
+                force_host_window ||
+                !can_register_gpu_memory_for_rdma(device_idx, total_window_bytes);
+            use_uccl_proxy = true;
+            setenv("EP_UCCL_PROXY_ACTIVE", "1", 1);
+        } else {
+            use_uccl_proxy = false;
+            setenv("EP_UCCL_PROXY_ACTIVE", "0", 1);
         }
 
         // Init NCCL runtime
         static constexpr int kBufferAlignment = 16;
         this->nccl_context = std::make_shared<nccl::NCCLSymmetricMemoryContext>(
             nccl_comm, num_ranks, rank_idx,
-            layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes, kBufferAlignment,
+            total_window_bytes, kBufferAlignment,
             allow_hybrid_mode, sl_idx, num_allocated_qps);
 
         // Timeout
@@ -146,32 +165,58 @@ public:
         // Assign workspaces and buffers
         workspace = this->nccl_context->mapped_window_ptr;
         if (use_uccl_proxy) {
-            int device_idx = 0;
-            CUDA_RUNTIME_CHECK(cudaGetDevice(&device_idx));
-            const auto total_window_bytes = layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes;
-            uccl_window = allocate_shared_buffer(
-                ("deepepv2_window_" + this->uccl_shm_id).c_str(),
-                total_window_bytes, local_rank, local_world_size, device_idx);
-            uccl_atomic_window = allocate_shared_buffer(
-                ("deepepv2_atomic_" + this->uccl_shm_id).c_str(),
-                kAtomicBufferSize, local_rank, local_world_size, device_idx);
-            workspace = uccl_window.my_device_ptr();
+            EP_HOST_ASSERT(get_env<int>("EP_FORCE_NO_NVLINK", 0) != 0 and
+                           "UCCL proxy mode requires EP_FORCE_NO_NVLINK=1");
+            EP_HOST_ASSERT(local_world_size > 0);
+            EP_HOST_ASSERT(local_rank >= 0 and local_rank < local_world_size);
+            if (uccl_use_host_window) {
+                uccl_use_shared_window = local_world_size > 1;
+                if (uccl_use_shared_window) {
+                    uccl_window = allocate_shared_buffer(
+                        ("deepepv2_window_" + this->uccl_shm_id).c_str(),
+                        total_window_bytes, local_rank, local_world_size, device_idx);
+                    uccl_atomic_window = allocate_shared_buffer(
+                        ("deepepv2_atomic_" + this->uccl_shm_id).c_str(),
+                        kAtomicBufferSize, local_rank, local_world_size, device_idx);
+                    workspace = uccl_window.my_device_ptr();
+                } else {
+                    CUDA_RUNTIME_CHECK(cudaHostAlloc(&uccl_host_window, total_window_bytes,
+                                                     cudaHostAllocMapped));
+                    std::memset(uccl_host_window, 0, total_window_bytes);
+                    CUDA_RUNTIME_CHECK(cudaHostGetDevicePointer(
+                        &uccl_host_window_device, uccl_host_window, 0));
+                    workspace = uccl_host_window_device;
+                }
+            } else {
+                CUDA_RUNTIME_CHECK(cudaMalloc(&uccl_gpu_window, total_window_bytes));
+                workspace = uccl_gpu_window;
+            }
 
             const int num_nodes = std::max(1, num_ranks / local_world_size);
+            const auto proxy_buffer_addr = uccl_use_host_window ?
+                (uccl_use_shared_window ?
+                    reinterpret_cast<uintptr_t>(uccl_window.my_host_ptr()) :
+                    reinterpret_cast<uintptr_t>(uccl_host_window)) :
+                reinterpret_cast<uintptr_t>(workspace);
+            const auto shared_rdma_base = uccl_use_shared_window ?
+                reinterpret_cast<uintptr_t>(uccl_window.mmap_ptr) : uintptr_t{0};
+            const auto shared_atomic_base = uccl_use_shared_window ?
+                reinterpret_cast<uintptr_t>(uccl_atomic_window.mmap_ptr) : uintptr_t{0};
             uccl_proxies.reserve(kNumProxyThs);
             for (int i = 0; i < kNumProxyThs; ++i) {
                 auto proxy = std::make_unique<UcclProxy>(
                     i,
-                    reinterpret_cast<uintptr_t>(uccl_window.my_host_ptr()),
+                    proxy_buffer_addr,
                     total_window_bytes,
                     rank_idx, node_idx, local_rank,
                     0, num_ranks, num_nodes,
-                    true, false, true,
-                    reinterpret_cast<uintptr_t>(uccl_window.mmap_ptr),
-                    total_window_bytes,
-                    reinterpret_cast<uintptr_t>(uccl_atomic_window.mmap_ptr),
-                    kAtomicBufferSize,
-                    local_world_size);
+                    true, false, uccl_use_host_window,
+                    shared_rdma_base,
+                    uccl_use_shared_window ? total_window_bytes : 0,
+                    shared_atomic_base,
+                    uccl_use_shared_window ? kAtomicBufferSize : 0,
+                    local_world_size,
+                    false);
                 auto addrs = proxy->get_d2h_channel_addrs();
                 uccl_d2h_channel_addrs_host.insert(
                     uccl_d2h_channel_addrs_host.end(), addrs.begin(), addrs.end());
@@ -218,9 +263,14 @@ public:
     void destroy() {
         EP_HOST_ASSERT(not destroyed);
 
-        // Finish all works on all GPUs
-        if (not use_uccl_proxy or uccl_proxies_started)
+        // Finish all works on all GPUs. UCCL mode uses Python-side CPU group
+        // synchronization because the native GPU barrier still depends on Gin
+        // signal semantics.
+        if (use_uccl_proxy) {
+            CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+        } else {
             barrier(true, true);
+        }
 
         if (uccl_proxies_started) {
             for (auto& proxy: uccl_proxies)
@@ -236,11 +286,19 @@ public:
             CUDA_RUNTIME_CHECK(cudaFree(uccl_signal_shadow_device));
             uccl_signal_shadow_device = nullptr;
         }
-
+        if (uccl_gpu_window != nullptr) {
+            CUDA_RUNTIME_CHECK(cudaFree(uccl_gpu_window));
+            uccl_gpu_window = nullptr;
+        }
+        if (uccl_host_window != nullptr) {
+            CUDA_RUNTIME_CHECK(cudaFreeHost(uccl_host_window));
+            uccl_host_window = nullptr;
+            uccl_host_window_device = nullptr;
+        }
         // Deallocate host workspaces
         CUDA_RUNTIME_CHECK(cudaFreeHost(host_workspace));
 
-        if (use_uccl_proxy) {
+        if (use_uccl_proxy && uccl_use_shared_window) {
             free_shared_buffer(uccl_atomic_window);
             free_shared_buffer(uccl_window);
         }
@@ -254,6 +312,10 @@ public:
 
     torch::Stream get_comm_stream() const {
         return comm_stream;
+    }
+
+    bool is_uccl_proxy_active() const {
+        return use_uccl_proxy;
     }
 
     std::tuple<int, int> get_physical_domain_size() const {
@@ -271,8 +333,16 @@ public:
         for (const auto& proxy: uccl_proxies)
             ports.push_back(proxy->get_listen_port());
         return {
-            reinterpret_cast<uint64_t>(uccl_window.my_host_ptr()),
-            static_cast<int64_t>(uccl_window.per_rank_size),
+            uccl_use_host_window ?
+                (uccl_use_shared_window ?
+                    reinterpret_cast<uint64_t>(uccl_window.my_host_ptr()) :
+                    reinterpret_cast<uint64_t>(uccl_host_window)) :
+                reinterpret_cast<uint64_t>(workspace),
+            uccl_use_host_window ?
+                (uccl_use_shared_window ?
+                    static_cast<int64_t>(uccl_window.per_rank_size) :
+                    static_cast<int64_t>(layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes)) :
+                static_cast<int64_t>(layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes),
             ports,
             uccl_d2h_channel_addrs_host
         };
@@ -1435,6 +1505,7 @@ static void register_apis(pybind11::module_& m) {
         .def(pybind11::init<int, int, int64_t, int64_t, bool, bool, bool, bool, int, int, int, int, bool, int, int, int, std::string>())
         .def("destroy", &ElasticBuffer::destroy)
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
+        .def("is_uccl_proxy_active", &ElasticBuffer::is_uccl_proxy_active)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)
         .def("get_logical_domain_size", &ElasticBuffer::get_logical_domain_size)
         .def("get_uccl_local_metadata", &ElasticBuffer::get_uccl_local_metadata)

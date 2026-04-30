@@ -90,6 +90,12 @@ def init_dist(local_rank: int, num_local_ranks: int, seed: int = 0) -> Tuple[int
     # Set local rank
     global _local_rank
     _local_rank = local_rank
+    trace_init = int(os.environ.get('EP_INIT_TRACE', '0'))
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} before cuda.set_device', flush=True)
+    torch.cuda.set_device(local_rank)
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} after cuda.set_device', flush=True)
 
     sig = inspect.signature(dist.init_process_group)
     params = {
@@ -101,13 +107,21 @@ def init_dist(local_rank: int, num_local_ranks: int, seed: int = 0) -> Tuple[int
     if 'device_id' in sig.parameters:
         # noinspection PyTypeChecker
         params['device_id'] = torch.device(f'cuda:{local_rank}')
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} before init_process_group {params}', flush=True)
     dist.init_process_group(**params)
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} after init_process_group', flush=True)
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device('cuda')
-    torch.cuda.set_device(local_rank)
 
     init_seed(seed)
-    return dist.get_rank(), dist.get_world_size(), dist.new_group(list(range(num_local_ranks * num_nodes)))
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} before new_group', flush=True)
+    group = dist.new_group(list(range(num_local_ranks * num_nodes)))
+    if trace_init:
+        print(f'[EP_INIT_TRACE] rank_env={node_rank} local_rank={local_rank} after new_group', flush=True)
+    return dist.get_rank(), dist.get_world_size(), group
 
 
 def get_physical_domain_size(group: dist.ProcessGroup) -> Tuple[int, int]:

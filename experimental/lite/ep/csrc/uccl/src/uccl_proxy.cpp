@@ -17,7 +17,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      bool gpu_buffer_is_host_allocated,
                      uintptr_t shared_rdma_base, size_t shared_rdma_per_rank,
                      uintptr_t shared_atomic_base,
-                     size_t shared_atomic_per_rank, int local_world_size)
+                     size_t shared_atomic_per_rank, int local_world_size,
+                     bool owns_gpu_buffer)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -66,7 +67,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.shared_atomic_base = reinterpret_cast<void*>(shared_atomic_base);
   cfg.shared_atomic_per_rank = shared_atomic_per_rank;
   cfg.local_world_size = local_world_size;
-  cfg.owns_gpu_buffer = (shared_rdma_base == 0);  // shared buf freed separately
+  cfg.owns_gpu_buffer = owns_gpu_buffer;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
