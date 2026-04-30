@@ -1,5 +1,5 @@
 #include "oob/oob.h"
-#include "oob/shmring_exchanger.h"
+#include "adapter/shmring_exchanger.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
@@ -14,7 +14,6 @@
 #include <unistd.h>
 
 using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
-using IpcCacheWire = UKernel::Transport::IpcCacheWire;
 using ShmExchanger = UKernel::Transport::ShmExchanger;
 using Exchanger = UKernel::Transport::Exchanger;
 using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
@@ -107,7 +106,7 @@ void test_shm_exchanger_put_wait_and_relay_state() {
   require(waited.host_id == "delayed", "waited payload host_id mismatch");
 }
 
-void test_shm_ipc_cache_exchange() {
+void test_shm_ack_exchange() {
   std::string const ring_namespace = unique_shm_namespace("oob-shm-test");
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
@@ -128,20 +127,14 @@ void test_shm_ipc_cache_exchange() {
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from(1) failed");
 
-      IpcCacheWire got{};
+      uint32_t status = 0;
       uint64_t seq = 0;
-      require(
-          shm0.recv_ipc_cache(/*peer_rank=*/1, got, &seq, /*timeout_ms=*/5000),
-          "rank0 recv_ipc_cache(1) failed");
+      require(shm0.recv_ack(/*peer_rank=*/1, &status, &seq, /*timeout_ms=*/5000,
+                            /*expected_seq=*/42),
+              "rank0 recv_ack(1) failed");
 
       require(seq == 42, "rank0 recv sequence mismatch");
-      require(got.is_send == 1, "rank0 recv is_send mismatch");
-      require(got.offset == 0x12345678ULL, "rank0 recv offset mismatch");
-      require(got.size == 4096ULL, "rank0 recv size mismatch");
-
-      auto const* hb = reinterpret_cast<uint8_t const*>(&got.handle);
-      require(hb[0] == 0xA0, "rank0 recv handle prefix[0] mismatch");
-      require(hb[1] == 0xA1, "rank0 recv handle prefix[1] mismatch");
+      require(status == 0xABCD1234UL, "rank0 recv status mismatch");
       mark_rank0_finished();
     } catch (...) {
       rank0_error = std::current_exception();
@@ -158,19 +151,8 @@ void test_shm_ipc_cache_exchange() {
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to(0) failed");
 
-      IpcCacheWire w{};
-      std::memset(&w.handle, 0, sizeof(w.handle));
-      auto* hb = reinterpret_cast<uint8_t*>(&w.handle);
-      for (size_t i = 0; i < sizeof(gpuIpcMemHandle_t); ++i) {
-        hb[i] = static_cast<uint8_t>(0xA0 + (i & 0x0F));
-      }
-
-      w.is_send = 1;
-      w.offset = 0x12345678ULL;
-      w.size = 4096ULL;
-
-      require(shm1.send_ipc_cache(/*peer_rank=*/0, /*seq=*/42, w),
-              "rank1 send_ipc_cache failed");
+      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/42, /*status=*/0xABCD1234UL),
+              "rank1 send_ack failed");
 
       std::unique_lock<std::mutex> lk(done_mu);
       bool done = done_cv.wait_for(lk, std::chrono::seconds(5),
@@ -192,6 +174,6 @@ void test_shm_ipc_cache_exchange() {
 void test_shm_oob() {
   run_case("transport unit", "shm exchanger put/wait/relay-state",
            test_shm_exchanger_put_wait_and_relay_state);
-  run_case("transport unit", "shm oob ipc cache exchange",
-           test_shm_ipc_cache_exchange);
+  run_case("transport unit", "shm oob ack exchange",
+            test_shm_ack_exchange);
 }

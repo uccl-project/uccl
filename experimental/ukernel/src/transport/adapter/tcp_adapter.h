@@ -28,16 +28,17 @@ class TcpTransportAdapter final : public TransportAdapter {
   std::string const& get_listen_ip() const { return local_ip_; }
 
   // TransportAdapter common capabilities.
-  bool ensure_peer(PeerConnectSpec const& spec) override;
-  bool has_peer(int peer_rank) const override;
+  bool ensure_put_path(PeerConnectSpec const& spec) override;
+  bool ensure_wait_path(PeerConnectSpec const& spec) override;
+  bool has_put_path(int peer_rank) const override;
+  bool has_wait_path(int peer_rank) const override;
 
-  unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint32_t local_buffer_id,
-                      std::optional<RemoteSlice> remote_hint,
-                      BounceBufferProvider bounce_provider = nullptr) override;
-  unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint32_t local_buffer_id,
-                      BounceBufferProvider bounce_provider = nullptr) override;
+  unsigned put_async(int peer_rank, void* local_ptr,
+                     uint32_t local_buffer_id, void* remote_ptr,
+                     uint32_t remote_buffer_id, size_t len) override;
+  unsigned signal_async(int peer_rank, uint64_t tag) override;
+  unsigned wait_async(int peer_rank, uint64_t expected_tag,
+                      std::optional<WaitTarget> target = std::nullopt) override;
 
   bool poll_completion(unsigned id) override;
   bool wait_completion(unsigned id) override;
@@ -70,11 +71,20 @@ class TcpTransportAdapter final : public TransportAdapter {
   };
 
   struct RequestSlot {
+    enum class Kind : uint8_t {
+      DataPut = 0,
+      DataWait = 1,
+      Signal = 2,
+      SignalWait = 3
+    };
     std::atomic<RequestState> state{RequestState::Free};
     std::atomic<uint32_t> generation{1};
+    Kind kind = Kind::DataPut;
     int peer_rank = -1;
     void* host_ptr = nullptr;
     size_t len = 0;
+    uint64_t expected_tag = 0;
+    uint64_t signal_payload = 0;
     std::atomic<bool> completed{false};
     std::atomic<bool> failed{false};
 

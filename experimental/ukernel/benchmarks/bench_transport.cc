@@ -181,33 +181,21 @@ static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
   return true;
 }
 
-static uint32_t remote_recv_slot_id(PeerTransportKind kind,
-                                    std::vector<MR> const& remote_recv_mrs,
-                                    int slot) {
-  if (kind != PeerTransportKind::Uccl) {
-    return 0;
-  }
-  return remote_recv_mrs.at(static_cast<size_t>(slot)).id;
-}
-
-static std::optional<RemoteSlice> remote_recv_slice(
-    PeerTransportKind kind, std::vector<MR> const& remote_recv_mrs, int slot) {
-  uint32_t remote_id = remote_recv_slot_id(kind, remote_recv_mrs, slot);
-  if (remote_id == 0) return std::nullopt;
-  return RemoteSlice{remote_id, 0};
-}
-
 static unsigned submit_send(Communicator& comm, int peer_rank,
                             uint32_t local_send_mr_id, size_t msg_size,
                             PeerTransportKind kind,
-                            std::vector<MR> const& remote_recv_mrs, int slot) {
-  return comm.isend(peer_rank, LocalSlice{local_send_mr_id, 0, msg_size},
-                    remote_recv_slice(kind, remote_recv_mrs, slot));
+                            std::vector<uint32_t> const& recv_buffer_ids,
+                            int slot) {
+  uint32_t remote_id = (kind == PeerTransportKind::Uccl)
+                           ? recv_buffer_ids.at(static_cast<size_t>(slot))
+                           : 0;
+  return comm.isend(peer_rank, local_send_mr_id, 0, msg_size,
+                    remote_id, 0);
 }
 
 static unsigned submit_recv(Communicator& comm, int peer_rank,
                             uint32_t local_recv_mr_id, size_t msg_size) {
-  return comm.irecv(peer_rank, LocalSlice{local_recv_mr_id, 0, msg_size});
+  return comm.irecv(peer_rank, local_recv_mr_id, 0, msg_size);
 }
 
 static bool sync_before_bidirectional(Communicator& comm, int rank,

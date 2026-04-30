@@ -260,27 +260,21 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {
     (void)resolve_const(binding, op.src, op.tile.size_bytes);
-    Transport::LocalSlice src_slice{
-        resolve_local_buffer_id(binding, op.src, op.tile.size_bytes),
-        op.src.offset_bytes,
-        op.tile.size_bytes,
-    };
-    std::optional<Transport::RemoteSlice> dst_hint = std::nullopt;
+    uint32_t dst_buffer_id = 0;
+    size_t dst_offset = 0;
     if (op.dst.kind == BufferKind::Remote) {
-      // Communicator::isend auto-enriches write hints (addr/rkey/capacity)
-      // from exchanged remote metadata when only buffer_id/offset are provided.
-      dst_hint = Transport::RemoteSlice{
-          resolve_remote_buffer_id(binding, op.dst), op.dst.offset_bytes, {}};
+      dst_buffer_id = resolve_remote_buffer_id(binding, op.dst);
+      dst_offset = op.dst.offset_bytes;
     }
-    request_id = communicator_->isend(peer_rank, src_slice, dst_hint);
+    request_id = communicator_->isend(
+        peer_rank, resolve_local_buffer_id(binding, op.src, op.tile.size_bytes),
+        op.src.offset_bytes, op.tile.size_bytes, dst_buffer_id, dst_offset);
   } else {
     (void)resolve_mutable(binding, op.dst, op.tile.size_bytes);
-    Transport::LocalSlice dst_slice{
+    request_id = communicator_->irecv(
+        peer_rank,
         resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
-        op.dst.offset_bytes,
-        op.tile.size_bytes,
-    };
-    request_id = communicator_->irecv(peer_rank, dst_slice);
+        op.dst.offset_bytes, op.tile.size_bytes);
   }
 
   if (request_id == 0) {

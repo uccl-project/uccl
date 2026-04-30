@@ -210,19 +210,13 @@ class Communicator {
         throw std::runtime_error("isend failed to register temporary MR");
       }
     }
-    std::optional<UKernel::Transport::RemoteSlice> dst_hint = std::nullopt;
     uint32_t dst_buffer_id = remote_buffer_id;
     if (dst_buffer_id == 0 && binding.has_value()) {
-      // By default, use the same logical buffer_id on peer side.
       dst_buffer_id = binding->buffer_id;
     }
-    if (dst_buffer_id != 0) {
-      dst_hint =
-          UKernel::Transport::RemoteSlice{dst_buffer_id, remote_offset, {}};
-    }
     uint64_t req = comm_->isend(
-        peer_rank, UKernel::Transport::LocalSlice{buffer_id, offset, len},
-        dst_hint);
+        peer_rank, buffer_id, offset, len,
+        dst_buffer_id, remote_offset);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);
@@ -260,7 +254,7 @@ class Communicator {
       }
     }
     uint64_t req = comm_->irecv(
-        peer_rank, UKernel::Transport::LocalSlice{buffer_id, offset, len});
+        peer_rank, buffer_id, offset, len);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);

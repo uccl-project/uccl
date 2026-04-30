@@ -1,7 +1,7 @@
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
-#include "oob/shmring_exchanger.h"
+#include "adapter/shmring_exchanger.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
@@ -222,7 +222,6 @@ void test_shm_ack_filtering() {
 
 void test_shm_dual_waiters() {
   using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
-  using IpcCacheWire = UKernel::Transport::IpcCacheWire;
   std::string const ring_namespace = unique_shm_namespace("core-shm-dual");
 
   std::exception_ptr rank0_error;
@@ -234,29 +233,27 @@ void test_shm_dual_waiters() {
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
-      IpcCacheWire got{};
-      uint64_t got_seq = 0;
-      uint32_t ack_status = 0;
-      uint64_t ack_seq = 0;
+      uint32_t ack1_status = 0;
+      uint64_t ack1_seq = 0;
+      uint32_t ack2_status = 0;
+      uint64_t ack2_seq = 0;
 
-      std::thread wait_ipc([&] {
-        require(shm0.recv_ipc_cache(/*peer_rank=*/1, got, &got_seq,
-                                    /*timeout_ms=*/5000, /*expected_seq=*/11),
-                "recv_ipc_cache failed");
+      std::thread wait1([&] {
+        require(shm0.recv_ack(/*peer_rank=*/1, &ack1_status, &ack1_seq,
+                              /*timeout_ms=*/5000, /*expected_seq=*/11),
+                "recv_ack seq=11 failed");
       });
-      std::thread wait_ack([&] {
-        require(shm0.recv_ack(/*peer_rank=*/1, &ack_status, &ack_seq,
+      std::thread wait2([&] {
+        require(shm0.recv_ack(/*peer_rank=*/1, &ack2_status, &ack2_seq,
                               /*timeout_ms=*/5000, /*expected_seq=*/22),
-                "recv_ack failed");
+                "recv_ack seq=22 failed");
       });
 
-      wait_ipc.join();
-      wait_ack.join();
+      wait1.join();
+      wait2.join();
 
-      require(got_seq == 11, "ipc cache sequence mismatch");
-      require(got.size == 2048 && got.offset == 64,
-              "ipc cache payload mismatch");
-      require(ack_seq == 22 && ack_status == 3, "ack payload mismatch");
+      require(ack1_seq == 11 && ack1_status == 0xAA, "ack1 payload mismatch");
+      require(ack2_seq == 22 && ack2_status == 3, "ack2 payload mismatch");
     } catch (...) {
       rank0_error = std::current_exception();
     }
@@ -269,17 +266,10 @@ void test_shm_dual_waiters() {
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
 
-      IpcCacheWire wire{};
-      std::memset(&wire.handle, 0, sizeof(wire.handle));
-      wire.is_send = 0;
-      wire.offset = 64;
-      wire.size = 2048;
-      wire.remote_gpu_idx_ = 0;
-
-      require(shm1.send_ipc_cache(/*peer_rank=*/0, /*seq=*/11, wire),
-              "send_ipc_cache failed");
+      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/11, /*status=*/0xAA),
+              "send_ack seq=11 failed");
       require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/22, /*status=*/3),
-              "send_ack failed");
+              "send_ack seq=22 failed");
     } catch (...) {
       rank1_error = std::current_exception();
     }

@@ -1,13 +1,14 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "bounce_buffer_pool.h"
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "memory/shm_manager.h"
 #include "oob/oob.h"
-#include "request.h"
+#include "request_tracker.h"
+#include "shm_buf_pool.h"
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,7 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -30,43 +30,41 @@ class UcclTransportAdapter;
 
 class Communicator {
  public:
-  // Lifecycle.
   Communicator(
       int gpu_id, int rank, int world_size,
       std::shared_ptr<CommunicatorConfig> config =
           std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env()));
   ~Communicator();
 
-  // Peer bootstrap / transport path.
+  int rank() const { return global_rank_; }
+  int world_size() const { return world_size_; }
+
   bool connect(int rank);
   bool accept(int rank);
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
-  // Async data path.
-  unsigned isend(int rank, LocalSlice src,
-                 std::optional<RemoteSlice> dst_hint = std::nullopt);
-  unsigned irecv(int rank, LocalSlice dst);
-  bool poll(unsigned const req);
-  void release(unsigned const req);
-  bool wait_finish(unsigned const req);
-  bool wait_finish(std::vector<unsigned> const& reqs);
+  unsigned isend(int rank, uint32_t src_buf_id, size_t src_off, size_t src_bytes,
+                 uint32_t dst_buf_id = 0, size_t dst_off = 0);
+  unsigned irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
+                 size_t dst_bytes);
+  bool poll(unsigned const req) { return tracker_->poll(req); }
+  void release(unsigned const req) { tracker_->release(req); }
+  bool wait_finish(unsigned const req) { return tracker_->wait_finish(req); }
+  bool wait_finish(std::vector<unsigned> const& reqs) {
+    return tracker_->wait_finish(reqs);
+  }
 
-  // Identity.
-  int rank() const { return global_rank_; }
-  int world_size() const { return world_size_; }
-  // Runtime-selectable OOB namespace for communication-group isolation.
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;
-  // OOB global barrier across ranks in this communicator.
   bool barrier(std::string const& barrier_namespace = "default",
                int timeout_ms = -1);
 
-  // Completion notification hook.
   std::shared_ptr<void> register_completion_notifier(
-      std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
+      std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb) {
+    return tracker_->register_notifier(std::move(cb));
+  }
 
-  // Async resource API (buffer_id keyed).
   bool reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
               bool publish = true);
   bool dereg_mr(uint32_t buffer_id);
@@ -85,9 +83,12 @@ class Communicator {
                                       size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
-  // SHM bounce.
   void* get_or_open_bounce_shm(std::string const& shm_name);
-  void clear_bounce_shm_cache();
+
+  int peer_gpu_idx(int rank) const;
+
+  // Shared SHM buffer pool for IPC relay (one per host).
+  ShmBufPool* shm_buf_pool() { return shm_buf_pool_.get(); }
 
  private:
   struct ResolvedPeer {
@@ -99,93 +100,68 @@ class Communicator {
   struct PeerState {
     bool has_meta = false;
     CommunicatorMeta meta{};
-    PeerTransportKind kind = PeerTransportKind::Unknown;
-    bool connected = false;
+    PeerTransportKind put_kind = PeerTransportKind::Unknown;
+    PeerTransportKind wait_kind = PeerTransportKind::Unknown;
+    bool put_ready = false;
+    bool wait_ready = false;
+    int gpu_idx = -1;
   };
 
-  struct TrackedRequest {
-    enum class SlotState : uint8_t {
-      Free = 0,
-      Reserved = 1,
-      InFlight = 2,
-      Completed = 3,
-      Failed = 4,
-      Releasing = 5
-    };
-    std::atomic<SlotState> state{SlotState::Free};
-    std::atomic<uint32_t> generation{0};
-    unsigned request_id = 0;
-    unsigned adapter_request_id = 0;
-    int peer_rank = -1;
-    PeerTransportKind kind = PeerTransportKind::Unknown;
-    bool notified = false;
-    bool needs_host_to_device_copy = false;
-    bool host_copy_submitted = false;
-    void* completion_buffer = nullptr;
-    size_t completion_offset = 0;
-    size_t completion_bytes = 0;
-    gpuEvent_t host_copy_event = nullptr;
-    SHMItem bounce;
-    std::shared_ptr<SHMItem> bounce_owner;
-  };
-
-  // Adapter bootstrap / selection.
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
   bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
                                UCCLP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
 
-  // Peer-state lifecycle.
-  PeerTransportKind get_peer_transport_kind(int rank) const;
-  bool has_peer_path(int rank) const;
-  void mark_peer_path_ready(int rank, PeerTransportKind kind);
+  bool has_put_path(int rank) const;
+  bool has_wait_path(int rank) const;
+  void mark_put_path_ready(int rank, PeerTransportKind kind);
+  void mark_wait_path_ready(int rank, PeerTransportKind kind);
+  bool ensure_path(int rank, bool is_put);
   void exchange_peer_metas();
   ResolvedPeer resolve_peer(int rank) const;
-  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
   bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta);
 
-  // Request tracking / progress.
-  bool poll_request_completion(unsigned id, bool blocking);
-  TrackedRequest* allocate_request_slot(unsigned* out_req_id);
-  TrackedRequest* resolve_request_slot(unsigned req_id) const;
-  bool try_release_request_slot(unsigned req_id, TrackedRequest* out_snapshot);
-  bool enqueue_active_request(unsigned req_id);
-  bool dequeue_active_request(unsigned* out_req_id);
-  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation);
-  static uint32_t request_slot_index(unsigned req_id);
-  static uint32_t request_generation(unsigned req_id);
-  void notify_request_completion();
+  TransportAdapter* get_adapter(PeerTransportKind kind);
 
-  // UCCL MR lifecycle.
+  bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
+  void cleanup_tracked_request(TrackedRequest& tracked);
+
   void register_existing_local_mrs_with_uccl();
   bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
-  // Request cleanup helpers.
-  void cleanup_tracked_request(TrackedRequest& tracked);
-  bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
   SHMManager& require_shm_manager(char const* caller);
 
-  // Background progress loop: advances completion state for all in-flight
-  // requests and emits user completion callbacks for requests that finish.
-  void progress_loop();
+  BounceBufferPool* ensure_bounce_pool();
+  void ensure_shm_buf_pool();
 
-  // Identity.
+  bool ipc_p2p_available(int peer_rank, uint32_t remote_buffer_id);
+
+  gpuEvent_t acquire_event();
+  void release_event(gpuEvent_t event);
+
+  PeerTransportKind get_put_transport_kind(int rank) const;
+  PeerTransportKind get_wait_transport_kind(int rank) const;
+
   int local_gpu_idx_;
   int global_rank_;
   int world_size_;
 
-  // Memory/resource managers.
   MRManager mr_manager_;
   IPCManager ipc_manager_;
   std::optional<SHMManager> shm_manager_;
 
-  // Transport adapters.
   std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
   gpuStream_t host_copy_stream_ = nullptr;
 
-  // Peer/bootstrapping state.
+  std::unique_ptr<RequestTracker> tracker_;
+  std::unique_ptr<BounceBufferPool> bounce_pool_;
+  std::unique_ptr<ShmBufPool> shm_buf_pool_;
+
+  mutable std::mutex event_pool_mu_;
+  std::vector<gpuEvent_t> event_pool_;
+
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;
   std::shared_ptr<CommunicatorConfig> config_;
@@ -193,44 +169,12 @@ class Communicator {
   std::shared_ptr<Exchanger> exchanger_client_;
   std::atomic<uint64_t> barrier_seq_{0};
 
-  // Adapter dispatch.
-  TransportAdapter* get_adapter(PeerTransportKind kind);
-
-  // Request lifecycle (slot/ring/event).
-  static constexpr uint32_t kRequestSlotBits = 13;
-  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
-  static constexpr uint32_t kRequestGenerationMask =
-      (1u << (32u - kRequestSlotBits)) - 1u;
-  std::unique_ptr<TrackedRequest[]> request_slots_;
-  std::atomic<uint32_t> request_alloc_cursor_{0};
-  std::atomic<uint32_t> inflight_request_count_{0};
-  static constexpr uint32_t kActiveRingSize = (1u << 15);
-  std::unique_ptr<std::atomic<unsigned>[]> active_ring_;
-  std::atomic<uint32_t> active_head_{0};
-  std::atomic<uint32_t> active_tail_{0};
-  int completion_event_fd_ = -1;
-  std::atomic<uint64_t> completion_seq_{0};
   mutable std::mutex resource_mu_;
   std::unordered_map<uint32_t, MR> local_buffer_to_mr_;
   std::unordered_map<int, std::unordered_map<uint32_t, MR>>
       remote_buffer_to_mr_;
   std::unordered_map<uint32_t, IPCItem> local_buffer_to_ipc_;
 
-  // Despite the historical name, this thread now serves as the communicator's
-  // background progress engine. register_completion_notifier() only attaches
-  // user callbacks to this always-on loop.
-  std::atomic<bool> progress_running_{false};
-  std::atomic<bool> progress_started_{false};
-  std::thread progress_thread_;
-  std::condition_variable progress_cv_;
-  std::mutex progress_mu_;
-
-  struct NotifyTarget {
-    std::function<void(unsigned, std::chrono::steady_clock::time_point)> emit;
-  };
-  std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
-
-  // UCCL registration caches.
   mutable std::mutex uccl_reg_mu_;
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> uccl_registered_mrs_;

@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -13,6 +14,11 @@ namespace UKernel {
 namespace Transport {
 
 std::string generate_host_id(bool include_ip = false);
+
+inline bool ipc_force_relay_enabled() {
+  char const* env = std::getenv("UHM_IPC_FORCE_RELAY");
+  return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
 
 }  // namespace Transport
 }  // namespace UKernel

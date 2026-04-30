@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../include/gpu_rt.h"
 #include "../util/jring.h"
 #include <atomic>
 #include <cstdint>
@@ -14,21 +13,6 @@
 namespace UKernel {
 namespace Transport {
 
-static constexpr uint16_t kTypeIpcCache = 1;
-static constexpr uint16_t kTypeAck = 2;
-
-#pragma pack(push, 1)
-struct IpcCacheWire {
-  gpuIpcMemHandle_t handle;
-  uint8_t is_send;
-  uint64_t offset;
-  uint64_t size;
-  uint32_t remote_gpu_idx_;
-  uint8_t use_bounce_buffer = 0;
-  char bounce_shm_name[128] = {};
-};
-#pragma pack(pop)
-
 struct AckWire {
   uint32_t status;
   uint32_t reserved;
@@ -37,9 +21,7 @@ struct AckWire {
 enum class ShmCtrlMsgType : uint32_t {
   Connect = 0,
   ConnectAck = 1,
-  IpcCache = 2,
   Ack = 3,
-  IpcCacheReq = 4,
 };
 
 struct ShmCtrlMsg {
@@ -48,12 +30,7 @@ struct ShmCtrlMsg {
   ShmCtrlMsgType type = ShmCtrlMsgType::Connect;
   uint32_t reserved = 0;
   uint64_t seq = 0;
-  union {
-    IpcCacheWire cache;
-    AckWire ack;
-  };
-
-  ShmCtrlMsg() : cache{} {}
+  AckWire ack{};
 };
 
 class ShmRingExchanger {
@@ -67,16 +44,6 @@ class ShmRingExchanger {
   bool connect_to(int peer_rank, int timeout_ms = 30000);
   bool accept_from(int peer_rank, int timeout_ms = 30000);
 
-  bool send(int peer_rank, uint16_t type, uint64_t seq, void const* payload,
-            uint32_t bytes);
-  bool send_ipc_cache(int peer_rank, uint64_t seq, IpcCacheWire const& cache);
-  bool send_ipc_cache_req(int peer_rank, uint64_t seq);
-  bool recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
-                      uint64_t* out_seq = nullptr, int timeout_ms = 30000,
-                      uint64_t expected_seq = UINT64_MAX);
-  bool recv_ipc_cache_req(int peer_rank, uint64_t* out_seq = nullptr,
-                          int timeout_ms = 30000,
-                          uint64_t expected_seq = UINT64_MAX);
   bool send_ack(int peer_rank, uint64_t seq, uint32_t status = 1);
   bool recv_ack(int peer_rank, uint32_t* out_status = nullptr,
                 uint64_t* out_seq = nullptr, int timeout_ms = 30000,
@@ -93,11 +60,6 @@ class ShmRingExchanger {
     std::string shm_name;
     bool attached = false;
     bool creator = false;
-  };
-
-  struct PendingIpcCacheMsg {
-    uint64_t seq = 0;
-    IpcCacheWire cache{};
   };
 
   struct PendingAckMsg {
@@ -120,19 +82,10 @@ class ShmRingExchanger {
   bool try_take_connect_locked(int peer_rank, uint64_t* out_seq = nullptr);
   bool try_take_cached_connect_ack_locked(int peer_rank, uint64_t expected_seq,
                                           uint64_t* out_seq);
-  bool try_take_cached_ipc_cache_locked(int peer_rank, uint64_t expected_seq,
-                                        IpcCacheWire& out_cache,
-                                        uint64_t* out_seq);
-  bool try_take_cached_ipc_cache_req_locked(int peer_rank,
-                                            uint64_t expected_seq,
-                                            uint64_t* out_seq);
   bool try_take_cached_ack_locked(int peer_rank, uint64_t expected_seq,
                                   AckWire& out_ack, uint64_t* out_seq);
   void cache_connect_message(int peer_rank, uint64_t seq);
   void cache_connect_ack_message(int peer_rank, uint64_t seq);
-  void cache_ipc_cache_message(int peer_rank, uint64_t seq,
-                               IpcCacheWire const& cache);
-  void cache_ipc_cache_req_message(int peer_rank, uint64_t seq);
   void cache_ack_message(int peer_rank, uint64_t seq, AckWire const& ack);
   bool send_msg(int peer_rank, ShmCtrlMsg const& msg);
 
@@ -148,9 +101,6 @@ class ShmRingExchanger {
   mutable std::mutex pending_mu_;
   std::unordered_map<int, std::deque<uint64_t>> pending_connect_;
   std::unordered_map<int, std::deque<uint64_t>> pending_connect_acks_;
-  std::unordered_map<int, std::deque<PendingIpcCacheMsg>>
-      rank_to_pending_ipc_cache_;
-  std::unordered_map<int, std::deque<uint64_t>> rank_to_pending_ipc_cache_req_;
   std::unordered_map<int, std::deque<PendingAckMsg>> rank_to_pending_acks_;
   std::vector<uint64_t> next_connect_seq_;
 };

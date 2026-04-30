@@ -15,8 +15,6 @@
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
 using MR = UKernel::Transport::MR;
-using LocalSlice = UKernel::Transport::LocalSlice;
-using RemoteSlice = UKernel::Transport::RemoteSlice;
 
 static constexpr int kWorldSize = 2;
 static constexpr int kClientGpu = 0;
@@ -100,12 +98,9 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
     (void)comm->get_mr(kServerRank, kServerRecvBufferId);
     remote_recv_buffer_id = kServerRecvBufferId;
   }
-  std::optional<RemoteSlice> dst_hint = std::nullopt;
-  if (remote_recv_buffer_id != 0) {
-    dst_hint = RemoteSlice{remote_recv_buffer_id, 0};
-  }
   unsigned send_req = comm->isend(
-      kServerRank, LocalSlice{kClientSendBufferId, 0, kMessageBytes}, dst_hint);
+      kServerRank, kClientSendBufferId, 0, kMessageBytes,
+      remote_recv_buffer_id, 0);
   require(send_req != 0, "client isend failed");
   require(comm->wait_finish(send_req), "client wait_finish(send) failed");
 
@@ -132,7 +127,7 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   (void)peer_kind;
 
   unsigned recv_req = comm->irecv(
-      kClientRank, LocalSlice{kServerRecvBufferId, 0, kMessageBytes});
+      kClientRank, kServerRecvBufferId, 0, kMessageBytes);
   require(recv_req != 0, "server irecv failed");
   require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
 

@@ -1,17 +1,15 @@
 #pragma once
 
 #include "../memory/ipc_manager.h"
-#include "../oob/shmring_exchanger.h"
 #include "../util/jring.h"
-#include "config.h"
-#include "gpu_rt.h"
+#include "../../include/gpu_rt.h"
+#include "shmring_exchanger.h"
 #include "transport_adapter.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -27,48 +25,45 @@ class Communicator;
 
 class IpcAdapter final : public TransportAdapter {
  public:
-  // Lifecycle.
   IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id,
              int local_gpu_idx);
   ~IpcAdapter() override;
   void shutdown();
 
-  // Peer state / routing metadata.
   void set_peer_local_id(int peer_rank, int local_id);
   void close_peer(int peer_rank);
-  bool ensure_peer(PeerConnectSpec const& spec) override;
-  bool has_peer(int peer_rank) const override;
 
-  // Async data-plane requests.
-  unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint32_t local_buffer_id,
-                      std::optional<RemoteSlice> remote_hint,
-                      BounceBufferProvider bounce_provider = nullptr) override;
-  unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint32_t local_buffer_id,
-                      BounceBufferProvider bounce_provider = nullptr) override;
+  uint64_t next_send_match_seq(int peer_rank);
+  uint64_t next_recv_match_seq(int peer_rank);
 
-  // Request completion API.
+  bool ensure_put_path(PeerConnectSpec const& spec) override;
+  bool ensure_wait_path(PeerConnectSpec const& spec) override;
+  bool has_put_path(int peer_rank) const override;
+  bool has_wait_path(int peer_rank) const override;
+
+  unsigned put_async(int peer_rank, void* local_ptr,
+                     uint32_t local_buffer_id, void* remote_ptr,
+                     uint32_t remote_buffer_id, size_t len) override;
+  unsigned signal_async(int peer_rank, uint64_t tag) override;
+  unsigned wait_async(int peer_rank, uint64_t expected_tag,
+                      std::optional<WaitTarget> target = std::nullopt) override;
+
   bool poll_completion(unsigned id) override;
   bool wait_completion(unsigned id) override;
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
+  uint64_t completion_payload(unsigned id) const override;
 
  private:
-  // Peer control-plane helpers.
   bool connect_to(int rank);
   bool accept_from(int rank);
-  uint64_t next_send_match_seq(int rank);
-  uint64_t next_recv_match_seq(int rank);
 
   enum class RequestState : uint8_t {
-    Free = 0,
-    Queued = 1,
-    Running = 2,
-    Completed = 3,
-    Failed = 4,
+    Free = 0, Queued = 1, Running = 2, Completed = 3, Failed = 4,
   };
-  enum class IpcReqType : uint8_t { Send = 0, Recv = 1 };
+  enum class IpcReqType : uint8_t {
+    DataPut = 0, DataWait = 1, Signal = 2, SignalWait = 3
+  };
 
   struct IpcRequestSlot {
     std::atomic<RequestState> state{RequestState::Free};
@@ -76,12 +71,12 @@ class IpcAdapter final : public TransportAdapter {
     unsigned id = 0;
     int peer_rank = -1;
     uint64_t match_seq = 0;
-    void* buffer = nullptr;
+    IpcReqType req_type = IpcReqType::DataPut;
+    void* local_ptr = nullptr;
+    void* remote_ptr = nullptr;
+    uint32_t remote_buffer_id = 0;
     size_t size_bytes = 0;
-    RemoteSlice remote_slice{};
-    void* bounce_ptr = nullptr;
-    std::string bounce_shm_name;
-    BounceBufferProvider bounce_provider = nullptr;
+    uint64_t signal_payload = 0;
     std::atomic<uint32_t> remaining{0};
     std::atomic<bool> failed{false};
     std::atomic<bool> finished{false};
@@ -105,18 +100,18 @@ class IpcAdapter final : public TransportAdapter {
       uint32_t prev = remaining.load(std::memory_order_acquire);
       while (prev != 0 && !remaining.compare_exchange_weak(
                               prev, prev - 1, std::memory_order_acq_rel,
-                              std::memory_order_acquire)) {
-      }
+                              std::memory_order_acquire)) {}
       if (prev <= 1) {
         state.store(RequestState::Completed, std::memory_order_release);
         finished.store(true, std::memory_order_release);
       }
     }
-    bool is_finished() const {
-      return finished.load(std::memory_order_acquire);
-    }
+    bool is_finished() const { return finished.load(std::memory_order_acquire); }
     bool has_failed() const { return failed.load(std::memory_order_acquire); }
-    void* data() const { return buffer; }
+    bool is_direct_gpu() const {
+      return remote_ptr != nullptr &&
+             remote_ptr == local_ptr;  // placeholder; determined by pointer attr
+    }
   };
 
   static constexpr uint32_t kRequestSlotBits = 13;
@@ -132,41 +127,17 @@ class IpcAdapter final : public TransportAdapter {
     return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
   }
 
-  // Request slot lifecycle.
   IpcRequestSlot* try_acquire_request_slot(unsigned* out_request_id);
   IpcRequestSlot* resolve_request_slot(unsigned request_id);
   IpcRequestSlot* resolve_request_slot_const(unsigned request_id) const;
   void release_request_slot(unsigned request_id);
 
-  // Task queue / worker execution.
   bool enqueue_request(unsigned request_id, IpcReqType type);
   bool send_one(IpcRequestSlot* creq);
   bool recv_one(IpcRequestSlot* creq);
-  bool find_or_open_remote_ipc_handle(int remote_rank,
-                                      gpuIpcMemHandle_t const& handle,
-                                      size_t offset, size_t bytes,
-                                      int remote_gpu_idx, IPCItem* out);
-  void clear_remote_handle_cache();
   void send_thread_func();
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
-
-  using IpcHandleKey = std::array<uint8_t, sizeof(gpuIpcMemHandle_t)>;
-  struct IpcHandleHash {
-    size_t operator()(IpcHandleKey const& k) const noexcept {
-      uint64_t hash = 1469598103934665603ull;
-      for (uint8_t b : k) {
-        hash ^= b;
-        hash *= 1099511628211ull;
-      }
-      return static_cast<size_t>(hash);
-    }
-  };
-  static IpcHandleKey make_ipc_handle_key(gpuIpcMemHandle_t const& h) {
-    IpcHandleKey k{};
-    std::memcpy(k.data(), &h, k.size());
-    return k;
-  }
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -181,19 +152,16 @@ class IpcAdapter final : public TransportAdapter {
   std::vector<gpuStream_t> ipc_streams_;
 
   std::mutex match_seq_mu_;
-  // Two directed-edge counters per peer:
-  // dir=0 -> low-rank to high-rank, dir=1 -> high-rank to low-rank.
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
   std::unique_ptr<IpcRequestSlot[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
+  mutable std::mutex peer_dir_mu_;
+  struct DirState { bool put_ready = false; bool wait_ready = false; };
+  std::vector<DirState> peer_dir_state_;
   Communicator* comm_;
   int local_gpu_idx_ = -1;
-  std::mutex remote_handle_mu_;
-  std::unordered_map<int,
-                     std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
-      remote_handle_cache_;
 };
 
 }  // namespace Transport

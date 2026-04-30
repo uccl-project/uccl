@@ -3,10 +3,10 @@
 #include "gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -21,6 +21,17 @@ constexpr auto kConnectRetrySleep = std::chrono::milliseconds(50);
 constexpr auto kDefaultConnectTimeout = std::chrono::seconds(30);
 constexpr auto kAcceptPollSleep = std::chrono::milliseconds(10);
 constexpr size_t kTaskRingSize = 1024;
+constexpr size_t kSignalWireBytes = sizeof(uint64_t);
+
+enum class FrameType : uint32_t {
+  Data = 1,
+  Signal = 2,
+};
+
+struct WireHeader {
+  uint32_t type = 0;
+  uint64_t payload_len = 0;
+};
 
 bool is_retryable_errno(int err) {
   return err == EINTR || err == EAGAIN || err == EWOULDBLOCK;
@@ -34,6 +45,29 @@ bool enqueue_one_request_id(jring_t* ring, unsigned request_id,
     std::this_thread::yield();
   }
   return !stop.load(std::memory_order_acquire);
+}
+
+bool recv_discard_all(int fd, uint64_t len) {
+  constexpr size_t kDiscardChunk = 4096;
+  char discard[kDiscardChunk];
+  uint64_t remaining = len;
+  while (remaining > 0) {
+    size_t chunk = static_cast<size_t>(
+        std::min<uint64_t>(remaining, static_cast<uint64_t>(kDiscardChunk)));
+    size_t received = 0;
+    while (received < chunk) {
+      ssize_t rc = ::recv(fd, discard + received, chunk - received, 0);
+      if (rc > 0) {
+        received += static_cast<size_t>(rc);
+        continue;
+      }
+      if (rc == 0) return false;
+      if (is_retryable_errno(errno)) continue;
+      return false;
+    }
+    remaining -= chunk;
+  }
+  return true;
 }
 
 }  // namespace
@@ -132,7 +166,7 @@ uint16_t TcpTransportAdapter::get_listen_port() const { return listen_port_; }
 
 bool TcpTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
                                           uint16_t remote_port) {
-  if (has_peer(peer_rank)) return true;
+  if (has_put_path(peer_rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   int fd = -1;
@@ -161,18 +195,17 @@ bool TcpTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
   std::lock_guard<std::mutex> lk(mu_);
   auto& ctx = peer_contexts_[peer_rank];
   if (!ctx) ctx = std::make_shared<PeerContext>();
-  if (ctx->send_fd >= 0 && ctx->recv_fd >= 0) {
+  if (ctx->send_fd >= 0) {
     ::close(fd);
     return true;
   }
-  if (ctx->send_fd < 0) ctx->send_fd = fd;
-  if (ctx->recv_fd < 0) ctx->recv_fd = fd;
+  ctx->send_fd = fd;
   return true;
 }
 
 bool TcpTransportAdapter::accept_from_peer(
     int peer_rank, std::string const& expected_remote_ip) {
-  if (has_peer(peer_rank)) return true;
+  if (has_wait_path(peer_rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -218,58 +251,65 @@ bool TcpTransportAdapter::accept_from_peer(
     std::lock_guard<std::mutex> lk(mu_);
     auto& ctx = peer_contexts_[peer_rank];
     if (!ctx) ctx = std::make_shared<PeerContext>();
-    if (ctx->send_fd >= 0 && ctx->recv_fd >= 0) {
+    if (ctx->recv_fd >= 0) {
       ::shutdown(fd, SHUT_RDWR);
       ::close(fd);
       return true;
     }
-    if (ctx->send_fd < 0) ctx->send_fd = fd;
-    if (ctx->recv_fd < 0) ctx->recv_fd = fd;
+    ctx->recv_fd = fd;
     return true;
   }
   return false;
 }
 
-bool TcpTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+bool TcpTransportAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   if (spec.peer_rank < 0) return false;
-  if (has_peer(spec.peer_rank)) return true;
+  if (has_put_path(spec.peer_rank)) return true;
+  if (spec.type != PeerConnectType::Connect) return false;
   if (!std::holds_alternative<TcpPeerConnectSpec>(spec.detail)) return false;
   auto const& tcp = std::get<TcpPeerConnectSpec>(spec.detail);
-  if (spec.type == PeerConnectType::Connect) {
-    return connect_to_peer(spec.peer_rank, tcp.remote_ip, tcp.remote_port);
+  if (!connect_to_peer(spec.peer_rank, tcp.remote_ip, tcp.remote_port)) {
+    return false;
   }
-  return accept_from_peer(spec.peer_rank, tcp.remote_ip);
+  return has_put_path(spec.peer_rank);
 }
 
-bool TcpTransportAdapter::has_peer(int peer_rank) const {
+bool TcpTransportAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_wait_path(spec.peer_rank)) return true;
+  if (spec.type != PeerConnectType::Accept) return false;
+  if (!std::holds_alternative<TcpPeerConnectSpec>(spec.detail)) return false;
+  auto const& tcp = std::get<TcpPeerConnectSpec>(spec.detail);
+  if (!accept_from_peer(spec.peer_rank, tcp.remote_ip)) return false;
+  return has_wait_path(spec.peer_rank);
+}
+
+bool TcpTransportAdapter::has_put_path(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second && it->second->send_fd >= 0 &&
-         it->second->recv_fd >= 0;
+  return it != peer_contexts_.end() && it->second && it->second->send_fd >= 0;
 }
 
-unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
-                                         size_t len, uint32_t local_buffer_id,
-                                         std::optional<RemoteSlice> remote_hint,
-                                         BounceBufferProvider bounce_provider) {
-  (void)local_buffer_id;
-  (void)remote_hint;
-  if (!has_peer(peer_rank)) return 0;
+bool TcpTransportAdapter::has_wait_path(int peer_rank) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  auto it = peer_contexts_.find(peer_rank);
+  return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
+}
 
-  void* send_ptr = local_ptr;
-  if (bounce_provider) {
-    BounceBufferInfo info = bounce_provider(len);
-    if (info.ptr != nullptr) {
-      GPU_RT_CHECK(gpuMemcpy(info.ptr, local_ptr, len, gpuMemcpyDeviceToHost));
-      send_ptr = info.ptr;
-    }
-  }
+unsigned TcpTransportAdapter::put_async(
+    int peer_rank, void* local_ptr, uint32_t local_buffer_id,
+    void* remote_ptr, uint32_t remote_buffer_id, size_t len) {
+  (void)local_buffer_id;
+  (void)remote_ptr;
+  (void)remote_buffer_id;
+  if (!has_put_path(peer_rank)) return 0;
 
   unsigned request_id = 0;
   RequestSlot* slot = try_acquire_request_slot(&request_id);
   if (!slot) return 0;
   slot->peer_rank = peer_rank;
-  slot->host_ptr = send_ptr;
+  slot->kind = RequestSlot::Kind::DataPut;
+  slot->host_ptr = local_ptr;
   slot->len = len;
   slot->mark_queued();
   if (!enqueue_request(request_id, /*is_send=*/true)) {
@@ -280,24 +320,45 @@ unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
   return request_id;
 }
 
-unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
-                                         size_t len, uint32_t local_buffer_id,
-                                         BounceBufferProvider bounce_provider) {
-  (void)local_buffer_id;
-  if (!has_peer(peer_rank)) return 0;
-  void* recv_ptr = local_ptr;
-  if (bounce_provider) {
-    BounceBufferInfo info = bounce_provider(len);
-    if (info.ptr != nullptr) {
-      recv_ptr = info.ptr;
-    }
-  }
+unsigned TcpTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
+  if (!has_put_path(peer_rank)) return 0;
   unsigned request_id = 0;
   RequestSlot* slot = try_acquire_request_slot(&request_id);
   if (!slot) return 0;
   slot->peer_rank = peer_rank;
-  slot->host_ptr = recv_ptr;
-  slot->len = len;
+  slot->kind = RequestSlot::Kind::Signal;
+  slot->signal_payload = tag;
+  // host_ptr must point to signal_payload so the send worker reads the tag value
+  // from the slot itself — this is safe because the slot is exclusively owned.
+  slot->host_ptr = &slot->signal_payload;
+  slot->len = sizeof(uint64_t);
+  slot->mark_queued();
+  if (!enqueue_request(request_id, /*is_send=*/true)) {
+    slot->mark_completed(false);
+    release_request_slot(request_id);
+    return 0;
+  }
+  return request_id;
+}
+
+unsigned TcpTransportAdapter::wait_async(int peer_rank, uint64_t expected_tag,
+                                         std::optional<WaitTarget> target) {
+  if (!has_wait_path(peer_rank)) return 0;
+  unsigned request_id = 0;
+  RequestSlot* slot = try_acquire_request_slot(&request_id);
+  if (!slot) return 0;
+  slot->peer_rank = peer_rank;
+  if (!target.has_value()) {
+    slot->kind = RequestSlot::Kind::SignalWait;
+    slot->expected_tag = expected_tag;
+    slot->signal_payload = 0;
+    slot->host_ptr = &slot->signal_payload;
+    slot->len = kSignalWireBytes;
+  } else {
+    slot->kind = RequestSlot::Kind::DataWait;
+    slot->host_ptr = target->local_ptr;
+    slot->len = target->len;
+  }
   slot->mark_queued();
   if (!enqueue_request(request_id, /*is_send=*/false)) {
     slot->mark_completed(false);
@@ -357,8 +418,11 @@ TcpTransportAdapter::RequestSlot* TcpTransportAdapter::try_acquire_request_slot(
       slot.generation.store(gen, std::memory_order_release);
     }
     slot.peer_rank = -1;
+    slot.kind = RequestSlot::Kind::DataPut;
     slot.host_ptr = nullptr;
     slot.len = 0;
+    slot.expected_tag = 0;
+    slot.signal_payload = 0;
     slot.completed.store(false, std::memory_order_release);
     slot.failed.store(false, std::memory_order_release);
     *out_request_id = make_request_id(idx, gen);
@@ -413,8 +477,11 @@ void TcpTransportAdapter::release_request_slot(unsigned request_id) {
   slot.completed.store(false, std::memory_order_release);
   slot.failed.store(false, std::memory_order_release);
   slot.peer_rank = -1;
+  slot.kind = RequestSlot::Kind::DataPut;
   slot.host_ptr = nullptr;
   slot.len = 0;
+  slot.expected_tag = 0;
+  slot.signal_payload = 0;
   uint32_t old_gen = slot.generation.load(std::memory_order_acquire);
   while (true) {
     uint32_t next_gen = old_gen + 1;
@@ -479,8 +546,17 @@ void TcpTransportAdapter::send_worker_loop() {
     }
     if (ctx) {
       std::lock_guard<std::mutex> send_lk(ctx->send_mu);
-      ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr,
-                                         slot->len);
+      WireHeader header{};
+      header.type =
+          static_cast<uint32_t>((slot->kind == RequestSlot::Kind::Signal)
+                                    ? FrameType::Signal
+                                    : FrameType::Data);
+      header.payload_len = static_cast<uint64_t>(slot->len);
+      ok = TcpTransportAdapter::send_all(ctx->send_fd, &header, sizeof(header));
+      if (ok && slot->len > 0) {
+        ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr,
+                                           slot->len);
+      }
     }
     slot->mark_completed(ok);
     cv_.notify_all();
@@ -529,8 +605,28 @@ void TcpTransportAdapter::recv_worker_loop() {
     }
     if (ctx) {
       std::lock_guard<std::mutex> recv_lk(ctx->recv_mu);
-      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, slot->host_ptr,
-                                         slot->len);
+      WireHeader header{};
+      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, &header, sizeof(header));
+      if (ok) {
+        FrameType expected_type =
+            (slot->kind == RequestSlot::Kind::SignalWait) ? FrameType::Signal
+                                                           : FrameType::Data;
+        FrameType got_type = static_cast<FrameType>(header.type);
+        bool frame_ok = (got_type == expected_type) &&
+                        (header.payload_len == static_cast<uint64_t>(slot->len));
+        if (!frame_ok) {
+          if (header.payload_len > 0) {
+            recv_discard_all(ctx->recv_fd, header.payload_len);
+          }
+          ok = false;
+        } else if (slot->len > 0) {
+          ok = TcpTransportAdapter::recv_all(ctx->recv_fd, slot->host_ptr,
+                                             slot->len);
+        }
+        if (ok && slot->kind == RequestSlot::Kind::SignalWait) {
+          ok = (slot->signal_payload == slot->expected_tag);
+        }
+      }
     }
     slot->mark_completed(ok);
     cv_.notify_all();
