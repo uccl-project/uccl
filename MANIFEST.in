@@ -2,3 +2,7 @@ include uccl/__init__.py
 include uccl/lib/*.so
 include uccl/*.so
 recursive-include ep/python/uccl_ep *.py *.so
+recursive-include ep/deep_ep_wrapper/deep_ep *.py
+recursive-include deep_ep *.py
+include Makefile
+include ep/Makefile.rocm

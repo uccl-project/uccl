@@ -1,25 +1,3 @@
-import torch
+"""Deprecated shim: import everything from the top-level ``deep_ep`` package."""
 
-from uccl.ep import (
-    EventOverlap,
-    Buffer,
-    Config,
-    initialize_uccl,
-    destroy_uccl,
-    test_internode,
-    # TODO topk_idx_t
-    buffer, # module
-    utils, # module
-
-)
-
-__all__ = [
-    "Config",
-    "Buffer",
-    "EventOverlap",
-    "initialize_uccl",
-    "destroy_uccl",
-    "test_internode",
-    "buffer",
-    "utils",
-]
+from deep_ep import *  # type: ignore F401,F403
