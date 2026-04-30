@@ -1316,6 +1316,7 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
 
     // IPC SHM bounce: signal_payload carries the buffer_id.
     uint32_t buf_id = static_cast<uint32_t>(tracked.signal_payload);
+    ensure_shm_buf_pool();
     if (!shm_buf_pool_) return false;
 
     int orig_device = -1;

@@ -104,8 +104,7 @@ RequestTracker::~RequestTracker() {
     TrackedRequest snapshot{};
     if (try_release(slot->request_id, &snapshot)) {
       cleanup_(snapshot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
+      finish_release(snapshot.request_id);
     } else {
       slot->state.store(TrackedRequest::SlotState::Free,
                         std::memory_order_release);
@@ -235,9 +234,16 @@ bool RequestTracker::try_release(unsigned req_id,
     snapshot->pool_slot = slot->pool_slot;
     snapshot->signal_payload = slot->signal_payload;
   }
+  return true;
+}
+
+void RequestTracker::finish_release(unsigned req_id) {
+  TrackedRequest* slot = resolve(req_id);
+  if (slot == nullptr) return;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state != TrackedRequest::SlotState::Releasing) return;
   slot->state.store(TrackedRequest::SlotState::Free,
                     std::memory_order_release);
-  return true;
 }
 
 // ── adapter dispatch ────────────────────────────────────────────────────────
@@ -322,6 +328,7 @@ void RequestTracker::release(unsigned req) {
   TrackedRequest snapshot{};
   if (try_release(req, &snapshot)) {
     cleanup_(snapshot);
+    finish_release(snapshot.request_id);
   }
 }
 
@@ -369,6 +376,7 @@ bool RequestTracker::wait_finish(std::vector<unsigned> const& reqs) {
             any_failed =
                 any_failed || (state == TrackedRequest::SlotState::Failed);
             cleanup_(snapshot);
+            finish_release(snapshot.request_id);
             finished.push_back(id);
           } else {
             rescan_immediately = true;

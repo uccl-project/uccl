@@ -104,6 +104,7 @@ class RequestTracker {
   void progress_loop();
   bool poll_one(unsigned id, bool blocking);
   void notify_completion();
+  void finish_release(unsigned req_id);
   static void signal_eventfd(int fd);
 
   static unsigned make_request_id(uint32_t slot_idx, uint32_t generation);
