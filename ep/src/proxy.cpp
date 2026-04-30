@@ -245,10 +245,9 @@ void Proxy::init_common() {
   // each peer ctx; per-peer dst_ah selects the destination per WR.
   RDMAConnectionInfo template_local_info{};
   if (!ctx_.qp) {
-    create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size,
-                         &template_local_info, cfg_.rank,
-                         cfg_.d2h_queues.size(), cfg_.use_normal_mode,
-                         atomic_buffer_ptr_);
+    create_per_thread_qp(
+        ctx_, cfg_.gpu_buffer, cfg_.total_size, &template_local_info, cfg_.rank,
+        cfg_.d2h_queues.size(), cfg_.use_normal_mode, atomic_buffer_ptr_);
     // Pre-post recv WRs once on the shared recv_ack_qp, sized for all peers.
     int num_active_peers = 0;
     for (int p = 0; p < num_ranks; ++p) {
