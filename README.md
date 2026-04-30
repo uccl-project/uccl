@@ -99,6 +99,15 @@ git clone https://github.com/uccl-project/uccl.git && cd uccl
 # Eg, bash build.sh cu12 ep --install
 bash build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
+
+# Install from source. Use the torch package from your current environment so
+# CUDA/ROCm backend detection matches the target platform.
+pip install nanobind
+pip install . --no-build-isolation
+# or (legacy, may be removed in newer setuptools):
+python3 setup.py install
+# or development, install in editable mode instead:
+pip install -e . --no-build-isolation
 ```
 > Note: 
 > - By default, `build.sh cu12` targets CUDA 12.8 and `build.sh roc7` targets ROCm 7.1, but you can also specify `cu13|roc6` to target CUDA 13.0 or ROCm 6.4.
