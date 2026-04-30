@@ -240,6 +240,31 @@ void Proxy::init_common() {
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
 
+#ifdef EFA
+  // SRD is connectionless: create one set of QPs on ctx_ and alias them into
+  // each peer ctx; per-peer dst_ah selects the destination per WR.
+  RDMAConnectionInfo template_local_info{};
+  if (!ctx_.qp) {
+    create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size,
+                         &template_local_info, cfg_.rank,
+                         cfg_.d2h_queues.size(), cfg_.use_normal_mode,
+                         atomic_buffer_ptr_);
+    // Pre-post recv WRs once on the shared recv_ack_qp, sized for all peers.
+    int num_active_peers = 0;
+    for (int p = 0; p < num_ranks; ++p) {
+      if (p == my_rank) continue;
+      if (peers_[p].ip == peers_[my_rank].ip) continue;
+      if (cfg_.use_normal_mode && std::abs(p - my_rank) % MAX_NUM_GPUS != 0)
+        continue;
+      ++num_active_peers;
+    }
+    int const ack_depth =
+        std::min(static_cast<int>(kMaxOutstandingRecvs),
+                 kSenderAckQueueDepth * std::max(1, num_active_peers));
+    local_post_ack_buf(ctx_, ack_depth);
+  }
+#endif
+
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
   ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
@@ -258,8 +283,7 @@ void Proxy::init_common() {
 #ifdef USE_DMABUF
     c.gpu_mr_chunks = ctx_.gpu_mr_chunks;
 #endif
-    // NOTE(MaoZiming): each context can share the same cq, pd, mr.
-    // but the qp must be different.
+    // Share cq/pd/mr; non-EFA QPs are per-peer, EFA QPs are aliased below.
     c.cq = ctx_.cq;
     c.cq_ex = ctx_.cq_ex;
     // Share the atomic buffer MR with peer contexts
@@ -273,9 +297,22 @@ void Proxy::init_common() {
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
+#ifdef EFA
+    // Alias the shared SRD QPs from ctx_; dst_ah/dst_qpn (set later in
+    // modify_qp_to_rtr) routes per WR via ibv_wr_set_ud_addr.
+    c.qp = ctx_.qp;
+    c.ack_qp = ctx_.ack_qp;
+    c.recv_ack_qp = ctx_.recv_ack_qp;
+    c.data_qps_by_channel = ctx_.data_qps_by_channel;
+    c.gid_index = ctx_.gid_index;
+    c.qps_are_shared = true;
+    // Advertised local info is identical for all peers (shared QPs/MR/GID).
+    local_infos_[peer] = template_local_info;
+#else
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
                          cfg_.use_normal_mode, atomic_buffer_ptr_);
+#endif
     modify_qp_to_init(c);
   }
 
@@ -446,14 +483,21 @@ void Proxy::init_sender() {
   init_common();
   assert(cfg_.rank == 0);
   auto& ctx_ptr = ctxs_for_all_ranks_[1];
+#ifndef EFA
   local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+#else
+  // EFA: posted once on the shared recv_ack_qp in init_common.
+  (void)ctx_ptr;
+#endif
 }
 
 void Proxy::init_remote() {
   init_common();
   assert(cfg_.rank == 1);
   auto& ctx_ptr = ctxs_for_all_ranks_[0];
+#ifndef EFA
   local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+#endif
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
 #ifndef EFA
@@ -500,7 +544,10 @@ void Proxy::run_dual() {
       continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
+#ifndef EFA
+    // EFA: posted once on the shared recv_ack_qp in init_common.
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
+#endif
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;
 #ifndef EFA
@@ -1037,6 +1084,7 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 void Proxy::destroy(bool free_gpu_buffer) {
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
+    if (ctx_ptr->qps_are_shared) continue;  // owned by ctx_ (EFA)
     qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
     qp_to_error(ctx_ptr->recv_ack_qp);
@@ -1044,6 +1092,15 @@ void Proxy::destroy(bool free_gpu_buffer) {
       if (q) qp_to_error(q);
     }
   }
+#ifdef EFA
+  // Shared SRD QPs live on ctx_; transition before draining the CQ.
+  qp_to_error(ctx_.qp);
+  qp_to_error(ctx_.ack_qp);
+  qp_to_error(ctx_.recv_ack_qp);
+  for (auto* q : ctx_.data_qps_by_channel) {
+    if (q) qp_to_error(q);
+  }
+#endif
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
@@ -1052,6 +1109,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
+    if (ctx_ptr->qps_are_shared) {
+      // Drop aliases; ctx_ destroys these below.
+      ctx_ptr->qp = nullptr;
+      ctx_ptr->ack_qp = nullptr;
+      ctx_ptr->recv_ack_qp = nullptr;
+      ctx_ptr->data_qps_by_channel.clear();
+      continue;
+    }
     if (ctx_ptr->qp) {
       ibv_destroy_qp(ctx_ptr->qp);
       ctx_ptr->qp = nullptr;
@@ -1072,6 +1137,28 @@ void Proxy::destroy(bool free_gpu_buffer) {
       ctx_ptr->recv_ack_qp = nullptr;
     }
   }
+#ifdef EFA
+  // Destroy the shared SRD QPs owned by ctx_.
+  if (ctx_.qp) {
+    ibv_destroy_qp(ctx_.qp);
+    ctx_.qp = nullptr;
+  }
+  for (auto*& q : ctx_.data_qps_by_channel) {
+    if (q) {
+      ibv_destroy_qp(q);
+      q = nullptr;
+    }
+  }
+  ctx_.data_qps_by_channel.clear();
+  if (ctx_.ack_qp) {
+    ibv_destroy_qp(ctx_.ack_qp);
+    ctx_.ack_qp = nullptr;
+  }
+  if (ctx_.recv_ack_qp) {
+    ibv_destroy_qp(ctx_.recv_ack_qp);
+    ctx_.recv_ack_qp = nullptr;
+  }
+#endif
   ring.ack_qp = nullptr;
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
@@ -1118,6 +1205,10 @@ void Proxy::destroy(bool free_gpu_buffer) {
     if (!ctx_ptr) continue;
     dereg(ctx_ptr->ack_recv_mr);
   }
+#ifdef EFA
+  // Shared recv_ack_qp's recv MR lives on ctx_.
+  dereg(ctx_.ack_recv_mr);
+#endif
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
   dereg(ctx_.atomic_buffer_mr);

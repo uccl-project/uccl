@@ -73,6 +73,9 @@ struct ProxyCtx {
   // std::vector<ibv_cq*> extra_cqs;
   ibv_qp* ack_qp = nullptr;
   ibv_qp* recv_ack_qp = nullptr;
+  // EFA shared-QP model: when true, the QP and ack_recv_buf/mr fields above
+  // alias another ProxyCtx (typically Proxy::ctx_) and must not be destroyed.
+  bool qps_are_shared = false;
   int numa_node = -1;
   int gid_index = -1;
 
