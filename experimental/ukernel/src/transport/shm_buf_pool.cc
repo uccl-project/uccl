@@ -35,7 +35,6 @@ ShmBufPool::ShmBufPool(std::string host_id)
       throw std::runtime_error("ShmBufPool: mmap registry failed");
     }
     reg_ = reinterpret_cast<Registry*>(ptr);
-    std::memset(reg_, 0, reg_size);
     reg_->magic = kMagic;
     reg_->num_slots = static_cast<uint32_t>(kMaxSlots);
     reg_->next_buffer_id = 1;
@@ -46,6 +45,9 @@ ShmBufPool::ShmBufPool(std::string host_id)
     pthread_mutexattr_destroy(&attr);
     for (size_t i = 0; i < kMaxSlots; ++i) {
       reg_->slots[i].state.store(0, std::memory_order_relaxed);
+      reg_->slots[i].buffer_id = 0;
+      reg_->slots[i].capacity = 0;
+      reg_->slots[i].shm_name[0] = '\0';
     }
     return;
   }

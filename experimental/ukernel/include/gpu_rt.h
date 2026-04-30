@@ -87,9 +87,11 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuDriverSuccess CUDA_SUCCESS
 #define gpuMemRangeHandleType CUmemRangeHandleType
 #define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD
+#define gpuPointerAttributes cudaPointerAttributes
 #define gpuPointerAttribute_t cudaPointerAttributes
 #define gpuPointerGetAttributes cudaPointerGetAttributes
 #define gpuMemoryTypeDevice cudaMemoryTypeDevice
+#define gpuMemoryTypeManaged cudaMemoryTypeManaged
 #define GPU_DRIVER_LIB_NAME "libcuda.so.1"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
@@ -192,9 +194,11 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuDriverSuccess hipSuccess
 #define gpuMemRangeHandleType hipMemRangeHandleType
 #define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define gpuPointerAttributes hipPointerAttribute_t
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
+#define gpuMemoryTypeManaged hipMemoryTypeManaged
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
