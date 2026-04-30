@@ -1,12 +1,14 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 import sysconfig
+import importlib.util
 from pathlib import Path
 from distutils import log
 
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, find_packages, Extension, Command
 from setuptools.command.build_ext import build_ext as _build_ext
 
 
@@ -33,35 +35,6 @@ def get_version():
 _use_limited_api = not _is_freethreaded() and sys.version_info >= (3, 12)
 
 VERSION = get_version()
-
-def _detect_rocm() -> str:
-    try:
-        import torch  # noqa: F401
-
-        return "1" if getattr(torch.version, "hip", None) else "0"
-    except Exception:
-        return "0"
-
-
-def _detect_rocm_arch() -> str:
-    env_arch = os.environ.get("ROCM_ARCH_LIST") or os.environ.get("TORCH_CUDA_ARCH_LIST")
-    if env_arch:
-        return env_arch
-    try:
-        output = subprocess.check_output(
-            ["rocminfo"], stderr=subprocess.DEVNULL, text=True
-        )
-        matches = re.findall(r"Name:\s+(gfx[0-9a-z]+)", output, re.IGNORECASE)
-        if matches:
-            # Preserve order while deduplicating
-            seen = []
-            for item in matches:
-                if item not in seen:
-                    seen.append(item)
-            return ",".join(seen)
-    except Exception:
-        pass
-    return ""
 
 # Single package "uccl" for all backends (vLLM-style).
 # Variants are distinguished by PEP 440 local version identifiers in the
@@ -91,8 +64,98 @@ class MakeExtension(Extension):
         self.env = env or {}
 
 
-class build_ext(_build_ext):
-    """Custom build_ext that invokes make before compiling C extensions."""
+class MakeClean(Command):
+    """`python setup.py clean` -> run `make clean` plus wipe Python build dirs.
+    """
+
+    description = "run `make clean` and remove build/, dist/, *.egg-info/, etc."
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        project_root = Path(__file__).parent.resolve()
+
+        # 1. Delegate to the project Makefile so native sub-modules clean up
+        #    their own .o/.d/.so files.
+        makefile = project_root / "Makefile"
+        if makefile.exists():
+            cmd = ["make", "clean"]
+            log.info("running %s in %s", " ".join(cmd), project_root)
+            subprocess.run(cmd, cwd=str(project_root), check=False)
+
+        # 2. Wipe top-level Python build artefacts.
+        targets = [
+            project_root / "build",
+            project_root / "dist",
+            project_root / "wheelhouse",
+            project_root / "ep" / "build",
+        ]
+        targets += list(project_root.glob("*.egg-info"))
+        targets += list((project_root / "ep").glob("*.egg-info"))
+
+        # 3. Stale shared libraries that may have been copied in-tree by an
+        #    earlier `make` (e.g. uccl/lib/*.so, uccl/p2p*.so,
+        #    ep/python/uccl_ep/ep_cpp*.so).
+        targets += list((project_root / "uccl" / "lib").glob("*.so"))
+        targets += list((project_root / "uccl").glob("p2p*.so"))
+        targets += list(
+            (project_root / "ep" / "python" / "uccl_ep").glob("ep_cpp*.so")
+        )
+
+        for path in targets:
+            if not path.exists() and not path.is_symlink():
+                continue
+            log.info("removing %s", path)
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+
+class MakeBuildExtension(_build_ext):
+    """Custom build_ext that invokes ``make`` before compiling C extensions."""
+
+    def is_rocm(self) -> bool:
+        """Find the ROCm
+            reference from pytorch/torch/utils/cpp_extension.py::_find_rocm_home
+        """
+        # Guess #1
+        rocm_home = os.environ.get('ROCM_HOME') or os.environ.get('ROCM_PATH')
+        if rocm_home is None:
+            # Guess #2: Support for ROCm distribution from TheRock
+            # rocm-sdk-core installs everything under <site-packages>/_rocm_sdk_core
+            # (include/, lib/, bin/, ...), so the module's own location is the
+            # ROCM_HOME we want. Use find_spec to locate it without importing.
+            spec = importlib.util.find_spec('_rocm_sdk_core')
+            if spec is not None and spec.origin is not None:
+                rocm_home = str(Path(spec.origin).parent.resolve())
+        if rocm_home is None:
+            # Guess #3
+            hipcc_path = shutil.which('hipcc')
+            if hipcc_path is not None:
+                rocm_home = os.path.dirname(os.path.dirname(
+                    os.path.realpath(hipcc_path)))
+                # can be either <ROCM_HOME>/hip/bin/hipcc or <ROCM_HOME>/bin/hipcc
+                if os.path.basename(rocm_home) == 'hip':
+                    rocm_home = os.path.dirname(rocm_home)
+            else:
+                # Guess #4
+                fallback_path = '/opt/rocm'
+                if os.path.exists(fallback_path):
+                    rocm_home = fallback_path
+        if rocm_home is None or not os.path.exists(rocm_home):
+            log.warn("No ROCm runtime is found, using ROCM_HOME='%s'", rocm_home)
+            return False
+        log.info("ROCm runtime is found at %s", rocm_home)
+        return True
 
     def run(self):
         make_exts = [ext for ext in self.extensions if isinstance(ext, MakeExtension)]
@@ -107,19 +170,34 @@ class build_ext(_build_ext):
         if self.parallel:
             cmd.extend(["-j", str(self.parallel)])
         cmd.extend(ext.make_args)
-        if ext.make_target:
-            cmd.append(ext.make_target)
+
+        if self.build_lib and not self.inplace:
+            cmd.append(f"BUILD_LIB={Path(self.build_lib).resolve()}")
+
+        cmd.append(ext.make_target)
+
         env = os.environ.copy()
         env.setdefault("PYTHON", sys.executable)
         env.update(ext.env)
+
+        # Honour an explicit USE_ROCM override (e.g. ``USE_ROCM=0`` to force
+        # the CUDA path on a hybrid host); otherwise auto-detect.
+        if "USE_ROCM" not in env and self.is_rocm():
+            env["USE_ROCM"] = "1"
+
+        # When pip runs the build under PEP 517 isolation it injects the
+        # build-env site-packages into PYTHONPATH so its own setuptools/wheel
+        # take precedence. That PYTHONPATH leaks into the child python that
+        # ep/setup.py drives via make and shadows the host venv, which makes
+        # ``import torch`` fail. Drop it so the submake's python falls back
+        # to its default site-packages (where torch is installed).
+        env.pop("PYTHONPATH", None)
+
         log.info("running `%s` in %s", " ".join(cmd), ext.sourcedir)
         subprocess.check_call(cmd, cwd=str(ext.sourcedir), env=env)
 
 
-_build_jobs = max(os.cpu_count() or 1, 1)
-_rocm_flag = _detect_rocm()
-_rocm_arch_list = _detect_rocm_arch() if _rocm_flag == "1" else ""
-
+_build_jobs = int(os.getenv("MAX_JOBS", "32"))
 
 make_ext = MakeExtension(
     name="uccl.make",
@@ -127,13 +205,7 @@ make_ext = MakeExtension(
     make_target="all",
     make_args=[
         f"PYTHON={sys.executable}",
-        f"BUILD_JOBS={_build_jobs}",
-        f"BULD_JOBS={_build_jobs}",
-        f"ROCM_DETECTED={_rocm_flag}",
-        *( [f"ROCM_ARCH_LIST={_rocm_arch_list}"] if _rocm_arch_list else [] ),
-        *( [f"HIP_HOME={os.environ['HIP_HOME']}"] if os.environ.get("HIP_HOME") else [] ),
-        *( [f"CONDA_LIB_HOME={os.environ['CONDA_LIB_HOME']}"] if os.environ.get("CONDA_LIB_HOME") else [] ),
-    ],
+        f"BUILD_JOBS={_build_jobs}"],
 )
 
 setup(
@@ -144,10 +216,11 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
-    packages=find_packages(include=["uccl", "uccl.*", "deep_ep"]) + ["uccl.ep"],
+    packages=find_packages(include=["uccl", "uccl.*"]) + ["uccl.ep", "deep_ep"],
     package_dir={
         "uccl": "uccl",
         "uccl.ep": "ep/python/uccl_ep",
+        "deep_ep": "ep/deep_ep_wrapper/deep_ep",
     },
     ext_modules=[make_ext, abi3_ext],
     package_data={
@@ -173,6 +246,7 @@ setup(
         "rocm": [],
     },
     cmdclass={
-        "build_ext": build_ext,
+        "build_ext": MakeBuildExtension,
+        "clean": MakeClean,
     },
 )

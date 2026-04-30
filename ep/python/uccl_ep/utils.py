@@ -28,6 +28,7 @@ EventHandle = ep_cpp.EventHandle
 # Numeric helpers
 # ---------------------------------------------------------------------------
 
+
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
     x, y = x.double() + 1, y.double() + 1
     denominator = (x * x + y * y).sum()
@@ -42,6 +43,7 @@ def hash_tensor(t: torch.Tensor):
 # ---------------------------------------------------------------------------
 # Distributed init
 # ---------------------------------------------------------------------------
+
 
 def init_dist(local_rank: int, num_local_ranks: int):
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
@@ -85,6 +87,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
 # ---------------------------------------------------------------------------
 # Peer / OOB helpers
 # ---------------------------------------------------------------------------
+
 
 def _gather_peer_ips(group):
     world = dist.get_world_size(group)
@@ -137,6 +140,7 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
 # NVLink checks
 # ---------------------------------------------------------------------------
 
+
 def check_nvlink_connections(group: dist.ProcessGroup):
     """
     Check NVLink connection between every pair of GPUs.
@@ -181,6 +185,7 @@ def check_nvlink_connections(group: dist.ProcessGroup):
 # EventOverlap
 # ---------------------------------------------------------------------------
 
+
 class EventOverlap:
     """
     A wrapper class to manage CUDA events, also for better overlapping convenience.
@@ -221,6 +226,7 @@ class EventOverlap:
 # IB / RDMA helpers
 # ---------------------------------------------------------------------------
 
+
 def detect_ib_hca():
     """Detect InfiniBand/RDMA HCA device.
 
@@ -251,6 +257,7 @@ def detect_ib_hca():
 # ---------------------------------------------------------------------------
 # FP8 helpers
 # ---------------------------------------------------------------------------
+
 
 def _fp8_e4m3_dtype() -> torch.dtype:
     """Return the correct FP8 E4M3 dtype for the current GPU."""
@@ -286,6 +293,7 @@ def per_token_cast_to_fp8(x: torch.Tensor):
 # ---------------------------------------------------------------------------
 # Benchmarking utilities
 # ---------------------------------------------------------------------------
+
 
 class empty_suppress:
     def __enter__(self):
@@ -480,6 +488,7 @@ def bench_kineto(
 # ---------------------------------------------------------------------------
 # UCCL proxy lifecycle
 # ---------------------------------------------------------------------------
+
 
 def initialize_uccl(
     scratch_ptr,

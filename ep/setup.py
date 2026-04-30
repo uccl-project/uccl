@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 import sysconfig
@@ -280,6 +281,7 @@ if __name__ == "__main__":
     else:
         # AMD GPU Architecture Detection
         detected_amd_arch = None
+        supported_amd_arch = ["gfx942", "gfx950"]
         try:
             rocminfo_output = subprocess.check_output(
                 ["rocminfo"], stderr=subprocess.DEVNULL
@@ -303,13 +305,16 @@ if __name__ == "__main__":
             )
 
         # Use environment variable, then detected arch, then fallback
-        device_arch = os.getenv(
-            "TORCH_CUDA_ARCH_LIST",
-            detected_amd_arch if detected_amd_arch else "gfx420",
+        default_amd_arch = (
+            detected_amd_arch if detected_amd_arch else ";".join(supported_amd_arch)
         )
+        device_amd_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_amd_arch)
 
-        for arch in device_arch.split(","):
-            nvcc_flags.append(f"--offload-arch={arch.lower()}")
+        nvcc_flags.extend(
+            f"--offload-arch={arch.lower()}"
+            for arch in re.split(r"[;,\s]+", device_amd_arch)
+            if arch in supported_amd_arch
+        )
 
         # Disable SM90 features on AMD
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
