@@ -4,7 +4,7 @@
 
 **Cluster**: 4× p5en.48xlarge bare metal (32× H200 GPUs, 16× EFAv3 NICs per node, 192 CPU cores per node)  
 **Model**: DeepSeek-V3 style MoE (256 experts, top-k=8, hidden=7168, ffn-hidden=2048)  
-**Routing**: Force-balanced (`--moe-router-force-load-balancing`)  
+**Routing**: Uniform (`--moe-router-force-load-balancing`)  
 **Precision**: BF16 + FP8 hybrid  
 **NCCL**: 2.28.9 with aws-ofi-nccl 1.18.0, Ring/Simple protocol  
 **Megatron**: core_r0.17.0
@@ -32,7 +32,7 @@
 
 - 4× p5en.48xlarge (or equivalent: 8× H200 per node, EFAv3 networking)
 - Shared filesystem (FSx Lustre or similar) across all nodes
-- Bare metal access recommended (virtualization might add overhead)
+- Bare metal access recommended (virtualization will add overhead)
 
 ### Software Stack
 
@@ -89,7 +89,7 @@ export PYTHONPATH=/path/to/uccl_ep_hook_site:/path/to/megatron-lm
 | `--expert-model-parallel-size` | 32 (or 16) |
 | `--train-iters` | 60 |
 
-### UCCL-EP Launch (EP=32, 4 nodes)
+### UCCL-EP Launch with Megatron (EP=32, 4 nodes)
 
 Run on each node (change `--node_rank` to 0, 1, 2, 3):
 
@@ -158,7 +158,7 @@ UCCL-EP dispatch and combine kernels are controlled by `Config(num_sms, nvl_send
 | `rdma_send` | Max RDMA chunked send tokens (inter-node pipelining) |
 | `rdma_recv` | Max RDMA chunked recv tokens |
 
-Higher `rdma_send` increases inter-node pipeline depth, improving throughput at the cost of more inflight RDMA work requests. The defaults in `buffer.py` are conservative; the tuned values below produced the best results on EFAv3.
+The tuned values below produced the best results on EFAv3.
 
 #### Defaults vs Tuned (32 ranks, EP=32)
 
@@ -182,7 +182,7 @@ To apply the tuned config, edit `get_dispatch_config` and `get_combine_config` i
 
 ## Known or potential Issues
 
-- **Container CPU jitter**: K8s scheduler preempts UCCL-EP proxy threads, inflating FIFO round-trips time. Use bare metal for best performance.
+- **Container CPU jitter**: The use of container can affect UCCL-proxy thread, inflating FIFO round-trip time. Use bare metal for best performance. 
 - **Tuning number of NCCL channels**: When UCCL-EP is active, NCCL auto-selects 32 channels for optimizer collectives (vs 16 in NCCL-only runs). This causes EFA SRD congestion and collapses performance. Setting `NCCL_MAX_NCHANNELS` resolves this.
 
 ## Reproducing AMD Primus Training frameworks results
