@@ -171,6 +171,12 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
   }
 }
 
+void Proxy::mark_ready() {
+  if (cfg_.ready_flag) {
+    cfg_.ready_flag->store(true, std::memory_order_release);
+  }
+}
+
 void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
@@ -492,6 +498,7 @@ void Proxy::run_sender() {
   if (std::getenv("EP_UCCL_DEBUG"))
     fprintf(stderr, "CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
+  mark_ready();
   size_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
@@ -505,6 +512,7 @@ void Proxy::run_remote() {
   if (std::getenv("EP_UCCL_DEBUG"))
     fprintf(stderr, "Remote CPU thread %d started\n", cfg_.thread_idx);
   init_remote();
+  mark_ready();
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
@@ -542,6 +550,7 @@ void Proxy::run_dual() {
     post_receive_buffer_for_imm(*ctx_ptr);
 #endif
   }
+  mark_ready();
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
@@ -822,6 +831,7 @@ void Proxy::run_local() {
     return;
   }
 
+  mark_ready();
   int total_seen = 0;
   while (true) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {

@@ -22,6 +22,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     : thread_{},
       mode_{Mode::None},
       running_{false},
+      ready_{false},
       is_intranode_{is_intranode} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
@@ -68,6 +69,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.shared_atomic_per_rank = shared_atomic_per_rank;
   cfg.local_world_size = local_world_size;
   cfg.owns_gpu_buffer = owns_gpu_buffer;
+  cfg.ready_flag = &ready_;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -158,6 +160,20 @@ void UcclProxy::start_remote() { start(Mode::Remote); }
 void UcclProxy::start_local() { start(Mode::Local); }
 void UcclProxy::start_dual() { start(Mode::Dual); }
 
+void UcclProxy::wait_until_ready() const {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!ready_.load(std::memory_order_acquire)) {
+    if (!running_.load(std::memory_order_acquire)) {
+      throw std::runtime_error("UCCL proxy stopped before becoming ready");
+    }
+    if (std::chrono::steady_clock::now() > deadline) {
+      throw std::runtime_error("Timed out waiting for UCCL proxy readiness");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
 void UcclProxy::stop() {
   if (!running_.load(std::memory_order_acquire)) {
     throw std::runtime_error("Proxy already stopped");
@@ -175,6 +191,7 @@ void UcclProxy::start(Mode m) {
     throw std::runtime_error("Proxy already running");
   }
   mode_ = m;
+  ready_.store(false, std::memory_order_release);
   proxy_->set_progress_run(true);
   running_.store(true, std::memory_order_release);
 

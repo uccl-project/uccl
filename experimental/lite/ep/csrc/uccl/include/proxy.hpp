@@ -53,6 +53,7 @@ class Proxy {
     bool is_intranode = false;
     bool free_buffer_with_cuda_free_host = false;
     bool owns_gpu_buffer = true;  // false when gpu_buffer is a shared-memory slice
+    std::atomic<bool>* ready_flag = nullptr;
 
     // Shared-memory intra-node transfer (no RDMA loopback).
     // When shared_rdma_base != nullptr, intra-node TransferCmds use memcpy
@@ -109,6 +110,7 @@ class Proxy {
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
+  void mark_ready();
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
   void send_barrier(uint64_t wr);
   void barrier_check();

@@ -174,17 +174,20 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
                                           nullptr, 0, -1
 #endif
         );
-        const auto send_shadow_ptr = gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(rank_idx));
 #ifdef EP_USE_UCCL_PROXY
+        const auto signal_shadow_base =
+            (kTag % layout::WorkspaceLayout::kNumGinBarrierTags) * layout::WorkspaceLayout::kNumMaxRanks;
+        const auto send_shadow_ptr = gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(signal_shadow_base + rank_idx));
         if (thread_idx == 0)
             ++(*send_shadow_ptr);
         __syncthreads();
         for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
             const auto send_target = *send_shadow_ptr;
             if (i != rank_idx)
-                gin.put_value<team_t>(workspace.get_gin_barrier_signal_ptr(rank_idx), send_target, i);
+                gin.put_value<team_t>(workspace.get_gin_barrier_signal_ptr(rank_idx, kTag), send_target, i);
         }
 #else
+        const auto send_shadow_ptr = gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(rank_idx));
         const auto send_target = ++(*send_shadow_ptr);
         for (int i = thread_idx; i < kNumRanks; i += kNumThreads)
             if (i != rank_idx)
@@ -195,13 +198,17 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
         for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
             if (i == rank_idx)
                 continue;
+#ifdef EP_USE_UCCL_PROXY
+            const auto shadow_ptr = gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(signal_shadow_base + i));
+#else
             const auto signal_idx = static_cast<ncclGinSignal_t>(i);
             const auto shadow_ptr = gin.gin.getSignalShadowPtr(signal_idx);
+#endif
             const auto target = ++(*shadow_ptr);
 
             timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
 #ifdef EP_USE_UCCL_PROXY
-                const auto signal = uccl::ld_cv_u64(workspace.get_gin_barrier_signal_ptr(i));
+                const auto signal = uccl::ld_cv_u64(workspace.get_gin_barrier_signal_ptr(i, kTag));
 #else
                 const auto signal = ptx::ld_acquire_sys<uint64_t>(workspace.get_gin_barrier_signal_ptr(i));
 #endif

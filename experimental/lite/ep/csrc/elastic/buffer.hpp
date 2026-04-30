@@ -231,9 +231,13 @@ public:
                 uccl_d2h_channel_addrs_host.size() * sizeof(uint64_t),
                 cudaMemcpyHostToDevice));
             CUDA_RUNTIME_CHECK(cudaMalloc(&uccl_signal_shadow_device,
-                                          num_ranks * sizeof(uint64_t)));
+                                          layout::WorkspaceLayout::kNumGinBarrierTags *
+                                          layout::WorkspaceLayout::kNumMaxRanks *
+                                          sizeof(uint64_t)));
             CUDA_RUNTIME_CHECK(cudaMemset(uccl_signal_shadow_device, 0,
-                                          num_ranks * sizeof(uint64_t)));
+                                          layout::WorkspaceLayout::kNumGinBarrierTags *
+                                          layout::WorkspaceLayout::kNumMaxRanks *
+                                          sizeof(uint64_t)));
         }
         workspace_layout_wo_expert = std::make_shared<layout::WorkspaceLayout>(
             workspace, nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks, 0);
@@ -378,6 +382,8 @@ public:
             proxy->set_peers_meta(peers);
             proxy->start_dual();
         }
+        for (auto& proxy: uccl_proxies)
+            proxy->wait_until_ready();
         uccl_proxies_started = true;
     }
 

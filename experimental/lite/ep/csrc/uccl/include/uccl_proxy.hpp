@@ -27,6 +27,7 @@ class UcclProxy {
   void start_remote();
   void start_local();
   void start_dual();
+  void wait_until_ready() const;
   void stop();
   int get_listen_port() const { return proxy_->get_listen_port(); }
 
@@ -90,6 +91,7 @@ class UcclProxy {
   std::thread thread_;
   Mode mode_;
   std::atomic<bool> running_;
+  std::atomic<bool> ready_;
   std::vector<uintptr_t> d2h_channel_host_addrs_;
   std::vector<uintptr_t> d2h_channel_addrs_;
   int thread_idx_;

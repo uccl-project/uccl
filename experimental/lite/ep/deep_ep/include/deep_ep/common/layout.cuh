@@ -20,9 +20,10 @@ struct WorkspaceLayout {
     static constexpr int kNumMaxExperts = 2048;
     static constexpr int kNumMaxExpertsPerRank = 256;
     static constexpr int kNumMaxInflightAGRS = 32;
+    static constexpr int kNumGinBarrierTags = 16;
 
     static constexpr int64_t kNumBarrierSignalBytes = 16;
-    static constexpr int64_t kNumGinBarrierSignalBytes = kNumMaxRanks * sizeof(uint64_t);
+    static constexpr int64_t kNumGinBarrierSignalBytes = kNumGinBarrierTags * kNumMaxRanks * sizeof(uint64_t);
 
     __forceinline__ __device__ __host__
     WorkspaceLayout(void* workspace,
@@ -90,8 +91,9 @@ struct WorkspaceLayout {
         return math::advance_ptr<int>(workspace, (2 + phase) * sizeof(int));
     }
 
-    __forceinline__ __device__ __host__ uint64_t* get_gin_barrier_signal_ptr(const int& rank) const {
-        return math::advance_ptr<uint64_t>(workspace, kNumBarrierSignalBytes) + rank;
+    __forceinline__ __device__ __host__ uint64_t* get_gin_barrier_signal_ptr(const int& rank, const int& tag = 0) const {
+        return math::advance_ptr<uint64_t>(workspace, kNumBarrierSignalBytes) +
+               (tag % kNumGinBarrierTags) * kNumMaxRanks + rank;
     }
 
     __forceinline__ __device__ __host__ int64_t* get_notify_reduction_workspace_ptr() const {
