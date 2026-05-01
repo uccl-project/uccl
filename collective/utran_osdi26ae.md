@@ -241,9 +241,24 @@ Each entry below states (a) which testbed from Table 1 the result was collected 
   ```
   `UCCL_CHUNK_SIZE_KB` controls the maximum chunk size carried by each WQE; `UCCL_NUM_ENGINES` controls how many CPU engine threads UCCL-Tran spawns per device. The full list of UCCL-Tran tunables is documented in [`collective/rdma/README.md`](rdma/README.md#environment-variables-in-uccl).
 
-### Table 2 — *(reserved for co-author Zhongjie)*
+### Table 2 — Congestion signal fidelity in software
 
-> @zhongjie: please fill in the script path and exact sweep parameters for Table 2.
+* **Testbed:** CX_IB (2 × HGX H100 + 8 × CX-7 400G IB, same rack).
+* **Script:** [`collective/rdma/run_nccl_test.sh`](rdma/run_nccl_test.sh).
+* **Procedure:** 
+```bash
+cd $UCCL_HOME/collective/rdma
+# Args: [nccl|uccl] [#procs] [GPUs/proc] [allreduce(0)/alltoall(1)] [procs/node]
+./run_nccl_test.sh uccl 2 8 0 1
+```
+  
+  * **CC decision delay:** Please add code [here](https://github.com/uccl-project/uccl/blob/main/collective/rdma/transport.cc#L2855) to manually calculate `t6-t5`, which corresponds exactly to the CC decision delay.
+  
+  * **ACK turnaround delay:**
+  Define `TEST_TURNAROUND_ESTIMATION` in [collective/rdma/rdma_io.cc](https://github.com/uccl-project/uccl/blob/main/collective/rdma/rdma_io.cc) to enable testing.
+
+* **How to sweep:** The message size sweep is built into `nccl-tests` (`-b 1K -e 1G -f 2`). Please use `-b 1K -e 64K` for `Allreduce/All-to-All Light` and `-b 1G -e 1G` for `Allreduce/All-to-All Heavy`.
+
 
 ---
 
