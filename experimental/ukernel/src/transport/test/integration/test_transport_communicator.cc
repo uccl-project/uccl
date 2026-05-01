@@ -97,6 +97,10 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
             "client wait_mr failed");
     (void)comm->get_mr(kServerRank, kServerRecvBufferId);
     remote_recv_buffer_id = kServerRecvBufferId;
+  } else if (peer_kind == UKernel::Transport::PeerTransportKind::Ipc) {
+    require(comm->wait_ipc(kServerRank, kServerRecvBufferId),
+            "client wait_ipc failed");
+    remote_recv_buffer_id = kServerRecvBufferId;
   }
   unsigned send_req = comm->isend(
       kServerRank, kClientSendBufferId, 0, kMessageBytes,
@@ -124,7 +128,10 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   require(comm->reg_mr(kServerRecvBufferId, recvbuf_d, kMessageBytes, true),
           "server reg_mr failed");
   auto peer_kind = comm->peer_transport_kind(kClientRank);
-  (void)peer_kind;
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Ipc) {
+    require(comm->reg_ipc(kServerRecvBufferId, recvbuf_d, kMessageBytes, true),
+            "server reg_ipc failed");
+  }
 
   unsigned recv_req = comm->irecv(
       kClientRank, kServerRecvBufferId, 0, kMessageBytes);

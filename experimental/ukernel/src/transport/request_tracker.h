@@ -44,8 +44,6 @@ struct TrackedRequest {
   size_t completion_bytes = 0;
   gpuEvent_t host_copy_event = nullptr;
   void* bounce_ptr = nullptr;
-  void* pool_slot = nullptr;
-  uint64_t signal_payload = 0;
 };
 
 class RequestTracker {

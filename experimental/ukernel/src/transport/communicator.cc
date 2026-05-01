@@ -208,8 +208,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     return;
   }
 
-  shm_manager_.emplace();
-
   tracker_ = std::make_unique<RequestTracker>(
       uccl_adapter_.get(), tcp_adapter_.get(), ipc_adapter_.get(),
       [this](TrackedRequest& t, bool blocking) {
@@ -358,12 +356,6 @@ Communicator::~Communicator() {
     ipc_manager_.delete_ipc(i);
   }
 
-  if (bounce_pool_ && shm_manager_) {
-    bounce_pool_->shutdown();
-  }
-  bounce_pool_.reset();
-
-  shm_manager_.reset();
   uccl_adapter_.reset();
   tcp_adapter_.reset();
   ipc_adapter_.reset();
@@ -674,36 +666,6 @@ int Communicator::peer_gpu_idx(int rank) const {
   return peer_states_[static_cast<size_t>(rank)].gpu_idx;
 }
 
-bool Communicator::ipc_p2p_available(int peer_rank,
-                                     uint32_t remote_buffer_id) {
-  if (ipc_force_relay_enabled()) return false;
-
-  if (remote_buffer_id == 0) return false;
-  IPCItem remote_ipc{};
-  try {
-    remote_ipc = get_ipc(peer_rank, remote_buffer_id);
-  } catch (...) {
-    return false;
-  }
-  if (!remote_ipc.valid) return false;
-
-  int remote_gpu = remote_ipc.device_idx;
-  if (remote_gpu < 0) return false;
-  if (remote_gpu == local_gpu_idx_) return true;
-
-  // Cache the gpu_idx for future use.
-  {
-    std::lock_guard<std::mutex> lk(peer_mu_);
-    auto& peer = peer_states_[static_cast<size_t>(peer_rank)];
-    if (peer.gpu_idx < 0) peer.gpu_idx = remote_gpu;
-  }
-
-  int can_access_peer = 0;
-  GPU_RT_CHECK(
-      gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_, remote_gpu));
-  return can_access_peer != 0;
-}
-
 TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
   switch (kind) {
     case PeerTransportKind::Uccl:
@@ -818,24 +780,13 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
   TrackedRequest* slot = tracker_->allocate(&rid);
   if (slot == nullptr) return 0;
 
-  if (peer_kind == PeerTransportKind::Tcp ||
-      (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_uccl_memory_registered(src_buf_id, local_ptr, src_bytes))) {
-    // Bounce via local pinned host memory.
-    auto* pool_slot = ensure_bounce_pool()->acquire(src_bytes);
-    if (pool_slot == nullptr) {
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    slot->pool_slot = pool_slot;
-    GPU_RT_CHECK(
-        gpuMemcpy(pool_slot->ptr, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
-    unsigned result = adapter->put_async(rank, pool_slot->ptr,
-                                         pool_slot->buffer_id, nullptr, 0,
-                                         src_bytes);
+  if (peer_kind == PeerTransportKind::Tcp) {
+    void* host_buf;
+    GPU_RT_CHECK(gpuHostMalloc(&host_buf, src_bytes));
+    GPU_RT_CHECK(gpuMemcpy(host_buf, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
+    slot->bounce_ptr = host_buf;
+    unsigned result = adapter->put_async(rank, host_buf, 0, nullptr, 0, src_bytes);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
       return 0;
@@ -843,54 +794,41 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     return rid;
   }
 
-  if (peer_kind == PeerTransportKind::Ipc) {
-    if (ipc_p2p_available(rank, dst_buf_id) && dst_buf_id != 0) {
-      // Direct GPU peer copy.
-      void* remote_ptr = nullptr;
-      int remote_gpu = -1;
-      if (!try_resolve_remote_ipc_pointer(rank, dst_buf_id, dst_off, src_bytes,
-                                          &remote_ptr, &remote_gpu)) {
-        slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
-        slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
-        return 0;
-      }
-      unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                           remote_ptr, dst_buf_id, src_bytes);
-      if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-        slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
-        cleanup_tracked_request(*slot);
-        slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
-        return 0;
-      }
-      return rid;
-    }
-
-    // IPC bounce: acquire shared SHM, adapter does D2H + signal.
-    ensure_shm_buf_pool();
-    auto shm = shm_buf_pool_->acquire(src_bytes);
-    if (shm.ptr == nullptr) {
-      slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
+  if (peer_kind == PeerTransportKind::Uccl) {
+    if (!ensure_uccl_memory_registered(src_buf_id, local_ptr, src_bytes)) {
+      std::cerr << "[ERROR] UCCL MR not registered for buffer " << src_buf_id
+                << std::endl;
       slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
       return 0;
     }
-    slot->pool_slot = reinterpret_cast<void*>(static_cast<uintptr_t>(shm.buffer_id));
-    slot->signal_payload = shm.buffer_id;
     unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                         shm.ptr, shm.buffer_id, src_bytes);
+                                         nullptr, 0, src_bytes);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      shm_buf_pool_->release(shm.buffer_id);
-      slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
+      cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
       return 0;
     }
     return rid;
   }
 
-  // UCCL GDR path (MR registered).
+  // IPC: direct GPU peer copy.
+  (void)dst_off;
+  if (dst_buf_id == 0) {
+    std::cerr << "[ERROR] IPC isend requires non-zero dst_buf_id" << std::endl;
+    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    return 0;
+  }
+  void* remote_ptr = nullptr;
+  int remote_gpu = -1;
+  if (!try_resolve_remote_ipc_pointer(rank, dst_buf_id, dst_off, src_bytes,
+                                      &remote_ptr, &remote_gpu)) {
+    std::cerr << "[ERROR] IPC failed to resolve remote pointer" << std::endl;
+    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    return 0;
+  }
   unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                       nullptr, 0, src_bytes);
+                                       remote_ptr, dst_buf_id, src_bytes);
   if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-    slot->state.store(TrackedRequest::SlotState::Releasing, std::memory_order_release);
     cleanup_tracked_request(*slot);
     slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
     return 0;
@@ -920,26 +858,18 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
   TrackedRequest* slot = tracker_->allocate(&rid);
   if (slot == nullptr) return 0;
 
-  if (peer_kind == PeerTransportKind::Tcp ||
-      (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_uccl_memory_registered(dst_buf_id, local_ptr, dst_bytes))) {
-    // Bounce via local pinned host memory.
-    auto* pool_slot = ensure_bounce_pool()->acquire(dst_bytes);
-    if (pool_slot == nullptr) {
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    slot->pool_slot = pool_slot;
-    slot->bounce_ptr = pool_slot->ptr;
+  if (peer_kind == PeerTransportKind::Tcp) {
+    void* host_buf;
+    GPU_RT_CHECK(gpuHostMalloc(&host_buf, dst_bytes));
+    slot->bounce_ptr = host_buf;
     slot->needs_host_to_device_copy = true;
     slot->completion_buffer = local_ptr;
     slot->completion_bytes = dst_bytes;
 
     TransportAdapter::WaitTarget wt;
-    wt.local_ptr = pool_slot->ptr;
+    wt.local_ptr = host_buf;
     wt.len = dst_bytes;
-    wt.local_buffer_id = pool_slot->buffer_id;
+    wt.local_buffer_id = 0;
     unsigned result = adapter->wait_async(rank, 0, std::move(wt));
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
@@ -949,24 +879,18 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     return rid;
   }
 
-  if (peer_kind == PeerTransportKind::Ipc) {
-    // IPC: always SignalWait.  Sender either GPU-peer-copied directly
-    // (signal payload=0) or wrote to SHM (signal payload=buffer_id).
-    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(rank);
-    // Publish destination for sender to resolve via OOB.
-    void* ipc_base_ptr =
-        reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address));
-    size_t ipc_bytes = static_cast<size_t>(local_mr.length);
-    if (!reg_ipc(dst_buf_id, ipc_base_ptr, ipc_bytes, true)) {
-      std::cerr << "[WARN] Communicator " << global_rank_
-                << " failed to publish IPC buffer for rank " << rank
-                << ", buffer_id=" << dst_buf_id << std::endl;
+  if (peer_kind == PeerTransportKind::Uccl) {
+    if (!ensure_uccl_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
+      std::cerr << "[ERROR] UCCL MR not registered for buffer " << dst_buf_id
+                << std::endl;
+      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      return 0;
     }
-    // Store dst info for post-signal H2D copy.
-    slot->completion_buffer = local_ptr;
-    slot->completion_bytes = dst_bytes;
-    slot->needs_host_to_device_copy = true;
-    unsigned result = ipc_adapter_->wait_async(rank, match_seq, std::nullopt);
+    TransportAdapter::WaitTarget wt;
+    wt.local_ptr = local_ptr;
+    wt.len = dst_bytes;
+    wt.local_buffer_id = dst_buf_id;
+    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
@@ -975,18 +899,20 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     return rid;
   }
 
-  // UCCL GDR path (MR registered).
-  TransportAdapter::WaitTarget wt;
-  wt.local_ptr = local_ptr;
-  wt.len = dst_bytes;
-  wt.local_buffer_id = dst_buf_id;
-  unsigned result = adapter->wait_async(rank, 0, std::move(wt));
-  if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-    cleanup_tracked_request(*slot);
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
-    return 0;
+  // IPC: SignalWait only. Applications publish/wait IPC buffer metadata
+  // explicitly with reg_ipc()/wait_ipc(), mirroring the MR API.
+  {
+    slot->completion_buffer = local_ptr;
+    slot->completion_bytes = dst_bytes;
+    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(rank);
+    unsigned result = ipc_adapter_->wait_async(rank, match_seq, std::nullopt);
+    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
+      cleanup_tracked_request(*slot);
+      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      return 0;
+    }
+    return rid;
   }
-  return rid;
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
@@ -1287,74 +1213,15 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   tracked.host_copy_submitted = false;
   tracked.needs_host_to_device_copy = false;
 
-  if (tracked.pool_slot != nullptr) {
-    if (tracked.signal_payload == 0) {
-      auto* pool_slot = static_cast<BounceBufferPool::Slot*>(tracked.pool_slot);
-      if (bounce_pool_) bounce_pool_->release(pool_slot);
-    } else if (tracked.kind == PeerTransportKind::Ipc) {
-      // IPC SHM: release on send failure (receiver handles normal completion).
-      auto state = tracked.state.load(std::memory_order_acquire);
-      if (state != TrackedRequest::SlotState::Completed) {
-        uint32_t buf_id = static_cast<uint32_t>(tracked.signal_payload);
-        if (shm_buf_pool_) shm_buf_pool_->release(buf_id);
-      }
-    }
-    tracked.pool_slot = nullptr;
+  // TCP uses per-transfer host buffer.
+  if (tracked.bounce_ptr != nullptr) {
+    GPU_RT_CHECK(gpuFreeHost(tracked.bounce_ptr));
+    tracked.bounce_ptr = nullptr;
   }
-  tracked.signal_payload = 0;
 }
 
 bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
                                              bool blocking) {
-  if (tracked.kind == PeerTransportKind::Ipc) {
-    // IPC direct-copy completions use payload 0. IPC SHM send completions also
-    // pass through here, but only the receive side owns completion_buffer.
-    if (tracked.signal_payload == 0 || tracked.completion_buffer == nullptr) {
-      tracked.needs_host_to_device_copy = false;
-      return true;
-    }
-
-    // IPC SHM bounce: signal_payload carries the buffer_id.
-    uint32_t buf_id = static_cast<uint32_t>(tracked.signal_payload);
-    ensure_shm_buf_pool();
-    if (!shm_buf_pool_) return false;
-
-    int orig_device = -1;
-    GPU_RT_CHECK(gpuGetDevice(&orig_device));
-    auto dev_reset = finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-
-    if (!tracked.host_copy_submitted) {
-      void* shm_ptr = shm_buf_pool_->get_ptr(buf_id);
-      if (!shm_ptr) return false;
-      if (tracked.host_copy_event == nullptr) {
-        tracked.host_copy_event = acquire_event();
-      }
-      GPU_RT_CHECK(gpuMemcpyAsync(
-          static_cast<char*>(tracked.completion_buffer) + tracked.completion_offset,
-          shm_ptr, tracked.completion_bytes, gpuMemcpyHostToDevice,
-          host_copy_stream_));
-      GPU_RT_CHECK(gpuEventRecord(tracked.host_copy_event, host_copy_stream_));
-      tracked.host_copy_submitted = true;
-      if (!blocking) return false;
-    }
-
-    if (blocking) {
-      GPU_RT_CHECK(gpuEventSynchronize(tracked.host_copy_event));
-    } else {
-      gpuError_t query = gpuEventQuery(tracked.host_copy_event);
-      if (query == gpuErrorNotReady) return false;
-      if (query != gpuSuccess) GPU_RT_CHECK(query);
-    }
-    release_event(tracked.host_copy_event);
-    tracked.host_copy_event = nullptr;
-    tracked.host_copy_submitted = false;
-    shm_buf_pool_->release(buf_id);
-    tracked.signal_payload = 0;
-    return true;
-  }
-
-  // TCP / UCCL bounce.
   if (!tracked.needs_host_to_device_copy) return true;
   if (!tracked.bounce_ptr || !tracked.completion_buffer) return false;
 
@@ -1381,9 +1248,7 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
   } else {
     gpuError_t query = gpuEventQuery(tracked.host_copy_event);
     if (query == gpuErrorNotReady) return false;
-    if (query != gpuSuccess) {
-      GPU_RT_CHECK(query);
-    }
+    if (query != gpuSuccess) GPU_RT_CHECK(query);
   }
   release_event(tracked.host_copy_event);
   tracked.host_copy_event = nullptr;
@@ -1408,41 +1273,6 @@ void Communicator::release_event(gpuEvent_t event) {
   if (event == nullptr) return;
   std::lock_guard<std::mutex> lk(event_pool_mu_);
   event_pool_.push_back(event);
-}
-
-SHMManager& Communicator::require_shm_manager(char const* caller) {
-  if (shm_manager_.has_value()) return *shm_manager_;
-  std::ostringstream oss;
-  oss << caller << " called after SHMManager teardown";
-  throw std::runtime_error(oss.str());
-}
-
-void* Communicator::get_or_open_bounce_shm(std::string const& shm_name) {
-  return require_shm_manager("Communicator::get_or_open_bounce_shm")
-      .open_remote_shm(shm_name)
-      .ptr;
-}
-
-BounceBufferPool* Communicator::ensure_bounce_pool() {
-  if (bounce_pool_) return bounce_pool_.get();
-  static std::mutex init_mu;
-  std::lock_guard<std::mutex> lk(init_mu);
-  if (!bounce_pool_) {
-    bounce_pool_ = std::make_unique<BounceBufferPool>(
-        *shm_manager_, mr_manager_,
-        /*needs_uccl_mr=*/true, next_ephemeral_buffer_id_);
-  }
-  return bounce_pool_.get();
-}
-
-void Communicator::ensure_shm_buf_pool() {
-  if (shm_buf_pool_) return;
-  static std::mutex init_mu;
-  std::lock_guard<std::mutex> lk(init_mu);
-  if (!shm_buf_pool_) {
-    std::string host_id = generate_host_id();
-    shm_buf_pool_ = std::make_unique<ShmBufPool>(std::move(host_id));
-  }
 }
 
 }  // namespace Transport

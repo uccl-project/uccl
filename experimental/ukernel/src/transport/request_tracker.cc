@@ -163,8 +163,6 @@ TrackedRequest* RequestTracker::allocate(unsigned* out_req_id) {
     slot->completion_bytes = 0;
     slot->host_copy_event = nullptr;
     slot->bounce_ptr = nullptr;
-    slot->pool_slot = nullptr;
-    slot->signal_payload = 0;
     *out_req_id = rid;
     return slot;
   }
@@ -231,8 +229,6 @@ bool RequestTracker::try_release(unsigned req_id,
     snapshot->completion_bytes = slot->completion_bytes;
     snapshot->host_copy_event = slot->host_copy_event;
     snapshot->bounce_ptr = slot->bounce_ptr;
-    snapshot->pool_slot = slot->pool_slot;
-    snapshot->signal_payload = slot->signal_payload;
   }
   return true;
 }
@@ -279,10 +275,6 @@ bool RequestTracker::poll_one(unsigned id, bool blocking) {
   }
 
   if (!done) return false;
-
-  if (done && !failed && slot->kind == PeerTransportKind::Ipc) {
-    slot->signal_payload = ipc_->completion_payload(adapter_id);
-  }
 
   if (!failed) {
     bool copy_done = complete_bounce_(*slot, blocking);

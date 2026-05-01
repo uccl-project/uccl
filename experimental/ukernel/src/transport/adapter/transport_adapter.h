@@ -76,9 +76,6 @@ class TransportAdapter {
   virtual bool wait_completion(unsigned id) = 0;
   virtual bool request_failed(unsigned id) = 0;
   virtual void release_request(unsigned id) = 0;
-
-  // Return opaque completion payload (e.g. SHM buffer_id for IPC relay).
-  virtual uint64_t completion_payload(unsigned id) const { return 0; }
 };
 
 }  // namespace Transport

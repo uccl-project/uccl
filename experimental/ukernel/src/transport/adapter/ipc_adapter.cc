@@ -200,9 +200,7 @@ IpcAdapter::IpcRequestSlot* IpcAdapter::try_acquire_request_slot(
     slot.req_type = IpcReqType::DataPut;
     slot.local_ptr = nullptr;
     slot.remote_ptr = nullptr;
-    slot.remote_buffer_id = 0;
     slot.size_bytes = 0;
-    slot.signal_payload = 0;
     *out_request_id = slot.id;
     return &slot;
   }
@@ -279,6 +277,7 @@ unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
                                uint32_t local_buffer_id, void* remote_ptr,
                                uint32_t remote_buffer_id, size_t len) {
   (void)local_buffer_id;
+  (void)remote_buffer_id;
   if (!has_put_path(peer_rank)) return 0;
 
   uint64_t match_seq = next_send_match_seq(peer_rank);
@@ -290,7 +289,6 @@ unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
   req->req_type = IpcReqType::DataPut;
   req->local_ptr = local_ptr;
   req->remote_ptr = remote_ptr;
-  req->remote_buffer_id = remote_buffer_id;
   req->size_bytes = len;
   req->mark_queued(1);
   if (!enqueue_request(rid, IpcReqType::DataPut)) {
@@ -311,7 +309,6 @@ unsigned IpcAdapter::signal_async(int peer_rank, uint64_t tag) {
   req->req_type = IpcReqType::Signal;
   req->local_ptr = nullptr;
   req->remote_ptr = nullptr;
-  req->remote_buffer_id = 0;
   req->size_bytes = 0;
   req->mark_queued(1);
   if (!enqueue_request(rid, IpcReqType::Signal)) {
@@ -336,8 +333,6 @@ unsigned IpcAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   req->req_type =
       target.has_value() ? IpcReqType::DataWait : IpcReqType::SignalWait;
   req->local_ptr = target.has_value() ? target->local_ptr : nullptr;
-  req->remote_ptr = nullptr;
-  req->remote_buffer_id = 0;
   req->size_bytes = target.has_value() ? target->len : 0;
   req->mark_queued(1);
   if (!enqueue_request(rid, req->req_type)) {
@@ -367,16 +362,9 @@ bool IpcAdapter::request_failed(unsigned id) {
 
 void IpcAdapter::release_request(unsigned id) { release_request_slot(id); }
 
-uint64_t IpcAdapter::completion_payload(unsigned id) const {
-  auto* req = resolve_request_slot_const(id);
-  return req ? req->signal_payload : 0;
-}
-
 // ── send_one ───────────────────────────────────────────────────────────────
-// Two paths for DataPut:
-//   1) remote_ptr is GPU → gpuMemcpyPeerAsync → send Ack (payload=0)
-//   2) remote_ptr is host SHM → D2H copy → send signal with buffer_id (payload=remote_buffer_id)
-// Signal: send ack with tag as payload
+// DataPut: GPU peer copy → send Ack (payload=0).
+// Signal: send ack with tag as status.
 
 bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   if (!creq) return false;
@@ -388,88 +376,55 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   auto dev_reset = finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  // Signal request: just send an Ack with tag as status.
   if (creq->req_type == IpcReqType::Signal) {
-    bool ok = shm_control_->send_ack(
+    return shm_control_->send_ack(
         to_rank, creq->match_seq,
         static_cast<uint32_t>(creq->match_seq & 0xFFFFFFFFu));
-    return ok;
   }
 
-  // DataPut: copy data then signal.
-  if (creq->remote_ptr != nullptr) {
-    // Determine if remote_ptr is GPU or host memory.
-    gpuPointerAttributes attrs{};
-    bool is_gpu = false;
-    if (gpuPointerGetAttributes(&attrs, creq->remote_ptr) == gpuSuccess &&
-        (attrs.type == gpuMemoryTypeDevice ||
-         attrs.type == gpuMemoryTypeManaged)) {
-      is_gpu = true;
-    }
+  // DataPut: GPU peer copy.
+  void* src = creq->local_ptr;
+  void* dst = creq->remote_ptr;
+  if (dst == nullptr) {
+    std::cerr << "[ERROR] IPC put_async required remote_ptr, req " << creq->id
+              << std::endl;
+    return false;
+  }
 
-    if (is_gpu) {
-      // Path 1: Direct GPU peer copy → Ack signal.
-      int remote_gpu = comm_->peer_gpu_idx(to_rank);
-      if (remote_gpu < 0) {
-        // Fallback: try same-device copy.
-        remote_gpu = local_gpu_idx_;
-      }
-      void* src = creq->local_ptr;
-      void* dst = creq->remote_ptr;
-      size_t n_streams =
-          std::min(ipc_streams_.size(),
-                   creq->size_bytes < kIpcSizePerEngine
-                       ? size_t{1}
-                       : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
-      size_t chunk = creq->size_bytes / n_streams;
-      for (size_t i = 0; i < n_streams; ++i) {
-        void* cs = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
-        void* cd = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
-        size_t sz = (i == n_streams - 1) ? creq->size_bytes - i * chunk : chunk;
-        if (remote_gpu == local_gpu_idx_) {
-          GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice,
+  int remote_gpu = comm_->peer_gpu_idx(to_rank);
+  if (remote_gpu < 0) remote_gpu = local_gpu_idx_;
+
+  size_t n_streams =
+      std::min(ipc_streams_.size(),
+               creq->size_bytes < kIpcSizePerEngine
+                   ? size_t{1}
+                   : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
+  size_t chunk = creq->size_bytes / n_streams;
+  for (size_t i = 0; i < n_streams; ++i) {
+    void* cs = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
+    void* cd = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
+    size_t sz = (i == n_streams - 1) ? creq->size_bytes - i * chunk : chunk;
+    if (remote_gpu == local_gpu_idx_) {
+      GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice,
+                                  ipc_streams_[i]));
+    } else {
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
                                       ipc_streams_[i]));
-        } else {
-          GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
-                                          ipc_streams_[i]));
-        }
-      }
-      for (auto& s : ipc_streams_) GPU_RT_CHECK(gpuStreamSynchronize(s));
-
-      // Send Ack (payload=0 means direct copy).
-      if (!shm_control_->send_ack(to_rank, creq->match_seq, 0)) {
-        std::cerr << "[ERROR] send_ack for direct copy failed, req " << creq->id
-                  << std::endl;
-        return false;
-      }
-      return true;
     }
-
-    // Path 2: remote_ptr is host SHM → D2H copy → signal with buffer_id.
-    void* src = creq->local_ptr;
-    void* dst = creq->remote_ptr;
-    GPU_RT_CHECK(
-        gpuMemcpy(dst, src, creq->size_bytes, gpuMemcpyDeviceToHost));
-    uint32_t payload = creq->remote_buffer_id;
-    creq->signal_payload = payload;
-    if (!shm_control_->send_ack(to_rank, creq->match_seq, payload)) {
-      std::cerr << "[ERROR] send_ack for SHM write failed, req " << creq->id
-                << std::endl;
-      return false;
-    }
-    return true;
   }
+  for (auto& s : ipc_streams_) GPU_RT_CHECK(gpuStreamSynchronize(s));
 
-  // remote_ptr == nullptr: should not happen for IPC put path.
-  std::cerr << "[ERROR] IPC put_async with null remote_ptr, req " << creq->id
-            << std::endl;
-  return false;
+  // payload=0 means data is already in receiver's GPU buffer.
+  if (!shm_control_->send_ack(to_rank, creq->match_seq, 0)) {
+    std::cerr << "[ERROR] send_ack for direct copy failed, req " << creq->id
+              << std::endl;
+    return false;
+  }
+  return true;
 }
 
 // ── recv_one ───────────────────────────────────────────────────────────────
 // SignalWait: wait for Ack from sender.
-//   - payload=0: direct GPU copy (data already in target)
-//   - payload≠0: SHM bounce → store buffer_id for Communicator to process
 
 bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   if (!creq) return false;
@@ -484,11 +439,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
     uint64_t ack_seq = 0;
     if (shm_control_->recv_ack(from_rank, &status, &ack_seq,
                                /*timeout_ms=*/50, creq->match_seq)) {
-      if (ack_seq == creq->match_seq) {
-        creq->signal_payload = static_cast<uint64_t>(status);
-        return true;
-      }
-      // Seq mismatch — ignore, keep waiting.
+      if (ack_seq == creq->match_seq) return true;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
       std::cerr << "[ERROR] IPC recv timed out, req " << creq->id

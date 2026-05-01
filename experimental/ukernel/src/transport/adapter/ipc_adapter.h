@@ -52,7 +52,6 @@ class IpcAdapter final : public TransportAdapter {
   bool wait_completion(unsigned id) override;
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
-  uint64_t completion_payload(unsigned id) const override;
 
  private:
   bool connect_to(int rank);
@@ -74,9 +73,7 @@ class IpcAdapter final : public TransportAdapter {
     IpcReqType req_type = IpcReqType::DataPut;
     void* local_ptr = nullptr;
     void* remote_ptr = nullptr;
-    uint32_t remote_buffer_id = 0;
     size_t size_bytes = 0;
-    uint64_t signal_payload = 0;
     std::atomic<uint32_t> remaining{0};
     std::atomic<bool> failed{false};
     std::atomic<bool> finished{false};

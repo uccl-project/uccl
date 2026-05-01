@@ -300,6 +300,7 @@ unsigned UcclTransportAdapter::put_async(
   PendingRequestSlot* slot = try_acquire_request_slot(&request_id);
   if (slot == nullptr) return 0;
   slot->kind = PendingRequestSlot::Kind::DataPut;
+
   int ret = send_async_uccl(peer_rank, local_ptr, len, local_buffer_id,
                             remote_buffer_id, request_id);
   if (ret != 0) {
@@ -458,16 +459,12 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
       local_mh = local_mh_override;
     } else {
       auto mh_it = buffer_id_to_mhandle_.find(local_buffer_id);
-      if (mh_it != buffer_id_to_mhandle_.end()) {
-        local_mh = mh_it->second;
-      }
+      if (mh_it != buffer_id_to_mhandle_.end()) local_mh = mh_it->second;
     }
 
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot == nullptr || slot->state != RequestState::Reserved) return -1;
-    if (!slot->request) {
-      slot->request = std::make_unique<::uccl::ucclRequest>();
-    }
+    if (!slot->request) slot->request = std::make_unique<::uccl::ucclRequest>();
     std::memset(slot->request.get(), 0, sizeof(::uccl::ucclRequest));
     slot->failed = false;
     ureq = slot->request.get();
@@ -476,9 +473,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
   if (!flow || !local_mh || !ureq) {
     std::cerr << "[ERROR] UCCL send_async missing "
               << (!flow ? "send flow" : "memory handle") << " for peer "
-              << peer_rank << ", request " << request_id << ", buffer_id "
-              << local_buffer_id << ", len " << len << ", ptr " << local_ptr
-              << std::endl;
+              << peer_rank << ", request " << request_id << std::endl;
     return -1;
   }
 
@@ -491,9 +486,8 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     backoff_retry(retries++);
   }
   if (ret != 0) {
-    std::cerr << "[ERROR] UCCL send submit failed for peer " << peer_rank << ", request "
-              << request_id << ", buffer_id " << local_buffer_id << ", len "
-              << len << ", ptr " << local_ptr << std::endl;
+    std::cerr << "[ERROR] UCCL send submit failed for peer " << peer_rank
+              << ", request " << request_id << std::endl;
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot != nullptr) {
@@ -510,7 +504,6 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     slot->failed = false;
     slot->state = RequestState::InFlight;
   }
-
   return 0;
 }
 

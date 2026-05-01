@@ -1,13 +1,10 @@
 #pragma once
 
 #include "../../include/config.h"
-#include "bounce_buffer_pool.h"
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
-#include "memory/shm_manager.h"
 #include "oob/oob.h"
 #include "request_tracker.h"
-#include "shm_buf_pool.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -49,7 +46,7 @@ class Communicator {
   unsigned irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
                  size_t dst_bytes);
   bool poll(unsigned const req) { return tracker_->poll(req); }
-  void release(unsigned const req) { tracker_->release(req); }
+  void release(unsigned const req) { return tracker_->release(req); }
   bool wait_finish(unsigned const req) { return tracker_->wait_finish(req); }
   bool wait_finish(std::vector<unsigned> const& reqs) {
     return tracker_->wait_finish(reqs);
@@ -83,12 +80,7 @@ class Communicator {
                                       size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
-  void* get_or_open_bounce_shm(std::string const& shm_name);
-
   int peer_gpu_idx(int rank) const;
-
-  // Shared SHM buffer pool for IPC relay (one per host).
-  ShmBufPool* shm_buf_pool() { return shm_buf_pool_.get(); }
 
  private:
   struct ResolvedPeer {
@@ -129,13 +121,6 @@ class Communicator {
   void register_existing_local_mrs_with_uccl();
   bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
-  SHMManager& require_shm_manager(char const* caller);
-
-  BounceBufferPool* ensure_bounce_pool();
-  void ensure_shm_buf_pool();
-
-  bool ipc_p2p_available(int peer_rank, uint32_t remote_buffer_id);
-
   gpuEvent_t acquire_event();
   void release_event(gpuEvent_t event);
 
@@ -148,7 +133,6 @@ class Communicator {
 
   MRManager mr_manager_;
   IPCManager ipc_manager_;
-  std::optional<SHMManager> shm_manager_;
 
   std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
@@ -156,8 +140,6 @@ class Communicator {
   gpuStream_t host_copy_stream_ = nullptr;
 
   std::unique_ptr<RequestTracker> tracker_;
-  std::unique_ptr<BounceBufferPool> bounce_pool_;
-  std::unique_ptr<ShmBufPool> shm_buf_pool_;
 
   mutable std::mutex event_pool_mu_;
   std::vector<gpuEvent_t> event_pool_;
