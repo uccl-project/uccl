@@ -208,10 +208,28 @@ Each entry below states (a) which testbed from Table 1 the result was collected 
   ```
 * **What to vary:** number of incast senders and permutation matrix size (regenerate `matrix.txt` with different arguments).
 
-### Figure 13 — *(reserved for co-author Zhongjie)*
+### Figure 13 — Effectiveness of UCCL’s loss recovery mechanism 
 
-> @zhongjie: please fill in the script path and exact sweep parameters for Figure 13.
-
+* **Testbed:** AMD (4 × MI300X + 8 × Broadcom Thor-2 400G), using only two nodes, each with one NIC/GPU, for communication.
+* **Script:** [collective/rdma/transport_test](https://github.com/uccl-project/uccl/blob/main/collective/rdma/transport_test.cc)
+* **Procedure:** 
+  ```bash
+  # client:
+  ./transport_test --serverip=xxx.xxx.xxx.xxx --nflow=1 --nmsg=16 --nreq=1 --msize=xxx
+  # server:
+  ./transport_test --server --nflow=1 --nmsg=16 --nreq=1 --msize=xxx
+  ```
+* **How to sweep:**
+  * **Message size:** Please sweep `--msize` over `32768/65536/131072/262144/524288/1048576`
+  * **Loss rate:** To keep our project neat and easier to maintain, the debug code inserted for testing the loss rate has already been removed. Please manually add probabilistic WQE-loss logic in [`_uc_poll_recv_cq_normal`](https://github.com/uccl-project/uccl/blob/main/collective/rdma/rdma_io.cc#L879). The code logic should look like this: 
+  ```c++
+  for (int i = 0; i < nr_wcs; i++) {
+    if (should_drop()) continue;
+  }
+  ```
+  Please note that the processing unit here is a WQE, so the loss probability here is $1-(1-\frac{1}{x^8})$ (`UCCL_CHUNK_SIZE_KB=32`, MTU = 4KB, x is the packet loss rate). Please sweep x over 256/1024/4096/16384.
+  
+ 
 ### Figure 14 — Sensitivity to chunk size and engine count on CX_ETH
 
 * **Testbed:** CX_ETH.
