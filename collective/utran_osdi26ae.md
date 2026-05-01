@@ -168,9 +168,16 @@ Each entry below states (a) which testbed from Table 1 the result was collected 
 * **How to sweep:** Same as Figure 7. Use a hostfile that places nodes on different racks, then sweep cluster size and message size.
 * **Detailed setup:** [`collective/rdma/README.md`](rdma/README.md).
 
-### Figure 11(a) — *(reserved for co-author Zhongjie)*
+### Figure 11(a) — DeepSeek-V2-Lite training on AMD
 
-> @zhongjie: please fill in the script path and exact sweep parameters for Figure 11(a).
+* **Testbed:** AMD (4 × MI300X + 8 × Broadcom Thor-2 400G).
+* **Procedure**
+  * Please clone and install [AMD-AGI/Primus](https://github.com/AMD-AGI/Primus/tree/main) by following its guidelines.
+  * Please use [deepseek_v2_lite-BF16-pretrain.yaml](https://github.com/AMD-AGI/Primus/blob/main/examples/megatron/configs/MI300X/deepseek_v2_lite-BF16-pretrain.yaml) as the model config and set `tensor_model_parallel_size=1, pipeline_model_parallel_size=1, expert_model_parallel_size=32`.
+  * For RCCL vs. UCCL comparison, set the environment variable `NCCL_NET_PLUGIN = libnccl-net-uccl.so` to use UCCL, and leave it unset by default to use RCCL.
+* **How to sweep**
+  * Add `num_experts` to [deepseek_v2_lite-BF16-pretrain.yaml](https://github.com/AMD-AGI/Primus/blob/main/examples/megatron/configs/MI300X/deepseek_v2_lite-BF16-pretrain.yaml) and sweep it over 32/64/128.
+* **Detailed setup:** [`collective/rdma/README.md`](rdma/README.md) (section "Building and running UCCL for AMD GPUs").
 
 ### Figure 11(b) — Expert-parallel benchmark on EFA
 
