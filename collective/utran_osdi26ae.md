@@ -64,6 +64,7 @@ git clone https://github.com/uccl-project/uccl.git
 cd uccl
 export UCCL_HOME=$(pwd)
 git submodule update --init thirdparty/nccl thirdparty/nccl-tests
+git submodule update --init thirdparty/rccl thirdparty/rccl-tests
 ```
 
 ### Step 2 — Build & install UCCL via Docker (recommended)
