@@ -24,12 +24,12 @@ We very much appreciate the AEC's understanding given the cost of multi-rack 400
 
 ### Testbeds used in the paper
 
-| Name    | # of Servers | Network    | Topology                  | MTU | NIC                            | GPU                       | CPU       | Where to rent (suggested)                              |
-| ------- | ------------ | ---------- | ------------------------- | --- | ------------------------------ | ------------------------- | --------- | ------------------------------------------------------ |
-| CX_ETH  | 6            | Ethernet   | Cross racks, fat-tree     | 4KB | NVIDIA ConnectX-7 400G x 8     | NVIDIA H100-80G x 8       | 160 cores | TensorWave / Lambda / CoreWeave / Crusoe (H100 + RoCE) |
-| AMD     | 4            | Ethernet   | Cross racks, rail-optimized | 4KB | Broadcom Thor-2 400G x 8       | AMD MI300X-192G x 8       | 128 cores | IBM Cloud `gx3d-160x1792x8mi300x` instances            |
-| EFA     | 4            | Ethernet   | Cross racks, fat-tree     | 9KB | AWS EFA 100G x 4               | NVIDIA A100-40G x 8       | 96  cores | AWS `p4d.24xlarge` (us-east-1, capacity reservation)   |
-| CX_IB   | 2            | InfiniBand | Same rack                 | 4KB | NVIDIA ConnectX-7 400G x 8     | NVIDIA H100-80G x 8       | 128 cores | A bare-metal H100 + IB host (e.g., CoreWeave / Lambda) |
+| Name    | # of Servers | Network    | Topology                    | MTU | NIC                            | GPU                       | CPU       | Where to rent (suggested)                              |
+| ------- | ------------ | ---------- | --------------------------- | --- | ------------------------------ | ------------------------- | --------- | ------------------------------------------------------ |
+| CX_ETH  | 6            | Ethernet   | Cross racks, fat-tree       | 4KB | NVIDIA ConnectX-7 400G x 8     | NVIDIA H100-80G x 8       | 160 cores | IBM Cloud `gx3d-160x1792x8h100` instances              |
+| AMD     | 4            | Ethernet   | Cross racks, rail-optimized | 4KB | Broadcom Thor-2 400G x 8       | AMD MI300X-192G x 8       | 128 cores | TensorWave MI300X instances                            |
+| EFA     | 4            | Ethernet   | Cross racks, fat-tree       | 9KB | AWS EFA 100G x 4               | NVIDIA A100-40G x 8       | 96  cores | AWS `p4d.24xlarge` instances                           |
+| CX_IB   | 2            | InfiniBand | Same rack                   | 4KB | NVIDIA ConnectX-7 400G x 8     | NVIDIA H100-80G x 8       | 128 cores | Bare-metal H100 + IB host (e.g., CoreWeave / Lambda)   |
 
 A representative subset of results (in particular Figures 7, 9, 11(b), and 14) can also be reproduced on **smaller clusters** of the same GPU/NIC family — the absolute numbers will differ but the qualitative trends should hold.
 
@@ -64,6 +64,7 @@ git clone https://github.com/uccl-project/uccl.git
 cd uccl
 export UCCL_HOME=$(pwd)
 git submodule update --init thirdparty/nccl thirdparty/nccl-tests
+git submodule update --init thirdparty/rccl thirdparty/rccl-tests
 ```
 
 ### Step 2 — Build & install UCCL via Docker (recommended)
