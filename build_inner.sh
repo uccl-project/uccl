@@ -214,15 +214,15 @@ build_ep() {
     extra_env=()
     if [[ "$TARGET" == "therock" ]]; then
       # On TheRock, ROCm comes from a pip-installed rocm-sdk wheel; expose its
-      # root to ep/setup.py via HIP_HOME/ROCM_HOME and disable the GPU-driven
-      # (IBGDA-style) RDMA path, which has no AMD equivalent yet. The intranode
-      # kernels (test_intranode.py) don't need GPU-driven RDMA.
+      # root to ep/setup.py via HIP_HOME/ROCM_HOME so hipcc can find headers
+      # and libraries. The IBGDA (GPU-driven RDMA) code path in
+      # ep/src/internode_ll.cu is already gated by __HIP_PLATFORM_AMD__ guards,
+      # so no extra flag is needed to keep the AMD build clean.
       ROCM_ROOT="$(rocm-sdk path --root)"
       extra_env+=(
         "HIP_HOME=${ROCM_ROOT}"
         "ROCM_HOME=${ROCM_ROOT}"
         "ROCM_PATH=${ROCM_ROOT}"
-        "UCCL_EP_DISABLE_GPU_DRIVEN=1"
       )
     fi
     env "${extra_env[@]}" \
