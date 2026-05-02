@@ -48,20 +48,26 @@ REAL_EXECUTOR_OBJ := $(REAL_EXECUTOR_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
+                 ../transport/request_tracker.cc \
+                 ../transport/bounce_buffer_pool.cc \
                  ../transport/memory/mr_manager.cc \
                  ../transport/memory/ipc_manager.cc \
                  ../transport/memory/shm_manager.cc \
-                 ../transport/oob/oob.cc ../transport/oob/oob_shm.cc \
+                 ../transport/oob/oob.cc \
                  ../transport/oob/oob_socket.cc \
+                 ../transport/adapter/shmring_exchanger.cc \
                  ../transport/adapter/tcp_adapter.cc \
                  ../transport/adapter/uccl_adapter.cc \
                  ../transport/adapter/ipc_adapter.cc \
                  ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
+                 transport_request_tracker.o \
+                 transport_bounce_buffer_pool.o \
                  transport_memory_mr_manager.o \
                  transport_memory_ipc_manager.o \
                  transport_memory_shm_manager.o \
-                 transport_oob_oob.o transport_oob_oob_shm.o transport_oob_oob_socket.o \
+                 transport_oob_oob.o transport_oob_oob_socket.o \
+                 transport_adapter_shmring_exchanger.o \
                  transport_adapter_tcp_adapter.o \
                  transport_adapter_uccl_adapter.o \
                  transport_adapter_ipc_adapter.o \

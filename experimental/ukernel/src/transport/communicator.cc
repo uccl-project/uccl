@@ -185,11 +185,11 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   if (config_->oob_namespace.empty()) {
     config_->oob_namespace = "default";
   }
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   ipc_adapter_ = std::make_shared<IpcAdapter>(
       this, generate_host_id() + "_p" + std::to_string(config_->exchanger_port),
       config_->local_id >= 0 ? config_->local_id : global_rank_,
       local_gpu_idx_);
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   GPU_RT_CHECK(
       gpuStreamCreateWithFlags(&host_copy_stream_, gpuStreamNonBlocking));
 
@@ -1107,6 +1107,29 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   return ipc_manager_.register_remote_ipc(owner_rank, buffer_id, state);
 }
 
+std::string Communicator::ipc_open_error_message(int owner_rank,
+                                                 uint32_t buffer_id,
+                                                 IPCItem const& item,
+                                                 gpuError_t err) const {
+  std::ostringstream oss;
+  oss << "failed to open remote IPC mem handle"
+      << " owner_rank=" << owner_rank << " buffer_id=" << buffer_id
+      << " local_gpu=" << local_gpu_idx_
+      << " remote_device_idx=" << item.device_idx
+      << " bytes=" << item.bytes << " base_offset=" << item.base_offset
+      << " err=" << static_cast<int>(err) << " (" << gpuGetErrorString(err)
+      << ")";
+  if (item.device_idx >= 0 && item.device_idx != local_gpu_idx_) {
+    int can_access_peer = -1;
+    gpuError_t access_err = gpuDeviceCanAccessPeer(
+        &can_access_peer, local_gpu_idx_, item.device_idx);
+    oss << " peer_access=" << can_access_peer
+        << " peer_access_err=" << static_cast<int>(access_err)
+        << " (" << gpuGetErrorString(access_err) << ")";
+  }
+  return oss.str();
+}
+
 IPCItem Communicator::get_ipc(uint32_t buffer_id) {
   std::lock_guard<std::mutex> lk(resource_mu_);
   auto it = local_buffer_to_ipc_.find(buffer_id);
@@ -1132,7 +1155,8 @@ IPCItem Communicator::get_ipc(int owner_rank, uint32_t buffer_id) {
     gpuError_t open_err = gpuIpcOpenMemHandle(&item.direct_ptr, item.handle,
                                                gpuIpcMemLazyEnablePeerAccess);
     if (open_err != gpuSuccess) {
-      throw std::runtime_error("failed to open remote IPC mem handle");
+      throw std::runtime_error(
+          ipc_open_error_message(owner_rank, buffer_id, item, open_err));
     }
     ipc_manager_.register_remote_ipc(owner_rank, buffer_id, item);
   }
@@ -1178,7 +1202,13 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
                                                gpuIpcMemLazyEnablePeerAccess);
     gpuError_t restore_err = gpuSetDevice(original_device);
     if (restore_err != gpuSuccess) return false;
-    if (open_err != gpuSuccess || item.direct_ptr == nullptr) return false;
+    if (open_err != gpuSuccess || item.direct_ptr == nullptr) {
+      std::cerr << "[ERROR] "
+                << ipc_open_error_message(remote_rank, remote_buffer_id, item,
+                                          open_err)
+                << std::endl;
+      return false;
+    }
     if (!ipc_manager_.register_remote_ipc(remote_rank, remote_buffer_id,
                                           item)) {
       return false;

@@ -37,16 +37,6 @@ static PreferredTransport parse_transport(char const* value) {
   std::exit(1);
 }
 
-enum class IpcPathMode { Auto, Relay };
-
-static IpcPathMode parse_ipc_path(char const* value) {
-  if (strcmp(value, "auto") == 0) return IpcPathMode::Auto;
-  if (strcmp(value, "relay") == 0) return IpcPathMode::Relay;
-  fprintf(stderr, "Error: unsupported ipc path '%s' (expected auto|relay)\n",
-          value);
-  std::exit(1);
-}
-
 static int throughput_window_for(PeerTransportKind kind) {
   if (kind == PeerTransportKind::Uccl) {
     return kUcclThroughputWindow;
@@ -118,12 +108,10 @@ static void free_device_slots(std::vector<void*>& slots) {
   slots.clear();
 }
 
-static std::vector<MR> register_slot_mrs(Communicator& comm,
-                                         std::vector<void*> const& slots,
-                                         size_t msg_size,
-                                         std::vector<uint32_t>& buffer_ids) {
-  std::vector<MR> mrs;
-  mrs.reserve(slots.size());
+static bool register_slot_mrs(Communicator& comm,
+                              std::vector<void*> const& slots,
+                              size_t msg_size,
+                              std::vector<uint32_t>& buffer_ids) {
   buffer_ids.clear();
   buffer_ids.reserve(slots.size());
   for (size_t i = 0; i < slots.size(); ++i) {
@@ -131,18 +119,37 @@ static std::vector<MR> register_slot_mrs(Communicator& comm,
     uint32_t const buffer_id =
         kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
     if (!comm.reg_mr(buffer_id, ptr, msg_size, true)) {
-      return {};
+      return false;
     }
     buffer_ids.push_back(buffer_id);
-    mrs.push_back(comm.get_mr(buffer_id));
   }
-  return mrs;
+  return true;
 }
 
 static void deregister_slot_mrs(Communicator& comm,
                                 std::vector<uint32_t> const& buffer_ids) {
   for (uint32_t buffer_id : buffer_ids) {
     if (buffer_id != 0) (void)comm.dereg_mr(buffer_id);
+  }
+}
+
+static bool register_slot_ipcs(Communicator& comm,
+                               std::vector<void*> const& slots,
+                               size_t msg_size,
+                               std::vector<uint32_t> const& buffer_ids) {
+  if (slots.size() != buffer_ids.size()) return false;
+  for (size_t i = 0; i < slots.size(); ++i) {
+    if (!comm.reg_ipc(buffer_ids[i], slots[i], msg_size, true)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void deregister_slot_ipcs(Communicator& comm,
+                                 std::vector<uint32_t> const& buffer_ids) {
+  for (uint32_t buffer_id : buffer_ids) {
+    if (buffer_id != 0) (void)comm.dereg_ipc(buffer_id);
   }
 }
 
@@ -168,15 +175,21 @@ static bool validate_recv_slots(char const* role, int rank,
   return true;
 }
 
-static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
-                                     size_t recv_slots,
-                                     std::vector<MR>& remote_recv_mrs) {
-  remote_recv_mrs.assign(recv_slots, MR{});
+static bool wait_remote_recv_buffers(
+    Communicator& comm, int peer_rank, PeerTransportKind kind,
+    size_t recv_slots, std::vector<uint32_t>& remote_recv_buffer_ids) {
+  remote_recv_buffer_ids.clear();
+  remote_recv_buffer_ids.reserve(recv_slots);
   for (size_t i = 0; i < recv_slots; ++i) {
     uint32_t const buffer_id =
         kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
-    if (!comm.wait_mr(peer_rank, buffer_id)) return false;
-    remote_recv_mrs[i] = comm.get_mr(peer_rank, buffer_id);
+    if (kind == PeerTransportKind::Uccl && !comm.wait_mr(peer_rank, buffer_id)) {
+      return false;
+    }
+    if (kind == PeerTransportKind::Ipc && !comm.wait_ipc(peer_rank, buffer_id)) {
+      return false;
+    }
+    remote_recv_buffer_ids.push_back(buffer_id);
   }
   return true;
 }
@@ -189,6 +202,9 @@ static unsigned submit_send(Communicator& comm, int peer_rank,
   uint32_t remote_id = (kind == PeerTransportKind::Uccl)
                            ? recv_buffer_ids.at(static_cast<size_t>(slot))
                            : 0;
+  if (kind == PeerTransportKind::Ipc) {
+    remote_id = recv_buffer_ids.at(static_cast<size_t>(slot));
+  }
   return comm.isend(peer_rank, local_send_mr_id, 0, msg_size,
                     remote_id, 0);
 }
@@ -202,7 +218,7 @@ static bool sync_before_bidirectional(Communicator& comm, int rank,
                                       int peer_rank, PeerTransportKind kind,
                                       uint32_t local_send_mr_id,
                                       uint32_t local_recv_mr_id,
-                                      std::vector<MR> const& remote_recv_mrs,
+                                      std::vector<uint32_t> const& remote_recv_buffer_ids,
                                       size_t msg_size) {
   if (rank < peer_rank) {
     unsigned recv_req =
@@ -211,13 +227,13 @@ static bool sync_before_bidirectional(Communicator& comm, int rank,
     if (!comm.wait_finish(recv_req)) return false;
 
     unsigned send_req = submit_send(comm, peer_rank, local_send_mr_id, msg_size,
-                                    kind, remote_recv_mrs, 0);
+                                    kind, remote_recv_buffer_ids, 0);
     if (send_req == 0) return false;
     return comm.wait_finish(send_req);
   }
 
   unsigned send_req = submit_send(comm, peer_rank, local_send_mr_id, msg_size,
-                                  kind, remote_recv_mrs, 0);
+                                  kind, remote_recv_buffer_ids, 0);
   if (send_req == 0) return false;
   if (!comm.wait_finish(send_req)) return false;
 
@@ -280,6 +296,9 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
       (void)comm.dereg_mr(kBenchSendBufferId);
       gpuFree(send_buf);
     }
+    if (transport_kind == PeerTransportKind::Ipc) {
+      deregister_slot_ipcs(comm, local_recv_buffer_ids);
+    }
     deregister_slot_mrs(comm, local_recv_buffer_ids);
     free_device_slots(recv_slots);
   };
@@ -291,32 +310,35 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     gpuMemset(recv_slot, 0, msg_size);
   }
 
-  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, true)) {
+  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, false)) {
     fprintf(stderr, "[Sender %d] Failed to register send buffer MR\n", rank);
     cleanup();
     return;
   }
-  MR local_send_mr = comm.get_mr(kBenchSendBufferId);
-  std::vector<MR> local_recv_mrs =
-      register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids);
-  if (local_recv_mrs.size() != recv_slots.size()) {
+  if (!register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids)) {
     fprintf(stderr, "[Sender %d] Failed to register recv slot MRs\n", rank);
     cleanup();
     return;
   }
+  if (transport_kind == PeerTransportKind::Ipc &&
+      !register_slot_ipcs(comm, recv_slots, msg_size, local_recv_buffer_ids)) {
+    fprintf(stderr, "[Sender %d] Failed to register recv slot IPC handles\n",
+            rank);
+    cleanup();
+    return;
+  }
 
-  printf("[Sender %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
-         local_send_mr.id, throughput_window);
+  printf("[Sender %d] Memory registered: send_buffer_id=%u, recv_slots=%d\n",
+         rank, kBenchSendBufferId, throughput_window);
 
-  std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
-    if (!exchange_remote_recv_mrs(comm, peer_rank, recv_slots.size(),
-                                  remote_recv_mrs)) {
-      fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
-              rank);
-      cleanup();
-      return;
-    }
+  std::vector<uint32_t> remote_recv_buffer_ids;
+  if (!wait_remote_recv_buffers(comm, peer_rank, transport_kind,
+                                recv_slots.size(), remote_recv_buffer_ids)) {
+    fprintf(stderr,
+            "[Sender %d] Failed to exchange remote receive buffer metadata\n",
+            rank);
+    cleanup();
+    return;
   }
 
   printf("[Sender %d] Remote memory info received\n", rank);
@@ -327,13 +349,14 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_warmup; ++i) {
     int slot = i % throughput_window;
     warmup_touched[static_cast<size_t>(slot)] = 1;
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     comm.wait_finish(send_req);
 
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     comm.wait_finish(recv_req);
   }
   if (!validate_recv_slots("Sender", rank, recv_slots, warmup_touched,
@@ -354,13 +377,14 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     latency_touched[static_cast<size_t>(slot)] = 1;
     uint64_t t0 = now_ns();
 
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     comm.wait_finish(send_req);
 
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     comm.wait_finish(recv_req);
 
     uint64_t t1 = now_ns();
@@ -385,8 +409,8 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
 
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
-    unsigned req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                               transport_kind, remote_recv_mrs, slot);
+    unsigned req = submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
+                               transport_kind, remote_recv_buffer_ids, slot);
     if (req == 0) {
       fprintf(stderr,
               "[Sender %d] isend failed during throughput test at iter %d\n",
@@ -427,8 +451,8 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   printf("  Messages/sec: %.2f M\n", num_iterations / elapsed_sec / 1e6);
 
   if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
-                                 local_send_mr.id, local_recv_mrs[0].id,
-                                 remote_recv_mrs, msg_size)) {
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
     fprintf(stderr,
             "[Sender %d] phase sync failed before bidirectional throughput\n",
             rank);
@@ -450,11 +474,12 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
     bidi_touched[static_cast<size_t>(slot)] = 1;
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     if (send_req == 0 || recv_req == 0) {
       fprintf(stderr,
               "[Sender %d] request submission failed during bidirectional "
@@ -563,6 +588,9 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
       (void)comm.dereg_mr(kBenchSendBufferId);
       gpuFree(send_buf);
     }
+    if (transport_kind == PeerTransportKind::Ipc) {
+      deregister_slot_ipcs(comm, local_recv_buffer_ids);
+    }
     deregister_slot_mrs(comm, local_recv_buffer_ids);
     free_device_slots(recv_slots);
   };
@@ -574,32 +602,36 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     gpuMemset(recv_slot, 0, msg_size);
   }
 
-  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, true)) {
+  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, false)) {
     fprintf(stderr, "[Receiver %d] Failed to register send buffer MR\n", rank);
     cleanup();
     return;
   }
-  MR local_send_mr = comm.get_mr(kBenchSendBufferId);
-  std::vector<MR> local_recv_mrs =
-      register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids);
-  if (local_recv_mrs.size() != recv_slots.size()) {
+  if (!register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids)) {
     fprintf(stderr, "[Receiver %d] Failed to register recv slot MRs\n", rank);
     cleanup();
     return;
   }
+  if (transport_kind == PeerTransportKind::Ipc &&
+      !register_slot_ipcs(comm, recv_slots, msg_size, local_recv_buffer_ids)) {
+    fprintf(stderr,
+            "[Receiver %d] Failed to register recv slot IPC handles\n", rank);
+    cleanup();
+    return;
+  }
 
-  printf("[Receiver %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
-         local_send_mr.id, throughput_window);
+  printf("[Receiver %d] Memory registered: send_buffer_id=%u, recv_slots=%d\n",
+         rank, kBenchSendBufferId, throughput_window);
 
-  std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
-    if (!exchange_remote_recv_mrs(comm, peer_rank, recv_slots.size(),
-                                  remote_recv_mrs)) {
-      fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",
-              rank);
-      cleanup();
-      return;
-    }
+  std::vector<uint32_t> remote_recv_buffer_ids;
+  if (!wait_remote_recv_buffers(comm, peer_rank, transport_kind,
+                                recv_slots.size(), remote_recv_buffer_ids)) {
+    fprintf(
+        stderr,
+        "[Receiver %d] Failed to exchange remote receive buffer metadata\n",
+        rank);
+    cleanup();
+    return;
   }
 
   printf("[Receiver %d] Remote memory info received\n", rank);
@@ -612,11 +644,12 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     warmup_touched[static_cast<size_t>(slot)] = 1;
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     comm.wait_finish(recv_req);
 
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     comm.wait_finish(send_req);
   }
   if (!validate_recv_slots("Receiver", rank, recv_slots, warmup_touched,
@@ -635,11 +668,12 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     latency_touched[static_cast<size_t>(slot)] = 1;
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     comm.wait_finish(recv_req);
 
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     comm.wait_finish(send_req);
   }
   if (!validate_recv_slots("Receiver", rank, recv_slots, latency_touched,
@@ -662,7 +696,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     throughput_touched[static_cast<size_t>(slot)] = 1;
     unsigned req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
     if (req == 0) {
       fprintf(stderr,
               "[Receiver %d] irecv failed during throughput test at iter %d\n",
@@ -696,8 +730,8 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   printf("[Receiver %d] Throughput test complete\n", rank);
 
   if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
-                                 local_send_mr.id, local_recv_mrs[0].id,
-                                 remote_recv_mrs, msg_size)) {
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
     fprintf(stderr,
             "[Receiver %d] phase sync failed before bidirectional throughput\n",
             rank);
@@ -719,9 +753,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     bidi_touched[static_cast<size_t>(slot)] = 1;
     unsigned recv_req =
         submit_recv(comm, peer_rank,
-                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
-    unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
-                                    transport_kind, remote_recv_mrs, slot);
+                    local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId,
+                                    msg_size, transport_kind,
+                                    remote_recv_buffer_ids, slot);
     if (send_req == 0 || recv_req == 0) {
       fprintf(stderr,
               "[Receiver %d] request submission failed during bidirectional "
@@ -778,7 +813,6 @@ void print_usage(char const* prog) {
   printf(
       "  --transport <kind>  Transport override: auto|ipc|uccl|tcp (default: "
       "auto)\n");
-  printf("  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
   printf("  --help              Show this help\n");
 }
 
@@ -792,7 +826,6 @@ int main(int argc, char** argv) {
   std::string local_ip = "127.0.0.1";
   uint16_t listen_port = 6979;
   PreferredTransport preferred_transport = PreferredTransport::Auto;
-  IpcPathMode ipc_path = IpcPathMode::Auto;
 
   // Parse arguments
   for (int i = 1; i < argc; ++i) {
@@ -814,18 +847,10 @@ int main(int argc, char** argv) {
       listen_port = static_cast<uint16_t>(atoi(argv[++i]));
     } else if (strcmp(argv[i], "--transport") == 0 && i + 1 < argc) {
       preferred_transport = parse_transport(argv[++i]);
-    } else if (strcmp(argv[i], "--ipc-path") == 0 && i + 1 < argc) {
-      ipc_path = parse_ipc_path(argv[++i]);
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
       print_usage(argv[0]);
       return 0;
     }
-  }
-
-  if (ipc_path == IpcPathMode::Relay) {
-    setenv("UHM_IPC_FORCE_RELAY", "1", 1);
-  } else {
-    unsetenv("UHM_IPC_FORCE_RELAY");
   }
 
   // Validate arguments
@@ -857,8 +882,6 @@ int main(int argc, char** argv) {
                  ? "ipc"
                  : (preferred_transport == PreferredTransport::Uccl ? "uccl"
                                                                     : "tcp")));
-  printf("IPC path mode: %s\n",
-         ipc_path == IpcPathMode::Relay ? "relay" : "auto");
   printf("============================================================\n\n");
 
   // Run as sender or receiver

@@ -83,19 +83,24 @@ Local integration smoke:
 
 ```bash
 ./test_transport_integration communicator-local
-CUDA_VISIBLE_DEVICES=5 ./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16980
-CUDA_VISIBLE_DEVICES=6 ./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16980
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16980
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16980
 ```
 
 Manual server/client cases:
 
 ```bash
-CUDA_VISIBLE_DEVICES=5 ./test_transport_integration communicator --role=server --case=exchange --exchanger-port 16979
-CUDA_VISIBLE_DEVICES=6 ./test_transport_integration communicator --role=client --case=exchange --exchanger-ip 127.0.0.1 --exchanger-port 16979
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=server --case=exchange --transport ipc --exchanger-port 16979
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=client --case=exchange --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
 
 `exchange` is the normal data-path case: connect, accept, send/recv, and verify
 payload.
+
+For IPC multi-GPU checks, both processes must see both GPUs so CUDA can open the
+peer IPC handle. With `CUDA_VISIBLE_DEVICES=6,7`, the default test mapping is
+server `--gpu=0` and client `--gpu=1`. Override with `--gpu` and `--peer-gpu`
+when testing a different visible-GPU layout.
 
 Available communicator cases:
 
@@ -107,13 +112,12 @@ ipc-buffer-meta
 Common manual runs:
 
 ```bash
-CUDA_VISIBLE_DEVICES=5 ./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16982
-CUDA_VISIBLE_DEVICES=6 ./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16982
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16982
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16982
 ```
 
 `ipc-buffer-meta` is a metadata-only IPC case. It does not establish a transport
-send/recv path; it only checks `notify_ipc_buffer -> wait_ipc_buffer ->
-resolve_ipc_buffer_pointer`.
+send/recv path; it only checks `reg_ipc -> wait_ipc -> get_ipc`.
 
 Optional full multi-process suite:
 

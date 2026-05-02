@@ -136,8 +136,8 @@ class IpcAdapter final : public TransportAdapter {
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
 
-  jring_t* send_task_ring_;
-  jring_t* recv_task_ring_;
+  jring_t* send_task_ring_ = nullptr;
+  jring_t* recv_task_ring_ = nullptr;
   std::atomic<bool> stop_{false};
   std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;

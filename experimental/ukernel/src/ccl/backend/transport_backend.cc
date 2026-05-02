@@ -46,8 +46,7 @@ CommunicatorTransportBackend::CommunicatorTransportBackend(
               : std::make_shared<UKernel::Transport::CommunicatorConfig>())),
       backend_cache_key_(g_next_transport_backend_cache_key.fetch_add(
           1, std::memory_order_relaxed)),
-      peer_paths_ready_(static_cast<size_t>(communicator_->world_size()),
-                        false) {
+      peer_path_states_(static_cast<size_t>(communicator_->world_size())) {
   completion_notifier_ = communicator_->register_completion_notifier(
       [this](unsigned request_id, std::chrono::steady_clock::time_point) {
         on_transport_completion(request_id);
@@ -95,35 +94,63 @@ void CommunicatorTransportBackend::ensure_plan_paths(
         "execution plan world size does not match transport communicator");
   }
 
-  std::vector<bool> need_peer(static_cast<size_t>(plan.nranks), false);
+  std::vector<bool> need_put(static_cast<size_t>(plan.nranks), false);
+  std::vector<bool> need_wait(static_cast<size_t>(plan.nranks), false);
   for (ExecOp const& op : plan.ops) {
     int peer_rank = transport_peer_rank(op);
     if (peer_rank < 0 || peer_rank >= plan.nranks) continue;
-    if (op.kind == ExecOpKind::TransportSend ||
-        op.kind == ExecOpKind::TransportRecv) {
-      need_peer[static_cast<size_t>(peer_rank)] = true;
+    if (op.kind == ExecOpKind::TransportSend) {
+      need_put[static_cast<size_t>(peer_rank)] = true;
+    } else if (op.kind == ExecOpKind::TransportRecv) {
+      need_wait[static_cast<size_t>(peer_rank)] = true;
     }
   }
 
   for (int peer = 0; peer < plan.nranks; ++peer) {
     if (peer == plan.rank) continue;
-    if (!need_peer[static_cast<size_t>(peer)]) continue;
-    ensure_peer_paths(peer);
+    bool const put = need_put[static_cast<size_t>(peer)];
+    bool const wait = need_wait[static_cast<size_t>(peer)];
+    if (!put && !wait) continue;
+    ensure_peer_paths(peer, put, wait);
   }
 }
 
-void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank) const {
+void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
+                                                     bool need_put,
+                                                     bool need_wait) const {
+  if (!need_put && !need_wait) return;
   std::lock_guard<std::mutex> lock(path_mu_);
   size_t idx = static_cast<size_t>(peer_rank);
-  if (peer_paths_ready_.at(idx)) return;
+  PeerPathState& state = peer_path_states_.at(idx);
+  bool const missing_put = need_put && !state.put_ready;
+  bool const missing_wait = need_wait && !state.wait_ready;
+  if (!missing_put && !missing_wait) return;
 
-  // Communicator exposes a duplex-ready semantic at peer granularity.
-  // Keep connect/accept API surface unchanged; choose one side
-  // deterministically.
-  bool ok = (communicator_->rank() < peer_rank)
-                ? communicator_->connect(peer_rank)
-                : communicator_->accept(peer_rank);
-  peer_paths_ready_.at(idx) = ok;
+  auto ensure_put = [&]() {
+    if (state.put_ready) return true;
+    if (!communicator_->connect(peer_rank)) return false;
+    state.put_ready = true;
+    return true;
+  };
+  auto ensure_wait = [&]() {
+    if (state.wait_ready) return true;
+    if (!communicator_->accept(peer_rank)) return false;
+    state.wait_ready = true;
+    return true;
+  };
+
+  bool ok = true;
+  if (missing_put && missing_wait) {
+    // When both directions are needed for the same peer (for example
+    // world_size=2 ring/all-to-all), use a stable asymmetric order.
+    ok = (communicator_->rank() < peer_rank)
+             ? (ensure_put() && ensure_wait())
+             : (ensure_wait() && ensure_put());
+  } else if (missing_put) {
+    ok = ensure_put();
+  } else if (missing_wait) {
+    ok = ensure_wait();
+  }
   if (!ok) {
     throw std::runtime_error(
         "failed to lazily establish transport path with "
@@ -256,6 +283,8 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
   ensure_memory_bindings_initialized(binding);
 
   int peer_rank = resolve_peer_rank(op);
+  ensure_peer_paths(peer_rank, op.kind == ExecOpKind::TransportSend,
+                    op.kind == ExecOpKind::TransportRecv);
   BackendToken token{next_token_++};
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {

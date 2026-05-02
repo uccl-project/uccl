@@ -35,6 +35,23 @@ def rel(path: Path) -> str:
     return str(path.resolve())
 
 
+transport_sources = [
+    rel(ROOT / "src" / "transport" / "communicator.cc"),
+    rel(ROOT / "src" / "transport" / "request_tracker.cc"),
+    rel(ROOT / "src" / "transport" / "bounce_buffer_pool.cc"),
+    rel(ROOT / "src" / "transport" / "memory" / "mr_manager.cc"),
+    rel(ROOT / "src" / "transport" / "memory" / "ipc_manager.cc"),
+    rel(ROOT / "src" / "transport" / "memory" / "shm_manager.cc"),
+    rel(ROOT / "src" / "transport" / "oob" / "oob.cc"),
+    rel(ROOT / "src" / "transport" / "oob" / "oob_socket.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "ipc_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "shmring_exchanger.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
+]
+
+
 sources = [
     rel(ROOT / "py" / "ukernel_ccl.cpp"),
     rel(NANOBIND_ROOT / "src" / "nb_combined.cpp"),
@@ -45,17 +62,7 @@ sources = [
     rel(ROOT / "src" / "ccl" / "plan.cc"),
     rel(ROOT / "src" / "ccl" / "selector.cc"),
     rel(ROOT / "src" / "ccl" / "topology.cc"),
-    rel(ROOT / "src" / "transport" / "communicator.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "mr_manager.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "ipc_manager.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "shm_manager.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob_shm.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob_socket.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "ipc_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
+    *transport_sources,
     rel(ROOT / "src" / "device" / "fifo" / "c2d_fifo.cc"),
     rel(ROOT / "src" / "device" / "fifo" / "d2c_fifo.cpp"),
     rel(ROOT / "src" / "device" / "fifo" / "sm_fifo.cc"),
@@ -66,17 +73,7 @@ sources = [
 p2p_sources = [
     rel(ROOT / "py" / "ukernel_p2p.cpp"),
     rel(NANOBIND_ROOT / "src" / "nb_combined.cpp"),
-    rel(ROOT / "src" / "transport" / "communicator.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "mr_manager.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "ipc_manager.cc"),
-    rel(ROOT / "src" / "transport" / "memory" / "shm_manager.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob_shm.cc"),
-    rel(ROOT / "src" / "transport" / "oob" / "oob_socket.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "ipc_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
+    *transport_sources,
 ]
 
 include_dirs = [

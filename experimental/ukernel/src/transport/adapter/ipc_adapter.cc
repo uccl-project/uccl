@@ -3,6 +3,7 @@
 #include "../util/utils.h"
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 
 namespace UKernel {
 namespace Transport {
@@ -45,10 +46,18 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
       local_gpu_idx_(local_gpu_idx) {
   send_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
   recv_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
+  if (send_task_ring_ == nullptr || recv_task_ring_ == nullptr) {
+    if (send_task_ring_ != nullptr) {
+      free(send_task_ring_);
+      send_task_ring_ = nullptr;
+    }
+    if (recv_task_ring_ != nullptr) {
+      free(recv_task_ring_);
+      recv_task_ring_ = nullptr;
+    }
+    throw std::runtime_error("IpcAdapter failed to allocate task rings");
+  }
   request_slots_ = std::make_unique<IpcRequestSlot[]>(kRequestSlotCount);
-  stop_.store(false);
-  send_thread_ = std::thread([this] { send_thread_func(); });
-  recv_thread_ = std::thread([this] { recv_thread_func(); });
 
   int n_streams = 2;
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -57,6 +66,10 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
     GPU_RT_CHECK(
         gpuStreamCreateWithFlags(&ipc_streams_[i], gpuStreamNonBlocking));
   }
+
+  stop_.store(false, std::memory_order_release);
+  send_thread_ = std::thread([this] { send_thread_func(); });
+  recv_thread_ = std::thread([this] { recv_thread_func(); });
 }
 
 IpcAdapter::~IpcAdapter() { shutdown(); }

@@ -210,13 +210,9 @@ class Communicator {
         throw std::runtime_error("isend failed to register temporary MR");
       }
     }
-    uint32_t dst_buffer_id = remote_buffer_id;
-    if (dst_buffer_id == 0 && binding.has_value()) {
-      dst_buffer_id = binding->buffer_id;
-    }
     uint64_t req = comm_->isend(
         peer_rank, buffer_id, offset, len,
-        dst_buffer_id, remote_offset);
+        remote_buffer_id, remote_offset);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);

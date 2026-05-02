@@ -60,10 +60,15 @@ class CommunicatorTransportBackend final : public Backend {
   uint32_t resolve_remote_buffer_id(CollectiveBinding const& binding,
                                     BufferRef const& ref) const;
   void ensure_plan_paths(ExecutionPlan const& plan) const;
-  void ensure_peer_paths(int peer_rank) const;
+  void ensure_peer_paths(int peer_rank, bool need_put, bool need_wait) const;
   void on_transport_completion(unsigned request_id);
   static void* byte_offset(void* base, size_t offset);
   static void const* byte_offset(void const* base, size_t offset);
+
+  struct PeerPathState {
+    bool put_ready = false;
+    bool wait_ready = false;
+  };
 
   std::unique_ptr<UKernel::Transport::Communicator> communicator_;
   uint64_t next_token_ = 1;
@@ -75,7 +80,7 @@ class CommunicatorTransportBackend final : public Backend {
   mutable std::mutex init_mu_;
   mutable std::mutex path_mu_;
   uint64_t backend_cache_key_ = 0;
-  mutable std::vector<bool> peer_paths_ready_;
+  mutable std::vector<PeerPathState> peer_path_states_;
 };
 
 }  // namespace CCL

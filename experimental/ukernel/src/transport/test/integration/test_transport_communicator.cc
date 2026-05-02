@@ -17,8 +17,8 @@ using Communicator = UKernel::Transport::Communicator;
 using MR = UKernel::Transport::MR;
 
 static constexpr int kWorldSize = 2;
-static constexpr int kClientGpu = 0;
-static constexpr int kServerGpu = 0;
+static constexpr int kDefaultServerGpu = 0;
+static constexpr int kDefaultClientGpu = 1;
 static constexpr int kClientRank = 1;
 static constexpr int kServerRank = 0;
 
@@ -32,6 +32,7 @@ using UKernel::Transport::TestUtil::run_case;
 constexpr size_t kMessageBytes = 4 * 1024;
 constexpr uint32_t kClientSendBufferId = 1001;
 constexpr uint32_t kServerRecvBufferId = 2001;
+constexpr int kIpcMetadataTimeoutMs = 10000;
 
 void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
   for (size_t i = 0; i < buf.size(); ++i) {
@@ -71,14 +72,15 @@ std::shared_ptr<Communicator> make_communicator(
   return std::make_shared<Communicator>(gpu, rank, world_size, cfg);
 }
 
-int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
+int run_exchange_client(int gpu, std::string const& exchanger_ip,
+                        int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
+  auto comm = make_communicator(gpu, kClientRank, kWorldSize,
                                 exchanger_ip, exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kClientRank, kServerRank),
           "client bidirectional connect/accept failed");
 
-  GPU_RT_CHECK(gpuSetDevice(kClientGpu));
+  GPU_RT_CHECK(gpuSetDevice(gpu));
   void* sendbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&sendbuf_d, kMessageBytes));
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(sendbuf_d); });
@@ -112,14 +114,15 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
   return 0;
 }
 
-int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
+int run_exchange_server(int gpu, std::string const& exchanger_ip,
+                        int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
+  auto comm = make_communicator(gpu, kServerRank, kWorldSize,
                                 exchanger_ip, exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kServerRank, kClientRank),
           "server bidirectional connect/accept failed");
 
-  GPU_RT_CHECK(gpuSetDevice(kServerGpu));
+  GPU_RT_CHECK(gpuSetDevice(gpu));
   void* recvbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&recvbuf_d, kMessageBytes));
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(recvbuf_d); });
@@ -148,16 +151,16 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
 }
 
 int run_ipc_buffer_metadata_client(
-    std::string const& exchanger_ip, int exchanger_port,
+    int gpu, std::string const& exchanger_ip, int exchanger_port,
     UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
+  auto comm = make_communicator(gpu, kClientRank, kWorldSize,
                                 exchanger_ip, exchanger_port, preferred);
   require(comm->same_host(kServerRank),
           "ipc-buffer-meta requires same-host peers");
 
-  GPU_RT_CHECK(gpuSetDevice(kClientGpu));
+  GPU_RT_CHECK(gpuSetDevice(gpu));
   void* buf = nullptr;
   GPU_RT_CHECK(gpuMalloc(&buf, 4096));
   auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
@@ -171,7 +174,7 @@ int run_ipc_buffer_metadata_client(
           "invalid ipc metadata publish should still succeed");
 
   constexpr uint32_t kAckIpcId = 7777;
-  require(comm->wait_ipc(kServerRank, kAckIpcId),
+  require(comm->wait_ipc(kServerRank, kAckIpcId, kIpcMetadataTimeoutMs),
           "client wait_ipc(ack) should succeed");
   // Publish a completion marker so the server keeps the exchanger process
   // alive until the client has observed the ack.
@@ -184,11 +187,12 @@ int run_ipc_buffer_metadata_client(
 }
 
 int run_ipc_buffer_metadata_server(
-    std::string const& exchanger_ip, int exchanger_port,
+    int gpu, int expected_peer_gpu, std::string const& exchanger_ip,
+    int exchanger_port,
     UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
+  auto comm = make_communicator(gpu, kServerRank, kWorldSize,
                                 exchanger_ip, exchanger_port, preferred);
   require(comm->same_host(kClientRank),
           "ipc-buffer-meta requires same-host peers");
@@ -198,7 +202,7 @@ int run_ipc_buffer_metadata_server(
   auto ipc = comm->get_ipc(kClientRank, kValidIpcId);
   require(ipc.direct_ptr != nullptr,
           "get_ipc should resolve a non-null direct_ptr for valid IPC");
-  require(ipc.device_idx == kClientGpu,
+  require(ipc.device_idx == expected_peer_gpu,
           "get_ipc should preserve remote device index");
   bool out_of_range_ok = (4096 > ipc.bytes || 1 > (ipc.bytes - 4096));
   require(out_of_range_ok, "out-of-range span check should fail");
@@ -220,7 +224,8 @@ int run_ipc_buffer_metadata_server(
   // Wait for client completion marker to avoid tearing down the in-process
   // exchanger before the client has consumed the ack.
   constexpr uint32_t kClientDoneIpcId = 8888;
-  require(comm->wait_ipc(kClientRank, kClientDoneIpcId),
+  require(comm->wait_ipc(kClientRank, kClientDoneIpcId,
+                         kIpcMetadataTimeoutMs),
           "server wait_ipc(done) should succeed");
 
   std::cout << "[SERVER][ipc-buffer-meta] OK" << std::endl;
@@ -275,6 +280,11 @@ int test_transport_communicator(int argc, char** argv) {
   if (exchanger_ip.empty()) {
     exchanger_ip = (role == "server") ? "0.0.0.0" : "127.0.0.1";
   }
+  int default_gpu = (role == "server") ? kDefaultServerGpu : kDefaultClientGpu;
+  int default_peer_gpu =
+      (role == "server") ? kDefaultClientGpu : kDefaultServerGpu;
+  int gpu = get_int_arg(argc, argv, "--gpu", default_gpu);
+  int peer_gpu = get_int_arg(argc, argv, "--peer-gpu", default_peer_gpu);
 
   try {
     UKernel::Transport::PreferredTransport preferred =
@@ -291,19 +301,21 @@ int test_transport_communicator(int argc, char** argv) {
 
     if (test_case == "ipc-buffer-meta") {
       if (role == "server") {
-        return run_ipc_buffer_metadata_server(exchanger_ip, exchanger_port,
-                                              preferred);
+        return run_ipc_buffer_metadata_server(gpu, peer_gpu, exchanger_ip,
+                                              exchanger_port, preferred);
       }
       if (role == "client") {
-        return run_ipc_buffer_metadata_client(exchanger_ip, exchanger_port,
+        return run_ipc_buffer_metadata_client(gpu, exchanger_ip, exchanger_port,
                                               preferred);
       }
     } else if (test_case == "exchange") {
       if (role == "server") {
-        return run_exchange_server(exchanger_ip, exchanger_port, preferred);
+        return run_exchange_server(gpu, exchanger_ip, exchanger_port,
+                                   preferred);
       }
       if (role == "client") {
-        return run_exchange_client(exchanger_ip, exchanger_port, preferred);
+        return run_exchange_client(gpu, exchanger_ip, exchanger_port,
+                                   preferred);
       }
     } else {
       throw std::invalid_argument("unknown transport communicator test case: " +

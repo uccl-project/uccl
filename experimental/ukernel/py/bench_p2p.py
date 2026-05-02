@@ -26,21 +26,20 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     send_buffer_id = 1
     recv_buffer_id = 2
     selected_transport = comm.peer_transport(peer)
-    if not comm.reg_rdma(send_buffer_id, send_buf, publish=True):
+    if not comm.reg_rdma(send_buffer_id, send_buf, publish=False):
         raise RuntimeError("reg_rdma(send) failed")
     if not comm.reg_rdma(recv_buffer_id, recv_buf, publish=True):
         raise RuntimeError("reg_rdma(recv) failed")
     ipc_registered = False
     if selected_transport == "ipc":
-        if not comm.reg_ipc(send_buffer_id, send_buf, publish=True):
-            raise RuntimeError("reg_ipc(send) failed")
         if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
-        if not comm.wait_ipc(peer, send_buffer_id):
-            raise RuntimeError("wait_ipc(peer send buffer) failed")
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
+    elif selected_transport == "uccl":
+        if not comm.wait_mr(peer, recv_buffer_id):
+            raise RuntimeError("wait_mr(peer recv buffer) failed")
 
     # Global synchronization after publishing transport metadata.
     if not comm.barrier("p2p_resource_ready", 30000):
@@ -77,7 +76,6 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     if ipc_registered:
-        comm.unreg_ipc(send_buffer_id)
         comm.unreg_ipc(recv_buffer_id)
     comm.unreg_rdma(send_buffer_id)
     comm.unreg_rdma(recv_buffer_id)

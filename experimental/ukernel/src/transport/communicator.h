@@ -123,6 +123,9 @@ class Communicator {
 
   gpuEvent_t acquire_event();
   void release_event(gpuEvent_t event);
+  std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
+                                     IPCItem const& item,
+                                     gpuError_t err) const;
 
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;
