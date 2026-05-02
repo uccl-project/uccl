@@ -114,6 +114,29 @@ For 2-node x 1-GPU runs, launch rank 0 on `NODE0` and rank 1 on `NODE1` with
 `RANK=0` or `RANK=1`. The first run after a JIT-visible change may spend the
 15-second timeout compiling; rerun with the same `EP_JIT_CACHE_DIR` after warmup.
 
+Use the full-path runner when validating or profiling expanded dispatch, cached
+dispatch, ordinary combine, and reduced combine without enabling
+`EP_TEST_BASIC_ONLY`:
+
+```bash
+timeout 15s $PYTHON_BIN \
+  tests/elastic/run_full_path_bench.py \
+  --transport nogdr \
+  --num-processes=4 \
+  --validate-only --trace-steps
+
+EP_BENCH_NUM_TESTS=1 timeout 15s $PYTHON_BIN \
+  tests/elastic/run_full_path_bench.py \
+  --transport nogdr \
+  --num-processes=4 \
+  --measure-stages=reduced_combine
+```
+
+`--measure-stages` accepts `all` or a comma-separated subset of `dispatch`,
+`expanded_dispatch`, `cached_dispatch`, `combine`, and `reduced_combine`. Stages
+not selected still execute once to preserve the full data path, but their printed
+bandwidth fields are `nan` placeholders.
+
 ## Current UCCL-EP benchmark data
 
 All rows below use DeepEPv2's built-in benchmark with
@@ -188,9 +211,10 @@ reduced combine:
 
 ```bash
 timeout 15s $PYTHON_BIN \
-  tests/elastic/test_ep.py \
+  tests/elastic/run_full_path_bench.py \
+  --transport nogdr \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
-  --test-first-only --skip-check --skip-perf-test
+  --validate-only --trace-steps
 ```
 
 Validated rows:

@@ -412,10 +412,16 @@ combine, and reduced combine:
 
 ```bash
 timeout 15s $PYTHON_BIN \
-  tests/elastic/test_ep.py \
+  tests/elastic/run_full_path_bench.py \
+  --transport nogdr \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
-  --test-first-only --skip-check --skip-perf-test
+  --validate-only --trace-steps
 ```
+
+For profiling under the same full data path, use the same runner with
+`--measure-stages=all` or a comma-separated subset of `dispatch`,
+`expanded_dispatch`, `cached_dispatch`, `combine`, and `reduced_combine`.
+Unselected stages still execute once and print `nan` placeholder bandwidths.
 
 | Topology | GDR | no-GDR |
 | --- | --- | --- |
@@ -447,8 +453,8 @@ completes the first built-in test case, but reduced combine still moves
 expanded-layout data and more host-window traffic than ordinary combine, so it
 is the next performance bottleneck to improve.
 
-- 2n x 4g full-path performance still needs a reliable short benchmark harness;
-  repeated 8-process startup can consume the 15-second wrapper before output.
+- Use `tests/elastic/run_full_path_bench.py --measure-stages=<stage>` for short
+  focused profiling when all-stage 2n x 4g runs approach the 15-second wrapper.
 - Increasing proxy threads from 4 to 8 was previously unstable and should not be
   retried as a simple fix.
 
