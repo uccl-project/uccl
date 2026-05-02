@@ -43,6 +43,52 @@ LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:/home/yangz/nfs/miniconda3/envs/uccl/lib:$
 EP_JIT_CACHE_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/jit-cache
 ```
 
+## Design notes
+
+### Communication window
+
+DeepEP kernels and the UCCL proxy communicate through a shared communication
+workspace. This document calls that workspace a *window*, matching the NCCL
+symmetric-window terminology used by `ncclCommWindowRegister(...)`.
+
+In UCCL proxy mode, the window is the memory region that contains DeepEP
+payload buffers, counters, and completion signals. GPU kernels write commands
+and payload metadata relative to this window; CPU proxy threads interpret those
+addresses and perform same-node memcpy or remote-node RDMA writes.
+
+There are two backing choices:
+
+| Window | Backing memory | Current use |
+| --- | --- | --- |
+| host window | CPU host memory, either `cudaHostAlloc` or POSIX shared memory registered with CUDA | no-GDR runs, and all no-NVLink multi-GPU-per-node UCCL runs |
+| GPU window | `cudaMalloc` GPU memory registered for RDMA, with CUDA IPC available for same-node diagnostics | single-local-rank GDR runs; diagnostic only for multi-local-rank no-NVLink |
+
+### Why multi-local-rank no-NVLink defaults to host window
+
+On L4/PCIe without NVLink, same-node GPU-window traffic is not a reliable fast
+path. Direct GPU-window operation either uses PCIe peer/CUDA IPC behavior for
+same-node peers or GPU RDMA-loopback style access, both of which were slower and
+less robust than CPU proxy memcpy through shared host memory during 1n x 4g,
+2n x 2g, and 2n x 4g validation.
+
+Therefore, when `EP_USE_UCCL_PROXY=1`, `EP_FORCE_NO_NVLINK=1`, and
+`local_world_size > 1`, the runtime chooses a POSIX shared host window even if
+`UCCL_FORCE_NO_GDR=0`. `EP_UCCL_FORCE_GPU_WINDOW=1` only disables that policy for
+diagnostics; it is not a supported benchmark or production path for L4/PCIe
+multi-GPU-per-node runs.
+
+The important code paths are:
+
+- `csrc/elastic/buffer.hpp`: selects `uccl_use_host_window`, allocates the
+  window, and passes its addresses to UCCL proxy threads.
+- `csrc/uccl/include/shared_buffer.hpp`: implements the POSIX shared host
+  window used by local ranks on the same node.
+- `csrc/uccl/src/proxy.cpp`: uses `shared_rdma_base != nullptr` to route
+  same-node `WRITE`, `ATOMIC`, and `PUT_VALUE` commands through host-memory
+  operations instead of RDMA loopback.
+- `csrc/kernels/backend/nccl.cu`: contains the original NCCL symmetric-window
+  registration path, which UCCL proxy mode bypasses for EP payload movement.
+
 ## Main migration changes
 
 ### 1. Imported and adapted the UCCL proxy runtime
