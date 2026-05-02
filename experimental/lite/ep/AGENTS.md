@@ -69,9 +69,9 @@ Notes:
   proxy still handles EP traffic when `EP_USE_UCCL_PROXY=1`.
 - `EP_FORCE_NO_NVLINK=1` preserves the conservative `Ranks: 2 x 1` mode used
   for L4 validation.
-- Do not use `EP_TEST_BASIC_ONLY` for final validation. The full built-in path
-  must include dispatch, expanded dispatch, cached dispatch, combine, and
-  reduced combine.
+- Current scale tables use `EP_TEST_BASIC_ONLY=1` for BF16 dispatch/combine
+  transport validation. Final full-path validation must remove that filter and
+  include expanded dispatch, cached dispatch, and reduced combine.
 
 ## Build and test
 
@@ -100,76 +100,69 @@ For 2-node x 1-GPU runs, launch rank 1 on `l41` and rank 0 on `l40` with
 
 ## Current UCCL-EP benchmark data
 
-Shape: 2 nodes x 1 GPU, L4 GPU3 on each node, BF16
-`128 tok x 7168 hid x top-8 x 64 exp`, `do_handle_copy=1`,
-`expert_alignment=128`, no NVLink, `EP_BENCH_NUM_TESTS=5`, DeepEPv2
+All rows below use DeepEPv2's built-in benchmark with
+`128 tok x 7168 hid x top-8 x 64 exp`, BF16 basic dispatch/combine only:
+`EP_TEST_BASIC_ONLY=1`, `EP_TEST_DO_HANDLE_COPY=0`,
+`EP_TEST_DISABLE_FP8=1`, `EP_FORCE_NO_NVLINK=1`,
 `tests/elastic/test_ep.py --test-first-only --skip-check`.
 
-Cells are `DeepEPv2 SU BW / legacy BW @ latency`. The SU/SO bandwidth is based
-on the bytes that the benchmark attributes to scale-up/scale-out traffic. Legacy
-BW uses the old DeepEP low-latency numerator (`valid_topk * hidden * 2` for
-BF16), so ordinary combine legacy bandwidth is about 4x the attributed SU/SO
-traffic for this shape and must not be read as physical link bandwidth.
+Cells are rank averages in the form `SO/SU GB/s, legacy GB/s @ latency`. SO/SU
+bandwidth uses the bytes that DeepEPv2 attributes to scale-out/scale-up traffic.
+Legacy bandwidth uses the old low-latency numerator, so it is useful for
+comparing runs with the same topology but is not physical link bandwidth.
 
-| Mode | Rank | Dispatch | Expanded dispatch | Cached dispatch | Combine | Reduced combine |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| GDR on | l40/r0 | 6 / 22 GB/s @ 665.775 us | 6 / 23 GB/s @ 647.869 us | 6 / 24 GB/s @ 621.661 us | 8 / 34 GB/s @ 433.005 us | 7 / 7 GB/s @ 2195.000 us |
-| GDR on | l41/r1 | 6 / 23 GB/s @ 640.006 us | 6 / 23 GB/s @ 640.288 us | 6 / 24 GB/s @ 618.087 us | 8 / 34 GB/s @ 431.433 us | 7 / 7 GB/s @ 2193.000 us |
-| no-GDR | l40/r0 | 3 / 12 GB/s @ 1177.000 us | 3 / 12 GB/s @ 1187.000 us | 3 / 13 GB/s @ 1160.000 us | 7 / 30 GB/s @ 495.903 us | 6 / 6 GB/s @ 2494.000 us |
-| no-GDR | l41/r1 | 3 / 12 GB/s @ 1266.000 us | 3 / 12 GB/s @ 1258.000 us | 3 / 12 GB/s @ 1186.000 us | 7 / 29 GB/s @ 505.365 us | 6 / 6 GB/s @ 2498.000 us |
+### 1n x 2g
 
-Interpretation:
+`l40`, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
+`EP_BENCH_NUM_TESTS=5`.
 
-- GDR mode now reaches the expected 20+ GB/s legacy bandwidth for dispatch and
-  ordinary combine on 2n x 1g.
-- no-GDR dispatch, expanded dispatch, and cached dispatch reach 12-13 GB/s
-  legacy bandwidth.
-- UCCL ordinary combine now bypasses the old two-stage forwarding path for 2n x
-  1g single-scaleup runs in both GDR and no-GDR mode. The earlier no-GDR-only
-  `29 GB/s legacy` result was misleading because GDR was still on the old path;
-  with the same direct path, GDR ordinary combine is about `34 GB/s legacy`
-  (`8 GB/s` SU/SO) and no-GDR is about `29-30 GB/s legacy` (`7 GB/s` SU/SO).
-- no-GDR reduced combine also improves, but remains lower at about 6 GB/s legacy
-  bandwidth because it moves much more expanded-layout data.
+| Mode | Dispatch | Combine |
+| --- | ---: | ---: |
+| GDR | 3/3 GB/s, 12.5 GB/s @ 1180 us | 7.5/7.5 GB/s, 30.0 GB/s @ 488 us |
+| no-GDR | 3/3 GB/s, 12.0 GB/s @ 1238 us | 8.0/8.0 GB/s, 30.5 GB/s @ 482 us |
 
-## Additional scale benchmark data
+### 1n x 4g
 
-Same target shape (`128 tok x 7168 hid x top-8 x 64 exp`) and built-in
-`tests/elastic/test_ep.py --test-first-only --skip-check`.
+`l40`, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4`,
+`EP_BENCH_NUM_TESTS=5`.
 
-1 node x 2 GPUs on `l40`, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
-`EP_BENCH_NUM_TESTS=5`:
+| Mode | Dispatch | Combine |
+| --- | ---: | ---: |
+| GDR | 3/3 GB/s, 6.8 GB/s @ 2222 us | 6.3/6.3 GB/s, 14.0 GB/s @ 1031 us |
+| no-GDR | 3/3 GB/s, 7.0 GB/s @ 2084 us | 6.3/6.3 GB/s, 14.3 GB/s @ 1015 us |
 
-| Mode | Rank | Dispatch | Expanded dispatch | Cached dispatch | Combine | Reduced combine |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| GDR on | r0 | 3 / 11 GB/s @ 1306.000 us | 3 / 11 GB/s @ 1312.000 us | 3 / 11 GB/s @ 1304.000 us | 3 / 14 GB/s @ 1064.000 us | 4 / 4 GB/s @ 3598.000 us |
-| GDR on | r1 | 3 / 11 GB/s @ 1308.000 us | 3 / 11 GB/s @ 1352.000 us | 3 / 11 GB/s @ 1314.000 us | 3 / 13 GB/s @ 1101.000 us | 4 / 4 GB/s @ 3653.000 us |
-| no-GDR | r0 | 3 / 12 GB/s @ 1244.000 us | 3 / 12 GB/s @ 1248.000 us | 3 / 12 GB/s @ 1240.000 us | 7 / 29 GB/s @ 501.961 us | 6 / 6 GB/s @ 2507.000 us |
-| no-GDR | r1 | 3 / 11 GB/s @ 1303.000 us | 3 / 11 GB/s @ 1288.000 us | 3 / 12 GB/s @ 1266.000 us | 7 / 27 GB/s @ 538.794 us | 6 / 6 GB/s @ 2555.000 us |
+The 1n x 4g legacy dispatch number is lower than 1n x 2g because top-8 routing
+touches about twice as many scaleout destinations per token when ranks increase
+from 2 to 4. The actual attributed dispatch throughput stays at about 3 GB/s in
+both cases. GDR and no-GDR are intentionally similar here because no-NVLink
+multi-local-rank UCCL runs use the shared host window in both modes. Forcing the
+diagnostic GPU-window path with `EP_UCCL_FORCE_GPU_WINDOW=1` times out for this
+1n x 4g benchmark and remains unsupported as a fast path on L4/PCIe.
 
-1 node x 4 GPUs on `l40`, `CUDA_VISIBLE_DEVICES=0,1,2,3`,
-`--num-processes=4`:
+### 2n x 1g
 
-| Mode | Iterations | Dispatch | Expanded dispatch | Cached dispatch | Combine | Reduced combine |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| GDR on | 1 | 3 / 6 GB/s @ 2268-2360 us | not rerun | not rerun | 6-7 / 12-15 GB/s @ 985-1160 us | basic-only |
-| no-GDR | 1 | 3 / 6 GB/s @ 2262-2431 us | not rerun | not rerun | 6 / 13-14 GB/s @ 1023-1091 us | basic-only |
+`l40` + `l41`, `CUDA_VISIBLE_DEVICES=3`, `--num-processes=1` per node,
+`EP_BENCH_NUM_TESTS=5`.
 
-2 nodes x 4 GPUs (`l40` + `l41`, `CUDA_VISIBLE_DEVICES=0,1,2,3`,
-`--num-processes=4` on each node) now completes the basic built-in
-dispatch/combine benchmark in GDR-enabled UCCL mode. With the no-NVLink
-multi-local-rank default shared host window, representative one-iteration
-results are:
+| Mode | Dispatch | Combine |
+| --- | ---: | ---: |
+| GDR | 6/6 GB/s, 23.0 GB/s @ 646 us | 9/9 GB/s, 35.0 GB/s @ 423 us |
+| no-GDR | 3/3 GB/s, 12.5 GB/s @ 1179 us | 7/7 GB/s, 29.5 GB/s @ 498 us |
 
-| Mode | Dispatch | Combine | Notes |
-| --- | ---: | ---: | --- |
-| GDR-enabled default | 2-3 / 3-4 GB/s @ 4033-4924 us | 5 / 7-8 GB/s @ 1829-1893 us | basic-only, BF16 |
+### 2n x 4g
 
-The previous GPU-window path hung in combine for 2n x 2g and 2n x 4g because
-same-node CUDA IPC signal writes were not a reliable completion path while all
-ranks were inside cooperative kernels. The robust default is now shared host
-window for any no-NVLink multi-GPU node; `EP_UCCL_FORCE_GPU_WINDOW=1` remains a
-diagnostic override.
+`l40` + `l41`, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4` per node,
+`EP_BENCH_NUM_TESTS=1` to stay within the 15-second script timeout.
+
+| Mode | Dispatch | Combine |
+| --- | ---: | ---: |
+| GDR | 2/2 GB/s, 3.1 GB/s @ 4345 us | 5.3/5.3 GB/s, 8.0 GB/s @ 1842 us |
+| no-GDR | 2/2 GB/s, 3.0 GB/s @ 4698 us | 5.0/5.0 GB/s, 7.1 GB/s @ 1950 us |
+
+The previous 2n x 4g blocked case is fixed for this BF16 basic built-in
+benchmark. GDR-enabled runs can still exceed the 15-second wrapper during
+teardown after all ranks print results; use the printed benchmark lines and keep
+the wrapper timeout at 15 seconds.
 
 ## UCCL-EP correctness notes
 
