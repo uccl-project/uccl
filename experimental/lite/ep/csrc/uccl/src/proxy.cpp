@@ -13,6 +13,89 @@
 #include <unistd.h>
 #include <cuda_runtime.h>
 
+namespace {
+
+struct CudaIpcCacheEntry {
+  void* ptr = nullptr;
+  int ref_count = 0;
+};
+
+std::mutex g_cuda_ipc_cache_mutex;
+std::unordered_map<std::string, CudaIpcCacheEntry> g_cuda_ipc_cache;
+
+std::string cuda_ipc_cache_key(int cuda_device,
+                               cudaIpcMemHandle_t const& handle) {
+  std::string key = std::to_string(cuda_device);
+  key.push_back(':');
+  key.append(reinterpret_cast<char const*>(&handle), sizeof(handle));
+  return key;
+}
+
+void* acquire_cuda_ipc_ptr(int cuda_device,
+                           cudaIpcMemHandle_t const& handle,
+                           std::string const& key,
+                           int rank,
+                           int thread_idx,
+                           int peer) {
+  std::lock_guard<std::mutex> lock(g_cuda_ipc_cache_mutex);
+  auto it = g_cuda_ipc_cache.find(key);
+  if (it != g_cuda_ipc_cache.end()) {
+    ++it->second.ref_count;
+    return it->second.ptr;
+  }
+
+  if (cuda_device >= 0) {
+    cudaError_t set_err = cudaSetDevice(cuda_device);
+    if (set_err != cudaSuccess) {
+      fprintf(stderr,
+              "[Proxy] rank=%d thread=%d failed to set CUDA device %d for "
+              "CUDA IPC peer %d: %s\n",
+              rank, thread_idx, cuda_device, peer, cudaGetErrorString(set_err));
+      return nullptr;
+    }
+  }
+
+  void* ipc_ptr = nullptr;
+  cudaError_t err =
+      cudaIpcOpenMemHandle(&ipc_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
+  if (err != cudaSuccess) {
+    if (std::getenv("EP_UCCL_DEBUG")) {
+      fprintf(stderr,
+              "[Proxy] rank=%d thread=%d failed to open CUDA IPC for peer %d: %s\n",
+              rank, thread_idx, peer, cudaGetErrorString(err));
+    }
+    return nullptr;
+  }
+
+  g_cuda_ipc_cache.emplace(key, CudaIpcCacheEntry{ipc_ptr, 1});
+  return ipc_ptr;
+}
+
+void release_cuda_ipc_ptr(int cuda_device, std::string const& key) {
+  std::lock_guard<std::mutex> lock(g_cuda_ipc_cache_mutex);
+  auto it = g_cuda_ipc_cache.find(key);
+  if (it == g_cuda_ipc_cache.end()) return;
+  --it->second.ref_count;
+  if (it->second.ref_count > 0) return;
+
+  if (cuda_device >= 0) {
+    cudaError_t set_err = cudaSetDevice(cuda_device);
+    if (set_err != cudaSuccess) {
+      fprintf(stderr,
+              "[destroy] cudaSetDevice(%d) before CUDA IPC close failed: %s\n",
+              cuda_device, cudaGetErrorString(set_err));
+    }
+  }
+  cudaError_t close_err = cudaIpcCloseMemHandle(it->second.ptr);
+  if (close_err != cudaSuccess) {
+    fprintf(stderr, "[destroy] cudaIpcCloseMemHandle failed: %s\n",
+            cudaGetErrorString(close_err));
+  }
+  g_cuda_ipc_cache.erase(it);
+}
+
+}  // namespace
+
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
   // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
@@ -148,6 +231,8 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
   ctxs_for_all_ranks_.clear();
   ctxs_for_all_ranks_.resize(peers.size());
+  cuda_ipc_peer_ptrs_.assign(peers.size(), nullptr);
+  cuda_ipc_peer_keys_.assign(peers.size(), std::string());
   for (size_t i = 0; i < peers.size(); ++i) {
     ctxs_for_all_ranks_[i] = std::make_unique<ProxyCtx>();
   }
@@ -249,6 +334,11 @@ void Proxy::init_common() {
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
+  auto uses_intranode_transport = [&](int peer) {
+    if (peer == my_rank) return false;
+    if (peers_[peer].ip != peers_[my_rank].ip) return false;
+    return cfg_.shared_rdma_base != nullptr || peers_[peer].has_cuda_ipc;
+  };
 
   uint32_t next_tag = 1;
   ctx_by_tag_.clear();
@@ -279,10 +369,7 @@ void Proxy::init_common() {
     c.atomic_old_values_mr = ctx_.atomic_old_values_mr;
 
     if (peer == my_rank) continue;
-    // Host-window mode uses shared-memory memcpy for intra-node peers. GDR mode
-    // has no shared host window, so same-node peers still need QPs.
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[my_rank].ip) {
+    if (uses_intranode_transport(peer)) {
       continue;
     }
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
@@ -297,8 +384,7 @@ void Proxy::init_common() {
   int num_expected_conns = 0;
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[my_rank].ip) {
+    if (uses_intranode_transport(peer)) {
       continue;
     }
     ++num_expected_conns;
@@ -315,8 +401,7 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[my_rank].ip) {
+    if (uses_intranode_transport(peer)) {
       continue;
     }
     char const* peer_ip = peers_[peer].ip.c_str();
@@ -331,8 +416,7 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[my_rank].ip) {
+    if (uses_intranode_transport(peer)) {
       continue;
     }
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
@@ -348,8 +432,7 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[my_rank].ip) {
+    if (uses_intranode_transport(peer)) {
       continue;
     }
     auto& c = *ctxs_for_all_ranks_[peer];
@@ -468,6 +551,31 @@ void Proxy::init_common() {
 #endif
   }
 
+  if (cfg_.shared_rdma_base == nullptr) {
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank || !peers_[peer].has_cuda_ipc ||
+          peers_[peer].ip != peers_[my_rank].ip) {
+        continue;
+      }
+      std::string key =
+          cuda_ipc_cache_key(cfg_.cuda_device, peers_[peer].cuda_ipc_handle);
+      void* ipc_ptr = acquire_cuda_ipc_ptr(cfg_.cuda_device,
+                                           peers_[peer].cuda_ipc_handle,
+                                           key, cfg_.rank, cfg_.thread_idx,
+                                           peer);
+      if (ipc_ptr != nullptr) {
+        cuda_ipc_peer_ptrs_[peer] = ipc_ptr;
+        cuda_ipc_peer_keys_[peer] = std::move(key);
+      } else {
+        fprintf(stderr,
+                "[Proxy] rank=%d thread=%d could not open required CUDA IPC "
+                "handle for same-node peer %d\n",
+                cfg_.rank, cfg_.thread_idx, peer);
+        std::abort();
+      }
+    }
+  }
+
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
   fifo_pending_.assign(cfg_.d2h_queues.size(),
@@ -537,8 +645,8 @@ void Proxy::run_dual() {
   }
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
-    if (cfg_.shared_rdma_base != nullptr &&
-        peers_[peer].ip == peers_[cfg_.rank].ip) {
+    if (peers_[peer].ip == peers_[cfg_.rank].ip &&
+        (cfg_.shared_rdma_base != nullptr || peers_[peer].has_cuda_ipc)) {
       continue;
     }
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
@@ -943,8 +1051,11 @@ void Proxy::post_gpu_commands_mixed(
   // Intra-node commands (handled via P2P DMA or shared-memory memcpy).
   std::vector<uint64_t> shm_write_wrs, shm_atomic_wrs, shm_put_value_wrs;
   std::vector<TransferCmd> shm_write_cmds, shm_atomic_cmds, shm_put_value_cmds;
+  std::vector<uint64_t> ipc_write_wrs, ipc_put_value_wrs;
+  std::vector<TransferCmd> ipc_write_cmds, ipc_put_value_cmds;
 
   bool const use_intranode = (cfg_.shared_rdma_base != nullptr);
+  bool const use_cuda_ipc = (cfg_.shared_rdma_base == nullptr);
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     auto base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
@@ -960,6 +1071,15 @@ void Proxy::post_gpu_commands_mixed(
       } else if (dst < (int)peers_.size() &&
                  peers_[dst].ip == peers_[cfg_.rank].ip) {
         is_intra = true;
+      }
+    }
+    bool is_cuda_ipc = false;
+    if (use_cuda_ipc && (base_cmd == CmdType::WRITE ||
+                         base_cmd == CmdType::PUT_VALUE)) {
+      int dst = static_cast<int>(cmds_to_post[i].dst_rank);
+      if (dst >= 0 && dst < (int)cuda_ipc_peer_ptrs_.size() &&
+          cuda_ipc_peer_ptrs_[dst] != nullptr) {
+        is_cuda_ipc = true;
       }
     }
 
@@ -1032,6 +1152,9 @@ void Proxy::post_gpu_commands_mixed(
         if (is_intra) {
           shm_write_wrs.push_back(wrs_to_post[i]);
           shm_write_cmds.push_back(cmds_to_post[i]);
+        } else if (is_cuda_ipc) {
+          ipc_write_wrs.push_back(wrs_to_post[i]);
+          ipc_write_cmds.push_back(cmds_to_post[i]);
         } else {
           rdma_wrs.push_back(wrs_to_post[i]);
           rdma_cmds.push_back(cmds_to_post[i]);
@@ -1042,6 +1165,9 @@ void Proxy::post_gpu_commands_mixed(
         if (is_intra) {
           shm_put_value_wrs.push_back(wrs_to_post[i]);
           shm_put_value_cmds.push_back(cmds_to_post[i]);
+        } else if (is_cuda_ipc) {
+          ipc_put_value_wrs.push_back(wrs_to_post[i]);
+          ipc_put_value_cmds.push_back(cmds_to_post[i]);
         } else {
           put_value_wrs.push_back(wrs_to_post[i]);
           put_value_cmds.push_back(cmds_to_post[i]);
@@ -1067,7 +1193,8 @@ void Proxy::post_gpu_commands_mixed(
   }
   if (rdma_wrs.size() + atomic_wrs.size() + put_value_wrs.size() +
           barrier_cmds.size() + quiet_cmds.size() + shm_write_wrs.size() +
-          shm_atomic_wrs.size() + shm_put_value_wrs.size() ==
+          shm_atomic_wrs.size() + shm_put_value_wrs.size() +
+          ipc_write_wrs.size() + ipc_put_value_wrs.size() ==
       0) {
     return;
   }
@@ -1154,6 +1281,76 @@ void Proxy::post_gpu_commands_mixed(
     }
     shm_put_value_wrs.clear();
     shm_put_value_cmds.clear();
+  }
+
+  // --- Intra-node GPU window: CUDA IPC copy for WRITE commands --------------
+  if (!ipc_write_cmds.empty()) {
+    if (!ctx_.copy_stream) {
+      cudaStreamCreateWithFlags(&ctx_.copy_stream, cudaStreamNonBlocking);
+    }
+    bool const is_ll = !cfg_.use_normal_mode;
+    for (size_t i = 0; i < ipc_write_cmds.size(); ++i) {
+      auto const& cmd = ipc_write_cmds[i];
+      int dst_rank = static_cast<int>(cmd.dst_rank);
+      uint64_t loff = decode_write_offset(cmd.req_lptr, is_ll);
+      uint64_t roff = decode_write_offset(cmd.req_rptr, is_ll);
+      void* src = static_cast<uint8_t*>(cfg_.gpu_buffer) + loff;
+      void* dst = static_cast<uint8_t*>(cuda_ipc_peer_ptrs_[dst_rank]) + roff;
+      cudaError_t err = cudaMemcpyAsync(dst, src, cmd.bytes, cudaMemcpyDeviceToDevice,
+                                        ctx_.copy_stream);
+      if (err != cudaSuccess) {
+        fprintf(stderr, "[ERROR] CUDA IPC WRITE failed dst=%d bytes=%u: %s\n",
+                dst_rank, static_cast<unsigned>(cmd.bytes),
+                cudaGetErrorString(err));
+        std::abort();
+      }
+      acked_wrs_.insert(ipc_write_wrs[i]);
+    }
+    cudaError_t err = cudaStreamSynchronize(ctx_.copy_stream);
+    if (err != cudaSuccess) {
+      fprintf(stderr, "[ERROR] CUDA IPC WRITE sync failed: %s\n",
+              cudaGetErrorString(err));
+      std::abort();
+    }
+    ipc_write_wrs.clear();
+    ipc_write_cmds.clear();
+  }
+
+  // --- Intra-node GPU window: CUDA IPC scalar store for PUT_VALUE commands ---
+  if (!ipc_put_value_cmds.empty()) {
+    if (!ctx_.copy_stream) {
+      cudaStreamCreateWithFlags(&ctx_.copy_stream, cudaStreamNonBlocking);
+    }
+    std::vector<uint64_t> values(ipc_put_value_cmds.size());
+    for (size_t i = 0; i < ipc_put_value_cmds.size(); ++i) {
+      auto const& cmd = ipc_put_value_cmds[i];
+      int dst_rank = static_cast<int>(cmd.dst_rank);
+      uint16_t bytes = cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
+      if (bytes > sizeof(uint64_t)) {
+        fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE bytes=%u exceeds 8\n", bytes);
+        std::abort();
+      }
+      values[i] = static_cast<uint64_t>(cmd.bytes_and_val) |
+                  (static_cast<uint64_t>(cmd.req_lptr) << 32);
+      uint64_t roff = decode_write_offset(cmd.req_rptr, false);
+      void* dst = static_cast<uint8_t*>(cuda_ipc_peer_ptrs_[dst_rank]) + roff;
+      cudaError_t err = cudaMemcpyAsync(dst, &values[i], bytes,
+                                        cudaMemcpyHostToDevice, ctx_.copy_stream);
+      if (err != cudaSuccess) {
+        fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE failed dst=%d bytes=%u: %s\n",
+                dst_rank, bytes, cudaGetErrorString(err));
+        std::abort();
+      }
+      acked_wrs_.insert(ipc_put_value_wrs[i]);
+    }
+    cudaError_t err = cudaStreamSynchronize(ctx_.copy_stream);
+    if (err != cudaSuccess) {
+      fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE sync failed: %s\n",
+              cudaGetErrorString(err));
+      std::abort();
+    }
+    ipc_put_value_wrs.clear();
+    ipc_put_value_cmds.clear();
   }
 
   // Handle regular RDMA writes
@@ -1329,6 +1526,14 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
+  if (cfg_.cuda_device >= 0) {
+    cudaError_t cuda_status = cudaSetDevice(cfg_.cuda_device);
+    if (cuda_status != cudaSuccess) {
+      fprintf(stderr, "[destroy] cudaSetDevice(%d) failed: %s\n",
+              cfg_.cuda_device, cudaGetErrorString(cuda_status));
+    }
+  }
+
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
@@ -1372,6 +1577,21 @@ void Proxy::destroy(bool free_gpu_buffer) {
     if (!ctx_ptr) continue;
   }
   if (get_cq(ctx_)) drain_cq(get_cq(ctx_));
+
+  for (size_t i = 0; i < cuda_ipc_peer_ptrs_.size(); ++i) {
+    if (cuda_ipc_peer_ptrs_[i] && i < cuda_ipc_peer_keys_.size() &&
+        !cuda_ipc_peer_keys_[i].empty()) {
+      release_cuda_ipc_ptr(cfg_.cuda_device, cuda_ipc_peer_keys_[i]);
+      cuda_ipc_peer_ptrs_[i] = nullptr;
+      cuda_ipc_peer_keys_[i].clear();
+    }
+  }
+  cuda_ipc_peer_ptrs_.clear();
+  cuda_ipc_peer_keys_.clear();
+  if (ctx_.copy_stream) {
+    cudaStreamDestroy(ctx_.copy_stream);
+    ctx_.copy_stream = nullptr;
+  }
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;

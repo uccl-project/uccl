@@ -10,12 +10,14 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <cuda_runtime.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -30,6 +32,8 @@ struct PeerMeta {
   size_t nbytes;
   std::string ip;
   int listen_ports[kNumProxyThs];
+  bool has_cuda_ipc = false;
+  cudaIpcMemHandle_t cuda_ipc_handle{};
 };
 
 class Proxy {
@@ -44,6 +48,7 @@ class Proxy {
     int rank = 0;
     int node_idx = -1;
     int local_rank = -1;
+    int cuda_device = -1;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
@@ -144,6 +149,8 @@ class Proxy {
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
   void* atomic_buffer_ptr_;
+  std::vector<void*> cuda_ipc_peer_ptrs_;
+  std::vector<std::string> cuda_ipc_peer_keys_;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 

@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -24,7 +25,8 @@
 //   No RDMA NIC involvement for same-node peers.
 struct SharedBuffer {
   void* mmap_ptr = nullptr;        // mmap'd host pointer (full region)
-  void* device_ptr = nullptr;      // cudaHostGetDevicePointer result (full)
+  void* device_ptr = nullptr;      // virtual CUDA base; my slice is device_slice(local_rank)
+  void* registered_host_ptr = nullptr;
   size_t total_size = 0;           // per_rank_size * local_world_size
   size_t per_rank_size = 0;
   int local_rank = -1;
@@ -55,7 +57,8 @@ struct SharedBuffer {
 // Returns a fully initialized SharedBuffer with CUDA registration.
 inline SharedBuffer allocate_shared_buffer(
     const char* tag, size_t per_rank_bytes, int local_rank,
-    int local_world_size, int device_index) {
+    int local_world_size, int device_index,
+    size_t zero_bytes = static_cast<size_t>(-1)) {
   SharedBuffer sb;
   sb.per_rank_size = per_rank_bytes;
   sb.local_rank = local_rank;
@@ -112,30 +115,39 @@ inline SharedBuffer allocate_shared_buffer(
     std::abort();
   }
 
-  // Zero my slice.
-  std::memset(sb.my_host_ptr(), 0, per_rank_bytes);
+  // Zero the caller-requested prefix of my slice. Large data buffers are
+  // overwritten by kernels/proxies and do not need an O(buffer_size) memset.
+  const size_t bytes_to_zero =
+      std::min(per_rank_bytes, zero_bytes == static_cast<size_t>(-1) ? per_rank_bytes : zero_bytes);
+  std::memset(sb.my_host_ptr(), 0, bytes_to_zero);
 
-  // Register the entire region with CUDA for GPU access.
+  // Only this rank's slice is accessed by its GPU kernels. Keep device_ptr as a
+  // virtual full-region base so device_slice(local_rank) preserves the original
+  // full-registration address arithmetic.
   cudaSetDevice(device_index);
-  auto err = cudaHostRegister(sb.mmap_ptr, sb.total_size,
-                               cudaHostRegisterMapped);
+  sb.registered_host_ptr = sb.my_host_ptr();
+  auto err = cudaHostRegister(sb.registered_host_ptr, per_rank_bytes,
+                              cudaHostRegisterMapped);
   if (err != cudaSuccess) {
     fprintf(stderr, "cudaHostRegister failed: %s\n", cudaGetErrorString(err));
     std::abort();
   }
-  err = cudaHostGetDevicePointer(&sb.device_ptr, sb.mmap_ptr, 0);
+  void* my_device_ptr = nullptr;
+  err = cudaHostGetDevicePointer(&my_device_ptr, sb.registered_host_ptr, 0);
   if (err != cudaSuccess) {
     fprintf(stderr, "cudaHostGetDevicePointer failed: %s\n",
             cudaGetErrorString(err));
     std::abort();
   }
+  sb.device_ptr = static_cast<uint8_t*>(my_device_ptr) -
+                  local_rank * sb.per_rank_size;
 
   if (std::getenv("EP_UCCL_DEBUG")) {
     fprintf(stderr,
-            "[SharedBuffer] rank %d: tag=%s total=%.1f MiB per_rank=%.1f MiB "
-            "host=%p dev=%p\n",
-            local_rank, tag, sb.total_size / (1024.0 * 1024.0),
-            per_rank_bytes / (1024.0 * 1024.0), sb.mmap_ptr, sb.device_ptr);
+             "[SharedBuffer] rank %d: tag=%s total=%.1f MiB per_rank=%.1f MiB "
+             "host=%p dev=%p\n",
+             local_rank, tag, sb.total_size / (1024.0 * 1024.0),
+             per_rank_bytes / (1024.0 * 1024.0), sb.mmap_ptr, sb.device_ptr);
   }
 
   return sb;
@@ -143,9 +155,10 @@ inline SharedBuffer allocate_shared_buffer(
 
 inline void free_shared_buffer(SharedBuffer& sb) {
   if (sb.mmap_ptr && sb.mmap_ptr != MAP_FAILED) {
-    cudaHostUnregister(sb.mmap_ptr);
+    if (sb.registered_host_ptr) cudaHostUnregister(sb.registered_host_ptr);
     munmap(sb.mmap_ptr, sb.total_size);
     sb.mmap_ptr = nullptr;
+    sb.registered_host_ptr = nullptr;
   }
   if (sb.fd >= 0) {
     close(sb.fd);

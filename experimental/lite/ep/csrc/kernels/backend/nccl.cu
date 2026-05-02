@@ -70,6 +70,10 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
                                                        const bool& allow_hybrid_mode,
                                                        const int& sl_idx, const int& num_allocated_qps):
     rank_idx(rank_idx), num_ranks(num_ranks), num_allocated_qps(num_allocated_qps) {
+    raw_window_ptr = nullptr;
+    mapped_window_ptr = nullptr;
+    window = {};
+
     if (get_env("EP_BUFFER_DEBUG", 0)) {
         int nccl_version;
         NCCL_CHECK(ncclGetVersion(&nccl_version));
@@ -134,6 +138,14 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
     }
     is_scaleup_nvlink = num_scaleup_ranks == num_nvl_ranks;
 
+    if (use_uccl_proxy) {
+        // UCCL proxy mode only needs NCCL for communicator/device-comm metadata.
+        // EP data movement uses the UCCL workspace, so allocating/registering a
+        // large NCCL symmetric window is pure startup and memory overhead.
+        nvl_window_ptrs.resize(num_nvl_ranks, nullptr);
+        return;
+    }
+
     // Create window
     // NOTES: `ncclCommWindowRegister` is collective: it internally calls bootstrapBarrier
     // across all ranks, so no explicit barrier is needed after this call.
@@ -158,14 +170,17 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
 }
 
 void* NCCLSymmetricMemoryContext::get_sym_ptr(void* ptr, const int& dst_rank_idx) const {
+    EP_HOST_ASSERT(mapped_window_ptr != nullptr and "NCCL window is unavailable in UCCL proxy mode");
     const auto offset = static_cast<uint8_t*>(ptr) - static_cast<uint8_t*>(mapped_window_ptr);
     return static_cast<uint8_t*>(nvl_window_ptrs[dst_rank_idx]) + offset;
 }
 
 void NCCLSymmetricMemoryContext::finalize() const {
-    // Deregister window and free buffer
-    NCCL_CHECK(ncclCommWindowDeregister(comm, window));
-    NCCL_CHECK(ncclMemFree(raw_window_ptr));
+    // Deregister window and free buffer if this context owns an NCCL window.
+    if (raw_window_ptr != nullptr) {
+        NCCL_CHECK(ncclCommWindowDeregister(comm, window));
+        NCCL_CHECK(ncclMemFree(raw_window_ptr));
+    }
 
     // Destroy device communicator
     NCCL_CHECK(ncclDevCommDestroy(comm, &dev_comm));

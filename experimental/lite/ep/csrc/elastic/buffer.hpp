@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <pybind11/functional.h>
+#include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
 #include <deep_ep/common/layout.cuh>
@@ -83,6 +84,16 @@ class ElasticBuffer {
     static constexpr int kNumMaxSMs = 160;
     static constexpr int kNumMaxChannels = kNumMaxChannelsPerSM * kNumMaxSMs;
 
+    static int get_num_buffer_channels(const bool& prefer_overlap_with_compute) {
+        const int max_channels_per_sm = prefer_overlap_with_compute ? kNumMaxChannelsPerSM : 4;
+        return jit::device_runtime->get_num_sms() * max_channels_per_sm;
+    }
+
+    static int get_num_channel_token_slots(const int& num_max_tokens_per_rank,
+                                           const int& max_num_channels) {
+        return max_num_channels * math::ceil_div(num_max_tokens_per_rank, max_num_channels);
+    }
+
     // Some Engram storage settings
     int num_engram_entries = 0, engram_hidden = 0;
     int64_t num_engram_storage_bytes = 0;
@@ -139,12 +150,31 @@ public:
         int device_idx = 0;
         if (request_uccl_proxy) {
             CUDA_RUNTIME_CHECK(cudaGetDevice(&device_idx));
+            // PCIe/no-NVLink local GPU-window traffic is not a useful fast path
+            // for UCCL proxy mode; use the shared host window whenever multiple
+            // ranks share a node, while leaving EP_UCCL_FORCE_GPU_WINDOW for
+            // explicit diagnostics.
+            const bool prefer_shared_host_window =
+                local_world_size > 1 &&
+                get_env<int>("EP_UCCL_FORCE_GPU_WINDOW", 0) == 0;
             uccl_use_host_window =
                 force_no_gdr ||
                 force_host_window ||
-                !can_register_gpu_memory_for_rdma(device_idx, total_window_bytes);
+                prefer_shared_host_window;
+            if (!uccl_use_host_window)
+                uccl_use_host_window = !can_register_gpu_memory_for_rdma(device_idx, total_window_bytes);
             use_uccl_proxy = true;
             setenv("EP_UCCL_PROXY_ACTIVE", "1", 1);
+            if (get_env<int>("EP_UCCL_DEBUG", 0)) {
+                fprintf(stderr,
+                        "[ElasticBuffer][UCCL] rank=%d local=%d/%d window=%s "
+                        "force_no_gdr=%d force_host=%d prefer_shared=%d\n",
+                        rank_idx, local_rank, local_world_size,
+                        uccl_use_host_window ? "host" : "gpu",
+                        static_cast<int>(force_no_gdr),
+                        static_cast<int>(force_host_window),
+                        static_cast<int>(prefer_shared_host_window));
+            }
         } else {
             use_uccl_proxy = false;
             setenv("EP_UCCL_PROXY_ACTIVE", "0", 1);
@@ -174,10 +204,12 @@ public:
                 if (uccl_use_shared_window) {
                     uccl_window = allocate_shared_buffer(
                         ("deepepv2_window_" + this->uccl_shm_id).c_str(),
-                        total_window_bytes, local_rank, local_world_size, device_idx);
+                        total_window_bytes, local_rank, local_world_size, device_idx,
+                        layout::WorkspaceLayout::get_num_bytes());
                     uccl_atomic_window = allocate_shared_buffer(
                         ("deepepv2_atomic_" + this->uccl_shm_id).c_str(),
-                        kAtomicBufferSize, local_rank, local_world_size, device_idx);
+                        kAtomicBufferSize, local_rank, local_world_size, device_idx,
+                        kAtomicBufferSize);
                     workspace = uccl_window.my_device_ptr();
                 } else {
                     CUDA_RUNTIME_CHECK(cudaHostAlloc(&uccl_host_window, total_window_bytes,
@@ -202,19 +234,25 @@ public:
                 reinterpret_cast<uintptr_t>(uccl_window.mmap_ptr) : uintptr_t{0};
             const auto shared_atomic_base = uccl_use_shared_window ?
                 reinterpret_cast<uintptr_t>(uccl_atomic_window.mmap_ptr) : uintptr_t{0};
+            const auto proxy_nbytes = uccl_use_shared_window ?
+                uccl_window.per_rank_size : total_window_bytes;
+            const auto shared_rdma_per_rank = uccl_use_shared_window ?
+                uccl_window.per_rank_size : size_t{0};
+            const auto shared_atomic_per_rank = uccl_use_shared_window ?
+                uccl_atomic_window.per_rank_size : size_t{0};
             uccl_proxies.reserve(kNumProxyThs);
             for (int i = 0; i < kNumProxyThs; ++i) {
                 auto proxy = std::make_unique<UcclProxy>(
                     i,
                     proxy_buffer_addr,
-                    total_window_bytes,
+                    proxy_nbytes,
                     rank_idx, node_idx, local_rank,
                     0, num_ranks, num_nodes,
                     true, false, uccl_use_host_window,
                     shared_rdma_base,
-                    uccl_use_shared_window ? total_window_bytes : 0,
+                    shared_rdma_per_rank,
                     shared_atomic_base,
-                    uccl_use_shared_window ? kAtomicBufferSize : 0,
+                    shared_atomic_per_rank,
                     local_world_size,
                     false);
                 auto addrs = proxy->get_d2h_channel_addrs();
@@ -330,12 +368,18 @@ public:
         return {nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks};
     }
 
-    std::tuple<uint64_t, int64_t, std::vector<int>, std::vector<uint64_t>> get_uccl_local_metadata() const {
+    std::tuple<uint64_t, int64_t, std::vector<int>, std::vector<uint64_t>, pybind11::bytes> get_uccl_local_metadata() const {
         EP_HOST_ASSERT(use_uccl_proxy);
         std::vector<int> ports;
         ports.reserve(uccl_proxies.size());
         for (const auto& proxy: uccl_proxies)
             ports.push_back(proxy->get_listen_port());
+        std::string cuda_ipc_handle_bytes;
+        if (!uccl_use_host_window) {
+            cudaIpcMemHandle_t handle;
+            CUDA_RUNTIME_CHECK(cudaIpcGetMemHandle(&handle, workspace));
+            cuda_ipc_handle_bytes.assign(reinterpret_cast<const char*>(&handle), sizeof(handle));
+        }
         return {
             uccl_use_host_window ?
                 (uccl_use_shared_window ?
@@ -348,15 +392,17 @@ public:
                     static_cast<int64_t>(layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes)) :
                 static_cast<int64_t>(layout::WorkspaceLayout::get_num_bytes() + num_buffer_bytes),
             ports,
-            uccl_d2h_channel_addrs_host
+            uccl_d2h_channel_addrs_host,
+            pybind11::bytes(cuda_ipc_handle_bytes)
         };
     }
 
     void sync_uccl_peers(const std::vector<int>& ranks,
                          const std::vector<uint64_t>& ptrs,
-                         const std::vector<int64_t>& nbytes,
-                         const std::vector<std::string>& ips,
-                         const std::vector<std::vector<int>>& listen_ports) {
+                          const std::vector<int64_t>& nbytes,
+                          const std::vector<std::string>& ips,
+                          const std::vector<std::vector<int>>& listen_ports,
+                          const std::vector<std::string>& cuda_ipc_handles) {
         EP_HOST_ASSERT(use_uccl_proxy);
         EP_HOST_ASSERT(not uccl_proxies_started);
         EP_HOST_ASSERT(ranks.size() == static_cast<size_t>(num_ranks));
@@ -364,6 +410,7 @@ public:
         EP_HOST_ASSERT(nbytes.size() == ranks.size());
         EP_HOST_ASSERT(ips.size() == ranks.size());
         EP_HOST_ASSERT(listen_ports.size() == ranks.size());
+        EP_HOST_ASSERT(cuda_ipc_handles.size() == ranks.size());
 
         std::vector<PeerMeta> peers(num_ranks);
         for (size_t i = 0; i < ranks.size(); ++i) {
@@ -373,6 +420,10 @@ public:
             peer.ptr = static_cast<uintptr_t>(ptrs[i]);
             peer.nbytes = static_cast<size_t>(nbytes[i]);
             peer.ip = ips[i];
+            if (cuda_ipc_handles[i].size() == sizeof(cudaIpcMemHandle_t)) {
+                peer.has_cuda_ipc = true;
+                std::memcpy(&peer.cuda_ipc_handle, cuda_ipc_handles[i].data(), sizeof(cudaIpcMemHandle_t));
+            }
             EP_HOST_ASSERT(listen_ports[i].size() == kNumProxyThs);
             for (int j = 0; j < kNumProxyThs; ++j)
                 peer.listen_ports[j] = listen_ports[i][j];
@@ -758,7 +809,8 @@ public:
                                             const int& hidden, const int& num_sf_packs, const int& num_topk,
                                             const int& elem_size,
                                             const int& num_scaleout_ranks, const int& num_scaleup_ranks,
-                                            const bool& is_scaleup_nvlink) {
+                                            const bool& is_scaleup_nvlink,
+                                            const int& max_num_channels = kNumMaxChannels) {
         const auto num_ranks = num_scaleup_ranks * num_scaleout_ranks;
         const auto token_layout = get_dispatch_token_layout(hidden, elem_size, num_sf_packs, num_topk);
 
@@ -777,7 +829,7 @@ public:
                 token_layout, 1, num_max_tokens_per_rank);
             const auto scaleout_recv_buffer = layout::BufferLayout<false>(
                 token_layout, num_scaleout_ranks,
-                /* kNumChannels * kNumMaxTokensPerChannel */ num_max_tokens_per_rank + kNumMaxChannels);
+                get_num_channel_token_slots(num_max_tokens_per_rank, max_num_channels));
             return scaleup_recv_buffer.get_num_bytes() +
                    scaleout_send_buffer.get_num_bytes() +
                    scaleout_recv_buffer.get_num_bytes();
@@ -785,9 +837,10 @@ public:
     }
 
     static int64_t get_combine_buffer_size(const int& num_max_tokens_per_rank, const int& hidden, const int& num_topk,
-                                           const int& num_scaleout_ranks, const int& num_scaleup_ranks,
-                                           const bool& is_scaleup_nvlink,
-                                           const bool& allow_multiple_reduction) {
+                                            const int& num_scaleout_ranks, const int& num_scaleup_ranks,
+                                            const bool& is_scaleup_nvlink,
+                                            const bool& allow_multiple_reduction,
+                                            const int& max_num_channels = kNumMaxChannels) {
         const auto num_ranks = num_scaleup_ranks * num_scaleout_ranks;
         const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
 
@@ -813,7 +866,8 @@ public:
             const auto scaleout_send_buffer = layout::BufferLayout<false>(
                 token_layout, allow_multiple_reduction ? 1 : num_topk,
                 /* kNumChannels * num_scaleout_ranks * kNumMaxTokensPerChannel */
-                num_scaleout_ranks * (num_max_tokens_per_rank + kNumMaxChannels));
+                num_scaleout_ranks *
+                    get_num_channel_token_slots(num_max_tokens_per_rank, max_num_channels));
             return scaleup_recv_buffer.get_num_bytes() +
                    scaleout_send_buffer.get_num_bytes() +
                    scaleout_recv_buffer.get_num_bytes();
@@ -821,10 +875,11 @@ public:
     }
 
     static int64_t calculate_buffer_size(const int64_t& nccl_comm,
-                                         const int& num_max_tokens_per_rank, const int& hidden,
-                                         int num_topk, const bool& use_fp8_dispatch,
-                                         const bool& allow_hybrid_mode,
-                                         const bool& allow_multiple_reduction) {
+                                          const int& num_max_tokens_per_rank, const int& hidden,
+                                          int num_topk, const bool& use_fp8_dispatch,
+                                          const bool& allow_hybrid_mode,
+                                          const bool& allow_multiple_reduction,
+                                          const bool& prefer_overlap_with_compute) {
         EP_HOST_ASSERT(num_max_tokens_per_rank > 0 and hidden > 0);
 
         // The worst case SF bytes must be less than the main part
@@ -837,6 +892,8 @@ public:
         const auto [num_rdma_ranks, num_nvl_ranks] = nccl::get_physical_domain_size(nccl_comm);
         const auto [num_scaleout_ranks, num_scaleup_ranks] = nccl::get_logical_domain_size(nccl_comm, allow_hybrid_mode);
         const auto is_scaleup_nvlink = num_scaleup_ranks == num_nvl_ranks;
+        const int max_num_channels = num_scaleout_ranks > 1 ?
+            get_num_buffer_channels(prefer_overlap_with_compute) : kNumMaxChannels;
 
         // Dispatch size
         const auto elem_size = use_fp8_dispatch ? sizeof(__nv_fp8_e4m3) : sizeof(nv_bfloat16);
@@ -844,13 +901,13 @@ public:
         const auto num_dispatch_bytes = get_dispatch_buffer_size(
             num_max_tokens_per_rank, hidden, num_sf_packs, num_topk, elem_size,
             num_scaleout_ranks, num_scaleup_ranks,
-            is_scaleup_nvlink);
+            is_scaleup_nvlink, max_num_channels);
 
         // Combine layout
         const auto num_combine_bytes = get_combine_buffer_size(
             num_max_tokens_per_rank, hidden, num_topk,
             num_scaleout_ranks, num_scaleup_ranks,
-            is_scaleup_nvlink, allow_multiple_reduction);
+            is_scaleup_nvlink, allow_multiple_reduction, max_num_channels);
 
         // Return the maximum of those layouts
         return std::max(num_dispatch_bytes, num_combine_bytes);
@@ -1124,10 +1181,12 @@ public:
         }
 
         // Check buffer size
+        const int dispatch_buffer_channels =
+            nccl_context->num_scaleout_ranks > 1 ? num_channels : kNumMaxChannels;
         EP_HOST_ASSERT(get_dispatch_buffer_size(
                        num_max_tokens_per_rank, hidden, num_sf_packs, num_topk, x.element_size(),
                        nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
-                       nccl_context->is_scaleup_nvlink) <= num_buffer_bytes);
+                       nccl_context->is_scaleup_nvlink, dispatch_buffer_channels) <= num_buffer_bytes);
 
         // Ready and clean host workspace for this round
         const auto host_workspace_layout = layout::WorkspaceLayout(
@@ -1410,11 +1469,6 @@ public:
         // All new tensor allocations should happen after this
         const auto compute_stream = stream_control_prologue(previous_event, allocate_on_comm_stream, async_with_compute_stream);
 
-        // Check buffer size
-        EP_HOST_ASSERT(get_combine_buffer_size(num_max_tokens_per_rank, hidden, num_topk,
-                                               nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
-                                               nccl_context->is_scaleup_nvlink, allow_multiple_reduction) <= num_buffer_bytes);
-
         // Optional configs and metadata for hybrid combine
         int num_channels = 1;
         int* token_metadata_at_forward_ptr = nullptr;
@@ -1439,6 +1493,14 @@ public:
             EP_HOST_ASSERT(channel_linked_list->is_cuda() and channel_linked_list->is_contiguous());
             EP_HOST_ASSERT(channel_linked_list->scalar_type() == torch::kInt);
         }
+
+        // Check buffer size
+        const int combine_buffer_channels =
+            nccl_context->num_scaleout_ranks > 1 ? num_channels : kNumMaxChannels;
+        EP_HOST_ASSERT(get_combine_buffer_size(num_max_tokens_per_rank, hidden, num_topk,
+                                               nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                                               nccl_context->is_scaleup_nvlink, allow_multiple_reduction,
+                                               combine_buffer_channels) <= num_buffer_bytes);
 
         // Push data into remote buffers
         // NOTES: we don't use `num_hidden_bytes` due to enable later quantization possibility

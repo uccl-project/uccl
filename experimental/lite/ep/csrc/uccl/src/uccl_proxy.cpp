@@ -57,6 +57,14 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.rank = rank;
   cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
+  int cuda_device = -1;
+  cudaError_t cuda_status = cudaGetDevice(&cuda_device);
+  if (cuda_status != cudaSuccess) {
+    fprintf(stderr, "Failed to get current CUDA device for UCCL proxy: %s\n",
+            cudaGetErrorString(cuda_status));
+    std::abort();
+  }
+  cfg.cuda_device = cuda_device;
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
@@ -196,6 +204,14 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
+    if (proxy_->cfg_.cuda_device >= 0) {
+      cudaError_t cuda_status = cudaSetDevice(proxy_->cfg_.cuda_device);
+      if (cuda_status != cudaSuccess) {
+        fprintf(stderr, "Failed to set CUDA device %d in UCCL proxy thread: %s\n",
+                proxy_->cfg_.cuda_device, cudaGetErrorString(cuda_status));
+        std::abort();
+      }
+    }
     if (is_intranode_ && proxy_->cfg_.shared_rdma_base == nullptr) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
       proxy_->run_local();

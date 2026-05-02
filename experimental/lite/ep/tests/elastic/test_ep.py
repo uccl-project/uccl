@@ -111,12 +111,16 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
 
         # Random data
         # TODO: support top-k groups
+        trace_step(buffer, 'before random x')
         x = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
+        trace_step(buffer, 'after random x')
         x = per_token_cast_to_fp8(x) if use_fp8_dispatch else x
+        trace_step(buffer, 'after optional fp8 cast')
         bias = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') if num_bias == 1 else None
         if num_bias == 2:
             bias = tuple(torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') for _ in range(num_bias))
             assert len(bias) == 2   # To prevent linter warning
+        trace_step(buffer, 'after random bias')
 
         # Test correctness with NCCL reference
         if not args.skip_check:
@@ -530,10 +534,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     rank_idx, num_ranks, group = init_dist(local_rank, num_local_ranks, seed=args.seed)
     def construct_elastic_buffer():
         return deep_ep.ElasticBuffer(group,
-                                     num_max_tokens_per_rank=args.num_tokens, hidden=args.hidden,
-                                     deterministic=args.deterministic,
-                                     allow_hybrid_mode=args.allow_hybrid_mode,
-                                     allow_multiple_reduction=args.allow_multiple_reduction,
+                                      num_max_tokens_per_rank=args.num_tokens, hidden=args.hidden,
+                                      num_topk=args.num_topk,
+                                      deterministic=args.deterministic,
+                                      allow_hybrid_mode=args.allow_hybrid_mode,
+                                      allow_multiple_reduction=args.allow_multiple_reduction,
                                      prefer_overlap_with_compute=bool(args.prefer_overlap_with_compute),
                                      sl_idx=args.sl_idx,
                                      num_allocated_qps=max(args.num_allocated_qps, args.num_qps),

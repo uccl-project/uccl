@@ -109,6 +109,165 @@ hybrid_combine_impl(nv_bfloat16* x,
     constexpr int kNumRegistersForScaleupWarps = 40;
     constexpr int kNumRegistersForForwardWarps = 256 - kNumRegistersForScaleupWarps;
 
+#ifdef EP_USE_UCCL_PROXY
+    if constexpr (kNumScaleupRanks == 1 and not kAllowMultipleReduction) {
+        // With one scaleup rank, the generic scaleup->forward path is a
+        // redundant extra copy. Write directly to the scaleout send/recv buffer
+        // and let the UCCL proxy forward cross-scaleout traffic.
+        if (warp_idx >= kNumScaleupWarps)
+            return;
+
+        const auto channel_idx = sm_idx * kNumChannelsPerSM + warp_idx;
+
+        if constexpr (kAdjustRegisters)
+            ptx::warpgroup_reg_dealloc<kNumRegistersForScaleupWarps>();
+
+        const auto direct_scaleout_send_buffer =
+            scaleout_send_buffer.template get_channel_buffer<kNumScaleoutRanks * kNumMaxTokensPerChannel>(channel_idx);
+
+        constexpr int kMetadataStride = 2 + kNumTopk;
+        int stored_ll_idx = 0;
+        while (true) {
+            int token_idx = lane_idx == 0 ?
+                __ldg(channel_linked_list +
+                      channel_idx * (kNumScaleoutRanks * kNumMaxTokensPerChannel + 1) *
+                      kNumScaleupRanks +
+                      stored_ll_idx * kNumScaleupRanks) : -1;
+            token_idx = ptx::exchange(token_idx, 0);
+            if (token_idx < 0)
+                break;
+
+            const auto src_global_token_idx = __ldg(src_metadata + token_idx * kMetadataStride + 0);
+            const auto src_token_idx = src_global_token_idx % kNumMaxTokensPerRank;
+            const auto src_scaleout_rank_idx = src_global_token_idx / (kNumMaxTokensPerRank * kNumScaleupRanks);
+
+            int stored_topk_slot_idx = -1;
+            if constexpr (kUseExpandedLayout) {
+                if (lane_idx < kNumTopk)
+                    stored_topk_slot_idx = __ldg(src_metadata + token_idx * kMetadataStride + (2 + lane_idx));
+                __syncwarp();
+
+                #pragma unroll
+                for (int k = 0; k < kNumTopk; ++ k) {
+                    const auto slot_idx = ptx::exchange(stored_topk_slot_idx, k);
+                    if (slot_idx < 0)
+                        continue;
+
+                    if (ptx::elect_one_sync()) {
+                        const auto load_ptr = math::advance_ptr(
+                            x, static_cast<int64_t>(slot_idx) * kNumHiddenBytes);
+                        ptx::tma_store_wait();
+                        ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr,
+                                         mbarrier_ptr, kNumHiddenBytes);
+                        ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
+                        ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+
+                        const auto recv_token_buffer =
+                            scaleout_recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx);
+                        const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
+                            recv_token_buffer :
+                            direct_scaleout_send_buffer.get_rank_buffer(k).get_token_buffer(stored_ll_idx);
+                        ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                          token_layout.get_num_bytes<false>());
+                        ptx::tma_store_commit();
+                        ptx::tma_store_wait();
+
+                        if (src_scaleout_rank_idx != scaleout_rank_idx) {
+                            gin.put<ncclTeamTagRail>(
+                                recv_token_buffer.get_base_ptr(),
+                                send_token_buffer.get_base_ptr(),
+                                token_layout.get_num_bytes<false>(),
+                                src_scaleout_rank_idx);
+                        }
+                    }
+                    __syncwarp();
+                }
+            } else {
+                const auto src_rank_topk_idx = __ldg(src_metadata + token_idx * kMetadataStride + 1);
+                const auto src_topk_idx = src_rank_topk_idx % kNumTopk;
+                if (ptx::elect_one_sync()) {
+                    const auto load_ptr = math::advance_ptr(
+                        x, static_cast<int64_t>(token_idx) * kNumHiddenBytes);
+                    ptx::tma_store_wait();
+                    ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr,
+                                     mbarrier_ptr, kNumHiddenBytes);
+                }
+                __syncwarp();
+                if (lane_idx < kNumTopk) {
+                    const float value = topk_weights == nullptr ? 0.0f :
+                        __ldg(topk_weights + (token_idx * kNumTopk + lane_idx));
+                    tma_buffer.get_topk_weights_ptr()[lane_idx] = value;
+                    ptx::tma_store_fence();
+                }
+                __syncwarp();
+
+                if (ptx::elect_one_sync()) {
+                    ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
+                    ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+
+                    const auto recv_buffer_rank_idx =
+                        kUseScaleoutRankLayout ? scaleout_rank_idx : src_topk_idx;
+                    const auto recv_token_buffer =
+                        scaleout_recv_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(src_token_idx);
+                    const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
+                        recv_token_buffer :
+                        direct_scaleout_send_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(stored_ll_idx);
+                    ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                      token_layout.get_num_bytes<false>());
+                    ptx::tma_store_commit();
+                    ptx::tma_store_wait();
+
+                    if (src_scaleout_rank_idx != scaleout_rank_idx) {
+                        gin.put<ncclTeamTagRail>(
+                            recv_token_buffer.get_base_ptr(),
+                            send_token_buffer.get_base_ptr(),
+                            token_layout.get_num_bytes<false>(),
+                            src_scaleout_rank_idx);
+                    }
+                }
+                __syncwarp();
+            }
+
+            ++ stored_ll_idx;
+        }
+
+        EP_STATIC_ASSERT(kNumScaleoutRanks <= 32, "Invalid ranks");
+        if (ptx::elect_one_sync()) {
+            const auto expected_signal = math::pack2<int, int64_t>(1, 0);
+            #pragma unroll
+            for (int rank = 0; rank < kNumScaleoutRanks; ++ rank) {
+                const auto signal_ptr =
+                    workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx);
+                gin.put_value<ncclTeamTagRail>(signal_ptr, expected_signal, rank);
+            }
+        }
+        __syncwarp();
+
+        if (lane_idx < kNumScaleoutRanks) {
+            const auto expected_signal = math::pack2<int, int64_t>(1, 0);
+            const auto wait_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
+            comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
+                const auto signal =
+                    static_cast<int64_t>(uccl::ld_cv_u64(reinterpret_cast<const uint64_t*>(wait_ptr)));
+                if (signal == expected_signal) {
+                    *wait_ptr = 0;
+                    return true;
+                }
+
+                if (is_last_check) {
+                    printf("DeepEP direct combine (scale-out wait all) timeout, scale-out: %d/%d, "
+                           "channel: %d, lane: %d, signal: %lld, expected: %lld\n",
+                           scaleout_rank_idx, kNumScaleoutRanks, channel_idx, lane_idx,
+                           signal, expected_signal);
+                }
+                return false;
+            });
+        }
+        __syncwarp();
+        return;
+    }
+#endif
+
     // Different warp roles
     if (warp_idx < kNumScaleupWarps) {
         const auto channel_idx = sm_idx * kNumChannelsPerSM + warp_idx;

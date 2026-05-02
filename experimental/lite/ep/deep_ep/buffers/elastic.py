@@ -195,7 +195,7 @@ class ElasticBuffer:
             num_bytes = _C.calculate_elastic_buffer_size(
                 self.nccl_comm_handle.get(),
                 num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch,
-                allow_hybrid_mode, allow_multiple_reduction)
+                allow_hybrid_mode, allow_multiple_reduction, prefer_overlap_with_compute)
         if os.environ.get('EP_BUFFER_DEBUG', 0):
             print(f'Initializing EP elastic buffer with {num_bytes} bytes at rank EP {group.rank()}/{group.size()}')
         self.num_bytes = num_bytes
@@ -258,7 +258,7 @@ class ElasticBuffer:
         self.use_uccl_proxy = bool(self.runtime.is_uccl_proxy_active())
 
         if self.use_uccl_proxy:
-            local_ptr, local_nbytes, listen_ports, _ = self.runtime.get_uccl_local_metadata()
+            local_ptr, local_nbytes, listen_ports, _, cuda_ipc_handle = self.runtime.get_uccl_local_metadata()
             local_ip = self._get_uccl_local_ip()
             local_meta = {
                 'rank': self.rank_idx,
@@ -266,6 +266,7 @@ class ElasticBuffer:
                 'nbytes': int(local_nbytes),
                 'ip': local_ip,
                 'listen_ports': list(listen_ports),
+                'cuda_ipc_handle': bytes(cuda_ipc_handle),
             }
             all_meta = [None] * self.num_ranks
             dist.all_gather_object(all_meta, local_meta, group=group)
@@ -275,7 +276,8 @@ class ElasticBuffer:
                 [item['ptr'] for item in all_meta],
                 [item['nbytes'] for item in all_meta],
                 [item['ip'] for item in all_meta],
-                [item['listen_ports'] for item in all_meta])
+                [item['listen_ports'] for item in all_meta],
+                [item['cuda_ipc_handle'] for item in all_meta])
 
         # Logical rank indices
         self.num_scaleout_ranks, self.num_scaleup_ranks = self.get_logical_domain_size()
@@ -346,7 +348,7 @@ class ElasticBuffer:
         return _C.calculate_elastic_buffer_size(
             get_nccl_comm_handle(group).get(),
             num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch,
-            allow_hybrid_mode, allow_multiple_reduction)
+            allow_hybrid_mode, allow_multiple_reduction, True)
 
     @staticmethod
     def get_engram_storage_size_hint(num_entries: int, hidden: int,
