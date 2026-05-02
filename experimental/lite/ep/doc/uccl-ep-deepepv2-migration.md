@@ -10,8 +10,8 @@ NCCL GIN is not used for EP data movement.
 
 Target validation environment:
 
-- 2 nodes x 1 GPU: `l40` rank 0 and `l41` rank 1
-- NVIDIA L4 / `sm_89`, GPU3 on each node
+- 2 nodes x 1 GPU: `NODE0` rank 0 and `NODE1` rank 1
+- NVIDIA L4 / `sm_89`, with the selected local GPU on each node
 - no NVLink: `EP_FORCE_NO_NVLINK=1`
 - DeepEPv2 built-in benchmark:
   `tests/elastic/test_ep.py --test-first-only`
@@ -28,6 +28,7 @@ Two UCCL-EP modes are supported:
 Common runtime environment:
 
 ```bash
+PYTHON_BIN=${PYTHON_BIN:-python}
 EP_USE_UCCL_PROXY=1
 EP_FORCE_NO_NVLINK=1
 NCCL_GIN_TYPE=2
@@ -35,12 +36,13 @@ DISABLE_SM90_FEATURES=1
 EP_SUPPRESS_NCCL_CHECK=1
 EP_TEST_DISABLE_FP8=1
 EP_FORCE_PROCESS_EXIT=1
-UCCL_IB_HCA=mlx5_1
-CUDA_VISIBLE_DEVICES=3
-EP_NCCL_ROOT_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/deps_nccl_2304/nvidia/nccl
-LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/torch-stubs/libtorch_nvshmem.so
-LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:/home/yangz/nfs/miniconda3/envs/uccl/lib:${LD_LIBRARY_PATH:-}
-EP_JIT_CACHE_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/jit-cache
+UCCL_IB_HCA=${UCCL_IB_HCA:-<ib-device>}
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<gpu-list>}
+EP_NCCL_ROOT_DIR=${EP_NCCL_ROOT_DIR:-<local-nccl-root>}
+EP_TORCH_NVSHMEM_STUB=${EP_TORCH_NVSHMEM_STUB:-}
+LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2${EP_TORCH_NVSHMEM_STUB:+:$EP_TORCH_NVSHMEM_STUB}
+LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${CONDA_PREFIX:-<python-env>}/lib:${LD_LIBRARY_PATH:-}
+EP_JIT_CACHE_DIR=${EP_JIT_CACHE_DIR:-<local-jit-cache-dir>}
 ```
 
 ## Design notes
@@ -109,7 +111,7 @@ What changed:
   proxy thread management.
 - Built UCCL proxy sources into the DeepEPv2 Lite extension.
 - Added JIT flags for `EP_USE_UCCL_PROXY` and a transport-version cache key.
-- Current JIT-visible UCCL transport version is `51`.
+- Current JIT-visible UCCL transport version is `52`.
 
 ### 2. Added UCCL proxy activation and metadata exchange to ElasticBuffer
 
@@ -241,9 +243,9 @@ What changed:
 ### 7. Preserved DeepEPv2 built-in benchmark coverage
 
 The migration is validated against DeepEPv2's own test program rather than only
-custom mini-benchmarks. The current scale matrix uses the BF16 basic
-dispatch/combine path for transport validation; full first-test coverage remains
-the next milestone.
+custom mini-benchmarks. The scale matrix still reports the BF16 basic
+dispatch/combine path for transport comparisons, and the full first-test path is
+validated separately for the no-GDR consumer target.
 
 Main files:
 
@@ -256,7 +258,7 @@ What changed:
   iteration control and targeted path filters.
 - Current scale validation uses `EP_TEST_BASIC_ONLY=1`,
   `EP_TEST_DO_HANDLE_COPY=0`, and `EP_TEST_DISABLE_FP8=1`.
-- Final validation should remove the basic-only filter and cover expanded
+- Full first-test validation removes the basic-only filter and covers expanded
   dispatch, cached dispatch, combine, and reduced combine.
 
 ### 8. Optimized UCCL single-scaleup combine
@@ -324,7 +326,7 @@ All current scale data uses the DeepEPv2 built-in benchmark, not custom
 mini-benchmarks:
 
 ```bash
-timeout 15s /home/yangz/nfs/miniconda3/envs/uccl/bin/python \
+timeout 15s $PYTHON_BIN \
   tests/elastic/test_ep.py \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
   --test-first-only --skip-check
@@ -348,7 +350,7 @@ same-topology comparisons but must not be treated as physical link bandwidth.
 
 ### 1n x 2g
 
-Environment: `l40`, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
+Environment: single node, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
 `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -358,7 +360,7 @@ Environment: `l40`, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
 
 ### 1n x 4g
 
-Environment: `l40`, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4`,
+Environment: single node, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4`,
 `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -378,7 +380,7 @@ this 1n x 4g benchmark on L4/PCIe.
 
 ### 2n x 1g
 
-Environment: `l40` + `l41`, `CUDA_VISIBLE_DEVICES=3`, `--num-processes=1` per
+Environment: two nodes, `CUDA_VISIBLE_DEVICES=3`, `--num-processes=1` per
 node, `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -388,7 +390,7 @@ node, `EP_BENCH_NUM_TESTS=5`.
 
 ### 2n x 4g
 
-Environment: `l40` + `l41`, `CUDA_VISIBLE_DEVICES=0,1,2,3`,
+Environment: two nodes, `CUDA_VISIBLE_DEVICES=0,1,2,3`,
 `--num-processes=4` per node, `EP_BENCH_NUM_TESTS=1` to stay within the
 15-second script timeout.
 
@@ -402,16 +404,51 @@ benchmark. GDR-enabled runs can still exceed the 15-second wrapper during
 teardown after all ranks have printed benchmark lines; the printed dispatch and
 combine rows are valid for comparison.
 
+### Full-path validation
+
+Full-path validation removes `EP_TEST_BASIC_ONLY` and runs the first built-in
+case with `do_handle_copy=1`, expanded dispatch, cached dispatch, ordinary
+combine, and reduced combine:
+
+```bash
+timeout 15s $PYTHON_BIN \
+  tests/elastic/test_ep.py \
+  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
+  --test-first-only --skip-check --skip-perf-test
+```
+
+| Topology | GDR | no-GDR |
+| --- | --- | --- |
+| 1n x 2g | pass | pass |
+| 1n x 4g | pass | pass |
+| 2n x 1g | pass | pass |
+| 2n x 4g | startup can exceed 15 s | pass |
+
+The target consumer path is no-GDR. In 2n x 4g no-GDR, all eight ranks reach
+`after reduced combine` within the 15-second wrapper once the UCCL JIT cache is
+warm. 2n x 4g GDR is retained as diagnostics; repeated 8-process GDR startup can
+consume the wrapper before the first test prints.
+
+For the no-GDR target, 1n x 4g full-path performance with `EP_BENCH_NUM_TESTS=1`
+is:
+
+| Stage | Rank-average result |
+| --- | ---: |
+| Dispatch | ~3/3 GB/s SO/SU, ~6 GB/s legacy @ ~2.4 ms |
+| Expanded dispatch | ~3/3 GB/s SO/SU, ~7 GB/s legacy @ ~2.1 ms |
+| Cached dispatch | ~3/3 GB/s SO/SU, ~6 GB/s legacy @ ~2.3 ms |
+| Combine | ~6 GB/s SO/SU, ~14 GB/s legacy @ ~1.0 ms |
+| Reduced combine | ~4 GB/s SO/SU, ~4 GB/s legacy @ ~3.4 ms |
+
 ## Known limitation and next performance work
 
-The four-table matrix above is BF16 basic-only. The remaining work is to remove
-the temporary benchmark filters and make the full first test case complete:
+The four-table matrix above is BF16 basic-only. The full-path no-GDR target now
+completes the first built-in test case, but reduced combine still moves
+expanded-layout data and more host-window traffic than ordinary combine, so it
+is the next performance bottleneck to improve.
 
-- `do_handle_copy=1`, expanded dispatch, cached dispatch, and reduced combine
-  still need full-path validation in UCCL mode.
-- Reduced combine historically moved expanded-layout data and more host-window
-  traffic than ordinary combine, so it is the likely performance bottleneck
-  after correctness is restored.
+- 2n x 4g full-path performance still needs a reliable short benchmark harness;
+  repeated 8-process startup can consume the 15-second wrapper before output.
 - Increasing proxy threads from 4 to 8 was previously unstable and should not be
   retried as a simple fix.
 
@@ -421,7 +458,7 @@ After UCCL transport, JIT-visible headers, or barrier layout changes:
 
 ```bash
 conda activate uccl
-make -j SM=89 PYTHON=/home/yangz/nfs/miniconda3/envs/uccl/bin/python
+make -j SM=89 PYTHON=$PYTHON_BIN
 ```
 
 Then rerun the built-in 2n x 1g benchmark in both modes:

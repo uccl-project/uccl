@@ -8,9 +8,22 @@ compatibility, but NCCL GIN is not the EP data path.
 
 Detailed migration notes are in `doc/uccl-ep-deepepv2-migration.md`.
 
+Primary goal:
+
+- Run Lite-EP, meaning UCCL-EP integrated with DeepEPv2, efficiently on
+  consumer or low-end GPU systems where NVLink and GPUDirect RDMA are not
+  available.
+- Treat no-NVLink/no-GDR as the target path, not a fallback. GDR-enabled runs are
+  useful for comparison and diagnostics, but correctness and performance work
+  should optimize the host-staged UCCL proxy path.
+- Keep inter-node payload movement staged through host memory and same-node
+  no-NVLink multi-GPU traffic on the POSIX shared host window unless a future
+  change proves a robust faster path.
+
 Target environment:
 
-- NVIDIA L4 / `sm_89`
+- Consumer/no-NVLink/no-GDR GPUs first; NVIDIA L4 / `sm_89` is the current
+  validation proxy
 - no NVLink
 - DeepEPv2 dispatch/combine kernels
 - UCCL CPU proxy over ibverbs; same-node peers use host memcpy, remote-node
@@ -22,11 +35,13 @@ Target environment:
 
 ## Runtime modes
 
-Common environment for the current 2-node x 1-GPU L40/L41 setup:
+Common environment template for local validation. Keep site-local absolute paths
+in the shell environment or session notes, not in committed docs.
 
 ```bash
-EP_DIR=/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-upgrade-lite-ep-to-deepepv2/experimental/lite/ep
+EP_DIR=$(pwd)
 PYTHONPATH=$EP_DIR
+PYTHON_BIN=${PYTHON_BIN:-python}
 EP_USE_UCCL_PROXY=1
 EP_FORCE_NO_NVLINK=1
 NCCL_GIN_TYPE=2
@@ -34,12 +49,13 @@ DISABLE_SM90_FEATURES=1
 EP_SUPPRESS_NCCL_CHECK=1
 EP_TEST_DISABLE_FP8=1
 EP_FORCE_PROCESS_EXIT=1
-UCCL_IB_HCA=mlx5_1
-CUDA_VISIBLE_DEVICES=3
-EP_NCCL_ROOT_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/deps_nccl_2304/nvidia/nccl
-LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2:/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/torch-stubs/libtorch_nvshmem.so
-LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:/home/yangz/nfs/miniconda3/envs/uccl/lib:${LD_LIBRARY_PATH:-}
-EP_JIT_CACHE_DIR=/home/yangz/nfs/zhongjie/copilot-deps/deepep-v2/jit-cache
+UCCL_IB_HCA=${UCCL_IB_HCA:-<ib-device>}
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<gpu-list>}
+EP_NCCL_ROOT_DIR=${EP_NCCL_ROOT_DIR:-<local-nccl-root>}
+EP_TORCH_NVSHMEM_STUB=${EP_TORCH_NVSHMEM_STUB:-}
+LD_PRELOAD=$EP_NCCL_ROOT_DIR/lib/libnccl.so.2${EP_TORCH_NVSHMEM_STUB:+:$EP_TORCH_NVSHMEM_STUB}
+LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${CONDA_PREFIX:-<python-env>}/lib:${LD_LIBRARY_PATH:-}
+EP_JIT_CACHE_DIR=${EP_JIT_CACHE_DIR:-<local-jit-cache-dir>}
 ```
 
 GDR-enabled mode:
@@ -70,8 +86,8 @@ Notes:
 - `EP_FORCE_NO_NVLINK=1` preserves the conservative `Ranks: 2 x 1` mode used
   for L4 validation.
 - Current scale tables use `EP_TEST_BASIC_ONLY=1` for BF16 dispatch/combine
-  transport validation. Final full-path validation must remove that filter and
-  include expanded dispatch, cached dispatch, and reduced combine.
+  transport validation. Full first-test validation also runs without that filter
+  and includes expanded dispatch, cached dispatch, and reduced combine.
 
 ## Build and test
 
@@ -79,23 +95,23 @@ Build from this directory:
 
 ```bash
 conda activate uccl
-make -j SM=89 PYTHON=/home/yangz/nfs/miniconda3/envs/uccl/bin/python
+make -j SM=89 PYTHON=$PYTHON_BIN
 ```
 
 Use DeepEPv2's built-in benchmark for the current target shape:
 
 ```bash
 EP_BENCH_NUM_TESTS=5 timeout 15s \
-  /home/yangz/nfs/miniconda3/envs/uccl/bin/python \
+  $PYTHON_BIN \
   tests/elastic/test_ep.py \
   --num-processes 1 \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
   --test-first-only --skip-check --num-gpu-timeout-secs=3
 ```
 
-For 2-node x 1-GPU runs, launch rank 1 on `l41` and rank 0 on `l40` with
+For 2-node x 1-GPU runs, launch rank 0 on `NODE0` and rank 1 on `NODE1` with
 `WORLD_SIZE=2`, `LOCAL_WORLD_SIZE=1`, matching `MASTER_ADDR`/`MASTER_PORT`, and
-`RANK=1` or `RANK=0`. The first run after a JIT-visible change may spend the
+`RANK=0` or `RANK=1`. The first run after a JIT-visible change may spend the
 15-second timeout compiling; rerun with the same `EP_JIT_CACHE_DIR` after warmup.
 
 ## Current UCCL-EP benchmark data
@@ -113,7 +129,7 @@ comparing runs with the same topology but is not physical link bandwidth.
 
 ### 1n x 2g
 
-`l40`, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
+Single node, `CUDA_VISIBLE_DEVICES=0,1`, `--num-processes=2`,
 `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -123,7 +139,7 @@ comparing runs with the same topology but is not physical link bandwidth.
 
 ### 1n x 4g
 
-`l40`, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4`,
+Single node, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4`,
 `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -141,7 +157,7 @@ diagnostic GPU-window path with `EP_UCCL_FORCE_GPU_WINDOW=1` times out for this
 
 ### 2n x 1g
 
-`l40` + `l41`, `CUDA_VISIBLE_DEVICES=3`, `--num-processes=1` per node,
+Two nodes, `CUDA_VISIBLE_DEVICES=3`, `--num-processes=1` per node,
 `EP_BENCH_NUM_TESTS=5`.
 
 | Mode | Dispatch | Combine |
@@ -151,7 +167,7 @@ diagnostic GPU-window path with `EP_UCCL_FORCE_GPU_WINDOW=1` times out for this
 
 ### 2n x 4g
 
-`l40` + `l41`, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4` per node,
+Two nodes, `CUDA_VISIBLE_DEVICES=0,1,2,3`, `--num-processes=4` per node,
 `EP_BENCH_NUM_TESTS=1` to stay within the 15-second script timeout.
 
 | Mode | Dispatch | Combine |
@@ -163,6 +179,43 @@ The previous 2n x 4g blocked case is fixed for this BF16 basic built-in
 benchmark. GDR-enabled runs can still exceed the 15-second wrapper during
 teardown after all ranks print results; use the printed benchmark lines and keep
 the wrapper timeout at 15 seconds.
+
+## Current full-path validation
+
+Full-path validation removes `EP_TEST_BASIC_ONLY` and uses
+`do_handle_copy=1`, expanded dispatch, cached dispatch, ordinary combine, and
+reduced combine:
+
+```bash
+timeout 15s $PYTHON_BIN \
+  tests/elastic/test_ep.py \
+  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
+  --test-first-only --skip-check --skip-perf-test
+```
+
+Validated rows:
+
+| Topology | GDR | no-GDR |
+| --- | --- | --- |
+| 1n x 2g | pass | pass |
+| 1n x 4g | pass | pass |
+| 2n x 1g | pass | pass |
+| 2n x 4g | startup can exceed 15 s | pass |
+
+The target consumer path is the no-GDR column. 2n x 4g no-GDR reaches `after
+reduced combine` on all eight ranks. 2n x 4g GDR is still diagnostic-only for
+this workstream; repeated 8-process startup can consume the 15-second wrapper
+before the first test prints.
+
+Additional no-GDR full-path 1n x 4g data with `EP_BENCH_NUM_TESTS=1`:
+
+| Stage | Rank-average result |
+| --- | ---: |
+| Dispatch | ~3/3 GB/s SO/SU, ~6 GB/s legacy @ ~2.4 ms |
+| Expanded dispatch | ~3/3 GB/s SO/SU, ~7 GB/s legacy @ ~2.1 ms |
+| Cached dispatch | ~3/3 GB/s SO/SU, ~6 GB/s legacy @ ~2.3 ms |
+| Combine | ~6 GB/s SO/SU, ~14 GB/s legacy @ ~1.0 ms |
+| Reduced combine | ~4 GB/s SO/SU, ~4 GB/s legacy @ ~3.4 ms |
 
 ## UCCL-EP correctness notes
 
@@ -196,6 +249,6 @@ the wrapper timeout at 15 seconds.
   shared host windows unless `EP_UCCL_FORCE_GPU_WINDOW=1` is explicitly set.
 - Do not re-enable NVLink/LSA peer bypass, multiple QPs, or multiple-reduction
   combine in this mode without rerunning correctness and performance on
-  l40+l41.
+  the two-node validation setup.
 - Guard SM90-only instructions/features behind `DISABLE_SM90_FEATURES` or
   equivalent architecture checks.
