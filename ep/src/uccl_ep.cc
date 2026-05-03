@@ -1283,22 +1283,46 @@ class Buffer {
     return {event, recv_hook};
   }
 
+  // `low_latency_combine` accepts seven DeepEP-compatible overlap kwargs at
+  // the end of the argument list. They are parsed for API compatibility with
+  // SGLang SBO callers (deepep.py:680-693, which dispatches to different
+  // kwargs dicts on Hopper vs Blackwell paths). Only `overlap=false` is
+  // wired to a kernel path today; `overlap=true` is rejected below until the
+  // comp_signal / src_signals kernel variants land in a follow-up PR.
   std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
-  low_latency_combine(std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
-                      std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
-                      std::uintptr_t topk_weights_ptr,
-                      std::uintptr_t src_info_ptr, int src_info_dim0,
-                      int src_info_dim1, std::uintptr_t layout_range_ptr,
-                      int layout_range_dim0, int layout_range_dim1,
-                      std::uintptr_t combine_wait_recv_cost_stats_ptr,
-                      std::uintptr_t compute_stream_ptr,
-                      int num_max_dispatch_tokens_per_rank, int num_experts,
-                      bool use_logfmt, bool zero_copy, bool async,
-                      bool return_recv_hook, std::uintptr_t out_ptr) {
+  low_latency_combine(
+      std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
+      std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
+      std::uintptr_t topk_weights_ptr, std::uintptr_t src_info_ptr,
+      int src_info_dim0, int src_info_dim1, std::uintptr_t layout_range_ptr,
+      int layout_range_dim0, int layout_range_dim1,
+      std::uintptr_t combine_wait_recv_cost_stats_ptr,
+      std::uintptr_t compute_stream_ptr, int num_max_dispatch_tokens_per_rank,
+      int num_experts, bool use_logfmt, bool zero_copy, bool async,
+      bool return_recv_hook, std::uintptr_t out_ptr, bool overlap = false,
+      std::uintptr_t packed_recv_count_ptr = 0,
+      std::uintptr_t comp_signal_ptr = 0, int block_m = 64, int threshold = 0,
+      int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
+      int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
     EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
     EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
     EP_HOST_ASSERT(out_ptr != 0);
+    if (overlap) {
+      throw std::runtime_error(
+          "low_latency_combine(overlap=true) is not implemented yet. "
+          "Overlap kernel support (comp_signal / src_signals) will land in a "
+          "follow-up PR; this release only accepts the parameters for API "
+          "compatibility with DeepEP and SGLang SBO callers.");
+    }
+    // Silence unused-variable warnings for stub parameters.
+    (void)packed_recv_count_ptr;
+    (void)comp_signal_ptr;
+    (void)block_m;
+    (void)threshold;
+    (void)num_sms;
+    (void)src_signals_ptr;
+    (void)src_signal_expect_value;
 
     auto num_local_experts = num_experts / num_ranks;
     EP_HOST_ASSERT(x_dim0 == num_local_experts);
@@ -2141,7 +2165,13 @@ NB_MODULE(ep, m) {
            nb::arg("num_max_dispatch_tokens_per_rank") = 0,
            nb::arg("num_experts") = 1, nb::arg("use_logfmt") = false,
            nb::arg("zero_copy") = false, nb::arg("is_async") = false,
-           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"));
+           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"),
+           // DeepEP-compatible overlap kwargs (stub).
+           nb::arg("overlap") = false, nb::arg("packed_recv_count_ptr") = 0,
+           nb::arg("comp_signal_ptr") = 0, nb::arg("block_m") = 64,
+           nb::arg("threshold") = 0, nb::arg("num_sms") = 0,
+           nb::arg("src_signals_ptr") = 0,
+           nb::arg("src_signal_expect_value") = 0);
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,

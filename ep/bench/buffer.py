@@ -436,6 +436,21 @@ class Buffer:
         return_recv_hook: bool = False,
         out: Optional[torch.Tensor] = None,
         combine_wait_recv_cost_stats: Optional[torch.Tensor] = None,
+        # DeepEP-compatible overlap kwargs (accepted but not yet implemented).
+        # Present so SGLang SBO callers (deepep.py:680-693 on both Hopper and
+        # Blackwell paths) can pass them without TypeError. Enabling overlap
+        # requires the kernel changes landing in a follow-up PR; until then
+        # overlap=True raises NotImplementedError.
+        overlap: bool = False,
+        # Hopper-path overlap kwargs (comp_signal protocol).
+        packed_recv_count: Optional[torch.Tensor] = None,
+        comp_signal: Optional[torch.Tensor] = None,
+        block_m: int = 64,
+        threshold: int = 0,
+        num_sms: int = 0,
+        # Blackwell-path overlap kwargs (src_signals protocol).
+        src_signals: Optional[torch.Tensor] = None,
+        src_signal_expect_value: int = 0,
     ) -> Tuple[torch.Tensor, EventOverlap, Callable]:
         """
         A low-latency implementation for combining tokens (reduce **with weights**) with IBGDA.
@@ -464,12 +479,25 @@ class Buffer:
             combine_wait_recv_cost_stats: a cumulative time spent waiting to receive each token tensor for statistics,
                 which should have shape `[num_ranks, num_ranks]` and be typed as `torch.int64`.
                 This is useful for detecting and pre-cisely localizing slow anomalies.
+            overlap: if True, fuse combine with the downstream GEMM via a release/acquire signal handshake.
+                Accepted for API compatibility with DeepEP upstream and SGLang SBO callers, but not yet
+                implemented; setting True raises NotImplementedError. The associated kwargs below
+                (`packed_recv_count`, `comp_signal`, `block_m`, `threshold`, `num_sms` for Hopper;
+                `src_signals`, `src_signal_expect_value` for Blackwell) are parsed but only validated
+                once overlap kernel support lands in a follow-up PR.
 
         Returns:
             combined_x: the reduced token tensor, with shape `[num_combined_tokens, hidden]` and type `torch.bfloat16`.
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        if overlap:
+            raise NotImplementedError(
+                "low_latency_combine(overlap=True) is not implemented yet. "
+                "The overlap/comp_signal/src_signals kwargs are accepted for API compatibility "
+                "with DeepEP and SGLang SBO callers; enabling the overlap kernel path requires "
+                "changes to internode_ll::combine() that will land in a follow-up PR."
+            )
         (
             src_info,
             layout_range,
