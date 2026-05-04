@@ -88,23 +88,8 @@ above and CLI:
 Cells are rank averages, format `SO/SU GB/s, legacy GB/s @ latency`. SO/SU
 uses bytes DeepEPv2 attributes to scale-out/scale-up. Legacy uses the
 historical low-latency numerator and is comparable only between rows of the
-same topology.
-
-| Topology | Mode | Dispatch | Combine |
-| --- | --- | ---: | ---: |
-| 1n × 2g (`N=5`) | GDR    | 3/3, 13 GB/s @ 1141 µs | 8/8, 31 GB/s @  478 µs |
-| 1n × 2g (`N=5`) | no-GDR | 3/3, 13 GB/s @ 1136 µs | 8/8, 30 GB/s @  481 µs |
-| 1n × 4g (`N=5`) | GDR    | 3/3,  6 GB/s @ 2245 µs | 6/6, 13 GB/s @ 1119 µs |
-| 1n × 4g (`N=5`) | no-GDR | 3/3,  7 GB/s @ 2142 µs | 6/6, 13 GB/s @ 1122 µs |
-| 2n × 1g (`N=5`) | GDR    | 5/5, 18 GB/s @  816 µs | 6/6, 22 GB/s @  653 µs |
-| 2n × 1g (`N=5`) | no-GDR | 3/3, 11 GB/s @ 1328 µs | 5/5, 20 GB/s @  730 µs |
-| 2n × 4g (`N=3`) | GDR    | 2/2,  2 GB/s @ 4400 µs | 5/5,  5 GB/s @ 2080 µs |
-| 2n × 4g (`N=3`) | no-GDR | 2/2,  2 GB/s @ 4200 µs | 4/4,  4 GB/s @ 2700 µs |
-
-After the SM89 warp-cooperative TMA fallback fix (commits `38093df5`,
-`2f958b9b`, `44d1b976`) the same shapes measure (`N=1`, `--test-first-only`,
-single bench iteration so latency is the per-call cost, not warmed steady
-state):
+same topology. Numbers below are from `N=1` with `--test-first-only`, so
+latency is the per-call cost (not warmed steady state).
 
 | Topology | Mode | Dispatch | Combine | Reduced combine |
 | --- | --- | ---: | ---: | ---: |
@@ -117,24 +102,13 @@ state):
 | 2n × 4g | GDR    | 3/3 GB/s @ 3174 µs | 9/8 GB/s @ 1176 µs | 10/10 GB/s @ 1486 µs |
 | 2n × 4g | no-GDR | 3/3 GB/s @ 3174 µs | 9/9 GB/s @ 1144 µs | 10/10 GB/s @ 1421 µs |
 
-Latency improvements (no-GDR; GDR matches no-GDR for intra-node and
-slightly better for 2n × 1g):
-
-* 1n × 2g dispatch: 1141 → 619 µs (~1.85x)
-* 1n × 4g dispatch: 2245 → 862 µs (~2.6x)
-* 2n × 1g combine: 653 → 244 µs (~2.7x)
-* 2n × 4g dispatch: 4400 → 3174 µs (~1.4x)
-* 2n × 4g combine: 2080 → 1144 µs (~1.8x)
-* 2n × 4g reduced combine: 4764 → 1421 µs (~3.4x)
-
-The intra-kernel "copy GB/s" / "reduce GB/s" numbers reported by the
-benchmark went from ~36 GB/s pre-fix to ~1100 GB/s post-fix — but those
-high numbers reflect L2-cache-resident data movement (L40 has 96 MB L2
-vs ~1.8 MB working set, and the dispatch/combine kernel just wrote the
-buffer), not GDDR or PCIe bandwidth. The takeaway is that the
-post-epilogue copy is no longer a bottleneck (~6 µs vs ~200 µs pre-fix);
-the ~30x speedup ratio is meaningful, the absolute 1.1 TB/s figure
-should not be quoted as a sustained throughput.
+These reflect the SM89 warp-cooperative TMA fallback fix (commits
+`38093df5`, `2f958b9b`, `44d1b976`); see the corresponding entry under
+"Open issues" for context. The intra-kernel "copy GB/s" / "reduce GB/s"
+numbers reported by the benchmark are L2-cache-resident (L40 has 96 MB
+L2 vs ~1.8 MB working set, and the dispatch/combine kernel just wrote
+the buffer), not GDDR or PCIe bandwidth, so they should not be quoted
+as a sustained throughput.
 
 Notes:
 
