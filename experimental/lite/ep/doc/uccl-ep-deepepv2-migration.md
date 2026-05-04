@@ -161,8 +161,23 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
     tie-breaker (verified with `EP_UCCL_DEBUG=1`)
   - Larger token counts (`--num-tokens=1024`): bandwidth doubles to
     ~4 GB/s, confirming per-message overhead is the bottleneck
+  - **All-RDMA baseline** (intra-node also via NIC loopback): tried via
+    a temporary `EP_UCCL_FORCE_ALL_RDMA=1` toggle that disables the shared
+    host window so same-node peers also get an RDMA QP. 2n × 4g result:
+    dispatch **1 GB/s @ ~13 ms (3× slower)**, combine 1 GB/s @ ~11 ms.
+    Two reasons it loses to the SHM path: (a) NIC loopback adds two
+    PCIe root-complex hops vs a single host memcpy; (b) intra-node
+    traffic now competes for NIC WR-rate budget with cross-node
+    traffic, amplifying the existing per-WR bottleneck. DeepEP hybrid-ep
+    PCIe kernel uses 1D RDMA loopback successfully because it bundles
+    many tokens per WR; lite-ep's one-token-per-WR pattern can't amortize
+    the loopback cost.
   Real fix would require coalescing per-token WRITEs into per-peer
   bulk WRITEs inside `hybrid_dispatch.cuh` (kernel-level change).
+  Multi-SGE coalescing in the proxy was attempted but does not help: the
+  `scaleout_recv_buffer` layout interleaves slots by (channel, slot, rank)
+  so consecutive cmds to the same destination land 48 token-widths apart
+  in the remote address space — never contiguous, never SGE-mergeable.
 
 ## Validation checklist
 
