@@ -98,8 +98,8 @@ same topology.
 | 1n × 4g (`N=5`) | no-GDR | 3/3,  7 GB/s @ 2142 µs | 6/6, 13 GB/s @ 1122 µs |
 | 2n × 1g (`N=5`) | GDR    | 5/5, 18 GB/s @  816 µs | 6/6, 22 GB/s @  653 µs |
 | 2n × 1g (`N=5`) | no-GDR | 3/3, 11 GB/s @ 1328 µs | 5/5, 20 GB/s @  730 µs |
-| 2n × 4g (`N=1`) | GDR    | 1/1,  2 GB/s @ 8465 µs | 2/2,  3 GB/s @ 5353 µs |
-| 2n × 4g (`N=1`) | no-GDR | 1/1,  2 GB/s @ 8910 µs | 2/2,  3 GB/s @ 5624 µs |
+| 2n × 4g (`N=3`) | GDR    | 2/2,  2 GB/s @ 4400 µs | 5/5,  5 GB/s @ 2080 µs |
+| 2n × 4g (`N=3`) | no-GDR | 2/2,  2 GB/s @ 4200 µs | 4/4,  4 GB/s @ 2700 µs |
 
 Notes:
 
@@ -109,10 +109,10 @@ Notes:
   SO/SU stays at ~3 GB/s; the path is doing more real work at the same rate.
 - 1n × 4g GDR ≈ no-GDR because both use the shared host window for
   no-NVLink multi-local ranks.
-- 2n × 4g uses `--num-bench-tests=1` to keep the benchmark inside the default
-  GPU-side timeout (100 s). The first cross-rank put on a cold UCCL
-  connection can take several seconds; if you set `--num-gpu-timeout-secs`
-  manually, keep it at the default (100 s) or higher for cold-start runs.
+- 2n × 4g uses `NCCL_IB_HCA=mlx5_0,mlx5_1` (both NICs) via the default in
+  `run_multinode.sh`. The remaining bottleneck at ~4 ms is proxy CPU overhead,
+  not NIC bandwidth; each node has 2 × 400 Gb/s NDR NICs well in excess of
+  what 4 proxy threads saturate.
 
 ## Full-path validation
 
@@ -143,6 +143,10 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
   subsequent runs.
 - Increasing UCCL proxy threads from 4 to 8 was previously unstable; do not
   retry as a simple fix.
+- 2n × 4g dispatch latency (~4 ms) is dominated by proxy CPU processing
+  overhead; the 2 × 400 Gb/s NICs are not the bottleneck. Per-GPU NIC
+  pinning (GPU 0,1 → mlx5_0; GPU 2,3 → mlx5_1) could reduce contention on
+  the proxy thread fan-out but has not been benchmarked.
 
 ## Validation checklist
 
