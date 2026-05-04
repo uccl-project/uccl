@@ -106,7 +106,7 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       msg_info "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
     fi
-  elif [[ "$TARGET" == roc[67] ]] && command -v amd-smi &>/dev/null; then
+  elif [[ ( "$TARGET" == roc[67] || "$TARGET" == "therock" ) ]] && command -v amd-smi &>/dev/null; then
     # Check if jq is installed, install via pip if not
     if ! command -v jq &>/dev/null; then
       msg_info "jq not found, installing via pip..."
@@ -390,6 +390,7 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
   for env_var in TARGET PY_VER ARCH ROCM_IDX_URL IS_EFA WHEEL_DIR BUILD_TYPE \
     USE_DIETGPU USE_INTEL_RDMA_NIC PER_EXPERT_BATCHING MAKE_NORMAL_MODE \
     TORCH_CUDA_ARCH_LIST HOST_GLIBC_VER UCCL_RETAG_TO_HOST_GLIBC \
+    PYTORCH_ROCM_ARCH \
     UCCL_LOCAL_VERSION; do
     value="${!env_var-}"
     CONTAINER_RUN_ARGS+=(--env "$env_var=$value")
@@ -422,6 +423,7 @@ else
     -e USE_DIETGPU="${USE_DIETGPU:-0}" \
     -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
     -e PER_EXPERT_BATCHING="${PER_EXPERT_BATCHING:-0}" \
+    -e PYTORCH_ROCM_ARCH="${PYTORCH_ROCM_ARCH:-}" \
     -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
     -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
     -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \

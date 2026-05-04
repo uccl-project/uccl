@@ -142,10 +142,27 @@ static inline uint32_t get_max_inflight_normal() {
   return val;
 }
 
+// On AMD CDNA, vanilla __ATOMIC_RELEASE/__ATOMIC_ACQUIRE system-scope atomics
+// do NOT emit the `s_waitcnt vmcnt(0)` needed to drain prior vector-memory
+// writes before the producer's tail-pointer store becomes visible to peer
+// GPUs over XGMI. The "aggressive" variant inserts that waitcnt and uses a
+// relaxed-sys load/store, which is what is actually needed for the intranode
+// dispatch/combine ring buffers to work reliably. Without this, the combine
+// receiver eventually deadlocks because later tail updates (e.g.
+// final_tail=115) never propagate past an early value (e.g. shared_tail=24),
+// even though the sender provably finished writing.
+//
+// setup.py injects -DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1 for ROCm builds so
+// the default is "on" there; CUDA builds keep the historical default of 0.
+#ifndef UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC
+#define UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC 0
+#endif
+
 static inline bool get_aggressive_atomic_enabled() {
   static uint32_t val = []() -> uint32_t {
     char const* env = getenv("UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC");
-    return env ? static_cast<uint32_t>(atoi(env)) : 0;
+    return env ? static_cast<uint32_t>(atoi(env))
+               : static_cast<uint32_t>(UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC);
   }();
   return val != 0;
 }

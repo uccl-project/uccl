@@ -199,15 +199,29 @@ build_ep() {
   if [[ "$TARGET" == "roc6" ]]; then
     echo "ERROR: EP requires roc7 (ROCm 7) for HIP code transformation; roc6 is not supported." >&2
     exit 1
-  elif [[ "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* ]]; then
+  elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* || "$TARGET" == "therock" ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
-    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
+    extra_env=()
+    if [[ "$TARGET" == "therock" ]]; then
+      # On TheRock, ROCm comes from a pip-installed rocm-sdk wheel; expose its
+      # root to ep/setup.py via HIP_HOME/ROCM_HOME so hipcc can find headers
+      # and libraries. The IBGDA (GPU-driven RDMA) code path in
+      # ep/src/internode_ll.cu is already gated by __HIP_PLATFORM_AMD__ guards,
+      # so no extra flag is needed to keep the AMD build clean.
+      ROCM_ROOT="$(rocm-sdk path --root)"
+      extra_env+=(
+        "HIP_HOME=${ROCM_ROOT}"
+        "ROCM_HOME=${ROCM_ROOT}"
+        "ROCM_PATH=${ROCM_ROOT}"
+      )
+    fi
+    env "${extra_env[@]}" \
+      USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} \
+      python3 setup.py build
     cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
+    echo "[container] Copying EP .so to uccl/"
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
   fi
@@ -241,12 +255,18 @@ build_ukernel() {
 
 if [[ "$TARGET" == "therock" ]]; then
   PY_V=$(echo ${PY_VER} | tr -d .)
+
   export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
 
   python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
   pip3 install --no-cache-dir --upgrade pip
-  pip3 install --no-cache-dir build auditwheel pybind11 nanobind
-  pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
+  # setuptools: ep/setup.py's first line is `import setuptools`. venv-created
+  #   Python no longer ships setuptools by default since 3.12.
+  # torch: ep/setup.py uses torch.utils.cpp_extension.CUDAExtension to drive
+  #   the HIP build. Install the ROCm-flavored torch from the same index as
+  #   the rocm-sdk wheels so torch.version.hip is set correctly.
+  pip3 install --no-cache-dir build auditwheel pybind11 nanobind setuptools
+  pip3 install --no-cache-dir rocm[libraries,devel] torch --index-url ${ROCM_IDX_URL}
 fi
 
 if [[ "$TARGET" == roc[67] ]]; then
