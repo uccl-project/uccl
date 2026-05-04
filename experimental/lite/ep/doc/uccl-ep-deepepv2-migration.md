@@ -80,7 +80,7 @@ All numbers are from DeepEPv2's built-in benchmark with the validation shape
 above and CLI:
 
 ```
---test-first-only --skip-check --num-gpu-timeout-secs=3 \
+--test-first-only --skip-check \
 --do-handle-copy-modes=0 --expert-alignment-modes=128 \
 --fp8-dispatch-modes=0 --num-bench-tests=<N>
 ```
@@ -92,14 +92,14 @@ same topology.
 
 | Topology | Mode | Dispatch | Combine |
 | --- | --- | ---: | ---: |
-| 1n × 2g (`N=5`) | GDR    | 3/3, 13 GB/s @ 1144 µs | 8/8, 31 GB/s @ 472 µs |
-| 1n × 2g (`N=5`) | no-GDR | 3/3, 12 GB/s @ 1210 µs | 7/7, 29 GB/s @ 507 µs |
-| 1n × 4g (`N=5`) | GDR    | 3/3,  6 GB/s @ 2344 µs | 6/6, 13 GB/s @ 1085 µs |
-| 1n × 4g (`N=5`) | no-GDR | 3/3,  6 GB/s @ 2218 µs | 6/6, 14 GB/s @ 1050 µs |
-| 2n × 1g (`N=5`) | GDR    | 5/5, 22 GB/s @  678 µs | 8/8, 33 GB/s @ 444 µs |
-| 2n × 1g (`N=5`) | no-GDR | 3/3, 13 GB/s @ 1158 µs | 7/7, 28 GB/s @ 528 µs |
-| 2n × 4g (`N=1`) | GDR    | fail (CUDA launch error during dispatch) | — |
-| 2n × 4g (`N=1`) | no-GDR | fail (Gin barrier timeout during dispatch) | — |
+| 1n × 2g (`N=5`) | GDR    | 3/3, 13 GB/s @ 1141 µs | 8/8, 31 GB/s @  478 µs |
+| 1n × 2g (`N=5`) | no-GDR | 3/3, 13 GB/s @ 1136 µs | 8/8, 30 GB/s @  481 µs |
+| 1n × 4g (`N=5`) | GDR    | 3/3,  6 GB/s @ 2245 µs | 6/6, 13 GB/s @ 1119 µs |
+| 1n × 4g (`N=5`) | no-GDR | 3/3,  7 GB/s @ 2142 µs | 6/6, 13 GB/s @ 1122 µs |
+| 2n × 1g (`N=5`) | GDR    | 5/5, 18 GB/s @  816 µs | 6/6, 22 GB/s @  653 µs |
+| 2n × 1g (`N=5`) | no-GDR | 3/3, 11 GB/s @ 1328 µs | 5/5, 20 GB/s @  730 µs |
+| 2n × 4g (`N=1`) | GDR    | 1/1,  2 GB/s @ 8465 µs | 2/2,  3 GB/s @ 5353 µs |
+| 2n × 4g (`N=1`) | no-GDR | 1/1,  2 GB/s @ 8910 µs | 2/2,  3 GB/s @ 5624 µs |
 
 Notes:
 
@@ -109,9 +109,10 @@ Notes:
   SO/SU stays at ~3 GB/s; the path is doing more real work at the same rate.
 - 1n × 4g GDR ≈ no-GDR because both use the shared host window for
   no-NVLink multi-local ranks.
-- 2n × 4g currently fails during dispatch on this branch on L4. no-GDR hits
-  a Gin barrier timeout (`tag=6/8`); GDR hits `CUDA_ERROR_LAUNCH_FAILED`.
-  This is a regression from earlier numbers and is the next item to debug.
+- 2n × 4g uses `--num-bench-tests=1` to keep the benchmark inside the default
+  GPU-side timeout (100 s). The first cross-rank put on a cold UCCL
+  connection can take several seconds; if you set `--num-gpu-timeout-secs`
+  manually, keep it at the default (100 s) or higher for cold-start runs.
 
 ## Full-path validation
 
@@ -120,7 +121,7 @@ expanded dispatch, cached dispatch, ordinary combine, and reduced combine
 with `do_handle_copy=1`:
 
 ```bash
-timeout 15s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
+timeout 120s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
   --transport nogdr \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
   --validate-only --trace-steps
@@ -132,13 +133,14 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
 
 ## Open issues
 
-- **2n × 4g failure** (above) — the basic benchmark previously ran with
-  `--num-bench-tests=1` on this topology. Current branch fails at dispatch in
-  both GDR and no-GDR modes; needs investigation before reporting numbers.
 - **Reduced combine** still moves expanded-layout data and more host-window
   traffic than ordinary combine, so it is the per-stage performance
   bottleneck on no-GDR. Use
   `run_full_path_bench.py --measure-stages=reduced_combine` for focused work.
+- The first put_value on a cold UCCL connection (especially across nodes)
+  can take a few seconds; keep `--num-gpu-timeout-secs` at the default
+  (100 s) for cold-start runs and rely on `EP_JIT_CACHE_DIR` reuse for
+  subsequent runs.
 - Increasing UCCL proxy threads from 4 to 8 was previously unstable; do not
   retry as a simple fix.
 

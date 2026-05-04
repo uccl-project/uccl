@@ -64,10 +64,10 @@ make -j SM=89 PYTHON=$PYTHON_BIN
 Built-in benchmark for the validation shape:
 
 ```bash
-timeout 15s $PYTHON_BIN tests/elastic/test_ep.py \
+timeout 120s $PYTHON_BIN tests/elastic/test_ep.py \
   --num-processes 2 \
   --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 \
-  --test-first-only --skip-check --num-gpu-timeout-secs=3 \
+  --test-first-only --skip-check \
   --do-handle-copy-modes=0 --expert-alignment-modes=128 \
   --fp8-dispatch-modes=0 --num-bench-tests=5
 ```
@@ -75,16 +75,18 @@ timeout 15s $PYTHON_BIN tests/elastic/test_ep.py \
 For 2-node × 1-GPU runs, set `WORLD_SIZE=2`, `LOCAL_WORLD_SIZE=1`, matching
 `MASTER_ADDR`/`MASTER_PORT`, and `RANK=0` / `RANK=1` on the two nodes. The
 first run after a JIT-visible change can spend the timeout compiling; rerun
-with the same `EP_JIT_CACHE_DIR` after warmup. `run_multinode.sh` wraps this
-launch pattern.
+with the same `EP_JIT_CACHE_DIR` after warmup. The first put on a cold UCCL
+connection (especially across nodes) can take a few seconds, so keep the
+default `--num-gpu-timeout-secs=100`. `run_multinode.sh` wraps this launch
+pattern.
 
 Full-path validation and per-stage profiling:
 
 ```bash
-timeout 15s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
+timeout 120s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
   --transport nogdr --num-processes=4 --validate-only --trace-steps
 
-timeout 15s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
+timeout 120s $PYTHON_BIN tests/elastic/run_full_path_bench.py \
   --transport nogdr --num-processes=4 \
   --measure-stages=reduced_combine --num-bench-tests=1
 ```
