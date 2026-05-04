@@ -145,11 +145,24 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
   subsequent runs.
 - Increasing UCCL proxy threads from 4 to 8 was previously unstable; do not
   retry as a simple fix.
-- 2n × 4g dispatch latency (~4 ms) is dominated by proxy CPU processing
-  overhead; the 2 × 400 Gb/s NICs are not the bottleneck. Per-GPU NIC
-  pinning is already automatic via UCCL's PCIe-distance + NUMA tie-breaker
-  logic (GPU 0,1 → mlx5_0; GPU 2,3 → mlx5_1), so no additional pinning
-  knob is needed.
+- 2n × 4g dispatch latency (~4 ms) is dominated by per-WR overhead, not
+  NIC bandwidth. Profiling (`EP_PROXY_STATS=1`) showed each rank emits
+  ~250K RDMA WRITEs averaging **14 KB each — exactly one BF16 token of
+  shape `(7168,)`**. DeepEPv2's hybrid-dispatch kernel issues one
+  `WRITE` per token per remote destination, plus ~1.8× as many 8-byte
+  `PUT_VALUE` signals. With 4 cross-node peers × 8 channels per thread,
+  the WR rate per NIC (~2-3M WR/s) is far below NDR's ~50M WR/s ceiling,
+  but per-WR proxy CPU overhead and synchronization across many peers
+  caps aggregate throughput. Things checked that did **not** help:
+  - `UCCL_IB_MAX_INFLIGHT_NORMAL` (8 → 16, 64, 256): no change
+  - `EP_UCCL_FORCE_GPU_WINDOW=1` (skip host-staging): crashes with
+    `CUDA IPC PUT_VALUE failed` on no-NVLink PCIe-only systems
+  - Per-GPU NIC pinning: already automatic via PCIe-distance + NUMA
+    tie-breaker (verified with `EP_UCCL_DEBUG=1`)
+  - Larger token counts (`--num-tokens=1024`): bandwidth doubles to
+    ~4 GB/s, confirming per-message overhead is the bottleneck
+  Real fix would require coalescing per-token WRITEs into per-peer
+  bulk WRITEs inside `hybrid_dispatch.cuh` (kernel-level change).
 
 ## Validation checklist
 
