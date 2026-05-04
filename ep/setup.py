@@ -299,10 +299,10 @@ if __name__ == "__main__":
                     " (perhaps inside a container)"
                 )
 
-        # Fallback: gfx942 (MI300X). Was 'gfx420' upstream which is a typo for
-        # gfx942 and not a real arch — anyone hitting that fallback got an
-        # unloadable binary.
-        device_arch = env_arch or detected_amd_arch or "gfx942"
+        # Fallback: gfx94x — the generic CDNA3/CDNA4 family target that
+        # covers both gfx942 (MI300X) and gfx950 (MI355X) on a sufficiently
+        # recent ROCm/LLVM.
+        device_arch = env_arch or detected_amd_arch or "gfx94x"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
@@ -325,9 +325,7 @@ if __name__ == "__main__":
         # When ROCm comes from pip wheels (rocm-sdk), there is no /opt/rocm.
         # Honor explicit HIP_HOME first, else query rocm-sdk, else /opt/rocm.
         rocm_home = (
-            os.getenv("HIP_HOME")
-            or os.getenv("ROCM_HOME")
-            or os.getenv("ROCM_PATH")
+            os.getenv("HIP_HOME") or os.getenv("ROCM_HOME") or os.getenv("ROCM_PATH")
         )
         if not rocm_home:
             try:

@@ -264,12 +264,6 @@ build_ukernel() {
 if [[ "$TARGET" == "therock" ]]; then
   PY_V=$(echo ${PY_VER} | tr -d .)
 
-  # NOTE: System packages required to build EP (rdma-core-devel, libnl3-devel,
-  # numactl-devel) are installed at image-build time in
-  # docker/Dockerfile.therock. We can't install them here at runtime because
-  # build.sh launches the container as the host user (--user $(id -u):$(id -g))
-  # and dnf needs root.
-
   export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
 
   python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
