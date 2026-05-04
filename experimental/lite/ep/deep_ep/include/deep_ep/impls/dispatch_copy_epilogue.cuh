@@ -85,13 +85,12 @@ dispatch_copy_epilogue_impl(void* buffer, void* workspace,
         ptx::tma_store_wait();
         __syncwarp();
 
-        // Issue TMA loads
+        // Issue TMA loads (warp-cooperative on SM89)
         // Including all stuffs: data, SF, top-k metadata
-        if (ptx::elect_one_sync()) {
-            ptx::tma_load_1d(tma_buffer.get_base_ptr(), buffer_token.get_base_ptr(),
-                             mbarrier_ptr, tma_buffer.get_num_bytes<false>());
+        ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), buffer_token.get_base_ptr(),
+                              mbarrier_ptr, tma_buffer.get_num_bytes<false>(), lane_idx);
+        if (ptx::elect_one_sync())
             ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, tma_buffer.get_num_bytes<false>());
-        }
         __syncwarp();
 
         // Load target expert indices separately to tolerate TMA load latency
@@ -132,12 +131,31 @@ dispatch_copy_epilogue_impl(void* buffer, void* workspace,
         }
 
         // Issue TMA stores for data
+        // SM90: each lane with a valid `dst_tensor_idx` independently issues a bulk
+        // store. SM89: serialize matches via ballot+shfl so each store is still
+        // warp-cooperative.
+#ifndef DISABLE_SM90_FEATURES
         if (kDoExpand ? (dst_tensor_idx >= 0) : ptx::elect_one_sync()) {
             ptx::tma_store_1d(math::advance_ptr(recv_x, static_cast<int64_t>(dst_tensor_idx) * kNumHiddenBytes),
                               tma_buffer.get_hidden_ptr(), kNumHiddenBytes);
             ptx::tma_store_commit();
         }
         __syncwarp();
+#else
+        {
+            auto active_mask = __ballot_sync(0xffffffffu, dst_tensor_idx >= 0);
+            while (active_mask != 0) {
+                const int src_lane = __ffs(active_mask) - 1;
+                const int b_dst_tensor_idx = __shfl_sync(0xffffffffu, dst_tensor_idx, src_lane);
+                ptx::tma_store_1d_warp(
+                    math::advance_ptr(recv_x, static_cast<int64_t>(b_dst_tensor_idx) * kNumHiddenBytes),
+                    tma_buffer.get_hidden_ptr(), kNumHiddenBytes, lane_idx);
+                active_mask &= ~(1u << src_lane);
+            }
+            ptx::tma_store_commit();
+            __syncwarp();
+        }
+#endif
 
         // Store SF
         if constexpr (kNumSFPacks > 0) {

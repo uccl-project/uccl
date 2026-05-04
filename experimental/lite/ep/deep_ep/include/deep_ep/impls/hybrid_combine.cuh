@@ -153,46 +153,54 @@ hybrid_combine_impl(nv_bfloat16* x,
                     if (slot_idx < 0)
                         continue;
 
+                    // All values used below are warp-uniform (slot_idx is a shfl
+                    // broadcast; src_*, scaleout_rank_idx, stored_ll_idx are all
+                    // computed warp-uniformly in the enclosing scope).
+                    const auto load_ptr = math::advance_ptr(
+                        x, static_cast<int64_t>(slot_idx) * kNumHiddenBytes);
+                    const auto recv_token_buffer =
+                        scaleout_recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx);
+                    const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
+                        recv_token_buffer :
+                        direct_scaleout_send_buffer.get_rank_buffer(k).get_token_buffer(stored_ll_idx);
+
+                    // Wait + load (warp-cooperative on SM89)
+                    ptx::tma_store_wait();
+                    __syncwarp();
+                    ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), load_ptr,
+                                          mbarrier_ptr, kNumHiddenBytes, lane_idx);
                     if (ptx::elect_one_sync()) {
-                        const auto load_ptr = math::advance_ptr(
-                            x, static_cast<int64_t>(slot_idx) * kNumHiddenBytes);
-                        ptx::tma_store_wait();
-                        ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr,
-                                         mbarrier_ptr, kNumHiddenBytes);
                         ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                         ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                    }
+                    __syncwarp();
 
-                        const auto recv_token_buffer =
-                            scaleout_recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx);
-                        const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
-                            recv_token_buffer :
-                            direct_scaleout_send_buffer.get_rank_buffer(k).get_token_buffer(stored_ll_idx);
-                        ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
-                                          token_layout.get_num_bytes<false>());
-                        ptx::tma_store_commit();
-                        ptx::tma_store_wait();
+                    // Store (warp-cooperative on SM89)
+                    ptx::tma_store_1d_warp(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                           token_layout.get_num_bytes<false>(), lane_idx);
+                    ptx::tma_store_commit();
+                    ptx::tma_store_wait();
+                    __syncwarp();
 
-                        if (src_scaleout_rank_idx != scaleout_rank_idx) {
-                            gin.put<ncclTeamTagRail>(
-                                recv_token_buffer.get_base_ptr(),
-                                send_token_buffer.get_base_ptr(),
-                                token_layout.get_num_bytes<false>(),
-                                src_scaleout_rank_idx);
-                        }
+                    // Issue IBGDA from the elected lane only
+                    if (src_scaleout_rank_idx != scaleout_rank_idx and ptx::elect_one_sync()) {
+                        gin.put<ncclTeamTagRail>(
+                            recv_token_buffer.get_base_ptr(),
+                            send_token_buffer.get_base_ptr(),
+                            token_layout.get_num_bytes<false>(),
+                            src_scaleout_rank_idx);
                     }
                     __syncwarp();
                 }
             } else {
                 const auto src_rank_topk_idx = __ldg(src_metadata + token_idx * kMetadataStride + 1);
                 const auto src_topk_idx = src_rank_topk_idx % kNumTopk;
-                if (ptx::elect_one_sync()) {
-                    const auto load_ptr = math::advance_ptr(
-                        x, static_cast<int64_t>(token_idx) * kNumHiddenBytes);
-                    ptx::tma_store_wait();
-                    ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr,
-                                     mbarrier_ptr, kNumHiddenBytes);
-                }
+                const auto load_ptr = math::advance_ptr(
+                    x, static_cast<int64_t>(token_idx) * kNumHiddenBytes);
+                ptx::tma_store_wait();
                 __syncwarp();
+                ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), load_ptr,
+                                      mbarrier_ptr, kNumHiddenBytes, lane_idx);
                 if (lane_idx < kNumTopk) {
                     const float value = topk_weights == nullptr ? 0.0f :
                         __ldg(topk_weights + (token_idx * kNumTopk + lane_idx));
@@ -201,29 +209,32 @@ hybrid_combine_impl(nv_bfloat16* x,
                 }
                 __syncwarp();
 
+                // Wait TMA arrival, then issue store
                 if (ptx::elect_one_sync()) {
                     ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                     ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                }
+                __syncwarp();
 
-                    const auto recv_buffer_rank_idx =
-                        kUseScaleoutRankLayout ? scaleout_rank_idx : src_topk_idx;
-                    const auto recv_token_buffer =
-                        scaleout_recv_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(src_token_idx);
-                    const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
-                        recv_token_buffer :
-                        direct_scaleout_send_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(stored_ll_idx);
-                    ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
-                                      token_layout.get_num_bytes<false>());
-                    ptx::tma_store_commit();
-                    ptx::tma_store_wait();
+                const auto recv_buffer_rank_idx =
+                    kUseScaleoutRankLayout ? scaleout_rank_idx : src_topk_idx;
+                const auto recv_token_buffer =
+                    scaleout_recv_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(src_token_idx);
+                const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
+                    recv_token_buffer :
+                    direct_scaleout_send_buffer.get_rank_buffer(recv_buffer_rank_idx).get_token_buffer(stored_ll_idx);
+                ptx::tma_store_1d_warp(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                       token_layout.get_num_bytes<false>(), lane_idx);
+                ptx::tma_store_commit();
+                ptx::tma_store_wait();
+                __syncwarp();
 
-                    if (src_scaleout_rank_idx != scaleout_rank_idx) {
-                        gin.put<ncclTeamTagRail>(
-                            recv_token_buffer.get_base_ptr(),
-                            send_token_buffer.get_base_ptr(),
-                            token_layout.get_num_bytes<false>(),
-                            src_scaleout_rank_idx);
-                    }
+                if (src_scaleout_rank_idx != scaleout_rank_idx and ptx::elect_one_sync()) {
+                    gin.put<ncclTeamTagRail>(
+                        recv_token_buffer.get_base_ptr(),
+                        send_token_buffer.get_base_ptr(),
+                        token_layout.get_num_bytes<false>(),
+                        src_scaleout_rank_idx);
                 }
                 __syncwarp();
             }
@@ -403,14 +414,13 @@ hybrid_combine_impl(nv_bfloat16* x,
                     if constexpr (kUseExpandedLayout)
                         token_idx_in_tensor = ptx::exchange(stored_topk_slot_idx, ptx::get_master_lane_idx(reduce_valid_mask));
 
-                    // Directly load
-                    if (ptx::elect_one_sync()) {
-                        const auto load_ptr =
-                            math::advance_ptr(x, static_cast<int64_t>(token_idx_in_tensor) * kNumHiddenBytes);
-                        ptx::tma_store_wait();
-                        ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr, mbarrier_ptr, kNumHiddenBytes);
-                    }
+                    // Directly load (warp-cooperative on SM89)
+                    const auto load_ptr =
+                        math::advance_ptr(x, static_cast<int64_t>(token_idx_in_tensor) * kNumHiddenBytes);
+                    ptx::tma_store_wait();
                     __syncwarp();
+                    ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), load_ptr,
+                                          mbarrier_ptr, kNumHiddenBytes, lane_idx);
                 } else if constexpr (kAllowMultipleReduction) {
                     // Do local reduction
                     // Sort valid top-k indices to front
@@ -445,24 +455,27 @@ hybrid_combine_impl(nv_bfloat16* x,
                         if (topk_slot_idx < 0)
                             continue;
 
+                        // Load (warp-cooperative on SM89)
+                        const auto load_ptr = math::advance_ptr(x, static_cast<int64_t>(kDoExpandedSend ? topk_slot_idx : token_idx) * kNumHiddenBytes);
+                        ptx::tma_store_wait();
+                        __syncwarp();
+                        ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), load_ptr,
+                                              mbarrier_ptr, kNumHiddenBytes, lane_idx);
                         if (ptx::elect_one_sync()) {
-                            // Load
-                            const auto load_ptr = math::advance_ptr(x, static_cast<int64_t>(kDoExpandedSend ? topk_slot_idx : token_idx) * kNumHiddenBytes);
-                            ptx::tma_store_wait();
-                            ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr, mbarrier_ptr, kNumHiddenBytes);
                             ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                             ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-                            // NOTES: We don't need to care about `topk_weights` since we are in expand mode
-
-                            // Store
-                            const auto dst_token_buffer = scaleup_buffer
-                                .get_rank_buffer(k)
-                                .get_token_buffer(src_scaleout_rank_idx * kNumMaxTokensPerRank + src_token_idx);
-                            ptx::tma_store_1d(
-                                gin.get_sym_ptr<ncclTeamTagLsa>(dst_token_buffer.get_base_ptr(), dst_scaleup_rank_idx),
-                                tma_buffer.get_base_ptr(), token_layout.get_num_bytes<false>());
-                            ptx::tma_store_commit();
                         }
+                        __syncwarp();
+                        // NOTES: We don't need to care about `topk_weights` since we are in expand mode
+
+                        // Store (warp-cooperative on SM89)
+                        const auto dst_token_buffer = scaleup_buffer
+                            .get_rank_buffer(k)
+                            .get_token_buffer(src_scaleout_rank_idx * kNumMaxTokensPerRank + src_token_idx);
+                        ptx::tma_store_1d_warp(
+                            gin.get_sym_ptr<ncclTeamTagLsa>(dst_token_buffer.get_base_ptr(), dst_scaleup_rank_idx),
+                            tma_buffer.get_base_ptr(), token_layout.get_num_bytes<false>(), lane_idx);
+                        ptx::tma_store_commit();
                         __syncwarp();
                     }
                 }
@@ -477,17 +490,18 @@ hybrid_combine_impl(nv_bfloat16* x,
 
                 // Issue TMA stores into remote scale-up buffer
                 // NOTES: `kDoExpandedSend` mode has already issued
-                if (not kDoExpandedSend and ptx::elect_one_sync()) {
+                if constexpr (not kDoExpandedSend) {
                     // Wait TMA arrival (only for non-reduced cases)
-                    if (no_local_reduce) {
+                    if (no_local_reduce and ptx::elect_one_sync()) {
                         ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                         ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
                     }
+                    __syncwarp();
 
-                    // Issue stores
-                    ptx::tma_store_1d(
+                    // Issue stores (warp-cooperative on SM89)
+                    ptx::tma_store_1d_warp(
                         token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
-                        token_layout.get_num_bytes<false>());
+                        token_layout.get_num_bytes<false>(), lane_idx);
                     ptx::tma_store_commit();
                 }
                 #pragma unroll
@@ -617,41 +631,44 @@ hybrid_combine_impl(nv_bfloat16* x,
                 auto topk_valid_mask = kUseExpandedLayout ?
                     ptx::gather(stored_src_scaleup_rank_idx >= 0) :
                     ptx::gather(ptx::deduplicate(stored_src_scaleup_rank_idx, lane_idx) and stored_src_scaleup_rank_idx >= 0);  // Deduplicate w.r.t. scaleup rank index if expanded mode is disabled
-                if (ptx::elect_one_sync()) {
-                    #pragma unroll
-                    for (int k = 0; k < kNumTopk; ++ k) {
-                        if ((topk_valid_mask & (1u << k)) == 0u)
-                            continue;
+                #pragma unroll
+                for (int k = 0; k < kNumTopk; ++ k) {
+                    if ((topk_valid_mask & (1u << k)) == 0u)
+                        continue;
 
-                        // Issue TMA load, and wait
-                        ptx::tma_load_1d(
-                            tma_buffer.get_base_ptr(), scaleup_buffer.get_rank_buffer(k).get_token_buffer(src_slot_idx).get_base_ptr(),
-                            mbarrier_ptr, token_layout.get_num_bytes<false>());
+                    // Issue TMA load (warp-cooperative on SM89), and wait
+                    ptx::tma_load_1d_warp(
+                        tma_buffer.get_base_ptr(), scaleup_buffer.get_rank_buffer(k).get_token_buffer(src_slot_idx).get_base_ptr(),
+                        mbarrier_ptr, token_layout.get_num_bytes<false>(), lane_idx);
+                    if (ptx::elect_one_sync()) {
                         ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, token_layout.get_num_bytes<false>());
                         ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-
-                        // Issue TMA store, and wait
-                        const auto recv_buffer_ptr = scaleout_recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx).get_base_ptr();
-                        const auto send_buffer_ptr = src_scaleout_rank_idx == scaleout_rank_idx ?
-                            recv_buffer_ptr : scaleout_send_buffer.get_rank_buffer(k).get_token_buffer(i).get_base_ptr();
-                        ptx::tma_store_1d(send_buffer_ptr, tma_buffer.get_base_ptr(), token_layout.get_num_bytes<false>());
-                        ptx::tma_store_commit();
-                        ptx::tma_store_wait();
-
-                        // Issue IBGDA
-                        topk_valid_mask ^= 1u << k;
-                        if (src_scaleout_rank_idx != scaleout_rank_idx) {
-                            gin.put<ncclTeamTagRail>(
-                                recv_buffer_ptr,
-                                send_buffer_ptr,
-                                token_layout.get_num_bytes<false>(),
-                                src_scaleout_rank_idx,
-                                topk_valid_mask == 0 and is_token_last_in_chunk ? 0 : ncclGinOptFlagsAggregateRequests
-                            );
-                        }
                     }
+                    __syncwarp();
+
+                    // Issue TMA store (warp-cooperative on SM89), and wait
+                    const auto recv_buffer_ptr = scaleout_recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx).get_base_ptr();
+                    const auto send_buffer_ptr = src_scaleout_rank_idx == scaleout_rank_idx ?
+                        recv_buffer_ptr : scaleout_send_buffer.get_rank_buffer(k).get_token_buffer(i).get_base_ptr();
+                    ptx::tma_store_1d_warp(send_buffer_ptr, tma_buffer.get_base_ptr(),
+                                           token_layout.get_num_bytes<false>(), lane_idx);
+                    ptx::tma_store_commit();
+                    ptx::tma_store_wait();
+                    __syncwarp();
+
+                    // Issue IBGDA from the elected lane only
+                    topk_valid_mask ^= 1u << k;
+                    if (src_scaleout_rank_idx != scaleout_rank_idx and ptx::elect_one_sync()) {
+                        gin.put<ncclTeamTagRail>(
+                            recv_buffer_ptr,
+                            send_buffer_ptr,
+                            token_layout.get_num_bytes<false>(),
+                            src_scaleout_rank_idx,
+                            topk_valid_mask == 0 and is_token_last_in_chunk ? 0 : ncclGinOptFlagsAggregateRequests
+                        );
+                    }
+                    __syncwarp();
                 }
-                __syncwarp();
             } else {
                 // NOTES: we must do deduplicate and only add once from one rank
                 auto reduce_valid_mask = ptx::gather(
@@ -716,11 +733,10 @@ hybrid_combine_impl(nv_bfloat16* x,
                     scaleout_send_buffer.get_token_buffer(i);
 
                 // Write into scale-out send buffer or local rank recv buffer bypass
-                if (ptx::elect_one_sync()) {
-                    ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
-                                    token_layout.get_num_bytes<false>());
-                    ptx::tma_store_commit();
-                }
+                // (warp-cooperative on SM89)
+                ptx::tma_store_1d_warp(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                       token_layout.get_num_bytes<false>(), lane_idx);
+                ptx::tma_store_commit();
                 __syncwarp();
 
                 // Record RDMA info to issue later

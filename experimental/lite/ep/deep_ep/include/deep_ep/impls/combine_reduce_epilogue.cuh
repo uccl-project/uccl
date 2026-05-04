@@ -118,13 +118,10 @@ combine_reduce_epilogue_impl(nv_bfloat16* combined_x,
         ptx::tma_store_fence();
         __syncwarp();
 
-        // Issue TMA copy
-        if (ptx::elect_one_sync()) {
-            ptx::tma_store_1d(output_buffer.get_token_buffer(token_idx).get_base_ptr(),
-                              tma_buffer.get_base_ptr(), kNumHiddenBytes);
-            ptx::tma_store_commit();
-        }
-        __syncwarp();
+        // Issue TMA copy (warp-cooperative on SM89)
+        ptx::tma_store_1d_warp(output_buffer.get_token_buffer(token_idx).get_base_ptr(),
+                               tma_buffer.get_base_ptr(), kNumHiddenBytes, lane_idx);
+        ptx::tma_store_commit();
 
         // Write top-k weights
         if (combined_topk_weights != nullptr) {
