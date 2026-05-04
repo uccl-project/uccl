@@ -110,9 +110,11 @@ Notes:
 - 1n × 4g GDR ≈ no-GDR because both use the shared host window for
   no-NVLink multi-local ranks.
 - 2n × 4g uses `NCCL_IB_HCA=mlx5_0,mlx5_1` (both NICs) via the default in
-  `run_multinode.sh`. The remaining bottleneck at ~4 ms is proxy CPU overhead,
-  not NIC bandwidth; each node has 2 × 400 Gb/s NDR NICs well in excess of
-  what 4 proxy threads saturate.
+  `run_multinode.sh`. UCCL's PCIe-distance + NUMA-aware NIC selection in
+  `csrc/uccl/src/rdma.cpp` automatically pins each GPU to its node-local NIC:
+  GPU 0,1 → mlx5_0 (NUMA 0); GPU 2,3 → mlx5_1 (NUMA 1). Confirmed via
+  `EP_UCCL_DEBUG=1` output. The remaining bottleneck at ~4 ms is proxy CPU
+  overhead (D2H ring drain + RDMA submission), not NIC bandwidth.
 
 ## Full-path validation
 
@@ -145,8 +147,9 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
   retry as a simple fix.
 - 2n × 4g dispatch latency (~4 ms) is dominated by proxy CPU processing
   overhead; the 2 × 400 Gb/s NICs are not the bottleneck. Per-GPU NIC
-  pinning (GPU 0,1 → mlx5_0; GPU 2,3 → mlx5_1) could reduce contention on
-  the proxy thread fan-out but has not been benchmarked.
+  pinning is already automatic via UCCL's PCIe-distance + NUMA tie-breaker
+  logic (GPU 0,1 → mlx5_0; GPU 2,3 → mlx5_1), so no additional pinning
+  knob is needed.
 
 ## Validation checklist
 
