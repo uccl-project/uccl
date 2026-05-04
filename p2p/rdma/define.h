@@ -563,7 +563,7 @@ typedef struct RDMARecvRequest {
 
   // Getter methods
   inline uint32_t getLocalKey() const {
-    return local_mem->getKeyByContextID(channel_id);
+    return local_mem->getKeyByChannelID(channel_id);
   }
 
   inline uint64_t getLocalAddress() const {
@@ -621,7 +621,8 @@ struct alignas(64) SendReqMeta {
     local_mem =
         *(rev_req->local_compression_mem ? rev_req->local_compression_mem
                                          : rev_req->local_mem);
-    float_type = rev_req->compress_ctx->getFloatType();
+    float_type = rev_req->compress_ctx ? rev_req->compress_ctx->getFloatType()
+                                       : uccl::FloatType::kUndefined;
     expected_chunk_count =
         ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
     received_chunk_count = 0;
@@ -923,7 +924,7 @@ enum class CompressStrategy {
 };
 
 inline CompressStrategy getCompressStrategyFromEnv() {
-  char const* env = std::getenv("P2P_COMPRESS_STRATEGY");
+  char const* env = std::getenv("UCCL_P2P_COMPRESS_STRATEGY");
 
   // default strategy
   if (!env || env[0] == '\0') {

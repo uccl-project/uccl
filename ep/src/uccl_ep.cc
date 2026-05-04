@@ -525,8 +525,10 @@ class Buffer {
     EP_HOST_ASSERT(num_experts > 0);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    // NOTE(zhenhuang12): No runime cost. Python now owns the actual tensor
+    // allocation stream before passing raw pointers into C++, so this flag is
+    // advisory on the C++ side.
+    static_cast<void>(allocate_on_comm_stream);
 
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
@@ -649,9 +651,7 @@ class Buffer {
     EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream) {
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    }
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -693,7 +693,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: CPU recv timeout");
         }
       }
@@ -729,15 +729,14 @@ class Buffer {
     EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_x_ptr != 0 && recv_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_src_idx_ptr != 0 && send_head_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens > 0);
+    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens >= 0);
     EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
                    0);
 
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     int num_channels = config.num_sms / 2;
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -813,8 +812,7 @@ class Buffer {
     int num_channels = config.num_sms / 2;
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -893,8 +891,7 @@ class Buffer {
     EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -944,7 +941,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs(NUM_CPU_TIMEOUT_SECS)) {
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
@@ -992,8 +989,7 @@ class Buffer {
     int const hidden_int4 =
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -1097,8 +1093,7 @@ class Buffer {
     int const hidden_int4 =
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+    static_cast<void>(allocate_on_comm_stream);
     if (previous_event.has_value()) {
       stream_wait(comm_stream, previous_event.value());
     } else {
@@ -2412,4 +2407,6 @@ NB_MODULE(ep, m) {
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
       .def_ro("thread_idx", &FifoProxy::thread_idx);
+
+  nb::set_leak_warnings(false);
 }

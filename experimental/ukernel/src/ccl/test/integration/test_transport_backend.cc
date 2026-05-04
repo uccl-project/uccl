@@ -97,7 +97,7 @@ int create_tcp_server(int port) {
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons(static_cast<uint16_t>(port));
   require(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0,
-          "failed to bind barrier socket");
+          "failed to bind barrier socket on port " + std::to_string(port));
   require(::listen(fd, 16) == 0, "failed to listen on barrier socket");
   return fd;
 }
@@ -118,9 +118,10 @@ int connect_tcp_client(std::string const& ip, int port,
     }
     ::close(fd);
     if (std::chrono::steady_clock::now() >= deadline) {
-      fail("failed to connect barrier client");
+      fail("timed out connecting barrier client to " + ip + ":" +
+           std::to_string(port));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 }
 
@@ -164,7 +165,7 @@ void socket_barrier(std::string const& ip, int port, int rank, int nranks) {
     }
     ::close(server);
   } else {
-    int fd = connect_tcp_client(ip, port, std::chrono::seconds(5));
+    int fd = connect_tcp_client(ip, port, std::chrono::seconds(30));
     write_exact(fd, &kToken, sizeof(kToken));
     uint64_t token = 0;
     read_exact(fd, &token, sizeof(token));

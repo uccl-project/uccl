@@ -26,19 +26,14 @@ fi
 mkdir -p "$SANDBOX"
 
 if [ ! -d "$SANDBOX/.venv" ]; then
-  # --seed installs pip/setuptools/wheel into the venv so that tools which
-  # shell out to `python -m pip ...` (e.g. build.sh --install) work.
+  # --seed installs pip/setuptools/wheel into the venv.
   uv venv "$SANDBOX/.venv" --python "$PY_VER" --seed
-  # shellcheck disable=SC1091
-  source "$SANDBOX/.venv/bin/activate"
-  uv pip install --pre torch torchvision --index-url "$TORCH_INDEX"
-  uv pip install nanobind pybind11
-else
-  # shellcheck disable=SC1091
-  source "$SANDBOX/.venv/bin/activate"
-  python -m pip --version >/dev/null 2>&1 || uv pip install pip setuptools wheel
-  if ! python -c "import torch" >/dev/null 2>&1; then
-    uv pip install --pre torch torchvision --index-url "$TORCH_INDEX" --reinstall
-  fi
-  python -c "import nanobind, pybind11" >/dev/null 2>&1 || uv pip install nanobind pybind11
 fi
+
+# shellcheck disable=SC1091
+source "$SANDBOX/.venv/bin/activate"
+python -m pip --version >/dev/null 2>&1 || uv pip install pip setuptools wheel
+if ! python -c "import torch" >/dev/null 2>&1; then
+  uv pip install --pre torch torchvision --index-url "$TORCH_INDEX" --reinstall
+fi
+python -c "import nanobind, pybind11" >/dev/null 2>&1 || uv pip install nanobind pybind11

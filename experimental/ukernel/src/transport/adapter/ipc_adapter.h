@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../oob/oob.h"
+#include "../memory/ipc_manager.h"
+#include "../oob/shmring_exchanger.h"
 #include "../util/jring.h"
 #include "config.h"
 #include "gpu_rt.h"
@@ -10,11 +11,13 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -25,7 +28,8 @@ class Communicator;
 class IpcAdapter final : public TransportAdapter {
  public:
   // Lifecycle.
-  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id);
+  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id,
+             int local_gpu_idx);
   ~IpcAdapter() override;
   void shutdown();
 
@@ -37,11 +41,11 @@ class IpcAdapter final : public TransportAdapter {
 
   // Async data-plane requests.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       std::optional<RemoteSlice> remote_hint,
                       BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
   // Request completion API.
@@ -138,9 +142,31 @@ class IpcAdapter final : public TransportAdapter {
   bool enqueue_request(unsigned request_id, IpcReqType type);
   bool send_one(IpcRequestSlot* creq);
   bool recv_one(IpcRequestSlot* creq);
+  bool find_or_open_remote_ipc_handle(int remote_rank,
+                                      gpuIpcMemHandle_t const& handle,
+                                      size_t offset, size_t bytes,
+                                      int remote_gpu_idx, IPCItem* out);
+  void clear_remote_handle_cache();
   void send_thread_func();
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
+
+  using IpcHandleKey = std::array<uint8_t, sizeof(gpuIpcMemHandle_t)>;
+  struct IpcHandleHash {
+    size_t operator()(IpcHandleKey const& k) const noexcept {
+      uint64_t hash = 1469598103934665603ull;
+      for (uint8_t b : k) {
+        hash ^= b;
+        hash *= 1099511628211ull;
+      }
+      return static_cast<size_t>(hash);
+    }
+  };
+  static IpcHandleKey make_ipc_handle_key(gpuIpcMemHandle_t const& h) {
+    IpcHandleKey k{};
+    std::memcpy(k.data(), &h, k.size());
+    return k;
+  }
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -163,6 +189,11 @@ class IpcAdapter final : public TransportAdapter {
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
   Communicator* comm_;
+  int local_gpu_idx_ = -1;
+  std::mutex remote_handle_mu_;
+  std::unordered_map<int,
+                     std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
+      remote_handle_cache_;
 };
 
 }  // namespace Transport

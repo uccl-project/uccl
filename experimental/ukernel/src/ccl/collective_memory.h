@@ -12,10 +12,10 @@ namespace CCL {
 
 using BufferId = uint32_t;
 
-inline constexpr BufferId kInvalidBufferId = UINT32_MAX;
-inline constexpr BufferId kDefaultInputBufferId = 0;
+inline constexpr BufferId kInvalidBufferId = 0;
+inline constexpr BufferId kDefaultInputBufferId = 1;
 inline constexpr BufferId kDefaultOutputBufferId = kDefaultInputBufferId;
-inline constexpr BufferId kDefaultScratchBufferId = 1;
+inline constexpr BufferId kDefaultScratchBufferId = 2;
 
 struct TensorLayout {
   // Torch-style tensor metadata: sizes/strides/storage_offset are all
@@ -51,14 +51,14 @@ inline BufferRef remote_buffer_ref(BufferId buffer_id, int rank,
 }
 
 struct PeerBufferView {
-  uint32_t mr_id = 0;
+  uint32_t buffer_id = 0;
   bool same_node = false;
 };
 
 struct RegisteredBuffer {
   bool registered = false;
   void* local_ptr = nullptr;
-  uint32_t local_mr_id = 0;
+  uint32_t local_buffer_id = 0;
   size_t bytes = 0;
   TensorLayout layout{};
   bool remotely_accessible = true;
@@ -164,7 +164,6 @@ struct CollectiveBufferRoles {
 struct CollectiveBinding {
   std::shared_ptr<BufferRegistry> registry;
   CollectiveBufferRoles roles{};
-  uint64_t transport_binding_version = 0;
   uint64_t transport_initialized_backend_key = 0;
   uint64_t transport_initialized_signature = 0;
 
@@ -210,7 +209,6 @@ struct CollectiveBinding {
   }
 
   void invalidate_transport_cache() {
-    transport_binding_version = 0;
     transport_initialized_backend_key = 0;
     transport_initialized_signature = 0;
   }

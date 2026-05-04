@@ -348,6 +348,16 @@ class AtomicBitmapPacketTrackerMultiAck {
     return total;
   }
 
+  // Update packet size for a seq_num that was registered with size 0.
+  // Used when the actual size is known later (e.g. after popping from queue).
+  void updatePacketSize(uint32_t seq_num, size_t packet_size) {
+    uint32_t base = base_seq_num_.load(std::memory_order_acquire);
+    if (seq_num < base || seq_num - base >= WINDOW_SIZE) return;
+
+    packet_sizes_[seq_num % WINDOW_SIZE].store(packet_size,
+                                               std::memory_order_release);
+  }
+
  private:
   void slideWindow() {
     uint32_t base = base_seq_num_.load(std::memory_order_acquire);

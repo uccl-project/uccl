@@ -15,6 +15,7 @@ struct CommunicatorConfig {
   std::string exchanger_ip = DEFAULT_EXCHANGER_SERVER_IP;
   int exchanger_port = DEFAULT_EXCHANGER_SERVER_PORT;
   int local_id = -1;
+  std::string oob_namespace = "default";
   PreferredTransport preferred_transport = PreferredTransport::Auto;
 
   static CommunicatorConfig from_env() {
@@ -24,6 +25,7 @@ struct CommunicatorConfig {
     config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
                                             DEFAULT_EXCHANGER_SERVER_PORT);
     config.local_id = getLocalIdOrDefault();
+    config.oob_namespace = getEnvOrDefault("UHM_OOB_NAMESPACE", "default");
     return config;
   }
 

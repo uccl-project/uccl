@@ -4,6 +4,7 @@
 #include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
+#include <cc/cc_state.h>
 #include <netinet/in.h>
 #include <chrono>
 #include <cstddef>
@@ -210,14 +211,17 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-#ifdef UCCL_P2P_USE_NCCL
-  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
-  numa_node_ = tcp::get_tcp_numa_node_from_iface();
-#else
-  // Initialize the RDMA endpoint.
-  ep_ = std::shared_ptr<NICEndpoint>(
-      new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
-#endif
+  if (uccl::is_nccl_transport()) {
+    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+  } else {
+    // Enable the polling thread when congestion control is active.
+    bool cc_polling =
+        uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
+        uccl::cc::CongestionControlState::Mode::kNone;
+    ep_ = std::shared_ptr<NICEndpoint>(
+        new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
+  }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -227,10 +231,10 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-#ifndef UCCL_P2P_USE_NCCL
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-#endif
+  if (!uccl::is_nccl_transport()) {
+    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
+  }
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -263,6 +267,13 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
 
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
+
+  // Save the current device before the loop so we can restore it afterwards.
+  // The loop calls gpuSetDevice(i) for each GPU, leaving the active device as
+  // GPU ngpus-1, which would corrupt gpu_bus_id_ and the advertised BDF.
+  int cur_dev = 0;
+  GPU_RT_CHECK(gpuGetDevice(&cur_dev));
+
   ipc_streams_.resize(ngpus);
   for (int i = 0; i < ngpus; ++i) {
     GPU_RT_CHECK(gpuSetDevice(i));
@@ -272,21 +283,19 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
           gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
     }
   }
+  GPU_RT_CHECK(gpuSetDevice(cur_dev));
 
   // Get the current GPU's BDF for metadata (needed before lazy engine init).
-  int cur_dev = 0;
-  GPU_RT_CHECK(gpuGetDevice(&cur_dev));
   char bdf_buf[64];
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-#ifdef UCCL_P2P_USE_NCCL
-  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
-#else
-  // Initialize the RDMA endpoint with lazy creation.
-  ep_ = std::shared_ptr<NICEndpoint>(
-      new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
-#endif
+  if (uccl::is_nccl_transport()) {
+    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+  } else {
+    ep_ = std::shared_ptr<NICEndpoint>(
+        new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+  }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -1313,20 +1322,18 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
 
-  std::cout << "Connecting to GPU " << remote_gpu_bdf << std::endl;
-
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
 
-  if (same_process || remote_gpu_bdf == gpu_bus_id_) {
-    // Same process or same GPU: use inbox_rings_ directly, no shm attach.
+  if (same_process) {
+    // Same process: use inbox_rings_ directly, no shm attach needed.
     auto it = inbox_rings_.find(remote_gpu_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
     }
     conn->shm_attached_ = false;
   } else {
-    // cross GPU, cross process: attach remote inbox via shared memory
+    // cross process: attach remote inbox via shared memory
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
 
     jring_t* ring = nullptr;
@@ -2422,7 +2429,11 @@ uint64_t Endpoint::conn_id_of_rank(int rank) const {
 }
 
 std::shared_ptr<EpollClient> Endpoint::get_oob_client() const {
-  return ep_->get_oob_client();
+  return std::visit(
+      [](auto const& s) -> std::shared_ptr<EpollClient> {
+        return s->get_oob_client();
+      },
+      ep_);
 }
 
 std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
@@ -2432,12 +2443,20 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
   }
   uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
 
-  return ep_->get_oob_conn_key(rank_id);
+  return std::visit(
+      [&](auto const& s) -> std::string {
+        return s->get_oob_conn_key(rank_id);
+      },
+      ep_);
 }
 
 int Endpoint::send_notification(uint64_t conn_id,
                                 NotifyMsg const& notification) const {
-#ifdef UCCL_P2P_USE_NCCL
+  if (!uccl::is_nccl_transport()) {
+    (void)conn_id;
+    (void)notification;
+    return -1;
+  }
   Conn* conn = get_conn(conn_id);
   if (conn == nullptr) {
     return -1;
@@ -2446,12 +2465,9 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (flow_id == UINT64_MAX) {
     return -1;
   }
-  return ep_->send_notification(flow_id, notification);
-#else
-  (void)conn_id;
-  (void)notification;
-  return -1;
-#endif
+  auto* tcp_ep = std::get_if<std::shared_ptr<tcp::TCPEndpoint>>(&ep_);
+  if (!tcp_ep || !*tcp_ep) return -1;
+  return (*tcp_ep)->send_notification(flow_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2486,12 +2502,12 @@ void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-#ifdef UCCL_P2P_USE_NCCL
-  numa_node_ = tcp::get_tcp_numa_node_from_iface();
-#else
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-#endif
+  if (uccl::is_nccl_transport()) {
+    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+  } else {
+    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
+  }
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
