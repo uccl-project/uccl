@@ -101,19 +101,40 @@ same topology.
 | 2n × 4g (`N=3`) | GDR    | 2/2,  2 GB/s @ 4400 µs | 5/5,  5 GB/s @ 2080 µs |
 | 2n × 4g (`N=3`) | no-GDR | 2/2,  2 GB/s @ 4200 µs | 4/4,  4 GB/s @ 2700 µs |
 
-After the SM89 warp-cooperative TMA fallback fix (commits `38093df5`
-and `2f958b9b`) the same shapes measure (no-GDR, `N=1`):
+After the SM89 warp-cooperative TMA fallback fix (commits `38093df5`,
+`2f958b9b`, `44d1b976`) the same shapes measure (`N=1`, `--test-first-only`,
+single bench iteration so latency is the per-call cost, not warmed steady
+state):
 
-| Topology | Dispatch | Combine | Reduced combine |
-| --- | ---: | ---: | ---: |
-| 1n × 2g | 6/6 GB/s @  619 µs | 6/6 GB/s @  582 µs | 6/6 GB/s @ 2571 µs |
-| 1n × 4g | 7/8 GB/s @  862 µs | 6/7 GB/s @ 1020 µs | 4/5 GB/s @ 3254 µs |
-| 2n × 1g | 6/6 GB/s @  598 µs | 15/15 GB/s @ 244 µs | 18/17 GB/s @ 827 µs |
-| 2n × 4g | 3/3 GB/s @ 3174 µs | 9/9 GB/s @ 1144 µs | 10/10 GB/s @ 1421 µs |
+| Topology | Mode | Dispatch | Combine | Reduced combine |
+| --- | --- | ---: | ---: | ---: |
+| 1n × 2g | GDR    | 6/6 GB/s @  618 µs | 6/6 GB/s @  581 µs | 6/6 GB/s @ 2530 µs |
+| 1n × 2g | no-GDR | 6/6 GB/s @  619 µs | 6/6 GB/s @  582 µs | 6/6 GB/s @ 2571 µs |
+| 1n × 4g | GDR    | 7/8 GB/s @  863 µs | 6/7 GB/s @ 1009 µs | 4/5 GB/s @ 3175 µs |
+| 1n × 4g | no-GDR | 7/8 GB/s @  862 µs | 6/7 GB/s @ 1020 µs | 4/5 GB/s @ 3254 µs |
+| 2n × 1g | GDR    | 7/7 GB/s @  539 µs | 14/14 GB/s @ 261 µs | 19/18 GB/s @ 781 µs |
+| 2n × 1g | no-GDR | 6/6 GB/s @  598 µs | 15/15 GB/s @ 244 µs | 18/17 GB/s @ 827 µs |
+| 2n × 4g | GDR    | 3/3 GB/s @ 3174 µs | 9/8 GB/s @ 1176 µs | 10/10 GB/s @ 1486 µs |
+| 2n × 4g | no-GDR | 3/3 GB/s @ 3174 µs | 9/9 GB/s @ 1144 µs | 10/10 GB/s @ 1421 µs |
 
-Epilogue kernels (`dispatch_copy_epilogue`, `combine_reduce_epilogue`)
-went from ~36 GB/s to ~1100 GB/s (single-token byte loop replaced by
-32-lane v4 stores).
+Latency improvements (no-GDR; GDR matches no-GDR for intra-node and
+slightly better for 2n × 1g):
+
+* 1n × 2g dispatch: 1141 → 619 µs (~1.85x)
+* 1n × 4g dispatch: 2245 → 862 µs (~2.6x)
+* 2n × 1g combine: 653 → 244 µs (~2.7x)
+* 2n × 4g dispatch: 4400 → 3174 µs (~1.4x)
+* 2n × 4g combine: 2080 → 1144 µs (~1.8x)
+* 2n × 4g reduced combine: 4764 → 1421 µs (~3.4x)
+
+The intra-kernel "copy GB/s" / "reduce GB/s" numbers reported by the
+benchmark went from ~36 GB/s pre-fix to ~1100 GB/s post-fix — but those
+high numbers reflect L2-cache-resident data movement (L40 has 96 MB L2
+vs ~1.8 MB working set, and the dispatch/combine kernel just wrote the
+buffer), not GDDR or PCIe bandwidth. The takeaway is that the
+post-epilogue copy is no longer a bottleneck (~6 µs vs ~200 µs pre-fix);
+the ~30x speedup ratio is meaningful, the absolute 1.1 TB/s figure
+should not be quoted as a sustained throughput.
 
 Notes:
 
@@ -194,22 +215,29 @@ profiling. Unselected stages still run once and report `nan` bandwidth.
   so consecutive cmds to the same destination land 48 token-widths apart
   in the remote address space — never contiguous, never SGE-mergeable.
 - **SM89 (Ada / L40) TMA fallback was a perf cliff** that was fixed in
-  commits `38093df5` and `2f958b9b`. DeepEPv2's `DISABLE_SM90_FEATURES`
-  fallback for `tma_load_1d` / `tma_store_1d` (in
-  `deep_ep/include/deep_ep/common/ptx.cuh`) was a single-thread byte
+  commits `38093df5`, `2f958b9b`, and `44d1b976`. DeepEPv2's
+  `DISABLE_SM90_FEATURES` fallback for `tma_load_1d` / `tma_store_1d`
+  (in `deep_ep/include/deep_ep/common/ptx.cuh`) was a single-thread byte
   loop — only 1/32 lanes did the 14 336-byte token copy, while 31 lanes
   idled. We added warp-cooperative variants (`tma_load_1d_warp` /
   `tma_store_1d_warp`) using `cp.async.cg` (gmem→smem) and
   `ld.shared.v4` + `st.global.v4` (smem→gmem), and converted all 23
   hot TMA call sites in `hybrid_dispatch.cuh`, `hybrid_combine.cuh`,
   `dispatch_copy_epilogue.cuh`, and `combine_reduce_epilogue.cuh` to
-  use them. Result: dispatch 1.5–2.6× faster, combine 2–3.4× faster,
-  epilogues 30× faster (see benchmark table). The treatment leaves
-  SM90 paths untouched under `#ifndef DISABLE_SM90_FEATURES` guards.
-  Equivalent fixes for `dispatch.cuh`, `combine.cuh`, and
-  `pp_send_recv.cuh` (non-hybrid / PP kernels) are still pending; if
-  those code paths become hot on non-Hopper hardware they will need
-  the same conversion.
+  use them. A follow-up commit (`44d1b976`) made the SM89
+  `tma_store_commit()` emit `fence.acq_rel.sys` instead of being a
+  no-op: parallel `st.global.v4` writes complete from the SM perspective
+  immediately, but may still be buffered in L2 / PCIe write FIFO when
+  the elected lane subsequently fires an IBGDA doorbell, so without
+  the system fence cross-node GDR traffic suffered NIC RNR-retry stalls
+  (2n × 4g GDR dispatch ballooned from 4400 µs pre-fix to 20000 µs
+  before the fence was added). Result: dispatch 1.4–2.6× faster,
+  combine 1.8–2.7× faster, reduced combine up to 3.4× faster — see
+  the post-fix benchmark table. The treatment leaves SM90 paths
+  untouched under `#ifndef DISABLE_SM90_FEATURES` guards. Equivalent
+  fixes for `dispatch.cuh`, `combine.cuh`, and `pp_send_recv.cuh`
+  (non-hybrid / PP kernels) are still pending; if those code paths
+  become hot on non-Hopper hardware they will need the same conversion.
 
 ## Validation checklist
 
