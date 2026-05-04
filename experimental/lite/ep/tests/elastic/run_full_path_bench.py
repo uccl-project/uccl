@@ -20,6 +20,7 @@ STAGE_ORDER = (
     "combine",
     "reduced_combine",
 )
+FULL_PATH_MODE = (1, 128, 0, 0, 0, 0, 0)
 
 
 def load_test_ep():
@@ -44,10 +45,6 @@ def apply_transport_env(transport: str) -> None:
     os.environ.setdefault("EP_USE_UCCL_PROXY", "1")
     os.environ.setdefault("EP_FORCE_NO_NVLINK", "1")
     os.environ.setdefault("EP_SUPPRESS_NCCL_CHECK", "1")
-    os.environ.setdefault("EP_TEST_DISABLE_FP8", "1")
-    os.environ.setdefault("EP_TEST_DO_HANDLE_COPY", "1")
-    os.environ.setdefault("EP_TEST_EXPERT_ALIGNMENT", "128")
-    os.environ.pop("EP_TEST_BASIC_ONLY", None)
 
     if transport == "nogdr":
         os.environ["UCCL_FORCE_NO_GDR"] = "1"
@@ -78,11 +75,16 @@ def make_test_args(args: argparse.Namespace) -> argparse.Namespace:
         prefer_overlap_with_compute=args.prefer_overlap_with_compute,
         deterministic=args.deterministic,
         seed=args.seed,
+        trace_steps=args.trace_steps,
         skip_check=not args.check,
         skip_perf_test=args.validate_only,
+        num_bench_tests=args.num_bench_tests,
         do_pressure_test=False,
         reuse_elastic_buffer=False,
         test_first_only=True,
+        do_handle_copy_modes="1",
+        expert_alignment_modes="128",
+        fp8_dispatch_modes="0",
         unbalanced_ratio=args.unbalanced_ratio,
         precise_unbalanced_ratio=args.precise_unbalanced_ratio,
         masked_ratio=args.masked_ratio,
@@ -96,6 +98,13 @@ def make_test_args(args: argparse.Namespace) -> argparse.Namespace:
         test_args.num_qps = 1
         test_args.num_allocated_qps = max(test_args.num_allocated_qps, 1)
     return test_args
+
+
+def install_mode_filter(test_ep) -> None:
+    def enumerate_full_path_mode(_args=None):
+        yield FULL_PATH_MODE
+
+    test_ep.enumerate_ep_modes = enumerate_full_path_mode
 
 
 def install_stage_filter(test_ep, measured_stages: tuple[str, ...], num_bench_tests: int) -> None:
@@ -123,6 +132,7 @@ def install_stage_filter(test_ep, measured_stages: tuple[str, ...], num_bench_te
 
 def run_worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> None:
     test_ep = load_test_ep()
+    install_mode_filter(test_ep)
     install_stage_filter(test_ep, args.measure_stages, args.num_bench_tests)
     test_ep.test_loop(local_rank, num_local_ranks, args.test_args)
 
@@ -133,7 +143,7 @@ def main() -> None:
                         help="Set common UCCL transport envs, or leave them unchanged")
     parser.add_argument("--measure-stages", type=parse_stages, default=STAGE_ORDER,
                         help="Comma-separated stages to profile, or 'all'")
-    parser.add_argument("--num-bench-tests", type=int, default=int(os.environ.get("EP_BENCH_NUM_TESTS", "1")),
+    parser.add_argument("--num-bench-tests", type=int, default=1,
                         help="Kineto measurement iterations for selected stages")
     parser.add_argument("--validate-only", action="store_true",
                         help="Run full path without perf profiling")
@@ -173,9 +183,6 @@ def main() -> None:
         raise ValueError("--num-bench-tests must be positive")
     if args.dump_profile_traces:
         os.makedirs(args.dump_profile_traces, exist_ok=True)
-    if args.trace_steps:
-        os.environ["EP_TEST_TRACE_STEPS"] = "1"
-
     apply_transport_env(args.transport)
     args.test_args = make_test_args(args)
 

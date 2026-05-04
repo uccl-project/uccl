@@ -31,11 +31,11 @@ test-intra:
 	NCCL_NET_GDR_LEVEL=0 \
 	NCCL_GIN_TYPE=2 \
 	DISABLE_SM90_FEATURES=$(DISABLE_SM90_FEATURES) \
-	EP_TEST_DISABLE_FP8=1 \
 	EP_FORCE_PROCESS_EXIT=1 \
 	EP_JIT_CACHE_DIR=$(EP_JIT_CACHE_DIR) \
 	$(PYTHON) tests/elastic/test_ep.py --num-processes 2 --allow-hybrid-mode 0 \
-	  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only
+	  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only \
+	  --do-handle-copy-modes=1 --expert-alignment-modes=128 --fp8-dispatch-modes=0
 
 clean:
 	rm -rf build deep_ep.egg-info deep_ep/_C*.so
