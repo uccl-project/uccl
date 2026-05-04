@@ -196,6 +196,14 @@ __forceinline__ __device__ void tma_store_1d(
 }
 
 __forceinline__ __device__ void tma_store_commit() {
+    // SM89/SM80 fallback: the warp-cooperative `st.global.v4` writes in
+    // `tma_store_1d_warp` complete from the SM perspective immediately, but
+    // they may still be buffered in L2 / PCIe write FIFO when the elected
+    // lane subsequently fires an IBGDA doorbell. Without a system-scope
+    // fence the NIC reads stale VRAM, RNR-retries, and the kernel slows
+    // 4-5x on cross-node GDR traffic. SM90's `cp.async.bulk.commit_group`
+    // already provides this ordering via the TMA proxy.
+    asm volatile("fence.acq_rel.sys;" ::: "memory");
 }
 
 template <class dtype_t>
