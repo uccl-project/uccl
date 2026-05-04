@@ -207,6 +207,64 @@ __forceinline__ __device__ void cp_async_mbarrier_arrive(mbarrier*) {
 }
 #endif
 
+// Warp-cooperative variants of `tma_load_1d` / `tma_store_1d`.
+// MUST be called by all 32 lanes of a converged warp.
+//   * SM90: only the elected lane issues the bulk TMA op (preserves original semantics).
+//   * SM80/SM89: all 32 lanes participate in a vectorized 16-byte striped copy
+//     (`cp.async.cg` for gmem->smem, `ld.shared.v4` + `st.global.v4` for smem->gmem),
+//     replacing the unusable single-lane byte-loop fallback.
+__forceinline__ __device__ void tma_load_1d_warp(
+    const void* dst_smem, const void* src_gmem, mbarrier* mbar, const int& num_bytes,
+    const int& lane_id, const TMACacheHint& hint = TMACacheHint::kEvictFirst) {
+#ifndef DISABLE_SM90_FEATURES
+    if (elect_one_sync())
+        tma_load_1d(dst_smem, src_gmem, mbar, num_bytes, hint);
+    __syncwarp();
+#else
+    const int n_vec = num_bytes / 16;
+    auto* dst_base = static_cast<uint8_t*>(const_cast<void*>(dst_smem));
+    const auto* src_base = static_cast<const uint8_t*>(src_gmem);
+    for (int i = lane_id; i < n_vec; i += 32) {
+        asm volatile("cp.async.cg.shared.global.L2::128B [%0], [%1], 16;\n" ::
+                     "r"(static_cast<uint32_t>(__cvta_generic_to_shared(dst_base + i * 16))),
+                     "l"(src_base + i * 16));
+    }
+    asm volatile("cp.async.commit_group;\n");
+    asm volatile("cp.async.wait_group 0;\n" ::: "memory");
+    const int tail_start = n_vec * 16;
+    for (int i = tail_start + lane_id; i < num_bytes; i += 32)
+        dst_base[i] = src_base[i];
+    __syncwarp();
+#endif
+}
+
+__forceinline__ __device__ void tma_store_1d_warp(
+    const void* dst_gmem, const void* src_smem, const int& num_bytes,
+    const int& lane_id, const TMACacheHint& hint = TMACacheHint::kEvictNormal) {
+#ifndef DISABLE_SM90_FEATURES
+    if (elect_one_sync())
+        tma_store_1d(dst_gmem, src_smem, num_bytes, hint);
+    __syncwarp();
+#else
+    const int n_vec = num_bytes / 16;
+    auto* dst_base = static_cast<uint8_t*>(const_cast<void*>(dst_gmem));
+    const auto* src_base = static_cast<const uint8_t*>(src_smem);
+    for (int i = lane_id; i < n_vec; i += 32) {
+        uint4 v;
+        asm volatile("ld.shared.v4.u32 {%0,%1,%2,%3}, [%4];\n"
+                     : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w)
+                     : "r"(static_cast<uint32_t>(__cvta_generic_to_shared(src_base + i * 16))));
+        asm volatile("st.global.v4.u32 [%0], {%1,%2,%3,%4};\n" ::
+                     "l"(dst_base + i * 16), "r"(v.x), "r"(v.y), "r"(v.z), "r"(v.w)
+                     : "memory");
+    }
+    const int tail_start = n_vec * 16;
+    for (int i = tail_start + lane_id; i < num_bytes; i += 32)
+        dst_base[i] = src_base[i];
+    __syncwarp();
+#endif
+}
+
 /// Barriers
 template <int kNumThreads>
 __forceinline__ __device__ void named_barrier(const int& idx) {

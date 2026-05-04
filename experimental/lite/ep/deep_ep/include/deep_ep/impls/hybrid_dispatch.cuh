@@ -365,13 +365,11 @@ hybrid_dispatch_impl(
             if (token_idx >= num_tokens)
                 return;
 
-            // Issue TMA load
+            // Issue TMA load (warp-cooperative on SM89 / single-lane bulk on SM90)
             const auto token_i64_idx = static_cast<int64_t>(token_idx);
-            if (ptx::elect_one_sync()) {
-                ptx::tma_load_1d(tma_buffer.get_hidden_ptr(), math::advance_ptr(x, token_i64_idx * kNumHiddenBytes),
-                                 mbarrier_ptr, kNumHiddenBytes);
-            }
-            __syncwarp();
+            ptx::tma_load_1d_warp(tma_buffer.get_hidden_ptr(),
+                                  math::advance_ptr(x, token_i64_idx * kNumHiddenBytes),
+                                  mbarrier_ptr, kNumHiddenBytes, lane_idx);
 
             // Issue SF `cp.async`
             if constexpr (kNumSFPacks > 0) {
@@ -429,23 +427,33 @@ hybrid_dispatch_impl(
             const auto scaleout_rank_mask = ptx::reduce_or(stored_dst_scaleout_rank_idx >= 0 ? (1u << stored_dst_scaleout_rank_idx) : 0u);
             stored_scaleout_tail += (scaleout_rank_mask >> lane_idx) & 1;
 
-            // Wait TMA arrival and issue the TMA store into send buffer
+            // Wait TMA arrival
             if (ptx::elect_one_sync()) {
                 ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                 ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-
-                // So if no ranks will go by RDMA, we skip the send buffer stores
-                if (scaleout_rank_mask ^ (1 << scaleout_rank_idx)) {
-                    ptx::tma_store_1d(scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
-                                      tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
-                }
             }
             __syncwarp();
 
-            // Local rank can be bypassed
-            if (stored_dst_slot_idx >= 0 and stored_dst_scaleout_rank_idx == scaleout_rank_idx) {
-                ptx::tma_store_1d(scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                                  tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
+            // Issue the TMA store into send buffer (warp-cooperative on SM89).
+            // `scaleout_rank_mask` is warp-uniform (computed via reduce_or), so the
+            // predicate is identical across all lanes.
+            if (scaleout_rank_mask ^ (1 << scaleout_rank_idx)) {
+                ptx::tma_store_1d_warp(scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
+                                       tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>(),
+                                       lane_idx);
+            }
+
+            // Local rank can be bypassed. After dedup, at most one lane has a match;
+            // broadcast the matching slot index so all lanes participate in the store.
+            const auto local_match_mask = __ballot_sync(
+                0xffffffffu,
+                stored_dst_slot_idx >= 0 and stored_dst_scaleout_rank_idx == scaleout_rank_idx);
+            if (local_match_mask != 0) {
+                const int src_lane = __ffs(local_match_mask) - 1;
+                const int bcast_slot_idx = __shfl_sync(0xffffffffu, stored_dst_slot_idx, src_lane);
+                ptx::tma_store_1d_warp(scaleout_recv_buffer.get_token_buffer(bcast_slot_idx).get_base_ptr(),
+                                       tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>(),
+                                       lane_idx);
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
@@ -557,10 +565,10 @@ hybrid_dispatch_impl(
                 ptx::tma_store_wait();
                 __syncwarp();
 
-                // TMA load into shared memory
+                // TMA load into shared memory (warp-cooperative on SM89)
+                ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), token_buffer.get_base_ptr(),
+                                      mbarrier_ptr, token_layout.get_num_bytes<false>(), lane_idx);
                 if (ptx::elect_one_sync()) {
-                    ptx::tma_load_1d(tma_buffer.get_base_ptr(), token_buffer.get_base_ptr(),
-                                     mbarrier_ptr, token_layout.get_num_bytes<false>());
                     ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, token_layout.get_num_bytes<false>());
                     ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
                 }
@@ -605,6 +613,10 @@ hybrid_dispatch_impl(
                 __syncwarp();
 
                 // Issue TMAs
+                // On SM90 multiple lanes may concurrently issue bulk stores (one per
+                // matching scale-up rank). On SM89 we serialize matches but each store
+                // is warp-cooperative.
+#ifndef DISABLE_SM90_FEATURES
                 if (stored_dst_slot_idx >= 0) {
                     const auto dst_ptr = gin.get_sym_ptr<ncclTeamTagLsa>(
                         scaleup_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
@@ -612,6 +624,23 @@ hybrid_dispatch_impl(
                     ptx::tma_store_1d(dst_ptr, tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
                     ptx::tma_store_commit();
                 }
+#else
+                {
+                    auto active_mask = __ballot_sync(0xffffffffu, stored_dst_slot_idx >= 0);
+                    while (active_mask != 0) {
+                        const int src_lane = __ffs(active_mask) - 1;
+                        const int b_slot_idx = __shfl_sync(0xffffffffu, stored_dst_slot_idx, src_lane);
+                        const int b_scaleup_rank = __shfl_sync(0xffffffffu, stored_dst_scaleup_rank_idx, src_lane);
+                        const auto b_dst_ptr = gin.get_sym_ptr<ncclTeamTagLsa>(
+                            scaleup_buffer.get_token_buffer(b_slot_idx).get_base_ptr(),
+                            b_scaleup_rank);
+                        ptx::tma_store_1d_warp(b_dst_ptr, tma_buffer.get_base_ptr(),
+                                               tma_buffer.get_num_bytes<false>(), lane_idx);
+                        active_mask &= ~(1u << src_lane);
+                    }
+                    ptx::tma_store_commit();
+                }
+#endif
                 __syncwarp();
 
                 // Add per-scale-up counter
