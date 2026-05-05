@@ -45,12 +45,7 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    comm}.cuh`): `kNumGinBarrierTags = 16`, signal/shadow indexed by
    `(tag, rank)`. Without this, dispatch and combine collide on the
    same per-rank counter.
-5. **Single-scaleup combine optimization**
-   (`deep_ep/include/deep_ep/impls/hybrid_combine.cuh`): for
-   `kNumScaleupRanks == 1 && !kAllowMultipleReduction`, the scaleup warp
-   writes directly into the scaleout send/recv buffer; forward warp
-   returns early.
-6. **SM89 TMA fallback fix** (commits `38093df5`, `2f958b9b`,
+5. **SM89 TMA fallback fix** (commits `38093df5`, `2f958b9b`,
    `44d1b976`, `3cce0ee8`): replaced the single-thread byte-loop in
    `tma_load_1d` / `tma_store_1d` with warp-cooperative `cp.async.cg` +
    `ld.shared.v4` / `st.global.v4`. SM89 `tma_store_commit()` emits
@@ -93,6 +88,13 @@ the table above; no separate sub-table needed.
 
 ## Open issues
 
+- **Single-scaleup combine fast path** (optional optimization, not
+  required for correctness): in `hybrid_combine.cuh`, for
+  `kNumScaleupRanks == 1 && !kAllowMultipleReduction`, the scaleup warp
+  writes directly into the scaleout send/recv buffer and the forward
+  warp returns early, saving one intermediate copy. Targets 2n × 1g
+  specifically; do not generalize without revisiting the
+  `kAllowMultipleReduction` and expanded-layout cases.
 - **Reduced combine** moves expanded-layout data and more host-window
   traffic than ordinary combine; per-stage bottleneck on no-GDR.
 - **Cold-start**: first put_value on a fresh UCCL connection can take
