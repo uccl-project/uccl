@@ -50,6 +50,14 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    `kNumScaleupRanks == 1 && !kAllowMultipleReduction`, the scaleup warp
    writes directly into the scaleout send/recv buffer; forward warp
    returns early.
+6. **SM89 TMA fallback fix** (commits `38093df5`, `2f958b9b`,
+   `44d1b976`, `3cce0ee8`): replaced the single-thread byte-loop in
+   `tma_load_1d` / `tma_store_1d` with warp-cooperative `cp.async.cg` +
+   `ld.shared.v4` / `st.global.v4`. SM89 `tma_store_commit()` emits
+   `fence.acq_rel.sys` so cross-node GDR doesn't suffer NIC RNR stalls.
+   All hot call sites converted in `{hybrid_,}{dispatch,combine}.cuh`,
+   the two epilogue kernels, and `pp_send_recv.cuh`. SM90 unchanged via
+   `#ifndef DISABLE_SM90_FEATURES`.
 
 ## Benchmark results
 
@@ -99,14 +107,6 @@ the table above; no separate sub-table needed.
   per-peer bulk-WRITE coalescing inside `hybrid_dispatch.cuh` — current
   one-WR-per-token layout interleaves remote slots so multi-SGE merging
   in the proxy doesn't help.
-- **SM89 TMA fallback fix** (commits `38093df5`, `2f958b9b`,
-  `44d1b976`, `3cce0ee8`): replaced single-thread byte-loop in
-  `tma_load_1d` / `tma_store_1d` with warp-cooperative `cp.async.cg` +
-  `ld.shared.v4` / `st.global.v4`. SM89 `tma_store_commit()` emits
-  `fence.acq_rel.sys` so cross-node GDR doesn't suffer NIC RNR stalls.
-  All hot call sites converted in
-  `{hybrid_,}{dispatch,combine}.cuh`, the two epilogue kernels, and
-  `pp_send_recv.cuh`. SM90 unchanged via `#ifndef DISABLE_SM90_FEATURES`.
 - **Intra-node direct host-window write** (prototype, NOT committed):
   bypass UCCL proxy memcpy by sender warp TMA-storing into peer's
   shared-window slice. 1n × 4g: dispatch −10%. 2n × 4g: regresses +3
