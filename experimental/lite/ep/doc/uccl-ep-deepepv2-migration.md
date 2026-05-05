@@ -85,20 +85,29 @@ above and CLI:
 --fp8-dispatch-modes=0 --num-bench-tests=<N>
 ```
 
-Cells are rank averages, format `SO/SU GB/s @ latency µs ± stddev`. SO/SU
-uses bytes DeepEPv2 attributes to scale-out/scale-up. Numbers are
-steady-state (`--num-bench-tests=10 --skip-check`) on commit `c07e6b94`
-(post `c1f893c3` channel-count fix); n samples = ranks × num_bench_tests
+Cells are rank averages, format `SO/SU GB/s @ latency µs ± stddev`. **SO
+counts inter-node bytes (RDMA traffic); SU counts intra-node bytes (host
+shared-memory memcpy).** This is a physical-topology accounting derived
+from `LOCAL_WORLD_SIZE`, not the DeepEPv2 logical (scaleout, scaleup)
+decomposition — the latter is meaningless under
+`EP_FORCE_NO_NVLINK=1` where `kNumScaleupRanks=1`. Self-rank traffic is
+always excluded. Numbers are steady-state
+(`--num-bench-tests=10 --skip-check`); n samples ≈ ranks × num_bench_tests
 × warmup (typically 36 for 1n×{2,4}g and 144 for 2n configs).
 
 | Topology | Mode | Dispatch | Combine | Reduced combine |
 | --- | --- | ---: | ---: | ---: |
-| 1n × 2g | no-GDR | 7/7 GB/s @ 560 ± 9 µs | 16/16 GB/s @ 222 ± 6 µs | 21/22 GB/s @ 682 ± 36 µs |
-| 1n × 4g | no-GDR | 6/6 GB/s @ 1058 ± 26 µs | 14/14 GB/s @ 472 ± 15 µs | 18/18 GB/s @ 818 ± 41 µs |
-| 2n × 1g | no-GDR | 7/7 GB/s @ 540 ± 10 µs | 16/16 GB/s @ 232 ± 10 µs | 22/21 GB/s @ 681 ± 36 µs |
-| 2n × 1g | GDR    | 19/19 GB/s @ 200 ± 69 µs | 19/19 GB/s @ 190 ± 19 µs | 21/21 GB/s @ 763 ± 225 µs |
-| 2n × 4g | no-GDR | 5/5 GB/s @ 2024 ± 173 µs | 13/13 GB/s @ 782 ± 55 µs | 13/13 GB/s @ 1154 ± 31 µs |
-| 2n × 4g | GDR    | 5/5 GB/s @ 1977 ± 106 µs | 10/10 GB/s @ 941 ± 59 µs | 10/10 GB/s @ 1382 ± 115 µs |
+| 1n × 2g | no-GDR | 0/3 GB/s @ 562 ± 3 µs | 0/8 GB/s @ 219 ± 8 µs | 0/3 GB/s @ 680 ± 38 µs |
+| 1n × 4g | no-GDR | 0/4 GB/s @ 1186 ± 21 µs | 0/10 GB/s @ 489 ± 14 µs | 0/6 GB/s @ 826 ± 42 µs |
+| 2n × 1g | no-GDR | 3/0 GB/s @ 546 ± 5 µs | 8/0 GB/s @ 224 ± 6 µs | 3/0 GB/s @ 694 ± 41 µs |
+| 2n × 1g | GDR    | 10/0 GB/s @ 188 ± 8 µs | 10/0 GB/s @ 189 ± 17 µs | 2/0 GB/s @ 760 ± 219 µs |
+| 2n × 4g | no-GDR | 3/2 GB/s @ 1830 ± 65 µs | 6/5 GB/s @ 785 ± 85 µs | 5/3 GB/s @ 1096 ± 148 µs |
+| 2n × 4g | GDR    | 3/2 GB/s @ 1995 ± 43 µs | 6/4 GB/s @ 901 ± 96 µs | 4/3 GB/s @ 1283 ± 148 µs |
+
+Sanity checks per row:
+- 1n configs have **SO = 0** (no NIC traffic) and SU > 0 (intra-node SHM).
+- 2n × 1g has **SU = 0** (only 1 GPU per node, no intra-node peer) and SO > 0.
+- 2n × 4g has **both > 0** (mixed RDMA + SHM).
 
 These reflect the SM89 warp-cooperative TMA fallback fix (commits
 `38093df5`, `2f958b9b`, `44d1b976`, `3cce0ee8`), the proxy `getenv`

@@ -280,6 +280,38 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             if args.ignore_local_traffic:
                 num_scaleup_recv_tokens -= (src_token_global_idx // num_max_tokens_per_rank % num_scaleup_ranks == dist.get_rank() % num_scaleup_ranks).sum().item()
 
+            # Physical-topology override for SO/SU labels (no-NVLink + UCCL proxy mode):
+            #   SU (intra-node) → host shared-memory memcpy on the same node, no NIC.
+            #   SO (inter-node) → ibverbs RDMA WRITE / inline PUT_VALUE across nodes.
+            # The DeepEPv2 logical (scaleout, scaleup) decomposition does not match
+            # physical topology when num_scaleup_ranks=1 (NVLink disabled), so always
+            # recompute SO=inter-node send / SU=intra-node recv (excluding self) from
+            # LOCAL_WORLD_SIZE-derived node membership. On single-node configs SO will
+            # be 0 (no inter-node traffic) and SU reports the actual intra-node count.
+            # --ignore-local-traffic does not apply here (self is always excluded).
+            _local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', str(num_scaleup_ranks)))
+            _num_total_ranks = num_scaleup_ranks * num_scaleout_ranks
+            if _local_world_size > 0:
+                _my_rank = dist.get_rank()
+                _my_node = _my_rank // _local_world_size
+                _num_experts_per_rank = num_experts // _num_total_ranks
+                _tok_dst_rank = topk_idx // _num_experts_per_rank   # [N, num_topk]
+                _intranode_send = 0
+                _internode_send = 0
+                for _p in range(_num_total_ranks):
+                    if _p == _my_rank:
+                        continue
+                    _n = (_tok_dst_rank == _p).any(dim=1).sum().item()
+                    if _p // _local_world_size == _my_node:
+                        _intranode_send += _n
+                    else:
+                        _internode_send += _n
+                num_scaleout_send_tokens = _internode_send  # SO = inter-node (RDMA)
+                _recv_src_ranks = src_token_global_idx[:num_recv_tokens] // num_max_tokens_per_rank
+                num_scaleup_recv_tokens = (
+                    ((_recv_src_ranks // _local_world_size == _my_node)
+                     & (_recv_src_ranks != _my_rank)).sum().item())  # SU = intra-node (SHM)
+
             # Test dispatch performance
             num_bytes_per_dispatch_token = safe_div(count_bytes(recv_x, recv_topk_idx, recv_topk_weights), recv_topk_idx.size(0))
             num_scaleup_bytes = num_bytes_per_dispatch_token * num_scaleup_recv_tokens  # Received via scaleup
@@ -370,6 +402,27 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                         num_reduction_read_tokens = get_unique_and_valid_dst_count(topk_idx // num_experts_per_rank)
                 if not args.ignore_local_traffic and num_scaleout_ranks == 1:
                     num_scaleout_tokens = 0
+                # Physical-topology override (mirrors the dispatch-side block above):
+                # SO=inter-node (RDMA) sends, SU=intra-node (SHM) recvs excluding self.
+                if _local_world_size > 0:
+                    # SU = recv from intra-node peers (excluding self).
+                    _recv_src_ranks_c = src_token_global_idx[:num_recv_tokens] // num_max_tokens_per_rank
+                    num_scaleup_tokens = (
+                        ((_recv_src_ranks_c // _local_world_size == _my_node)
+                         & (_recv_src_ranks_c != _my_rank)).sum().item())
+                    # SO = send to inter-node peers (mirror dispatch's send-side count).
+                    _intra_send_c = 0
+                    _inter_send_c = 0
+                    _tok_dst_rank_c = topk_idx // (num_experts // _num_total_ranks)
+                    for _p in range(_num_total_ranks):
+                        if _p == _my_rank:
+                            continue
+                        _n = (_tok_dst_rank_c == _p).any(dim=1).sum().item()
+                        if _p // _local_world_size == _my_node:
+                            _intra_send_c += _n
+                        else:
+                            _inter_send_c += _n
+                    num_scaleout_tokens = _inter_send_c
                 return num_scaleout_tokens * num_bytes_per_combine_token, num_scaleup_tokens * num_bytes_per_combine_token, num_reduction_read_tokens * num_bytes_per_combine_token
 
             num_scaleout_bytes, num_scaleup_bytes, num_reduction_read_bytes = get_combine_bytes(False)
