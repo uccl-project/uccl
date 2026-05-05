@@ -292,11 +292,10 @@ dispatch_impl(
             ptx::tma_store_wait();
             __syncwarp();
 
-            // Issue data TMA
-            if (ptx::elect_one_sync()) {
-                ptx::tma_load_1d(tma_buffer.get_hidden_ptr(), math::advance_ptr(x, token_i64_idx * kNumHiddenBytes),
-                                 mbarrier_ptr, kNumHiddenBytes);
-            }
+            // Issue data TMA (warp-cooperative on SM89)
+            ptx::tma_load_1d_warp(tma_buffer.get_hidden_ptr(),
+                                  math::advance_ptr(x, token_i64_idx * kNumHiddenBytes),
+                                  mbarrier_ptr, kNumHiddenBytes, lane_idx);
             __syncwarp();
 
             // Issue SF TMA or cp.async

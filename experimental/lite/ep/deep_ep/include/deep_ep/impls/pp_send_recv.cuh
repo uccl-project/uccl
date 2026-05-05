@@ -43,18 +43,24 @@ template <int kNumSMs,
           int kNumTMABlocksPerStage = kNumTMABytesPerStage / ptx::kNumTMAAlignBytes>
 __device__ __forceinline__ void tma_copy(
     void* src_ptr, void* dst_ptr,
-    const int64_t& num_bytes, const int& sm_idx) {
+    const int64_t& num_bytes, const int& sm_idx, const int& lane_id) {
     extern __shared__ __align__(ptx::kNumTMAAlignBytes) int8_t smem[];
     const auto tma_buffers = smem;
     const auto mbarriers = reinterpret_cast<ptx::mbarrier*>(smem + kNumStages * kNumTMABytesPerStage);
     EP_STATIC_ASSERT(kNumTMABytesPerStage > 0, "Invalid shared memory bytes");
     EP_STATIC_ASSERT(kNumStages >= 2, "Need at least 2 stages for pipelining");
 
-    // Init mbarriers
+    // Init mbarriers (single-lane init)
     ptx::arrival_phase phases[kNumStages];
+    if (ptx::elect_one_sync()) {
+        #pragma unroll
+        for (int s = 0; s < kNumStages; ++ s)
+            ptx::mbarrier_init_with_fence(mbarriers + s, 1);
+    }
     #pragma unroll
     for (int s = 0; s < kNumStages; ++ s)
-        phases[s] = 0, ptx::mbarrier_init_with_fence(mbarriers + s, 1);
+        phases[s] = 0;
+    __syncwarp();
 
     // Work partitioning across SMs
     EP_DEVICE_ASSERT(num_bytes % ptx::kNumTMAAlignBytes == 0);
@@ -78,31 +84,38 @@ __device__ __forceinline__ void tma_copy(
 
         // Fill pipeline: issue loads for the first kNumStages iterations
         if (iter_idx < kNumStages) {
-            ptx::tma_load_1d(
+            ptx::tma_load_1d_warp(
                 tma_buffers + stage_idx * kNumTMABytesPerStage,
                 math::advance_ptr(src_ptr, store_offset),
-                mbarriers + stage_idx, num_store_bytes);
-            ptx::mbarrier_arrive_and_set_tx(mbarriers + stage_idx, num_store_bytes);
+                mbarriers + stage_idx, num_store_bytes, lane_id);
+            if (ptx::elect_one_sync())
+                ptx::mbarrier_arrive_and_set_tx(mbarriers + stage_idx, num_store_bytes);
+            __syncwarp();
         }
 
         // Wait for this stage's load, then store
-        ptx::mbarrier_wait_and_flip_phase(mbarriers + stage_idx, phases[stage_idx]);
-        ptx::tma_store_1d(
+        if (ptx::elect_one_sync())
+            ptx::mbarrier_wait_and_flip_phase(mbarriers + stage_idx, phases[stage_idx]);
+        __syncwarp();
+        ptx::tma_store_1d_warp(
             math::advance_ptr(dst_ptr, store_offset),
             tma_buffers + stage_idx * kNumTMABytesPerStage,
-            num_store_bytes);
+            num_store_bytes, lane_id);
         ptx::tma_store_commit();
 
         // Prefetch: wait until this stage's buffer is safe to reuse, then issue next load
         const auto next_iter_idx = iter_idx + kNumStages;
         if (next_iter_idx < num_iterations) {
             ptx::tma_store_wait<kNumStages - 1>();
+            __syncwarp();
             const auto [load_offset, num_load_bytes] = get_iter_info(next_iter_idx);
-            ptx::tma_load_1d(
+            ptx::tma_load_1d_warp(
                 tma_buffers + stage_idx * kNumTMABytesPerStage,
                 math::advance_ptr(src_ptr, load_offset),
-                mbarriers + stage_idx, num_load_bytes);
-            ptx::mbarrier_arrive_and_set_tx(mbarriers + stage_idx, num_load_bytes);
+                mbarriers + stage_idx, num_load_bytes, lane_id);
+            if (ptx::elect_one_sync())
+                ptx::mbarrier_arrive_and_set_tx(mbarriers + stage_idx, num_load_bytes);
+            __syncwarp();
         }
     }
 
@@ -146,8 +159,9 @@ pp_send_impl(const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
             // TODO: print more info, and control the SM who prints it
             []() { printf("DeepEP PP send timeout, recv buffer is full"); }
         );
-        tma_copy<kNumSMs, kNumSmemBytes>(x, send_buffer_ptr, num_x_bytes, sm_idx);
     }
+    __syncwarp();
+    tma_copy<kNumSMs, kNumSmemBytes>(x, send_buffer_ptr, num_x_bytes, sm_idx, ptx::get_lane_idx());
     cooperative_groups::this_grid().sync();
 
     // Issue RDMA put
@@ -197,8 +211,9 @@ pp_recv_impl(const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
             // TODO: print more info, and control the SM who prints it
             []() { printf("DeepEP PP recv timeout, recv buffer is empty\n"); }
         );
-        tma_copy<kNumSMs, kNumSmemBytes>(recv_buffer_ptr, x, num_x_bytes, sm_idx);
     }
+    __syncwarp();
+    tma_copy<kNumSMs, kNumSmemBytes>(recv_buffer_ptr, x, num_x_bytes, sm_idx, ptx::get_lane_idx());
     cooperative_groups::this_grid().sync();
 
     // TODO: add a comment

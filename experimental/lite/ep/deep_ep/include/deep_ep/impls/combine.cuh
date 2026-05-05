@@ -135,16 +135,19 @@ combine_impl(nv_bfloat16* x,
                 token_idx_in_tensor = ptx::exchange(stored_topk_slot_idx, ptx::get_master_lane_idx(reduce_valid_mask));
 
             // No reduce
+            const auto load_ptr =
+                math::advance_ptr(x, static_cast<int64_t>(token_idx_in_tensor) * kNumHiddenBytes);
+            ptx::tma_store_wait();
+            __syncwarp();
+            ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), load_ptr, mbarrier_ptr, kNumHiddenBytes, lane_idx);
             if (ptx::elect_one_sync()) {
-                const auto load_ptr =
-                    math::advance_ptr(x, static_cast<int64_t>(token_idx_in_tensor) * kNumHiddenBytes);
-                ptx::tma_store_wait();
-                ptx::tma_load_1d(tma_buffer.get_base_ptr(), load_ptr, mbarrier_ptr, kNumHiddenBytes);
                 ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                 ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-                ptx::tma_store_1d(master_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(), kNumHiddenBytes);
-                ptx::tma_store_commit();
             }
+            __syncwarp();
+            ptx::tma_store_1d_warp(master_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                   kNumHiddenBytes, lane_idx);
+            ptx::tma_store_commit();
             __syncwarp();
         } else if constexpr (kAllowMultipleReduction) {
             // Do local reduction
@@ -173,11 +176,10 @@ combine_impl(nv_bfloat16* x,
             ptx::tma_store_fence();
             __syncwarp();
 
-            // Issue TMA stores
-            if (ptx::elect_one_sync()) {
-                ptx::tma_store_1d(master_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(), kNumHiddenBytes);
-                ptx::tma_store_commit();
-            }
+            // Issue TMA stores (warp-cooperative on SM89)
+            ptx::tma_store_1d_warp(master_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(),
+                                   kNumHiddenBytes, lane_idx);
+            ptx::tma_store_commit();
             __syncwarp();
         } else {
             // No local reduction, send all data (expanded send)
@@ -187,28 +189,34 @@ combine_impl(nv_bfloat16* x,
                 if (slot_idx >= 0) {
                     const auto src_token_ptr = math::advance_ptr<int4>(x, slot_idx * static_cast<int64_t>(kNumHiddenBytes));
                     const auto token_buffer = recv_buffer.get_rank_buffer(k).get_token_buffer(src_token_idx);
+                    // Load (warp-cooperative on SM89)
+                    ptx::tma_store_wait();
+                    __syncwarp();
+                    ptx::tma_load_1d_warp(tma_buffer.get_base_ptr(), src_token_ptr, mbarrier_ptr, kNumHiddenBytes, lane_idx);
                     if (ptx::elect_one_sync()) {
-                        // Load
-                        ptx::tma_store_wait();
-                        ptx::tma_load_1d(tma_buffer.get_base_ptr(), src_token_ptr, mbarrier_ptr, kNumHiddenBytes);
                         ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                         ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                    }
+                    __syncwarp();
 
-                        if (nvlink_bypass) {
-                            // Write into the same position
-                            ptx::tma_store_1d(gin.get_sym_ptr<team_t>(token_buffer.get_base_ptr(), src_rank_idx),
-                                              tma_buffer.get_base_ptr(), kNumHiddenBytes);
-                            ptx::tma_store_commit();
-                        } else {
-                            // Write to the RDMA send buffer
-                            const auto send_token_buffer =
-                                send_buffer.get_rank_buffer(src_rank_idx).get_token_buffer(src_token_idx * kNumTopk + k);
-                            ptx::tma_store_1d(send_token_buffer.get_base_ptr(), tma_buffer.get_base_ptr(), kNumHiddenBytes);
-                            ptx::tma_store_commit();
-                            ptx::tma_store_wait();
-                            ptx::fence_acq_rel_sys();
+                    if (nvlink_bypass) {
+                        // Write into the same position (warp-cooperative on SM89)
+                        ptx::tma_store_1d_warp(
+                            gin.get_sym_ptr<team_t>(token_buffer.get_base_ptr(), src_rank_idx),
+                            tma_buffer.get_base_ptr(), kNumHiddenBytes, lane_idx);
+                        ptx::tma_store_commit();
+                    } else {
+                        // Write to the RDMA send buffer (warp-cooperative on SM89)
+                        const auto send_token_buffer =
+                            send_buffer.get_rank_buffer(src_rank_idx).get_token_buffer(src_token_idx * kNumTopk + k);
+                        ptx::tma_store_1d_warp(send_token_buffer.get_base_ptr(),
+                                               tma_buffer.get_base_ptr(), kNumHiddenBytes, lane_idx);
+                        ptx::tma_store_commit();
+                        ptx::tma_store_wait();
+                        ptx::fence_acq_rel_sys();
 
-                            // Issue RDMA
+                        // Issue RDMA from the elected lane only
+                        if (ptx::elect_one_sync()) {
                             gin.put<team_t>(token_buffer.get_base_ptr(), send_token_buffer.get_base_ptr(),
                                             kNumHiddenBytes, src_rank_idx);
                         }
