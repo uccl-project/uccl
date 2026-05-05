@@ -47,6 +47,8 @@ from uccl.ep.utils import (  # type: ignore[no-redef]
     detect_ib_hca,
     hash_tensor,
 )
+
+# Test compatibility with low latency functions
 from uccl.ep.buffer import Buffer  # type: ignore[no-redef]
 
 try:

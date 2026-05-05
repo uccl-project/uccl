@@ -11,7 +11,7 @@ import torch.distributed as dist
 import os
 
 # noinspection PyUnresolvedReferences
-from uccl.ep.ep_cpp import Config
+from uccl.ep import Config
 from utils import (
     init_dist,
     bench,

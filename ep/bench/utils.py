@@ -47,6 +47,9 @@ def hash_tensor(t: torch.Tensor):
 
 
 def init_dist(local_rank: int, num_local_ranks: int):
+    # Set device
+
+    # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
     port = int(os.getenv("MASTER_PORT", "8361"))
     world_size = int(os.getenv("WORLD_SIZE", 1))
@@ -61,6 +64,7 @@ def init_dist(local_rank: int, num_local_ranks: int):
     }
     print(params)
     if "device_id" in sig.parameters:
+        # noinspection PyTypeChecker
         params["device_id"] = torch.device(f"cuda:{local_rank}")
     dist.init_process_group(**params)
     torch.set_default_dtype(torch.bfloat16)
@@ -72,12 +76,15 @@ def init_dist(local_rank: int, num_local_ranks: int):
 
 
 def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
+    # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
     dist.init_process_group(
         backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
     )
+
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
+
     return (
         dist.get_rank(),
         dist.get_world_size(),
@@ -91,6 +98,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
 
 
 def _gather_peer_ips(group):
+    # Gather local IP strings across ranks
     world = dist.get_world_size(group)
     my_ip = ep_cpp.get_oob_ip()
     ips = [None] * world
@@ -136,10 +144,13 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, bool
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
+
     if num_ranks == 1:
+        # single-process local test: okay to leave blank (or 127.0.0.1)
         peer_ip = ""
     else:
         ips = _gather_peer_ips(group)
+        # simple ring: next rank is your peer
         peer_ip = ips[(rank + 1) % num_ranks]
     return peer_ip if peer_ip else ""
 
@@ -154,6 +165,7 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
         "listen_ports": [proxy.get_listen_port() for proxy in proxies],
     }
     all_meta = [None] * num_ranks
+    # Use current device or fallback to LOCAL_RANK or 0
     if "LOCAL_RANK" in os.environ:
         device_index = int(os.environ["LOCAL_RANK"])
     else:
@@ -162,6 +174,7 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
 
+    # Debug: print IP distribution
     ip_counts = {}
     for m in all_meta:
         ip = m["ip"]
@@ -186,13 +199,18 @@ def check_nvlink_connections(group: dist.ProcessGroup):
     Arguments:
         group: the communication group.
     """
+    # Check NVLink connection
+    # NOTES: some A100 PCIE GPUs only have pairwise NVLink connection, so that we can only use EP2
+    # TODO: check all cases, all local-node GPUs in the group should be connected via NVLink
     if "PCIE" in torch.cuda.get_device_name():
         assert group.size() <= 2, "PCIe GPUs only have pairwise NVLink connections"
 
+        # noinspection PyUnresolvedReferences
         import pynvml
 
         pynvml.nvmlInit()
 
+        # noinspection PyTypeChecker
         devices = (
             os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
             .strip(",")
@@ -202,6 +220,8 @@ def check_nvlink_connections(group: dist.ProcessGroup):
         physical_device_indices = [0] * group.size()
         dist.all_gather_object(physical_device_indices, physical_device_idx, group)
 
+        # Check whether they are all connected via NVLink
+        # Reference: https://github.com/vllm-project/vllm/blob/b8e809a057765c574726a6077fd124db5077ce1f/vllm/platforms/cuda.py#L438
         handles = [
             pynvml.nvmlDeviceGetHandleByIndex(i) for i in physical_device_indices
         ]
@@ -216,6 +236,7 @@ def check_nvlink_connections(group: dist.ProcessGroup):
                     status == pynvml.NVML_P2P_STATUS_OK
                 ), f"GPU {physical_device_indices[i]} and GPU {physical_device_indices[j]} are not connected via NVLink"
 
+        # Close NVML
         pynvml.nvmlShutdown()
 
 
@@ -230,8 +251,7 @@ class EventOverlap:
 
     Attributes:
         event: the CUDA event captured.
-        extra_tensors: an easier way to simulate PyTorch tensor ``record_stream``,
-            may be useful with CUDA graph.
+        extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with CUDA graph.
     """
 
     def __init__(
@@ -239,22 +259,47 @@ class EventOverlap:
         event: Optional[EventHandle] = None,
         extra_tensors: Optional[Tuple[torch.Tensor]] = None,
     ) -> None:
+        """
+        Initialize the class.
+
+        Arguments:
+            event: the CUDA event captured.
+            extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with CUDA graph.
+        """
         self.event = event
+
+        # NOTES: we use extra tensors to achieve stream recording, otherwise,
+        # stream recording will be incompatible with CUDA graph.
         self.extra_tensors = extra_tensors
 
     def current_stream_wait(self) -> None:
         """
-        The current stream ``torch.cuda.current_stream()`` waits for the
-        event to be finished.
+        The current stream `torch.cuda.current_stream()` waits for the event to be finished.
         """
         assert self.event is not None
         stream_ptr = int(torch.cuda.current_stream().cuda_stream)
         self.event.current_stream_wait(stream_ptr)
 
     def __enter__(self) -> Any:
+        """
+        Utility for overlapping and Python `with` syntax.
+
+        You can overlap the kernels on the current stream with the following example:
+        ```python
+        event_overlap = event_after_all_to_all_kernels()
+        with event_overlap():
+            do_something_on_current_stream()
+        # After exiting the `with` scope, the current stream with wait the event to be finished.
+        ```
+        """
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """
+        Utility for overlapping and Python `with` syntax.
+
+        Please follow the example in the `__enter__` function.
+        """
         if self.event is not None:
             stream_ptr = int(torch.cuda.current_stream().cuda_stream)
             self.event.current_stream_wait(stream_ptr)
@@ -277,14 +322,17 @@ def detect_ib_hca():
         return None
 
     if not devices:
+        # No InfiniBand devices found - this is okay on systems without RDMA
         return None
 
+    # Check for Mellanox devices first
     ib_devs = [
         os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
     ]
     if ib_devs:
         return ib_devs[0]
 
+    # Check for Intel RDMA devices (irdma)
     ib_devs = [
         os.path.basename(d) for d in devices if os.path.basename(d).startswith("irdma")
     ]
@@ -345,14 +393,19 @@ class suppress_stdout_stderr:
     def __enter__(self):
         self.outnull_file = open(os.devnull, "w")
         self.errnull_file = open(os.devnull, "w")
+
         self.old_stdout_fileno_undup = sys.stdout.fileno()
         self.old_stderr_fileno_undup = sys.stderr.fileno()
+
         self.old_stdout_fileno = os.dup(sys.stdout.fileno())
         self.old_stderr_fileno = os.dup(sys.stderr.fileno())
+
         self.old_stdout = sys.stdout
         self.old_stderr = sys.stderr
+
         os.dup2(self.outnull_file.fileno(), self.old_stdout_fileno_undup)
         os.dup2(self.errnull_file.fileno(), self.old_stderr_fileno_undup)
+
         sys.stdout = self.outnull_file
         sys.stderr = self.errnull_file
         return self
@@ -360,29 +413,37 @@ class suppress_stdout_stderr:
     def __exit__(self, *_):
         sys.stdout = self.old_stdout
         sys.stderr = self.old_stderr
+
         os.dup2(self.old_stdout_fileno, self.old_stdout_fileno_undup)
         os.dup2(self.old_stderr_fileno, self.old_stderr_fileno_undup)
+
         os.close(self.old_stdout_fileno)
         os.close(self.old_stderr_fileno)
+
         self.outnull_file.close()
         self.errnull_file.close()
 
 
 def bench(fn, num_warmups: int = 50, num_tests: int = 50, post_fn=None):
+    # Flush L2 cache with 256 MB data
     torch.cuda.synchronize()
     current_device = torch.cuda.current_device()
     cache = torch.empty(
         int(256e6 // 4), dtype=torch.int, device=f"cuda:{current_device}"
     )
 
+    # Warmup
     for _ in range(num_warmups):
         fn()
 
+    # Flush L2
     cache.zero_()
 
+    # Testing
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
     for i in range(num_tests):
+        # Record
         start_events[i].record()
         fn()
         end_events[i].record()
@@ -405,6 +466,7 @@ def bench_kineto(
     barrier_comm_profiling: bool = False,
     num_kernels_per_period: int = 1,
 ):
+    # Profile
     suppress = suppress_stdout_stderr if suppress_kineto_output else empty_suppress
     with suppress():
         schedule = torch.profiler.schedule(wait=0, warmup=1, active=1, repeat=1)
@@ -412,6 +474,7 @@ def bench_kineto(
             activities=[torch.profiler.ProfilerActivity.CUDA], schedule=schedule
         ) as prof:
             for i in range(2):
+                # NOTES: use a large kernel and a barrier to eliminate the unbalanced CPU launch overhead
                 if barrier_comm_profiling:
                     current_device = torch.cuda.current_device()
                     lhs = torch.randn(
@@ -438,6 +501,7 @@ def bench_kineto(
                 dist.barrier()
                 prof.step()
 
+    # Parse the profiling table
     assert isinstance(kernel_names, str) or isinstance(kernel_names, tuple)
     is_tuple = isinstance(kernel_names, tuple)
     prof_lines = (
@@ -457,9 +521,11 @@ def bench_kineto(
             )
             print(f"[WARNING] Continuing execution despite mismatch...\n")
 
+    # Save chrome traces
     if trace_path is not None:
         prof.export_chrome_trace(trace_path)
 
+    # Return average kernel durations
     units = {"ms": 1e3, "us": 1e6}
     kernel_durations = []
     for name in kernel_names:
@@ -475,12 +541,14 @@ def bench_kineto(
                         found = True
                         break
                 break
+        # NOTE(MaoZiming): in rare cases it misses certain events.
         if not found:
             print(
                 f"[WARNING] Kernel '{name}' not found in profiling table, using 0.0 as placeholder"
             )
             kernel_durations.append(0.0)
 
+    # Expand the kernels by periods
     if num_kernels_per_period > 1:
         with tempfile.NamedTemporaryFile(suffix=".json") as tmp:
             prof.export_chrome_trace(tmp.name)
@@ -495,6 +563,8 @@ def bench_kineto(
             events = sorted(events, key=lambda event: event["ts"])
             durations = [event["dur"] / 1e6 for event in events]
 
+            # Handle incomplete periods gracefully (due to dropped samples)
+            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue.
             num_complete_periods = len(durations) // num_kernels_per_period
             if len(durations) % num_kernels_per_period != 0:
                 dropped_samples = len(durations) % num_kernels_per_period
@@ -505,6 +575,7 @@ def bench_kineto(
                         f"Using {num_complete_periods} complete periods.",
                         flush=True,
                     )
+                # Truncate to only use complete periods
                 durations = durations[: num_complete_periods * num_kernels_per_period]
             if num_complete_periods > 0:
                 kernel_durations[i] = [
@@ -512,6 +583,7 @@ def bench_kineto(
                     for j in range(num_kernels_per_period)
                 ]
             else:
+                # If we have no complete periods, fall back to returning zeros
                 if dist.get_rank() == 0:
                     print(
                         f"[WARNING] Kernel '{kernel_name}': No complete periods found. "
@@ -520,6 +592,7 @@ def bench_kineto(
                     )
                 kernel_durations[i] = [0.0] * num_kernels_per_period
 
+    # Return execution durations
     return kernel_durations if is_tuple else kernel_durations[0]
 
 
@@ -585,7 +658,13 @@ def initialize_uccl(
 
     ep_cpp.register_proxies(local_rank, proxies)
 
+    # Set atomic buffer pointer for all proxies BEFORE starting them
+    # This ensures the atomic buffer info is included in connection info exchange
+    # Note: Only thread 0's proxy allocates the atomic buffer in its constructor
     if not is_intranode and len(proxies) > 0:
+        # Get atomic buffer pointer from thread 0 proxy (only thread 0 allocates it)
+        # This must be done before start_dual() so the atomic buffer info is included
+        # in the connection info exchange during init_common()
         atomic_buffer_ptr = proxies[0].get_atomic_buffer_ptr()
         if atomic_buffer_ptr:
             for proxy in proxies:
@@ -603,6 +682,7 @@ def initialize_uccl(
 
 
 def destroy_uccl(proxies, workers):
+    # Use current device or fallback to LOCAL_RANK
     if "LOCAL_RANK" in os.environ:
         device_index = int(os.environ["LOCAL_RANK"])
     else:
