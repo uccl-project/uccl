@@ -131,7 +131,7 @@ $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS)
 py: $(PYTARGET) $(EP_EXT)
 
 # Repo uccl package dir (so in-repo runs use the same build)
-UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
+UCCL_UCCL := $(abspath $(CURDIR)/../uccl)
 
 EP_PYTHON_DIR := $(CURDIR)/python/uccl_ep
 

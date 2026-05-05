@@ -8,6 +8,7 @@ Provides ``EventOverlap``, ``initialize_uccl``, ``destroy_uccl``,
 import inspect
 import glob
 import os
+import socket
 import sys
 import time
 import json
@@ -95,6 +96,43 @@ def _gather_peer_ips(group):
     ips = [None] * world
     dist.all_gather_object(ips, my_ip, group=group)
     return ips
+
+
+def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, bool]:
+    """
+    Infer local rank and node topology for a process group.
+
+    Returns:
+        local_rank: rank index within the current node.
+        node_idx: compact node index within the given group.
+        num_nodes: number of distinct nodes spanned by the group.
+        is_intranode: whether all ranks in the group are on the same node.
+    """
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        local_rank = torch.cuda.current_device()
+
+    node_token = (
+        os.environ.get("NODE_RANK")
+        or os.environ.get("GROUP_RANK")
+        or os.environ.get("SLURM_NODEID")
+        or socket.gethostname()
+    )
+
+    world = dist.get_world_size(group)
+    node_tokens = [None] * world
+    dist.all_gather_object(node_tokens, node_token, group=group)
+
+    token_to_idx = {}
+    for token in node_tokens:
+        if token not in token_to_idx:
+            token_to_idx[token] = len(token_to_idx)
+
+    node_idx = token_to_idx[node_token]
+    num_nodes = len(token_to_idx)
+    is_intranode = num_nodes == 1
+    return local_rank, node_idx, num_nodes, is_intranode
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -497,7 +535,7 @@ def initialize_uccl(
     num_ranks,
     group,
     num_experts=0,
-    is_intranode=False,
+    is_intranode: Optional[bool] = None,
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
 ):
@@ -507,33 +545,17 @@ def initialize_uccl(
     except Exception:
         pass
 
-    if "LOCAL_RANK" in os.environ:
-        local_rank = int(os.environ["LOCAL_RANK"])
-    else:
-        local_rank = torch.cuda.current_device()
-
-    if "LOCAL_WORLD_SIZE" in os.environ:
-        nproc_per_node = int(os.environ["LOCAL_WORLD_SIZE"])
-    else:
-        if is_intranode:
-            nproc_per_node = num_ranks
-        else:
-            num_gpus = torch.cuda.device_count()
-            nproc_per_node = num_gpus if num_gpus > 0 else 1
-
-    node_idx = rank // nproc_per_node if nproc_per_node > 0 else 0
-
-    if "WORLD_SIZE" in os.environ and nproc_per_node > 0:
-        world_size = int(os.environ.get("WORLD_SIZE"))
-        if world_size % nproc_per_node != 0:
-            raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+    local_rank, node_idx, num_nodes, detected_is_intranode = detect_group_topology(
+        group
+    )
+    if is_intranode is None:
+        is_intranode = detected_is_intranode
+    elif is_intranode and not detected_is_intranode:
+        raise ValueError(
+            "Detected multi-node group topology, but `is_intranode=True` was requested"
+        )
 
     proxies = []
-
-    if nproc_per_node > 0:
-        num_nodes = num_ranks // nproc_per_node
-    else:
-        num_nodes = num_ranks
 
     for i in range(ep_cpp.get_num_proxy_threads()):
         proxy = ep_cpp.Proxy(
