@@ -115,6 +115,26 @@ Sanity checks per row:
   just self, so SU reflects the bytes the GPU writes for itself.
 - **2n × 4g** has both > 0 (mixed RDMA inter-node + SHM intra-node).
 
+### Logical bottleneck bandwidth
+
+The DeepEP V2 README's [Performance section](https://github.com/deepseek-ai/DeepEP#performance)
+reports `Dispatch / Combine Bottleneck Bandwidth` — note the README's own
+line "the results are logical bandwidth … 90 GB/s actually contains local
+rank traffic". We compute the same metric: per rank, BW = `legacy_bytes /
+latency` where `legacy_bytes = (topk_idx != -1).sum() × per-token bytes`
+(includes self-bypass / intra-node traffic). The bottleneck is the
+**minimum across ranks** of that per-iteration BW, then averaged over
+benchmark iterations.
+
+| Topology | Mode | Dispatch BW | Combine BW | Reduced combine BW |
+| --- | --- | ---: | ---: | ---: |
+| 1n × 2g | no-GDR | 26 GB/s | 64 ± 2 GB/s | 21 ± 1 GB/s |
+| 1n × 4g | no-GDR | 12 GB/s | 28 ± 1 GB/s | 17 ± 1 GB/s |
+| 2n × 1g | no-GDR | 27 GB/s | 66 ± 4 GB/s | 22 ± 1 GB/s |
+| 2n × 1g | GDR    | 66 ± 1 GB/s | 69 ± 6 GB/s | 20 ± 6 GB/s |
+| 2n × 4g | no-GDR | 7 GB/s | 17 ± 2 GB/s | 12 ± 2 GB/s |
+| 2n × 4g | GDR    | 7 GB/s | 18 ± 2 GB/s | 13 ± 2 GB/s |
+
 These reflect the SM89 warp-cooperative TMA fallback fix (commits
 `38093df5`, `2f958b9b`, `44d1b976`, `3cce0ee8`), the proxy `getenv`
 cache (commit `9255edf9`), and the channel-count cap on multi-node
