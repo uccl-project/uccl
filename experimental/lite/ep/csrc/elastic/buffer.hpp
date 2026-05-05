@@ -1059,9 +1059,33 @@ public:
                 /* 2 kinds of warps */ num_channels_per_sm / 2, kNumMaxChannelsPerSM);
             if (not prefer_overlap_with_compute)
                 num_channels_per_sm = std::min<int>(num_channels_per_sm, 4);
+            // Multi-node + multi-GPU-per-node configs (UCCL proxy mode) hit a
+            // proxy WR-rate ceiling: every channel that exists fires one
+            // "finish" PUT_VALUE per cross-rank peer per dispatch, regardless
+            // of how many tokens it carried. With small `num_max_tokens_per_rank`
+            // (e.g. 128) and many SMs (58 × 3 channels/SM = 174 channels),
+            // ~88% of those signals come from channels that processed 0 or 1
+            // tokens, but each still costs ~1 µs of proxy-thread `ibv_post_send`.
+            // Capping channels-per-SM to 1 in this regime moves dispatch on
+            // 2n×4g L4 from ~3 ms to ~1.9 ms (−36%) without hurting GPU-side
+            // parallelism (the kernel's TMA warps were already idle most of
+            // the time on under-loaded channels). Single-node configs are
+            // not signal-bound (intra-node PUT_VALUE goes through host shm
+            // memcpy, not the NIC) so they keep the original wide channel
+            // layout to maximise GPU-side parallelism.
+            const bool multi_node_multi_gpu =
+                use_uccl_proxy and local_world_size > 1 and
+                (num_ranks / local_world_size) > 1;
+            if (multi_node_multi_gpu)
+                num_channels_per_sm = std::min<int>(num_channels_per_sm, 1);
+            // Explicit env override always wins (clamp to [1, kNumMaxChannelsPerSM]).
+            if (const char* env = std::getenv("EP_NUM_CHANNELS_PER_SM")) {
+                num_channels_per_sm = std::max(1, std::min(atoi(env), kNumMaxChannelsPerSM));
+            }
             num_channels = num_sms * num_channels_per_sm;
             if (get_env<int>("EP_BUFFER_DEBUG"))
-                printf("Elastic buffer uses %d channels per SM\n", num_channels_per_sm);
+                printf("Elastic buffer uses %d channels per SM (multi_node_multi_gpu=%d)\n",
+                       num_channels_per_sm, static_cast<int>(multi_node_multi_gpu));
         }
 
         // Non-hybrid mode handles
