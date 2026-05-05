@@ -45,14 +45,28 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    comm}.cuh`): `kNumGinBarrierTags = 16`, signal/shadow indexed by
    `(tag, rank)`. Without this, dispatch and combine collide on the
    same per-rank counter.
-5. **SM89 TMA fallback fix** (commits `38093df5`, `2f958b9b`,
-   `44d1b976`, `3cce0ee8`): replaced the single-thread byte-loop in
-   `tma_load_1d` / `tma_store_1d` with warp-cooperative `cp.async.cg` +
-   `ld.shared.v4` / `st.global.v4`. SM89 `tma_store_commit()` emits
-   `fence.acq_rel.sys` so cross-node GDR doesn't suffer NIC RNR stalls.
-   All hot call sites converted in `{hybrid_,}{dispatch,combine}.cuh`,
-   the two epilogue kernels, and `pp_send_recv.cuh`. SM90 unchanged via
-   `#ifndef DISABLE_SM90_FEATURES`.
+5. **No-NVLink fallback** (`deep_ep/buffers/elastic.py`,
+   `deep_ep/include/deep_ep/common/handle.cuh`,
+   `csrc/kernels/backend/nccl.cu`, `csrc/jit/compiler.hpp`,
+   `csrc/elastic/buffer.hpp`): on PCIe-only GPUs (L4/L40), upstream's
+   NVLink scaleup path (`is_nvlink_accessible`, LSA team direct
+   `ld.acquire.sys` cross-GPU loads) hangs or segfaults. Setting
+   `EP_FORCE_NO_NVLINK=1` forces `kNumScaleupRanks=1` in Python, gates
+   out the NVLink helpers in device headers via JIT macro, and skips
+   NVLink-requiring NCCL symmetric-memory segment types — so all
+   cross-GPU traffic goes through the UCCL proxy.
+6. **SM89 vectorized TMA fallback**
+   (`deep_ep/include/deep_ep/common/ptx.cuh` and call sites in
+   `{hybrid_,}{dispatch,combine}.cuh`, the two epilogue kernels, and
+   `pp_send_recv.cuh`): on SM89 the upstream `tma_load_1d` /
+   `tma_store_1d` fall back to a single-thread byte loop (one lane
+   copies 14 KB while 31 lanes idle), which is a perf cliff. Replaced
+   with warp-cooperative variants that vectorize the copy across all
+   32 lanes (`cp.async` + `ld.shared.v4` + `st.global.v4`), and made
+   the SM89 `tma_store_commit()` emit a system fence so the GPU
+   stores are visible to the NIC before the proxy fires the doorbell
+   (without the fence, cross-node GDR stalls on NIC RNR retries).
+   SM90 paths are untouched.
 
 ## Benchmark results
 
