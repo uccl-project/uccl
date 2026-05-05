@@ -549,7 +549,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #endif
       S.numa_node = entry.numa_node;
       entry.refcount++;
-      if (std::getenv("EP_UCCL_DEBUG")) {
+      if (ep_uccl_debug_enabled()) {
         fprintf(stderr,
                 "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
                 "for GPU %d\n",
@@ -581,7 +581,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr, "[RDMA] Selected NIC %s (index %d) for GPU %d, NUMA node %d\n",
             selected_nic_name.c_str(), selected_dev_idx, gpu_idx, S.numa_node);
   }
@@ -1055,7 +1055,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     local_info->atomic_buffer_addr =
         reinterpret_cast<uintptr_t>(S.atomic_buffer_mr->addr);
     local_info->atomic_buffer_len = S.atomic_buffer_mr->length;
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
               "[create_per_thread_qp] Populated atomic buffer info: addr=0x%llx, "
               "len=%zu, rkey=0x%x\n",
@@ -1117,7 +1117,7 @@ void modify_qp_to_init(ProxyCtx& S) {
     }
   }
 
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "QP modified to INIT state\n");
 }
 
@@ -1170,11 +1170,11 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   }
 
   if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-    if (std::getenv("EP_UCCL_DEBUG"))
+    if (ep_uccl_debug_enabled())
       fprintf(stderr, "RoCE detected (Ethernet)\n");
     is_roce = 1;
   } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-    if (std::getenv("EP_UCCL_DEBUG"))
+    if (ep_uccl_debug_enabled())
       fprintf(stderr, "InfiniBand detected\n");
     is_roce = 0;
   } else {
@@ -1216,7 +1216,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
               IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr, "Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid,
             remote->qp_num, remote->psn);
     fprintf(stderr, "Verifying port state:\n");
@@ -1253,7 +1253,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "QP modified to RTR state\n");
 
   if (S.ack_qp) {
@@ -1278,7 +1278,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "ACK-QP modified to RTR state\n");
 }
 
@@ -1312,7 +1312,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     }
   }
 
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "QP modified to RTS state\n");
 
   attr.sq_psn = local_info->ack_psn;
@@ -1330,7 +1330,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     exit(1);
   }
 
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "ACK-QP modified to RTS state\n");
 }
 

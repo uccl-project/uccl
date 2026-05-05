@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "common.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -142,7 +143,7 @@ inline SharedBuffer allocate_shared_buffer(
   sb.device_ptr = static_cast<uint8_t*>(my_device_ptr) -
                   local_rank * sb.per_rank_size;
 
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr,
              "[SharedBuffer] rank %d: tag=%s total=%.1f MiB per_rank=%.1f MiB "
              "host=%p dev=%p\n",

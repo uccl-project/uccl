@@ -12,6 +12,21 @@
 #include <stdio.h>
 #include <unistd.h>
 
+// Cached env-var lookups for the proxy hot loop. glibc `getenv` does a
+// linear scan + strncmp of the full environ array; calling it from
+// per-iteration debug guards costs ~21% of proxy CPU at the ~M iters/s
+// rate of `Proxy::run_dual` on 2n×4g. Read once on first access into a
+// thread-safe static. The proxy never expects these to change at
+// runtime, so caching is safe.
+inline bool ep_uccl_debug_enabled() {
+  static const bool v = (std::getenv("EP_UCCL_DEBUG") != nullptr);
+  return v;
+}
+inline bool uccl_proxy_trace_enabled() {
+  static const bool v = (std::getenv("UCCL_PROXY_TRACE") != nullptr);
+  return v;
+}
+
 // #define SOFTWARE_ORDERING
 #define MAX_IB_DEVS 32
 // #define MEASURE_PER_OP_LATENCY

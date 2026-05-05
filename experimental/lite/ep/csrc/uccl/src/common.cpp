@@ -76,7 +76,7 @@ bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
   // Give scheduler a chance to migrate if needed
   sched_yield();
   int now = sched_getcpu();
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr,
             "Pinned to NUMA node %d, thread_idx: %d, local_rank: %d, running on CPU "
             "%d.\n",

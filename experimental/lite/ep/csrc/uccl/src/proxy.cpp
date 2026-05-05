@@ -59,7 +59,7 @@ void* acquire_cuda_ipc_ptr(int cuda_device,
   cudaError_t err =
       cudaIpcOpenMemHandle(&ipc_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
   if (err != cudaSuccess) {
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
               "[Proxy] rank=%d thread=%d failed to open CUDA IPC for peer %d: %s\n",
               rank, thread_idx, peer, cudaGetErrorString(err));
@@ -190,7 +190,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
-    } else if (std::getenv("EP_UCCL_DEBUG")) {
+    } else if (ep_uccl_debug_enabled()) {
       printf(
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d\n",
@@ -213,7 +213,7 @@ void Proxy::pin_thread_to_numa_wrapper() {
     CPU_ZERO(&cpuset);
     pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
           "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
           "%d, "
@@ -289,7 +289,7 @@ void Proxy::init_common() {
       std::abort();
     }
 
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
               "[Proxy] Registered atomic_buffer_ptr MR: addr=0x%llx, len=%zu, "
               "rkey=0x%x\n",
@@ -445,7 +445,7 @@ void Proxy::init_common() {
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
 
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       fprintf(stderr, "[Proxy] thread=%d peer=%d remote_addr=0x%llx remote_len=%zu remote_rkey=0x%x "
               "local_mr_addr=0x%llx local_mr_len=%zu local_mr_lkey=0x%x local_mr_rkey=0x%x "
               "local_qpn=0x%x remote_qpn=%u ack_qpn=0x%x recv_ack_qpn=0x%x\n",
@@ -489,13 +489,13 @@ void Proxy::init_common() {
     c.remote_atomic_buffer_len = remote_infos_[peer].atomic_buffer_len;
     c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
 
-    if (c.remote_atomic_buffer_addr == 0 and std::getenv("EP_UCCL_DEBUG")) {
+    if (c.remote_atomic_buffer_addr == 0 and ep_uccl_debug_enabled()) {
       fprintf(
           stderr,
           "[Proxy] WARNING: Remote atomic buffer not registered for peer %d "
           "(local atomic_buffer_ptr=%p, local atomic_buffer_mr=%p)\n",
           peer, atomic_buffer_ptr_, (void*)ctx_.atomic_buffer_mr);
-    } else if (std::getenv("EP_UCCL_DEBUG")) {
+    } else if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
               "[Proxy] Remote atomic buffer info for peer %d: addr=0x%llx, "
               "len=%zu, rkey=0x%x\n",
@@ -603,7 +603,7 @@ void Proxy::init_remote() {
 }
 
 void Proxy::run_sender() {
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
   mark_ready();
@@ -617,7 +617,7 @@ void Proxy::run_sender() {
 }
 
 void Proxy::run_remote() {
-  if (std::getenv("EP_UCCL_DEBUG"))
+  if (ep_uccl_debug_enabled())
     fprintf(stderr, "Remote CPU thread %d started\n", cfg_.thread_idx);
   init_remote();
   mark_ready();
@@ -638,7 +638,7 @@ void Proxy::run_remote() {
 
 void Proxy::run_dual() {
   init_common();
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr, "[EP_UCCL_DEBUG] proxy rank=%d thread=%d entered run_dual loop with %zu rings\n",
             cfg_.rank, cfg_.thread_idx, cfg_.d2h_queues.size());
     fflush(stderr);
@@ -664,7 +664,7 @@ void Proxy::run_dual() {
   std::set<PendingUpdate> pending_atomic_updates;
   auto last_debug = std::chrono::steady_clock::now();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    if (std::getenv("EP_UCCL_DEBUG")) {
+    if (ep_uccl_debug_enabled()) {
       auto now = std::chrono::steady_clock::now();
       if (now - last_debug > std::chrono::seconds(1)) {
         if (!cfg_.d2h_queues.empty()) {
@@ -895,7 +895,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   // Process all collected commands in batch
   if (!wrs_to_post.empty()) {
-    if (std::getenv("UCCL_PROXY_TRACE")) {
+    if (uccl_proxy_trace_enabled()) {
       fprintf(stderr,
               "[ProxyTrace] rank=%d thread=%d posting %zu cmds first_type=%d "
               "first_dst=%d first_bytes=%u first_lptr=%lu first_rptr=%lu\n",
@@ -929,7 +929,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
 void Proxy::run_local() {
   pin_thread_to_cpu_wrapper();
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr, "Local CPU thread %d started with %zu ring buffers\n",
             cfg_.thread_idx, cfg_.d2h_queues.size());
   }
@@ -943,7 +943,7 @@ void Proxy::run_local() {
   int total_seen = 0;
   while (true) {
     if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-      if (std::getenv("EP_UCCL_DEBUG")) {
+      if (ep_uccl_debug_enabled()) {
         fprintf(stderr, "Local thread %d stopping early at total_seen=%d\n",
                 cfg_.thread_idx, total_seen);
       }
@@ -996,7 +996,7 @@ void Proxy::run_local() {
           }
 
           if (!ctx_.progress_run.load(std::memory_order_acquire)) {
-            if (std::getenv("EP_UCCL_DEBUG")) {
+            if (ep_uccl_debug_enabled()) {
               fprintf(stderr, "Local thread %d stopping early at total_seen=%d\n",
                       cfg_.thread_idx, total_seen);
             }
@@ -1033,7 +1033,7 @@ void Proxy::run_local() {
     }
   }
 
-  if (std::getenv("EP_UCCL_DEBUG")) {
+  if (ep_uccl_debug_enabled()) {
     fprintf(stderr, "Local thread %d finished %d commands across %zu ring buffers\n",
             cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
   }
@@ -1266,7 +1266,7 @@ void Proxy::post_gpu_commands_mixed(
                   dst_local_rank * cfg_.shared_rdma_per_rank + roff;
       std::memcpy(dst, &value, bytes);
       std::atomic_thread_fence(std::memory_order_release);
-      if (std::getenv("UCCL_PROXY_TRACE")) {
+      if (uccl_proxy_trace_enabled()) {
         uint64_t readback = 0;
         std::memcpy(&readback, dst, bytes);
         fprintf(stderr,
@@ -1427,7 +1427,7 @@ void Proxy::post_gpu_commands_mixed(
       wrs[i].send_flags = IBV_SEND_INLINE;
       wrs[i].wr.rdma.remote_addr = remote_addr;
       wrs[i].wr.rdma.rkey = ctx->remote_rkey;
-      if (std::getenv("UCCL_PROXY_TRACE")) {
+      if (uccl_proxy_trace_enabled()) {
         fprintf(stderr,
                 "[ProxyTrace] rank=%d thread=%d RDMA_PUT_VALUE dst_rank=%d "
                 "remote_addr=0x%llx bytes=%u value=%llu\n",
