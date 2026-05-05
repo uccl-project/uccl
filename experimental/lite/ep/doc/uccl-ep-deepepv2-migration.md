@@ -54,7 +54,11 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    `EP_FORCE_NO_NVLINK=1` forces `kNumScaleupRanks=1` in Python, gates
    out the NVLink helpers in device headers via JIT macro, and skips
    NVLink-requiring NCCL symmetric-memory segment types — so all
-   cross-GPU traffic goes through the UCCL proxy.
+   cross-GPU traffic goes through the UCCL proxy. Consequence:
+   `kNumScaleupRanks=1` makes the `hybrid_*` kernels collapse into
+   their direct-mode branch (no intra-node NVLink aggregation), so we
+   only support direct EP — DeepEPv2's hybrid traffic-deduplication
+   advantage is unavailable in this deployment.
 6. **SM89 vectorized TMA fallback**
    (`deep_ep/include/deep_ep/common/ptx.cuh` and call sites in
    `{hybrid_,}{dispatch,combine}.cuh`, the two epilogue kernels, and
