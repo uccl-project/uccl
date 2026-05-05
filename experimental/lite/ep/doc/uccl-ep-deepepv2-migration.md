@@ -63,10 +63,11 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    copies 14 KB while 31 lanes idle), which is a perf cliff. Replaced
    with warp-cooperative variants that vectorize the copy across all
    32 lanes (`cp.async` + `ld.shared.v4` + `st.global.v4`), and made
-   the SM89 `tma_store_commit()` emit a system fence so the GPU
-   stores are visible to the NIC before the proxy fires the doorbell
-   (without the fence, cross-node GDR stalls on NIC RNR retries).
-   SM90 paths are untouched.
+   the SM89 `tma_store_commit()` emit a system-scope release fence so
+   GPU stores are flushed past L2 before the proxy fires the RDMA
+   doorbell — without it, GDR mode (NIC reads GPU memory over PCIe
+   peer-to-peer with no CPU in the path) can read stale or
+   partially-written bytes. SM90 paths are untouched.
 
 ## Benchmark results
 
