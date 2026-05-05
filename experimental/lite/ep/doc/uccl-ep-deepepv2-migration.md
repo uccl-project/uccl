@@ -85,58 +85,35 @@ above and CLI:
 --fp8-dispatch-modes=0 --num-bench-tests=<N>
 ```
 
-Cells are rank averages, format `SO/SU GB/s, legacy GB/s @ latency`. SO/SU
-uses bytes DeepEPv2 attributes to scale-out/scale-up. Legacy uses the
-historical low-latency numerator and is comparable only between rows of the
-same topology. Numbers below are from `N=1` with `--test-first-only`, so
-latency is the per-call cost (not warmed steady state).
+Cells are rank averages, format `SO/SU GB/s @ latency µs ± stddev`. SO/SU
+uses bytes DeepEPv2 attributes to scale-out/scale-up. Numbers are
+steady-state (`--num-bench-tests=10 --skip-check`) on commit `c07e6b94`
+(post `c1f893c3` channel-count fix); n samples = ranks × num_bench_tests
+× warmup (typically 36 for 1n×{2,4}g and 144 for 2n configs).
 
 | Topology | Mode | Dispatch | Combine | Reduced combine |
 | --- | --- | ---: | ---: | ---: |
-| 1n × 2g | GDR    | 6/6 GB/s @  618 µs | 6/6 GB/s @  581 µs | 6/6 GB/s @ 2530 µs |
-| 1n × 2g | no-GDR | 6/6 GB/s @  619 µs | 6/6 GB/s @  582 µs | 6/6 GB/s @ 2571 µs |
-| 1n × 4g | GDR    | 7/8 GB/s @  863 µs | 6/7 GB/s @ 1009 µs | 4/5 GB/s @ 3175 µs |
-| 1n × 4g | no-GDR | 7/8 GB/s @  862 µs | 6/7 GB/s @ 1020 µs | 4/5 GB/s @ 3254 µs |
-| 2n × 1g | GDR    | 7/7 GB/s @  539 µs | 14/14 GB/s @ 261 µs | 19/18 GB/s @ 781 µs |
-| 2n × 1g | no-GDR | 6/6 GB/s @  598 µs | 15/15 GB/s @ 244 µs | 18/17 GB/s @ 827 µs |
-| 2n × 4g | GDR    | 3/3 GB/s @ 3174 µs | 9/8 GB/s @ 1176 µs | 10/10 GB/s @ 1486 µs |
-| 2n × 4g | no-GDR | 3/3 GB/s @ 3174 µs | 9/9 GB/s @ 1144 µs | 10/10 GB/s @ 1421 µs |
+| 1n × 2g | no-GDR | 7/7 GB/s @ 560 ± 9 µs | 16/16 GB/s @ 222 ± 6 µs | 21/22 GB/s @ 682 ± 36 µs |
+| 1n × 4g | no-GDR | 6/6 GB/s @ 1058 ± 26 µs | 14/14 GB/s @ 472 ± 15 µs | 18/18 GB/s @ 818 ± 41 µs |
+| 2n × 1g | no-GDR | 7/7 GB/s @ 540 ± 10 µs | 16/16 GB/s @ 232 ± 10 µs | 22/21 GB/s @ 681 ± 36 µs |
+| 2n × 1g | GDR    | 19/19 GB/s @ 200 ± 69 µs | 19/19 GB/s @ 190 ± 19 µs | 21/21 GB/s @ 763 ± 225 µs |
+| 2n × 4g | no-GDR | 5/5 GB/s @ 2024 ± 173 µs | 13/13 GB/s @ 782 ± 55 µs | 13/13 GB/s @ 1154 ± 31 µs |
+| 2n × 4g | GDR    | 5/5 GB/s @ 1977 ± 106 µs | 10/10 GB/s @ 941 ± 59 µs | 10/10 GB/s @ 1382 ± 115 µs |
 
 These reflect the SM89 warp-cooperative TMA fallback fix (commits
-`38093df5`, `2f958b9b`, `44d1b976`); see the corresponding entry under
-"Open issues" for context. The intra-kernel "copy GB/s" / "reduce GB/s"
-numbers reported by the benchmark are L2-cache-resident (L40 has 96 MB
-L2 vs ~1.8 MB working set, and the dispatch/combine kernel just wrote
-the buffer), not GDDR or PCIe bandwidth, so they should not be quoted
-as a sustained throughput.
+`38093df5`, `2f958b9b`, `44d1b976`, `3cce0ee8`), the proxy `getenv`
+cache (commit `9255edf9`), and the channel-count cap on multi-node
+multi-GPU UCCL proxy (commit `c1f893c3`). See the corresponding entries
+under "Open issues" for context. The intra-kernel "copy GB/s" / "reduce
+GB/s" numbers reported by the benchmark are L2-cache-resident (L40 has
+96 MB L2 vs ~1.8 MB working set, and the dispatch/combine kernel just
+wrote the buffer), not GDDR or PCIe bandwidth, so they should not be
+quoted as a sustained throughput.
 
-### Steady-state results after channel-count fix (commit `c1f893c3`)
-
-The numbers above were captured cold (`--test-first-only`, N=1). Steady-state
-mean ± stddev with `--num-bench-tests=10 --skip-check` (n samples = ranks ×
-warmup × num_bench_tests, see methodology in the channel-count entry under
-"Open issues"):
-
-| Topology | Mode | Dispatch µs | Combine µs | Reduced combine µs |
-| --- | --- | ---: | ---: | ---: |
-| 1n × 2g          | no-GDR | 560 ± 1 | 222 ± 2 | 682 ± 18 |
-| 1n × 4g          | no-GDR | 1058 ± 21 | 472 ± 11 | 818 ± 12 |
-| 2n × 1g          | no-GDR | 540 ± 7 | 232 ± 3 | 681 ± 6 |
-| 2n × 1g          | GDR    | 200 ± 5 | 190 ± 3 | 763 ± 12 |
-| **2n × 4g**      | no-GDR | **2024 ± 173** | **782 ± 55** | 1154 ± 31 |
-| **2n × 4g**      | GDR    | **1977 ± 106** | **941 ± 59** | 1382 ± 115 |
-
-Compared to the pre-`c1f893c3` baseline (cap not applied, default
-`num_channels_per_sm = 3`):
-
-| Topology | Stage | Pre µs | Post µs | Δ |
-| --- | --- | ---: | ---: | ---: |
-| 2n × 4g no-GDR | dispatch | 3050 | 2024 | **−34%** |
-| 2n × 4g no-GDR | combine | 1034 | 782 | **−24%** |
-| 2n × 4g GDR | dispatch | 3164 | 1977 | **−38%** |
-| 2n × 4g GDR | combine | 1060 | 941 | −11% |
-| 2n × 4g GDR | reduced combine | 1272 | 1382 | +9% (regression) |
-| 1n × 4g no-GDR | combine | 552 | 472 | −15% |
+For reference, the pre-`c1f893c3` baseline on 2n × 4g was: dispatch
+~3050 µs / ~3164 µs (no-GDR / GDR), combine ~1034 µs / ~1060 µs.
+The fix delivers −34 to −38% on dispatch and −11 to −24% on combine
+with a +9% regression on 2n × 4g GDR reduced combine (see Open issues).
 
 Notes:
 
