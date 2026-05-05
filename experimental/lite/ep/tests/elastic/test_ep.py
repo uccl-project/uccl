@@ -280,37 +280,45 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             if args.ignore_local_traffic:
                 num_scaleup_recv_tokens -= (src_token_global_idx // num_max_tokens_per_rank % num_scaleup_ranks == dist.get_rank() % num_scaleup_ranks).sum().item()
 
-            # Physical-topology override for SO/SU labels (no-NVLink + UCCL proxy mode):
-            #   SU (intra-node) → host shared-memory memcpy on the same node, no NIC.
-            #   SO (inter-node) → ibverbs RDMA WRITE / inline PUT_VALUE across nodes.
-            # The DeepEPv2 logical (scaleout, scaleup) decomposition does not match
-            # physical topology when num_scaleup_ranks=1 (NVLink disabled), so always
-            # recompute SO=inter-node send / SU=intra-node recv (excluding self) from
-            # LOCAL_WORLD_SIZE-derived node membership. On single-node configs SO will
-            # be 0 (no inter-node traffic) and SU reports the actual intra-node count.
-            # --ignore-local-traffic does not apply here (self is always excluded).
+            # Physical-topology override for SO/SU labels under EP_FORCE_NO_NVLINK=1.
+            # When kNumScaleupRanks=1 (NVLink disabled), the DeepEPv2 logical SO/SU
+            # decomposition does not match the physical fabric the data actually
+            # traverses. Mirror the upstream formulas exactly, only substituting
+            # the boundary unit:
+            #   upstream  SO unit = NVLink-domain (i.e. scaleout rank)
+            #   our       SO unit = physical node (LOCAL_WORLD_SIZE)
+            #   upstream  SU unit = NVLink-domain (recv via NVLink-internal peers)
+            #   our       SU unit = physical node (recv via host-shm peers)
+            # `--ignore-local-traffic` semantics are preserved verbatim: by default
+            # SO includes the self node (one tok per token sent to self-bypass) and
+            # SU includes self-recv tokens; passing the flag excludes both, exactly
+            # like the upstream behaviour.
             _local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', str(num_scaleup_ranks)))
             _num_total_ranks = num_scaleup_ranks * num_scaleout_ranks
+            _num_nodes_phys = max(1, _num_total_ranks // max(1, _local_world_size))
             if _local_world_size > 0:
                 _my_rank = dist.get_rank()
                 _my_node = _my_rank // _local_world_size
                 _num_experts_per_rank = num_experts // _num_total_ranks
-                _tok_dst_rank = topk_idx // _num_experts_per_rank   # [N, num_topk]
-                _intranode_send = 0
-                _internode_send = 0
-                for _p in range(_num_total_ranks):
-                    if _p == _my_rank:
+                # Per-token destination node: one token contributes to a node iff
+                # any of its top-k experts maps to a rank on that node.
+                _tok_dst_rank = topk_idx // _num_experts_per_rank          # [N, num_topk]
+                _tok_dst_node = torch.where(_tok_dst_rank >= 0,
+                                            _tok_dst_rank // _local_world_size,
+                                            torch.full_like(_tok_dst_rank, -1))
+                _so_phys = 0
+                for _n in range(_num_nodes_phys if _num_nodes_phys > 1 else 0):
+                    if args.ignore_local_traffic and _n == _my_node:
                         continue
-                    _n = (_tok_dst_rank == _p).any(dim=1).sum().item()
-                    if _p // _local_world_size == _my_node:
-                        _intranode_send += _n
-                    else:
-                        _internode_send += _n
-                num_scaleout_send_tokens = _internode_send  # SO = inter-node (RDMA)
+                    _so_phys += (_tok_dst_node == _n).any(dim=1).sum().item()
+                num_scaleout_send_tokens = _so_phys
+                # SU = recv via intra-node peers (mirrors upstream's
+                # num_recv_tokens which is "recv via NVLink-domain peers").
                 _recv_src_ranks = src_token_global_idx[:num_recv_tokens] // num_max_tokens_per_rank
-                num_scaleup_recv_tokens = (
-                    ((_recv_src_ranks // _local_world_size == _my_node)
-                     & (_recv_src_ranks != _my_rank)).sum().item())  # SU = intra-node (SHM)
+                _recv_intranode = (_recv_src_ranks // _local_world_size == _my_node)
+                if args.ignore_local_traffic:
+                    _recv_intranode &= (_recv_src_ranks != _my_rank)
+                num_scaleup_recv_tokens = _recv_intranode.sum().item()
 
             # Test dispatch performance
             num_bytes_per_dispatch_token = safe_div(count_bytes(recv_x, recv_topk_idx, recv_topk_weights), recv_topk_idx.size(0))
@@ -402,27 +410,47 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
                         num_reduction_read_tokens = get_unique_and_valid_dst_count(topk_idx // num_experts_per_rank)
                 if not args.ignore_local_traffic and num_scaleout_ranks == 1:
                     num_scaleout_tokens = 0
-                # Physical-topology override (mirrors the dispatch-side block above):
-                # SO=inter-node (RDMA) sends, SU=intra-node (SHM) recvs excluding self.
+                # Physical-topology override mirroring upstream get_combine_bytes
+                # exactly, only substituting the boundary unit
+                # (NVLink-domain → physical node). `--ignore-local-traffic`
+                # semantics are preserved verbatim.
                 if _local_world_size > 0:
-                    # SU = recv from intra-node peers (excluding self).
+                    # Per-token dst-node mask (used for SO and reduction-read).
+                    _tok_dst_rank_c = topk_idx // num_experts_per_rank
+                    _tok_dst_node_c = torch.where(_tok_dst_rank_c >= 0,
+                                                  _tok_dst_rank_c // _local_world_size,
+                                                  torch.full_like(_tok_dst_rank_c, -1))
+                    # SO = unique (token, dst-node) pairs across remote nodes;
+                    # include self-node by default, exclude it when
+                    # --ignore-local-traffic is set (matches upstream).
+                    _so_phys_c = 0
+                    if _num_nodes_phys > 1:
+                        for _n in range(_num_nodes_phys):
+                            if args.ignore_local_traffic and _n == _my_node:
+                                continue
+                            _so_phys_c += (_tok_dst_node_c == _n).any(dim=1).sum().item()
+                    num_scaleout_tokens = _so_phys_c
+
+                    # SU = "scaleup-domain" tokens, again with NVLink-domain
+                    # replaced by node. Upstream's two branches:
+                    #   (a) not-expand: num_scaleup_tokens = num_scaleup_recv_tokens
+                    #       which here means "recv from intra-node peers".
+                    #   (b) expand    : (recv_topk_idx != -1) summed over rows
+                    #       whose src is in our scaleup domain. Substitute with
+                    #       "src is on our node".
+                    #   (c) allow_multiple_reduction: same as dispatch's
+                    #       num_scaleup_recv_tokens.
                     _recv_src_ranks_c = src_token_global_idx[:num_recv_tokens] // num_max_tokens_per_rank
-                    num_scaleup_tokens = (
-                        ((_recv_src_ranks_c // _local_world_size == _my_node)
-                         & (_recv_src_ranks_c != _my_rank)).sum().item())
-                    # SO = send to inter-node peers (mirror dispatch's send-side count).
-                    _intra_send_c = 0
-                    _inter_send_c = 0
-                    _tok_dst_rank_c = topk_idx // (num_experts // _num_total_ranks)
-                    for _p in range(_num_total_ranks):
-                        if _p == _my_rank:
-                            continue
-                        _n = (_tok_dst_rank_c == _p).any(dim=1).sum().item()
-                        if _p // _local_world_size == _my_node:
-                            _intra_send_c += _n
-                        else:
-                            _inter_send_c += _n
-                    num_scaleout_tokens = _inter_send_c
+                    _recv_intranode_c = (_recv_src_ranks_c // _local_world_size == _my_node)
+                    if args.ignore_local_traffic:
+                        _recv_intranode_c &= (_recv_src_ranks_c != _my_rank)
+                    if (not args.allow_multiple_reduction) and is_expand_mode:
+                        # Upstream: (recv_topk_idx[:N] != -1)[<scaleup-mask>].sum()
+                        # Our scaleup-mask = src on our node.
+                        _row_mask = _recv_intranode_c
+                        num_scaleup_tokens = (recv_topk_idx[:num_recv_tokens] != -1)[_row_mask].sum().item()
+                    else:
+                        num_scaleup_tokens = _recv_intranode_c.sum().item()
                 return num_scaleout_tokens * num_bytes_per_combine_token, num_scaleup_tokens * num_bytes_per_combine_token, num_reduction_read_tokens * num_bytes_per_combine_token
 
             num_scaleout_bytes, num_scaleup_bytes, num_reduction_read_bytes = get_combine_bytes(False)

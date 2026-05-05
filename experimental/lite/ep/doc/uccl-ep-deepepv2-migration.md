@@ -87,27 +87,33 @@ above and CLI:
 
 Cells are rank averages, format `SO/SU GB/s @ latency µs ± stddev`. **SO
 counts inter-node bytes (RDMA traffic); SU counts intra-node bytes (host
-shared-memory memcpy).** This is a physical-topology accounting derived
-from `LOCAL_WORLD_SIZE`, not the DeepEPv2 logical (scaleout, scaleup)
-decomposition — the latter is meaningless under
-`EP_FORCE_NO_NVLINK=1` where `kNumScaleupRanks=1`. Self-rank traffic is
-always excluded. Numbers are steady-state
-(`--num-bench-tests=10 --skip-check`); n samples ≈ ranks × num_bench_tests
-× warmup (typically 36 for 1n×{2,4}g and 144 for 2n configs).
+shared-memory memcpy).** This mirrors upstream DeepEPv2's bench
+methodology exactly — same formulas (unique `(token, dst-domain)` pairs
+for SO, `num_recv_tokens` from `<scaleup-domain>` peers for SU,
+self-domain included by default and excluded by `--ignore-local-traffic`)
+— with the **only substitution** being the boundary unit:
+`NVLink domain` (upstream) → `physical node` (LOCAL_WORLD_SIZE here),
+because under `EP_FORCE_NO_NVLINK=1` the logical scaleup domain
+`kNumScaleupRanks=1` does not match what the data physically traverses.
+Numbers are steady-state (`--num-bench-tests=10 --skip-check`); n
+samples ≈ ranks × num_bench_tests × warmup.
 
 | Topology | Mode | Dispatch | Combine | Reduced combine |
 | --- | --- | ---: | ---: | ---: |
-| 1n × 2g | no-GDR | 0/3 GB/s @ 562 ± 3 µs | 0/8 GB/s @ 219 ± 8 µs | 0/3 GB/s @ 680 ± 38 µs |
-| 1n × 4g | no-GDR | 0/4 GB/s @ 1186 ± 21 µs | 0/10 GB/s @ 489 ± 14 µs | 0/6 GB/s @ 826 ± 42 µs |
-| 2n × 1g | no-GDR | 3/0 GB/s @ 546 ± 5 µs | 8/0 GB/s @ 224 ± 6 µs | 3/0 GB/s @ 694 ± 41 µs |
-| 2n × 1g | GDR    | 10/0 GB/s @ 188 ± 8 µs | 10/0 GB/s @ 189 ± 17 µs | 2/0 GB/s @ 760 ± 219 µs |
-| 2n × 4g | no-GDR | 3/2 GB/s @ 1830 ± 65 µs | 6/5 GB/s @ 785 ± 85 µs | 5/3 GB/s @ 1096 ± 148 µs |
-| 2n × 4g | GDR    | 3/2 GB/s @ 1995 ± 43 µs | 6/4 GB/s @ 901 ± 96 µs | 4/3 GB/s @ 1283 ± 148 µs |
+| 1n × 2g | no-GDR | 0/7 GB/s @ 552 ± 5 µs | 0/16 GB/s @ 227 ± 8 µs | 0/21 GB/s @ 686 ± 33 µs |
+| 1n × 4g | no-GDR | 0/6 GB/s @ 1185 ± 18 µs | 0/13 GB/s @ 510 ± 17 µs | 0/17 GB/s @ 859 ± 65 µs |
+| 2n × 1g | no-GDR | 7/3 GB/s @ 546 ± 8 µs | 17/8 GB/s @ 220 ± 12 µs | 6/11 GB/s @ 676 ± 32 µs |
+| 2n × 1g | GDR    | 18/9 GB/s @ 201 ± 19 µs | 19/9 GB/s @ 199 ± 22 µs | 5/10 GB/s @ 779 ± 230 µs |
+| 2n × 4g | no-GDR | 2/3 GB/s @ 1848 ± 83 µs | 5/6 GB/s @ 797 ± 86 µs | 3/6 GB/s @ 1141 ± 176 µs |
+| 2n × 4g | GDR    | 2/3 GB/s @ 1863 ± 43 µs | 5/6 GB/s @ 764 ± 68 µs | 4/7 GB/s @ 1098 ± 154 µs |
 
 Sanity checks per row:
-- 1n configs have **SO = 0** (no NIC traffic) and SU > 0 (intra-node SHM).
-- 2n × 1g has **SU = 0** (only 1 GPU per node, no intra-node peer) and SO > 0.
-- 2n × 4g has **both > 0** (mixed RDMA + SHM).
+- **1n configs** have **SO = 0** (single node has no inter-node traffic)
+  and SU > 0 (all cross-GPU traffic is intra-node SHM).
+- **2n × 1g** has SU > 0 because upstream's `num_recv_tokens` includes
+  self-recv bytes; with only 1 GPU per node the "intra-node domain" is
+  just self, so SU reflects the bytes the GPU writes for itself.
+- **2n × 4g** has both > 0 (mixed RDMA inter-node + SHM intra-node).
 
 These reflect the SM89 warp-cooperative TMA fallback fix (commits
 `38093df5`, `2f958b9b`, `44d1b976`, `3cce0ee8`), the proxy `getenv`
