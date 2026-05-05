@@ -39,7 +39,7 @@ from utils import (
 
 # UCCL import
 try:
-    from uccl.ep import ep_cpp as ep
+    from uccl import ep
 except ImportError as exc:
     import sys
 

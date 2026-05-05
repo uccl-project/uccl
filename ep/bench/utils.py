@@ -1,10 +1,3 @@
-"""
-uccl.ep.utils — Utility helpers for the UCCL Expert-Parallel subsystem.
-
-Provides ``EventOverlap``, ``initialize_uccl``, ``destroy_uccl``,
-``check_nvlink_connections``, and assorted benchmark / conversion helpers.
-"""
-
 import inspect
 import glob
 import os
@@ -25,11 +18,6 @@ from uccl.ep import ep_cpp
 EventHandle = ep_cpp.EventHandle
 
 
-# ---------------------------------------------------------------------------
-# Numeric helpers
-# ---------------------------------------------------------------------------
-
-
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
     x, y = x.double() + 1, y.double() + 1
     denominator = (x * x + y * y).sum()
@@ -38,12 +26,7 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
 
 
 def hash_tensor(t: torch.Tensor):
-    return t.view(torch.int).sum().item()
-
-
-# ---------------------------------------------------------------------------
-# Distributed init
-# ---------------------------------------------------------------------------
+    return t.view(torch.int64).sum().item()
 
 
 def init_dist(local_rank: int, num_local_ranks: int):
@@ -90,11 +73,6 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
         dist.get_world_size(),
         dist.new_group(list(range(dist.get_world_size()))),
     )
-
-
-# ---------------------------------------------------------------------------
-# Peer / OOB helpers
-# ---------------------------------------------------------------------------
 
 
 def _gather_peer_ips(group):
@@ -187,11 +165,6 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     return rank2meta
 
 
-# ---------------------------------------------------------------------------
-# NVLink checks
-# ---------------------------------------------------------------------------
-
-
 def check_nvlink_connections(group: dist.ProcessGroup):
     """
     Check NVLink connection between every pair of GPUs.
@@ -217,7 +190,9 @@ def check_nvlink_connections(group: dist.ProcessGroup):
             .split(",")
         )
         physical_device_idx = int(devices[torch.cuda.current_device()])
-        physical_device_indices = [0] * group.size()
+        physical_device_indices = [
+            0,
+        ] * group.size()
         dist.all_gather_object(physical_device_indices, physical_device_idx, group)
 
         # Check whether they are all connected via NVLink
@@ -238,11 +213,6 @@ def check_nvlink_connections(group: dist.ProcessGroup):
 
         # Close NVML
         pynvml.nvmlShutdown()
-
-
-# ---------------------------------------------------------------------------
-# EventOverlap
-# ---------------------------------------------------------------------------
 
 
 class EventOverlap:
@@ -305,11 +275,6 @@ class EventOverlap:
             self.event.current_stream_wait(stream_ptr)
 
 
-# ---------------------------------------------------------------------------
-# IB / RDMA helpers
-# ---------------------------------------------------------------------------
-
-
 def detect_ib_hca():
     """Detect InfiniBand/RDMA HCA device.
 
@@ -340,21 +305,6 @@ def detect_ib_hca():
         return ib_devs[0]
 
 
-# ---------------------------------------------------------------------------
-# FP8 helpers
-# ---------------------------------------------------------------------------
-
-
-def _fp8_e4m3_dtype() -> torch.dtype:
-    """Return the correct FP8 E4M3 dtype for the current GPU."""
-    if hasattr(torch.version, "hip") and torch.version.hip is not None:
-        props = torch.cuda.get_device_properties(torch.cuda.current_device())
-        arch = getattr(props, "gcnArchName", "")
-        if arch.startswith("gfx942"):
-            return torch.float8_e4m3fnuz
-    return torch.float8_e4m3fn
-
-
 def per_token_cast_back(x_fp8: torch.Tensor, x_scales: torch.Tensor):
     if x_scales.dtype == torch.int:
         x_scales = x_scales.view(dtype=torch.uint8).to(torch.int) << 23
@@ -362,23 +312,6 @@ def per_token_cast_back(x_fp8: torch.Tensor, x_scales: torch.Tensor):
     x_fp32 = x_fp8.to(torch.float32).view(x_fp8.size(0), -1, 128)
     x_scales = x_scales.view(x_fp8.size(0), -1, 1)
     return (x_fp32 * x_scales).view(x_fp8.shape).to(torch.bfloat16)
-
-
-def per_token_cast_to_fp8(x: torch.Tensor):
-    assert x.dim() == 2 and x.size(1) % 128 == 0
-    m, n = x.shape
-    fp8_dtype = _fp8_e4m3_dtype()
-    fp8_max = 240.0 if fp8_dtype == torch.float8_e4m3fnuz else 448.0
-    x_view = x.view(m, -1, 128)
-    x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
-    return (x_view * (fp8_max / x_amax.unsqueeze(2))).to(fp8_dtype).view(m, n), (
-        x_amax / fp8_max
-    ).view(m, -1)
-
-
-# ---------------------------------------------------------------------------
-# Benchmarking utilities
-# ---------------------------------------------------------------------------
 
 
 class empty_suppress:
@@ -596,11 +529,6 @@ def bench_kineto(
     return kernel_durations if is_tuple else kernel_durations[0]
 
 
-# ---------------------------------------------------------------------------
-# UCCL proxy lifecycle
-# ---------------------------------------------------------------------------
-
-
 def initialize_uccl(
     scratch_ptr,
     scratch_nbytes,
@@ -710,6 +638,28 @@ def destroy_uccl(proxies, workers):
         pass
 
 
+def _fp8_e4m3_dtype() -> torch.dtype:
+    """Return the correct FP8 E4M3 dtype for the current GPU."""
+    if hasattr(torch.version, "hip") and torch.version.hip is not None:
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        arch = getattr(props, "gcnArchName", "")
+        if arch.startswith("gfx942"):
+            return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def per_token_cast_to_fp8(x: torch.Tensor):
+    assert x.dim() == 2 and x.size(1) % 128 == 0
+    m, n = x.shape
+    fp8_dtype = _fp8_e4m3_dtype()
+    fp8_max = 240.0 if fp8_dtype == torch.float8_e4m3fnuz else 448.0
+    x_view = x.view(m, -1, 128)
+    x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
+    return (x_view * (fp8_max / x_amax.unsqueeze(2))).to(fp8_dtype).view(m, n), (
+        x_amax / fp8_max
+    ).view(m, -1)
+
+
 def create_grouped_scores(
     scores: torch.Tensor, group_idx: torch.Tensor, num_groups: int
 ):
@@ -733,3 +683,7 @@ def inplace_unique(x: torch.Tensor, num_slots: int):
     x[:, :].fill_(-1)
     valid_len = min(num_slots, x.size(1))
     x[:, :valid_len] = sorted_bin_idx[:, :valid_len]
+
+
+def hash_tensor(t: torch.Tensor):
+    return t.view(torch.int).sum().item()

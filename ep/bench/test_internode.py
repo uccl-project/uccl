@@ -52,7 +52,7 @@ from uccl.ep.utils import (  # type: ignore[no-redef]
 from uccl.ep.buffer import Buffer  # type: ignore[no-redef]
 
 try:
-    from uccl.ep.ep_cpp import Config
+    from uccl.ep import Config
 except ImportError as exc:
     import sys
 
@@ -261,7 +261,7 @@ def test_main(
                     )
 
                     # Checks
-                    recv_gbl_rank_prefix_sum = handle[-4]
+                    recv_gbl_rank_prefix_sum = handle[-6]
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(
                         0
                     ), f"{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}"
