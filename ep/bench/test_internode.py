@@ -33,7 +33,8 @@ import torch.distributed as dist
 
 # noinspection PyUnresolvedReferences
 
-from utils import (
+
+from uccl.ep.utils import (  # type: ignore[no-redef]
     init_dist,
     bench,
     bench_kineto,
@@ -48,7 +49,7 @@ from utils import (
 )
 
 # Test compatibility with low latency functions
-from buffer import Buffer
+from uccl.ep.buffer import Buffer  # type: ignore[no-redef]
 
 try:
     from uccl.ep import Config

@@ -183,8 +183,12 @@ FC_LOAD_LATENCY_TARGET := test_fc_load_latency$(BUILD_SUFFIX)
 CAS_TARGET := test_cas_throughput$(BUILD_SUFFIX)
 
 # EP runtime targets (if EFA is available)
+# NOTE: the native extension is named `ep_cpp` so that it can live as
+# `uccl.ep.ep_cpp` without shadowing the `uccl.ep` Python package.  The
+# filename must match the `NB_MODULE(ep_cpp, ...)` declaration in
+# ../src/uccl_ep.cc, otherwise Python fails to import it.
 ifeq ($(HAS_EFA),1)
-    EP_EXT := ep$(EXT_SUFFIX)
+    EP_EXT := ep_cpp$(EXT_SUFFIX)
 endif
 
 # Header dependencies
@@ -328,9 +332,10 @@ py: $(EP_EXT)
 	@echo "Python extension built: $(EP_EXT)"
 
 install: $(EP_EXT)
-	@mkdir -p $(INSTALL_DIR)
-	@cp $(EP_EXT) $(INSTALL_DIR)/
-	@echo "Installation complete. Module installed to: $(INSTALL_DIR)/$(EP_EXT)"
+	@mkdir -p $(INSTALL_DIR)/ep
+	@rm -f $(INSTALL_DIR)/ep/ep_cpp.cpython-*.so $(INSTALL_DIR)/ep/ep_cpp.abi3.so
+	@cp $(EP_EXT) $(INSTALL_DIR)/ep/
+	@echo "Installation complete. Module installed to: $(INSTALL_DIR)/ep/$(EP_EXT)"
 else
 $(EP_EXT):
 	@echo "PyTorch not found. Skipping Python extension build."
