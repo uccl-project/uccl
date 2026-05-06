@@ -213,6 +213,10 @@ class MakeBuildExtension(_build_ext):
         env = os.environ.copy()
         env.setdefault("PYTHON", sys.executable)
         env.update(ext.env)
+        
+        # Drop PEP 517 build-env PYTHONPATH so the child make's python sees
+        # the host venv (otherwise ``import torch`` in ep/setup.py fails).
+        env.pop("PYTHONPATH", None)
 
         env["USE_ROCM"] = "1" if self._is_use_rocm(env) else "0"
 
