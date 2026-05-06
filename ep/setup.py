@@ -305,14 +305,14 @@ if __name__ == "__main__":
             )
 
         # Use environment variable, then detected arch, then fallback
-        default_amd_arch = (
+        default_arch = (
             detected_amd_arch if detected_amd_arch else ";".join(supported_amd_arch)
         )
-        device_amd_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_amd_arch)
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
 
         nvcc_flags.extend(
             f"--offload-arch={arch.lower()}"
-            for arch in re.split(r"[;,\s]+", device_amd_arch)
+            for arch in re.split(r"[;,\s]+", device_arch)
             if arch in supported_amd_arch
         )
 

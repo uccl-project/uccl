@@ -36,6 +36,27 @@ _use_limited_api = not _is_freethreaded() and sys.version_info >= (3, 12)
 
 VERSION = get_version()
 
+
+def _rename_cpython_to_abi3(directory: Path) -> None:
+    """Rename ``foo.cpython-*-*-*.so`` to ``foo.abi3.so`` (Python >= 3.12 only)."""
+    if sys.version_info < (3, 12) or _is_freethreaded():
+        return
+    if not directory.is_dir():
+        return
+    pattern = re.compile(r"\.cpython-[^.]+-[^.]+-[^.]+\.so$")
+    for so in directory.iterdir():
+        if not so.is_file():
+            continue
+        m = pattern.search(so.name)
+        if not m:
+            continue
+        new_name = so.name[: m.start()] + ".abi3.so"
+        target = so.with_name(new_name)
+        if target.exists():
+            target.unlink()
+        log.info("renaming %s -> %s", so.name, new_name)
+        so.rename(target)
+
 # Single package "uccl" for all backends (vLLM-style).
 # Variants are distinguished by PEP 440 local version identifiers in the
 # wheel filename (e.g. uccl-0.1.0+cu13, uccl-0.1.0+cu12.efa).
@@ -123,7 +144,8 @@ class MakeClean(Command):
 class MakeBuildExtension(_build_ext):
     """Custom build_ext that invokes ``make`` before compiling C extensions."""
 
-    def is_rocm(self) -> bool:
+    @staticmethod
+    def _is_rocm_env() -> bool:
         """Find the ROCm
             reference from pytorch/torch/utils/cpp_extension.py::_find_rocm_home
         """
@@ -165,7 +187,39 @@ class MakeBuildExtension(_build_ext):
         self.extensions = [ext for ext in self.extensions if not isinstance(ext, MakeExtension)]
         super().run()
 
+        # Make the wheel cp312-abi3 compatible.
+        if self.build_lib and not self.inplace:
+            staging = Path(self.build_lib).resolve()
+            _rename_cpython_to_abi3(staging / "uccl")
+            _rename_cpython_to_abi3(staging / "uccl" / "ep")
+        else:
+            sourcedir = Path(__file__).parent.resolve()
+            _rename_cpython_to_abi3(sourcedir / "uccl")
+            _rename_cpython_to_abi3(sourcedir / "ep" / "python" / "uccl_ep")
+
+    @staticmethod
+    def _is_use_rocm(env: dict) -> bool:
+        """Resolve USE_ROCM from env: explicit USE_ROCM > TARGET (cu*/roc*/therock) > auto-detect."""
+        if "USE_ROCM" in env:
+            return env["USE_ROCM"] == "1"
+        target = env.get("TARGET", "").lower()
+        if target.startswith("roc") or target == "therock":
+            return True
+        if target.startswith("cu"):
+            return False
+        return MakeBuildExtension._is_rocm_env()
+
     def build_make_extension(self, ext: MakeExtension):
+        env = os.environ.copy()
+        env.setdefault("PYTHON", sys.executable)
+        env.update(ext.env)
+
+        # Drop PEP 517 build-env PYTHONPATH so the child make's python sees
+        # the host venv (otherwise ``import torch`` in ep/setup.py fails).
+        env.pop("PYTHONPATH", None)
+
+        env["USE_ROCM"] = "1" if self._is_use_rocm(env) else "0"
+
         cmd = ["make"]
         if self.parallel:
             cmd.extend(["-j", str(self.parallel)])
@@ -175,23 +229,6 @@ class MakeBuildExtension(_build_ext):
             cmd.append(f"BUILD_LIB={Path(self.build_lib).resolve()}")
 
         cmd.append(ext.make_target)
-
-        env = os.environ.copy()
-        env.setdefault("PYTHON", sys.executable)
-        env.update(ext.env)
-
-        # Honour an explicit USE_ROCM override (e.g. ``USE_ROCM=0`` to force
-        # the CUDA path on a hybrid host); otherwise auto-detect.
-        if "USE_ROCM" not in env and self.is_rocm():
-            env["USE_ROCM"] = "1"
-
-        # When pip runs the build under PEP 517 isolation it injects the
-        # build-env site-packages into PYTHONPATH so its own setuptools/wheel
-        # take precedence. That PYTHONPATH leaks into the child python that
-        # ep/setup.py drives via make and shadows the host venv, which makes
-        # ``import torch`` fail. Drop it so the submake's python falls back
-        # to its default site-packages (where torch is installed).
-        env.pop("PYTHONPATH", None)
 
         log.info("running `%s` in %s", " ".join(cmd), ext.sourcedir)
         subprocess.check_call(cmd, cwd=str(ext.sourcedir), env=env)
@@ -216,11 +253,10 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
-    packages=find_packages(include=["uccl", "uccl.*"]) + ["uccl.ep", "deep_ep"],
+    packages=find_packages(include=["uccl", "uccl.*", "uccl.ep"]) + ["uccl.ep"],
     package_dir={
         "uccl": "uccl",
         "uccl.ep": "ep/python/uccl_ep",
-        "deep_ep": "ep/deep_ep_wrapper/deep_ep",
     },
     ext_modules=[make_ext, abi3_ext],
     package_data={
