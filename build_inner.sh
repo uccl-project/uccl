@@ -76,6 +76,9 @@ fi
 
 # All native build logic lives in the top-level Makefile, driven by setup.py's
 # MakeBuildExtension. ``--no-isolation`` reuses the container's setuptools/wheel.
+pip3 install $(python3 -c "
+import tomllib
+print(' '.join(tomllib.load(open('pyproject.toml','rb'))['build-system']['requires']))")
 python3 -m build --wheel --no-isolation
 
 # Restore the original setup.py if we patched it.
