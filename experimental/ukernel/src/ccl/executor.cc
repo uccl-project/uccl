@@ -26,7 +26,7 @@ void* local_mutable_ptr(CollectiveBinding const& binding, BufferRef const& ref,
   if (ref.kind != BufferKind::Local) {
     throw std::invalid_argument("local binding cannot target remote buffer");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("local registered buffer is missing");
   }
@@ -47,11 +47,11 @@ uint32_t remote_buffer_id_for_ipc(CollectiveBinding const& binding,
         "remote IPC lookup requires a remote buffer ref");
   }
   size_t peer = static_cast<size_t>(ref.rank);
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (peer >= buffer.peer_views.size()) {
     throw std::invalid_argument("remote buffer peer rank out of range");
   }
-  return ref.buffer_id;
+  return buffer.peer_views[peer].buffer_id;
 }
 
 ExecOp bind_device_exec_op(
@@ -96,8 +96,7 @@ ExecOp bind_device_exec_op(
 }  // namespace
 
 PlanRequest make_plan_request(CollectiveKind kind,
-                              CollectiveConfig const& config,
-                              CollectiveBufferRoles const& roles) {
+                              CollectiveConfig const& config, bool inplace) {
   PlanRequest request;
   request.collective = kind;
   request.algorithm = config.algorithm;
@@ -111,7 +110,7 @@ PlanRequest make_plan_request(CollectiveKind kind,
   request.staging_bytes = config.staging_bytes;
   request.input_split_bytes = config.input_split_bytes;
   request.output_split_bytes = config.output_split_bytes;
-  request.roles = roles;
+  request.inplace = inplace;
   request.dtype = config.dtype;
   request.reduction = config.reduction;
   return request;
@@ -574,8 +573,10 @@ CollectiveOpHandle Executor::submit_allreduce(
     throw std::invalid_argument(
         "executor submit_allreduce requires collective runtime binding");
   }
+  bool inplace = runtime_binding->roles.input_buffer_id ==
+                 runtime_binding->roles.output_buffer_id;
   CollectivePlan plan = build_plan(make_plan_request(
-      CollectiveKind::AllReduce, config, runtime_binding->roles));
+      CollectiveKind::AllReduce, config, inplace));
   return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 
@@ -586,8 +587,10 @@ CollectiveOpHandle Executor::submit_alltoall(
     throw std::invalid_argument(
         "executor submit_alltoall requires collective runtime binding");
   }
+  bool inplace = runtime_binding->roles.input_buffer_id ==
+                 runtime_binding->roles.output_buffer_id;
   CollectivePlan plan = build_plan(make_plan_request(
-      CollectiveKind::AllToAll, config, runtime_binding->roles));
+      CollectiveKind::AllToAll, config, inplace));
   return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdlib>
+
 #ifndef __HIP_PLATFORM_AMD__
 #include <cuda.h>
 #include <cuda_runtime.h>

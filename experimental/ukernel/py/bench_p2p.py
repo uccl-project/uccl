@@ -34,16 +34,17 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     if selected_transport == "ipc":
         if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
+        # Synchronize after publish so both ranks overwrite OOB entries
+        # before either reads — avoids reading a stale IPC handle from a
+        # previous iteration whose backing tensor may have been freed.
+        if not comm.barrier("p2p_ipc_ready", 30000):
+            raise RuntimeError("ukernel barrier(p2p_ipc_ready) failed")
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
     elif selected_transport == "uccl":
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
-
-    # Global synchronization after publishing transport metadata.
-    if not comm.barrier("p2p_resource_ready", 30000):
-        raise RuntimeError("ukernel barrier(p2p_resource_ready) failed")
 
     def do_send():
         # Sender writes into peer's recv buffer id.
@@ -280,9 +281,13 @@ def main() -> None:
     if peer == 1:
         if not comm.connect_peer(peer):
             raise RuntimeError(f"connect_peer({peer}) failed")
+        if not comm.accept_peer(peer):
+            raise RuntimeError(f"accept_peer({peer}) failed")
     else:
         if not comm.accept_peer(peer):
             raise RuntimeError(f"accept_peer({peer}) failed")
+        if not comm.connect_peer(peer):
+            raise RuntimeError(f"connect_peer({peer}) failed")
 
     if rank == 0:
         print(f"[ukernel] selected transport to peer {peer}: {comm.peer_transport(peer)}")

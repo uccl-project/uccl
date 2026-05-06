@@ -43,9 +43,9 @@ float* local_buffer_ptr(SimRankState& state, BufferRef const& ref) {
         "remote ref is not addressable as a local buffer");
   }
   switch (ref.buffer_id) {
-    case kDefaultInputBufferId:
+    case PlanBuffer::Input:
       return state.tensor.data() + ref.offset_bytes / sizeof(float);
-    case kDefaultScratchBufferId:
+    case PlanBuffer::Scratch:
       return state.staging.data() + ref.offset_bytes / sizeof(float);
     default:
       break;
@@ -100,14 +100,15 @@ CollectivePlan build_test_plan(CollectiveKind kind,
   CollectiveBinding binding = Testing::make_test_memory(
       config.rank, config.nranks,
       std::max(config.tensor_bytes, config.staging_bytes));
-  return build_plan(make_plan_request(kind, config, binding.roles));
+  bool inplace = binding.roles.input_buffer_id == binding.roles.output_buffer_id;
+  return build_plan(make_plan_request(kind, config, inplace));
 }
 
 void assert_ref_uses_only_roles(BufferRef const& ref,
-                                CollectiveBufferRoles const& roles) {
-  assert(ref.buffer_id == roles.input_buffer_id ||
-         ref.buffer_id == roles.output_buffer_id ||
-         ref.buffer_id == roles.scratch_buffer_id);
+                                CollectiveBufferRoles const& /*roles*/) {
+  assert(ref.buffer_id == PlanBuffer::Input ||
+         ref.buffer_id == PlanBuffer::Output ||
+         ref.buffer_id == PlanBuffer::Scratch);
 }
 
 std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
@@ -327,7 +328,7 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   roles.validate();
 
   CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllToAll, cfg, roles));
+      build_plan(make_plan_request(CollectiveKind::AllToAll, cfg, /*inplace=*/false));
   Testing::validate_basic_plan(plan);
   assert(plan.input_split_bytes == cfg.input_split_bytes);
   assert(plan.output_split_bytes == cfg.output_split_bytes);
@@ -345,8 +346,8 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
     } else if (op.kind == PrimitiveOpKind::Copy &&
                op.src.kind == BufferKind::Local &&
                op.dst.kind == BufferKind::Local &&
-               op.src.buffer_id == roles.input_buffer_id &&
-               op.dst.buffer_id == roles.output_buffer_id) {
+               op.src.buffer_id == PlanBuffer::Input &&
+               op.dst.buffer_id == PlanBuffer::Output) {
       self_copy_bytes += op.tile.size_bytes;
     }
   }
@@ -363,7 +364,7 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
 }
 
 void test_planner_honors_custom_role_buffer_ids() {
-  printf("[test] planner honors custom role buffer ids...\n");
+  printf("[test] planner uses plan buffer constants...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
   CollectiveBufferRoles roles{};
@@ -371,16 +372,17 @@ void test_planner_honors_custom_role_buffer_ids() {
   roles.scratch_buffer_id = 11;
   roles.validate();
 
+  bool inplace = roles.input_buffer_id == roles.output_buffer_id;
   CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg, roles));
+      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg, inplace));
   Testing::validate_basic_plan(plan);
   bool saw_input = false;
   bool saw_scratch = false;
   for (auto const& op : plan.ops) {
     for (BufferRef const* ref : {&op.src, &op.dst}) {
       assert_ref_uses_only_roles(*ref, roles);
-      saw_input = saw_input || ref->buffer_id == roles.input_buffer_id;
-      saw_scratch = saw_scratch || ref->buffer_id == roles.scratch_buffer_id;
+      saw_input = saw_input || ref->buffer_id == PlanBuffer::Input;
+      saw_scratch = saw_scratch || ref->buffer_id == PlanBuffer::Scratch;
     }
   }
   assert(saw_input);

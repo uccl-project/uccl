@@ -88,6 +88,8 @@ include_dirs = [
     rel(UCCL_ROOT / "collective" / "rdma"),
     rel(UCCL_ROOT / "include"),
     str(GDRCOPY_INCLUDE_DIR),
+    "/usr/local/include",
+    "/usr/include",
 ]
 if USE_ROCM:
     include_dirs.append(str(ROCM_HOME / "include"))

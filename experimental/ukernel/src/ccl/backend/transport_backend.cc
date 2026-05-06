@@ -14,6 +14,8 @@ namespace {
 
 std::atomic<uint64_t> g_next_transport_backend_cache_key{1};
 
+constexpr int kMemoryBindingTimeoutMs = 30000;
+
 void validate_span(char const* what, size_t offset, size_t bytes,
                    size_t capacity) {
   if (offset > capacity || bytes > capacity - offset) {
@@ -247,7 +249,8 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
     for (BufferId id : buffer_ids) {
       RegisteredBuffer& buffer = binding.buffer(id);
       if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-          buffer.remotely_accessible && !communicator_->wait_mr(peer, id)) {
+          buffer.remotely_accessible &&
+          !communicator_->wait_mr(peer, id, kMemoryBindingTimeoutMs)) {
         throw std::runtime_error("transport backend wait_mr failed for peer " +
                                  std::to_string(peer) + ", buffer " +
                                  std::to_string(id));
@@ -260,7 +263,7 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
       }
       if (buffer.peer_views[static_cast<size_t>(peer)].same_node &&
           buffer.peer_views[static_cast<size_t>(peer)].buffer_id != 0 &&
-          !communicator_->wait_ipc(peer, id)) {
+          !communicator_->wait_ipc(peer, id, kMemoryBindingTimeoutMs)) {
         throw std::runtime_error(
             "transport backend wait ipc buffer failed for peer " +
             std::to_string(peer));
@@ -367,7 +370,7 @@ void* CommunicatorTransportBackend::resolve_mutable(
     throw std::invalid_argument(
         "transport backend cannot bind remote destination buffer");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("transport local buffer is missing");
   }
@@ -383,7 +386,7 @@ void const* CommunicatorTransportBackend::resolve_const(
     throw std::invalid_argument(
         "transport backend cannot bind remote source buffer");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("transport local buffer is missing");
   }
@@ -399,12 +402,12 @@ uint32_t CommunicatorTransportBackend::resolve_local_buffer_id(
     throw std::invalid_argument(
         "transport backend local buffer id requires local buffer ref");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_buffer_id != 0) {
     return buffer.local_buffer_id;
   }
   (void)bytes;
-  return ref.buffer_id;
+  return binding.roles.resolve_plan_id(ref.buffer_id);
 }
 
 int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
@@ -433,7 +436,7 @@ uint32_t CommunicatorTransportBackend::resolve_remote_buffer_id(
         "transport remote buffer id requires peer buffer ref");
   }
   int peer_rank = ref.rank;
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (peer_rank < 0 ||
       static_cast<size_t>(peer_rank) >= buffer.peer_views.size()) {
     throw std::invalid_argument("transport peer rank out of range");
