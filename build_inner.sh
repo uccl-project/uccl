@@ -31,25 +31,8 @@
 
 set -euo pipefail
 
-# IS_EFA arrived from build.sh as either "" or some non-empty string;
-# normalise it to a "0"/"1" the Makefile understands so we can export it.
-if [[ -n "${IS_EFA:-}" && "${IS_EFA}" != "0" ]]; then
-  IS_EFA=1
-else
-  IS_EFA=0
-fi
-
-# Forward every build knob to setup.py / make as env vars.
-export TARGET ARCH IS_EFA
-export BUILD_TYPE="${BUILD_TYPE:-all}"
-export USE_DIETGPU="${USE_DIETGPU:-0}"
-export USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}"
-export PER_EXPERT_BATCHING="${PER_EXPERT_BATCHING:-0}"
-export MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}"
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}"
-
 ########################################################
-# therock-only: container bootstrap
+# Main build logic
 ########################################################
 
 if [[ "$TARGET" == "therock" ]]; then
@@ -91,10 +74,6 @@ def initialize():
   export PIP_EXTRA_INDEX_URL=${ROCM_IDX_URL}
 fi
 
-########################################################
-# Build the wheel
-########################################################
-#
 # All native build logic lives in the top-level Makefile, driven by setup.py's
 # MakeBuildExtension. ``--no-isolation`` reuses the container's setuptools/wheel.
 python3 -m build --wheel --no-isolation

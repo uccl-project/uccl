@@ -136,7 +136,9 @@ DIETGPU_FLOAT_DIR := thirdparty/dietgpu/dietgpu/float
 DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
 
 # TORCH_CUDA_ARCH_LIST=9.0+PTX -> sm_90 for dietgpu CUDA build.
-DIETGPU_GPU_ARCH := sm_$(subst .,,$(firstword $(subst +PTX,,$(TORCH_CUDA_ARCH_LIST))))
+# Default to 9.0 when unset (mirrors build_inner.sh's ${TORCH_CUDA_ARCH_LIST:-9.0}).
+DIETGPU_TORCH_ARCH := $(if $(strip $(TORCH_CUDA_ARCH_LIST)),$(TORCH_CUDA_ARCH_LIST),9.0)
+DIETGPU_GPU_ARCH := sm_$(subst .,,$(firstword $(subst +PTX,,$(DIETGPU_TORCH_ARCH))))
 
 _dietgpu:
 ifeq ($(USE_DIETGPU),1)
@@ -246,7 +248,9 @@ endif
 
 ukernel: dirs
 	@echo "[make] ukernel TARGET=$(TARGET) ARCH=$(ARCH)"
-ifeq ($(USE_ROCM),1)
+ifeq ($(IS_THEROCK),1)
+	@echo "[make] therock -> ukernel skipped (matches build_inner.sh)"
+else ifeq ($(USE_ROCM),1)
 ifeq ($(IS_AARCH64),1)
 	@echo "[make] aarch64 + ROCm -> ukernel skipped"
 else
