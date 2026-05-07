@@ -9,6 +9,7 @@
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
+#include <cc/link_bandwidth.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -503,9 +504,6 @@ class NICEndpoint {
 
   // Manual polling routine for send channels when auto_start_polling_ is false
   int sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req) {
-    if (auto_start_polling_) {
-      return -1;  // Do nothing if auto polling is enabled
-    }
     if (!req) {
       UCCL_LOG(WARN) << "NICEndpoint::sendRoutine - null request";
       return -1;
@@ -528,6 +526,13 @@ class NICEndpoint {
                         "for rank_id: "
                      << rank_id;
       return -1;
+    }
+
+    // When the polling thread is active, enqueue via send() so that
+    // only the polling thread touches QPs (avoids concurrent ibv_post_*
+    // from two threads).
+    if (auto_start_polling_) {
+      return send_group->send(req);
     }
 
     return send_group->processSendRequests(req);
@@ -755,11 +760,15 @@ class NICEndpoint {
     }
     auto numa_node = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
+    auto* ctx =
+        (!contexts_.empty() && contexts_[0]) ? contexts_[0]->getCtx() : nullptr;
+    double link_bw =
+        uccl::cc::get_link_bandwidth_bps(ctx, "UCCL_P2P_RDMA_LINK_GBPS");
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
-          rank_id,
-          std::make_shared<SendConnection>(numa_node, auto_start_polling_));
+          rank_id, std::make_shared<SendConnection>(
+                       numa_node, auto_start_polling_, link_bw));
       return it->second;
     }
   }

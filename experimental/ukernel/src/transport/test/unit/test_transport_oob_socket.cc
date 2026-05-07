@@ -165,8 +165,8 @@ void publisher_socket(int port) {
   require(ex.valid(), "publisher failed to connect to socket exchanger");
 
   NamedMRInfos remote{};
-  remote.entries.push_back(NamedMR{5, MR{1, 0x12345000ULL, 4096, 0, 123}});
-  remote.entries.push_back(NamedMR{8, MR{2, 0x12346000ULL, 8192, 0, 456}});
+  remote.entries.push_back(NamedMR{5, MR{0x12345000ULL, 4096, 0, 123}});
+  remote.entries.push_back(NamedMR{8, MR{0x12346000ULL, 8192, 0, 456}});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   require(ex.put("named-mr:peer:1:0", remote),
@@ -184,7 +184,7 @@ void test_socket_publish_fetch() {
           "socket listener not ready in time");
 
   NamedMRInfos local{};
-  local.entries.push_back(NamedMR{9, MR{7, 0xABCDEF00ULL, 16384, 0, 789}});
+  local.entries.push_back(NamedMR{9, MR{0xABCDEF00ULL, 16384, 0, 789}});
   require(ex.put("named-mr:peer:0:0", local),
           "failed to publish local MR info");
 
@@ -201,8 +201,8 @@ void test_socket_publish_fetch() {
   require(ex.wait("named-mr:peer:1:0", remote, Exchanger::WaitOptions{50, 100}),
           "timeout waiting for remote MR info");
   require(remote.entries.size() == 2, "remote MR count mismatch");
-  require(remote.entries[0].mr.id == 1 && remote.entries[1].mr.id == 2,
-          "remote MR ids mismatch");
+  require(remote.entries[0].buffer_id == 5 && remote.entries[1].buffer_id == 8,
+          "remote buffer_ids mismatch");
 
   pub_thread.join();
   if (pub_error) std::rethrow_exception(pub_error);
@@ -278,8 +278,8 @@ void test_socket_valid_implies_snapshot_ready() {
 
   NamedMRInfos payload{};
   payload.generation = 7;
-  payload.entries.push_back(NamedMR{3, MR{11, 0x11111000ULL, 2048, 0, 11}});
-  payload.entries.push_back(NamedMR{4, MR{12, 0x22222000ULL, 4096, 0, 12}});
+  payload.entries.push_back(NamedMR{3, MR{0x11111000ULL, 2048, 0, 11}});
+  payload.entries.push_back(NamedMR{4, MR{0x22222000ULL, 4096, 0, 12}});
   require(server.put("snapshot:key", payload),
           "server failed to publish snapshot payload");
 

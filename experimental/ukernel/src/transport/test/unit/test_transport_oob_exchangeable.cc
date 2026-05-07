@@ -34,8 +34,8 @@ void test_exchangeable_round_trip() {
 
   NamedMRInfos infos{};
   infos.generation = 42;
-  infos.entries.push_back(NamedMR{3, MR{1, 0x1000ULL, 256, 0, 11}});
-  infos.entries.push_back(NamedMR{7, MR{2, 0x2000ULL, 512, 0, 22}});
+  infos.entries.push_back(NamedMR{3, MR{0x1000ULL, 256, 0, 11}});
+  infos.entries.push_back(NamedMR{7, MR{0x2000ULL, 512, 0, 22}});
   NamedMRInfos infos_rt;
   require(infos.serialize(encoded), "NamedMRInfos serialize failed");
   require(infos_rt.deserialize(encoded), "NamedMRInfos deserialize failed");
@@ -66,7 +66,6 @@ void test_exchangeable_round_trip() {
           "TcpP2PInfo round-trip mismatch");
 
   IpcBufferInfo ipc{};
-  ipc.ipc_id = 9;
   ipc.base_offset = 128;
   ipc.bytes = 4096;
   ipc.device_idx = 3;
@@ -79,7 +78,6 @@ void test_exchangeable_round_trip() {
   IpcBufferInfo ipc_rt;
   require(ipc.serialize(encoded), "IpcBufferInfo serialize failed");
   require(ipc_rt.deserialize(encoded), "IpcBufferInfo deserialize failed");
-  require(ipc_rt.ipc_id == ipc.ipc_id, "IpcBufferInfo ipc_id mismatch");
   require(ipc_rt.base_offset == ipc.base_offset,
           "IpcBufferInfo base_offset mismatch");
   require(ipc_rt.bytes == ipc.bytes, "IpcBufferInfo bytes mismatch");

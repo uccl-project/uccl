@@ -22,7 +22,7 @@ UCCL is an efficient communication library for GPUs, covering collectives, P2P (
 
 An UCCL overview can be found in this [slide deck](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing) with the following components: 
 
-* **[UCCL-collective](collective/)** serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
+* **[UCCL-collective](collective/)** (UCCL-Tran) serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
   <details>
   <summary>UCCL-collective performance comparison</summary>
@@ -169,7 +169,7 @@ The code in this repository is mostly described in the papers below. Please cons
 
 ```bibtex
 @article{uccl_tran,
-  title={UCCL-Tran: An Extensible Software Transport Layer for Machine Learning Workloads},
+  title={UCCL-Tran: An Extensible Software Transport Layer for GPU Networking},
   author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and Ren, Fengyuan and Xu, Zhiying and Raiciu, Costin and Stoica, Ion},
   journal={USENIX OSDI},
   year={2026}

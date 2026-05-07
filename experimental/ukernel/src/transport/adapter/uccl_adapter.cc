@@ -146,9 +146,9 @@ bool UcclTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
                           u.remote_gpu_idx, u.remote_port);
 }
 
-bool UcclTransportAdapter::is_memory_registered(uint64_t mr_id) const {
+bool UcclTransportAdapter::is_memory_registered(uint32_t buffer_id) const {
   std::lock_guard<std::mutex> lk(mu_);
-  return mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end();
+  return buffer_id_to_mhandle_.find(buffer_id) != buffer_id_to_mhandle_.end();
 }
 
 bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
@@ -262,12 +262,12 @@ bool UcclTransportAdapter::accept_from_peer(
   return has_send_peer(peer_rank) && has_recv_peer(peer_rank);
 }
 
-bool UcclTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
+bool UcclTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
                                            size_t len) {
   if (!endpoint_ || ptr == nullptr || len == 0) return false;
   {
     std::lock_guard<std::mutex> lk(mu_);
-    if (mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end()) {
+    if (buffer_id_to_mhandle_.find(buffer_id) != buffer_id_to_mhandle_.end()) {
       return true;
     }
   }
@@ -281,48 +281,48 @@ bool UcclTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    mr_id_to_mhandle_[mr_id] = mhandle;
+    buffer_id_to_mhandle_[buffer_id] = mhandle;
   }
 
   return true;
 }
 
-void UcclTransportAdapter::deregister_memory(uint64_t mr_id) {
+void UcclTransportAdapter::deregister_memory(uint32_t buffer_id) {
   if (!endpoint_) return;
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_id_to_mhandle_.find(mr_id);
-  if (it != mr_id_to_mhandle_.end()) {
+  auto it = buffer_id_to_mhandle_.find(buffer_id);
+  if (it != buffer_id_to_mhandle_.end()) {
     endpoint_->uccl_deregmr(it->second);
-    mr_id_to_mhandle_.erase(it);
+    buffer_id_to_mhandle_.erase(it);
   }
 }
 
 unsigned UcclTransportAdapter::send_async(
-    int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+    int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
     std::optional<RemoteSlice> remote_hint,
     BounceBufferProvider bounce_provider) {
   void* send_ptr = local_ptr;
-  uint64_t send_mr_id = local_mr_id;
+  uint32_t send_buffer_id = local_buffer_id;
 
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
     if (info.ptr != nullptr) {
       GPU_RT_CHECK(gpuMemcpy(info.ptr, local_ptr, len, gpuMemcpyDeviceToHost));
       send_ptr = info.ptr;
-      send_mr_id = info.mr_id;
+      send_buffer_id = info.buffer_id;
     }
   }
 
-  uint64_t remote_mr_id = 0;
+  uint32_t remote_buffer_id = 0;
   RemoteSlice const* remote_slice_ptr = nullptr;
   if (remote_hint.has_value()) {
-    remote_mr_id = remote_hint->mem_id;
+    remote_buffer_id = remote_hint->buffer_id;
     remote_slice_ptr = &(*remote_hint);
   }
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = send_async_uccl(peer_rank, send_ptr, len, send_mr_id, remote_mr_id,
-                            request_id, remote_slice_ptr);
+  int ret = send_async_uccl(peer_rank, send_ptr, len, send_buffer_id,
+                            remote_buffer_id, request_id, remote_slice_ptr);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
     release_request_slot_locked(request_id);
@@ -332,20 +332,21 @@ unsigned UcclTransportAdapter::send_async(
 }
 
 unsigned UcclTransportAdapter::recv_async(
-    int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+    int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
     BounceBufferProvider bounce_provider) {
   void* recv_ptr = local_ptr;
-  uint64_t recv_mr_id = local_mr_id;
+  uint32_t recv_buffer_id = local_buffer_id;
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
     if (info.ptr != nullptr) {
       recv_ptr = info.ptr;
-      recv_mr_id = info.mr_id;
+      recv_buffer_id = info.buffer_id;
     }
   }
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = recv_async_uccl(peer_rank, recv_ptr, len, recv_mr_id, request_id);
+  int ret =
+      recv_async_uccl(peer_rank, recv_ptr, len, recv_buffer_id, request_id);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
     release_request_slot_locked(request_id);
@@ -361,8 +362,8 @@ bool UcclTransportAdapter::request_failed(unsigned id) {
 }
 
 int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
-                                          size_t len, uint64_t local_mr_id,
-                                          uint64_t remote_mr_id,
+                                          size_t len, uint32_t local_buffer_id,
+                                          uint32_t remote_buffer_id,
                                           uint64_t request_id,
                                           RemoteSlice const* remote_slice) {
   ::uccl::UcclFlow* flow = nullptr;
@@ -378,8 +379,8 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     }
     flow = peer_it->second.send_flow;
 
-    auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
-    if (mh_it != mr_id_to_mhandle_.end()) {
+    auto mh_it = buffer_id_to_mhandle_.find(local_buffer_id);
+    if (mh_it != buffer_id_to_mhandle_.end()) {
       local_mh = mh_it->second;
     }
 
@@ -396,8 +397,8 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
   if (!flow || !local_mh || !ureq) {
     std::cerr << "[ERROR] UCCL send_async missing "
               << (!flow ? "send flow" : "memory handle") << " for peer "
-              << peer_rank << ", request " << request_id << ", mr_id "
-              << local_mr_id << ", len " << len << ", ptr " << local_ptr
+              << peer_rank << ", request " << request_id << ", buffer_id "
+              << local_buffer_id << ", len " << len << ", ptr " << local_ptr
               << std::endl;
     return -1;
   }
@@ -407,7 +408,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
 
   // Optional one-sided path: if caller provides explicit remote write hint and
   // remote memory id, submit directly via write_async.
-  if (remote_slice != nullptr && remote_mr_id != 0 &&
+  if (remote_slice != nullptr && remote_buffer_id != 0 &&
       remote_slice->has_write_hint()) {
     one_sided_attempted = true;
     ::uccl::FifoItem slot_item{};
@@ -425,8 +426,9 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
                                       ureq);
     if (ret != 0) {
       std::cerr << "[WARN] UCCL one-sided write submit failed for peer "
-                << peer_rank << ", request " << request_id << ", remote_mr_id "
-                << remote_mr_id << "; fallback to send/recv path" << std::endl;
+                << peer_rank << ", request " << request_id
+                << ", remote_buffer_id " << remote_buffer_id
+                << "; fallback to send/recv path" << std::endl;
     }
   }
 
@@ -443,9 +445,9 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     std::cerr << "[ERROR] UCCL "
               << (one_sided_attempted ? "write/send fallback" : "send")
               << " submit failed for peer " << peer_rank << ", request "
-              << request_id << ", mr_id " << local_mr_id << ", remote_mr_id "
-              << remote_mr_id << ", len " << len << ", ptr " << local_ptr
-              << std::endl;
+              << request_id << ", buffer_id " << local_buffer_id
+              << ", remote_buffer_id " << remote_buffer_id << ", len " << len
+              << ", ptr " << local_ptr << std::endl;
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot != nullptr) {
@@ -467,7 +469,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
 }
 
 int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
-                                          size_t len, uint64_t local_mr_id,
+                                          size_t len, uint32_t local_buffer_id,
                                           uint64_t request_id) {
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
@@ -482,8 +484,8 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
     }
     flow = peer_it->second.recv_flow;
 
-    auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
-    if (mh_it != mr_id_to_mhandle_.end()) {
+    auto mh_it = buffer_id_to_mhandle_.find(local_buffer_id);
+    if (mh_it != buffer_id_to_mhandle_.end()) {
       local_mh = mh_it->second;
     }
 
@@ -500,8 +502,8 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
   if (!flow || !local_mh || !ureq) {
     std::cerr << "[ERROR] UCCL recv_async missing "
               << (!flow ? "recv flow" : "memory handle") << " for peer "
-              << peer_rank << ", request " << request_id << ", mr_id "
-              << local_mr_id << ", len " << len << ", ptr " << local_ptr
+              << peer_rank << ", request " << request_id << ", buffer_id "
+              << local_buffer_id << ", len " << len << ", ptr " << local_ptr
               << std::endl;
     return -1;
   }
@@ -521,7 +523,7 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
   }
   if (ret != 0) {
     std::cerr << "[ERROR] UCCL recv_async submit failed for peer " << peer_rank
-              << ", request " << request_id << ", mr_id " << local_mr_id
+              << ", request " << request_id << ", buffer_id " << local_buffer_id
               << ", len " << len << ", ptr " << local_ptr << std::endl;
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);

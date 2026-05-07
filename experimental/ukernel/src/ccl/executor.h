@@ -71,6 +71,7 @@ class Executor {
   // successor ops.
   explicit Executor(
       ExecutorBackends backends,
+      // Callback contract: second argument is remote `buffer_id` (not MR id).
       std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
           resolve_ipc_buffer_pointer = {});
   Executor(ExecutorConfig const& config = {});
