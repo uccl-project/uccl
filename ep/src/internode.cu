@@ -702,7 +702,9 @@ __global__ void __launch_bounds__(
 
       // Issue RDMA for non-local ranks
       if (dst_rdma_rank != rdma_rank) {
-        __threadfence_system();  // ensure metadata visible to NIC DMA
+        // Note(MaoZiming): atomic_set_and_commit in put_nbi_warp already issues
+        // __threadfence_system() before publishing cmd_type to the CPU proxy.
+        // __threadfence_system();
         // NOTE(MaoZiming): this tells the remote rank how many tokens each
         // local nvl_rank and expert are expected to receive.
         uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
@@ -884,8 +886,7 @@ __global__ void __launch_bounds__(
       for (int j = 0; j < num_topk_ranks; ++j) {
         int raw = __shfl_sync(WARP_MASK, rdma_tail_idx, topk_ranks[j]);
         if (lane_id == j)
-          src_meta.is_token_in_nvl_rank_bits |=
-              ((raw + 1) & 0xFFFFFF) << 8;
+          src_meta.is_token_in_nvl_rank_bits |= ((raw + 1) & 0xFFFFFF) << 8;
       }
 
       // Copy source metadata into symmetric send buffer
@@ -924,13 +925,14 @@ __global__ void __launch_bounds__(
         auto window_spin_start = clock64();
         while (offset >= WARP_SIZE) {
           release_lock(rdma_send_channel_lock + lane_id);
-          __nanosleep(NUM_WAIT_NANOSECONDS);  // yield to prevent warp starvation
+          __nanosleep(
+              NUM_WAIT_NANOSECONDS);  // yield to prevent warp starvation
           if (clock64() - window_spin_start > NUM_TIMEOUT_CYCLES) {
             printf(
                 "EP sender window spin timeout: ch:%d rdma:%d nvl:%d lane:%d "
                 "rdma_tail_idx:%d latest_tail:%d offset:%d\n",
-                channel_id, rdma_rank, nvl_rank, lane_id,
-                rdma_tail_idx, latest_tail, offset);
+                channel_id, rdma_rank, nvl_rank, lane_id, rdma_tail_idx,
+                latest_tail, offset);
             trap();
           }
           acquire_lock(rdma_send_channel_lock + lane_id);
@@ -1048,7 +1050,10 @@ __global__ void __launch_bounds__(
         EP_DEVICE_ASSERT(num_tokens_to_issue >= 0 and
                          num_tokens_to_issue <= synced_num_tokens_to_send);
         if (dst_rdma_rank != rdma_rank) {
-          __threadfence_system();  // ensure st_na_global visible to NIC DMA
+          // Note(MaoZiming): atomic_set_and_commit in put_nbi_warp already
+          // issues
+          // __threadfence_system() before publishing cmd_type to the CPU proxy.
+          // __threadfence_system();
           auto dst_slot_idx =
               synced_last_issued_tail % num_max_rdma_chunked_recv_tokens;
           EP_DEVICE_ASSERT(dst_slot_idx + num_tokens_to_issue <=
@@ -1185,10 +1190,13 @@ __global__ void __launch_bounds__(
             cached_nvl_channel_tail - cached_nvl_channel_head;
         if (num_max_nvl_chunked_recv_tokens - num_used_slots <
             num_max_nvl_chunked_send_tokens) {
-          __threadfence_system();
+          // Note(MaoZiming): st_release_sys_global below is a system-scope
+          // release store, prior TMA/global stores are already ordered-before
+          // it.
+          // __threadfence_system();
           if (lane_id == 0)
-            st_release_sys_global(
-                nvl_channel_tail.buffer(), cached_nvl_channel_tail);
+            st_release_sys_global(nvl_channel_tail.buffer(),
+                                  cached_nvl_channel_tail);
           cached_nvl_channel_head = __shfl_sync(
               WARP_MASK, ld_volatile_global(nvl_channel_head.buffer()), 0);
         }
@@ -1229,7 +1237,9 @@ __global__ void __launch_bounds__(
       auto src_rdma_tail =
           __shfl_sync(WARP_MASK, cached_rdma_channel_tail, src_rdma_rank);
 
-      __threadfence_system();  // ensure NIC DMA committed before reading
+      // Note(MaoZiming): a consumer-side fence cannot synchronize with NIC DMA;
+      // freshness is enforced by the epoch-tag spin-wait below.
+      // __threadfence_system();
 
       // Iterate over every token from the RDMA buffer
       for (int i = src_rdma_head, num_tokens_sent = 0; i < src_rdma_tail; ++i) {
@@ -1240,8 +1250,9 @@ __global__ void __launch_bounds__(
         int expected_tag = ((i + 1) & 0xFFFFFF) << 8;
         int seen_bits;
         {
-          auto ptr = reinterpret_cast<int const*>(
-              shifted + hidden_bytes + scale_bytes) + 1;
+          auto ptr = reinterpret_cast<int const*>(shifted + hidden_bytes +
+                                                  scale_bytes) +
+                     1;
           int raw = ld_acquire_sys_global(ptr);
           if ((raw & 0xFFFFFF00) == expected_tag) {
             seen_bits = raw & 0xFF;
@@ -1255,10 +1266,11 @@ __global__ void __launch_bounds__(
                 break;
               }
               if (clock64() - spin_start > NUM_TIMEOUT_CYCLES) {
-                printf("EP epoch timeout: ch:%d rdma:%d src:%d "
-                       "token:%d slot:%d raw:0x%x expect:0x%x\n",
-                       channel_id, rdma_rank, src_rdma_rank,
-                       i, rdma_slot_idx, raw, expected_tag);
+                printf(
+                    "EP epoch timeout: ch:%d rdma:%d src:%d "
+                    "token:%d slot:%d raw:0x%x expect:0x%x\n",
+                    channel_id, rdma_rank, src_rdma_rank, i, rdma_slot_idx, raw,
+                    expected_tag);
                 trap();
               }
             }
@@ -1281,18 +1293,24 @@ __global__ void __launch_bounds__(
           while (true) {
             int nvl_used = cached_nvl_channel_tail - cached_nvl_channel_head;
             if (nvl_used < num_max_nvl_chunked_recv_tokens) break;
-            __threadfence_system();
+            // Note(MaoZiming): st_release_sys_global below is a system-scope
+            // release store, prior TMA/global stores are already ordered-before
+            // it.
+            // __threadfence_system();
             if (lane_id == 0)
-              st_release_sys_global(
-                  nvl_channel_tail.buffer(), cached_nvl_channel_tail);
+              st_release_sys_global(nvl_channel_tail.buffer(),
+                                    cached_nvl_channel_tail);
             cached_nvl_channel_head = __shfl_sync(
                 WARP_MASK, ld_volatile_global(nvl_channel_head.buffer()), 0);
             __nanosleep(100000);
-            if (lane_id == 0 && clock64() - nvl_wait_start > NUM_TIMEOUT_CYCLES) {
-              printf("EP NVL full timeout: ch:%d rdma:%d nvl:%d dst:%d h:%d t:%d\n",
-                     channel_id, rdma_rank, nvl_rank, dst_nvl_rank,
-                     ld_volatile_global(nvl_channel_head.buffer()),
-                     cached_nvl_channel_tail);
+            if (lane_id == 0 &&
+                clock64() - nvl_wait_start > NUM_TIMEOUT_CYCLES) {
+              printf(
+                  "EP NVL full timeout: ch:%d rdma:%d nvl:%d dst:%d h:%d "
+                  "t:%d\n",
+                  channel_id, rdma_rank, nvl_rank, dst_nvl_rank,
+                  ld_volatile_global(nvl_channel_head.buffer()),
+                  cached_nvl_channel_tail);
               trap();
             }
           }
@@ -1342,7 +1360,9 @@ __global__ void __launch_bounds__(
 
       // Move tail index
       __syncwarp();
-      __threadfence_system();  // ensure TMA data visible before publishing tail
+      // Note(MaoZiming): st_release_sys_global below is a system-scope release
+      // store, prior TMA/global stores are already ordered-before it.
+      // __threadfence_system();
       if (lane_id == 0)
         st_release_sys_global<kUseAggressiveAtomic>(nvl_channel_tail.buffer(),
                                                     cached_nvl_channel_tail);
@@ -1384,8 +1404,8 @@ __global__ void __launch_bounds__(
           (min_head >= last_head + num_max_rdma_chunked_send_tokens) ||
           (min_head > last_head &&
            clock64() - coordinator_stall_start > NUM_TIMEOUT_CYCLES / 100000);
-      if (min_head != std::numeric_limits<int>::max() &&
-          should_advance && lane_id < kNumRDMARanks) {
+      if (min_head != std::numeric_limits<int>::max() && should_advance &&
+          lane_id < kNumRDMARanks) {
         uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -1489,9 +1509,11 @@ __global__ void __launch_bounds__(
         SourceMeta meta;
         meta.src_rdma_rank = ld_acquire_sys_global(
             reinterpret_cast<int const*>(shifted + hidden_bytes + scale_bytes));
-        meta.is_token_in_nvl_rank_bits = ld_acquire_sys_global(
-            reinterpret_cast<int const*>(shifted + hidden_bytes + scale_bytes) + 1)
-            & 0xFF;  // mask out epoch tag, keep lower 8 routing bits
+        meta.is_token_in_nvl_rank_bits =
+            ld_acquire_sys_global(reinterpret_cast<int const*>(
+                                      shifted + hidden_bytes + scale_bytes) +
+                                  1) &
+            0xFF;  // mask out epoch tag, keep lower 8 routing bits
         int64_t recv_token_idx =
             __shfl_sync(WARP_MASK, total_offset, meta.src_rdma_rank);
         (lane_id == meta.src_rdma_rank) ? (total_offset += 1) : 0;
