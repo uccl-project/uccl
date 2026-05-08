@@ -105,6 +105,27 @@ of the same `(SO)/(SU) GB/s` upstream prints: SO for multi-node (RDMA
 limit), SU for single-node (NVLink limit). Pick the relevant column from
 the table above; no separate sub-table needed.
 
+### NCCL all-to-all reference
+
+`tests/elastic/bench_nccl_a2a.py` runs `dist.all_to_all_single` (NCCL
+backend, `NCCL_NET_GDR_LEVEL=0`, `NCCL_P2P_DISABLE=1`) with the same
+`legacy_bytes = num_tokens × num_topk × hidden × 2` as the EP bench, so
+its `legacy GB/s` is directly comparable to ours. Steady-state, 30 iters:
+
+| Topology | NCCL a2a | EP dispatch (legacy) | EP reduced combine (legacy) |
+| --- | ---: | ---: | ---: |
+| 1n × 2g | 25 GB/s @ 583 µs | 26 GB/s | 21 GB/s |
+| 1n × 4g | 17 GB/s @ 868 µs | 12 GB/s | 17 GB/s |
+| 2n × 1g | 23 GB/s @ 628 µs | 27 GB/s | 22 GB/s |
+| 2n × 4g | 15 GB/s @ 998 µs |  6 GB/s | 12 GB/s |
+
+Take-aways: 2n × 1g, 1n × 2g already match (or exceed, on the small
+configs) NCCL's pure a2a; 1n × 4g sits ~30% under and 2n × 4g ~2.4×
+under. The 1n × 4g gap is the intra-node SHM memcpy path being
+DDR-bandwidth-bound (proxy threads observed idle during dispatch under
+`top -H`); the 2n × 4g gap is per-WR overhead in the proxy
+ibv_post_send loop, not NIC bandwidth (see Open issues).
+
 ## Open issues
 
 - **Single-scaleup combine fast path** (optional optimization, not
@@ -128,13 +149,34 @@ the table above; no separate sub-table needed.
   per-peer bulk-WRITE coalescing inside `hybrid_dispatch.cuh` — current
   one-WR-per-token layout interleaves remote slots so multi-SGE merging
   in the proxy doesn't help.
-- **Intra-node direct host-window write** (prototype, NOT committed):
-  bypass UCCL proxy memcpy by sender warp TMA-storing into peer's
-  shared-window slice. 1n × 4g: dispatch −10%. 2n × 4g: regresses +3
-  to +7% because per-lane serial TMA loop on SM89 contends with the
-  NIC for PCIe upstream. Diff preserved at `/tmp/refactor_full.patch`;
-  recommit only after either restructuring the dispatch hot path to
-  avoid the per-lane serial loop, or gating on `num_nodes == 1`.
+- **Intra-node ceiling on 1n × 4g.** Dispatch ~1180 µs corresponds to
+  ~22 MB/iter intra-node SHM traffic (4 ranks × 5.5 MB) at ~25 GB/s
+  effective host DDR bandwidth on this Xeon Silver 4410Y dual-channel
+  DDR4. The `top -H` sample of proxy threads during dispatch shows them
+  idle (CPU not the bottleneck), so the bench is hitting raw DDR
+  throughput. Tested optimizations (kept as opt-in code paths, not
+  default) for future hardware where DDR isn't the limiter:
+  - **NT-store memcpy** (`UCCL_EP_SHM_USE_NT_MEMCPY=1`, kept reverted):
+    AVX2 `vmovntdq` for the SHM WRITE batch. A/B showed −13% / −64%
+    regression on 2n × 4g (NT stores force DRAM round-trip; cached
+    stores let receiver-GPU PCIe DMA snoop the writer's L3).
+  - **THP + page pre-touch** (`UCCL_EP_SHM_HUGEPAGE=1` /
+    `UCCL_EP_SHM_PRETOUCH=1`): no measurable change vs. run-to-run noise
+    (~10% on this hardware), kept off by default.
+  - **Intra-node direct host-window write** (kernel-level, prototype
+    code preserved at `/tmp/refactor_full.patch`): replaced one DDR
+    pass (proxy memcpy) with a direct GPU peer-slice TMA-store. With
+    proper interleaved A/B (4 rounds + warmup discard, both nodes
+    randomized order), end-to-end dispatch / combine were within ±2%
+    of the proxy memcpy baseline on 1n × 4g and within +7% on 2n × 4g.
+    The earlier doc claim of "−10% on 1n × 4g" was cold-cache noise.
+    Conclusion: the prototype isn't a real win on this hardware; the
+    intra-node SHM path is DDR-bandwidth-bound regardless of who
+    issues the store.
+
+  Real fix would require either NVLink (changes intra-node from PCIe-
+  bound to NVLink-bound, ~10× faster) or a different algorithm that
+  cuts intra-node bytes per token.
 
 ## Validation checklist
 
