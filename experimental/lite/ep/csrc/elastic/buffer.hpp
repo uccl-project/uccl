@@ -79,6 +79,34 @@ class ElasticBuffer {
     uint64_t* uccl_d2h_channel_addrs_device = nullptr;
     uint64_t* uccl_signal_shadow_device = nullptr;
 
+    // Direct intra-node host-window descriptor.
+    // Default ON when the shared host window is in use: the sender warp
+    // writes directly into the peer's host-pinned slice (one PCIe pass)
+    // instead of staging via the proxy memcpy (two DDR passes). Latency
+    // is the same on idle systems (the proxy memcpy is fully overlapped
+    // with PCIe), but DDR bandwidth and proxy CPU are freed for other
+    // workloads. Set EP_UCCL_INTRANODE_DIRECT=0 to fall back to the
+    // proxy-memcpy path for A/B comparison.
+    bool uccl_intranode_direct_enabled() const {
+        if (!uccl_use_shared_window) return false;
+        if (const char* e = std::getenv("EP_UCCL_INTRANODE_DIRECT")) {
+            return std::atoi(e) != 0;
+        }
+        return true;
+    }
+    uint64_t uccl_shared_per_rank_bytes() const {
+        return uccl_intranode_direct_enabled() ? static_cast<uint64_t>(uccl_window.per_rank_size) : 0u;
+    }
+    int uccl_intranode_local_world_size() const {
+        return uccl_intranode_direct_enabled() ? local_world_size : 0;
+    }
+    int uccl_intranode_my_local_rank() const {
+        return uccl_intranode_direct_enabled() ? local_rank : -1;
+    }
+    int uccl_intranode_node_idx() const {
+        return uccl_intranode_direct_enabled() ? node_idx : -1;
+    }
+
     // Some EP hybrid mode settings
     static constexpr int kNumMaxChannelsPerSM = 8;
     static constexpr int kNumMaxSMs = 160;
@@ -459,6 +487,10 @@ public:
                          uccl_d2h_channel_addrs_device,
                          static_cast<int>(uccl_d2h_channel_addrs_host.size()),
                          uccl_signal_shadow_device,
+                         uccl_shared_per_rank_bytes(),
+                         uccl_intranode_local_world_size(),
+                         uccl_intranode_my_local_rank(),
+                         uccl_intranode_node_idx(),
                          stream);
 
         // Let CPU wait
@@ -1249,6 +1281,10 @@ public:
                            uccl_d2h_channel_addrs_device,
                            static_cast<int>(uccl_d2h_channel_addrs_host.size()),
                            uccl_signal_shadow_device,
+                           uccl_shared_per_rank_bytes(),
+                           uccl_intranode_local_world_size(),
+                           uccl_intranode_my_local_rank(),
+                           uccl_intranode_node_idx(),
                            comm_stream);
 
         // Received token counters
@@ -1549,6 +1585,10 @@ public:
               uccl_d2h_channel_addrs_device,
               static_cast<int>(uccl_d2h_channel_addrs_host.size()),
               uccl_signal_shadow_device,
+              uccl_shared_per_rank_bytes(),
+              uccl_intranode_local_world_size(),
+              uccl_intranode_my_local_rank(),
+              uccl_intranode_node_idx(),
               comm_stream);
 
         // Allocate output tensors

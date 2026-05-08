@@ -35,7 +35,11 @@ combine_impl(nv_bfloat16* x,
                int num_reduced_tokens,
                const uint64_t* uccl_d2h_channel_addrs,
                const int uccl_num_d2h_channel_addrs,
-               uint64_t* uccl_signal_shadow) {
+               uint64_t* uccl_signal_shadow,
+               const uint64_t uccl_shared_per_rank_bytes,
+               const int uccl_intranode_local_world_size,
+               const int uccl_intranode_my_local_rank,
+               const int uccl_intranode_node_idx) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);
@@ -76,7 +80,13 @@ combine_impl(nv_bfloat16* x,
     const auto [qp_idx, sharing_mode] = comm::get_qp_mode<kNumSMs, kNumQPs, kNumWarps>(sm_idx, warp_idx);
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
                                      uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
-                                     uccl_signal_shadow);
+                                     uccl_signal_shadow,
+                                     /*local_scaleout_rank_idx=*/-1,
+                                     /*local_scaleup_rank_idx=*/-1,
+                                     uccl_shared_per_rank_bytes,
+                                     uccl_intranode_local_world_size,
+                                     uccl_intranode_my_local_rank,
+                                     uccl_intranode_node_idx);
 
     // Full barrier to ensure the remote buffer is available
     const auto workspace_layout = layout::WorkspaceLayout(workspace, 1, kNumRanks, kNumExperts);

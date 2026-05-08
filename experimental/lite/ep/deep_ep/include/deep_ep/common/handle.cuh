@@ -62,6 +62,15 @@ struct NCCLGin {
     const uint64_t* uccl_d2h_channel_addrs;
     int uccl_num_d2h_channel_addrs;
     uint64_t* uccl_signal_shadow;
+    // Direct intra-node shared host window descriptor: when these are non-zero,
+    // get_sym_ptr<World>/<LSA> returns the host-mapped address of the peer's
+    // slice within the shared POSIX/cudaHostAlloc-mapped window, allowing the
+    // sender warp to TMA-store directly to the peer's slot and skip the CPU
+    // proxy memcpy. See doc/uccl-ep-deepepv2-migration.md.
+    uint64_t uccl_shared_per_rank_bytes;
+    int uccl_intranode_local_world_size;
+    int uccl_intranode_my_local_rank;
+    int uccl_intranode_node_idx;
 
     __device__ __forceinline__ int get_uccl_channel_idx() const {
         return static_cast<int>(blockIdx.x) * (static_cast<int>(blockDim.x) / 32) +
@@ -81,7 +90,11 @@ struct NCCLGin {
             const int& local_rank_idx = -1,
             uint64_t* uccl_signal_shadow = nullptr,
             const int& local_scaleout_rank_idx = -1,
-            const int& local_scaleup_rank_idx = -1):
+            const int& local_scaleup_rank_idx = -1,
+            const uint64_t& uccl_shared_per_rank_bytes = 0,
+            const int& uccl_intranode_local_world_size = 0,
+            const int& uccl_intranode_my_local_rank = -1,
+            const int& uccl_intranode_node_idx = -1):
         nccl_dev_comm(nccl_dev_comm), nccl_window(nccl_window),
 #ifndef EP_USE_UCCL_PROXY
         gin(ncclGin(nccl_dev_comm, qp_idx, resource_sharing_mode)),
@@ -99,22 +112,53 @@ struct NCCLGin {
         local_scaleup_rank_idx(local_scaleup_rank_idx >= 0 ? local_scaleup_rank_idx : local_rank_idx),
         uccl_d2h_channel_addrs(uccl_d2h_channel_addrs),
         uccl_num_d2h_channel_addrs(uccl_num_d2h_channel_addrs),
-        uccl_signal_shadow(uccl_signal_shadow) {
+        uccl_signal_shadow(uccl_signal_shadow),
+        uccl_shared_per_rank_bytes(uccl_shared_per_rank_bytes),
+        uccl_intranode_local_world_size(uccl_intranode_local_world_size),
+        uccl_intranode_my_local_rank(uccl_intranode_my_local_rank),
+        uccl_intranode_node_idx(uccl_intranode_node_idx) {
         lsa_base_ptr = reinterpret_cast<uint64_t>(local_base_ptr);
 #endif
     }
+
+#ifdef EP_USE_UCCL_PROXY
+    // Returns the destination peer's local rank index when the peer is on the
+    // same node and the shared host window is enabled; -1 otherwise.
+    template <typename team_t>
+    __device__ __forceinline__ int uccl_intranode_dst_local_rank(const int& dst_rank_idx) const {
+        if (uccl_shared_per_rank_bytes == 0 or uccl_intranode_local_world_size <= 0)
+            return -1;
+        IS_TEAM_LSA({
+            // LSA team in UCCL force-no-NVLink hybrid mode is exactly the local node.
+            return (dst_rank_idx >= 0 and dst_rank_idx < uccl_intranode_local_world_size) ?
+                dst_rank_idx : -1;
+        })
+        IS_TEAM_WORLD({
+            const int dst_node = dst_rank_idx / uccl_intranode_local_world_size;
+            const int dst_local_rank = dst_rank_idx - dst_node * uccl_intranode_local_world_size;
+            return dst_node == uccl_intranode_node_idx ? dst_local_rank : -1;
+        })
+        IS_TEAM_RAIL({
+            // RAIL team is by construction one rank per node — peer is either
+            // self (handled earlier) or cross-node.
+            return -1;
+        })
+    }
+#endif
 
     template <typename team_t>
     __device__ __forceinline__ bool is_nvlink_accessible(const int& dst_rank_idx) const {
 #ifdef EP_USE_UCCL_PROXY
         IS_TEAM_LSA({
-            return dst_rank_idx == local_scaleup_rank_idx;
+            if (dst_rank_idx == local_scaleup_rank_idx) return true;
+            return uccl_intranode_dst_local_rank<ncclTeamTagLsa>(dst_rank_idx) >= 0;
         })
         IS_TEAM_RAIL({
             return dst_rank_idx == local_scaleout_rank_idx;
         })
         IS_TEAM_WORLD({
-            return dst_rank_idx == local_rank_idx;
+            if (dst_rank_idx == local_rank_idx) return true;
+            return uccl_intranode_dst_local_rank<ncclTeamTagWorld>(dst_rank_idx) >= 0;
         })
 #else
 #ifdef EP_FORCE_NO_NVLINK
@@ -159,13 +203,25 @@ struct NCCLGin {
     dtype_t* get_sym_ptr(dtype_t* ptr, const int& dst_rank_idx) const {
 #ifdef EP_USE_UCCL_PROXY
         IS_TEAM_LSA({
-            return dst_rank_idx == local_scaleup_rank_idx ? ptr : nullptr;
+            if (dst_rank_idx == local_scaleup_rank_idx) return ptr;
+            const int dst_local_rank = uccl_intranode_dst_local_rank<ncclTeamTagLsa>(dst_rank_idx);
+            if (dst_local_rank < 0) return nullptr;
+            const int64_t shift = (static_cast<int64_t>(dst_local_rank) -
+                                   static_cast<int64_t>(uccl_intranode_my_local_rank)) *
+                                  static_cast<int64_t>(uccl_shared_per_rank_bytes);
+            return reinterpret_cast<dtype_t*>(reinterpret_cast<uint64_t>(ptr) + shift);
         })
         IS_TEAM_RAIL({
             return dst_rank_idx == local_scaleout_rank_idx ? ptr : nullptr;
         })
         IS_TEAM_WORLD({
-            return dst_rank_idx == local_rank_idx ? ptr : nullptr;
+            if (dst_rank_idx == local_rank_idx) return ptr;
+            const int dst_local_rank = uccl_intranode_dst_local_rank<ncclTeamTagWorld>(dst_rank_idx);
+            if (dst_local_rank < 0) return nullptr;
+            const int64_t shift = (static_cast<int64_t>(dst_local_rank) -
+                                   static_cast<int64_t>(uccl_intranode_my_local_rank)) *
+                                  static_cast<int64_t>(uccl_shared_per_rank_bytes);
+            return reinterpret_cast<dtype_t*>(reinterpret_cast<uint64_t>(ptr) + shift);
         })
 #else
         IS_TEAM_RAIL({

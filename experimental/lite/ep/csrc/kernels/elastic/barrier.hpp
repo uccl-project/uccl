@@ -27,6 +27,10 @@ public:
         const uint64_t* uccl_d2h_channel_addrs;
         int uccl_num_d2h_channel_addrs;
         uint64_t* uccl_signal_shadow;
+        uint64_t uccl_shared_per_rank_bytes;
+        int uccl_intranode_local_world_size;
+        int uccl_intranode_my_local_rank;
+        int uccl_intranode_node_idx;
 
         jit::LaunchArgs launch_args;
     };
@@ -52,7 +56,11 @@ static void __instantiate_kernel() {{
             args.nccl_dev_comm, args.nccl_window,
             args.workspace, args.scaleout_rank_idx, args.scaleup_rank_idx,
             args.uccl_d2h_channel_addrs, args.uccl_num_d2h_channel_addrs,
-            args.uccl_signal_shadow
+            args.uccl_signal_shadow,
+            args.uccl_shared_per_rank_bytes,
+            args.uccl_intranode_local_world_size,
+            args.uccl_intranode_my_local_rank,
+            args.uccl_intranode_node_idx
         ));
     }
 };
@@ -66,6 +74,10 @@ static void launch_barrier(const ncclDevComm_t& nccl_dev_comm, const ncclWindow_
                              const uint64_t* uccl_d2h_channel_addrs,
                              const int& uccl_num_d2h_channel_addrs,
                              uint64_t* uccl_signal_shadow,
+                             const uint64_t& uccl_shared_per_rank_bytes,
+                             const int& uccl_intranode_local_world_size,
+                             const int& uccl_intranode_my_local_rank,
+                             const int& uccl_intranode_node_idx,
                              const at::cuda::CUDAStream& stream) {
     // Number of threads equals to the number of ranks
     constexpr auto kNumThreads = 512;
@@ -84,6 +96,10 @@ static void launch_barrier(const ncclDevComm_t& nccl_dev_comm, const ncclWindow_
         .uccl_d2h_channel_addrs = uccl_d2h_channel_addrs,
         .uccl_num_d2h_channel_addrs = uccl_num_d2h_channel_addrs,
         .uccl_signal_shadow = uccl_signal_shadow,
+        .uccl_shared_per_rank_bytes = uccl_shared_per_rank_bytes,
+        .uccl_intranode_local_world_size = uccl_intranode_local_world_size,
+        .uccl_intranode_my_local_rank = uccl_intranode_my_local_rank,
+        .uccl_intranode_node_idx = uccl_intranode_node_idx,
         .launch_args = jit::LaunchArgs(num_sms, kNumThreads, 0, 1, true)};
     const auto code = BarrierRuntime::generate(args);
     const auto runtime = jit::compiler->build("barrier", code);

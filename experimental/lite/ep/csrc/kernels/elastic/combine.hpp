@@ -41,6 +41,10 @@ public:
         const uint64_t* uccl_d2h_channel_addrs;
         int uccl_num_d2h_channel_addrs;
         uint64_t* uccl_signal_shadow;
+        uint64_t uccl_shared_per_rank_bytes;
+        int uccl_intranode_local_world_size;
+        int uccl_intranode_my_local_rank;
+        int uccl_intranode_node_idx;
 
         jit::LaunchArgs launch_args;
     };
@@ -96,7 +100,11 @@ static void __instantiate_kernel() {{
                                                        args.num_reduced_tokens,
                                                        args.uccl_d2h_channel_addrs,
                                                        args.uccl_num_d2h_channel_addrs,
-                                                       args.uccl_signal_shadow));
+                                                       args.uccl_signal_shadow,
+                                                       args.uccl_shared_per_rank_bytes,
+                                                       args.uccl_intranode_local_world_size,
+                                                       args.uccl_intranode_my_local_rank,
+                                                       args.uccl_intranode_node_idx));
         } else {
             EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(kernel, config,
                                                      args.x, args.topk_weights,
@@ -141,6 +149,10 @@ static void* launch_combine(void* x,
                               const uint64_t* uccl_d2h_channel_addrs,
                               const int& uccl_num_d2h_channel_addrs,
                               uint64_t* uccl_signal_shadow,
+                              const uint64_t& uccl_shared_per_rank_bytes,
+                              const int& uccl_intranode_local_world_size,
+                              const int& uccl_intranode_my_local_rank,
+                              const int& uccl_intranode_node_idx,
                               const at::cuda::CUDAStream& stream) {
     // Maximize shared memory utilization
     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
@@ -185,6 +197,10 @@ static void* launch_combine(void* x,
         .uccl_d2h_channel_addrs = uccl_d2h_channel_addrs,
         .uccl_num_d2h_channel_addrs = uccl_num_d2h_channel_addrs,
         .uccl_signal_shadow = uccl_signal_shadow,
+        .uccl_shared_per_rank_bytes = uccl_shared_per_rank_bytes,
+        .uccl_intranode_local_world_size = uccl_intranode_local_world_size,
+        .uccl_intranode_my_local_rank = uccl_intranode_my_local_rank,
+        .uccl_intranode_node_idx = uccl_intranode_node_idx,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)
     };

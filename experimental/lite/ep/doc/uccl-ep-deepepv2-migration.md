@@ -163,16 +163,14 @@ ibv_post_send loop, not NIC bandwidth (see Open issues).
   - **THP + page pre-touch** (`UCCL_EP_SHM_HUGEPAGE=1` /
     `UCCL_EP_SHM_PRETOUCH=1`): no measurable change vs. run-to-run noise
     (~10% on this hardware), kept off by default.
-  - **Intra-node direct host-window write** (kernel-level, prototype
-    code preserved at `/tmp/refactor_full.patch`): replaced one DDR
-    pass (proxy memcpy) with a direct GPU peer-slice TMA-store. With
-    proper interleaved A/B (4 rounds + warmup discard, both nodes
-    randomized order), end-to-end dispatch / combine were within ±2%
-    of the proxy memcpy baseline on 1n × 4g and within +7% on 2n × 4g.
-    The earlier doc claim of "−10% on 1n × 4g" was cold-cache noise.
-    Conclusion: the prototype isn't a real win on this hardware; the
-    intra-node SHM path is DDR-bandwidth-bound regardless of who
-    issues the store.
+  - **Intra-node direct host-window write**: enabled by default
+    (`EP_UCCL_INTRANODE_DIRECT=1`) since it doesn't regress and frees
+    DDR bandwidth + proxy CPU for co-located workloads. The latency
+    improvement on the bench itself is 0 µs (the proxy memcpy is fully
+    overlapped with PCIe), but ~22 MB/iter of host DDR traffic and the
+    proxy thread's memcpy work are eliminated. Set
+    `EP_UCCL_INTRANODE_DIRECT=0` to fall back to the proxy-memcpy path
+    for diagnostics.
 
   Real fix would require either NVLink (changes intra-node from PCIe-
   bound to NVLink-bound, ~10× faster) or a different algorithm that

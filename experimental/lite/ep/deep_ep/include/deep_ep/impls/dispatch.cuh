@@ -43,7 +43,11 @@ dispatch_impl(
     const int rank_idx,
     const uint64_t* uccl_d2h_channel_addrs,
     const int uccl_num_d2h_channel_addrs,
-    uint64_t* uccl_signal_shadow
+    uint64_t* uccl_signal_shadow,
+    const uint64_t uccl_shared_per_rank_bytes,
+    const int uccl_intranode_local_world_size,
+    const int uccl_intranode_my_local_rank,
+    const int uccl_intranode_node_idx
 ) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumRanks == 0, "Invalid number of experts or ranks");
@@ -72,7 +76,13 @@ dispatch_impl(
         sm_idx, warp_idx - kNumNotifyWarps, warp_idx < kNumNotifyWarps);
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode, workspace,
                                      uccl_d2h_channel_addrs, uccl_num_d2h_channel_addrs, rank_idx,
-                                     uccl_signal_shadow);
+                                     uccl_signal_shadow,
+                                     /*local_scaleout_rank_idx=*/-1,
+                                     /*local_scaleup_rank_idx=*/-1,
+                                     uccl_shared_per_rank_bytes,
+                                     uccl_intranode_local_world_size,
+                                     uccl_intranode_my_local_rank,
+                                     uccl_intranode_node_idx);
 
     // Barrier without TMA store flush, without prologue grid sync
     comm::gpu_barrier<kIsScaleupNVLink, 1, kNumRanks,
@@ -366,23 +376,52 @@ dispatch_impl(
             }
             __syncwarp();
 
-            // TMA store to send buffer
+            // TMA store to local send buffer (only needed when we will fall back to
+            // the proxy/RDMA path for some destinations). We compute `dst_ptr` first
+            // and skip the local copy when *all* active lanes' destinations are
+            // intra-node-shared (dst_ptr != nullptr), saving one PCIe-upstream copy
+            // per token in the no-NVLink direct-intranode path.
             auto send_buffer_ptr = send_buffer.get_token_buffer(token_idx).get_base_ptr();
-            if constexpr (not kIsScaleupNVLink) {
-                if (ptx::elect_one_sync())
-                    ptx::tma_store_1d(send_buffer_ptr, tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
-                ptx::tma_store_commit();
-                __syncwarp();
-            }
 
-            // Issue TMA NVLink stores
+            // Issue TMA NVLink/intranode-shared stores
             EP_STATIC_ASSERT(kNumTopk <= 32, "Invalid top-k selection");
             const auto dst_ptr = stored_dst_slot_idx >= 0 ?
                 gin.get_sym_ptr<team_t>(recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(), stored_dst_rank_idx) :
                 nullptr;
+
+            // If any active lane needs the RDMA fallback (dst_ptr == nullptr but slot is valid),
+            // we must populate the local send_buffer first so the proxy can pick it up.
+            const bool needs_local_send_buf = stored_dst_slot_idx >= 0 and dst_ptr == nullptr;
+            const auto warp_needs_local = ptx::reduce_or(needs_local_send_buf ? 1u : 0u);
+            if constexpr (not kIsScaleupNVLink) {
+                if (warp_needs_local) {
+                    ptx::tma_store_1d_warp(send_buffer_ptr, tma_buffer.get_base_ptr(),
+                                           tma_buffer.get_num_bytes<false>(), lane_idx);
+                    ptx::tma_store_commit();
+                    __syncwarp();
+                }
+            }
+
+#ifndef DISABLE_SM90_FEATURES
+            // SM90: each active lane issues its own cp.async.bulk in parallel.
             if (dst_ptr != nullptr)
                 ptx::tma_store_1d(dst_ptr, tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
             ptx::tma_store_commit();
+#else
+            // SM89: serialize per active lane and use the warp-cooperative store.
+            {
+                auto active_mask = __ballot_sync(0xffffffffu, dst_ptr != nullptr);
+                while (active_mask != 0) {
+                    const int src_lane = __ffs(active_mask) - 1;
+                    const auto b_dst_ptr = reinterpret_cast<uint8_t*>(
+                        __shfl_sync(0xffffffffu, reinterpret_cast<uintptr_t>(dst_ptr), src_lane));
+                    ptx::tma_store_1d_warp(b_dst_ptr, tma_buffer.get_base_ptr(),
+                                           tma_buffer.get_num_bytes<false>(), lane_idx);
+                    active_mask &= ~(1u << src_lane);
+                }
+                ptx::tma_store_commit();
+            }
+#endif
             __syncwarp();
 
             // Issue RDMA put
