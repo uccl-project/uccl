@@ -1,12 +1,19 @@
 #pragma once
 #include <nanobind/nanobind.h>
-#include <unordered_map>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace uccl {
 namespace nb = nanobind;
 
-extern std::unordered_map<int, std::vector<nb::object>> g_proxies_by_dev;
+// Keyed by (device_index, low_latency_mode). Allows a single process to
+// register two independent sets of UcclProxy instances on the same device --
+// one for normal-mode and one for low-latency-mode -- so that two coexisting
+// Buffer instances don't collide on shared resources (per-device thread
+// pool, /dev/shm barriers, etc.).
+using ProxyRegistryKey = std::pair<int, bool>;
+extern std::map<ProxyRegistryKey, std::vector<nb::object>> g_proxies_by_dev;
 
-std::unordered_map<int, std::vector<nb::object>>& proxies_by_dev();
+std::map<ProxyRegistryKey, std::vector<nb::object>>& proxies_by_dev();
 }  // namespace uccl

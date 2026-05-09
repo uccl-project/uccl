@@ -555,8 +555,12 @@ def initialize_uccl(
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
 ):
+    # Only sweep barriers belonging to OUR mode so we don't stomp on a
+    # coexisting Buffer of the other mode in the same process. The C++
+    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<nm|ll>_th<idx>`.
     try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+        mode_token = "_nm_" if use_normal_mode else "_ll_"
+        for shm_file in glob.glob(f"/dev/shm/uccl_barrier_*{mode_token}*"):
             os.remove(shm_file)
     except Exception:
         pass
