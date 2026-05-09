@@ -259,7 +259,7 @@ void* DeviceBackend::resolve_mutable(CollectiveBinding const& binding,
     throw std::invalid_argument(
         "device backend requires resolved runtime pointer for remote dst");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("device backend local buffer is missing");
   }
@@ -275,7 +275,7 @@ void const* DeviceBackend::resolve_const(CollectiveBinding const& binding,
     throw std::invalid_argument(
         "device backend requires resolved runtime pointer for remote src");
   }
-  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("device backend local buffer is missing");
   }

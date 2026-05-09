@@ -55,8 +55,7 @@ struct ExecutorConfig {
 };
 
 PlanRequest make_plan_request(CollectiveKind kind,
-                              CollectiveConfig const& config,
-                              CollectiveBufferRoles const& roles);
+                              CollectiveConfig const& config, bool inplace);
 
 struct CollectiveOpHandle {
   uint64_t value = 0;
