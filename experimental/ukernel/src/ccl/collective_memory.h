@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -16,6 +18,12 @@ inline constexpr BufferId kInvalidBufferId = 0;
 inline constexpr BufferId kDefaultInputBufferId = 1;
 inline constexpr BufferId kDefaultOutputBufferId = kDefaultInputBufferId;
 inline constexpr BufferId kDefaultScratchBufferId = 2;
+
+namespace PlanBuffer {
+inline constexpr BufferId Input = 1;
+inline constexpr BufferId Output = 2;
+inline constexpr BufferId Scratch = 3;
+}  // namespace PlanBuffer
 
 struct TensorLayout {
   // Torch-style tensor metadata: sizes/strides/storage_offset are all
@@ -68,45 +76,44 @@ struct RegisteredBuffer {
 
 struct BufferRegistry {
   int local_rank = 0;
-  std::vector<RegisteredBuffer> buffers;
+  std::unordered_map<BufferId, RegisteredBuffer> buffers;
 
   RegisteredBuffer& ensure_buffer(BufferId id) {
     if (id == kInvalidBufferId) {
       throw std::invalid_argument("cannot materialize invalid buffer id");
     }
-    size_t index = static_cast<size_t>(id);
-    if (index >= buffers.size()) {
-      buffers.resize(index + 1);
-    }
-    buffers[index].registered = true;
-    return buffers[index];
+    auto& buf = buffers[id];
+    buf.registered = true;
+    return buf;
   }
 
   bool has_buffer(BufferId id) const {
-    return id != kInvalidBufferId && static_cast<size_t>(id) < buffers.size() &&
-           buffers[static_cast<size_t>(id)].registered;
+    if (id == kInvalidBufferId) return false;
+    auto it = buffers.find(id);
+    return it != buffers.end() && it->second.registered;
   }
 
   RegisteredBuffer& buffer(BufferId id) {
-    if (!has_buffer(id)) {
+    auto it = buffers.find(id);
+    if (it == buffers.end() || !it->second.registered) {
       throw std::invalid_argument("buffer id is not registered");
     }
-    return buffers[static_cast<size_t>(id)];
+    return it->second;
   }
 
   RegisteredBuffer const& buffer(BufferId id) const {
-    if (!has_buffer(id)) {
+    auto it = buffers.find(id);
+    if (it == buffers.end() || !it->second.registered) {
       throw std::invalid_argument("buffer id is not registered");
     }
-    return buffers[static_cast<size_t>(id)];
+    return it->second;
   }
 
   std::vector<BufferId> registered_buffer_ids() const {
     std::vector<BufferId> ids;
     ids.reserve(buffers.size());
-    for (size_t index = 0; index < buffers.size(); ++index) {
-      if (!buffers[index].registered) continue;
-      ids.push_back(static_cast<BufferId>(index));
+    for (auto const& [id, buf] : buffers) {
+      if (buf.registered) ids.push_back(id);
     }
     return ids;
   }
@@ -137,6 +144,20 @@ struct CollectiveBufferRoles {
         return scratch_buffer_id;
     }
     return kInvalidBufferId;
+  }
+
+  BufferId resolve_plan_id(BufferId plan_id) const {
+    switch (plan_id) {
+      case PlanBuffer::Input:
+        return input_buffer_id;
+      case PlanBuffer::Output:
+        return output_buffer_id;
+      case PlanBuffer::Scratch:
+        return scratch_buffer_id;
+      default:
+        throw std::invalid_argument("unknown plan buffer id: " +
+                                    std::to_string(plan_id));
+    }
   }
 
   void validate() const {
@@ -198,6 +219,14 @@ struct CollectiveBinding {
       throw std::invalid_argument("collective binding has no buffer registry");
     }
     return registry->buffer(id);
+  }
+
+  RegisteredBuffer& plan_buffer(BufferRef const& ref) {
+    return buffer(roles.resolve_plan_id(ref.buffer_id));
+  }
+
+  RegisteredBuffer const& plan_buffer(BufferRef const& ref) const {
+    return buffer(roles.resolve_plan_id(ref.buffer_id));
   }
 
   RegisteredBuffer& role_buffer(CollectiveBufferRole role) {

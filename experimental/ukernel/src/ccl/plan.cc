@@ -73,32 +73,26 @@ uint32_t clamp_num_flows(uint32_t requested_flows, size_t tiles_per_unit) {
   return static_cast<uint32_t>(bounded);
 }
 
-BufferRef input_ref(PlanRequest const& request, size_t offset_bytes) {
-  return local_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Input),
-                          offset_bytes);
+BufferRef input_ref(PlanRequest const& /*request*/, size_t offset_bytes) {
+  return local_buffer_ref(PlanBuffer::Input, offset_bytes);
 }
 
-BufferRef output_ref(PlanRequest const& request, size_t offset_bytes) {
-  return local_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Output),
-                          offset_bytes);
+BufferRef output_ref(PlanRequest const& /*request*/, size_t offset_bytes) {
+  return local_buffer_ref(PlanBuffer::Output, offset_bytes);
 }
 
-BufferRef staging_ref(PlanRequest const& request, size_t offset_bytes) {
-  return local_buffer_ref(
-      request.roles.buffer_id(CollectiveBufferRole::Scratch), offset_bytes);
+BufferRef staging_ref(PlanRequest const& /*request*/, size_t offset_bytes) {
+  return local_buffer_ref(PlanBuffer::Scratch, offset_bytes);
 }
 
-BufferRef peer_input_ref(PlanRequest const& request, int rank,
+BufferRef peer_input_ref(PlanRequest const& /*request*/, int rank,
                          size_t offset_bytes) {
-  return remote_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Input),
-                           rank, offset_bytes);
+  return remote_buffer_ref(PlanBuffer::Input, rank, offset_bytes);
 }
 
-BufferRef peer_staging_ref(PlanRequest const& request, int rank,
+BufferRef peer_staging_ref(PlanRequest const& /*request*/, int rank,
                            size_t offset_bytes) {
-  return remote_buffer_ref(
-      request.roles.buffer_id(CollectiveBufferRole::Scratch), rank,
-      offset_bytes);
+  return remote_buffer_ref(PlanBuffer::Scratch, rank, offset_bytes);
 }
 
 void add_dep(std::vector<uint32_t>& deps, uint32_t dep) {
@@ -168,7 +162,6 @@ void require_plan_request(PlanRequest const& request) {
   if (request.tile_bytes == 0) {
     throw std::invalid_argument("collective plan tile_bytes must be positive");
   }
-  request.roles.validate();
 
   size_t elem_bytes = scalar_type_size(request.dtype);
   if (elem_bytes == 0) {
@@ -553,8 +546,7 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
     throw std::invalid_argument(
         "alltoall self split size must match between input and output");
   }
-  if (self_slice_bytes != 0 &&
-      request.roles.input_buffer_id != request.roles.output_buffer_id) {
+  if (self_slice_bytes != 0 && !request.inplace) {
     size_t self_tiles = ceil_div(self_slice_bytes, request.tile_bytes);
     for (size_t tile_index = 0; tile_index < self_tiles; ++tile_index) {
       size_t bytes =
