@@ -87,7 +87,7 @@ struct PlanRequest {
   size_t staging_bytes = 0;
   std::vector<size_t> input_split_bytes;
   std::vector<size_t> output_split_bytes;
-  CollectiveBufferRoles roles{};
+  bool inplace = true;
   ScalarType dtype = ScalarType::Float32;
   ReductionKind reduction = ReductionKind::Sum;
 };

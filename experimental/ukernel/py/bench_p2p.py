@@ -26,25 +26,25 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     send_buffer_id = 1
     recv_buffer_id = 2
     selected_transport = comm.peer_transport(peer)
-    if not comm.reg_rdma(send_buffer_id, send_buf, publish=True):
+    if not comm.reg_rdma(send_buffer_id, send_buf, publish=False):
         raise RuntimeError("reg_rdma(send) failed")
     if not comm.reg_rdma(recv_buffer_id, recv_buf, publish=True):
         raise RuntimeError("reg_rdma(recv) failed")
     ipc_registered = False
     if selected_transport == "ipc":
-        if not comm.reg_ipc(send_buffer_id, send_buf, publish=True):
-            raise RuntimeError("reg_ipc(send) failed")
         if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
-        if not comm.wait_ipc(peer, send_buffer_id):
-            raise RuntimeError("wait_ipc(peer send buffer) failed")
+        # Synchronize after publish so both ranks overwrite OOB entries
+        # before either reads — avoids reading a stale IPC handle from a
+        # previous iteration whose backing tensor may have been freed.
+        if not comm.barrier("p2p_ipc_ready", 30000):
+            raise RuntimeError("ukernel barrier(p2p_ipc_ready) failed")
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
-
-    # Global synchronization after publishing transport metadata.
-    if not comm.barrier("p2p_resource_ready", 30000):
-        raise RuntimeError("ukernel barrier(p2p_resource_ready) failed")
+    elif selected_transport == "uccl":
+        if not comm.wait_mr(peer, recv_buffer_id):
+            raise RuntimeError("wait_mr(peer recv buffer) failed")
 
     def do_send():
         # Sender writes into peer's recv buffer id.
@@ -77,7 +77,6 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     if ipc_registered:
-        comm.unreg_ipc(send_buffer_id)
         comm.unreg_ipc(recv_buffer_id)
     comm.unreg_rdma(send_buffer_id)
     comm.unreg_rdma(recv_buffer_id)
@@ -282,9 +281,13 @@ def main() -> None:
     if peer == 1:
         if not comm.connect_peer(peer):
             raise RuntimeError(f"connect_peer({peer}) failed")
+        if not comm.accept_peer(peer):
+            raise RuntimeError(f"accept_peer({peer}) failed")
     else:
         if not comm.accept_peer(peer):
             raise RuntimeError(f"accept_peer({peer}) failed")
+        if not comm.connect_peer(peer):
+            raise RuntimeError(f"connect_peer({peer}) failed")
 
     if rank == 0:
         print(f"[ukernel] selected transport to peer {peer}: {comm.peer_transport(peer)}")

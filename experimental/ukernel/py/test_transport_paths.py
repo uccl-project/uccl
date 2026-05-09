@@ -107,7 +107,57 @@ def setup_peer(comm: p2p.Communicator, rank: int, peer: int) -> None:
         require(comm.accept_peer(peer), "accept_peer failed")
 
 
-def run_oneway_case(comm: p2p.Communicator, rank: int, peer: int, case: OneWayCase) -> None:
+def send_buffer_id(case_id: int, owner_rank: int) -> int:
+    return 20_000 + case_id * 10 + owner_rank
+
+
+def recv_buffer_id(case_id: int, owner_rank: int) -> int:
+    return 10_000 + case_id * 10 + owner_rank
+
+
+def register_case_buffers(
+    comm: p2p.Communicator,
+    selected_transport: str,
+    peer: int,
+    case_id: int,
+    rank: int,
+    send_buf: torch.Tensor,
+    recv_buf: torch.Tensor,
+) -> int:
+    local_send_id = send_buffer_id(case_id, rank)
+    local_recv_id = recv_buffer_id(case_id, rank)
+    remote_recv_id = recv_buffer_id(case_id, peer)
+    require(comm.reg_rdma(local_send_id, send_buf, publish=False), "reg_rdma(send) failed")
+    require(comm.reg_rdma(local_recv_id, recv_buf, publish=True), "reg_rdma(recv) failed")
+    if selected_transport == "ipc":
+        require(comm.reg_ipc(local_recv_id, recv_buf, publish=True), "reg_ipc(recv) failed")
+        require(comm.wait_ipc(peer, remote_recv_id), "wait_ipc(peer recv buffer) failed")
+    elif selected_transport == "uccl":
+        require(comm.wait_mr(peer, remote_recv_id), "wait_mr(peer recv buffer) failed")
+    return remote_recv_id
+
+
+def unregister_case_buffers(
+    comm: p2p.Communicator,
+    selected_transport: str,
+    case_id: int,
+    rank: int,
+) -> None:
+    local_send_id = send_buffer_id(case_id, rank)
+    local_recv_id = recv_buffer_id(case_id, rank)
+    if selected_transport == "ipc":
+        comm.unreg_ipc(local_recv_id)
+    comm.unreg_rdma(local_recv_id)
+    comm.unreg_rdma(local_send_id)
+
+
+def run_oneway_case(
+    comm: p2p.Communicator,
+    rank: int,
+    peer: int,
+    selected_transport: str,
+    case: OneWayCase,
+) -> None:
     guard = -7777.0 - float(case.case_id)
     dtype = torch.float32
     eb = elem_bytes(dtype)
@@ -118,37 +168,51 @@ def run_oneway_case(comm: p2p.Communicator, rank: int, peer: int, case: OneWayCa
     send_off_b = case.send_offset_elems * eb
     recv_off_b = case.recv_offset_elems * eb
     payload_b = case.payload_elems * eb
+    remote_recv_id = register_case_buffers(
+        comm, selected_transport, peer, case.case_id, rank, send_buf, recv_buf
+    )
 
-    if rank == case.sender_rank:
-        req = comm.isend(peer, send_buf, offset=send_off_b, len=payload_b)
-        require(req != 0, f"{case.name}: isend returned 0")
-        require(comm.wait_finish(req), f"{case.name}: wait_finish(isend) failed")
-        ack = torch.empty(1, device="cuda", dtype=torch.int32)
-        comm.recv(peer, ack)
-        require(int(ack.item()) == case.case_id, f"{case.name}: bad ack")
-    else:
-        req = comm.irecv(peer, recv_buf, offset=recv_off_b, len=payload_b)
-        require(req != 0, f"{case.name}: irecv returned 0")
-        require(comm.wait_finish(req), f"{case.name}: wait_finish(irecv) failed")
-        exp = expected_payload(
-            sender_rank=case.sender_rank,
-            case_id=case.case_id,
-            start_elem=case.send_offset_elems,
-            length=case.payload_elems,
+    try:
+        if rank == case.sender_rank:
+            req = comm.isend(
+                peer,
+                send_buf,
+                offset=send_off_b,
+                len=payload_b,
+                remote_buffer_id=remote_recv_id,
+                remote_offset=recv_off_b,
+            )
+            require(req != 0, f"{case.name}: isend returned 0")
+            require(comm.wait_finish(req), f"{case.name}: wait_finish(isend) failed")
+        else:
+            req = comm.irecv(peer, recv_buf, offset=recv_off_b, len=payload_b)
+            require(req != 0, f"{case.name}: irecv returned 0")
+            require(comm.wait_finish(req), f"{case.name}: wait_finish(irecv) failed")
+            exp = expected_payload(
+                sender_rank=case.sender_rank,
+                case_id=case.case_id,
+                start_elem=case.send_offset_elems,
+                length=case.payload_elems,
+            )
+            verify_segment(
+                recv_buf,
+                recv_offset_elems=case.recv_offset_elems,
+                payload_elems=case.payload_elems,
+                expected=exp,
+                guard_value=guard,
+                case_name=case.name,
+            )
+        require(
+            comm.barrier(f"{case.name}_done", 30000),
+            f"{case.name}: completion barrier failed",
         )
-        verify_segment(
-            recv_buf,
-            recv_offset_elems=case.recv_offset_elems,
-            payload_elems=case.payload_elems,
-            expected=exp,
-            guard_value=guard,
-            case_name=case.name,
-        )
-        ack = torch.tensor([case.case_id], device="cuda", dtype=torch.int32)
-        comm.send(peer, ack)
+    finally:
+        unregister_case_buffers(comm, selected_transport, case.case_id, rank)
 
 
-def run_bidirectional_offset_case(comm: p2p.Communicator, rank: int, peer: int) -> None:
+def run_bidirectional_offset_case(
+    comm: p2p.Communicator, rank: int, peer: int, selected_transport: str
+) -> None:
     case_id = 99
     total_elems = 4096
     payload_elems = 777
@@ -159,49 +223,51 @@ def run_bidirectional_offset_case(comm: p2p.Communicator, rank: int, peer: int) 
 
     send_buf = build_tensor_payload(rank, case_id, total_elems)
     recv_buf = torch.full((total_elems,), guard, device="cuda", dtype=torch.float32)
-
-    recv_req = comm.irecv(
-        peer,
-        recv_buf,
-        offset=recv_offset_elems * eb,
-        len=payload_elems * eb,
+    remote_recv_id = register_case_buffers(
+        comm, selected_transport, peer, case_id, rank, send_buf, recv_buf
     )
-    require(recv_req != 0, "bidir_offset: irecv returned 0")
 
-    send_req = comm.isend(
-        peer,
-        send_buf,
-        offset=send_offset_elems * eb,
-        len=payload_elems * eb,
-    )
-    require(send_req != 0, "bidir_offset: isend returned 0")
+    try:
+        recv_req = comm.irecv(
+            peer,
+            recv_buf,
+            offset=recv_offset_elems * eb,
+            len=payload_elems * eb,
+        )
+        require(recv_req != 0, "bidir_offset: irecv returned 0")
 
-    require(comm.wait_finish_multi([send_req, recv_req]), "bidir_offset: wait_finish_multi failed")
+        send_req = comm.isend(
+            peer,
+            send_buf,
+            offset=send_offset_elems * eb,
+            len=payload_elems * eb,
+            remote_buffer_id=remote_recv_id,
+            remote_offset=(71 + peer * 13) * eb,
+        )
+        require(send_req != 0, "bidir_offset: isend returned 0")
 
-    exp = expected_payload(
-        sender_rank=peer,
-        case_id=case_id,
-        start_elem=23 + peer * 11,
-        length=payload_elems,
-    )
-    verify_segment(
-        recv_buf,
-        recv_offset_elems=recv_offset_elems,
-        payload_elems=payload_elems,
-        expected=exp,
-        guard_value=guard,
-        case_name="bidir_offset",
-    )
-    # Cross-check that both ranks passed verification before reporting success.
-    done = torch.tensor([case_id], device="cuda", dtype=torch.int32)
-    peer_done = torch.empty(1, device="cuda", dtype=torch.int32)
-    if rank < peer:
-        comm.send(peer, done)
-        comm.recv(peer, peer_done)
-    else:
-        comm.recv(peer, peer_done)
-        comm.send(peer, done)
-    require(int(peer_done.item()) == case_id, "bidir_offset: peer completion ack mismatch")
+        require(
+            comm.wait_finish_multi([send_req, recv_req]),
+            "bidir_offset: wait_finish_multi failed",
+        )
+
+        exp = expected_payload(
+            sender_rank=peer,
+            case_id=case_id,
+            start_elem=23 + peer * 11,
+            length=payload_elems,
+        )
+        verify_segment(
+            recv_buf,
+            recv_offset_elems=recv_offset_elems,
+            payload_elems=payload_elems,
+            expected=exp,
+            guard_value=guard,
+            case_name="bidir_offset",
+        )
+        require(comm.barrier("bidir_offset_done", 30000), "bidir_offset: completion barrier failed")
+    finally:
+        unregister_case_buffers(comm, selected_transport, case_id, rank)
 
 
 def build_cases() -> List[OneWayCase]:
@@ -277,11 +343,11 @@ def main() -> None:
         )
 
     for case in build_cases():
-        run_oneway_case(comm, rank, peer, case)
+        run_oneway_case(comm, rank, peer, selected, case)
         if rank == 0:
             print(f"[transport={selected}] {case.name}: PASS")
 
-    run_bidirectional_offset_case(comm, rank, peer)
+    run_bidirectional_offset_case(comm, rank, peer, selected)
     if rank == 0:
         print(f"[transport={selected}] bidir_offset: PASS")
         print(f"[transport={selected}] all transport path correctness checks passed")
