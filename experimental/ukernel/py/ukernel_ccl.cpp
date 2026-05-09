@@ -452,17 +452,15 @@ class ProcessGroup {
 
     BufferId input_id =
         resolve_or_register_tensor(input_ptr, input_bytes, input_dtype);
-    BufferId output_id = inplace
-                             ? input_id
-                             : resolve_or_register_tensor(output_ptr,
-                                                          output_bytes,
-                                                          output_dtype);
+    BufferId output_id = inplace ? input_id
+                                 : resolve_or_register_tensor(
+                                       output_ptr, output_bytes, output_dtype);
     BufferId staging_id =
         resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
     CollectiveBufferRoles roles{input_id, output_id, staging_id};
 
-    CollectivePlan plan =
-        build_plan(make_plan_request(CollectiveKind::AllToAll, config, inplace));
+    CollectivePlan plan = build_plan(
+        make_plan_request(CollectiveKind::AllToAll, config, inplace));
 
     if (!binding_state_.matches(input_work.work_flat.data_ptr(), input_bytes,
                                 input_dtype, output_work.work_flat.data_ptr(),
@@ -679,8 +677,8 @@ class ProcessGroup {
     config.tile_bytes = tile_bytes;
     config.staging_bytes = tile_bytes * num_flows;
     config.algorithm = (collective == CollectiveKind::AllReduce)
-                            ? AlgorithmKind::Ring
-                            : AlgorithmKind::Pairwise;
+                           ? AlgorithmKind::Ring
+                           : AlgorithmKind::Pairwise;
     config.dtype = dtype;
     config.reduction = reduction;
 

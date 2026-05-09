@@ -42,8 +42,7 @@ BounceBufferPool::Slot* BounceBufferPool::acquire(size_t min_bytes) {
   slot->shm_name = item.shm_name;
 
   if (needs_uccl_mr_) {
-    uint32_t bid =
-        ephemeral_id_gen_.fetch_add(1, std::memory_order_relaxed);
+    uint32_t bid = ephemeral_id_gen_.fetch_add(1, std::memory_order_relaxed);
     if (bid == 0)
       bid = ephemeral_id_gen_.fetch_add(1, std::memory_order_relaxed);
     mr_.create_local_mr(bid, slot->ptr, slot->bytes);

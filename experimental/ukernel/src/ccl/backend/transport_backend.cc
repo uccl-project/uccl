@@ -139,9 +139,8 @@ void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
   if (missing_put && missing_wait) {
     // When both directions are needed for the same peer (for example
     // world_size=2 ring/all-to-all), use a stable asymmetric order.
-    ok = (communicator_->rank() < peer_rank)
-             ? (ensure_put() && ensure_wait())
-             : (ensure_wait() && ensure_put());
+    ok = (communicator_->rank() < peer_rank) ? (ensure_put() && ensure_wait())
+                                             : (ensure_wait() && ensure_put());
   } else if (missing_put) {
     ok = ensure_put();
   } else if (missing_wait) {
@@ -298,8 +297,7 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
   } else {
     (void)resolve_mutable(binding, op.dst, op.tile.size_bytes);
     request_id = communicator_->irecv(
-        peer_rank,
-        resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
+        peer_rank, resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
         op.dst.offset_bytes, op.tile.size_bytes);
   }
 
@@ -366,7 +364,8 @@ bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
       auto it = request_to_token_.find(req_id);
       if (it == request_to_token_.end()) continue;
       auto pending_it = pending_.find(it->second);
-      if (pending_it == pending_.end() || pending_it->second.completed) continue;
+      if (pending_it == pending_.end() || pending_it->second.completed)
+        continue;
       pending_it->second.completed = true;
       completed_tokens_.push_back(it->second);
     }

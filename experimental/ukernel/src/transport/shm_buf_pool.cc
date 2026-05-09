@@ -12,14 +12,13 @@
 namespace UKernel {
 namespace Transport {
 
-ShmBufPool::ShmBufPool(std::string host_id)
-    : host_id_(std::move(host_id)) {
+ShmBufPool::ShmBufPool(std::string host_id) : host_id_(std::move(host_id)) {
   reg_shm_name_ = "/uccl_shm_buf_reg_" + host_id_;
   size_t reg_size = sizeof(Registry);
 
   // Try create (first process on this host).
-  reg_shm_fd_ = shm_open(reg_shm_name_.c_str(),
-                          O_CREAT | O_EXCL | O_RDWR, 0666);
+  reg_shm_fd_ =
+      shm_open(reg_shm_name_.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
   if (reg_shm_fd_ >= 0) {
     is_creator_ = true;
     if (ftruncate(reg_shm_fd_, static_cast<off_t>(reg_size)) < 0) {
@@ -27,8 +26,8 @@ ShmBufPool::ShmBufPool(std::string host_id)
       shm_unlink(reg_shm_name_.c_str());
       throw std::runtime_error("ShmBufPool: ftruncate registry failed");
     }
-    void* ptr =
-        mmap(nullptr, reg_size, PROT_READ | PROT_WRITE, MAP_SHARED, reg_shm_fd_, 0);
+    void* ptr = mmap(nullptr, reg_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                     reg_shm_fd_, 0);
     if (ptr == MAP_FAILED) {
       close(reg_shm_fd_);
       shm_unlink(reg_shm_name_.c_str());
@@ -63,13 +62,13 @@ ShmBufPool::ShmBufPool(std::string host_id)
     throw std::runtime_error("ShmBufPool: open existing registry failed");
   }
   struct stat st {};
-  if (fstat(reg_shm_fd_, &st) != 0 || st.st_size < static_cast<off_t>(reg_size)) {
+  if (fstat(reg_shm_fd_, &st) != 0 ||
+      st.st_size < static_cast<off_t>(reg_size)) {
     close(reg_shm_fd_);
     throw std::runtime_error("ShmBufPool: registry size check failed");
   }
-  void* ptr =
-      mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ | PROT_WRITE,
-           MAP_SHARED, reg_shm_fd_, 0);
+  void* ptr = mmap(nullptr, static_cast<size_t>(st.st_size),
+                   PROT_READ | PROT_WRITE, MAP_SHARED, reg_shm_fd_, 0);
   if (ptr == MAP_FAILED) {
     close(reg_shm_fd_);
     throw std::runtime_error("ShmBufPool: mmap existing registry failed");
@@ -112,7 +111,7 @@ ShmBufPool::~ShmBufPool() {
 }
 
 void* ShmBufPool::open_or_create_data_shm(char const* name, size_t cap,
-                                           int* out_fd) {
+                                          int* out_fd) {
   *out_fd = -1;
   int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0666);
   if (fd >= 0) {
@@ -210,8 +209,8 @@ ShmBufSlotInfo ShmBufPool::acquire(size_t min_bytes) {
     if (reg_->next_buffer_id == 0) reg_->next_buffer_id = 1;
 
     size_t cap = min_bytes;
-    snprintf(slot->shm_name, sizeof(slot->shm_name),
-             "/uccl_shm_buf_%s_%u", host_id_.c_str(), buf_id);
+    snprintf(slot->shm_name, sizeof(slot->shm_name), "/uccl_shm_buf_%s_%u",
+             host_id_.c_str(), buf_id);
 
     int fd = -1;
     void* ptr = open_or_create_data_shm(slot->shm_name, cap, &fd);
@@ -243,8 +242,8 @@ ShmBufSlotInfo ShmBufPool::acquire(size_t min_bytes) {
       pthread_mutex_unlock(&reg_->mu);
       return {};
     }
-    void* ptr =
-        mmap(nullptr, slot->capacity, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void* ptr = mmap(nullptr, slot->capacity, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, fd, 0);
     if (ptr == MAP_FAILED) {
       close(fd);
       slot->state.store(0, std::memory_order_release);

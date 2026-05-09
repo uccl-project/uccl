@@ -33,9 +33,9 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool has_put_path(int peer_rank) const override;
   bool has_wait_path(int peer_rank) const override;
 
-  unsigned put_async(int peer_rank, void* local_ptr,
-                     uint32_t local_buffer_id, void* remote_ptr,
-                     uint32_t remote_buffer_id, size_t len) override;
+  unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
+                     void* remote_ptr, uint32_t remote_buffer_id,
+                     size_t len) override;
   unsigned signal_async(int peer_rank, uint64_t tag) override;
   unsigned wait_async(int peer_rank, uint64_t expected_tag,
                       std::optional<WaitTarget> target = std::nullopt) override;

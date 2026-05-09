@@ -100,7 +100,8 @@ CollectivePlan build_test_plan(CollectiveKind kind,
   CollectiveBinding binding = Testing::make_test_memory(
       config.rank, config.nranks,
       std::max(config.tensor_bytes, config.staging_bytes));
-  bool inplace = binding.roles.input_buffer_id == binding.roles.output_buffer_id;
+  bool inplace =
+      binding.roles.input_buffer_id == binding.roles.output_buffer_id;
   return build_plan(make_plan_request(kind, config, inplace));
 }
 
@@ -327,8 +328,8 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   roles.scratch_buffer_id = 11;
   roles.validate();
 
-  CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllToAll, cfg, /*inplace=*/false));
+  CollectivePlan plan = build_plan(
+      make_plan_request(CollectiveKind::AllToAll, cfg, /*inplace=*/false));
   Testing::validate_basic_plan(plan);
   assert(plan.input_split_bytes == cfg.input_split_bytes);
   assert(plan.output_split_bytes == cfg.output_split_bytes);

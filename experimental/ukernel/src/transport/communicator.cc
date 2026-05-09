@@ -215,7 +215,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       },
       [this](TrackedRequest& t) { cleanup_tracked_request(t); });
 
-
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_
             << " initialized: peer meta exchange success" << std::endl;
@@ -412,10 +411,10 @@ bool Communicator::exchange_uccl_peer_info(int rank,
   std::string p2p_key = uccl_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
 
-  bool ok = oob_put(*exchanger_client_, oob_namespace(), p2p_key,
-                    local_p2p_info) &&
-            oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
-                    *out_remote_p2p_info, bootstrap_timeout_ms());
+  bool ok =
+      oob_put(*exchanger_client_, oob_namespace(), p2p_key, local_p2p_info) &&
+      oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+              *out_remote_p2p_info, bootstrap_timeout_ms());
   if (ok && out_remote_p2p_info->gpu_idx >= 0) {
     std::lock_guard<std::mutex> lk(peer_mu_);
     peer_states_[static_cast<size_t>(rank)].gpu_idx =
@@ -453,12 +452,12 @@ Communicator::ResolvedPeer Communicator::resolve_peer(int rank) const {
   resolved.local_meta = local_peer.meta;
   resolved.remote_meta = remote_peer.meta;
   resolved.kind = resolve_peer_transport_kind(*config_, resolved.local_meta,
-                                               resolved.remote_meta);
+                                              resolved.remote_meta);
   return resolved;
 }
 
 bool Communicator::try_fallback_tcp_accept(int rank,
-                                            CommunicatorMeta const& local_meta) {
+                                           CommunicatorMeta const& local_meta) {
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp = ensure_tcp_adapter(local_meta);
 
@@ -517,8 +516,7 @@ bool Communicator::ensure_path(int rank, bool is_put) {
     return false;
   }
 
-  auto conn_type =
-      is_put ? PeerConnectType::Connect : PeerConnectType::Accept;
+  auto conn_type = is_put ? PeerConnectType::Connect : PeerConnectType::Accept;
   char const* dir_label = is_put ? "put" : "wait";
 
   auto fallback = [&] {
@@ -536,9 +534,9 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = conn_type;
-      spec.detail = UcclPeerConnectSpec{remote.ip, remote.port, dev,
-                                        local_gpu_idx_, remote.dev_idx,
-                                        remote.gpu_idx};
+      spec.detail =
+          UcclPeerConnectSpec{remote.ip,      remote.port,    dev,
+                              local_gpu_idx_, remote.dev_idx, remote.gpu_idx};
       if (!(is_put ? uccl.ensure_put_path(spec)
                    : uccl.ensure_wait_path(spec))) {
         return fallback();
@@ -557,8 +555,8 @@ bool Communicator::ensure_path(int rank, bool is_put) {
     spec.detail = IpcPeerConnectSpec{};
     if (!(is_put ? ipc_adapter_->ensure_put_path(spec)
                  : ipc_adapter_->ensure_wait_path(spec))) {
-      std::cerr << "[ERROR] Communicator " << global_rank_ << " IPC " << dir_label
-                << " failed to rank " << rank << std::endl;
+      std::cerr << "[ERROR] Communicator " << global_rank_ << " IPC "
+                << dir_label << " failed to rank " << rank << std::endl;
       if (is_put) ipc_adapter_->close_peer(rank);
       return false;
     }
@@ -583,8 +581,8 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = conn_type;
-      spec.detail = TcpPeerConnectSpec{remote.ip,
-                                        is_put ? remote.port : uint16_t{0}};
+      spec.detail =
+          TcpPeerConnectSpec{remote.ip, is_put ? remote.port : uint16_t{0}};
       if (!(is_put ? tcp.ensure_put_path(spec) : tcp.ensure_wait_path(spec))) {
         std::cerr << "[ERROR] Communicator " << global_rank_ << " TCP "
                   << dir_label << " failed to rank " << rank << std::endl;
@@ -631,7 +629,8 @@ void Communicator::mark_wait_path_ready(int rank, PeerTransportKind kind) {
 PeerTransportKind Communicator::get_put_transport_kind(int rank) const {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-  if (!peer.has_meta || !peer.put_ready || peer.put_kind == PeerTransportKind::Unknown) {
+  if (!peer.has_meta || !peer.put_ready ||
+      peer.put_kind == PeerTransportKind::Unknown) {
     throw std::runtime_error("transport put path is not established");
   }
   return peer.put_kind;
@@ -640,7 +639,8 @@ PeerTransportKind Communicator::get_put_transport_kind(int rank) const {
 PeerTransportKind Communicator::get_wait_transport_kind(int rank) const {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-  if (!peer.has_meta || !peer.wait_ready || peer.wait_kind == PeerTransportKind::Unknown) {
+  if (!peer.has_meta || !peer.wait_ready ||
+      peer.wait_kind == PeerTransportKind::Unknown) {
     throw std::runtime_error("transport wait path is not established");
   }
   return peer.wait_kind;
@@ -782,12 +782,15 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
   if (peer_kind == PeerTransportKind::Tcp) {
     void* host_buf;
     GPU_RT_CHECK(gpuHostMalloc(&host_buf, src_bytes));
-    GPU_RT_CHECK(gpuMemcpy(host_buf, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
+    GPU_RT_CHECK(
+        gpuMemcpy(host_buf, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
     slot->bounce_ptr = host_buf;
-    unsigned result = adapter->put_async(rank, host_buf, 0, nullptr, 0, src_bytes);
+    unsigned result =
+        adapter->put_async(rank, host_buf, 0, nullptr, 0, src_bytes);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     return rid;
@@ -797,14 +800,16 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     if (!ensure_uccl_memory_registered(src_buf_id, local_ptr, src_bytes)) {
       std::cerr << "[ERROR] UCCL MR not registered for buffer " << src_buf_id
                 << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
-    unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                         nullptr, 0, src_bytes);
+    unsigned result =
+        adapter->put_async(rank, local_ptr, src_buf_id, nullptr, 0, src_bytes);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     return rid;
@@ -814,7 +819,8 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
   (void)dst_off;
   if (dst_buf_id == 0) {
     std::cerr << "[ERROR] IPC isend requires non-zero dst_buf_id" << std::endl;
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
   void* remote_ptr = nullptr;
@@ -822,14 +828,16 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
   if (!try_resolve_remote_ipc_pointer(rank, dst_buf_id, dst_off, src_bytes,
                                       &remote_ptr, &remote_gpu)) {
     std::cerr << "[ERROR] IPC failed to resolve remote pointer" << std::endl;
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
-  unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                       remote_ptr, dst_buf_id, src_bytes);
+  unsigned result = adapter->put_async(rank, local_ptr, src_buf_id, remote_ptr,
+                                       dst_buf_id, src_bytes);
   if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
     cleanup_tracked_request(*slot);
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
   return rid;
@@ -872,7 +880,8 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     unsigned result = adapter->wait_async(rank, 0, std::move(wt));
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     return rid;
@@ -882,7 +891,8 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     if (!ensure_uccl_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
       std::cerr << "[ERROR] UCCL MR not registered for buffer " << dst_buf_id
                 << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     TransportAdapter::WaitTarget wt;
@@ -892,7 +902,8 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     unsigned result = adapter->wait_async(rank, 0, std::move(wt));
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     return rid;
@@ -907,7 +918,8 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     unsigned result = ipc_adapter_->wait_async(rank, match_seq, std::nullopt);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
     return rid;
@@ -1114,17 +1126,16 @@ std::string Communicator::ipc_open_error_message(int owner_rank,
   oss << "failed to open remote IPC mem handle"
       << " owner_rank=" << owner_rank << " buffer_id=" << buffer_id
       << " local_gpu=" << local_gpu_idx_
-      << " remote_device_idx=" << item.device_idx
-      << " bytes=" << item.bytes << " base_offset=" << item.base_offset
-      << " err=" << static_cast<int>(err) << " (" << gpuGetErrorString(err)
-      << ")";
+      << " remote_device_idx=" << item.device_idx << " bytes=" << item.bytes
+      << " base_offset=" << item.base_offset << " err=" << static_cast<int>(err)
+      << " (" << gpuGetErrorString(err) << ")";
   if (item.device_idx >= 0 && item.device_idx != local_gpu_idx_) {
     int can_access_peer = -1;
     gpuError_t access_err = gpuDeviceCanAccessPeer(
         &can_access_peer, local_gpu_idx_, item.device_idx);
     oss << " peer_access=" << can_access_peer
-        << " peer_access_err=" << static_cast<int>(access_err)
-        << " (" << gpuGetErrorString(access_err) << ")";
+        << " peer_access_err=" << static_cast<int>(access_err) << " ("
+        << gpuGetErrorString(access_err) << ")";
   }
   return oss.str();
 }
@@ -1152,7 +1163,7 @@ IPCItem Communicator::get_ipc(int owner_rank, uint32_t buffer_id) {
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
     gpuError_t open_err = gpuIpcOpenMemHandle(&item.direct_ptr, item.handle,
-                                               gpuIpcMemLazyEnablePeerAccess);
+                                              gpuIpcMemLazyEnablePeerAccess);
     if (open_err != gpuSuccess) {
       throw std::runtime_error(
           ipc_open_error_message(owner_rank, buffer_id, item, open_err));
@@ -1198,7 +1209,7 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
     if (gpuGetDevice(&original_device) != gpuSuccess) return false;
     if (gpuSetDevice(local_gpu_idx_) != gpuSuccess) return false;
     gpuError_t open_err = gpuIpcOpenMemHandle(&item.direct_ptr, item.handle,
-                                               gpuIpcMemLazyEnablePeerAccess);
+                                              gpuIpcMemLazyEnablePeerAccess);
     gpuError_t restore_err = gpuSetDevice(original_device);
     if (restore_err != gpuSuccess) return false;
     if (open_err != gpuSuccess || item.direct_ptr == nullptr) {

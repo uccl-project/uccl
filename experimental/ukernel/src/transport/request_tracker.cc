@@ -68,8 +68,8 @@ RequestTracker::~RequestTracker() {
 
 TrackedRequest* RequestTracker::allocate(unsigned* out_req_id) {
   if (out_req_id == nullptr) return nullptr;
-  uint32_t start = alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
-                   (kSlotCount - 1u);
+  uint32_t start =
+      alloc_cursor_.fetch_add(1, std::memory_order_relaxed) & (kSlotCount - 1u);
   for (uint32_t i = 0; i < kSlotCount; ++i) {
     uint32_t idx = (start + i) & (kSlotCount - 1u);
     TrackedRequest* slot = &slots_[idx];
@@ -129,8 +129,7 @@ bool RequestTracker::activate(unsigned req_id, unsigned adapter_req_id,
   return true;
 }
 
-bool RequestTracker::try_release(unsigned req_id,
-                                 TrackedRequest* snapshot) {
+bool RequestTracker::try_release(unsigned req_id, TrackedRequest* snapshot) {
   TrackedRequest* slot = resolve(req_id);
   if (slot == nullptr) return false;
   auto state = slot->state.load(std::memory_order_acquire);
@@ -145,9 +144,8 @@ bool RequestTracker::try_release(unsigned req_id,
   }
   if (snapshot) {
     snapshot->state.store(state, std::memory_order_relaxed);
-    snapshot->generation.store(
-        slot->generation.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+    snapshot->generation.store(slot->generation.load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
     snapshot->request_id = slot->request_id;
     snapshot->adapter_request_id = slot->adapter_request_id;
     snapshot->peer_rank = slot->peer_rank;
@@ -168,8 +166,7 @@ void RequestTracker::finish_release(unsigned req_id) {
   if (slot == nullptr) return;
   auto state = slot->state.load(std::memory_order_acquire);
   if (state != TrackedRequest::SlotState::Releasing) return;
-  slot->state.store(TrackedRequest::SlotState::Free,
-                    std::memory_order_release);
+  slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
 }
 
 // ── adapter dispatch ────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
-#include "../util/utils.h"
 #include "shmring_exchanger.h"
+#include "../util/utils.h"
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -25,7 +25,7 @@ static inline bool shm_ring_try_recv(jring_t* ring, ShmCtrlMsg& msg) {
 }
 
 static inline jring_t* attach_shared_ring_quiet(char const* shm_name,
-                                                 int& shm_fd, size_t shm_size) {
+                                                int& shm_fd, size_t shm_size) {
   shm_fd = shm_open(shm_name, O_RDWR, 0666);
   if (shm_fd < 0) return nullptr;
   void* ptr =
@@ -47,8 +47,8 @@ static inline bool timeout_expired(
 }  // namespace
 
 ShmRingExchanger::ShmRingExchanger(int self_rank, int world_size,
-                                    std::string ring_namespace,
-                                    int self_local_id)
+                                   std::string ring_namespace,
+                                   int self_local_id)
     : self_rank_(self_rank),
       world_size_(world_size),
       self_local_id_(self_local_id >= 0 ? self_local_id : self_rank),
@@ -202,8 +202,8 @@ bool ShmRingExchanger::send_ack(int peer_rank, uint64_t seq, uint32_t status) {
 }
 
 bool ShmRingExchanger::recv_ack(int peer_rank, uint32_t* out_status,
-                                 uint64_t* out_seq, int timeout_ms,
-                                 uint64_t expected_seq) {
+                                uint64_t* out_seq, int timeout_ms,
+                                uint64_t expected_seq) {
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
   while (true) {
@@ -316,7 +316,7 @@ bool ShmRingExchanger::ensure_local_ring(int peer_rank) {
 }
 
 bool ShmRingExchanger::ensure_remote_ring_attached(int peer_rank,
-                                                    int timeout_ms) {
+                                                   int timeout_ms) {
   std::shared_ptr<PeerState> peer;
   {
     std::lock_guard<std::mutex> lk(mu_);
@@ -374,7 +374,7 @@ bool ShmRingExchanger::try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg) {
 }
 
 bool ShmRingExchanger::try_take_connect_locked(int peer_rank,
-                                                uint64_t* out_seq) {
+                                               uint64_t* out_seq) {
   auto it = pending_connect_.find(peer_rank);
   if (it == pending_connect_.end()) return false;
   auto& q = it->second;
@@ -387,8 +387,8 @@ bool ShmRingExchanger::try_take_connect_locked(int peer_rank,
 }
 
 bool ShmRingExchanger::try_take_cached_connect_ack_locked(int peer_rank,
-                                                           uint64_t expected_seq,
-                                                           uint64_t* out_seq) {
+                                                          uint64_t expected_seq,
+                                                          uint64_t* out_seq) {
   auto it = pending_connect_acks_.find(peer_rank);
   if (it == pending_connect_acks_.end()) return false;
   auto& q = it->second;
@@ -404,9 +404,9 @@ bool ShmRingExchanger::try_take_cached_connect_ack_locked(int peer_rank,
 }
 
 bool ShmRingExchanger::try_take_cached_ack_locked(int peer_rank,
-                                                   uint64_t expected_seq,
-                                                   AckWire& out_ack,
-                                                   uint64_t* out_seq) {
+                                                  uint64_t expected_seq,
+                                                  AckWire& out_ack,
+                                                  uint64_t* out_seq) {
   auto it = rank_to_pending_acks_.find(peer_rank);
   if (it == rank_to_pending_acks_.end()) return false;
   auto& q = it->second;
@@ -431,7 +431,7 @@ void ShmRingExchanger::cache_connect_ack_message(int peer_rank, uint64_t seq) {
 }
 
 void ShmRingExchanger::cache_ack_message(int peer_rank, uint64_t seq,
-                                          AckWire const& ack) {
+                                         AckWire const& ack) {
   std::lock_guard<std::mutex> lk(pending_mu_);
   rank_to_pending_acks_[peer_rank].push_back(PendingAckMsg{seq, ack});
 }

@@ -296,9 +296,10 @@ bool TcpTransportAdapter::has_wait_path(int peer_rank) const {
   return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
 }
 
-unsigned TcpTransportAdapter::put_async(
-    int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-    void* remote_ptr, uint32_t remote_buffer_id, size_t len) {
+unsigned TcpTransportAdapter::put_async(int peer_rank, void* local_ptr,
+                                        uint32_t local_buffer_id,
+                                        void* remote_ptr,
+                                        uint32_t remote_buffer_id, size_t len) {
   (void)local_buffer_id;
   (void)remote_ptr;
   (void)remote_buffer_id;
@@ -328,8 +329,9 @@ unsigned TcpTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
   slot->peer_rank = peer_rank;
   slot->kind = RequestSlot::Kind::Signal;
   slot->signal_payload = tag;
-  // host_ptr must point to signal_payload so the send worker reads the tag value
-  // from the slot itself — this is safe because the slot is exclusively owned.
+  // host_ptr must point to signal_payload so the send worker reads the tag
+  // value from the slot itself — this is safe because the slot is exclusively
+  // owned.
   slot->host_ptr = &slot->signal_payload;
   slot->len = sizeof(uint64_t);
   slot->mark_queued();
@@ -547,10 +549,9 @@ void TcpTransportAdapter::send_worker_loop() {
     if (ctx) {
       std::lock_guard<std::mutex> send_lk(ctx->send_mu);
       WireHeader header{};
-      header.type =
-          static_cast<uint32_t>((slot->kind == RequestSlot::Kind::Signal)
-                                    ? FrameType::Signal
-                                    : FrameType::Data);
+      header.type = static_cast<uint32_t>(
+          (slot->kind == RequestSlot::Kind::Signal) ? FrameType::Signal
+                                                    : FrameType::Data);
       header.payload_len = static_cast<uint64_t>(slot->len);
       ok = TcpTransportAdapter::send_all(ctx->send_fd, &header, sizeof(header));
       if (ok && slot->len > 0) {
@@ -608,12 +609,13 @@ void TcpTransportAdapter::recv_worker_loop() {
       WireHeader header{};
       ok = TcpTransportAdapter::recv_all(ctx->recv_fd, &header, sizeof(header));
       if (ok) {
-        FrameType expected_type =
-            (slot->kind == RequestSlot::Kind::SignalWait) ? FrameType::Signal
-                                                           : FrameType::Data;
+        FrameType expected_type = (slot->kind == RequestSlot::Kind::SignalWait)
+                                      ? FrameType::Signal
+                                      : FrameType::Data;
         FrameType got_type = static_cast<FrameType>(header.type);
-        bool frame_ok = (got_type == expected_type) &&
-                        (header.payload_len == static_cast<uint64_t>(slot->len));
+        bool frame_ok =
+            (got_type == expected_type) &&
+            (header.payload_len == static_cast<uint64_t>(slot->len));
         if (!frame_ok) {
           if (header.payload_len > 0) {
             recv_discard_all(ctx->recv_fd, header.payload_len);

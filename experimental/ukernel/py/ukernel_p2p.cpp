@@ -210,9 +210,8 @@ class Communicator {
         throw std::runtime_error("isend failed to register temporary MR");
       }
     }
-    uint64_t req = comm_->isend(
-        peer_rank, buffer_id, offset, len,
-        remote_buffer_id, remote_offset);
+    uint64_t req = comm_->isend(peer_rank, buffer_id, offset, len,
+                                remote_buffer_id, remote_offset);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);
@@ -249,8 +248,7 @@ class Communicator {
         throw std::runtime_error("irecv failed to register temporary MR");
       }
     }
-    uint64_t req = comm_->irecv(
-        peer_rank, buffer_id, offset, len);
+    uint64_t req = comm_->irecv(peer_rank, buffer_id, offset, len);
     if (req == 0) {
       if (!binding.has_value()) {
         comm_->dereg_mr(buffer_id);

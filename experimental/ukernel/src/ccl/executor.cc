@@ -575,8 +575,8 @@ CollectiveOpHandle Executor::submit_allreduce(
   }
   bool inplace = runtime_binding->roles.input_buffer_id ==
                  runtime_binding->roles.output_buffer_id;
-  CollectivePlan plan = build_plan(make_plan_request(
-      CollectiveKind::AllReduce, config, inplace));
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllReduce, config, inplace));
   return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 
@@ -589,8 +589,8 @@ CollectiveOpHandle Executor::submit_alltoall(
   }
   bool inplace = runtime_binding->roles.input_buffer_id ==
                  runtime_binding->roles.output_buffer_id;
-  CollectivePlan plan = build_plan(make_plan_request(
-      CollectiveKind::AllToAll, config, inplace));
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllToAll, config, inplace));
   return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 

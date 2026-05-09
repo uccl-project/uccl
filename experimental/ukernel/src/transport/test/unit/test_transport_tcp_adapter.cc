@@ -14,9 +14,9 @@ namespace {
 
 using UKernel::Transport::PeerConnectSpec;
 using UKernel::Transport::PeerConnectType;
-using UKernel::Transport::TransportAdapter;
 using UKernel::Transport::TcpPeerConnectSpec;
 using UKernel::Transport::TcpTransportAdapter;
+using UKernel::Transport::TransportAdapter;
 using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
 
@@ -58,8 +58,7 @@ void test_tcp_connect_and_transfer() {
   require(client.has_put_path(0), "client put path should be connected");
   require(server.has_wait_path(1), "server wait path should be connected");
   require(!server.has_put_path(1), "server put path should not be connected");
-  require(!client.has_wait_path(0),
-          "client wait path should not be connected");
+  require(!client.has_wait_path(0), "client wait path should not be connected");
 
   PeerConnectSpec wrong_put_spec{};
   wrong_put_spec.peer_rank = 1;
@@ -87,10 +86,10 @@ void test_tcp_connect_and_transfer() {
   unsigned recv_req =
       server.wait_async(/*peer_rank=*/1, /*expected_tag=*/0, wait_target);
   require(recv_req != 0, "server wait_async should succeed");
-  unsigned send_req = client.put_async(/*peer_rank=*/0, sendbuf.data(),
-                                       /*local_buffer_id=*/0,
-                                       /*remote_ptr=*/nullptr, 0,
-                                       sendbuf.size());
+  unsigned send_req =
+      client.put_async(/*peer_rank=*/0, sendbuf.data(),
+                       /*local_buffer_id=*/0,
+                       /*remote_ptr=*/nullptr, 0, sendbuf.size());
   require(send_req != 0, "client put_async should succeed");
 
   require(client.wait_completion(send_req), "client wait_completion failed");
@@ -105,10 +104,10 @@ void test_tcp_connect_and_transfer() {
   unsigned bad_wait =
       client.wait_async(/*peer_rank=*/0, /*expected_tag=*/123, std::nullopt);
   require(bad_wait == 0, "wait_async without wait path should fail");
-  unsigned bad_put = server.put_async(/*peer_rank=*/1, sendbuf.data(),
-                                      /*buffer_id=*/0,
-                                      /*remote_ptr=*/nullptr, 0,
-                                      sendbuf.size());
+  unsigned bad_put =
+      server.put_async(/*peer_rank=*/1, sendbuf.data(),
+                       /*buffer_id=*/0,
+                       /*remote_ptr=*/nullptr, 0, sendbuf.size());
   require(bad_put == 0, "put_async without put path should fail");
 
   unsigned signal_wait =
@@ -146,8 +145,7 @@ void test_tcp_invalid_peer_paths() {
 
   require(adapter.put_async(/*peer_rank=*/1, buf.data(),
                             /*local_buffer_id=*/0,
-                            /*remote_ptr=*/nullptr, 0,
-                            buf.size()) == 0,
+                            /*remote_ptr=*/nullptr, 0, buf.size()) == 0,
           "put_async without peer should fail");
   TransportAdapter::WaitTarget wait_target;
   wait_target.local_ptr = buf.data();

@@ -1,7 +1,7 @@
+#include "adapter/shmring_exchanger.h"
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
-#include "adapter/shmring_exchanger.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>

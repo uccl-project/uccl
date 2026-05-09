@@ -126,7 +126,8 @@ bool IpcAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   if (has_put_path(spec.peer_rank)) return true;
   if (spec.type != PeerConnectType::Connect) return false;
   if (!(std::holds_alternative<IpcPeerConnectSpec>(spec.detail) ||
-        std::holds_alternative<std::monostate>(spec.detail))) return false;
+        std::holds_alternative<std::monostate>(spec.detail)))
+    return false;
   if (!connect_to(spec.peer_rank)) return false;
   std::lock_guard<std::mutex> lk(peer_dir_mu_);
   peer_dir_state_[static_cast<size_t>(spec.peer_rank)].put_ready = true;
@@ -138,7 +139,8 @@ bool IpcAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
   if (has_wait_path(spec.peer_rank)) return true;
   if (spec.type != PeerConnectType::Accept) return false;
   if (!(std::holds_alternative<IpcPeerConnectSpec>(spec.detail) ||
-        std::holds_alternative<std::monostate>(spec.detail))) return false;
+        std::holds_alternative<std::monostate>(spec.detail)))
+    return false;
   if (!accept_from(spec.peer_rank)) return false;
   std::lock_guard<std::mutex> lk(peer_dir_mu_);
   peer_dir_state_[static_cast<size_t>(spec.peer_rank)].wait_ready = true;
@@ -226,8 +228,10 @@ IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot(unsigned id) {
   if (generation == 0) return nullptr;
   uint32_t idx = request_slot_index(id);
   auto& slot = request_slots_[idx];
-  if (slot.generation.load(std::memory_order_acquire) != generation) return nullptr;
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) return nullptr;
+  if (slot.generation.load(std::memory_order_acquire) != generation)
+    return nullptr;
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free)
+    return nullptr;
   return &slot;
 }
 
@@ -238,8 +242,10 @@ IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot_const(
   if (generation == 0) return nullptr;
   uint32_t idx = request_slot_index(request_id);
   auto const& slot = request_slots_[idx];
-  if (slot.generation.load(std::memory_order_acquire) != generation) return nullptr;
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) return nullptr;
+  if (slot.generation.load(std::memory_order_acquire) != generation)
+    return nullptr;
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free)
+    return nullptr;
   return const_cast<IpcRequestSlot*>(&slot);
 }
 
@@ -407,19 +413,21 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   int remote_gpu = comm_->peer_gpu_idx(to_rank);
   if (remote_gpu < 0) remote_gpu = local_gpu_idx_;
 
-  size_t n_streams =
-      std::min(ipc_streams_.size(),
-               creq->size_bytes < kIpcSizePerEngine
-                   ? size_t{1}
-                   : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
+  size_t n_streams = std::min(
+      ipc_streams_.size(),
+      creq->size_bytes < kIpcSizePerEngine
+          ? size_t{1}
+          : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
   size_t chunk = creq->size_bytes / n_streams;
   for (size_t i = 0; i < n_streams; ++i) {
-    void* cs = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
-    void* cd = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
+    void* cs =
+        reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
+    void* cd =
+        reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
     size_t sz = (i == n_streams - 1) ? creq->size_bytes - i * chunk : chunk;
     if (remote_gpu == local_gpu_idx_) {
-      GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice,
-                                  ipc_streams_[i]));
+      GPU_RT_CHECK(
+          gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice, ipc_streams_[i]));
     } else {
       GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
                                       ipc_streams_[i]));

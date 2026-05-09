@@ -42,8 +42,8 @@ class Communicator {
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
-  unsigned isend(int rank, uint32_t src_buf_id, size_t src_off, size_t src_bytes,
-                 uint32_t dst_buf_id = 0, size_t dst_off = 0);
+  unsigned isend(int rank, uint32_t src_buf_id, size_t src_off,
+                 size_t src_bytes, uint32_t dst_buf_id = 0, size_t dst_off = 0);
   unsigned irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
                  size_t dst_bytes);
   bool poll(unsigned const req) { return tracker_->poll(req); }
@@ -126,8 +126,7 @@ class Communicator {
   gpuEvent_t acquire_event();
   void release_event(gpuEvent_t event);
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
-                                     IPCItem const& item,
-                                     gpuError_t err) const;
+                                     IPCItem const& item, gpuError_t err) const;
 
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;

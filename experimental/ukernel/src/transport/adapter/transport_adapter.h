@@ -64,9 +64,9 @@ class TransportAdapter {
   // local_ptr / local_buffer_id: source data (may be host bounce buffer).
   // remote_ptr / remote_buffer_id: resolved destination on peer, or nullptr/0
   //   (for send/recv model where peer posts its own recv buffer).
-  virtual unsigned put_async(
-      int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-      void* remote_ptr, uint32_t remote_buffer_id, size_t len) = 0;
+  virtual unsigned put_async(int peer_rank, void* local_ptr,
+                             uint32_t local_buffer_id, void* remote_ptr,
+                             uint32_t remote_buffer_id, size_t len) = 0;
   virtual unsigned signal_async(int peer_rank, uint64_t tag) = 0;
   virtual unsigned wait_async(
       int peer_rank, uint64_t expected_tag,

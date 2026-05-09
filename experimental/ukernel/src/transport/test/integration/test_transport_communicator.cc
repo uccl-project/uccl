@@ -75,8 +75,8 @@ std::shared_ptr<Communicator> make_communicator(
 int run_exchange_client(int gpu, std::string const& exchanger_ip,
                         int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm = make_communicator(gpu, kClientRank, kWorldSize,
-                                exchanger_ip, exchanger_port, preferred);
+  auto comm = make_communicator(gpu, kClientRank, kWorldSize, exchanger_ip,
+                                exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kClientRank, kServerRank),
           "client bidirectional connect/accept failed");
 
@@ -104,9 +104,8 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
             "client wait_ipc failed");
     remote_recv_buffer_id = kServerRecvBufferId;
   }
-  unsigned send_req = comm->isend(
-      kServerRank, kClientSendBufferId, 0, kMessageBytes,
-      remote_recv_buffer_id, 0);
+  unsigned send_req = comm->isend(kServerRank, kClientSendBufferId, 0,
+                                  kMessageBytes, remote_recv_buffer_id, 0);
   require(send_req != 0, "client isend failed");
   require(comm->wait_finish(send_req), "client wait_finish(send) failed");
 
@@ -117,8 +116,8 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
 int run_exchange_server(int gpu, std::string const& exchanger_ip,
                         int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm = make_communicator(gpu, kServerRank, kWorldSize,
-                                exchanger_ip, exchanger_port, preferred);
+  auto comm = make_communicator(gpu, kServerRank, kWorldSize, exchanger_ip,
+                                exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kServerRank, kClientRank),
           "server bidirectional connect/accept failed");
 
@@ -136,8 +135,8 @@ int run_exchange_server(int gpu, std::string const& exchanger_ip,
             "server reg_ipc failed");
   }
 
-  unsigned recv_req = comm->irecv(
-      kClientRank, kServerRecvBufferId, 0, kMessageBytes);
+  unsigned recv_req =
+      comm->irecv(kClientRank, kServerRecvBufferId, 0, kMessageBytes);
   require(recv_req != 0, "server irecv failed");
   require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
 
@@ -155,8 +154,8 @@ int run_ipc_buffer_metadata_client(
     UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm = make_communicator(gpu, kClientRank, kWorldSize,
-                                exchanger_ip, exchanger_port, preferred);
+  auto comm = make_communicator(gpu, kClientRank, kWorldSize, exchanger_ip,
+                                exchanger_port, preferred);
   require(comm->same_host(kServerRank),
           "ipc-buffer-meta requires same-host peers");
 
@@ -188,12 +187,11 @@ int run_ipc_buffer_metadata_client(
 
 int run_ipc_buffer_metadata_server(
     int gpu, int expected_peer_gpu, std::string const& exchanger_ip,
-    int exchanger_port,
-    UKernel::Transport::PreferredTransport preferred) {
+    int exchanger_port, UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm = make_communicator(gpu, kServerRank, kWorldSize,
-                                exchanger_ip, exchanger_port, preferred);
+  auto comm = make_communicator(gpu, kServerRank, kWorldSize, exchanger_ip,
+                                exchanger_port, preferred);
   require(comm->same_host(kClientRank),
           "ipc-buffer-meta requires same-host peers");
 
@@ -224,8 +222,7 @@ int run_ipc_buffer_metadata_server(
   // Wait for client completion marker to avoid tearing down the in-process
   // exchanger before the client has consumed the ack.
   constexpr uint32_t kClientDoneIpcId = 8888;
-  require(comm->wait_ipc(kClientRank, kClientDoneIpcId,
-                         kIpcMetadataTimeoutMs),
+  require(comm->wait_ipc(kClientRank, kClientDoneIpcId, kIpcMetadataTimeoutMs),
           "server wait_ipc(done) should succeed");
 
   std::cout << "[SERVER][ipc-buffer-meta] OK" << std::endl;

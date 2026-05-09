@@ -1,5 +1,5 @@
-#include "oob/oob.h"
 #include "adapter/shmring_exchanger.h"
+#include "oob/oob.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
@@ -151,8 +151,9 @@ void test_shm_ack_exchange() {
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to(0) failed");
 
-      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/42, /*status=*/0xABCD1234UL),
-              "rank1 send_ack failed");
+      require(
+          shm1.send_ack(/*peer_rank=*/0, /*seq=*/42, /*status=*/0xABCD1234UL),
+          "rank1 send_ack failed");
 
       std::unique_lock<std::mutex> lk(done_mu);
       bool done = done_cv.wait_for(lk, std::chrono::seconds(5),
@@ -174,6 +175,5 @@ void test_shm_ack_exchange() {
 void test_shm_oob() {
   run_case("transport unit", "shm exchanger put/wait/relay-state",
            test_shm_exchanger_put_wait_and_relay_state);
-  run_case("transport unit", "shm oob ack exchange",
-            test_shm_ack_exchange);
+  run_case("transport unit", "shm oob ack exchange", test_shm_ack_exchange);
 }
