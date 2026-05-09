@@ -2,30 +2,13 @@
 #include "adapter/ipc_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/uccl_adapter.h"
-#include "util/utils.h"
-#include <sys/eventfd.h>
-#include <poll.h>
-#include <unistd.h>
 #include <algorithm>
-#include <array>
-#include <cerrno>
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
 namespace UKernel {
 namespace Transport {
-
-namespace {
-
-constexpr uint32_t kActiveRingCount = 32768;
-
-void drain_eventfd(int fd) {
-  if (fd < 0) return;
-  uint64_t cnt = 0;
-  while (::read(fd, &cnt, sizeof(cnt)) == static_cast<ssize_t>(sizeof(cnt))) {
-  }
-}
-
-}  // namespace
 
 // ── static helpers ──────────────────────────────────────────────────────────
 
@@ -44,18 +27,6 @@ uint32_t RequestTracker::request_generation(unsigned req_id) {
   return (req_id >> kSlotBits) & kGenerationMask;
 }
 
-void RequestTracker::signal_eventfd(int fd) {
-  if (fd < 0) return;
-  uint64_t one = 1;
-  while (true) {
-    ssize_t n = ::write(fd, &one, sizeof(one));
-    if (n == static_cast<ssize_t>(sizeof(one))) return;
-    if (n < 0 && errno == EINTR) continue;
-    if (n < 0 && errno == EAGAIN) return;
-    return;
-  }
-}
-
 // ── lifecycle ───────────────────────────────────────────────────────────────
 
 RequestTracker::RequestTracker(UcclTransportAdapter* uccl,
@@ -67,33 +38,14 @@ RequestTracker::RequestTracker(UcclTransportAdapter* uccl,
       ipc_(ipc),
       complete_bounce_(std::move(complete_bounce)),
       cleanup_(std::move(cleanup)) {
-  active_jring_ = create_ring(sizeof(unsigned), kActiveRingCount);
-  if (active_jring_ == nullptr) {
-    throw std::runtime_error("RequestTracker: failed to create active jring");
-  }
-
   slots_ = std::make_unique<TrackedRequest[]>(kSlotCount);
   for (uint32_t i = 0; i < kSlotCount; ++i) {
     slots_[i].state.store(TrackedRequest::SlotState::Free,
                           std::memory_order_relaxed);
   }
-
-  event_fd_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-  if (event_fd_ < 0) {
-    throw std::runtime_error("RequestTracker: failed to create eventfd");
-  }
 }
 
 RequestTracker::~RequestTracker() {
-  if (started_.load(std::memory_order_acquire)) {
-    running_.store(false, std::memory_order_release);
-    cv_.notify_all();
-    signal_eventfd(event_fd_);
-    if (progress_thread_.joinable()) {
-      progress_thread_.join();
-    }
-  }
-
   for (uint32_t i = 0; i < kSlotCount; ++i) {
     auto* slot = &slots_[i];
     auto state = slot->state.load(std::memory_order_acquire);
@@ -110,22 +62,6 @@ RequestTracker::~RequestTracker() {
                         std::memory_order_release);
     }
   }
-
-  if (active_jring_ != nullptr) {
-    free(active_jring_);
-    active_jring_ = nullptr;
-  }
-
-  if (event_fd_ >= 0) {
-    ::close(event_fd_);
-    event_fd_ = -1;
-  }
-}
-
-void RequestTracker::start_progress() {
-  running_.store(true, std::memory_order_release);
-  started_.store(true, std::memory_order_release);
-  progress_thread_ = std::thread(&RequestTracker::progress_loop, this);
 }
 
 // ── slot lifecycle ──────────────────────────────────────────────────────────
@@ -155,7 +91,6 @@ TrackedRequest* RequestTracker::allocate(unsigned* out_req_id) {
     slot->adapter_request_id = 0;
     slot->peer_rank = -1;
     slot->kind = PeerTransportKind::Unknown;
-    slot->notified = false;
     slot->needs_host_to_device_copy = false;
     slot->host_copy_submitted = false;
     slot->completion_buffer = nullptr;
@@ -191,10 +126,6 @@ bool RequestTracker::activate(unsigned req_id, unsigned adapter_req_id,
   slot->kind = kind;
   slot->state.store(TrackedRequest::SlotState::InFlight,
                     std::memory_order_release);
-  inflight_count_.fetch_add(1, std::memory_order_release);
-  unsigned slot_val = req_id;
-  jring_mp_enqueue_bulk(active_jring_, &slot_val, 1, nullptr);
-  cv_.notify_all();
   return true;
 }
 
@@ -221,7 +152,6 @@ bool RequestTracker::try_release(unsigned req_id,
     snapshot->adapter_request_id = slot->adapter_request_id;
     snapshot->peer_rank = slot->peer_rank;
     snapshot->kind = slot->kind;
-    snapshot->notified = slot->notified;
     snapshot->needs_host_to_device_copy = slot->needs_host_to_device_copy;
     snapshot->host_copy_submitted = slot->host_copy_submitted;
     snapshot->completion_buffer = slot->completion_buffer;
@@ -283,8 +213,6 @@ bool RequestTracker::poll_one(unsigned id, bool blocking) {
   slot->state.store(failed ? TrackedRequest::SlotState::Failed
                            : TrackedRequest::SlotState::Completed,
                     std::memory_order_release);
-  inflight_count_.fetch_sub(1, std::memory_order_acq_rel);
-  notify_completion();
   return true;
 }
 
@@ -296,12 +224,8 @@ bool RequestTracker::poll(unsigned req) {
   if (slot == nullptr) return true;
   auto state = slot->state.load(std::memory_order_acquire);
   if (state == TrackedRequest::SlotState::InFlight) {
-    if (!started_.load(std::memory_order_acquire)) {
-      if (!poll_one(req, false)) return false;
-      state = slot->state.load(std::memory_order_acquire);
-    } else {
-      return false;
-    }
+    if (!poll_one(req, false)) return false;
+    state = slot->state.load(std::memory_order_acquire);
   }
   if (state == TrackedRequest::SlotState::Failed) {
     throw std::runtime_error("transport request failed");
@@ -343,178 +267,61 @@ bool RequestTracker::wait_finish(std::vector<unsigned> const& reqs) {
   }
 
   bool any_failed = false;
-  uint64_t seen_seq = completion_seq_.load(std::memory_order_acquire);
-  bool should_scan = true;
 
   while (!remaining.empty()) {
-    if (should_scan) {
-      std::vector<unsigned> finished;
-      bool rescan_immediately = false;
-      for (auto id : remaining) {
-        if (id == 0) return false;
-        if (!started_.load(std::memory_order_acquire)) {
-          (void)poll_one(id, false);
-        }
-        TrackedRequest* slot = resolve(id);
-        if (slot == nullptr) {
-          finished.push_back(id);
-          continue;
-        }
-        auto state = slot->state.load(std::memory_order_acquire);
-        if (state == TrackedRequest::SlotState::Completed ||
-            state == TrackedRequest::SlotState::Failed) {
-          TrackedRequest snapshot{};
-          if (try_release(id, &snapshot)) {
-            any_failed =
-                any_failed || (state == TrackedRequest::SlotState::Failed);
-            cleanup_(snapshot);
-            finish_release(snapshot.request_id);
-            finished.push_back(id);
-          } else {
-            rescan_immediately = true;
-            if (resolve(id) == nullptr) finished.push_back(id);
-          }
-        } else if (state == TrackedRequest::SlotState::Releasing) {
-          rescan_immediately = true;
-        }
-      }
-      for (auto id : finished) {
-        auto it = std::find(remaining.begin(), remaining.end(), id);
-        if (it != remaining.end()) remaining.erase(it);
-      }
-      should_scan = rescan_immediately;
+    bool made_progress = false;
+    for (auto id : remaining) {
+      if (id == 0) return false;
+      (void)poll_one(id, false);
     }
-
-    if (remaining.empty()) return !any_failed;
-    if (should_scan) continue;
-
-    if (event_fd_ >= 0) {
-      pollfd pfd{};
-      pfd.fd = event_fd_;
-      pfd.events = POLLIN;
-      int rc = ::poll(&pfd, 1, -1);
-      if (rc > 0 && (pfd.revents & POLLIN)) {
-        drain_eventfd(event_fd_);
+    std::vector<unsigned> finished;
+    for (auto id : remaining) {
+      TrackedRequest* slot = resolve(id);
+      if (slot == nullptr) {
+        finished.push_back(id);
+        continue;
       }
-      uint64_t now_seq = completion_seq_.load(std::memory_order_acquire);
-      if (now_seq != seen_seq) {
-        seen_seq = now_seq;
-        should_scan = true;
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state == TrackedRequest::SlotState::Completed ||
+          state == TrackedRequest::SlotState::Failed) {
+        TrackedRequest snapshot{};
+        if (try_release(id, &snapshot)) {
+          any_failed =
+              any_failed || (state == TrackedRequest::SlotState::Failed);
+          cleanup_(snapshot);
+          finish_release(snapshot.request_id);
+          finished.push_back(id);
+          made_progress = true;
+        }
       }
-    } else {
-      std::this_thread::yield();
-      should_scan = true;
+    }
+    for (auto id : finished) {
+      auto it = std::find(remaining.begin(), remaining.end(), id);
+      if (it != remaining.end()) remaining.erase(it);
+    }
+    if (remaining.empty()) break;
+    if (!made_progress) {
+      std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
   }
 
   return !any_failed;
 }
 
-// ── notification ────────────────────────────────────────────────────────────
-
-void RequestTracker::notify_completion() {
-  completion_seq_.fetch_add(1, std::memory_order_release);
-  signal_eventfd(event_fd_);
-}
-
-std::shared_ptr<void> RequestTracker::register_notifier(NotifyCb cb) {
-  auto target = std::make_shared<NotifyTarget>();
-  target->emit = std::move(cb);
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    notifiers_.push_back(target);
-  }
-
-  cv_.notify_all();
-  return std::static_pointer_cast<void>(target);
-}
-
-// ── progress loop ───────────────────────────────────────────────────────────
-
-void RequestTracker::progress_loop() {
-  constexpr size_t kBatchSize = 128;
-  std::array<unsigned, kBatchSize> batch{};
-
-  while (running_.load(std::memory_order_acquire)) {
-    {
-      std::unique_lock<std::mutex> lk(mu_);
-      cv_.wait(lk, [&] {
-        if (!running_.load(std::memory_order_acquire)) return true;
-        return inflight_count_.load(std::memory_order_acquire) > 0;
-      });
-    }
-
-    if (!running_.load(std::memory_order_acquire)) break;
-
-    bool progress = false;
-
-    // Snapshot live notifiers.
-    std::vector<std::shared_ptr<NotifyTarget>> targets_snapshot;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      notifiers_.erase(
-          std::remove_if(notifiers_.begin(), notifiers_.end(),
-                         [](std::weak_ptr<NotifyTarget> const& t) {
-                           return t.expired();
-                         }),
-          notifiers_.end());
-      targets_snapshot.reserve(notifiers_.size());
-      for (auto const& weak_t : notifiers_) {
-        if (auto t = weak_t.lock()) {
-          targets_snapshot.push_back(std::move(t));
-        }
-      }
-    }
-
-    // Bulk-dequeue from jring (single CAS for up to kBatchSize items).
-    unsigned n =
-        jring_sc_dequeue_burst(active_jring_, batch.data(), kBatchSize, nullptr);
-
-    auto now = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < n; ++i) {
-      unsigned id = batch[i];
-      TrackedRequest* slot = resolve(id);
-      if (slot == nullptr) continue;
-      auto state = slot->state.load(std::memory_order_acquire);
-      if (state != TrackedRequest::SlotState::InFlight) continue;
-      if (!poll_one(id, false)) {
-        unsigned id_val = id;
-        jring_mp_enqueue_bulk(active_jring_, &id_val, 1, nullptr);
-        continue;
-      }
-
-      bool should_emit = false;
-      state = slot->state.load(std::memory_order_acquire);
-      if ((state == TrackedRequest::SlotState::Completed ||
-           state == TrackedRequest::SlotState::Failed) &&
-          !slot->notified) {
-        slot->notified = true;
-        should_emit = true;
-      }
-      if (!should_emit) continue;
-      for (auto& tgt : targets_snapshot) {
-        if (!tgt) continue;
-        tgt->emit(id, now);
-      }
-      progress = true;
-    }
-
-    // Safety net: if no progress but inflight > 0, re-enqueue missed requests.
-    if (!progress) {
-      if (inflight_count_.load(std::memory_order_acquire) > 0) {
-        for (uint32_t i = 0; i < kSlotCount; ++i) {
-          TrackedRequest* slot = &slots_[i];
-          auto state = slot->state.load(std::memory_order_acquire);
-          if (state != TrackedRequest::SlotState::InFlight) continue;
-          unsigned id_val = slot->request_id;
-          jring_mp_enqueue_bulk(active_jring_, &id_val, 1, nullptr);
-        }
-      } else {
-        std::this_thread::yield();
-      }
+std::vector<std::pair<unsigned, bool>> RequestTracker::progress_all() {
+  std::vector<std::pair<unsigned, bool>> completed;
+  for (uint32_t i = 0; i < kSlotCount; ++i) {
+    auto* slot = &slots_[i];
+    auto state = slot->state.load(std::memory_order_acquire);
+    if (state != TrackedRequest::SlotState::InFlight) continue;
+    unsigned req_id = slot->request_id;
+    if (poll_one(req_id, false)) {
+      auto final_state = slot->state.load(std::memory_order_acquire);
+      completed.push_back(
+          {req_id, final_state == TrackedRequest::SlotState::Failed});
     }
   }
+  return completed;
 }
 
 }  // namespace Transport

@@ -215,7 +215,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       },
       [this](TrackedRequest& t) { cleanup_tracked_request(t); });
 
-  tracker_->start_progress();
 
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_

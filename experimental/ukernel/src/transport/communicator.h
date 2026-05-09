@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace UKernel {
@@ -52,15 +53,16 @@ class Communicator {
     return tracker_->wait_finish(reqs);
   }
 
+  // Caller-driven progress: polls all inflight requests (one non-blocking
+  // pass). Returns completed (request_id, failed) pairs.
+  std::vector<std::pair<unsigned, bool>> progress() {
+    return tracker_->progress_all();
+  }
+
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;
   bool barrier(std::string const& barrier_namespace = "default",
                int timeout_ms = -1);
-
-  std::shared_ptr<void> register_completion_notifier(
-      std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb) {
-    return tracker_->register_notifier(std::move(cb));
-  }
 
   bool reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
               bool publish = true);

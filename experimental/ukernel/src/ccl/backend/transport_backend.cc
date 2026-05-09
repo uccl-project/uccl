@@ -1,7 +1,6 @@
 #include "transport_backend.h"
 #include "../../include/transport.h"
 #include <atomic>
-#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -48,12 +47,7 @@ CommunicatorTransportBackend::CommunicatorTransportBackend(
               : std::make_shared<UKernel::Transport::CommunicatorConfig>())),
       backend_cache_key_(g_next_transport_backend_cache_key.fetch_add(
           1, std::memory_order_relaxed)),
-      peer_path_states_(static_cast<size_t>(communicator_->world_size())) {
-  completion_notifier_ = communicator_->register_completion_notifier(
-      [this](unsigned request_id, std::chrono::steady_clock::time_point) {
-        on_transport_completion(request_id);
-      });
-}
+      peer_path_states_(static_cast<size_t>(communicator_->world_size())) {}
 
 CommunicatorTransportBackend::~CommunicatorTransportBackend() = default;
 
@@ -331,16 +325,56 @@ bool CommunicatorTransportBackend::poll(BackendToken token) {
   }
 
   if (!communicator_->poll(request_id)) return false;
-  on_transport_completion(request_id);
+
+  bool should_release = false;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = pending_.find(token.value);
+    if (it == pending_.end()) return true;
+    it->second.completed = true;
+    if (it->second.released) {
+      should_release = true;
+      pending_.erase(it);
+      request_to_token_.erase(request_id);
+    } else {
+      completed_tokens_.push_back(token.value);
+    }
+  }
+  if (should_release) {
+    communicator_->release(request_id);
+  }
   return true;
 }
 
 bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
-  std::lock_guard<std::mutex> lk(mu_);
-  if (completed_tokens_.empty()) return false;
-  token.value = completed_tokens_.front();
-  completed_tokens_.pop_front();
-  return true;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!completed_tokens_.empty()) {
+      token.value = completed_tokens_.front();
+      completed_tokens_.pop_front();
+      return true;
+    }
+  }
+
+  auto done = communicator_->progress();
+  if (done.empty()) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& [req_id, failed] : done) {
+      (void)failed;
+      auto it = request_to_token_.find(req_id);
+      if (it == request_to_token_.end()) continue;
+      auto pending_it = pending_.find(it->second);
+      if (pending_it == pending_.end() || pending_it->second.completed) continue;
+      pending_it->second.completed = true;
+      completed_tokens_.push_back(it->second);
+    }
+    if (completed_tokens_.empty()) return false;
+    token.value = completed_tokens_.front();
+    completed_tokens_.pop_front();
+    return true;
+  }
 }
 
 void CommunicatorTransportBackend::release(BackendToken token) {
@@ -447,31 +481,6 @@ uint32_t CommunicatorTransportBackend::resolve_remote_buffer_id(
     throw std::invalid_argument("transport remote buffer id is missing");
   }
   return remote_buffer_id;
-}
-
-void CommunicatorTransportBackend::on_transport_completion(
-    unsigned request_id) {
-  bool should_release = false;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = request_to_token_.find(request_id);
-    if (it == request_to_token_.end()) return;
-
-    auto pending_it = pending_.find(it->second);
-    if (pending_it == pending_.end() || pending_it->second.completed) return;
-
-    pending_it->second.completed = true;
-    if (pending_it->second.released) {
-      should_release = true;
-      pending_.erase(pending_it);
-      request_to_token_.erase(it);
-    } else {
-      completed_tokens_.push_back(it->second);
-    }
-  }
-  if (should_release) {
-    communicator_->release(request_id);
-  }
 }
 
 void* CommunicatorTransportBackend::byte_offset(void* base, size_t offset) {
