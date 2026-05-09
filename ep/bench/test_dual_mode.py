@@ -33,9 +33,7 @@ Or across two nodes, 8 ranks each:
 
 import argparse
 import os
-import sys
 
-import torch
 import torch.distributed as dist
 
 from buffer import Buffer
