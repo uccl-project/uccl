@@ -18,13 +18,14 @@ static std::string shm_name_for_barrier(std::string const& ip,
                                         bool use_normal_mode, int thread_idx) {
   // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
   // when a leftover object is owned by a different user.
-  // Include mode ("nm" vs "ll") so that two coexisting Buffers on the same
-  // node (e.g. one normal-mode + one low-latency) get distinct barrier
-  // namespaces; otherwise their proxy threads (sharing thread_idx 0..N-1)
-  // would collide on /dev/shm and corrupt each other's LocalBarrier counters.
+  // Include mode ("ht" for high-throughput vs "ll" for low-latency) so that
+  // two coexisting Buffers on the same node (e.g. one HT + one LL) get
+  // distinct barrier namespaces; otherwise their proxy threads (sharing
+  // thread_idx 0..N-1) would collide on /dev/shm and corrupt each other's
+  // LocalBarrier counters.
   uid_t uid = getuid();
   return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) +
-         (use_normal_mode ? "_nm" : "_ll") + "_th" + std::to_string(thread_idx);
+         (use_normal_mode ? "_ht" : "_ll") + "_th" + std::to_string(thread_idx);
 }
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
@@ -108,7 +109,7 @@ uint64_t Proxy::completed_wr() const { return completion_count_; }
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
-    // Offset LL-mode proxies onto a separate CPU range so a normal-mode
+    // Offset LL-mode proxies onto a separate CPU range so a high-throughput
     // Buffer and an LL-mode Buffer running in the same process don't fight
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
     int const mode_offset =
@@ -123,7 +124,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d, mode: %s\n",
           cpu, cfg_.thread_idx, cfg_.local_rank,
-          cfg_.use_normal_mode ? "normal" : "low_latency");
+          cfg_.use_normal_mode ? "high_throughput" : "low_latency");
     }
   }
 }

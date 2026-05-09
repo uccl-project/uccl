@@ -557,9 +557,11 @@ def initialize_uccl(
 ):
     # Only sweep barriers belonging to OUR mode so we don't stomp on a
     # coexisting Buffer of the other mode in the same process. The C++
-    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<nm|ll>_th<idx>`.
+    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<ht|ll>_th<idx>`,
+    # where `ht` = high-throughput (use_normal_mode=True) and `ll` =
+    # low-latency.
     try:
-        mode_token = "_nm_" if use_normal_mode else "_ll_"
+        mode_token = "_ht_" if use_normal_mode else "_ll_"
         for shm_file in glob.glob(f"/dev/shm/uccl_barrier_*{mode_token}*"):
             os.remove(shm_file)
     except Exception:

@@ -336,7 +336,7 @@ class Buffer {
               "ep.Buffer: no UcclProxy registered for device " +
               std::to_string(device_index) +
               std::string(low_latency_mode ? " (low-latency mode)"
-                                           : " (normal mode)") +
+                                           : " (high-throughput mode)") +
               ". Call uccl.ep.register_proxies(device_index, proxies) "
               "first with proxies built with use_normal_mode=" +
               (low_latency_mode ? "False" : "True") + ".");
@@ -1665,9 +1665,12 @@ NB_MODULE(ep, m) {
 
   // Helper: peek a UcclProxy's mode without unwrapping nb::object.
   auto proxy_low_latency_mode = [](nb::object const& proxy) -> bool {
-    // UcclProxy.use_normal_mode() returns True for normal-mode (DeepEP
-    // throughput); the registry key uses low_latency_mode = !use_normal_mode
-    // so that a Buffer ctor can look up by its own low_latency_mode flag.
+    // UcclProxy.use_normal_mode() returns True for high-throughput mode
+    // (DeepEP throughput / "normal" kernels); the registry key uses
+    // low_latency_mode = !use_normal_mode so a Buffer ctor can look up by
+    // its own low_latency_mode flag. The legacy attribute name is kept
+    // for backwards compatibility with code paths still passing
+    // use_normal_mode=True/False.
     return !nb::cast<bool>(proxy.attr("use_normal_mode")());
   };
 
@@ -1681,12 +1684,12 @@ NB_MODULE(ep, m) {
           fprintf(stderr,
                   "WARNING: overwriting existing proxies for device %d "
                   "(%s mode)\n",
-                  device_index, ll ? "low-latency" : "normal");
+                  device_index, ll ? "low-latency" : "high-throughput");
           std::abort();
         }
         vec.push_back(std::move(proxy));
         printf("Registered proxy for device %d (%s mode)\n", device_index,
-               ll ? "low-latency" : "normal");
+               ll ? "low-latency" : "high-throughput");
       },
       nb::arg("device_index"), nb::arg("proxy"));
   m.def(
@@ -1715,14 +1718,14 @@ NB_MODULE(ep, m) {
           fprintf(stderr,
                   "WARNING: overwriting existing proxies for device %d "
                   "(%s mode)\n",
-                  device_index, ll ? "low-latency" : "normal");
+                  device_index, ll ? "low-latency" : "high-throughput");
           std::abort();
         }
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
         printf("Registered proxies for device %d (%s mode)\n", device_index,
-               ll ? "low-latency" : "normal");
+               ll ? "low-latency" : "high-throughput");
       },
       nb::arg("device_index"), nb::arg("proxies"));
   m.def(

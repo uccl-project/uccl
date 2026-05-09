@@ -1,5 +1,5 @@
-"""Smoke test: a single process can hold one normal-mode Buffer and one
-low-latency-mode Buffer simultaneously without crashing on the shared
+"""Smoke test: a single process can hold one high-throughput-mode Buffer and
+one low-latency-mode Buffer simultaneously without crashing on the shared
 shm-barrier / proxy registry that previously segfaulted.
 
 Pre-fix behavior:
@@ -11,8 +11,9 @@ Pre-fix behavior:
 
 Post-fix behavior:
 - Proxy registry is keyed by ``(device_index, low_latency_mode)``.
-- shm names include a ``_nm_`` / ``_ll_`` mode token.
-- LL-mode proxies pin to a CPU range disjoint from normal-mode proxies.
+- shm names include a ``_ht_`` (high-throughput) / ``_ll_`` (low-latency)
+  mode token.
+- LL-mode proxies pin to a CPU range disjoint from HT-mode proxies.
 
 The test is a construction-only smoke test: build both Buffers in the same
 process, do a process-wide barrier between them, and tear them down. If we
@@ -55,7 +56,7 @@ def make_low_latency_buffer(group, num_ranks, num_tokens, hidden, num_experts):
     )
 
 
-def make_normal_buffer(group, num_ranks, hidden):
+def make_high_throughput_buffer(group, num_ranks, hidden):
     from uccl.ep import Config as EpConfig  # type: ignore
 
     cfg = EpConfig(
@@ -82,8 +83,8 @@ def main(local_rank: int, num_local_ranks: int, args):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
 
     # Number of experts must divide num_ranks for LL mode and
-    # num_ranks * NUM_MAX_NVL_PEERS for normal mode. Pick a safe small
-    # multiple.
+    # num_ranks * NUM_MAX_NVL_PEERS for high-throughput mode. Pick a safe
+    # small multiple.
     num_experts = args.num_experts or max(num_ranks * 2, 16)
     if num_experts % num_ranks:
         num_experts = ((num_experts // num_ranks) + 1) * num_ranks
@@ -105,19 +106,22 @@ def main(local_rank: int, num_local_ranks: int, args):
     if rank == 0:
         print("[dual-mode] low-latency Buffer ready", flush=True)
 
-    # 2) normal Buffer in the SAME process. Pre-fix: aborts in
+    # 2) high-throughput Buffer in the SAME process. Pre-fix: aborts in
     # register_proxies, or segfaults on shared LocalBarrier shm.
     if rank == 0:
-        print("[dual-mode] creating normal Buffer ...", flush=True)
-    nm_buf = make_normal_buffer(group, num_ranks, args.hidden)
+        print("[dual-mode] creating high-throughput Buffer ...", flush=True)
+    ht_buf = make_high_throughput_buffer(group, num_ranks, args.hidden)
     dist.barrier(group)
     if rank == 0:
-        print("[dual-mode] normal Buffer ready -- both modes coexisting", flush=True)
+        print(
+            "[dual-mode] high-throughput Buffer ready -- both modes coexisting",
+            flush=True,
+        )
 
     # Tear down in reverse order.
     if rank == 0:
         print("[dual-mode] destroying buffers ...", flush=True)
-    nm_buf.destroy()
+    ht_buf.destroy()
     ll_buf.destroy()
     dist.barrier(group)
     if rank == 0:
