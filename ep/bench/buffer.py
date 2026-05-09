@@ -237,6 +237,10 @@ class Buffer:
         return ep.is_sm90_compiled()
 
     @staticmethod
+    def _is_efa() -> bool:
+        return os.path.exists(os.getenv("EFA_HOME", "/opt/amazon/efa"))
+
+    @staticmethod
     def set_num_sms(new_num_sms: int) -> None:
         """
         Set the number of SMs to use in high-throughput kernels.
@@ -693,9 +697,9 @@ class Buffer:
             2: Config(Buffer.num_sms, 24, 256, 6, 128),
             4: Config(Buffer.num_sms, 6, 256, 6, 128),
             8: Config(Buffer.num_sms, 6, 256, 6, 128),
-            16: Config(Buffer.num_sms, 36, 288, 20, 128),
+            16: Config(Buffer.num_sms, 36, 288, 20, 512 if Buffer._is_efa() else 128),
             24: Config(Buffer.num_sms, 8, 288, 32, 128),
-            32: Config(Buffer.num_sms, 32, 288, 32, 128),
+            32: Config(Buffer.num_sms, 32, 288, 32, 512 if Buffer._is_efa() else 128),
             64: Config(Buffer.num_sms, 20, 288, 28, 128),
             128: Config(Buffer.num_sms, 20, 560, 32, 128),
             144: Config(Buffer.num_sms, 32, 720, 12, 128),
@@ -721,9 +725,9 @@ class Buffer:
             2: Config(Buffer.num_sms, 10, 256, 6, 128),
             4: Config(Buffer.num_sms, 9, 256, 6, 128),
             8: Config(Buffer.num_sms, 4, 256, 6, 128),
-            16: Config(Buffer.num_sms, 4, 288, 12, 128),
+            16: Config(Buffer.num_sms, 4, 288, 12, 512 if Buffer._is_efa() else 128),
             24: Config(Buffer.num_sms, 1, 288, 8, 128),
-            32: Config(Buffer.num_sms, 1, 288, 8, 128),
+            32: Config(Buffer.num_sms, 1, 288, 8, 512 if Buffer._is_efa() else 128),
             64: Config(Buffer.num_sms, 1, 288, 20, 128),
             128: Config(Buffer.num_sms, 1, 560, 12, 128),
             144: Config(Buffer.num_sms, 2, 720, 8, 128),
