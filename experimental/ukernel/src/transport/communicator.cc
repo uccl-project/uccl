@@ -1,5 +1,6 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
+#include "adapter/rdma_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
 #include "adapter/uccl_adapter.h"
@@ -122,6 +123,11 @@ std::string tcp_p2p_key(int src_rank, int dst_rank) {
          std::to_string(dst_rank);
 }
 
+std::string rdma_p2p_key(int src_rank, int dst_rank) {
+  return "rdma_p2p_info_" + std::to_string(src_rank) + "_to_" +
+         std::to_string(dst_rank);
+}
+
 std::string ipc_global_buffer_key(int owner_rank, uint32_t buffer_id) {
   return "ipc:rank:" + std::to_string(owner_rank) +
          ":buf:" + std::to_string(buffer_id);
@@ -210,6 +216,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 
   tracker_ = std::make_unique<RequestTracker>(
       uccl_adapter_.get(), tcp_adapter_.get(), ipc_adapter_.get(),
+      rdma_adapter_.get(),
       [this](TrackedRequest& t, bool blocking) {
         return complete_host_bounce_recv(t, blocking);
       },
@@ -334,6 +341,15 @@ Communicator::~Communicator() {
       }
       uccl_direct_reg_failed_mrs_.erase(registered_id);
     }
+    if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      if (rdma_registered_mrs_.find(registered_id) !=
+          rdma_registered_mrs_.end()) {
+        rdma_adapter_->deregister_memory(registered_id);
+        rdma_registered_mrs_.erase(registered_id);
+      }
+      rdma_direct_reg_failed_mrs_.erase(registered_id);
+    }
     (void)mr_manager_.delete_mr(static_cast<uint32_t>(buffer_id));
   }
 
@@ -356,6 +372,7 @@ Communicator::~Communicator() {
 
   uccl_adapter_.reset();
   tcp_adapter_.reset();
+  rdma_adapter_.reset();
   ipc_adapter_.reset();
 
   for (gpuEvent_t e : event_pool_) {
@@ -414,6 +431,54 @@ bool Communicator::exchange_uccl_peer_info(int rank,
   bool ok =
       oob_put(*exchanger_client_, oob_namespace(), p2p_key, local_p2p_info) &&
       oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+              *out_remote_p2p_info, bootstrap_timeout_ms());
+  if (ok && out_remote_p2p_info->gpu_idx >= 0) {
+    std::lock_guard<std::mutex> lk(peer_mu_);
+    peer_states_[static_cast<size_t>(rank)].gpu_idx =
+        out_remote_p2p_info->gpu_idx;
+  }
+  return ok;
+}
+
+RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
+    CommunicatorMeta const& local_meta) {
+  (void)local_meta;
+  if (!rdma_adapter_) {
+    RdmaTransportConfig rdma_cfg;
+    rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
+                                                           std::move(rdma_cfg));
+    tracker_->set_rdma(rdma_adapter_.get());
+  }
+  return *rdma_adapter_;
+}
+
+bool Communicator::exchange_rdma_peer_info(int rank,
+                                           RdmaTransportAdapter& rdma_adapter,
+                                           RdmaP2PInfo* out_remote_p2p_info) {
+  if (out_remote_p2p_info == nullptr) return false;
+
+  auto init = rdma_adapter.get_connect_init(rank);
+  RdmaP2PInfo local_p2p_info;
+  local_p2p_info.qpn0 = init.qpns[0];
+  local_p2p_info.qpn1 = init.qpns[1];
+  local_p2p_info.qpn2 = init.qpns[2];
+  local_p2p_info.qpn3 = init.qpns[3];
+  local_p2p_info.num_qps = init.num_qps;
+  local_p2p_info.lid = init.lid;
+  memcpy(&local_p2p_info.gid_prefix, init.gid_raw, 8);
+  memcpy(&local_p2p_info.gid_iface, init.gid_raw + 8, 8);
+  local_p2p_info.gid_index = init.gid_index;
+  local_p2p_info.signal_addr = init.signal_addr;
+  local_p2p_info.signal_rkey = init.signal_rkey;
+  local_p2p_info.dev_idx = init.dev_idx;
+  local_p2p_info.gpu_idx = init.gpu_idx;
+
+  std::string key = rdma_p2p_key(global_rank_, rank);
+  std::string peer_key = rdma_p2p_key(rank, global_rank_);
+
+  bool ok =
+      oob_put(*exchanger_client_, oob_namespace(), key, local_p2p_info) &&
+      oob_get(*exchanger_client_, oob_namespace(), peer_key,
               *out_remote_p2p_info, bootstrap_timeout_ms());
   if (ok && out_remote_p2p_info->gpu_idx >= 0) {
     std::lock_guard<std::mutex> lk(peer_mu_);
@@ -548,6 +613,45 @@ bool Communicator::ensure_path(int rank, bool is_put) {
     return true;
   }
 
+  if (resolved.kind == PeerTransportKind::Rdma) {
+    auto& rdma = ensure_rdma_adapter(resolved.local_meta);
+    bool ready = is_put ? rdma.has_put_path(rank) : rdma.has_wait_path(rank);
+    if (!ready) {
+      RdmaP2PInfo remote;
+      if (!exchange_rdma_peer_info(rank, rdma, &remote)) return fallback();
+
+      RdmaPeerConnectSpec rspec;
+      rspec.num_qps = remote.num_qps;
+      rspec.remote_qpns[0] = remote.qpn0;
+      rspec.remote_qpns[1] = remote.qpn1;
+      rspec.remote_qpns[2] = remote.qpn2;
+      rspec.remote_qpns[3] = remote.qpn3;
+      rspec.remote_lid = remote.lid;
+      memcpy(&rspec.remote_gid_raw[0], &remote.gid_prefix, 8);
+      memcpy(&rspec.remote_gid_raw[8], &remote.gid_iface, 8);
+      rspec.remote_gid_index = remote.gid_index;
+      rspec.remote_signal_addr = remote.signal_addr;
+      rspec.remote_signal_rkey = remote.signal_rkey;
+      rspec.local_dev_idx = remote.dev_idx;
+      rspec.local_gpu_idx = local_gpu_idx_;
+      rspec.remote_dev_idx = remote.dev_idx;
+      rspec.remote_gpu_idx = remote.gpu_idx;
+
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = conn_type;
+      spec.detail = std::move(rspec);
+      if (!(is_put ? rdma.ensure_put_path(spec)
+                   : rdma.ensure_wait_path(spec))) {
+        return fallback();
+      }
+    }
+    is_put ? mark_put_path_ready(rank, PeerTransportKind::Rdma)
+           : mark_wait_path_ready(rank, PeerTransportKind::Rdma);
+    register_existing_local_mrs_with_rdma();
+    return true;
+  }
+
   if (resolved.kind == PeerTransportKind::Ipc) {
     PeerConnectSpec spec{};
     spec.peer_rank = rank;
@@ -673,6 +777,8 @@ TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
       return tcp_adapter_.get();
     case PeerTransportKind::Ipc:
       return ipc_adapter_.get();
+    case PeerTransportKind::Rdma:
+      return rdma_adapter_.get();
     default:
       return nullptr;
   }
@@ -756,6 +862,71 @@ bool Communicator::ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr,
   return true;
 }
 
+void Communicator::register_existing_local_mrs_with_rdma() {
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
+  for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
+    void* ptr = reinterpret_cast<void*>(item.mr.address);
+    size_t len = static_cast<size_t>(item.mr.length);
+    (void)ensure_rdma_memory_registered(buffer_id, ptr, len);
+  }
+}
+
+bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
+                                                 size_t len) {
+  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
+
+    void* base_ptr = ptr;
+    size_t mr_len = len;
+    bool is_direct_local_mr = false;
+
+    MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
+    if (item.valid) {
+      base_ptr =
+          reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
+      mr_len = static_cast<size_t>(item.mr.length);
+      is_direct_local_mr = true;
+    }
+
+    if (is_direct_local_mr) {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      if (rdma_direct_reg_failed_mrs_.find(buffer_id) !=
+          rdma_direct_reg_failed_mrs_.end()) {
+        return false;
+      }
+    }
+
+    if (base_ptr == nullptr || mr_len == 0) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " invalid pointer or length for RDMA reg, buffer_id="
+                << buffer_id << std::endl;
+      return false;
+    }
+
+    bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
+    if (!ok) {
+      if (is_direct_local_mr) {
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        rdma_direct_reg_failed_mrs_.insert(buffer_id);
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " failed to register local GPU MR " << buffer_id
+                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
+                  << std::endl;
+      } else {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " failed to register host MR " << buffer_id
+                  << " with RDMA" << std::endl;
+      }
+    } else {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      rdma_registered_mrs_.insert(buffer_id);
+    }
+    return ok;
+  }
+
+  return true;
+}
+
 unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
                              size_t src_bytes, uint32_t dst_buf_id,
                              size_t dst_off) {
@@ -806,6 +977,32 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     }
     unsigned result =
         adapter->put_async(rank, local_ptr, src_buf_id, nullptr, 0, src_bytes);
+    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
+      cleanup_tracked_request(*slot);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+      return 0;
+    }
+    return rid;
+  }
+
+  if (peer_kind == PeerTransportKind::Rdma) {
+    if (!ensure_rdma_memory_registered(src_buf_id, local_ptr, src_bytes)) {
+      std::cerr << "[ERROR] RDMA MR not registered for buffer " << src_buf_id
+                << std::endl;
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+      return 0;
+    }
+    uint32_t remote_id = dst_buf_id != 0 ? dst_buf_id : src_buf_id;
+    MR remote_mr = get_mr(rank, remote_id);
+    void* remote_ptr_val =
+        reinterpret_cast<void*>(static_cast<uint64_t>(remote_mr.address) +
+                                dst_off);
+    rdma_adapter_->register_remote_buffer(rank, remote_id,
+                                          remote_mr.address, remote_mr.key);
+    unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
+                                         remote_ptr_val, remote_id, src_bytes);
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free,
@@ -909,6 +1106,28 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     return rid;
   }
 
+  if (peer_kind == PeerTransportKind::Rdma) {
+    if (!ensure_rdma_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
+      std::cerr << "[ERROR] RDMA MR not registered for buffer " << dst_buf_id
+                << std::endl;
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+      return 0;
+    }
+    TransportAdapter::WaitTarget wt;
+    wt.local_ptr = local_ptr;
+    wt.len = dst_bytes;
+    wt.local_buffer_id = dst_buf_id;
+    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
+    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
+      cleanup_tracked_request(*slot);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+      return 0;
+    }
+    return rid;
+  }
+
   // IPC: SignalWait only. Applications publish/wait IPC buffer metadata
   // explicitly with reg_ipc()/wait_ipc(), mirroring the MR API.
   {
@@ -967,6 +1186,13 @@ bool Communicator::dereg_mr(uint32_t buffer_id) {
       uccl_adapter_->deregister_memory(registered_id);
     }
     uccl_direct_reg_failed_mrs_.erase(registered_id);
+  }
+  if (registered_id != 0 && rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    if (rdma_registered_mrs_.erase(registered_id) > 0) {
+      rdma_adapter_->deregister_memory(registered_id);
+    }
+    rdma_direct_reg_failed_mrs_.erase(registered_id);
   }
   if (found) (void)mr_manager_.delete_mr(buffer_id);
   return true;
@@ -1242,6 +1468,9 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   }
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
     tcp_adapter_->release_request(adapter_id);
+  }
+  if (tracked.kind == PeerTransportKind::Rdma && rdma_adapter_) {
+    rdma_adapter_->release_request(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Ipc && ipc_adapter_) {
     ipc_adapter_->release_request(adapter_id);

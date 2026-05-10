@@ -16,6 +16,7 @@ namespace Transport {
 class UcclTransportAdapter;
 class TcpTransportAdapter;
 class IpcAdapter;
+class RdmaTransportAdapter;
 
 struct TrackedRequest {
   enum class SlotState : uint8_t {
@@ -48,7 +49,8 @@ class RequestTracker {
   using CleanupFn = std::function<void(TrackedRequest& tracked)>;
 
   RequestTracker(UcclTransportAdapter* uccl, TcpTransportAdapter* tcp,
-                 IpcAdapter* ipc, CompleteBounceFn complete_bounce,
+                 IpcAdapter* ipc, RdmaTransportAdapter* rdma,
+                 CompleteBounceFn complete_bounce,
                  CleanupFn cleanup);
   ~RequestTracker();
 
@@ -80,6 +82,7 @@ class RequestTracker {
   // Update adapter pointers (uccl/tcp are created lazily by Communicator).
   void set_uccl(UcclTransportAdapter* uccl) { uccl_ = uccl; }
   void set_tcp(TcpTransportAdapter* tcp) { tcp_ = tcp; }
+  void set_rdma(RdmaTransportAdapter* rdma) { rdma_ = rdma; }
 
  private:
   bool poll_one(unsigned id, bool blocking);
@@ -93,6 +96,7 @@ class RequestTracker {
   UcclTransportAdapter* uccl_;
   TcpTransportAdapter* tcp_;
   IpcAdapter* ipc_;
+  RdmaTransportAdapter* rdma_;
 
   // Callbacks from Communicator.
   CompleteBounceFn complete_bounce_;

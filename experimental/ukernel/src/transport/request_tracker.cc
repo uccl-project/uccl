@@ -2,6 +2,7 @@
 #include "adapter/ipc_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/uccl_adapter.h"
+#include "adapter/rdma_adapter.h"
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
@@ -31,11 +32,13 @@ uint32_t RequestTracker::request_generation(unsigned req_id) {
 
 RequestTracker::RequestTracker(UcclTransportAdapter* uccl,
                                TcpTransportAdapter* tcp, IpcAdapter* ipc,
+                               RdmaTransportAdapter* rdma,
                                CompleteBounceFn complete_bounce,
                                CleanupFn cleanup)
     : uccl_(uccl),
       tcp_(tcp),
       ipc_(ipc),
+      rdma_(rdma),
       complete_bounce_(std::move(complete_bounce)),
       cleanup_(std::move(cleanup)) {
   slots_ = std::make_unique<TrackedRequest[]>(kSlotCount);
@@ -199,6 +202,11 @@ bool RequestTracker::poll_one(unsigned id, bool blocking) {
     done = blocking ? ipc_->wait_completion(adapter_id)
                     : ipc_->poll_completion(adapter_id);
     failed = done && ipc_->request_failed(adapter_id);
+  } else if (slot->kind == PeerTransportKind::Rdma) {
+    if (rdma_ == nullptr) return false;
+    done = blocking ? rdma_->wait_completion(adapter_id)
+                    : rdma_->poll_completion(adapter_id);
+    failed = done && rdma_->request_failed(adapter_id);
   }
 
   if (!done) return false;

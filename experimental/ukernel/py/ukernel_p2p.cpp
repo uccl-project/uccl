@@ -40,6 +40,7 @@ PreferredTransport parse_transport(std::string const& value) {
   if (value == "ipc") return PreferredTransport::Ipc;
   if (value == "uccl") return PreferredTransport::Uccl;
   if (value == "tcp") return PreferredTransport::Tcp;
+  if (value == "rdma") return PreferredTransport::Rdma;
   throw std::invalid_argument("unsupported transport: " + value);
 }
 
@@ -307,6 +308,8 @@ class Communicator {
         return "uccl";
       case PeerTransportKind::Tcp:
         return "tcp";
+      case PeerTransportKind::Rdma:
+        return "rdma";
       default:
         return "unknown";
     }
