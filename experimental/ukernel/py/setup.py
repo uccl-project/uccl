@@ -19,7 +19,7 @@ UCCL_ROOT = ROOT.parent.parent
 CUDA_HOME = Path("/usr/local/cuda")
 ROCM_HOME = Path(os.environ.get("ROCM_HOME", "/opt/rocm"))
 USE_ROCM = getattr(torch.version, "hip", None) is not None
-BUILD_CCL_ON_ROCM = os.environ.get("UKERNEL_BUILD_CCL_ON_ROCM", "0") == "1"
+
 
 GDRCOPY_INCLUDE_DIR = Path(
     os.environ.get("GDRCOPY_INCLUDE_DIR", "/usr/local/include")
@@ -142,6 +142,9 @@ cuda_nvcc_args = [
     "arch=compute_89,code=sm_89",
 ]
 
+if USE_ROCM:
+    os.environ["CC"] = str(ROCM_HOME / "bin" / "hipcc")
+    os.environ["CXX"] = str(ROCM_HOME / "bin" / "hipcc")
 ExtensionCls = CppExtension if USE_ROCM else CUDAExtension
 
 common_libraries = [
@@ -191,9 +194,7 @@ p2p_ext = ExtensionCls(
     runtime_library_dirs=runtime_library_dirs,
 )
 
-ext_modules = [p2p_ext]
-if not USE_ROCM or BUILD_CCL_ON_ROCM:
-    ext_modules.insert(0, ext)
+ext_modules = [ext, p2p_ext]
 
 
 setup(
