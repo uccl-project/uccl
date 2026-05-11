@@ -143,9 +143,8 @@ cuda_nvcc_args = [
 ]
 
 if USE_ROCM:
-    os.environ["CC"] = str(ROCM_HOME / "bin" / "hipcc")
-    os.environ["CXX"] = str(ROCM_HOME / "bin" / "hipcc")
-ExtensionCls = CppExtension if USE_ROCM else CUDAExtension
+    os.environ.setdefault("CUDA_HOME", str(ROCM_HOME))
+ExtensionCls = CUDAExtension
 
 common_libraries = [
     "gflags",
@@ -157,41 +156,72 @@ common_libraries = [
     "numa",
 ]
 if USE_ROCM:
-    common_libraries.extend(["amdhip64", "elf", "dl"])
+    library_dirs.append(str(RDMA_STATIC.parent.resolve()))
+    common_libraries.extend(["amdhip64", "elf", "dl", "rdma_hip"])
 else:
-    common_libraries.extend(["cudart", "cuda", "gdrapi"])
+    library_dirs.append(str(RDMA_STATIC.parent.resolve()))
+    common_libraries.extend(["cudart", "cuda", "gdrapi", "rdma"])
 
 extra_link_args = []
 
 
-ext = ExtensionCls(
-    name="ukernel_ccl._C",
+extension_kwargs = dict(
     sources=sources,
     include_dirs=include_dirs,
-    extra_compile_args=common_cxx_args if USE_ROCM else {
-        "cxx": common_cxx_args,
-        "nvcc": cuda_nvcc_args,
-    },
     library_dirs=library_dirs,
     libraries=common_libraries,
-    extra_objects=[str(RDMA_STATIC.resolve())],
     extra_link_args=extra_link_args,
     runtime_library_dirs=runtime_library_dirs,
 )
+if USE_ROCM:
+    extension_kwargs["extra_compile_args"] = {
+        "cxx": common_cxx_args,
+        "nvcc": [
+            "-O3",
+            "-std=c++17",
+            "-Wall",
+            "-Wno-sign-compare",
+            "-Wno-reorder",
+            "-Wno-unused-variable",
+            "-Wno-unused-label",
+            "-Wno-unused-but-set-variable",
+            "-Wno-narrowing",
+            "-pthread",
+            "-fPIC",
+            "-D__HIP_PLATFORM_AMD__",
+            "-DUKERNEL_ENABLE_TMA=0",
+        ],
+    }
+else:
+    extension_kwargs["extra_compile_args"] = {
+        "cxx": common_cxx_args,
+        "nvcc": cuda_nvcc_args,
+    }
+
+ext = ExtensionCls(
+    name="ukernel_ccl._C",
+    **extension_kwargs,
+)
+
+p2p_extension_kwargs = dict(
+    sources=p2p_sources,
+    include_dirs=include_dirs,
+    library_dirs=library_dirs,
+    libraries=common_libraries,
+    extra_link_args=extra_link_args,
+    runtime_library_dirs=runtime_library_dirs,
+)
+if USE_ROCM:
+    p2p_extension_kwargs["extra_compile_args"] = extension_kwargs["extra_compile_args"]
+else:
+    p2p_extension_kwargs["extra_compile_args"] = {
+        "cxx": common_cxx_args,
+        "nvcc": cuda_nvcc_args,
+    }
 
 p2p_ext = ExtensionCls(
     name="ukernel_p2p._C",
-    sources=p2p_sources,
-    include_dirs=include_dirs,
-    extra_compile_args=common_cxx_args if USE_ROCM else {
-        "cxx": common_cxx_args,
-        "nvcc": cuda_nvcc_args,
-    },
-    library_dirs=library_dirs,
-    libraries=common_libraries,
-    extra_objects=[str(RDMA_STATIC.resolve())],
-    extra_link_args=extra_link_args,
-    runtime_library_dirs=runtime_library_dirs,
+    **p2p_extension_kwargs,
 )
 
 ext_modules = [ext, p2p_ext]

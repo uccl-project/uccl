@@ -188,7 +188,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
 #define gpuMemGetAddressRange hipMemGetAddressRange
-#define gpuLaunchKernel hipLaunchKernel
+#define gpuLaunchKernel(kernel, ...) hipLaunchKernel(reinterpret_cast<const void*>(kernel), __VA_ARGS__)
 #define gpuDeviceSynchronize hipDeviceSynchronize
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t hipError_t
