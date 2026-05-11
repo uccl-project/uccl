@@ -56,7 +56,7 @@ ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_B
 
 .PHONY: all test test-unit test-integration unit integration bench clean
 
-all: bench
+all: $(ALL_BIN)
 
 test: test-unit test-integration
 

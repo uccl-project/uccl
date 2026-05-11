@@ -1,39 +1,66 @@
 # Compiler and environment
-HIP_HOME ?= /opt/rocm
-HIP_LIB  := $(HIP_HOME)/lib
+HIP_HOME      ?= /opt/rocm
+HIP_LIB       := $(HIP_HOME)/lib
 override CXX := /usr/bin/g++
-HIPCC      := $(HIP_HOME)/bin/hipcc
+HIPCC         := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME ?= /usr/lib
-UCCL_ROOT := $(abspath ../..)
-UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
-UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
+DEBUG         ?= 0
 
-# Compilation flags
-CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
-HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
-LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -ldl
+# Base compilation flags
+ifeq ($(DEBUG),1)
+CXX_OPT_FLAGS  := -O0 -g
+HIPCC_OPT_FLAGS := -O0 -g
+else
+CXX_OPT_FLAGS  := -O3
+HIPCC_OPT_FLAGS := -O3
+endif
 
-# Include directories
-INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include -Isrc/transport -Isrc/ccl \
-            -I$(UCCL_ROOT) -I$(UCCL_RDMA_ROOT)
+CXXFLAGS   := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
+              -D__HIP_PLATFORM_AMD__ \
+              -I$(CONDA_LIB_HOME)/../include \
+              -DUKERNEL_ENABLE_TMA=0
 
-LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
+HIPCCFLAGS := $(HIPCC_OPT_FLAGS) -std=c++17 \
+              -D__HIP_PLATFORM_AMD__ \
+              -DUKERNEL_ENABLE_TMA=0 \
+              --offload-arch=gfx942
 
-# Redis: use redis exchaner by USE_REDIS_OOB=1
+LDFLAGS    := -L$(CONDA_LIB_HOME) \
+              -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) \
+              -lamdhip64 -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -ldl
+
+# Local includes must come first to avoid conflicts with UCCL headers
+LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
+
+# System and external library includes
+INCLUDES := -I$(HIP_HOME)/include -I/usr/include -I/usr/local/include -I../../include
+
+# Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
-REDIS_PKGCONFIG := pkg-config
-REDIS_CFLAGS    := $(shell $(REDIS_PKGCONFIG) --cflags hiredis)
-REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis)
+PKG_CONFIG := pkg-config
+REDIS_CFLAGS := $(shell $(PKG_CONFIG) --cflags hiredis)
+REDIS_LIBS   := $(shell $(PKG_CONFIG) --libs hiredis)
 
 CXXFLAGS   += $(REDIS_CFLAGS) -DUSE_REDIS_OOB
-HIPCCFLAGS += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
+HIPCCFLAGS += -DUSE_REDIS_OOB
 LDFLAGS    += $(REDIS_LIBS)
 endif
 
-# Source files
+# UCCL collective support
+UCCL_ROOT := $(abspath ../..)
+UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
+UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
+UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs
+
+CXXFLAGS += $(UCCL_CFLAGS)
+LDFLAGS += $(UCCL_LDFLAGS)
+
+# Source files - mirror the CUDA Makefile source set, excluding benchmarks and tests
 SRC_CPP := src/transport/communicator.cc \
+           src/transport/request_tracker.cc \
+           src/transport/bounce_buffer_pool.cc \
            src/transport/oob/oob.cc \
-           src/transport/oob/oob_shm.cc \
            src/transport/oob/oob_socket.cc \
            src/transport/util/utils.cc \
            src/transport/memory/ipc_manager.cc \
@@ -41,12 +68,21 @@ SRC_CPP := src/transport/communicator.cc \
            src/transport/memory/mr_manager.cc \
            src/transport/adapter/ipc_adapter.cc \
            src/transport/adapter/tcp_adapter.cc \
-           src/transport/adapter/uccl_adapter.cc
-SRC_CU  :=
+           src/transport/adapter/uccl_adapter.cc \
+           src/transport/adapter/shmring_exchanger.cc \
+           src/ccl/topology.cc \
+           src/ccl/plan.cc \
+           src/ccl/selector.cc \
+           src/ccl/executor.cc \
+           src/ccl/executor_real.cc \
+           src/ccl/backend/device_backend.cc \
+           src/ccl/backend/transport_backend.cc
+SRC_CU  := src/device/persistent_kernel_ops.cu
 
 # Object files
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
+
 # Benchmark files
 BENCH_TRANSPORT_SRC := benchmarks/bench_transport.cc
 BENCH_TRANSPORT_OBJ := $(BENCH_TRANSPORT_SRC:.cc=.o)
@@ -61,49 +97,73 @@ BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
 
-# Default target
-all: $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS)
+# Build the core ukernel artifacts plus top-level benchmarks.
+all: $(STATIC_LIB) $(SHARED_LIB) bench
 
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C $(UCCL_RDMA_ROOT) -f Makefile.rocm librdma_hip.a
-
-# Compilation rules
+# Compilation rules - local includes must come before system/UCCL includes
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 %.o: %.cu
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(HIPCC) $(LOCAL_INCLUDES) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+ensure-uccl-rdma: $(UCCL_RDMA_STATIC)
 
+$(UCCL_RDMA_STATIC):
+	@echo "[ukernel] building collective/rdma (ROCm)..."
+	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
+
+# Static library
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) $(UCCL_RDMA_STATIC)
-	$(HIPCC) -shared $(HIPCCFLAGS) $(INCLUDES) $(OBJ_CC) $(OBJ_CU) $(UCCL_RDMA_STATIC) -lamdhip64 $(LDFLAGS) -o $@
+# Shared library
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
+	$(HIPCC) -shared $(HIPCCFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
+# Benchmark build rules
 $(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) $(UCCL_RDMA_STATIC)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) $(UCCL_RDMA_STATIC) -lamdhip64 $(LDFLAGS) -o $@
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
 $(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
 	$(HIPCC) $(BENCH_GDRCOPY_HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ)
-	$(HIPCC) $(HIPCCFLAGS) $(BENCH_GDRCOPY_OBJ) -lamdhip64 -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) -o $@
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-uccl-rdma
+	$(HIPCC) $(HIPCCFLAGS) $< -lamdhip64 -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) -o $@
 
 bench: $(BENCH_BINS)
+
+device_test:
+	$(MAKE) -C src/device -f Makefile.rocm test
+
+ccl_test:
+	$(MAKE) -C src/ccl -f Makefile.rocm test
+
+transport_test:
+	$(MAKE) -C src/transport -f Makefile.rocm test
+
+transport_suite:
+	$(MAKE) -C src/transport -f Makefile.rocm suite
 
 device_bench:
 	$(MAKE) -C src/device -f Makefile.rocm bench
 
-# Clean rule
+# Clean
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) $(BENCH_BINS) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/transport/*.d benchmarks/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
+	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
+	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/*/*.d benchmarks/*.d
+	find src -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
+	$(MAKE) -C src/ccl -f Makefile.rocm clean
 	$(MAKE) -C src/device -f Makefile.rocm clean
+	$(MAKE) -C src/transport -f Makefile.rocm clean
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d)
 
-.PHONY: all bench device_bench clean
+.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
+
+transport_bench: $(BENCH_TRANSPORT_BIN)

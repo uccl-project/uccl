@@ -138,7 +138,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuGetDeviceCount hipGetDeviceCount
 #define gpuGetDeviceProperties hipGetDeviceProperties
 #define gpuDeviceGetAttribute hipDeviceGetAttribute
-#define gpuDevAttrMultiProcessorCount hipDevAttrMultiProcessorCount
+#define gpuDevAttrMultiProcessorCount hipDeviceAttributeMultiprocessorCount
 #define gpuDeviceProp hipDeviceProp_t
 #define gpuDeviceReset hipDeviceReset
 #define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
