@@ -459,10 +459,14 @@ bool Communicator::exchange_rdma_peer_info(int rank,
 
   auto init = rdma_adapter.get_connect_init(rank);
   RdmaP2PInfo local_p2p_info;
-  local_p2p_info.qpn0 = init.qpns[0];
-  local_p2p_info.qpn1 = init.qpns[1];
-  local_p2p_info.qpn2 = init.qpns[2];
-  local_p2p_info.qpn3 = init.qpns[3];
+  local_p2p_info.send_qpn0 = init.send_qpns[0];
+  local_p2p_info.send_qpn1 = init.send_qpns[1];
+  local_p2p_info.send_qpn2 = init.send_qpns[2];
+  local_p2p_info.send_qpn3 = init.send_qpns[3];
+  local_p2p_info.recv_qpn0 = init.recv_qpns[0];
+  local_p2p_info.recv_qpn1 = init.recv_qpns[1];
+  local_p2p_info.recv_qpn2 = init.recv_qpns[2];
+  local_p2p_info.recv_qpn3 = init.recv_qpns[3];
   local_p2p_info.num_qps = init.num_qps;
   local_p2p_info.lid = init.lid;
   memcpy(&local_p2p_info.gid_prefix, init.gid_raw, 8);
@@ -622,10 +626,14 @@ bool Communicator::ensure_path(int rank, bool is_put) {
 
       RdmaPeerConnectSpec rspec;
       rspec.num_qps = remote.num_qps;
-      rspec.remote_qpns[0] = remote.qpn0;
-      rspec.remote_qpns[1] = remote.qpn1;
-      rspec.remote_qpns[2] = remote.qpn2;
-      rspec.remote_qpns[3] = remote.qpn3;
+      rspec.remote_send_qpns[0] = remote.send_qpn0;
+      rspec.remote_send_qpns[1] = remote.send_qpn1;
+      rspec.remote_send_qpns[2] = remote.send_qpn2;
+      rspec.remote_send_qpns[3] = remote.send_qpn3;
+      rspec.remote_recv_qpns[0] = remote.recv_qpn0;
+      rspec.remote_recv_qpns[1] = remote.recv_qpn1;
+      rspec.remote_recv_qpns[2] = remote.recv_qpn2;
+      rspec.remote_recv_qpns[3] = remote.recv_qpn3;
       rspec.remote_lid = remote.lid;
       memcpy(&rspec.remote_gid_raw[0], &remote.gid_prefix, 8);
       memcpy(&rspec.remote_gid_raw[8], &remote.gid_iface, 8);
@@ -1154,6 +1162,16 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
     local_buffer_to_mr_[buffer_id] = mr;
+  }
+
+  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    (void)ensure_rdma_memory_registered(buffer_id, local_buf, len);
+    uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+    if (rkey != 0) {
+      mr.key = rkey;
+      std::lock_guard<std::mutex> lk(resource_mu_);
+      local_buffer_to_mr_[buffer_id].key = rkey;
+    }
   }
 
   if (!publish || !exchanger_client_ || !exchanger_client_->valid()) {

@@ -292,6 +292,8 @@ int test_transport_communicator(int argc, char** argv) {
       preferred = UKernel::Transport::PreferredTransport::Uccl;
     } else if (transport == "tcp") {
       preferred = UKernel::Transport::PreferredTransport::Tcp;
+    } else if (transport == "rdma") {
+      preferred = UKernel::Transport::PreferredTransport::Rdma;
     } else if (transport != "auto") {
       throw std::invalid_argument("unknown transport override: " + transport);
     }

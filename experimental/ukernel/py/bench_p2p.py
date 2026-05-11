@@ -42,7 +42,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
-    elif selected_transport == "uccl":
+    elif selected_transport == "uccl" or selected_transport == "rdma":
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
 

@@ -132,7 +132,7 @@ def register_case_buffers(
     if selected_transport == "ipc":
         require(comm.reg_ipc(local_recv_id, recv_buf, publish=True), "reg_ipc(recv) failed")
         require(comm.wait_ipc(peer, remote_recv_id), "wait_ipc(peer recv buffer) failed")
-    elif selected_transport == "uccl":
+    elif selected_transport == "uccl" or selected_transport == "rdma":
         require(comm.wait_mr(peer, remote_recv_id), "wait_mr(peer recv buffer) failed")
     return remote_recv_id
 
