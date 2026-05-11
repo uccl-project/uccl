@@ -37,7 +37,7 @@ NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lcudart -lcuda -lgflags -lz -libverbs \
-                  -lnl-3 -lnl-route-3 -lrdmacm -lpthread \
+                  -lnl-3 -lnl-route-3 -lpthread \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 

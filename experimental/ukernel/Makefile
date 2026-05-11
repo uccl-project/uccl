@@ -78,7 +78,7 @@ UCCL_ROOT := $(abspath ../../)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
-UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
+UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs
 
 CXXFLAGS += $(UCCL_CFLAGS)
 NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"

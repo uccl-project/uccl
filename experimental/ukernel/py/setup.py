@@ -20,7 +20,7 @@ CUDA_HOME = Path("/usr/local/cuda")
 ROCM_HOME = Path(os.environ.get("ROCM_HOME", "/opt/rocm"))
 USE_ROCM = getattr(torch.version, "hip", None) is not None
 BUILD_CCL_ON_ROCM = os.environ.get("UKERNEL_BUILD_CCL_ON_ROCM", "0") == "1"
-RDMACM_SO = Path("/usr/lib/x86_64-linux-gnu/librdmacm.so.1")
+
 GDRCOPY_INCLUDE_DIR = Path(
     os.environ.get("GDRCOPY_INCLUDE_DIR", "/usr/local/include")
 )
@@ -156,12 +156,10 @@ common_libraries = [
 if USE_ROCM:
     common_libraries.extend(["amdhip64", "elf", "dl"])
 else:
-    common_libraries.append("rdmacm")
     common_libraries.extend(["cudart", "cuda", "gdrapi"])
 
 extra_link_args = []
-if USE_ROCM and RDMACM_SO.exists():
-    extra_link_args.append(str(RDMACM_SO.resolve()))
+
 
 ext = ExtensionCls(
     name="ukernel_ccl._C",
