@@ -158,6 +158,7 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<int> pending_send_{0};
   std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;
+  std::vector<gpuEvent_t> ipc_events_;
 
   std::mutex match_seq_mu_;
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;

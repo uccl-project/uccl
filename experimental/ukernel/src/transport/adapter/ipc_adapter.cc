@@ -62,9 +62,12 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
   int n_streams = 2;
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   ipc_streams_.resize(n_streams);
+  ipc_events_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(
         gpuStreamCreateWithFlags(&ipc_streams_[i], gpuStreamNonBlocking));
+    GPU_RT_CHECK(
+        gpuEventCreateWithFlags(&ipc_events_[i], gpuEventDisableTiming));
   }
 
   stop_.store(false, std::memory_order_release);
@@ -99,6 +102,10 @@ void IpcAdapter::shutdown() {
     if (stream != nullptr) GPU_RT_CHECK(gpuStreamDestroy(stream));
   }
   ipc_streams_.clear();
+  for (auto& event : ipc_events_) {
+    if (event != nullptr) GPU_RT_CHECK(gpuEventDestroy(event));
+  }
+  ipc_events_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
   if (send_task_ring_) {
@@ -430,11 +437,11 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
           gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice, ipc_streams_[i]));
     } else {
       GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
-                                      ipc_streams_[i]));
+                                       ipc_streams_[i]));
     }
+    GPU_RT_CHECK(gpuEventRecord(ipc_events_[i], ipc_streams_[i]));
   }
-  // Only synchronize streams that were actually used for this transfer.
-  for (size_t i = 0; i < n_streams; ++i) GPU_RT_CHECK(gpuStreamSynchronize(ipc_streams_[i]));
+  for (size_t i = 0; i < n_streams; ++i) GPU_RT_CHECK(gpuEventSynchronize(ipc_events_[i]));
 
   // payload=0 means data is already in receiver's GPU buffer.
   if (!shm_control_->send_ack(to_rank, creq->match_seq, 0)) {
