@@ -1010,7 +1010,7 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     rdma_adapter_->register_remote_buffer(rank, remote_id,
                                           remote_mr.address, remote_mr.key);
 
-    // Phase 1: post data WRs (pure RDMA_WRITE, single QP per message)
+    // Phase 1: post data WRs (pure RDMA_WRITE, multi-QP spray)
     unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
                                          remote_ptr_val, remote_id, src_bytes);
     if (result == 0) {
@@ -1019,14 +1019,12 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
                         std::memory_order_release);
       return 0;
     }
-    // Wait for data CQEs (fast: single QP, loopback microseconds)
+    // Wait for data CQEs before signalling (no QP-ordering assumption)
     adapter->wait_completion(result);
     adapter->release_request(result);
 
-    // Phase 2: signal on the same QP that carried the data
-    int qp = adapter->last_put_qp(rank);
-    unsigned sig_result = qp >= 0 ? adapter->signal_async_on_qp(rank, 0, qp)
-                                  : adapter->signal_async(rank, 0);
+    // Phase 2: signal the receiver that data is ready
+    unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
     if (sig_result == 0 || !tracker_->activate(rid, sig_result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free,

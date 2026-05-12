@@ -447,12 +447,6 @@ bool RdmaTransportAdapter::has_wait_path(int rank) const {
   return it != peers_.end() && it->second->wait_ready;
 }
 
-int RdmaTransportAdapter::last_put_qp(int rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peers_.find(rank);
-  return (it != peers_.end()) ? it->second->last_put_qp : -1;
-}
-
 bool RdmaTransportAdapter::do_connect(int rank,
                                       RdmaPeerConnectSpec const& remote) {
   {
@@ -651,13 +645,10 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   slot->total_chunks = ck.count;
   slot->completed_chunks.store(0, std::memory_order_release);
 
-  // Single QP per message: data WRs on same QP → signal on same QP gets
-  // free ordering (no extra wait needed).
-  int q = select_qp(*p, static_cast<uint32_t>(len));
-
   size_t off = 0;
   for (uint32_t ci = 0; ci < ck.count; ++ci) {
     uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.regular_size;
+    int q = select_qp(*p, sz);
 
     while (p->unacked_bytes_.load(std::memory_order_acquire) + sz >
            kMaxInflightBytes) {
@@ -698,17 +689,10 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     off += sz;
   }
 
-  p->last_put_qp = q;
-
   return rid;
 }
 
 unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
-  return signal_async_on_qp(rank, tag, -1);
-}
-
-unsigned RdmaTransportAdapter::signal_async_on_qp(int rank, uint64_t tag,
-                                                   int qp) {
   if (!has_put_path(rank)) return 0;
 
   RdmaPeer* p = nullptr;
@@ -735,7 +719,7 @@ unsigned RdmaTransportAdapter::signal_async_on_qp(int rank, uint64_t tag,
                                   static_cast<uintptr_t>(msg_id) * 8);
   *tag_addr = tag;
 
-  int q = qp >= 0 ? qp : select_qp(*p, 0);
+  int q = select_qp(*p, 0);
   uint32_t imm = imm_encode(msg_id, 0, 0);
 
   ibv_sge sge = {};
