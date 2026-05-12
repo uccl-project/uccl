@@ -54,7 +54,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
                      void* remote_ptr, uint32_t remote_buffer_id,
                      size_t len) override;
+  int last_put_qp(int peer_rank) const;
   unsigned signal_async(int peer_rank, uint64_t tag) override;
+  unsigned signal_async_on_qp(int peer_rank, uint64_t tag, int qp);
   unsigned wait_async(int peer_rank, uint64_t expected_tag,
                       std::optional<WaitTarget> target = std::nullopt) override;
 
@@ -140,6 +142,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
     uint64_t remote_signal_addr = 0;
     uint32_t remote_signal_rkey = 0;
+
+    int last_put_qp = -1;
 
     std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
 
