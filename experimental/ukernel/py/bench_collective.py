@@ -65,7 +65,7 @@ def main() -> None:
 
     torch.cuda.set_device(local_rank)
 
-    tile_bytes = 64 << 10
+    tile_bytes = 512 << 10  # 512 KB
     num_flows = 2
     warmup = 3
     iters = 20
