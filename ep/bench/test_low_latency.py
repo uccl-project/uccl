@@ -384,6 +384,9 @@ def test_main(
                                     )
                                     _record_hash(f"combine_out|{tag}", combined_x)
 
+                                import time
+                                time.sleep(3)
+
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
         mat_0 = torch.randn((8192, 8192), dtype=torch.float)

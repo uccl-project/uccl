@@ -574,6 +574,7 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
+  adaptive_sleeper_.init_timer();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     adaptive_sleeper_.maybe_sleep(ctx_);
     

@@ -328,6 +328,7 @@ class Buffer:
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
         for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens=x.shape[0],
                 hidden=x.shape[1],
@@ -502,6 +503,9 @@ class Buffer:
                 "with DeepEP and SGLang SBO callers; enabling the overlap kernel path requires "
                 "changes to internode_ll::combine() that will land in a follow-up PR."
             )
+        for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
+
         (
             src_info,
             layout_range,
@@ -935,6 +939,7 @@ class Buffer:
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
             for proxy in self.proxies:
+                print("Notifying proxies...")
                 proxy.notify_proxy_thread_adaptive_sleeper()
 
             return self.internode_dispatch(
@@ -1260,6 +1265,7 @@ class Buffer:
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
             for proxy in self.proxies:
+                print("Notifying proxies...")
                 proxy.notify_proxy_thread_adaptive_sleeper()
 
             return self.internode_combine(
@@ -1853,3 +1859,6 @@ class Buffer:
             num_experts,
             compute_stream_ptr,
         )
+
+    def get_proxies(self):
+        return self.proxies

@@ -19,11 +19,11 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "adaptive_sleeper.hpp"
 #include "d2h_queue_host.hpp"
 #include <deque>
 #include <set>
 #include <tuple>
-#include "adaptive_sleeper.hpp"
 
 struct PeerMeta {
   int rank;

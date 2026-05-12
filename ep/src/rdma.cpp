@@ -40,6 +40,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <fcntl.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -887,9 +888,16 @@ ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S) {
   // TODO(Shawn): check if there are different cases for EFA (which already has
   // cq_ext)
   S.comp_channel = ibv_create_comp_channel(S.context);
+
   if (!S.comp_channel) {
     UCCL_LOG(FATAL) << "Could not allocate completion channel";
   }
+
+  // make the channel nonblocking
+  int flags = fcntl(S.comp_channel->fd, F_GETFL, 0);
+  UCCL_PCHECK(flags != -1);
+  int ret = fcntl(S.comp_channel->fd, F_SETFL, flags | O_NONBLOCK);
+  UCCL_PCHECK(ret != -1);
 
   return S.comp_channel;
 }
