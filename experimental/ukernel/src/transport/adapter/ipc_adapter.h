@@ -7,7 +7,6 @@
 #include "transport_adapter.h"
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -153,10 +152,6 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;
   std::thread recv_thread_;
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
-  std::atomic<int> pending_send_{0};
-  std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;
   std::vector<gpuEvent_t> ipc_events_;
 

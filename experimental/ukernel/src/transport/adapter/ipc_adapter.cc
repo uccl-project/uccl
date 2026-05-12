@@ -82,7 +82,6 @@ void IpcAdapter::shutdown() {
   if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
 
   stop_.store(true, std::memory_order_release);
-  cv_.notify_all();
   if (send_thread_.joinable()) send_thread_.join();
   if (recv_thread_.joinable()) recv_thread_.join();
 
@@ -286,14 +285,11 @@ bool IpcAdapter::enqueue_request(unsigned id, IpcReqType type) {
     if (send_task_ring_ == nullptr ||
         !enqueue_one_request_id(send_task_ring_, id, stop_))
       return false;
-    pending_send_.fetch_add(1, std::memory_order_relaxed);
   } else {
     if (recv_task_ring_ == nullptr ||
         !enqueue_one_request_id(recv_task_ring_, id, stop_))
       return false;
-    pending_recv_.fetch_add(1, std::memory_order_relaxed);
   }
-  cv_.notify_all();
   return true;
 }
 
@@ -492,18 +488,11 @@ void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
 
 void IpcAdapter::send_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_send_.load(std::memory_order_relaxed) > 0;
-      });
-    }
-    if (stop_.load(std::memory_order_relaxed)) break;
-
     unsigned id = 0;
-    if (jring_sc_dequeue_bulk(send_task_ring_, &id, 1, nullptr) != 1) continue;
-    pending_send_.fetch_sub(1, std::memory_order_relaxed);
+    if (jring_sc_dequeue_bulk(send_task_ring_, &id, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
     auto* req = resolve_request_slot(id);
     if (!req) continue;
     complete_task(req, send_one(req));
@@ -520,18 +509,11 @@ void IpcAdapter::send_thread_func() {
 
 void IpcAdapter::recv_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_recv_.load(std::memory_order_relaxed) > 0;
-      });
-    }
-    if (stop_.load(std::memory_order_relaxed)) break;
-
     unsigned id = 0;
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &id, 1, nullptr) != 1) continue;
-    pending_recv_.fetch_sub(1, std::memory_order_relaxed);
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &id, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
     auto* req = resolve_request_slot(id);
     if (!req) continue;
     complete_task(req, recv_one(req));
