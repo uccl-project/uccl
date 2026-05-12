@@ -148,7 +148,11 @@ class RecvControlChannel : public RDMADataChannel {
         std::make_shared<RDMASendRequest>(local_mem_ptr_, remote_mem_ptr_,
                                           index);
     send_ptr->channel_id = kControlChannelID;
-    RDMADataChannel::send(send_ptr);
+    send_ptr->wr_id = index;
+    while (RDMADataChannel::send(send_ptr) < 0) {
+      noblockingPoll();
+      std::this_thread::yield();
+    }
     return index;
   }
 

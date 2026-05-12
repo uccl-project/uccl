@@ -100,6 +100,7 @@ class RDMADataChannel {
     wr.num_sge = 1;
     if (ibv_post_recv(qp_, &wr, &bad_wr)) {
       UCCL_LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
+      return -1;
     }
     return wr_id;
   }
@@ -288,8 +289,8 @@ class RDMADataChannel {
   }
 
   void initQP() {
-    impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
     impl_->initPreAllocResources();
+    impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
   }
 
   // Prepare SGE list for send request

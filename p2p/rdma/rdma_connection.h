@@ -169,10 +169,10 @@ class SendConnection : public RDMAConnection {
     // getTotalInflightBytes() only reflects requests actually being sent.
     int64_t wr_id = tracker_->sendPacket(0);
     req->wr_id = wr_id;
-    if (unlikely(request_queue_->push(req) < 0)) {
+    while (unlikely(request_queue_->push(req) < 0)) {
       UCCL_LOG(WARN) << "SendConnection: isend request queue is full, wr_id="
                      << wr_id;
-      return -1;
+      std::this_thread::yield();
     }
     return wr_id;
   }
