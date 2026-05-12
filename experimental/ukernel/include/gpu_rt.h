@@ -138,7 +138,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuGetDeviceCount hipGetDeviceCount
 #define gpuGetDeviceProperties hipGetDeviceProperties
 #define gpuDeviceGetAttribute hipDeviceGetAttribute
-#define gpuDevAttrMultiProcessorCount hipDevAttrMultiProcessorCount
+#define gpuDevAttrMultiProcessorCount hipDeviceAttributeMultiprocessorCount
 #define gpuDeviceProp hipDeviceProp_t
 #define gpuDeviceReset hipDeviceReset
 #define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
@@ -188,7 +188,8 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
 #define gpuMemGetAddressRange hipMemGetAddressRange
-#define gpuLaunchKernel hipLaunchKernel
+#define gpuLaunchKernel(kernel, ...) \
+  hipLaunchKernel(reinterpret_cast<void const*>(kernel), __VA_ARGS__)
 #define gpuDeviceSynchronize hipDeviceSynchronize
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t hipError_t

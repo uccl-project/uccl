@@ -1,7 +1,9 @@
-CXX            := /usr/bin/g++
-CUDA_PATH      ?= /usr/local/cuda
+HIP_HOME      ?= /opt/rocm
+HIP_LIB       := $(HIP_HOME)/lib
+CXX           := /usr/bin/g++
 CONDA_LIB_HOME ?= /usr/lib
-DEBUG          ?= 0
+DEBUG         ?= 0
+ENABLE_TMA    := 0
 
 ifeq ($(DEBUG),1)
 CXX_OPT_FLAGS := -O0 -g
@@ -9,13 +11,13 @@ else
 CXX_OPT_FLAGS := -O3
 endif
 
-CXXFLAGS := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC -I$(CONDA_LIB_HOME)/../include
-LDFLAGS  := -L$(CONDA_LIB_HOME) -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 -lcudart -lcuda -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread
+CXXFLAGS := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I$(CONDA_LIB_HOME)/../include -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+LDFLAGS  := -L$(CONDA_LIB_HOME) -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) -lamdhip64 -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread
 
 UCCL_ROOT := $(abspath ../../../..)
 UKERNEL_ROOT := $(abspath ../..)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
-UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
+UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
 UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
 UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs
 
@@ -24,7 +26,7 @@ LDFLAGS += $(UCCL_LDFLAGS)
 
 LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/include \
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
-	-I../../include -I$(CUDA_HOME)/include
+	-I../../include -I$(HIP_HOME)/include
 
 SRC_CPP := communicator.cc request_tracker.cc bounce_buffer_pool.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc adapter/shmring_exchanger.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_socket.cc util/utils.cc
 TEST_UNIT_CPP := test/unit/test_transport_unit_main.cc \
@@ -71,8 +73,8 @@ suite: $(TEST_INTEGRATION_BIN)
 	./test/integration/run_transport_suite.sh ./$(TEST_INTEGRATION_BIN)
 
 $(UCCL_RDMA_STATIC): $(UCCL_RDMA_DEPS)
-	@echo "[ukernel/transport] rebuilding collective/rdma static library..."
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
+	@echo "[ukernel/transport] rebuilding collective/rdma static library (ROCm)..."
+	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
 
 %.o: %.cc
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) -MMD -MP -c $< -o $@
