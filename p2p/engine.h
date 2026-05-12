@@ -247,7 +247,7 @@ class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
-  static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
+  static constexpr int kMaxInflightOps = 128;  // Max 128 concurrent Ops
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
   static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;

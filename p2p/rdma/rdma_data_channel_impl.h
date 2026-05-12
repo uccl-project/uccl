@@ -80,9 +80,6 @@ class RDMADataChannelImpl {
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                              uint32_t remote_qpn) = 0;
 
-  // Get max inline data size
-  virtual uint32_t getMaxInlineData() const = 0;
-
   // Initialize pre-allocated resources
   virtual void initPreAllocResources() = 0;
 
