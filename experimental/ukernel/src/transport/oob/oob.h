@@ -117,6 +117,7 @@ struct RdmaP2PInfo {
   uint32_t recv_qpn1 = 0;
   uint32_t recv_qpn2 = 0;
   uint32_t recv_qpn3 = 0;
+  uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
   uint64_t gid_prefix = 0;
@@ -170,6 +171,7 @@ UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
                            f("recv_qpn1", v.recv_qpn1);
                            f("recv_qpn2", v.recv_qpn2);
                            f("recv_qpn3", v.recv_qpn3);
+                           f("signal_qpn", v.signal_qpn);
                            f("num_qps", v.num_qps);
                            f("lid", v.lid);
                            f("gid_prefix", v.gid_prefix);

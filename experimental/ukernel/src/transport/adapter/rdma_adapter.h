@@ -28,6 +28,7 @@ struct RdmaTransportConfig {
 struct RdmaConnectInit {
   uint32_t send_qpns[4] = {};
   uint32_t recv_qpns[4] = {};
+  uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
   uint8_t gid_raw[16] = {};
@@ -127,6 +128,12 @@ class RdmaTransportAdapter final : public TransportAdapter {
     ibv_qp* recv_qps[kMaxQPs] = {};
     ibv_cq* recv_cq = nullptr;
 
+    ibv_qp* signal_qp = nullptr;
+    ibv_cq* signal_cq = nullptr;
+    uint32_t remote_signal_qpn = 0;
+    std::unique_ptr<RecvPool> signal_pool;
+    int signal_post_idx = 0;
+
     uint8_t num_qps = kMaxQPs;
     bool put_ready = false;
     bool wait_ready = false;
@@ -218,11 +225,18 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void destroy_peer_qps(RdmaPeer& peer);
   bool repost_one_recv(RdmaPeer& peer, int qp_idx);
 
+  bool create_signal_qp(RdmaPeer& p);
+  bool connect_signal_qp(RdmaPeer& p, uint32_t remote_qpn);
+  bool init_signal_pool(RdmaPeer& p);
+  void destroy_signal_qp(RdmaPeer& p);
+  bool repost_signal_recv(RdmaPeer& p);
+
   ChunkResult chunk_split(size_t len) const;
 
   void poll_loop();
   bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq,
                    ibv_qp* const* qps, int qp_count, bool is_recv_side);
+  bool poll_signal_cq(RdmaPeer& peer, int rank);
 
   ibv_context* ctx_ = nullptr;
   ibv_pd* pd_ = nullptr;

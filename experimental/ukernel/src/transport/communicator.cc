@@ -467,6 +467,7 @@ bool Communicator::exchange_rdma_peer_info(int rank,
   local_p2p_info.recv_qpn1 = init.recv_qpns[1];
   local_p2p_info.recv_qpn2 = init.recv_qpns[2];
   local_p2p_info.recv_qpn3 = init.recv_qpns[3];
+  local_p2p_info.signal_qpn = init.signal_qpn;
   local_p2p_info.num_qps = init.num_qps;
   local_p2p_info.lid = init.lid;
   memcpy(&local_p2p_info.gid_prefix, init.gid_raw, 8);
@@ -640,6 +641,7 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       rspec.remote_gid_index = remote.gid_index;
       rspec.remote_signal_addr = remote.signal_addr;
       rspec.remote_signal_rkey = remote.signal_rkey;
+      rspec.remote_signal_qpn = remote.signal_qpn;
       rspec.local_dev_idx = remote.dev_idx;
       rspec.local_gpu_idx = local_gpu_idx_;
       rspec.remote_dev_idx = remote.dev_idx;

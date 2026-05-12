@@ -296,6 +296,151 @@ int RdmaTransportAdapter::find_qp_idx(ibv_qp* const* qps, int count,
   return -1;
 }
 
+bool RdmaTransportAdapter::create_signal_qp(RdmaPeer& p) {
+  p.signal_cq = ibv_create_cq(ctx_, 256, nullptr, nullptr, 0);
+  if (!p.signal_cq) return false;
+
+  ibv_qp_init_attr attr = {};
+  attr.send_cq = p.signal_cq;
+  attr.recv_cq = p.signal_cq;
+  attr.qp_type = IBV_QPT_RC;
+  attr.cap.max_send_wr = 64;
+  attr.cap.max_recv_wr = 16;
+  attr.cap.max_send_sge = 1;
+  attr.cap.max_recv_sge = 1;
+  attr.cap.max_inline_data = 16;
+
+  p.signal_qp = ibv_create_qp(pd_, &attr);
+  if (!p.signal_qp) {
+    ibv_destroy_cq(p.signal_cq);
+    p.signal_cq = nullptr;
+    return false;
+  }
+
+  ibv_qp_attr qp_attr = {};
+  qp_attr.qp_state = IBV_QPS_INIT;
+  qp_attr.pkey_index = 0;
+  qp_attr.port_num = 1;
+  qp_attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+  if (ibv_modify_qp(p.signal_qp, &qp_attr,
+                    IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                        IBV_QP_ACCESS_FLAGS) != 0) {
+    ibv_destroy_qp(p.signal_qp);
+    p.signal_qp = nullptr;
+    ibv_destroy_cq(p.signal_cq);
+    p.signal_cq = nullptr;
+    return false;
+  }
+  return true;
+}
+
+bool RdmaTransportAdapter::connect_signal_qp(RdmaPeer& p,
+                                             uint32_t remote_qpn) {
+  if (!p.signal_qp) return false;
+
+  ibv_qp_attr attr = {};
+  attr.qp_state = IBV_QPS_RTR;
+  attr.path_mtu = IBV_MTU_4096;
+  attr.dest_qp_num = remote_qpn;
+  attr.rq_psn = 0;
+  attr.max_dest_rd_atomic = 16;
+  attr.min_rnr_timer = 12;
+
+  if (p.remote_lid != 0) {
+    attr.ah_attr.is_global = 0;
+    attr.ah_attr.dlid = p.remote_lid;
+    attr.ah_attr.sl = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.port_num = 1;
+  } else {
+    attr.ah_attr.is_global = 1;
+    attr.ah_attr.port_num = 1;
+    memcpy(&attr.ah_attr.grh.dgid, &p.remote_gid,
+           sizeof(attr.ah_attr.grh.dgid));
+    attr.ah_attr.grh.sgid_index = gid_index_;
+    attr.ah_attr.grh.hop_limit = 64;
+  }
+
+  int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
+              IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+              IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+
+  if (ibv_modify_qp(p.signal_qp, &attr, flags) != 0) return false;
+
+  ibv_qp_attr rts_attr = {};
+  rts_attr.qp_state = IBV_QPS_RTS;
+  rts_attr.sq_psn = 0;
+  rts_attr.timeout = kQpTimeout;
+  rts_attr.retry_cnt = kQpRetryCnt;
+  rts_attr.rnr_retry = kQpRnrRetry;
+  rts_attr.max_rd_atomic = 16;
+
+  int rts_flags = IBV_QP_STATE | IBV_QP_SQ_PSN | IBV_QP_TIMEOUT |
+                  IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_MAX_QP_RD_ATOMIC;
+
+  if (ibv_modify_qp(p.signal_qp, &rts_attr, rts_flags) != 0) return false;
+
+  return true;
+}
+
+bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
+  static constexpr int kSignalPoolSz = 16;
+  auto pool = std::make_unique<RecvPool>();
+  pool->buffer.resize(static_cast<size_t>(kSignalPoolSz) * 32);
+  pool->mr = ibv_reg_mr(pd_, pool->buffer.data(), pool->buffer.size(),
+                        IBV_ACCESS_LOCAL_WRITE);
+  if (!pool->mr) return false;
+
+  pool->sges.resize(kSignalPoolSz);
+  pool->wrs.resize(kSignalPoolSz);
+  for (int i = 0; i < kSignalPoolSz; ++i) {
+    pool->sges[i].addr = reinterpret_cast<uint64_t>(pool->buffer.data() +
+                                                    static_cast<size_t>(i) * 32);
+    pool->sges[i].length = 32;
+    pool->sges[i].lkey = pool->mr->lkey;
+
+    pool->wrs[i].wr_id = 0;
+    pool->wrs[i].sg_list = &pool->sges[i];
+    pool->wrs[i].num_sge = 1;
+    pool->wrs[i].next = (i + 1 < kSignalPoolSz) ? &pool->wrs[i + 1] : nullptr;
+  }
+
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(p.signal_qp, &pool->wrs[0], &bad) != 0) {
+    return false;
+  }
+  p.signal_pool = std::move(pool);
+  p.signal_post_idx = 0;
+  return true;
+}
+
+void RdmaTransportAdapter::destroy_signal_qp(RdmaPeer& p) {
+  if (p.signal_pool && p.signal_pool->mr) {
+    ibv_dereg_mr(p.signal_pool->mr);
+  }
+  p.signal_pool.reset();
+  if (p.signal_qp) {
+    ibv_destroy_qp(p.signal_qp);
+    p.signal_qp = nullptr;
+  }
+  if (p.signal_cq) {
+    ibv_destroy_cq(p.signal_cq);
+    p.signal_cq = nullptr;
+  }
+}
+
+bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
+  if (!p.signal_pool) return false;
+  int idx = p.signal_post_idx;
+  static constexpr int kSignalPoolSz = 16;
+  p.signal_pool->wrs[idx].next = nullptr;
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(p.signal_qp, &p.signal_pool->wrs[idx], &bad) != 0)
+    return false;
+  p.signal_post_idx = (idx + 1) % kSignalPoolSz;
+  return true;
+}
+
 // ── peer init / destroy ─────────────────────────────────────────────────────
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
@@ -303,7 +448,8 @@ bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   return create_qp_set(p.send_qps, &p.send_cq, p.num_qps, cq_size) &&
          create_qp_set(p.recv_qps, &p.recv_cq, p.num_qps, cq_size) &&
          qps_to_init(p.send_qps, p.num_qps) &&
-         qps_to_init(p.recv_qps, p.num_qps);
+         qps_to_init(p.recv_qps, p.num_qps) &&
+         create_signal_qp(p);
 }
 
 void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
@@ -329,6 +475,7 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
     ibv_destroy_cq(p.recv_cq);
     p.recv_cq = nullptr;
   }
+  destroy_signal_qp(p);
 }
 
 // ── recv pools ───────────────────────────────────────────────────────────────
@@ -405,6 +552,7 @@ RdmaConnectInit RdmaTransportAdapter::get_connect_init(int peer_rank) {
           init.send_qpns[i] = p->send_qps[i]->qp_num;
           init.recv_qpns[i] = p->recv_qps[i]->qp_num;
         }
+        init.signal_qpn = p->signal_qp ? p->signal_qp->qp_num : 0;
         peers_[peer_rank] = std::move(p);
       }
     } else if (it->second->qps_in_init) {
@@ -412,6 +560,7 @@ RdmaConnectInit RdmaTransportAdapter::get_connect_init(int peer_rank) {
         init.send_qpns[i] = it->second->send_qps[i]->qp_num;
         init.recv_qpns[i] = it->second->recv_qps[i]->qp_num;
       }
+      init.signal_qpn = it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
     }
   }
   return init;
@@ -485,8 +634,12 @@ bool RdmaTransportAdapter::do_connect(int rank,
   memcpy(p->remote_recv_qpns, remote.remote_recv_qpns,
          sizeof(p->remote_recv_qpns));
   p->remote_lid = remote.remote_lid;
+  memcpy(p->remote_gid.raw, remote.remote_gid_raw.data(),
+         sizeof(p->remote_gid.raw));
+  p->remote_gid_index = remote.remote_gid_index;
   p->remote_signal_addr = remote.remote_signal_addr;
   p->remote_signal_rkey = remote.remote_signal_rkey;
+  p->remote_signal_qpn = remote.remote_signal_qpn;
 
   if (!qps_to_rtr(p->send_qps, p->num_qps, remote, true)) return false;
   if (!qps_to_rts(p->send_qps, p->num_qps)) return false;
@@ -494,6 +647,12 @@ bool RdmaTransportAdapter::do_connect(int rank,
   if (!qps_to_rtr(p->recv_qps, p->num_qps, remote, false)) return false;
   if (!qps_to_rts(p->recv_qps, p->num_qps)) return false;
   if (!p->wait_ready && !init_recv_pools(*p)) return false;
+
+  if (!p->signal_qp) {
+    if (!create_signal_qp(*p)) return false;
+  }
+  if (!connect_signal_qp(*p, p->remote_signal_qpn)) return false;
+  if (!p->signal_pool && !init_signal_pool(*p)) return false;
 
   p->put_ready = true;
   p->wait_ready = true;
@@ -545,6 +704,7 @@ bool RdmaTransportAdapter::do_accept(int rank,
   p->remote_gid_index = remote.remote_gid_index;
   p->remote_signal_addr = remote.remote_signal_addr;
   p->remote_signal_rkey = remote.remote_signal_rkey;
+  p->remote_signal_qpn = remote.remote_signal_qpn;
 
   if (!qps_to_rtr(p->send_qps, p->num_qps, remote, true)) return false;
   if (!qps_to_rts(p->send_qps, p->num_qps)) return false;
@@ -552,6 +712,12 @@ bool RdmaTransportAdapter::do_accept(int rank,
   if (!qps_to_rtr(p->recv_qps, p->num_qps, remote, false)) return false;
   if (!qps_to_rts(p->recv_qps, p->num_qps)) return false;
   if (!p->wait_ready && !init_recv_pools(*p)) return false;
+
+  if (!p->signal_qp) {
+    if (!create_signal_qp(*p)) return false;
+  }
+  if (!connect_signal_qp(*p, p->remote_signal_qpn)) return false;
+  if (!p->signal_pool && !init_signal_pool(*p)) return false;
 
   p->put_ready = true;
   p->wait_ready = true;
@@ -719,7 +885,6 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
                                   static_cast<uintptr_t>(msg_id) * 8);
   *tag_addr = tag;
 
-  int q = select_qp(*p, 0);
   uint32_t imm = imm_encode(msg_id, 0, 0);
 
   ibv_sge sge = {};
@@ -739,13 +904,12 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
   wr.wr.rdma.rkey = p->remote_signal_rkey;
 
   ibv_send_wr* bad = nullptr;
-  if (ibv_post_send(p->send_qps[q], &wr, &bad) != 0) {
+  if (ibv_post_send(p->signal_qp, &wr, &bad) != 0) {
     slot->failed.store(true, std::memory_order_release);
     slot->completed.store(true, std::memory_order_release);
     return rid;
   }
 
-  p->rtt_tracker[q].last_send_ns.store(now_ns(), std::memory_order_release);
   return rid;
 }
 
@@ -867,7 +1031,8 @@ void RdmaTransportAdapter::poll_loop() {
     {
       std::lock_guard<std::mutex> lk(mu_);
       for (auto& [rank, p] : peers_) {
-        if (p->send_cq || p->recv_cq) active.push_back({rank, p.get()});
+        if (p->send_cq || p->recv_cq || p->signal_cq)
+          active.push_back({rank, p.get()});
       }
     }
 
@@ -878,6 +1043,8 @@ void RdmaTransportAdapter::poll_loop() {
         any = true;
       if (p->recv_cq &&
           poll_cq_set(*p, rank, p->recv_cq, p->recv_qps, p->num_qps, true))
+        any = true;
+      if (p->signal_cq && poll_signal_cq(*p, rank))
         any = true;
       check_dispatch(*p, rank);
     }
@@ -958,6 +1125,59 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
       case IBV_WC_RECV: {
         int qp = find_qp_idx(qps, qp_count, wc.qp_num);
         if (qp >= 0) repost_one_recv(p, qp);
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+  return any;
+}
+
+bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
+  ibv_wc wc;
+  bool any = false;
+  while (ibv_poll_cq(p.signal_cq, 1, &wc) > 0) {
+    any = true;
+    if (wc.status != IBV_WC_SUCCESS) {
+      if (wc.opcode == IBV_WC_RECV ||
+          wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        repost_signal_recv(p);
+      }
+      unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
+      RequestSlot* s = resolve_slot(rid);
+      if (s && !s->completed.load(std::memory_order_acquire)) {
+        s->failed.store(true, std::memory_order_release);
+        s->completed.store(true, std::memory_order_release);
+      }
+      cv_.notify_all();
+      continue;
+    }
+
+    switch (wc.opcode) {
+      case IBV_WC_RDMA_WRITE: {
+        unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
+        RequestSlot* s = resolve_slot(rid);
+        if (s) {
+          s->completed.store(true, std::memory_order_release);
+        }
+        cv_.notify_all();
+        break;
+      }
+
+      case IBV_WC_RECV_RDMA_WITH_IMM: {
+        repost_signal_recv(p);
+        uint32_t imm = wc.imm_data;
+        uint8_t msg_id = imm_msg_id(imm);
+        auto& t = p.trackers[msg_id];
+        t.completed.store(true, std::memory_order_release);
+        check_dispatch(p, rank);
+        break;
+      }
+
+      case IBV_WC_RECV: {
+        repost_signal_recv(p);
         break;
       }
 
