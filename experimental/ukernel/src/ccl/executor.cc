@@ -14,6 +14,10 @@ bool is_remote_ref(BufferRef const& ref) {
   return ref.kind == BufferKind::Remote;
 }
 
+bool is_device_op(ExecOpKind kind) {
+  return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
+}
+
 void validate_local_span(char const* what, size_t offset, size_t bytes,
                          size_t capacity) {
   if (offset > capacity || bytes > capacity - offset) {
@@ -152,7 +156,7 @@ CollectiveOpHandle Executor::Impl::submit(
   detail::HandleState state;
   state.exec_plan = std::move(exec_plan);
   state.runtime_binding = std::move(runtime_binding);
-  state.status = CollectiveOpStatus::Queued;
+  state.status.store(CollectiveOpStatus::Queued);
   state.op_states.resize(state.exec_plan.ops.size());
 
   for (size_t index = 0; index < state.exec_plan.ops.size(); ++index) {
@@ -200,12 +204,18 @@ CollectiveOpHandle Executor::Impl::submit(
 
 bool Executor::Impl::poll(CollectiveOpHandle handle) {
   std::lock_guard<std::mutex> lock(mu);
-  return detail::is_terminal(get_locked(handle).status);
+  auto it = handles.find(handle.value);
+  if (it == handles.end()) return true;
+  return detail::is_terminal(it->second.status.load());
 }
 
 void Executor::Impl::wait(CollectiveOpHandle handle) {
   std::unique_lock<std::mutex> lock(mu);
-  cv.wait(lock, [&] { return detail::is_terminal(get_locked(handle).status); });
+  cv.wait(lock, [&] {
+    auto it = handles.find(handle.value);
+    return it == handles.end() ||
+           detail::is_terminal(it->second.status.load());
+  });
 }
 
 void Executor::Impl::release(CollectiveOpHandle handle) {
@@ -213,8 +223,8 @@ void Executor::Impl::release(CollectiveOpHandle handle) {
   auto it = handles.find(handle.value);
   if (it == handles.end()) return;
   if (active_handle == handle.value ||
-      it->second.status == CollectiveOpStatus::Queued ||
-      it->second.status == CollectiveOpStatus::Running) {
+      it->second.status.load() == CollectiveOpStatus::Queued ||
+      it->second.status.load() == CollectiveOpStatus::Running) {
     throw std::runtime_error(
         "cannot release a collective that is still queued or running");
   }
@@ -223,18 +233,24 @@ void Executor::Impl::release(CollectiveOpHandle handle) {
 
 CollectiveOpStatus Executor::Impl::status(CollectiveOpHandle handle) const {
   std::lock_guard<std::mutex> lock(mu);
-  return get_locked_const(handle).status;
+  auto it = handles.find(handle.value);
+  if (it == handles.end()) return CollectiveOpStatus::Completed;
+  return it->second.status.load();
 }
 
 std::string Executor::Impl::error_message(CollectiveOpHandle handle) const {
   std::lock_guard<std::mutex> lock(mu);
-  return get_locked_const(handle).error;
+  auto it = handles.find(handle.value);
+  if (it == handles.end()) return {};
+  return it->second.error;
 }
 
 size_t Executor::Impl::inflight_steps(CollectiveOpHandle handle) const {
   std::lock_guard<std::mutex> lock(mu);
+  auto it = handles.find(handle.value);
+  if (it == handles.end()) return 0;
   size_t inflight = 0;
-  for (auto const& op_state : get_locked_const(handle).op_states) {
+  for (auto const& op_state : it->second.op_states) {
     if (op_state.inflight.backend != nullptr) {
       ++inflight;
     }
@@ -244,47 +260,60 @@ size_t Executor::Impl::inflight_steps(CollectiveOpHandle handle) const {
 
 void Executor::Impl::progress_loop() {
   while (true) {
-    std::unique_lock<std::mutex> lock(mu);
-    cv.wait(lock, [&] {
-      return stop_requested || active_handle != 0 || !pending_handles.empty();
-    });
-    if (stop_requested) {
-      return;
-    }
+    detail::HandleState* state_ptr = nullptr;
+    {
+      std::unique_lock<std::mutex> lock(mu);
+      if (!stop_requested && active_handle == 0 &&
+          pending_handles.empty()) {
+        cv.wait(lock, [&] {
+          return stop_requested || !pending_handles.empty();
+        });
+      }
+      if (stop_requested) {
+        return;
+      }
 
-    if (active_handle == 0) {
-      start_next_collective_locked();
+      if (active_handle == 0) {
+        start_next_collective_locked();
+      }
+      if (active_handle == 0) continue;
+
+      state_ptr = &handles.at(active_handle);
     }
 
     bool progress = false;
     try {
-      progress = progress_active_collective_locked();
+      progress = progress_active_collective(*state_ptr);
     } catch (std::exception const& ex) {
-      fail_active_collective_locked(ex.what());
-      progress = true;
+      {
+        std::lock_guard<std::mutex> lock(mu);
+        fail_active_collective_locked(ex.what());
+      }
+      continue;
     } catch (...) {
-      fail_active_collective_locked(
-          "executor progress loop hit unknown exception");
-      progress = true;
+      {
+        std::lock_guard<std::mutex> lock(mu);
+        fail_active_collective_locked(
+            "executor progress loop hit unknown exception");
+      }
+      continue;
     }
 
-    if (active_handle != 0) {
-      detail::HandleState& state = handles.at(active_handle);
-      if (detail::is_terminal(state.status)) {
-        if (state.status == CollectiveOpStatus::Failed &&
-            !state.error.empty()) {
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      if (active_handle != 0 &&
+          detail::is_terminal(state_ptr->status.load())) {
+        if (state_ptr->status.load() == CollectiveOpStatus::Failed &&
+            !state_ptr->error.empty()) {
           std::fprintf(stderr,
                        "[ccl executor] collective %" PRIu64 " failed: %s\n",
-                       active_handle, state.error.c_str());
+                       active_handle, state_ptr->error.c_str());
         }
-        active_handle = 0;
-        cv.notify_all();
         continue;
       }
     }
 
     if (!progress) {
-      lock.unlock();
       std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
   }
@@ -298,20 +327,16 @@ void Executor::Impl::start_next_collective_locked() {
     if (it == handles.end()) {
       continue;
     }
-    it->second.status = CollectiveOpStatus::Running;
+    it->second.status.store(CollectiveOpStatus::Running);
     active_handle = handle_value;
     cv.notify_all();
     return;
   }
 }
 
-bool Executor::Impl::progress_active_collective_locked() {
-  if (active_handle == 0) {
-    return false;
-  }
-
-  detail::HandleState& state = handles.at(active_handle);
-  if (detail::is_terminal(state.status)) {
+bool Executor::Impl::progress_active_collective(
+    detail::HandleState& state) {
+  if (detail::is_terminal(state.status.load())) {
     return true;
   }
 
@@ -324,24 +349,29 @@ bool Executor::Impl::progress_active_collective_locked() {
   }
   progress |= completion_progress;
 
-  if (completion_progress && state.status == CollectiveOpStatus::Running) {
+  if (completion_progress || !state.ready_ops.empty()) {
     progress |= drive_ready_ops_locked(state);
   }
 
-  maybe_quiesce_backends_locked(state);
-
   if (state.completed_ops == state.exec_plan.ops.size()) {
-    stop_device_flows_locked(state);
-    state.status = CollectiveOpStatus::Completed;
-    cv.notify_all();
+    state.status.store(CollectiveOpStatus::Completed);
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      active_handle = 0;
+      cv.notify_all();
+    }
     return true;
   }
 
-  if (state.status == CollectiveOpStatus::Running && state.ready_ops.empty() &&
-      state.inflight_lookup.empty()) {
-    state.status = CollectiveOpStatus::Failed;
+  if (state.status.load() == CollectiveOpStatus::Running &&
+      state.ready_ops.empty() && state.inflight_lookup.empty()) {
+    state.status.store(CollectiveOpStatus::Failed);
     state.error = "collective stalled with no ready or inflight ops";
-    cv.notify_all();
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      active_handle = 0;
+      cv.notify_all();
+    }
     return true;
   }
 
@@ -350,12 +380,30 @@ bool Executor::Impl::progress_active_collective_locked() {
 
 bool Executor::Impl::drive_ready_ops_locked(detail::HandleState& state) {
   bool progress = false;
+  constexpr uint32_t kMaxBatch = 8;
+  uint32_t count = 0;
+  std::deque<uint32_t> retry;
+
   while (!state.ready_ops.empty() &&
-         state.status == CollectiveOpStatus::Running) {
+         state.status.load() == CollectiveOpStatus::Running &&
+         count < kMaxBatch) {
     uint32_t op_id = state.ready_ops.front();
     state.ready_ops.pop_front();
-    submit_ready_op_locked(state, op_id);
-    progress = true;
+
+    if (!submit_ready_op_locked(state, op_id)) {
+      retry.push_back(op_id);
+      if (is_device_op(state.exec_plan.ops[op_id].kind)) {
+        break;
+      }
+    } else {
+      progress = true;
+      ++count;
+    }
+  }
+
+  while (!retry.empty()) {
+    state.ready_ops.push_front(retry.back());
+    retry.pop_back();
   }
   return progress;
 }
@@ -394,28 +442,28 @@ void Executor::Impl::maybe_quiesce_backends_locked(
   }
 }
 
-void Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
+bool Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
                                             uint32_t op_id) {
   if (op_id >= state.op_states.size()) {
-    state.status = CollectiveOpStatus::Failed;
+    state.status.store(CollectiveOpStatus::Failed);
     state.error = "ready op id out of range";
-    cv.notify_all();
-    return;
+    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
+    return false;
   }
 
   detail::OpState& op_state = state.op_states[op_id];
   if (op_state.completed || op_state.submitted ||
       op_state.remaining_deps != 0) {
-    return;
+    return false;
   }
 
   ExecOp const& op = state.exec_plan.ops[op_id];
   Backend* backend = detail::pick_backend(backends, op.kind);
   if (backend == nullptr || !backend->supports(op.kind)) {
-    state.status = CollectiveOpStatus::Failed;
+    state.status.store(CollectiveOpStatus::Failed);
     state.error = "no backend available for ready execution op";
-    cv.notify_all();
-    return;
+    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
+    return false;
   }
 
   BackendToken token{};
@@ -428,10 +476,16 @@ void Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
   } else {
     token = backend->submit(op, *state.runtime_binding);
   }
+
+  if (token.value == 0) {
+    return false;
+  }
+
   op_state.submitted = true;
   op_state.inflight.backend = backend;
   op_state.inflight.token = token;
   state.inflight_lookup[detail::inflight_key(backend, token)] = op_id;
+  return true;
 }
 
 bool Executor::Impl::drain_backend_completions_locked(
@@ -457,7 +511,7 @@ bool Executor::Impl::poll_inflight_locked(detail::HandleState& state) {
     if (!op_state.inflight.backend->poll(op_state.inflight.token)) continue;
     complete_inflight_locked(state, op_id);
     progress = true;
-    if (state.status == CollectiveOpStatus::Failed) return true;
+    if (state.status.load() == CollectiveOpStatus::Failed) return true;
   }
   return progress;
 }
@@ -473,9 +527,9 @@ bool Executor::Impl::complete_inflight_by_token_locked(
 void Executor::Impl::complete_inflight_locked(detail::HandleState& state,
                                               uint32_t op_id) {
   if (op_id >= state.op_states.size()) {
-    state.status = CollectiveOpStatus::Failed;
+    state.status.store(CollectiveOpStatus::Failed);
     state.error = "completion op id out of range";
-    cv.notify_all();
+    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
     return;
   }
 
@@ -491,22 +545,26 @@ void Executor::Impl::complete_inflight_locked(detail::HandleState& state,
 
   for (uint32_t successor : op_state.successors) {
     if (successor >= state.op_states.size()) {
-      state.status = CollectiveOpStatus::Failed;
+      state.status.store(CollectiveOpStatus::Failed);
       state.error = "successor op id out of range";
-      cv.notify_all();
+      { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
       return;
     }
     detail::OpState& successor_state = state.op_states[successor];
     if (successor_state.remaining_deps == 0) {
-      state.status = CollectiveOpStatus::Failed;
+      state.status.store(CollectiveOpStatus::Failed);
       state.error = "dependency underflow while completing op";
-      cv.notify_all();
+      { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
       return;
     }
     --successor_state.remaining_deps;
     if (successor_state.remaining_deps == 0 && !successor_state.submitted &&
         !successor_state.completed) {
-      state.ready_ops.push_back(successor);
+      if (is_device_op(state.exec_plan.ops[successor].kind)) {
+        submit_ready_op_locked(state, successor);
+      } else {
+        state.ready_ops.push_back(successor);
+      }
     }
   }
 }
@@ -529,8 +587,9 @@ void Executor::Impl::fail_active_collective_locked(std::string message) {
   }
   detail::HandleState& state = handles.at(active_handle);
   cleanup_inflight_locked(state);
-  state.status = CollectiveOpStatus::Failed;
+  state.status.store(CollectiveOpStatus::Failed);
   state.error = std::move(message);
+  active_handle = 0;
   cv.notify_all();
 }
 

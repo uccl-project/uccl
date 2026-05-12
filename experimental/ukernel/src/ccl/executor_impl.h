@@ -1,6 +1,7 @@
 #pragma once
 
 #include "executor.h"
+#include <atomic>
 #include <chrono>
 #include <cinttypes>
 #include <condition_variable>
@@ -35,12 +36,36 @@ struct OpState {
 struct HandleState {
   ExecutionPlan exec_plan;
   std::shared_ptr<CollectiveBinding> runtime_binding;
-  CollectiveOpStatus status = CollectiveOpStatus::Queued;
+  std::atomic<CollectiveOpStatus> status{CollectiveOpStatus::Queued};
   std::vector<OpState> op_states;
   std::unordered_map<uint64_t, uint32_t> inflight_lookup;
   std::deque<uint32_t> ready_ops;
   size_t completed_ops = 0;
   std::string error;
+
+  HandleState() = default;
+  HandleState(HandleState&& other) noexcept
+      : exec_plan(std::move(other.exec_plan)),
+        runtime_binding(std::move(other.runtime_binding)),
+        status(other.status.load()),
+        op_states(std::move(other.op_states)),
+        inflight_lookup(std::move(other.inflight_lookup)),
+        ready_ops(std::move(other.ready_ops)),
+        completed_ops(other.completed_ops),
+        error(std::move(other.error)) {}
+  HandleState& operator=(HandleState&& other) noexcept {
+    if (this != &other) {
+      exec_plan = std::move(other.exec_plan);
+      runtime_binding = std::move(other.runtime_binding);
+      status.store(other.status.load());
+      op_states = std::move(other.op_states);
+      inflight_lookup = std::move(other.inflight_lookup);
+      ready_ops = std::move(other.ready_ops);
+      completed_ops = other.completed_ops;
+      error = std::move(other.error);
+    }
+    return *this;
+  }
 };
 
 inline bool is_terminal(CollectiveOpStatus status) {
@@ -80,6 +105,10 @@ inline void validate_backends(std::vector<Backend*> const& backends,
 
 inline bool is_transport_op(ExecOpKind kind) {
   return kind == ExecOpKind::TransportSend || kind == ExecOpKind::TransportRecv;
+}
+
+inline bool is_device_op(ExecOpKind kind) {
+  return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
 }
 
 inline Backend* pick_backend(ExecutorBackends const& backends,
@@ -129,11 +158,11 @@ struct Executor::Impl {
 
   void progress_loop();
   void start_next_collective_locked();
-  bool progress_active_collective_locked();
+  bool progress_active_collective(detail::HandleState& state);
   bool drive_ready_ops_locked(detail::HandleState& state);
   void maybe_quiesce_backends_locked(detail::HandleState const& state);
   void stop_device_flows_locked(detail::HandleState& state);
-  void submit_ready_op_locked(detail::HandleState& state, uint32_t op_id);
+  bool submit_ready_op_locked(detail::HandleState& state, uint32_t op_id);
   bool drain_backend_completions_locked(detail::HandleState& state);
   bool poll_inflight_locked(detail::HandleState& state);
   bool complete_inflight_by_token_locked(detail::HandleState& state,

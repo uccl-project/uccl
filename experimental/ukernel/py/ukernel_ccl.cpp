@@ -250,6 +250,30 @@ struct InflightCollective {
   torch::Tensor staging_tensor;
 };
 
+size_t plan_cache_key(CollectiveKind collective,
+                      CollectiveConfig const& config, bool inplace) {
+  size_t h = 0;
+  auto combine = [&h](auto v) {
+    h ^= std::hash<decltype(v)>{}(v) + 0x9e3779b97f4a7c15ULL +
+         (h << 6) + (h >> 2);
+  };
+  combine(static_cast<uint32_t>(collective));
+  combine(static_cast<uint32_t>(config.algorithm));
+  combine(config.nranks);
+  combine(config.rank);
+  combine(config.num_flows);
+  combine(config.tensor_bytes);
+  combine(config.input_bytes);
+  combine(config.output_bytes);
+  combine(config.tile_bytes);
+  combine(static_cast<uint32_t>(config.dtype));
+  combine(static_cast<uint32_t>(config.reduction));
+  combine(inplace ? 1u : 0u);
+  for (auto v : config.input_split_bytes) combine(v);
+  for (auto v : config.output_split_bytes) combine(v);
+  return h;
+}
+
 }  // namespace
 
 class ProcessGroup {
@@ -460,8 +484,16 @@ class ProcessGroup {
         resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
     CollectiveBufferRoles roles{input_id, output_id, staging_id};
 
-    CollectivePlan plan = build_plan(
-        make_plan_request(CollectiveKind::AllToAll, config, inplace));
+    size_t key = plan_cache_key(CollectiveKind::AllToAll, config, inplace);
+    CollectivePlan plan;
+    auto cache_it = plan_cache_.find(key);
+    if (cache_it != plan_cache_.end()) {
+      plan = cache_it->second;
+    } else {
+      plan = build_plan(
+          make_plan_request(CollectiveKind::AllToAll, config, inplace));
+      plan_cache_[key] = plan;
+    }
 
     if (!binding_state_.matches(input_work.work_flat.data_ptr(), input_bytes,
                                 input_dtype, output_work.work_flat.data_ptr(),
@@ -701,8 +733,15 @@ class ProcessGroup {
         resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
     CollectiveBufferRoles roles{input_id, input_id, staging_id};
 
-    CollectivePlan plan =
-        build_plan(make_plan_request(collective, config, /*inplace=*/true));
+    size_t key = plan_cache_key(collective, config, /*inplace=*/true);
+    CollectivePlan plan;
+    auto cache_it = plan_cache_.find(key);
+    if (cache_it != plan_cache_.end()) {
+      plan = cache_it->second;
+    } else {
+      plan = build_plan(make_plan_request(collective, config, /*inplace=*/true));
+      plan_cache_[key] = plan;
+    }
 
     if (!binding_state_.matches(work.work_flat.data_ptr(), tensor_bytes, dtype,
                                 work.work_flat.data_ptr(), tensor_bytes, dtype,
@@ -766,6 +805,7 @@ class ProcessGroup {
   torch::Tensor staging_tensor_;
   torch::Tensor barrier_tensor_;
   BindingState binding_state_{};
+  std::unordered_map<size_t, CollectivePlan> plan_cache_;
   std::unordered_map<uint64_t, InflightCollective> inflight_;
   std::mutex mu_;
 };

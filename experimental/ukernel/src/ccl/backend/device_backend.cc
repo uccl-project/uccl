@@ -3,10 +3,8 @@
 #include "../../device/worker.h"
 #include "../../include/gpu_rt.h"
 #include <algorithm>
-#include <chrono>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace UKernel {
@@ -170,19 +168,11 @@ BackendToken DeviceBackend::submit(ExecOp const& op,
   Device::Task task =
       Device::TaskManager::instance().create_task(args, task_type, dtype, 0);
 
-  uint64_t task_id = Device::WorkerPool::kInvalidTaskId;
-  for (int retry = 0;
-       retry < 1000 && task_id == Device::WorkerPool::kInvalidTaskId; ++retry) {
-    task_id = worker_pool_->enqueue(task, fifo_id);
-    if (task_id == Device::WorkerPool::kInvalidTaskId) {
-      std::this_thread::sleep_for(std::chrono::microseconds(5));
-    }
-  }
+  uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
   if (task_id == Device::WorkerPool::kInvalidTaskId) {
     active_flows_[flow_id].inflight--;
-    stop_flow(flow_id);
     Device::TaskManager::instance().free_task_args(task.args_index());
-    throw std::runtime_error("device backend failed to enqueue task");
+    return BackendToken{0};
   }
 
   BackendToken token{next_token_++};
@@ -228,15 +218,11 @@ void DeviceBackend::release(BackendToken token) {
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return;
   uint32_t flow_id = it->second.flow_id;
-  bool const completed = it->second.args_released;
   submitted_.erase(it);
   auto flow_it = active_flows_.find(flow_id);
   if (flow_it == active_flows_.end()) return;
   if (flow_it->second.inflight > 0) {
     --flow_it->second.inflight;
-  }
-  if (!completed && flow_it->second.inflight == 0) {
-    stop_flow(flow_id);
   }
 }
 
