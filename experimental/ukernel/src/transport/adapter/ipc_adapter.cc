@@ -433,7 +433,8 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
                                       ipc_streams_[i]));
     }
   }
-  for (auto& s : ipc_streams_) GPU_RT_CHECK(gpuStreamSynchronize(s));
+  // Only synchronize streams that were actually used for this transfer.
+  for (size_t i = 0; i < n_streams; ++i) GPU_RT_CHECK(gpuStreamSynchronize(ipc_streams_[i]));
 
   // payload=0 means data is already in receiver's GPU buffer.
   if (!shm_control_->send_ack(to_rank, creq->match_seq, 0)) {
