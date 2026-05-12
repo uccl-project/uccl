@@ -178,6 +178,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<bool> failed{false};
     uint32_t total_chunks = 0;
     std::atomic<uint32_t> completed_chunks{0};
+    uint32_t regular_chunk_size = 0;
+    uint32_t last_chunk_size = 0;
   };
 
   static constexpr uint32_t kSlotBits = 13;
