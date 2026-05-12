@@ -30,8 +30,7 @@ struct IpcDataCompletion {
 
 class IpcAdapter final : public TransportAdapter {
  public:
-  IpcAdapter(Communicator* comm, std::string ring_namespace,
-             int local_gpu_idx);
+  IpcAdapter(Communicator* comm, std::string ring_namespace, int local_gpu_idx);
   ~IpcAdapter() override;
   void shutdown();
 

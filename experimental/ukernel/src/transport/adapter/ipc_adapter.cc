@@ -106,8 +106,8 @@ void IpcAdapter::shutdown() {
 // ── Data-completion SHM (fast path for IPC GPU data transfers) ───────────
 
 std::string IpcAdapter::completion_shm_name(int peer_rank) const {
-  return Format("/uk_cmpl_%s_p%d_p%d", ring_namespace_.c_str(),
-                peer_rank, comm_->rank());
+  return Format("/uk_cmpl_%s_p%d_p%d", ring_namespace_.c_str(), peer_rank,
+                comm_->rank());
 }
 
 bool IpcAdapter::ensure_local_completion(int peer_rank) {
@@ -139,8 +139,8 @@ bool IpcAdapter::ensure_remote_completion(int peer_rank) {
 
   // The remote completion SHM is the peer's *local* completion — the
   // peer created it with itself as receiver.
-  std::string remote_name = Format("/uk_cmpl_%s_p%d_p%d",
-      ring_namespace_.c_str(), comm_->rank(), peer_rank);
+  std::string remote_name = Format(
+      "/uk_cmpl_%s_p%d_p%d", ring_namespace_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   size_t sz = sizeof(IpcDataCompletion);
   while (true) {
@@ -181,13 +181,9 @@ void IpcAdapter::close_completion(int peer_rank) {
 
 // ── Connection / path state ────────────────────────────────────────────────
 
-bool IpcAdapter::connect_to(int rank) {
-  return ensure_remote_completion(rank);
-}
+bool IpcAdapter::connect_to(int rank) { return ensure_remote_completion(rank); }
 
-bool IpcAdapter::accept_from(int rank) {
-  return ensure_local_completion(rank);
-}
+bool IpcAdapter::accept_from(int rank) { return ensure_local_completion(rank); }
 
 bool IpcAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   if (spec.peer_rank < 0) return false;
@@ -464,25 +460,30 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
     int remote_gpu = comm_->peer_gpu_idx(to_rank);
     if (remote_gpu < 0) remote_gpu = local_gpu_idx_;
 
-    size_t n_streams = std::min(
-        ipc_streams_.size(),
-        creq->size_bytes < kIpcSizePerEngine
-            ? size_t{1}
-            : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
+    size_t n_streams =
+        std::min(ipc_streams_.size(),
+                 creq->size_bytes < kIpcSizePerEngine
+                     ? size_t{1}
+                     : std::max<size_t>(size_t{1},
+                                        creq->size_bytes / kIpcSizePerEngine));
     size_t chunk = creq->size_bytes / n_streams;
     for (size_t i = 0; i < n_streams; ++i) {
-      void* cs = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
-      void* cd = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
+      void* cs =
+          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
+      void* cd =
+          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
       size_t sz = (i == n_streams - 1) ? creq->size_bytes - i * chunk : chunk;
       if (remote_gpu == local_gpu_idx_) {
-        GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice, ipc_streams_[i]));
+        GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice,
+                                    ipc_streams_[i]));
       } else {
         GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
-                                         ipc_streams_[i]));
+                                        ipc_streams_[i]));
       }
       GPU_RT_CHECK(gpuEventRecord(ipc_events_[i], ipc_streams_[i]));
     }
-    for (size_t i = 0; i < n_streams; ++i) GPU_RT_CHECK(gpuEventSynchronize(ipc_events_[i]));
+    for (size_t i = 0; i < n_streams; ++i)
+      GPU_RT_CHECK(gpuEventSynchronize(ipc_events_[i]));
   }
 
   // Publish completion to the peer's data-completion SHM counter.

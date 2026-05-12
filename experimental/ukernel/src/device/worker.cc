@@ -295,10 +295,10 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
 
   if (worker.numBlocks == 1) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,
-                                  block, args_single, smem_size, worker.stream));
+                                 block, args_single, smem_size, worker.stream));
   } else {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
-                                  block, args_multi, smem_size, worker.stream));
+                                 block, args_multi, smem_size, worker.stream));
   }
   GPU_RT_CHECK(gpuGetLastError());
 
