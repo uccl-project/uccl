@@ -645,8 +645,6 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   slot->total_chunks = ck.count;
   slot->completed_chunks.store(0, std::memory_order_release);
 
-  uint8_t msg_id = p->next_msg_id++ & kMsgIdMask;
-
   size_t off = 0;
   for (uint32_t ci = 0; ci < ck.count; ++ci) {
     uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.regular_size;
@@ -662,8 +660,6 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
       });
     }
 
-    uint32_t imm = imm_encode(msg_id, static_cast<uint8_t>(ck.count),
-                              static_cast<uint16_t>(ci));
     uint64_t wr_id = (static_cast<uint64_t>(rid) << 32) | ci;
 
     ibv_sge sge = {};
@@ -676,9 +672,8 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     wr.wr_id = wr_id;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.opcode = IBV_WR_RDMA_WRITE;
     wr.send_flags = IBV_SEND_SIGNALED;
-    wr.imm_data = imm;
     wr.wr.rdma.remote_addr = raddr + off;
     wr.wr.rdma.rkey = rkey;
 
@@ -951,18 +946,10 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
 
         uint32_t imm = wc.imm_data;
         uint8_t msg_id = imm_msg_id(imm);
-        uint8_t total = imm_total(imm);
 
+        // Only signal IMMs arrive (total=0); data WRs use plain RDMA_WRITE
         auto& t = p.trackers[msg_id];
-        if (total == 0) {
-          t.completed.store(true, std::memory_order_release);
-        } else {
-          if (t.total == 0) t.total = total;
-          t.done++;
-          if (t.done >= t.total) {
-            t.completed.store(true, std::memory_order_release);
-          }
-        }
+        t.completed.store(true, std::memory_order_release);
 
         check_dispatch(p, rank);
         break;
