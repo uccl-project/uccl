@@ -3,6 +3,7 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#include <infiniband/verbs.h>
 #ifdef USE_DMABUF
 #include <condition_variable>
 #include <map>
@@ -33,6 +34,7 @@
 #include <immintrin.h>
 #endif
 #include "bench_utils.hpp"
+#include "util/debug.h"
 #include "util/util.h"
 #include <atomic>
 #include <cassert>
@@ -879,6 +881,17 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   }
   return S.cq;
 #endif
+}
+
+ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S) {
+  // TODO(Shawn): check if there are different cases for EFA (which already has
+  // cq_ext)
+  S.comp_channel = ibv_create_comp_channel(S.context);
+  if (!S.comp_channel) {
+    UCCL_LOG(FATAL) << "Could not allocate completion channel";
+  }
+
+  return S.comp_channel;
 }
 
 #ifdef EFA

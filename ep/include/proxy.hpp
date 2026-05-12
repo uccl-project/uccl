@@ -23,6 +23,7 @@
 #include <deque>
 #include <set>
 #include <tuple>
+#include "adaptive_sleeper.hpp"
 
 struct PeerMeta {
   int rank;
@@ -87,9 +88,14 @@ class Proxy {
   CopyRingBuffer ring;
   Config cfg_;
 
+  void notify_proxy_thread_adaptive_sleeper() {
+    adaptive_sleeper_.maybe_wake_proxy_thread();
+  }
+
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
+  AdaptiveSleeper adaptive_sleeper_;
   void init_common();
   void init_sender();
   void init_remote();

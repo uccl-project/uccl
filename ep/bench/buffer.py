@@ -934,6 +934,9 @@ class Buffer:
 
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
+            for proxy in self.proxies:
+                proxy.notify_proxy_thread_adaptive_sleeper()
+
             return self.internode_dispatch(
                 x,
                 handle,
@@ -1256,6 +1259,9 @@ class Buffer:
 
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
+            for proxy in self.proxies:
+                proxy.notify_proxy_thread_adaptive_sleeper()
+
             return self.internode_combine(
                 x,
                 handle,

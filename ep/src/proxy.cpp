@@ -2,6 +2,7 @@
 #include "bench_utils.hpp"
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
+#include "rdma.hpp"
 #include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -188,7 +189,10 @@ void Proxy::init_common() {
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_numa_wrapper();
-  if (!get_cq(ctx_)) (void)create_per_thread_cq(ctx_);
+  if (!get_cq(ctx_)) {
+    (void)create_per_thread_cq(ctx_);
+    (void)create_per_thread_comp_channel(ctx_);
+  }
 
   // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
   // This must be done after PD is initialized by per_thread_rdma_init
@@ -571,6 +575,8 @@ void Proxy::run_dual() {
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
+    adaptive_sleeper_.maybe_sleep(ctx_);
+    
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,

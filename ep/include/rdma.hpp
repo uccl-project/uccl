@@ -358,6 +358,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           size_t num_rings, bool use_normal_mode,
                           void* atomic_buffer_ptr = nullptr);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
+ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
