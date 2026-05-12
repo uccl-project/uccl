@@ -459,7 +459,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
     uint32_t status = 0;
     uint64_t ack_seq = 0;
     if (shm_control_->recv_ack(from_rank, &status, &ack_seq,
-                               /*timeout_ms=*/50, creq->match_seq)) {
+                               /*timeout_ms=*/0, creq->match_seq)) {
       if (ack_seq == creq->match_seq) return true;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
@@ -467,7 +467,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
                 << " match_seq " << creq->match_seq << std::endl;
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::yield();
   }
   return false;
 }
