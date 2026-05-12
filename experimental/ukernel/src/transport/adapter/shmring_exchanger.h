@@ -51,6 +51,7 @@ class ShmRingExchanger {
 
   void close_peer(int peer_rank);
   bool is_peer_connected(int peer_rank) const;
+  std::string const& ring_namespace() const { return ring_namespace_; }
 
  private:
   struct ShmRingHandle {
