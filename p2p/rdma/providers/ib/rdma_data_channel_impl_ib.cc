@@ -8,7 +8,6 @@
 #include <cstring>
 
 #define GID_INDEX_DEFAULT 3
-#define MAX_INLINE_DATA 128
 #define SERVICE_LEVEL 3
 #define MIN_RNR_TIMER 12
 #define TRAFFIC_CLASS 104
@@ -46,7 +45,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   qp_attr.cap.max_recv_wr = kMaxRecvWr;
   qp_attr.cap.max_send_sge = kMaxSendSeg;
   qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-  qp_attr.cap.max_inline_data = getMaxInlineData();
+  qp_attr.cap.max_inline_data = 0;
 
   qp_attr.send_cq = ibv_cq_ex_to_cq(*cq_ex);
   qp_attr.recv_cq = ibv_cq_ex_to_cq(*cq_ex);
@@ -266,10 +265,6 @@ inline void IBChannelImpl::initPreAllocResources() {
     pre_alloc_recv_wrs_[i].next =
         (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
   }
-}
-
-inline uint32_t IBChannelImpl::getMaxInlineData() const {
-  return MAX_INLINE_DATA;
 }
 
 #endif  // RDMA_DATA_CHANNEL_IMPL_IB_CC_INCLUDED
