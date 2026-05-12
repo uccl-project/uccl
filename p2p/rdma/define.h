@@ -550,10 +550,10 @@ typedef struct RemoteMemInfo {
 } RemoteMemInfo;
 
 typedef struct RDMARecvRequest {
-  uint32_t from_rank_id;
-  uint32_t to_rank_id;
-  uint32_t channel_id;
-  int64_t wr_id;
+  uint32_t from_rank_id = INVALID_RANK_ID;
+  uint32_t to_rank_id = INVALID_RANK_ID;
+  uint32_t channel_id = 0;
+  int64_t wr_id = -1;
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RegMemBlock> local_compression_mem;
   CompressCtx compress_ctx;
@@ -717,12 +717,12 @@ enum class SendType { Send, Write, Read };
 struct RDMASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
-  uint32_t from_rank_id;
-  uint32_t to_rank_id;
-  uint32_t channel_id;
+  uint32_t from_rank_id = INVALID_RANK_ID;
+  uint32_t to_rank_id = INVALID_RANK_ID;
+  uint32_t channel_id = 0;
   ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
                          // index (low 16 bits)
-  int64_t wr_id;
+  int64_t wr_id = -1;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
   CompressCtx compress_ctx;

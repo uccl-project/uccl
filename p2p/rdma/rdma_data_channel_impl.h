@@ -87,8 +87,8 @@ class RDMADataChannelImpl {
   virtual void initPreAllocResources() = 0;
 
  protected:
-  struct ibv_recv_wr* pre_alloc_recv_wrs_;
-  uint32_t pending_post_recv_;
+  struct ibv_recv_wr* pre_alloc_recv_wrs_ = nullptr;
+  uint32_t pending_post_recv_ = 0;
 };
 
 // Forward declarations for implementations

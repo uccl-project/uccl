@@ -783,9 +783,8 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<bool> sent(num_iovs, false);
-  std::vector<bool> done(num_iovs, false);
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
   // Check if mhandles are all valid
@@ -797,31 +796,32 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
   }
 
-  while (1) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
-      if (!sent[i]) {
-        void* cur_data = (void*)data_v[i];
-        size_t cur_size = size_v[i];
+  size_t iov_issued = 0, iov_finished = 0;
 
-        auto mhandle = mhandles[i];
+  while (iov_finished < num_iovs) {
+    while (iov_issued < num_iovs &&
+           iov_issued - iov_finished < kMaxInflightOps) {
+      size_t slot = iov_issued % kMaxInflightOps;
+      void* cur_data = (void*)data_v[iov_issued];
+      size_t cur_size = size_v[iov_issued];
 
-        auto rc =
-            uccl_send_async(ep_, conn, mhandle, cur_data, cur_size, &ureq[i]);
-        if (rc != -1) {
-          sent[i] = true;
-        }
-      }
+      auto rc = uccl_send_async(ep_, conn, mhandles[iov_issued], cur_data,
+                                cur_size, &ureq[slot]);
+      if (rc == -1) break;
+      done[slot] = false;
+      iov_issued++;
+    }
 
-      if (sent[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
+    for (size_t i = iov_finished; i < iov_issued; i++) {
+      size_t slot = i % kMaxInflightOps;
+      if (done[slot]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
+        done[slot] = true;
       }
     }
 
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
+    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
+      iov_finished++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
@@ -868,9 +868,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<bool> done(num_iovs, false);
-  std::vector<bool> received(num_iovs, false);
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
   // Check if mhandles are all valid
@@ -881,34 +880,32 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       return false;
     }
   }
-  while (1) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
+  size_t iov_issued = 0, iov_finished = 0;
 
-      if (!received[i]) {
-        void* cur_data = data_v[i];
-        size_t cur_size = size_v[i];
+  while (iov_finished < num_iovs) {
+    while (iov_issued < num_iovs &&
+           iov_issued - iov_finished < kMaxInflightOps) {
+      size_t slot = iov_issued % kMaxInflightOps;
+      void* cur_data = data_v[iov_issued];
+      int size_int = static_cast<int>(size_v[iov_issued]);
 
-        auto mhandle = mhandles[i];
+      auto rc = uccl_recv_async(ep_, conn, mhandles[iov_issued], &cur_data,
+                                &size_int, 1, &ureq[slot]);
+      if (rc == -1) break;
+      done[slot] = false;
+      iov_issued++;
+    }
 
-        int size_int = static_cast<int>(cur_size);
-
-        auto rc = uccl_recv_async(ep_, conn, mhandle, &cur_data, &size_int, 1,
-                                  &ureq[i]);
-        if (rc != -1) {
-          received[i] = true;
-        }
-      }
-
-      if (received[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
+    for (size_t i = iov_finished; i < iov_issued; i++) {
+      size_t slot = i % kMaxInflightOps;
+      if (done[slot]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
+        done[slot] = true;
       }
     }
 
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
+    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
+      iov_finished++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
@@ -1036,40 +1033,45 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   ucclRequest ureq[kMaxInflightOps] = {};
-  bool done[kMaxInflightOps] = {false};
+  bool active[kMaxInflightOps] = {false};
 
-  size_t iov_issued = 0, iov_finished = 0;
+  size_t next_iov = 0;
+  size_t num_completed = 0;
+  size_t num_inflight = 0;
 
-  while (iov_finished < num_iovs) {
-    // Issue up to kMaxInflightOps IOVs
-    while (iov_issued < num_iovs &&
-           iov_issued - iov_finished < kMaxInflightOps) {
-      P2PMhandle* mhandle = get_mhandle(mr_id_v[iov_issued]);
+  while (num_completed < num_iovs) {
+    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+      size_t slot = 0;
+      while (slot < kMaxInflightOps && active[slot]) {
+        slot++;
+      }
+      UCCL_DCHECK(slot < kMaxInflightOps);
+
+      P2PMhandle* mhandle = get_mhandle(mr_id_v[next_iov]);
       if (unlikely(mhandle == nullptr)) {
-        std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[iov_issued]
+        std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[next_iov]
                   << std::endl;
         return false;
       }
 
-      auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[iov_issued],
-                                size_v[iov_issued], slot_item_v[iov_issued],
-                                &ureq[iov_issued % kMaxInflightOps]);
+      auto rc =
+          uccl_read_async(ep_, conn, mhandle, dst_v[next_iov], size_v[next_iov],
+                          slot_item_v[next_iov], &ureq[slot]);
       if (rc == -1) break;
-      done[iov_issued % kMaxInflightOps] = false;
-      iov_issued++;
+      active[slot] = true;
+      next_iov++;
+      num_inflight++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    for (size_t i = iov_finished; i < iov_issued; i++) {
-      if (done[i % kMaxInflightOps]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
-        done[i % kMaxInflightOps] = true;
+    for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+      if (!active[slot]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
+        active[slot] = false;
+        num_completed++;
+        num_inflight--;
       }
-    }
-
-    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
-      iov_finished++;
     }
   }
 
@@ -1194,39 +1196,45 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   ucclRequest ureq[kMaxInflightOps] = {};
-  bool done[kMaxInflightOps] = {false};
+  bool active[kMaxInflightOps] = {false};
 
-  size_t iov_issued = 0, iov_finished = 0;
+  size_t next_iov = 0;
+  size_t num_completed = 0;
+  size_t num_inflight = 0;
 
-  while (iov_finished < num_iovs) {
-    while (iov_issued < num_iovs &&
-           iov_issued - iov_finished < kMaxInflightOps) {
-      P2PMhandle* mhandle = get_mhandle(mr_id_v[iov_issued]);
+  while (num_completed < num_iovs) {
+    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+      size_t slot = 0;
+      while (slot < kMaxInflightOps && active[slot]) {
+        slot++;
+      }
+      UCCL_DCHECK(slot < kMaxInflightOps);
+
+      P2PMhandle* mhandle = get_mhandle(mr_id_v[next_iov]);
       if (unlikely(mhandle == nullptr)) {
-        std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[iov_issued]
+        std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[next_iov]
                   << std::endl;
         return false;
       }
 
-      auto rc = uccl_write_async(ep_, conn, mhandle, src_v[iov_issued],
-                                 size_v[iov_issued], slot_item_v[iov_issued],
-                                 &ureq[iov_issued % kMaxInflightOps]);
+      auto rc = uccl_write_async(ep_, conn, mhandle, src_v[next_iov],
+                                 size_v[next_iov], slot_item_v[next_iov],
+                                 &ureq[slot]);
       if (rc == -1) break;
-      done[iov_issued % kMaxInflightOps] = false;
-      iov_issued++;
+      active[slot] = true;
+      next_iov++;
+      num_inflight++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    for (size_t i = iov_finished; i < iov_issued; i++) {
-      if (done[i % kMaxInflightOps]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
-        done[i % kMaxInflightOps] = true;
+    for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+      if (!active[slot]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
+        active[slot] = false;
+        num_completed++;
+        num_inflight--;
       }
-    }
-
-    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
-      iov_finished++;
     }
   }
 
