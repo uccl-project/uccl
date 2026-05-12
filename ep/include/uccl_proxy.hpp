@@ -70,6 +70,7 @@ class UcclProxy {
   std::vector<uint64_t> get_d2h_channel_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
+  bool use_normal_mode() const noexcept { return proxy_->cfg_.use_normal_mode; }
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
   double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);

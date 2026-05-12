@@ -26,16 +26,18 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <cuda_runtime.h>
 
 namespace uccl {
-std::unordered_map<int, std::vector<nb::object>> g_proxies_by_dev;
+std::map<ProxyRegistryKey, std::vector<nb::object>> g_proxies_by_dev;
 
-std::unordered_map<int, std::vector<nb::object>>& proxies_by_dev() {
+std::map<ProxyRegistryKey, std::vector<nb::object>>& proxies_by_dev() {
   return g_proxies_by_dev;
 }
 }  // namespace uccl
@@ -284,9 +286,9 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
 }  // namespace
 
 static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
-    int device_index) {
+    int device_index, bool low_latency_mode) {
   std::lock_guard<std::mutex> lk(g_proxies_mu);
-  auto it = uccl::g_proxies_by_dev.find(device_index);
+  auto it = uccl::g_proxies_by_dev.find({device_index, low_latency_mode});
   EP_HOST_ASSERT(it != uccl::g_proxies_by_dev.end() && !it->second.empty());
 
   std::vector<uint64_t> all_addrs;
@@ -328,13 +330,16 @@ class Buffer {
       cudaGetDevice(&device_index);
       {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto it = uccl::g_proxies_by_dev.find(device_index);
+        auto it = uccl::g_proxies_by_dev.find({device_index, low_latency_mode});
         if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
           throw std::runtime_error(
               "ep.Buffer: no UcclProxy registered for device " +
               std::to_string(device_index) +
-              ". Call uccl.ep.register_proxy(device_index, proxies) "
-              "first.");
+              std::string(low_latency_mode ? " (low-latency mode)"
+                                           : " (high-throughput mode)") +
+              ". Call uccl.ep.register_proxies(device_index, proxies) "
+              "first with proxies built with use_normal_mode=" +
+              (low_latency_mode ? "False" : "True") + ".");
         }
       }
 
@@ -345,7 +350,8 @@ class Buffer {
                                                     &greatest_priority));
         CUDA_CHECK(cudaStreamCreateWithPriority(
             &comm_stream, cudaStreamNonBlocking, greatest_priority));
-        auto host_addrs = collect_d2h_channel_addrs_for_device(device_index);
+        auto host_addrs = collect_d2h_channel_addrs_for_device(
+            device_index, low_latency_mode);
         num_d2h_channel_addrs = static_cast<int>(host_addrs.size());
         if (num_d2h_channel_addrs > 0) {
           CUDA_CHECK(cudaMallocManaged(
@@ -1283,22 +1289,46 @@ class Buffer {
     return {event, recv_hook};
   }
 
+  // `low_latency_combine` accepts seven DeepEP-compatible overlap kwargs at
+  // the end of the argument list. They are parsed for API compatibility with
+  // SGLang SBO callers (deepep.py:680-693, which dispatches to different
+  // kwargs dicts on Hopper vs Blackwell paths). Only `overlap=false` is
+  // wired to a kernel path today; `overlap=true` is rejected below until the
+  // comp_signal / src_signals kernel variants land in a follow-up PR.
   std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
-  low_latency_combine(std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
-                      std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
-                      std::uintptr_t topk_weights_ptr,
-                      std::uintptr_t src_info_ptr, int src_info_dim0,
-                      int src_info_dim1, std::uintptr_t layout_range_ptr,
-                      int layout_range_dim0, int layout_range_dim1,
-                      std::uintptr_t combine_wait_recv_cost_stats_ptr,
-                      std::uintptr_t compute_stream_ptr,
-                      int num_max_dispatch_tokens_per_rank, int num_experts,
-                      bool use_logfmt, bool zero_copy, bool async,
-                      bool return_recv_hook, std::uintptr_t out_ptr) {
+  low_latency_combine(
+      std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
+      std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
+      std::uintptr_t topk_weights_ptr, std::uintptr_t src_info_ptr,
+      int src_info_dim0, int src_info_dim1, std::uintptr_t layout_range_ptr,
+      int layout_range_dim0, int layout_range_dim1,
+      std::uintptr_t combine_wait_recv_cost_stats_ptr,
+      std::uintptr_t compute_stream_ptr, int num_max_dispatch_tokens_per_rank,
+      int num_experts, bool use_logfmt, bool zero_copy, bool async,
+      bool return_recv_hook, std::uintptr_t out_ptr, bool overlap = false,
+      std::uintptr_t packed_recv_count_ptr = 0,
+      std::uintptr_t comp_signal_ptr = 0, int block_m = 64, int threshold = 0,
+      int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
+      int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
     EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
     EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
     EP_HOST_ASSERT(out_ptr != 0);
+    if (overlap) {
+      throw std::runtime_error(
+          "low_latency_combine(overlap=true) is not implemented yet. "
+          "Overlap kernel support (comp_signal / src_signals) will land in a "
+          "follow-up PR; this release only accepts the parameters for API "
+          "compatibility with DeepEP and SGLang SBO callers.");
+    }
+    // Silence unused-variable warnings for stub parameters.
+    (void)packed_recv_count_ptr;
+    (void)comp_signal_ptr;
+    (void)block_m;
+    (void)threshold;
+    (void)num_sms;
+    (void)src_signals_ptr;
+    (void)src_signal_expect_value;
 
     auto num_local_experts = num_experts / num_ranks;
     EP_HOST_ASSERT(x_dim0 == num_local_experts);
@@ -1657,51 +1687,94 @@ NB_MODULE(ep, m) {
       .def("get_rdma_buffer_size_hint",
            &uccl::Config::get_rdma_buffer_size_hint);
 
+  // Helper: peek a UcclProxy's mode without unwrapping nb::object.
+  auto proxy_low_latency_mode = [](nb::object const& proxy) -> bool {
+    // UcclProxy.use_normal_mode() returns True for high-throughput mode
+    // (DeepEP throughput / "normal" kernels); the registry key uses
+    // low_latency_mode = !use_normal_mode so a Buffer ctor can look up by
+    // its own low_latency_mode flag. The legacy attribute name is kept
+    // for backwards compatibility with code paths still passing
+    // use_normal_mode=True/False.
+    return !nb::cast<bool>(proxy.attr("use_normal_mode")());
+  };
+
   m.def(
       "register_proxy",
-      [](int device_index, nb::object proxy) {
+      [proxy_low_latency_mode](int device_index, nb::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto& vec = uccl::g_proxies_by_dev[device_index];
+        bool ll = proxy_low_latency_mode(proxy);
+        auto& vec = uccl::g_proxies_by_dev[{device_index, ll}];
         if (!vec.empty()) {
           fprintf(stderr,
-                  "WARNING: overwriting existing proxies for device %d\n",
-                  device_index);
+                  "WARNING: overwriting existing proxies for device %d "
+                  "(%s mode)\n",
+                  device_index, ll ? "low-latency" : "high-throughput");
           std::abort();
         }
         vec.push_back(std::move(proxy));
-        printf("Registered proxy for device %d\n", device_index);
+        printf("Registered proxy for device %d (%s mode)\n", device_index,
+               ll ? "low-latency" : "high-throughput");
       },
       nb::arg("device_index"), nb::arg("proxy"));
   m.def(
       "register_proxies",
-      [](int device_index, std::vector<nb::object> proxies) {
+      [proxy_low_latency_mode](int device_index,
+                               std::vector<nb::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto& vec = uccl::g_proxies_by_dev[device_index];
+        if (proxies.empty()) {
+          fprintf(stderr,
+                  "register_proxies: empty proxy vector for device %d\n",
+                  device_index);
+          std::abort();
+        }
+        bool ll = proxy_low_latency_mode(proxies.front());
+        // All proxies in a single registration must share the same mode.
+        for (auto const& p : proxies) {
+          if (proxy_low_latency_mode(p) != ll) {
+            fprintf(stderr,
+                    "register_proxies: mixed-mode proxies for device %d\n",
+                    device_index);
+            std::abort();
+          }
+        }
+        auto& vec = uccl::g_proxies_by_dev[{device_index, ll}];
         if (!vec.empty()) {
           fprintf(stderr,
-                  "WARNING: overwriting existing proxies for device %d\n",
-                  device_index);
+                  "WARNING: overwriting existing proxies for device %d "
+                  "(%s mode)\n",
+                  device_index, ll ? "low-latency" : "high-throughput");
           std::abort();
         }
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
-        printf("Registered proxies for device %d\n", device_index);
+        printf("Registered proxies for device %d (%s mode)\n", device_index,
+               ll ? "low-latency" : "high-throughput");
       },
       nb::arg("device_index"), nb::arg("proxies"));
   m.def(
       "unregister_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        uccl::g_proxies_by_dev.erase(device_index);
+        // Remove every mode slot for this device.
+        for (auto it = uccl::g_proxies_by_dev.begin();
+             it != uccl::g_proxies_by_dev.end();) {
+          if (it->first.first == device_index) {
+            it = uccl::g_proxies_by_dev.erase(it);
+          } else {
+            ++it;
+          }
+        }
       },
       nb::arg("device_index"));
   m.def(
       "has_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto it = uccl::g_proxies_by_dev.find(device_index);
-        return it != uccl::g_proxies_by_dev.end() && !it->second.empty();
+        for (auto const& kv : uccl::g_proxies_by_dev) {
+          if (kv.first.first == device_index && !kv.second.empty()) return true;
+        }
+        return false;
       },
       nb::arg("device_index"));
   m.def("stop_all_registered_proxies", []() {
@@ -2141,7 +2214,13 @@ NB_MODULE(ep, m) {
            nb::arg("num_max_dispatch_tokens_per_rank") = 0,
            nb::arg("num_experts") = 1, nb::arg("use_logfmt") = false,
            nb::arg("zero_copy") = false, nb::arg("is_async") = false,
-           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"));
+           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"),
+           // DeepEP-compatible overlap kwargs (stub).
+           nb::arg("overlap") = false, nb::arg("packed_recv_count_ptr") = 0,
+           nb::arg("comp_signal_ptr") = 0, nb::arg("block_m") = 64,
+           nb::arg("threshold") = 0, nb::arg("num_sms") = 0,
+           nb::arg("src_signals_ptr") = 0,
+           nb::arg("src_signal_expect_value") = 0);
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
@@ -2225,6 +2304,7 @@ NB_MODULE(ep, m) {
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
            nb::arg("num_tokens"), nb::arg("hidden"), nb::arg("num_experts"))
       .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
+      .def("use_normal_mode", &UcclProxy::use_normal_mode)
       .def_prop_ro("thread_idx", &UcclProxy::thread_idx)
       .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
