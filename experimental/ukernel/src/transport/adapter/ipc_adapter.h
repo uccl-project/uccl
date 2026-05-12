@@ -3,7 +3,6 @@
 #include "../../include/gpu_rt.h"
 #include "../memory/ipc_manager.h"
 #include "../util/jring.h"
-#include "shmring_exchanger.h"
 #include "transport_adapter.h"
 #include <array>
 #include <atomic>
@@ -22,14 +21,20 @@ namespace Transport {
 
 class Communicator;
 
+// Shared-memory data completion mailbox: resides in a dedicated tiny SHM
+// region so that the sender can signal "GPU copy done" directly to the
+// receiver without going through the ShmRingExchanger control ring.
+struct IpcDataCompletion {
+  std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
+};
+
 class IpcAdapter final : public TransportAdapter {
  public:
-  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id,
+  IpcAdapter(Communicator* comm, std::string ring_namespace,
              int local_gpu_idx);
   ~IpcAdapter() override;
   void shutdown();
 
-  void set_peer_local_id(int peer_rank, int local_id);
   void close_peer(int peer_rank);
 
   uint64_t next_send_match_seq(int peer_rank);
@@ -114,11 +119,6 @@ class IpcAdapter final : public TransportAdapter {
       return finished.load(std::memory_order_acquire);
     }
     bool has_failed() const { return failed.load(std::memory_order_acquire); }
-    bool is_direct_gpu() const {
-      return remote_ptr != nullptr &&
-             remote_ptr ==
-                 local_ptr;  // placeholder; determined by pointer attr
-    }
   };
 
   static constexpr uint32_t kRequestSlotBits = 13;
@@ -146,6 +146,20 @@ class IpcAdapter final : public TransportAdapter {
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
 
+  // Data-completion shared memory (fast path: replaces send_ack/recv_ack
+  // for IPC GPU data transfers).
+  struct PeerCompletion {
+    IpcDataCompletion* local = nullptr;   // my side (receiver polls this)
+    IpcDataCompletion* remote = nullptr;  // peer's side (sender writes to this)
+    int shm_fd = -1;
+    size_t shm_size = 0;
+    std::string shm_name;
+  };
+  std::string completion_shm_name(int peer_rank) const;
+  bool ensure_local_completion(int peer_rank);
+  bool ensure_remote_completion(int peer_rank);
+  void close_completion(int peer_rank);
+
   jring_t* send_task_ring_ = nullptr;
   jring_t* recv_task_ring_ = nullptr;
   std::atomic<bool> stop_{false};
@@ -160,13 +174,14 @@ class IpcAdapter final : public TransportAdapter {
   std::unique_ptr<IpcRequestSlot[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};
 
-  std::shared_ptr<ShmRingExchanger> shm_control_;
+  std::string ring_namespace_;
   mutable std::mutex peer_dir_mu_;
   struct DirState {
     bool put_ready = false;
     bool wait_ready = false;
   };
   std::vector<DirState> peer_dir_state_;
+  std::vector<PeerCompletion> peer_completions_;
   Communicator* comm_;
   int local_gpu_idx_ = -1;
 };
