@@ -26,7 +26,10 @@ Alternatively, you can build `uccl.ep` wheel using docker then install:
 # Under uccl
 bash build.sh cu12 ep --install
 ```
-> Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
+
+Notes:  
+* UCCL-EP `setup.py` and `Makefile` auto-detects the existence of `/opt/amazon/efa` to enable EFA-specific RDMA path with `-DEFA`. If you hit `RDMA buffer MR registration failed: Invalid argument`, it is likely that your UCCL-EP wheel uses a non-EFA RDMA path. In that case, we suggest making sure `/opt/amazon/efa` exists, and rebuilding and reinstalling the wheel. 
+* Docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554.
 
 ## Build on ROCm
 
