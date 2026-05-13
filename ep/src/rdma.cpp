@@ -875,7 +875,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   return ibv_cq_ex_to_cq(S.cq_ex);
 #else
   // Use standard CQ for other NICs like Broadcom
-  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, nullptr, 0);
+  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, S.comp_channel, 0);
   if (!S.cq) {
     perror("Failed to create CQ (ibv_create_cq)");
     exit(1);

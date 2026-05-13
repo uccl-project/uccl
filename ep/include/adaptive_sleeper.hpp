@@ -23,7 +23,6 @@ class AdaptiveSleeper {
       : state_(POLL),
         last_event_time_(std::chrono::steady_clock::time_point::min()) {
     work_eventfd_ = eventfd(0, EFD_NONBLOCK);
-    UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper initialzed!";
   }
 
   ~AdaptiveSleeper() { close(work_eventfd_); }
@@ -60,11 +59,14 @@ class AdaptiveSleeper {
 
       int n = ppoll(events_to_poll, kNumActivitiesToPoll, &kPollSleepDuration,
                     NULL);
-      if (n > 0) {
-        UCCL_LOG(INFO, UCCL_EP) << "Detected new event, waking proxy thread";
+      UCCL_PCHECK(n != -1);
 
+      if (n > 0) {
         // handle the necessary acknowledgements for the file descriptors
         if (events_to_poll[0].revents == POLLIN) {
+          UCCL_LOG(INFO, UCCL_EP)
+              << "Waking up because of dispatch/combine trigger";
+
           eventfd_t work_value;
           ret = eventfd_read(work_eventfd_, &work_value);
           // we check for % since cumulative unread writes will add on each
@@ -73,6 +75,7 @@ class AdaptiveSleeper {
         }
 
         if (events_to_poll[1].revents == POLLIN) {
+          UCCL_LOG(INFO, UCCL_EP) << "Waking up because of RDMA event";
           // TODO: need to dig into what each of these events does
           void* ctx;
           ibv_get_cq_event(proxy_ctx.comp_channel, &proxy_ctx.cq, &ctx);
@@ -90,8 +93,6 @@ class AdaptiveSleeper {
       } else if (n == 0) {
         UCCL_LOG(INFO, UCCL_EP)
             << "Proxy thread woke due to poll timeout, sleeping again";
-      } else {
-        UCCL_LOG(FATAL) << "Encountered ppoll error";
       }
     }
   }
@@ -113,14 +114,15 @@ class AdaptiveSleeper {
   }
 
  private:
-  //  TODO: change back to 30 seconds after testing
-  static constexpr auto kNoActivityThreshold = std::chrono::seconds(10);
+  static constexpr auto kNoActivityThreshold = std::chrono::seconds(120);
   static constexpr int kNumActivitiesToPoll = 2;
-  static constexpr struct timespec kPollSleepDuration = {.tv_sec = 5};
+  static constexpr struct timespec kPollSleepDuration = {
+      .tv_sec = 5,
+      .tv_nsec = 0,
+  };
   static constexpr int kWakeEventConst = 0x42;
 
   SleepState state_;
-  // used by python API to inform proxy threads of new work entry
   int work_eventfd_;
   std::chrono::steady_clock::time_point last_event_time_;
 };
