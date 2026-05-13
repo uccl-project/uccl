@@ -17,12 +17,13 @@ fifo_blob_size = 64  # bytes
 
 
 def _make_buffer(n_bytes: int, device: str, gpu: int):
-    n = n_bytes // 4
+    if n_bytes <= 0:
+        raise ValueError(f"buffer size must be positive, got {n_bytes}")
     if device == "gpu":
-        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
+        buf = torch.ones(n_bytes, dtype=torch.uint8, device=f"cuda:{gpu}")
         ptr = buf.data_ptr()
     else:
-        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
+        buf = torch.ones(n_bytes, dtype=torch.uint8, pin_memory=True)
         ptr = buf.data_ptr()
     return buf, ptr
 
