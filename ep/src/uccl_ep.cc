@@ -524,6 +524,37 @@ class Buffer {
       std::uintptr_t is_token_in_rank_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+    // Handle empty tensor case: when num_tokens == 0 (e.g., DP-attention
+    // ranks with no tokens to route), PyTorch returns data_ptr() == 0 for
+    // zero-element tensors. Zero out the output arrays and return early.
+    if (num_tokens == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      static_cast<void>(allocate_on_comm_stream);
+      if (previous_event.has_value()) {
+        stream_wait(comm_stream, previous_event.value());
+      } else {
+        stream_wait(comm_stream, compute_stream);
+      }
+      // Zero out per-rank and per-expert token counts
+      CUDA_CHECK(cudaMemsetAsync(
+          reinterpret_cast<void*>(num_tokens_per_rank_ptr), 0,
+          num_ranks * sizeof(int), comm_stream));
+      if (num_tokens_per_rdma_rank_ptr != 0) {
+        CUDA_CHECK(cudaMemsetAsync(
+            reinterpret_cast<void*>(num_tokens_per_rdma_rank_ptr), 0,
+            num_ranks * sizeof(int), comm_stream));
+      }
+      CUDA_CHECK(cudaMemsetAsync(
+          reinterpret_cast<void*>(num_tokens_per_expert_ptr), 0,
+          num_experts * sizeof(int), comm_stream));
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else {
+        stream_wait(compute_stream, comm_stream);
+      }
+      return event;
+    }
     EP_HOST_ASSERT(topk_idx_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
@@ -877,6 +908,26 @@ class Buffer {
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
     nb::gil_scoped_release release;
+    // Handle empty token case: when num_tokens == 0, this rank has nothing
+    // to dispatch. Return zeros without launching any communication.
+    if (num_tokens == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      static_cast<void>(allocate_on_comm_stream);
+      if (previous_event.has_value()) {
+        stream_wait(comm_stream, previous_event.value());
+      } else {
+        stream_wait(comm_stream, compute_stream);
+      }
+      int const num_local_experts = num_experts / num_ranks;
+      std::vector<int> empty_expert_counts(num_local_experts, 0);
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else {
+        stream_wait(compute_stream, comm_stream);
+      }
+      return {0, 0, empty_expert_counts, event};
+    }
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
@@ -885,7 +936,7 @@ class Buffer {
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_experts > 0);
+    EP_HOST_ASSERT(hidden > 0 && num_experts > 0);
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&
                    get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
@@ -983,6 +1034,23 @@ class Buffer {
       std::uintptr_t send_rdma_head_ptr, std::uintptr_t send_nvl_head_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+    // Handle empty token case: nothing to dispatch from this rank.
+    if (num_tokens == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      static_cast<void>(allocate_on_comm_stream);
+      if (previous_event.has_value()) {
+        stream_wait(comm_stream, previous_event.value());
+      } else {
+        stream_wait(comm_stream, compute_stream);
+      }
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else {
+        stream_wait(compute_stream, comm_stream);
+      }
+      return event;
+    }
     EP_HOST_ASSERT(x_ptr != 0 && recv_x_ptr != 0 && is_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
@@ -1086,6 +1154,23 @@ class Buffer {
       std::uintptr_t combined_x_ptr, std::uintptr_t combined_topk_weights_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+    // Handle empty token case: nothing to combine for this rank.
+    if (num_combined_tokens == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      static_cast<void>(allocate_on_comm_stream);
+      if (previous_event.has_value()) {
+        stream_wait(comm_stream, previous_event.value());
+      } else {
+        stream_wait(comm_stream, compute_stream);
+      }
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else {
+        stream_wait(compute_stream, comm_stream);
+      }
+      return event;
+    }
     EP_HOST_ASSERT(x_ptr != 0 && src_meta_ptr != 0 && combined_x_ptr != 0);
     EP_HOST_ASSERT(is_combined_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
@@ -1200,6 +1285,20 @@ class Buffer {
                        bool use_fp8, bool round_scale, bool use_ue8m0,
                        bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
+    // Handle empty token case: when x_rows == 0, this rank has no tokens
+    // to dispatch. PyTorch returns data_ptr() == 0 for zero-element tensors,
+    // so x_ptr and topk_idx_ptr will legitimately be 0.
+    if (x_rows == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else {
+        stream_wait(compute_stream, comm_stream);
+      }
+      std::optional<std::function<void()>> hook;
+      return {event, hook};
+    }
     EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0);
     EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
     EP_HOST_ASSERT(packed_recv_src_info_ptr != 0 &&
@@ -1311,6 +1410,19 @@ class Buffer {
       int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
       int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
+    // Handle empty token case: when topk_rows == 0, this rank dispatched
+    // no tokens so there is nothing to combine. Return early.
+    if (topk_rows == 0) {
+      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+      std::optional<EventHandle> event;
+      if (async) {
+        event = EventHandle(comm_stream);
+      } else if (not return_recv_hook) {
+        stream_wait(compute_stream, comm_stream);
+      }
+      std::optional<std::function<void()>> hook;
+      return {event, hook};
+    }
     EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
     EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
     EP_HOST_ASSERT(out_ptr != 0);
