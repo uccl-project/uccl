@@ -908,26 +908,6 @@ class Buffer {
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
     nb::gil_scoped_release release;
-    // Handle empty token case: when num_tokens == 0, this rank has nothing
-    // to dispatch. Return zeros without launching any communication.
-    if (num_tokens == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      static_cast<void>(allocate_on_comm_stream);
-      if (previous_event.has_value()) {
-        stream_wait(comm_stream, previous_event.value());
-      } else {
-        stream_wait(comm_stream, compute_stream);
-      }
-      int const num_local_experts = num_experts / num_ranks;
-      std::vector<int> empty_expert_counts(num_local_experts, 0);
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else {
-        stream_wait(compute_stream, comm_stream);
-      }
-      return {0, 0, empty_expert_counts, event};
-    }
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
@@ -936,7 +916,9 @@ class Buffer {
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(hidden > 0 && num_experts > 0);
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch, but must still participate in the collective notification.
+    EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0 && num_experts > 0);
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&
                    get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
@@ -1034,29 +1016,18 @@ class Buffer {
       std::uintptr_t send_rdma_head_ptr, std::uintptr_t send_nvl_head_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    // Handle empty token case: nothing to dispatch from this rank.
-    if (num_tokens == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      static_cast<void>(allocate_on_comm_stream);
-      if (previous_event.has_value()) {
-        stream_wait(comm_stream, previous_event.value());
-      } else {
-        stream_wait(comm_stream, compute_stream);
-      }
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else {
-        stream_wait(compute_stream, comm_stream);
-      }
-      return event;
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch, but must still participate in the collective cached_notify
+    // and dispatch so that remote ranks are not left spinning.
+    EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0);
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(x_ptr != 0 && recv_x_ptr != 0 &&
+                     is_token_in_rank_ptr != 0);
     }
-    EP_HOST_ASSERT(x_ptr != 0 && recv_x_ptr != 0 && is_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0);
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
     int const num_channels = config.num_sms / 2;
@@ -1092,7 +1063,7 @@ class Buffer {
     }
 
     uccl::internode::dispatch(
-        reinterpret_cast<void*>(recv_x_ptr),
+        recv_x_ptr == 0 ? nullptr : reinterpret_cast<void*>(recv_x_ptr),
         recv_x_scales_ptr == 0 ? nullptr
                                : reinterpret_cast<float*>(recv_x_scales_ptr),
         recv_topk_idx_ptr == 0 ? nullptr
@@ -1101,7 +1072,7 @@ class Buffer {
             ? nullptr
             : reinterpret_cast<float*>(recv_topk_weights_ptr),
         cached_mode ? nullptr : reinterpret_cast<void*>(recv_src_meta_ptr),
-        reinterpret_cast<void const*>(x_ptr),
+        x_ptr == 0 ? nullptr : reinterpret_cast<void const*>(x_ptr),
         x_scales_ptr == 0 ? nullptr
                           : reinterpret_cast<float const*>(x_scales_ptr),
         topk_idx_ptr == 0 ? nullptr
@@ -1121,7 +1092,10 @@ class Buffer {
         reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr),
         reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr),
         reinterpret_cast<int const*>(recv_gbl_rank_prefix_sum_ptr),
-        reinterpret_cast<bool const*>(is_token_in_rank_ptr), num_tokens,
+        is_token_in_rank_ptr == 0
+            ? nullptr
+            : reinterpret_cast<bool const*>(is_token_in_rank_ptr),
+        num_tokens,
         num_worst_tokens, hidden_int4, num_scales, num_topk, num_experts,
         scale_token_stride, scale_hidden_stride, rdma_buffer_ptr,
         config.num_max_rdma_chunked_send_tokens,
@@ -1154,25 +1128,13 @@ class Buffer {
       std::uintptr_t combined_x_ptr, std::uintptr_t combined_topk_weights_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    // Handle empty token case: nothing to combine for this rank.
-    if (num_combined_tokens == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      static_cast<void>(allocate_on_comm_stream);
-      if (previous_event.has_value()) {
-        stream_wait(comm_stream, previous_event.value());
-      } else {
-        stream_wait(comm_stream, compute_stream);
-      }
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else {
-        stream_wait(compute_stream, comm_stream);
-      }
-      return event;
+    // Allow num_combined_tokens == 0: DP-attention ranks may have no tokens
+    // to combine, but must still participate in the collective cached_notify
+    // and combine so that remote ranks are not left spinning.
+    if (num_combined_tokens > 0) {
+      EP_HOST_ASSERT(x_ptr != 0 && src_meta_ptr != 0 && combined_x_ptr != 0);
+      EP_HOST_ASSERT(is_combined_token_in_rank_ptr != 0);
     }
-    EP_HOST_ASSERT(x_ptr != 0 && src_meta_ptr != 0 && combined_x_ptr != 0);
-    EP_HOST_ASSERT(is_combined_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
@@ -1210,19 +1172,23 @@ class Buffer {
     };
     uccl::internode::combine(
         cuda_dtype_from_code(x_dtype_code),
-        reinterpret_cast<void*>(combined_x_ptr),
+        combined_x_ptr == 0 ? nullptr
+                            : reinterpret_cast<void*>(combined_x_ptr),
         combined_topk_weights_ptr == 0
             ? nullptr
             : reinterpret_cast<float*>(combined_topk_weights_ptr),
-        reinterpret_cast<bool const*>(is_combined_token_in_rank_ptr),
-        reinterpret_cast<void const*>(x_ptr),
+        is_combined_token_in_rank_ptr == 0
+            ? nullptr
+            : reinterpret_cast<bool const*>(is_combined_token_in_rank_ptr),
+        x_ptr == 0 ? nullptr : reinterpret_cast<void const*>(x_ptr),
         topk_weights_ptr == 0
             ? nullptr
             : reinterpret_cast<float const*>(topk_weights_ptr),
         bias_ptrs[0], bias_ptrs[1],
         reinterpret_cast<int const*>(combined_rdma_head_ptr),
         reinterpret_cast<int const*>(combined_nvl_head_ptr),
-        reinterpret_cast<void const*>(src_meta_ptr),
+        src_meta_ptr == 0 ? nullptr
+                          : reinterpret_cast<void const*>(src_meta_ptr),
         reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
         reinterpret_cast<int const*>(rdma_rank_prefix_sum_ptr),
         reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr), num_tokens,
