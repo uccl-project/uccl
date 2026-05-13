@@ -79,7 +79,5 @@ void AdaptiveSleeper::init_timer() {
   if (is_adaptive_sleep && strcmp(is_adaptive_sleep, "1") == 0) {
     UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper configured";
     last_event_time_ = std::chrono::steady_clock::now();
-  } else {
-    UCCL_LOG(WARN) << "This was not enabled " << is_adaptive_sleep;
   }
 }
