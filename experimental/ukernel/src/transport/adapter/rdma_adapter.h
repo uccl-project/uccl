@@ -27,7 +27,6 @@ struct RdmaTransportConfig {
 
 struct RdmaConnectInit {
   uint32_t send_qpns[4] = {};
-  uint32_t recv_qpns[4] = {};
   uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
@@ -85,6 +84,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr uint64_t kMaxInflightBytes =
       static_cast<uint64_t>(4) * 512 * 1024;
 
+  static constexpr uint64_t kMaxInflightBytesPerQp = kMaxInflightBytes;
+
   struct RemoteBufInfo {
     uint64_t addr = 0;
     uint32_t rkey = 0;
@@ -103,16 +104,16 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::vector<ibv_recv_wr> wrs;
   };
 
-  struct QpRttTracker {
+  struct QpState {
     std::atomic<uint64_t> last_send_ns{0};
     double ewma_rtt_ns = 1'000'000.0;
+    std::atomic<uint64_t> unacked_bytes{0};
   };
 
   enum class RequestKind : uint8_t {
     DataPut = 0,
-    DataWait = 1,
-    Signal = 2,
-    SignalWait = 3,
+    Signal = 1,
+    SignalWait = 2,
   };
 
   struct ChunkTracker {
@@ -123,8 +124,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   struct RdmaPeer {
     ibv_qp* send_qps[kMaxQPs] = {};
     ibv_cq* send_cq = nullptr;
-    ibv_qp* recv_qps[kMaxQPs] = {};
-    ibv_cq* recv_cq = nullptr;
 
     ibv_qp* signal_qp = nullptr;
     ibv_cq* signal_cq = nullptr;
@@ -138,7 +137,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
     bool qps_in_init = false;
 
     uint32_t remote_send_qpns[kMaxQPs] = {};
-    uint32_t remote_recv_qpns[kMaxQPs] = {};
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
     uint8_t remote_gid_index = 0;
@@ -148,13 +146,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
     std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
 
-    QpRttTracker rtt_tracker[kMaxQPs];
+    QpState qp_state[kMaxQPs];
 
     std::atomic<int> last_qp_{0};
     std::atomic<bool> cached_qp_valid_{false};
     std::atomic<uint32_t> consecutive_cached_bytes_{0};
-
-    std::atomic<uint64_t> unacked_bytes_{0};
 
     std::atomic<unsigned> next_msg_id{0};
 
@@ -208,7 +204,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size);
   bool qps_to_init(ibv_qp** qps, int count);
   bool qps_to_rtr(ibv_qp** qps, int count,
-                  RdmaPeerConnectSpec const& remote, bool is_put);
+                   RdmaPeerConnectSpec const& remote);
   bool qps_to_rts(ibv_qp** qps, int count);
 
   bool setup_peer_path(int peer_rank, RdmaPeerConnectSpec const& remote);
@@ -225,7 +221,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   void poll_loop();
   bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq,
-                   ibv_qp* const* qps, int qp_count, bool is_recv_side);
+                   ibv_qp* const* qps, int qp_count);
   bool poll_signal_cq(RdmaPeer& peer, int rank);
 
   ibv_context* ctx_ = nullptr;

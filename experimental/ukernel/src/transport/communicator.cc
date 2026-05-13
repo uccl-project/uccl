@@ -463,10 +463,6 @@ bool Communicator::exchange_rdma_peer_info(int rank,
   local_p2p_info.send_qpn1 = init.send_qpns[1];
   local_p2p_info.send_qpn2 = init.send_qpns[2];
   local_p2p_info.send_qpn3 = init.send_qpns[3];
-  local_p2p_info.recv_qpn0 = init.recv_qpns[0];
-  local_p2p_info.recv_qpn1 = init.recv_qpns[1];
-  local_p2p_info.recv_qpn2 = init.recv_qpns[2];
-  local_p2p_info.recv_qpn3 = init.recv_qpns[3];
   local_p2p_info.signal_qpn = init.signal_qpn;
   local_p2p_info.num_qps = init.num_qps;
   local_p2p_info.lid = init.lid;
@@ -631,10 +627,6 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       rspec.remote_send_qpns[1] = remote.send_qpn1;
       rspec.remote_send_qpns[2] = remote.send_qpn2;
       rspec.remote_send_qpns[3] = remote.send_qpn3;
-      rspec.remote_recv_qpns[0] = remote.recv_qpn0;
-      rspec.remote_recv_qpns[1] = remote.recv_qpn1;
-      rspec.remote_recv_qpns[2] = remote.recv_qpn2;
-      rspec.remote_recv_qpns[3] = remote.recv_qpn3;
       rspec.remote_lid = remote.lid;
       memcpy(&rspec.remote_gid_raw[0], &remote.gid_prefix, 8);
       memcpy(&rspec.remote_gid_raw[8], &remote.gid_iface, 8);

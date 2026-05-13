@@ -243,14 +243,12 @@ bool RdmaTransportAdapter::qps_to_init(ibv_qp** qps, int count) {
 }
 
 bool RdmaTransportAdapter::qps_to_rtr(ibv_qp** qps, int count,
-                                      RdmaPeerConnectSpec const& remote,
-                                      bool is_put) {
+                                      RdmaPeerConnectSpec const& remote) {
   for (int i = 0; i < count; ++i) {
     ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
     attr.path_mtu = IBV_MTU_4096;
-    attr.dest_qp_num =
-        is_put ? remote.remote_recv_qpns[i] : remote.remote_send_qpns[i];
+    attr.dest_qp_num = remote.remote_signal_qpn;
     attr.rq_psn = 0;
     attr.max_dest_rd_atomic = 16;
     attr.min_rnr_timer = 12;
@@ -457,9 +455,7 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
   return create_qp_set(p.send_qps, &p.send_cq, p.num_qps, cq_size) &&
-         create_qp_set(p.recv_qps, &p.recv_cq, p.num_qps, cq_size) &&
          qps_to_init(p.send_qps, p.num_qps) &&
-         qps_to_init(p.recv_qps, p.num_qps) &&
          create_signal_qp(p);
 }
 
@@ -469,18 +465,10 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
       ibv_destroy_qp(p.send_qps[q]);
       p.send_qps[q] = nullptr;
     }
-    if (p.recv_qps[q]) {
-      ibv_destroy_qp(p.recv_qps[q]);
-      p.recv_qps[q] = nullptr;
-    }
   }
   if (p.send_cq) {
     ibv_destroy_cq(p.send_cq);
     p.send_cq = nullptr;
-  }
-  if (p.recv_cq) {
-    ibv_destroy_cq(p.recv_cq);
-    p.recv_cq = nullptr;
   }
   destroy_signal_qp(p);
 }
@@ -508,7 +496,6 @@ RdmaConnectInit RdmaTransportAdapter::get_connect_init(int peer_rank) {
         p->qps_in_init = true;
         for (int i = 0; i < p->num_qps; ++i) {
           init.send_qpns[i] = p->send_qps[i]->qp_num;
-          init.recv_qpns[i] = p->recv_qps[i]->qp_num;
         }
         init.signal_qpn = p->signal_qp ? p->signal_qp->qp_num : 0;
         peers_[peer_rank] = std::move(p);
@@ -516,7 +503,6 @@ RdmaConnectInit RdmaTransportAdapter::get_connect_init(int peer_rank) {
     } else if (it->second->qps_in_init) {
       for (int i = 0; i < it->second->num_qps; ++i) {
         init.send_qpns[i] = it->second->send_qps[i]->qp_num;
-        init.recv_qpns[i] = it->second->recv_qps[i]->qp_num;
       }
       init.signal_qpn = it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
     }
@@ -590,8 +576,6 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
 
   memcpy(p->remote_send_qpns, remote.remote_send_qpns,
          sizeof(p->remote_send_qpns));
-  memcpy(p->remote_recv_qpns, remote.remote_recv_qpns,
-         sizeof(p->remote_recv_qpns));
   p->remote_lid = remote.remote_lid;
   memcpy(p->remote_gid.raw, remote.remote_gid_raw.data(),
          sizeof(p->remote_gid.raw));
@@ -600,11 +584,8 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   p->remote_signal_rkey = remote.remote_signal_rkey;
   p->remote_signal_qpn = remote.remote_signal_qpn;
 
-  if (!qps_to_rtr(p->send_qps, p->num_qps, remote, true)) return false;
+  if (!qps_to_rtr(p->send_qps, p->num_qps, remote)) return false;
   if (!qps_to_rts(p->send_qps, p->num_qps)) return false;
-
-  if (!qps_to_rtr(p->recv_qps, p->num_qps, remote, false)) return false;
-  if (!qps_to_rts(p->recv_qps, p->num_qps)) return false;
 
   if (!p->signal_qp) {
     if (!create_signal_qp(*p)) return false;
@@ -643,7 +624,7 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
   int a = rng() % p.num_qps;
   int b = rng() % p.num_qps;
   while (a == b) b = rng() % p.num_qps;
-  int chosen = (p.rtt_tracker[a].ewma_rtt_ns < p.rtt_tracker[b].ewma_rtt_ns)
+  int chosen = (p.qp_state[a].ewma_rtt_ns < p.qp_state[b].ewma_rtt_ns)
                    ? a
                    : b;
   p.last_qp_.store(chosen, std::memory_order_relaxed);
@@ -703,22 +684,20 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   slot->chunk_size = ck.chunk_size;
   slot->last_chunk_size = ck.last_size;
 
-  fprintf(stderr, "[put_async] START rank=%d rid=%u len=%zu chunks=%u unacked=%lu\n",
-          rank, rid, len, ck.count, (unsigned long)p->unacked_bytes_.load());
+  fprintf(stderr, "[put_async] START rank=%d rid=%u len=%zu chunks=%u\n",
+          rank, rid, len, ck.count);
 
   size_t off = 0;
   for (uint32_t ci = 0; ci < ck.count; ++ci) {
     uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
     int q = select_qp(*p, sz);
 
-    while (p->unacked_bytes_.load(std::memory_order_acquire) + sz >
-           kMaxInflightBytes) {
-      fprintf(stderr, "[put_async] FLOW_BLOCK unacked=%lu sz=%u rank=%d\n",
-              (unsigned long)p->unacked_bytes_.load(), sz, rank);
+    while (p->qp_state[q].unacked_bytes.load(std::memory_order_acquire) + sz >
+           kMaxInflightBytesPerQp) {
       std::unique_lock<std::mutex> lk(cv_mu_);
       cv_.wait_for(lk, kPollSleep, [&] {
-        return p->unacked_bytes_.load(std::memory_order_acquire) + sz <=
-                   kMaxInflightBytes ||
+        return p->qp_state[q].unacked_bytes.load(std::memory_order_acquire) + sz <=
+                   kMaxInflightBytesPerQp ||
                slot->failed.load(std::memory_order_acquire) ||
                stop_.load(std::memory_order_acquire);
       });
@@ -748,8 +727,8 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
       return rid;
     }
 
-    p->unacked_bytes_.fetch_add(sz, std::memory_order_relaxed);
-    p->rtt_tracker[q].last_send_ns.store(now_ns(), std::memory_order_release);
+    p->qp_state[q].unacked_bytes.fetch_add(sz, std::memory_order_relaxed);
+    p->qp_state[q].last_send_ns.store(now_ns(), std::memory_order_release);
     off += sz;
   }
 
@@ -833,11 +812,7 @@ unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
     p = it->second.get();
   }
 
-  if (!target.has_value()) {
-    slot->kind = RequestKind::SignalWait;
-  } else {
-    slot->kind = RequestKind::DataWait;
-  }
+  slot->kind = RequestKind::SignalWait;
 
   unsigned idx =
       p->next_expected_dispatch.fetch_add(1, std::memory_order_relaxed) &
@@ -931,7 +906,7 @@ void RdmaTransportAdapter::poll_loop() {
     {
       std::lock_guard<std::mutex> lk(mu_);
       for (auto& [rank, p] : peers_) {
-        if (p->send_cq || p->recv_cq || p->signal_cq)
+        if (p->send_cq || p->signal_cq)
           active.push_back({rank, p.get()});
       }
     }
@@ -939,10 +914,7 @@ void RdmaTransportAdapter::poll_loop() {
     bool any = false;
     for (auto& [rank, p] : active) {
       if (p->send_cq &&
-          poll_cq_set(*p, rank, p->send_cq, p->send_qps, p->num_qps, false))
-        any = true;
-      if (p->recv_cq &&
-          poll_cq_set(*p, rank, p->recv_cq, p->recv_qps, p->num_qps, true))
+          poll_cq_set(*p, rank, p->send_cq, p->send_qps, p->num_qps))
         any = true;
       if (p->signal_cq && poll_signal_cq(*p, rank))
         any = true;
@@ -955,8 +927,7 @@ void RdmaTransportAdapter::poll_loop() {
 }
 
 bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
-                                        ibv_qp* const* qps, int qp_count,
-                                        bool is_recv_side) {
+                                         ibv_qp* const* qps, int qp_count) {
   ibv_wc wc;
   bool any = false;
   int polls = 0;
@@ -967,20 +938,14 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
     if (wc.status != IBV_WC_SUCCESS) {
       unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
       RequestSlot* s = resolve_slot(rid);
-      if (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND) {
-        if (s && !s->completed.load(std::memory_order_acquire)) {
-          s->failed.store(true, std::memory_order_release);
-          s->completed.store(true, std::memory_order_release);
-          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->chunk_size + s->last_chunk_size;
-          p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
-        } else if (!s || s->completed.load(std::memory_order_acquire)) {
-          p.unacked_bytes_.fetch_sub(wc.byte_len, std::memory_order_relaxed);
-        }
-      } else {
-        if (s && !s->completed.load(std::memory_order_acquire)) {
-          s->failed.store(true, std::memory_order_release);
-          s->completed.store(true, std::memory_order_release);
-        }
+      int qp = find_qp_idx(qps, qp_count, wc.qp_num);
+      if (qp >= 0 &&
+          (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND)) {
+        p.qp_state[qp].unacked_bytes.fetch_sub(wc.byte_len, std::memory_order_relaxed);
+      }
+      if (s && !s->completed.load(std::memory_order_acquire)) {
+        s->failed.store(true, std::memory_order_release);
+        s->completed.store(true, std::memory_order_release);
       }
       cv_.notify_all();
       continue;
@@ -993,31 +958,27 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
         int qp = find_qp_idx(qps, qp_count, wc.qp_num);
         if (qp >= 0) {
           uint64_t send_ns =
-              p.rtt_tracker[qp].last_send_ns.load(std::memory_order_acquire);
+              p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
           if (send_ns != 0) {
             uint64_t rtt_ns = now_ns() - send_ns;
-            p.rtt_tracker[qp].ewma_rtt_ns =
+            p.qp_state[qp].ewma_rtt_ns =
                 kEwmaAlpha * static_cast<double>(rtt_ns) +
-                (1.0 - kEwmaAlpha) * p.rtt_tracker[qp].ewma_rtt_ns;
+                (1.0 - kEwmaAlpha) * p.qp_state[qp].ewma_rtt_ns;
           }
         }
 
         RequestSlot* s = resolve_slot(rid);
         if (!s) break;
+        if (qp >= 0)
+          p.qp_state[qp].unacked_bytes.fetch_sub(wc.byte_len, std::memory_order_relaxed);
         uint32_t done =
             s->completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (done >= s->total_chunks) {
-          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->chunk_size + s->last_chunk_size;
-          p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
           s->completed.store(true, std::memory_order_release);
-          fprintf(stderr, "[CQE] ALL_DONE rid=%u total=%lu unacked_now=%lu\n",
-                  rid, (unsigned long)total_bytes, (unsigned long)p.unacked_bytes_.load());
+          fprintf(stderr, "[CQE] ALL_DONE rid=%u rank=%d\n",
+                  rid, rank);
         }
         cv_.notify_all();
-        break;
-      }
-
-      case IBV_WC_RECV: {
         break;
       }
 
@@ -1026,8 +987,8 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
     }
   }
   if (wc_count > 0) {
-    fprintf(stderr, "[poll_cq_set] rank=%d is_recv=%d wc_count=%d\n",
-            rank, (int)is_recv_side, wc_count);
+    fprintf(stderr, "[poll_cq_set] rank=%d wc_count=%d\n",
+            rank, wc_count);
   }
   return any;
 }
@@ -1102,16 +1063,12 @@ void RdmaTransportAdapter::check_dispatch(RdmaPeer& p, int rank) {
 
     RequestSlot* s = resolve_slot(wait_id);
     if (s && s->peer_rank == rank) {
-      if (s->kind == RequestKind::SignalWait) {
-        uint64_t* tag_addr = reinterpret_cast<uint64_t*>(
-            signal_addr_ + static_cast<uintptr_t>(idx) * 8);
-        if (*tag_addr == s->expected_tag) {
-          s->completed.store(true, std::memory_order_release);
-        } else {
-          break;
-        }
-      } else if (s->kind == RequestKind::DataWait) {
+      uint64_t* tag_addr = reinterpret_cast<uint64_t*>(
+          signal_addr_ + static_cast<uintptr_t>(idx) * 8);
+      if (*tag_addr == s->expected_tag) {
         s->completed.store(true, std::memory_order_release);
+      } else {
+        break;
       }
     } else {
       break;
