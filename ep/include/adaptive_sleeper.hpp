@@ -71,7 +71,9 @@ class AdaptiveSleeper {
           // we check for % since cumulative unread writes will add on each
           // other
           UCCL_CHECK(ret == 0 && work_value % kWakeEventConst == 0);
-        } else if (events_to_poll[1].revents == POLLIN) {
+        } 
+        
+        if (events_to_poll[1].revents == POLLIN) {
           // TODO: need to dig into what each of these events does
           void* ctx;
           ibv_get_cq_event(proxy_ctx.comp_channel, &proxy_ctx.cq, &ctx);
