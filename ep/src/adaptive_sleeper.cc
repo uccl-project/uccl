@@ -16,7 +16,7 @@ void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
   if (std::chrono::steady_clock::now() - last_event_time_ >=
           kNoActivityThreshold &&
       last_event_time_ != std::chrono::steady_clock::time_point::min()) {
-    UCCL_LOG(INFO, UCCL_EP) << "No activity detected for the last 30 "
+    UCCL_LOG(INFO, UCCL_EP) << "No activity detected for the last 120 "
                                "seconds, putting proxy to sleep";
 
     state_ = SLEEP;
