@@ -536,17 +536,17 @@ class Buffer {
         stream_wait(comm_stream, compute_stream);
       }
       // Zero out per-rank and per-expert token counts
-      CUDA_CHECK(cudaMemsetAsync(
-          reinterpret_cast<void*>(num_tokens_per_rank_ptr), 0,
-          num_ranks * sizeof(int), comm_stream));
+      CUDA_CHECK(
+          cudaMemsetAsync(reinterpret_cast<void*>(num_tokens_per_rank_ptr), 0,
+                          num_ranks * sizeof(int), comm_stream));
       if (num_tokens_per_rdma_rank_ptr != 0) {
         CUDA_CHECK(cudaMemsetAsync(
             reinterpret_cast<void*>(num_tokens_per_rdma_rank_ptr), 0,
             num_ranks * sizeof(int), comm_stream));
       }
-      CUDA_CHECK(cudaMemsetAsync(
-          reinterpret_cast<void*>(num_tokens_per_expert_ptr), 0,
-          num_experts * sizeof(int), comm_stream));
+      CUDA_CHECK(
+          cudaMemsetAsync(reinterpret_cast<void*>(num_tokens_per_expert_ptr), 0,
+                          num_experts * sizeof(int), comm_stream));
       std::optional<EventHandle> event;
       if (async) {
         event = EventHandle(comm_stream);
@@ -1095,9 +1095,8 @@ class Buffer {
         is_token_in_rank_ptr == 0
             ? nullptr
             : reinterpret_cast<bool const*>(is_token_in_rank_ptr),
-        num_tokens,
-        num_worst_tokens, hidden_int4, num_scales, num_topk, num_experts,
-        scale_token_stride, scale_hidden_stride, rdma_buffer_ptr,
+        num_tokens, num_worst_tokens, hidden_int4, num_scales, num_topk,
+        num_experts, scale_token_stride, scale_hidden_stride, rdma_buffer_ptr,
         config.num_max_rdma_chunked_send_tokens,
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
@@ -1172,8 +1171,7 @@ class Buffer {
     };
     uccl::internode::combine(
         cuda_dtype_from_code(x_dtype_code),
-        combined_x_ptr == 0 ? nullptr
-                            : reinterpret_cast<void*>(combined_x_ptr),
+        combined_x_ptr == 0 ? nullptr : reinterpret_cast<void*>(combined_x_ptr),
         combined_topk_weights_ptr == 0
             ? nullptr
             : reinterpret_cast<float*>(combined_topk_weights_ptr),
