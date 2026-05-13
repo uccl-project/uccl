@@ -577,7 +577,7 @@ void Proxy::run_dual() {
   adaptive_sleeper_.init_timer();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     adaptive_sleeper_.maybe_sleep(ctx_);
-    
+
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,

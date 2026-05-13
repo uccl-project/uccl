@@ -26,19 +26,18 @@ class AdaptiveSleeper {
     UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper initialzed!";
   }
 
-  ~AdaptiveSleeper() {
-    close(work_eventfd_);
-  }
+  ~AdaptiveSleeper() { close(work_eventfd_); }
 
   // decide whether or not to put the CPU to sleep based on its current
   void maybe_sleep(ProxyCtx& proxy_ctx) {
     int ret;
 
     if (std::chrono::steady_clock::now() - last_event_time_ >=
-            kNoActivityThreshold && last_event_time_ != std::chrono::steady_clock::time_point::min()) {
+            kNoActivityThreshold &&
+        last_event_time_ != std::chrono::steady_clock::time_point::min()) {
       UCCL_LOG(INFO, UCCL_EP) << "No activity detected for the last 30 "
                                  "seconds, putting proxy to sleep";
-                                 
+
       state_ = SLEEP;
 
       // TODO: do I have to clear anything from the completion channel if I
@@ -71,8 +70,8 @@ class AdaptiveSleeper {
           // we check for % since cumulative unread writes will add on each
           // other
           UCCL_CHECK(ret == 0 && work_value % kWakeEventConst == 0);
-        } 
-        
+        }
+
         if (events_to_poll[1].revents == POLLIN) {
           // TODO: need to dig into what each of these events does
           void* ctx;
@@ -83,13 +82,14 @@ class AdaptiveSleeper {
           ibv_ack_cq_events(proxy_ctx.cq, 1);
         }
 
-        // TODO: there is some small bug that stops the second pass of bench kineto from running as quickly as it normally would
-        // does not affect correctness though
+        // TODO: there is some small bug that stops the second pass of bench
+        // kineto from running as quickly as it normally would does not affect
+        // correctness though
         last_event_time_ = std::chrono::steady_clock::now();
         state_ = POLL;
       } else if (n == 0) {
-         UCCL_LOG(INFO, UCCL_EP)
-              << "Proxy thread woke due to poll timeout, sleeping again";
+        UCCL_LOG(INFO, UCCL_EP)
+            << "Proxy thread woke due to poll timeout, sleeping again";
       } else {
         UCCL_LOG(FATAL) << "Encountered ppoll error";
       }
@@ -99,11 +99,9 @@ class AdaptiveSleeper {
   void maybe_wake_proxy_thread() {
     int ret = eventfd_write(work_eventfd_, kWakeEventConst);
     UCCL_CHECK(ret == 0);
-}
-
-  void init_timer() {
-    last_event_time_ = std::chrono::steady_clock::now();
   }
+
+  void init_timer() { last_event_time_ = std::chrono::steady_clock::now(); }
 
   std::string_view get_sleep_state() {
     switch (state_) {
@@ -116,7 +114,7 @@ class AdaptiveSleeper {
 
  private:
   //  TODO: change back to 30 seconds after testing
-  static constexpr auto kNoActivityThreshold = std::chrono::seconds(2);
+  static constexpr auto kNoActivityThreshold = std::chrono::seconds(10);
   static constexpr int kNumActivitiesToPoll = 2;
   static constexpr struct timespec kPollSleepDuration = {.tv_sec = 5};
   static constexpr int kWakeEventConst = 0x42;
