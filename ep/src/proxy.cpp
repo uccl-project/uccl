@@ -743,12 +743,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // Force load head from DRAM (like original code)
     uint64_t cur_head = h->volatile_head();
     if (cur_head == ring_tail) {
-      std::cout << "There is no more work to be done from GPU side queue\n";
-
       continue;  // No new work in this ring
     }
 
-    std::cout << "There is more work to be done from GPU side queue\n";
     // Batch processing for this ring buffer
     size_t batch_size = cur_head - ring_seen;
     if (batch_size == 0) continue;
