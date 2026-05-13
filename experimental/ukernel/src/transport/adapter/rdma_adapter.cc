@@ -494,16 +494,10 @@ RdmaConnectInit RdmaTransportAdapter::get_connect_init(int peer_rank) {
       p->num_qps = static_cast<uint8_t>(config_.num_qps);
       if (init_peer_qps(*p)) {
         p->qps_in_init = true;
-        for (int i = 0; i < p->num_qps; ++i) {
-          init.send_qpns[i] = p->send_qps[i]->qp_num;
-        }
         init.signal_qpn = p->signal_qp ? p->signal_qp->qp_num : 0;
         peers_[peer_rank] = std::move(p);
       }
     } else if (it->second->qps_in_init) {
-      for (int i = 0; i < it->second->num_qps; ++i) {
-        init.send_qpns[i] = it->second->send_qps[i]->qp_num;
-      }
       init.signal_qpn = it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
     }
   }
@@ -548,7 +542,7 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
     if (it != peers_.end() && it->second->put_ready && it->second->wait_ready)
       return true;
     if (it != peers_.end() && !it->second->qps_in_init) {
-      it->second.reset();
+      peers_.erase(it);
     }
   }
 
@@ -574,8 +568,6 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
     }
   }
 
-  memcpy(p->remote_send_qpns, remote.remote_send_qpns,
-         sizeof(p->remote_send_qpns));
   p->remote_lid = remote.remote_lid;
   memcpy(p->remote_gid.raw, remote.remote_gid_raw.data(),
          sizeof(p->remote_gid.raw));
@@ -595,6 +587,31 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
 
   p->put_ready = true;
   p->wait_ready = true;
+
+  {
+    auto state_name = [](ibv_qp_state s) -> char const* {
+      switch (s) {
+        case IBV_QPS_RESET: return "RESET";
+        case IBV_QPS_INIT:  return "INIT";
+        case IBV_QPS_RTR:   return "RTR";
+        case IBV_QPS_RTS:   return "RTS";
+        case IBV_QPS_SQD:   return "SQD";
+        case IBV_QPS_SQE:   return "SQE";
+        case IBV_QPS_ERR:   return "ERR";
+        default:            return "?";
+      }
+    };
+    ibv_qp_attr qattr;
+    ibv_qp_init_attr iattr;
+    for (int i = 0; i < p->num_qps; ++i) {
+      ibv_query_qp(p->send_qps[i], &qattr, IBV_QP_STATE, &iattr);
+      fprintf(stderr, "[RDMA] rank=%d send_qp[%d] qpn=%u state=%s\n",
+              rank, i, p->send_qps[i]->qp_num, state_name(qattr.qp_state));
+    }
+    ibv_query_qp(p->signal_qp, &qattr, IBV_QP_STATE, &iattr);
+    fprintf(stderr, "[RDMA] rank=%d signal_qp qpn=%u state=%s\n",
+            rank, p->signal_qp->qp_num, state_name(qattr.qp_state));
+  }
 
   return true;
 }
@@ -763,6 +780,12 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
   *tag_addr = tag;
 
   uint32_t imm = imm_encode(msg_id);
+
+  fprintf(stderr, "[signal_async] rank=%d msg_id=%u tag=0x%lx remote_qpn=%u remote_addr=0x%lx+0x%lx rkey=0x%x\n",
+          rank, msg_id, (unsigned long)tag, p->remote_signal_qpn,
+          (unsigned long)p->remote_signal_addr,
+          (unsigned long)(static_cast<uintptr_t>(msg_id) * 8),
+          p->remote_signal_rkey);
 
   ibv_sge sge = {};
   sge.addr = reinterpret_cast<uint64_t>(tag_addr);
@@ -1001,6 +1024,8 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
     wc_count++;
     any = true;
     if (wc.status != IBV_WC_SUCCESS) {
+      fprintf(stderr, "[poll_signal_cq] ERROR rank=%d status=%d opcode=%d wrid=0x%lx\n",
+              rank, wc.status, wc.opcode, (unsigned long)wc.wr_id);
       if (wc.opcode == IBV_WC_RECV ||
           wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
         (void)repost_signal_recv(p);
@@ -1030,6 +1055,8 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
         (void)repost_signal_recv(p);
         uint32_t imm = wc.imm_data;
         uint8_t msg_id = imm_msg_id(imm);
+        fprintf(stderr, "[poll_signal_cq] RECV_IMM rank=%d msg_id=%u imm=0x%x\n",
+                rank, msg_id, imm);
         auto& t = p.trackers[msg_id];
         t.completed.store(true, std::memory_order_release);
         check_dispatch(p, rank);
@@ -1057,20 +1084,37 @@ void RdmaTransportAdapter::check_dispatch(RdmaPeer& p, int rank) {
     unsigned idx = p.dispatch_cursor & kMsgIdMask;
     auto& t = p.trackers[idx];
 
-    if (!t.completed.load(std::memory_order_acquire)) break;
+    if (!t.completed.load(std::memory_order_acquire)) {
+      fprintf(stderr, "[check_dispatch] rank=%d cursor=%u expected=%u idx=%u NOT_COMPLETED\n",
+              rank, p.dispatch_cursor, expected, idx);
+      break;
+    }
     unsigned wait_id = t.wait_slot.load(std::memory_order_acquire);
-    if (wait_id == 0) break;
+    if (wait_id == 0) {
+      fprintf(stderr, "[check_dispatch] rank=%d cursor=%u expected=%u idx=%u completed BUT wait_id=0\n",
+              rank, p.dispatch_cursor, expected, idx);
+      break;
+    }
 
     RequestSlot* s = resolve_slot(wait_id);
     if (s && s->peer_rank == rank) {
       uint64_t* tag_addr = reinterpret_cast<uint64_t*>(
           signal_addr_ + static_cast<uintptr_t>(idx) * 8);
+      fprintf(stderr, "[check_dispatch] rank=%d cursor=%u idx=%u tag=0x%lx expected_tag=0x%lx wait_id=%u\n",
+              rank, p.dispatch_cursor, idx, (unsigned long)*tag_addr,
+              (unsigned long)s->expected_tag, wait_id);
       if (*tag_addr == s->expected_tag) {
         s->completed.store(true, std::memory_order_release);
+        fprintf(stderr, "[check_dispatch] MATCH rank=%d idx=%u wait_id=%u\n",
+                rank, idx, wait_id);
       } else {
+        fprintf(stderr, "[check_dispatch] TAG_MISMATCH rank=%d idx=%u\n",
+                rank, idx);
         break;
       }
     } else {
+      fprintf(stderr, "[check_dispatch] rank=%d cursor=%u idx=%u BAD_SLOT s=%p peer=%d\n",
+              rank, p.dispatch_cursor, idx, (void*)s, s ? s->peer_rank : -1);
       break;
     }
 

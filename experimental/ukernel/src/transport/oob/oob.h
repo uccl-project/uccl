@@ -109,10 +109,6 @@ struct TcpP2PInfo {
 };
 
 struct RdmaP2PInfo {
-  uint32_t send_qpn0 = 0;
-  uint32_t send_qpn1 = 0;
-  uint32_t send_qpn2 = 0;
-  uint32_t send_qpn3 = 0;
   uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
@@ -159,10 +155,6 @@ UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
                            f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
 UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
-                           f("send_qpn0", v.send_qpn0);
-                           f("send_qpn1", v.send_qpn1);
-                           f("send_qpn2", v.send_qpn2);
-                           f("send_qpn3", v.send_qpn3);
                            f("signal_qpn", v.signal_qpn);
                            f("num_qps", v.num_qps);
                            f("lid", v.lid);

@@ -26,7 +26,6 @@ struct RdmaTransportConfig {
 };
 
 struct RdmaConnectInit {
-  uint32_t send_qpns[4] = {};
   uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
@@ -136,7 +135,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
     bool wait_ready = false;
     bool qps_in_init = false;
 
-    uint32_t remote_send_qpns[kMaxQPs] = {};
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
     uint8_t remote_gid_index = 0;
