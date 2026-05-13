@@ -852,7 +852,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
-  cq_ex_attr.channel = nullptr;
+  cq_ex_attr.channel = S.comp_channel;
   cq_ex_attr.comp_vector = 0;
   cq_ex_attr.comp_mask = 0;
   cq_ex_attr.flags = 0;
@@ -885,8 +885,6 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
 }
 
 ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S) {
-  // TODO(Shawn): check if there are different cases for EFA (which already has
-  // cq_ext)
   S.comp_channel = ibv_create_comp_channel(S.context);
 
   if (!S.comp_channel) {
