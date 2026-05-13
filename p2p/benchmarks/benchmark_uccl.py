@@ -23,24 +23,20 @@ except ImportError as exc:
 
 def _make_buffer(size_bytes: int, device: str, gpu_idx: int, pinned: bool = False):
     """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
+    if size_bytes <= 0:
+        raise ValueError(f"buffer size must be positive, got {size_bytes}")
     if device == "gpu":
-        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
-        n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype).cuda()
+        buf = torch.ones(size_bytes, dtype=torch.uint8, device=f"cuda:{gpu_idx}")
         assert buf.device.type == "cuda"
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     elif device == "cpu" and pinned:
-        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
-        n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype).pin_memory()
+        buf = torch.ones(size_bytes, dtype=torch.uint8).pin_memory()
         assert buf.is_pinned()
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu (pageable)
-        dtype = np.dtype(np.float32) if size_bytes >= 4 else np.dtype(np.uint8)
-        n_elems = size_bytes // dtype.itemsize
-        buf = np.ones(n_elems, dtype=dtype)
+        buf = np.ones(size_bytes, dtype=np.uint8)
         ptr = buf.ctypes.data
     return buf, ptr
 

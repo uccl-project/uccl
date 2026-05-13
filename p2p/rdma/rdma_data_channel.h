@@ -176,14 +176,7 @@ class RDMADataChannel {
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
 
-    if (req->send_type != SendType::Read &&
-        req->getLocalLen() <= impl_->getMaxInlineData()) {
-      qpx->wr_flags |= IBV_SEND_INLINE;
-      ibv_wr_set_inline_data(qpx, (void*)req->getLocalAddress(),
-                             req->getLocalLen());
-    } else {
-      ibv_wr_set_sge_list(qpx, num_sge, sge);
-    }
+    ibv_wr_set_sge_list(qpx, num_sge, sge);
 
     impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
 
@@ -245,11 +238,6 @@ class RDMADataChannel {
     } else {
       UCCL_LOG(ERROR) << "Unknown SendType in RDMADataChannel::postRequest";
       return -1;
-    }
-
-    if (req->send_type != SendType::Read &&
-        req->getLocalLen() <= impl_->getMaxInlineData()) {
-      wr.send_flags |= IBV_SEND_INLINE;
     }
 
     int ret = ibv_post_send(qp_, &wr, &bad_wr);

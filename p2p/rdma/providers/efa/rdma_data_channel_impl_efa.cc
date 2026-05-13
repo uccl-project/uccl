@@ -8,7 +8,6 @@
 
 #define GID_INDEX_EFA 0
 #define LID_EFA 0
-#define EFA_MAX_INLINE_DATA 0
 #define EFA_SERVICE_LEVEL 8
 #define QKEY 0x15695
 
@@ -68,7 +67,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   qp_attr.cap.max_recv_wr = kMaxRecvWr;
   qp_attr.cap.max_send_sge = kMaxSendSeg;
   qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-  qp_attr.cap.max_inline_data = getMaxInlineData();
+  qp_attr.cap.max_inline_data = 0;
 
   qp_attr.send_cq = ibv_cq_ex_to_cq(*cq_ex);
   qp_attr.recv_cq = ibv_cq_ex_to_cq(*cq_ex);
@@ -210,9 +209,5 @@ inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
 }
 
 inline void EFAChannelImpl::initPreAllocResources() {}
-
-inline uint32_t EFAChannelImpl::getMaxInlineData() const {
-  return EFA_MAX_INLINE_DATA;
-}
 
 #endif  // RDMA_DATA_CHANNEL_IMPL_EFA_CC_INCLUDED

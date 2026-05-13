@@ -22,8 +22,6 @@ class IBChannelImpl : public RDMADataChannelImpl {
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
-  uint32_t getMaxInlineData() const override;
-
   void initPreAllocResources() override;
 
  private:
