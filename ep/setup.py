@@ -162,6 +162,7 @@ if __name__ == "__main__":
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
+    use_dmabuf = False
 
     if torch.version.cuda:
         # Add CUDA library directory to library_dirs
@@ -232,6 +233,16 @@ if __name__ == "__main__":
             include_dirs.append(Path(efa_home) / "include")
             library_dirs.append(Path(efa_home) / "lib")
             libraries.append("efa")
+
+        # DMA-BUF registration avoids nvidia_peermem/efa_nv_peermem.
+        # Set USE_DMABUF=1 to compile with this path.
+        use_dmabuf = int(os.getenv("USE_DMABUF", "0"))
+        if use_dmabuf:
+            print("Building with DMA-BUF GPU memory registration (USE_DMABUF)")
+            cxx_flags.append("-DUSE_DMABUF")
+            nvcc_flags.append("-DUSE_DMABUF")
+        else:
+            print("Building without DMA-BUF GPU memory registration")
 
         # Add GH200 flags if detected
         if has_gh200:
@@ -416,6 +427,7 @@ if __name__ == "__main__":
             print(f" > GPU: {gpu_name}")
         print(f" > EFA Support: {'Yes' if has_efa else 'No'}")
         print(f" > GH200 Support: {'Yes' if has_gh200 else 'No'}")
+        print(f" > DMA-BUF Support: {'Yes' if use_dmabuf else 'No'}")
     print(f" > Device Arch: {device_arch}")
     print(f" > Sources: {len(sources)} files")
     print(f" > Headers (tracked): {len(header_files)} files")

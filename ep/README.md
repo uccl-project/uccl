@@ -29,6 +29,7 @@ bash build.sh cu12 ep --install
 
 Notes:  
 * UCCL-EP `setup.py` and `Makefile` auto-detects the existence of `/opt/amazon/efa` to enable EFA-specific RDMA path with `-DEFA`. If you hit `RDMA buffer MR registration failed: Invalid argument`, it is likely that your UCCL-EP wheel uses a non-EFA RDMA path. In that case, we suggest making sure `/opt/amazon/efa` exists, and rebuilding and reinstalling the wheel. 
+* UCCL-EP by default uses `ibv_reg_mr_iova2` for GPU memory registration with RDMA, which requires `nvidia_peermem / efa_nv_peermem / ib_peer_mem` kernel module dependency. We suggest making sure the corresponding kernel modules are loaded (i.e., `sudo modprobe xxx`), or you can specify `USE_DMABUF=1` when building the wheel (all three ways above) to use kernel DMABUF mechanisms; otherwise, you may also hit `Invalid argument` registartion error.
 * Docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554.
 
 ## Build on ROCm

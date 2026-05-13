@@ -14,6 +14,8 @@
 #                                     Example: CONTAINER_ENGINE=apptainer ./build.sh cu12 all
 #   USE_INTEL_RDMA_NIC=1            Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                                     Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
+#   USE_DMABUF=1                    Enable DMA-BUF GPU memory registration for EP builds
+#                                     Example: USE_DMABUF=1 ./build.sh cu12 ep
 #   UCCL_RETAG_TO_HOST_GLIBC=1      Allow retagging the wheel to the host's
 #                                   glibc version when it differs from the container's.
 #                                   By default the wheel keeps the container's glibc tag.
@@ -388,10 +390,9 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
   fi
 
   for env_var in TARGET PY_VER ARCH ROCM_IDX_URL IS_EFA WHEEL_DIR BUILD_TYPE \
-    USE_DIETGPU USE_INTEL_RDMA_NIC PER_EXPERT_BATCHING MAKE_NORMAL_MODE \
+    USE_DIETGPU USE_INTEL_RDMA_NIC USE_DMABUF PER_EXPERT_BATCHING \
     TORCH_CUDA_ARCH_LIST HOST_GLIBC_VER UCCL_RETAG_TO_HOST_GLIBC \
-    PYTORCH_ROCM_ARCH \
-    UCCL_LOCAL_VERSION; do
+    PYTORCH_ROCM_ARCH UCCL_LOCAL_VERSION; do
     value="${!env_var-}"
     CONTAINER_RUN_ARGS+=(--env "$env_var=$value")
   done
@@ -422,9 +423,9 @@ else
     -e BUILD_TYPE="${BUILD_TYPE}" \
     -e USE_DIETGPU="${USE_DIETGPU:-0}" \
     -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
+    -e USE_DMABUF="${USE_DMABUF:-0}" \
     -e PER_EXPERT_BATCHING="${PER_EXPERT_BATCHING:-0}" \
     -e PYTORCH_ROCM_ARCH="${PYTORCH_ROCM_ARCH:-}" \
-    -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
     -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
     -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \
     -e UCCL_RETAG_TO_HOST_GLIBC="${UCCL_RETAG_TO_HOST_GLIBC:-0}" \

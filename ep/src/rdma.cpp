@@ -572,14 +572,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
     g_shared_rdma_cv.notify_all();
   };
+#else
+  auto signal_failure = []() {};
 #endif
 
   S.context = ibv_open_device(dev_list[selected_dev_idx]);
   if (!S.context) {
     perror("Failed to open device");
-#ifdef USE_DMABUF
     signal_failure();
-#endif
     exit(1);
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
@@ -589,9 +589,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   S.pd = ibv_alloc_pd(S.context);
   if (!S.pd) {
     perror("Failed to allocate PD");
-#ifdef USE_DMABUF
     signal_failure();
-#endif
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
@@ -642,17 +640,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   if (!S.mr) {
     perror("RDMA buffer MR registration failed");
-#ifdef USE_DMABUF
     signal_failure();
-#endif
     exit(1);
   }
 
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
-#ifdef USE_DMABUF
     signal_failure();
-#endif
     exit(1);
   }
 
