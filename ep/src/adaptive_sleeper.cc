@@ -21,9 +21,6 @@ void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
 
     state_ = SLEEP;
 
-    // TODO: do I have to clear anything from the completion channel if I
-    // did not ask for anything?
-    // TODO: should I check for all types of notifications (solicited only)?
     ret = ibv_req_notify_cq(proxy_ctx.cq, 0);
     UCCL_PCHECK(ret == 0);
   }
@@ -44,7 +41,6 @@ void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
     UCCL_PCHECK(n != -1);
 
     if (n > 0) {
-      // handle the necessary acknowledgements for the file descriptors
       if (events_to_poll[0].revents == POLLIN) {
         UCCL_LOG(INFO, UCCL_EP)
             << "Waking up because of dispatch/combine trigger";
@@ -58,18 +54,12 @@ void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
 
       if (events_to_poll[1].revents == POLLIN) {
         UCCL_LOG(INFO, UCCL_EP) << "Waking up because of RDMA event";
-        // TODO: need to dig into what each of these events does
         void* ctx;
         ibv_get_cq_event(proxy_ctx.comp_channel, &proxy_ctx.cq, &ctx);
         // acknowledge the event to clear the notification
-        // TODO: what happens If I dont ack
-        // TODO: what happens if I ack more than I get?
         ibv_ack_cq_events(proxy_ctx.cq, 1);
       }
 
-      // TODO: there is some small bug that stops the second pass of bench
-      // kineto from running as quickly as it normally would does not affect
-      // correctness though
       last_event_time_ = std::chrono::steady_clock::now();
       state_ = POLL;
     } else if (n == 0) {
