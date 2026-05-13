@@ -6,8 +6,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
+#include <random>
 #include <unistd.h>
+
+#include "util/util.h"
 
 namespace UKernel {
 namespace Transport {
@@ -62,12 +64,29 @@ int detect_gid(ibv_context* ctx, ibv_port_attr const* port_attr,
   return 0;
 }
 
-int pick_dev() {
-  int n = 0;
-  ibv_device** list = ibv_get_device_list(&n);
-  if (!list || n == 0) return -1;
-  ibv_free_device_list(list);
-  return 0;
+int pick_dev_for_gpu(int gpu_idx) {
+  auto gpu_cards = uccl::get_gpu_cards();
+  if (gpu_idx < 0 || static_cast<size_t>(gpu_idx) >= gpu_cards.size()) return 0;
+
+  auto nics = uccl::get_rdma_nics();
+  if (nics.empty()) return 0;
+
+  int best_idx = 0;
+  uint32_t best_dist = UINT32_MAX;
+  int ndev = 0;
+  ibv_device** devs = ibv_get_device_list(&ndev);
+  if (!devs) return 0;
+
+  for (int j = 0; j < ndev; ++j) {
+    std::string name = ibv_get_device_name(devs[j]);
+    auto it = std::find_if(nics.begin(), nics.end(),
+        [&](auto const& p) { return p.first == name; });
+    if (it == nics.end()) continue;
+    uint32_t d = uccl::safe_pcie_distance(gpu_cards[gpu_idx], it->second);
+    if (d < best_dist) { best_dist = d; best_idx = j; }
+  }
+  ibv_free_device_list(devs);
+  return best_idx;
 }
 
 }  // namespace
@@ -86,14 +105,7 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
     : local_gpu_idx_(local_gpu_idx), config_(config) {
   if (config_.num_qps < 1 || config_.num_qps > kMaxQPs) config_.num_qps = 4;
 
-  std::srand(static_cast<unsigned>(now_ns() & 0xFFFFFFFFU));
-
-  local_dev_idx_ = pick_dev();
-  if (local_dev_idx_ < 0) {
-    std::cerr << "[ERROR] RdmaAdapter: no RDMA device for GPU "
-              << local_gpu_idx_ << std::endl;
-    return;
-  }
+  local_dev_idx_ = pick_dev_for_gpu(local_gpu_idx_);
 
   int ndev = 0;
   ibv_device** devs = ibv_get_device_list(&ndev);
@@ -113,7 +125,7 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
   ctx_ = raw;
 
   if (ibv_query_device(ctx_, &dev_attr_) != 0) {
-    std::cerr << "[ERROR] RdmaAdapter: ibv_query_device failed" << std::endl;
+    fprintf(stderr, "[ERROR] RdmaAdapter: ibv_query_device failed\n");
     ctx_handle_.reset();
     ctx_ = nullptr;
     return;
@@ -156,9 +168,6 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
 
   stop_.store(false, std::memory_order_release);
   poll_thread_ = std::thread([this] { poll_loop(); });
-
-  std::cout << "[INFO] RdmaAdapter: dev=" << ibv_get_device_name(ctx_->device)
-            << " lid=" << lid_ << " gid_idx=" << (int)gid_index_ << std::endl;
 }
 
 RdmaTransportAdapter::~RdmaTransportAdapter() {
@@ -197,9 +206,9 @@ bool RdmaTransportAdapter::create_qp_set(ibv_qp** qps, ibv_cq** cq, int count,
   attr.recv_cq = *cq;
   attr.qp_type = IBV_QPT_RC;
   attr.cap.max_send_wr = kQpMaxSendWr;
-  attr.cap.max_recv_wr = config_.recv_wr_pool_per_qp;
+  attr.cap.max_recv_wr = 1;
   attr.cap.max_send_sge = 1;
-  attr.cap.max_recv_sge = 4;
+  attr.cap.max_recv_sge = 1;
   attr.cap.max_inline_data = 0;
 
   for (int i = 0; i < count; ++i) {
@@ -411,8 +420,6 @@ bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   }
   p.signal_pool = std::move(pool);
   p.signal_post_idx = 0;
-  std::cerr << "[init_signal_pool] posted " << kSignalPoolSz
-            << " recv WRs on signal_qp" << std::endl;
   return true;
 }
 
@@ -437,8 +444,10 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
   static constexpr int kSignalPoolSz = 16;
   p.signal_pool->wrs[idx].next = nullptr;
   ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(p.signal_qp, &p.signal_pool->wrs[idx], &bad) != 0)
+  if (ibv_post_recv(p.signal_qp, &p.signal_pool->wrs[idx], &bad) != 0) {
+    fprintf(stderr, "[repost_signal_recv] FAILED idx=%d errno=%d\n", idx, errno);
     return false;
+  }
   p.signal_post_idx = (idx + 1) % kSignalPoolSz;
   return true;
 }
@@ -446,7 +455,7 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
 // ── peer init / destroy ─────────────────────────────────────────────────────
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
-  int cq_size = config_.recv_wr_pool_per_qp * p.num_qps * 2 + kQpMaxSendWr;
+  int cq_size = kQpMaxSendWr * 2;
   return create_qp_set(p.send_qps, &p.send_cq, p.num_qps, cq_size) &&
          create_qp_set(p.recv_qps, &p.recv_cq, p.num_qps, cq_size) &&
          qps_to_init(p.send_qps, p.num_qps) &&
@@ -464,10 +473,6 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
       ibv_destroy_qp(p.recv_qps[q]);
       p.recv_qps[q] = nullptr;
     }
-    if (p.recv_pools[q] && p.recv_pools[q]->mr) {
-      ibv_dereg_mr(p.recv_pools[q]->mr);
-    }
-    p.recv_pools[q].reset();
   }
   if (p.send_cq) {
     ibv_destroy_cq(p.send_cq);
@@ -478,55 +483,6 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
     p.recv_cq = nullptr;
   }
   destroy_signal_qp(p);
-}
-
-// ── recv pools ───────────────────────────────────────────────────────────────
-
-bool RdmaTransportAdapter::init_recv_pools(RdmaPeer& p) {
-  int n = config_.recv_wr_pool_per_qp;
-  for (int q = 0; q < p.num_qps; ++q) {
-    auto pool = std::make_unique<RecvPool>();
-    pool->buffer.resize(static_cast<size_t>(n) * 32);
-    pool->mr = ibv_reg_mr(pd_, pool->buffer.data(), pool->buffer.size(),
-                          IBV_ACCESS_LOCAL_WRITE);
-    if (!pool->mr) return false;
-
-    pool->sges.resize(n);
-    pool->wrs.resize(n);
-    for (int i = 0; i < n; ++i) {
-      pool->sges[i].addr = reinterpret_cast<uint64_t>(pool->buffer.data() +
-                                                      static_cast<size_t>(i) *
-                                                          32);
-      pool->sges[i].length = 32;
-      pool->sges[i].lkey = pool->mr->lkey;
-
-      pool->wrs[i].wr_id = 0;
-      pool->wrs[i].sg_list = &pool->sges[i];
-      pool->wrs[i].num_sge = 1;
-      pool->wrs[i].next = (i + 1 < n) ? &pool->wrs[i + 1] : nullptr;
-    }
-
-    ibv_recv_wr* bad = nullptr;
-    if (ibv_post_recv(p.recv_qps[q], &pool->wrs[0], &bad) != 0) {
-      return false;
-    }
-    p.recv_pools[q] = std::move(pool);
-    p.recv_post_idx[q] = 0;
-  }
-  return true;
-}
-
-bool RdmaTransportAdapter::repost_one_recv(RdmaPeer& p, int qp_idx) {
-  auto& pool = p.recv_pools[qp_idx];
-  if (!pool) return false;
-  int idx = p.recv_post_idx[qp_idx];
-  int n = config_.recv_wr_pool_per_qp;
-  pool->wrs[idx].next = nullptr;
-  ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(p.recv_qps[qp_idx], &pool->wrs[idx], &bad) != 0)
-    return false;
-  p.recv_post_idx[qp_idx] = (idx + 1) % n;
-  return true;
 }
 
 // ── connection management ───────────────────────────────────────────────────
@@ -573,8 +529,8 @@ bool RdmaTransportAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   if (has_put_path(spec.peer_rank)) return true;
   if (spec.type != PeerConnectType::Connect) return false;
   if (!std::holds_alternative<RdmaPeerConnectSpec>(spec.detail)) return false;
-  return do_connect(spec.peer_rank,
-                    std::get<RdmaPeerConnectSpec>(spec.detail));
+  return setup_peer_path(spec.peer_rank,
+                         std::get<RdmaPeerConnectSpec>(spec.detail));
 }
 
 bool RdmaTransportAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
@@ -582,8 +538,8 @@ bool RdmaTransportAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
   if (has_wait_path(spec.peer_rank)) return true;
   if (spec.type != PeerConnectType::Accept) return false;
   if (!std::holds_alternative<RdmaPeerConnectSpec>(spec.detail)) return false;
-  return do_accept(spec.peer_rank,
-                   std::get<RdmaPeerConnectSpec>(spec.detail));
+  return setup_peer_path(spec.peer_rank,
+                         std::get<RdmaPeerConnectSpec>(spec.detail));
 }
 
 bool RdmaTransportAdapter::has_put_path(int rank) const {
@@ -598,79 +554,12 @@ bool RdmaTransportAdapter::has_wait_path(int rank) const {
   return it != peers_.end() && it->second->wait_ready;
 }
 
-bool RdmaTransportAdapter::do_connect(int rank,
-                                      RdmaPeerConnectSpec const& remote) {
+bool RdmaTransportAdapter::setup_peer_path(int rank,
+                                          RdmaPeerConnectSpec const& remote) {
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = peers_.find(rank);
-    if (it != peers_.end() && it->second->put_ready) return true;
-    if (it != peers_.end() && !it->second->qps_in_init) {
-      it->second.reset();
-    }
-  }
-
-  RdmaPeer* p = nullptr;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(rank);
-    if (it != peers_.end() && it->second->qps_in_init) {
-      p = it->second.get();
-    }
-  }
-
-  if (!p) {
-    auto np = std::make_unique<RdmaPeer>();
-    np->num_qps = remote.num_qps > 0 ? remote.num_qps
-                                     : static_cast<uint8_t>(config_.num_qps);
-    if (!init_peer_qps(*np)) return false;
-    np->qps_in_init = true;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      peers_[rank] = std::move(np);
-      p = peers_[rank].get();
-    }
-  }
-
-  memcpy(p->remote_send_qpns, remote.remote_send_qpns,
-         sizeof(p->remote_send_qpns));
-  memcpy(p->remote_recv_qpns, remote.remote_recv_qpns,
-         sizeof(p->remote_recv_qpns));
-  p->remote_lid = remote.remote_lid;
-  memcpy(p->remote_gid.raw, remote.remote_gid_raw.data(),
-         sizeof(p->remote_gid.raw));
-  p->remote_gid_index = remote.remote_gid_index;
-  p->remote_signal_addr = remote.remote_signal_addr;
-  p->remote_signal_rkey = remote.remote_signal_rkey;
-  p->remote_signal_qpn = remote.remote_signal_qpn;
-
-  if (!qps_to_rtr(p->send_qps, p->num_qps, remote, true)) return false;
-  if (!qps_to_rts(p->send_qps, p->num_qps)) return false;
-
-  if (!qps_to_rtr(p->recv_qps, p->num_qps, remote, false)) return false;
-  if (!qps_to_rts(p->recv_qps, p->num_qps)) return false;
-  if (!p->wait_ready && !init_recv_pools(*p)) return false;
-
-  if (!p->signal_qp) {
-    if (!create_signal_qp(*p)) return false;
-  }
-  if (!connect_signal_qp(*p, p->remote_signal_qpn)) return false;
-  if (!p->signal_pool && !init_signal_pool(*p)) return false;
-
-  std::cerr << "[do_connect] SIGNAL_READY rank=" << rank
-            << " signal_qpn=" << p->signal_qp->qp_num
-            << " remote_qpn=" << p->remote_signal_qpn << std::endl;
-  p->put_ready = true;
-  p->wait_ready = true;
-
-  return true;
-}
-
-bool RdmaTransportAdapter::do_accept(int rank,
-                                     RdmaPeerConnectSpec const& remote) {
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(rank);
-    if (it != peers_.end() && it->second->wait_ready && it->second->put_ready)
+    if (it != peers_.end() && it->second->put_ready && it->second->wait_ready)
       return true;
     if (it != peers_.end() && !it->second->qps_in_init) {
       it->second.reset();
@@ -716,7 +605,6 @@ bool RdmaTransportAdapter::do_accept(int rank,
 
   if (!qps_to_rtr(p->recv_qps, p->num_qps, remote, false)) return false;
   if (!qps_to_rts(p->recv_qps, p->num_qps)) return false;
-  if (!p->wait_ready && !init_recv_pools(*p)) return false;
 
   if (!p->signal_qp) {
     if (!create_signal_qp(*p)) return false;
@@ -724,9 +612,6 @@ bool RdmaTransportAdapter::do_accept(int rank,
   if (!connect_signal_qp(*p, p->remote_signal_qpn)) return false;
   if (!p->signal_pool && !init_signal_pool(*p)) return false;
 
-  std::cerr << "[do_accept] SIGNAL_READY rank=" << rank
-            << " signal_qpn=" << p->signal_qp->qp_num
-            << " remote_qpn=" << p->remote_signal_qpn << std::endl;
   p->put_ready = true;
   p->wait_ready = true;
 
@@ -754,9 +639,10 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
     return 0;
   }
 
-  int a = std::rand() % p.num_qps;
-  int b = std::rand() % p.num_qps;
-  while (a == b) b = std::rand() % p.num_qps;
+  static thread_local std::mt19937 rng(std::random_device{}());
+  int a = rng() % p.num_qps;
+  int b = rng() % p.num_qps;
+  while (a == b) b = rng() % p.num_qps;
   int chosen = (p.rtt_tracker[a].ewma_rtt_ns < p.rtt_tracker[b].ewma_rtt_ns)
                    ? a
                    : b;
@@ -788,11 +674,7 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     auto it = mr_map_.find(local_buf_id);
     if (it != mr_map_.end()) lmr = it->second;
   }
-  if (!lmr) {
-    lmr = ibv_reg_mr(pd_, local_ptr, len,
-                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!lmr) return 0;
-  }
+  if (!lmr) return 0;
 
   uint64_t raddr = 0;
   uint32_t rkey = 0;
@@ -818,24 +700,21 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   auto ck = chunk_split(len);
   slot->total_chunks = ck.count;
   slot->completed_chunks.store(0, std::memory_order_release);
-  slot->regular_chunk_size = ck.regular_size;
+  slot->chunk_size = ck.chunk_size;
   slot->last_chunk_size = ck.last_size;
 
-  std::cerr << "[put_async] start rank=" << rank << " rid=" << rid
-            << " len=" << len << " chunks=" << ck.count
-            << " unacked=" << p->unacked_bytes_.load() << std::endl;
+  fprintf(stderr, "[put_async] START rank=%d rid=%u len=%zu chunks=%u unacked=%lu\n",
+          rank, rid, len, ck.count, (unsigned long)p->unacked_bytes_.load());
 
   size_t off = 0;
   for (uint32_t ci = 0; ci < ck.count; ++ci) {
-    uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.regular_size;
+    uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
     int q = select_qp(*p, sz);
 
     while (p->unacked_bytes_.load(std::memory_order_acquire) + sz >
            kMaxInflightBytes) {
-      std::cerr << "[put_async] FLOW_BLOCK unacked="
-                << p->unacked_bytes_.load(std::memory_order_acquire)
-                << " + sz=" << sz << " > max=" << kMaxInflightBytes
-                << " rank=" << rank << " ci=" << ci << std::endl;
+      fprintf(stderr, "[put_async] FLOW_BLOCK unacked=%lu sz=%u rank=%d\n",
+              (unsigned long)p->unacked_bytes_.load(), sz, rank);
       std::unique_lock<std::mutex> lk(cv_mu_);
       cv_.wait_for(lk, kPollSleep, [&] {
         return p->unacked_bytes_.load(std::memory_order_acquire) + sz <=
@@ -864,17 +743,12 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
 
     ibv_send_wr* bad = nullptr;
     if (ibv_post_send(p->send_qps[q], &wr, &bad) != 0) {
-      std::cerr << "[put_async] POST_FAILED rank=" << rank << " ci=" << ci
-                << " qp=" << q << " sz=" << sz << " rid=" << rid << std::endl;
       slot->failed.store(true, std::memory_order_release);
       slot->completed.store(true, std::memory_order_release);
       return rid;
     }
 
-    uint64_t prev = p->unacked_bytes_.fetch_add(sz, std::memory_order_relaxed);
-    std::cerr << "[put_async] POST_OK ci=" << ci << " sz=" << sz
-              << " unacked: " << prev << " -> " << (prev + sz)
-              << " rid=" << rid << " qp=" << q << std::endl;
+    p->unacked_bytes_.fetch_add(sz, std::memory_order_relaxed);
     p->rtt_tracker[q].last_send_ns.store(now_ns(), std::memory_order_release);
     off += sz;
   }
@@ -902,14 +776,14 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
   slot->total_chunks = 1;
   slot->completed_chunks.store(0, std::memory_order_release);
 
-  uint8_t msg_id = p->next_msg_id++ & kMsgIdMask;
+  uint8_t msg_id = p->next_msg_id.fetch_add(1, std::memory_order_relaxed) & kMsgIdMask;
 
   uint64_t* tag_addr =
       reinterpret_cast<uint64_t*>(signal_addr_ +
                                   static_cast<uintptr_t>(msg_id) * 8);
   *tag_addr = tag;
 
-  uint32_t imm = imm_encode(msg_id, 0, 0);
+  uint32_t imm = imm_encode(msg_id);
 
   ibv_sge sge = {};
   sge.addr = reinterpret_cast<uint64_t>(tag_addr);
@@ -929,15 +803,13 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
 
   ibv_send_wr* bad = nullptr;
   if (ibv_post_send(p->signal_qp, &wr, &bad) != 0) {
-    std::cerr << "[signal_async] FAILED ibv_post_send rank=" << rank
-              << " msg_id=" << (int)msg_id << std::endl;
+    fprintf(stderr, "[signal_async] POST_FAILED rank=%d msg_id=%u\n", rank, msg_id);
     slot->failed.store(true, std::memory_order_release);
     slot->completed.store(true, std::memory_order_release);
     return rid;
   }
 
-  std::cerr << "[signal_async] posted rank=" << rank << " msg_id=" << (int)msg_id
-            << " tag=" << tag << " rid=" << rid << std::endl;
+  fprintf(stderr, "[signal_async] OK rank=%d msg_id=%u rid=%u\n", rank, msg_id, rid);
   return rid;
 }
 
@@ -984,11 +856,7 @@ bool RdmaTransportAdapter::poll_completion(unsigned id) {
 }
 
 bool RdmaTransportAdapter::wait_completion(unsigned id) {
-  int spins = 0;
   while (!poll_completion(id)) {
-    if (++spins % 100000 == 0)
-      std::cerr << "[wait_completion] still waiting rid=" << id
-                << " spins=" << spins << std::endl;
     std::this_thread::sleep_for(kPollSleep);
   }
   return true;
@@ -1058,8 +926,6 @@ void RdmaTransportAdapter::set_remote_signal_info(int rank, uint64_t addr,
 // ── polling ──────────────────────────────────────────────────────────────────
 
 void RdmaTransportAdapter::poll_loop() {
-  unsigned poll_cycles = 0;
-  unsigned signal_cq_polls = 0;
   while (!stop_.load(std::memory_order_acquire)) {
     std::vector<std::pair<int, RdmaPeer*>> active;
     {
@@ -1078,17 +944,9 @@ void RdmaTransportAdapter::poll_loop() {
       if (p->recv_cq &&
           poll_cq_set(*p, rank, p->recv_cq, p->recv_qps, p->num_qps, true))
         any = true;
-      if (p->signal_cq) {
-        signal_cq_polls++;
-        if (poll_signal_cq(*p, rank)) any = true;
-      }
+      if (p->signal_cq && poll_signal_cq(*p, rank))
+        any = true;
       check_dispatch(*p, rank);
-    }
-    poll_cycles++;
-    if (poll_cycles % 500000 == 0) {
-      std::cerr << "[poll_loop] cycles=" << poll_cycles
-                << " signal_cq_polls=" << signal_cq_polls
-                << " any=" << any << std::endl;
     }
     if (!any) {
       std::this_thread::sleep_for(kPollSleep);
@@ -1101,34 +959,21 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
                                         bool is_recv_side) {
   ibv_wc wc;
   bool any = false;
-  while (ibv_poll_cq(cq, 1, &wc) > 0) {
+  int polls = 0;
+  int wc_count = 0;
+  while ((polls = ibv_poll_cq(cq, 1, &wc)) > 0) {
+    wc_count++;
     any = true;
     if (wc.status != IBV_WC_SUCCESS) {
-      if (is_recv_side && (wc.opcode == IBV_WC_RECV ||
-                           wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM)) {
-        int qp = find_qp_idx(qps, qp_count, wc.qp_num);
-        if (qp >= 0) repost_one_recv(p, qp);
-      }
       unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
-      std::cerr << "[poll_cq_set] ERROR status=" << (int)wc.status
-                << " opcode=" << (int)wc.opcode << " rid=" << rid
-                << " byte_len=" << wc.byte_len
-                << " unacked_before=" << p.unacked_bytes_.load()
-                << " is_recv=" << is_recv_side << std::endl;
       RequestSlot* s = resolve_slot(rid);
       if (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND) {
         if (s && !s->completed.load(std::memory_order_acquire)) {
           s->failed.store(true, std::memory_order_release);
           s->completed.store(true, std::memory_order_release);
-          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->regular_chunk_size + s->last_chunk_size;
-          uint64_t before = p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
-          std::cerr << "[poll_cq_set] ERROR_DONE rid=" << rid
-                    << " total_bytes=" << total_bytes
-                    << " unacked: " << before << " -> " << (before - total_bytes)
-                    << std::endl;
-        } else if (s && s->completed.load(std::memory_order_acquire)) {
-          // already completed (previous error or all success), don't decrement again
-        } else {
+          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->chunk_size + s->last_chunk_size;
+          p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
+        } else if (!s || s->completed.load(std::memory_order_acquire)) {
           p.unacked_bytes_.fetch_sub(wc.byte_len, std::memory_order_relaxed);
         }
       } else {
@@ -1161,42 +1006,18 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
         if (!s) break;
         uint32_t done =
             s->completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
-        std::cerr << "[poll_cq_set] CQE_DECR rid=" << rid
-                  << " wc_byte_len=" << wc.byte_len
-                  << " done_chunks=" << done << "/" << s->total_chunks
-                  << " unacked_before=" << p.unacked_bytes_.load()
-                  << " is_recv=" << is_recv_side << std::endl;
         if (done >= s->total_chunks) {
-          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->regular_chunk_size + s->last_chunk_size;
-          uint64_t before = p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
-          std::cerr << "[poll_cq_set] ALL_DONE rid=" << rid
-                    << " total_bytes=" << total_bytes
-                    << " unacked: " << before << " -> " << (before - total_bytes)
-                    << std::endl;
+          uint64_t total_bytes = static_cast<uint64_t>(s->total_chunks - 1) * s->chunk_size + s->last_chunk_size;
+          p.unacked_bytes_.fetch_sub(total_bytes, std::memory_order_relaxed);
           s->completed.store(true, std::memory_order_release);
+          fprintf(stderr, "[CQE] ALL_DONE rid=%u total=%lu unacked_now=%lu\n",
+                  rid, (unsigned long)total_bytes, (unsigned long)p.unacked_bytes_.load());
         }
         cv_.notify_all();
         break;
       }
 
-      case IBV_WC_RECV_RDMA_WITH_IMM: {
-        int qp = find_qp_idx(qps, qp_count, wc.qp_num);
-        if (qp >= 0) repost_one_recv(p, qp);
-
-        uint32_t imm = wc.imm_data;
-        uint8_t msg_id = imm_msg_id(imm);
-
-        // Only signal IMMs arrive (total=0); data WRs use plain RDMA_WRITE
-        auto& t = p.trackers[msg_id];
-        t.completed.store(true, std::memory_order_release);
-
-        check_dispatch(p, rank);
-        break;
-      }
-
       case IBV_WC_RECV: {
-        int qp = find_qp_idx(qps, qp_count, wc.qp_num);
-        if (qp >= 0) repost_one_recv(p, qp);
         break;
       }
 
@@ -1204,24 +1025,26 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
         break;
     }
   }
+  if (wc_count > 0) {
+    fprintf(stderr, "[poll_cq_set] rank=%d is_recv=%d wc_count=%d\n",
+            rank, (int)is_recv_side, wc_count);
+  }
   return any;
 }
 
 bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
   ibv_wc wc;
   bool any = false;
-  int ret;
-  while ((ret = ibv_poll_cq(p.signal_cq, 1, &wc)) > 0) {
+  int wc_count = 0;
+  while (ibv_poll_cq(p.signal_cq, 1, &wc) > 0) {
+    wc_count++;
     any = true;
     if (wc.status != IBV_WC_SUCCESS) {
       if (wc.opcode == IBV_WC_RECV ||
           wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-        repost_signal_recv(p);
+        (void)repost_signal_recv(p);
       }
       unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
-      std::cerr << "[poll_signal_cq] ERROR status=" << wc.status
-                << " opcode=" << wc.opcode << " rid=" << rid
-                << " vendor_err=" << wc.vendor_err << std::endl;
       RequestSlot* s = resolve_slot(rid);
       if (s && !s->completed.load(std::memory_order_acquire)) {
         s->failed.store(true, std::memory_order_release);
@@ -1234,8 +1057,6 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
     switch (wc.opcode) {
       case IBV_WC_RDMA_WRITE: {
         unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
-        std::cerr << "[poll_signal_cq] SEND_CQE rid=" << rid
-                  << " status=" << wc.status << std::endl;
         RequestSlot* s = resolve_slot(rid);
         if (s) {
           s->completed.store(true, std::memory_order_release);
@@ -1245,11 +1066,9 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       }
 
       case IBV_WC_RECV_RDMA_WITH_IMM: {
-        repost_signal_recv(p);
+        (void)repost_signal_recv(p);
         uint32_t imm = wc.imm_data;
         uint8_t msg_id = imm_msg_id(imm);
-        std::cerr << "[poll_signal_cq] RECV_IMM rank=" << rank
-                  << " msg_id=" << (int)msg_id << std::endl;
         auto& t = p.trackers[msg_id];
         t.completed.store(true, std::memory_order_release);
         check_dispatch(p, rank);
@@ -1257,7 +1076,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       }
 
       case IBV_WC_RECV: {
-        repost_signal_recv(p);
+        (void)repost_signal_recv(p);
         break;
       }
 
@@ -1265,44 +1084,21 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
         break;
     }
   }
-  if (ret < 0) {
-    std::cerr << "[poll_signal_cq] POLL_ERROR ret=" << ret
-              << " errno=" << errno << std::endl;
+  if (wc_count > 0) {
+    fprintf(stderr, "[poll_signal_cq] rank=%d wc_count=%d\n", rank, wc_count);
   }
   return any;
 }
 
 void RdmaTransportAdapter::check_dispatch(RdmaPeer& p, int rank) {
   unsigned expected = p.next_expected_dispatch.load(std::memory_order_acquire);
-  if (p.dispatch_cursor < expected) {
-    std::cerr << "[check_dispatch] enter rank=" << rank
-              << " cursor=" << p.dispatch_cursor << " next_expected=" << expected
-              << std::endl;
-  }
   while (p.dispatch_cursor < expected) {
     unsigned idx = p.dispatch_cursor & kMsgIdMask;
     auto& t = p.trackers[idx];
 
-    if (!t.completed.load(std::memory_order_acquire)) {
-      std::cerr << "[check_dispatch] tracker[" << idx
-                << "] not completed, breaking (cursor=" << p.dispatch_cursor
-                << ")" << std::endl;
-      {
-        ibv_qp_attr a;
-        ibv_qp_init_attr ia;
-        if (ibv_query_qp(p.signal_qp, &a, IBV_QP_STATE, &ia) == 0) {
-          std::cerr << "[check_dispatch] signal_qp_state=" << (int)a.qp_state
-                    << " (2=RTR,3=RTS,6=ERR)" << std::endl;
-        }
-      }
-      break;
-    }
+    if (!t.completed.load(std::memory_order_acquire)) break;
     unsigned wait_id = t.wait_slot.load(std::memory_order_acquire);
-    if (wait_id == 0) {
-      std::cerr << "[check_dispatch] tracker[" << idx
-                << "] wait_id=0, breaking" << std::endl;
-      break;
-    }
+    if (wait_id == 0) break;
 
     RequestSlot* s = resolve_slot(wait_id);
     if (s && s->peer_rank == rank) {
@@ -1310,32 +1106,19 @@ void RdmaTransportAdapter::check_dispatch(RdmaPeer& p, int rank) {
         uint64_t* tag_addr = reinterpret_cast<uint64_t*>(
             signal_addr_ + static_cast<uintptr_t>(idx) * 8);
         if (*tag_addr == s->expected_tag) {
-          std::cerr << "[check_dispatch] SignalWait idx=" << idx
-                    << " tag matched, completing slot" << std::endl;
           s->completed.store(true, std::memory_order_release);
         } else {
-          std::cerr << "[check_dispatch] SignalWait idx=" << idx
-                    << " TAG MISMATCH got=" << *tag_addr
-                    << " expected=" << s->expected_tag << ", breaking"
-                    << std::endl;
           break;
         }
       } else if (s->kind == RequestKind::DataWait) {
-        std::cerr << "[check_dispatch] DataWait idx=" << idx
-                  << " completing slot wait_id=" << wait_id << std::endl;
         s->completed.store(true, std::memory_order_release);
       }
     } else {
-      std::cerr << "[check_dispatch] resolve_slot failed wait_id=" << wait_id
-                << " peer_rank=" << (s ? s->peer_rank : -1)
-                << " expected_rank=" << rank << ", breaking" << std::endl;
       break;
     }
 
     t.completed.store(false, std::memory_order_release);
     t.wait_slot.store(0, std::memory_order_release);
-    t.total = 0;
-    t.done = 0;
     p.dispatch_cursor++;
     cv_.notify_all();
     expected = p.next_expected_dispatch.load(std::memory_order_acquire);
@@ -1367,11 +1150,9 @@ RdmaTransportAdapter::RequestSlot* RdmaTransportAdapter::acquire_slot(
     s.failed.store(false, std::memory_order_release);
     s.total_chunks = 0;
     s.completed_chunks.store(0, std::memory_order_release);
-    s.regular_chunk_size = 0;
+    s.chunk_size = 0;
     s.last_chunk_size = 0;
     *out = make_request_id(idx, gen);
-    std::cerr << "[acquire_slot] idx=" << idx << " gen=" << gen
-              << " rid=" << *out << " cursor=" << cursor_.load() << std::endl;
     return &s;
   }
   return nullptr;
@@ -1413,10 +1194,6 @@ void RdmaTransportAdapter::free_slot(unsigned id) {
   s.total_chunks = 0;
   s.completed_chunks.store(0, std::memory_order_release);
   s.generation.fetch_add(1, std::memory_order_release);
-  uint32_t ng = s.generation.load(std::memory_order_acquire);
-  std::cerr << "[free_slot] rid=" << id << " idx=" << idx << " old_gen=" << gen
-            << " new_gen=" << ng << " st=" << (int)st << " completed="
-            << (int)s.completed.load() << std::endl;
   cv_.notify_all();
 }
 
@@ -1424,17 +1201,17 @@ RdmaTransportAdapter::ChunkResult RdmaTransportAdapter::chunk_split(
     size_t len) const {
   ChunkResult r = {};
   uint32_t cs = static_cast<uint32_t>(config_.chunk_size_kb) * 1024;
-  r.regular_size = cs;
+  r.chunk_size = cs;
 
   uint32_t n = static_cast<uint32_t>((len + cs - 1) / cs);
   if (n > kMaxChunks) {
     n = kMaxChunks;
-    r.regular_size = static_cast<uint32_t>(len / n);
+    r.chunk_size = static_cast<uint32_t>(len / n);
   }
   r.count = n;
   if (n > 1) {
     r.last_size =
-        static_cast<uint32_t>(len - static_cast<uint64_t>(r.regular_size) *
+        static_cast<uint32_t>(len - static_cast<uint64_t>(r.chunk_size) *
                                        (n - 1));
   } else {
     r.last_size = static_cast<uint32_t>(len);

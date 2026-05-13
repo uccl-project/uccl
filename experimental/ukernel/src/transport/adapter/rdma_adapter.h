@@ -92,7 +92,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   struct ChunkResult {
     uint32_t count;
-    uint32_t regular_size;
+    uint32_t chunk_size;   // per-chunk size; for single-chunk, last_size holds the actual data len
     uint32_t last_size;
   };
 
@@ -116,8 +116,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct ChunkTracker {
-    uint32_t total = 0;
-    uint32_t done = 0;
     std::atomic<bool> completed{false};
     std::atomic<unsigned> wait_slot{0};
   };
@@ -150,9 +148,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
     std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
 
-    std::unique_ptr<RecvPool> recv_pools[kMaxQPs];
-    int recv_post_idx[kMaxQPs] = {};
-
     QpRttTracker rtt_tracker[kMaxQPs];
 
     std::atomic<int> last_qp_{0};
@@ -161,7 +156,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
     std::atomic<uint64_t> unacked_bytes_{0};
 
-    uint8_t next_msg_id = 0;
+    std::atomic<unsigned> next_msg_id{0};
 
     ChunkTracker trackers[kMaxMsgId];
     std::atomic<uint32_t> next_expected_dispatch{0};
@@ -178,7 +173,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<bool> failed{false};
     uint32_t total_chunks = 0;
     std::atomic<uint32_t> completed_chunks{0};
-    uint32_t regular_chunk_size = 0;
+    uint32_t chunk_size = 0;
     uint32_t last_chunk_size = 0;
   };
 
@@ -192,15 +187,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static uint32_t slot_index(unsigned id) { return id & kSlotMask; }
   static uint32_t slot_generation(unsigned id) { return id >> kSlotBits; }
 
-  static uint32_t imm_encode(uint8_t msg_id, uint8_t total, uint16_t idx) {
-    return (static_cast<uint32_t>(msg_id) << 24) |
-           (static_cast<uint32_t>(total) << 16) | idx;
+  static uint32_t imm_encode(uint8_t msg_id) {
+    return static_cast<uint32_t>(msg_id) << 24;
   }
   static uint8_t imm_msg_id(uint32_t imm) {
     return static_cast<uint8_t>((imm >> 24) & 0x7F);
-  }
-  static uint8_t imm_total(uint32_t imm) {
-    return static_cast<uint8_t>((imm >> 16) & 0xFF);
   }
 
   static uint64_t now_ns();
@@ -220,12 +211,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
                   RdmaPeerConnectSpec const& remote, bool is_put);
   bool qps_to_rts(ibv_qp** qps, int count);
 
-  bool do_connect(int peer_rank, RdmaPeerConnectSpec const& remote);
-  bool do_accept(int peer_rank, RdmaPeerConnectSpec const& remote);
+  bool setup_peer_path(int peer_rank, RdmaPeerConnectSpec const& remote);
   bool init_peer_qps(RdmaPeer& peer);
-  bool init_recv_pools(RdmaPeer& peer);
   void destroy_peer_qps(RdmaPeer& peer);
-  bool repost_one_recv(RdmaPeer& peer, int qp_idx);
 
   bool create_signal_qp(RdmaPeer& p);
   bool connect_signal_qp(RdmaPeer& p, uint32_t remote_qpn);

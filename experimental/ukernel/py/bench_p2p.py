@@ -20,6 +20,8 @@ def env_int(name: str, default: int) -> int:
 
 def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     """Benchmark ukernel_p2p send/recv bandwidth."""
+    rank = comm.rank
+    print(f"[rank {rank}] bench_p2p_ukernel start size={size_bytes}", flush=True)
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
@@ -43,6 +45,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
     elif selected_transport == "uccl" or selected_transport == "rdma":
+        print(f"[rank {comm.rank}] wait_mr peer={peer} buf={recv_buffer_id}...", flush=True)
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
 
@@ -54,10 +57,13 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         comm.recv(peer, recv_buf)
 
     rank = comm.rank
+    print(f"[rank {rank}] warmup loop start", flush=True)
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
+            print(f"[rank {rank}] warmup iter: recv...", flush=True)
             do_recv()
+            print(f"[rank {rank}] warmup iter: send...", flush=True)
             do_send()  # echo back
         torch.cuda.synchronize()
         t0 = time.perf_counter()
@@ -67,7 +73,9 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
+            print(f"[rank {rank}] warmup iter: send...", flush=True)
             do_send()
+            print(f"[rank {rank}] warmup iter: recv...", flush=True)
             do_recv()
         torch.cuda.synchronize()
         t0 = time.perf_counter()

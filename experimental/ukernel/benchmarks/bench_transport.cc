@@ -355,20 +355,12 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     unsigned send_req =
         submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
                     transport_kind, remote_recv_buffer_ids, slot);
-    std::cerr << "[Sender " << rank << "] warmup iter " << i
-              << " isend done, waiting..." << std::endl;
     comm.wait_finish(send_req);
-    std::cerr << "[Sender " << rank << "] warmup iter " << i
-              << " send complete" << std::endl;
 
     unsigned recv_req =
         submit_recv(comm, peer_rank,
                     local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
-    std::cerr << "[Sender " << rank << "] warmup iter " << i
-              << " irecv done, waiting..." << std::endl;
     comm.wait_finish(recv_req);
-    std::cerr << "[Sender " << rank << "] warmup iter " << i
-              << " recv complete" << std::endl;
   }
   if (!validate_recv_slots("Sender", rank, recv_slots, warmup_touched,
                            expected_recv)) {
@@ -655,20 +647,12 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     unsigned recv_req =
         submit_recv(comm, peer_rank,
                     local_recv_buffer_ids[static_cast<size_t>(slot)], msg_size);
-    std::cerr << "[Receiver " << rank << "] warmup iter " << i
-              << " irecv done, waiting..." << std::endl;
     comm.wait_finish(recv_req);
-    std::cerr << "[Receiver " << rank << "] warmup iter " << i
-              << " recv complete" << std::endl;
 
     unsigned send_req =
         submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
                     transport_kind, remote_recv_buffer_ids, slot);
-    std::cerr << "[Receiver " << rank << "] warmup iter " << i
-              << " isend done, waiting..." << std::endl;
     comm.wait_finish(send_req);
-    std::cerr << "[Receiver " << rank << "] warmup iter " << i
-              << " send complete" << std::endl;
   }
   if (!validate_recv_slots("Receiver", rank, recv_slots, warmup_touched,
                            expected_recv)) {

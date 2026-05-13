@@ -1027,8 +1027,6 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
 
     // Phase 2: signal the receiver that data is ready
     unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
-    std::cerr << "[comm isend] signal_async rank=" << rank << " sig_result=" << sig_result
-              << " rid=" << rid << std::endl;
     if (sig_result == 0 || !tracker_->activate(rid, sig_result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free,
@@ -1145,8 +1143,6 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
     wt.len = dst_bytes;
     wt.local_buffer_id = dst_buf_id;
     unsigned result = adapter->wait_async(rank, 0, std::move(wt));
-    std::cerr << "[comm irecv] wait_async rank=" << rank << " result=" << result
-              << " rid=" << rid << " buf_id=" << dst_buf_id << std::endl;
     if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free,
