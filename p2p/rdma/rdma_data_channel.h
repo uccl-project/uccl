@@ -357,24 +357,24 @@ class RDMADataChannel {
   }
 
   // Post all requests in `batch` using a single ibv_wr_start/ibv_wr_complete
-  // pair (one doorbell). Only the LAST WR is IBV_SEND_SIGNALED; the
-  // preceding WRs rely on RC ordering and are acknowledged together when
-  // the signaled CQE arrives. Returns 0 on success.
+  // pair (one doorbell). IB uses selective signaling; EFA SRD requires each
+  // WR to be signaled even when doorbell-batched.
   inline int __flushBatch_ex(
       std::vector<std::shared_ptr<RDMASendRequest>> const& batch) {
     if (batch.empty()) return 0;
     // SGE storage must remain valid until ibv_wr_complete.
     std::vector<struct ibv_sge> sges(batch.size());
     size_t const last = batch.size() - 1;
+    bool const signal_all = uccl::is_efa_transport();
     std::vector<uint64_t> unsignaled;
-    unsignaled.reserve(last);
+    if (!signal_all) unsignaled.reserve(last);
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
     for (size_t i = 0; i < batch.size(); ++i) {
       auto const& req = batch[i];
       qpx->wr_id = req->wr_id;
       qpx->comp_mask = 0;
-      qpx->wr_flags = (i == last) ? IBV_SEND_SIGNALED : 0;
+      qpx->wr_flags = (signal_all || i == last) ? IBV_SEND_SIGNALED : 0;
       if (req->send_type == SendType::Send) {
         ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
                               req->imm_data);
@@ -390,7 +390,8 @@ class RDMADataChannel {
       int num_sge = prepareSGEList(&sges[i], req);
       ibv_wr_set_sge_list(qpx, num_sge, &sges[i]);
       impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
-      if (i != last) unsignaled.push_back(static_cast<uint64_t>(req->wr_id));
+      if (!signal_all && i != last)
+        unsignaled.push_back(static_cast<uint64_t>(req->wr_id));
     }
     int ret = ibv_wr_complete(qpx);
     if (ret) {
