@@ -13,6 +13,16 @@ else
   EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
 endif
 
+# DMA-BUF avoids nvidia_peermem/efa_nv_peermem. Enable with USE_DMABUF=1.
+USE_DMABUF ?= 0
+ifeq ($(USE_DMABUF),1)
+  $(info DMA-BUF GPU memory registration enabled)
+  DMABUF_CFLAGS := -DUSE_DMABUF
+else
+  $(info DMA-BUF GPU memory registration disabled)
+  DMABUF_CFLAGS :=
+endif
+
 ARCH := $(shell uname -m)
 GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
 CPU_IS_ARM64 := 0
@@ -85,10 +95,10 @@ ifeq ($(PER_EXPERT_BATCHING),1)
 endif
 
 
-CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
-NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
+CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
+NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
-INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
+INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp
 SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
