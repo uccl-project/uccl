@@ -8,6 +8,14 @@
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
+#include <mutex>
+
+// When set on a thread, RDMADataChannel::submitRequest() accumulates send
+// requests in a per-channel batch instead of immediately posting them. The
+// thread must subsequently call flushBatch() (typically via
+// NICEndpoint::flushAllSends()) to flush all pending work requests in a
+// single doorbell per channel.
+inline thread_local bool g_uccl_batch_post = false;
 
 // Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
@@ -66,7 +74,41 @@ class RDMADataChannel {
   }
 
   int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {
+    if (g_uccl_batch_post) {
+      // Cap how many bytes we accumulate before forcing a doorbell. This
+      // preserves pipelining for large iovs (each WR posts ~immediately)
+      // while still amortizing the doorbell cost across many small iovs.
+      static constexpr size_t kBatchFlushBytes = 32 * 1024;
+      size_t req_size = req->getLocalLen();
+      bool should_flush;
+      {
+        std::lock_guard<std::mutex> lock(batch_mu_);
+        batch_.push_back(std::move(req));
+        batch_bytes_ += req_size;
+        should_flush = (batch_bytes_ >= kBatchFlushBytes);
+      }
+      if (should_flush) flushBatch();
+      return 0;  // success; actual post deferred until flushBatch().
+    }
     return postRequest(req);
+  }
+
+  // Flush all accumulated batched send requests in one doorbell. Safe to call
+  // when nothing is batched (returns 0).
+  int flushBatch() {
+    std::vector<std::shared_ptr<RDMASendRequest>> local;
+    {
+      std::lock_guard<std::mutex> lock(batch_mu_);
+      if (batch_.empty()) return 0;
+      local.swap(batch_);
+      batch_bytes_ = 0;
+    }
+    bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
+                       ctx_->getVendorID() == 0x8086);   // Intel irdma
+    if (use_legacy) {
+      return __flushBatch_legacy(local);
+    }
+    return __flushBatch_ex(local);
   }
 
   int64_t read(std::shared_ptr<RDMASendRequest> req) {
@@ -142,6 +184,11 @@ class RDMADataChannel {
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMADataChannelImpl> impl_;
+
+  // Per-channel buffer for batched doorbell posting. Protected by batch_mu_.
+  std::vector<std::shared_ptr<RDMASendRequest>> batch_;
+  size_t batch_bytes_ = 0;
+  std::mutex batch_mu_;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -274,6 +321,89 @@ class RDMADataChannel {
     }
 
     return __postRequest_ex(req);
+  }
+
+  // Post all requests in `batch` using a single ibv_wr_start/ibv_wr_complete
+  // pair (one doorbell). Returns 0 on success.
+  inline int __flushBatch_ex(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch) {
+    if (batch.empty()) return 0;
+    // SGE storage must remain valid until ibv_wr_complete.
+    std::vector<struct ibv_sge> sges(batch.size());
+    auto* qpx = ibv_qp_to_qp_ex(qp_);
+    ibv_wr_start(qpx);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      qpx->wr_id = req->wr_id;
+      qpx->comp_mask = 0;
+      qpx->wr_flags = IBV_SEND_SIGNALED;
+      if (req->send_type == SendType::Send) {
+        ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(),
+                              req->getRemoteAddress(), req->imm_data);
+      } else if (req->send_type == SendType::Write) {
+        ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
+      } else if (req->send_type == SendType::Read) {
+        ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __flushBatch_ex";
+        ibv_wr_abort(qpx);
+        return -1;
+      }
+      int num_sge = prepareSGEList(&sges[i], req);
+      ibv_wr_set_sge_list(qpx, num_sge, &sges[i]);
+      impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_wr_complete failed in __flushBatch_ex: " << ret
+                      << " " << strerror(ret) << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+    }
+    return ret;
+  }
+
+  // Legacy verbs path: build a linked ibv_send_wr list and post once.
+  inline int __flushBatch_legacy(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch) {
+    if (batch.empty()) return 0;
+    std::vector<struct ibv_send_wr> wrs(batch.size());
+    std::vector<struct ibv_sge> sges(batch.size());
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      auto& wr = wrs[i];
+      std::memset(&wr, 0, sizeof(wr));
+      wr.wr_id = req->wr_id;
+      wr.send_flags = IBV_SEND_SIGNALED;
+      int num_sge = prepareSGEList(&sges[i], req);
+      wr.sg_list = &sges[i];
+      wr.num_sge = num_sge;
+      if (req->send_type == SendType::Send) {
+        wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+        wr.imm_data = req->imm_data;
+      } else if (req->send_type == SendType::Write) {
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+      } else if (req->send_type == SendType::Read) {
+        wr.opcode = IBV_WR_RDMA_READ;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __flushBatch_legacy";
+        return -1;
+      }
+      wr.next = (i + 1 < batch.size()) ? &wrs[i + 1] : nullptr;
+    }
+    struct ibv_send_wr* bad_wr = nullptr;
+    int ret = ibv_post_send(qp_, wrs.data(), &bad_wr);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_post_send failed in __flushBatch_legacy: " << ret
+                      << " " << strerror(ret) << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+    }
+    return ret;
   }
 
   void initQP() {
