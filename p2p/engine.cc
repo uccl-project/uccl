@@ -1055,6 +1055,34 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
 
+  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
+  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
+  // lookup), flush once, then poll until all are acked.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
+    ucclRequest ureqs[kMaxInflightOps] = {};
+    bool done[kMaxInflightOps] = {false};
+
+    for (size_t i = 0; i < num_iovs; ++i) {
+      uccl_read_async_on_group(send_group, conn, mhandle_v[i], dst_v[i],
+                               size_v[i], slot_item_v[i], &ureqs[i]);
+    }
+    uccl_flush_send(ep_);
+
+    size_t num_done = 0;
+    while (num_done < num_iovs) {
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      uccl_drive_send(ep_);
+      for (size_t i = 0; i < num_iovs; ++i) {
+        if (done[i]) continue;
+        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+          done[i] = true;
+          num_done++;
+        }
+      }
+    }
+    return true;
+  }
+
   ucclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};
 
@@ -1253,6 +1281,34 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   // per-call shared_lock + map.find().
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
+
+  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
+  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
+  // lookup), flush once, then poll until all are acked.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
+    ucclRequest ureqs[kMaxInflightOps] = {};
+    bool done[kMaxInflightOps] = {false};
+
+    for (size_t i = 0; i < num_iovs; ++i) {
+      uccl_write_async_on_group(send_group, conn, mhandle_v[i], src_v[i],
+                                size_v[i], slot_item_v[i], &ureqs[i]);
+    }
+    uccl_flush_send(ep_);
+
+    size_t num_done = 0;
+    while (num_done < num_iovs) {
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      uccl_drive_send(ep_);
+      for (size_t i = 0; i < num_iovs; ++i) {
+        if (done[i]) continue;
+        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+          done[i] = true;
+          num_done++;
+        }
+      }
+    }
+    return true;
+  }
 
   ucclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};

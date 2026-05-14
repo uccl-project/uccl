@@ -81,6 +81,47 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   return ureq->engine_idx;
 }
 
+// Same as set_request() but skips NICEndpoint::writeOrRead() (which does a
+// per-call map.find on send_channel_groups_) by taking a pre-resolved
+// SendConnection pointer directly. Used by writev/readv hot paths.
+static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
+                                       P2PMhandle* local_mh, void* src,
+                                       size_t size, FifoItem const& slot_item,
+                                       ucclRequest* ureq) {
+  auto bundle = std::make_shared<PooledSendBundle>();
+
+  bundle->remote_mem_obj.addr = slot_item.addr;
+  bundle->remote_mem_obj.length = slot_item.size;
+  bundle->remote_mem_obj.type = MemoryType::GPU;
+  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+
+  bundle->local_mem_obj.addr = src;
+  bundle->local_mem_obj.size = size;
+  bundle->local_mem_obj.type = MemoryType::GPU;
+  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+
+  bundle->req.local_mem =
+      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
+  bundle->req.remote_mem =
+      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
+  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.send_type =
+      (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+  bundle->req.need_signaled = true;
+
+  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
+
+  int64_t wr_id = -1;
+  while (wr_id < 0) {
+    wr_id = send_group->postWriteOrRead(req);
+    if (wr_id < 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
+  }
+  ureq->engine_idx = static_cast<int>(wr_id);
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return ureq->engine_idx;
+}
+
 // ── Dispatch functions ──────────────────────────────────────────────────────
 // Each function uses std::visit to dispatch to the correct endpoint type
 // at runtime. The if constexpr branches are resolved at compile time so
@@ -400,6 +441,26 @@ inline int uccl_write_async(RDMAEndPoint const& ep, Conn* conn,
         }
       },
       ep);
+}
+
+// RDMA-only fast variant: pre-resolved SendConnection*, no variant visit,
+// no send_channel_groups_ lookup. Caller guarantees the path is RDMA.
+inline int uccl_write_async_on_group(SendConnection* send_group, Conn* conn,
+                                     P2PMhandle* local_mh, void* src,
+                                     size_t size, FifoItem const& slot_item,
+                                     ucclRequest* ureq) {
+  ureq->type = ReqType::ReqWrite;
+  return set_request_on_group(send_group, conn, local_mh, src, size, slot_item,
+                              ureq);
+}
+
+inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
+                                    P2PMhandle* local_mh, void* dst,
+                                    size_t size, FifoItem const& slot_item,
+                                    ucclRequest* ureq) {
+  ureq->type = ReqType::ReqRead;
+  return set_request_on_group(send_group, conn, local_mh, dst, size, slot_item,
+                              ureq);
 }
 
 inline int prepare_fifo_metadata(RDMAEndPoint const& ep, Conn* conn,
