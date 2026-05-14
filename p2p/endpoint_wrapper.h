@@ -236,6 +236,92 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
       ep);
 }
 
+// Drive the send/recv pollers once for the whole endpoint. Cheap to call
+// repeatedly but should be called only once per outer poll pass when
+// completing many in-flight requests (see writev/readv).
+inline void uccl_drive_send(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->sendRoutine();
+        }
+      },
+      ep);
+}
+
+// Flush any batched send WRs (doorbell-batched posting). Use together with
+// the thread-local g_uccl_batch_post flag.
+inline void uccl_flush_send(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->flushAllSends();
+        }
+      },
+      ep);
+}
+
+// Resolve the SendConnection for a rank_id once. Returns nullptr on the
+// TCP path or if not found. Callers can then use uccl_check_wr_fast() to
+// avoid the per-call mutex + map lookup in checkSendComplete_once().
+inline SendConnection* uccl_resolve_send_group(RDMAEndPoint const& ep,
+                                               uint64_t rank_id) {
+  SendConnection* result = nullptr;
+  std::visit(
+      [&](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          result = s->getSendGroupRaw(rank_id);
+        }
+      },
+      ep);
+  return result;
+}
+
+// Fast completion check using a pre-resolved SendConnection*.
+inline bool uccl_check_wr_fast(SendConnection* send_group, int64_t wr_id) {
+  return send_group->check(wr_id);
+}
+
+inline void uccl_drive_recv(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->recvRoutine();
+        }
+      },
+      ep);
+}
+
+// Check completion of a single request without driving the send/recv pollers.
+// Use together with uccl_drive_send/uccl_drive_recv to amortize the polling
+// work across many in-flight requests.
+inline bool uccl_check_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
+  return std::visit(
+      [&](auto const& s) -> bool {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          bool ret = s->uccl_poll_ureq_once(&nreq);
+          from_nccl_req(nreq, ureq);
+          return ret;
+        } else {
+          if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
+              ureq->type == ReqType::ReqRead) {
+            return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
+          } else if (ureq->type == ReqType::ReqRx) {
+            return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
+          }
+          UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
+          return false;
+        }
+      },
+      ep);
+}
+
 inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
                            P2PMhandle* local_mh, void* dst, size_t size,
                            FifoItem const& slot_item, ucclRequest* ureq) {

@@ -309,6 +309,16 @@ class SendConnection : public RDMAConnection {
     return wr_id;
   }
 
+  // Flush any batched send WRs on all channels of this connection. Used to
+  // amortize doorbell cost across many small RDMA writes/reads posted via
+  // g_uccl_batch_post.
+  void flushBatches() {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    for (auto& [cid, channel] : channels_) {
+      if (channel) channel->flushBatch();
+    }
+  }
+
  private:
   std::shared_ptr<SendControlChannel> ctrl_channel_;
   mutable std::shared_mutex ctrl_channel_mutex_;
