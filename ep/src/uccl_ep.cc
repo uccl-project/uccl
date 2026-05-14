@@ -2457,7 +2457,9 @@ NB_MODULE(ep, m) {
             for (nb::handle h : addrs) v.push_back(nb::cast<uintptr_t>(h));
             self.set_bench_d2h_channel_addrs(v);
           },
-          nb::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
+          nb::arg("addrs"), "Attach ring buffer addresses for benchmarking.")
+      .def("notify_proxy_thread_adaptive_sleeper",
+           &UcclProxy::notify_proxy_thread_adaptive_sleeper);
   // .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
   nb::class_<EnvInfo>(m, "EnvInfo")
       .def_ro("blocks", &EnvInfo::blocks)

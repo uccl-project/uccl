@@ -77,6 +77,9 @@ class UcclProxy {
   void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
     proxy_->set_bench_d2h_channel_addrs(addrs);
   }
+  void notify_proxy_thread_adaptive_sleeper() {
+    proxy_->notify_proxy_thread_adaptive_sleeper();
+  }
 
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };

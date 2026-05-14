@@ -3,6 +3,7 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#include <infiniband/verbs.h>
 #ifdef USE_DMABUF
 #include <condition_variable>
 #include <map>
@@ -33,11 +34,13 @@
 #include <immintrin.h>
 #endif
 #include "bench_utils.hpp"
+#include "util/debug.h"
 #include "util/util.h"
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <fcntl.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -843,7 +846,7 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
-  cq_ex_attr.channel = nullptr;
+  cq_ex_attr.channel = S.comp_channel;
   cq_ex_attr.comp_vector = 0;
   cq_ex_attr.comp_mask = 0;
   cq_ex_attr.flags = 0;
@@ -866,13 +869,29 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   return ibv_cq_ex_to_cq(S.cq_ex);
 #else
   // Use standard CQ for other NICs like Broadcom
-  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, nullptr, 0);
+  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, S.comp_channel, 0);
   if (!S.cq) {
     perror("Failed to create CQ (ibv_create_cq)");
     exit(1);
   }
   return S.cq;
 #endif
+}
+
+ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S) {
+  S.comp_channel = ibv_create_comp_channel(S.context);
+
+  if (!S.comp_channel) {
+    UCCL_LOG(FATAL) << "Could not allocate completion channel";
+  }
+
+  // make the channel nonblocking
+  int flags = fcntl(S.comp_channel->fd, F_GETFL, 0);
+  UCCL_PCHECK(flags != -1);
+  int ret = fcntl(S.comp_channel->fd, F_SETFL, flags | O_NONBLOCK);
+  UCCL_PCHECK(ret != -1);
+
+  return S.comp_channel;
 }
 
 #ifdef EFA
