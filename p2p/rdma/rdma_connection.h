@@ -605,24 +605,29 @@ class SendConnection : public RDMAConnection {
     for (auto& [channel_id, channel] : channels_) {
       std::vector<CQMeta> cq_datas;
       if (channel && channel->pollOnce(cq_datas)) {
+        std::vector<uint64_t> acks;
         for (auto const& cq_data : cq_datas) {
-          // UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection::pollingLoop -
-          // Channel "
-          // << channel_id
-          //           << " polled completion: " << cq_data;
-          if (cc_.enabled()) {
-            // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
-            uint32_t msg_seq = static_cast<uint32_t>(cq_data.wr_id);
-            uint32_t tsc_id = static_cast<uint32_t>(cq_data.wr_id >> 32);
-            tracker_->acknowledge(msg_seq);
-            cc_.onAck(tsc_id, cq_data.len);
-            // Decrease per-chunk inflight counter so CC window checks
-            // unblock pending chunks without waiting for the whole message.
-            size_t prev = cc_inflight_bytes_.load(std::memory_order_relaxed);
-            size_t sub = std::min(prev, static_cast<size_t>(cq_data.len));
-            cc_inflight_bytes_.fetch_sub(sub, std::memory_order_relaxed);
-          } else {
-            tracker_->acknowledge(cq_data.wr_id);
+          // A signaled CQE produced by batched flush represents completion
+          // of itself + all preceding unsignaled WRs on this QP. Expand
+          // the wr_id list accordingly.
+          acks.clear();
+          channel->expandCompletion(cq_data.wr_id, acks);
+          for (uint64_t wid : acks) {
+            if (cc_.enabled()) {
+              // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
+              uint32_t msg_seq = static_cast<uint32_t>(wid);
+              uint32_t tsc_id = static_cast<uint32_t>(wid >> 32);
+              tracker_->acknowledge(msg_seq);
+              cc_.onAck(tsc_id, cq_data.len);
+              // Decrease per-chunk inflight counter so CC window checks
+              // unblock pending chunks without waiting for the whole message.
+              size_t prev =
+                  cc_inflight_bytes_.load(std::memory_order_relaxed);
+              size_t sub = std::min(prev, static_cast<size_t>(cq_data.len));
+              cc_inflight_bytes_.fetch_sub(sub, std::memory_order_relaxed);
+            } else {
+              tracker_->acknowledge(static_cast<uint32_t>(wid));
+            }
           }
         }
       }
