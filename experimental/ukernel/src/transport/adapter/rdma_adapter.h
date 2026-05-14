@@ -26,6 +26,8 @@ struct RdmaTransportConfig {
 };
 
 struct RdmaConnectInit {
+  uint32_t data_qpns[4] = {};
+  uint32_t peer_qpns[4] = {};
   uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
@@ -80,10 +82,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
-  static constexpr uint64_t kMaxInflightBytes =
-      static_cast<uint64_t>(4) * 512 * 1024;
-
-  static constexpr uint64_t kMaxInflightBytesPerQp = kMaxInflightBytes;
+  static constexpr int kMaxInflightWrs = 32;
 
   struct RemoteBufInfo {
     uint64_t addr = 0;
@@ -92,7 +91,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   struct ChunkResult {
     uint32_t count;
-    uint32_t chunk_size;   // per-chunk size; for single-chunk, last_size holds the actual data len
+    uint32_t chunk_size;
     uint32_t last_size;
   };
 
@@ -106,7 +105,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   struct QpState {
     std::atomic<uint64_t> last_send_ns{0};
     double ewma_rtt_ns = 1'000'000.0;
-    std::atomic<uint64_t> unacked_bytes{0};
+    std::atomic<uint32_t> unacked_wrs{0};
   };
 
   enum class RequestKind : uint8_t {
@@ -121,8 +120,14 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct RdmaPeer {
-    ibv_qp* send_qps[kMaxQPs] = {};
-    ibv_cq* send_cq = nullptr;
+    ibv_qp* data_qps[kMaxQPs] = {};
+    ibv_cq* data_cq = nullptr;
+
+    ibv_qp* peer_qps[kMaxQPs] = {};
+    ibv_cq* peer_cq = nullptr;
+
+    uint32_t remote_data_qpns[kMaxQPs] = {};
+    uint32_t remote_peer_qpns[kMaxQPs] = {};
 
     ibv_qp* signal_qp = nullptr;
     ibv_cq* signal_cq = nullptr;
@@ -199,20 +204,18 @@ class RdmaTransportAdapter final : public TransportAdapter {
   int find_qp_idx(ibv_qp* const* qps, int count, uint32_t qp_num);
   void check_dispatch(RdmaPeer& p, int rank);
 
-  bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size);
+  bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size,
+                     int max_recv_wr = 1);
   bool qps_to_init(ibv_qp** qps, int count);
   bool qps_to_rtr(ibv_qp** qps, int count,
-                   RdmaPeerConnectSpec const& remote);
+                   RdmaPeerConnectSpec const& remote, bool is_data);
   bool qps_to_rts(ibv_qp** qps, int count);
 
   bool setup_peer_path(int peer_rank, RdmaPeerConnectSpec const& remote);
   bool init_peer_qps(RdmaPeer& peer);
   void destroy_peer_qps(RdmaPeer& peer);
 
-  bool create_signal_qp(RdmaPeer& p);
-  bool connect_signal_qp(RdmaPeer& p, uint32_t remote_qpn);
   bool init_signal_pool(RdmaPeer& p);
-  void destroy_signal_qp(RdmaPeer& p);
   bool repost_signal_recv(RdmaPeer& p);
 
   ChunkResult chunk_split(size_t len) const;

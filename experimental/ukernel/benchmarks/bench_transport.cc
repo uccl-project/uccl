@@ -274,6 +274,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
 
   printf("[Sender %d] Bidirectional flows ready with peer %d\n", rank,
          peer_rank);
+  fprintf(stderr, "[Sender %d] Starting warmup\n", rank);
   PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
   int throughput_window = throughput_window_for(transport_kind);
   printf("[Sender %d] Active transport to peer %d: %s (throughput window=%d)\n",
@@ -565,6 +566,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
 
   printf("[Receiver %d] Bidirectional flows ready with peer %d\n", rank,
          peer_rank);
+  fprintf(stderr, "[Receiver %d] Starting warmup\n", rank);
   PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
   int throughput_window = throughput_window_for(transport_kind);
   printf(

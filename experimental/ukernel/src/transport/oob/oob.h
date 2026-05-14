@@ -109,6 +109,14 @@ struct TcpP2PInfo {
 };
 
 struct RdmaP2PInfo {
+  uint32_t data_qpn0 = 0;
+  uint32_t data_qpn1 = 0;
+  uint32_t data_qpn2 = 0;
+  uint32_t data_qpn3 = 0;
+  uint32_t peer_qpn0 = 0;
+  uint32_t peer_qpn1 = 0;
+  uint32_t peer_qpn2 = 0;
+  uint32_t peer_qpn3 = 0;
   uint32_t signal_qpn = 0;
   uint8_t num_qps = 4;
   uint16_t lid = 0;
@@ -155,6 +163,14 @@ UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
                            f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
 UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
+                           f("data_qpn0", v.data_qpn0);
+                           f("data_qpn1", v.data_qpn1);
+                           f("data_qpn2", v.data_qpn2);
+                           f("data_qpn3", v.data_qpn3);
+                           f("peer_qpn0", v.peer_qpn0);
+                           f("peer_qpn1", v.peer_qpn1);
+                           f("peer_qpn2", v.peer_qpn2);
+                           f("peer_qpn3", v.peer_qpn3);
                            f("signal_qpn", v.signal_qpn);
                            f("num_qps", v.num_qps);
                            f("lid", v.lid);

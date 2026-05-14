@@ -40,6 +40,8 @@ struct IpcPeerConnectSpec {};
 struct RdmaPeerConnectSpec {
   static constexpr int kMaxQPs = 4;
 
+  uint32_t remote_data_qpns[kMaxQPs] = {};
+  uint32_t remote_peer_qpns[kMaxQPs] = {};
   uint32_t remote_signal_qpn = 0;
   uint8_t num_qps = kMaxQPs;
   uint16_t remote_lid = 0;

@@ -459,6 +459,14 @@ bool Communicator::exchange_rdma_peer_info(int rank,
 
   auto init = rdma_adapter.get_connect_init(rank);
   RdmaP2PInfo local_p2p_info;
+  local_p2p_info.data_qpn0 = init.data_qpns[0];
+  local_p2p_info.data_qpn1 = init.data_qpns[1];
+  local_p2p_info.data_qpn2 = init.data_qpns[2];
+  local_p2p_info.data_qpn3 = init.data_qpns[3];
+  local_p2p_info.peer_qpn0 = init.peer_qpns[0];
+  local_p2p_info.peer_qpn1 = init.peer_qpns[1];
+  local_p2p_info.peer_qpn2 = init.peer_qpns[2];
+  local_p2p_info.peer_qpn3 = init.peer_qpns[3];
   local_p2p_info.signal_qpn = init.signal_qpn;
   local_p2p_info.num_qps = init.num_qps;
   local_p2p_info.lid = init.lid;
@@ -475,8 +483,8 @@ bool Communicator::exchange_rdma_peer_info(int rank,
 
   bool ok =
       oob_put(*exchanger_client_, oob_namespace(), key, local_p2p_info) &&
-      oob_get(*exchanger_client_, oob_namespace(), peer_key,
-              *out_remote_p2p_info, bootstrap_timeout_ms());
+       oob_get(*exchanger_client_, oob_namespace(), peer_key,
+               *out_remote_p2p_info, bootstrap_timeout_ms());
   if (ok && out_remote_p2p_info->gpu_idx >= 0) {
     std::lock_guard<std::mutex> lk(peer_mu_);
     peer_states_[static_cast<size_t>(rank)].gpu_idx =
@@ -623,6 +631,14 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       memcpy(&rspec.remote_gid_raw[0], &remote.gid_prefix, 8);
       memcpy(&rspec.remote_gid_raw[8], &remote.gid_iface, 8);
       rspec.remote_gid_index = remote.gid_index;
+      rspec.remote_data_qpns[0] = remote.data_qpn0;
+      rspec.remote_data_qpns[1] = remote.data_qpn1;
+      rspec.remote_data_qpns[2] = remote.data_qpn2;
+      rspec.remote_data_qpns[3] = remote.data_qpn3;
+      rspec.remote_peer_qpns[0] = remote.peer_qpn0;
+      rspec.remote_peer_qpns[1] = remote.peer_qpn1;
+      rspec.remote_peer_qpns[2] = remote.peer_qpn2;
+      rspec.remote_peer_qpns[3] = remote.peer_qpn3;
       rspec.remote_signal_addr = remote.signal_addr;
       rspec.remote_signal_rkey = remote.signal_rkey;
       rspec.remote_signal_qpn = remote.signal_qpn;
@@ -1007,7 +1023,14 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     }
     // Wait for data CQEs before signalling (no QP-ordering assumption)
     adapter->wait_completion(result);
+    bool data_failed = adapter->request_failed(result);
     adapter->release_request(result);
+
+    if (data_failed) {
+      cleanup_tracked_request(*slot);
+      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      return 0;
+    }
 
     // Phase 2: signal the receiver that data is ready
     unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
