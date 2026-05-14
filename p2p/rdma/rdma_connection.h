@@ -478,7 +478,15 @@ class SendConnection : public RDMAConnection {
 
   void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
                           int expected_chunk_count = 0) {
-    if (expected_chunk_count == 1) {
+    // Fast path: single-chunk message. The default caller passes
+    // expected_chunk_count=0, in which case we compute chunk count from the
+    // message size; for messages that fit in a single chunk we post `req`
+    // directly and skip the chunk-wrapper allocations done by
+    // postSingleChunk().
+    if (expected_chunk_count == 1 ||
+        (expected_chunk_count == 0 &&
+         ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size) ==
+             1)) {
       req->imm_data.set_chunk_count(1);
       if (!postRequestOnChannel(req)) {
         UCCL_LOG(WARN)
