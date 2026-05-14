@@ -24,8 +24,8 @@
 #   Build feature flags:
 #     USE_DIETGPU                   Enable DietGPU compression (default "0")
 #     USE_INTEL_RDMA_NIC            Enable Intel RDMA NIC / irdma driver (default "0")
+#     USE_DMABUF                    Enable EP DMA-BUF GPU memory registration (default "0")
 #     PER_EXPERT_BATCHING           Enable per-expert batching (default "0")
-#     MAKE_NORMAL_MODE              Make normal mode flag
 #     TORCH_CUDA_ARCH_LIST          CUDA compute capabilities to compile for
 # -----------------------
 
@@ -195,6 +195,9 @@ build_ep() {
   if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
     echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
   fi
+  if [[ "${USE_DMABUF:-0}" == "1" ]]; then
+    echo "[container] Building EP with DMA-BUF GPU memory registration (USE_DMABUF=1)"
+  fi
 
   if [[ "$TARGET" == "roc6" ]]; then
     echo "ERROR: EP requires roc7 (ROCm 7) for HIP code transformation; roc6 is not supported." >&2
@@ -219,6 +222,7 @@ build_ep() {
     fi
     env "${extra_env[@]}" \
       USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} \
+      USE_DMABUF=${USE_DMABUF:-0} \
       python3 setup.py build
     cd ..
     echo "[container] Copying EP .so to uccl/"
