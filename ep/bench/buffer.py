@@ -1857,6 +1857,3 @@ class Buffer:
             num_experts,
             compute_stream_ptr,
         )
-
-    def get_proxies(self):
-        return self.proxies
