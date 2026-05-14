@@ -881,8 +881,8 @@ NB_MODULE(p2p, m) {
             for (size_t i = 0; i < num_iovs; ++i) {
               char* bytes_data;
               Py_ssize_t bytes_len;
-              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i), &bytes_data,
-                                          &bytes_len) != 0 ||
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
                   bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -921,8 +921,8 @@ NB_MODULE(p2p, m) {
             for (size_t i = 0; i < num_iovs; ++i) {
               char* bytes_data;
               Py_ssize_t bytes_len;
-              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i), &bytes_data,
-                                          &bytes_len) != 0 ||
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
                   bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -1012,8 +1012,8 @@ NB_MODULE(p2p, m) {
             for (size_t i = 0; i < num_iovs; ++i) {
               char* bytes_data;
               Py_ssize_t bytes_len;
-              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i), &bytes_data,
-                                          &bytes_len) != 0 ||
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
                   bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -1052,8 +1052,8 @@ NB_MODULE(p2p, m) {
             for (size_t i = 0; i < num_iovs; ++i) {
               char* bytes_data;
               Py_ssize_t bytes_len;
-              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i), &bytes_data,
-                                          &bytes_len) != 0 ||
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
                   bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");

@@ -376,8 +376,8 @@ class RDMADataChannel {
       qpx->comp_mask = 0;
       qpx->wr_flags = (i == last) ? IBV_SEND_SIGNALED : 0;
       if (req->send_type == SendType::Send) {
-        ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(),
-                              req->getRemoteAddress(), req->imm_data);
+        ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
+                              req->imm_data);
       } else if (req->send_type == SendType::Write) {
         ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
       } else if (req->send_type == SendType::Read) {

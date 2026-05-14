@@ -99,10 +99,56 @@ class RDMAConnection {
     return {random_id, context_id};
   }
 
+  // Lock-free hot-path channel cache. `channels_` is append-only during
+  // connection setup, so once cached the snapshot stays valid for the
+  // connection's lifetime. Falls back through the locked path if not built.
+  RDMADataChannel* getChannelFast(uint32_t channel_id) const {
+    if (likely(fast_channels_ready_.load(std::memory_order_acquire))) {
+      if (likely(channel_id >= 1 &&
+                 channel_id <=
+                     fast_channel_count_.load(std::memory_order_relaxed))) {
+        return fast_channels_[channel_id - 1];
+      }
+    }
+    auto sp = getChannel(channel_id);
+    return sp.get();
+  }
+
+  // Select next channel via round-robin without acquiring `mutex_` in the
+  // common case. Returns (channel_id, channel_ptr); on first call this
+  // primes the cache under a shared lock.
+  std::pair<uint32_t, RDMADataChannel*> selectNextChannelRoundRobinFast() {
+    if (unlikely(!fast_channels_ready_.load(std::memory_order_acquire))) {
+      buildFastChannelCache();
+    }
+    size_t n = fast_channel_count_.load(std::memory_order_relaxed);
+    if (unlikely(n == 0)) return {0, nullptr};
+    uint32_t prev = last_channel_id_.load(std::memory_order_relaxed);
+    uint32_t next = (prev % n) + 1;
+    last_channel_id_.store(next, std::memory_order_relaxed);
+    return {next, fast_channels_[next - 1]};
+  }
+
  protected:
+  void buildFastChannelCache() {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    size_t n = channels_.size();
+    fast_channels_.assign(n, nullptr);
+    for (auto const& [cid, ch] : channels_) {
+      if (cid >= 1 && cid <= n) fast_channels_[cid - 1] = ch.get();
+    }
+    fast_channel_count_.store(n, std::memory_order_release);
+    fast_channels_ready_.store(true, std::memory_order_release);
+  }
+
   mutable std::shared_mutex mutex_;
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> channels_;
   std::atomic<uint32_t> last_channel_id_;
+
+  // Lock-free channel pointer cache (populated lazily on first hot-path use).
+  mutable std::vector<RDMADataChannel*> fast_channels_;
+  mutable std::atomic<size_t> fast_channel_count_{0};
+  mutable std::atomic<bool> fast_channels_ready_{false};
 };
 
 class SendConnection : public RDMAConnection {
@@ -198,13 +244,40 @@ class SendConnection : public RDMAConnection {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
 
-    auto [channel_id, context_id] = selectNextChannelRoundRobin();
-    if (unlikely(channel_id == 0)) {
+    // Lock-free channel selection + direct pointer.
+    auto [channel_id, ch_ptr] = selectNextChannelRoundRobinFast();
+    if (unlikely(channel_id == 0 || ch_ptr == nullptr)) {
       UCCL_LOG(ERROR) << "SendConnection::write - Failed to select channel";
       return -1;
     }
 
     req->channel_id = channel_id;
+
+    // Fast single-chunk path: skip postChunkedRequest/postSingleChunk and
+    // submit directly to the resolved channel pointer.
+    if (likely(ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size) ==
+               1)) {
+      req->imm_data.set_chunk_count(1);
+
+      int64_t saved_wr_id = req->wr_id;
+      if (cc_.enabled()) {
+        uint32_t tsc_id =
+            chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
+        req->wr_id = (static_cast<int64_t>(tsc_id) << 32) |
+                     static_cast<uint32_t>(req->wr_id);
+        cc_.recordSendTsc(tsc_id);
+      }
+
+      int64_t send_ret = ch_ptr->submitRequest(req);
+      req->wr_id = saved_wr_id;
+
+      if (send_ret >= 0 && cc_.enabled()) {
+        cc_inflight_bytes_.fetch_add(req->getLocalLen(),
+                                     std::memory_order_relaxed);
+      }
+      return wr_id;
+    }
+
     postChunkedRequest(req);
 
     // Since postChunkedRequest() is non-blocking — if the CC
@@ -485,8 +558,7 @@ class SendConnection : public RDMAConnection {
     // postSingleChunk().
     if (expected_chunk_count == 1 ||
         (expected_chunk_count == 0 &&
-         ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size) ==
-             1)) {
+         ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size) == 1)) {
       req->imm_data.set_chunk_count(1);
       if (!postRequestOnChannel(req)) {
         UCCL_LOG(WARN)
@@ -629,8 +701,7 @@ class SendConnection : public RDMAConnection {
               cc_.onAck(tsc_id, cq_data.len);
               // Decrease per-chunk inflight counter so CC window checks
               // unblock pending chunks without waiting for the whole message.
-              size_t prev =
-                  cc_inflight_bytes_.load(std::memory_order_relaxed);
+              size_t prev = cc_inflight_bytes_.load(std::memory_order_relaxed);
               size_t sub = std::min(prev, static_cast<size_t>(cq_data.len));
               cc_inflight_bytes_.fetch_sub(sub, std::memory_order_relaxed);
             } else {

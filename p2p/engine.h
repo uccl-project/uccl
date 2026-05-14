@@ -340,8 +340,7 @@ class Endpoint {
 
   /* Read a vector of data chunks. */
   bool readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
-             std::vector<void*> const& dst_v,
-             std::vector<size_t> const& size_v,
+             std::vector<void*> const& dst_v, std::vector<size_t> const& size_v,
              std::vector<FifoItem> const& slot_item_v, size_t num_iovs);
 
   /* Read a vector of data chunks asynchronously. */

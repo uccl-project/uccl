@@ -44,8 +44,7 @@ struct PooledSendBundle {
   RemoteMemInfo remote_mem_obj;
   RDMASendRequest req;
   PooledSendBundle()
-      : req(std::shared_ptr<RegMemBlock>(),
-            std::shared_ptr<RemoteMemInfo>()) {}
+      : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
 };
 
 static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
@@ -65,10 +64,10 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   bundle->local_mem_obj.mr_array = local_mh->mr_array;
 
   // Aliasing constructor: shares ownership/control-block with `bundle`.
-  bundle->req.local_mem = std::shared_ptr<RegMemBlock>(
-      bundle, &bundle->local_mem_obj);
-  bundle->req.remote_mem = std::shared_ptr<RemoteMemInfo>(
-      bundle, &bundle->remote_mem_obj);
+  bundle->req.local_mem =
+      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
+  bundle->req.remote_mem =
+      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
   bundle->req.compress_ctx = local_mh->compress_ctx;
   bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
   bundle->req.send_type =
