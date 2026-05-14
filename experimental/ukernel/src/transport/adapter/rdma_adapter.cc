@@ -71,7 +71,7 @@ int pick_dev_for_gpu(int gpu_idx) {
   auto nics = uccl::get_rdma_nics();
   if (nics.empty()) return 0;
 
-  int best_idx = 0;
+  int best_idx = -1;
   uint32_t best_dist = UINT32_MAX;
   int ndev = 0;
   ibv_device** devs = ibv_get_device_list(&ndev);
@@ -82,10 +82,31 @@ int pick_dev_for_gpu(int gpu_idx) {
     auto it = std::find_if(nics.begin(), nics.end(),
         [&](auto const& p) { return p.first == name; });
     if (it == nics.end()) continue;
+
+    char state_path[512];
+    snprintf(state_path, sizeof(state_path),
+             "/sys/class/infiniband/%s/ports/1/state", name.c_str());
+    FILE* fp = fopen(state_path, "r");
+    if (!fp) continue;
+    int port_state = 0;
+    char buf[32] = {};
+    if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
+    fclose(fp);
+    if (port_state != 4) {  // 4 = IBV_PORT_ACTIVE
+      fprintf(stderr, "[pick_dev] skip %s (port state=%d, not active)\n",
+              name.c_str(), port_state);
+      continue;
+    }
+
     uint32_t d = uccl::safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) { best_dist = d; best_idx = j; }
   }
   ibv_free_device_list(devs);
+
+  if (best_idx < 0) {
+    fprintf(stderr, "[pick_dev] no active RDMA port found\n");
+    return -1;
+  }
   return best_idx;
 }
 
@@ -109,7 +130,7 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
 
   int ndev = 0;
   ibv_device** devs = ibv_get_device_list(&ndev);
-  if (!devs || local_dev_idx_ >= ndev) {
+  if (!devs || local_dev_idx_ < 0 || local_dev_idx_ >= ndev) {
     if (devs) ibv_free_device_list(devs);
     return;
   }
@@ -738,7 +759,13 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     wr.wr.rdma.rkey = rkey;
 
     ibv_send_wr* bad = nullptr;
-    if (ibv_post_send(p->send_qps[q], &wr, &bad) != 0) {
+    int rc = ibv_post_send(p->send_qps[q], &wr, &bad);
+    if (rc != 0) {
+      ibv_qp_attr qattr;
+      ibv_qp_init_attr iattr;
+      ibv_query_qp(p->send_qps[q], &qattr, IBV_QP_STATE, &iattr);
+      fprintf(stderr, "[put_async] POST_FAILED ci=%u qp=%d qpn=%u state=%d errno=%d\n",
+              ci, q, p->send_qps[q]->qp_num, qattr.qp_state, errno);
       slot->failed.store(true, std::memory_order_release);
       slot->completed.store(true, std::memory_order_release);
       return rid;
