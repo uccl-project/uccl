@@ -34,23 +34,48 @@ static inline ConnID to_conn_id(uccl::ConnID const& in) {
 }
 
 // RDMA-only: build a one-sided request from FifoItem metadata.
+//
+// To minimize per-iov allocations on hot paths (writev/readv), the three
+// objects (RemoteMemInfo, RegMemBlock, RDMASendRequest) are co-allocated in
+// a single control block via std::make_shared, and aliased shared_ptrs are
+// handed out via the aliasing constructor — sharing one refcount.
+struct PooledSendBundle {
+  RegMemBlock local_mem_obj;
+  RemoteMemInfo remote_mem_obj;
+  RDMASendRequest req;
+  PooledSendBundle()
+      : req(std::shared_ptr<RegMemBlock>(),
+            std::shared_ptr<RemoteMemInfo>()) {}
+};
+
 static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
                               ucclRequest* ureq) {
-  auto remote_mem = std::make_shared<RemoteMemInfo>();
-  remote_mem->addr = slot_item.addr;
-  remote_mem->length = slot_item.size;
-  remote_mem->type = MemoryType::GPU;
-  remote_mem->rkey_array.copyFrom(slot_item.padding);
-  auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
-  local_mem->mr_array = local_mh->mr_array;
+  auto bundle = std::make_shared<PooledSendBundle>();
 
-  auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
-  req->compress_ctx = local_mh->compress_ctx;
-  req->to_rank_id = conn->uccl_conn_id_.flow_id;
-  req->send_type =
+  bundle->remote_mem_obj.addr = slot_item.addr;
+  bundle->remote_mem_obj.length = slot_item.size;
+  bundle->remote_mem_obj.type = MemoryType::GPU;
+  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+
+  bundle->local_mem_obj.addr = src;
+  bundle->local_mem_obj.size = size;
+  bundle->local_mem_obj.type = MemoryType::GPU;
+  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+
+  // Aliasing constructor: shares ownership/control-block with `bundle`.
+  bundle->req.local_mem = std::shared_ptr<RegMemBlock>(
+      bundle, &bundle->local_mem_obj);
+  bundle->req.remote_mem = std::shared_ptr<RemoteMemInfo>(
+      bundle, &bundle->remote_mem_obj);
+  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+  bundle->req.need_signaled = true;
+
+  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
 
   ureq->engine_idx = obj->writeOrRead(req);
   ureq->n = conn->uccl_conn_id_.flow_id;
