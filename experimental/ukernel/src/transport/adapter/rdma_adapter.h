@@ -8,7 +8,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -21,22 +20,6 @@ namespace Transport {
 struct RdmaTransportConfig {
   int num_qps = 4;
   int chunk_size_kb = 512;
-  int max_chunks = 16;
-  int recv_wr_pool_per_qp = 128;
-};
-
-struct RdmaConnectInit {
-  uint32_t data_qpns[4] = {};
-  uint32_t peer_qpns[4] = {};
-  uint32_t signal_qpn = 0;
-  uint8_t num_qps = 4;
-  uint16_t lid = 0;
-  uint8_t gid_raw[16] = {};
-  uint8_t gid_index = 0;
-  uint64_t signal_addr = 0;
-  uint32_t signal_rkey = 0;
-  int dev_idx = -1;
-  int gpu_idx = -1;
 };
 
 class RdmaTransportAdapter final : public TransportAdapter {
@@ -45,7 +28,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   ~RdmaTransportAdapter() override;
 
   bool is_initialized() const { return ctx_handle_ != nullptr; }
-  RdmaConnectInit get_connect_init(int peer_rank);
+  RdmaPeerConnectSpec get_connect_init(int peer_rank);
 
   bool ensure_put_path(PeerConnectSpec const& spec) override;
   bool ensure_wait_path(PeerConnectSpec const& spec) override;
@@ -71,18 +54,16 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   void register_remote_buffer(int peer_rank, uint32_t buffer_id,
                               uint64_t addr, uint32_t rkey);
-  void set_remote_signal_info(int peer_rank, uint64_t addr, uint32_t rkey);
 
  private:
   static constexpr int kMaxQPs = 4;
   static constexpr uint32_t kMaxChunks = 16;
   static constexpr int kMaxMsgId = 128;
   static constexpr int kMsgIdMask = kMaxMsgId - 1;
-  static constexpr size_t kSignalBufBytes = static_cast<size_t>(kMaxMsgId) * 8;
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
-  static constexpr int kMaxInflightWrs = 32;
+  static constexpr int kMaxInflightWrs = 16;
 
   struct RemoteBufInfo {
     uint64_t addr = 0;
@@ -123,29 +104,21 @@ class RdmaTransportAdapter final : public TransportAdapter {
     ibv_qp* data_qps[kMaxQPs] = {};
     ibv_cq* data_cq = nullptr;
 
-    ibv_qp* peer_qps[kMaxQPs] = {};
-    ibv_cq* peer_cq = nullptr;
-
     uint32_t remote_data_qpns[kMaxQPs] = {};
-    uint32_t remote_peer_qpns[kMaxQPs] = {};
 
     ibv_qp* signal_qp = nullptr;
     ibv_cq* signal_cq = nullptr;
     uint32_t remote_signal_qpn = 0;
     std::unique_ptr<RecvPool> signal_pool;
-    int signal_post_idx = 0;
 
     uint8_t num_qps = kMaxQPs;
     bool put_ready = false;
     bool wait_ready = false;
-    bool qps_in_init = false;
+    bool qps_created = false;
 
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
     uint8_t remote_gid_index = 0;
-
-    uint64_t remote_signal_addr = 0;
-    uint32_t remote_signal_rkey = 0;
 
     std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
 
@@ -172,8 +145,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<bool> failed{false};
     uint32_t total_chunks = 0;
     std::atomic<uint32_t> completed_chunks{0};
-    uint32_t chunk_size = 0;
-    uint32_t last_chunk_size = 0;
   };
 
   static constexpr uint32_t kSlotBits = 13;
@@ -185,13 +156,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   }
   static uint32_t slot_index(unsigned id) { return id & kSlotMask; }
   static uint32_t slot_generation(unsigned id) { return id >> kSlotBits; }
-
-  static uint32_t imm_encode(uint8_t msg_id) {
-    return static_cast<uint32_t>(msg_id) << 24;
-  }
-  static uint8_t imm_msg_id(uint32_t imm) {
-    return static_cast<uint8_t>((imm >> 24) & 0x7F);
-  }
 
   static uint64_t now_ns();
 
@@ -208,7 +172,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
                      int max_recv_wr = 1);
   bool qps_to_init(ibv_qp** qps, int count);
   bool qps_to_rtr(ibv_qp** qps, int count,
-                   RdmaPeerConnectSpec const& remote, bool is_data);
+                   RdmaPeerConnectSpec const& remote);
   bool qps_to_rts(ibv_qp** qps, int count);
 
   bool setup_peer_path(int peer_rank, RdmaPeerConnectSpec const& remote);
@@ -233,9 +197,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   uint8_t gid_index_ = 0;
 
   std::shared_ptr<ibv_context> ctx_handle_;
-  uint64_t signal_addr_ = 0;
-  uint32_t signal_rkey_ = 0;
-  ibv_mr* signal_mr_ = nullptr;
 
   int local_gpu_idx_ = -1;
   int local_dev_idx_ = -1;

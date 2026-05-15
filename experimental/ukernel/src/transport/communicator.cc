@@ -459,24 +459,18 @@ bool Communicator::exchange_rdma_peer_info(int rank,
 
   auto init = rdma_adapter.get_connect_init(rank);
   RdmaP2PInfo local_p2p_info;
-  local_p2p_info.data_qpn0 = init.data_qpns[0];
-  local_p2p_info.data_qpn1 = init.data_qpns[1];
-  local_p2p_info.data_qpn2 = init.data_qpns[2];
-  local_p2p_info.data_qpn3 = init.data_qpns[3];
-  local_p2p_info.peer_qpn0 = init.peer_qpns[0];
-  local_p2p_info.peer_qpn1 = init.peer_qpns[1];
-  local_p2p_info.peer_qpn2 = init.peer_qpns[2];
-  local_p2p_info.peer_qpn3 = init.peer_qpns[3];
-  local_p2p_info.signal_qpn = init.signal_qpn;
+  local_p2p_info.data_qpn0 = init.remote_data_qpns[0];
+  local_p2p_info.data_qpn1 = init.remote_data_qpns[1];
+  local_p2p_info.data_qpn2 = init.remote_data_qpns[2];
+  local_p2p_info.data_qpn3 = init.remote_data_qpns[3];
+  local_p2p_info.signal_qpn = init.remote_signal_qpn;
   local_p2p_info.num_qps = init.num_qps;
-  local_p2p_info.lid = init.lid;
-  memcpy(&local_p2p_info.gid_prefix, init.gid_raw, 8);
-  memcpy(&local_p2p_info.gid_iface, init.gid_raw + 8, 8);
-  local_p2p_info.gid_index = init.gid_index;
-  local_p2p_info.signal_addr = init.signal_addr;
-  local_p2p_info.signal_rkey = init.signal_rkey;
-  local_p2p_info.dev_idx = init.dev_idx;
-  local_p2p_info.gpu_idx = init.gpu_idx;
+  local_p2p_info.lid = init.remote_lid;
+  memcpy(&local_p2p_info.gid_prefix, init.remote_gid_raw.data(), 8);
+  memcpy(&local_p2p_info.gid_iface, init.remote_gid_raw.data() + 8, 8);
+  local_p2p_info.gid_index = init.remote_gid_index;
+  local_p2p_info.dev_idx = init.local_dev_idx;
+  local_p2p_info.gpu_idx = init.local_gpu_idx;
 
   std::string key = rdma_p2p_key(global_rank_, rank);
   std::string peer_key = rdma_p2p_key(rank, global_rank_);
@@ -635,12 +629,6 @@ bool Communicator::ensure_path(int rank, bool is_put) {
       rspec.remote_data_qpns[1] = remote.data_qpn1;
       rspec.remote_data_qpns[2] = remote.data_qpn2;
       rspec.remote_data_qpns[3] = remote.data_qpn3;
-      rspec.remote_peer_qpns[0] = remote.peer_qpn0;
-      rspec.remote_peer_qpns[1] = remote.peer_qpn1;
-      rspec.remote_peer_qpns[2] = remote.peer_qpn2;
-      rspec.remote_peer_qpns[3] = remote.peer_qpn3;
-      rspec.remote_signal_addr = remote.signal_addr;
-      rspec.remote_signal_rkey = remote.signal_rkey;
       rspec.remote_signal_qpn = remote.signal_qpn;
       rspec.local_dev_idx = remote.dev_idx;
       rspec.local_gpu_idx = local_gpu_idx_;
