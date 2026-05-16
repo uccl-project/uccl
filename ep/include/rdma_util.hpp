@@ -13,12 +13,13 @@
 #include <mutex>
 #include <unordered_set>
 #include <vector>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
+static inline void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   if (!S.context) {
     fprintf(stderr, "Error: context not initialized when filling GID\n");
     exit(1);
@@ -101,6 +102,48 @@ static inline int get_roce_version_from_env() {
   char const* env = getenv("UCCL_IB_ROCE_VERSION_NUM");
   if (env) roce_version = atoi(env);
   return roce_version;
+}
+
+static inline int get_udp_sport_base_from_env() {
+  static int udp_sport_base = 0;
+  char const* env = getenv("UCCL_UDP_SPORT_BASE");
+  if (env) {
+    int val = atoi(env);
+    if (val < 1 || val > 65535) {
+      fprintf(stderr,
+              "UCCL_UDP_SPORT_BASE=%d out of the valid range [1, 65535], "
+              "ignoring\n",
+              val);
+    } else {
+      udp_sport_base = val;
+    }
+  }
+  return udp_sport_base;
+}
+
+typedef int (*mlx5dv_modify_qp_udp_sport_fn)(struct ibv_qp*, uint16_t);
+
+static inline mlx5dv_modify_qp_udp_sport_fn load_mlx5dv_udp_sport_fn() {
+  static mlx5dv_modify_qp_udp_sport_fn fn =
+      []() -> mlx5dv_modify_qp_udp_sport_fn {
+    void* handle = dlopen("libmlx5.so", RTLD_NOW);
+    if (!handle) handle = dlopen("libmlx5.so.1", RTLD_NOW);
+    if (!handle) {
+      fprintf(stderr, "Failed to open libmlx5.so[.1]: %s\n", dlerror());
+      return nullptr;
+    }
+    auto f = (mlx5dv_modify_qp_udp_sport_fn)dlsym(handle,
+                                                  "mlx5dv_modify_qp_udp_sport");
+    if (!f) {
+      fprintf(stderr,
+              "dlsym failed on mlx5dv_modify_qp_udp_sport: %s, "
+              "skipping UDP sport configuration\n",
+              dlerror());
+      dlclose(handle);
+    }
+    return f;
+  }();
+  return fn;
 }
 
 static sa_family_t envIbAddrFamily(void) {

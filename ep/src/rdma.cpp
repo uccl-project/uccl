@@ -7,7 +7,6 @@
 #ifdef USE_DMABUF
 #include <condition_variable>
 #include <map>
-#include <dlfcn.h>
 #endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -1338,6 +1337,26 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   }
 
   printf("ACK-QP modified to RTS state\n");
+
+  if (S.udp_sport_base != 0) {
+    auto fn = load_mlx5dv_udp_sport_fn();
+    if (fn) {
+      auto set_sport = [&](ibv_qp* qp, int sport, char const* name) {
+        if (fn(qp, (uint16_t)sport))
+          fprintf(stderr, "Warning: failed to set UDP sport %d on %s QP\n",
+                  sport, name);
+      };
+      set_sport(S.qp, S.udp_sport_base, "main");
+      for (size_t r = 0; r < S.data_qps_by_channel.size(); ++r)
+        set_sport(S.data_qps_by_channel[r], S.udp_sport_base + r + 1, "data");
+      set_sport(S.ack_qp, S.udp_sport_base + S.data_qps_by_channel.size() + 1,
+                "ACK");
+      set_sport(S.recv_ack_qp,
+                S.udp_sport_base + S.data_qps_by_channel.size() + 2,
+                "recv ACK");
+      printf("UDP source ports set starting from %d\n", S.udp_sport_base);
+    }
+  }
 }
 
 void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
