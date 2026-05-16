@@ -2,14 +2,13 @@
 
 <p align="center"> <img src="./docs/images/uccl_logo.png" alt="" width="300"> </p>
 
-[![🌐 UCCL](https://img.shields.io/badge/-Visit%20Website-5865F2?style=for-the-badge)](https://uccl-project.github.io/) [![Github](https://img.shields.io/badge/UCCL-000000?style=for-the-badge&logo=github&logoColor=000&logoColor=white)](https://github.com/uccl-project/uccl) [![Twitter](https://img.shields.io/badge/UCCL-white?style=for-the-badge&logo=X&logoColor=000&color=000&labelColor=white)](https://x.com/uccl_proj)
 <p align="center">
-    <a href="#about"><b>About</b></a> | 
-    <a href="#road-map"><b>Road Map</b></a> | 
-    <a href="#quick-start"><b>Quick Start</b></a> | 
-    <a href="#dev-guide"><b>Dev Guide</b></a> | 
-    <a href="#acknowledgement"><b>Acknowledgement</b></a> |
-    <a href="#contact"><b>Contact</b></a>
+    <a href="https://uccl-project.github.io/"><b>Blog</b></a> | 
+    <a href="https://join.slack.com/t/uccl-dev/shared_invite/zt-3xbjdb0d0-tvDeUhGxtYxvGqsGKQ31Uw"><b>Join Slack</b></a> | 
+    <a href="https://x.com/uccl_proj"><b>Twitter/X</b></a> | 
+    <a href="#road-map"><b>Roadmap</b></a> | 
+    <a href="#quick-start"><b>Quick Start</b></a> |
+    <a href="https://github.com/uccl-project/uccl/issues/944"><b>Open Letter</b></a>
 </p>
 
 </div>
@@ -164,7 +163,16 @@ For quick installation with docker, you can directly dive into:
 
 </details>
 
+## Adoptions
+
+* NVIDIA NeMo agent framework integrates UCCL-EP for expert-parallel communication: [homepage](https://docs.nvidia.com/nemo/automodel/latest/apidocs/nemo_automodel/nemo_automodel.components.moe.uccl_ep.html). 
+* NVIDIA NIXL inference transfer library integrates UCCL-P2P as a RDMA backend: [release page](https://github.com/ai-dynamo/nixl/releases/tag/0.9.0).
+* Red Hat/IBM/Google llm-d distributed inference stack leverages UCCL-P2P for KV-cache transfer: [blog](https://llm-d.ai/blog/llm-d-v0.5-sustaining-performance-at-scale).
+* AMD Primus training framework uses UCCL-EP for expert-parallel communication: [code](https://github.com/AMD-AGI/Primus/tree/main/examples/moe_package).
+* AMD TheRock build platform incorporates UCCL-Tran, UCCL-EP, and UCCL-P2P: [homepage](https://github.com/ROCm/TheRock/tree/main/external-builds/uccl).
+
 ## Citation
+
 The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
@@ -183,6 +191,7 @@ The code in this repository is mostly described in the papers below. Please cons
   year={2026}
 }
 ```
+
 ## Acknowledgement
 
 UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/) and [UC Davis ArtSy lab](https://github.com/artsy-lab). We enthusiastically welcome open-source developers joining us! 
@@ -196,6 +205,3 @@ UCCL is generously supported by (in alphabetical order):
 [IBM](https://www.ibm.com/), 
 [Lambda](https://lambda.ai/),
 [Mibura](https://www.mibura.com/).
-
-## Contact
-Feel free to raise GitHub issues if you have any questions or suggestions. 
