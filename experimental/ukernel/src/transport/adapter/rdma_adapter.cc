@@ -339,10 +339,27 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
-  return create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size) &&
-         qps_to_init(p.data_qps, p.num_qps) &&
-         create_qp_set(&p.signal_qp, &p.signal_cq, 1, 256) &&
-         qps_to_init(&p.signal_qp, 1);
+  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size)) return false;
+  if (!qps_to_init(p.data_qps, p.num_qps)) return false;
+
+  p.signal_cq = ibv_create_cq(ctx_, 256, nullptr, nullptr, 0);
+  if (!p.signal_cq) return false;
+
+  ibv_qp_init_attr attr = {};
+  attr.send_cq = p.signal_cq;
+  attr.recv_cq = p.signal_cq;
+  attr.qp_type = IBV_QPT_RC;
+  attr.cap.max_send_wr = kQpMaxSendWr;
+  attr.cap.max_recv_wr = 1;
+  attr.cap.max_send_sge = 1;
+  attr.cap.max_recv_sge = 1;
+  attr.cap.max_inline_data = 16;
+
+  p.signal_qp = ibv_create_qp(pd_, &attr);
+  if (!p.signal_qp) return false;
+  if (!qps_to_init(&p.signal_qp, 1)) return false;
+
+  return true;
 }
 
 void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
