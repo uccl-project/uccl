@@ -8,6 +8,15 @@
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
+#include <deque>
+#include <mutex>
+
+// When set on a thread, RDMADataChannel::submitRequest() accumulates send
+// requests in a per-channel batch instead of immediately posting them. The
+// thread must subsequently call flushBatch() (typically via
+// NICEndpoint::flushAllSends()) to flush all pending work requests in a
+// single doorbell per channel.
+inline thread_local bool g_uccl_batch_post = false;
 
 // Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
@@ -66,7 +75,61 @@ class RDMADataChannel {
   }
 
   int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {
+    if (g_uccl_batch_post) {
+      // Cap how many bytes we accumulate before forcing a doorbell. This
+      // preserves pipelining for large iovs (each WR posts ~immediately)
+      // while still amortizing the doorbell cost across many small iovs.
+      static constexpr size_t kBatchFlushBytes = 32 * 1024;
+      size_t req_size = req->getLocalLen();
+      bool should_flush;
+      {
+        std::lock_guard<std::mutex> lock(batch_mu_);
+        batch_.push_back(std::move(req));
+        batch_bytes_ += req_size;
+        should_flush = (batch_bytes_ >= kBatchFlushBytes);
+      }
+      if (should_flush) flushBatch();
+      return 0;  // success; actual post deferred until flushBatch().
+    }
     return postRequest(req);
+  }
+
+  // Flush all accumulated batched send requests in one doorbell. Safe to call
+  // when nothing is batched (returns 0).
+  int flushBatch() {
+    std::vector<std::shared_ptr<RDMASendRequest>> local;
+    {
+      std::lock_guard<std::mutex> lock(batch_mu_);
+      if (batch_.empty()) return 0;
+      local.swap(batch_);
+      batch_bytes_ = 0;
+    }
+    bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
+                       ctx_->getVendorID() == 0x8086);   // Intel irdma
+    if (use_legacy) {
+      return __flushBatch_legacy(local);
+    }
+    return __flushBatch_ex(local);
+  }
+
+  // Given a CQE wr_id, return all wr_ids that should be acknowledged in the
+  // tracker. With selective signaling, a single signaled CQE represents
+  // completion of the WR with that wr_id plus all earlier unsignaled WRs
+  // posted as part of the same batched flush. For CQEs that do not match
+  // any pending batch (i.e. immediate-path WRs that signaled themselves),
+  // only the original wr_id is returned.
+  void expandCompletion(uint64_t cqe_wr_id, std::vector<uint64_t>& acks) {
+    std::lock_guard<std::mutex> lock(pending_mu_);
+    if (!pending_groups_.empty() &&
+        pending_groups_.front().signal_wr_id == cqe_wr_id) {
+      auto& group = pending_groups_.front();
+      acks.insert(acks.end(), group.unsignaled_wr_ids.begin(),
+                  group.unsignaled_wr_ids.end());
+      acks.push_back(cqe_wr_id);
+      pending_groups_.pop_front();
+      return;
+    }
+    acks.push_back(cqe_wr_id);
   }
 
   int64_t read(std::shared_ptr<RDMASendRequest> req) {
@@ -142,6 +205,23 @@ class RDMADataChannel {
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMADataChannelImpl> impl_;
+
+  // Per-channel buffer for batched doorbell posting. Protected by batch_mu_.
+  std::vector<std::shared_ptr<RDMASendRequest>> batch_;
+  size_t batch_bytes_ = 0;
+  std::mutex batch_mu_;
+
+  // Selective-signaling state: each batched flush emits one signaled CQE.
+  // When that CQE arrives, all preceding unsignaled WRs in the same batch
+  // are guaranteed (by the RC ordering rules) to have completed and can be
+  // acknowledged together. Each entry corresponds to one batched flush, in
+  // post order on this channel's QP.
+  struct PendingSignalGroup {
+    uint64_t signal_wr_id;
+    std::vector<uint64_t> unsignaled_wr_ids;
+  };
+  std::deque<PendingSignalGroup> pending_groups_;
+  std::mutex pending_mu_;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -274,6 +354,113 @@ class RDMADataChannel {
     }
 
     return __postRequest_ex(req);
+  }
+
+  // Post all requests in `batch` using a single ibv_wr_start/ibv_wr_complete
+  // pair (one doorbell). IB uses selective signaling; EFA SRD requires each
+  // WR to be signaled even when doorbell-batched.
+  inline int __flushBatch_ex(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch) {
+    if (batch.empty()) return 0;
+    // SGE storage must remain valid until ibv_wr_complete.
+    std::vector<struct ibv_sge> sges(batch.size());
+    size_t const last = batch.size() - 1;
+    bool const signal_all = uccl::is_efa_transport();
+    std::vector<uint64_t> unsignaled;
+    if (!signal_all) unsignaled.reserve(last);
+    auto* qpx = ibv_qp_to_qp_ex(qp_);
+    ibv_wr_start(qpx);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      qpx->wr_id = req->wr_id;
+      qpx->comp_mask = 0;
+      qpx->wr_flags = (signal_all || i == last) ? IBV_SEND_SIGNALED : 0;
+      if (req->send_type == SendType::Send) {
+        ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
+                              req->imm_data);
+      } else if (req->send_type == SendType::Write) {
+        ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
+      } else if (req->send_type == SendType::Read) {
+        ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __flushBatch_ex";
+        ibv_wr_abort(qpx);
+        return -1;
+      }
+      int num_sge = prepareSGEList(&sges[i], req);
+      ibv_wr_set_sge_list(qpx, num_sge, &sges[i]);
+      impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
+      if (!signal_all && i != last)
+        unsignaled.push_back(static_cast<uint64_t>(req->wr_id));
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_wr_complete failed in __flushBatch_ex: " << ret
+                      << " " << strerror(ret) << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+      return ret;
+    }
+    if (!unsignaled.empty()) {
+      std::lock_guard<std::mutex> lock(pending_mu_);
+      pending_groups_.push_back(
+          {static_cast<uint64_t>(batch[last]->wr_id), std::move(unsignaled)});
+    }
+    return 0;
+  }
+
+  // Legacy verbs path: build a linked ibv_send_wr list and post once. Only
+  // the last WR is IBV_SEND_SIGNALED.
+  inline int __flushBatch_legacy(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch) {
+    if (batch.empty()) return 0;
+    size_t const last = batch.size() - 1;
+    std::vector<struct ibv_send_wr> wrs(batch.size());
+    std::vector<struct ibv_sge> sges(batch.size());
+    std::vector<uint64_t> unsignaled;
+    unsignaled.reserve(last);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      auto& wr = wrs[i];
+      std::memset(&wr, 0, sizeof(wr));
+      wr.wr_id = req->wr_id;
+      wr.send_flags = (i == last) ? IBV_SEND_SIGNALED : 0;
+      int num_sge = prepareSGEList(&sges[i], req);
+      wr.sg_list = &sges[i];
+      wr.num_sge = num_sge;
+      if (req->send_type == SendType::Send) {
+        wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+        wr.imm_data = req->imm_data;
+      } else if (req->send_type == SendType::Write) {
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+      } else if (req->send_type == SendType::Read) {
+        wr.opcode = IBV_WR_RDMA_READ;
+        wr.wr.rdma.remote_addr = req->getRemoteAddress();
+        wr.wr.rdma.rkey = req->getRemoteKey();
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __flushBatch_legacy";
+        return -1;
+      }
+      wr.next = (i + 1 < batch.size()) ? &wrs[i + 1] : nullptr;
+      if (i != last) unsignaled.push_back(static_cast<uint64_t>(req->wr_id));
+    }
+    struct ibv_send_wr* bad_wr = nullptr;
+    int ret = ibv_post_send(qp_, wrs.data(), &bad_wr);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_post_send failed in __flushBatch_legacy: " << ret
+                      << " " << strerror(ret) << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+      return ret;
+    }
+    if (!unsignaled.empty()) {
+      std::lock_guard<std::mutex> lock(pending_mu_);
+      pending_groups_.push_back(
+          {static_cast<uint64_t>(batch[last]->wr_id), std::move(unsignaled)});
+    }
+    return 0;
   }
 
   void initQP() {

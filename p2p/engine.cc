@@ -1023,13 +1023,64 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   return true;
 }
 
-bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                     std::vector<void*> dst_v, std::vector<size_t> size_v,
-                     std::vector<FifoItem> slot_item_v, size_t num_iovs) {
+bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
+                     std::vector<void*> const& dst_v,
+                     std::vector<size_t> const& size_v,
+                     std::vector<FifoItem> const& slot_item_v,
+                     size_t num_iovs) {
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
+  }
+
+  // Pre-resolve all mhandles once to avoid per-iov mutex + map lookup.
+  std::vector<P2PMhandle*> mhandle_v(num_iovs);
+  for (size_t i = 0; i < num_iovs; ++i) {
+    mhandle_v[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandle_v[i] == nullptr)) {
+      std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
+  }
+
+  // Enable doorbell-batched posting for the duration of this call.
+  struct BatchGuard {
+    BatchGuard() { g_uccl_batch_post = true; }
+    ~BatchGuard() { g_uccl_batch_post = false; }
+  } batch_guard;
+
+  // Resolve the send group once so per-slot completion checks avoid the
+  // per-call shared_lock + map.find().
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
+
+  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
+  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
+  // lookup), flush once, then poll until all are acked.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
+    ucclRequest ureqs[kMaxInflightOps] = {};
+    bool done[kMaxInflightOps] = {false};
+
+    for (size_t i = 0; i < num_iovs; ++i) {
+      uccl_read_async_on_group(send_group, conn, mhandle_v[i], dst_v[i],
+                               size_v[i], slot_item_v[i], &ureqs[i]);
+    }
+    uccl_flush_send(ep_);
+
+    size_t num_done = 0;
+    while (num_done < num_iovs) {
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      uccl_drive_send(ep_);
+      for (size_t i = 0; i < num_iovs; ++i) {
+        if (done[i]) continue;
+        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+          done[i] = true;
+          num_done++;
+        }
+      }
+    }
+    return true;
   }
 
   ucclRequest ureq[kMaxInflightOps] = {};
@@ -1047,16 +1098,9 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       }
       UCCL_DCHECK(slot < kMaxInflightOps);
 
-      P2PMhandle* mhandle = get_mhandle(mr_id_v[next_iov]);
-      if (unlikely(mhandle == nullptr)) {
-        std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[next_iov]
-                  << std::endl;
-        return false;
-      }
-
       auto rc =
-          uccl_read_async(ep_, conn, mhandle, dst_v[next_iov], size_v[next_iov],
-                          slot_item_v[next_iov], &ureq[slot]);
+          uccl_read_async(ep_, conn, mhandle_v[next_iov], dst_v[next_iov],
+                          size_v[next_iov], slot_item_v[next_iov], &ureq[slot]);
       if (rc == -1) break;
       active[slot] = true;
       next_iov++;
@@ -1065,12 +1109,30 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
-      if (!active[slot]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
-        active[slot] = false;
-        num_completed++;
-        num_inflight--;
+    // Flush batched WRs in one doorbell per channel, then drive send once.
+    // (readv issues RDMA reads via the send path, so drive send here.)
+    if (num_inflight > 0) {
+      uccl_flush_send(ep_);
+      uccl_drive_send(ep_);
+    }
+
+    if (send_group != nullptr) {
+      for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+        if (!active[slot]) continue;
+        if (uccl_check_wr_fast(send_group, ureq[slot].engine_idx)) {
+          active[slot] = false;
+          num_completed++;
+          num_inflight--;
+        }
+      }
+    } else {
+      for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+        if (!active[slot]) continue;
+        if (uccl_check_ureq_once(ep_, &ureq[slot])) {
+          active[slot] = false;
+          num_completed++;
+          num_inflight--;
+        }
       }
     }
   }
@@ -1186,13 +1248,66 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
   return true;
 }
 
-bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                      std::vector<void*> src_v, std::vector<size_t> size_v,
-                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
+bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
+                      std::vector<void*> const& src_v,
+                      std::vector<size_t> const& size_v,
+                      std::vector<FifoItem> const& slot_item_v,
+                      size_t num_iovs) {
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[writev] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
+  }
+
+  // Pre-resolve all mhandles once to avoid per-iov mutex + map lookup.
+  std::vector<P2PMhandle*> mhandle_v(num_iovs);
+  for (size_t i = 0; i < num_iovs; ++i) {
+    mhandle_v[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandle_v[i] == nullptr)) {
+      std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
+  }
+
+  // Enable doorbell-batched posting for the duration of this call. All
+  // submitRequest() calls from this thread accumulate WRs per channel; we
+  // flush once per outer pass before polling.
+  struct BatchGuard {
+    BatchGuard() { g_uccl_batch_post = true; }
+    ~BatchGuard() { g_uccl_batch_post = false; }
+  } batch_guard;
+
+  // Resolve the send group once so per-slot completion checks avoid the
+  // per-call shared_lock + map.find().
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
+
+  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
+  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
+  // lookup), flush once, then poll until all are acked.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
+    ucclRequest ureqs[kMaxInflightOps] = {};
+    bool done[kMaxInflightOps] = {false};
+
+    for (size_t i = 0; i < num_iovs; ++i) {
+      uccl_write_async_on_group(send_group, conn, mhandle_v[i], src_v[i],
+                                size_v[i], slot_item_v[i], &ureqs[i]);
+    }
+    uccl_flush_send(ep_);
+
+    size_t num_done = 0;
+    while (num_done < num_iovs) {
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+      uccl_drive_send(ep_);
+      for (size_t i = 0; i < num_iovs; ++i) {
+        if (done[i]) continue;
+        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+          done[i] = true;
+          num_done++;
+        }
+      }
+    }
+    return true;
   }
 
   ucclRequest ureq[kMaxInflightOps] = {};
@@ -1210,16 +1325,9 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       }
       UCCL_DCHECK(slot < kMaxInflightOps);
 
-      P2PMhandle* mhandle = get_mhandle(mr_id_v[next_iov]);
-      if (unlikely(mhandle == nullptr)) {
-        std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[next_iov]
-                  << std::endl;
-        return false;
-      }
-
-      auto rc = uccl_write_async(ep_, conn, mhandle, src_v[next_iov],
-                                 size_v[next_iov], slot_item_v[next_iov],
-                                 &ureq[slot]);
+      auto rc = uccl_write_async(ep_, conn, mhandle_v[next_iov],
+                                 src_v[next_iov], size_v[next_iov],
+                                 slot_item_v[next_iov], &ureq[slot]);
       if (rc == -1) break;
       active[slot] = true;
       next_iov++;
@@ -1228,12 +1336,31 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
-      if (!active[slot]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
-        active[slot] = false;
-        num_completed++;
-        num_inflight--;
+    // Flush all batched WRs in one doorbell per channel, then drive the send
+    // poller once for this pass.
+    if (num_inflight > 0) {
+      uccl_flush_send(ep_);
+      uccl_drive_send(ep_);
+    }
+
+    if (send_group != nullptr) {
+      // Fast path: avoid per-slot mutex + map lookup.
+      for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+        if (!active[slot]) continue;
+        if (uccl_check_wr_fast(send_group, ureq[slot].engine_idx)) {
+          active[slot] = false;
+          num_completed++;
+          num_inflight--;
+        }
+      }
+    } else {
+      for (size_t slot = 0; slot < kMaxInflightOps; slot++) {
+        if (!active[slot]) continue;
+        if (uccl_check_ureq_once(ep_, &ureq[slot])) {
+          active[slot] = false;
+          num_completed++;
+          num_inflight--;
+        }
       }
     }
   }
@@ -2587,17 +2714,8 @@ void Endpoint::send_proxy_thread_func() {
         }
         case TaskType::WRITEV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-          std::vector<FifoItem> slot_item_v(
-              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
-
-          writev(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
-                 batch.num_iovs);
+          writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                 *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         default:
@@ -2648,17 +2766,8 @@ void Endpoint::recv_proxy_thread_func() {
         }
         case TaskType::READV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-          std::vector<FifoItem> slot_item_v(
-              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
-
-          readv(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
-                batch.num_iovs);
+          readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         case TaskType::SEND_NET:

@@ -875,22 +875,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             bool ok;
             {
@@ -917,22 +915,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             uint64_t transfer_id;
             bool ok;
@@ -1010,22 +1006,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             bool ok;
             {
@@ -1052,22 +1046,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             uint64_t transfer_id;
             bool ok;

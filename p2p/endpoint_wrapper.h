@@ -34,25 +34,90 @@ static inline ConnID to_conn_id(uccl::ConnID const& in) {
 }
 
 // RDMA-only: build a one-sided request from FifoItem metadata.
+//
+// To minimize per-iov allocations on hot paths (writev/readv), the three
+// objects (RemoteMemInfo, RegMemBlock, RDMASendRequest) are co-allocated in
+// a single control block via std::make_shared, and aliased shared_ptrs are
+// handed out via the aliasing constructor — sharing one refcount.
+struct PooledSendBundle {
+  RegMemBlock local_mem_obj;
+  RemoteMemInfo remote_mem_obj;
+  RDMASendRequest req;
+  PooledSendBundle()
+      : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
+};
+
 static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
                               ucclRequest* ureq) {
-  auto remote_mem = std::make_shared<RemoteMemInfo>();
-  remote_mem->addr = slot_item.addr;
-  remote_mem->length = slot_item.size;
-  remote_mem->type = MemoryType::GPU;
-  remote_mem->rkey_array.copyFrom(slot_item.padding);
-  auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
-  local_mem->mr_array = local_mh->mr_array;
+  auto bundle = std::make_shared<PooledSendBundle>();
 
-  auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
-  req->compress_ctx = local_mh->compress_ctx;
-  req->to_rank_id = conn->uccl_conn_id_.flow_id;
-  req->send_type =
+  bundle->remote_mem_obj.addr = slot_item.addr;
+  bundle->remote_mem_obj.length = slot_item.size;
+  bundle->remote_mem_obj.type = MemoryType::GPU;
+  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+
+  bundle->local_mem_obj.addr = src;
+  bundle->local_mem_obj.size = size;
+  bundle->local_mem_obj.type = MemoryType::GPU;
+  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+
+  // Aliasing constructor: shares ownership/control-block with `bundle`.
+  bundle->req.local_mem =
+      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
+  bundle->req.remote_mem =
+      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
+  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+  bundle->req.need_signaled = true;
+
+  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
 
   ureq->engine_idx = obj->writeOrRead(req);
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return ureq->engine_idx;
+}
+
+// Same as set_request() but skips NICEndpoint::writeOrRead() (which does a
+// per-call map.find on send_channel_groups_) by taking a pre-resolved
+// SendConnection pointer directly. Used by writev/readv hot paths.
+static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
+                                       P2PMhandle* local_mh, void* src,
+                                       size_t size, FifoItem const& slot_item,
+                                       ucclRequest* ureq) {
+  auto bundle = std::make_shared<PooledSendBundle>();
+
+  bundle->remote_mem_obj.addr = slot_item.addr;
+  bundle->remote_mem_obj.length = slot_item.size;
+  bundle->remote_mem_obj.type = MemoryType::GPU;
+  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+
+  bundle->local_mem_obj.addr = src;
+  bundle->local_mem_obj.size = size;
+  bundle->local_mem_obj.type = MemoryType::GPU;
+  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+
+  bundle->req.local_mem =
+      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
+  bundle->req.remote_mem =
+      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
+  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.send_type =
+      (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+  bundle->req.need_signaled = true;
+
+  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
+
+  int64_t wr_id = -1;
+  while (wr_id < 0) {
+    wr_id = send_group->postWriteOrRead(req);
+    if (wr_id < 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
+  }
+  ureq->engine_idx = static_cast<int>(wr_id);
   ureq->n = conn->uccl_conn_id_.flow_id;
   return ureq->engine_idx;
 }
@@ -236,6 +301,92 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
       ep);
 }
 
+// Drive the send/recv pollers once for the whole endpoint. Cheap to call
+// repeatedly but should be called only once per outer poll pass when
+// completing many in-flight requests (see writev/readv).
+inline void uccl_drive_send(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->sendRoutine();
+        }
+      },
+      ep);
+}
+
+// Flush any batched send WRs (doorbell-batched posting). Use together with
+// the thread-local g_uccl_batch_post flag.
+inline void uccl_flush_send(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->flushAllSends();
+        }
+      },
+      ep);
+}
+
+// Resolve the SendConnection for a rank_id once. Returns nullptr on the
+// TCP path or if not found. Callers can then use uccl_check_wr_fast() to
+// avoid the per-call mutex + map lookup in checkSendComplete_once().
+inline SendConnection* uccl_resolve_send_group(RDMAEndPoint const& ep,
+                                               uint64_t rank_id) {
+  SendConnection* result = nullptr;
+  std::visit(
+      [&](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          result = s->getSendGroupRaw(rank_id);
+        }
+      },
+      ep);
+  return result;
+}
+
+// Fast completion check using a pre-resolved SendConnection*.
+inline bool uccl_check_wr_fast(SendConnection* send_group, int64_t wr_id) {
+  return send_group->check(wr_id);
+}
+
+inline void uccl_drive_recv(RDMAEndPoint const& ep) {
+  std::visit(
+      [](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+          s->recvRoutine();
+        }
+      },
+      ep);
+}
+
+// Check completion of a single request without driving the send/recv pollers.
+// Use together with uccl_drive_send/uccl_drive_recv to amortize the polling
+// work across many in-flight requests.
+inline bool uccl_check_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
+  return std::visit(
+      [&](auto const& s) -> bool {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          bool ret = s->uccl_poll_ureq_once(&nreq);
+          from_nccl_req(nreq, ureq);
+          return ret;
+        } else {
+          if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
+              ureq->type == ReqType::ReqRead) {
+            return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
+          } else if (ureq->type == ReqType::ReqRx) {
+            return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
+          }
+          UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
+          return false;
+        }
+      },
+      ep);
+}
+
 inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
                            P2PMhandle* local_mh, void* dst, size_t size,
                            FifoItem const& slot_item, ucclRequest* ureq) {
@@ -290,6 +441,26 @@ inline int uccl_write_async(RDMAEndPoint const& ep, Conn* conn,
         }
       },
       ep);
+}
+
+// RDMA-only fast variant: pre-resolved SendConnection*, no variant visit,
+// no send_channel_groups_ lookup. Caller guarantees the path is RDMA.
+inline int uccl_write_async_on_group(SendConnection* send_group, Conn* conn,
+                                     P2PMhandle* local_mh, void* src,
+                                     size_t size, FifoItem const& slot_item,
+                                     ucclRequest* ureq) {
+  ureq->type = ReqType::ReqWrite;
+  return set_request_on_group(send_group, conn, local_mh, src, size, slot_item,
+                              ureq);
+}
+
+inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
+                                    P2PMhandle* local_mh, void* dst,
+                                    size_t size, FifoItem const& slot_item,
+                                    ucclRequest* ureq) {
+  ureq->type = ReqType::ReqRead;
+  return set_request_on_group(send_group, conn, local_mh, dst, size, slot_item,
+                              ureq);
 }
 
 inline int prepare_fifo_metadata(RDMAEndPoint const& ep, Conn* conn,

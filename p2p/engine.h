@@ -247,7 +247,7 @@ class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
-  static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
+  static constexpr int kMaxInflightOps = 128;  // Max 8 concurrent Ops
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
   static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
@@ -339,9 +339,9 @@ class Endpoint {
                   FifoItem const& slot_item, uint64_t* transfer_id);
 
   /* Read a vector of data chunks. */
-  bool readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> dst_v, std::vector<size_t> size_v,
-             std::vector<FifoItem> slot_item_v, size_t num_iovs);
+  bool readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
+             std::vector<void*> const& dst_v, std::vector<size_t> const& size_v,
+             std::vector<FifoItem> const& slot_item_v, size_t num_iovs);
 
   /* Read a vector of data chunks asynchronously. */
   bool readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -358,9 +358,10 @@ class Endpoint {
                    FifoItem const& slot_item, uint64_t* transfer_id);
 
   /* Write a vector of data chunks. */
-  bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-              std::vector<void*> src_v, std::vector<size_t> size_v,
-              std::vector<FifoItem> slot_item_v, size_t num_iovs);
+  bool writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
+              std::vector<void*> const& src_v,
+              std::vector<size_t> const& size_v,
+              std::vector<FifoItem> const& slot_item_v, size_t num_iovs);
 
   /* Write a vector of data chunks asynchronously. */
   bool writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
