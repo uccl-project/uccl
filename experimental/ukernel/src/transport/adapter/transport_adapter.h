@@ -45,7 +45,6 @@ struct RdmaPeerConnectSpec {
   uint8_t num_qps = kMaxQPs;
   uint16_t remote_lid = 0;
   std::array<uint8_t, 16> remote_gid_raw = {};
-  uint8_t remote_gid_index = 0;
 
   int local_dev_idx = -1;
   int local_gpu_idx = -1;

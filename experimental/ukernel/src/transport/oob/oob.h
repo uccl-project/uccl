@@ -118,7 +118,6 @@ struct RdmaP2PInfo {
   uint16_t lid = 0;
   uint64_t gid_prefix = 0;
   uint64_t gid_iface = 0;
-  uint8_t gid_index = 0;
   int dev_idx = -1;
   int gpu_idx = -1;
 
@@ -164,9 +163,8 @@ UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
                            f("signal_qpn", v.signal_qpn);
                            f("num_qps", v.num_qps);
                            f("lid", v.lid);
-                           f("gid_prefix", v.gid_prefix);
-                           f("gid_iface", v.gid_iface);
-                            f("gid_index", v.gid_index);
+                            f("gid_prefix", v.gid_prefix);
+                            f("gid_iface", v.gid_iface);
                             f("dev_idx", v.dev_idx);
                            f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("handle", v.handle);

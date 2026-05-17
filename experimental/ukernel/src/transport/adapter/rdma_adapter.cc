@@ -385,7 +385,6 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
   init.num_qps = static_cast<uint8_t>(config_.num_qps);
   init.remote_lid = lid_;
   memcpy(init.remote_gid_raw.data(), gid_.raw, sizeof(init.remote_gid_raw));
-  init.remote_gid_index = gid_index_;
   init.remote_signal_qpn = 0;
   init.local_dev_idx = local_dev_idx_;
   init.local_gpu_idx = local_gpu_idx_;
@@ -479,7 +478,6 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   p->remote_lid = remote.remote_lid;
   memcpy(p->remote_gid.raw, remote.remote_gid_raw.data(),
          sizeof(p->remote_gid.raw));
-  p->remote_gid_index = remote.remote_gid_index;
 
   p->remote_signal_qpn = remote.remote_signal_qpn;
   memcpy(p->remote_data_qpns, remote.remote_data_qpns,
@@ -624,7 +622,6 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   unsigned rid = 0;
   RequestSlot* slot = acquire_slot(&rid);
   if (!slot) return 0;
-  slot->kind = RequestKind::DataPut;
   slot->peer_rank = rank;
 
   auto ck = chunk_split(len);
@@ -699,9 +696,7 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
   unsigned rid = 0;
   RequestSlot* slot = acquire_slot(&rid);
   if (!slot) return 0;
-  slot->kind = RequestKind::Signal;
   slot->peer_rank = rank;
-  slot->expected_tag = tag;
   slot->total_chunks = 1;
   slot->completed_chunks.store(0, std::memory_order_release);
 
@@ -741,7 +736,6 @@ unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
   RequestSlot* slot = acquire_slot(&rid);
   if (!slot) return 0;
   slot->peer_rank = rank;
-  slot->expected_tag = expected_tag;
 
   RdmaPeer* p = nullptr;
   {
@@ -750,8 +744,6 @@ unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
     if (it == peers_.end()) return 0;
     p = it->second.get();
   }
-
-  slot->kind = RequestKind::SignalWait;
 
   unsigned idx =
       p->next_expected_dispatch.fetch_add(1, std::memory_order_relaxed) &
@@ -995,9 +987,7 @@ RdmaTransportAdapter::RequestSlot* RdmaTransportAdapter::acquire_slot(
       gen = 1;
       s.generation.store(gen, std::memory_order_release);
     }
-    s.kind = RequestKind::DataPut;
     s.peer_rank = -1;
-    s.expected_tag = 0;
     s.completed.store(false, std::memory_order_release);
     s.failed.store(false, std::memory_order_release);
     s.total_chunks = 0;

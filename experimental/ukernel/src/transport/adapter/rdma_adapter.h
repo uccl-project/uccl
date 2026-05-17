@@ -89,12 +89,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<uint32_t> unacked_wrs{0};
   };
 
-  enum class RequestKind : uint8_t {
-    DataPut = 0,
-    Signal = 1,
-    SignalWait = 2,
-  };
-
   struct ChunkTracker {
     std::atomic<bool> completed{false};
     std::atomic<unsigned> wait_slot{0};
@@ -118,7 +112,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
-    uint8_t remote_gid_index = 0;
 
     std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
 
@@ -138,9 +131,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   struct RequestSlot {
     std::atomic<uint8_t> state{0};
     std::atomic<uint32_t> generation{1};
-    RequestKind kind = RequestKind::DataPut;
     int peer_rank = -1;
-    uint64_t expected_tag = 0;
     std::atomic<bool> completed{false};
     std::atomic<bool> failed{false};
     uint32_t total_chunks = 0;
