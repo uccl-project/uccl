@@ -175,6 +175,11 @@ class Communicator {
   std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> rdma_registered_mrs_;
   std::atomic<uint32_t> next_ephemeral_buffer_id_{0x80000000u};
+  std::atomic<uint64_t> mr_generation_{1};
+  std::atomic<uint64_t> ipc_generation_{1};
+  mutable std::mutex mr_gen_mu_;
+  std::unordered_map<uint64_t, uint64_t> last_mr_generation_;
+  std::unordered_map<uint64_t, uint64_t> last_ipc_generation_;
 };
 
 }  // namespace Transport

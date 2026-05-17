@@ -36,17 +36,10 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     if selected_transport == "ipc":
         if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
-        # Synchronize after publish so both ranks overwrite OOB entries
-        # before either reads — avoids reading a stale IPC handle from a
-        # previous iteration whose backing tensor may have been freed.
-        if not comm.barrier("p2p_ipc_ready", 30000):
-            raise RuntimeError("ukernel barrier(p2p_ipc_ready) failed")
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
     elif selected_transport == "uccl" or selected_transport == "rdma":
-        if not comm.barrier("p2p_mr_ready", 30000):
-            raise RuntimeError("ukernel barrier(p2p_mr_ready) failed")
         print(f"[rank {comm.rank}] wait_mr peer={peer} buf={recv_buffer_id}...", flush=True)
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")

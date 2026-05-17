@@ -125,6 +125,7 @@ struct RdmaP2PInfo {
 };
 
 struct IpcBufferInfo {
+  uint64_t generation = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -167,7 +168,8 @@ UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
                             f("gid_iface", v.gid_iface);
                             f("dev_idx", v.dev_idx);
                            f("gpu_idx", v.gpu_idx);)
-UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("handle", v.handle);
+UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("generation", v.generation);
+                           f("handle", v.handle);
                            f("base_offset", v.base_offset); f("bytes", v.bytes);
                            f("device_idx", v.device_idx); f("valid", v.valid);)
 

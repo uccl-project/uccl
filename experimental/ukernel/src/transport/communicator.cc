@@ -1188,6 +1188,7 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   NamedMRInfos payload{};
+  payload.generation = mr_generation_.fetch_add(1, std::memory_order_relaxed);
   payload.entries.push_back(NamedMR{buffer_id, mr});
   return oob_put(*exchanger_client_, oob_namespace(),
                  mr_global_buffer_key(global_rank_, buffer_id), payload);
@@ -1233,13 +1234,32 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   }
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
-  NamedMRInfos payload{};
-  if (!oob_get(*exchanger_client_, oob_namespace(),
-               mr_global_buffer_key(owner_rank, buffer_id), payload,
-               timeout_ms)) {
-    return false;
+  uint64_t last_gen = 0;
+  {
+    std::lock_guard<std::mutex> lk(mr_gen_mu_);
+    auto it = last_mr_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
+    if (it != last_mr_generation_.end()) last_gen = it->second;
   }
-  if (payload.entries.empty()) return false;
+
+  constexpr int kPollMs = 10;
+  int elapsed = 0;
+  NamedMRInfos payload{};
+  while (true) {
+    int poll_to = (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
+    if (!oob_get(*exchanger_client_, oob_namespace(),
+                 mr_global_buffer_key(owner_rank, buffer_id), payload, poll_to)) {
+      if (timeout_ms >= 0) {
+        elapsed += kPollMs;
+        if (elapsed >= timeout_ms) return false;
+      }
+      continue;
+    }
+    if (!payload.entries.empty() && payload.generation != last_gen) break;
+    if (timeout_ms >= 0) {
+      elapsed += kPollMs;
+      if (elapsed >= timeout_ms) return false;
+    }
+  }
 
   bool found = false;
   MR mr{};
@@ -1265,6 +1285,10 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
     remote_buffer_to_mr_[owner_rank][buffer_id] = mr;
+  }
+  {
+    std::lock_guard<std::mutex> lk(mr_gen_mu_);
+    last_mr_generation_[(uint64_t(owner_rank) << 32) | buffer_id] = payload.generation;
   }
   return true;
 }
@@ -1319,6 +1343,7 @@ bool Communicator::reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   IpcBufferInfo info{};
+  info.generation = ipc_generation_.fetch_add(1, std::memory_order_relaxed);
   info.handle = local.handle;
   info.base_offset = static_cast<uint64_t>(local.base_offset);
   info.bytes = static_cast<uint64_t>(local.bytes);
@@ -1355,11 +1380,31 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   }
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
+  uint64_t last_gen = 0;
+  {
+    std::lock_guard<std::mutex> lk(mr_gen_mu_);
+    auto it = last_ipc_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
+    if (it != last_ipc_generation_.end()) last_gen = it->second;
+  }
+
+  constexpr int kPollMs = 10;
+  int elapsed = 0;
   IpcBufferInfo info{};
-  if (!oob_get(*exchanger_client_, oob_namespace(),
-               ipc_global_buffer_key(owner_rank, buffer_id), info,
-               timeout_ms)) {
-    return false;
+  while (true) {
+    int poll_to = (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
+    if (!oob_get(*exchanger_client_, oob_namespace(),
+                 ipc_global_buffer_key(owner_rank, buffer_id), info, poll_to)) {
+      if (timeout_ms >= 0) {
+        elapsed += kPollMs;
+        if (elapsed >= timeout_ms) return false;
+      }
+      continue;
+    }
+    if (info.generation != last_gen) break;
+    if (timeout_ms >= 0) {
+      elapsed += kPollMs;
+      if (elapsed >= timeout_ms) return false;
+    }
   }
 
   IPCItem state{};
@@ -1368,7 +1413,12 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   state.bytes = static_cast<size_t>(info.bytes);
   state.device_idx = info.device_idx;
   state.valid = info.valid;
-  return ipc_manager_.register_remote_ipc(owner_rank, buffer_id, state);
+  bool ok = ipc_manager_.register_remote_ipc(owner_rank, buffer_id, state);
+  if (ok) {
+    std::lock_guard<std::mutex> lk(mr_gen_mu_);
+    last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] = info.generation;
+  }
+  return ok;
 }
 
 std::string Communicator::ipc_open_error_message(int owner_rank,
