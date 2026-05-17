@@ -520,31 +520,6 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   p->put_ready = true;
   p->wait_ready = true;
 
-  {
-    auto state_name = [](ibv_qp_state s) -> char const* {
-      switch (s) {
-        case IBV_QPS_RESET: return "RESET";
-        case IBV_QPS_INIT:  return "INIT";
-        case IBV_QPS_RTR:   return "RTR";
-        case IBV_QPS_RTS:   return "RTS";
-        case IBV_QPS_SQD:   return "SQD";
-        case IBV_QPS_SQE:   return "SQE";
-        case IBV_QPS_ERR:   return "ERR";
-        default:            return "?";
-      }
-    };
-    ibv_qp_attr qattr;
-    ibv_qp_init_attr iattr;
-    for (int i = 0; i < p->num_qps; ++i) {
-      ibv_query_qp(p->data_qps[i], &qattr, IBV_QP_STATE, &iattr);
-      fprintf(stderr, "[RDMA] rank=%d data_qp[%d] qpn=%u state=%s\n",
-              rank, i, p->data_qps[i]->qp_num, state_name(qattr.qp_state));
-    }
-    ibv_query_qp(p->signal_qp, &qattr, IBV_QP_STATE, &iattr);
-    fprintf(stderr, "[RDMA] rank=%d signal_qp qpn=%u state=%s\n",
-            rank, p->signal_qp->qp_num, state_name(qattr.qp_state));
-  }
-
   return true;
 }
 

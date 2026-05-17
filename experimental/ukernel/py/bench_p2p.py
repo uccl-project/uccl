@@ -55,10 +55,8 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
-            print(f"[rank {rank}] warmup iter: recv...", flush=True)
             do_recv()
-            print(f"[rank {rank}] warmup iter: send...", flush=True)
-            do_send()  # echo back
+            do_send()
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -67,9 +65,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
-            print(f"[rank {rank}] warmup iter: send...", flush=True)
             do_send()
-            print(f"[rank {rank}] warmup iter: recv...", flush=True)
             do_recv()
         torch.cuda.synchronize()
         t0 = time.perf_counter()
