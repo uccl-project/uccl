@@ -859,46 +859,46 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
   int n;
   while ((n = ibv_poll_cq(cq, 16, wc)) > 0) {
     for (int i = 0; i < n; ++i) {
-    any = true;
-    if (wc[i].status != IBV_WC_SUCCESS) {
+      any = true;
+      if (wc[i].status != IBV_WC_SUCCESS) {
+        unsigned rid = static_cast<unsigned>(wc[i].wr_id >> 32);
+        RequestSlot* s = resolve_slot(rid);
+        int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
+        if (qp >= 0)
+          p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
+        if (s && !s->completed.load(std::memory_order_acquire)) {
+          s->failed.store(true, std::memory_order_release);
+          s->completed.store(true, std::memory_order_release);
+        }
+        cv_.notify_all();
+        continue;
+      }
+
       unsigned rid = static_cast<unsigned>(wc[i].wr_id >> 32);
-      RequestSlot* s = resolve_slot(rid);
       int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
+      if (qp >= 0 &&
+          (wc[i].opcode == IBV_WC_RDMA_WRITE || wc[i].opcode == IBV_WC_SEND)) {
+        uint64_t send_ns =
+            p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
+        if (send_ns != 0) {
+          uint64_t rtt_ns = now_ns() - send_ns;
+          p.qp_state[qp].ewma_rtt_ns =
+              kEwmaAlpha * static_cast<double>(rtt_ns) +
+              (1.0 - kEwmaAlpha) * p.qp_state[qp].ewma_rtt_ns;
+        }
+      }
       if (qp >= 0)
         p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
-      if (s && !s->completed.load(std::memory_order_acquire)) {
-        s->failed.store(true, std::memory_order_release);
-        s->completed.store(true, std::memory_order_release);
-      }
-      cv_.notify_all();
-      continue;
-    }
 
-    unsigned rid = static_cast<unsigned>(wc[i].wr_id >> 32);
-    int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
-    if (qp >= 0 &&
-        (wc[i].opcode == IBV_WC_RDMA_WRITE || wc[i].opcode == IBV_WC_SEND)) {
-      uint64_t send_ns =
-          p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
-      if (send_ns != 0) {
-        uint64_t rtt_ns = now_ns() - send_ns;
-        p.qp_state[qp].ewma_rtt_ns =
-            kEwmaAlpha * static_cast<double>(rtt_ns) +
-            (1.0 - kEwmaAlpha) * p.qp_state[qp].ewma_rtt_ns;
+      RequestSlot* s = resolve_slot(rid);
+      if (s) {
+        uint32_t done =
+            s->completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (done >= s->total_chunks) {
+          s->completed.store(true, std::memory_order_release);
+        }
+        cv_.notify_all();
       }
-    }
-    if (qp >= 0)
-      p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
-
-    RequestSlot* s = resolve_slot(rid);
-    if (s) {
-      uint32_t done =
-          s->completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
-      if (done >= s->total_chunks) {
-        s->completed.store(true, std::memory_order_release);
-      }
-      cv_.notify_all();
-    }
     }
   }
   return any;
