@@ -474,10 +474,9 @@ bool Communicator::exchange_rdma_peer_info(int rank,
   std::string key = rdma_p2p_key(global_rank_, rank);
   std::string peer_key = rdma_p2p_key(rank, global_rank_);
 
-  bool ok =
-      oob_put(*exchanger_client_, oob_namespace(), key, local_p2p_info) &&
-       oob_get(*exchanger_client_, oob_namespace(), peer_key,
-               *out_remote_p2p_info, bootstrap_timeout_ms());
+  bool ok = oob_put(*exchanger_client_, oob_namespace(), key, local_p2p_info) &&
+            oob_get(*exchanger_client_, oob_namespace(), peer_key,
+                    *out_remote_p2p_info, bootstrap_timeout_ms());
   if (ok && out_remote_p2p_info->gpu_idx >= 0) {
     std::lock_guard<std::mutex> lk(peer_mu_);
     peer_states_[static_cast<size_t>(rank)].gpu_idx =
@@ -910,8 +909,8 @@ bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
                   << std::endl;
       } else {
         std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host MR " << buffer_id
-                  << " with RDMA" << std::endl;
+                  << " failed to register host MR " << buffer_id << " with RDMA"
+                  << std::endl;
       }
     } else {
       std::lock_guard<std::mutex> lk(rdma_reg_mu_);
@@ -992,11 +991,10 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
     }
     uint32_t remote_id = dst_buf_id != 0 ? dst_buf_id : src_buf_id;
     MR remote_mr = get_mr(rank, remote_id);
-    void* remote_ptr_val =
-        reinterpret_cast<void*>(static_cast<uint64_t>(remote_mr.address) +
-                                dst_off);
-    rdma_adapter_->register_remote_buffer(rank, remote_id,
-                                          remote_mr.address, remote_mr.key);
+    void* remote_ptr_val = reinterpret_cast<void*>(
+        static_cast<uint64_t>(remote_mr.address) + dst_off);
+    rdma_adapter_->register_remote_buffer(rank, remote_id, remote_mr.address,
+                                          remote_mr.key);
 
     // Phase 1: post data WRs (pure RDMA_WRITE, multi-QP spray)
     unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
@@ -1014,13 +1012,15 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
 
     if (data_failed) {
       cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
       return 0;
     }
 
     // Phase 2: signal the receiver that data is ready
     unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
-    if (sig_result == 0 || !tracker_->activate(rid, sig_result, rank, peer_kind)) {
+    if (sig_result == 0 ||
+        !tracker_->activate(rid, sig_result, rank, peer_kind)) {
       cleanup_tracked_request(*slot);
       slot->state.store(TrackedRequest::SlotState::Free,
                         std::memory_order_release);
@@ -1245,7 +1245,8 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   uint64_t last_gen = 0;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
-    auto it = last_mr_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
+    auto it =
+        last_mr_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
     if (it != last_mr_generation_.end()) last_gen = it->second;
   }
 
@@ -1253,10 +1254,11 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   int elapsed = 0;
   NamedMRInfos payload{};
   while (true) {
-    int poll_to = (timeout_ms < 0) ? kPollMs
-                                   : std::min(kPollMs, timeout_ms - elapsed);
+    int poll_to =
+        (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
     if (!oob_get(*exchanger_client_, oob_namespace(),
-                 mr_global_buffer_key(owner_rank, buffer_id), payload, poll_to)) {
+                 mr_global_buffer_key(owner_rank, buffer_id), payload,
+                 poll_to)) {
       if (timeout_ms >= 0) {
         elapsed += kPollMs;
         if (elapsed >= timeout_ms) return false;
@@ -1265,7 +1267,10 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
     }
 
     if (payload.entries.empty()) {
-      if (timeout_ms >= 0) { elapsed += kPollMs; if (elapsed >= timeout_ms) return false; }
+      if (timeout_ms >= 0) {
+        elapsed += kPollMs;
+        if (elapsed >= timeout_ms) return false;
+      }
       continue;
     }
 
@@ -1312,7 +1317,8 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   }
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
-    last_mr_generation_[(uint64_t(owner_rank) << 32) | buffer_id] = payload.generation;
+    last_mr_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
+        payload.generation;
   }
   return true;
 }
@@ -1416,7 +1422,8 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   uint64_t last_gen = 0;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
-    auto it = last_ipc_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
+    auto it =
+        last_ipc_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
     if (it != last_ipc_generation_.end()) last_gen = it->second;
   }
 
@@ -1424,8 +1431,8 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   int elapsed = 0;
   IpcBufferInfo info{};
   while (true) {
-    int poll_to = (timeout_ms < 0) ? kPollMs
-                                   : std::min(kPollMs, timeout_ms - elapsed);
+    int poll_to =
+        (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
     if (!oob_get(*exchanger_client_, oob_namespace(),
                  ipc_global_buffer_key(owner_rank, buffer_id), info, poll_to)) {
       if (timeout_ms >= 0) {
@@ -1436,14 +1443,17 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
     }
 
     if (!info.valid) {
-      if (timeout_ms >= 0) { elapsed += kPollMs; if (elapsed >= timeout_ms) return false; }
+      if (timeout_ms >= 0) {
+        elapsed += kPollMs;
+        if (elapsed >= timeout_ms) return false;
+      }
       continue;
     }
 
     if (info.generation != last_gen) break;  // new data — accept
 
-  // Same generation, check if already cached (CCL repeat calls)
-  if (ipc_manager_.get_ipc(owner_rank, buffer_id).valid) return true;
+    // Same generation, check if already cached (CCL repeat calls)
+    if (ipc_manager_.get_ipc(owner_rank, buffer_id).valid) return true;
 
     if (timeout_ms >= 0) {
       elapsed += kPollMs;
@@ -1460,7 +1470,8 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   bool ok = ipc_manager_.register_remote_ipc(owner_rank, buffer_id, state);
   if (ok) {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
-    last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] = info.generation;
+    last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
+        info.generation;
   }
   return ok;
 }

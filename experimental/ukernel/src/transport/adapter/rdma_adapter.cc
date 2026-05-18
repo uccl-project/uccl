@@ -1,12 +1,11 @@
 #include "rdma_adapter.h"
-#include <algorithm>
+#include "util/util.h"
 #include <arpa/inet.h>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <unistd.h>
-
-#include "util/util.h"
 
 namespace UKernel {
 namespace Transport {
@@ -77,7 +76,7 @@ int pick_dev_for_gpu(int gpu_idx) {
   for (int j = 0; j < ndev; ++j) {
     std::string name = ibv_get_device_name(devs[j]);
     auto it = std::find_if(nics.begin(), nics.end(),
-        [&](auto const& p) { return p.first == name; });
+                           [&](auto const& p) { return p.first == name; });
     if (it == nics.end()) continue;
 
     char state_path[512];
@@ -96,7 +95,10 @@ int pick_dev_for_gpu(int gpu_idx) {
     }
 
     uint32_t d = uccl::safe_pcie_distance(gpu_cards[gpu_idx], it->second);
-    if (d < best_dist) { best_dist = d; best_idx = j; }
+    if (d < best_dist) {
+      best_dist = d;
+      best_idx = j;
+    }
   }
   ibv_free_device_list(devs);
 
@@ -195,7 +197,7 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
 // ── QP helpers ──────────────────────────────────────────────────────────────
 
 bool RdmaTransportAdapter::create_qp_set(ibv_qp** qps, ibv_cq** cq, int count,
-                                          int cq_size, int max_recv_wr) {
+                                         int cq_size, int max_recv_wr) {
   *cq = ibv_create_cq(ctx_, cq_size, nullptr, nullptr, 0);
   if (!*cq) return false;
 
@@ -266,9 +268,9 @@ bool RdmaTransportAdapter::qps_to_rtr(ibv_qp** qps, int count,
       attr.ah_attr.grh.hop_limit = 64;
     }
 
-    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
-                IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN |
+                IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC |
+                IBV_QP_MIN_RNR_TIMER;
 
     if (ibv_modify_qp(qps[i], &attr, flags) != 0) return false;
   }
@@ -294,7 +296,7 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
 }
 
 int RdmaTransportAdapter::find_qp_idx(ibv_qp* const* qps, int count,
-                                       uint32_t qp_num) {
+                                      uint32_t qp_num) {
   for (int i = 0; i < count; ++i) {
     if (qps[i] && qps[i]->qp_num == qp_num) return i;
   }
@@ -369,9 +371,18 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
       p.data_qps[q] = nullptr;
     }
   }
-  if (p.data_cq) { ibv_destroy_cq(p.data_cq); p.data_cq = nullptr; }
-  if (p.signal_qp) { ibv_destroy_qp(p.signal_qp); p.signal_qp = nullptr; }
-  if (p.signal_cq) { ibv_destroy_cq(p.signal_cq); p.signal_cq = nullptr; }
+  if (p.data_cq) {
+    ibv_destroy_cq(p.data_cq);
+    p.data_cq = nullptr;
+  }
+  if (p.signal_qp) {
+    ibv_destroy_qp(p.signal_qp);
+    p.signal_qp = nullptr;
+  }
+  if (p.signal_cq) {
+    ibv_destroy_cq(p.signal_cq);
+    p.signal_cq = nullptr;
+  }
   if (p.signal_pool && p.signal_pool->mr) {
     ibv_dereg_mr(p.signal_pool->mr);
   }
@@ -405,7 +416,8 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
     } else if (it->second->qps_created) {
       for (int i = 0; i < it->second->num_qps; ++i)
         init.remote_data_qpns[i] = it->second->data_qps[i]->qp_num;
-      init.remote_signal_qpn = it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
+      init.remote_signal_qpn =
+          it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
     }
   }
   return init;
@@ -442,7 +454,7 @@ bool RdmaTransportAdapter::has_wait_path(int rank) const {
 }
 
 bool RdmaTransportAdapter::setup_peer_path(int rank,
-                                          RdmaPeerConnectSpec const& remote) {
+                                           RdmaPeerConnectSpec const& remote) {
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = peers_.find(rank);
@@ -508,9 +520,9 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
       attr.ah_attr.grh.sgid_index = gid_index_;
       attr.ah_attr.grh.hop_limit = 64;
     }
-    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU |
-                IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-                IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+    int flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN |
+                IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC |
+                IBV_QP_MIN_RNR_TIMER;
     if (ibv_modify_qp(p->signal_qp, &attr, flags) != 0) return false;
   }
   if (!qps_to_rts(&p->signal_qp, 1)) return false;
@@ -546,9 +558,7 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
 
   int a = p.last_qp_.load(std::memory_order_relaxed);
   int b = (a + 1) % p.num_qps;
-  int chosen = (p.qp_state[a].ewma_rtt_ns < p.qp_state[b].ewma_rtt_ns)
-                   ? a
-                   : b;
+  int chosen = (p.qp_state[a].ewma_rtt_ns < p.qp_state[b].ewma_rtt_ns) ? a : b;
   p.last_qp_.store(chosen, std::memory_order_relaxed);
   p.cached_qp_valid_.store(true, std::memory_order_release);
   p.consecutive_cached_bytes_.store(msize, std::memory_order_release);
@@ -622,8 +632,8 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     uint64_t wr_id = (static_cast<uint64_t>(rid) << 32) | ci;
 
     ibv_sge sge = {};
-    sge.addr = reinterpret_cast<uint64_t>(static_cast<uint8_t*>(local_ptr) +
-                                          off);
+    sge.addr =
+        reinterpret_cast<uint64_t>(static_cast<uint8_t*>(local_ptr) + off);
     sge.length = sz;
     sge.lkey = lmr->lkey;
 
@@ -642,7 +652,8 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
       ibv_qp_attr qattr;
       ibv_qp_init_attr iattr;
       ibv_query_qp(p->data_qps[q], &qattr, IBV_QP_STATE, &iattr);
-      fprintf(stderr, "[put_async] POST_FAILED ci=%u qp=%d qpn=%u state=%d errno=%d\n",
+      fprintf(stderr,
+              "[put_async] POST_FAILED ci=%u qp=%d qpn=%u state=%d errno=%d\n",
               ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
       slot->failed.store(true, std::memory_order_release);
       slot->completed.store(true, std::memory_order_release);
@@ -675,7 +686,8 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
   slot->total_chunks = 1;
   slot->completed_chunks.store(0, std::memory_order_release);
 
-  uint8_t msg_id = p->next_msg_id.fetch_add(1, std::memory_order_relaxed) & kMsgIdMask;
+  uint8_t msg_id =
+      p->next_msg_id.fetch_add(1, std::memory_order_relaxed) & kMsgIdMask;
 
   uint32_t payload = static_cast<uint32_t>(msg_id);
   ibv_sge sge = {};
@@ -692,7 +704,8 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
 
   ibv_send_wr* bad = nullptr;
   if (ibv_post_send(p->signal_qp, &wr, &bad) != 0) {
-    fprintf(stderr, "[signal_async] POST_FAILED rank=%d msg_id=%u\n", rank, msg_id);
+    fprintf(stderr, "[signal_async] POST_FAILED rank=%d msg_id=%u\n", rank,
+            msg_id);
     slot->failed.store(true, std::memory_order_release);
     slot->completed.store(true, std::memory_order_release);
     return rid;
@@ -802,8 +815,7 @@ void RdmaTransportAdapter::poll_loop() {
     {
       std::lock_guard<std::mutex> lk(mu_);
       for (auto& [rank, p] : peers_) {
-        if (p->data_cq || p->signal_cq)
-          active.push_back({rank, p.get()});
+        if (p->data_cq || p->signal_cq) active.push_back({rank, p.get()});
       }
     }
 
@@ -812,8 +824,7 @@ void RdmaTransportAdapter::poll_loop() {
       if (p->data_cq &&
           poll_cq_set(*p, rank, p->data_cq, p->data_qps, p->num_qps))
         any = true;
-      if (p->signal_cq && poll_signal_cq(*p, rank))
-        any = true;
+      if (p->signal_cq && poll_signal_cq(*p, rank)) any = true;
       check_dispatch(*p, rank);
     }
     if (!any) {
@@ -823,7 +834,7 @@ void RdmaTransportAdapter::poll_loop() {
 }
 
 bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
-                                         ibv_qp* const* qps, int qp_count) {
+                                       ibv_qp* const* qps, int qp_count) {
   ibv_wc wc;
   bool any = false;
   int polls = 0;
@@ -848,8 +859,10 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
     // Success: any completion means a WR finished.
     unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
     int qp = find_qp_idx(qps, qp_count, wc.qp_num);
-    if (qp >= 0 && (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND)) {
-      uint64_t send_ns = p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
+    if (qp >= 0 &&
+        (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND)) {
+      uint64_t send_ns =
+          p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
       if (send_ns != 0) {
         uint64_t rtt_ns = now_ns() - send_ns;
         p.qp_state[qp].ewma_rtt_ns =
@@ -877,7 +890,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
   ibv_wc wc;
   bool any = false;
   int wc_count = 0;
-    while (ibv_poll_cq(p.signal_cq, 1, &wc) > 0) {
+  while (ibv_poll_cq(p.signal_cq, 1, &wc) > 0) {
     wc_count++;
     any = true;
     if (wc.status != IBV_WC_SUCCESS) {
@@ -905,7 +918,8 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
 
       case IBV_WC_RECV: {
         (void)repost_signal_recv(p);
-        uint8_t msg_id = *reinterpret_cast<uint8_t*>(p.signal_pool->buffer.data());
+        uint8_t msg_id =
+            *reinterpret_cast<uint8_t*>(p.signal_pool->buffer.data());
         auto& t = p.trackers[msg_id];
         t.completed.store(true, std::memory_order_release);
         check_dispatch(p, rank);
@@ -985,7 +999,7 @@ RdmaTransportAdapter::RequestSlot* RdmaTransportAdapter::resolve_slot(
   return &s;
 }
 
-const RdmaTransportAdapter::RequestSlot* RdmaTransportAdapter::resolve_const(
+RdmaTransportAdapter::RequestSlot const* RdmaTransportAdapter::resolve_const(
     unsigned id) const {
   if (id == 0 || !slots_) return nullptr;
   uint32_t gen = slot_generation(id);
@@ -1025,9 +1039,8 @@ RdmaTransportAdapter::ChunkResult RdmaTransportAdapter::chunk_split(
   }
   r.count = n;
   if (n > 1) {
-    r.last_size =
-        static_cast<uint32_t>(len - static_cast<uint64_t>(r.chunk_size) *
-                                       (n - 1));
+    r.last_size = static_cast<uint32_t>(
+        len - static_cast<uint64_t>(r.chunk_size) * (n - 1));
   } else {
     r.last_size = static_cast<uint32_t>(len);
   }

@@ -50,8 +50,7 @@ class RequestTracker {
 
   RequestTracker(UcclTransportAdapter* uccl, TcpTransportAdapter* tcp,
                  IpcAdapter* ipc, RdmaTransportAdapter* rdma,
-                 CompleteBounceFn complete_bounce,
-                 CleanupFn cleanup);
+                 CompleteBounceFn complete_bounce, CleanupFn cleanup);
   ~RequestTracker();
 
   RequestTracker(RequestTracker const&) = delete;

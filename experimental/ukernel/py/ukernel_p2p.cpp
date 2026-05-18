@@ -153,9 +153,9 @@ class Communicator {
     return comm_->wait_mr(peer_rank, buffer_id);
   }
 
-  uint64_t isend(int peer_rank, uint32_t local_buffer_id,
-                 size_t offset = 0, size_t len = 0,
-                 uint32_t remote_buffer_id = 0, size_t remote_offset = 0) {
+  uint64_t isend(int peer_rank, uint32_t local_buffer_id, size_t offset = 0,
+                 size_t len = 0, uint32_t remote_buffer_id = 0,
+                 size_t remote_offset = 0) {
     if (len == 0) {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = buffer_sizes_.find(local_buffer_id);
@@ -165,8 +165,8 @@ class Communicator {
                         remote_buffer_id, remote_offset);
   }
 
-  uint64_t irecv(int peer_rank, uint32_t local_buffer_id,
-                 size_t offset = 0, size_t len = 0) {
+  uint64_t irecv(int peer_rank, uint32_t local_buffer_id, size_t offset = 0,
+                 size_t len = 0) {
     if (len == 0) {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = buffer_sizes_.find(local_buffer_id);
@@ -192,11 +192,16 @@ class Communicator {
 
   std::string peer_transport(int peer_rank) const {
     switch (comm_->peer_transport_kind(peer_rank)) {
-      case PeerTransportKind::Ipc:  return "ipc";
-      case PeerTransportKind::Uccl: return "uccl";
-      case PeerTransportKind::Tcp:  return "tcp";
-      case PeerTransportKind::Rdma: return "rdma";
-      default:                      return "unknown";
+      case PeerTransportKind::Ipc:
+        return "ipc";
+      case PeerTransportKind::Uccl:
+        return "uccl";
+      case PeerTransportKind::Tcp:
+        return "tcp";
+      case PeerTransportKind::Rdma:
+        return "rdma";
+      default:
+        return "unknown";
     }
   }
 
@@ -209,8 +214,8 @@ class Communicator {
 
   void send(int peer_rank, uint32_t local_buffer_id,
             uint32_t remote_buffer_id = 0, size_t remote_offset = 0) {
-    uint64_t req = isend(peer_rank, local_buffer_id, 0, 0,
-                         remote_buffer_id, remote_offset);
+    uint64_t req = isend(peer_rank, local_buffer_id, 0, 0, remote_buffer_id,
+                         remote_offset);
     if (req == 0) throw std::runtime_error("isend returned 0");
     wait_finish(req);
   }

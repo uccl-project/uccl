@@ -156,18 +156,12 @@ UK_OOB_DEFINE_VISIT_FIELDS(NamedMRInfos, f("generation", v.generation);
 UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
                            f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
-UK_OOB_DEFINE_VISIT_FIELDS(RdmaP2PInfo,
-                           f("data_qpn0", v.data_qpn0);
-                           f("data_qpn1", v.data_qpn1);
-                           f("data_qpn2", v.data_qpn2);
-                           f("data_qpn3", v.data_qpn3);
-                           f("signal_qpn", v.signal_qpn);
-                           f("num_qps", v.num_qps);
-                           f("lid", v.lid);
-                            f("gid_prefix", v.gid_prefix);
-                            f("gid_iface", v.gid_iface);
-                            f("dev_idx", v.dev_idx);
-                           f("gpu_idx", v.gpu_idx);)
+UK_OOB_DEFINE_VISIT_FIELDS(
+    RdmaP2PInfo, f("data_qpn0", v.data_qpn0); f("data_qpn1", v.data_qpn1);
+    f("data_qpn2", v.data_qpn2); f("data_qpn3", v.data_qpn3);
+    f("signal_qpn", v.signal_qpn); f("num_qps", v.num_qps); f("lid", v.lid);
+    f("gid_prefix", v.gid_prefix); f("gid_iface", v.gid_iface);
+    f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("generation", v.generation);
                            f("handle", v.handle);
                            f("base_offset", v.base_offset); f("bytes", v.bytes);

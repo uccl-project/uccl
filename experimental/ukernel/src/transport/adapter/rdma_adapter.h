@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport_adapter.h"
+#include <infiniband/verbs.h>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -11,8 +12,6 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-
-#include <infiniband/verbs.h>
 
 namespace UKernel {
 namespace Transport {
@@ -52,8 +51,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool is_memory_registered(uint32_t buffer_id) const;
   uint32_t get_memory_rkey(uint32_t buffer_id) const;
 
-  void register_remote_buffer(int peer_rank, uint32_t buffer_id,
-                              uint64_t addr, uint32_t rkey);
+  void register_remote_buffer(int peer_rank, uint32_t buffer_id, uint64_t addr,
+                              uint32_t rkey);
 
  private:
   static constexpr int kMaxQPs = 4;
@@ -152,7 +151,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   RequestSlot* acquire_slot(unsigned* out_id);
   RequestSlot* resolve_slot(unsigned id);
-  const RequestSlot* resolve_const(unsigned id) const;
+  RequestSlot const* resolve_const(unsigned id) const;
   void free_slot(unsigned id);
 
   int select_qp(RdmaPeer& p, uint32_t msize);
@@ -162,8 +161,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size,
                      int max_recv_wr = 1);
   bool qps_to_init(ibv_qp** qps, int count);
-  bool qps_to_rtr(ibv_qp** qps, int count,
-                   RdmaPeerConnectSpec const& remote);
+  bool qps_to_rtr(ibv_qp** qps, int count, RdmaPeerConnectSpec const& remote);
   bool qps_to_rts(ibv_qp** qps, int count);
 
   bool setup_peer_path(int peer_rank, RdmaPeerConnectSpec const& remote);
@@ -176,8 +174,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   ChunkResult chunk_split(size_t len) const;
 
   void poll_loop();
-  bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq,
-                   ibv_qp* const* qps, int qp_count);
+  bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq, ibv_qp* const* qps,
+                   int qp_count);
   bool poll_signal_cq(RdmaPeer& peer, int rank);
 
   ibv_context* ctx_ = nullptr;

@@ -1,8 +1,8 @@
 #include "request_tracker.h"
 #include "adapter/ipc_adapter.h"
+#include "adapter/rdma_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/uccl_adapter.h"
-#include "adapter/rdma_adapter.h"
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
