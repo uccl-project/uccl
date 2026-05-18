@@ -488,13 +488,24 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         selected_nic_name = candidates[thread_idx % 4];
         use_ll_sl = true;
       } else if (num_efas == 16) {
-        assert(candidates.size() == 4);
-        // On p5e/p5en, there are 4 NICs with the same distance.
-        // We hardcode the first half Proxies to use the first NIC, and the
-        // second half to use the second NIC.
-        auto half = (local_rank % 2) * 2;
-        // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
-        selected_nic_name = candidates[thread_idx % 2 + half];
+        if (candidates.size() == 4) {
+          // On p5e/p5en, there are 4 NICs with the same distance per GPU.
+          // We hardcode the first half Proxies to use the first NIC, and the
+          // second half to use the second NIC.
+          auto half = (local_rank % 2) * 2;
+          // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+          selected_nic_name = candidates[thread_idx % 2 + half];
+        } else if (candidates.size() == 2) {
+          // On p6-b300.48xlarge (B300, 16x400Gbps EFA), there are 2 NICs with
+          // the same distance per GPU. Stripe all proxy threads across both.
+          selected_nic_name = candidates[thread_idx % 2];
+        } else {
+          fprintf(stderr,
+                  "[WARN] num_efas=16 with unexpected candidates size %zu, "
+                  "defaulting to candidates[0]\n",
+                  candidates.size());
+          selected_nic_name = candidates[0];
+        }
         use_ll_sl = true;
       } else {
         // On p6-b200, there is 2 NICs with the same distance.
