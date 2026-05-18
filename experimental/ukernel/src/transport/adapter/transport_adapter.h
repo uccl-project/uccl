@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -36,11 +37,26 @@ struct UcclPeerConnectSpec {
 
 struct IpcPeerConnectSpec {};
 
+struct RdmaPeerConnectSpec {
+  static constexpr int kMaxQPs = 4;
+
+  uint32_t remote_data_qpns[kMaxQPs] = {};
+  uint32_t remote_signal_qpn = 0;
+  uint8_t num_qps = kMaxQPs;
+  uint16_t remote_lid = 0;
+  std::array<uint8_t, 16> remote_gid_raw = {};
+
+  int local_dev_idx = -1;
+  int local_gpu_idx = -1;
+  int remote_dev_idx = -1;
+  int remote_gpu_idx = -1;
+};
+
 struct PeerConnectSpec {
   int peer_rank = -1;
   PeerConnectType type = PeerConnectType::Connect;
   std::variant<std::monostate, TcpPeerConnectSpec, UcclPeerConnectSpec,
-               IpcPeerConnectSpec>
+               IpcPeerConnectSpec, RdmaPeerConnectSpec>
       detail{};
 };
 

@@ -56,10 +56,11 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/shmring_exchanger.cc \
-                 ../transport/adapter/tcp_adapter.cc \
-                 ../transport/adapter/uccl_adapter.cc \
-                 ../transport/adapter/ipc_adapter.cc \
-                 ../transport/util/utils.cc
+                  ../transport/adapter/tcp_adapter.cc \
+                  ../transport/adapter/uccl_adapter.cc \
+                  ../transport/adapter/ipc_adapter.cc \
+                  ../transport/adapter/rdma_adapter.cc \
+                  ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
                  transport_request_tracker.o \
                  transport_bounce_buffer_pool.o \
@@ -68,10 +69,11 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
                  transport_adapter_shmring_exchanger.o \
-                 transport_adapter_tcp_adapter.o \
-                 transport_adapter_uccl_adapter.o \
-                 transport_adapter_ipc_adapter.o \
-                 transport_util_utils.o
+                  transport_adapter_tcp_adapter.o \
+                  transport_adapter_uccl_adapter.o \
+                  transport_adapter_ipc_adapter.o \
+                  transport_adapter_rdma_adapter.o \
+                  transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
                   device_worker.o
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o

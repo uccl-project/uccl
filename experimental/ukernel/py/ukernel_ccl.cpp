@@ -43,6 +43,7 @@ Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "ipc") return Transport::PreferredTransport::Ipc;
   if (value == "uccl") return Transport::PreferredTransport::Uccl;
   if (value == "tcp") return Transport::PreferredTransport::Tcp;
+  if (value == "rdma") return Transport::PreferredTransport::Rdma;
   throw std::invalid_argument("unsupported transport: " + value);
 }
 
@@ -568,6 +569,8 @@ class ProcessGroup {
         return "uccl";
       case Transport::PeerTransportKind::Tcp:
         return "tcp";
+      case Transport::PeerTransportKind::Rdma:
+        return "rdma";
     }
     return "unknown";
   }

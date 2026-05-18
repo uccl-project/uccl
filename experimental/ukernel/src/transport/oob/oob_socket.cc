@@ -569,21 +569,14 @@ bool ShmExchanger::wait_for_update(int delay_ms) const {
   if (!shm_) return false;
   if (delay_ms <= 0) delay_ms = 1;
 
-  auto deadline =
-      std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
-  auto sec = std::chrono::time_point_cast<std::chrono::seconds>(deadline);
-  auto nsec =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - sec)
-          .count();
-  struct timespec ts {};
-  ts.tv_sec = static_cast<time_t>(sec.time_since_epoch().count());
-  ts.tv_nsec = static_cast<long>(nsec);
-
+  auto start = std::chrono::steady_clock::now();
   while (true) {
-    if (sem_timedwait(&shm_->notify_sem, &ts) == 0) return true;
-    if (errno == EINTR) continue;
-    if (errno == ETIMEDOUT) return false;
-    return false;
+    if (sem_trywait(&shm_->notify_sem) == 0) return true;
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start)
+            .count() >= delay_ms)
+      return false;
+    usleep(1000);
   }
 }
 

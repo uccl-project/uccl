@@ -31,14 +31,19 @@ static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "ipc") == 0) return PreferredTransport::Ipc;
   if (strcmp(value, "uccl") == 0) return PreferredTransport::Uccl;
   if (strcmp(value, "tcp") == 0) return PreferredTransport::Tcp;
-  fprintf(stderr,
-          "Error: unsupported transport '%s' (expected auto|ipc|uccl|tcp)\n",
-          value);
+  if (strcmp(value, "rdma") == 0) return PreferredTransport::Rdma;
+  fprintf(
+      stderr,
+      "Error: unsupported transport '%s' (expected auto|ipc|uccl|tcp|rdma)\n",
+      value);
   std::exit(1);
 }
 
 static int throughput_window_for(PeerTransportKind kind) {
   if (kind == PeerTransportKind::Uccl) {
+    return kUcclThroughputWindow;
+  }
+  if (kind == PeerTransportKind::Rdma) {
     return kUcclThroughputWindow;
   }
   if (kind == PeerTransportKind::Tcp) return kTcpThroughputWindow;
@@ -181,7 +186,7 @@ static bool wait_remote_recv_buffers(
   for (size_t i = 0; i < recv_slots; ++i) {
     uint32_t const buffer_id =
         kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
-    if (kind == PeerTransportKind::Uccl &&
+    if ((kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma) &&
         !comm.wait_mr(peer_rank, buffer_id)) {
       return false;
     }
@@ -199,9 +204,10 @@ static unsigned submit_send(Communicator& comm, int peer_rank,
                             PeerTransportKind kind,
                             std::vector<uint32_t> const& recv_buffer_ids,
                             int slot) {
-  uint32_t remote_id = (kind == PeerTransportKind::Uccl)
-                           ? recv_buffer_ids.at(static_cast<size_t>(slot))
-                           : 0;
+  uint32_t remote_id =
+      (kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma)
+          ? recv_buffer_ids.at(static_cast<size_t>(slot))
+          : 0;
   if (kind == PeerTransportKind::Ipc) {
     remote_id = recv_buffer_ids.at(static_cast<size_t>(slot));
   }
@@ -870,14 +876,16 @@ int main(int argc, char** argv) {
   printf("GPU: %d, Message size: %zu bytes\n", gpu_id, msg_size);
   printf("Iterations: %d, Warmup: %d\n", num_iterations, num_warmup);
   printf("IP: %s, Port: %d\n", local_ip.c_str(), listen_port);
-  printf(
-      "Transport override: %s\n",
-      preferred_transport == PreferredTransport::Auto
-          ? "auto"
-          : (preferred_transport == PreferredTransport::Ipc
-                 ? "ipc"
-                 : (preferred_transport == PreferredTransport::Uccl ? "uccl"
-                                                                    : "tcp")));
+  printf("Transport override: %s\n",
+         preferred_transport == PreferredTransport::Auto
+             ? "auto"
+             : (preferred_transport == PreferredTransport::Ipc
+                    ? "ipc"
+                    : (preferred_transport == PreferredTransport::Uccl
+                           ? "uccl"
+                           : (preferred_transport == PreferredTransport::Rdma
+                                  ? "rdma"
+                                  : "tcp"))));
   printf("============================================================\n\n");
 
   // Run as sender or receiver

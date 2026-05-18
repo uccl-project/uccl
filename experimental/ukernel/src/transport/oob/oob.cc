@@ -36,6 +36,8 @@ char const* peer_transport_kind_name(PeerTransportKind kind) {
       return "ipc";
     case PeerTransportKind::Tcp:
       return "tcp";
+    case PeerTransportKind::Rdma:
+      return "rdma";
   }
   return "unknown";
 }
@@ -59,6 +61,13 @@ PeerTransportKind resolve_peer_transport_kind(
   }
   if (config.preferred_transport == PreferredTransport::Tcp) {
     return PeerTransportKind::Tcp;
+  }
+  if (config.preferred_transport == PreferredTransport::Rdma) {
+    if (!local_meta.rdma_capable || !peer_meta.rdma_capable) {
+      throw std::invalid_argument(
+          "preferred RDMA transport requires RDMA-capable peers");
+    }
+    return PeerTransportKind::Rdma;
   }
   if (local_meta.host_id == peer_meta.host_id) {
     return PeerTransportKind::Ipc;
