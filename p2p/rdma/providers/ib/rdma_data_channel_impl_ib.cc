@@ -8,7 +8,6 @@
 #include <cstring>
 
 #define GID_INDEX_DEFAULT 3
-#define MAX_INLINE_DATA 128
 #define SERVICE_LEVEL 3
 #define MIN_RNR_TIMER 12
 #define TRAFFIC_CLASS 104
@@ -18,12 +17,13 @@
 #define TIMEOUT 14
 #define MAX_RD_ATOMIC 1
 #define MAX_DEST_RD_ATOMIC 1
-#define MAX_CQE 1024
+static constexpr int kMaxCqe = kMaxSendWr + kMaxRecvWr;
+static constexpr uint64_t kRecvWrIdMask = 1ull << 63;
 
 inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                   ChannelMetaData* local_meta) {
-  *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), MAX_CQE, nullptr,
+  *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), kMaxCqe, nullptr,
                                             nullptr, 0);
   assert(*cq_ex);
 
@@ -45,7 +45,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   qp_attr.cap.max_recv_wr = kMaxRecvWr;
   qp_attr.cap.max_send_sge = kMaxSendSeg;
   qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-  qp_attr.cap.max_inline_data = getMaxInlineData();
+  qp_attr.cap.max_inline_data = 0;
 
   qp_attr.send_cq = ibv_cq_ex_to_cq(*cq_ex);
   qp_attr.recv_cq = ibv_cq_ex_to_cq(*cq_ex);
@@ -185,7 +185,12 @@ inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
     if (unlikely(status != IBV_WC_SUCCESS)) {
       UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
                      << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                     << " (" << ibv_wc_status_str(status) << ")";
+                     << " (" << ibv_wc_status_str(status) << ")"
+                     << ", opcode=" << wc->opcode
+                     << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
+                     << std::hex << wc->vendor_err << ", qp_num=0x"
+                     << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
+                     << std::dec;
     } else {
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;
@@ -256,13 +261,10 @@ inline void IBChannelImpl::initPreAllocResources() {
   pending_post_recv_ = 0;
   for (int i = 0; i < kMaxRecvWr; i++) {
     pre_alloc_recv_wrs_[i] = {};
+    pre_alloc_recv_wrs_[i].wr_id = kRecvWrIdMask | static_cast<uint64_t>(i);
     pre_alloc_recv_wrs_[i].next =
         (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
   }
-}
-
-inline uint32_t IBChannelImpl::getMaxInlineData() const {
-  return MAX_INLINE_DATA;
 }
 
 #endif  // RDMA_DATA_CHANNEL_IMPL_IB_CC_INCLUDED

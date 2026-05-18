@@ -45,10 +45,10 @@ __device__ __forceinline__ nv_bfloat16
 apply_reduce_bf16_amd_naive(nv_bfloat16 a, nv_bfloat16 b, ReduceType op) {
   float af = static_cast<float>(a);
   float bf = static_cast<float>(b);
-  if (op == ReduceType::Sum) return __float2bfloat16(af + bf);
-  if (op == ReduceType::Prod) return __float2bfloat16(af * bf);
-  if (op == ReduceType::Max) return __float2bfloat16(fmaxf(af, bf));
-  if (op == ReduceType::Min) return __float2bfloat16(fminf(af, bf));
+  if (op == ReduceType::Sum) return nv_bfloat16(af + bf);
+  if (op == ReduceType::Prod) return nv_bfloat16(af * bf);
+  if (op == ReduceType::Max) return nv_bfloat16(fmaxf(af, bf));
+  if (op == ReduceType::Min) return nv_bfloat16(fminf(af, bf));
   return b;
 }
 #endif

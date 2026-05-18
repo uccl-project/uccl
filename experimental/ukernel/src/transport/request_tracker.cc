@@ -306,7 +306,7 @@ bool RequestTracker::wait_finish(std::vector<unsigned> const& reqs) {
     }
     if (remaining.empty()) break;
     if (!made_progress) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
+      std::this_thread::yield();
     }
   }
 

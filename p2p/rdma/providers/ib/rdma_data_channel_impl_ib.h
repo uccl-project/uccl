@@ -6,7 +6,7 @@
 class IBChannelImpl : public RDMADataChannelImpl {
  public:
   IBChannelImpl() = default;
-  ~IBChannelImpl() override = default;
+  ~IBChannelImpl() override { delete[] pre_alloc_recv_wrs_; }
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;
@@ -21,8 +21,6 @@ class IBChannelImpl : public RDMADataChannelImpl {
 
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
-
-  uint32_t getMaxInlineData() const override;
 
   void initPreAllocResources() override;
 

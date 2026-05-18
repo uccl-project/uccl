@@ -3,7 +3,6 @@ This is the same test_internode.py test in DeepEP's repo.
 
 Build:
 export OMP_NUM_THREADS=6
-export MAKE_NORMAL_MODE=1
 make clean && make -j install
 
 On first node:

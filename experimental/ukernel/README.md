@@ -4,9 +4,9 @@ Minimal build and test entry points for `experimental/ukernel`.
 
 ## Prerequisites
 
-- CUDA toolchain for NVIDIA builds
+- CUDA/Rocm toolchain for NVIDIA/AMD builds
 - RDMA / verbs dependencies used by `transport` and `ccl`
-- system-installed GDRCopy (`gdrapi.h` + `libgdrapi`) for `device` and `ccl`
+- system-installed GDRCopy (`gdrapi.h` + `libgdrapi`) for `device` and `ccl` (only Nvidia)
 - `torchrun` available for CCL multiprocess integration tests
 
 ## Quick Install GDRCopy (System)
@@ -118,11 +118,12 @@ Run Python tests (requires 2+ GPUs):
 ```bash
 cd experimental/ukernel/py
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_collective.py
-CUDA_VISIBLE_DEVICES=0,6,7 torchrun --nproc_per_node=3 test_collective.py  # for 3-rank tests
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_p2p.py
 
 # rdma battle
 UK_P2P_TRANSPORT=uccl UCCL_P2P_MODE=rdma NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_IB_DISABLE=0 NCCL_IB_HCA=mlx5_0 NCCL_DEBUG=INFO CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
+
+Nvdia local:
         Size |  ukernel (ms) |  ukernel (GB/s) |   UCCL (ms) |   UCCL (GB/s) |   NCCL (ms) |   NCCL (GB/s)
 --------------------------------------------------------------------------------------------------------------------------------
       1024 B |         0.063 |            0.03 |       0.316 |          0.01 |       0.096 |          0.02
@@ -164,18 +165,20 @@ UK_P2P_TRANSPORT=uccl UCCL_P2P_MODE=rdma NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 N
 
 # ipc battle
 UK_P2P_TRANSPORT=ipc UCCL_P2P_MODE=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
+
+on AMD0:
          Size |  ukernel (ms) |  ukernel (GB/s) |   UCCL (ms) |   UCCL (GB/s) |   NCCL (ms) |   NCCL (GB/s)
 --------------------------------------------------------------------------------------------------------------------------------
-      1024 B |         3.318 |            0.00 |       0.042 |          0.05 |       0.091 |          0.02
-      4096 B |         3.470 |            0.00 |       0.042 |          0.20 |       0.090 |          0.09
-     16384 B |         3.339 |            0.01 |       0.064 |          0.51 |       0.087 |          0.37
-     65536 B |         3.410 |            0.04 |       0.078 |          1.68 |       0.098 |          1.34
-    262144 B |         3.439 |            0.15 |       0.185 |          2.84 |       0.088 |          5.96
-   1048576 B |         3.602 |            0.58 |       0.566 |          3.70 |       0.102 |         20.66
-   4194304 B |         3.679 |            2.28 |       1.374 |          6.10 |       0.250 |         33.50
-  16777216 B |         4.104 |            8.18 |       4.683 |          7.17 |       0.799 |         41.99
-  67108864 B |         6.058 |           22.15 |      17.865 |          7.51 |       2.758 |         48.66
- 268435456 B |        13.548 |           39.63 |      70.594 |          7.61 |      10.814 |         49.64
+      1024 B |         0.030 |            0.07 |       0.039 |          0.05 |       0.142 |          0.01
+      4096 B |         0.030 |            0.27 |       0.039 |          0.21 |       0.125 |          0.07
+     16384 B |         0.031 |            1.06 |       0.039 |          0.83 |       0.127 |          0.26
+     65536 B |         0.044 |            2.96 |       0.031 |          4.20 |       0.124 |          1.05
+    262144 B |         0.052 |           10.16 |       0.041 |         12.80 |       0.135 |          3.90
+   1048576 B |         0.083 |           25.39 |       0.073 |         28.70 |       0.146 |         14.39
+   4194304 B |         0.206 |           40.71 |       0.253 |         33.20 |       0.268 |         31.36
+  16777216 B |         0.697 |           48.13 |       0.764 |         43.90 |       0.758 |         44.27
+  67108864 B |         2.656 |           50.54 |       2.797 |         47.99 |       2.715 |         49.44
+ 268435456 B |        10.495 |           51.15 |      10.920 |         49.16 |      10.548 |         50.90
 
 # tcp
 UK_P2P_TRANSPORT=tcp UCCL_P2P_MODE=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py

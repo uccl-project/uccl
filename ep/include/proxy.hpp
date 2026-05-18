@@ -19,6 +19,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "adaptive_sleeper.hpp"
 #include "d2h_queue_host.hpp"
 #include <deque>
 #include <set>
@@ -87,9 +88,14 @@ class Proxy {
   CopyRingBuffer ring;
   Config cfg_;
 
+  void notify_proxy_thread_adaptive_sleeper() {
+    adaptive_sleeper_.maybe_wake_proxy_thread();
+  }
+
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
+  AdaptiveSleeper adaptive_sleeper_;
   void init_common();
   void init_sender();
   void init_remote();

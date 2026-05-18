@@ -194,7 +194,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   ipc_adapter_ = std::make_shared<IpcAdapter>(
       this, generate_host_id() + "_p" + std::to_string(config_->exchanger_port),
-      config_->local_id >= 0 ? config_->local_id : global_rank_,
       local_gpu_idx_);
   GPU_RT_CHECK(
       gpuStreamCreateWithFlags(&host_copy_stream_, gpuStreamNonBlocking));
@@ -297,7 +296,6 @@ void Communicator::exchange_peer_metas() {
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
       peer.has_meta = true;
-      ipc_adapter_->set_peer_local_id(i, remote.local_id);
     } else {
       missing_ranks.push_back(i);
     }

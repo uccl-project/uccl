@@ -183,6 +183,16 @@ class NICEndpoint {
     return send_group->check(wr_id);
   }
 
+  // Resolve the SendConnection for a given rank_id once so the caller can
+  // perform many completion checks without re-acquiring the mutex + doing a
+  // map lookup per check.
+  SendConnection* getSendGroupRaw(uint64_t rank_id) {
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    auto it = send_channel_groups_.find(rank_id);
+    if (it == send_channel_groups_.end()) return nullptr;
+    return it->second.get();
+  }
+
   bool checkRecvComplete_once(uint64_t rank_id, uint64_t index) {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "checkRecvComplete - Checking for rank_id: " << rank_id
@@ -499,6 +509,15 @@ class NICEndpoint {
       if (send_group) {
         send_group->pollingLoopForMeta();
       }
+    }
+  }
+
+  // Flush any batched send WRs across all send connections. Used after
+  // posting many small one-sided RDMA requests in g_uccl_batch_post mode.
+  void flushAllSends() {
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    for (auto& [rank_id, send_group] : send_channel_groups_) {
+      if (send_group) send_group->flushBatches();
     }
   }
 

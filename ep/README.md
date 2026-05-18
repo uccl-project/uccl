@@ -26,7 +26,11 @@ Alternatively, you can build `uccl.ep` wheel using docker then install:
 # Under uccl
 bash build.sh cu12 ep --install
 ```
-> Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
+
+Notes:  
+* **"Invalid argument" registartion error**: UCCL-EP by default uses `ibv_reg_mr_iova2` to register GPU memory with RDMA, which requires `nvidia_peermem / efa_nv_peermem / ib_peer_mem` kernel module dependency. Making sure the kernel modules are loaded (i.e., `sudo modprobe xxx`). If these modules are not available on your platform, you can specify `USE_DMABUF=1` during wheel building (any of three ways above) to use kernel DMABUF mechanisms. 
+* **EFA auto-detection**: UCCL-EP `setup.py` and `Makefile` auto-detects the existence of `/opt/amazon/efa` to enable EFA-specific RDMA path with `-DEFA`. If you hit "Invalid argument" error on EFA, it is also possible that your UCCL-EP wheel uses a non-EFA RDMA path. In that case, we suggest making sure `/opt/amazon/efa` exists, and rebuilding and reinstalling the wheel. 
+* Docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554.
 
 ## Build on ROCm
 
@@ -132,8 +136,8 @@ Notes:
 | UCCL_IB_MAX_INFLIGHT_LOW_LATENCY | Max inflight writes per GPU/NIC in LL | 32 |
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
 | UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
-| UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual fences instead of acquire/release semantics (AMD only) | 0 (disabled) |
-
+| UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual `s_waitcnt vmcnt(0)` fences instead of acquire/release semantics. Required on AMD CDNA so the combine receiver actually sees the producer's tail-pointer updates over XGMI; without it the kernel deadlocks at scale. | 1 on AMD, 0 on CUDA |
+| UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
 
 ## Results
 

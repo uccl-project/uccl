@@ -2,6 +2,7 @@
 #include "bench_utils.hpp"
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
+#include "rdma.hpp"
 #include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -14,12 +15,18 @@
 #include <unistd.h>
 
 #ifndef USE_SUBSET_BARRIER
-static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
+static std::string shm_name_for_barrier(std::string const& ip,
+                                        bool use_normal_mode, int thread_idx) {
   // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
   // when a leftover object is owned by a different user.
+  // Include mode ("ht" for high-throughput vs "ll" for low-latency) so that
+  // two coexisting Buffers on the same node (e.g. one HT + one LL) get
+  // distinct barrier namespaces; otherwise their proxy threads (sharing
+  // thread_idx 0..N-1) would collide on /dev/shm and corrupt each other's
+  // LocalBarrier counters.
   uid_t uid = getuid();
-  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) + "_th" +
-         std::to_string(thread_idx);
+  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) +
+         (use_normal_mode ? "_ht" : "_ll") + "_th" + std::to_string(thread_idx);
 }
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
@@ -103,15 +110,22 @@ uint64_t Proxy::completed_wr() const { return completion_count_; }
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
-    pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumProxyThs);
+    // Offset LL-mode proxies onto a separate CPU range so a high-throughput
+    // Buffer and an LL-mode Buffer running in the same process don't fight
+    // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
+    int const mode_offset =
+        cfg_.use_normal_mode ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
+    pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
+                      cfg_.local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
     } else {
       printf(
           "Local CPU thread pinned to core %d, thread_idx: %d, "
-          "local_rank: %d\n",
-          cpu, cfg_.thread_idx, cfg_.local_rank);
+          "local_rank: %d, mode: %s\n",
+          cpu, cfg_.thread_idx, cfg_.local_rank,
+          cfg_.use_normal_mode ? "high_throughput" : "low_latency");
     }
   }
 }
@@ -175,7 +189,10 @@ void Proxy::init_common() {
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_numa_wrapper();
-  if (!get_cq(ctx_)) (void)create_per_thread_cq(ctx_);
+  if (!get_cq(ctx_)) {
+    (void)create_per_thread_comp_channel(ctx_);
+    (void)create_per_thread_cq(ctx_);
+  }
 
   // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
   // This must be done after PD is initialized by per_thread_rdma_init
@@ -450,7 +467,8 @@ void Proxy::init_common() {
       std::abort();
     }
 #ifndef USE_SUBSET_BARRIER
-    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+    std::string const shm_name =
+        shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
     ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
     if (!ctx_.lb) {
       fprintf(stderr, "Failed to map local barrier shm: %s\n",
@@ -556,7 +574,10 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
+  adaptive_sleeper_.init_timer();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
+    adaptive_sleeper_.maybe_sleep(ctx_);
+
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
@@ -1264,7 +1285,8 @@ void Proxy::destroy(bool free_gpu_buffer) {
 #ifndef USE_SUBSET_BARRIER
   std::string const my_ip =
       (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
-  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
+  std::string const shm_name =
+      shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
   unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
   ctx_.lb = nullptr;
   ctx_.lb_owner = false;
