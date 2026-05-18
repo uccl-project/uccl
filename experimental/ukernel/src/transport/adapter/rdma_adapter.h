@@ -56,13 +56,13 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
  private:
   static constexpr int kMaxQPs = 4;
-  static constexpr uint32_t kMaxChunks = 16;
+  static constexpr uint32_t kMaxChunks = 128; // BDP: 64 MB
   static constexpr int kMaxMsgId = 128;
   static constexpr int kMsgIdMask = kMaxMsgId - 1;
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
-  static constexpr int kMaxInflightWrs = 16;
+  static constexpr int kMaxInflightWrs = 64;
 
   struct RemoteBufInfo {
     uint64_t addr = 0;
