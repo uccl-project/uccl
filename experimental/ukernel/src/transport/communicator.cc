@@ -1223,6 +1223,14 @@ bool Communicator::dereg_mr(uint32_t buffer_id) {
     rdma_direct_reg_failed_mrs_.erase(registered_id);
   }
   if (found) (void)mr_manager_.delete_mr(buffer_id);
+
+  if (exchanger_client_ && exchanger_client_->valid()) {
+    NamedMRInfos empty{};
+    empty.generation = mr_generation_.fetch_add(1, std::memory_order_relaxed);
+    oob_put(*exchanger_client_, oob_namespace(),
+            mr_global_buffer_key(global_rank_, buffer_id), empty);
+  }
+
   return true;
 }
 
@@ -1245,7 +1253,8 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   int elapsed = 0;
   NamedMRInfos payload{};
   while (true) {
-    int poll_to = (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
+    int poll_to = (timeout_ms < 0) ? kPollMs
+                                   : std::min(kPollMs, timeout_ms - elapsed);
     if (!oob_get(*exchanger_client_, oob_namespace(),
                  mr_global_buffer_key(owner_rank, buffer_id), payload, poll_to)) {
       if (timeout_ms >= 0) {
@@ -1254,7 +1263,22 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
       }
       continue;
     }
-    if (!payload.entries.empty() && payload.generation != last_gen) break;
+
+    if (payload.entries.empty()) {
+      if (timeout_ms >= 0) { elapsed += kPollMs; if (elapsed >= timeout_ms) return false; }
+      continue;
+    }
+
+    if (payload.generation != last_gen) break;  // new data — accept
+
+    // Same generation, check if we already have it cached (CCL repeat calls)
+    {
+      std::lock_guard<std::mutex> lk(resource_mu_);
+      auto it = remote_buffer_to_mr_.find(owner_rank);
+      if (it != remote_buffer_to_mr_.end() && it->second.count(buffer_id))
+        return true;
+    }
+
     if (timeout_ms >= 0) {
       elapsed += kPollMs;
       if (elapsed >= timeout_ms) return false;
@@ -1368,6 +1392,15 @@ bool Communicator::dereg_ipc(uint32_t buffer_id) {
   if (found && local.base_addr != 0) {
     (void)ipc_manager_.delete_ipc(reinterpret_cast<void*>(local.base_addr));
   }
+
+  if (exchanger_client_ && exchanger_client_->valid()) {
+    IpcBufferInfo empty{};
+    empty.generation = ipc_generation_.fetch_add(1, std::memory_order_relaxed);
+    empty.valid = false;
+    oob_put(*exchanger_client_, oob_namespace(),
+            ipc_global_buffer_key(global_rank_, buffer_id), empty);
+  }
+
   return true;
 }
 
@@ -1391,7 +1424,8 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   int elapsed = 0;
   IpcBufferInfo info{};
   while (true) {
-    int poll_to = (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
+    int poll_to = (timeout_ms < 0) ? kPollMs
+                                   : std::min(kPollMs, timeout_ms - elapsed);
     if (!oob_get(*exchanger_client_, oob_namespace(),
                  ipc_global_buffer_key(owner_rank, buffer_id), info, poll_to)) {
       if (timeout_ms >= 0) {
@@ -1400,7 +1434,17 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
       }
       continue;
     }
-    if (info.generation != last_gen) break;
+
+    if (!info.valid) {
+      if (timeout_ms >= 0) { elapsed += kPollMs; if (elapsed >= timeout_ms) return false; }
+      continue;
+    }
+
+    if (info.generation != last_gen) break;  // new data — accept
+
+  // Same generation, check if already cached (CCL repeat calls)
+  if (ipc_manager_.get_ipc(owner_rank, buffer_id).valid) return true;
+
     if (timeout_ms >= 0) {
       elapsed += kPollMs;
       if (elapsed >= timeout_ms) return false;
