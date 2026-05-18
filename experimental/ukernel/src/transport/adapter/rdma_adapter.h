@@ -62,7 +62,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
-  static constexpr int kMaxInflightWrs = 64;
+  static constexpr int kMaxInflightWrs = 128;
 
   struct RemoteBufInfo {
     uint64_t addr = 0;

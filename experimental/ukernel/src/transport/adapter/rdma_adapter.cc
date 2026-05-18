@@ -854,17 +854,16 @@ void RdmaTransportAdapter::poll_loop() {
 
 bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
                                        ibv_qp* const* qps, int qp_count) {
-  ibv_wc wc;
+  ibv_wc wc[16];
   bool any = false;
-  int polls = 0;
-  int wc_count = 0;
-  while ((polls = ibv_poll_cq(cq, 1, &wc)) > 0) {
-    wc_count++;
+  int n;
+  while ((n = ibv_poll_cq(cq, 16, wc)) > 0) {
+    for (int i = 0; i < n; ++i) {
     any = true;
-    if (wc.status != IBV_WC_SUCCESS) {
-      unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
+    if (wc[i].status != IBV_WC_SUCCESS) {
+      unsigned rid = static_cast<unsigned>(wc[i].wr_id >> 32);
       RequestSlot* s = resolve_slot(rid);
-      int qp = find_qp_idx(qps, qp_count, wc.qp_num);
+      int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
       if (qp >= 0)
         p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
       if (s && !s->completed.load(std::memory_order_acquire)) {
@@ -875,11 +874,10 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
       continue;
     }
 
-    // Success: any completion means a WR finished.
-    unsigned rid = static_cast<unsigned>(wc.wr_id >> 32);
-    int qp = find_qp_idx(qps, qp_count, wc.qp_num);
+    unsigned rid = static_cast<unsigned>(wc[i].wr_id >> 32);
+    int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
     if (qp >= 0 &&
-        (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND)) {
+        (wc[i].opcode == IBV_WC_RDMA_WRITE || wc[i].opcode == IBV_WC_SEND)) {
       uint64_t send_ns =
           p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
       if (send_ns != 0) {
@@ -900,6 +898,7 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
         s->completed.store(true, std::memory_order_release);
       }
       cv_.notify_all();
+    }
     }
   }
   return any;
