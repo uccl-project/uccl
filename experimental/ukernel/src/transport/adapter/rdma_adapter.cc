@@ -12,7 +12,7 @@ namespace Transport {
 
 namespace {
 
-constexpr auto kPollSleep = std::chrono::microseconds(10);
+constexpr auto kCvTimeout = std::chrono::microseconds(1);
 constexpr auto kQpMaxSendWr = 1024;
 constexpr int kQpTimeout = 14;
 constexpr int kQpRetryCnt = 7;
@@ -556,6 +556,14 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
     return 0;
   }
 
+  if (msize <= static_cast<uint32_t>(config_.chunk_size_kb) * 1024) {
+    int chosen = (p.last_qp_.load(std::memory_order_relaxed) + 1) % p.num_qps;
+    p.last_qp_.store(chosen, std::memory_order_relaxed);
+    p.cached_qp_valid_.store(true, std::memory_order_release);
+    p.consecutive_cached_bytes_.store(msize, std::memory_order_release);
+    return chosen;
+  }
+
   int a = p.last_qp_.load(std::memory_order_relaxed);
   int b = (a + 1) % p.num_qps;
   int chosen = (p.qp_state[a].ewma_rtt_ns < p.qp_state[b].ewma_rtt_ns) ? a : b;
@@ -609,7 +617,15 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   if (!slot) return 0;
   slot->peer_rank = rank;
 
-  auto ck = chunk_split(len);
+  uint32_t cs = static_cast<uint32_t>(config_.chunk_size_kb) * 1024;
+  ChunkResult ck;
+  if (len <= cs) {
+    ck.count = 1;
+    ck.chunk_size = static_cast<uint32_t>(len);
+    ck.last_size = static_cast<uint32_t>(len);
+  } else {
+    ck = chunk_split(len);
+  }
   slot->total_chunks = ck.count;
   slot->completed_chunks.store(0, std::memory_order_release);
 
@@ -621,7 +637,7 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
     while (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 >
            kMaxInflightWrs) {
       std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait_for(lk, kPollSleep, [&] {
+      cv_.wait_for(lk, kCvTimeout, [&] {
         return p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 <=
                    kMaxInflightWrs ||
                slot->failed.load(std::memory_order_acquire) ||
@@ -750,8 +766,11 @@ bool RdmaTransportAdapter::poll_completion(unsigned id) {
 }
 
 bool RdmaTransportAdapter::wait_completion(unsigned id) {
+  for (int spin = 0; spin < 1000; ++spin) {
+    if (poll_completion(id)) return true;
+  }
   while (!poll_completion(id)) {
-    std::this_thread::sleep_for(kPollSleep);
+    std::this_thread::yield();
   }
   return true;
 }
@@ -828,7 +847,7 @@ void RdmaTransportAdapter::poll_loop() {
       check_dispatch(*p, rank);
     }
     if (!any) {
-      std::this_thread::sleep_for(kPollSleep);
+      std::this_thread::yield();
     }
   }
 }
