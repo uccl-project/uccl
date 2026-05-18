@@ -40,7 +40,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
     elif selected_transport == "uccl" or selected_transport == "rdma":
-        print(f"[rank {comm.rank}] wait_mr peer={peer} buf={recv_buffer_id}...", flush=True)
+        # print(f"[rank {comm.rank}] wait_mr peer={peer} buf={recv_buffer_id}...", flush=True)
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
 
@@ -51,7 +51,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         comm.recv(peer, recv_buffer_id)
 
     rank = comm.rank
-    print(f"[rank {rank}] warmup loop start", flush=True)
+    # print(f"[rank {rank}] warmup loop start", flush=True)
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
