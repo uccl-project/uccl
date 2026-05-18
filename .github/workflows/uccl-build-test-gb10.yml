@@ -80,10 +80,12 @@ jobs:
 
             ./build.sh cu13 ep 3.13 --install 2>&1 | tee build.log
 
+            pushd /tmp
             if ! python -c 'import torch; import uccl.ep'; then
               echo 'Import of torch and uccl.ep failed.'
               exit 1
             fi
+            popd
 
             echo 'Build and Verification Successful!'
           EOF
