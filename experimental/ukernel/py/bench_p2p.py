@@ -151,13 +151,17 @@ def _exchange_uccl_metadata(local_metadata: bytes, rank: int):
     return remote_metadata
 
 
-def _exchange_local_gpu_idx(local_gpu_idx: int, rank: int) -> int:
+def _exchange_local_gpu_bdf(uc_ep, rank: int) -> str:
+    local_meta = bytes(uc_ep.get_metadata())
+    _, _, local_bdf = uccl_p2p.Endpoint.parse_metadata(local_meta)
+    local_bdf = str(local_bdf)
+    local_payload = local_bdf.encode()
     if rank == 0:
-        _send_i64(local_gpu_idx, dst=1)
-        return _recv_i64(src=1)
-    remote_gpu_idx = _recv_i64(src=0)
-    _send_i64(local_gpu_idx, dst=0)
-    return remote_gpu_idx
+        _send_bytes(local_payload, dst=1)
+        return _recv_bytes(src=1).decode()
+    remote_payload = _recv_bytes(src=0)
+    _send_bytes(local_payload, dst=0)
+    return remote_payload.decode()
 
 
 def _create_uccl_endpoint(local_gpu_idx: int, rank: int):
@@ -318,16 +322,16 @@ def main() -> None:
                 raise RuntimeError(
                     f"[uccl] ipc mode requested but endpoint lacks API: {missing}"
                 )
-            remote_gpu_idx = _exchange_local_gpu_idx(local_rank, rank)
+            remote_gpu_bdf = _exchange_local_gpu_bdf(uc_ep, rank)
             if rank == 0:
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(0->1) failed"
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(1->0) failed"
             else:
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(0->1) failed"
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(1->0) failed"
         else:
             local_meta = bytes(uc_ep.get_metadata())
