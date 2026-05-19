@@ -260,57 +260,50 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
       any_submitted = true;
     }
 
-    // Phase 2: Drain batched completions from backends.
-    bool any_completed = false;
-    for (Backend* backend : completion_sources_) {
-      if (!backend) continue;
-      BackendToken token{};
-      while (backend->try_pop_completed(token)) {
-        auto it = inflight.find(inflight_key(backend, token));
-        if (it != inflight.end()) {
-          size_t op_id = it->second;
-          backend->release(token);
-          inflight.erase(it);
-          completed[op_id] = true;
+    // Phase 2: Drain batched completions, then immediately rescan flow
+    // heads so that completion→successor-submit has zero-yield latency.
+    {
+      bool any_completed = false;
+
+      for (Backend* backend : completion_sources_) {
+        if (!backend) continue;
+        BackendToken token{};
+        while (backend->try_pop_completed(token)) {
+          auto it = inflight.find(inflight_key(backend, token));
+          if (it != inflight.end()) {
+            size_t op_id = it->second;
+            backend->release(token);
+            inflight.erase(it);
+            completed[op_id] = true;
+            completed_count++;
+            any_completed = true;
+          }
+        }
+      }
+
+      // Phase 3: Fallback poll every inflight op individually.
+      for (size_t i = 0; i < total; i++) {
+        if (completed[i] || !op_backend[i]) continue;
+        if (op_backend[i]->poll(tokens[i])) {
+          op_backend[i]->release(tokens[i]);
+          inflight.erase(inflight_key(op_backend[i], tokens[i]));
+          completed[i] = true;
           completed_count++;
           any_completed = true;
         }
       }
-    }
-
-    // Phase 3: Fallback poll every inflight op individually.
-    for (size_t i = 0; i < total; i++) {
-      if (completed[i] || !op_backend[i]) continue;
-      if (op_backend[i]->poll(tokens[i])) {
-        op_backend[i]->release(tokens[i]);
-        inflight.erase(inflight_key(op_backend[i], tokens[i]));
-        completed[i] = true;
-        completed_count++;
-        any_completed = true;
-      }
-    }
 
     if (completed_count == total) break;
 
-    // Stalled: all flows at head-of-queue with unsatisfied deps,
-    // nothing submitted this cycle, nothing completed this cycle.
-    if (!any_submitted && !any_completed) {
-      bool all_heads_parked = true;
-      for (uint32_t fid = 0; fid < exec.num_flows && all_heads_parked; fid++) {
-        if (flow_head[fid] < flow_ops[fid].size()) {
-          uint32_t op_id = flow_ops[fid][flow_head[fid]];
-          if (!completed[op_id] && exec.ops[op_id].deps.empty()) {
-            // op at head has no deps but wasn't submitted → backpressure
-            all_heads_parked = false;
-          }
-        }
-      }
-      if (all_heads_parked) {
-        throw std::runtime_error(
-            "collective stalled: all flow heads blocked on unsatisfied "
-            "dependencies or backpressure with nothing in flight");
-      }
+    // Stalled: nothing submitted, nothing completed, nothing inflight.
+    if (!any_submitted && !any_completed && inflight.empty()) {
+      throw std::runtime_error(
+          "collective stalled: all flow heads blocked with nothing in flight");
     }
+
+    // If completions happened, immediately re-scan flow heads to
+    // submit newly-unlocked successors without a yield() in between.
+    if (any_completed) continue;
 
     std::this_thread::yield();
   }
