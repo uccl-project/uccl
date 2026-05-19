@@ -89,6 +89,90 @@ Arguments are:
 ./benchmarks/bench_device_launch_vs_worker [tasks_per_batch] [rounds] [warmup] [bytes] [num_blocks] [threads_per_block] [smem_size]
 ```
 
+## Simple AR Multi-GPU Benchmarks
+
+`bench_device_allreduce_p2p` uses MPI + CUDA IPC to exchange GPU buffer
+handles across processes and exercises persistent-kernel allreduce / alltoall
+with real cross-GPU P2P reads.
+
+### Build
+
+```bash
+make bench_device_allreduce_p2p
+```
+
+MPI include/library paths are auto-detected via `mpic++ --showme`.  If your
+MPI is not found add the env override:
+
+```bash
+MPI_CXX=/path/to/mpicxx make bench_device_allreduce_p2p
+```
+
+### Usage
+
+```bash
+mpirun -np <N> ./bench_device_allreduce_p2p \
+    --bench=<allreduce|alltoall> \
+    --workers=<W> --bytes=<B> --blocks=<NB> \
+    [--sm] [--warmup=N] [--iters=N]
+```
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--bench=S` | `allreduce` or `alltoall` | `all` (both) |
+| `--workers=W` | Persistent workers per rank | 1 |
+| `--bytes=B` | Data size per rank (bytes) | 1024 |
+| `--blocks=NB` | CUDA blocks per worker | 1 |
+| `--sm` | Measure SM occupancy (idle+poll/sync/compute/tail) | off |
+| `--warmup=N` | Warmup iterations | 5 |
+| `--iters=N` | Timed iterations | 20 |
+
+### Examples
+
+```bash
+# 2-GPU allreduce, 1 worker per rank, 1 MB data, SM on
+mpirun -np 2 ./bench_device_allreduce_p2p \
+    --bench=allreduce --workers=1 --bytes=1048576 --sm
+
+# 4-GPU alltoall, 2 workers per rank, 4 blocks per worker
+mpirun -np 4 ./bench_device_allreduce_p2p \
+    --bench=alltoall --workers=2 --bytes=4194304 --blocks=4 --sm
+
+# 8-GPU allreduce, sweep larger data
+mpirun -np 8 ./bench_device_allreduce_p2p \
+    --bench=allreduce --workers=1 --bytes=16777216 --sm
+```
+
+### Semantics
+
+**SM occupancy** — When `--sm` is passed each worker records clock64
+timestamps per dispatched task:
+
+| Phase | Formula | What it captures |
+|-------|---------|-----------------|
+| idle+poll | T1 − T0 | FIFO-empty spinning + active poll to find a task |
+| sync | T2 − T1 | `__syncthreads` overhead |
+| compute | T3 − T2 | `dispatch_task` (copy / reduce) |
+| tail | T4 − T3 | Tail publish + multi-block completion wait |
+
+### Single-GPU (single-process) Bench
+
+`bench_device_allreduce` is a single-process, single-GPU variant useful for
+quick kernel-microbenchmark rounds without MPI:
+
+```bash
+make bench_device_allreduce
+./bench_device_allreduce --nodes=2 --workers=4 --blocks=1 --bytes=1048576 --sm
+```
+
+| Flag | Meaning | Default |
+|------|---------|---------|
+| `--nodes=K` | Number of logical data sources | 2 |
+| `--workers=M` | Workers per node | 1 |
+| `--blocks=N` | CUDA blocks per worker | 1 |
+| `--bytes=B` | Data per node (bytes) | 1024 |
+| `--sm` | Measure SM occupancy | off |
+
 ## Notes
 
 - `test-unit` covers task encoding, task manager behavior, worker lifecycle, enqueue semantics, dtype copy, and multi-fifo behavior.

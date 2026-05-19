@@ -325,20 +325,20 @@ int main(int argc, char** argv) {
   }
 
   // ── IPC handle exchange via MPI ─────────────────────────────────────────
-  cudaIpcMemHandle_t local_handle;
-  GPU_RT_CHECK(cudaIpcGetMemHandle(&local_handle, d_local_buf));
+  gpuIpcMemHandle_t local_handle;
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&local_handle, d_local_buf));
 
-  std::vector<cudaIpcMemHandle_t> all_handles(K);
-  MPI_Allgather(&local_handle, sizeof(cudaIpcMemHandle_t), MPI_BYTE,
-                all_handles.data(), sizeof(cudaIpcMemHandle_t), MPI_BYTE,
+  std::vector<gpuIpcMemHandle_t> all_handles(K);
+  MPI_Allgather(&local_handle, sizeof(gpuIpcMemHandle_t), MPI_BYTE,
+                all_handles.data(), sizeof(gpuIpcMemHandle_t), MPI_BYTE,
                 MPI_COMM_WORLD);
 
   std::vector<float*> peer_bufs(K);
   peer_bufs[rank] = d_local_buf;
   for (int i = 0; i < K; ++i) {
     if (i == rank) continue;
-    GPU_RT_CHECK(cudaIpcOpenMemHandle((void**)&peer_bufs[i], all_handles[i],
-                                      cudaIpcMemLazyEnablePeerAccess));
+    GPU_RT_CHECK(gpuIpcOpenMemHandle((void**)&peer_bufs[i], all_handles[i],
+                                     gpuIpcMemLazyEnablePeerAccess));
   }
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -413,7 +413,7 @@ int main(int argc, char** argv) {
   }
 
   for (int i = 0; i < K; ++i) {
-    if (i != rank) cudaIpcCloseMemHandle(peer_bufs[i]);
+    if (i != rank) gpuIpcCloseMemHandle(peer_bufs[i]);
   }
   if (d_allreduce_dst) gpuFree(d_allreduce_dst);
   if (d_alltoall_ws) gpuFree(d_alltoall_ws);
