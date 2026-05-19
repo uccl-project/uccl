@@ -355,15 +355,6 @@ class ProcessGroup {
   void alltoallv_out(torch::Tensor output, torch::Tensor input,
                      std::vector<int64_t> output_split_sizes,
                      std::vector<int64_t> input_split_sizes,
-                     size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
-    alltoallv_out(std::move(output), std::move(input),
-                  std::move(output_split_sizes), std::move(input_split_sizes),
-                  tile_bytes, num_flows);
-  }
-
-  void alltoallv_out(torch::Tensor output, torch::Tensor input,
-                     std::vector<int64_t> output_split_sizes,
-                     std::vector<int64_t> input_split_sizes,
                      size_t tile_bytes = 64ull << 10,
                      uint32_t num_flows = 2) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -619,7 +610,7 @@ class ProcessGroup {
     config.staging_bytes = tile_bytes * num_flows;
     config.algorithm = AlgorithmKind::Ring;
     config.dtype = dtype;
-    config.reduction = reduction;
+    config.reduction = static_cast<ReductionKind>(reduction);
 
     size_t staging_req = config.staging_bytes;
     void* old_staging_ptr =
