@@ -17,24 +17,15 @@ class Communicator;
 }  // namespace Transport
 namespace CCL {
 
-enum class CollectiveOpStatus : uint32_t {
-  Queued,
-  Running,
-  Completed,
-  Failed,
-};
-
 struct CollectiveConfig {
   int nranks = 1;
   int rank = 0;
   uint32_t num_flows = 1;
   size_t tensor_bytes = 0;
-  // Optional alltoall-specific byte sizes. When unset, tensor_bytes is used.
   size_t input_bytes = 0;
   size_t output_bytes = 0;
   size_t tile_bytes = 0;
   size_t staging_bytes = 0;
-  // Optional alltoall-specific per-peer split sizes in bytes.
   std::vector<size_t> input_split_bytes;
   std::vector<size_t> output_split_bytes;
   AlgorithmKind algorithm = AlgorithmKind::Ring;
@@ -57,20 +48,10 @@ struct ExecutorConfig {
 PlanRequest make_plan_request(CollectiveKind kind,
                               CollectiveConfig const& config, bool inplace);
 
-struct CollectiveOpHandle {
-  uint64_t value = 0;
-};
-
 class Executor {
  public:
-  // Executor owns runtime scheduling for the primitive DAG emitted by the
-  // planner. submit() enqueues a collective, and a dedicated progress thread
-  // drives one queued collective at a time until completion. Ops become ready
-  // when all dependency counts reach zero, and backend completions unlock
-  // successor ops.
   explicit Executor(
       ExecutorBackends backends,
-      // Callback contract: second argument is remote `buffer_id` (not MR id).
       std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
           resolve_ipc_buffer_pointer = {});
   Executor(ExecutorConfig const& config = {});
@@ -79,32 +60,20 @@ class Executor {
   Executor(Executor const&) = delete;
   Executor& operator=(Executor const&) = delete;
 
-  // Each submit binds one concrete registered-buffer snapshot to the logical
-  // collective plan. Executor itself no longer owns mutable global collective
-  // memory state.
-  CollectiveOpHandle submit(CollectivePlan plan,
-                            std::shared_ptr<CollectiveBinding> runtime_binding);
-  CollectiveOpHandle submit_allreduce(
-      CollectiveConfig const& config,
-      std::shared_ptr<CollectiveBinding> runtime_binding);
-  CollectiveOpHandle submit_alltoall(
-      CollectiveConfig const& config,
-      std::shared_ptr<CollectiveBinding> runtime_binding);
-  // poll() is now a non-blocking terminal-state query. Execution progresses on
-  // the internal progress thread rather than on the caller thread.
-  bool poll(CollectiveOpHandle handle);
-  void wait(CollectiveOpHandle handle);
-  void release(CollectiveOpHandle handle);
+  void run(CollectivePlan plan, CollectiveBinding& binding);
+  void allreduce(CollectiveConfig const& config, CollectiveBinding& binding);
+  void alltoall(CollectiveConfig const& config, CollectiveBinding& binding);
 
-  CollectiveOpStatus status(CollectiveOpHandle handle) const;
-  std::string error_message(CollectiveOpHandle handle) const;
-  size_t inflight_steps(CollectiveOpHandle handle) const;
   UKernel::Transport::Communicator* communicator();
   UKernel::Transport::Communicator const* communicator() const;
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  ExecutorBackends backends_{};
+  std::vector<Backend*> completion_sources_;
+  std::unique_ptr<Backend> owned_transport_backend_;
+  std::unique_ptr<Backend> owned_device_backend_;
+  std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
+      resolve_ipc_buffer_pointer_;
 };
 
 }  // namespace CCL

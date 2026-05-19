@@ -43,8 +43,6 @@ DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_EXECUTOR_SRC := executor_real.cc
-REAL_EXECUTOR_OBJ := $(REAL_EXECUTOR_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
@@ -111,7 +109,7 @@ $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
 test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
-		backend/device_backend.o $(REAL_EXECUTOR_OBJ) $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
+		backend/device_backend.o $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
 		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
@@ -172,7 +170,6 @@ clean:
 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(REAL_EXECUTOR_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
 	test/unit/test_components.d \
 	test/integration/test_device_backend.d \

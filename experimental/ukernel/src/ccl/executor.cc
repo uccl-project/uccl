@@ -1,9 +1,14 @@
 #include "executor.h"
-#include "executor_impl.h"
+#include "backend/device_backend.h"
+#include "backend/transport_backend.h"
+#include "../include/transport.h"
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <thread>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
@@ -16,6 +21,10 @@ bool is_remote_ref(BufferRef const& ref) {
 
 bool is_device_op(ExecOpKind kind) {
   return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
+}
+
+bool is_transport_op(ExecOpKind kind) {
+  return kind == ExecOpKind::TransportSend || kind == ExecOpKind::TransportRecv;
 }
 
 void validate_local_span(char const* what, size_t offset, size_t bytes,
@@ -63,7 +72,6 @@ ExecOp bind_device_exec_op(
     std::function<bool(int, uint32_t, size_t, size_t, void**, int*)> const&
         resolve_remote_ptr) {
   ExecOp bound = op;
-
   if (is_remote_ref(op.src)) {
     uint32_t remote_buffer_id = remote_buffer_id_for_ipc(binding, op.src);
     void* ptr = nullptr;
@@ -78,7 +86,6 @@ ExecOp bind_device_exec_op(
   } else {
     bound.resolved_src = local_const_ptr(binding, op.src, op.tile.size_bytes);
   }
-
   if (is_remote_ref(op.dst)) {
     uint32_t remote_buffer_id = remote_buffer_id_for_ipc(binding, op.dst);
     void* ptr = nullptr;
@@ -93,8 +100,42 @@ ExecOp bind_device_exec_op(
   } else {
     bound.resolved_dst = local_mutable_ptr(binding, op.dst, op.tile.size_bytes);
   }
-
   return bound;
+}
+
+inline Backend* pick_backend(ExecutorBackends const& backends,
+                             ExecOpKind kind) {
+  if (is_transport_op(kind)) {
+    return backends.transport != nullptr ? backends.transport
+                                         : backends.fallback;
+  }
+  return backends.device != nullptr ? backends.device : backends.fallback;
+}
+
+inline std::vector<Backend*> backend_sources(ExecutorBackends const& backends) {
+  std::vector<Backend*> out;
+  if (backends.transport != nullptr) out.push_back(backends.transport);
+  if (backends.device != nullptr && backends.device != backends.transport)
+    out.push_back(backends.device);
+  if (backends.fallback != nullptr && backends.fallback != backends.transport &&
+      backends.fallback != backends.device)
+    out.push_back(backends.fallback);
+  return out;
+}
+
+inline void validate_backends(std::vector<Backend*> const& sources,
+                              ExecutionPlan const& exec_plan,
+                              CollectiveBinding& binding) {
+  for (Backend* backend : sources) {
+    if (backend != nullptr) backend->validate(exec_plan, binding);
+  }
+}
+
+inline uint64_t inflight_key(Backend const* backend, BackendToken token) {
+  uint64_t backend_bits =
+      static_cast<uint64_t>(reinterpret_cast<uintptr_t>(backend));
+  return backend_bits ^ (token.value + 0x9e3779b97f4a7c15ULL +
+                         (backend_bits << 6) + (backend_bits >> 2));
 }
 
 }  // namespace
@@ -120,555 +161,189 @@ PlanRequest make_plan_request(CollectiveKind kind,
   return request;
 }
 
-Executor::Impl::~Impl() {
-  {
-    std::lock_guard<std::mutex> lock(mu);
-    stop_requested = true;
-    cv.notify_all();
-  }
-  if (progress_thread.joinable()) {
-    progress_thread.join();
-  }
-
-  std::lock_guard<std::mutex> lock(mu);
-  for (auto& [handle_value, state] : handles) {
-    cleanup_inflight_locked(state);
-  }
-}
-
-CollectiveOpHandle Executor::Impl::submit(
-    CollectivePlan plan, std::shared_ptr<CollectiveBinding> runtime_binding) {
-  if (plan.ops.empty()) {
-    throw std::invalid_argument("collective plan must contain at least one op");
-  }
-
-  ExecutionPlan exec_plan = lower_plan(plan);
-  if (exec_plan.ops.empty()) {
-    throw std::invalid_argument(
-        "lowered execution plan must contain at least one op");
-  }
-  if (runtime_binding == nullptr) {
-    throw std::invalid_argument(
-        "executor submit requires collective runtime binding");
-  }
-  detail::validate_backends(completion_sources, exec_plan, *runtime_binding);
-
-  detail::HandleState state;
-  state.exec_plan = std::move(exec_plan);
-  state.runtime_binding = std::move(runtime_binding);
-  state.status.store(CollectiveOpStatus::Queued);
-  state.op_states.resize(state.exec_plan.ops.size());
-
-  for (size_t index = 0; index < state.exec_plan.ops.size(); ++index) {
-    ExecOp const& op = state.exec_plan.ops[index];
-    if (op.op_id != index) {
-      throw std::invalid_argument(
-          "execution plan op ids must be dense and ordered");
-    }
-
-    Backend* backend = detail::pick_backend(backends, op.kind);
-    if (backend == nullptr || !backend->supports(op.kind)) {
-      throw std::invalid_argument("no backend available for execution op");
-    }
-
-    detail::OpState& op_state = state.op_states[index];
-    op_state.remaining_deps = static_cast<uint32_t>(op.deps.size());
-    for (uint32_t dep : op.deps) {
-      if (dep >= state.exec_plan.ops.size()) {
-        throw std::invalid_argument("execution plan dependency out of range");
-      }
-      if (dep >= op.op_id) {
-        throw std::invalid_argument(
-            "execution plan dependencies must reference earlier ops");
-      }
-      state.op_states[dep].successors.push_back(op.op_id);
-    }
-  }
-
-  for (size_t index = 0; index < state.op_states.size(); ++index) {
-    if (state.op_states[index].remaining_deps == 0) {
-      state.ready_ops.push_back(static_cast<uint32_t>(index));
-    }
-  }
-
-  std::lock_guard<std::mutex> lock(mu);
-  CollectiveOpHandle handle{next_handle++};
-  auto [it, inserted] = handles.emplace(handle.value, std::move(state));
-  if (!inserted) {
-    throw std::runtime_error("duplicate collective handle");
-  }
-  pending_handles.push_back(handle.value);
-  cv.notify_all();
-  return handle;
-}
-
-bool Executor::Impl::poll(CollectiveOpHandle handle) {
-  std::lock_guard<std::mutex> lock(mu);
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) return true;
-  return detail::is_terminal(it->second.status.load());
-}
-
-void Executor::Impl::wait(CollectiveOpHandle handle) {
-  std::unique_lock<std::mutex> lock(mu);
-  cv.wait(lock, [&] {
-    auto it = handles.find(handle.value);
-    return it == handles.end() ||
-           detail::is_terminal(it->second.status.load());
-  });
-}
-
-void Executor::Impl::release(CollectiveOpHandle handle) {
-  std::lock_guard<std::mutex> lock(mu);
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) return;
-  if (active_handle == handle.value ||
-      it->second.status.load() == CollectiveOpStatus::Queued ||
-      it->second.status.load() == CollectiveOpStatus::Running) {
-    throw std::runtime_error(
-        "cannot release a collective that is still queued or running");
-  }
-  handles.erase(it);
-}
-
-CollectiveOpStatus Executor::Impl::status(CollectiveOpHandle handle) const {
-  std::lock_guard<std::mutex> lock(mu);
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) return CollectiveOpStatus::Completed;
-  return it->second.status.load();
-}
-
-std::string Executor::Impl::error_message(CollectiveOpHandle handle) const {
-  std::lock_guard<std::mutex> lock(mu);
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) return {};
-  return it->second.error;
-}
-
-size_t Executor::Impl::inflight_steps(CollectiveOpHandle handle) const {
-  std::lock_guard<std::mutex> lock(mu);
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) return 0;
-  size_t inflight = 0;
-  for (auto const& op_state : it->second.op_states) {
-    if (op_state.inflight.backend != nullptr) {
-      ++inflight;
-    }
-  }
-  return inflight;
-}
-
-void Executor::Impl::progress_loop() {
-  while (true) {
-    detail::HandleState* state_ptr = nullptr;
-    {
-      std::unique_lock<std::mutex> lock(mu);
-      if (!stop_requested && active_handle == 0 &&
-          pending_handles.empty()) {
-        cv.wait(lock, [&] {
-          return stop_requested || !pending_handles.empty();
-        });
-      }
-      if (stop_requested) {
-        return;
-      }
-
-      if (active_handle == 0) {
-        start_next_collective_locked();
-      }
-      if (active_handle == 0) continue;
-
-      state_ptr = &handles.at(active_handle);
-    }
-
-    bool progress = false;
-    try {
-      progress = progress_active_collective(*state_ptr);
-    } catch (std::exception const& ex) {
-      {
-        std::lock_guard<std::mutex> lock(mu);
-        fail_active_collective_locked(ex.what());
-      }
-      continue;
-    } catch (...) {
-      {
-        std::lock_guard<std::mutex> lock(mu);
-        fail_active_collective_locked(
-            "executor progress loop hit unknown exception");
-      }
-      continue;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(mu);
-      if (active_handle != 0 &&
-          detail::is_terminal(state_ptr->status.load())) {
-        if (state_ptr->status.load() == CollectiveOpStatus::Failed &&
-            !state_ptr->error.empty()) {
-          std::fprintf(stderr,
-                       "[ccl executor] collective %" PRIu64 " failed: %s\n",
-                       active_handle, state_ptr->error.c_str());
-        }
-        continue;
-      }
-    }
-
-    if (!progress) {
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
-  }
-}
-
-void Executor::Impl::start_next_collective_locked() {
-  while (!pending_handles.empty()) {
-    uint64_t handle_value = pending_handles.front();
-    pending_handles.pop_front();
-    auto it = handles.find(handle_value);
-    if (it == handles.end()) {
-      continue;
-    }
-    it->second.status.store(CollectiveOpStatus::Running);
-    active_handle = handle_value;
-    cv.notify_all();
-    return;
-  }
-}
-
-bool Executor::Impl::progress_active_collective(
-    detail::HandleState& state) {
-  if (detail::is_terminal(state.status.load())) {
-    return true;
-  }
-
-  bool progress = false;
-  progress |= drive_ready_ops_locked(state);
-
-  bool completion_progress = drain_backend_completions_locked(state);
-  if (!completion_progress) {
-    completion_progress = poll_inflight_locked(state);
-  }
-  progress |= completion_progress;
-
-  if (completion_progress || !state.ready_ops.empty()) {
-    progress |= drive_ready_ops_locked(state);
-  }
-
-  if (state.completed_ops == state.exec_plan.ops.size()) {
-    state.status.store(CollectiveOpStatus::Completed);
-    {
-      std::lock_guard<std::mutex> lock(mu);
-      active_handle = 0;
-      cv.notify_all();
-    }
-    return true;
-  }
-
-  if (state.status.load() == CollectiveOpStatus::Running &&
-      state.ready_ops.empty() && state.inflight_lookup.empty()) {
-    state.status.store(CollectiveOpStatus::Failed);
-    state.error = "collective stalled with no ready or inflight ops";
-    {
-      std::lock_guard<std::mutex> lock(mu);
-      active_handle = 0;
-      cv.notify_all();
-    }
-    return true;
-  }
-
-  return progress;
-}
-
-bool Executor::Impl::drive_ready_ops_locked(detail::HandleState& state) {
-  bool progress = false;
-  constexpr uint32_t kMaxBatch = 8;
-  uint32_t count = 0;
-  std::deque<uint32_t> retry;
-
-  while (!state.ready_ops.empty() &&
-         state.status.load() == CollectiveOpStatus::Running &&
-         count < kMaxBatch) {
-    uint32_t op_id = state.ready_ops.front();
-    state.ready_ops.pop_front();
-
-    if (!submit_ready_op_locked(state, op_id)) {
-      retry.push_back(op_id);
-      if (is_device_op(state.exec_plan.ops[op_id].kind)) {
-        break;
-      }
-    } else {
-      progress = true;
-      ++count;
-    }
-  }
-
-  while (!retry.empty()) {
-    state.ready_ops.push_front(retry.back());
-    retry.pop_back();
-  }
-  return progress;
-}
-
-void Executor::Impl::stop_device_flows_locked(detail::HandleState& state) {
-  Backend* device_backend =
-      backends.device != nullptr ? backends.device : backends.fallback;
-  if (device_backend == nullptr) return;
-  for (uint32_t flow_id = 0; flow_id < state.exec_plan.num_flows; ++flow_id) {
-    device_backend->stop(flow_id);
-  }
-}
-
-void Executor::Impl::maybe_quiesce_backends_locked(
-    detail::HandleState const& state) {
-  Backend* device_backend =
-      backends.device != nullptr ? backends.device : backends.fallback;
-  if (device_backend == nullptr) return;
-  for (uint32_t flow_id = 0; flow_id < state.exec_plan.num_flows; ++flow_id) {
-    bool flow_has_unfinished_device_work = false;
-    for (size_t op_id = 0; op_id < state.op_states.size(); ++op_id) {
-      ExecOp const& op = state.exec_plan.ops[op_id];
-      if (op.kind != ExecOpKind::DeviceCopy &&
-          op.kind != ExecOpKind::DeviceReduce) {
-        continue;
-      }
-      if (op.tile.flow_index != flow_id) continue;
-      if (!state.op_states[op_id].completed) {
-        flow_has_unfinished_device_work = true;
-        break;
-      }
-    }
-    if (!flow_has_unfinished_device_work) {
-      device_backend->stop(flow_id);
-    }
-  }
-}
-
-bool Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
-                                            uint32_t op_id) {
-  if (op_id >= state.op_states.size()) {
-    state.status.store(CollectiveOpStatus::Failed);
-    state.error = "ready op id out of range";
-    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
-    return false;
-  }
-
-  detail::OpState& op_state = state.op_states[op_id];
-  if (op_state.completed || op_state.submitted ||
-      op_state.remaining_deps != 0) {
-    return false;
-  }
-
-  ExecOp const& op = state.exec_plan.ops[op_id];
-  Backend* backend = detail::pick_backend(backends, op.kind);
-  if (backend == nullptr || !backend->supports(op.kind)) {
-    state.status.store(CollectiveOpStatus::Failed);
-    state.error = "no backend available for ready execution op";
-    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
-    return false;
-  }
-
-  BackendToken token{};
-  if ((op.kind == ExecOpKind::DeviceCopy ||
-       op.kind == ExecOpKind::DeviceReduce) &&
-      state.runtime_binding != nullptr) {
-    ExecOp bound = bind_device_exec_op(op, *state.runtime_binding,
-                                       resolve_ipc_buffer_pointer);
-    token = backend->submit(bound, *state.runtime_binding);
-  } else {
-    token = backend->submit(op, *state.runtime_binding);
-  }
-
-  if (token.value == 0) {
-    return false;
-  }
-
-  op_state.submitted = true;
-  op_state.inflight.backend = backend;
-  op_state.inflight.token = token;
-  state.inflight_lookup[detail::inflight_key(backend, token)] = op_id;
-  return true;
-}
-
-bool Executor::Impl::drain_backend_completions_locked(
-    detail::HandleState& state) {
-  bool progress = false;
-  for (Backend* backend : completion_sources) {
-    if (backend == nullptr) continue;
-    BackendToken token{};
-    while (backend->try_pop_completed(token)) {
-      if (complete_inflight_by_token_locked(state, backend, token)) {
-        progress = true;
-      }
-    }
-  }
-  return progress;
-}
-
-bool Executor::Impl::poll_inflight_locked(detail::HandleState& state) {
-  bool progress = false;
-  for (uint32_t op_id = 0; op_id < state.op_states.size(); ++op_id) {
-    detail::OpState& op_state = state.op_states[op_id];
-    if (op_state.inflight.backend == nullptr) continue;
-    if (!op_state.inflight.backend->poll(op_state.inflight.token)) continue;
-    complete_inflight_locked(state, op_id);
-    progress = true;
-    if (state.status.load() == CollectiveOpStatus::Failed) return true;
-  }
-  return progress;
-}
-
-bool Executor::Impl::complete_inflight_by_token_locked(
-    detail::HandleState& state, Backend* backend, BackendToken token) {
-  auto it = state.inflight_lookup.find(detail::inflight_key(backend, token));
-  if (it == state.inflight_lookup.end()) return false;
-  complete_inflight_locked(state, it->second);
-  return true;
-}
-
-void Executor::Impl::complete_inflight_locked(detail::HandleState& state,
-                                              uint32_t op_id) {
-  if (op_id >= state.op_states.size()) {
-    state.status.store(CollectiveOpStatus::Failed);
-    state.error = "completion op id out of range";
-    { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
-    return;
-  }
-
-  detail::OpState& op_state = state.op_states[op_id];
-  if (op_state.inflight.backend == nullptr) return;
-
-  state.inflight_lookup.erase(
-      detail::inflight_key(op_state.inflight.backend, op_state.inflight.token));
-  op_state.inflight.backend->release(op_state.inflight.token);
-  op_state.inflight = {};
-  op_state.completed = true;
-  ++state.completed_ops;
-
-  for (uint32_t successor : op_state.successors) {
-    if (successor >= state.op_states.size()) {
-      state.status.store(CollectiveOpStatus::Failed);
-      state.error = "successor op id out of range";
-      { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
-      return;
-    }
-    detail::OpState& successor_state = state.op_states[successor];
-    if (successor_state.remaining_deps == 0) {
-      state.status.store(CollectiveOpStatus::Failed);
-      state.error = "dependency underflow while completing op";
-      { std::lock_guard<std::mutex> lock(mu); cv.notify_all(); }
-      return;
-    }
-    --successor_state.remaining_deps;
-    if (successor_state.remaining_deps == 0 && !successor_state.submitted &&
-        !successor_state.completed) {
-      if (is_device_op(state.exec_plan.ops[successor].kind)) {
-        submit_ready_op_locked(state, successor);
-      } else {
-        state.ready_ops.push_back(successor);
-      }
-    }
-  }
-}
-
-void Executor::Impl::cleanup_inflight_locked(detail::HandleState& state) {
-  for (auto& op_state : state.op_states) {
-    if (op_state.inflight.backend == nullptr) {
-      continue;
-    }
-    state.inflight_lookup.erase(detail::inflight_key(op_state.inflight.backend,
-                                                     op_state.inflight.token));
-    op_state.inflight.backend->release(op_state.inflight.token);
-    op_state.inflight = {};
-  }
-}
-
-void Executor::Impl::fail_active_collective_locked(std::string message) {
-  if (active_handle == 0) {
-    return;
-  }
-  detail::HandleState& state = handles.at(active_handle);
-  cleanup_inflight_locked(state);
-  state.status.store(CollectiveOpStatus::Failed);
-  state.error = std::move(message);
-  active_handle = 0;
-  cv.notify_all();
-}
-
-detail::HandleState& Executor::Impl::get_locked(CollectiveOpHandle handle) {
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) {
-    throw std::invalid_argument("unknown collective handle");
-  }
-  return it->second;
-}
-
-detail::HandleState const& Executor::Impl::get_locked_const(
-    CollectiveOpHandle handle) const {
-  auto it = handles.find(handle.value);
-  if (it == handles.end()) {
-    throw std::invalid_argument("unknown collective handle");
-  }
-  return it->second;
-}
-
 Executor::Executor(
     ExecutorBackends backends,
     std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
         resolve_ipc_buffer_pointer)
-    : impl_(std::make_unique<Impl>(backends)) {
-  impl_->resolve_ipc_buffer_pointer = std::move(resolve_ipc_buffer_pointer);
+    : backends_(backends),
+      completion_sources_(backend_sources(backends)),
+      resolve_ipc_buffer_pointer_(std::move(resolve_ipc_buffer_pointer)) {}
+
+Executor::Executor(ExecutorConfig const& config) {
+  owned_transport_backend_ =
+      std::make_unique<CommunicatorTransportBackend>(TransportBackendConfig{
+          config.gpu_id, config.rank, config.world_size,
+          config.communicator_config});
+  auto* communicator =
+      &static_cast<CommunicatorTransportBackend*>(
+           owned_transport_backend_.get())
+           ->communicator();
+  owned_device_backend_ = std::make_unique<DeviceBackend>(DeviceBackendConfig{
+      config.device_task_capacity, config.max_device_fifos,
+      config.threads_per_block, config.fifo_capacity, config.smem_size});
+  backends_.transport = owned_transport_backend_.get();
+  backends_.device = owned_device_backend_.get();
+  completion_sources_ = backend_sources(backends_);
+  resolve_ipc_buffer_pointer_ =
+      [communicator](int remote_rank, uint32_t remote_buffer_id, size_t offset,
+                     size_t bytes, void** out_ptr, int* out_device_idx) {
+        return communicator->try_resolve_remote_ipc_pointer(
+            remote_rank, remote_buffer_id, offset, bytes, out_ptr,
+            out_device_idx);
+      };
 }
 
 Executor::~Executor() = default;
 
-CollectiveOpHandle Executor::submit(
-    CollectivePlan plan, std::shared_ptr<CollectiveBinding> runtime_binding) {
-  return impl_->submit(std::move(plan), std::move(runtime_binding));
+void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
+  ExecutionPlan exec = lower_plan(plan);
+  validate_backends(completion_sources_, exec, binding);
+
+  size_t total = exec.ops.size();
+  if (total == 0) return;
+
+  // Build per-flow op lists.  Ops in the plan are already topologically
+  // sorted, so the per-flow vectors inherit the dependency order.
+  std::vector<std::vector<uint32_t>> flow_ops(exec.num_flows);
+  for (size_t i = 0; i < exec.ops.size(); i++) {
+    uint32_t f = exec.ops[i].tile.flow_index;
+    if (f < exec.num_flows) flow_ops[f].push_back(static_cast<uint32_t>(i));
+  }
+
+  std::vector<bool> completed(total, false);
+  std::vector<BackendToken> tokens(total);
+  std::vector<Backend*> op_backend(total, nullptr);
+  std::unordered_map<uint64_t, size_t> inflight;
+  std::vector<size_t> flow_head(exec.num_flows, 0);
+  size_t completed_count = 0;
+
+  while (completed_count < total) {
+    // Phase 1: Advance every flow — submit its next ready op if all of
+    // that op's dependencies (which may cross flows) are completed.
+    bool any_submitted = false;
+    for (uint32_t fid = 0; fid < exec.num_flows; fid++) {
+      size_t head = flow_head[fid];
+      if (head >= flow_ops[fid].size()) continue;
+
+      uint32_t op_id = flow_ops[fid][head];
+      if (completed[op_id]) {
+        flow_head[fid] = head + 1;
+        continue;
+      }
+
+      bool deps_ready = true;
+      for (uint32_t dep : exec.ops[op_id].deps) {
+        if (dep >= total || !completed[dep]) {
+          deps_ready = false;
+          break;
+        }
+      }
+      if (!deps_ready) continue;
+
+      Backend* backend = pick_backend(backends_, exec.ops[op_id].kind);
+      BackendToken token;
+      if (is_device_op(exec.ops[op_id].kind) &&
+          resolve_ipc_buffer_pointer_ != nullptr) {
+        ExecOp bound = bind_device_exec_op(
+            exec.ops[op_id], binding, resolve_ipc_buffer_pointer_);
+        token = backend->submit(bound, binding);
+      } else {
+        token = backend->submit(exec.ops[op_id], binding);
+      }
+
+      if (token.value == 0) continue;  // backpressure – retry next cycle
+
+      tokens[op_id] = token;
+      op_backend[op_id] = backend;
+      inflight[inflight_key(backend, token)] = op_id;
+      flow_head[fid] = head + 1;
+      any_submitted = true;
+    }
+
+    // Phase 2: Drain batched completions from backends.
+    bool any_completed = false;
+    for (Backend* backend : completion_sources_) {
+      if (!backend) continue;
+      BackendToken token{};
+      while (backend->try_pop_completed(token)) {
+        auto it = inflight.find(inflight_key(backend, token));
+        if (it != inflight.end()) {
+          size_t op_id = it->second;
+          backend->release(token);
+          inflight.erase(it);
+          completed[op_id] = true;
+          completed_count++;
+          any_completed = true;
+        }
+      }
+    }
+
+    // Phase 3: Fallback poll every inflight op individually.
+    for (size_t i = 0; i < total; i++) {
+      if (completed[i] || !op_backend[i]) continue;
+      if (op_backend[i]->poll(tokens[i])) {
+        op_backend[i]->release(tokens[i]);
+        inflight.erase(inflight_key(op_backend[i], tokens[i]));
+        completed[i] = true;
+        completed_count++;
+        any_completed = true;
+      }
+    }
+
+    if (completed_count == total) break;
+
+    // Stalled: all flows at head-of-queue with unsatisfied deps,
+    // nothing submitted this cycle, nothing completed this cycle.
+    if (!any_submitted && !any_completed) {
+      bool all_heads_parked = true;
+      for (uint32_t fid = 0; fid < exec.num_flows && all_heads_parked; fid++) {
+        if (flow_head[fid] < flow_ops[fid].size()) {
+          uint32_t op_id = flow_ops[fid][flow_head[fid]];
+          if (!completed[op_id] && exec.ops[op_id].deps.empty()) {
+            // op at head has no deps but wasn't submitted → backpressure
+            all_heads_parked = false;
+          }
+        }
+      }
+      if (all_heads_parked) {
+        throw std::runtime_error(
+            "collective stalled: all flow heads blocked on unsatisfied "
+            "dependencies or backpressure with nothing in flight");
+      }
+    }
+
+    std::this_thread::yield();
+  }
 }
 
-CollectiveOpHandle Executor::submit_allreduce(
-    CollectiveConfig const& config,
-    std::shared_ptr<CollectiveBinding> runtime_binding) {
-  if (runtime_binding == nullptr) {
-    throw std::invalid_argument(
-        "executor submit_allreduce requires collective runtime binding");
-  }
-  bool inplace = runtime_binding->roles.input_buffer_id ==
-                 runtime_binding->roles.output_buffer_id;
+void Executor::allreduce(CollectiveConfig const& config,
+                         CollectiveBinding& binding) {
+  bool inplace = binding.roles.input_buffer_id ==
+                 binding.roles.output_buffer_id;
   CollectivePlan plan =
       build_plan(make_plan_request(CollectiveKind::AllReduce, config, inplace));
-  return impl_->submit(std::move(plan), std::move(runtime_binding));
+  run(std::move(plan), binding);
 }
 
-CollectiveOpHandle Executor::submit_alltoall(
-    CollectiveConfig const& config,
-    std::shared_ptr<CollectiveBinding> runtime_binding) {
-  if (runtime_binding == nullptr) {
-    throw std::invalid_argument(
-        "executor submit_alltoall requires collective runtime binding");
-  }
-  bool inplace = runtime_binding->roles.input_buffer_id ==
-                 runtime_binding->roles.output_buffer_id;
+void Executor::alltoall(CollectiveConfig const& config,
+                        CollectiveBinding& binding) {
+  bool inplace = binding.roles.input_buffer_id ==
+                 binding.roles.output_buffer_id;
   CollectivePlan plan =
       build_plan(make_plan_request(CollectiveKind::AllToAll, config, inplace));
-  return impl_->submit(std::move(plan), std::move(runtime_binding));
+  run(std::move(plan), binding);
 }
 
-bool Executor::poll(CollectiveOpHandle handle) { return impl_->poll(handle); }
-
-void Executor::wait(CollectiveOpHandle handle) { impl_->wait(handle); }
-
-void Executor::release(CollectiveOpHandle handle) { impl_->release(handle); }
-
-CollectiveOpStatus Executor::status(CollectiveOpHandle handle) const {
-  return impl_->status(handle);
+UKernel::Transport::Communicator* Executor::communicator() {
+  if (backends_.transport == nullptr) return nullptr;
+  return &static_cast<CommunicatorTransportBackend*>(backends_.transport)
+              ->communicator();
 }
 
-std::string Executor::error_message(CollectiveOpHandle handle) const {
-  return impl_->error_message(handle);
-}
-
-size_t Executor::inflight_steps(CollectiveOpHandle handle) const {
-  return impl_->inflight_steps(handle);
+UKernel::Transport::Communicator const* Executor::communicator() const {
+  if (backends_.transport == nullptr) return nullptr;
+  return &static_cast<CommunicatorTransportBackend const*>(backends_.transport)
+              ->communicator();
 }
 
 }  // namespace CCL

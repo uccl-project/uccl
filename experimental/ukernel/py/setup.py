@@ -59,7 +59,6 @@ sources = [
     rel(ROOT / "src" / "ccl" / "backend" / "device_backend.cc"),
     rel(ROOT / "src" / "ccl" / "backend" / "transport_backend.cc"),
     rel(ROOT / "src" / "ccl" / "executor.cc"),
-    rel(ROOT / "src" / "ccl" / "executor_real.cc"),
     rel(ROOT / "src" / "ccl" / "plan.cc"),
     rel(ROOT / "src" / "ccl" / "selector.cc"),
     rel(ROOT / "src" / "ccl" / "topology.cc"),

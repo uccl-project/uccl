@@ -221,20 +221,17 @@ class ProcessGroup:
         tile_bytes: int = 64 << 10,
         num_flows: int = 2,
     ):
+        if async_op:
+            raise NotImplementedError("async not yet supported with sync executor")
         op = _canonical_reduce_op(op)
         _ensure_cuda_tensor(tensor, "tensor")
         _ensure_contiguous_tensor(tensor, "tensor")
         _validate_reduce_dtype(op, tensor)
-        handle = self._impl.submit_allreduce(
+        self._impl.allreduce(
             tensor,
-            int(op),
             tile_bytes=tile_bytes,
             num_flows=num_flows,
         )
-        work = Work(_NativeCollectiveRunner(self, handle, result=tensor))
-        if async_op:
-            return work
-        work.wait()
         return None
 
     def all_to_all_single(
@@ -247,25 +244,30 @@ class ProcessGroup:
         tile_bytes: int = 64 << 10,
         num_flows: int = 2,
     ):
-        runner = self._create_all_to_all_single_runner(
-            output,
-            input,
-            output_split_sizes=output_split_sizes,
-            input_split_sizes=input_split_sizes,
-            tile_bytes=tile_bytes,
-            num_flows=num_flows,
-        )
-        work = Work(runner)
         if async_op:
-            return work
-        work.wait()
+            raise NotImplementedError("async not yet supported with sync executor")
+        _ensure_cuda_tensor(output, "output tensor")
+        _ensure_cuda_tensor(input, "input tensor")
+        _ensure_contiguous_tensor(output, "output tensor")
+        _ensure_contiguous_tensor(input, "input tensor")
+        _validate_alltoall_dtype(input)
+        if output_split_sizes is None and input_split_sizes is None:
+            self._impl.alltoall_out(
+                output, input,
+                tile_bytes=tile_bytes, num_flows=num_flows,
+            )
+        else:
+            self._impl.alltoallv_out(
+                output, input,
+                output_split_sizes or [], input_split_sizes or [],
+                tile_bytes=tile_bytes, num_flows=num_flows,
+            )
         return None
 
     def barrier(self, async_op: bool = False):
-        work = Work(_NativeCollectiveRunner(self, self._impl.submit_barrier()))
         if async_op:
-            return work
-        work.wait()
+            raise NotImplementedError("async not yet supported with sync executor")
+        self._impl.barrier()
         return None
 
     def same_host(self, peer_rank: int) -> bool:
