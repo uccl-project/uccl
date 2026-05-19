@@ -5,6 +5,9 @@
 #include <cassert>
 #include <cstdint>
 
+// SM occupancy measurement — 5 timestamps per dispatched task
+struct SmTimestamp { uint64_t t[5]; };
+
 namespace UKernel {
 namespace Device {
 
@@ -16,6 +19,9 @@ struct alignas(16) MultiBlockSync {
   Task currentTask;
   TaskArgs currentArgs;
 };
+
+// Called from host to set SM buffer pointers visible to persistent kernels.
+void set_sm_device_pointers(SmTimestamp* ts, uint32_t* cnt);
 
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
                                          uint32_t num_blocks,

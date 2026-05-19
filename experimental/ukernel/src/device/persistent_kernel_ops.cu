@@ -4,6 +4,30 @@
 namespace UKernel {
 namespace Device {
 
+// SM occupancy measurement — device pointers, set from host via set_sm_device_pointers.
+__device__ SmTimestamp* d_sm_ts = nullptr;
+__device__ uint32_t* d_sm_count = nullptr;
+
+void set_sm_device_pointers(SmTimestamp* ts, uint32_t* cnt) {
+  cudaMemcpyToSymbol(d_sm_ts, &ts, sizeof(ts));
+  cudaMemcpyToSymbol(d_sm_count, &cnt, sizeof(cnt));
+}
+
+__device__ void sm_record(uint64_t t0, uint64_t t1, uint64_t t2,
+                          uint64_t t3, uint64_t t4) {
+  if (!d_sm_ts || !d_sm_count) return;
+  uint32_t idx = atomicAdd(d_sm_count, 1u);
+  d_sm_ts[idx].t[0] = t0; d_sm_ts[idx].t[1] = t1;
+  d_sm_ts[idx].t[2] = t2; d_sm_ts[idx].t[3] = t3;
+  d_sm_ts[idx].t[4] = t4;
+}
+
+}  // namespace Device
+}  // namespace UKernel
+
+namespace UKernel {
+namespace Device {
+
 namespace {
 
 constexpr uint32_t kCommandIdle = 0;
@@ -184,7 +208,8 @@ __global__ void singlePersistentKernel(
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
   __shared__ Task current_task;
-  __shared__ __align__(16) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ alignas(
+      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
@@ -198,6 +223,7 @@ __global__ void singlePersistentKernel(
   }
 
   while (true) {
+    uint64_t _t0 = clock64(), _t1 = 0;
     if (threadIdx.x == 0) {
       command = kCommandIdle;
       if (should_stop && *should_stop) {
@@ -236,6 +262,7 @@ __global__ void singlePersistentKernel(
         }
       }
     }
+    _t1 = clock64();
     __syncthreads();
 
     if (command == kCommandIdle) {
@@ -245,8 +272,10 @@ __global__ void singlePersistentKernel(
       return;
     }
 
+    uint64_t _t2 = clock64();
     dispatch_task(current_task, has_current_args ? current_args : nullptr, 0, 1,
                   smem_buf);
+    uint64_t _t3 = clock64();
     __syncthreads();
 
     if (threadIdx.x == 0) {
@@ -255,6 +284,8 @@ __global__ void singlePersistentKernel(
       // globally visible first.
       ++cached_tail;
       publish_tail_progress(fifo.tail, cached_tail);
+      uint64_t _t4 = clock64();
+      sm_record(_t0, _t1, _t2, _t3, _t4);
     }
   }
 }
@@ -268,7 +299,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   const uint32_t bid = blockIdx.x;
 
   __shared__ Task current_task;
-  __shared__ __align__(16) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ alignas(
+      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
   uint32_t local_phase = 0;
@@ -282,6 +314,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   }
 
   while (true) {
+    uint64_t _t0 = clock64(), _t1 = 0;
     if (bid == 0 && threadIdx.x == 0) {
       uint32_t command = kCommandRun;
       Task next_task{};
@@ -333,6 +366,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
       mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
           &d_sync->publishedPhase, local_phase + 1,
           mscclpp::memoryOrderRelease);
+      _t1 = clock64();
     }
 
     while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
@@ -354,8 +388,10 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     }
     __syncthreads();
 
+    uint64_t _t2 = clock64();
     dispatch_task(current_task, has_current_args ? current_args : nullptr, bid,
                   gridDim.x, smem_buf);
+    uint64_t _t3 = clock64();
     __syncthreads();
 
     if (threadIdx.x == 0) {
@@ -370,6 +406,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         // writes must be visible before host observes task completion.
         ++cached_tail;
         publish_tail_progress(fifo.tail, cached_tail);
+        uint64_t _t4 = clock64();
+        sm_record(_t0, _t1, _t2, _t3, _t4);
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,
             mscclpp::memoryOrderRelease);
