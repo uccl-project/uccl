@@ -42,6 +42,14 @@ BENCH_FULL_SRC  := benchmarks/bench_device_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_device_sm_fifo.cu
 BENCH_VS_SRC := benchmarks/bench_device_launch_vs_worker.cu
 BENCH_AR_SRC := benchmarks/bench_device_allreduce.cu
+BENCH_P2P_SRC := benchmarks/bench_device_allreduce_p2p.cu
+
+# ── MPI detection for P2P bench ─────────────────────────────────────────────
+MPI_CXX ?= mpic++
+MPI_INCLUDE := $(shell $(MPI_CXX) --showme:compile 2>/dev/null || echo "-I/usr/include")
+MPI_LIBS   := $(shell $(MPI_CXX) --showme:link 2>/dev/null || echo "-lmpi")
+# strip -pthread from MPI_LIBS (nvcc handles it via Xcompiler)
+MPI_LIBS   := $(subst -pthread,,$(MPI_LIBS))
 
 COMMON_OBJ := $(patsubst %.cc,%.o,$(patsubst %.cpp,%.o,$(COMMON_CPP))) $(COMMON_CU:.cu=.o) $(WORKER_CPP:.cc=.o)
 TEST_ALL_OBJ := $(TEST_ALL_SRC:.cc=.o)
@@ -51,6 +59,7 @@ BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
 BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
 BENCH_VS_OBJ := $(BENCH_VS_SRC:.cu=.o)
 BENCH_AR_OBJ := $(BENCH_AR_SRC:.cu=.o)
+BENCH_P2P_OBJ := $(BENCH_P2P_SRC:.cu=.o)
 
 TEST_ALL_BIN := test_all
 SIMPLE_COPY_TEST_BIN := simple_copy_test
@@ -59,8 +68,9 @@ BENCH_FULL_BIN := benchmarks/bench_device_full_fifo
 BENCH_SM_BIN := benchmarks/bench_device_sm_fifo
 BENCH_VS_BIN := benchmarks/bench_device_launch_vs_worker
 BENCH_AR_BIN := bench_device_allreduce
+BENCH_P2P_BIN := bench_device_allreduce_p2p
 
-ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN) $(BENCH_AR_BIN)
+ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN) $(BENCH_AR_BIN) $(BENCH_P2P_BIN)
 
 .PHONY: all test test-unit test-integration unit integration bench clean
 
@@ -80,7 +90,7 @@ integration: test-integration
 
 simple: test-integration
 
-bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN) $(BENCH_AR_BIN)
+bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN) $(BENCH_AR_BIN) $(BENCH_P2P_BIN)
 
 %.o: %.cc
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -132,6 +142,14 @@ $(BENCH_AR_OBJ): $(BENCH_AR_SRC)
 
 $(BENCH_AR_BIN): $(COMMON_OBJ) $(BENCH_AR_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+# P2P bench: needs MPI includes during compile, MPI lib during link.
+# NVCC compiles .cu directly and the MPI header (mpi.h) must be visible.
+$(BENCH_P2P_OBJ): $(BENCH_P2P_SRC)
+	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES) $(MPI_INCLUDE)
+
+$(BENCH_P2P_BIN): $(COMMON_OBJ) $(BENCH_P2P_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS) $(MPI_LIBS)
 
 clean:
 	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./ops/*.o \
