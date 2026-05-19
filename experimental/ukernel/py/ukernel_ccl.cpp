@@ -241,12 +241,6 @@ struct BindingState {
   }
 };
 
-struct TensorRegEntry {
-  BufferId buffer_id = kInvalidBufferId;
-  size_t bytes = 0;
-  ScalarType dtype = ScalarType::UInt8;
-};
-
 size_t plan_cache_key(CollectiveKind collective,
                       CollectiveConfig const& config, bool inplace) {
   size_t h = 0;
@@ -347,17 +341,24 @@ class ProcessGroup {
               tile_bytes, num_flows);
   }
 
-  void alltoall(torch::Tensor tensor,
-                size_t tile_bytes = 64ull << 10,
+  void alltoall(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
                 uint32_t num_flows = 2) {
-    alltoall_out(tensor, tensor, tile_bytes, num_flows);
+    alltoall_out(std::move(tensor), std::move(tensor), tile_bytes, num_flows);
   }
 
   void alltoall_out(torch::Tensor output, torch::Tensor input,
-                    size_t tile_bytes = 64ull << 10,
-                    uint32_t num_flows = 2) {
+                    size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
     alltoallv_out(std::move(output), std::move(input), {}, {}, tile_bytes,
                   num_flows);
+  }
+
+  void alltoallv_out(torch::Tensor output, torch::Tensor input,
+                     std::vector<int64_t> output_split_sizes,
+                     std::vector<int64_t> input_split_sizes,
+                     size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
+    alltoallv_out(std::move(output), std::move(input),
+                  std::move(output_split_sizes), std::move(input_split_sizes),
+                  tile_bytes, num_flows);
   }
 
   void alltoallv_out(torch::Tensor output, torch::Tensor input,
@@ -502,14 +503,173 @@ class ProcessGroup {
   }
 
   std::string peer_transport(int peer_rank) const {
-    auto kind = transport_backend_.communicator().peer_transport_kind(peer_rank);
-    switch (kind) {
-      case Transport::PeerTransportKind::Ipc: return "ipc";
-      case Transport::PeerTransportKind::Uccl: return "uccl";
-      case Transport::PeerTransportKind::Tcp: return "tcp";
-      case Transport::PeerTransportKind::Rdma: return "rdma";
-      default: return "unknown";
+    switch (transport_backend_.communicator().peer_transport_kind(peer_rank)) {
+      case Transport::PeerTransportKind::Unknown:
+        return "unknown";
+      case Transport::PeerTransportKind::Ipc:
+        return "ipc";
+      case Transport::PeerTransportKind::Uccl:
+        return "uccl";
+      case Transport::PeerTransportKind::Tcp:
+        return "tcp";
+      case Transport::PeerTransportKind::Rdma:
+        return "rdma";
     }
+    return "unknown";
+  }
+
+ private:
+  struct TensorRegEntry {
+    BufferId buffer_id = kInvalidBufferId;
+    size_t bytes = 0;
+    ScalarType dtype = ScalarType::UInt8;
+  };
+
+  BufferId resolve_or_register_tensor(void* ptr, size_t bytes,
+                                      ScalarType dtype) {
+    if (ptr == nullptr || bytes == 0) return kInvalidBufferId;
+    auto it = tensor_registry_.find(ptr);
+    if (it != tensor_registry_.end()) {
+      it->second.bytes = bytes;
+      return it->second.buffer_id;
+    }
+    BufferId id = next_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+    tensor_registry_[ptr] = {id, bytes, dtype};
+    return id;
+  }
+
+  void deregister_tensor(void* ptr) {
+    if (ptr == nullptr) return;
+    auto it = tensor_registry_.find(ptr);
+    if (it == tensor_registry_.end()) return;
+    BufferId id = it->second.buffer_id;
+    if (id != kInvalidBufferId) {
+      transport_backend_.communicator().dereg_mr(id);
+      transport_backend_.communicator().dereg_ipc(id);
+    }
+    tensor_registry_.erase(it);
+  }
+
+  WorkTensor prepare_work_tensor(CollectiveKind collective,
+                                 torch::Tensor const& tensor,
+                                 bool require_even_alltoall_bytes = true) {
+    if (!tensor.defined()) {
+      throw std::invalid_argument("tensor must be defined");
+    }
+    if (!tensor.is_cuda()) {
+      throw std::invalid_argument("tensor must be a CUDA tensor");
+    }
+    if (tensor.device().index() != gpu_id_) {
+      throw std::invalid_argument(
+          "tensor device does not match process group gpu_id");
+    }
+    validate_collective_dtype(collective, tensor.scalar_type());
+
+    WorkTensor out;
+    torch::Tensor flat = tensor.view({-1});
+    size_t raw_bytes = static_cast<size_t>(flat.numel()) *
+                       static_cast<size_t>(flat.element_size());
+    size_t alignment = static_cast<size_t>(world_size_) *
+                       static_cast<size_t>(flat.element_size());
+    if (collective == CollectiveKind::AllToAll && require_even_alltoall_bytes &&
+        alignment != 0 && (raw_bytes % alignment) != 0) {
+      throw std::invalid_argument(
+          "alltoall tensor byte size must be divisible by world_size * "
+          "element_size");
+    }
+    out.work_flat = flat;
+    return out;
+  }
+
+  torch::Tensor ensure_staging(size_t staging_bytes) {
+    if (staging_bytes == 0) {
+      staging_tensor_ = torch::Tensor();
+      return staging_tensor_;
+    }
+    if (staging_tensor_.defined() &&
+        staging_tensor_.device().index() == gpu_id_ &&
+        static_cast<size_t>(staging_tensor_.numel()) >= staging_bytes) {
+      return staging_tensor_;
+    }
+    staging_tensor_ =
+        torch::empty({static_cast<int64_t>(staging_bytes)},
+                     torch::TensorOptions()
+                         .dtype(torch::kUInt8)
+                         .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
+    return staging_tensor_;
+  }
+
+  void allreduce(torch::Tensor tensor, uint32_t reduction,
+                 size_t tile_bytes = 64ull << 10,
+                 uint32_t num_flows = 2) {
+    std::lock_guard<std::mutex> lock(mu_);
+    GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+
+    WorkTensor work = prepare_work_tensor(CollectiveKind::AllReduce, tensor);
+    ScalarType dtype = to_scalar_type(tensor.scalar_type());
+    size_t tensor_bytes = static_cast<size_t>(work.work_flat.numel()) *
+                          static_cast<size_t>(work.work_flat.element_size());
+
+    CollectiveConfig config{};
+    config.nranks = world_size_;
+    config.rank = rank_;
+    config.num_flows = num_flows;
+    config.tensor_bytes = tensor_bytes;
+    config.tile_bytes = tile_bytes;
+    config.staging_bytes = tile_bytes * num_flows;
+    config.algorithm = AlgorithmKind::Ring;
+    config.dtype = dtype;
+    config.reduction = reduction;
+
+    size_t staging_req = config.staging_bytes;
+    void* old_staging_ptr =
+        staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
+    torch::Tensor staging = ensure_staging(staging_req);
+    void* staging_ptr = staging.defined() ? staging.data_ptr() : nullptr;
+    if (old_staging_ptr != nullptr && old_staging_ptr != staging_ptr) {
+      deregister_tensor(old_staging_ptr);
+    }
+
+    void* tensor_ptr = work.work_flat.data_ptr();
+    BufferId input_id =
+        resolve_or_register_tensor(tensor_ptr, tensor_bytes, dtype);
+    BufferId staging_id =
+        resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
+    CollectiveBufferRoles roles{input_id, input_id, staging_id};
+
+    size_t key = plan_cache_key(CollectiveKind::AllReduce, config, /*inplace=*/true);
+    CollectivePlan plan;
+    auto cache_it = plan_cache_.find(key);
+    if (cache_it != plan_cache_.end()) {
+      plan = cache_it->second;
+    } else {
+      plan = build_plan(make_plan_request(CollectiveKind::AllReduce, config, /*inplace=*/true));
+      plan_cache_[key] = plan;
+    }
+
+    if (!binding_state_.matches(work.work_flat.data_ptr(), tensor_bytes, dtype,
+                                work.work_flat.data_ptr(), tensor_bytes, dtype,
+                                staging_ptr, plan.staging_bytes_required,
+                                roles)) {
+      binding_memory_ =
+          std::make_shared<CollectiveBinding>(build_collective_memory(
+              rank_, world_size_, work.work_flat.data_ptr(), tensor_bytes,
+              dtype, work.work_flat.data_ptr(), tensor_bytes, dtype,
+              staging_ptr, plan.staging_bytes_required, roles));
+      binding_state_.input_ptr = work.work_flat.data_ptr();
+      binding_state_.input_bytes = tensor_bytes;
+      binding_state_.input_dtype = dtype;
+      binding_state_.output_ptr = work.work_flat.data_ptr();
+      binding_state_.output_bytes = tensor_bytes;
+      binding_state_.output_dtype = dtype;
+      binding_state_.staging_ptr = staging_ptr;
+      binding_state_.staging_bytes = plan.staging_bytes_required;
+      binding_state_.input_buffer_id = roles.input_buffer_id;
+      binding_state_.output_buffer_id = roles.output_buffer_id;
+      binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
+    }
+
+    executor_.run(std::move(plan), *binding_memory_);
   }
 
   int rank_;
