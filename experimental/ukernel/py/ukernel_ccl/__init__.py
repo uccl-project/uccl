@@ -118,6 +118,17 @@ class _WorkRunner:
         raise NotImplementedError
 
 
+class _CompletedWork(_WorkRunner):
+    def __init__(self, result=None):
+        self._result = result
+
+    def wait(self):
+        return self._result
+
+    def is_completed(self):
+        return True
+
+
 class _NativeCollectiveRunner(_WorkRunner):
     def __init__(
         self,
@@ -221,8 +232,6 @@ class ProcessGroup:
         tile_bytes: int = 64 << 10,
         num_flows: int = 2,
     ):
-        if async_op:
-            raise NotImplementedError("async not yet supported with sync executor")
         op = _canonical_reduce_op(op)
         _ensure_cuda_tensor(tensor, "tensor")
         _ensure_contiguous_tensor(tensor, "tensor")
@@ -232,6 +241,8 @@ class ProcessGroup:
             tile_bytes=tile_bytes,
             num_flows=num_flows,
         )
+        if async_op:
+            return _CompletedWork(tensor)
         return None
 
     def all_to_all_single(
@@ -244,8 +255,6 @@ class ProcessGroup:
         tile_bytes: int = 64 << 10,
         num_flows: int = 2,
     ):
-        if async_op:
-            raise NotImplementedError("async not yet supported with sync executor")
         _ensure_cuda_tensor(output, "output tensor")
         _ensure_cuda_tensor(input, "input tensor")
         _ensure_contiguous_tensor(output, "output tensor")
@@ -262,12 +271,14 @@ class ProcessGroup:
                 output_split_sizes or [], input_split_sizes or [],
                 tile_bytes=tile_bytes, num_flows=num_flows,
             )
+        if async_op:
+            return _CompletedWork(output)
         return None
 
     def barrier(self, async_op: bool = False):
-        if async_op:
-            raise NotImplementedError("async not yet supported with sync executor")
         self._impl.barrier()
+        if async_op:
+            return _CompletedWork()
         return None
 
     def same_host(self, peer_rank: int) -> bool:
