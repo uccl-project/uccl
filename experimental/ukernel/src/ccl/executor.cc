@@ -216,8 +216,13 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
   std::unordered_map<uint64_t, size_t> inflight;
   std::vector<size_t> flow_head(exec.num_flows, 0);
   size_t completed_count = 0;
+  uint64_t loop_count = 0;
 
   while (completed_count < total) {
+    if (++loop_count <= 10 || loop_count % 1000 == 0) {
+      fprintf(stderr, "[ccl run] iter=%lu completed=%zu/%zu inflight=%zu\n",
+              loop_count, completed_count, total, inflight.size());
+    }
     // Phase 1: Advance every flow — submit its next ready op if all of
     // that op's dependencies (which may cross flows) are completed.
     bool any_submitted = false;
@@ -253,6 +258,10 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
 
       if (token.value == 0) continue;  // backpressure – retry next cycle
 
+      if (loop_count <= 10)
+        fprintf(stderr, "[ccl run] submit op=%u flow=%u kind=%d\n",
+                op_id, fid, (int)exec.ops[op_id].kind);
+
       tokens[op_id] = token;
       op_backend[op_id] = backend;
       inflight[inflight_key(backend, token)] = op_id;
@@ -272,9 +281,12 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
             size_t op_id = it->second;
             backend->release(token);
             inflight.erase(it);
-            completed[op_id] = true;
-            completed_count++;
-            any_completed = true;
+          completed[op_id] = true;
+          completed_count++;
+          if (loop_count <= 10 || completed_count == total)
+            fprintf(stderr, "[ccl run] done op=%u -> %zu/%zu\n",
+                    (uint32_t)op_id, completed_count, total);
+          any_completed = true;
           }
         }
       }
@@ -285,9 +297,12 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
         if (op_backend[i]->poll(tokens[i])) {
           op_backend[i]->release(tokens[i]);
           inflight.erase(inflight_key(op_backend[i], tokens[i]));
-          completed[i] = true;
-          completed_count++;
-          any_completed = true;
+        completed[i] = true;
+        completed_count++;
+        if (loop_count <= 10 || completed_count == total)
+          fprintf(stderr, "[ccl run] poll-done op=%zu -> %zu/%zu\n",
+                  i, completed_count, total);
+        any_completed = true;
         }
       }
 
