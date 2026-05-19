@@ -76,7 +76,8 @@ WorkerPool::~WorkerPool() {
   }
 }
 
-bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
+bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks,
+                              SmTimestamp* d_sm_ts, uint32_t* d_sm_count) {
   if (fifoId >= fifos_.size() || numBlocks == 0) {
     return false;
   }
@@ -102,6 +103,8 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
     if (!workers_[i]->launched) {
       workers_[i]->fifoId = fifoId;
       workers_[i]->numBlocks = numBlocks;
+      workers_[i]->d_sm_ts = d_sm_ts;
+      workers_[i]->d_sm_count = d_sm_count;
       workers_[i]->ready = false;
       *h_stop_flags_[i] = false;
       GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
@@ -127,6 +130,10 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
 
   ctx.bound_workers.store(0, std::memory_order_relaxed);
   return false;
+}
+
+bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
+  return createWorker(fifoId, numBlocks, nullptr, nullptr);
 }
 
 bool WorkerPool::pollWorker(uint32_t fifoId) {
@@ -288,10 +295,12 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   size_t smem_size = cfg_.smemSize;
 
   void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
-                         &d_stop_flags_[workerIndex]};
+                         &d_stop_flags_[workerIndex],
+                         &worker.d_sm_ts, &worker.d_sm_count};
 
   void* args_multi[] = {&worker.d_fifo_handle, &d_task_args,
-                        &d_stop_flags_[workerIndex], &worker.d_multi_sync};
+                        &d_stop_flags_[workerIndex], &worker.d_multi_sync,
+                        &worker.d_sm_ts, &worker.d_sm_count};
 
   if (worker.numBlocks == 1) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,

@@ -2,6 +2,7 @@
 
 #include "c2d_fifo.h"
 #include "gpu_rt.h"
+#include "persistent_kernel_ops.h"
 #include "task.h"
 #include <atomic>
 #include <cstddef>
@@ -39,6 +40,8 @@ class WorkerPool {
   ~WorkerPool();
 
   bool createWorker(uint32_t fifoId, uint32_t numBlocks);
+  bool createWorker(uint32_t fifoId, uint32_t numBlocks,
+                    SmTimestamp* d_sm_ts, uint32_t* d_sm_count);
   bool pollWorker(uint32_t fifoId);
   void waitWorker(uint32_t fifoId);
   void destroyWorker(uint32_t fifoId);
@@ -82,6 +85,8 @@ class WorkerPool {
     gpuStream_t stream = nullptr;
     mscclpp::C2DDeviceHandle<Task>* d_fifo_handle = nullptr;
     MultiBlockSync* d_multi_sync = nullptr;
+    SmTimestamp* d_sm_ts = nullptr;
+    uint32_t* d_sm_count = nullptr;
   };
 
   void launchWorkerForFifo(size_t workerIndex);

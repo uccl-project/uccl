@@ -20,9 +20,6 @@ struct alignas(16) MultiBlockSync {
   TaskArgs currentArgs;
 };
 
-// Called from host to set SM buffer pointers visible to persistent kernels.
-void set_sm_device_pointers(SmTimestamp* ts, uint32_t* cnt);
-
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
                                          uint32_t num_blocks,
                                          void* smem_buf = nullptr);
@@ -32,13 +29,16 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                            uint32_t num_blocks,
                                            void* smem_buf = nullptr);
 
+// SM measurement buffers appended as kernel args. nullptr = skip recording.
 __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
-    bool* should_stop);
+    bool* should_stop,
+    SmTimestamp* d_sm_ts, uint32_t* d_sm_count);
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
-                                      MultiBlockSync* d_sync);
+                                      MultiBlockSync* d_sync,
+                                      SmTimestamp* d_sm_ts, uint32_t* d_sm_count);
 
 __global__ void benchDispatchNopKernel();
 __global__ void benchDispatchCopyFp32Kernel(TaskArgs args);

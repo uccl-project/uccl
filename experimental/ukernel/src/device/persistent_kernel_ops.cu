@@ -4,30 +4,6 @@
 namespace UKernel {
 namespace Device {
 
-// SM occupancy measurement — device pointers, set from host via set_sm_device_pointers.
-__device__ SmTimestamp* d_sm_ts = nullptr;
-__device__ uint32_t* d_sm_count = nullptr;
-
-void set_sm_device_pointers(SmTimestamp* ts, uint32_t* cnt) {
-  cudaMemcpyToSymbol(d_sm_ts, &ts, sizeof(ts));
-  cudaMemcpyToSymbol(d_sm_count, &cnt, sizeof(cnt));
-}
-
-__device__ void sm_record(uint64_t t0, uint64_t t1, uint64_t t2,
-                          uint64_t t3, uint64_t t4) {
-  if (!d_sm_ts || !d_sm_count) return;
-  uint32_t idx = atomicAdd(d_sm_count, 1u);
-  d_sm_ts[idx].t[0] = t0; d_sm_ts[idx].t[1] = t1;
-  d_sm_ts[idx].t[2] = t2; d_sm_ts[idx].t[3] = t3;
-  d_sm_ts[idx].t[4] = t4;
-}
-
-}  // namespace Device
-}  // namespace UKernel
-
-namespace UKernel {
-namespace Device {
-
 namespace {
 
 constexpr uint32_t kCommandIdle = 0;
@@ -45,6 +21,18 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
 }
 
 }  // namespace
+
+// SM occupancy measurement — called by persistent kernels, passed via kernel args.
+__device__ __forceinline__ void sm_record(SmTimestamp* d_sm_ts,
+                                          uint32_t* d_sm_count,
+                                          uint64_t t0, uint64_t t1, uint64_t t2,
+                                          uint64_t t3, uint64_t t4) {
+  if (!d_sm_ts || !d_sm_count) return;
+  uint32_t idx = atomicAdd(d_sm_count, 1u);
+  d_sm_ts[idx].t[0] = t0; d_sm_ts[idx].t[1] = t1;
+  d_sm_ts[idx].t[2] = t2; d_sm_ts[idx].t[3] = t3;
+  d_sm_ts[idx].t[4] = t4;
+}
 
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
                                          uint32_t num_blocks, void* smem_buf) {
@@ -203,7 +191,8 @@ __device__ __forceinline__ void process_task(Task const& task,
 
 __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
-    bool* should_stop) {
+    bool* should_stop,
+    SmTimestamp* d_sm_ts, uint32_t* d_sm_count) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -222,8 +211,9 @@ __global__ void singlePersistentKernel(
     cached_head = cached_tail;
   }
 
+  uint64_t _t0 = clock64(), _t1 = 0;
   while (true) {
-    uint64_t _t0 = clock64(), _t1 = 0;
+    _t1 = 0;
     if (threadIdx.x == 0) {
       command = kCommandIdle;
       if (should_stop && *should_stop) {
@@ -285,14 +275,16 @@ __global__ void singlePersistentKernel(
       ++cached_tail;
       publish_tail_progress(fifo.tail, cached_tail);
       uint64_t _t4 = clock64();
-      sm_record(_t0, _t1, _t2, _t3, _t4);
+      sm_record(d_sm_ts, d_sm_count, _t0, _t1, _t2, _t3, _t4);
+      _t0 = clock64();
     }
   }
 }
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
-                                      MultiBlockSync* d_sync) {
+                                      MultiBlockSync* d_sync,
+                                      SmTimestamp* d_sm_ts, uint32_t* d_sm_count) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -313,8 +305,9 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     cached_head = cached_tail;
   }
 
+  uint64_t _t0 = clock64(), _t1 = 0;
   while (true) {
-    uint64_t _t0 = clock64(), _t1 = 0;
+    _t1 = 0;
     if (bid == 0 && threadIdx.x == 0) {
       uint32_t command = kCommandRun;
       Task next_task{};
@@ -407,7 +400,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         ++cached_tail;
         publish_tail_progress(fifo.tail, cached_tail);
         uint64_t _t4 = clock64();
-        sm_record(_t0, _t1, _t2, _t3, _t4);
+        sm_record(d_sm_ts, d_sm_count, _t0, _t1, _t2, _t3, _t4);
+        _t0 = clock64();
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,
             mscclpp::memoryOrderRelease);
