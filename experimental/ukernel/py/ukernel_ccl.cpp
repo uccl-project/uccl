@@ -241,6 +241,12 @@ struct BindingState {
   }
 };
 
+struct TensorRegEntry {
+  BufferId buffer_id = kInvalidBufferId;
+  size_t bytes = 0;
+  ScalarType dtype = ScalarType::UInt8;
+};
+
 size_t plan_cache_key(CollectiveKind collective,
                       CollectiveConfig const& config, bool inplace) {
   size_t h = 0;
@@ -339,52 +345,6 @@ class ProcessGroup {
     allreduce(std::move(tensor),
               static_cast<uint32_t>(ReductionKind::Sum),
               tile_bytes, num_flows);
-  }
-
-  void alltoall(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                uint32_t num_flows = 2) {
-    alltoall(std::move(tensor), tile_bytes, num_flows);
-  }
-
-  void alltoall_out(torch::Tensor output, torch::Tensor input,
-                    size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
-    alltoall_out(std::move(output), std::move(input), tile_bytes, num_flows);
-  }
-
-  void alltoallv_out(torch::Tensor output, torch::Tensor input,
-                     std::vector<int64_t> output_split_sizes,
-                     std::vector<int64_t> input_split_sizes,
-                     size_t tile_bytes = 64ull << 10,
-                     uint32_t num_flows = 2) {
-    alltoallv_out(std::move(output), std::move(input),
-                  std::move(output_split_sizes), std::move(input_split_sizes),
-                  tile_bytes, num_flows);
-  }
-
-  void alltoall(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                uint32_t num_flows = 2) {
-    alltoall(std::move(tensor), tile_bytes, num_flows);
-  }
-
-  void alltoall_out(torch::Tensor output, torch::Tensor input,
-                    size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
-    alltoall_out(std::move(output), std::move(input), tile_bytes, num_flows);
-  }
-
-  void alltoallv_out(torch::Tensor output, torch::Tensor input,
-                     std::vector<int64_t> output_split_sizes,
-                     std::vector<int64_t> input_split_sizes,
-                     size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
-    alltoallv_out(std::move(output), std::move(input),
-                  std::move(output_split_sizes), std::move(input_split_sizes),
-                  tile_bytes, num_flows);
-  }
-
-  void allreduce(torch::Tensor tensor, uint32_t reduction,
-                 size_t tile_bytes = 64ull << 10,
-                 uint32_t num_flows = 2) {
-    run_collective(CollectiveKind::AllReduce, std::move(tensor),
-                   parse_reduction_kind(reduction), tile_bytes, num_flows);
   }
 
   void alltoall(torch::Tensor tensor,
@@ -533,8 +493,23 @@ class ProcessGroup {
     } else {
       barrier_tensor_.fill_(1);
     }
-    run_collective(CollectiveKind::AllReduce, barrier_tensor_,
-                   ReductionKind::Sum, sizeof(int32_t), 1);
+    allreduce(barrier_tensor_, static_cast<uint32_t>(ReductionKind::Sum),
+              sizeof(int32_t), 1);
+  }
+
+  bool same_host(int peer_rank) const {
+    return transport_backend_.communicator().same_host(peer_rank);
+  }
+
+  std::string peer_transport(int peer_rank) const {
+    auto kind = transport_backend_.communicator().peer_transport_kind(peer_rank);
+    switch (kind) {
+      case Transport::PeerTransportKind::Ipc: return "ipc";
+      case Transport::PeerTransportKind::Uccl: return "uccl";
+      case Transport::PeerTransportKind::Tcp: return "tcp";
+      case Transport::PeerTransportKind::Rdma: return "rdma";
+      default: return "unknown";
+    }
   }
 
   int rank_;
@@ -582,14 +557,6 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
           nb::arg("num_flows") = 2)
-          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-             uint32_t num_flows) {
-            self.allreduce(
-                UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
-                tile_bytes, num_flows);
-          },
-           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("num_flows") = 2)
       .def(
           "alltoall",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,

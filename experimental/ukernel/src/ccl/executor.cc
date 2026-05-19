@@ -260,10 +260,8 @@ void Executor::run(CollectivePlan plan, CollectiveBinding& binding) {
       any_submitted = true;
     }
 
-    // Phase 2: Drain batched completions, then immediately rescan flow
-    // heads so that completion→successor-submit has zero-yield latency.
-    {
-      bool any_completed = false;
+    // Phase 2: Drain batched completions from backends.
+    bool any_completed = false;
 
       for (Backend* backend : completion_sources_) {
         if (!backend) continue;
