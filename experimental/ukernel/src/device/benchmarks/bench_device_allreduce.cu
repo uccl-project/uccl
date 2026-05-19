@@ -184,9 +184,6 @@ static double run_allreduce(TaskManager& tmgr, WorkerPool& pool,
                             uint64_t& rr_counter) {
   // Warmup
   for (int iter = 0; iter < cfg.num_warmup; ++iter) {
-    for (int n = 0; n < num_nodes; ++n) {
-      GPU_RT_CHECK(gpuMemset(d_node_dst[n], 0, bytes));
-    }
     std::vector<TaskBatch> batches(num_workers);
     for (int n = 0; n < num_nodes; ++n) {
       auto& workers = node_workers[n];
@@ -208,9 +205,6 @@ static double run_allreduce(TaskManager& tmgr, WorkerPool& pool,
   // Timed
   std::vector<double> lats;
   for (int iter = 0; iter < cfg.num_iters; ++iter) {
-    for (int n = 0; n < num_nodes; ++n) {
-      GPU_RT_CHECK(gpuMemset(d_node_dst[n], 0, bytes));
-    }
     uint64_t t0 = now_ns();
     std::vector<TaskBatch> batches(num_workers);
     for (int n = 0; n < num_nodes; ++n) {
@@ -379,40 +373,18 @@ int main(int argc, char** argv) {
   wcfg.fifoCapacity = 64;
   WorkerPool pool(wcfg);
 
-  // Create M workers + FIFOs
-  std::vector<uint32_t> fifo_ids(M);
-  for (int w = 0; w < M; ++w) fifo_ids[w] = static_cast<uint32_t>(w);
-
-  std::vector<SmBuf> sm_bufs;
+  // ── Allocate ALL GPU buffers BEFORE creating workers ──────────────────
+  // gpuMalloc blocks when a persistent kernel occupies the GPU.
   uint32_t max_ts = (cfg.num_warmup + cfg.num_iters) * K * K * 2;
+  std::vector<SmBuf> sm_bufs;
   if (sm_measure_enabled) {
     sm_bufs.resize(M);
-  }
-
-  for (int w = 0; w < M; ++w) {
-    int node_id = w / WPN;
-    SmTimestamp* sm_ts = nullptr;
-    uint32_t* sm_cnt = nullptr;
-    if (sm_measure_enabled) {
+    for (int w = 0; w < M; ++w) {
       sm_bufs[w] = sm_init_buffer(max_ts);
-      sm_ts = sm_bufs[w].d_ts;
-      sm_cnt = sm_bufs[w].d_count;
     }
-    if (!pool.createWorker(fifo_ids[w], cfg.num_blocks, sm_ts, sm_cnt)) {
-      fprintf(stderr, "FAIL: createWorker for fifo=%u\n", fifo_ids[w]);
-      return 1;
-    }
-    printf("[init] Worker %d: node=%d fifo=%u blocks=%d\n",
-           w, node_id, fifo_ids[w], cfg.num_blocks);
-  }
-  if (sm_measure_enabled) {
-    printf("[init] SM timestamp buffer: %u slots x %d workers\n", max_ts, M);
   }
 
   // Per-node buffers
-  // src bufs: K bufs shared by all workers (read-only)
-  // dst bufs: per-node workspace for allreduce result
-  // ws bufs:  per-node workspace for alltoall output
   std::vector<float*> d_src_bufs(K);
   std::vector<void*> d_node_dst(K);
   std::vector<void*> d_node_ws(K);
@@ -427,6 +399,29 @@ int main(int argc, char** argv) {
 
     GPU_RT_CHECK(gpuMalloc(&d_node_dst[n], cfg.data_bytes));
     GPU_RT_CHECK(gpuMalloc(&d_node_ws[n], ws_bytes));
+  }
+
+  // Create M workers + FIFOs
+  std::vector<uint32_t> fifo_ids(M);
+  for (int w = 0; w < M; ++w) fifo_ids[w] = static_cast<uint32_t>(w);
+
+  for (int w = 0; w < M; ++w) {
+    int node_id = w / WPN;
+    SmTimestamp* sm_ts = nullptr;
+    uint32_t* sm_cnt = nullptr;
+    if (sm_measure_enabled) {
+      sm_ts = sm_bufs[w].d_ts;
+      sm_cnt = sm_bufs[w].d_count;
+    }
+    if (!pool.createWorker(fifo_ids[w], cfg.num_blocks, sm_ts, sm_cnt)) {
+      fprintf(stderr, "FAIL: createWorker for fifo=%u\n", fifo_ids[w]);
+      return 1;
+    }
+    printf("[init] Worker %d: node=%d fifo=%u blocks=%d\n",
+           w, node_id, fifo_ids[w], cfg.num_blocks);
+  }
+  if (sm_measure_enabled) {
+    printf("[init] SM timestamp buffer: %u slots x %d workers\n", max_ts, M);
   }
 
   // ── Allreduce ──────────────────────────────────────────────────────────

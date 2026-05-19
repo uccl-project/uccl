@@ -149,7 +149,6 @@ static double run_allreduce(TaskManager& tmgr, WorkerPool& pool,
                             uint64_t& rr_counter) {
   // Warmup
   for (int iter = 0; iter < cfg.num_warmup; ++iter) {
-    GPU_RT_CHECK(gpuMemset(d_dst, 0, bytes));
     std::vector<TaskBatch> batches(num_workers);
     for (int k = 0; k < num_ranks; ++k) {
       int wi = rr_counter++ % num_workers;
@@ -163,7 +162,6 @@ static double run_allreduce(TaskManager& tmgr, WorkerPool& pool,
   // Timed
   std::vector<double> lats;
   for (int iter = 0; iter < cfg.num_iters; ++iter) {
-    GPU_RT_CHECK(gpuMemset(d_dst, 0, bytes));
     uint64_t t0 = now_ns();
     std::vector<TaskBatch> batches(num_workers);
     for (int k = 0; k < num_ranks; ++k) {
@@ -352,21 +350,14 @@ int main(int argc, char** argv) {
   wcfg.fifoCapacity = 64;
   WorkerPool pool(wcfg);
 
+  // Allocate all GPU buffers BEFORE creating workers — gpuMalloc blocks
+  // when a persistent kernel is occupying the GPU.
   uint32_t max_ts = (cfg.num_warmup + cfg.num_iters) * K * 2;
   std::vector<SmBuf> sm_bufs;
-  if (sm_measure_enabled) sm_bufs.resize(W);
-
-  for (int w = 0; w < W; ++w) {
-    SmTimestamp* sm_ts = nullptr;
-    uint32_t* sm_cnt = nullptr;
-    if (sm_measure_enabled) {
+  if (sm_measure_enabled) {
+    sm_bufs.resize(W);
+    for (int w = 0; w < W; ++w) {
       sm_bufs[w] = sm_init_buffer(max_ts);
-      sm_ts = sm_bufs[w].d_ts;
-      sm_cnt = sm_bufs[w].d_count;
-    }
-    if (!pool.createWorker((uint32_t)w, cfg.num_blocks, sm_ts, sm_cnt)) {
-      fprintf(stderr, "[rank %d] FAIL: createWorker for fifo=%d\n", rank, w);
-      MPI_Abort(MPI_COMM_WORLD, 1);
     }
   }
 
@@ -377,6 +368,19 @@ int main(int argc, char** argv) {
   }
   if (strcmp(cfg.bench, "alltoall") == 0 || strcmp(cfg.bench, "all") == 0) {
     GPU_RT_CHECK(gpuMalloc(&d_alltoall_ws, buf_bytes));
+  }
+
+  for (int w = 0; w < W; ++w) {
+    SmTimestamp* sm_ts = nullptr;
+    uint32_t* sm_cnt = nullptr;
+    if (sm_measure_enabled) {
+      sm_ts = sm_bufs[w].d_ts;
+      sm_cnt = sm_bufs[w].d_count;
+    }
+    if (!pool.createWorker((uint32_t)w, cfg.num_blocks, sm_ts, sm_cnt)) {
+      fprintf(stderr, "[rank %d] FAIL: createWorker for fifo=%d\n", rank, w);
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
   }
 
   uint64_t rr_counter = 0;
