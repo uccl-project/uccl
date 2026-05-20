@@ -1,0 +1,6 @@
+#!/bin/bash
+
+export GLOO_SOCKET_IFNAME=enp49s0f0np0
+export NCCL_SOCKET_IFNAME=enp49s0f0np0
+export UCCL_P2P_RDMA_GID_INDEX=3
+export NCCL_IB_GID_INDEX=3
