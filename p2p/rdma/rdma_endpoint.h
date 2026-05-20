@@ -66,8 +66,7 @@ class NICEndpoint {
     // Host-side rings used to carry per-message compression metadata and
     // completion acks. Registered on every context slot so any data/control
     // QP can target them via rkey lookup.
-    ack_ring_ =
-        allocator_->allocate(kAckRingBytes, MemoryType::HOST, nullptr);
+    ack_ring_ = allocator_->allocate(kAckRingBytes, MemoryType::HOST, nullptr);
     write_meta_ring_ =
         allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, nullptr);
     std::memset(ack_ring_->addr, 0, kAckRingBytes);
@@ -86,22 +85,26 @@ class NICEndpoint {
     for (size_t slot = 0; slot < contexts_.size(); ++slot) {
       auto ctx = contexts_[slot];
       auto it = registered.find(ctx.get());
-      struct ibv_mr* mr =
-          (it != registered.end()) ? it->second : ctx->regMem(blk.addr, blk.size);
+      struct ibv_mr* mr = (it != registered.end())
+                              ? it->second
+                              : ctx->regMem(blk.addr, blk.size);
       if (it == registered.end()) registered[ctx.get()] = mr;
       blk.setMRByContextID(slot, mr);
     }
   }
 
   std::shared_ptr<RegMemBlock> ackRing() const { return ack_ring_; }
-  std::shared_ptr<RegMemBlock> writeMetaRing() const { return write_meta_ring_; }
+  std::shared_ptr<RegMemBlock> writeMetaRing() const {
+    return write_meta_ring_;
+  }
 
   // Populate the three RemoteMemInfo fields in a Control-channel
   // MetaInfoToExchange. No-op if compression is disabled.
   void fillCompressionMeta(MetaInfoToExchange& m) const {
     auto decomp = Compressor::getInstance().getDecompressBuffer();
     if (decomp) m.decompress_buf_meta = RemoteMemInfo(*decomp);
-    if (write_meta_ring_) m.write_meta_ring_meta = RemoteMemInfo(*write_meta_ring_);
+    if (write_meta_ring_)
+      m.write_meta_ring_meta = RemoteMemInfo(*write_meta_ring_);
     if (ack_ring_) m.ack_ring_meta = RemoteMemInfo(*ack_ring_);
   }
   int gpuIndex() const { return gpu_index_; }
@@ -685,7 +688,8 @@ class NICEndpoint {
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
       // Receiver owns the authoritative WriteReqMeta ring.
-      if (write_meta_ring_) recv_ctrl_channel->bindWriteMetaRing(write_meta_ring_);
+      if (write_meta_ring_)
+        recv_ctrl_channel->bindWriteMetaRing(write_meta_ring_);
 
       // Create response (include our OOB port for potential future use)
       RemoteMemInfo ctrl_info(ctrl_mem);
@@ -907,14 +911,15 @@ class NICEndpoint {
           // Bind WriteReqMeta ring: local mirror (this endpoint's own) +
           // remote slot table on the peer receiver.
           if (write_meta_ring_) {
-            control_channel->bindWriteMetaRing(write_meta_ring_,
-                                               response_meta.write_meta_ring_meta);
+            control_channel->bindWriteMetaRing(
+                write_meta_ring_, response_meta.write_meta_ring_meta);
           }
           this->setSendControlChannel(rank_id, std::move(control_channel));
           // Remember peer's decompress_buf so the SendConnection can target
           // it during compressWriteRequestSplitFirst.
           this->setSendCompressionPeerMeta(rank_id, response_meta);
-          promise->set_value(response_meta.rank_id);  // no try/catch → fail-fast
+          promise->set_value(
+              response_meta.rank_id);  // no try/catch → fail-fast
         });
 
     if (!sent) {

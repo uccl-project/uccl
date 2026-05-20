@@ -296,7 +296,8 @@ class ImmData {
 
   // Set index (preserves chunk_count + write_meta flag)
   void set_index(uint16_t index) {
-    data_ = (data_ & 0xFFFF0000) | (index & kIndexMask) | (data_ & kWriteMetaBit);
+    data_ =
+        (data_ & 0xFFFF0000) | (index & kIndexMask) | (data_ & kWriteMetaBit);
   }
 
   // Distinguishes WriteReqMeta entries from SendReqMeta entries on the
@@ -716,7 +717,7 @@ struct alignas(64) WriteReqMeta {
   uint32_t total_uncomp_size;  // original message size in bytes
   uint32_t compressed_size;    // split + encode output total bytes
   uint32_t float_type;         // uccl::FloatType
-  uint32_t ack_slot;           // sender expects ack written here in its ack_ring
+  uint32_t ack_slot;  // sender expects ack written here in its ack_ring
   uint32_t _pad;
   int64_t wr_id;
 };

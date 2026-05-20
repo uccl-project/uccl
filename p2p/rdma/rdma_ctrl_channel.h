@@ -38,9 +38,9 @@ class SendControlChannel : public RDMADataChannel {
   void bindWriteMetaRing(std::shared_ptr<RegMemBlock> local_mirror,
                          RemoteMemInfo const& remote_ring) {
     write_meta_local_ = local_mirror;
-    write_meta_remote_ =
-        std::make_shared<RemoteMemInfo>(remote_ring.addr, remote_ring.length,
-                                        remote_ring.rkey_array, remote_ring.type);
+    write_meta_remote_ = std::make_shared<RemoteMemInfo>(
+        remote_ring.addr, remote_ring.length, remote_ring.rkey_array,
+        remote_ring.type);
   }
 
   // Push one WriteReqMeta to the receiver. Caller is responsible for choosing
@@ -53,9 +53,9 @@ class SendControlChannel : public RDMADataChannel {
     auto* local = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
     *local = meta;
 
-    auto src = std::make_shared<RegMemBlock>(
-        local, sizeof(WriteReqMeta), write_meta_local_->mr_array,
-        write_meta_local_->type);
+    auto src = std::make_shared<RegMemBlock>(local, sizeof(WriteReqMeta),
+                                             write_meta_local_->mr_array,
+                                             write_meta_local_->type);
     auto dst = std::make_shared<RemoteMemInfo>(
         write_meta_remote_->addr + slot * sizeof(WriteReqMeta),
         sizeof(WriteReqMeta), write_meta_remote_->rkey_array,

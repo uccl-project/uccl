@@ -59,8 +59,8 @@ class ICompressorBackend {
    * thread.
    */
   virtual void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                               uccl::FloatType float_type,
-                               gpuHostFn_t on_done, void* user_data) = 0;
+                               uccl::FloatType float_type, gpuHostFn_t on_done,
+                               void* user_data) = 0;
 
   /**
    * @brief Check if a request should be compressed based on size threshold.
@@ -179,9 +179,7 @@ class NullCompressorBackend : public ICompressorBackend {
 class DietGPUCompressorBackend : public ICompressorBackend {
  public:
   DietGPUCompressorBackend()
-      : stream_(nullptr),
-        res_(nullptr),
-        devCompressedSize_(nullptr) {
+      : stream_(nullptr), res_(nullptr), devCompressedSize_(nullptr) {
     compress_strategy_ = getCompressStrategyFromEnv();
     if (compress_strategy_ == CompressStrategy::kNone) {
       return;

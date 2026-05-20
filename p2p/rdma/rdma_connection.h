@@ -258,8 +258,8 @@ class SendConnection : public RDMAConnection {
                           uccl::FloatType::kUndefined);
     bool c_fit = static_cast<uint64_t>(req->local_mem->size) <=
                  remote_decompress_buf_.length;
-    bool c_should =
-        Compressor::getInstance().shouldCompressAndSplitFirst(req->local_mem->size);
+    bool c_should = Compressor::getInstance().shouldCompressAndSplitFirst(
+        req->local_mem->size);
     UCCL_LOG(INFO, UCCL_RDMA)
         << "compressedWriteCheck size=" << req->local_mem->size
         << " send_type=" << c_send_type << " ack=" << c_ack
@@ -789,8 +789,7 @@ class SendConnection : public RDMAConnection {
   // decompress_buffer at one slot, then a WriteReqMeta is pushed via the
   // control channel after all data WCs are observed locally (see
   // pollDataChannels).
-  int64_t compressWriteRequestSplitFirst(
-      std::shared_ptr<RDMASendRequest> req) {
+  int64_t compressWriteRequestSplitFirst(std::shared_ptr<RDMASendRequest> req) {
     int64_t wr_id = req->wr_id;
     uint32_t total_uncomp = req->local_mem->size;
     uint64_t user_remote_addr = req->remote_mem->addr;
@@ -826,7 +825,8 @@ class SendConnection : public RDMAConnection {
     // Phase 2 by contrast is a single chunk on one channel (see comment
     // below where second_chunks is set).
     size_t first_chunks =
-        std::min<size_t>(num_channels * 2, static_cast<size_t>(ChunkSplitStrategy::kMaxSplitNum));
+        std::min<size_t>(num_channels * 2,
+                         static_cast<size_t>(ChunkSplitStrategy::kMaxSplitNum));
     if (first_chunks > first_seg) first_chunks = first_seg > 0 ? 1 : 0;
     PendingCompressed entry{};
     entry.ack_slot = ack_slot;
@@ -846,7 +846,8 @@ class SendConnection : public RDMAConnection {
       pending_compressed_.emplace(wr_id, entry);
       pending_compressed_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    tracker_->updateExpectedAckCount(wr_id, std::numeric_limits<uint32_t>::max());
+    tracker_->updateExpectedAckCount(wr_id,
+                                     std::numeric_limits<uint32_t>::max());
 
     // Defer per-chunk flushes for the entire compressed write — submitRequest
     // would otherwise call flushBatch() per chunk (each chunk > the 32KB
@@ -907,8 +908,7 @@ class SendConnection : public RDMAConnection {
     // not back on phase 1's first channel. Affects which single channel
     // bears the extra phase-2 work (NIC's dynamic per-QP bandwidth
     // arbitration handles the imbalance from there).
-    req->channel_id =
-        ((req->channel_id - 1 + first_chunks) % num_channels) + 1;
+    req->channel_id = ((req->channel_id - 1 + first_chunks) % num_channels) + 1;
 
     postCompressedSegment(req, second_seg, second_chunks, num_channels);
     // Strict semantic: wait for ALL chunk WCs (= data durable in receiver
@@ -1044,9 +1044,8 @@ class SendConnection : public RDMAConnection {
         << " slot=" << push_slot
         << " decompress_offset=" << meta_to_push.decompress_offset
         << " compressed_size=" << meta_to_push.compressed_size
-        << " ack_slot=" << meta_to_push.ack_slot
-        << " user_remote_addr=0x" << std::hex << meta_to_push.user_remote_addr
-        << std::dec;
+        << " ack_slot=" << meta_to_push.ack_slot << " user_remote_addr=0x"
+        << std::hex << meta_to_push.user_remote_addr << std::dec;
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     if (ctrl_channel_) ctrl_channel_->pushWriteMeta(meta_to_push, push_slot);
   }
@@ -1232,7 +1231,8 @@ class RecvConnection : public RDMAConnection {
     uint64_t remote_ack_addr;
     uint32_t remote_ack_rkey;
     std::shared_ptr<RecvControlChannel> ctrl_channel;
-    uint64_t value;  // 8-byte ack payload kept alive until ibv_post_send copies it inline
+    uint64_t value;  // 8-byte ack payload kept alive until ibv_post_send copies
+                     // it inline
   };
 
   static void postAckHostFn(void* user_data) {
@@ -1248,8 +1248,7 @@ class RecvConnection : public RDMAConnection {
         << " decompress_offset=" << m.decompress_offset
         << " compressed_size=" << m.compressed_size
         << " total_uncomp=" << m.total_uncomp_size
-        << " float_type=" << m.float_type
-        << " ack_slot=" << m.ack_slot;
+        << " float_type=" << m.float_type << " ack_slot=" << m.ack_slot;
     auto decomp_buf = Compressor::getInstance().getDecompressBuffer();
     if (unlikely(!decomp_buf || remote_ack_ring_.length == 0)) {
       UCCL_LOG(WARN) << "handleCompressedWriteArrival: missing infra";
