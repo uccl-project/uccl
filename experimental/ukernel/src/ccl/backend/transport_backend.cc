@@ -300,6 +300,14 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
         peer_rank, resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
         op.dst.offset_bytes, op.tile.size_bytes);
   }
+  fprintf(stderr, "[transport] rank=%d %s rid=%u buf=%u peer=%d bytes=%zu\n",
+          communicator_->rank(),
+          op.kind == ExecOpKind::TransportSend ? "isend" : "irecv",
+          request_id,
+          op.kind == ExecOpKind::TransportSend
+              ? resolve_local_buffer_id(binding, op.src, op.tile.size_bytes)
+              : resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
+          peer_rank, op.tile.size_bytes);
 
   if (request_id == 0) {
     throw std::runtime_error(
@@ -355,6 +363,10 @@ bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
   }
 
   auto done = communicator_->progress();
+  if (!done.empty()) {
+    fprintf(stderr, "[transport] rank=%d progress found %zu completions\n",
+            communicator_->rank(), done.size());
+  }
   if (done.empty()) return false;
 
   {
