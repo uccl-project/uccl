@@ -1,4 +1,5 @@
 #include "device_backend.h"
+#include "../utils.h"
 #include "../../device/task.h"
 #include "../../device/worker.h"
 #include "../../include/gpu_rt.h"
@@ -11,13 +12,6 @@ namespace UKernel {
 namespace CCL {
 
 namespace {
-
-void validate_span(char const* what, size_t offset, size_t bytes,
-                   size_t capacity) {
-  if (offset > capacity || bytes > capacity - offset) {
-    throw std::invalid_argument(std::string(what) + " out of range");
-  }
-}
 
 Device::DataType to_device_dtype(ScalarType dtype) {
   switch (dtype) {
@@ -102,7 +96,7 @@ DeviceBackend::~DeviceBackend() {
 
 char const* DeviceBackend::name() const { return "device"; }
 
-void DeviceBackend::validate(ExecutionPlan const& plan,
+void DeviceBackend::validate(CollectivePlan const& plan,
                              CollectiveBinding& binding) const {
   if (plan.staging_bytes_required != 0 &&
       binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr) {
@@ -113,25 +107,25 @@ void DeviceBackend::validate(ExecutionPlan const& plan,
     throw std::invalid_argument(
         "device backend staging capacity is insufficient");
   }
-  for (ExecOp const& op : plan.ops) {
+  for (Op const& op : plan.ops) {
     if (!supports(op.kind)) continue;
     (void)to_device_dtype(op.dtype);
   }
 }
 
-bool DeviceBackend::supports(ExecOpKind kind) const {
+bool DeviceBackend::supports(OpKind kind) const {
   switch (kind) {
-    case ExecOpKind::DeviceCopy:
-    case ExecOpKind::DeviceReduce:
+    case OpKind::DeviceCopy:
+    case OpKind::DeviceReduce:
       return true;
-    case ExecOpKind::TransportSend:
-    case ExecOpKind::TransportRecv:
+    case OpKind::TransportSend:
+    case OpKind::TransportRecv:
       return false;
   }
   return false;
 }
 
-BackendToken DeviceBackend::submit(ExecOp const& op,
+BackendToken DeviceBackend::submit(Op const& op,
                                    CollectiveBinding& binding) {
   ensure_device_context();
   if (!supports(op.kind)) {
@@ -158,7 +152,7 @@ BackendToken DeviceBackend::submit(ExecOp const& op,
   args.dst_device = op.dst_device >= 0 ? op.dst_device : local_device_idx_;
   args.set_red_type(::UKernel::CCL::to_device_reduce_type(op.reduction));
 
-  Device::TaskType task_type = (op.kind == ExecOpKind::DeviceReduce)
+  Device::TaskType task_type = (op.kind == OpKind::DeviceReduce)
                                    ? Device::TaskType::CollReduce
                                    : Device::TaskType::CollCopy;
 
@@ -231,21 +225,13 @@ void DeviceBackend::stop(uint32_t flow_id) {
   stop_flow(flow_id);
 }
 
-void* DeviceBackend::byte_offset(void* base, size_t offset) const {
-  return static_cast<void*>(static_cast<char*>(base) + offset);
-}
-
-void const* DeviceBackend::byte_offset(void const* base, size_t offset) const {
-  return static_cast<void const*>(static_cast<char const*>(base) + offset);
-}
-
 void* DeviceBackend::resolve_mutable(CollectiveBinding const& binding,
                                      BufferRef const& ref, size_t bytes) const {
   if (ref.kind == BufferKind::Remote) {
     throw std::invalid_argument(
         "device backend requires resolved runtime pointer for remote dst");
   }
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("device backend local buffer is missing");
   }
@@ -261,7 +247,7 @@ void const* DeviceBackend::resolve_const(CollectiveBinding const& binding,
     throw std::invalid_argument(
         "device backend requires resolved runtime pointer for remote src");
   }
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("device backend local buffer is missing");
   }
@@ -350,9 +336,9 @@ void DeviceBackend::stop_flow(uint32_t flow_id) {
   active_flows_.erase(it);
 }
 
-uint32_t DeviceBackend::suggested_num_blocks(ExecOp const& op) const {
+uint32_t DeviceBackend::suggested_num_blocks(Op const& op) const {
   size_t bytes_per_block =
-      (op.kind == ExecOpKind::DeviceReduce) ? (1u << 20) : (4u << 20);
+      (op.kind == OpKind::DeviceReduce) ? (1u << 20) : (4u << 20);
   uint32_t blocks = static_cast<uint32_t>(std::max<size_t>(
       1, (op.tile.size_bytes + bytes_per_block - 1) / bytes_per_block));
   return std::min<uint32_t>(std::max<uint32_t>(1, blocks),

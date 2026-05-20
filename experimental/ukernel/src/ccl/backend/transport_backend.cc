@@ -1,4 +1,5 @@
 #include "transport_backend.h"
+#include "../utils.h"
 #include "../../include/transport.h"
 #include <atomic>
 #include <stdexcept>
@@ -15,22 +16,15 @@ std::atomic<uint64_t> g_next_transport_backend_cache_key{1};
 
 constexpr int kMemoryBindingTimeoutMs = 30000;
 
-void validate_span(char const* what, size_t offset, size_t bytes,
-                   size_t capacity) {
-  if (offset > capacity || bytes > capacity - offset) {
-    throw std::invalid_argument(std::string(what) + " out of range");
-  }
-}
-
 bool is_peer_ref(BufferRef const& ref) {
   return ref.kind == BufferKind::Remote;
 }
 
-int transport_peer_rank(ExecOp const& op) {
-  if (op.kind == ExecOpKind::TransportSend) {
+int transport_peer_rank(Op const& op) {
+  if (op.kind == OpKind::TransportSend) {
     return is_peer_ref(op.dst) ? op.dst.rank : -1;
   }
-  if (op.kind == ExecOpKind::TransportRecv) {
+  if (op.kind == OpKind::TransportRecv) {
     return is_peer_ref(op.src) ? op.src.rank : -1;
   }
   return -1;
@@ -64,7 +58,7 @@ CommunicatorTransportBackend::communicator() const {
   return *communicator_;
 }
 
-void CommunicatorTransportBackend::validate(ExecutionPlan const& plan,
+void CommunicatorTransportBackend::validate(CollectivePlan const& plan,
                                             CollectiveBinding& binding) const {
   ensure_memory_bindings_initialized(binding);
   ensure_plan_paths(plan);
@@ -80,7 +74,7 @@ void CommunicatorTransportBackend::validate(ExecutionPlan const& plan,
 }
 
 void CommunicatorTransportBackend::ensure_plan_paths(
-    ExecutionPlan const& plan) const {
+    CollectivePlan const& plan) const {
   if (plan.rank != communicator_->rank()) {
     throw std::invalid_argument(
         "execution plan rank does not match transport communicator");
@@ -92,12 +86,12 @@ void CommunicatorTransportBackend::ensure_plan_paths(
 
   std::vector<bool> need_put(static_cast<size_t>(plan.nranks), false);
   std::vector<bool> need_wait(static_cast<size_t>(plan.nranks), false);
-  for (ExecOp const& op : plan.ops) {
+  for (Op const& op : plan.ops) {
     int peer_rank = transport_peer_rank(op);
     if (peer_rank < 0 || peer_rank >= plan.nranks) continue;
-    if (op.kind == ExecOpKind::TransportSend) {
+    if (op.kind == OpKind::TransportSend) {
       need_put[static_cast<size_t>(peer_rank)] = true;
-    } else if (op.kind == ExecOpKind::TransportRecv) {
+    } else if (op.kind == OpKind::TransportRecv) {
       need_wait[static_cast<size_t>(peer_rank)] = true;
     }
   }
@@ -267,11 +261,11 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
   binding.transport_initialized_signature = binding.transport_signature();
 }
 
-bool CommunicatorTransportBackend::supports(ExecOpKind kind) const {
-  return kind == ExecOpKind::TransportSend || kind == ExecOpKind::TransportRecv;
+bool CommunicatorTransportBackend::supports(OpKind kind) const {
+  return kind == OpKind::TransportSend || kind == OpKind::TransportRecv;
 }
 
-BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
+BackendToken CommunicatorTransportBackend::submit(Op const& op,
                                                   CollectiveBinding& binding) {
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for transport backend");
@@ -279,11 +273,11 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
   ensure_memory_bindings_initialized(binding);
 
   int peer_rank = resolve_peer_rank(op);
-  ensure_peer_paths(peer_rank, op.kind == ExecOpKind::TransportSend,
-                    op.kind == ExecOpKind::TransportRecv);
+  ensure_peer_paths(peer_rank, op.kind == OpKind::TransportSend,
+                    op.kind == OpKind::TransportRecv);
   BackendToken token{next_token_++};
   unsigned request_id = 0;
-  if (op.kind == ExecOpKind::TransportSend) {
+  if (op.kind == OpKind::TransportSend) {
     (void)resolve_const(binding, op.src, op.tile.size_bytes);
     uint32_t dst_buffer_id = 0;
     size_t dst_offset = 0;
@@ -300,15 +294,6 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
         peer_rank, resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
         op.dst.offset_bytes, op.tile.size_bytes);
   }
-  fprintf(stderr, "[transport] rank=%d %s rid=%u buf=%u peer=%d bytes=%zu\n",
-          communicator_->rank(),
-          op.kind == ExecOpKind::TransportSend ? "isend" : "irecv",
-          request_id,
-          op.kind == ExecOpKind::TransportSend
-              ? resolve_local_buffer_id(binding, op.src, op.tile.size_bytes)
-              : resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
-          peer_rank, op.tile.size_bytes);
-
   if (request_id == 0) {
     throw std::runtime_error(
         "communicator transport request submission failed");
@@ -363,10 +348,6 @@ bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
   }
 
   auto done = communicator_->progress();
-  if (!done.empty()) {
-    fprintf(stderr, "[transport] rank=%d progress found %zu completions\n",
-            communicator_->rank(), done.size());
-  }
   if (done.empty()) return false;
 
   {
@@ -415,7 +396,7 @@ void* CommunicatorTransportBackend::resolve_mutable(
     throw std::invalid_argument(
         "transport backend cannot bind remote destination buffer");
   }
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("transport local buffer is missing");
   }
@@ -431,7 +412,7 @@ void const* CommunicatorTransportBackend::resolve_const(
     throw std::invalid_argument(
         "transport backend cannot bind remote source buffer");
   }
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (buffer.local_ptr == nullptr) {
     throw std::invalid_argument("transport local buffer is missing");
   }
@@ -447,23 +428,23 @@ uint32_t CommunicatorTransportBackend::resolve_local_buffer_id(
     throw std::invalid_argument(
         "transport backend local buffer id requires local buffer ref");
   }
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (buffer.local_buffer_id != 0) {
     return buffer.local_buffer_id;
   }
   (void)bytes;
-  return binding.roles.resolve_plan_id(ref.buffer_id);
+  return ref.buffer_id;
 }
 
-int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
-  if (op.kind == ExecOpKind::TransportSend) {
+int CommunicatorTransportBackend::resolve_peer_rank(Op const& op) const {
+  if (op.kind == OpKind::TransportSend) {
     if (!is_peer_ref(op.dst) || op.dst.rank < 0) {
       throw std::invalid_argument(
           "transport send requires a peer destination buffer");
     }
     return op.dst.rank;
   }
-  if (op.kind == ExecOpKind::TransportRecv) {
+  if (op.kind == OpKind::TransportRecv) {
     if (!is_peer_ref(op.src) || op.src.rank < 0) {
       throw std::invalid_argument(
           "transport recv requires a peer source buffer");
@@ -481,7 +462,7 @@ uint32_t CommunicatorTransportBackend::resolve_remote_buffer_id(
         "transport remote buffer id requires peer buffer ref");
   }
   int peer_rank = ref.rank;
-  RegisteredBuffer const& buffer = binding.plan_buffer(ref);
+  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
   if (peer_rank < 0 ||
       static_cast<size_t>(peer_rank) >= buffer.peer_views.size()) {
     throw std::invalid_argument("transport peer rank out of range");
@@ -492,15 +473,6 @@ uint32_t CommunicatorTransportBackend::resolve_remote_buffer_id(
     throw std::invalid_argument("transport remote buffer id is missing");
   }
   return remote_buffer_id;
-}
-
-void* CommunicatorTransportBackend::byte_offset(void* base, size_t offset) {
-  return static_cast<void*>(static_cast<char*>(base) + offset);
-}
-
-void const* CommunicatorTransportBackend::byte_offset(void const* base,
-                                                      size_t offset) {
-  return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
 }  // namespace CCL

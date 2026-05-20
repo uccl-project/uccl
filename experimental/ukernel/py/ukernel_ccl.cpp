@@ -158,10 +158,10 @@ CollectiveBinding build_collective_memory(
     int rank, int world_size, void* input_ptr, size_t input_bytes,
     ScalarType input_dtype, void* output_ptr, size_t output_bytes,
     ScalarType output_dtype, void* staging_ptr, size_t staging_bytes,
-    CollectiveBufferRoles const& roles) {
+    CollectiveBufferRoles const& roles, BufferRegistry* registry) {
   CollectiveBinding binding;
-  binding.registry = std::make_shared<BufferRegistry>();
-  binding.registry->local_rank = rank;
+  binding.registry = registry;
+  registry->local_rank = rank;
   binding.roles = roles;
   binding.roles.validate();
   RegisteredBuffer& input =
@@ -416,7 +416,7 @@ class ProcessGroup {
     config.staging_bytes = tile_bytes * (world_size_ - 1);
     config.algorithm = AlgorithmKind::Pairwise;
     config.dtype = input_dtype;
-    config.reduction = ReductionKind::Sum;
+    config.reduction = ReductionKind::None;
 
     size_t staging_req = config.staging_bytes;
     void* old_staging_ptr =
@@ -446,8 +446,8 @@ class ProcessGroup {
     if (cache_it != plan_cache_.end()) {
       plan = cache_it->second;
     } else {
-      plan = build_plan(
-          make_plan_request(CollectiveKind::AllToAll, config, inplace));
+      config.collective = CollectiveKind::AllToAll;
+      plan = build_plan(config, inplace);
       plan_cache_[key] = plan;
     }
 
@@ -455,11 +455,13 @@ class ProcessGroup {
                                 input_dtype, output_work.work_flat.data_ptr(),
                                 output_bytes, output_dtype, staging_ptr,
                                 plan.staging_bytes_required, roles)) {
+      registry_ = std::make_shared<BufferRegistry>();
       binding_memory_ =
           std::make_shared<CollectiveBinding>(build_collective_memory(
               rank_, world_size_, input_work.work_flat.data_ptr(), input_bytes,
               input_dtype, output_work.work_flat.data_ptr(), output_bytes,
-              output_dtype, staging_ptr, plan.staging_bytes_required, roles));
+              output_dtype, staging_ptr, plan.staging_bytes_required, roles,
+              registry_.get()));
       binding_state_.input_ptr = input_work.work_flat.data_ptr();
       binding_state_.input_bytes = input_bytes;
       binding_state_.input_dtype = input_dtype;
@@ -473,7 +475,7 @@ class ProcessGroup {
       binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
     }
 
-    executor_.run(std::move(plan), *binding_memory_);
+    executor_.run_plan(plan, *binding_memory_);
   }
 
   void barrier() {
@@ -634,7 +636,8 @@ class ProcessGroup {
     if (cache_it != plan_cache_.end()) {
       plan = cache_it->second;
     } else {
-      plan = build_plan(make_plan_request(CollectiveKind::AllReduce, config, /*inplace=*/true));
+      config.collective = CollectiveKind::AllReduce;
+      plan = build_plan(config, /*inplace=*/true);
       plan_cache_[key] = plan;
     }
 
@@ -642,11 +645,13 @@ class ProcessGroup {
                                 work.work_flat.data_ptr(), tensor_bytes, dtype,
                                 staging_ptr, plan.staging_bytes_required,
                                 roles)) {
+      registry_ = std::make_shared<BufferRegistry>();
       binding_memory_ =
           std::make_shared<CollectiveBinding>(build_collective_memory(
               rank_, world_size_, work.work_flat.data_ptr(), tensor_bytes,
               dtype, work.work_flat.data_ptr(), tensor_bytes, dtype,
-              staging_ptr, plan.staging_bytes_required, roles));
+              staging_ptr, plan.staging_bytes_required, roles,
+              registry_.get()));
       binding_state_.input_ptr = work.work_flat.data_ptr();
       binding_state_.input_bytes = tensor_bytes;
       binding_state_.input_dtype = dtype;
@@ -660,7 +665,7 @@ class ProcessGroup {
       binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
     }
 
-    executor_.run(std::move(plan), *binding_memory_);
+    executor_.run_plan(plan, *binding_memory_);
   }
 
   int rank_;
@@ -669,6 +674,7 @@ class ProcessGroup {
   std::atomic<BufferId> next_buffer_id_{kDefaultScratchBufferId + 2};
   std::unordered_map<void*, TensorRegEntry> tensor_registry_;
   std::shared_ptr<CollectiveBinding> binding_memory_;
+  std::shared_ptr<BufferRegistry> registry_;
   CommunicatorTransportBackend transport_backend_;
   DeviceBackend device_backend_;
   Executor executor_;

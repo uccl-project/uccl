@@ -30,8 +30,6 @@ constexpr BufferId kTestScratchBufferId = 11;
 constexpr CollectiveBufferRoles kTestRoles{
     kTestInputBufferId, kTestInputBufferId, kTestScratchBufferId};
 
-size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
-
 size_t default_test_bytes_per_rank(int world_size) {
   size_t base = 1u << 20;
   size_t alignment =
@@ -276,7 +274,8 @@ CollectiveBinding build_collective_memory(int rank, int world_size,
                                           void* staging_ptr,
                                           size_t staging_bytes) {
   CollectiveBinding binding;
-  binding.registry = std::make_shared<BufferRegistry>();
+  static auto s_registry = std::make_shared<BufferRegistry>();
+  binding.registry = s_registry.get();
   binding.registry->local_rank = rank;
   binding.roles = kTestRoles;
   RegisteredBuffer& tensor =
@@ -458,9 +457,9 @@ int run_rank(Options const& opts) {
   }
   upload_tensor(tensor.ptr, input);
 
-  auto memory = std::make_shared<CollectiveBinding>(build_collective_memory(
+  CollectiveBinding memory = build_collective_memory(
       opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank, staging.ptr,
-      opts.bytes_per_rank));
+      opts.bytes_per_rank);
 
   ExecutorConfig executor_cfg{};
   executor_cfg.gpu_id = opts.gpu;

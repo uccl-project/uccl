@@ -2,6 +2,7 @@
 
 #include "../backend/backend.h"
 #include "../executor.h"
+#include "../utils.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -28,7 +29,7 @@ inline void* allocate_test_storage(size_t bytes) {
 }
 
 inline void init_registered_buffer(RegisteredBuffer& buffer, size_t bytes,
-                                   int nranks, void* local_ptr) {
+                                    int nranks, void* local_ptr) {
   buffer.bytes = bytes;
   buffer.layout.sizes = {static_cast<int64_t>(bytes)};
   buffer.layout.strides = {1};
@@ -43,9 +44,14 @@ inline void init_registered_buffer(RegisteredBuffer& buffer, size_t bytes,
 }
 
 inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
-                                          CollectiveBufferRoles roles = {}) {
+                                           CollectiveBufferRoles roles = {}) {
+  // Use a static registry owned by this test helper.
+  static std::unique_ptr<BufferRegistry> s_registry;
+  if (!s_registry) {
+    s_registry = std::make_unique<BufferRegistry>();
+  }
   CollectiveBinding binding;
-  binding.registry = std::make_shared<BufferRegistry>();
+  binding.registry = s_registry.get();
   binding.registry->local_rank = rank;
   binding.roles = roles;
   binding.roles.validate();
@@ -68,8 +74,8 @@ inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
 }
 
 inline CollectiveConfig make_test_config(int nranks, int rank,
-                                         size_t tensor_bytes, size_t tile_bytes,
-                                         uint32_t num_flows = 1) {
+                                          size_t tensor_bytes, size_t tile_bytes,
+                                          uint32_t num_flows = 1) {
   CollectiveConfig config{};
   config.nranks = nranks;
   config.rank = rank;
@@ -112,20 +118,20 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     };
     validate_ref(op.src);
     validate_ref(op.dst);
-    if (op.kind == PrimitiveOpKind::Send) {
+    if (op.kind == OpKind::TransportSend) {
       assert(op.src.kind == BufferKind::Local);
       assert(op.dst.kind == BufferKind::Remote);
     }
-    if (op.kind == PrimitiveOpKind::Recv) {
+    if (op.kind == OpKind::TransportRecv) {
       assert(op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local);
     }
-    if (op.kind == PrimitiveOpKind::Copy ||
-        op.kind == PrimitiveOpKind::Reduce) {
+    if (op.kind == OpKind::DeviceCopy ||
+        op.kind == OpKind::DeviceReduce) {
       assert(op.src.kind == BufferKind::Local ||
-             op.src.kind == BufferKind::Remote);
+              op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local ||
-             op.dst.kind == BufferKind::Remote);
+              op.dst.kind == BufferKind::Remote);
     }
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
@@ -134,7 +140,7 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
   }
 }
 
-inline size_t count_ops(CollectivePlan const& plan, PrimitiveOpKind kind) {
+inline size_t count_ops(CollectivePlan const& plan, OpKind kind) {
   size_t total = 0;
   for (auto const& op : plan.ops) {
     if (op.kind == kind) ++total;
@@ -142,47 +148,12 @@ inline size_t count_ops(CollectivePlan const& plan, PrimitiveOpKind kind) {
   return total;
 }
 
-inline void validate_basic_exec_plan(ExecutionPlan const& plan) {
-  assert(plan.nranks >= 2);
-  assert(plan.rank >= 0 && plan.rank < plan.nranks);
-  assert(plan.num_flows >= 1);
-  assert(plan.tensor_bytes > 0);
-  assert(plan.tile_bytes > 0);
-  assert(!plan.ops.empty());
-
-  std::unordered_set<uint32_t> op_ids;
-  for (size_t index = 0; index < plan.ops.size(); ++index) {
-    auto const& op = plan.ops[index];
-    assert(op_ids.insert(op.op_id).second);
-    assert(op.op_id == index);
-    assert(op.tile.size_bytes > 0);
-    assert(op.tile.flow_index < plan.num_flows);
-    assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
-    auto validate_ref = [&](BufferRef const& ref) {
-      assert(ref.buffer_id != kInvalidBufferId);
-      if (ref.kind == BufferKind::Remote) {
-        assert(ref.rank >= 0);
-        assert(ref.rank < plan.nranks);
-        assert(ref.rank != plan.rank);
-      } else {
-        assert(ref.rank < 0);
-      }
-    };
-    validate_ref(op.src);
-    validate_ref(op.dst);
-    for (uint32_t dep : op.deps) {
-      assert(dep < plan.ops.size());
-      assert(dep < op.op_id);
-    }
-  }
+inline void validate_basic_exec_plan(CollectivePlan const& plan) {
+  validate_basic_plan(plan);
 }
 
-inline size_t count_exec_ops(ExecutionPlan const& plan, ExecOpKind kind) {
-  size_t total = 0;
-  for (auto const& op : plan.ops) {
-    if (op.kind == kind) ++total;
-  }
-  return total;
+inline size_t count_exec_ops(CollectivePlan const& plan, OpKind kind) {
+  return count_ops(plan, kind);
 }
 
 inline BackendToken submit_token(
@@ -214,9 +185,9 @@ class MockBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "mock"; }
-  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
-  bool supports(ExecOpKind) const override { return true; }
-  BackendToken submit(ExecOp const&, CollectiveBinding&) override {
+  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  bool supports(OpKind) const override { return true; }
+  BackendToken submit(Op const&, CollectiveBinding&) override {
     return submit_token(next_token_, submissions_, polls_before_ready_,
                         pending_polls_);
   }
@@ -243,11 +214,11 @@ class MockDeviceBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "device"; }
-  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
-  bool supports(ExecOpKind kind) const override {
-    return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
+  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  bool supports(OpKind kind) const override {
+    return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce;
   }
-  BackendToken submit(ExecOp const& op, CollectiveBinding&) override {
+  BackendToken submit(Op const& op, CollectiveBinding&) override {
     if (!supports(op.kind)) {
       throw std::invalid_argument("device backend does not support this op");
     }
@@ -277,9 +248,9 @@ class ThrowingBackend final : public Backend {
       : message_(std::move(message)) {}
 
   char const* name() const override { return "throwing"; }
-  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
-  bool supports(ExecOpKind) const override { return true; }
-  BackendToken submit(ExecOp const&, CollectiveBinding&) override {
+  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  bool supports(OpKind) const override { return true; }
+  BackendToken submit(Op const&, CollectiveBinding&) override {
     throw std::runtime_error(message_);
   }
   bool poll(BackendToken) override { return false; }

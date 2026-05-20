@@ -70,11 +70,10 @@ SRC_CPP := src/transport/communicator.cc \
            src/transport/adapter/tcp_adapter.cc \
            src/transport/adapter/uccl_adapter.cc \
            src/transport/adapter/shmring_exchanger.cc \
-           src/ccl/topology.cc \
-           src/ccl/plan.cc \
-           src/ccl/selector.cc \
-           src/ccl/executor.cc \
-           src/ccl/executor_real.cc \
+            src/ccl/topology.cc \
+            src/ccl/plan.cc \
+            src/ccl/executor.cc \
+           src/ccl/executor_live.cc \
            src/ccl/backend/device_backend.cc \
            src/ccl/backend/transport_backend.cc
 SRC_CU  := src/device/persistent_kernel_ops.cu

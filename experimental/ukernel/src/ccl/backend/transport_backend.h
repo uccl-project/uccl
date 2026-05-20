@@ -30,10 +30,10 @@ class CommunicatorTransportBackend final : public Backend {
   ~CommunicatorTransportBackend() override;
 
   char const* name() const override;
-  void validate(ExecutionPlan const& plan,
+  void validate(CollectivePlan const& plan,
                 CollectiveBinding& binding) const override;
-  bool supports(ExecOpKind kind) const override;
-  BackendToken submit(ExecOp const& op, CollectiveBinding& binding) override;
+  bool supports(OpKind kind) const override;
+  BackendToken submit(Op const& op, CollectiveBinding& binding) override;
   bool poll(BackendToken token) override;
   bool try_pop_completed(BackendToken& token) override;
   void release(BackendToken token) override;
@@ -56,14 +56,11 @@ class CommunicatorTransportBackend final : public Backend {
                             BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_local_buffer_id(CollectiveBinding const& binding,
                                    BufferRef const& ref, size_t bytes) const;
-  int resolve_peer_rank(ExecOp const& op) const;
+  int resolve_peer_rank(Op const& op) const;
   uint32_t resolve_remote_buffer_id(CollectiveBinding const& binding,
                                     BufferRef const& ref) const;
-  void ensure_plan_paths(ExecutionPlan const& plan) const;
+  void ensure_plan_paths(CollectivePlan const& plan) const;
   void ensure_peer_paths(int peer_rank, bool need_put, bool need_wait) const;
-  static void* byte_offset(void* base, size_t offset);
-  static void const* byte_offset(void const* base, size_t offset);
-
   struct PeerPathState {
     bool put_ready = false;
     bool wait_ready = false;

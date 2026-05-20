@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -104,7 +105,7 @@ void wait_for_token(DeviceBackend& backend, BackendToken token,
   require(backend.poll(token), "device backend token timed out");
 }
 
-BackendToken submit_and_wait(DeviceBackend& backend, ExecOp const& op,
+BackendToken submit_and_wait(DeviceBackend& backend, Op const& op,
                              CollectiveBinding& binding,
                              std::chrono::milliseconds timeout) {
   BackendToken token = backend.submit(op, binding);
@@ -112,11 +113,11 @@ BackendToken submit_and_wait(DeviceBackend& backend, ExecOp const& op,
   return token;
 }
 
-ExecOp make_device_op(uint32_t op_id, ExecOpKind kind, uint32_t flow_index,
-                      size_t offset_bytes, size_t size_bytes, BufferId src,
-                      BufferId dst,
-                      ReductionKind reduction = ReductionKind::None) {
-  ExecOp op;
+Op make_device_op(uint32_t op_id, OpKind kind, uint32_t flow_index,
+                  size_t offset_bytes, size_t size_bytes, BufferId src,
+                  BufferId dst,
+                  ReductionKind reduction = ReductionKind::None) {
+  Op op;
   op.op_id = op_id;
   op.kind = kind;
   op.tile.flow_index = flow_index;
@@ -161,28 +162,27 @@ void verify_sum_reduce(std::vector<float> const& out,
   }
 }
 
-std::shared_ptr<CollectiveBinding> make_memory(int rank, void* tensor_ptr,
-                                               size_t tensor_bytes,
-                                               void* staging_ptr,
-                                               size_t staging_bytes) {
-  auto binding = std::make_shared<CollectiveBinding>();
-  binding->registry = std::make_shared<BufferRegistry>();
-  binding->registry->local_rank = rank;
-  binding->roles = kTestRoles;
+CollectiveBinding make_memory(int rank, void* tensor_ptr,
+                             size_t tensor_bytes,
+                             void* staging_ptr,
+                             size_t staging_bytes) {
+  static auto s_registry = std::make_shared<BufferRegistry>();
+  s_registry->local_rank = rank;
+  CollectiveBinding binding;
+  binding.registry = s_registry.get();
+  binding.roles = kTestRoles;
   RegisteredBuffer& tensor =
-      binding->ensure_buffer(binding->buffer_id(CollectiveBufferRole::Input));
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
   tensor.local_ptr = tensor_ptr;
   tensor.bytes = tensor_bytes;
-  tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
-  tensor.layout.strides = {1};
   tensor.layout.dtype = ScalarType::Float32;
+  tensor.peer_views.resize(1);
   RegisteredBuffer& staging =
-      binding->ensure_buffer(binding->buffer_id(CollectiveBufferRole::Scratch));
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
   staging.local_ptr = staging_ptr;
   staging.bytes = staging_bytes;
-  staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
-  staging.layout.strides = {1};
   staging.layout.dtype = ScalarType::Float32;
+  staging.peer_views.resize(1);
   return binding;
 }
 
@@ -203,10 +203,10 @@ void test_device_copy() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  ExecOp op = make_device_op(0, ExecOpKind::DeviceCopy, 0, 0, kBytes,
+  Op op = make_device_op(0, OpKind::DeviceCopy, 0, 0, kBytes,
                              kTestInputBufferId, kTestScratchBufferId);
   BackendToken token =
-      submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
+      submit_and_wait(backend, op, memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
 
@@ -232,11 +232,11 @@ void test_device_reduce_sum() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  ExecOp op = make_device_op(0, ExecOpKind::DeviceReduce, 0, 0, kBytes,
+  Op op = make_device_op(0, OpKind::DeviceReduce, 0, 0, kBytes,
                              kTestScratchBufferId, kTestInputBufferId,
                              ReductionKind::Sum);
   BackendToken token =
-      submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
+      submit_and_wait(backend, op, memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
@@ -269,11 +269,11 @@ void test_device_reduce_pipeline_same_flow() {
   tokens.reserve(kTiles);
   for (size_t tile = 0; tile < kTiles; ++tile) {
     size_t offset = tile * kTileElems * sizeof(float);
-    ExecOp op =
-        make_device_op(static_cast<uint32_t>(tile), ExecOpKind::DeviceReduce, 0,
+    Op op =
+        make_device_op(static_cast<uint32_t>(tile), OpKind::DeviceReduce, 0,
                        offset, kTileElems * sizeof(float), kTestScratchBufferId,
                        kTestInputBufferId, ReductionKind::Sum);
-    tokens.push_back(backend.submit(op, *memory));
+    tokens.push_back(backend.submit(op, memory));
   }
 
   for (BackendToken token : tokens) {

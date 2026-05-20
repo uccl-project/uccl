@@ -28,10 +28,10 @@ class DeviceBackend final : public Backend {
   ~DeviceBackend() override;
 
   char const* name() const override;
-  void validate(ExecutionPlan const& plan,
+  void validate(CollectivePlan const& plan,
                 CollectiveBinding& binding) const override;
-  bool supports(ExecOpKind kind) const override;
-  BackendToken submit(ExecOp const& op, CollectiveBinding& binding) override;
+  bool supports(OpKind kind) const override;
+  BackendToken submit(Op const& op, CollectiveBinding& binding) override;
   bool poll(BackendToken token) override;
   bool try_pop_completed(BackendToken& token) override;
   void release(BackendToken token) override;
@@ -52,8 +52,6 @@ class DeviceBackend final : public Backend {
     uint32_t inflight = 0;
   };
 
-  void* byte_offset(void* base, size_t offset) const;
-  void const* byte_offset(void const* base, size_t offset) const;
   void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
                         size_t bytes) const;
   void const* resolve_const(CollectiveBinding const& binding,
@@ -63,7 +61,7 @@ class DeviceBackend final : public Backend {
   uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
   void release_task_args(SubmittedTask& task);
   void stop_flow(uint32_t flow_id);
-  uint32_t suggested_num_blocks(ExecOp const& op) const;
+  uint32_t suggested_num_blocks(Op const& op) const;
 
   DeviceBackendConfig config_{};
   bool owns_task_manager_ = false;

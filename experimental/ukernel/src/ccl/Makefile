@@ -41,9 +41,9 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
+CCL_CORE_SRC := topology.cc plan.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -108,7 +108,7 @@ test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
-test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
+test_multiprocess_collective: $(CCL_CORE_OBJ) executor_live.o backend/transport_backend.o \
 		backend/device_backend.o $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
 		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -200,8 +201,8 @@ void wait_for_token(CommunicatorTransportBackend& backend, BackendToken token,
   require(backend.poll(token), "transport backend token timed out");
 }
 
-ExecutionPlan make_single_op_plan(int rank, int nranks, ExecOp const& op) {
-  ExecutionPlan plan;
+CollectivePlan make_single_op_plan(int rank, int nranks, Op const& op) {
+  CollectivePlan plan;
   plan.rank = rank;
   plan.nranks = nranks;
   plan.num_flows = 1;
@@ -274,20 +275,21 @@ int run_rank(Options const& opts) {
   GPU_RT_CHECK(gpuMemset(tensor.ptr, 0, opts.bytes));
   GPU_RT_CHECK(gpuMemset(staging.ptr, 0, opts.bytes));
 
-  auto memory = std::make_shared<CollectiveBinding>();
-  memory->registry = std::make_shared<BufferRegistry>();
-  memory->registry->local_rank = opts.rank;
-  memory->roles.input_buffer_id = 7;
-  memory->roles.scratch_buffer_id = 11;
-  memory->roles.validate();
-  BufferId input_id = memory->buffer_id(CollectiveBufferRole::Input);
-  BufferId scratch_id = memory->buffer_id(CollectiveBufferRole::Scratch);
-  RegisteredBuffer& tensor_buf = memory->ensure_buffer(input_id);
+  auto registry = std::make_shared<BufferRegistry>();
+  registry->local_rank = opts.rank;
+  CollectiveBinding memory;
+  memory.registry = registry.get();
+  memory.roles.input_buffer_id = 7;
+  memory.roles.scratch_buffer_id = 11;
+  memory.roles.validate();
+  BufferId input_id = memory.buffer_id(CollectiveBufferRole::Input);
+  BufferId scratch_id = memory.buffer_id(CollectiveBufferRole::Scratch);
+  RegisteredBuffer& tensor_buf = memory.ensure_buffer(input_id);
   tensor_buf.local_ptr = tensor.ptr;
   tensor_buf.bytes = opts.bytes;
   tensor_buf.layout.dtype = ScalarType::Float32;
   tensor_buf.peer_views.resize(static_cast<size_t>(opts.world_size));
-  RegisteredBuffer& staging_buf = memory->ensure_buffer(scratch_id);
+  RegisteredBuffer& staging_buf = memory.ensure_buffer(scratch_id);
   staging_buf.local_ptr = staging.ptr;
   staging_buf.bytes = opts.bytes;
   staging_buf.layout.dtype = ScalarType::Float32;
@@ -327,10 +329,10 @@ int run_rank(Options const& opts) {
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 1, opts.rank,
                  opts.world_size);
 
-  ExecOp op1;
+  Op op1;
   op1.op_id = 0;
   op1.kind =
-      (opts.rank == 0) ? ExecOpKind::TransportSend : ExecOpKind::TransportRecv;
+      (opts.rank == 0) ? OpKind::TransportSend : OpKind::TransportRecv;
   op1.tile.flow_index = 0;
   op1.tile.size_bytes = opts.bytes;
   op1.src = (opts.rank == 0) ? local_buffer_ref(PlanBuffer::Input, 0)
@@ -338,8 +340,8 @@ int run_rank(Options const& opts) {
   op1.dst = (opts.rank == 0) ? remote_buffer_ref(PlanBuffer::Scratch, 1, 0)
                              : local_buffer_ref(PlanBuffer::Scratch, 0);
   backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1),
-                   *memory);
-  BackendToken token1 = backend.submit(op1, *memory);
+                   memory);
+  BackendToken token1 = backend.submit(op1, memory);
   wait_for_token(backend, token1, std::chrono::seconds(10));
   backend.release(token1);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 2, opts.rank,
@@ -366,10 +368,10 @@ int run_rank(Options const& opts) {
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 3, opts.rank,
                  opts.world_size);
 
-  ExecOp op2;
+  Op op2;
   op2.op_id = 0;
   op2.kind =
-      (opts.rank == 1) ? ExecOpKind::TransportSend : ExecOpKind::TransportRecv;
+      (opts.rank == 1) ? OpKind::TransportSend : OpKind::TransportRecv;
   op2.tile.flow_index = 0;
   op2.tile.size_bytes = opts.bytes;
   op2.src = (opts.rank == 1) ? local_buffer_ref(PlanBuffer::Scratch, 0)
@@ -377,8 +379,8 @@ int run_rank(Options const& opts) {
   op2.dst = (opts.rank == 1) ? remote_buffer_ref(PlanBuffer::Input, 0, 0)
                              : local_buffer_ref(PlanBuffer::Input, 0);
   backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2),
-                   *memory);
-  BackendToken token2 = backend.submit(op2, *memory);
+                   memory);
+  BackendToken token2 = backend.submit(op2, memory);
   wait_for_token(backend, token2, std::chrono::seconds(10));
   backend.release(token2);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 4, opts.rank,

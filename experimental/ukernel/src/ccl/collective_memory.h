@@ -3,7 +3,6 @@
 #include "collective_types.h"
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -183,7 +182,7 @@ struct CollectiveBufferRoles {
 };
 
 struct CollectiveBinding {
-  std::shared_ptr<BufferRegistry> registry;
+  BufferRegistry* registry = nullptr;
   CollectiveBufferRoles roles{};
   uint64_t transport_initialized_backend_key = 0;
   uint64_t transport_initialized_signature = 0;
@@ -198,7 +197,7 @@ struct CollectiveBinding {
 
   RegisteredBuffer& ensure_buffer(BufferId id) {
     if (registry == nullptr) {
-      registry = std::make_shared<BufferRegistry>();
+      throw std::invalid_argument("collective binding requires a buffer registry");
     }
     return registry->ensure_buffer(id);
   }
@@ -221,12 +220,24 @@ struct CollectiveBinding {
     return registry->buffer(id);
   }
 
-  RegisteredBuffer& plan_buffer(BufferRef const& ref) {
-    return buffer(roles.resolve_plan_id(ref.buffer_id));
+  // Resolves a buffer ref that may use either a plan buffer constant
+  // (PlanBuffer::Input=1, Output=2, Scratch=3) or a concrete registered id.
+  RegisteredBuffer& buffer_for_ref(BufferRef const& ref) {
+    BufferId id = ref.buffer_id;
+    if (id == PlanBuffer::Input || id == PlanBuffer::Output ||
+        id == PlanBuffer::Scratch) {
+      id = roles.resolve_plan_id(id);
+    }
+    return buffer(id);
   }
 
-  RegisteredBuffer const& plan_buffer(BufferRef const& ref) const {
-    return buffer(roles.resolve_plan_id(ref.buffer_id));
+  RegisteredBuffer const& buffer_for_ref(BufferRef const& ref) const {
+    BufferId id = ref.buffer_id;
+    if (id == PlanBuffer::Input || id == PlanBuffer::Output ||
+        id == PlanBuffer::Scratch) {
+      id = roles.resolve_plan_id(id);
+    }
+    return buffer(id);
   }
 
   RegisteredBuffer& role_buffer(CollectiveBufferRole role) {
@@ -242,9 +253,6 @@ struct CollectiveBinding {
     transport_initialized_signature = 0;
   }
 
-  // Signature used by transport backend cache invalidation.
-  // Any bind-relevant mutation (roles, ptr/bytes/accessibility) changes this
-  // value and forces MR/IPC metadata re-initialization for correctness.
   uint64_t transport_signature() const {
     auto hash_combine = [](uint64_t seed, uint64_t value) {
       return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
@@ -262,9 +270,6 @@ struct CollectiveBinding {
       RegisteredBuffer const& entry = registry->buffer(id);
       signature = hash_combine(signature, static_cast<uint64_t>(id));
       signature = hash_combine(signature, entry.registered ? 1ULL : 0ULL);
-      signature = hash_combine(
-          signature,
-          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(entry.local_ptr)));
       signature = hash_combine(signature, static_cast<uint64_t>(entry.bytes));
       signature =
           hash_combine(signature, entry.remotely_accessible ? 1ULL : 0ULL);

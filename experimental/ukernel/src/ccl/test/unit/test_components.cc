@@ -1,5 +1,4 @@
 #include "backend_test_utils.h"
-#include "selector.h"
 #include "test_utils.h"
 #include <cassert>
 #include <chrono>
@@ -81,12 +80,12 @@ void build_sim_state_dependencies(SimRankState& state) {
   std::vector<uint64_t> next_recv_seq(static_cast<size_t>(state.plan.nranks),
                                       1);
   for (auto const& op : state.plan.ops) {
-    if (op.kind == PrimitiveOpKind::Send) {
+    if (op.kind == OpKind::TransportSend) {
       int peer = op.dst.rank;
       assert(peer >= 0 && peer < state.plan.nranks);
       state.send_seq.emplace(op.op_id,
                              next_send_seq[static_cast<size_t>(peer)]++);
-    } else if (op.kind == PrimitiveOpKind::Recv) {
+    } else if (op.kind == OpKind::TransportRecv) {
       int peer = op.src.rank;
       assert(peer >= 0 && peer < state.plan.nranks);
       state.recv_seq.emplace(op.op_id,
@@ -102,7 +101,9 @@ CollectivePlan build_test_plan(CollectiveKind kind,
       std::max(config.tensor_bytes, config.staging_bytes));
   bool inplace =
       binding.roles.input_buffer_id == binding.roles.output_buffer_id;
-  return build_plan(make_plan_request(kind, config, inplace));
+  CollectiveConfig cfg = config;
+  cfg.collective = kind;
+  return build_plan(cfg, inplace);
 }
 
 void assert_ref_uses_only_roles(BufferRef const& ref,
@@ -152,9 +153,9 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
         if (state.completed[op_id] || state.remaining_deps[op_id] != 0) {
           continue;
         }
-        PrimitiveOp const& op = state.plan.ops[op_id];
+        Op const& op = state.plan.ops[op_id];
         switch (op.kind) {
-          case PrimitiveOpKind::Recv: {
+          case OpKind::TransportRecv: {
             if (state.recv_posted[op_id]) continue;
             auto seq_it = state.recv_seq.find(static_cast<uint32_t>(op_id));
             assert(seq_it != state.recv_seq.end());
@@ -166,7 +167,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
             progress = true;
             break;
           }
-          case PrimitiveOpKind::Send: {
+          case OpKind::TransportSend: {
             auto seq_it = state.send_seq.find(static_cast<uint32_t>(op_id));
             assert(seq_it != state.send_seq.end());
             uint64_t key = make_match_key(rank, op.dst.rank, seq_it->second);
@@ -175,8 +176,8 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
 
             PostedRecv posted = posted_it->second;
             SimRankState& dst_state = ranks[posted.dst_rank];
-            PrimitiveOp const& recv_op = dst_state.plan.ops[posted.recv_op_id];
-            assert(recv_op.kind == PrimitiveOpKind::Recv);
+            Op const& recv_op = dst_state.plan.ops[posted.recv_op_id];
+            assert(recv_op.kind == OpKind::TransportRecv);
             assert(recv_op.src.rank == rank);
             assert(recv_op.tile.size_bytes == op.tile.size_bytes);
 
@@ -191,7 +192,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
             progress = true;
             break;
           }
-          case PrimitiveOpKind::Copy: {
+          case OpKind::DeviceCopy: {
             size_t count = op.tile.size_bytes / sizeof(float);
             float const* src_ptr = local_buffer_ptr(state, op.src);
             float* dst_ptr = local_buffer_ptr(state, op.dst);
@@ -200,7 +201,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
             progress = true;
             break;
           }
-          case PrimitiveOpKind::Reduce: {
+          case OpKind::DeviceReduce: {
             size_t count = op.tile.size_bytes / sizeof(float);
             float const* src_ptr = local_buffer_ptr(state, op.src);
             float* dst_ptr = local_buffer_ptr(state, op.dst);
@@ -243,12 +244,11 @@ void test_lowering_routes_ops_to_execution_kinds() {
   printf("[test] lowering routes ops...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
   CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
-  ExecutionPlan exec = lower_plan(plan);
 
-  Testing::validate_basic_exec_plan(exec);
-  assert(Testing::count_exec_ops(exec, ExecOpKind::TransportSend) > 0);
-  assert(Testing::count_exec_ops(exec, ExecOpKind::TransportRecv) > 0);
-  assert(Testing::count_exec_ops(exec, ExecOpKind::DeviceReduce) > 0);
+  Testing::validate_basic_exec_plan(plan);
+  assert(Testing::count_exec_ops(plan, OpKind::TransportSend) > 0);
+  assert(Testing::count_exec_ops(plan, OpKind::TransportRecv) > 0);
+  assert(Testing::count_exec_ops(plan, OpKind::DeviceReduce) > 0);
 }
 
 void test_planner_emits_valid_collective_dags() {
@@ -261,9 +261,9 @@ void test_planner_emits_valid_collective_dags() {
   Testing::validate_basic_plan(allreduce_plan);
   assert(allreduce_plan.collective == CollectiveKind::AllReduce);
   assert(allreduce_plan.algorithm == AlgorithmKind::Ring);
-  assert(Testing::count_ops(allreduce_plan, PrimitiveOpKind::Send) > 0);
-  assert(Testing::count_ops(allreduce_plan, PrimitiveOpKind::Recv) > 0);
-  assert(Testing::count_ops(allreduce_plan, PrimitiveOpKind::Reduce) > 0);
+  assert(Testing::count_ops(allreduce_plan, OpKind::TransportSend) > 0);
+  assert(Testing::count_ops(allreduce_plan, OpKind::TransportRecv) > 0);
+  assert(Testing::count_ops(allreduce_plan, OpKind::DeviceReduce) > 0);
   assert(allreduce_plan.staging_bytes_required ==
          allreduce_cfg.num_flows * allreduce_cfg.tile_bytes);
 
@@ -274,9 +274,9 @@ void test_planner_emits_valid_collective_dags() {
   Testing::validate_basic_plan(alltoall_plan);
   assert(alltoall_plan.collective == CollectiveKind::AllToAll);
   assert(alltoall_plan.algorithm == AlgorithmKind::Pairwise);
-  assert(Testing::count_ops(alltoall_plan, PrimitiveOpKind::Send) > 0);
-  assert(Testing::count_ops(alltoall_plan, PrimitiveOpKind::Recv) > 0);
-  assert(Testing::count_ops(alltoall_plan, PrimitiveOpKind::Copy) > 0);
+  assert(Testing::count_ops(alltoall_plan, OpKind::TransportSend) > 0);
+  assert(Testing::count_ops(alltoall_plan, OpKind::TransportRecv) > 0);
+  assert(Testing::count_ops(alltoall_plan, OpKind::DeviceCopy) > 0);
   assert(alltoall_plan.staging_bytes_required ==
          static_cast<size_t>(alltoall_cfg.nranks - 1) *
              alltoall_cfg.tile_bytes);
@@ -328,8 +328,8 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   roles.scratch_buffer_id = 11;
   roles.validate();
 
-  CollectivePlan plan = build_plan(
-      make_plan_request(CollectiveKind::AllToAll, cfg, /*inplace=*/false));
+  cfg.collective = CollectiveKind::AllToAll;
+  CollectivePlan plan = build_plan(cfg, /*inplace=*/false);
   Testing::validate_basic_plan(plan);
   assert(plan.input_split_bytes == cfg.input_split_bytes);
   assert(plan.output_split_bytes == cfg.output_split_bytes);
@@ -338,13 +338,13 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   std::vector<size_t> recv_bytes(3, 0);
   size_t self_copy_bytes = 0;
   for (auto const& op : plan.ops) {
-    if (op.kind == PrimitiveOpKind::Send) {
+    if (op.kind == OpKind::TransportSend) {
       assert(op.dst.rank >= 0 && op.dst.rank < 3);
       sent_bytes[static_cast<size_t>(op.dst.rank)] += op.tile.size_bytes;
-    } else if (op.kind == PrimitiveOpKind::Recv) {
+    } else if (op.kind == OpKind::TransportRecv) {
       assert(op.src.rank >= 0 && op.src.rank < 3);
       recv_bytes[static_cast<size_t>(op.src.rank)] += op.tile.size_bytes;
-    } else if (op.kind == PrimitiveOpKind::Copy &&
+    } else if (op.kind == OpKind::DeviceCopy &&
                op.src.kind == BufferKind::Local &&
                op.dst.kind == BufferKind::Local &&
                op.src.buffer_id == PlanBuffer::Input &&
@@ -374,8 +374,7 @@ void test_planner_honors_custom_role_buffer_ids() {
   roles.validate();
 
   bool inplace = roles.input_buffer_id == roles.output_buffer_id;
-  CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg, inplace));
+  CollectivePlan plan = build_plan(cfg, inplace);
   Testing::validate_basic_plan(plan);
   bool saw_input = false;
   bool saw_scratch = false;
@@ -389,9 +388,8 @@ void test_planner_honors_custom_role_buffer_ids() {
   assert(saw_input);
   assert(saw_scratch);
 
-  ExecutionPlan exec = lower_plan(plan);
-  Testing::validate_basic_exec_plan(exec);
-  for (auto const& op : exec.ops) {
+  Testing::validate_basic_exec_plan(plan);
+  for (auto const& op : plan.ops) {
     assert_ref_uses_only_roles(op.src, roles);
     assert_ref_uses_only_roles(op.dst, roles);
   }
@@ -406,24 +404,24 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
 
   assert(plan.ops.size() == 5);
 
-  PrimitiveOp const& rs_send = plan.ops[0];
-  PrimitiveOp const& rs_recv = plan.ops[1];
-  PrimitiveOp const& rs_reduce = plan.ops[2];
-  PrimitiveOp const& ag_send = plan.ops[3];
-  PrimitiveOp const& ag_recv = plan.ops[4];
+  Op const& rs_send = plan.ops[0];
+  Op const& rs_recv = plan.ops[1];
+  Op const& rs_reduce = plan.ops[2];
+  Op const& ag_send = plan.ops[3];
+  Op const& ag_recv = plan.ops[4];
 
-  assert(rs_send.kind == PrimitiveOpKind::Send);
+  assert(rs_send.kind == OpKind::TransportSend);
   assert(rs_send.tile.owner_rank == 0);
-  assert(rs_recv.kind == PrimitiveOpKind::Recv);
+  assert(rs_recv.kind == OpKind::TransportRecv);
   assert(rs_recv.tile.owner_rank == 1);
-  assert(rs_reduce.kind == PrimitiveOpKind::Reduce);
+  assert(rs_reduce.kind == OpKind::DeviceReduce);
   assert(rs_reduce.tile.owner_rank == 1);
 
   // The first allgather send must forward the fully reduced shard produced by
   // the reduce-scatter phase, which for rank 0 in a two-rank ring is shard 1.
-  assert(ag_send.kind == PrimitiveOpKind::Send);
+  assert(ag_send.kind == OpKind::TransportSend);
   assert(ag_send.tile.owner_rank == 1);
-  assert(ag_recv.kind == PrimitiveOpKind::Recv);
+  assert(ag_recv.kind == OpKind::TransportRecv);
   assert(ag_recv.tile.owner_rank == 0);
 }
 
@@ -473,25 +471,18 @@ void test_three_rank_ring_allreduce_simulator_handles_tail_elements_case() {
 }
 
 void test_lowering_preserves_dependency_dag() {
-  printf("[test] lowering preserves dependency DAG...\n");
+  printf("[test] plan dependency DAG invariants...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
   CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
-  ExecutionPlan exec = lower_plan(plan);
 
-  assert(exec.ops.size() == plan.ops.size());
-  Testing::validate_basic_exec_plan(exec);
+  Testing::validate_basic_exec_plan(plan);
 
-  for (size_t i = 0; i < exec.ops.size(); ++i) {
-    auto const& op = exec.ops[i];
+  for (size_t i = 0; i < plan.ops.size(); ++i) {
+    auto const& op = plan.ops[i];
     assert(op.op_id == i);
-    assert(op.tile.owner_rank == plan.ops[i].tile.owner_rank);
-    assert(op.tile.tile_index == plan.ops[i].tile.tile_index);
-    assert(op.src.kind == plan.ops[i].src.kind);
-    assert(op.src.rank == plan.ops[i].src.rank);
-    assert(op.dst.kind == plan.ops[i].dst.kind);
-    assert(op.dst.rank == plan.ops[i].dst.rank);
-    assert(op.deps == plan.ops[i].deps);
+    assert(op.tile.size_bytes > 0);
+    assert(op.tile.flow_index < plan.num_flows);
     for (uint32_t dep : op.deps) {
       assert(dep < op.op_id);
     }
@@ -513,15 +504,17 @@ void test_executor_completes_collectives_with_background_progress() {
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 1, 4096, 512, 2);
+  allreduce_cfg.collective = CollectiveKind::AllReduce;
   CollectiveOpHandle ar_handle =
-      executor.submit_allreduce(allreduce_cfg, memory);
+      executor.submit_allreduce(allreduce_cfg, *memory);
   assert(wait_until_terminal(executor, ar_handle, std::chrono::seconds(2)));
   assert(executor.status(ar_handle) == CollectiveOpStatus::Completed);
   executor.release(ar_handle);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256, 2);
+  alltoall_cfg.collective = CollectiveKind::AllToAll;
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
-  CollectiveOpHandle at_handle = executor.submit_alltoall(alltoall_cfg, memory);
+  CollectiveOpHandle at_handle = executor.submit_alltoall(alltoall_cfg, *memory);
   assert(wait_until_terminal(executor, at_handle, std::chrono::seconds(2)));
   assert(executor.status(at_handle) == CollectiveOpStatus::Completed);
   executor.release(at_handle);
@@ -545,8 +538,8 @@ void test_executor_queues_collectives_serially() {
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, memory);
-  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, memory);
+  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, *memory);
+  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, *memory);
 
   assert(executor.status(second) == CollectiveOpStatus::Queued);
 
@@ -577,8 +570,8 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   CollectiveConfig second_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
   second_cfg.algorithm = AlgorithmKind::Pairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(first_cfg, memory);
-  CollectiveOpHandle second = executor.submit_alltoall(second_cfg, memory);
+  CollectiveOpHandle first = executor.submit_allreduce(first_cfg, *memory);
+  CollectiveOpHandle second = executor.submit_alltoall(second_cfg, *memory);
 
   assert(throws([&] { executor.release(first); }));
   assert(throws([&] { executor.release(second); }));
@@ -603,7 +596,7 @@ void test_executor_uses_fallback_backend_when_specialized_backends_are_missing()
       Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, *memory);
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Completed);
   assert(fallback_backend.submissions() > 0);
@@ -621,7 +614,7 @@ void test_executor_reports_submit_failure() {
       Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256, 1);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, *memory);
 
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Failed);

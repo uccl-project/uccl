@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../collective_memory.h"
-#include "../selector.h"
+#include "../plan.h"
 #include <cstdint>
 
 namespace UKernel {
@@ -16,10 +16,10 @@ class Backend {
   virtual ~Backend() = default;
 
   virtual char const* name() const = 0;
-  virtual void validate(ExecutionPlan const& plan,
+  virtual void validate(CollectivePlan const& plan,
                         CollectiveBinding& binding) const = 0;
-  virtual bool supports(ExecOpKind kind) const = 0;
-  virtual BackendToken submit(ExecOp const& op, CollectiveBinding& binding) = 0;
+  virtual bool supports(OpKind kind) const = 0;
+  virtual BackendToken submit(Op const& op, CollectiveBinding& binding) = 0;
   virtual bool poll(BackendToken token) = 0;
   virtual bool try_pop_completed(BackendToken& token) = 0;
   virtual void release(BackendToken token) = 0;
