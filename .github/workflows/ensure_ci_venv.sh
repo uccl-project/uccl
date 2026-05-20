@@ -8,13 +8,13 @@
 # Env:
 #   UCCL_CI_SANDBOX   (default: $HOME/uccl-ci-sandbox)
 #   UCCL_CI_PYTHON    (default: 3.12)
-#   UCCL_CI_TORCH_INDEX (default: https://download.pytorch.org/whl/nightly/rocm7.1)
+#   UCCL_CI_TORCH_INDEX (default: https://download.pytorch.org/whl/nightly/rocm7.0)
 
 set -euo pipefail
 
 SANDBOX="${UCCL_CI_SANDBOX:-$HOME/uccl-ci-sandbox}"
 PY_VER="${UCCL_CI_PYTHON:-3.12}"
-TORCH_INDEX="${UCCL_CI_TORCH_INDEX:-https://download.pytorch.org/whl/nightly/rocm7.1}"
+TORCH_INDEX="${UCCL_CI_TORCH_INDEX:-https://download.pytorch.org/whl/nightly/rocm7.0}"
 
 export PATH="$HOME/.local/bin:$PATH"
 
