@@ -726,7 +726,15 @@ class ElasticBuffer:
                 bounded_gbs / bounded_traffic * sm_write / sm_write_gbs,
             )
         num_sms = align(max(4, math.ceil(num_sms * 1.25)), 2)
-        num_sms = num_sms if self.prefer_overlap_with_compute else max(num_sms, 64)
+        if self.request_uccl_proxy and int(os.environ.get('EP_FORCE_NO_NVLINK', '0')) and \
+                self.num_max_tokens_per_rank <= 256:
+            # The upstream bandwidth model floors non-overlap runs to 64 SMs.
+            # On L4/PCIe UCCL proxy runs with small EP batches, that
+            # over-parallelizes the kernel and costs more in setup/barriers
+            # than it saves in payload copies.
+            num_sms = align(max(4, int(os.environ.get('EP_UCCL_SMALL_BATCH_NUM_SMS', '24'))), 2)
+        else:
+            num_sms = num_sms if self.prefer_overlap_with_compute else max(num_sms, 64)
         num_sms = min(num_sms, num_device_sms)
 
         # Summary
