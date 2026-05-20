@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "env.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/util.h"
@@ -107,6 +108,28 @@ struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext {
   explicit FloatCompressCtx(uccl::FloatType ft)
       : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
 
+  // Plain device allocation for the per-ctx [in_ptr, inSize, out_ptr] tuple
+  // referenced by `params_dev`. Freed here so each ctx releases its own buffer
+  // independently (no LIFO stack ordering required, unlike dietgpu's
+  // StackDeviceMemory). params_dev itself is hand-constructed with res=nullptr
+  // so its RAII release is a no-op.
+  void* raw_params_dev = nullptr;
+
+  FloatCompressCtx(FloatCompressCtx const&) = delete;
+  FloatCompressCtx& operator=(FloatCompressCtx const&) = delete;
+
+  ~FloatCompressCtx() {
+    if (raw_params_dev) {
+      // dietgpu's ~GpuMemoryReservation does `if (ptr) CHECK(res)`. Our
+      // hand-constructed params_dev has res=nullptr, so clear ptr first to
+      // disarm the assertion; we own the buffer and free it directly.
+      params_dev.ptr = nullptr;
+      params_dev.res = nullptr;
+      gpuFree(raw_params_dev);
+      raw_params_dev = nullptr;
+    }
+  }
+
   uccl::FloatType getFloatType() const { return from_dietgpu(float_type); }
 };
 
@@ -177,9 +200,6 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
-
-constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;       // 1MB
-constexpr size_t kCompressBufferSize = 1024 * 1024 * 1024;  // 1 GB
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -274,8 +294,21 @@ class ImmData {
     data_ = (static_cast<uint32_t>(chunk_count) << 16) | (data_ & 0xFFFF);
   }
 
-  // Set index (preserves chunk_count)
-  void set_index(uint16_t index) { data_ = (data_ & 0xFFFF0000) | index; }
+  // Set index (preserves chunk_count + write_meta flag)
+  void set_index(uint16_t index) {
+    data_ = (data_ & 0xFFFF0000) | (index & kIndexMask) | (data_ & kWriteMetaBit);
+  }
+
+  // Distinguishes WriteReqMeta entries from SendReqMeta entries on the
+  // control channel. kRingCapacity = 16384 only needs 14 bits, so bit 15 of
+  // the low halfword is free.
+  static constexpr uint32_t kWriteMetaBit = 1u << 15;
+  static constexpr uint32_t kIndexMask = 0x7FFFu;
+  constexpr bool is_write_meta() const { return data_ & kWriteMetaBit; }
+  void set_write_meta() { data_ |= kWriteMetaBit; }
+  constexpr uint16_t plain_index() const {
+    return static_cast<uint16_t>(data_ & kIndexMask);
+  }
 
   // Implicit conversion to uint32_t for compatibility
   constexpr operator uint32_t() const { return data_; }
@@ -354,10 +387,6 @@ struct ChunkSplitStrategy {
     return (message_size + chunk_count - 1) / chunk_count;
   }
 };
-
-static_assert(
-    kMinCompressBytes > 4 * ChunkSplitStrategy::kMessageChunkSizeKB,
-    "kMinCompressBytes must be > 4 * ChunkSplitStrategy::kMessageChunkSizeKB");
 
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
@@ -676,6 +705,38 @@ struct alignas(64) SendReqMetaOnRing {
 static constexpr size_t kRingBufferSize =
     sizeof(SendReqMetaOnRing) * kRingCapacity;
 
+// ── Compressed write infra ──────────────────────────────────────────────────
+// One entry per in-flight compressed write. Pushed by sender to receiver via
+// the control QP (RDMA WRITE WITH IMM, IMM carries the ring index + write_meta
+// flag bit).
+struct alignas(64) WriteReqMeta {
+  uint64_t user_remote_addr;   // user-visible WRITE destination (GPU VA)
+  uint64_t decompress_offset;  // byte offset within remote decompress_buffer
+  uint32_t user_rkey;          // user-provided rkey (for logging/validation)
+  uint32_t total_uncomp_size;  // original message size in bytes
+  uint32_t compressed_size;    // split + encode output total bytes
+  uint32_t float_type;         // uccl::FloatType
+  uint32_t ack_slot;           // sender expects ack written here in its ack_ring
+  uint32_t _pad;
+  int64_t wr_id;
+};
+
+// A small on-host ack slot. Receiver writes |wr_id| (or wr_id|kAckErrBit) once
+// decompress completes. Sender polls the value to determine completion.
+static constexpr uint64_t kAckErrBit = 1ull << 63;
+struct alignas(64) AckSlot {
+  std::atomic<uint64_t> value;
+};
+
+// Ring sizes for the WriteReqMeta channel and the ack ring. Must be ≥ max
+// in-flight compressed writes so the monotonic-modulo allocators don't
+// wrap onto a still-pending entry.
+constexpr size_t kWriteMetaRingCapacity = 4096;
+constexpr size_t kAckRingDepth = 4096;
+constexpr size_t kWriteMetaRingBytes =
+    sizeof(WriteReqMeta) * kWriteMetaRingCapacity;
+constexpr size_t kAckRingBytes = sizeof(AckSlot) * kAckRingDepth;
+
 // Helper functions for SendReqMetaOnRing to be used with
 // modify_and_advance_write
 inline auto check_in_progress = [](SendReqMetaOnRing const& item) {
@@ -818,6 +879,10 @@ struct MetaInfoToExchange {
   RemoteMemInfo mem_meta;
   int gpu_id;
   uint16_t oob_port;  // OOB server port for back-connection (notifications)
+  // Compressed-write infra; populated only on the Control-channel handshake.
+  RemoteMemInfo decompress_buf_meta;
+  RemoteMemInfo write_meta_ring_meta;
+  RemoteMemInfo ack_ring_meta;
 
   // Default constructor
   MetaInfoToExchange()
@@ -916,38 +981,3 @@ struct hash<RegMemBlock> {
 };
 
 }  // namespace std
-
-enum class CompressStrategy {
-  kNone,         // no compression
-  kSplitOnly,    // only split, no encode
-  kSplitEncode,  // split + encode (default)
-};
-
-inline CompressStrategy getCompressStrategyFromEnv() {
-  char const* env = std::getenv("UCCL_P2P_COMPRESS_STRATEGY");
-
-  // default strategy
-  if (!env || env[0] == '\0') {
-    return CompressStrategy::kNone;
-  }
-
-  std::string s(env);
-  std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-
-  // ---- accepted values ----
-  if (s == "none" || s == "off" || s == "0") {
-    return CompressStrategy::kNone;
-  }
-
-  if (s == "split" || s == "split_only") {
-    return CompressStrategy::kSplitOnly;
-  }
-
-  if (s == "encode" || s == "split_encode" || s == "full" || s == "1") {
-    return CompressStrategy::kSplitEncode;
-  }
-
-  // ---- fallback ----
-  // unknown value -> default
-  return CompressStrategy::kSplitEncode;
-}

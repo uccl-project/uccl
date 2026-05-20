@@ -50,6 +50,19 @@ class ICompressorBackend {
                           uccl::FloatType float_type) = 0;
 
   /**
+   * @brief Queue decompress on the internal stream WITHOUT synchronizing.
+   * After the kernel completes, `on_done(user_data)` fires on a host-managed
+   * thread (via gpuLaunchHostFunc). Caller owns user_data lifetime — typically
+   * heap-allocated and deleted inside on_done. The host callback MUST NOT
+   * call any GPU APIs. Used by the compressed-write path to post an ack as
+   * soon as decompress finishes, without blocking the receiver polling
+   * thread.
+   */
+  virtual void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
+                               uccl::FloatType float_type,
+                               gpuHostFn_t on_done, void* user_data) = 0;
+
+  /**
    * @brief Check if a request should be compressed based on size threshold.
    * @param size The size in bytes to check.
    * @return true if the size meets the minimum compression threshold.
@@ -126,6 +139,12 @@ class NullCompressorBackend : public ICompressorBackend {
     return false;
   }
 
+  void decompressAsync(RemoteMemInfo const& /*input*/, RegMemBlock& /*output*/,
+                       uccl::FloatType /*float_type*/, gpuHostFn_t on_done,
+                       void* user_data) override {
+    if (on_done) on_done(user_data);  // synchronous fallback
+  }
+
   bool shouldCompress(size_t /*size*/) override { return false; }
 
   bool shouldCompressAndSplitFirst(size_t /*size*/) override { return false; }
@@ -162,7 +181,6 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   DietGPUCompressorBackend()
       : stream_(nullptr),
         res_(nullptr),
-        res_meta_(nullptr),
         devCompressedSize_(nullptr) {
     compress_strategy_ = getCompressStrategyFromEnv();
     if (compress_strategy_ == CompressStrategy::kNone) {
@@ -188,10 +206,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     // Initialize StackDeviceMemory for compress/decompress operations
     res_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),
                                           3 * kCompressBufferSize);
-
-    // Initialize StackDeviceMemory for split context metadata allocations
-    res_meta_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),
-                                               kCompressBufferSize);
+    // Per-ctx split metadata is now allocated/freed directly by each
+    // FloatCompressCtx via gpuMalloc/gpuFree — no stack allocator needed.
   }
 
   ~DietGPUCompressorBackend() override {
@@ -202,10 +218,6 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     if (res_) {
       delete res_;
       res_ = nullptr;
-    }
-    if (res_meta_) {
-      delete res_meta_;
-      res_meta_ = nullptr;
     }
     if (devCompressedSize_) {
       GPU_RT_CHECK(gpuFree(devCompressedSize_));
@@ -345,6 +357,34 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     return true;
   }
 
+  void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
+                       uccl::FloatType float_type, gpuHostFn_t on_done,
+                       void* user_data) override {
+    if (unlikely(!stream_ || !res_ || input.addr == 0 || input.length == 0 ||
+                 output.addr == nullptr || output.size == 0)) {
+      UCCL_LOG(WARN) << "decompressAsync - invalid params; firing on_done "
+                        "synchronously";
+      if (on_done) on_done(user_data);
+      return;
+    }
+    dietgpu::FloatType ft = to_dietgpu(float_type);
+    dietgpu::FloatDecompressConfig cfg;
+    cfg.floatType = ft;
+    cfg.useChecksum = false;
+    cfg.is16ByteAligned = true;
+    uint32_t numFloats = dietgpu::getElementCountFromBytes(ft, output.size);
+    void const* compIn[1] = {reinterpret_cast<void const*>(input.addr)};
+    void* decompOut[1] = {output.addr};
+    uint32_t outCap[1] = {numFloats};
+    // Queue kernel — NO gpuStreamSynchronize here. on_done fires on a CUDA
+    // host thread after the kernel completes.
+    dietgpu::floatDecompress(*res_, cfg, 1, compIn, decompOut, outCap, nullptr,
+                             nullptr, stream_);
+    if (on_done) {
+      GPU_RT_CHECK(gpuLaunchHostFunc(stream_, on_done, user_data));
+    }
+  }
+
   bool shouldCompress(size_t size) override {
     if (compress_strategy_ == CompressStrategy::kNone) {
       return false;
@@ -371,6 +411,13 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     if (unlikely(!shouldCompress(size))) {
       return;
     }
+    // dietgpu's getWordSizeFromFloatType CHECK-fails on kUndefined. Caller
+    // (likely the Python binding default) didn't supply a float_type, so we
+    // can't compress this region — leave params_dev uninitialized; the
+    // compressed-send/write paths will see kUndefined and skip compression.
+    if (unlikely(ctx->getFloatType() == uccl::FloatType::kUndefined)) {
+      return;
+    }
     dietgpu::FloatType float_type = to_dietgpu(ctx->getFloatType());
     uint32_t numFloats = static_cast<uint32_t>(
         dietgpu::getElementCountFromBytes(float_type, size));
@@ -381,19 +428,34 @@ class DietGPUCompressorBackend : public ICompressorBackend {
       numFloats /= 2;
     }
 
-    // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]
+    // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]. Use
+    // plain cudaMalloc so each ctx owns its allocation — no LIFO ordering
+    // constraint between independently-dereg'd mhandles. params_dev wraps the
+    // raw pointer with res=nullptr so its RAII release is a no-op; ownership
+    // lives in ctx->raw_params_dev (freed by ~FloatCompressCtx).
     uintptr_t hostParams[3];
     hostParams[0] = reinterpret_cast<uintptr_t>(addr);
     hostParams[1] = static_cast<uintptr_t>(numFloats);
     hostParams[2] = reinterpret_cast<uintptr_t>(buffer_->addr);
 
-    auto devParams = res_meta_->alloc<uintptr_t>(stream_, 3);
-    GPU_RT_CHECK(gpuMemcpyAsync(devParams.data(), hostParams,
-                                sizeof(hostParams), gpuMemcpyHostToDevice,
-                                stream_));
+    void* raw = nullptr;
+    GPU_RT_CHECK(gpuMalloc(&raw, sizeof(hostParams)));
+    GPU_RT_CHECK(gpuMemcpyAsync(raw, hostParams, sizeof(hostParams),
+                                gpuMemcpyHostToDevice, stream_));
     GPU_RT_CHECK(gpuStreamSynchronize(stream_));
 
-    ctx->params_dev = std::move(devParams);
+    if (ctx->raw_params_dev) {
+      // Re-prepare on same ctx: defuse old params_dev so the move-assign
+      // below doesn't UCCL_CHECK on the stale (res=nullptr, ptr!=nullptr)
+      // pair, then free the old buffer we own.
+      ctx->params_dev.ptr = nullptr;
+      ctx->params_dev.res = nullptr;
+      gpuFree(ctx->raw_params_dev);
+    }
+    ctx->raw_params_dev = raw;
+    ctx->params_dev = dietgpu::GpuMemoryReservation<uintptr_t>(
+        /*res=*/nullptr, dietgpu::getCurrentDevice(), stream_, raw,
+        /*num=*/3, /*sizeAllocated=*/sizeof(hostParams));
     ctx->maxSize = size;
   }
 
@@ -469,7 +531,6 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   std::shared_ptr<RegMemBlock> decompressBuffer_;  // Decompression buffer
   gpuStream_t stream_;                             // GPU stream
   dietgpu::StackDeviceMemory* res_;  // Device memory for compress/decompress
-  dietgpu::StackDeviceMemory* res_meta_;  // Device memory for split context
   CompressStrategy compress_strategy_;
 };
 
@@ -539,6 +600,12 @@ class Compressor {
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   uccl::FloatType float_type) {
     return backend_->decompress(input, output, float_type);
+  }
+
+  void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
+                       uccl::FloatType float_type, gpuHostFn_t on_done,
+                       void* user_data) {
+    backend_->decompressAsync(input, output, float_type, on_done, user_data);
   }
 
   /**

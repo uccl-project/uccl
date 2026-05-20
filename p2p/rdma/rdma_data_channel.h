@@ -18,6 +18,13 @@
 // single doorbell per channel.
 inline thread_local bool g_uccl_batch_post = false;
 
+// Additional override: when true, submitRequest() never auto-flushes a
+// batch regardless of accumulated bytes — caller must manually flush. Used
+// by the compressed-write split→encode pipeline to coalesce many >32KB
+// chunks into one doorbell per channel per phase, instead of one doorbell
+// per chunk (which kills NIC throughput on compressed writes).
+inline thread_local bool g_uccl_defer_flush = false;
+
 // Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
   if (uccl::is_efa_transport())
@@ -86,7 +93,8 @@ class RDMADataChannel {
         std::lock_guard<std::mutex> lock(batch_mu_);
         batch_.push_back(std::move(req));
         batch_bytes_ += req_size;
-        should_flush = (batch_bytes_ >= kBatchFlushBytes);
+        should_flush =
+            !g_uccl_defer_flush && (batch_bytes_ >= kBatchFlushBytes);
       }
       if (should_flush) flushBatch();
       return 0;  // success; actual post deferred until flushBatch().
@@ -175,6 +183,39 @@ class RDMADataChannel {
     return result;
   }
 
+  // Post an unsignaled INLINE RDMA WRITE of a small payload (used to ship
+  // 8-byte completion acks back to the sender's ack_ring). Every kAckSigEvery
+  // calls one WR is signaled so the SQ doesn't fill up; callers should
+  // periodically drain CQEs via pollOnce(). `payload` may live on stack —
+  // INLINE copies it into the WQE before ibv_post_send returns.
+  //
+  // Thread-safe: called from both the receiver polling thread and the CUDA
+  // host-callback thread (after async decompress).
+  int postAckWrite(uint64_t remote_addr, uint32_t remote_rkey,
+                   void const* payload, size_t len) {
+    ibv_sge sge{};
+    sge.addr = reinterpret_cast<uintptr_t>(payload);
+    sge.length = static_cast<uint32_t>(len);
+    sge.lkey = 0;  // ignored with IBV_SEND_INLINE
+    ibv_send_wr wr{};
+    wr.wr_id = kAckSignalMarker;
+    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.wr.rdma.remote_addr = remote_addr;
+    wr.wr.rdma.rkey = remote_rkey;
+    wr.send_flags = IBV_SEND_INLINE;
+    std::lock_guard<std::mutex> lk(ack_mu_);
+    if (++ack_unsig_count_ >= kAckSigEvery) {
+      wr.send_flags |= IBV_SEND_SIGNALED;
+      ack_unsig_count_ = 0;
+    }
+    ibv_send_wr* bad = nullptr;
+    return ibv_post_send(qp_, &wr, &bad);
+  }
+  static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
+  static constexpr uint32_t kAckSigEvery = 64;
+
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {
     return local_meta_;
@@ -222,6 +263,9 @@ class RDMADataChannel {
   };
   std::deque<PendingSignalGroup> pending_groups_;
   std::mutex pending_mu_;
+
+  uint32_t ack_unsig_count_ = 0;  // selective-signal counter for postAckWrite
+  std::mutex ack_mu_;             // serializes ibv_post_send for ack WRs
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;

@@ -19,12 +19,21 @@ fifo_blob_size = 64  # bytes
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     if n_bytes <= 0:
         raise ValueError(f"buffer size must be positive, got {n_bytes}")
-    if device == "gpu":
-        buf = torch.ones(n_bytes, dtype=torch.uint8, device=f"cuda:{gpu}")
-        ptr = buf.data_ptr()
+    # Allocate as bfloat16 so the bytes on the wire actually look like a
+    # bf16 tensor — that's the dtype we hand to the compression layer.
+    # Fall back to uint8 if n_bytes is not a multiple of 2.
+    if n_bytes % 2 == 0:
+        n_elems = n_bytes // 2
+        if device == "gpu":
+            buf = torch.ones(n_elems, dtype=torch.bfloat16, device=f"cuda:{gpu}")
+        else:
+            buf = torch.ones(n_elems, dtype=torch.bfloat16, pin_memory=True)
     else:
-        buf = torch.ones(n_bytes, dtype=torch.uint8, pin_memory=True)
-        ptr = buf.data_ptr()
+        if device == "gpu":
+            buf = torch.ones(n_bytes, dtype=torch.uint8, device=f"cuda:{gpu}")
+        else:
+            buf = torch.ones(n_bytes, dtype=torch.uint8, pin_memory=True)
+    ptr = buf.data_ptr()
     return buf, ptr
 
 
@@ -50,7 +59,9 @@ def _run_server(args, ep, remote_metadata):
             size_v = []
             for _ in range(args.num_iovs):
                 buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                ok, mr_id = ep.reg(ptr, size_per_block)
+                ok, mr_id = ep.reg(
+                    ptr, size_per_block, floatType=p2p.FloatType.kBFloat16
+                )
                 assert ok
                 buf_v.append(buf)
                 ptr_v.append(ptr)
@@ -85,7 +96,9 @@ def _run_server(args, ep, remote_metadata):
             size_v = []
             for _ in range(args.num_iovs):
                 buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                ok, mr_id = ep.reg(ptr, size_per_block)
+                ok, mr_id = ep.reg(
+                    ptr, size_per_block, floatType=p2p.FloatType.kBFloat16
+                )
                 assert ok
                 buf_v.append(buf)
                 ptr_v.append(ptr)
@@ -116,7 +129,9 @@ def _run_client(args, ep, remote_metadata):
             size_v = []
             for _ in range(args.num_iovs):
                 buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                ok, mr_id = ep.reg(ptr, size_per_block)
+                ok, mr_id = ep.reg(
+                    ptr, size_per_block, floatType=p2p.FloatType.kBFloat16
+                )
                 assert ok
                 buf_v.append(buf)
                 ptr_v.append(ptr)
@@ -151,7 +166,9 @@ def _run_client(args, ep, remote_metadata):
             size_v = []
             for _ in range(args.num_iovs):
                 buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                ok, mr_id = ep.reg(ptr, size_per_block)
+                ok, mr_id = ep.reg(
+                    ptr, size_per_block, floatType=p2p.FloatType.kBFloat16
+                )
                 assert ok
                 buf_v.append(buf)
                 ptr_v.append(ptr)

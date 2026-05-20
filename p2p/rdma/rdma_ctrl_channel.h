@@ -32,6 +32,47 @@ class SendControlChannel : public RDMADataChannel {
         mem_block);
   }
 
+  // Bind the WriteReqMeta ring: local mirror (sender-owned, registered HOST
+  // memory) + remote slot table on the receiver. Called once during the
+  // Control-channel handshake from the peer's exchanged metadata.
+  void bindWriteMetaRing(std::shared_ptr<RegMemBlock> local_mirror,
+                         RemoteMemInfo const& remote_ring) {
+    write_meta_local_ = local_mirror;
+    write_meta_remote_ =
+        std::make_shared<RemoteMemInfo>(remote_ring.addr, remote_ring.length,
+                                        remote_ring.rkey_array, remote_ring.type);
+  }
+
+  // Push one WriteReqMeta to the receiver. Caller is responsible for choosing
+  // a slot index that is not currently in flight (monotonic counter mod
+  // kWriteMetaRingCapacity is sufficient because depth ≥ max in-flight).
+  // Slot is filled locally + RDMA WRITE WITH IMM (with kWriteMetaBit) lands
+  // the same 64 bytes on the receiver, triggering its IMM CQE handler.
+  bool pushWriteMeta(WriteReqMeta const& meta, uint32_t slot) {
+    if (unlikely(!write_meta_local_ || !write_meta_remote_)) return false;
+    auto* local = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
+    *local = meta;
+
+    auto src = std::make_shared<RegMemBlock>(
+        local, sizeof(WriteReqMeta), write_meta_local_->mr_array,
+        write_meta_local_->type);
+    auto dst = std::make_shared<RemoteMemInfo>(
+        write_meta_remote_->addr + slot * sizeof(WriteReqMeta),
+        sizeof(WriteReqMeta), write_meta_remote_->rkey_array,
+        write_meta_remote_->type);
+
+    ImmData imm;
+    imm.set_chunk_count(1);
+    imm.set_index(static_cast<uint16_t>(slot));
+    imm.set_write_meta();
+
+    auto req = std::make_shared<RDMASendRequest>(src, dst, imm.raw());
+    req->channel_id = kControlChannelID;
+    req->wr_id = static_cast<int64_t>(slot);
+    req->send_type = SendType::Send;  // → RDMA_WRITE_WITH_IMM
+    return RDMADataChannel::send(req) >= 0;
+  }
+
   int getOneSendRequestMeta(SendReqMeta& meta) {
     // Pop from rb_ and generate req, return false if empty
     return rb_->pop_with_convert(meta, from_ring_meta);
@@ -84,6 +125,8 @@ class SendControlChannel : public RDMADataChannel {
 
  private:
   std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
+  std::shared_ptr<RegMemBlock> write_meta_local_;
+  std::shared_ptr<RemoteMemInfo> write_meta_remote_;
 };
 
 class RecvControlChannel : public RDMADataChannel {
@@ -177,15 +220,40 @@ class RecvControlChannel : public RDMADataChannel {
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (RDMADataChannel::pollOnce(cq_datas)) {
-      for (auto const& cq_data : cq_datas) {
+    if (!RDMADataChannel::pollOnce(cq_datas)) return false;
+    for (auto const& cq_data : cq_datas) {
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "RecvControlChannel::noblockingPoll - CQE: " << cq_data
+          << ", is_write_meta=" << cq_data.imm.is_write_meta()
+          << ", local_ring=" << (write_meta_local_ ? "set" : "NULL");
+      if (cq_data.hasIMM() && cq_data.imm.is_write_meta() &&
+          write_meta_local_) {
+        uint16_t slot = cq_data.imm.plain_index();
+        auto* entry =
+            static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
         UCCL_LOG(INFO, UCCL_RDMA)
-            << "RecvControlChannel::noblockingPoll - Polled completion: "
-            << cq_data;
+            << "RecvControlChannel: queued WriteReqMeta slot=" << slot
+            << " wr_id=" << entry->wr_id
+            << " decompress_offset=" << entry->decompress_offset
+            << " compressed_size=" << entry->compressed_size;
+        pending_write_metas_.push_back(*entry);
       }
-      return true;
     }
-    return false;
+    return true;
+  }
+
+  // Adopt the local WriteReqMeta ring (HOST memory, registered for RDMA
+  // WRITE access from the peer sender).
+  void bindWriteMetaRing(std::shared_ptr<RegMemBlock> local_ring) {
+    write_meta_local_ = local_ring;
+  }
+
+  // Hand off accumulated WriteReqMeta entries since the last call. Owned by
+  // RecvConnection, which drives decompress + ack.
+  std::vector<WriteReqMeta> drainPendingWriteMetas() {
+    std::vector<WriteReqMeta> out;
+    out.swap(pending_write_metas_);
+    return out;
   }
 
   bool check_done(uint64_t index) {
@@ -199,4 +267,6 @@ class RecvControlChannel : public RDMADataChannel {
   std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
   std::shared_ptr<RemoteMemInfo> remote_mem_ptr_;
   std::shared_ptr<RegMemBlock> local_mem_ptr_;
+  std::shared_ptr<RegMemBlock> write_meta_local_;
+  std::vector<WriteReqMeta> pending_write_metas_;
 };
