@@ -37,3 +37,7 @@ if ! python -c "import torch" >/dev/null 2>&1; then
   uv pip install --pre torch torchvision --index-url "$TORCH_INDEX" --reinstall
 fi
 python -c "import nanobind, pybind11" >/dev/null 2>&1 || uv pip install nanobind pybind11
+
+export GLOO_SOCKET_IFNAME=enp49s0f0np0
+export NCCL_SOCKET_IFNAME=enp49s0f0np0
+export UCCL_P2P_RDMA_GID_INDEX=3

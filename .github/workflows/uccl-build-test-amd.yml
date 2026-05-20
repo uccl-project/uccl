@@ -91,28 +91,28 @@ jobs:
               ./ amd1:~/uccl-ci-sandbox/
           fi
 
-      # - name: Build and install
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
+      - name: Build and install
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      #     ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
-      #       set -euo pipefail
-      #       bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-      #       source ~/uccl-ci-sandbox/.venv/bin/activate
-      #       cd ~/uccl-ci-sandbox
-      #       ./build.sh roc7 all --install 2>&1 | tee build.log
-      #     EOF
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox
+            ./build.sh roc7 all --install 2>&1 | tee build.log
+          EOF
 
-      #     if [ "$SHARED_NFS" != "true" ]; then
-      #       ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF'
-      #         set -euo pipefail
-      #         bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-      #         source ~/uccl-ci-sandbox/.venv/bin/activate
-      #         cd ~/uccl-ci-sandbox
-      #         ./build.sh roc7 all --install 2>&1 | tee build.log
-      #     EOF
-      #     fi
+          if [ "$SHARED_NFS" != "true" ]; then
+            ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF'
+              set -euo pipefail
+              bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+              source ~/uccl-ci-sandbox/.venv/bin/activate
+              cd ~/uccl-ci-sandbox
+              ./build.sh roc7 all --install 2>&1 | tee build.log
+          EOF
+          fi
 
       - name: Run P2P benchmark
         timeout-minutes: 3
@@ -122,12 +122,11 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
-            echo $GLOO_SOCKET_IFNAME $NCCL_SOCKET_IFNAME $UCCL_P2P_RDMA_GID_INDEX
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
@@ -139,10 +138,9 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
-            echo $GLOO_SOCKET_IFNAME $NCCL_SOCKET_IFNAME $UCCL_P2P_RDMA_GID_INDEX
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
@@ -172,8 +170,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -185,8 +183,8 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -214,8 +212,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -227,8 +225,8 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
