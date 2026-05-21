@@ -340,8 +340,15 @@ bool CommunicatorTransportBackend::poll(BackendToken token) {
 bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
   {
     std::lock_guard<std::mutex> lk(mu_);
+    if (!failed_tokens_.empty()) {
+      token.value = failed_tokens_.front();
+      token.failed = true;
+      failed_tokens_.pop_front();
+      return true;
+    }
     if (!completed_tokens_.empty()) {
       token.value = completed_tokens_.front();
+      token.failed = false;
       completed_tokens_.pop_front();
       return true;
     }
@@ -352,18 +359,28 @@ bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    for (auto& [req_id, failed] : done) {
-      (void)failed;
+    for (auto& [req_id, req_failed] : done) {
       auto it = request_to_token_.find(req_id);
       if (it == request_to_token_.end()) continue;
       auto pending_it = pending_.find(it->second);
       if (pending_it == pending_.end() || pending_it->second.completed)
         continue;
       pending_it->second.completed = true;
-      completed_tokens_.push_back(it->second);
+      if (req_failed) {
+        failed_tokens_.push_back(it->second);
+      } else {
+        completed_tokens_.push_back(it->second);
+      }
+    }
+    if (!failed_tokens_.empty()) {
+      token.value = failed_tokens_.front();
+      token.failed = true;
+      failed_tokens_.pop_front();
+      return true;
     }
     if (completed_tokens_.empty()) return false;
     token.value = completed_tokens_.front();
+    token.failed = false;
     completed_tokens_.pop_front();
     return true;
   }

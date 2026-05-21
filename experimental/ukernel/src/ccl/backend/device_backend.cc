@@ -84,6 +84,7 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& config)
 
 DeviceBackend::~DeviceBackend() {
   ensure_device_context();
+  inflight_tokens_.clear();
   completed_tokens_.clear();
   submitted_.clear();
   active_flows_.clear();
@@ -172,6 +173,7 @@ BackendToken DeviceBackend::submit(Op const& op,
   BackendToken token{next_token_++};
   submitted_[token.value] =
       SubmittedTask{fifo_id, task_id, flow_id, task.args_index(), false, false};
+  inflight_tokens_.push_back(token.value);
   return token;
 }
 
@@ -191,14 +193,20 @@ bool DeviceBackend::poll(BackendToken token) {
 bool DeviceBackend::try_pop_completed(BackendToken& token) {
   ensure_device_context();
   if (completed_tokens_.empty()) {
-    for (auto& [token_value, submitted] : submitted_) {
-      if (submitted.completion_queued) continue;
-      if (!worker_pool_->is_done(submitted.task_id, submitted.fifo_id))
+    size_t write_pos = 0;
+    for (size_t i = 0; i < inflight_tokens_.size(); ++i) {
+      uint64_t token_value = inflight_tokens_[i];
+      auto it = submitted_.find(token_value);
+      if (it == submitted_.end() || it->second.completion_queued) continue;
+      if (!worker_pool_->is_done(it->second.task_id, it->second.fifo_id)) {
+        inflight_tokens_[write_pos++] = token_value;
         continue;
-      release_task_args(submitted);
-      submitted.completion_queued = true;
+      }
+      release_task_args(it->second);
+      it->second.completion_queued = true;
       completed_tokens_.push_back(token_value);
     }
+    inflight_tokens_.resize(write_pos);
   }
 
   if (completed_tokens_.empty()) return false;
@@ -217,6 +225,9 @@ void DeviceBackend::release(BackendToken token) {
   if (flow_it == active_flows_.end()) return;
   if (flow_it->second.inflight > 0) {
     --flow_it->second.inflight;
+  }
+  if (flow_it->second.inflight == 0) {
+    stop_flow(flow_id);
   }
 }
 

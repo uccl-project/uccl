@@ -132,7 +132,6 @@ bool Executor::PlanCacheKey::operator==(PlanCacheKey const& o) const {
          config.input_bytes == o.config.input_bytes &&
          config.output_bytes == o.config.output_bytes &&
          config.tile_bytes == o.config.tile_bytes &&
-         config.staging_bytes == o.config.staging_bytes &&
          config.input_split_bytes == o.config.input_split_bytes &&
          config.output_split_bytes == o.config.output_split_bytes &&
          config.algorithm == o.config.algorithm &&
@@ -153,7 +152,6 @@ size_t Executor::PlanCacheKeyHash::operator()(PlanCacheKey const& key) const {
   s = h(s, key.config.input_bytes);
   s = h(s, key.config.output_bytes);
   s = h(s, key.config.tile_bytes);
-  s = h(s, key.config.staging_bytes);
   s = h(s, static_cast<size_t>(key.config.algorithm));
   s = h(s, static_cast<size_t>(key.config.dtype));
   s = h(s, static_cast<size_t>(key.config.reduction));
@@ -223,6 +221,9 @@ CollectiveOpHandle Executor::submit_collective(
   run.completed.assign(run.total_ops, false);
   run.tokens.resize(run.total_ops);
   run.op_backend.resize(run.total_ops, nullptr);
+  run.token_to_op_idx.clear();
+  run.inflight_op_indices.clear();
+  run.inflight_op_indices.reserve(run.total_ops);
   run.flow_ops.resize(run.plan.num_flows);
   run.flow_head.assign(run.plan.num_flows, 0);
 
@@ -273,7 +274,6 @@ void Executor::advance_run(CollectiveRun& run) {
         ++run.flow_head[fid];
         continue;
       }
-      // Check dependencies.
       bool deps_ok = true;
       for (uint32_t dep : run.plan.ops[op_idx].deps) {
         if (!run.completed[dep]) {
@@ -298,15 +298,14 @@ void Executor::advance_run(CollectiveRun& run) {
       try {
         resolve_remote_ptrs(submit_op, *run.binding,
                             resolve_ipc_buffer_pointer_);
-      } catch (std::exception const& /*e*/) {
+      } catch (std::exception const& e) {
         run.status = CollectiveOpStatus::Failed;
         run.error_message =
             std::string("IPC pointer resolution failed for op ") +
-            std::to_string(r.op_idx);
+            std::to_string(r.op_idx) + ": " + e.what();
         return;
       }
     } else {
-      // Resolve local pointers.
       if (!is_remote_ref(submit_op.src)) {
         submit_op.resolved_src =
             local_const_ptr(*run.binding, submit_op.src, submit_op.tile.size_bytes);
@@ -327,43 +326,74 @@ void Executor::advance_run(CollectiveRun& run) {
     }
 
     if (token.value == 0) {
-      // Backpressure — retry next cycle.
       --run.flow_head[r.fid];
       continue;
     }
     run.tokens[r.op_idx] = token;
     run.op_backend[r.op_idx] = backend;
+    run.token_to_op_idx[{backend, token.value}] = r.op_idx;
+    run.inflight_op_indices.push_back(r.op_idx);
   }
 
-  // Phase 3: Drain completions from all backends.
+  // Phase 3: Drain completions from all backends with O(1) token lookup.
+  bool phase3_found_completions = false;
   for (Backend* backend : completion_sources_) {
     if (backend == nullptr) continue;
     BackendToken token{};
     while (backend->try_pop_completed(token)) {
-      for (size_t i = 0; i < run.total_ops; ++i) {
-        if (run.completed[i]) continue;
-        if (run.op_backend[i] == backend &&
-            run.tokens[i].value == token.value) {
+      auto it = run.token_to_op_idx.find({backend, token.value});
+      if (it != run.token_to_op_idx.end() && !run.completed[it->second]) {
+        size_t op_idx = it->second;
+        // Propagate failure from backend to run status.
+        if (token.failed) {
+          run.status = CollectiveOpStatus::Failed;
+          run.error_message =
+              std::string("backend '") + backend->name() +
+              "' reported failure for op " + std::to_string(op_idx);
           backend->release(token);
-          run.completed[i] = true;
-          ++run.completed_count;
-          break;
+          return;
         }
+        backend->release(token);
+        run.completed[op_idx] = true;
+        ++run.completed_count;
+        run.token_to_op_idx.erase(it);
+        phase3_found_completions = true;
       }
     }
   }
 
-  // Phase 4: Fallback poll individual inflight ops.
-  for (size_t i = 0; i < run.total_ops; ++i) {
-    if (run.completed[i] || run.op_backend[i] == nullptr) continue;
-    if (run.op_backend[i]->poll(run.tokens[i])) {
-      run.op_backend[i]->release(run.tokens[i]);
-      run.completed[i] = true;
-      ++run.completed_count;
+  // Phase 4: Fallback poll individual inflight ops (only if Phase 3 found
+  // no completions and we may have slow-path ops not surfaced via batch pop).
+  if (!phase3_found_completions && !run.inflight_op_indices.empty()) {
+    size_t write_pos = 0;
+    for (size_t j = 0; j < run.inflight_op_indices.size(); ++j) {
+      size_t op_idx = run.inflight_op_indices[j];
+      if (run.completed[op_idx] || run.op_backend[op_idx] == nullptr) continue;
+      if (run.op_backend[op_idx]->poll(run.tokens[op_idx])) {
+        if (run.tokens[op_idx].failed) {
+          run.status = CollectiveOpStatus::Failed;
+          run.error_message =
+              std::string("backend '") + run.op_backend[op_idx]->name() +
+              "' reported failure for op " + std::to_string(op_idx);
+          run.op_backend[op_idx]->release(run.tokens[op_idx]);
+          return;
+        }
+        run.op_backend[op_idx]->release(run.tokens[op_idx]);
+        run.completed[op_idx] = true;
+        ++run.completed_count;
+        run.token_to_op_idx.erase(
+            {run.op_backend[op_idx], run.tokens[op_idx].value});
+      } else {
+        // Keep this op in the inflight list.
+        if (write_pos != j) {
+          run.inflight_op_indices[write_pos] = run.inflight_op_indices[j];
+        }
+        ++write_pos;
+      }
     }
+    run.inflight_op_indices.resize(write_pos);
   }
 
-  // Check termination.
   if (run.completed_count == run.total_ops) {
     run.status = CollectiveOpStatus::Completed;
   }
@@ -386,16 +416,36 @@ void Executor::progress() {
 
 bool Executor::wait(CollectiveOpHandle handle,
                     std::chrono::milliseconds timeout) {
+  constexpr int kSpinIters = 1000;
+  constexpr int kBackoffBaseUs = 10;
+  constexpr int kBackoffMaxUs = 200;
+  int spin_count = 0;
+  int backoff_us = kBackoffBaseUs;
+
   if (timeout.count() == 0) {
     while (!poll(handle)) {
-      std::this_thread::yield();
+      if (spin_count < kSpinIters) {
+        ++spin_count;
+        std::this_thread::yield();
+      } else {
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(backoff_us));
+        backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
+      }
     }
     return true;
   }
   auto deadline = std::chrono::steady_clock::now() + timeout;
   do {
     if (poll(handle)) return true;
-    std::this_thread::sleep_for(std::chrono::microseconds(50));
+    if (spin_count < kSpinIters) {
+      ++spin_count;
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(backoff_us));
+      backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
+    }
   } while (std::chrono::steady_clock::now() < deadline);
   return poll(handle);
 }
@@ -450,6 +500,9 @@ void Executor::run_plan(CollectivePlan const& plan,
   run.completed.assign(run.total_ops, false);
   run.tokens.resize(run.total_ops);
   run.op_backend.resize(run.total_ops, nullptr);
+  run.token_to_op_idx.clear();
+  run.inflight_op_indices.clear();
+  run.inflight_op_indices.reserve(run.total_ops);
   run.flow_ops.resize(run.plan.num_flows);
   run.flow_head.assign(run.plan.num_flows, 0);
 

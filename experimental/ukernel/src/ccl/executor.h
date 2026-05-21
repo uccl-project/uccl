@@ -53,6 +53,22 @@ struct CollectiveRun {
   std::vector<bool> completed;
   std::vector<BackendToken> tokens;
   std::vector<Backend*> op_backend;
+
+  struct TokenKey {
+    Backend* backend;
+    uint64_t value;
+    bool operator==(TokenKey const& o) const {
+      return backend == o.backend && value == o.value;
+    }
+  };
+  struct TokenKeyHash {
+    size_t operator()(TokenKey const& k) const {
+      return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.backend)) ^
+             std::hash<uint64_t>()(k.value);
+    }
+  };
+  std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
+  std::vector<size_t> inflight_op_indices;
   std::vector<std::vector<uint32_t>> flow_ops;
   std::vector<size_t> flow_head;
   size_t completed_count = 0;

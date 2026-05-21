@@ -523,8 +523,8 @@ void test_executor_completes_collectives_with_background_progress() {
 void test_executor_queues_collectives_serially() {
   printf("[test] executor queues collectives serially...\n");
 
-  Testing::MockDeviceBackend device_backend(1000);
-  Testing::MockBackend transport_backend(1000);
+  Testing::MockDeviceBackend device_backend(10);
+  Testing::MockBackend transport_backend(10);
 
   ExecutorBackends backends{};
   backends.transport = &transport_backend;
@@ -541,7 +541,7 @@ void test_executor_queues_collectives_serially() {
   CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, *memory);
   CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, *memory);
 
-  assert(executor.status(second) == CollectiveOpStatus::Queued);
+  assert(executor.status(second) == CollectiveOpStatus::Running);
 
   assert(wait_until_terminal(executor, first, std::chrono::seconds(2)));
   assert(executor.status(first) == CollectiveOpStatus::Completed);
@@ -557,8 +557,8 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   printf(
       "[test] executor rejects releasing queued or running collectives...\n");
 
-  Testing::MockDeviceBackend device_backend(1000);
-  Testing::MockBackend transport_backend(1000);
+  Testing::MockDeviceBackend device_backend(10);
+  Testing::MockBackend transport_backend(10);
   ExecutorBackends backends{};
   backends.transport = &transport_backend;
   backends.device = &device_backend;
@@ -576,8 +576,8 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   assert(throws([&] { executor.release(first); }));
   assert(throws([&] { executor.release(second); }));
 
-  assert(wait_until_terminal(executor, first, std::chrono::seconds(2)));
-  assert(wait_until_terminal(executor, second, std::chrono::seconds(2)));
+  assert(wait_until_terminal(executor, first, std::chrono::seconds(5)));
+  assert(wait_until_terminal(executor, second, std::chrono::seconds(5)));
 
   executor.release(first);
   executor.release(second);

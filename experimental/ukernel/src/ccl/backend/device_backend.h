@@ -73,6 +73,7 @@ class DeviceBackend final : public Backend {
   std::deque<uint32_t> free_fifos_;
   std::unordered_map<uint64_t, SubmittedTask> submitted_;
   std::deque<uint64_t> completed_tokens_;
+  std::vector<uint64_t> inflight_tokens_;
 };
 
 }  // namespace CCL

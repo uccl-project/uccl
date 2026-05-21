@@ -72,6 +72,7 @@ class CommunicatorTransportBackend final : public Backend {
   std::unordered_map<uint64_t, PendingRequest> pending_;
   std::unordered_map<unsigned, uint64_t> request_to_token_;
   std::deque<uint64_t> completed_tokens_;
+  std::deque<uint64_t> failed_tokens_;
   mutable std::mutex init_mu_;
   mutable std::mutex path_mu_;
   uint64_t backend_cache_key_ = 0;

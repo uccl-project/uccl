@@ -9,6 +9,7 @@ namespace CCL {
 
 struct BackendToken {
   uint64_t value = 0;
+  bool failed = false;
 };
 
 class Backend {
