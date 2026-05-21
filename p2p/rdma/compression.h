@@ -169,7 +169,12 @@ class NullCompressorBackend : public ICompressorBackend {
 };
 
 #ifdef USE_DIETGPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
+    defined(__HIPCC__)
+#include "dietgpu/utils/GreenContext_hip.h"
+#else
 #include "dietgpu/utils/GreenContext.h"
+#endif
 /**
  * @brief DietGPU-based compressor backend.
  *
