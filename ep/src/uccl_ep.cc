@@ -911,13 +911,17 @@ class Buffer {
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
     // Allow num_tokens == 0: DP-attention ranks may have no tokens to
     // dispatch, but must still participate in the collective notification.
+    // Zero-element tensors have data_ptr() == 0 in PyTorch, so only require
+    // a real is_token_in_rank buffer when we actually have tokens to route.
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    }
     EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0 && num_experts > 0);
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&

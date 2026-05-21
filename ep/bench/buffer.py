@@ -1617,8 +1617,11 @@ class Buffer:
                 recv_gbl_channel_prefix_matrix = torch.empty(
                     (self.group_size, num_channels), dtype=torch.int32, device=x.device
                 )
+                # Keep at least 1 row so data_ptr() is never null when
+                # x.size(0) == 0 (DP-attention / TBO empty-micro-batch case).
                 send_rdma_head = torch.empty(
-                    (x.size(0), num_rdma_ranks), dtype=torch.int32, device=x.device
+                    (max(x.size(0), 1), num_rdma_ranks),
+                    dtype=torch.int32, device=x.device
                 )
                 send_nvl_head = torch.empty(
                     (alloc_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
