@@ -2,7 +2,7 @@
 
 `experimental/lite/ep` is the DeepEPv2 Lite `ElasticBuffer` codebase with
 UCCL-EP integrated as the EP data transport. The active path is the UCCL CPU
-proxy (`EP_USE_UCCL_PROXY=1`) for both GDR and no-GDR runs. NCCL is still
+proxy (`LITE_EP_TRANSPORT=uccl-*`) for both GDR and no-GDR runs. NCCL is still
 loaded for communicator/bootstrap and DeepEP interface compatibility, but NCCL
 GIN is not used for EP payload movement.
 
@@ -26,8 +26,8 @@ committed docs):
 EP_DIR=$(pwd)
 PYTHONPATH=$EP_DIR
 PYTHON_BIN=${PYTHON_BIN:-python}
-EP_USE_UCCL_PROXY=1
-EP_FORCE_NO_NVLINK=1
+LITE_EP_TRANSPORT=${LITE_EP_TRANSPORT:-uccl-no-gdr}
+LITE_EP_NVLINK=${LITE_EP_NVLINK:-0}
 NCCL_GIN_TYPE=2
 DISABLE_SM90_FEATURES=1
 EP_SUPPRESS_NCCL_CHECK=1
@@ -42,14 +42,26 @@ LD_LIBRARY_PATH=$EP_NCCL_ROOT_DIR/lib:${CONDA_PREFIX:-<python-env>}/lib:${LD_LIB
 EP_JIT_CACHE_DIR=${EP_JIT_CACHE_DIR:-$EP_DIR/.jit-cache}
 ```
 
-| Mode | Settings |
-| --- | --- |
-| GDR | `UCCL_FORCE_NO_GDR=0`, `EP_FORCE_HOST_WINDOW=0`, `NCCL_NET_GDR_LEVEL=5` |
-| no-GDR | `UCCL_FORCE_NO_GDR=1`, `EP_FORCE_HOST_WINDOW=1`, `NCCL_NET_GDR_LEVEL=0` |
+Lite-EP exposes only two runtime knobs for selecting the EP datapath:
 
-With `EP_FORCE_NO_NVLINK=1` and `local_world_size > 1`, UCCL proxy uses the
-shared host window even in GDR mode. `EP_UCCL_FORCE_GPU_WINDOW=1` is for
-diagnostics only — it is not a supported fast path on L4/PCIe.
+| `LITE_EP_TRANSPORT` | Backend | GDR | Typical use |
+| --- | --- | --- | --- |
+| `uccl-no-gdr` (default) | UCCL CPU proxy | no | L4 / consumer GPU primary target |
+| `uccl-gdr`              | UCCL CPU proxy | yes | ConnectX with GDR available |
+| `nccl-gdr`              | NCCL GIN       | yes | upstream comparison runs |
+| `nccl-no-gdr`           | NCCL GIN       | no  | intranode smoke (`make test-intra`) |
+
+`LITE_EP_NVLINK=0` (default) forces every rank into a singleton scaleup
+domain (`kNumScaleupRanks=1`); set `LITE_EP_NVLINK=1` only on platforms
+where NVLink is actually wired. `LITE_EP_NVLINK=1` is rejected with the
+UCCL transports (UCCL proxy mode is built around `kNumScaleupRanks=1`).
+
+The legacy environment variables `EP_USE_UCCL_PROXY`, `UCCL_FORCE_NO_GDR`,
+`EP_FORCE_HOST_WINDOW`, `EP_FORCE_NO_NVLINK`, and `EP_DISABLE_GIN` are no
+longer user-facing -- the resolver in
+`deep_ep/utils/lite_env.py` translates `LITE_EP_TRANSPORT`/`LITE_EP_NVLINK`
+into those names as an internal wire format. Setting any legacy name
+directly will fail at import time with a pointer to the new knobs.
 
 Use explicit test CLI flags (`--do-handle-copy-modes`, `--expert-alignment-modes`,
 `--fp8-dispatch-modes`, `--num-bench-tests`, `--trace-steps`); do not add
@@ -112,8 +124,8 @@ fields print as `nan`.
 - One elected lane must post direct-combine completion signals after payload
   puts so the UCCL D2H ring preserves data-before-signal ordering.
 - In UCCL/no-NVLink mode with `local_world_size > 1`, prefer the shared host
-  window even when `UCCL_FORCE_NO_GDR=0`. Same-node GPU-window traffic over
-  PCIe is slower and less robust than host memcpy on L4.
+  window even on `LITE_EP_TRANSPORT=uccl-gdr`. Same-node GPU-window traffic
+  over PCIe is slower and less robust than host memcpy on L4.
 - Bump `EP_UCCL_PROXY_TRANSPORT_VERSION` whenever JIT-visible device headers,
   barrier layout, or transport semantics change.
 
@@ -122,10 +134,11 @@ fields print as `nan`.
 - Keep UCCL transport changes scoped to `experimental/lite/ep`.
 - Do not modify top-level `ep/` for DeepEPv2 work; that path is legacy
   DeepEP v1 UCCL-EP reference code.
-- Keep the UCCL path gated by `EP_USE_UCCL_PROXY=1`; use `UCCL_FORCE_NO_GDR`
-  and `EP_FORCE_HOST_WINDOW` to select GDR vs no-GDR for single-local-rank
-  runs. Multi-local-rank no-NVLink runs default to shared host windows
-  unless `EP_UCCL_FORCE_GPU_WINDOW=1` is set explicitly.
+- Select the transport via `LITE_EP_TRANSPORT` (one of `uccl-no-gdr`,
+  `uccl-gdr`, `nccl-gdr`, `nccl-no-gdr`) and the NVLink axis via
+  `LITE_EP_NVLINK` (`0` off, `1` on). Multi-local-rank no-NVLink runs
+  default to shared host windows; `EP_UCCL_FORCE_GPU_WINDOW=1` exists as
+  a diagnostic escape hatch but is not a supported fast path.
 - Do not re-enable NVLink/LSA peer bypass, multiple QPs, or multiple-reduction
   combine without rerunning correctness and performance on the two-node
   validation setup.

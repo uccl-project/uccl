@@ -23,7 +23,7 @@ no-GDR, validation shape `128 tok × 7168 hid × top-8`:
 
 ### Small-batch SM cap
 
-For UCCL proxy + `EP_FORCE_NO_NVLINK=1` runs with
+For UCCL proxy + `LITE_EP_NVLINK=0` runs with
 `num_max_tokens_per_rank <= 256`, the automatic SM selector now caps the EP
 kernel at 24 SMs by default (`EP_UCCL_SMALL_BATCH_NUM_SMS=24`). The upstream
 non-overlap floor of 64 SMs over-parallelizes the L4/PCIe validation shape and

@@ -71,8 +71,8 @@ We omit results for larger EP configurations for the time being, but encourage i
 
 This lite-EP port carries an SM89 fallback path for NVIDIA L4 and can run
 DeepEPv2 without NVLink or GPUDirect RDMA through a UCCL-EP style CPU proxy
-transport. Set `EP_USE_UCCL_PROXY=1`, `UCCL_FORCE_NO_GDR=1`,
-`EP_FORCE_NO_NVLINK=1`, and `NCCL_NET_GDR_LEVEL=0` to use this path. NCCL is
+transport. Set `LITE_EP_TRANSPORT=uccl-no-gdr` (default) and
+`LITE_EP_NVLINK=0` to use this path. NCCL is
 still loaded for communicator/bootstrap compatibility, but EP data movement uses
 host-pinned mapped windows, GPU-to-CPU D2H command rings, CPU memcpy for
 same-node peers, and ibverbs RDMA writes from CPU proxy threads for remote-node
@@ -349,13 +349,14 @@ def decode_combine(x: torch.Tensor,
 The library provides some environment variables, which may be useful:
 
 - General
+    - `LITE_EP_TRANSPORT`: one of `uccl-no-gdr` (default), `uccl-gdr`, `nccl-gdr`, `nccl-no-gdr`. Selects the EP datapath (backend + GDR/no-GDR). The resolver in `deep_ep/utils/lite_env.py` translates this into internal env vars consumed by the C++/JIT layers; the legacy names `EP_USE_UCCL_PROXY`, `UCCL_FORCE_NO_GDR`, `EP_FORCE_HOST_WINDOW`, `EP_FORCE_NO_NVLINK`, `EP_DISABLE_GIN` are no longer user-facing and will raise on import if set directly.
+    - `LITE_EP_NVLINK`: `0` (default, NVLink off) or `1` (NVLink on). Must be `0` for `LITE_EP_TRANSPORT=uccl-*` (UCCL proxy mode is built around a singleton scaleup domain).
     - `EP_BUFFER_DEBUG`: `0` or `1`, print buffer initialization, SM approximation, and backend debugging information, `0` by default
     - `EP_SUPPRESS_NCCL_CHECK`: `0` or `1`, suppress NCCL version mismatch checking, `0` by default
     - `EP_AVOID_RECORD_STREAM`: `0` or `1`, avoid `record_stream` on output tensors, `0` by default
     - `EP_NUM_TOPK_IDX_BITS`: integer, override the number of bits for top-k index encoding, `0` (auto) by default
 - Networking
     - `EP_OVERRIDE_RDMA_SL`: integer, override the RDMA service level index for traffic isolation
-    - `EP_DISABLE_GIN`: `0` or `1`, disable the NCCL Gin backend (fall back to non-Gin path), `0` by default
 - JIT
     - `EP_JIT_DEBUG`: `0` or `1`, print JIT debugging information, `0` by default
     - `EP_JIT_CACHE_DIR`: string, cache directory for compiled kernels, `$HOME/.deep_ep` by default

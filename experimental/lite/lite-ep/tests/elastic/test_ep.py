@@ -280,7 +280,7 @@ def test_dispatch_combine(buffer: deep_ep.ElasticBuffer, args: argparse.Namespac
             if args.ignore_local_traffic:
                 num_scaleup_recv_tokens -= (src_token_global_idx // num_max_tokens_per_rank % num_scaleup_ranks == dist.get_rank() % num_scaleup_ranks).sum().item()
 
-            # Physical-topology override for SO/SU labels under EP_FORCE_NO_NVLINK=1.
+            # Physical-topology override for SO/SU labels under LITE_EP_NVLINK=0.
             # When kNumScaleupRanks=1 (NVLink disabled), the DeepEPv2 logical SO/SU
             # decomposition does not match the physical fabric the data actually
             # traverses. Mirror the upstream formulas exactly, only substituting

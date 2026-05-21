@@ -224,7 +224,7 @@ public:
         workspace = this->nccl_context->mapped_window_ptr;
         if (use_uccl_proxy) {
             EP_HOST_ASSERT(get_env<int>("EP_FORCE_NO_NVLINK", 0) != 0 and
-                           "UCCL proxy mode requires EP_FORCE_NO_NVLINK=1");
+                           "UCCL proxy mode requires LITE_EP_NVLINK=0");
             EP_HOST_ASSERT(local_world_size > 0);
             EP_HOST_ASSERT(local_rank >= 0 and local_rank < local_world_size);
             if (uccl_use_host_window) {

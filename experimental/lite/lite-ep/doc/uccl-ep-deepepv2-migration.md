@@ -6,22 +6,22 @@ UCCL-EP integrated into the DeepEPv2 `ElasticBuffer` codebase under
 
 ## Scope
 
-- Active EP datapath: UCCL CPU proxy via `EP_USE_UCCL_PROXY=1`.
+- Active EP datapath: UCCL CPU proxy via `LITE_EP_TRANSPORT=uccl-*`.
 - NCCL is used for communicator/bootstrap only; NCCL Gin does not move EP payload.
 - Validation HW: NVIDIA L4 (`sm_89`), no NVLink, ConnectX over ibverbs.
 - Validation shape: `128 tok × 7168 hid × top-8 × 64 exp`, BF16,
   `do_handle_copy=0`, `expert_alignment=128`.
 
-Two transport modes:
+Two transport modes (`LITE_EP_TRANSPORT` value, with `LITE_EP_NVLINK=0`):
 
-| Mode | Settings | Window |
+| Mode | Setting | Window |
 | --- | --- | --- |
-| GDR | `UCCL_FORCE_NO_GDR=0`, `EP_FORCE_HOST_WINDOW=0` | GPU RDMA window for single-local-rank; shared host window otherwise |
-| no-GDR | `UCCL_FORCE_NO_GDR=1`, `EP_FORCE_HOST_WINDOW=1` | host-pinned CUDA-mapped window |
+| GDR    | `LITE_EP_TRANSPORT=uccl-gdr`    | GPU RDMA window for single-local-rank; shared host window otherwise |
+| no-GDR | `LITE_EP_TRANSPORT=uccl-no-gdr` | host-pinned CUDA-mapped window |
 
 On L4/PCIe without NVLink, same-node GPU-window traffic is slower than
 CPU-proxy memcpy through shared host memory, so UCCL +
-`EP_FORCE_NO_NVLINK=1` + `local_world_size > 1` always picks a POSIX
+`LITE_EP_NVLINK=0` + `local_world_size > 1` always picks a POSIX
 shared host window. `EP_UCCL_FORCE_GPU_WINDOW=1` exists for diagnostics.
 
 Key code paths: `csrc/elastic/buffer.hpp` (window selection),
@@ -51,7 +51,7 @@ Key code paths: `csrc/elastic/buffer.hpp` (window selection),
    `csrc/elastic/buffer.hpp`): on PCIe-only GPUs (L4/L40), upstream's
    NVLink scaleup path (`is_nvlink_accessible`, LSA team direct
    `ld.acquire.sys` cross-GPU loads) hangs or segfaults. Setting
-   `EP_FORCE_NO_NVLINK=1` forces `kNumScaleupRanks=1` in Python, gates
+   `LITE_EP_NVLINK=0` forces `kNumScaleupRanks=1` in Python, gates
    out the NVLink helpers in device headers via JIT macro, and skips
    NVLink-requiring NCCL symmetric-memory segment types — so all
    cross-GPU traffic goes through the UCCL proxy. Consequence:
@@ -88,7 +88,7 @@ counts inter-node bytes (RDMA); SU counts intra-node bytes (host SHM
 memcpy). Same byte formulas as upstream `tests/elastic/test_ep.py`
 (self-rank traffic counted), with the only substitution being
 `NVLink domain → physical node (LOCAL_WORLD_SIZE)` because under
-`EP_FORCE_NO_NVLINK=1` the logical scaleup domain `kNumScaleupRanks=1`
+`LITE_EP_NVLINK=0` the logical scaleup domain `kNumScaleupRanks=1`
 does not match what data physically traverses.
 
 | Topology | Mode | Dispatch | Combine | Reduced combine |

@@ -42,18 +42,29 @@ def parse_stages(value: str) -> tuple[str, ...]:
 
 
 def apply_transport_env(transport: str) -> None:
-    os.environ.setdefault("EP_USE_UCCL_PROXY", "1")
-    os.environ.setdefault("EP_FORCE_NO_NVLINK", "1")
+    # Map the bench-script transport name to LITE_EP_TRANSPORT. The
+    # resolver in deep_ep/utils/lite_env.py translates this into the
+    # internal env vars consumed by the C++/JIT layers on `import deep_ep`
+    # in each spawned worker. Run the resolver in the parent process too
+    # so that this script's own reads of EP_FORCE_NO_NVLINK see the
+    # translated values before spawn.
+    if transport == "nogdr":
+        os.environ.setdefault("LITE_EP_TRANSPORT", "uccl-no-gdr")
+    elif transport == "gdr":
+        os.environ.setdefault("LITE_EP_TRANSPORT", "uccl-gdr")
+    os.environ.setdefault("LITE_EP_NVLINK", "0")
     os.environ.setdefault("EP_SUPPRESS_NCCL_CHECK", "1")
 
-    if transport == "nogdr":
-        os.environ["UCCL_FORCE_NO_GDR"] = "1"
-        os.environ["EP_FORCE_HOST_WINDOW"] = "1"
-        os.environ["NCCL_NET_GDR_LEVEL"] = "0"
-    elif transport == "gdr":
-        os.environ["UCCL_FORCE_NO_GDR"] = "0"
-        os.environ["EP_FORCE_HOST_WINDOW"] = "0"
-        os.environ["NCCL_NET_GDR_LEVEL"] = "5"
+    # Load lite_env.py directly to avoid pulling in the full deep_ep
+    # package (which initialises CUDA / loads _C) in the parent process.
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "_lite_env_standalone",
+        EP_DIR / "deep_ep" / "utils" / "lite_env.py",
+    )
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _mod.resolve()
 
 
 def make_test_args(args: argparse.Namespace) -> argparse.Namespace:

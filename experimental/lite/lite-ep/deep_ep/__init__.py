@@ -6,6 +6,12 @@ import torch
 import os
 
 from .utils.find_pkgs import find_nccl_root
+from .utils import lite_env
+
+# Resolve LITE_EP_TRANSPORT / LITE_EP_NVLINK into the internal env vars
+# consumed by the C++/JIT layers. This must run before `deep_ep._C` is
+# imported so that the first JIT compile sees the correct -D flags.
+lite_env.resolve()
 
 # Set some default environment provided at setup
 try:
