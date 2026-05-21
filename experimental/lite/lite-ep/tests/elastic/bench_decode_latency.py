@@ -185,7 +185,7 @@ def run(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     if shared_buffer is not None:
         shared_buffer.destroy()
     dist.destroy_process_group()
-    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '0')):
+    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '1')):
         os._exit(0)
 
 

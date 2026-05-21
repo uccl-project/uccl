@@ -189,7 +189,7 @@ def main() -> None:
     torch.multiprocessing.spawn(
         run_worker, args=(args.num_processes, args), nprocs=args.num_processes
     )
-    if int(os.environ.get("EP_FORCE_PROCESS_EXIT", "0")):
+    if int(os.environ.get("EP_FORCE_PROCESS_EXIT", "1")):
         os._exit(0)
 
 

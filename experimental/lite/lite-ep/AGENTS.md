@@ -31,7 +31,8 @@ EP_FORCE_NO_NVLINK=1
 NCCL_GIN_TYPE=2
 DISABLE_SM90_FEATURES=1
 EP_SUPPRESS_NCCL_CHECK=1
-EP_FORCE_PROCESS_EXIT=1
+# EP_FORCE_PROCESS_EXIT defaults to 1; set to 0 to keep the process alive
+# after dist.destroy_process_group() for debugging.
 UCCL_IB_HCA=${UCCL_IB_HCA:-<ib-device>}
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<gpu-list>}
 EP_NCCL_ROOT_DIR=${EP_NCCL_ROOT_DIR:-<local-nccl-root>}

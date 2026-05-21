@@ -652,7 +652,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     # Destroy the runtime and communication group
     buffer.destroy()
     dist.destroy_process_group()
-    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '0')):
+    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '1')):
         os._exit(0)
 
 
@@ -714,5 +714,5 @@ if __name__ == '__main__':
     # Launch test processes
     num_processes = args.num_processes
     torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
-    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '0')):
+    if int(os.environ.get('EP_FORCE_PROCESS_EXIT', '1')):
         os._exit(0)

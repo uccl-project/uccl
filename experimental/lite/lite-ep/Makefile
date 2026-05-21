@@ -31,7 +31,6 @@ test-intra:
 	NCCL_NET_GDR_LEVEL=0 \
 	NCCL_GIN_TYPE=2 \
 	DISABLE_SM90_FEATURES=$(DISABLE_SM90_FEATURES) \
-	EP_FORCE_PROCESS_EXIT=1 \
 	EP_JIT_CACHE_DIR=$(EP_JIT_CACHE_DIR) \
 	$(PYTHON) tests/elastic/test_ep.py --num-processes 2 --allow-hybrid-mode 0 \
 	  --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=64 --test-first-only \

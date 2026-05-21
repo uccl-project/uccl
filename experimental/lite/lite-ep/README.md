@@ -369,6 +369,7 @@ The library provides some environment variables, which may be useful:
     - `EP_JIT_DUMP_PTX`: `0` or `1`, dump PTX output, `0` by default
     - `EP_JIT_DUMP_SASS`: `0` or `1`, dump SASS output, `0` by default
 - Debug and profiling
+    - `EP_FORCE_PROCESS_EXIT`: `0` or `1`, call `os._exit(0)` after `dist.destroy_process_group()` to avoid NCCL/CUDA shutdown hangs in test/bench scripts, `1` by default (set to `0` to keep the process alive for post-mortem inspection)
     - `EP_GIN_GDAKI_DEBUG`: `0` or `1`, enable NCCL Gin GDAKI debugging output, `0` by default
     - `EP_USE_NVIDIA_TOOLS`: `0` or `1`, skip internal profiling when running under external NVIDIA tools, `0` by default
     - `EP_DISABLE_BARRIER_PROFILING`: `0` or `1`, disable barrier-based communication profiling in benchmarks, `0` by default
