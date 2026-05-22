@@ -183,14 +183,22 @@ inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
-                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                     << " (" << ibv_wc_status_str(status) << ")"
-                     << ", opcode=" << wc->opcode
-                     << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
-                     << std::hex << wc->vendor_err << ", qp_num=0x"
-                     << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
-                     << std::dec;
+      if (status == IBV_WC_WR_FLUSH_ERR) {
+        // Cascade flush after a QP error; root cause logged by primary CQE.
+        UCCL_LOG_EVERY_N(WARN, 1000)
+            << "pollOnce - channel_id: " << channel_id
+            << ", WR_FLUSH_ERR, qp_num=0x" << std::hex << wc->qp_num
+            << std::dec;
+      } else {
+        UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
+                       << ", CQE error, wr_id=" << wr_id << ", status=" << status
+                       << " (" << ibv_wc_status_str(status) << ")"
+                       << ", opcode=" << wc->opcode
+                       << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
+                       << std::hex << wc->vendor_err << ", qp_num=0x"
+                       << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
+                       << std::dec;
+      }
     } else {
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;

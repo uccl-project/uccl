@@ -486,19 +486,6 @@ class SendConnection : public RDMAConnection {
     std::condition_variable cv;
 
     uint64_t reserve(uint64_t bytes) {
-      // Diagnostic mode: UCCL_P2P_COMPRESS_FIX_ARENA_OFFSET=1 forces every
-      // compressed write to land at decompress_buffer[0..]. Used to test
-      // whether varying destination address per iter is what's costing the
-      // compressed path its NIC throughput (NIC/HBM cache locality
-      // hypothesis). Not safe for production — successive writes overlap
-      // and the receiver's in-flight decompress may read corrupted bytes
-      // — but the bench doesn't verify payload integrity.
-      static bool const fix_offset = []() {
-        char const* env = std::getenv("UCCL_P2P_COMPRESS_FIX_ARENA_OFFSET");
-        return env && env[0] == '1';
-      }();
-      if (fix_offset) return 0;
-
       std::unique_lock<std::mutex> lk(mu);
       while (true) {
         if (head + bytes > size) head = 0;
@@ -849,20 +836,15 @@ class SendConnection : public RDMAConnection {
     tracker_->updateExpectedAckCount(wr_id,
                                      std::numeric_limits<uint32_t>::max());
 
-    // Defer per-chunk flushes for the entire compressed write — submitRequest
-    // would otherwise call flushBatch() per chunk (each chunk > the 32KB
-    // threshold), turning the writev batch into one doorbell per chunk and
-    // halving effective NIC throughput. We manually flush at the end of
-    // phase 1 so kSplitOnly pipelining (NIC drains phase-1 while GPU runs
-    // encode) is preserved; phase 2 is left in the batch for the outer
-    // writev / write_async caller's flush to drain.
-    struct DeferGuard {
-      DeferGuard() { g_uccl_defer_flush = true; }
-      ~DeferGuard() { g_uccl_defer_flush = false; }
-    } defer_guard;
+    // DeferGuard removed: on Broadcom bnxt_re + AMD MI325X, accumulating
+    // multiple phase-1 WRs per channel before flushing (even with individual
+    // ibv_post_send + IBV_SEND_SIGNALED) causes IBV_WC_LOC_QP_OP_ERR
+    // vendor_err=0x3 on all data channels. Without DeferGuard, each chunk
+    // auto-flushes immediately (chunk_size >> kBatchFlushBytes=32KB),
+    // reproducing the round-robin interleaved posting order of write_async.
 
     postCompressedSegment(req, first_seg, first_chunks, num_channels);
-    flushBatches();  // 1 doorbell per channel for phase 1, kicks NIC DMA
+    flushBatches();  // drain any remaining per-chunk auto-flushes
 
     // Phase 2: encode. compressEncodeOneBatch advances req->remote_mem->addr
     // by first_seg so the encoded tail lands at slot_base + first_seg.
@@ -872,21 +854,6 @@ class SendConnection : public RDMAConnection {
     uint32_t compressed_size =
         Compressor::getInstance().compressEncodeOneBatch(req);
 
-    // Diagnostic: UCCL_P2P_COMPRESS_SKIP_PHASE2=1 short-circuits ONLY the
-    // phase-2 NIC post. encode kernel still runs (to clean up split temps).
-    // Bench sees iter completion after phase 1's first_chunks WCs land —
-    // useful for isolating whether phase 2 (or its interaction with phase 1
-    // in NIC SQ) is what's costing the compressed path its throughput. NOT
-    // functionally correct (receiver gets only the raw split bytes, can't
-    // decompress) but bench doesn't verify payload.
-    static bool const skip_phase2 = []() {
-      char const* env = std::getenv("UCCL_P2P_COMPRESS_SKIP_PHASE2");
-      return env && env[0] == '1';
-    }();
-    if (skip_phase2) {
-      tracker_->updateExpectedAckCount(wr_id, first_chunks);
-      return wr_id;
-    }
     uint32_t second_seg = req->local_mem->size;
     // Phase 2 routed to a SINGLE chunk on one channel. Empirical finding:
     // when phase 2 chunks share QPs with phase 1 (mixed sized WRs on the
@@ -1228,18 +1195,17 @@ class RecvConnection : public RDMAConnection {
   // deletes the context.
   struct AsyncAckCtx {
     int64_t wr_id;
+    uint32_t ack_slot;
     uint64_t remote_ack_addr;
     uint32_t remote_ack_rkey;
     std::shared_ptr<RecvControlChannel> ctrl_channel;
-    uint64_t value;  // 8-byte ack payload kept alive until ibv_post_send copies
-                     // it inline
   };
 
   static void postAckHostFn(void* user_data) {
     std::unique_ptr<AsyncAckCtx> ctx(static_cast<AsyncAckCtx*>(user_data));
-    ctx->value = static_cast<uint64_t>(ctx->wr_id);
     ctx->ctrl_channel->postAckWrite(ctx->remote_ack_addr, ctx->remote_ack_rkey,
-                                    &ctx->value, sizeof(ctx->value));
+                                    ctx->ack_slot,
+                                    static_cast<uint64_t>(ctx->wr_id) + 1);
   }
 
   void handleCompressedWriteArrival(WriteReqMeta const& m) {
@@ -1270,12 +1236,12 @@ class RecvConnection : public RDMAConnection {
     // drains the slot (2 GB arena vs single-digit-ms decompress → tens of
     // ms before any wrap collision could occur).
     //
-    // postAckWrite is INLINE so the 8-byte payload is copied into the WQE
-    // before ibv_post_send returns — stack lifetime is safe.
-    uint64_t ack_value = static_cast<uint64_t>(m.wr_id);
+    // Use wr_id+1 so wr_id=0 never writes the zero sentinel that
+    // pollAckRing uses to mean "not yet acked".
     ctrl_channel_->postAckWrite(
         remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
-        remote_ack_ring_.getKeyByContextID(0), &ack_value, sizeof(ack_value));
+        remote_ack_ring_.getKeyByContextID(0), m.ack_slot,
+        static_cast<uint64_t>(m.wr_id) + 1);
 
     // Queue decompress kernel; no callback needed (ack already sent).
     Compressor::getInstance().decompressAsync(

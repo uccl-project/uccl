@@ -67,6 +67,7 @@ class RDMADataChannel {
   RDMADataChannel& operator=(RDMADataChannel const&) = delete;
 
   ~RDMADataChannel() {
+    if (ack_staging_mr_) ibv_dereg_mr(ack_staging_mr_);
     if (qp_) ibv_destroy_qp(qp_);
     if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
   }
@@ -183,20 +184,20 @@ class RDMADataChannel {
     return result;
   }
 
-  // Post an unsignaled INLINE RDMA WRITE of a small payload (used to ship
-  // 8-byte completion acks back to the sender's ack_ring). Every kAckSigEvery
-  // calls one WR is signaled so the SQ doesn't fill up; callers should
-  // periodically drain CQEs via pollOnce(). `payload` may live on stack —
-  // INLINE copies it into the WQE before ibv_post_send returns.
+  // Post an RDMA WRITE to ship an 8-byte ack back to the sender's ack_ring.
+  // ack_slot selects a pre-registered staging slot so no IBV_SEND_INLINE is
+  // needed (bnxt_re does not support inline RDMA WRITEs). Each slot is only
+  // reused after kAckRingDepth messages, well after the previous WR completes.
+  // Every kAckSigEvery calls one WR is signaled to prevent SQ overflow.
   //
-  // Thread-safe: called from both the receiver polling thread and the CUDA
-  // host-callback thread (after async decompress).
+  // Thread-safe: called from the receiver polling thread.
   int postAckWrite(uint64_t remote_addr, uint32_t remote_rkey,
-                   void const* payload, size_t len) {
+                   uint32_t ack_slot, uint64_t value) {
+    ack_staging_[ack_slot] = value;
     ibv_sge sge{};
-    sge.addr = reinterpret_cast<uintptr_t>(payload);
-    sge.length = static_cast<uint32_t>(len);
-    sge.lkey = 0;  // ignored with IBV_SEND_INLINE
+    sge.addr = reinterpret_cast<uintptr_t>(&ack_staging_[ack_slot]);
+    sge.length = sizeof(uint64_t);
+    sge.lkey = ack_staging_mr_->lkey;
     ibv_send_wr wr{};
     wr.wr_id = kAckSignalMarker;
     wr.opcode = IBV_WR_RDMA_WRITE;
@@ -204,14 +205,21 @@ class RDMADataChannel {
     wr.num_sge = 1;
     wr.wr.rdma.remote_addr = remote_addr;
     wr.wr.rdma.rkey = remote_rkey;
-    wr.send_flags = IBV_SEND_INLINE;
+    wr.send_flags = 0;
     std::lock_guard<std::mutex> lk(ack_mu_);
     if (++ack_unsig_count_ >= kAckSigEvery) {
       wr.send_flags |= IBV_SEND_SIGNALED;
       ack_unsig_count_ = 0;
     }
     ibv_send_wr* bad = nullptr;
-    return ibv_post_send(qp_, &wr, &bad);
+    int rc = ibv_post_send(qp_, &wr, &bad);
+    if (unlikely(rc != 0)) {
+      UCCL_LOG(WARN) << "postAckWrite ibv_post_send failed slot=" << ack_slot
+                     << " rc=" << rc << " errno=" << errno << " remote_addr=0x"
+                     << std::hex << remote_addr << " rkey=0x" << remote_rkey
+                     << " lkey=0x" << ack_staging_mr_->lkey << std::dec;
+    }
+    return rc;
   }
   static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
   static constexpr uint32_t kAckSigEvery = 64;
@@ -266,6 +274,12 @@ class RDMADataChannel {
 
   uint32_t ack_unsig_count_ = 0;  // selective-signal counter for postAckWrite
   std::mutex ack_mu_;             // serializes ibv_post_send for ack WRs
+
+  // Pre-registered staging buffer for postAckWrite. kAckRingDepth slots, one
+  // per ack ring slot, so each slot is only reused after kAckRingDepth
+  // messages — long after any in-flight RDMA WRITE for that slot completes.
+  std::vector<uint64_t> ack_staging_;
+  struct ibv_mr* ack_staging_mr_ = nullptr;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -510,6 +524,15 @@ class RDMADataChannel {
   void initQP() {
     impl_->initPreAllocResources();
     impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
+    // Pre-register host staging buffer for non-inline ack RDMA WRITEs.
+    // One uint64_t slot per ack ring depth; slot index = ack_slot, so each
+    // slot is only overwritten when the same ack_slot cycles back (≥4096
+    // messages later), well after the previous RDMA WRITE has completed.
+    ack_staging_.resize(kAckRingDepth, 0);
+    ack_staging_mr_ = ibv_reg_mr(
+        ctx_->getPD(), ack_staging_.data(),
+        kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
+    assert(ack_staging_mr_);
   }
 
   // Prepare SGE list for send request
