@@ -96,13 +96,16 @@ std::string preview(std::vector<float> const& values, size_t count = 4) {
 void wait_for_token(DeviceBackend& backend, BackendToken token,
                     std::chrono::milliseconds timeout) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
+  BackendToken done_buf[64];
   while (std::chrono::steady_clock::now() < deadline) {
-    if (backend.poll(token)) {
-      return;
-    }
+    size_t n = backend.drain(done_buf, 64);
+    for (size_t i = 0; i < n; ++i)
+      if (done_buf[i].value == token.value) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  require(backend.poll(token), "device backend token timed out");
+  BackendToken t{};
+  require(backend.drain(&t, 1) == 1 && t.value == token.value,
+          "device backend token timed out");
 }
 
 BackendToken submit_and_wait(DeviceBackend& backend, Op const& op,
@@ -207,7 +210,6 @@ void test_device_copy() {
                              kTestInputBufferId, kTestScratchBufferId);
   BackendToken token =
       submit_and_wait(backend, op, memory, std::chrono::seconds(5));
-  backend.release(token);
   backend.stop(0);
 
   verify_copy(download_floats(staging.ptr, kBytes), src, "device copy");
@@ -237,7 +239,6 @@ void test_device_reduce_sum() {
                              ReductionKind::Sum);
   BackendToken token =
       submit_and_wait(backend, op, memory, std::chrono::seconds(5));
-  backend.release(token);
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
   std::vector<float> staging_after = download_floats(staging.ptr, kBytes);
@@ -278,7 +279,6 @@ void test_device_reduce_pipeline_same_flow() {
 
   for (BackendToken token : tokens) {
     wait_for_token(backend, token, std::chrono::seconds(5));
-    backend.release(token);
   }
   backend.stop(0);
 

@@ -77,7 +77,7 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_components
+UNIT_TEST_BINS := test_components test_backend_components
 INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_multiprocess_collective
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
@@ -90,6 +90,7 @@ test: test-unit test-integration
 
 test-unit: $(UNIT_TEST_BINS)
 	./test_components
+	./test_backend_components
 
 test-integration: $(INTEGRATION_TEST_BINS)
 	./test_device_backend
@@ -103,6 +104,9 @@ integration: test-integration
 real_backends: $(REAL_BACKEND_OBJ)
 
 test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+
+test_backend_components: $(CCL_CORE_OBJ) test/unit/test_backend_components.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 $(UCCL_RDMA_STATIC):

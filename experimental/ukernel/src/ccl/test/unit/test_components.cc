@@ -583,14 +583,14 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   executor.release(second);
 }
 
-void test_executor_uses_fallback_backend_when_specialized_backends_are_missing() {
-  printf(
-      "[test] executor uses fallback backend when specialized backends are "
-      "missing...\n");
+void test_executor_uses_transport_only_backend() {
+  printf("[test] executor runs with transport-only backend...\n");
 
-  Testing::MockBackend fallback_backend;
+  Testing::MockBackend transport_backend;
+  Testing::MockDeviceBackend device_backend;
   ExecutorBackends backends{};
-  backends.fallback = &fallback_backend;
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
   Executor executor(backends);
   auto memory = std::make_shared<CollectiveBinding>(
       Testing::make_test_memory(1, 4, 4096));
@@ -599,7 +599,8 @@ void test_executor_uses_fallback_backend_when_specialized_backends_are_missing()
   CollectiveOpHandle handle = executor.submit_allreduce(cfg, *memory);
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Completed);
-  assert(fallback_backend.submissions() > 0);
+  assert(transport_backend.submissions() > 0);
+  assert(device_backend.submissions() > 0);
   executor.release(handle);
 }
 
@@ -608,7 +609,7 @@ void test_executor_reports_submit_failure() {
 
   Testing::ThrowingBackend throwing_backend("mock backend submit failure");
   ExecutorBackends backends{};
-  backends.fallback = &throwing_backend;
+  backends.transport = &throwing_backend;
   Executor executor(backends);
   auto memory = std::make_shared<CollectiveBinding>(
       Testing::make_test_memory(1, 4, 2048));
@@ -646,7 +647,7 @@ int main() {
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();
   test_executor_rejects_releasing_queued_or_running_collectives();
-  test_executor_uses_fallback_backend_when_specialized_backends_are_missing();
+  test_executor_uses_transport_only_backend();
   test_executor_reports_submit_failure();
   printf("\n=== Component tests PASSED ===\n");
   return 0;

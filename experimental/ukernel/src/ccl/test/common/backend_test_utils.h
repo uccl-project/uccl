@@ -45,7 +45,6 @@ inline void init_registered_buffer(RegisteredBuffer& buffer, size_t bytes,
 
 inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
                                            CollectiveBufferRoles roles = {}) {
-  // Use a static registry owned by this test helper.
   static std::unique_ptr<BufferRegistry> s_registry;
   if (!s_registry) {
     s_registry = std::make_unique<BufferRegistry>();
@@ -129,9 +128,9 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     if (op.kind == OpKind::DeviceCopy ||
         op.kind == OpKind::DeviceReduce) {
       assert(op.src.kind == BufferKind::Local ||
-              op.src.kind == BufferKind::Remote);
+               op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local ||
-              op.dst.kind == BufferKind::Remote);
+               op.dst.kind == BufferKind::Remote);
     }
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
@@ -142,9 +141,8 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
 
 inline size_t count_ops(CollectivePlan const& plan, OpKind kind) {
   size_t total = 0;
-  for (auto const& op : plan.ops) {
+  for (auto const& op : plan.ops)
     if (op.kind == kind) ++total;
-  }
   return total;
 }
 
@@ -156,28 +154,7 @@ inline size_t count_exec_ops(CollectivePlan const& plan, OpKind kind) {
   return count_ops(plan, kind);
 }
 
-inline BackendToken submit_token(
-    uint64_t& next_token, uint64_t& submissions, uint32_t polls_before_ready,
-    std::unordered_map<uint64_t, uint32_t>& pending_polls) {
-  BackendToken token{next_token++};
-  ++submissions;
-  pending_polls.emplace(token.value, polls_before_ready);
-  return token;
-}
-
-inline bool poll_token(BackendToken token,
-                       std::unordered_map<uint64_t, uint32_t>& pending_polls) {
-  auto it = pending_polls.find(token.value);
-  if (it == pending_polls.end()) return true;
-  if (it->second == 0) return true;
-  --it->second;
-  return it->second == 0;
-}
-
-inline void release_token(
-    BackendToken token, std::unordered_map<uint64_t, uint32_t>& pending_polls) {
-  pending_polls.erase(token.value);
-}
+// ── Mock backends for unit tests ──────────────────────────────────────
 
 class MockBackend final : public Backend {
  public:
@@ -185,26 +162,39 @@ class MockBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "mock"; }
-  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind) const override { return true; }
+
   BackendToken submit(Op const&, CollectiveBinding&) override {
-    return submit_token(next_token_, submissions_, polls_before_ready_,
-                        pending_polls_);
-  }
-  bool poll(BackendToken token) override {
-    return poll_token(token, pending_polls_);
-  }
-  bool try_pop_completed(BackendToken&) override { return false; }
-  void release(BackendToken token) override {
-    release_token(token, pending_polls_);
+    BackendToken t{next_token_++};
+    ++submissions_;
+    pending_polls_[t.value] = polls_before_ready_;
+    return t;
   }
 
-  uint64_t submissions() const { return submissions_; }
+  size_t drain(BackendToken* out, size_t max_count) override {
+    size_t n = 0;
+    auto it = pending_polls_.begin();
+    while (it != pending_polls_.end() && n < max_count) {
+      if (it->second > 1) {
+        --it->second;
+        ++it;
+      } else {
+        out[n].value = it->first;
+        out[n].failed = false;
+        ++n;
+        it = pending_polls_.erase(it);
+      }
+    }
+    return n;
+  }
+
+  size_t submissions() const { return submissions_; }
 
  private:
   uint32_t polls_before_ready_ = 1;
   uint64_t next_token_ = 1;
-  uint64_t submissions_ = 0;
+  size_t submissions_ = 0;
   std::unordered_map<uint64_t, uint32_t> pending_polls_;
 };
 
@@ -214,31 +204,43 @@ class MockDeviceBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "device"; }
-  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind kind) const override {
     return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce;
   }
+
   BackendToken submit(Op const& op, CollectiveBinding&) override {
-    if (!supports(op.kind)) {
+    if (!supports(op.kind))
       throw std::invalid_argument("device backend does not support this op");
-    }
-    return submit_token(next_token_, submissions_, polls_before_ready_,
-                        pending_polls_);
-  }
-  bool poll(BackendToken token) override {
-    return poll_token(token, pending_polls_);
-  }
-  bool try_pop_completed(BackendToken&) override { return false; }
-  void release(BackendToken token) override {
-    release_token(token, pending_polls_);
+    BackendToken t{next_token_++};
+    ++submissions_;
+    pending_polls_[t.value] = polls_before_ready_;
+    return t;
   }
 
-  uint64_t submissions() const { return submissions_; }
+  size_t drain(BackendToken* out, size_t max_count) override {
+    size_t n = 0;
+    auto it = pending_polls_.begin();
+    while (it != pending_polls_.end() && n < max_count) {
+      if (it->second > 1) {
+        --it->second;
+        ++it;
+      } else {
+        out[n].value = it->first;
+        out[n].failed = false;
+        ++n;
+        it = pending_polls_.erase(it);
+      }
+    }
+    return n;
+  }
+
+  size_t submissions() const { return submissions_; }
 
  private:
   uint32_t polls_before_ready_ = 1;
   uint64_t next_token_ = 1;
-  uint64_t submissions_ = 0;
+  size_t submissions_ = 0;
   std::unordered_map<uint64_t, uint32_t> pending_polls_;
 };
 
@@ -248,14 +250,12 @@ class ThrowingBackend final : public Backend {
       : message_(std::move(message)) {}
 
   char const* name() const override { return "throwing"; }
-  void validate(CollectivePlan const&, CollectiveBinding&) const override {}
+  void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind) const override { return true; }
   BackendToken submit(Op const&, CollectiveBinding&) override {
     throw std::runtime_error(message_);
   }
-  bool poll(BackendToken) override { return false; }
-  bool try_pop_completed(BackendToken&) override { return false; }
-  void release(BackendToken) override {}
+  size_t drain(BackendToken*, size_t) override { return 0; }
 
  private:
   std::string message_;

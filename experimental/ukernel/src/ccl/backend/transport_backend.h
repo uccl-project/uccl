@@ -3,7 +3,6 @@
 #include "backend.h"
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -23,7 +22,6 @@ struct TransportBackendConfig {
   std::shared_ptr<UKernel::Transport::CommunicatorConfig> communicator_config;
 };
 
-// Adapts transport::Communicator onto the CCL backend interface.
 class CommunicatorTransportBackend final : public Backend {
  public:
   explicit CommunicatorTransportBackend(TransportBackendConfig const& config);
@@ -31,52 +29,34 @@ class CommunicatorTransportBackend final : public Backend {
 
   char const* name() const override;
   void validate(CollectivePlan const& plan,
-                CollectiveBinding& binding) const override;
+                CollectiveBinding& binding) override;
   bool supports(OpKind kind) const override;
   BackendToken submit(Op const& op, CollectiveBinding& binding) override;
-  bool poll(BackendToken token) override;
-  bool try_pop_completed(BackendToken& token) override;
-  void release(BackendToken token) override;
+  size_t drain(BackendToken* out, size_t max_count) override;
 
   UKernel::Transport::Communicator& communicator();
   UKernel::Transport::Communicator const& communicator() const;
 
  private:
-  struct PendingRequest {
-    unsigned request_id = 0;
-    bool completed = false;
-    bool released = false;
-  };
+  void initialize_memory_bindings(CollectiveBinding& binding);
+  void ensure_peer_path(int peer_rank, bool need_put, bool need_wait);
 
-  void ensure_memory_bindings_initialized(CollectiveBinding& binding) const;
-  void initialize_memory_bindings(CollectiveBinding& binding) const;
-  void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
-                        size_t bytes) const;
-  void const* resolve_const(CollectiveBinding const& binding,
-                            BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_local_buffer_id(CollectiveBinding const& binding,
-                                   BufferRef const& ref, size_t bytes) const;
+                                    BufferRef const& ref) const;
   int resolve_peer_rank(Op const& op) const;
   uint32_t resolve_remote_buffer_id(CollectiveBinding const& binding,
-                                    BufferRef const& ref) const;
-  void ensure_plan_paths(CollectivePlan const& plan) const;
-  void ensure_peer_paths(int peer_rank, bool need_put, bool need_wait) const;
-  struct PeerPathState {
-    bool put_ready = false;
-    bool wait_ready = false;
-  };
+                                     BufferRef const& ref) const;
+  bool is_transport_fresh(CollectiveBinding const& binding) const;
 
   std::unique_ptr<UKernel::Transport::Communicator> communicator_;
   uint64_t next_token_ = 1;
-  mutable std::mutex mu_;
-  std::unordered_map<uint64_t, PendingRequest> pending_;
-  std::unordered_map<unsigned, uint64_t> request_to_token_;
-  std::deque<uint64_t> completed_tokens_;
-  std::deque<uint64_t> failed_tokens_;
-  mutable std::mutex init_mu_;
-  mutable std::mutex path_mu_;
   uint64_t backend_cache_key_ = 0;
-  mutable std::vector<PeerPathState> peer_path_states_;
+  mutable std::mutex mu_;
+  std::unordered_map<uint64_t, unsigned> pending_;     // token → request_id
+  std::unordered_map<unsigned, uint64_t> req_to_token_; // request_id → token
+  std::vector<bool> peer_put_ready_;
+  std::vector<bool> peer_wait_ready_;
+  mutable std::mutex init_mu_;
 };
 
 }  // namespace CCL

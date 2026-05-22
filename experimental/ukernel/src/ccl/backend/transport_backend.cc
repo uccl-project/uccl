@@ -4,8 +4,6 @@
 #include <atomic>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <utility>
 
 namespace UKernel {
 namespace CCL {
@@ -13,7 +11,6 @@ namespace CCL {
 namespace {
 
 std::atomic<uint64_t> g_next_transport_backend_cache_key{1};
-
 constexpr int kMemoryBindingTimeoutMs = 30000;
 
 bool is_peer_ref(BufferRef const& ref) {
@@ -21,12 +18,10 @@ bool is_peer_ref(BufferRef const& ref) {
 }
 
 int transport_peer_rank(Op const& op) {
-  if (op.kind == OpKind::TransportSend) {
+  if (op.kind == OpKind::TransportSend)
     return is_peer_ref(op.dst) ? op.dst.rank : -1;
-  }
-  if (op.kind == OpKind::TransportRecv) {
+  if (op.kind == OpKind::TransportRecv)
     return is_peer_ref(op.src) ? op.src.rank : -1;
-  }
   return -1;
 }
 
@@ -41,7 +36,9 @@ CommunicatorTransportBackend::CommunicatorTransportBackend(
               : std::make_shared<UKernel::Transport::CommunicatorConfig>())),
       backend_cache_key_(g_next_transport_backend_cache_key.fetch_add(
           1, std::memory_order_relaxed)),
-      peer_path_states_(static_cast<size_t>(communicator_->world_size())) {}
+      peer_put_ready_(static_cast<size_t>(communicator_->world_size()), false),
+      peer_wait_ready_(static_cast<size_t>(communicator_->world_size()), false) {
+}
 
 CommunicatorTransportBackend::~CommunicatorTransportBackend() = default;
 
@@ -58,438 +55,247 @@ CommunicatorTransportBackend::communicator() const {
   return *communicator_;
 }
 
+// ── validate — one-time init ──────────────────────────────────────────
+
 void CommunicatorTransportBackend::validate(CollectivePlan const& plan,
-                                            CollectiveBinding& binding) const {
-  ensure_memory_bindings_initialized(binding);
-  ensure_plan_paths(plan);
+                                            CollectiveBinding& binding) {
+  if (plan.rank != communicator_->rank())
+    throw std::invalid_argument("plan rank != communicator rank");
+  if (plan.nranks != communicator_->world_size())
+    throw std::invalid_argument("plan world_size != communicator world_size");
+
   if (plan.staging_bytes_required != 0 &&
-      binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr) {
-    throw std::invalid_argument("transport backend staging buffer is missing");
-  }
+      binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr)
+    throw std::invalid_argument("staging buffer is missing");
   if (plan.staging_bytes_required >
-      binding.role_buffer(CollectiveBufferRole::Scratch).bytes) {
-    throw std::invalid_argument(
-        "transport backend staging capacity is insufficient");
-  }
-}
+      binding.role_buffer(CollectiveBufferRole::Scratch).bytes)
+    throw std::invalid_argument("staging buffer too small");
 
-void CommunicatorTransportBackend::ensure_plan_paths(
-    CollectivePlan const& plan) const {
-  if (plan.rank != communicator_->rank()) {
-    throw std::invalid_argument(
-        "execution plan rank does not match transport communicator");
-  }
-  if (plan.nranks != communicator_->world_size()) {
-    throw std::invalid_argument(
-        "execution plan world size does not match transport communicator");
+  // Pre-establish memory bindings (MR / IPC registration) — done once.
+  {
+    std::lock_guard<std::mutex> lock(init_mu_);
+    if (!is_transport_fresh(binding)) return;
+    binding.invalidate_transport_cache();
+    initialize_memory_bindings(binding);
   }
 
+  // Pre-establish peer paths — done once per plan shape.
   std::vector<bool> need_put(static_cast<size_t>(plan.nranks), false);
   std::vector<bool> need_wait(static_cast<size_t>(plan.nranks), false);
   for (Op const& op : plan.ops) {
     int peer_rank = transport_peer_rank(op);
     if (peer_rank < 0 || peer_rank >= plan.nranks) continue;
-    if (op.kind == OpKind::TransportSend) {
+    if (op.kind == OpKind::TransportSend)
       need_put[static_cast<size_t>(peer_rank)] = true;
-    } else if (op.kind == OpKind::TransportRecv) {
+    else if (op.kind == OpKind::TransportRecv)
       need_wait[static_cast<size_t>(peer_rank)] = true;
-    }
   }
-
   for (int peer = 0; peer < plan.nranks; ++peer) {
     if (peer == plan.rank) continue;
-    bool const put = need_put[static_cast<size_t>(peer)];
-    bool const wait = need_wait[static_cast<size_t>(peer)];
-    if (!put && !wait) continue;
-    ensure_peer_paths(peer, put, wait);
+    if (!need_put[static_cast<size_t>(peer)] && !need_wait[static_cast<size_t>(peer)])
+      continue;
+    ensure_peer_path(peer, need_put[static_cast<size_t>(peer)],
+                     need_wait[static_cast<size_t>(peer)]);
   }
 }
 
-void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
+bool CommunicatorTransportBackend::is_transport_fresh(
+    CollectiveBinding const& binding) const {
+  if (binding.transport_initialized_backend_key != backend_cache_key_)
+    return true;
+  if (binding.transport_initialized_signature != binding.transport_signature())
+    return true;
+  return false;
+}
+
+void CommunicatorTransportBackend::ensure_peer_path(int peer_rank,
                                                      bool need_put,
-                                                     bool need_wait) const {
-  if (!need_put && !need_wait) return;
-  std::lock_guard<std::mutex> lock(path_mu_);
+                                                     bool need_wait) {
   size_t idx = static_cast<size_t>(peer_rank);
-  PeerPathState& state = peer_path_states_.at(idx);
-  bool const missing_put = need_put && !state.put_ready;
-  bool const missing_wait = need_wait && !state.wait_ready;
+  bool missing_put = need_put && !peer_put_ready_[idx];
+  bool missing_wait = need_wait && !peer_wait_ready_[idx];
   if (!missing_put && !missing_wait) return;
 
-  auto ensure_put = [&]() {
-    if (state.put_ready) return true;
+  auto do_put = [&]() {
+    if (peer_put_ready_[idx]) return true;
     if (!communicator_->connect(peer_rank)) return false;
-    state.put_ready = true;
+    peer_put_ready_[idx] = true;
     return true;
   };
-  auto ensure_wait = [&]() {
-    if (state.wait_ready) return true;
+  auto do_wait = [&]() {
+    if (peer_wait_ready_[idx]) return true;
     if (!communicator_->accept(peer_rank)) return false;
-    state.wait_ready = true;
+    peer_wait_ready_[idx] = true;
     return true;
   };
 
   bool ok = true;
-  if (missing_put && missing_wait) {
-    // When both directions are needed for the same peer (for example
-    // world_size=2 ring/all-to-all), use a stable asymmetric order.
-    ok = (communicator_->rank() < peer_rank) ? (ensure_put() && ensure_wait())
-                                             : (ensure_wait() && ensure_put());
-  } else if (missing_put) {
-    ok = ensure_put();
-  } else if (missing_wait) {
-    ok = ensure_wait();
-  }
-  if (!ok) {
-    throw std::runtime_error(
-        "failed to lazily establish transport path with "
-        "peer " +
-        std::to_string(peer_rank));
-  }
+  if (missing_put && missing_wait)
+    ok = (communicator_->rank() < peer_rank) ? (do_put() && do_wait())
+                                              : (do_wait() && do_put());
+  else if (missing_put)
+    ok = do_put();
+  else
+    ok = do_wait();
+
+  if (!ok)
+    throw std::runtime_error("failed to establish transport path with peer " +
+                             std::to_string(peer_rank));
 }
 
-void CommunicatorTransportBackend::ensure_memory_bindings_initialized(
-    CollectiveBinding& binding) const {
-  auto fully_bound = [&]() {
-    if (binding.registry == nullptr) return false;
-    if (binding.transport_initialized_backend_key != backend_cache_key_) {
-      return false;
-    }
-    if (binding.transport_initialized_signature !=
-        binding.transport_signature()) {
-      return false;
-    }
-    for (BufferId id : binding.registry->registered_buffer_ids()) {
-      RegisteredBuffer const& buffer = binding.buffer(id);
-      if (buffer.peer_views.size() !=
-          static_cast<size_t>(communicator_->world_size())) {
-        return false;
-      }
-      if (buffer.local_ptr == nullptr || buffer.bytes == 0 ||
-          !buffer.remotely_accessible) {
-        continue;
-      }
-      if (buffer.local_buffer_id == 0) {
-        return false;
-      }
-      for (int peer = 0; peer < communicator_->world_size(); ++peer) {
-        if (peer == communicator_->rank()) continue;
-        if (buffer.peer_views[static_cast<size_t>(peer)].buffer_id == 0) {
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-  if (fully_bound()) return;
-  std::lock_guard<std::mutex> lock(init_mu_);
-  if (fully_bound()) return;
-  if (binding.transport_initialized_backend_key != backend_cache_key_ ||
-      binding.transport_initialized_signature !=
-          binding.transport_signature()) {
-    binding.invalidate_transport_cache();
-  }
-  initialize_memory_bindings(binding);
-}
+// ── memory bindings — MR / IPC registration ───────────────────────────
 
 void CommunicatorTransportBackend::initialize_memory_bindings(
-    CollectiveBinding& binding) const {
-  if (!binding.has_buffer(binding.buffer_id(CollectiveBufferRole::Input))) {
-    throw std::invalid_argument(
-        "transport backend requires a registered input buffer");
-  }
+    CollectiveBinding& binding) {
+  if (!binding.has_buffer(binding.buffer_id(CollectiveBufferRole::Input)))
+    throw std::invalid_argument("transport backend requires a registered input buffer");
 
-  std::vector<BufferId> buffer_ids = binding.registry->registered_buffer_ids();
+  auto buffer_ids = binding.registry->registered_buffer_ids();
+  int world = communicator_->world_size();
+
   for (BufferId id : buffer_ids) {
-    RegisteredBuffer& buffer = binding.buffer(id);
-    buffer.peer_views.resize(static_cast<size_t>(communicator_->world_size()));
-    if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-        buffer.remotely_accessible) {
-      if (!communicator_->reg_mr(id, buffer.local_ptr, buffer.bytes, true)) {
-        throw std::runtime_error("transport backend reg_mr failed for buffer " +
-                                 std::to_string(id));
-      }
-      buffer.local_buffer_id = id;
+    RegisteredBuffer& buf = binding.buffer(id);
+    buf.peer_views.resize(static_cast<size_t>(world));
+    if (buf.local_ptr && buf.bytes && buf.remotely_accessible) {
+      if (!communicator_->reg_mr(id, buf.local_ptr, buf.bytes, true))
+        throw std::runtime_error("reg_mr failed for buffer " + std::to_string(id));
+      buf.local_buffer_id = id;
     } else {
-      buffer.local_buffer_id = 0;
+      buf.local_buffer_id = 0;
     }
-    if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-        buffer.remotely_accessible) {
-      (void)communicator_->reg_ipc(id, buffer.local_ptr, buffer.bytes, true);
-    } else {
-      (void)communicator_->reg_ipc(id, nullptr, 0, true);
-    }
+    communicator_->reg_ipc(id, (buf.local_ptr && buf.bytes && buf.remotely_accessible)
+                                   ? buf.local_ptr : nullptr,
+                           (buf.local_ptr && buf.bytes && buf.remotely_accessible)
+                                   ? buf.bytes : 0,
+                           true);
   }
 
-  for (int peer = 0; peer < communicator_->world_size(); ++peer) {
-    bool same_node =
-        (peer != communicator_->rank()) && communicator_->same_host(peer);
-    for (BufferId id : buffer_ids) {
-      RegisteredBuffer& buffer = binding.buffer(id);
-      buffer.peer_views[static_cast<size_t>(peer)].same_node = same_node;
-    }
+  for (int peer = 0; peer < world; ++peer) {
+    bool same_node = (peer != communicator_->rank()) && communicator_->same_host(peer);
+    for (BufferId id : buffer_ids)
+      binding.buffer(id).peer_views[static_cast<size_t>(peer)].same_node = same_node;
     if (peer == communicator_->rank()) continue;
   }
 
-  for (int peer = 0; peer < communicator_->world_size(); ++peer) {
+  for (int peer = 0; peer < world; ++peer) {
     if (peer == communicator_->rank()) continue;
     for (BufferId id : buffer_ids) {
-      RegisteredBuffer& buffer = binding.buffer(id);
-      if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-          buffer.remotely_accessible &&
-          !communicator_->wait_mr(peer, id, kMemoryBindingTimeoutMs)) {
-        throw std::runtime_error("transport backend wait_mr failed for peer " +
-                                 std::to_string(peer) + ", buffer " +
-                                 std::to_string(id));
-      }
-      if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
-          buffer.remotely_accessible) {
-        buffer.peer_views[static_cast<size_t>(peer)].buffer_id = id;
+      RegisteredBuffer& buf = binding.buffer(id);
+      if (buf.local_ptr && buf.bytes && buf.remotely_accessible) {
+        if (!communicator_->wait_mr(peer, id, kMemoryBindingTimeoutMs))
+          throw std::runtime_error("wait_mr failed peer=" + std::to_string(peer) +
+                                   " buf=" + std::to_string(id));
+        buf.peer_views[static_cast<size_t>(peer)].buffer_id = id;
       } else {
-        buffer.peer_views[static_cast<size_t>(peer)].buffer_id = 0;
+        buf.peer_views[static_cast<size_t>(peer)].buffer_id = 0;
       }
-      if (buffer.peer_views[static_cast<size_t>(peer)].same_node &&
-          buffer.peer_views[static_cast<size_t>(peer)].buffer_id != 0 &&
-          !communicator_->wait_ipc(peer, id, kMemoryBindingTimeoutMs)) {
-        throw std::runtime_error(
-            "transport backend wait ipc buffer failed for peer " +
-            std::to_string(peer));
-      }
+      if (buf.peer_views[static_cast<size_t>(peer)].same_node &&
+          buf.peer_views[static_cast<size_t>(peer)].buffer_id != 0 &&
+          !communicator_->wait_ipc(peer, id, kMemoryBindingTimeoutMs))
+        throw std::runtime_error("wait_ipc failed peer=" + std::to_string(peer));
     }
   }
   binding.transport_initialized_backend_key = backend_cache_key_;
   binding.transport_initialized_signature = binding.transport_signature();
 }
 
+// ── submit / drain ─────────────────────────────────────────────────────
+
 bool CommunicatorTransportBackend::supports(OpKind kind) const {
   return kind == OpKind::TransportSend || kind == OpKind::TransportRecv;
 }
 
 BackendToken CommunicatorTransportBackend::submit(Op const& op,
-                                                  CollectiveBinding& binding) {
-  if (!supports(op.kind)) {
-    throw std::invalid_argument("unsupported op kind for transport backend");
-  }
-  ensure_memory_bindings_initialized(binding);
-
+                                                   CollectiveBinding& binding) {
+  (void)binding;  // memory bindings already done in validate()
   int peer_rank = resolve_peer_rank(op);
-  ensure_peer_paths(peer_rank, op.kind == OpKind::TransportSend,
-                    op.kind == OpKind::TransportRecv);
-  BackendToken token{next_token_++};
   unsigned request_id = 0;
   if (op.kind == OpKind::TransportSend) {
-    (void)resolve_const(binding, op.src, op.tile.size_bytes);
-    uint32_t dst_buffer_id = 0;
-    size_t dst_offset = 0;
+    uint32_t dst_buf_id = 0;
+    size_t dst_off = 0;
     if (op.dst.kind == BufferKind::Remote) {
-      dst_buffer_id = resolve_remote_buffer_id(binding, op.dst);
-      dst_offset = op.dst.offset_bytes;
+      dst_buf_id = resolve_remote_buffer_id(binding, op.dst);
+      dst_off = op.dst.offset_bytes;
     }
     request_id = communicator_->isend(
-        peer_rank, resolve_local_buffer_id(binding, op.src, op.tile.size_bytes),
-        op.src.offset_bytes, op.tile.size_bytes, dst_buffer_id, dst_offset);
+        peer_rank, resolve_local_buffer_id(binding, op.src),
+        op.src.offset_bytes, op.tile.size_bytes, dst_buf_id, dst_off);
   } else {
-    (void)resolve_mutable(binding, op.dst, op.tile.size_bytes);
     request_id = communicator_->irecv(
-        peer_rank, resolve_local_buffer_id(binding, op.dst, op.tile.size_bytes),
+        peer_rank, resolve_local_buffer_id(binding, op.dst),
         op.dst.offset_bytes, op.tile.size_bytes);
   }
-  if (request_id == 0) {
-    throw std::runtime_error(
-        "communicator transport request submission failed");
-  }
+  if (request_id == 0)
+    throw std::runtime_error("transport request submission failed");
 
-  std::lock_guard<std::mutex> lk(mu_);
-  pending_[token.value] = PendingRequest{request_id, false, false};
-  request_to_token_[request_id] = token.value;
+  BackendToken token{next_token_++};
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    pending_[token.value] = request_id;
+    req_to_token_[request_id] = token.value;
+  }
   return token;
 }
 
-bool CommunicatorTransportBackend::poll(BackendToken token) {
-  unsigned request_id = 0;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(token.value);
-    if (it == pending_.end()) return true;
-    if (it->second.completed) return true;
-    request_id = it->second.request_id;
-  }
-
-  if (!communicator_->poll(request_id)) return false;
-
-  bool should_release = false;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(token.value);
-    if (it == pending_.end()) return true;
-    it->second.completed = true;
-    if (it->second.released) {
-      should_release = true;
-      pending_.erase(it);
-      request_to_token_.erase(request_id);
-    } else {
-      completed_tokens_.push_back(token.value);
-    }
-  }
-  if (should_release) {
-    communicator_->release(request_id);
-  }
-  return true;
-}
-
-bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (!failed_tokens_.empty()) {
-      token.value = failed_tokens_.front();
-      token.failed = true;
-      failed_tokens_.pop_front();
-      return true;
-    }
-    if (!completed_tokens_.empty()) {
-      token.value = completed_tokens_.front();
-      token.failed = false;
-      completed_tokens_.pop_front();
-      return true;
-    }
-  }
-
+size_t CommunicatorTransportBackend::drain(BackendToken* out, size_t max_count) {
   auto done = communicator_->progress();
-  if (done.empty()) return false;
+  if (done.empty()) return 0;
 
+  size_t count = 0;
   {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto& [req_id, req_failed] : done) {
-      auto it = request_to_token_.find(req_id);
-      if (it == request_to_token_.end()) continue;
-      auto pending_it = pending_.find(it->second);
-      if (pending_it == pending_.end() || pending_it->second.completed)
-        continue;
-      pending_it->second.completed = true;
-      if (req_failed) {
-        failed_tokens_.push_back(it->second);
-      } else {
-        completed_tokens_.push_back(it->second);
-      }
-    }
-    if (!failed_tokens_.empty()) {
-      token.value = failed_tokens_.front();
-      token.failed = true;
-      failed_tokens_.pop_front();
-      return true;
-    }
-    if (completed_tokens_.empty()) return false;
-    token.value = completed_tokens_.front();
-    token.failed = false;
-    completed_tokens_.pop_front();
-    return true;
-  }
-}
-
-void CommunicatorTransportBackend::release(BackendToken token) {
-  unsigned request_id = 0;
-  bool should_release = false;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(token.value);
-    if (it == pending_.end()) return;
-    request_id = it->second.request_id;
-    it->second.released = true;
-    if (it->second.completed) {
-      should_release = true;
-      pending_.erase(it);
-      request_to_token_.erase(request_id);
+      if (count >= max_count) break;
+      auto ti = req_to_token_.find(req_id);
+      if (ti == req_to_token_.end()) continue;
+      auto pi = pending_.find(ti->second);
+      if (pi == pending_.end()) continue;  // already drained
+      communicator_->release(req_id);
+      out[count].value = ti->second;
+      out[count].failed = req_failed;
+      ++count;
+      pending_.erase(pi);
+      req_to_token_.erase(ti);
     }
   }
-  if (should_release) {
-    communicator_->release(request_id);
-  }
+  return count;
 }
 
-void* CommunicatorTransportBackend::resolve_mutable(
-    CollectiveBinding const& binding, BufferRef const& ref,
-    size_t bytes) const {
-  if (ref.kind != BufferKind::Local) {
-    throw std::invalid_argument(
-        "transport backend cannot bind remote destination buffer");
-  }
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (buffer.local_ptr == nullptr) {
-    throw std::invalid_argument("transport local buffer is missing");
-  }
-  validate_span("transport local buffer", ref.offset_bytes, bytes,
-                buffer.bytes);
-  return byte_offset(buffer.local_ptr, ref.offset_bytes);
-}
-
-void const* CommunicatorTransportBackend::resolve_const(
-    CollectiveBinding const& binding, BufferRef const& ref,
-    size_t bytes) const {
-  if (ref.kind != BufferKind::Local) {
-    throw std::invalid_argument(
-        "transport backend cannot bind remote source buffer");
-  }
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (buffer.local_ptr == nullptr) {
-    throw std::invalid_argument("transport local buffer is missing");
-  }
-  validate_span("transport local buffer", ref.offset_bytes, bytes,
-                buffer.bytes);
-  return byte_offset(buffer.local_ptr, ref.offset_bytes);
-}
-
-uint32_t CommunicatorTransportBackend::resolve_local_buffer_id(
-    CollectiveBinding const& binding, BufferRef const& ref,
-    size_t bytes) const {
-  if (ref.kind == BufferKind::Remote) {
-    throw std::invalid_argument(
-        "transport backend local buffer id requires local buffer ref");
-  }
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (buffer.local_buffer_id != 0) {
-    return buffer.local_buffer_id;
-  }
-  (void)bytes;
-  return ref.buffer_id;
-}
+// ── helpers ────────────────────────────────────────────────────────────
 
 int CommunicatorTransportBackend::resolve_peer_rank(Op const& op) const {
   if (op.kind == OpKind::TransportSend) {
-    if (!is_peer_ref(op.dst) || op.dst.rank < 0) {
-      throw std::invalid_argument(
-          "transport send requires a peer destination buffer");
-    }
+    if (!is_peer_ref(op.dst) || op.dst.rank < 0)
+      throw std::invalid_argument("transport send requires a peer destination");
     return op.dst.rank;
   }
   if (op.kind == OpKind::TransportRecv) {
-    if (!is_peer_ref(op.src) || op.src.rank < 0) {
-      throw std::invalid_argument(
-          "transport recv requires a peer source buffer");
-    }
+    if (!is_peer_ref(op.src) || op.src.rank < 0)
+      throw std::invalid_argument("transport recv requires a peer source");
     return op.src.rank;
   }
-  throw std::invalid_argument(
-      "transport peer rank requested for non-transport op");
+  throw std::invalid_argument("non-transport op");
+}
+
+uint32_t CommunicatorTransportBackend::resolve_local_buffer_id(
+    CollectiveBinding const& binding, BufferRef const& ref) const {
+  if (ref.kind == BufferKind::Remote)
+    throw std::invalid_argument("local buffer id requires a local ref");
+  RegisteredBuffer const& buf = binding.buffer_for_ref(ref);
+  return buf.local_buffer_id != 0 ? buf.local_buffer_id : ref.buffer_id;
 }
 
 uint32_t CommunicatorTransportBackend::resolve_remote_buffer_id(
     CollectiveBinding const& binding, BufferRef const& ref) const {
-  if (!is_peer_ref(ref) || ref.rank < 0) {
-    throw std::invalid_argument(
-        "transport remote buffer id requires peer buffer ref");
-  }
-  int peer_rank = ref.rank;
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (peer_rank < 0 ||
-      static_cast<size_t>(peer_rank) >= buffer.peer_views.size()) {
-    throw std::invalid_argument("transport peer rank out of range");
-  }
-  uint32_t remote_buffer_id =
-      buffer.peer_views[static_cast<size_t>(peer_rank)].buffer_id;
-  if (remote_buffer_id == 0) {
-    throw std::invalid_argument("transport remote buffer id is missing");
-  }
-  return remote_buffer_id;
+  if (!is_peer_ref(ref) || ref.rank < 0)
+    throw std::invalid_argument("remote buffer id requires a peer ref");
+  RegisteredBuffer const& buf = binding.buffer_for_ref(ref);
+  if (static_cast<size_t>(ref.rank) >= buf.peer_views.size())
+    throw std::invalid_argument("peer rank out of range");
+  uint32_t rid = buf.peer_views[static_cast<size_t>(ref.rank)].buffer_id;
+  if (rid == 0)
+    throw std::invalid_argument("remote buffer id is missing");
+  return rid;
 }
 
 }  // namespace CCL

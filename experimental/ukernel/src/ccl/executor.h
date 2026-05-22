@@ -41,7 +41,6 @@ struct ExecutorConfig {
 };
 
 // Per-invocation mutable execution state.
-// The CollectivePlan is immutable and can be shared across runs.
 struct CollectiveRun {
   CollectiveOpHandle handle = kInvalidHandle;
   CollectiveOpStatus status = CollectiveOpStatus::Queued;
@@ -54,6 +53,8 @@ struct CollectiveRun {
   std::vector<BackendToken> tokens;
   std::vector<Backend*> op_backend;
 
+  // O(1) drain → op index lookup.  Key combines backend + token value
+  // because transport and device backends have independent token spaces.
   struct TokenKey {
     Backend* backend;
     uint64_t value;
@@ -68,7 +69,7 @@ struct CollectiveRun {
     }
   };
   std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
-  std::vector<size_t> inflight_op_indices;
+
   std::vector<std::vector<uint32_t>> flow_ops;
   std::vector<size_t> flow_head;
   size_t completed_count = 0;
@@ -88,13 +89,11 @@ class Executor {
   Executor(Executor const&) = delete;
   Executor& operator=(Executor const&) = delete;
 
-  // === Asynchronous submission ===
   CollectiveOpHandle submit_allreduce(CollectiveConfig const& config,
                                       CollectiveBinding& binding);
   CollectiveOpHandle submit_alltoall(CollectiveConfig const& config,
                                      CollectiveBinding& binding);
 
-  // === Progress inquiry ===
   CollectiveOpStatus status(CollectiveOpHandle handle) const;
   bool poll(CollectiveOpHandle handle);
   void progress();
@@ -103,10 +102,8 @@ class Executor {
   void release(CollectiveOpHandle handle);
   std::string error_message(CollectiveOpHandle handle) const;
 
-  // Synchronous execution of a pre-built plan (convenience for bindings).
   void run_plan(CollectivePlan const& plan, CollectiveBinding& binding);
 
-  // === Utilities ===
   size_t active_count() const;
   UKernel::Transport::Communicator* communicator();
   UKernel::Transport::Communicator const* communicator() const;
@@ -120,7 +117,6 @@ class Executor {
   void advance_run(CollectiveRun& run);
 
   ExecutorBackends backends_{};
-  std::vector<Backend*> completion_sources_;
   std::unique_ptr<Backend> owned_transport_backend_;
   std::unique_ptr<Backend> owned_device_backend_;
   std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
@@ -128,7 +124,6 @@ class Executor {
   std::unordered_map<CollectiveOpHandle, CollectiveRun> runs_;
   uint64_t next_handle_ = 1;
 
-  // Plan cache keyed by a hash of the config shape.
   struct PlanCacheKey {
     CollectiveKind kind;
     bool inplace;

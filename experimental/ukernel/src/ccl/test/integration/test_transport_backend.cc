@@ -192,13 +192,16 @@ std::vector<float> download_floats(void const* src, size_t bytes) {
 void wait_for_token(CommunicatorTransportBackend& backend, BackendToken token,
                     std::chrono::milliseconds timeout) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
+  BackendToken done_buf[64];
   while (std::chrono::steady_clock::now() < deadline) {
-    if (backend.poll(token)) {
-      return;
-    }
+    size_t n = backend.drain(done_buf, 64);
+    for (size_t i = 0; i < n; ++i)
+      if (done_buf[i].value == token.value) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  require(backend.poll(token), "transport backend token timed out");
+  BackendToken t{};
+  require(backend.drain(&t, 1) == 1 && t.value == token.value,
+          "transport backend token timed out");
 }
 
 CollectivePlan make_single_op_plan(int rank, int nranks, Op const& op) {
@@ -343,7 +346,6 @@ int run_rank(Options const& opts) {
                    memory);
   BackendToken token1 = backend.submit(op1, memory);
   wait_for_token(backend, token1, std::chrono::seconds(10));
-  backend.release(token1);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 2, opts.rank,
                  opts.world_size);
 
@@ -382,7 +384,6 @@ int run_rank(Options const& opts) {
                    memory);
   BackendToken token2 = backend.submit(op2, memory);
   wait_for_token(backend, token2, std::chrono::seconds(10));
-  backend.release(token2);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 4, opts.rank,
                  opts.world_size);
 
