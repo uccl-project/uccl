@@ -184,13 +184,8 @@ class RDMADataChannel {
     return result;
   }
 
-  // Post an RDMA WRITE to ship an 8-byte ack back to the sender's ack_ring.
-  // ack_slot selects a pre-registered staging slot so no IBV_SEND_INLINE is
-  // needed (bnxt_re does not support inline RDMA WRITEs). Each slot is only
-  // reused after kAckRingDepth messages, well after the previous WR completes.
-  // Every kAckSigEvery calls one WR is signaled to prevent SQ overflow.
-  //
-  // Thread-safe: called from the receiver polling thread.
+  // Post an 8-byte RDMA WRITE ack to the sender's ack_ring.
+  // Uses a pre-registered staging slot (bnxt_re rejects IBV_SEND_INLINE).
   int postAckWrite(uint64_t remote_addr, uint32_t remote_rkey,
                    uint32_t ack_slot, uint64_t value) {
     ack_staging_[ack_slot] = value;
@@ -275,10 +270,7 @@ class RDMADataChannel {
   uint32_t ack_unsig_count_ = 0;  // selective-signal counter for postAckWrite
   std::mutex ack_mu_;             // serializes ibv_post_send for ack WRs
 
-  // Pre-registered staging buffer for postAckWrite. kAckRingDepth slots, one
-  // per ack ring slot, so each slot is only reused after kAckRingDepth
-  // messages — long after any in-flight RDMA WRITE for that slot completes.
-  std::vector<uint64_t> ack_staging_;
+  std::vector<uint64_t> ack_staging_;  // staging buffer for postAckWrite
   struct ibv_mr* ack_staging_mr_ = nullptr;
 
   struct ibv_cq_ex* getCQ() const {
@@ -524,14 +516,11 @@ class RDMADataChannel {
   void initQP() {
     impl_->initPreAllocResources();
     impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
-    // Pre-register host staging buffer for non-inline ack RDMA WRITEs.
-    // One uint64_t slot per ack ring depth; slot index = ack_slot, so each
-    // slot is only overwritten when the same ack_slot cycles back (≥4096
-    // messages later), well after the previous RDMA WRITE has completed.
+    // Staging buffer for postAckWrite (one slot per ack ring entry).
     ack_staging_.resize(kAckRingDepth, 0);
-    ack_staging_mr_ = ibv_reg_mr(
-        ctx_->getPD(), ack_staging_.data(),
-        kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
+    ack_staging_mr_ =
+        ibv_reg_mr(ctx_->getPD(), ack_staging_.data(),
+                   kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
     assert(ack_staging_mr_);
   }
 

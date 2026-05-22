@@ -22,7 +22,8 @@ class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
     std::vector<std::pair<std::string, uint32_t>> usable_dist;
     usable_dist.reserve(dist.size());
     for (auto const& p : dist) {
-      UCCL_LOG(INFO, UCCL_RDMA) << "NIC: " << p.first << ", distance: " << p.second;
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "NIC: " << p.first << ", distance: " << p.second;
       if (is_nic_usable(p.first, NicMode::IB)) {
         usable_dist.push_back(p);
       } else {

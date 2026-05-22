@@ -93,14 +93,13 @@ class NICEndpoint {
         if (!mr) {
           UCCL_LOG(ERROR) << "regMrForAllSlots: ibv_reg_mr FAILED for addr="
                           << blk.addr << " size=" << blk.size
-                          << " slot=" << slot << " errno=" << errno
-                          << " (" << strerror(errno) << ")";
+                          << " slot=" << slot << " errno=" << errno << " ("
+                          << strerror(errno) << ")";
         } else {
           UCCL_LOG(INFO, UCCL_RDMA)
               << "regMrForAllSlots: registered addr=" << blk.addr
-              << " size=" << blk.size << " slot=" << slot
-              << " lkey=0x" << std::hex << mr->lkey
-              << " rkey=0x" << mr->rkey << std::dec;
+              << " size=" << blk.size << " slot=" << slot << " lkey=0x"
+              << std::hex << mr->lkey << " rkey=0x" << mr->rkey << std::dec;
         }
         registered[ctx.get()] = mr;
       }

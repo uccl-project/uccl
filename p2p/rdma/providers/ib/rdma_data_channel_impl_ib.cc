@@ -185,14 +185,14 @@ inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
     if (unlikely(status != IBV_WC_SUCCESS)) {
       if (status == IBV_WC_WR_FLUSH_ERR) {
         // Cascade flush after a QP error; root cause logged by primary CQE.
-        UCCL_LOG_EVERY_N(WARN, 1000)
-            << "pollOnce - channel_id: " << channel_id
-            << ", WR_FLUSH_ERR, qp_num=0x" << std::hex << wc->qp_num
-            << std::dec;
+        UCCL_LOG_EVERY_N(WARN, 1000) << "pollOnce - channel_id: " << channel_id
+                                     << ", WR_FLUSH_ERR, qp_num=0x" << std::hex
+                                     << wc->qp_num << std::dec;
       } else {
         UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
-                       << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                       << " (" << ibv_wc_status_str(status) << ")"
+                       << ", CQE error, wr_id=" << wr_id
+                       << ", status=" << status << " ("
+                       << ibv_wc_status_str(status) << ")"
                        << ", opcode=" << wc->opcode
                        << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
                        << std::hex << wc->vendor_err << ", qp_num=0x"

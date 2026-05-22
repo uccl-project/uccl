@@ -244,12 +244,7 @@ class SendConnection : public RDMAConnection {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
 
-    // Compressed-write path: split → encode pipelined, data targets a
-    // variable-size region in the peer's decompress_buffer, and the
-    // WriteReqMeta is pushed via the control channel after all data chunks
-    // are locally ACKed. Requires a fully-formed compress_ctx (dietgpu
-    // CHECK-fails on kUndefined) and the message must fit in the peer's
-    // decompress_buffer (so reserve() doesn't deadlock).
+    // Use compressed write path when all preconditions are met.
     bool c_send_type = (req->send_type == SendType::Write);
     bool c_ack = static_cast<bool>(ack_ring_);
     bool c_rdb = remote_decompress_buf_.length > 0;
@@ -364,26 +359,11 @@ class SendConnection : public RDMAConnection {
         std::make_unique<std::thread>(&SendConnection::pollingLoop, this);
   }
 
-  bool check(int64_t wr_id) {
-    // Compressed and non-compressed writes alike complete when the local
-    // data WCs have all arrived. For RC RDMA WRITE, local WC = peer NIC
-    // ACK, which means the bytes are durably in the receiver's GPU memory
-    // (in our case, the decompress_buffer slot). Receiver-side decompress
-    // runs asynchronously after the WriteReqMeta IMM arrives, and the
-    // receiver acks the sender immediately (before decompress kernel
-    // finishes) — that ack drives pollAckRing() for arena slot recycling
-    // but is OFF this critical path.
-    return tracker_->isAcknowledged(wr_id);
-  }
+  bool check(int64_t wr_id) { return tracker_->isAcknowledged(wr_id); }
 
   void setRemoteDecompressBuf(RemoteMemInfo const& m) {
     remote_decompress_buf_ = m;
     decompress_arena_.size = m.length;
-    // The compressed-write path needs continuous background pollAckRing()
-    // to release arena slots — user threads can block in arena.reserve()
-    // and never get back to poll_async() (which is what otherwise drives
-    // pollingLoopForMeta in non-auto-polling mode). Force the polling
-    // thread up here, regardless of cc_polling.
     if (!running_.load(std::memory_order_acquire)) startPolling();
   }
   void setLocalAckRing(std::shared_ptr<RegMemBlock> ring) { ack_ring_ = ring; }
@@ -454,9 +434,7 @@ class SendConnection : public RDMAConnection {
   uccl::cc::CongestionControlState cc_;
   std::atomic<uint32_t> chunk_tsc_counter_{0};
 
-  // ── Compressed-write state ─────────────────────────────────────────────
-  // ack_ring_ is this endpoint's local host ack ring (peer writes here).
-  // remote_decompress_buf_ is the peer's GPU decompress buffer (we write here).
+  // Compressed-write state
   std::shared_ptr<RegMemBlock> ack_ring_;
   RemoteMemInfo remote_decompress_buf_;
   std::atomic<uint64_t> next_ack_slot_{0};
@@ -471,13 +449,8 @@ class SendConnection : public RDMAConnection {
   std::unordered_map<int64_t, PendingCompressed> pending_compressed_;
   std::atomic<size_t> pending_compressed_count_{0};
 
-  // Variable-size FIFO-ish allocator over the peer's decompress_buffer.
-  // Each compressed write reserves enough contiguous bytes for its compressed
-  // payload (upper bound = total_uncomp_size, since dietgpu output ≤ input
-  // for the float types we support). Released by pollAckRing() (background
-  // polling thread) once the receiver's ack lands in our ack_ring slot.
-  // Bump-pointer with wrap-around + linear in-flight overlap check — small
-  // N keeps this cheap.
+  // Bump-pointer allocator over the peer's decompress_buffer. Released by
+  // pollAckRing() once the receiver's ack lands in ack_ring_.
   struct DecompressArena {
     uint64_t size = 0;
     uint64_t head = 0;
@@ -748,11 +721,8 @@ class SendConnection : public RDMAConnection {
     Compressor::getInstance().compress(req);
   }
 
-  // Post a compressed-write segment as exactly `num_chunks` ~equal-sized
-  // chunks, round-robin across data channels starting from req->channel_id.
-  // Bypasses ChunkSplitStrategy's 512 KB granularity / kMaxSplitNum cap so
-  // we can keep per-write WR count low — per-WR NIC overhead is the
-  // dominant cost for compressed payloads on a fast NIC.
+  // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
+  // across data channels. Bypasses ChunkSplitStrategy to keep WR count low.
   void postCompressedSegment(std::shared_ptr<RDMASendRequest> const& req,
                              size_t seg_size, size_t num_chunks,
                              size_t num_channels) {
@@ -772,10 +742,8 @@ class SendConnection : public RDMAConnection {
     }
   }
 
-  // Two-phase compressed RDMA WRITE. Both phases land in the peer's
-  // decompress_buffer at one slot, then a WriteReqMeta is pushed via the
-  // control channel after all data WCs are observed locally (see
-  // pollDataChannels).
+  // Two-phase compressed RDMA WRITE into one decompress_buffer slot.
+  // WriteReqMeta is pushed after all data WCs land (see pollDataChannels).
   int64_t compressWriteRequestSplitFirst(std::shared_ptr<RDMASendRequest> req) {
     int64_t wr_id = req->wr_id;
     uint32_t total_uncomp = req->local_mem->size;
@@ -783,9 +751,7 @@ class SendConnection : public RDMAConnection {
     uint32_t user_remote_rkey =
         req->remote_mem->getKeyByContextID(0);  // diagnostic / logging only
 
-    // Reserve a contiguous region in the peer's decompress_buffer big
-    // enough to hold the compressed payload (compressed_size ≤ total_uncomp
-    // for FP32/BF16/FP16). Released on ack receipt in check().
+    // Reserve space in the peer's decompress_buffer; released on ack receipt.
     uint64_t arena_bytes = static_cast<uint64_t>(total_uncomp);
     uint64_t arena_offset = decompress_arena_.reserve(arena_bytes);
     uint32_t ack_slot = static_cast<uint32_t>(
@@ -794,8 +760,7 @@ class SendConnection : public RDMAConnection {
         0, std::memory_order_relaxed);
     uint64_t slot_base = remote_decompress_buf_.addr + arena_offset;
 
-    // Phase 1: split → compress_buffer[0..first_seg). req->local_mem is
-    // rewritten to point at it; redirect req->remote_mem to slot_base.
+    // Phase 1: split into compress_buffer, post to slot_base.
     Compressor::getInstance().compressSplitOneBatch(req);
     uint32_t first_seg = req->local_mem->size;
     req->remote_mem = std::make_shared<RemoteMemInfo>(
@@ -806,11 +771,7 @@ class SendConnection : public RDMAConnection {
     req->channel_id = channel_id ? channel_id : 1;
     size_t num_channels = normalChannelCount();
     if (num_channels == 0) num_channels = 1;
-    // Phase 1 fans out to 2 chunks per channel (=8 WRs for 4 channels), which
-    // matches the WR density used by non-compressed RDMA writes (~4 WR per
-    // channel for 100 MB) — per-WR NIC setup cost would otherwise dominate.
-    // Phase 2 by contrast is a single chunk on one channel (see comment
-    // below where second_chunks is set).
+    // 2 chunks per channel keeps WR density similar to non-compressed writes.
     size_t first_chunks =
         std::min<size_t>(num_channels * 2,
                          static_cast<size_t>(ChunkSplitStrategy::kMaxSplitNum));
@@ -836,33 +797,17 @@ class SendConnection : public RDMAConnection {
     tracker_->updateExpectedAckCount(wr_id,
                                      std::numeric_limits<uint32_t>::max());
 
-    // DeferGuard removed: on Broadcom bnxt_re + AMD MI325X, accumulating
-    // multiple phase-1 WRs per channel before flushing (even with individual
-    // ibv_post_send + IBV_SEND_SIGNALED) causes IBV_WC_LOC_QP_OP_ERR
-    // vendor_err=0x3 on all data channels. Without DeferGuard, each chunk
-    // auto-flushes immediately (chunk_size >> kBatchFlushBytes=32KB),
-    // reproducing the round-robin interleaved posting order of write_async.
-
+    // No DeferGuard: per-chunk auto-flush gives the round-robin interleaving
+    // required on Broadcom bnxt_re (batching causes LOC_QP_OP_ERR vendor=0x3).
     postCompressedSegment(req, first_seg, first_chunks, num_channels);
-    flushBatches();  // drain any remaining per-chunk auto-flushes
+    flushBatches();
 
-    // Phase 2: encode. compressEncodeOneBatch advances req->remote_mem->addr
-    // by first_seg so the encoded tail lands at slot_base + first_seg.
-    // (encode must run even if we skip the NIC post afterwards — it owns
-    // releasing the split kernel's toComp_dev/histogram_dev temps in LIFO
-    // order from dietgpu's StackDeviceMemory.)
+    // Phase 2: encode tail, post as a single chunk on one channel.
+    // Mixing phase-2 chunks across QPs with phase 1 halves throughput;
+    // one chunk lets the NIC's per-QP bandwidth arbitration rebalance.
     uint32_t compressed_size =
         Compressor::getInstance().compressEncodeOneBatch(req);
-
     uint32_t second_seg = req->local_mem->size;
-    // Phase 2 routed to a SINGLE chunk on one channel. Empirical finding:
-    // when phase 2 chunks share QPs with phase 1 (mixed sized WRs on the
-    // same SQ), NIC effective per-byte throughput drops to ~half. With one
-    // chunk only one channel carries phase 2; the other channels run a
-    // homogeneous phase-1-only stream at line rate, and the NIC's dynamic
-    // per-QP bandwidth arbitration backfills the lone-phase-2 QP after the
-    // others idle. Measured: 100MB random compressed 30 → 68 GB/s when
-    // collapsing phase 2 from 8 chunks to 1.
     size_t second_chunks = second_seg > 0 ? 1 : 0;
 
     {
@@ -870,16 +815,9 @@ class SendConnection : public RDMAConnection {
       pending_compressed_[wr_id].meta.compressed_size = compressed_size;
     }
 
-    // Advance the round-robin channel pointer past phase 1's chunks so the
-    // lone phase 2 chunk lands on the channel right after phase 1's last,
-    // not back on phase 1's first channel. Affects which single channel
-    // bears the extra phase-2 work (NIC's dynamic per-QP bandwidth
-    // arbitration handles the imbalance from there).
+    // Advance past phase-1 channels so phase-2 lands on the next one.
     req->channel_id = ((req->channel_id - 1 + first_chunks) % num_channels) + 1;
-
     postCompressedSegment(req, second_seg, second_chunks, num_channels);
-    // Strict semantic: wait for ALL chunk WCs (= data durable in receiver
-    // GPU memory). Set expected to the real post count.
     tracker_->updateExpectedAckCount(wr_id, first_chunks + second_chunks);
     return wr_id;
   }
@@ -888,7 +826,6 @@ class SendConnection : public RDMAConnection {
       std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
     Compressor::getInstance().compressSplitOneBatch(req);
 
-    // compressed data / chunk size = chunk count
     uint32_t send_chunks_first =
         req->local_mem->size /
         ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize,
@@ -958,12 +895,7 @@ class SendConnection : public RDMAConnection {
     pollAckRing();
   }
 
-  // Scan the host ack ring for completed acks and release the corresponding
-  // arena slot. Only checks ack_slots of currently in-flight compressed
-  // writes (≈ tens of entries) — much cheaper than scanning all
-  // kAckRingDepth (4096) slots per polling tick, which previously cost
-  // ~256 KB of cache-line reads each tick and stole CPU/L3 from the user
-  // thread.
+  // Release arena slots for completed acks. Only scans in-flight entries.
   void pollAckRing() {
     if (!ack_ring_) return;
     if (pending_compressed_count_.load(std::memory_order_relaxed) == 0) return;
@@ -989,10 +921,7 @@ class SendConnection : public RDMAConnection {
     for (auto off : released_offsets) decompress_arena_.release(off);
   }
 
-  // If wr_id corresponds to a compressed write whose data chunks have all
-  // been locally ACKed (≡ RC-acknowledged by the peer NIC ≡ data is durable
-  // in the peer's decompress_buffer), push its WriteReqMeta via the control
-  // channel exactly once.
+  // Push WriteReqMeta once all data WCs for wr_id have arrived.
   void maybePushCompressedMeta(int64_t wr_id) {
     WriteReqMeta meta_to_push{};
     uint32_t push_slot = 0;
@@ -1185,14 +1114,7 @@ class RecvConnection : public RDMAConnection {
     UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::pollingLoop - Stopped";
   }
 
-  // Run decompress on a freshly-arrived WriteReqMeta and post an 8-byte
-  // RDMA WRITE INLINE ack back to the sender's ack_ring at the indicated
-  // slot. The decompress call is synchronous (stream_sync inside), so by
-  // the time we post the ack the user_remote_addr already holds the
-  // reconstructed original data.
-  // Heap-allocated context shipped from the receiver polling thread to the
-  // CUDA host-callback thread. The callback posts the ack RDMA WRITE and
-  // deletes the context.
+  // Context for the async-decompress callback path (currently unused).
   struct AsyncAckCtx {
     int64_t wr_id;
     uint32_t ack_slot;
@@ -1227,23 +1149,15 @@ class RecvConnection : public RDMAConnection {
     RegMemBlock out(reinterpret_cast<void*>(m.user_remote_addr),
                     m.total_uncomp_size, MemoryType::GPU);
 
-    // ACK IMMEDIATELY — when the WriteReqMeta IMM arrives, the sender's data
-    // chunks have already landed in our decompress_buffer (RC guarantees
-    // order: sender only pushed the meta after all chunk WCs were local,
-    // which means receiver NIC already wrote the data). We can recycle the
-    // sender's arena slot NOW; we trust the buffer is large enough that the
-    // sender's arena head won't wrap around before our decompress kernel
-    // drains the slot (2 GB arena vs single-digit-ms decompress → tens of
-    // ms before any wrap collision could occur).
-    //
-    // Use wr_id+1 so wr_id=0 never writes the zero sentinel that
-    // pollAckRing uses to mean "not yet acked".
+    // Ack immediately: meta arrival implies data is already in
+    // decompress_buffer (sender posts meta only after all chunk WCs). wr_id+1
+    // avoids writing the zero sentinel that pollAckRing uses to mean "not yet
+    // acked".
     ctrl_channel_->postAckWrite(
         remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
         remote_ack_ring_.getKeyByContextID(0), m.ack_slot,
         static_cast<uint64_t>(m.wr_id) + 1);
 
-    // Queue decompress kernel; no callback needed (ack already sent).
     Compressor::getInstance().decompressAsync(
         in, out, static_cast<uccl::FloatType>(m.float_type),
         /*on_done=*/nullptr, /*user_data=*/nullptr);
