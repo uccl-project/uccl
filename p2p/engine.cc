@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "adaptive_sleeper.h"
 #include "endpoint_wrapper.h"
 #include "util/debug.h"
 #include "util/pause.h"
@@ -2684,8 +2685,12 @@ void Endpoint::send_proxy_thread_func() {
   // bulk copy
   alignas(16) char task_buffer[16];
   UnifiedTask* task;
+  AdaptiveSleeper adaptive_sleeper;
+  adaptive_sleeper.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
+    adaptive_sleeper.maybe_sleep();
+
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
@@ -2726,6 +2731,7 @@ void Endpoint::send_proxy_thread_func() {
       auto* status = task->status_ptr;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
+      adaptive_sleeper.update_timer();
     }
   }
 }
@@ -2736,8 +2742,11 @@ void Endpoint::recv_proxy_thread_func() {
   // bulk copy
   alignas(16) char task_buffer[16];
   UnifiedTask* task;
+  AdaptiveSleeper adaptive_sleeper;
+  adaptive_sleeper.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
+    adaptive_sleeper.maybe_sleep();
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
@@ -2781,6 +2790,7 @@ void Endpoint::recv_proxy_thread_func() {
       auto* status = task->status_ptr;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
+      adaptive_sleeper.update_timer();
     }
   }
 }
@@ -2819,8 +2829,16 @@ void Endpoint::ipc_poller_thread_func() {
   std::deque<IpcInflightOp*> active_ops;
   alignas(16) char buf[16];
   int cur_device = -1;
+  AdaptiveSleeper adaptive_sleeper;
+  adaptive_sleeper.update_timer();
 
   while (!stop_.load(std::memory_order_acquire) || !active_ops.empty()) {
+    // only try to sleep if there are no more inflight ops
+    if (!active_ops.empty()) {
+      adaptive_sleeper.update_timer();
+    }
+    adaptive_sleeper.maybe_sleep();
+    
     // Drain newly submitted ops into the local active list.
     while (jring_sc_dequeue_bulk(ipc_inflight_ring_, buf, 1, nullptr) == 1) {
       active_ops.push_back(*reinterpret_cast<IpcInflightOp**>(buf));
