@@ -54,8 +54,8 @@ class CommunicatorTransportBackend final : public Backend {
   mutable std::mutex mu_;
   std::unordered_map<uint64_t, unsigned> pending_;     // token → request_id
   std::unordered_map<unsigned, uint64_t> req_to_token_; // request_id → token
-  std::vector<bool> peer_put_ready_;
-  std::vector<bool> peer_wait_ready_;
+  std::vector<uint8_t> peer_put_ready_;
+  std::vector<uint8_t> peer_wait_ready_;
   mutable std::mutex init_mu_;
   int connect_retry_ms_ = 100;
   int connect_timeout_s_ = 30;

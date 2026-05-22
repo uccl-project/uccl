@@ -4,14 +4,13 @@ set -euo pipefail
 BIN="${1:-./test_multiprocess_collective}"
 
 # Minimal functional config for local correctness checks.
-NPROC_PER_NODE=$(...)
+GPU_IDS="${CUDA_VISIBLE_DEVICES:-0,6,7}"
+NPROC_PER_NODE=$(echo "${GPU_IDS}" | tr ',' '\n' | wc -l | tr -d ' ')
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1
 TORCHRUN_MASTER_PORT=29500
 EXCHANGER_PORT_BASE=29600
-GPU_IDS="${CUDA_VISIBLE_DEVICES:-0,6,7}"
-NPROC_PER_NODE=$(echo "${GPU_IDS}" | tr ',' '\n' | wc -l | tr -d ' ')
 
 TRANSPORT=auto
 TILE_BYTES=$((64 * 1024))

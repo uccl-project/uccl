@@ -288,11 +288,21 @@ void Executor::advance_run(CollectiveRun& run) {
     run.tokens[r.op_idx] = token;
     run.op_backend[r.op_idx] = backend;
     run.token_to_op_idx[{backend, token.value}] = r.op_idx;
+    fprintf(stderr, "[exec-submit] r=%d op%u %s src_off=%zu dst_off=%zu sz=%zu\n",
+            run.plan.rank, r.op_idx,
+            plan_op.kind == OpKind::TransportSend ? "SEND" :
+            plan_op.kind == OpKind::TransportRecv ? "RECV" :
+            plan_op.kind == OpKind::DeviceReduce ? "REDUCE" : "COPY",
+            submit_op.src.offset_bytes, submit_op.dst.offset_bytes,
+            submit_op.tile.size_bytes);
   }
 
-  // Phase 3: Drain completions from each backend.  Backend cleans its own
-  // resources inside drain() — we only update op-level bookkeeping.
+  // Phase 3: Drain completions from each backend.
+  // Backend cleans its own resources inside drain(); we update op bookkeeping.
+  // Process ALL drain results even if a failure is detected, because drain
+  // has already released backend resources for every returned token.
   std::vector<BackendToken> done_buf(run.total_ops);
+  std::string failure_msg;
   for (Backend* backend : {backends_.transport, backends_.device}) {
     if (backend == nullptr) continue;
     size_t n = backend->drain(done_buf.data(), run.total_ops);
@@ -302,16 +312,24 @@ void Executor::advance_run(CollectiveRun& run) {
       size_t op_idx = it->second;
       if (run.completed[op_idx]) { run.token_to_op_idx.erase(it); continue; }
 
-      if (done_buf[i].failed) {
-        run.status = CollectiveOpStatus::Failed;
-        run.error_message = std::string("backend '") + backend->name() +
-                            "' reported failure for op " + std::to_string(op_idx);
-        return;
-      }
+      if (done_buf[i].failed && failure_msg.empty())
+        failure_msg = std::string("backend '") + backend->name() +
+                      "' reported failure for op " + std::to_string(op_idx);
+
       run.completed[op_idx] = true;
       ++run.completed_count;
       run.token_to_op_idx.erase(it);
+      fprintf(stderr, "[exec-done] r=%d op%zu %s\n",
+              run.plan.rank, op_idx,
+              run.plan.ops[op_idx].kind == OpKind::TransportSend ? "SEND" :
+              run.plan.ops[op_idx].kind == OpKind::TransportRecv ? "RECV" :
+              run.plan.ops[op_idx].kind == OpKind::DeviceReduce ? "REDUCE" : "COPY");
     }
+  }
+  if (!failure_msg.empty()) {
+    run.status = CollectiveOpStatus::Failed;
+    run.error_message = std::move(failure_msg);
+    return;
   }
 
   if (run.completed_count == run.total_ops)

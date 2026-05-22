@@ -112,6 +112,8 @@ BackendToken DeviceBackend::submit(Op const& op,
                                     CollectiveBinding& binding) {
   if (!supports(op.kind))
     throw std::invalid_argument("unsupported op kind for device backend");
+  if (worker_pool_ == nullptr)
+    throw std::runtime_error("device backend not initialized — call validate() first");
 
   void const* src = op.resolved_src
       ? op.resolved_src
@@ -137,6 +139,10 @@ BackendToken DeviceBackend::submit(Op const& op,
       ? Device::TaskType::CollReduce : Device::TaskType::CollCopy;
   uint32_t flow_id = op.tile.flow_index;
 
+  fprintf(stderr, "[dev-submit] %s f=%u src=%p dst=%p sz=%zu\n",
+          op.kind == OpKind::DeviceReduce ? "REDUCE" : "COPY",
+          flow_id, src, dst, op.tile.size_bytes);
+
   auto fit = active_flows_.find(flow_id);
   uint32_t fifo_id = (fit != active_flows_.end())
       ? fit->second.fifo_id
@@ -148,43 +154,52 @@ BackendToken DeviceBackend::submit(Op const& op,
 
   uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
   if (task_id == Device::WorkerPool::kInvalidTaskId) {
-    active_flows_[flow_id].inflight--;
+    active_flows_[flow_id].pending--;
     Device::TaskManager::instance().free_task_args(task.args_index());
     return BackendToken{0};
   }
 
   BackendToken token{next_token_++};
   submitted_per_fifo_[fifo_id][token.value] = TaskRec{task_id, flow_id, task.args_index()};
+  active_flows_[flow_id].pending++;
   return token;
 }
 
 // ── drain ──────────────────────────────────────────────────────────────
 
 size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
+  int current_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&current_device));
+  if (current_device != local_device_idx_)
+    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+
   size_t count = 0;
-  for (auto& fifo_map : submitted_per_fifo_) {
+  std::vector<uint32_t> flows_to_stop;
+  for (uint32_t fid = 0; fid < submitted_per_fifo_.size() && count < max_count; ++fid) {
+    auto& fifo_map = submitted_per_fifo_[fid];
     if (fifo_map.empty()) continue;
     auto it = fifo_map.begin();
     while (it != fifo_map.end() && count < max_count) {
       TaskRec& rec = it->second;
-      if (!worker_pool_->is_done(rec.task_id, 0)) { ++it; continue; }
+      if (!worker_pool_->is_done(rec.task_id, fid)) { ++it; continue; }
       release_task_args(rec.args_id);
       out[count].value = it->first;
       out[count].failed = false;
       ++count;
 
-      uint32_t fid = rec.flow_id;
+      uint32_t flow_id = rec.flow_id;
       it = fifo_map.erase(it);
 
-      auto fi = active_flows_.find(fid);
-      if (fi != active_flows_.end() && fi->second.inflight > 0) {
-        --fi->second.inflight;
-        if (fi->second.inflight == 0)
-          stop_flow(fid);
+      auto fi = active_flows_.find(flow_id);
+      if (fi != active_flows_.end() && fi->second.pending > 0) {
+        --fi->second.pending;
+        if (fi->second.pending == 0)
+          flows_to_stop.push_back(flow_id);
       }
     }
-    if (count >= max_count) break;
   }
+  for (uint32_t flow_id : flows_to_stop)
+    stop_flow(flow_id);
   return count;
 }
 
@@ -201,7 +216,7 @@ void DeviceBackend::stop(uint32_t flow_id) {
 void DeviceBackend::stop_flow(uint32_t flow_id) {
   if (worker_pool_ == nullptr) return;
   auto it = active_flows_.find(flow_id);
-  if (it == active_flows_.end() || it->second.inflight != 0)
+  if (it == active_flows_.end() || it->second.pending != 0)
     return;
   uint32_t fifo_id = it->second.fifo_id;
   worker_pool_->destroyWorker(fifo_id);
@@ -238,10 +253,8 @@ void DeviceBackend::ensure_runtime() {
 
 uint32_t DeviceBackend::acquire_fifo(uint32_t flow_id, uint32_t num_blocks) {
   auto it = active_flows_.find(flow_id);
-  if (it != active_flows_.end()) {
-    ++it->second.inflight;
+  if (it != active_flows_.end())
     return it->second.fifo_id;
-  }
   if (worker_pool_ == nullptr)
     throw std::runtime_error("device runtime not initialized");
   if (free_fifos_.empty())

@@ -43,7 +43,7 @@ class DeviceBackend final : public Backend {
 
   struct FlowRec {
     uint32_t fifo_id = 0;
-    uint32_t inflight = 0;
+    uint32_t pending = 0;
   };
 
   void ensure_runtime();

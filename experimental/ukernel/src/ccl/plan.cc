@@ -334,6 +334,10 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
         "allreduce ring requires staging_bytes >= num_flows * tile_bytes");
   }
 
+  fprintf(stderr, "[plan r=%d/%d] bytes=%zu tile=%zu flows=%u tiles_per_shard=%zu staging_req=%zu\n",
+          config.rank, config.nranks, config.tensor_bytes, config.tile_bytes,
+          num_flows, tiles_per_shard, plan.staging_bytes_required);
+
   PlanBuilder builder(std::move(plan));
 
   std::vector<std::vector<uint32_t>> ready_ops(
@@ -382,6 +386,9 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
               peer_staging_ref(config, send_peer, staging_offset),
               op_dtype(config, OpKind::TransportSend),
               op_reduction(config, OpKind::TransportSend), std::move(deps));
+          fprintf(stderr, "[plan r=%d] op%u RS_SEND f=%u step=%d tile=%zu peer=%d src_off=%zu dst_off=%zu sz=%zu\n",
+                  config.rank, send_op, flow_slot, ring_step, tile_index,
+                  send_peer, send_tile.offset_bytes, staging_offset, send_tile_bytes);
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
@@ -404,6 +411,10 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
               op_dtype(config, OpKind::TransportRecv),
               op_reduction(config, OpKind::TransportRecv),
               std::move(recv_deps));
+          fprintf(stderr, "[plan r=%d] op%u RS_RECV f=%u step=%d tile=%zu peer=%d src_off=%zu dst_off=%zu sz=%zu deps=%zu\n",
+                  config.rank, recv_op, flow_slot, ring_step, tile_index,
+                  recv_peer, recv_tile.offset_bytes, staging_offset, recv_tile_bytes,
+                  recv_deps.size());
           last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
 
           std::vector<uint32_t> reduce_deps;
@@ -415,6 +426,9 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
                              op_dtype(config, OpKind::DeviceReduce),
                              op_reduction(config, OpKind::DeviceReduce),
                              std::move(reduce_deps));
+          fprintf(stderr, "[plan r=%d] op%u RS_REDUCE f=%u step=%d tile=%zu src_off=%zu dst_off=%zu sz=%zu\n",
+                  config.rank, reduce_op, flow_slot, ring_step, tile_index,
+                  staging_offset, recv_tile.offset_bytes, recv_tile_bytes);
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = reduce_op;
           last_staging_consumer[flow_slot] = reduce_op;
         }
@@ -457,6 +471,9 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
               peer_input_ref(config, send_peer, send_tile.offset_bytes),
               op_dtype(config, OpKind::TransportSend),
               op_reduction(config, OpKind::TransportSend), std::move(deps));
+          fprintf(stderr, "[plan r=%d] op%u AG_SEND f=%u step=%d tile=%zu peer=%d src_off=%zu dst_off=%zu sz=%zu\n",
+                  config.rank, send_op, flow_slot, ring_step, tile_index,
+                  send_peer, send_tile.offset_bytes, send_tile.offset_bytes, send_tile_bytes);
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
@@ -478,6 +495,9 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
               op_dtype(config, OpKind::TransportRecv),
               op_reduction(config, OpKind::TransportRecv),
               std::move(recv_deps));
+          fprintf(stderr, "[plan r=%d] op%u AG_RECV f=%u step=%d tile=%zu peer=%d src_off=%zu dst_off=%zu sz=%zu\n",
+                  config.rank, recv_op, flow_slot, ring_step, tile_index,
+                  recv_peer, recv_tile.offset_bytes, recv_tile.offset_bytes, recv_tile_bytes);
           last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = recv_op;
         }

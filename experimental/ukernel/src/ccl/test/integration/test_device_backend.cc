@@ -93,27 +93,34 @@ std::string preview(std::vector<float> const& values, size_t count = 4) {
   return out;
 }
 
-void wait_for_token(DeviceBackend& backend, BackendToken token,
-                    std::chrono::milliseconds timeout) {
+void drain_all(DeviceBackend& backend, std::vector<BackendToken> const& tokens,
+               std::chrono::milliseconds timeout) {
+  std::vector<bool> seen(tokens.size(), false);
+  size_t remaining = tokens.size();
   auto deadline = std::chrono::steady_clock::now() + timeout;
   BackendToken done_buf[64];
-  while (std::chrono::steady_clock::now() < deadline) {
+  while (remaining > 0 && std::chrono::steady_clock::now() < deadline) {
     size_t n = backend.drain(done_buf, 64);
-    for (size_t i = 0; i < n; ++i)
-      if (done_buf[i].value == token.value) return;
+    for (size_t i = 0; i < n; ++i) {
+      for (size_t j = 0; j < tokens.size(); ++j) {
+        if (!seen[j] && done_buf[i].value == tokens[j].value) {
+          seen[j] = true;
+          --remaining;
+          break;
+        }
+      }
+    }
+    if (remaining == 0) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  BackendToken t{};
-  require(backend.drain(&t, 1) == 1 && t.value == token.value,
-          "device backend token timed out");
+  require(remaining == 0, "device backend token timed out");
 }
 
-BackendToken submit_and_wait(DeviceBackend& backend, Op const& op,
-                             CollectiveBinding& binding,
-                             std::chrono::milliseconds timeout) {
-  BackendToken token = backend.submit(op, binding);
-  wait_for_token(backend, token, timeout);
-  return token;
+void submit_and_drain(DeviceBackend& backend, Op const& op,
+                      CollectiveBinding& binding,
+                      std::chrono::milliseconds timeout) {
+  std::vector<BackendToken> tokens = {backend.submit(op, binding)};
+  drain_all(backend, tokens, timeout);
 }
 
 Op make_device_op(uint32_t op_id, OpKind kind, uint32_t flow_index,
@@ -189,6 +196,19 @@ CollectiveBinding make_memory(int rank, void* tensor_ptr,
   return binding;
 }
 
+void validate_backend_for_op(DeviceBackend& backend, Op const& op,
+                             CollectiveBinding& binding) {
+  CollectivePlan plan;
+  plan.nranks = 1;
+  plan.rank = 0;
+  plan.num_flows = 1;
+  plan.tensor_bytes = op.tile.size_bytes;
+  plan.tile_bytes = op.tile.size_bytes;
+  plan.dtype = op.dtype;
+  plan.ops.push_back(op);
+  backend.validate(plan, binding);
+}
+
 void test_device_copy() {
   std::printf("[test] device backend copy...\n");
   constexpr size_t kElems = 257;
@@ -208,8 +228,8 @@ void test_device_copy() {
 
   Op op = make_device_op(0, OpKind::DeviceCopy, 0, 0, kBytes,
                              kTestInputBufferId, kTestScratchBufferId);
-  BackendToken token =
-      submit_and_wait(backend, op, memory, std::chrono::seconds(5));
+  validate_backend_for_op(backend, op, memory);
+  submit_and_drain(backend, op, memory, std::chrono::seconds(5));
   backend.stop(0);
 
   verify_copy(download_floats(staging.ptr, kBytes), src, "device copy");
@@ -237,8 +257,8 @@ void test_device_reduce_sum() {
   Op op = make_device_op(0, OpKind::DeviceReduce, 0, 0, kBytes,
                              kTestScratchBufferId, kTestInputBufferId,
                              ReductionKind::Sum);
-  BackendToken token =
-      submit_and_wait(backend, op, memory, std::chrono::seconds(5));
+  validate_backend_for_op(backend, op, memory);
+  submit_and_drain(backend, op, memory, std::chrono::seconds(5));
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
   std::vector<float> staging_after = download_floats(staging.ptr, kBytes);
@@ -268,18 +288,20 @@ void test_device_reduce_pipeline_same_flow() {
 
   std::vector<BackendToken> tokens;
   tokens.reserve(kTiles);
+  bool validated = false;
   for (size_t tile = 0; tile < kTiles; ++tile) {
     size_t offset = tile * kTileElems * sizeof(float);
     Op op =
         make_device_op(static_cast<uint32_t>(tile), OpKind::DeviceReduce, 0,
                        offset, kTileElems * sizeof(float), kTestScratchBufferId,
                        kTestInputBufferId, ReductionKind::Sum);
+    if (!validated) {
+      validate_backend_for_op(backend, op, memory);
+      validated = true;
+    }
     tokens.push_back(backend.submit(op, memory));
   }
-
-  for (BackendToken token : tokens) {
-    wait_for_token(backend, token, std::chrono::seconds(5));
-  }
+  drain_all(backend, tokens, std::chrono::seconds(5));
   backend.stop(0);
 
   verify_sum_reduce(download_floats(tensor.ptr, kBytes), dst_init, src,
