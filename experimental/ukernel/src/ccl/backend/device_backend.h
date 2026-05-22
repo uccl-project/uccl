@@ -36,7 +36,6 @@ class DeviceBackend final : public Backend {
 
  private:
   struct TaskRec {
-    uint32_t fifo_id;
     uint64_t task_id;
     uint32_t flow_id;
     uint32_t args_id;
@@ -47,7 +46,6 @@ class DeviceBackend final : public Backend {
     uint32_t inflight = 0;
   };
 
-  void ensure_device_context() const;
   void ensure_runtime();
   uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
   void release_task_args(uint32_t args_id);
@@ -62,7 +60,8 @@ class DeviceBackend final : public Backend {
   uint64_t next_token_ = 1;
   std::unordered_map<uint32_t, FlowRec> active_flows_;
   std::vector<uint32_t> free_fifos_;
-  std::unordered_map<uint64_t, TaskRec> submitted_;
+  // Per-FIFO submitted task map.  Indexed by fifo_id; empty when no worker.
+  std::vector<std::unordered_map<uint64_t, TaskRec>> submitted_per_fifo_;
 };
 
 }  // namespace CCL

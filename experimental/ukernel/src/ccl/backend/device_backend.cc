@@ -56,11 +56,11 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& config)
   local_device_idx_ = device;
   GPU_RT_CHECK(
       gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount, device));
+  submitted_per_fifo_.resize(config_.max_fifos);
 }
 
 DeviceBackend::~DeviceBackend() {
-  ensure_device_context();
-  submitted_.clear();
+  for (auto& m : submitted_per_fifo_) m.clear();
   active_flows_.clear();
   worker_pool_.reset();
   if (owns_task_manager_) {
@@ -75,7 +75,11 @@ char const* DeviceBackend::name() const { return "device"; }
 
 void DeviceBackend::validate(CollectivePlan const& plan,
                               CollectiveBinding& binding) {
-  (void)binding;
+  int current_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&current_device));
+  if (current_device != local_device_idx_)
+    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+
   if (plan.staging_bytes_required != 0 &&
       binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr)
     throw std::invalid_argument("device backend staging buffer is missing");
@@ -83,13 +87,13 @@ void DeviceBackend::validate(CollectivePlan const& plan,
       binding.role_buffer(CollectiveBufferRole::Scratch).bytes)
     throw std::invalid_argument("device backend staging capacity insufficient");
 
-  // Pre-check dtype compatibility for all device ops.
+  // Pre-compute dev_dtype for all device ops.
   for (Op const& op : plan.ops) {
     if (!supports(op.kind)) continue;
     (void)to_device_dtype(op.dtype);
   }
 
-  // Pre-warm runtime & workers for every flow used by the plan.
+  // Pre-warm runtime & workers.
   ensure_runtime();
   for (Op const& op : plan.ops) {
     uint32_t fid = op.tile.flow_index;
@@ -106,7 +110,6 @@ bool DeviceBackend::supports(OpKind kind) const {
 
 BackendToken DeviceBackend::submit(Op const& op,
                                     CollectiveBinding& binding) {
-  ensure_device_context();
   if (!supports(op.kind))
     throw std::invalid_argument("unsupported op kind for device backend");
 
@@ -151,37 +154,36 @@ BackendToken DeviceBackend::submit(Op const& op,
   }
 
   BackendToken token{next_token_++};
-  submitted_[token.value] = TaskRec{fifo_id, task_id, flow_id, task.args_index()};
+  submitted_per_fifo_[fifo_id][token.value] = TaskRec{task_id, flow_id, task.args_index()};
   return token;
 }
 
-// ── drain — harvest all completed tasks, release internal resources ────
+// ── drain ──────────────────────────────────────────────────────────────
 
 size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
-  ensure_device_context();
   size_t count = 0;
-  auto it = submitted_.begin();
-  while (it != submitted_.end() && count < max_count) {
-    TaskRec& rec = it->second;
-    if (!worker_pool_->is_done(rec.task_id, rec.fifo_id)) {
-      ++it;
-      continue;
+  for (auto& fifo_map : submitted_per_fifo_) {
+    if (fifo_map.empty()) continue;
+    auto it = fifo_map.begin();
+    while (it != fifo_map.end() && count < max_count) {
+      TaskRec& rec = it->second;
+      if (!worker_pool_->is_done(rec.task_id, 0)) { ++it; continue; }
+      release_task_args(rec.args_id);
+      out[count].value = it->first;
+      out[count].failed = false;
+      ++count;
+
+      uint32_t fid = rec.flow_id;
+      it = fifo_map.erase(it);
+
+      auto fi = active_flows_.find(fid);
+      if (fi != active_flows_.end() && fi->second.inflight > 0) {
+        --fi->second.inflight;
+        if (fi->second.inflight == 0)
+          stop_flow(fid);
+      }
     }
-    release_task_args(rec.args_id);
-
-    out[count].value = it->first;
-    out[count].failed = false;
-    ++count;
-
-    uint32_t fid = rec.flow_id;
-    it = submitted_.erase(it);
-
-    auto fi = active_flows_.find(fid);
-    if (fi != active_flows_.end() && fi->second.inflight > 0) {
-      --fi->second.inflight;
-      if (fi->second.inflight == 0)
-        stop_flow(fid);
-    }
+    if (count >= max_count) break;
   }
   return count;
 }
@@ -189,7 +191,10 @@ size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
 // ── stop ───────────────────────────────────────────────────────────────
 
 void DeviceBackend::stop(uint32_t flow_id) {
-  ensure_device_context();
+  int current_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&current_device));
+  if (current_device != local_device_idx_)
+    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
   stop_flow(flow_id);
 }
 
@@ -200,10 +205,10 @@ void DeviceBackend::stop_flow(uint32_t flow_id) {
     return;
   uint32_t fifo_id = it->second.fifo_id;
   worker_pool_->destroyWorker(fifo_id);
-  for (auto& [token_val, rec] : submitted_) {
-    if (rec.flow_id == flow_id)
-      release_task_args(rec.args_id);
-  }
+  // Release any remaining task args for this flow.
+  for (auto& [token_val, rec] : submitted_per_fifo_[fifo_id])
+    release_task_args(rec.args_id);
+  submitted_per_fifo_[fifo_id].clear();
   free_fifos_.push_back(fifo_id);
   active_flows_.erase(it);
 }
@@ -214,15 +219,7 @@ void DeviceBackend::release_task_args(uint32_t args_id) {
   Device::TaskManager::instance().free_task_args(args_id);
 }
 
-void DeviceBackend::ensure_device_context() const {
-  int current_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&current_device));
-  if (current_device != local_device_idx_)
-    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
-}
-
 void DeviceBackend::ensure_runtime() {
-  ensure_device_context();
   if (!Device::TaskManager::instance().inited()) {
     Device::TaskManager::instance().init(config_.task_capacity);
     owns_task_manager_ = true;

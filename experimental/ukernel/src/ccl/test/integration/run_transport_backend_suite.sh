@@ -3,13 +3,13 @@ set -euo pipefail
 
 BIN="${1:-./test_transport_backend}"
 
-NPROC_PER_NODE=2
+GPU_IDS="${CUDA_VISIBLE_DEVICES:-0,1}"
+NPROC_PER_NODE=$(echo "${GPU_IDS}" | tr ',' '\n' | wc -l | tr -d ' ')
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1
 TORCHRUN_MASTER_PORT=29750
 EXCHANGER_PORT=29760
-GPU_IDS="${CUDA_VISIBLE_DEVICES:-0,1}"
 TRANSPORT=auto
 BYTES=$((64 * 1024))
 UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-transport-$(date +%s)-$$}

@@ -2,8 +2,10 @@
 #include "../utils.h"
 #include "../../include/transport.h"
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace UKernel {
 namespace CCL {
@@ -112,35 +114,59 @@ void CommunicatorTransportBackend::ensure_peer_path(int peer_rank,
                                                      bool need_put,
                                                      bool need_wait) {
   size_t idx = static_cast<size_t>(peer_rank);
-  bool missing_put = need_put && !peer_put_ready_[idx];
-  bool missing_wait = need_wait && !peer_wait_ready_[idx];
-  if (!missing_put && !missing_wait) return;
 
-  auto do_put = [&]() {
+  auto establish_put = [&]() {
     if (peer_put_ready_[idx]) return true;
-    if (!communicator_->connect(peer_rank)) return false;
-    peer_put_ready_[idx] = true;
-    return true;
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(connect_timeout_s_);
+    while (!peer_put_ready_[idx]) {
+      if (communicator_->connect(peer_rank)) {
+        peer_put_ready_[idx] = true;
+        return true;
+      }
+      if (std::chrono::steady_clock::now() >= deadline)
+        return false;
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(connect_retry_ms_));
+    }
+    return peer_put_ready_[idx];
   };
-  auto do_wait = [&]() {
+
+  auto establish_wait = [&]() {
     if (peer_wait_ready_[idx]) return true;
-    if (!communicator_->accept(peer_rank)) return false;
-    peer_wait_ready_[idx] = true;
-    return true;
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(connect_timeout_s_);
+    while (!peer_wait_ready_[idx]) {
+      if (communicator_->accept(peer_rank)) {
+        peer_wait_ready_[idx] = true;
+        return true;
+      }
+      if (std::chrono::steady_clock::now() >= deadline)
+        return false;
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(connect_retry_ms_));
+    }
+    return peer_wait_ready_[idx];
   };
 
   bool ok = true;
-  if (missing_put && missing_wait)
-    ok = (communicator_->rank() < peer_rank) ? (do_put() && do_wait())
-                                              : (do_wait() && do_put());
-  else if (missing_put)
-    ok = do_put();
+  if (!need_put && !need_wait) return;
+
+  // When both directions are needed for the same peer, order by rank
+  // to avoid symmetric deadlock.
+  if (need_put && need_wait)
+    ok = (communicator_->rank() < peer_rank)
+             ? (establish_put() && establish_wait())
+             : (establish_wait() && establish_put());
+  else if (need_put)
+    ok = establish_put();
   else
-    ok = do_wait();
+    ok = establish_wait();
 
   if (!ok)
-    throw std::runtime_error("failed to establish transport path with peer " +
-                             std::to_string(peer_rank));
+    throw std::runtime_error(
+        "timed out establishing transport path with peer " +
+        std::to_string(peer_rank));
 }
 
 // ── memory bindings — MR / IPC registration ───────────────────────────
@@ -207,7 +233,7 @@ bool CommunicatorTransportBackend::supports(OpKind kind) const {
 
 BackendToken CommunicatorTransportBackend::submit(Op const& op,
                                                    CollectiveBinding& binding) {
-  (void)binding;  // memory bindings already done in validate()
+  (void)binding;
   int peer_rank = resolve_peer_rank(op);
   unsigned request_id = 0;
   if (op.kind == OpKind::TransportSend) {
@@ -238,6 +264,10 @@ BackendToken CommunicatorTransportBackend::submit(Op const& op,
 }
 
 size_t CommunicatorTransportBackend::drain(BackendToken* out, size_t max_count) {
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (pending_.empty()) return 0;
+  }
   auto done = communicator_->progress();
   if (done.empty()) return 0;
 

@@ -53,6 +53,9 @@ struct Op {
   ReductionKind reduction = ReductionKind::None;
   std::vector<uint32_t> deps;
 
+  // Pre-computed device backend values — filled by DeviceBackend::validate().
+  uint8_t dev_dtype = 255;     // Device::DataType enum value
+
   // Runtime bindings — filled by the Executor, unset by the planner.
   void const* resolved_src = nullptr;
   void* resolved_dst = nullptr;

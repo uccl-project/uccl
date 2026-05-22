@@ -57,6 +57,8 @@ class CommunicatorTransportBackend final : public Backend {
   std::vector<bool> peer_put_ready_;
   std::vector<bool> peer_wait_ready_;
   mutable std::mutex init_mu_;
+  int connect_retry_ms_ = 100;
+  int connect_timeout_s_ = 30;
 };
 
 }  // namespace CCL
