@@ -22,8 +22,11 @@ import torch
 import torch.distributed as dist
 from uccl import p2p
 
-_DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16,
-           "float16": torch.float16}
+_DTYPES = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}
 _FLOAT_TYPES = {
     torch.float32: p2p.FloatType.kFloat32,
     torch.bfloat16: p2p.FloatType.kBFloat16,
@@ -49,8 +52,12 @@ def gloo_recv(src: int) -> int:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--size", type=int, default=64 * 1024 * 1024,
-                    help="bytes to transfer per iteration (>2 MB for compression)")
+    ap.add_argument(
+        "--size",
+        type=int,
+        default=64 * 1024 * 1024,
+        help="bytes to transfer per iteration (>2 MB for compression)",
+    )
     ap.add_argument("--dtype", choices=list(_DTYPES), default="bfloat16")
     ap.add_argument("--iters", type=int, default=3)
     args = ap.parse_args()
@@ -60,8 +67,10 @@ def main():
 
     strategy = os.environ.get("UCCL_P2P_COMPRESS_STRATEGY", "")
     if strategy not in ("split", "split_only"):
-        print(f"[WARN] UCCL_P2P_COMPRESS_STRATEGY={strategy!r}; "
-              "set to 'split_only' for compression to activate")
+        print(
+            f"[WARN] UCCL_P2P_COMPRESS_STRATEGY={strategy!r}; "
+            "set to 'split_only' for compression to activate"
+        )
 
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
@@ -100,8 +109,9 @@ def main():
             src.fill_(fill_val)
             torch.cuda.synchronize()
 
-            ok, tid = ep.write_async(conn_id, mr_id, src.data_ptr(),
-                                     src.nbytes, fifo_blob)
+            ok, tid = ep.write_async(
+                conn_id, mr_id, src.data_ptr(), src.nbytes, fifo_blob
+            )
             assert ok, f"write_async failed iter={i}"
             while True:
                 ok, done = ep.poll_async(tid)
@@ -152,17 +162,21 @@ def main():
             if not torch.all(dst == fill_val):
                 bad = (dst != fill_val).nonzero(as_tuple=False)
                 idx = bad[0].item()
-                print(f"[Receiver] FAIL iter={i} expected={fill_val}: "
-                      f"{len(bad)} mismatches, "
-                      f"first at [{idx}] got={dst.flatten()[idx].item()}")
-                gloo_send(1, dst=0)   # report failure to writer
+                print(
+                    f"[Receiver] FAIL iter={i} expected={fill_val}: "
+                    f"{len(bad)} mismatches, "
+                    f"first at [{idx}] got={dst.flatten()[idx].item()}"
+                )
+                gloo_send(1, dst=0)  # report failure to writer
                 dist.destroy_process_group()
                 sys.exit(1)
 
-            print(f"[Receiver] iter={i} OK — "
-                  f"{args.size // 1024 // 1024} MB {args.dtype} "
-                  f"all == {fill_val}")
-            gloo_send(0, dst=0)   # report success to writer
+            print(
+                f"[Receiver] iter={i} OK — "
+                f"{args.size // 1024 // 1024} MB {args.dtype} "
+                f"all == {fill_val}"
+            )
+            gloo_send(0, dst=0)  # report success to writer
 
         print("[Receiver] all iterations passed ✓")
 

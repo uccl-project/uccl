@@ -19,9 +19,8 @@ fifo_blob_size = 64  # bytes
 def _make_buffer(n_bytes: int, device: str, gpu: int):
     if n_bytes <= 0:
         raise ValueError(f"buffer size must be positive, got {n_bytes}")
-    # Allocate as bfloat16 so the bytes on the wire actually look like a
-    # bf16 tensor — that's the dtype we hand to the compression layer.
-    # Fall back to uint8 if n_bytes is not a multiple of 2.
+    # Use bfloat16 so the compression layer sees a valid float dtype;
+    # fall back to uint8 if n_bytes is not a multiple of 2.
     if n_bytes % 2 == 0:
         n_elems = n_bytes // 2
         if device == "gpu":

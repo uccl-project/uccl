@@ -108,11 +108,8 @@ struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext {
   explicit FloatCompressCtx(uccl::FloatType ft)
       : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
 
-  // Plain device allocation for the per-ctx [in_ptr, inSize, out_ptr] tuple
-  // referenced by `params_dev`. Freed here so each ctx releases its own buffer
-  // independently (no LIFO stack ordering required, unlike dietgpu's
-  // StackDeviceMemory). params_dev itself is hand-constructed with res=nullptr
-  // so its RAII release is a no-op.
+  // Raw device buffer for the [in_ptr, inSize, out_ptr] tuple in params_dev.
+  // Plain cudaMalloc so each ctx frees independently (no LIFO constraint).
   void* raw_params_dev = nullptr;
 
   FloatCompressCtx(FloatCompressCtx const&) = delete;

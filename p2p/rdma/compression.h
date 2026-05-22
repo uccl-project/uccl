@@ -49,15 +49,8 @@ class ICompressorBackend {
   virtual bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                           uccl::FloatType float_type) = 0;
 
-  /**
-   * @brief Queue decompress on the internal stream WITHOUT synchronizing.
-   * After the kernel completes, `on_done(user_data)` fires on a host-managed
-   * thread (via gpuLaunchHostFunc). Caller owns user_data lifetime — typically
-   * heap-allocated and deleted inside on_done. The host callback MUST NOT
-   * call any GPU APIs. Used by the compressed-write path to post an ack as
-   * soon as decompress finishes, without blocking the receiver polling
-   * thread.
-   */
+  // Queue decompress asynchronously. on_done fires via gpuLaunchHostFunc after
+  // the kernel completes; it must not call any GPU APIs.
   virtual void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
                                uccl::FloatType float_type, gpuHostFn_t on_done,
                                void* user_data) = 0;
@@ -414,10 +407,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     if (unlikely(!shouldCompress(size))) {
       return;
     }
-    // dietgpu's getWordSizeFromFloatType CHECK-fails on kUndefined. Caller
-    // (likely the Python binding default) didn't supply a float_type, so we
-    // can't compress this region — leave params_dev uninitialized; the
-    // compressed-send/write paths will see kUndefined and skip compression.
+    // kUndefined means no float_type was supplied; skip compression.
     if (unlikely(ctx->getFloatType() == uccl::FloatType::kUndefined)) {
       return;
     }
@@ -431,11 +421,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
       numFloats /= 2;
     }
 
-    // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]. Use
-    // plain cudaMalloc so each ctx owns its allocation — no LIFO ordering
-    // constraint between independently-dereg'd mhandles. params_dev wraps the
-    // raw pointer with res=nullptr so its RAII release is a no-op; ownership
-    // lives in ctx->raw_params_dev (freed by ~FloatCompressCtx).
+    // params_dev layout: [in_ptr, inSize, out_ptr]. Plain cudaMalloc so
+    // each ctx owns its buffer independently; raw_params_dev holds ownership.
     uintptr_t hostParams[3];
     hostParams[0] = reinterpret_cast<uintptr_t>(addr);
     hostParams[1] = static_cast<uintptr_t>(numFloats);
@@ -448,9 +435,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     GPU_RT_CHECK(gpuStreamSynchronize(stream_));
 
     if (ctx->raw_params_dev) {
-      // Re-prepare on same ctx: defuse old params_dev so the move-assign
-      // below doesn't UCCL_CHECK on the stale (res=nullptr, ptr!=nullptr)
-      // pair, then free the old buffer we own.
+      // Re-prepare: clear stale params_dev before reassigning, then free old
+      // buffer.
       ctx->params_dev.ptr = nullptr;
       ctx->params_dev.res = nullptr;
       gpuFree(ctx->raw_params_dev);
