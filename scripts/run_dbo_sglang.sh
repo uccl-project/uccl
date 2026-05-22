@@ -26,6 +26,13 @@ export NCCL_SOCKET_IFNAME=enp71s0
 export UCCL_SOCKET_IFNAME=enp71s0
 export NCCL_IB_GID_INDEX=0
 export UCCL_IB_GID_INDEX=0
+# Cap NCCL channels so they don't fight uccl-ep for EFA QPs/CQs.
+# Without this, NCCL DP-attention all-gathers + uccl-ep RDMA dispatch
+# can deadlock at the second dispatch_b (CPU timeout on counters).
+export NCCL_MAX_NCHANNELS=8
+# Bump uccl-ep's CPU-side dispatch timeout to 10 min so we can attach py-spy
+# while the dispatch is genuinely stuck instead of seeing it die at 100s.
+export UCCL_EP_CPU_TIMEOUT_SECS=600
 
 # EFA
 export FI_PROVIDER=efa
@@ -65,7 +72,8 @@ NNODES=2
 TP_SIZE=16
 EP_SIZE=16
 DP_SIZE=16
-DIST_ADDR="172.31.73.10:5000"
+DIST_ADDR="172.31.73.10:5001"
+SGLANG_PORT="30001"
 
 echo ">>> Launching sglang"
 echo "    Model:     $MODEL_PATH"
@@ -80,6 +88,7 @@ echo "    Master:    $DIST_ADDR"
 cd /tmp
 
 exec python -m sglang.launch_server \
+  --port "$SGLANG_PORT" \
   --model-path "$MODEL_PATH" \
   --tp-size "$TP_SIZE" \
   --ep-size "$EP_SIZE" \
@@ -101,4 +110,5 @@ exec python -m sglang.launch_server \
   --moe-a2a-backend deepep \
   --deepep-mode normal \
   --deepep-config "$DEEPEP_CFG" \
+  --skip-server-warmup \
   --enable-two-batch-overlap

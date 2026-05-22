@@ -43,4 +43,6 @@ exec torchrun \
     --master_port="$MASTER_PORT" \
     bench/test_dbo_dispatch_twice.py \
     --num-tokens 4096 --hidden 7168 --num-experts 256 --num-topk 8 \
-    --iters 1 --moe-layers 48 --all-empty-b --only-empty-pattern --fp8
+    --iters 50 --moe-layers 1 --only-empty-pattern --fp8 \
+    --tbo-faithful --kernel-layout \
+    --asymmetric-tokens --vary-each-iter --skew 0.8

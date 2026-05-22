@@ -45,8 +45,13 @@ from uccl.ep import Config
 
 
 def gen_workload(num_tokens, hidden, num_experts, num_topk, num_topk_groups, num_nodes,
-                 num_ranks, num_local_ranks, rank, seed):
-    """Mirror test_internode.py's data + layout generation."""
+                 num_ranks, num_local_ranks, rank, seed, skew: float = 0.0):
+    """Mirror test_internode.py's data + layout generation.
+
+    skew in [0, 1]: 0 = uniform random topk; 1 = pathologically skewed
+    routing where most tokens funnel onto a few experts (mimics real model
+    routing imbalance that uniform random misses).
+    """
     g = torch.Generator(device="cuda")
     g.manual_seed(int(seed))
 
@@ -56,6 +61,16 @@ def gen_workload(num_tokens, hidden, num_experts, num_topk, num_topk_groups, num
         torch.randn((num_tokens, num_experts), dtype=torch.float32, device="cuda",
                     generator=g).abs() + 1
     )
+    if skew > 0:
+        # Bias `skew_frac` of experts to be very hot. Mimics real-model
+        # routing: not uniform-random, certain experts pull many more tokens.
+        hot_experts = max(1, int(num_experts * 0.15))
+        hot_mask = torch.zeros(num_experts, device="cuda", dtype=torch.float32)
+        # Reproducible hot-expert selection seeded by skew level
+        torch.manual_seed(int(seed) + 9999)
+        hot_idx = torch.randperm(num_experts, device="cuda")[:hot_experts]
+        hot_mask[hot_idx] = 1.0
+        scores = scores * (1.0 + skew * 10.0 * hot_mask[None, :])
     group_scores = scores.view(num_tokens, num_nodes, -1).amax(dim=-1)
     group_idx = torch.topk(group_scores, k=num_topk_groups, dim=-1, sorted=False).indices
     masked_scores = create_grouped_scores(scores, group_idx, num_nodes)
@@ -166,6 +181,24 @@ def dispatch_args(wl, config, async_finish, previous_event=None,
     return args
 
 
+def _fake_expert_compute(recv_x, flops_budget: int):
+    """Stand-in for sglang's op_experts (grouped FP8 GEMM). Just runs a
+    bf16 matmul on the default stream so that there's real GPU work between
+    A.dispatch_b and B.dispatch_b, like in real TBO."""
+    if isinstance(recv_x, tuple):
+        recv_x = recv_x[0]
+    m, n = recv_x.shape[-2], recv_x.shape[-1]
+    if m == 0:
+        # Zero-token rank: do a tiny dummy matmul so the stream still has work.
+        m = 1
+    # Pick K such that 2*m*n*K ~= flops_budget.
+    k = max(64, flops_budget // max(1, 2 * m * n))
+    a = torch.randn(m, k, dtype=torch.bfloat16, device=recv_x.device)
+    b = torch.randn(k, n, dtype=torch.bfloat16, device=recv_x.device)
+    _ = a @ b  # discarded — we just want GPU work between dispatches
+    return _
+
+
 def fingerprint(t):
     if isinstance(t, tuple):
         t = t[0]
@@ -206,6 +239,30 @@ def main():
                         help="Number of (dispatch_A, dispatch_B, combine_A, combine_B) "
                              "cycles within a single iter, simulating Qwen3-30B's "
                              "48 MoE layers in one forward pass.")
+    parser.add_argument("--tbo-faithful", action="store_true",
+                        help="Match sglang TBO's exact op interleave per layer: "
+                             "A.dispatch_b -> A.experts(fake deepGEMM) -> "
+                             "A.combine_a(capture) -> B.dispatch_b -> "
+                             "B.experts -> B.combine_a -> A.combine_b -> B.combine_b. "
+                             "Inserts a torch.matmul as a stand-in for the FP8 grouped "
+                             "GEMM that sglang's op_experts runs between A and B.")
+    parser.add_argument("--fake-expert-flops", type=int, default=4 * 1024 * 1024 * 1024,
+                        help="Size of the fake expert GEMM (flops budget). 4G flops "
+                             "= a few ms on H200, similar to a real MoE expert layer.")
+    parser.add_argument("--kernel-layout", action="store_true",
+                        help="Compute num_tokens_per_rank etc. via buffer.get_dispatch_layout "
+                             "(kernel on comm_stream) like sglang TBO does, instead of "
+                             "Python-side. Requires topk_idx as the only routing input.")
+    parser.add_argument("--skew", type=float, default=0.0,
+                        help="Routing skew in [0,1]. >0 makes some experts much hotter "
+                             "to mimic real-model routing imbalance.")
+    parser.add_argument("--asymmetric-tokens", action="store_true",
+                        help="Use per-rank-varied num_tokens (rank R has roughly "
+                             "max(1, R * num_tokens // num_ranks) tokens). Provokes "
+                             "the RDMA / NVL traffic imbalance real models create.")
+    parser.add_argument("--vary-each-iter", action="store_true",
+                        help="Re-seed gen_workload each iter so token counts and routing "
+                             "differ every iteration, chasing the race condition.")
     parser.add_argument("--only-empty-pattern", action="store_true",
                         help="Skip patterns A/B/C and only run the empty-rank "
                              "pattern. Use with --dp-attention-style.")
@@ -226,10 +283,12 @@ def main():
 
     num_sms = 24
     hidden_bytes = args.hidden * 2
-    cfg_for_size = Config(num_sms, 8, 512, 16, 512)
-    align = lambda s: ((int(s * 1.2) + 127) // 128) * 128
-    num_nvlink_bytes = align(cfg_for_size.get_nvl_buffer_size_hint(hidden_bytes, num_ranks))
-    num_rdma_bytes = align(cfg_for_size.get_rdma_buffer_size_hint(hidden_bytes, num_ranks))
+    # Match sglang DeepEPBuffer.get_deepep_buffer: size with max of dispatch
+    # and combine configs (we use the same Config for both, like
+    # DeepEPConfig with normal_dispatch_config==normal_combine_config).
+    cfg_for_size = Config(num_sms, 16, 512, 16, 512)
+    num_nvlink_bytes = cfg_for_size.get_nvl_buffer_size_hint(hidden_bytes, num_ranks)
+    num_rdma_bytes = cfg_for_size.get_rdma_buffer_size_hint(hidden_bytes, num_ranks)
     if is_master:
         print(f"[buffer] num_nvlink_bytes={num_nvlink_bytes/1e9:.2f} GB, "
               f"num_rdma_bytes={num_rdma_bytes/1e9:.2f} GB", flush=True)
@@ -237,22 +296,34 @@ def main():
     buffer = Buffer(
         group, num_nvlink_bytes, num_rdma_bytes,
         low_latency_mode=False, num_qps_per_rank=num_sms,
+        allow_mnnvl=True,
         explicitly_destroy=True,
     )
-    config = Config(num_sms, 8, 512, 16, 512)
+    config = Config(num_sms, 16, 512, 16, 512)
 
     total_fail = 0
 
     for it in range(args.iters):
+        # Per-rank token count (asymmetric or uniform)
+        if args.asymmetric_tokens:
+            # rank 0 -> tiny; rank num_ranks-1 -> max
+            nt_A = max(1, (rank + 1) * args.num_tokens // num_ranks)
+            nt_B = max(1, (num_ranks - rank) * args.num_tokens // num_ranks)
+        else:
+            nt_A = nt_B = args.num_tokens
+        seed_offset = it * 1000000 if args.vary_each_iter else 0
+
         # Two DIFFERENT micro-batches (different seeds -> different x/topk).
-        wl_A = gen_workload(args.num_tokens, args.hidden, args.num_experts,
+        wl_A = gen_workload(nt_A, args.hidden, args.num_experts,
                             args.num_topk, args.num_topk_groups, num_nodes,
                             num_ranks, num_local_ranks, rank,
-                            seed=100000 * rank + 2 * it + 1)
-        wl_B = gen_workload(args.num_tokens, args.hidden, args.num_experts,
+                            seed=100000 * rank + 2 * it + 1 + seed_offset,
+                            skew=args.skew)
+        wl_B = gen_workload(nt_B, args.hidden, args.num_experts,
                             args.num_topk, args.num_topk_groups, num_nodes,
                             num_ranks, num_local_ranks, rank,
-                            seed=100000 * rank + 2 * it + 2)
+                            seed=100000 * rank + 2 * it + 2 + seed_offset,
+                            skew=args.skew)
 
         # Optional: emulate TBO + DP-attention by giving some ranks an
         # empty wl_B. This is the missing ingredient that made the previous
@@ -300,6 +371,18 @@ def main():
         # This mirrors sglang's TBO `_dispatch_core`: previous_event chain
         # (Buffer.capture()), allocate_on_comm_stream=True, and the FP8
         # expert_alignment=128 path.
+        #
+        # With --tbo-faithful, the per-layer interleave mirrors sglang's
+        # Qwen3 prefill strategy exactly:
+        #
+        #   stage 0: gate, select_experts, dispatch_a       (just CPU prep + capture)
+        #   stage 1: dispatch_b -> experts -> combine_a     (the real GPU comm + GEMM)
+        #   stage 2: combine_b -> output                    (final combine)
+        #
+        # Under TBO, executor A and B share the same default stream but A's
+        # whole stage 1 finishes before B's stage 1 starts. So between
+        # A.dispatch_b and B.dispatch_b sit A.experts (a grouped FP8 GEMM)
+        # and A.combine_a (just Buffer.capture()).
         for moe_layer in range(args.moe_layers):
             torch.cuda.synchronize(); group.barrier()
             if is_master and moe_layer == 0:
@@ -307,21 +390,89 @@ def main():
                     " (rank%2==1 ranks have empty B)" if args.dp_attention_style else
                     " (ALL ranks have empty B)" if args.all_empty_b else ""
                 )
-                print(f"[iter {it}] pattern_A back-to-back{empty_ranks_msg}: "
+                tbo_msg = " [tbo-faithful]" if args.tbo_faithful else ""
+                print(f"[iter {it}] pattern_A back-to-back{empty_ranks_msg}{tbo_msg}: "
                       f"running {args.moe_layers} MoE-layer cycles...", flush=True)
+
+            # sglang TBO stage ordering for Qwen3 prefill:
+            #   stage 0: A.dispatch_a (capture ev_A)
+            #   stage 0: B.dispatch_a (capture ev_B)
+            #   stage 1: A.dispatch_b (real call, uses ev_A)
+            #            A.experts (deep_gemm on default stream)
+            #            A.combine_a (capture pe_A)
+            #   stage 1: B.dispatch_b (real call, uses ev_B)
+            #            B.experts
+            #            B.combine_a (capture pe_B)
+            #   stage 2: A.combine_b (real combine call, uses pe_A)
+            #   stage 2: B.combine_b (real combine call, uses pe_B)
+
+            # ----- A.dispatch_a + B.dispatch_a (both captures first) -----
             prev_A = buffer.capture()
-            recv_A, _, _, _, handle_A, evA = buffer.dispatch(
-                **dispatch_args(wl_A, config, async_finish=True,
-                                previous_event=prev_A,
-                                allocate_on_comm_stream=True,
-                                expert_alignment=128 if args.fp8 else 1))
             prev_B = buffer.capture()
-            recv_B, _, _, _, handle_B, evB = buffer.dispatch(
-                **dispatch_args(wl_B, config, async_finish=True,
-                                previous_event=prev_B,
-                                allocate_on_comm_stream=True,
-                                expert_alignment=128 if args.fp8 else 1))
-            evA.current_stream_wait(); evB.current_stream_wait()
+
+            # ----- A.dispatch_b -----
+            if args.kernel_layout:
+                # Match sglang: call get_dispatch_layout INSIDE dispatch_b,
+                # on comm_stream, with the previous_event chain.
+                wl_A_dyn = dict(wl_A)
+                (wl_A_dyn["num_tokens_per_rank"], wl_A_dyn["num_tokens_per_rdma_rank"],
+                 wl_A_dyn["num_tokens_per_expert"], wl_A_dyn["is_token_in_rank"],
+                 prev_A) = buffer.get_dispatch_layout(
+                    wl_A["topk_idx"], args.num_experts,
+                    previous_event=prev_A,
+                    async_finish=True,
+                    allocate_on_comm_stream=True,
+                )
+                dispatch_kwargs = dispatch_args(
+                    wl_A_dyn, config, async_finish=True,
+                    previous_event=prev_A,
+                    allocate_on_comm_stream=True,
+                    expert_alignment=128 if args.fp8 else 1)
+            else:
+                dispatch_kwargs = dispatch_args(
+                    wl_A, config, async_finish=True,
+                    previous_event=prev_A,
+                    allocate_on_comm_stream=True,
+                    expert_alignment=128 if args.fp8 else 1)
+            recv_A, _, _, _, handle_A, evA = buffer.dispatch(**dispatch_kwargs)
+            evA.current_stream_wait()
+
+            _prev_combine_A = None
+            if args.tbo_faithful:
+                # ----- A.op_experts -----
+                _fake_expert_compute(recv_A, args.fake_expert_flops)
+                # ----- A.op_combine_a (just Buffer.capture()) -----
+                _prev_combine_A = buffer.capture()
+
+            # ----- B.dispatch_b -----
+            if args.kernel_layout:
+                wl_B_dyn = dict(wl_B)
+                (wl_B_dyn["num_tokens_per_rank"], wl_B_dyn["num_tokens_per_rdma_rank"],
+                 wl_B_dyn["num_tokens_per_expert"], wl_B_dyn["is_token_in_rank"],
+                 prev_B) = buffer.get_dispatch_layout(
+                    wl_B["topk_idx"], args.num_experts,
+                    previous_event=prev_B,
+                    async_finish=True,
+                    allocate_on_comm_stream=True,
+                )
+                dispatch_kwargs = dispatch_args(
+                    wl_B_dyn, config, async_finish=True,
+                    previous_event=prev_B,
+                    allocate_on_comm_stream=True,
+                    expert_alignment=128 if args.fp8 else 1)
+            else:
+                dispatch_kwargs = dispatch_args(
+                    wl_B, config, async_finish=True,
+                    previous_event=prev_B,
+                    allocate_on_comm_stream=True,
+                    expert_alignment=128 if args.fp8 else 1)
+            recv_B, _, _, _, handle_B, evB = buffer.dispatch(**dispatch_kwargs)
+            evB.current_stream_wait()
+
+            _prev_combine_B = None
+            if args.tbo_faithful:
+                _fake_expert_compute(recv_B, args.fake_expert_flops)
+                _prev_combine_B = buffer.capture()
 
             # combine() expects bf16; if dispatch produced fp8 tuples,
             # take just the fp8 component and upcast.
@@ -329,10 +480,24 @@ def main():
             out_B = recv_B if not isinstance(recv_B, tuple) else recv_B[0]
             if out_A.dtype != torch.bfloat16: out_A = out_A.to(torch.bfloat16)
             if out_B.dtype != torch.bfloat16: out_B = out_B.to(torch.bfloat16)
-            combined_A, _, ev_cA = buffer.combine(out_A, handle_A,
-                                                  async_finish=True, config=config)
-            combined_B, _, ev_cB = buffer.combine(out_B, handle_B,
-                                                  async_finish=True, config=config)
+
+            if args.tbo_faithful:
+                # combine_b uses the previous_event from combine_a's capture.
+                combined_A, _, ev_cA = buffer.combine(
+                    out_A, handle_A, async_finish=True, config=config,
+                    previous_event=_prev_combine_A,
+                    allocate_on_comm_stream=True,
+                )
+                combined_B, _, ev_cB = buffer.combine(
+                    out_B, handle_B, async_finish=True, config=config,
+                    previous_event=_prev_combine_B,
+                    allocate_on_comm_stream=True,
+                )
+            else:
+                combined_A, _, ev_cA = buffer.combine(
+                    out_A, handle_A, async_finish=True, config=config)
+                combined_B, _, ev_cB = buffer.combine(
+                    out_B, handle_B, async_finish=True, config=config)
             ev_cA.current_stream_wait(); ev_cB.current_stream_wait()
             torch.cuda.synchronize()
 

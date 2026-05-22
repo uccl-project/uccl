@@ -1522,18 +1522,38 @@ class Buffer:
                 and is_token_in_rank is not None
                 and num_tokens_per_expert is not None
             )
-            rdma_channel_prefix_matrix = torch.empty(
-                (num_rdma_ranks, num_channels), dtype=torch.int32, device=x.device
+            # Allocate the prefix-matrix / prefix-sum tensors on comm_stream so
+            # PyTorch's caching allocator tags them as owned by comm_stream and
+            # won't return their memory to the cache pool until comm_stream has
+            # actually progressed past the kernels that read them. Without this,
+            # under DBO/TBO (two dispatches queued back-to-back on the SAME
+            # comm_stream), the second dispatch's `torch.empty()` happily reuses
+            # the first dispatch's still-in-flight memory because the allocator
+            # tracks lifetime via the user's default stream. Result: the kernel
+            # reads garbage (e.g. IEEE-754 float bit patterns left over from
+            # whatever else PyTorch put in that block). DeepEP's C++ wrapper
+            # does the equivalent via at::cuda::setCurrentCUDAStream(comm_stream)
+            # around its torch::empty calls; we mirror that here in Python.
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
             )
-            recv_rdma_rank_prefix_sum = torch.empty(
-                (num_rdma_ranks,), dtype=torch.int32, device=x.device
-            )
-            gbl_channel_prefix_matrix = torch.empty(
-                (self.group_size, num_channels), dtype=torch.int32, device=x.device
-            )
-            recv_gbl_rank_prefix_sum = torch.empty(
-                (self.group_size,), dtype=torch.int32, device=x.device
-            )
+            with alloc_ctx:
+                rdma_channel_prefix_matrix = torch.empty(
+                    (num_rdma_ranks, num_channels),
+                    dtype=torch.int32, device=x.device,
+                )
+                recv_rdma_rank_prefix_sum = torch.empty(
+                    (num_rdma_ranks,), dtype=torch.int32, device=x.device,
+                )
+                gbl_channel_prefix_matrix = torch.empty(
+                    (self.group_size, num_channels),
+                    dtype=torch.int32, device=x.device,
+                )
+                recv_gbl_rank_prefix_sum = torch.empty(
+                    (self.group_size,), dtype=torch.int32, device=x.device,
+                )
             (
                 num_recv_tokens,
                 num_rdma_recv_tokens,
@@ -1566,11 +1586,6 @@ class Buffer:
             # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_rdma_recv_tokens = max(num_rdma_recv_tokens, 1)
-            alloc_ctx = (
-                torch.cuda.stream(self.get_comm_stream())
-                if allocate_on_comm_stream
-                else nullcontext()
-            )
             with alloc_ctx:
                 recv_x = torch.empty(
                     (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
