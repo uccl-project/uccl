@@ -88,5 +88,8 @@ typedef uint16_t __hip_fp8x2_storage_t;
 typedef int __nv_fp8_interpretation_t;
 typedef int __nv_fp8x4_e4m3;
 typedef uint8_t __nv_fp8_storage_t;
+typedef uint16_t __nv_fp8x2_storage_t;
+#define __NV_SATFINITE 0
+#define __nv_cvt_float2_to_fp8x2(a, b, c) ((uint16_t)0)
 #endif
 #endif

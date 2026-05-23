@@ -811,7 +811,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int offset, num_tokens_to_send;
     unpack2(layout, num_tokens_to_send, offset);
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     // TMA stuffs
     constexpr int kNumTMABufferBytes = sizeof(int4) * WARP_SIZE * kNumUnrolls;
     constexpr int kNumStages = 3;
@@ -899,7 +899,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
                            cpy_src_int4_ptr, ld_nc_global, st_na_global);
 
-#else
+#elif !defined(DISABLE_SM90_FEATURES)
         // Prefetch
         if (elect_one_sync(lane_id))
           tma_load_and_arrive(0, cpy_src_int4_ptr, get_num_tma_bytes(0));
@@ -1010,7 +1010,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #endif
       }
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       // Flush all stores
       tma_store_wait();
       __syncwarp();
