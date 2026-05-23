@@ -111,6 +111,7 @@ Notes:
 | UCCL_P2P_RDMA_DEV | RDMA devices forced to use (instead of auto-selecting based on PCIe affinity) | none (eg, `irdma-mkp0,irdma-mkp1`) |
 | UCCL_P2P_TRANSPORT | Network backend to use at runtime | ib (others: efa/nccl/tcp/tcpx) |
 | UCCL_P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
+| UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
 
 `UCCL_P2P_COMPRESS_STRATEGY` accepted values:
 * `none` / `off` / `0` — no compression
