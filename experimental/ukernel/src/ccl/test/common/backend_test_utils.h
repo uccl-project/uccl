@@ -81,10 +81,10 @@ inline CollectiveConfig make_test_config(int nranks, int rank,
   config.num_flows = num_flows;
   config.tensor_bytes = tensor_bytes;
   config.tile_bytes = tile_bytes;
+  // staging must cover max per-tile slots
   config.staging_bytes =
-      std::max(static_cast<size_t>(num_flows),
-               static_cast<size_t>(nranks > 0 ? nranks - 1 : 0)) *
-      tile_bytes;
+      std::max(static_cast<size_t>(nranks > 0 ? nranks - 1 : 0) * tile_bytes,
+               (tensor_bytes / tile_bytes + 1) * tile_bytes);
   config.algorithm = AlgorithmKind::Ring;
   return config;
 }

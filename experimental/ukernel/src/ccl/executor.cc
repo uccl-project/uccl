@@ -91,21 +91,6 @@ Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
 
 }  // namespace
 
-// ── shared run initialisation ──────────────────────────────────────────
-
-static void init_run_state(CollectiveRun& run) {
-  run.completed.assign(run.total_ops, false);
-  run.tokens.resize(run.total_ops);
-  run.op_backend.resize(run.total_ops, nullptr);
-  run.flow_ops.resize(run.plan.num_flows);
-  run.flow_head.assign(run.plan.num_flows, 0);
-  for (size_t i = 0; i < run.total_ops; i++) {
-    uint32_t f = run.plan.ops[i].tile.flow_index;
-    if (f < run.plan.num_flows)
-      run.flow_ops[f].push_back(static_cast<uint32_t>(i));
-  }
-}
-
 // PlanCacheKey helpers
 bool Executor::PlanCacheKey::operator==(PlanCacheKey const& o) const {
   return kind == o.kind && inplace == o.inplace &&
@@ -181,58 +166,6 @@ CollectiveOpHandle Executor::submit_collective(
     plan_cache_.emplace(key, plan);
   }
 
-  // Debug: verify deps BEFORE truncation
-  if (std::getenv("CCL_VERIFY_DEPS") && plan.collective == CollectiveKind::AllReduce) {
-    for (size_t i = 0; i < plan.ops.size(); ++i) {
-      auto const& o = plan.ops[i];
-      if (o.kind != OpKind::TransportRecv) continue;
-      fprintf(stderr, "[deps-pre] r=%d op=%zu RECV deps=[",
-              plan.rank, i);
-      for (size_t j = 0; j < o.deps.size(); ++j)
-        fprintf(stderr, "%s%u", j ? "," : "", o.deps[j]);
-      fprintf(stderr, "]\n");
-    }
-  }
-
-  // Debug: truncate to ReduceScatter phase only (CCL_RS_ONLY=1).
-  // RS phase ends with the last DeviceReduce; AG phase has none.
-  if (plan.collective == CollectiveKind::AllReduce && std::getenv("CCL_RS_ONLY")) {
-    size_t cutoff = 0;
-    for (size_t i = 0; i < plan.ops.size(); ++i)
-      if (plan.ops[i].kind == OpKind::DeviceReduce) cutoff = i + 1;
-    if (cutoff > 0 && cutoff < plan.ops.size()) {
-      fprintf(stderr, "[CCL_RS_ONLY] truncating plan %zu → %zu ops\n",
-              plan.ops.size(), cutoff);
-      plan.ops.resize(cutoff);
-      for (Op& op : plan.ops)
-        op.deps.erase(std::remove_if(op.deps.begin(), op.deps.end(),
-                         [cutoff](uint32_t d) { return d >= cutoff; }),
-                      op.deps.end());
-    }
-  }
-
-  // Debug: keep only flow 0 (CCL_FLOW0_ONLY=1).
-  if (plan.collective == CollectiveKind::AllReduce && std::getenv("CCL_FLOW0_ONLY")) {
-    size_t orig = plan.ops.size();
-    plan.ops.erase(
-        std::remove_if(plan.ops.begin(), plan.ops.end(),
-                       [](Op const& o) { return o.tile.flow_index != 0; }),
-        plan.ops.end());
-    // Rebuild op_id → index mapping by compaction
-    std::vector<uint32_t> new_id(orig, 0xFFFFFFFFu);
-    for (size_t i = 0; i < plan.ops.size(); ++i)
-      new_id[plan.ops[i].op_id] = static_cast<uint32_t>(i);
-    for (Op& op : plan.ops) {
-      op.op_id = new_id[op.op_id];
-      for (uint32_t& d : op.deps)
-        d = new_id[d];
-      op.deps.erase(std::remove(op.deps.begin(), op.deps.end(), 0xFFFFFFFFu),
-                    op.deps.end());
-    }
-    fprintf(stderr, "[CCL_FLOW0_ONLY] truncated plan %zu → %zu ops\n",
-            orig, plan.ops.size());
-  }
-
   // One-time backend init.
   if (backends_.transport) backends_.transport->validate(plan, binding);
   if (backends_.device && backends_.device != backends_.transport)
@@ -252,8 +185,18 @@ CollectiveOpHandle Executor::submit_collective(
     return handle;
   }
 
-  init_run_state(run);
-  run.done_buf.resize(run.total_ops);
+  run.completed.assign(run.total_ops, false);
+  run.tokens.resize(run.total_ops);
+  run.op_backend.resize(run.total_ops, nullptr);
+  run.flow_ops.resize(run.plan.num_flows);
+  run.flow_head.assign(run.plan.num_flows, 0);
+
+  for (size_t i = 0; i < run.total_ops; i++) {
+    uint32_t f = run.plan.ops[i].tile.flow_index;
+    if (f < run.plan.num_flows)
+      run.flow_ops[f].push_back(static_cast<uint32_t>(i));
+  }
+
   runs_.emplace(handle, std::move(run));
   return handle;
 }
@@ -345,29 +288,42 @@ void Executor::advance_run(CollectiveRun& run) {
     run.tokens[r.op_idx] = token;
     run.op_backend[r.op_idx] = backend;
     run.token_to_op_idx[{backend, token.value}] = r.op_idx;
+    fprintf(stderr, "[exec-submit] r=%d op%u %s src_off=%zu dst_off=%zu sz=%zu\n",
+            run.plan.rank, r.op_idx,
+            plan_op.kind == OpKind::TransportSend ? "SEND" :
+            plan_op.kind == OpKind::TransportRecv ? "RECV" :
+            plan_op.kind == OpKind::DeviceReduce ? "REDUCE" : "COPY",
+            submit_op.src.offset_bytes, submit_op.dst.offset_bytes,
+            submit_op.tile.size_bytes);
   }
 
   // Phase 3: Drain completions from each backend.
   // Backend cleans its own resources inside drain(); we update op bookkeeping.
   // Process ALL drain results even if a failure is detected, because drain
   // has already released backend resources for every returned token.
+  std::vector<BackendToken> done_buf(run.total_ops);
   std::string failure_msg;
   for (Backend* backend : {backends_.transport, backends_.device}) {
     if (backend == nullptr) continue;
-    size_t n = backend->drain(run.done_buf.data(), run.total_ops);
+    size_t n = backend->drain(done_buf.data(), run.total_ops);
     for (size_t i = 0; i < n; ++i) {
-      auto it = run.token_to_op_idx.find({backend, run.done_buf[i].value});
+      auto it = run.token_to_op_idx.find({backend, done_buf[i].value});
       if (it == run.token_to_op_idx.end()) continue;
       size_t op_idx = it->second;
       if (run.completed[op_idx]) { run.token_to_op_idx.erase(it); continue; }
 
-      if (run.done_buf[i].failed && failure_msg.empty())
+      if (done_buf[i].failed && failure_msg.empty())
         failure_msg = std::string("backend '") + backend->name() +
                       "' reported failure for op " + std::to_string(op_idx);
 
       run.completed[op_idx] = true;
       ++run.completed_count;
       run.token_to_op_idx.erase(it);
+      fprintf(stderr, "[exec-done] r=%d op%zu %s\n",
+              run.plan.rank, op_idx,
+              run.plan.ops[op_idx].kind == OpKind::TransportSend ? "SEND" :
+              run.plan.ops[op_idx].kind == OpKind::TransportRecv ? "RECV" :
+              run.plan.ops[op_idx].kind == OpKind::DeviceReduce ? "REDUCE" : "COPY");
     }
   }
   if (!failure_msg.empty()) {
@@ -378,13 +334,6 @@ void Executor::advance_run(CollectiveRun& run) {
 
   if (run.completed_count == run.total_ops)
     run.status = CollectiveOpStatus::Completed;
-
-  if (run.status == CollectiveOpStatus::Completed &&
-      run.plan.collective == CollectiveKind::AllReduce &&
-      std::getenv("CCL_RS_ONLY")) {
-    fprintf(stderr, "[CCL_RS_ONLY] rank=%d RS done, %zu ops completed\n",
-            run.plan.rank, run.completed_count);
-  }
 }
 
 // ── public API ─────────────────────────────────────────────────────────
@@ -471,8 +420,17 @@ void Executor::run_plan(CollectivePlan const& plan,
 
   if (run.total_ops == 0) return;
 
-  init_run_state(run);
-  run.done_buf.resize(run.total_ops);
+  run.completed.assign(run.total_ops, false);
+  run.tokens.resize(run.total_ops);
+  run.op_backend.resize(run.total_ops, nullptr);
+  run.flow_ops.resize(run.plan.num_flows);
+  run.flow_head.assign(run.plan.num_flows, 0);
+
+  for (size_t i = 0; i < run.total_ops; i++) {
+    uint32_t f = run.plan.ops[i].tile.flow_index;
+    if (f < run.plan.num_flows)
+      run.flow_ops[f].push_back(static_cast<uint32_t>(i));
+  }
 
   while (run.status == CollectiveOpStatus::Running) {
     advance_run(run);
