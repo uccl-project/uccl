@@ -865,6 +865,7 @@ class NICEndpoint {
   // connection so the compressed-write data path can target them.
   void setSendCompressionPeerMeta(uint64_t rank_id,
                                   MetaInfoToExchange const& peer) {
+    if (!ack_ring_ || peer.decompress_buf_meta.length == 0) return;
     auto group = getOrCreateSendGroup(rank_id);
     group->setRemoteDecompressBuf(peer.decompress_buf_meta);
     group->setLocalAckRing(ack_ring_);
@@ -872,6 +873,7 @@ class NICEndpoint {
 
   void setRecvCompressionPeerMeta(uint64_t rank_id,
                                   MetaInfoToExchange const& peer) {
+    if (peer.ack_ring_meta.length == 0) return;
     auto group = getOrCreateRecvGroup(rank_id);
     group->setRemoteAckRing(peer.ack_ring_meta);
   }

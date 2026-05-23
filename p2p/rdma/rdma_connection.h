@@ -362,6 +362,7 @@ class SendConnection : public RDMAConnection {
   bool check(int64_t wr_id) { return tracker_->isAcknowledged(wr_id); }
 
   void setRemoteDecompressBuf(RemoteMemInfo const& m) {
+    if (m.length == 0) return;
     remote_decompress_buf_ = m;
     decompress_arena_.size = m.length;
     if (!running_.load(std::memory_order_acquire)) startPolling();
@@ -1046,6 +1047,7 @@ class RecvConnection : public RDMAConnection {
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
 
   void setRemoteAckRing(RemoteMemInfo const& m) {
+    if (m.length == 0) return;
     remote_ack_ring_ = m;
     // The compressed-write path needs the receive side to actively poll its
     // control-channel CQ for incoming WriteReqMeta IMMs — but for pure

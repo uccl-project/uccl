@@ -227,8 +227,9 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next = nullptr;
     int const post_recv_rc = ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr);
     if (unlikely(post_recv_rc != 0)) {
-      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc
-                      << ", errno=" << errno << " (" << strerror(errno) << ")";
+      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc << " ("
+                      << strerror(post_recv_rc) << "), errno=" << errno << " ("
+                      << strerror(errno) << ")";
       throw std::runtime_error("ibv_post_recv failed");
     }
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next =
@@ -243,8 +244,9 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next = nullptr;
     int const post_recv_rc = ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr);
     if (unlikely(post_recv_rc != 0)) {
-      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc
-                      << ", errno=" << errno << " (" << strerror(errno) << ")";
+      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc << " ("
+                      << strerror(post_recv_rc) << "), errno=" << errno << " ("
+                      << strerror(errno) << ")";
       throw std::runtime_error("ibv_post_recv failed");
     }
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next =
