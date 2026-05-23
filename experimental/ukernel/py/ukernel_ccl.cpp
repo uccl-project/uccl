@@ -298,7 +298,7 @@ class ProcessGroup {
             smem_size,
         }),
         executor_(
-            ExecutorBackends{&transport_backend_, &device_backend_, nullptr},
+            ExecutorBackends{&transport_backend_, &device_backend_},
             [this](int remote_rank, uint32_t remote_buffer_id, size_t offset,
                    size_t bytes, void** out_ptr, int* out_device_idx) {
               if (out_ptr == nullptr) return false;
@@ -413,7 +413,9 @@ class ProcessGroup {
     config.input_split_bytes = std::move(input_split_bytes);
     config.output_split_bytes = std::move(output_split_bytes);
     config.tile_bytes = tile_bytes;
-    config.staging_bytes = tile_bytes * (world_size_ - 1);
+    config.staging_bytes = std::max(
+        tile_bytes * (world_size_ - 1),
+        ((config.tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
     config.algorithm = AlgorithmKind::Pairwise;
     config.dtype = input_dtype;
     config.reduction = ReductionKind::None;
@@ -609,7 +611,9 @@ class ProcessGroup {
     config.num_flows = num_flows;
     config.tensor_bytes = tensor_bytes;
     config.tile_bytes = tile_bytes;
-    config.staging_bytes = tile_bytes * num_flows;
+    config.staging_bytes = std::max(
+        tile_bytes * num_flows,
+        ((tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
     config.algorithm = AlgorithmKind::Ring;
     config.dtype = dtype;
     config.reduction = static_cast<ReductionKind>(reduction);

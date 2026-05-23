@@ -73,6 +73,7 @@ struct CollectiveRun {
   std::vector<std::vector<uint32_t>> flow_ops;
   std::vector<size_t> flow_head;
   std::vector<BackendToken> done_buf;
+  std::vector<std::pair<uint32_t, uint32_t>> ready;
   size_t completed_count = 0;
   size_t total_ops = 0;
 };
@@ -124,6 +125,7 @@ class Executor {
       resolve_ipc_buffer_pointer_;
   std::unordered_map<CollectiveOpHandle, CollectiveRun> runs_;
   uint64_t next_handle_ = 1;
+  uint64_t validated_sig_ = 0;
 
   struct PlanCacheKey {
     CollectiveKind kind;

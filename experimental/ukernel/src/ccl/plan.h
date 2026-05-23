@@ -97,6 +97,7 @@ struct CollectivePlan {
   std::vector<size_t> input_split_bytes;
   std::vector<size_t> output_split_bytes;
   std::vector<Op> ops;
+  std::vector<std::vector<uint32_t>> flow_ops;
 };
 
 uint32_t normalized_num_flows(CollectiveKind collective, int nranks,

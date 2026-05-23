@@ -239,7 +239,9 @@ CollectivePlan make_empty_alltoall_plan(CollectiveConfig const& config) {
 }
 
 struct PlanBuilder {
-  explicit PlanBuilder(CollectivePlan plan_in) : plan(std::move(plan_in)) {}
+  explicit PlanBuilder(CollectivePlan plan_in) : plan(std::move(plan_in)) {
+    plan.flow_ops.resize(plan.num_flows);
+  }
 
   uint32_t add_op(OpKind kind, TileRef tile, BufferRef src, BufferRef dst,
                   ScalarType dtype, ReductionKind reduction,
@@ -253,6 +255,9 @@ struct PlanBuilder {
     op.dtype = dtype;
     op.reduction = reduction;
     op.deps = std::move(deps);
+    uint32_t fid = tile.flow_index;
+    if (fid < plan.num_flows)
+      plan.flow_ops[fid].push_back(op.op_id);
     plan.ops.push_back(std::move(op));
     return plan.ops.back().op_id;
   }
@@ -373,7 +378,6 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
 
           std::vector<uint32_t> deps;
           add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
-          add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
           uint32_t send_op = builder.add_op(
               OpKind::TransportSend, send_tile,
               input_ref(config, send_tile.offset_bytes),

@@ -91,6 +91,14 @@ Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
 
 }  // namespace
 
+static void init_run_state(CollectiveRun& run) {
+  run.completed.assign(run.total_ops, false);
+  run.tokens.resize(run.total_ops);
+  run.op_backend.resize(run.total_ops, nullptr);
+  run.flow_ops = run.plan.flow_ops;  // pre-computed by planner
+  run.flow_head.assign(run.plan.num_flows, 0);
+}
+
 // PlanCacheKey helpers
 bool Executor::PlanCacheKey::operator==(PlanCacheKey const& o) const {
   return kind == o.kind && inplace == o.inplace &&
@@ -166,10 +174,16 @@ CollectiveOpHandle Executor::submit_collective(
     plan_cache_.emplace(key, plan);
   }
 
-  // One-time backend init.
-  if (backends_.transport) backends_.transport->validate(plan, binding);
-  if (backends_.device && backends_.device != backends_.transport)
-    backends_.device->validate(plan, binding);
+  // One-time backend init (skip if same plan+binding as previous).
+  uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
+      (static_cast<uint64_t>(plan.ops.size()) << 32) ^
+      static_cast<uint64_t>(plan.tensor_bytes);
+  if (sig != validated_sig_) {
+    if (backends_.transport) backends_.transport->validate(plan, binding);
+    if (backends_.device && backends_.device != backends_.transport)
+      backends_.device->validate(plan, binding);
+    validated_sig_ = sig;
+  }
 
   CollectiveOpHandle handle = next_handle_++;
   CollectiveRun run;
@@ -185,18 +199,8 @@ CollectiveOpHandle Executor::submit_collective(
     return handle;
   }
 
-  run.completed.assign(run.total_ops, false);
-  run.tokens.resize(run.total_ops);
-  run.op_backend.resize(run.total_ops, nullptr);
-  run.flow_ops.resize(run.plan.num_flows);
-  run.flow_head.assign(run.plan.num_flows, 0);
-
-  for (size_t i = 0; i < run.total_ops; i++) {
-    uint32_t f = run.plan.ops[i].tile.flow_index;
-    if (f < run.plan.num_flows)
-      run.flow_ops[f].push_back(static_cast<uint32_t>(i));
-  }
-
+  init_run_state(run);
+  run.done_buf.resize(run.total_ops);
   runs_.emplace(handle, std::move(run));
   return handle;
 }
@@ -226,9 +230,8 @@ void Executor::advance_run(CollectiveRun& run) {
   }
 
   // Phase 1: Collect all ops whose dependencies are satisfied.
-  struct ReadyOp { uint32_t fid; uint32_t op_idx; };
-  std::vector<ReadyOp> ready;
-  ready.reserve(run.plan.num_flows * 2);  // typical inflight per cycle
+  run.ready.clear();
+  run.ready.reserve(run.plan.num_flows * 2);  // typical inflight per cycle
 
   for (uint32_t fid = 0; fid < run.plan.num_flows; ++fid) {
     while (run.flow_head[fid] < run.flow_ops[fid].size()) {
@@ -242,14 +245,16 @@ void Executor::advance_run(CollectiveRun& run) {
         if (!run.completed[dep]) { deps_ok = false; break; }
       }
       if (!deps_ok) break;
-      ready.push_back({fid, op_idx});
+      run.ready.push_back({fid, op_idx});
       ++run.flow_head[fid];
     }
   }
 
   // Phase 2: Submit ready ops.
-  for (auto& r : ready) {
-    Op const& plan_op = run.plan.ops[r.op_idx];
+  for (auto& r : run.ready) {
+    uint32_t fid = r.first;
+    uint32_t op_idx = r.second;
+    Op const& plan_op = run.plan.ops[op_idx];
     Backend* backend = pick_backend(backends_, plan_op.kind);
     if (backend == nullptr) continue;
 
@@ -260,7 +265,7 @@ void Executor::advance_run(CollectiveRun& run) {
       } catch (std::exception const& e) {
         run.status = CollectiveOpStatus::Failed;
         run.error_message = std::string("IPC resolution failed for op ") +
-                            std::to_string(r.op_idx) + ": " + e.what();
+                            std::to_string(op_idx) + ": " + e.what();
         return;
       }
     } else {
@@ -282,30 +287,29 @@ void Executor::advance_run(CollectiveRun& run) {
     }
 
     if (token.value == 0) {
-      --run.flow_head[r.fid];  // backpressure — retry next cycle
+      --run.flow_head[fid];  // backpressure — retry next cycle
       continue;
     }
-    run.tokens[r.op_idx] = token;
-    run.op_backend[r.op_idx] = backend;
-    run.token_to_op_idx[{backend, token.value}] = r.op_idx;
+    run.tokens[op_idx] = token;
+    run.op_backend[op_idx] = backend;
+    run.token_to_op_idx[{backend, token.value}] = op_idx;
   }
 
   // Phase 3: Drain completions from each backend.
   // Backend cleans its own resources inside drain(); we update op bookkeeping.
   // Process ALL drain results even if a failure is detected, because drain
   // has already released backend resources for every returned token.
-  std::vector<BackendToken> done_buf(run.total_ops);
   std::string failure_msg;
   for (Backend* backend : {backends_.transport, backends_.device}) {
     if (backend == nullptr) continue;
-    size_t n = backend->drain(done_buf.data(), run.total_ops);
+    size_t n = backend->drain(run.done_buf.data(), run.total_ops);
     for (size_t i = 0; i < n; ++i) {
-      auto it = run.token_to_op_idx.find({backend, done_buf[i].value});
+      auto it = run.token_to_op_idx.find({backend, run.done_buf[i].value});
       if (it == run.token_to_op_idx.end()) continue;
       size_t op_idx = it->second;
       if (run.completed[op_idx]) { run.token_to_op_idx.erase(it); continue; }
 
-      if (done_buf[i].failed && failure_msg.empty())
+      if (run.done_buf[i].failed && failure_msg.empty())
         failure_msg = std::string("backend '") + backend->name() +
                       "' reported failure for op " + std::to_string(op_idx);
 
@@ -394,9 +398,15 @@ size_t Executor::active_count() const {
 
 void Executor::run_plan(CollectivePlan const& plan,
                         CollectiveBinding& binding) {
-  if (backends_.transport) backends_.transport->validate(plan, binding);
-  if (backends_.device && backends_.device != backends_.transport)
-    backends_.device->validate(plan, binding);
+  uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
+      (static_cast<uint64_t>(plan.ops.size()) << 32) ^
+      static_cast<uint64_t>(plan.tensor_bytes);
+  if (sig != validated_sig_) {
+    if (backends_.transport) backends_.transport->validate(plan, binding);
+    if (backends_.device && backends_.device != backends_.transport)
+      backends_.device->validate(plan, binding);
+    validated_sig_ = sig;
+  }
 
   CollectiveOpHandle handle = next_handle_++;
   CollectiveRun run;
@@ -408,17 +418,8 @@ void Executor::run_plan(CollectivePlan const& plan,
 
   if (run.total_ops == 0) return;
 
-  run.completed.assign(run.total_ops, false);
-  run.tokens.resize(run.total_ops);
-  run.op_backend.resize(run.total_ops, nullptr);
-  run.flow_ops.resize(run.plan.num_flows);
-  run.flow_head.assign(run.plan.num_flows, 0);
-
-  for (size_t i = 0; i < run.total_ops; i++) {
-    uint32_t f = run.plan.ops[i].tile.flow_index;
-    if (f < run.plan.num_flows)
-      run.flow_ops[f].push_back(static_cast<uint32_t>(i));
-  }
+  init_run_state(run);
+  run.done_buf.resize(run.total_ops);
 
   while (run.status == CollectiveOpStatus::Running) {
     advance_run(run);
