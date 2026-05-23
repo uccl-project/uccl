@@ -35,6 +35,45 @@ except ImportError:
     )
 
 
+def _record_stream_safe(tensors, stream):
+    """Best-effort ``Tensor.record_stream(stream)`` across a mixed iterable.
+
+    Bug 2 / Bug 1 family: under DBO/TBO sglang queues many kernels on
+    ``comm_stream`` while ``compute_stream`` (the default stream) keeps
+    allocating and freeing tensors. The PyTorch caching allocator
+    tracks a storage's lifetime by *the stream that allocated it*, not
+    by every stream that reads or writes it. If we hand a tensor to a
+    kernel running on ``comm_stream`` and the Python reference goes
+    away after the call returns, the allocator can hand that same
+    storage back to ``torch.empty`` on ``compute_stream`` while our
+    kernel is still mid-read.
+
+    DeepEP's ``Buffer::internode_dispatch`` / ``::internode_combine``
+    fix this with a tight ``for t in {...}: t.record_stream(comm)``
+    block at the tail (with a matching ``t.record_stream(compute)``
+    when ``allocate_on_comm_stream`` is set). We mirror that here in
+    Python because uccl_ep.cc receives raw pointers and so can't
+    reach the underlying ``c10::Storage`` from C++.
+
+    Skips ``None``s, non-tensors (handles are tuples), and tensors on
+    a different device. Recurses one level into iterables so that
+    passing ``handle`` directly works.
+    """
+    if stream is None:
+        return
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, torch.Tensor):
+            if t.is_cuda:
+                t.record_stream(stream)
+            continue
+        if isinstance(t, (tuple, list)):
+            for inner in t:
+                if isinstance(inner, torch.Tensor) and inner.is_cuda:
+                    inner.record_stream(stream)
+
+
 class Buffer:
     """
     The core expert-parallel (EP) communication buffers for Mixture of Experts (MoE) model, which supports:
@@ -1542,17 +1581,23 @@ class Buffer:
             with alloc_ctx:
                 rdma_channel_prefix_matrix = torch.empty(
                     (num_rdma_ranks, num_channels),
-                    dtype=torch.int32, device=x.device,
+                    dtype=torch.int32,
+                    device=x.device,
                 )
                 recv_rdma_rank_prefix_sum = torch.empty(
-                    (num_rdma_ranks,), dtype=torch.int32, device=x.device,
+                    (num_rdma_ranks,),
+                    dtype=torch.int32,
+                    device=x.device,
                 )
                 gbl_channel_prefix_matrix = torch.empty(
                     (self.group_size, num_channels),
-                    dtype=torch.int32, device=x.device,
+                    dtype=torch.int32,
+                    device=x.device,
                 )
                 recv_gbl_rank_prefix_sum = torch.empty(
-                    (self.group_size,), dtype=torch.int32, device=x.device,
+                    (self.group_size,),
+                    dtype=torch.int32,
+                    device=x.device,
                 )
             (
                 num_recv_tokens,
@@ -1636,7 +1681,8 @@ class Buffer:
                 # x.size(0) == 0 (DP-attention / TBO empty-micro-batch case).
                 send_rdma_head = torch.empty(
                     (max(x.size(0), 1), num_rdma_ranks),
-                    dtype=torch.int32, device=x.device
+                    dtype=torch.int32,
+                    device=x.device,
                 )
                 send_nvl_head = torch.empty(
                     (alloc_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
@@ -1724,6 +1770,26 @@ class Buffer:
                 recv_topk_idx,
                 recv_topk_weights,
             )
+            # Bug 2 fix: under DBO/TBO sglang queues many kernels on
+            # comm_stream while the compute (default) stream continues to
+            # allocate/free tensors. The PyTorch caching allocator tracks
+            # tensor lifetime by the stream that *allocated* the tensor,
+            # not by every stream that reads it. Without record_stream,
+            # an externally-allocated input (e.g. `x`, `topk_idx`,
+            # `is_token_in_rank`, the MLP output handed to combine, etc.)
+            # can be returned to the pool and re-handed-out on the
+            # compute stream *while* our notify_dispatch/dispatch kernels
+            # on comm_stream are still reading it. Result: garbage data
+            # → SM-warp OOB / silent fault (matches DeepEP's
+            # `t.record_stream(comm_stream)` calls in their
+            # internode_dispatch tail). Internally-allocated tensors
+            # (the prefix matrices, recv buffers) are already tagged as
+            # owned by comm_stream via `alloc_ctx` (Bug 1 fix) so the
+            # extra record_stream is harmless but cheap insurance.
+            comm_stream = self.get_comm_stream()
+            _record_stream_safe(tensors_to_record, comm_stream)
+            if allocate_on_comm_stream:
+                _record_stream_safe(tensors_to_record, torch.cuda.current_stream())
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
@@ -1845,6 +1911,19 @@ class Buffer:
             combined_x,
             combined_topk_weights,
         )
+        # Bug 2 fix (same rationale as in internode_dispatch above): tag
+        # every tensor read or written by the comm_stream so the
+        # PyTorch caching allocator does not recycle their storage on
+        # the compute stream while our combine kernels are still
+        # reading them. This is what DeepEP's
+        # `Buffer::internode_combine` does at its tail
+        # (`for t in {...}: t.record_stream(comm_stream)`); we mirror
+        # it here in Python because uccl_ep.cc receives raw pointers
+        # and so cannot do it C++-side.
+        comm_stream = self.get_comm_stream()
+        _record_stream_safe(tensors_to_record, comm_stream)
+        if allocate_on_comm_stream:
+            _record_stream_safe(tensors_to_record, torch.cuda.current_stream())
         return (
             combined_x,
             combined_topk_weights,

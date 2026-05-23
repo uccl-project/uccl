@@ -145,12 +145,6 @@ __global__ void notify_dispatch(
     // Clean up for later data dispatch
     EP_DEVICE_ASSERT(rdma_recv_num_tokens_mixed.total_bytes <=
                      rdma_clean_offset * sizeof(int));
-    // [DEBUG] log clear range from rank 0 only — note this is notify_dispatch
-    // kernel (no channel_id), runs once per notify_dispatch call.
-    if (rank == 0 && thread_id == 0) {
-      printf("[NOTIFY_CLEAR] rank=0 clear_offset=%d clear_count=%d clock=%lld\n",
-             rdma_clean_offset, rdma_num_int_clean, (long long)clock64());
-    }
 #pragma unroll
     for (int i = thread_id; i < rdma_num_int_clean; i += num_threads)
       rdma_buffer_ptr_int[rdma_clean_offset + i] = 0;
@@ -343,6 +337,35 @@ __global__ void notify_dispatch(
   } else {
     // Calculate meta data
     int dst_rdma_rank = sm_id - 1;
+
+    // Empty-rank fast path (DP-attention "forward_idle" microbatch).
+    // ``is_token_in_rank`` is allowed to be ``nullptr`` on a rank with
+    // ``num_tokens == 0`` (see the matching gate in
+    // ``Buffer::internode_prepare``: the assertion against a non-null
+    // ``is_token_in_rank_ptr`` is skipped when there are no tokens to
+    // route). The per-token inner loop below is logically a no-op for
+    // ``num_tokens == 0`` -- but the surrounding per-channel bookkeeping
+    // still indexes into ``rdma_channel_prefix_matrix`` and
+    // ``gbl_channel_prefix_matrix``. Take the explicit zero-write path
+    // here so that the empty-rank case is provably free of any
+    // ``is_token_in_rank`` dereference and never relies on the inner
+    // loop short-circuiting correctly under future refactors.
+    if (num_tokens == 0) {
+      for (int channel_id = thread_id; channel_id < num_channels;
+           channel_id += num_threads) {
+        rdma_channel_prefix_matrix[dst_rdma_rank * num_channels + channel_id] =
+            0;
+      }
+      // Same for the gbl matrix: kNumNvlPeers consecutive rows per
+      // dst_rdma_rank, each `num_channels` wide.
+      int const gbl_total = NUM_MAX_NVL_PEERS * num_channels;
+      int const gbl_base = dst_rdma_rank * NUM_MAX_NVL_PEERS * num_channels;
+      for (int k = thread_id; k < gbl_total; k += num_threads) {
+        gbl_channel_prefix_matrix[gbl_base + k] = 0;
+      }
+      return;
+    }
+
     for (int channel_id = warp_id; channel_id < num_channels;
          channel_id += num_warps) {
       int token_start_idx, token_end_idx;
@@ -692,35 +715,17 @@ __global__ void __launch_bounds__(
                                        channel_id] -
             1;
       } else if (lane_id == NUM_MAX_NVL_PEERS * 2) {
-        int val =
+        dst_ptr[lane_id] =
             -(channel_id == 0
                   ? 0
                   : rdma_channel_prefix_matrix[dst_rdma_rank * num_channels +
                                                channel_id - 1]) -
             1;
-        dst_ptr[lane_id] = val;
-        // [DEBUG] m2 write — gate to rank 0, ch=4, dst=0 (LOCAL case).
-        if (rank == 0 && channel_id == 4 && dst_rdma_rank == 0) {
-          printf("[SND_M2] rank=0 ch=4 dst_rdma=0 lane=%d val=%d "
-                 "dst_ptr_offset=%lld clock=%lld\n",
-                 lane_id, val,
-                 (long long)(dst_ptr -
-                             static_cast<int*>(original_rdma_buffer_ptr)),
-                 (long long)clock64());
-        }
       } else if (lane_id == NUM_MAX_NVL_PEERS * 2 + 1) {
-        int val = -rdma_channel_prefix_matrix[dst_rdma_rank * num_channels +
-                                              channel_id] -
-                  1;
-        dst_ptr[lane_id] = val;
-        if (rank == 0 && channel_id == 4 && dst_rdma_rank == 0) {
-          printf("[SND_M3] rank=0 ch=4 dst_rdma=0 lane=%d val=%d "
-                 "dst_ptr_offset=%lld clock=%lld\n",
-                 lane_id, val,
-                 (long long)(dst_ptr -
-                             static_cast<int*>(original_rdma_buffer_ptr)),
-                 (long long)clock64());
-        }
+        dst_ptr[lane_id] =
+            -rdma_channel_prefix_matrix[dst_rdma_rank * num_channels +
+                                        channel_id] -
+            1;
       }
       __syncwarp();
 
@@ -1145,10 +1150,6 @@ __global__ void __launch_bounds__(
     int num_tokens_to_recv_from_rdma = 0, src_rdma_channel_prefix = 0;
     EP_DEVICE_ASSERT(kNumRDMARanks <= WARP_SIZE);
     auto start_time = clock64();
-    // [DEBUG] Track meta values over time on rank 0, ch=4 to detect
-    // "meta went negative then got zeroed" pattern (race confirmation).
-    int dbg_last_meta_0 = 0, dbg_last_meta_1 = 0, dbg_meta_was_neg = 0;
-    long long dbg_iter = 0;
     if (lane_id < kNumRDMARanks) {
       while (true) {
         auto meta_0 = ld_volatile_global(
@@ -1160,25 +1161,6 @@ __global__ void __launch_bounds__(
             rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2);
         auto meta_3 = ld_volatile_global(
             rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2 + 1);
-        // [DEBUG] Detect a meta-was-negative-then-zeroed transition.
-        if (rank == 0 && channel_id == 4 && lane_id == 0 && dst_nvl_rank == 7) {
-          if (meta_0 < 0 && !dbg_meta_was_neg) {
-            dbg_meta_was_neg = 1;
-            printf("[FWD_META_NEG] rank=0 ch=4 dst=7 src_lane=0 "
-                   "iter=%lld m0=%d m1=%d m2=%d m3=%d\n",
-                   dbg_iter, meta_0, meta_1, meta_2, meta_3);
-          }
-          if (dbg_meta_was_neg && meta_0 == 0 && dbg_last_meta_0 < 0) {
-            printf("[FWD_META_ZEROED] rank=0 ch=4 dst=7 src_lane=0 "
-                   "iter=%lld m0=%d m1=%d m2=%d m3=%d "
-                   "prev_m0=%d prev_m1=%d (RACE CONFIRMED)\n",
-                   dbg_iter, meta_0, meta_1, meta_2, meta_3,
-                   dbg_last_meta_0, dbg_last_meta_1);
-          }
-          dbg_last_meta_0 = meta_0;
-          dbg_last_meta_1 = meta_1;
-          dbg_iter++;
-        }
         if (meta_0 < 0 and meta_1 < 0 and meta_2 < 0 and meta_3 < 0) {
           // Notify NVL ranks
           int start_sum = -meta_0 - 1, end_sum = -meta_1 - 1;
@@ -1188,14 +1170,6 @@ __global__ void __launch_bounds__(
                                 -start_sum - 1);
           st_relaxed_sys_global(nvl_channel_prefix_end.buffer() + lane_id,
                                 -end_sum - 1);
-          // [DEBUG] forwarder wrote prefix — gate to rank 0 only.
-          // 2 lanes * 8 dst_nvl * 12 channels = 192 lines per dispatch.
-          if (rank == 0) {
-            printf("[FWD_OK] ch=%d rdma=%d nvl=%d dst_nvl=%d src_lane=%d "
-                   "start_sum=%d end_sum=%d\n",
-                   channel_id, rdma_rank, nvl_rank, dst_nvl_rank, lane_id,
-                   start_sum, end_sum);
-          }
 
           // Save RDMA channel received token count
           src_rdma_channel_prefix = -meta_2 - 1;
@@ -1501,13 +1475,6 @@ __global__ void __launch_bounds__(
       if (start_offset < 0 and end_offset < 0) {
         start_offset = -start_offset - 1, end_offset = -end_offset - 1;
         total_offset += start_offset;
-        // [DEBUG] receiver saw prefix — gate to rank 0 only.
-        if (rank == 0) {
-          printf("[RCV_OK] ch=%d rdma=%d nvl=%d src_nvl=%d src_rdma_lane=%d "
-                 "start=%d end=%d\n",
-                 channel_id, rdma_rank, nvl_rank, src_nvl_rank, lane_id,
-                 start_offset, end_offset);
-        }
         break;
       }
 
