@@ -35,6 +35,17 @@ inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
 
 class RDMADataChannel {
  public:
+  struct RawSendRequest {
+    SendType send_type = SendType::Write;
+    uint64_t wr_id = 0;
+    uint64_t local_addr = 0;
+    uint32_t local_len = 0;
+    uint32_t local_key = 0;
+    uint64_t remote_addr = 0;
+    uint32_t remote_key = 0;
+    ImmData imm_data = 0;
+  };
+
   explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
                            uint32_t channel_id = 0)
       : ctx_(ctx),
@@ -113,12 +124,24 @@ class RDMADataChannel {
       local.swap(batch_);
       batch_bytes_ = 0;
     }
+    std::lock_guard<std::mutex> post_lock(post_mu_);
     bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
                        ctx_->getVendorID() == 0x8086);   // Intel irdma
     if (use_legacy) {
       return __flushBatch_legacy(local);
     }
     return __flushBatch_ex(local);
+  }
+
+  int postRawBatch(std::vector<RawSendRequest> const& batch) {
+    if (batch.empty()) return 0;
+    std::lock_guard<std::mutex> post_lock(post_mu_);
+    bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
+                       ctx_->getVendorID() == 0x8086);   // Intel irdma
+    if (use_legacy) {
+      return __postRawBatch_legacy(batch);
+    }
+    return __postRawBatch_ex(batch);
   }
 
   // Given a CQE wr_id, return all wr_ids that should be acknowledged in the
@@ -199,6 +222,7 @@ class RDMADataChannel {
       signaled = true;
       ack_unsig_count_ = 0;
     }
+    std::lock_guard<std::mutex> post_lock(post_mu_);
     int rc = impl_->postWrite(qp_, ah_, remote_meta_->qpn, kAckSignalMarker,
                               &sge, remote_addr, remote_rkey, signaled);
     if (unlikely(rc != 0)) {
@@ -248,6 +272,10 @@ class RDMADataChannel {
   std::vector<std::shared_ptr<RDMASendRequest>> batch_;
   size_t batch_bytes_ = 0;
   std::mutex batch_mu_;
+
+  // Verbs posting on a QP must be single-producer. Serialize direct posts,
+  // deferred flushes, raw vector batches, and ack writes on this channel.
+  std::mutex post_mu_;
 
   // Selective-signaling state: each batched flush emits one signaled CQE.
   // When that CQE arrives, all preceding unsignaled WRs in the same batch
@@ -391,6 +419,7 @@ class RDMADataChannel {
   }
 
   inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
+    std::lock_guard<std::mutex> post_lock(post_mu_);
     if (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
         ctx_->getVendorID() == 0x8086) {  // Intel irdma
       // These NICs don't support ibv_wr_* extended posting API.
@@ -503,6 +532,107 @@ class RDMADataChannel {
       std::lock_guard<std::mutex> lock(pending_mu_);
       pending_groups_.push_back(
           {static_cast<uint64_t>(batch[last]->wr_id), std::move(unsignaled)});
+    }
+    return 0;
+  }
+
+  inline int __postRawBatch_ex(std::vector<RawSendRequest> const& batch) {
+    if (batch.empty()) return 0;
+    std::vector<struct ibv_sge> sges(batch.size());
+    size_t const last = batch.size() - 1;
+    bool const signal_all = uccl::is_efa_transport();
+    std::vector<uint64_t> unsignaled;
+    if (!signal_all) unsignaled.reserve(last);
+    auto* qpx = ibv_qp_to_qp_ex(qp_);
+    ibv_wr_start(qpx);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      qpx->wr_id = req.wr_id;
+      qpx->comp_mask = 0;
+      qpx->wr_flags = (signal_all || i == last) ? IBV_SEND_SIGNALED : 0;
+      if (req.send_type == SendType::Send) {
+        ibv_wr_rdma_write_imm(qpx, req.remote_key, req.remote_addr,
+                              req.imm_data);
+      } else if (req.send_type == SendType::Write) {
+        ibv_wr_rdma_write(qpx, req.remote_key, req.remote_addr);
+      } else if (req.send_type == SendType::Read) {
+        ibv_wr_rdma_read(qpx, req.remote_key, req.remote_addr);
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __postRawBatch_ex";
+        ibv_wr_abort(qpx);
+        return -1;
+      }
+      sges[i].addr = req.local_addr;
+      sges[i].length = req.local_len;
+      sges[i].lkey = req.local_key;
+      ibv_wr_set_sge_list(qpx, 1, &sges[i]);
+      impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
+      if (!signal_all && i != last) unsignaled.push_back(req.wr_id);
+    }
+    int ret = ibv_wr_complete(qpx);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_wr_complete failed in __postRawBatch_ex: " << ret
+                      << " " << strerror(ret) << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+      return ret;
+    }
+    if (!unsignaled.empty()) {
+      std::lock_guard<std::mutex> lock(pending_mu_);
+      pending_groups_.push_back({batch[last].wr_id, std::move(unsignaled)});
+    }
+    return 0;
+  }
+
+  inline int __postRawBatch_legacy(std::vector<RawSendRequest> const& batch) {
+    if (batch.empty()) return 0;
+    size_t const last = batch.size() - 1;
+    std::vector<struct ibv_send_wr> wrs(batch.size());
+    std::vector<struct ibv_sge> sges(batch.size());
+    std::vector<uint64_t> unsignaled;
+    unsignaled.reserve(last);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      auto const& req = batch[i];
+      auto& wr = wrs[i];
+      std::memset(&wr, 0, sizeof(wr));
+      wr.wr_id = req.wr_id;
+      wr.send_flags = (i == last) ? IBV_SEND_SIGNALED : 0;
+      sges[i].addr = req.local_addr;
+      sges[i].length = req.local_len;
+      sges[i].lkey = req.local_key;
+      wr.sg_list = &sges[i];
+      wr.num_sge = 1;
+      if (req.send_type == SendType::Send) {
+        wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+        wr.wr.rdma.remote_addr = req.remote_addr;
+        wr.wr.rdma.rkey = req.remote_key;
+        wr.imm_data = req.imm_data;
+      } else if (req.send_type == SendType::Write) {
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        wr.wr.rdma.remote_addr = req.remote_addr;
+        wr.wr.rdma.rkey = req.remote_key;
+      } else if (req.send_type == SendType::Read) {
+        wr.opcode = IBV_WR_RDMA_READ;
+        wr.wr.rdma.remote_addr = req.remote_addr;
+        wr.wr.rdma.rkey = req.remote_key;
+      } else {
+        UCCL_LOG(ERROR) << "Unknown SendType in __postRawBatch_legacy";
+        return -1;
+      }
+      wr.next = (i + 1 < batch.size()) ? &wrs[i + 1] : nullptr;
+      if (i != last) unsignaled.push_back(req.wr_id);
+    }
+    struct ibv_send_wr* bad_wr = nullptr;
+    int ret = ibv_post_send(qp_, wrs.data(), &bad_wr);
+    if (ret) {
+      UCCL_LOG(ERROR) << "ibv_post_send failed in __postRawBatch_legacy: "
+                      << ret << " " << strerror(ret)
+                      << ", batch_size=" << batch.size()
+                      << ", local_qpn=" << qp_->qp_num;
+      return ret;
+    }
+    if (!unsignaled.empty()) {
+      std::lock_guard<std::mutex> lock(pending_mu_);
+      pending_groups_.push_back({batch[last].wr_id, std::move(unsignaled)});
     }
     return 0;
   }

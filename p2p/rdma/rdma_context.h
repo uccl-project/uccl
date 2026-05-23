@@ -62,6 +62,8 @@ class RdmaContext {
       throw std::runtime_error("ibv_query_device failed");
     }
     vendor_id_ = dev_attr.vendor_id;
+    max_qp_rd_atom_ = dev_attr.max_qp_rd_atom;
+    max_qp_init_rd_atom_ = dev_attr.max_qp_init_rd_atom;
 
     struct ibv_pd* pd = ibv_alloc_pd(ctx_.get());
     if (!pd) throw std::runtime_error("Failed to alloc pd");
@@ -84,6 +86,8 @@ class RdmaContext {
   }
 
   uint32_t getVendorID() const { return vendor_id_; }
+  uint8_t getMaxQpRdAtom() const { return max_qp_rd_atom_; }
+  uint8_t getMaxQpInitRdAtom() const { return max_qp_init_rd_atom_; }
 
   // Query GID by index
   void getGID(int gid_index, union ibv_gid* gid, int port = 1) const {
@@ -436,11 +440,20 @@ class RdmaContext {
 
   RegistrationMode getRegistrationMode(void* addr) const {
     bool is_gpu = isGpuPointer(addr);
-    bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
+    auto env_enabled = [](char const* name) {
+      char const* value = std::getenv(name);
+      return value != nullptr &&
+             (std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0 ||
+              std::strcmp(value, "TRUE") == 0 ||
+              std::strcmp(value, "on") == 0 || std::strcmp(value, "ON") == 0);
+    };
+    bool force_dmabuf =
+        env_enabled("UCCL_P2P_USE_DMABUF") || env_enabled("USE_DMABUF");
+    bool use_dmabuf = is_gpu && (force_dmabuf || vendor_id_ == 0x8086);
     if (use_dmabuf) {
       UCCL_LOG(INFO, UCCL_RDMA)
-          << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
-          << vendor_id_ << std::dec << "), using DMA-BUF registration";
+          << "GPU memory detected (vendor=0x" << std::hex << vendor_id_
+          << std::dec << "), using DMA-BUF registration";
     }
     return {is_gpu, use_dmabuf};
   }
@@ -457,6 +470,8 @@ class RdmaContext {
 
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
+  uint8_t max_qp_rd_atom_ = 1;
+  uint8_t max_qp_init_rd_atom_ = 1;
   std::mutex mr_cache_mu_;
   std::unordered_map<MrCacheKey, std::unique_ptr<MrCacheEntry>, MrCacheKeyHash>
       mr_cache_;

@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
 #include <netinet/in.h>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -1060,18 +1061,34 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
 
-  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
-  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
-  // lookup), flush once, then poll until all are acked.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
-    ucclRequest ureqs[kMaxInflightOps] = {};
+  bool raw_batch_eligible = true;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+      raw_batch_eligible = false;
+      break;
+    }
+  }
+
+  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
+  // Post raw one-sided WRs directly by channel and skip per-iov request-object
+  // construction.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
+      raw_batch_eligible &&
+      send_group->canUseRawOneSidedBatch(SendType::Read)) {
+    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+    int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
 
     for (size_t i = 0; i < num_iovs; ++i) {
-      uccl_read_async_on_group(send_group, conn, mhandle_v[i], dst_v[i],
-                               size_v[i], slot_item_v[i], &ureqs[i]);
+      ops[i].local_addr = dst_v[i];
+      ops[i].size = size_v[i];
+      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
+      ops[i].slot_item = &slot_item_v[i];
     }
-    uccl_flush_send(ep_);
+    if (!send_group->postWriteOrReadBatch(SendType::Read, ops.data(), num_iovs,
+                                          wr_ids)) {
+      return false;
+    }
 
     size_t num_done = 0;
     while (num_done < num_iovs) {
@@ -1079,7 +1096,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_drive_send(ep_);
       for (size_t i = 0; i < num_iovs; ++i) {
         if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
           done[i] = true;
           num_done++;
         }
@@ -1289,18 +1306,34 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
 
-  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
-  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
-  // lookup), flush once, then poll until all are acked.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
-    ucclRequest ureqs[kMaxInflightOps] = {};
+  bool raw_batch_eligible = true;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+      raw_batch_eligible = false;
+      break;
+    }
+  }
+
+  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
+  // Post raw one-sided WRs directly by channel and skip per-iov request-object
+  // construction.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
+      raw_batch_eligible &&
+      send_group->canUseRawOneSidedBatch(SendType::Write)) {
+    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+    int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
 
     for (size_t i = 0; i < num_iovs; ++i) {
-      uccl_write_async_on_group(send_group, conn, mhandle_v[i], src_v[i],
-                                size_v[i], slot_item_v[i], &ureqs[i]);
+      ops[i].local_addr = src_v[i];
+      ops[i].size = size_v[i];
+      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
+      ops[i].slot_item = &slot_item_v[i];
     }
-    uccl_flush_send(ep_);
+    if (!send_group->postWriteOrReadBatch(SendType::Write, ops.data(), num_iovs,
+                                          wr_ids)) {
+      return false;
+    }
 
     size_t num_done = 0;
     while (num_done < num_iovs) {
@@ -1308,7 +1341,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_drive_send(ep_);
       for (size_t i = 0; i < num_iovs; ++i) {
         if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
           done[i] = true;
           num_done++;
         }
