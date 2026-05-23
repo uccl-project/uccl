@@ -72,6 +72,7 @@ struct CollectiveRun {
 
   std::vector<std::vector<uint32_t>> flow_ops;
   std::vector<size_t> flow_head;
+  std::vector<BackendToken> done_buf;
   size_t completed_count = 0;
   size_t total_ops = 0;
 };

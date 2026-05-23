@@ -58,10 +58,12 @@ class DeviceBackend final : public Backend {
   int sm_count_ = 1;
   std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
   uint64_t next_token_ = 1;
+  uint8_t dev_dtype_lut_[11] = {};  // ScalarType → Device::DataType
   std::unordered_map<uint32_t, FlowRec> active_flows_;
   std::vector<uint32_t> free_fifos_;
   // Per-FIFO submitted task map.  Indexed by fifo_id; empty when no worker.
   std::vector<std::unordered_map<uint64_t, TaskRec>> submitted_per_fifo_;
+  std::vector<uint32_t> flows_to_stop_;
 };
 
 }  // namespace CCL

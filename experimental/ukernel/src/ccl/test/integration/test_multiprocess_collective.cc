@@ -509,7 +509,17 @@ int run_rank(Options const& opts) {
   executor.release(handle);
 
   std::vector<float> output = download_tensor(tensor.ptr, opts.bytes_per_rank);
-  if (opts.collective == CollectiveKind::AllReduce) {
+  if (std::getenv("CCL_RS_ONLY")) {
+    size_t half_elems = output.size() / static_cast<size_t>(opts.world_size);
+    std::printf("[rank %d] RS-only result: "
+                "own [0..3]={%.1f,%.1f,%.1f,%.1f}  "
+                "peer shard [%zu..]={%.1f,%.1f,%.1f,%.1f}\n",
+                opts.rank,
+                output[0], output[1], output[2], output[3],
+                half_elems,
+                output[half_elems], output[half_elems+1],
+                output[half_elems+2], output[half_elems+3]);
+  } else if (opts.collective == CollectiveKind::AllReduce) {
     verify_allreduce_output(output, opts.world_size);
   } else {
     verify_alltoall_output(output, opts.rank, opts.world_size);

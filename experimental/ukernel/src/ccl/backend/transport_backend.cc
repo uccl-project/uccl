@@ -131,7 +131,7 @@ void CommunicatorTransportBackend::ensure_peer_path(int peer_rank,
       std::this_thread::sleep_for(
           std::chrono::milliseconds(connect_retry_ms_));
     }
-    return peer_put_ready_[idx] != 0;
+    return false;
   };
 
   auto establish_wait = [&]() {
@@ -148,7 +148,7 @@ void CommunicatorTransportBackend::ensure_peer_path(int peer_rank,
       std::this_thread::sleep_for(
           std::chrono::milliseconds(connect_retry_ms_));
     }
-    return peer_wait_ready_[idx] != 0;
+    return false;
   };
 
   bool ok = true;
@@ -255,17 +255,11 @@ BackendToken CommunicatorTransportBackend::submit(Op const& op,
       dst_off = op.dst.offset_bytes;
     }
     uint32_t src_buf = resolve_local_buffer_id(binding, op.src);
-    fprintf(stderr, "[tr-submit] SEND r%d→%d src_buf=%u src_off=%zu sz=%zu dst_buf=%u dst_off=%zu\n",
-            communicator_->rank(), peer_rank, src_buf, op.src.offset_bytes,
-            op.tile.size_bytes, dst_buf_id, dst_off);
     request_id = communicator_->isend(
         peer_rank, src_buf, op.src.offset_bytes, op.tile.size_bytes,
         dst_buf_id, dst_off);
   } else {
     uint32_t dst_buf = resolve_local_buffer_id(binding, op.dst);
-    fprintf(stderr, "[tr-submit] RECV r%d←%d dst_buf=%u dst_off=%zu sz=%zu\n",
-            communicator_->rank(), peer_rank, dst_buf, op.dst.offset_bytes,
-            op.tile.size_bytes);
     request_id = communicator_->irecv(
         peer_rank, dst_buf, op.dst.offset_bytes, op.tile.size_bytes);
   }

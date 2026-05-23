@@ -100,6 +100,16 @@ void DeviceBackend::validate(CollectivePlan const& plan,
     if (active_flows_.count(fid) == 0)
       acquire_fifo(fid, suggested_num_blocks(op));
   }
+
+  // Populate dtype lookup table once.
+  for (int i = 0; i < 11; ++i) {
+    try {
+      dev_dtype_lut_[i] = static_cast<uint8_t>(
+          to_device_dtype(static_cast<ScalarType>(i)));
+    } catch (...) {
+      dev_dtype_lut_[i] = 255;
+    }
+  }
 }
 
 // ── submit ─────────────────────────────────────────────────────────────
@@ -139,22 +149,19 @@ BackendToken DeviceBackend::submit(Op const& op,
       ? Device::TaskType::CollReduce : Device::TaskType::CollCopy;
   uint32_t flow_id = op.tile.flow_index;
 
-  fprintf(stderr, "[dev-submit] %s f=%u src=%p dst=%p sz=%zu\n",
-          op.kind == OpKind::DeviceReduce ? "REDUCE" : "COPY",
-          flow_id, src, dst, op.tile.size_bytes);
-
   auto fit = active_flows_.find(flow_id);
   uint32_t fifo_id = (fit != active_flows_.end())
       ? fit->second.fifo_id
       : acquire_fifo(flow_id, suggested_num_blocks(op));
 
   Device::Task task =
-      Device::TaskManager::instance().create_task(args, task_type,
-                                                  to_device_dtype(op.dtype), 0);
+      Device::TaskManager::instance().create_task(
+          args, task_type,
+          static_cast<Device::DataType>(
+              dev_dtype_lut_[static_cast<int>(op.dtype)]), 0);
 
   uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
   if (task_id == Device::WorkerPool::kInvalidTaskId) {
-    active_flows_[flow_id].pending--;
     Device::TaskManager::instance().free_task_args(task.args_index());
     return BackendToken{0};
   }
@@ -174,7 +181,7 @@ size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
     GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
 
   size_t count = 0;
-  std::vector<uint32_t> flows_to_stop;
+  flows_to_stop_.clear();
   for (uint32_t fid = 0; fid < submitted_per_fifo_.size() && count < max_count; ++fid) {
     auto& fifo_map = submitted_per_fifo_[fid];
     if (fifo_map.empty()) continue;
@@ -194,11 +201,11 @@ size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
       if (fi != active_flows_.end() && fi->second.pending > 0) {
         --fi->second.pending;
         if (fi->second.pending == 0)
-          flows_to_stop.push_back(flow_id);
+          flows_to_stop_.push_back(flow_id);
       }
     }
   }
-  for (uint32_t flow_id : flows_to_stop)
+  for (uint32_t flow_id : flows_to_stop_)
     stop_flow(flow_id);
   return count;
 }
