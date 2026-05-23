@@ -80,6 +80,12 @@ class RDMADataChannelImpl {
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                              uint32_t remote_qpn) = 0;
 
+  // Post an RDMA write
+  virtual int postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                        uint32_t remote_qpn, uint64_t wr_id,
+                        struct ibv_sge* sge, uint64_t remote_addr,
+                        uint32_t remote_rkey, bool signaled) = 0;
+
   // Initialize pre-allocated resources
   virtual void initPreAllocResources() = 0;
 

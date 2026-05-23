@@ -208,6 +208,22 @@ inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
   ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
 }
 
+inline int EFAChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                                     uint32_t remote_qpn, uint64_t wr_id,
+                                     struct ibv_sge* sge, uint64_t remote_addr,
+                                     uint32_t remote_rkey, bool signaled) {
+  (void)signaled;
+  auto* qpx = ibv_qp_to_qp_ex(qp);
+  ibv_wr_start(qpx);
+  qpx->wr_id = wr_id;
+  qpx->comp_mask = 0;
+  qpx->wr_flags = IBV_SEND_SIGNALED;
+  ibv_wr_rdma_write(qpx, remote_rkey, remote_addr);
+  ibv_wr_set_sge_list(qpx, 1, sge);
+  ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
+  return ibv_wr_complete(qpx);
+}
+
 inline void EFAChannelImpl::initPreAllocResources() {}
 
 #endif  // RDMA_DATA_CHANNEL_IMPL_EFA_CC_INCLUDED
