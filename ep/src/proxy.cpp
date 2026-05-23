@@ -574,13 +574,13 @@ void Proxy::run_dual() {
   uint64_t my_tail = 0;
   size_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
-  adaptive_sleeper_.init_timer();
+  adaptive_sleeper_.update_timer();
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     adaptive_sleeper_.maybe_sleep(ctx_);
 
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
-                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes, adaptive_sleeper_,
                  cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
@@ -665,6 +665,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     ring_tails_[rb_idx] = h->advance_tail_from_mask();
   }
 #endif
+
+  adaptive_sleeper_.update_timer();
 }
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
@@ -695,6 +697,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       }
       auto trig = fifo->poll();
       if (trig.fst == 0) break;
+      adaptive_sleeper_.update_timer();
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
 
       /* For some reason, this is important for correctness */

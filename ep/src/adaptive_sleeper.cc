@@ -2,15 +2,18 @@
 #include "util/debug.h"
 #include <cstring>
 
-AdaptiveSleeper::AdaptiveSleeper()
+EPAdaptiveSleeper::EPAdaptiveSleeper()
     : state_(POLL),
       last_event_time_(std::chrono::steady_clock::time_point::min()) {
   work_eventfd_ = eventfd(0, EFD_NONBLOCK);
+  char const* adative_sleep_env = std::getenv("UCCL_RDMA_ADAPTIVE_SLEEP");
+    is_adaptive_sleep_ =
+        adative_sleep_env && strcmp(adative_sleep_env, "1") == 0;
 }
 
-AdaptiveSleeper::~AdaptiveSleeper() { close(work_eventfd_); }
+EPAdaptiveSleeper::~EPAdaptiveSleeper() { close(work_eventfd_); }
 
-void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
+void EPAdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
   int ret;
 
   if (std::chrono::steady_clock::now() - last_event_time_ >=
@@ -69,15 +72,18 @@ void AdaptiveSleeper::maybe_sleep(ProxyCtx& proxy_ctx) {
   }
 }
 
-void AdaptiveSleeper::maybe_wake_proxy_thread() {
+void EPAdaptiveSleeper::maybe_wake_proxy_thread() {
+  if (!is_adaptive_sleep_) {
+    return;
+  }
   int ret = eventfd_write(work_eventfd_, kWakeEventConst);
   UCCL_CHECK(ret == 0);
 }
 
-void AdaptiveSleeper::init_timer() {
-  char const* is_adaptive_sleep = std::getenv("UCCL_RDMA_ADAPTIVE_SLEEP");
-  if (is_adaptive_sleep && strcmp(is_adaptive_sleep, "1") == 0) {
-    UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper configured";
-    last_event_time_ = std::chrono::steady_clock::now();
+void EPAdaptiveSleeper::update_timer() {
+  if (!is_adaptive_sleep_) {
+    return;
   }
+  UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper configured";
+  last_event_time_ = std::chrono::steady_clock::now();
 }

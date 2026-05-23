@@ -17,13 +17,13 @@
 // 2. SLEEP = put the CPU to sleep, while letting it poll on GPU initiated
 // events and the completion events queue. This happens when there has been no
 // work for >= kNoActivityDuration (120 seconds)
-class AdaptiveSleeper {
+class EPAdaptiveSleeper {
  public:
   enum SleepState { POLL = 0, SLEEP };
 
-  AdaptiveSleeper();
+  EPAdaptiveSleeper();
 
-  ~AdaptiveSleeper();
+  ~EPAdaptiveSleeper();
 
   // decide whether or not to put the CPU to sleep based on its current
   void maybe_sleep(ProxyCtx& proxy_ctx);
@@ -32,7 +32,7 @@ class AdaptiveSleeper {
 
   // this function kickk starts the inactivity timer, and is guarded by the
   // UCCL_RDMA_ADAPTIVE_SLEEP flag
-  void init_timer();
+  void update_timer();
 
  private:
   static constexpr auto kNoActivityThreshold = std::chrono::seconds(120);
@@ -46,6 +46,7 @@ class AdaptiveSleeper {
   SleepState state_;
   int work_eventfd_;
   std::chrono::steady_clock::time_point last_event_time_;
+  bool is_adaptive_sleep_;
 };
 
 #endif

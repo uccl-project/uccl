@@ -1,4 +1,5 @@
 #include "rdma.hpp"
+#include "adaptive_sleeper.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
@@ -2195,7 +2196,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode) {
+                  int num_nodes, EPAdaptiveSleeper &adaptive_sleeper, bool use_normal_mode) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
@@ -2205,6 +2206,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
                                  use_normal_mode);
+      adaptive_sleeper.update_timer();
     }
   };
   if (get_cq(S)) poll_one(get_cq(S));
