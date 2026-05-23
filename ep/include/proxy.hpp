@@ -95,7 +95,7 @@ class Proxy {
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
-  AdaptiveSleeper adaptive_sleeper_;
+  EPAdaptiveSleeper adaptive_sleeper_;
   void init_common();
   void init_sender();
   void init_remote();

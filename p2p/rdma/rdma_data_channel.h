@@ -18,6 +18,13 @@
 // single doorbell per channel.
 inline thread_local bool g_uccl_batch_post = false;
 
+// Additional override: when true, submitRequest() never auto-flushes a
+// batch regardless of accumulated bytes — caller must manually flush. Used
+// by the compressed-write split→encode pipeline to coalesce many >32KB
+// chunks into one doorbell per channel per phase, instead of one doorbell
+// per chunk (which kills NIC throughput on compressed writes).
+inline thread_local bool g_uccl_defer_flush = false;
+
 // Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
   if (uccl::is_efa_transport())
@@ -60,6 +67,7 @@ class RDMADataChannel {
   RDMADataChannel& operator=(RDMADataChannel const&) = delete;
 
   ~RDMADataChannel() {
+    if (ack_staging_mr_) ibv_dereg_mr(ack_staging_mr_);
     if (qp_) ibv_destroy_qp(qp_);
     if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
   }
@@ -86,7 +94,8 @@ class RDMADataChannel {
         std::lock_guard<std::mutex> lock(batch_mu_);
         batch_.push_back(std::move(req));
         batch_bytes_ += req_size;
-        should_flush = (batch_bytes_ >= kBatchFlushBytes);
+        should_flush =
+            !g_uccl_defer_flush && (batch_bytes_ >= kBatchFlushBytes);
       }
       if (should_flush) flushBatch();
       return 0;  // success; actual post deferred until flushBatch().
@@ -175,6 +184,32 @@ class RDMADataChannel {
     return result;
   }
 
+  // Post an 8-byte RDMA WRITE ack to the sender's ack_ring.
+  // Uses a pre-registered staging slot (bnxt_re rejects IBV_SEND_INLINE).
+  int postAckWrite(uint64_t remote_addr, uint32_t remote_rkey,
+                   uint32_t ack_slot, uint64_t value) {
+    ack_staging_[ack_slot] = value;
+    ibv_sge sge{};
+    sge.addr = reinterpret_cast<uintptr_t>(&ack_staging_[ack_slot]);
+    sge.length = sizeof(uint64_t);
+    sge.lkey = ack_staging_mr_->lkey;
+    std::lock_guard<std::mutex> lk(ack_mu_);
+    bool signaled = false;
+    if (++ack_unsig_count_ >= kAckSigEvery) {
+      signaled = true;
+      ack_unsig_count_ = 0;
+    }
+    int rc = impl_->postWrite(qp_, ah_, remote_meta_->qpn, kAckSignalMarker,
+                              &sge, remote_addr, remote_rkey, signaled);
+    if (unlikely(rc != 0)) {
+      UCCL_LOG(WARN) << "postAckWrite provider post failed slot=" << ack_slot
+                     << " rc=" << rc << " errno=" << errno << " remote_addr=0x"
+                     << std::hex << remote_addr << " rkey=0x" << remote_rkey
+                     << " lkey=0x" << ack_staging_mr_->lkey << std::dec;
+    }
+    return rc;
+  }
+
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {
     return local_meta_;
@@ -193,6 +228,9 @@ class RDMADataChannel {
   inline uint32_t getChannelID() const { return channel_id_; }
 
  private:
+  static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
+  static constexpr uint32_t kAckSigEvery = 64;
+
   std::shared_ptr<RdmaContext> ctx_;
   uint32_t channel_id_;
 
@@ -222,6 +260,12 @@ class RDMADataChannel {
   };
   std::deque<PendingSignalGroup> pending_groups_;
   std::mutex pending_mu_;
+
+  uint32_t ack_unsig_count_ = 0;  // selective-signal counter for postAckWrite
+  std::mutex ack_mu_;             // serializes ibv_post_send for ack WRs
+
+  std::vector<uint64_t> ack_staging_;  // staging buffer for postAckWrite
+  struct ibv_mr* ack_staging_mr_ = nullptr;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -466,6 +510,12 @@ class RDMADataChannel {
   void initQP() {
     impl_->initPreAllocResources();
     impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
+    // Staging buffer for postAckWrite (one slot per ack ring entry).
+    ack_staging_.resize(kAckRingDepth, 0);
+    ack_staging_mr_ =
+        ibv_reg_mr(ctx_->getPD(), ack_staging_.data(),
+                   kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
+    assert(ack_staging_mr_);
   }
 
   // Prepare SGE list for send request
