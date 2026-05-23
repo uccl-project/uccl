@@ -264,6 +264,25 @@ inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
   (void)remote_qpn;
 }
 
+inline int IBChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                                    uint32_t remote_qpn, uint64_t wr_id,
+                                    struct ibv_sge* sge,
+                                    uint64_t remote_addr,
+                                    uint32_t remote_rkey, bool signaled) {
+  (void)ah;
+  (void)remote_qpn;
+  ibv_send_wr wr{};
+  wr.wr_id = wr_id;
+  wr.opcode = IBV_WR_RDMA_WRITE;
+  wr.sg_list = sge;
+  wr.num_sge = 1;
+  wr.wr.rdma.remote_addr = remote_addr;
+  wr.wr.rdma.rkey = remote_rkey;
+  wr.send_flags = signaled ? IBV_SEND_SIGNALED : 0;
+  ibv_send_wr* bad = nullptr;
+  return ibv_post_send(qp, &wr, &bad);
+}
+
 inline void IBChannelImpl::initPreAllocResources() {
   pre_alloc_recv_wrs_ = new struct ibv_recv_wr[kMaxRecvWr];
   pending_post_recv_ = 0;

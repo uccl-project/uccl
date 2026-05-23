@@ -193,31 +193,22 @@ class RDMADataChannel {
     sge.addr = reinterpret_cast<uintptr_t>(&ack_staging_[ack_slot]);
     sge.length = sizeof(uint64_t);
     sge.lkey = ack_staging_mr_->lkey;
-    ibv_send_wr wr{};
-    wr.wr_id = kAckSignalMarker;
-    wr.opcode = IBV_WR_RDMA_WRITE;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.wr.rdma.remote_addr = remote_addr;
-    wr.wr.rdma.rkey = remote_rkey;
-    wr.send_flags = 0;
     std::lock_guard<std::mutex> lk(ack_mu_);
+    bool signaled = false;
     if (++ack_unsig_count_ >= kAckSigEvery) {
-      wr.send_flags |= IBV_SEND_SIGNALED;
+      signaled = true;
       ack_unsig_count_ = 0;
     }
-    ibv_send_wr* bad = nullptr;
-    int rc = ibv_post_send(qp_, &wr, &bad);
+    int rc = impl_->postWrite(qp_, ah_, remote_meta_->qpn, kAckSignalMarker,
+                              &sge, remote_addr, remote_rkey, signaled);
     if (unlikely(rc != 0)) {
-      UCCL_LOG(WARN) << "postAckWrite ibv_post_send failed slot=" << ack_slot
+      UCCL_LOG(WARN) << "postAckWrite provider post failed slot=" << ack_slot
                      << " rc=" << rc << " errno=" << errno << " remote_addr=0x"
                      << std::hex << remote_addr << " rkey=0x" << remote_rkey
                      << " lkey=0x" << ack_staging_mr_->lkey << std::dec;
     }
     return rc;
   }
-  static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
-  static constexpr uint32_t kAckSigEvery = 64;
 
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {
@@ -237,6 +228,9 @@ class RDMADataChannel {
   inline uint32_t getChannelID() const { return channel_id_; }
 
  private:
+  static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
+  static constexpr uint32_t kAckSigEvery = 64;
+
   std::shared_ptr<RdmaContext> ctx_;
   uint32_t channel_id_;
 
@@ -273,13 +267,9 @@ class RDMADataChannel {
   std::vector<uint64_t> ack_staging_;  // staging buffer for postAckWrite
   struct ibv_mr* ack_staging_mr_ = nullptr;
 
-  struct ibv_cq_ex* getCQ() const {
-    return cq_ex_;
-  }
+  struct ibv_cq_ex* getCQ() const { return cq_ex_; }
 
-  struct ibv_qp* getQP() const {
-    return qp_;
-  }
+  struct ibv_qp* getQP() const { return qp_; }
 
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
