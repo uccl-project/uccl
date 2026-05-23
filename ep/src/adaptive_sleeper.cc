@@ -83,6 +83,6 @@ void EPAdaptiveSleeper::update_timer() {
   if (!is_adaptive_sleep_) {
     return;
   }
-  UCCL_LOG(INFO, UCCL_EP) << "Adaptive sleeper configured";
+  UCCL_LOG(INFO, UCCL_EP) << "Sleep timer updated";
   last_event_time_ = std::chrono::steady_clock::now();
 }
