@@ -7,8 +7,7 @@ EPAdaptiveSleeper::EPAdaptiveSleeper()
       last_event_time_(std::chrono::steady_clock::time_point::min()) {
   work_eventfd_ = eventfd(0, EFD_NONBLOCK);
   char const* adative_sleep_env = std::getenv("UCCL_RDMA_ADAPTIVE_SLEEP");
-    is_adaptive_sleep_ =
-        adative_sleep_env && strcmp(adative_sleep_env, "1") == 0;
+  is_adaptive_sleep_ = adative_sleep_env && strcmp(adative_sleep_env, "1") == 0;
 }
 
 EPAdaptiveSleeper::~EPAdaptiveSleeper() { close(work_eventfd_); }

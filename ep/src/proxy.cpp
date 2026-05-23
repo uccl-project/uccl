@@ -580,8 +580,8 @@ void Proxy::run_dual() {
 
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
-                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes, adaptive_sleeper_,
-                 cfg_.use_normal_mode);
+                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
+                 adaptive_sleeper_, cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
