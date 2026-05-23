@@ -1,5 +1,6 @@
 #pragma once
 
+#include "adaptive_sleeper.h"
 #include "common.h"
 #include "include/transport_type.h"
 #include "nccl/nccl_endpoint.h"
@@ -509,6 +510,11 @@ class Endpoint {
   std::atomic<bool> passive_accept_stop_{false};
   std::thread passive_accept_thread_;
   std::thread passive_accept_local_thread_;
+
+  /* adaptive sleeping tracker for the thread funcs */
+  P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
+  P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
+  P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();

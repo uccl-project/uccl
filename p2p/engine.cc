@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "adaptive_sleeper.h"
 #include "endpoint_wrapper.h"
 #include "util/debug.h"
 #include "util/pause.h"
@@ -751,6 +750,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -771,6 +771,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -856,6 +857,7 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -936,6 +938,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -1020,6 +1023,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -1163,6 +1167,7 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -1245,6 +1250,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -1392,6 +1398,7 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -1815,6 +1822,7 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
+  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -2146,6 +2154,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
 
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
+  ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -2209,6 +2218,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
 
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
+  ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -2289,6 +2299,7 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
 
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
+  ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -2368,6 +2379,7 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
 
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
+  ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
   return true;
 }
@@ -2685,11 +2697,10 @@ void Endpoint::send_proxy_thread_func() {
   // bulk copy
   alignas(16) char task_buffer[16];
   UnifiedTask* task;
-  AdaptiveSleeper adaptive_sleeper;
-  adaptive_sleeper.update_timer();
+  send_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
-    adaptive_sleeper.maybe_sleep();
+    send_proxy_adaptive_sleeper_.maybe_sleep();
 
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
@@ -2731,7 +2742,7 @@ void Endpoint::send_proxy_thread_func() {
       auto* status = task->status_ptr;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
-      adaptive_sleeper.update_timer();
+      send_proxy_adaptive_sleeper_.update_timer();
     }
   }
 }
@@ -2742,11 +2753,10 @@ void Endpoint::recv_proxy_thread_func() {
   // bulk copy
   alignas(16) char task_buffer[16];
   UnifiedTask* task;
-  AdaptiveSleeper adaptive_sleeper;
-  adaptive_sleeper.update_timer();
+  recv_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
-    adaptive_sleeper.maybe_sleep();
+    recv_proxy_adaptive_sleeper_.maybe_sleep();
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
@@ -2790,7 +2800,7 @@ void Endpoint::recv_proxy_thread_func() {
       auto* status = task->status_ptr;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
-      adaptive_sleeper.update_timer();
+      recv_proxy_adaptive_sleeper_.update_timer();
     }
   }
 }
@@ -2829,16 +2839,15 @@ void Endpoint::ipc_poller_thread_func() {
   std::deque<IpcInflightOp*> active_ops;
   alignas(16) char buf[16];
   int cur_device = -1;
-  AdaptiveSleeper adaptive_sleeper;
-  adaptive_sleeper.update_timer();
+  ipc_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire) || !active_ops.empty()) {
     // only try to sleep if there are no more inflight ops
     if (!active_ops.empty()) {
-      adaptive_sleeper.update_timer();
+      ipc_proxy_adaptive_sleeper_.update_timer();
     }
-    adaptive_sleeper.maybe_sleep();
-    
+    ipc_proxy_adaptive_sleeper_.maybe_sleep();
+
     // Drain newly submitted ops into the local active list.
     while (jring_sc_dequeue_bulk(ipc_inflight_ring_, buf, 1, nullptr) == 1) {
       active_ops.push_back(*reinterpret_cast<IpcInflightOp**>(buf));
