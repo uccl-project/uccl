@@ -73,6 +73,8 @@ USE_DIETGPU=1 bash build.sh cu12 p2p --install
 
 DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `UCCL_P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
 
+Compression also applies to one-sided `write`/`writev` when `UCCL_P2P_COMPRESS_STRATEGY=split_only`. Only the `split_only` strategy is supported for the write path (not `encode`/`full`). The mechanism is transparent: the sender compresses float data in two GPU kernel phases and writes the result directly into a pre-allocated GPU buffer on the receiver side; once all data arrives, the receiver decompresses into the advertised destination address and sends a small RDMA ack to release the sender's buffer slot. Both sides must be built with `USE_DIETGPU=1`.
+
 ## Performance Benchmarks
 
 ### Running UCCL P2P

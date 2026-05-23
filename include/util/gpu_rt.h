@@ -14,6 +14,8 @@
 #define gpuStreamCreateWithFlags cudaStreamCreateWithFlags
 #define gpuStreamSynchronize cudaStreamSynchronize
 #define gpuStreamDestroy cudaStreamDestroy
+#define gpuLaunchHostFunc cudaLaunchHostFunc
+#define gpuHostFn_t cudaHostFn_t
 #define gpuDeviceProp cudaDeviceProp
 #define gpuSetDevice cudaSetDevice
 #define gpuDeviceMapHost cudaDeviceMapHost
@@ -101,6 +103,8 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuStreamCreateWithFlags hipStreamCreateWithFlags
 #define gpuStreamSynchronize hipStreamSynchronize
 #define gpuStreamDestroy hipStreamDestroy
+#define gpuLaunchHostFunc hipLaunchHostFunc
+#define gpuHostFn_t hipHostFn_t
 #define gpuSetDevice hipSetDevice
 #define gpuDeviceMapHost hipDeviceMapHost
 #define gpuSetDeviceFlags hipSetDeviceFlags

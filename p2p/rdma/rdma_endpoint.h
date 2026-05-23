@@ -58,19 +58,68 @@ class NICEndpoint {
 
   void initCompressor() {
     Compressor& compressor = Compressor::getInstance();
-    for (auto ctx_ptr : contexts_) {
-      auto buffer = compressor.getCompressBuffer();
-      if (buffer) {
-        buffer->setMRByContextID(ctx_ptr->getContextID(),
-                                 ctx_ptr->regMem(buffer->addr, buffer->size));
+    auto compress_buf = compressor.getCompressBuffer();
+    auto decompress_buf = compressor.getDecompressBuffer();
+    if (compress_buf) regMrForAllSlots(*compress_buf);
+    if (decompress_buf) regMrForAllSlots(*decompress_buf);
+    if (compressor.getCompressStrategy() == CompressStrategy::kNone) return;
+    // Host-side rings used to carry per-message compression metadata and
+    // completion acks. Registered on every context slot so any data/control
+    // QP can target them via rkey lookup.
+    ack_ring_ = allocator_->allocate(kAckRingBytes, MemoryType::HOST, nullptr);
+    write_meta_ring_ =
+        allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, nullptr);
+    std::memset(ack_ring_->addr, 0, kAckRingBytes);
+    std::memset(write_meta_ring_->addr, 0, kWriteMetaRingBytes);
+    regMrForAllSlots(*ack_ring_);
+    regMrForAllSlots(*write_meta_ring_);
+  }
+
+  // Register a buffer once per UNIQUE RdmaContext and broadcast the resulting
+  // MR pointer to every context slot that shares that context. Mirrors the
+  // dedup logic in uccl_regmr — context slots can share an underlying device,
+  // and naïvely using getContextID() as the slot key would clobber all slots
+  // onto context 0 and leave the others null.
+  void regMrForAllSlots(RegMemBlock& blk) {
+    std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
+    for (size_t slot = 0; slot < contexts_.size(); ++slot) {
+      auto ctx = contexts_[slot];
+      auto it = registered.find(ctx.get());
+      struct ibv_mr* mr = nullptr;
+      if (it != registered.end()) {
+        mr = it->second;
+      } else {
+        mr = ctx->regMem(blk.addr, blk.size);
+        if (!mr) {
+          UCCL_LOG(ERROR) << "regMrForAllSlots: ibv_reg_mr FAILED for addr="
+                          << blk.addr << " size=" << blk.size
+                          << " slot=" << slot << " errno=" << errno << " ("
+                          << strerror(errno) << ")";
+        } else {
+          UCCL_LOG(INFO, UCCL_RDMA)
+              << "regMrForAllSlots: registered addr=" << blk.addr
+              << " size=" << blk.size << " slot=" << slot << " lkey=0x"
+              << std::hex << mr->lkey << " rkey=0x" << mr->rkey << std::dec;
+        }
+        registered[ctx.get()] = mr;
       }
-      auto decompressBuffer = compressor.getDecompressBuffer();
-      if (decompressBuffer) {
-        decompressBuffer->setMRByContextID(
-            ctx_ptr->getContextID(),
-            ctx_ptr->regMem(decompressBuffer->addr, decompressBuffer->size));
-      }
+      blk.setMRByContextID(slot, mr);
     }
+  }
+
+  std::shared_ptr<RegMemBlock> ackRing() const { return ack_ring_; }
+  std::shared_ptr<RegMemBlock> writeMetaRing() const {
+    return write_meta_ring_;
+  }
+
+  // Populate the three RemoteMemInfo fields in a Control-channel
+  // MetaInfoToExchange. No-op if compression is disabled.
+  void fillCompressionMeta(MetaInfoToExchange& m) const {
+    auto decomp = Compressor::getInstance().getDecompressBuffer();
+    if (decomp) m.decompress_buf_meta = RemoteMemInfo(*decomp);
+    if (write_meta_ring_)
+      m.write_meta_ring_meta = RemoteMemInfo(*write_meta_ring_);
+    if (ack_ring_) m.ack_ring_meta = RemoteMemInfo(*ack_ring_);
   }
   int gpuIndex() const { return gpu_index_; }
 
@@ -652,6 +701,9 @@ class NICEndpoint {
 
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
+      // Receiver owns the authoritative WriteReqMeta ring.
+      if (write_meta_ring_)
+        recv_ctrl_channel->bindWriteMetaRing(write_meta_ring_);
 
       // Create response (include our OOB port for potential future use)
       RemoteMemInfo ctrl_info(ctrl_mem);
@@ -659,6 +711,7 @@ class NICEndpoint {
           rank_id_, meta.channel_id, recv_ctrl_channel->get_local_meta(),
           nullptr, ChannelType::Control, gpu_index_, oob_server_->get_port());
       response.mem_meta = ctrl_info;
+      fillCompressionMeta(response);
       UCCL_LOG(INFO, UCCL_RDMA)
           << "response (control channel):::::::" << response;
       output = serialize(response);
@@ -666,6 +719,9 @@ class NICEndpoint {
       // Set the control channel
       auto ctrl_ch_copy = recv_ctrl_channel;
       setRecvControlChannel(actual_rank_id, std::move(ctrl_ch_copy));
+      // Remember peer's ack_ring address+rkey — the receive side needs it
+      // when decompress finishes and we post an ack back to the sender.
+      setRecvCompressionPeerMeta(actual_rank_id, meta);
 
       // Store accepted connection metadata
       {
@@ -805,6 +861,23 @@ class NICEndpoint {
         std::forward<std::shared_ptr<SendControlChannel>>(ctrl_channel));
   }
 
+  // Hand the peer-side compression descriptors to the corresponding
+  // connection so the compressed-write data path can target them.
+  void setSendCompressionPeerMeta(uint64_t rank_id,
+                                  MetaInfoToExchange const& peer) {
+    if (!ack_ring_ || peer.decompress_buf_meta.length == 0) return;
+    auto group = getOrCreateSendGroup(rank_id);
+    group->setRemoteDecompressBuf(peer.decompress_buf_meta);
+    group->setLocalAckRing(ack_ring_);
+  }
+
+  void setRecvCompressionPeerMeta(uint64_t rank_id,
+                                  MetaInfoToExchange const& peer) {
+    if (peer.ack_ring_meta.length == 0) return;
+    auto group = getOrCreateRecvGroup(rank_id);
+    group->setRemoteAckRing(peer.ack_ring_meta);
+  }
+
   std::string const build_oob_connect(uint64_t rank_id) {
     auto const& item = rank_oob_meta_.find(rank_id);
     std::shared_ptr<OOBMetaData> ip_port_ptr = item->second;
@@ -832,6 +905,7 @@ class NICEndpoint {
     MetaInfoToExchange ctrl_meta(
         rank_id_, kControlChannelID, control_channel->get_local_meta(),
         ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
+    fillCompressionMeta(ctrl_meta);
 
     UCCL_LOG(INFO, UCCL_RDMA)
         << "Control Meta: " << ctrl_meta
@@ -847,10 +921,21 @@ class NICEndpoint {
         oob_con, ctrl_serialized_meta,
         [this, control_channel, promise,
          rank_id](std::string const& response) mutable {
-          uint64_t peer_rank =
-              this->handle_send_meta_response(control_channel, response);
+          MetaInfoToExchange response_meta =
+              deserialize<MetaInfoToExchange>(response);
+          control_channel->establishChannel(response_meta.channel_meta);
+          // Bind WriteReqMeta ring: local mirror (this endpoint's own) +
+          // remote slot table on the peer receiver.
+          if (write_meta_ring_) {
+            control_channel->bindWriteMetaRing(
+                write_meta_ring_, response_meta.write_meta_ring_meta);
+          }
           this->setSendControlChannel(rank_id, std::move(control_channel));
-          promise->set_value(peer_rank);  // no try/catch → fail-fast
+          // Remember peer's decompress_buf so the SendConnection can target
+          // it during compressWriteRequestSplitFirst.
+          this->setSendCompressionPeerMeta(rank_id, response_meta);
+          promise->set_value(
+              response_meta.rank_id);  // no try/catch → fail-fast
         });
 
     if (!sent) {
@@ -963,6 +1048,8 @@ class NICEndpoint {
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
   std::shared_ptr<MemoryAllocator> allocator_;
+  std::shared_ptr<RegMemBlock> ack_ring_;
+  std::shared_ptr<RegMemBlock> write_meta_ring_;
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
   bool auto_start_polling_;

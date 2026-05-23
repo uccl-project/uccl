@@ -183,14 +183,22 @@ inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
-                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                     << " (" << ibv_wc_status_str(status) << ")"
-                     << ", opcode=" << wc->opcode
-                     << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
-                     << std::hex << wc->vendor_err << ", qp_num=0x"
-                     << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
-                     << std::dec;
+      if (status == IBV_WC_WR_FLUSH_ERR) {
+        // Cascade flush after a QP error; root cause logged by primary CQE.
+        UCCL_LOG_EVERY_N(WARN, 1000) << "pollOnce - channel_id: " << channel_id
+                                     << ", WR_FLUSH_ERR, qp_num=0x" << std::hex
+                                     << wc->qp_num << std::dec;
+      } else {
+        UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
+                       << ", CQE error, wr_id=" << wr_id
+                       << ", status=" << status << " ("
+                       << ibv_wc_status_str(status) << ")"
+                       << ", opcode=" << wc->opcode
+                       << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
+                       << std::hex << wc->vendor_err << ", qp_num=0x"
+                       << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
+                       << std::dec;
+      }
     } else {
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;
@@ -219,8 +227,9 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next = nullptr;
     int const post_recv_rc = ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr);
     if (unlikely(post_recv_rc != 0)) {
-      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc
-                      << ", errno=" << errno << " (" << strerror(errno) << ")";
+      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc << " ("
+                      << strerror(post_recv_rc) << "), errno=" << errno << " ("
+                      << strerror(errno) << ")";
       throw std::runtime_error("ibv_post_recv failed");
     }
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next =
@@ -235,8 +244,9 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next = nullptr;
     int const post_recv_rc = ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr);
     if (unlikely(post_recv_rc != 0)) {
-      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc
-                      << ", errno=" << errno << " (" << strerror(errno) << ")";
+      UCCL_LOG(ERROR) << "ibv_post_recv failed, rc=" << post_recv_rc << " ("
+                      << strerror(post_recv_rc) << "), errno=" << errno << " ("
+                      << strerror(errno) << ")";
       throw std::runtime_error("ibv_post_recv failed");
     }
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next =
@@ -254,6 +264,24 @@ inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
   (void)qpx;
   (void)ah;
   (void)remote_qpn;
+}
+
+inline int IBChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                                    uint32_t remote_qpn, uint64_t wr_id,
+                                    struct ibv_sge* sge, uint64_t remote_addr,
+                                    uint32_t remote_rkey, bool signaled) {
+  (void)ah;
+  (void)remote_qpn;
+  ibv_send_wr wr{};
+  wr.wr_id = wr_id;
+  wr.opcode = IBV_WR_RDMA_WRITE;
+  wr.sg_list = sge;
+  wr.num_sge = 1;
+  wr.wr.rdma.remote_addr = remote_addr;
+  wr.wr.rdma.rkey = remote_rkey;
+  wr.send_flags = signaled ? IBV_SEND_SIGNALED : 0;
+  ibv_send_wr* bad = nullptr;
+  return ibv_post_send(qp, &wr, &bad);
 }
 
 inline void IBChannelImpl::initPreAllocResources() {

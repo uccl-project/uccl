@@ -22,6 +22,10 @@ class EFAChannelImpl : public RDMADataChannelImpl {
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
+  int postWrite(struct ibv_qp* qp, struct ibv_ah* ah, uint32_t remote_qpn,
+                uint64_t wr_id, struct ibv_sge* sge, uint64_t remote_addr,
+                uint32_t remote_rkey, bool signaled) override;
+
   void initPreAllocResources() override;
 };
 

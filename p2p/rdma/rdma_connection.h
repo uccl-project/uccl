@@ -244,6 +244,27 @@ class SendConnection : public RDMAConnection {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
 
+    // Use compressed write path when all preconditions are met.
+    bool c_send_type = (req->send_type == SendType::Write);
+    bool c_ack = static_cast<bool>(ack_ring_);
+    bool c_rdb = remote_decompress_buf_.length > 0;
+    bool c_ctx = static_cast<bool>(req->compress_ctx);
+    bool c_ft = c_ctx && (req->compress_ctx->getFloatType() !=
+                          uccl::FloatType::kUndefined);
+    bool c_fit = static_cast<uint64_t>(req->local_mem->size) <=
+                 remote_decompress_buf_.length;
+    bool c_should = Compressor::getInstance().shouldCompressAndSplitFirst(
+        req->local_mem->size);
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "compressedWriteCheck size=" << req->local_mem->size
+        << " send_type=" << c_send_type << " ack=" << c_ack
+        << " rdb_len=" << remote_decompress_buf_.length << " (>" << 0 << ")"
+        << " ctx=" << c_ctx << " ft_ok=" << c_ft << " fit=" << c_fit
+        << " should=" << c_should;
+    if (c_send_type && c_ack && c_rdb && c_ctx && c_ft && c_fit && c_should) {
+      return compressWriteRequestSplitFirst(req);
+    }
+
     // Lock-free channel selection + direct pointer.
     auto [channel_id, ch_ptr] = selectNextChannelRoundRobinFast();
     if (unlikely(channel_id == 0 || ch_ptr == nullptr)) {
@@ -340,6 +361,14 @@ class SendConnection : public RDMAConnection {
 
   bool check(int64_t wr_id) { return tracker_->isAcknowledged(wr_id); }
 
+  void setRemoteDecompressBuf(RemoteMemInfo const& m) {
+    if (m.length == 0) return;
+    remote_decompress_buf_ = m;
+    decompress_arena_.size = m.length;
+    if (!running_.load(std::memory_order_acquire)) startPolling();
+  }
+  void setLocalAckRing(std::shared_ptr<RegMemBlock> ring) { ack_ring_ = ring; }
+
   // Stop polling thread
   void stopPolling() {
     if (!running_.load()) {
@@ -405,6 +434,58 @@ class SendConnection : public RDMAConnection {
 
   uccl::cc::CongestionControlState cc_;
   std::atomic<uint32_t> chunk_tsc_counter_{0};
+
+  // Compressed-write state
+  std::shared_ptr<RegMemBlock> ack_ring_;
+  RemoteMemInfo remote_decompress_buf_;
+  std::atomic<uint64_t> next_ack_slot_{0};
+  struct PendingCompressed {
+    WriteReqMeta meta;
+    uint32_t ack_slot = 0;
+    uint64_t arena_offset = 0;
+    uint64_t arena_bytes = 0;
+    bool meta_pushed = false;
+  };
+  std::mutex pending_compressed_mu_;
+  std::unordered_map<int64_t, PendingCompressed> pending_compressed_;
+  std::atomic<size_t> pending_compressed_count_{0};
+
+  // Bump-pointer allocator over the peer's decompress_buffer. Released by
+  // pollAckRing() once the receiver's ack lands in ack_ring_.
+  struct DecompressArena {
+    uint64_t size = 0;
+    uint64_t head = 0;
+    std::map<uint64_t, uint64_t> inflight;  // offset → bytes
+    std::mutex mu;
+    std::condition_variable cv;
+
+    uint64_t reserve(uint64_t bytes) {
+      std::unique_lock<std::mutex> lk(mu);
+      while (true) {
+        if (head + bytes > size) head = 0;
+        uint64_t start = head, end = head + bytes;
+        auto it = inflight.lower_bound(start);
+        bool overlap = false;
+        if (it != inflight.end() && it->first < end) overlap = true;
+        if (!overlap && it != inflight.begin()) {
+          auto prev = std::prev(it);
+          if (prev->first + prev->second > start) overlap = true;
+        }
+        if (!overlap) {
+          inflight.emplace(start, bytes);
+          head = end;
+          return start;
+        }
+        cv.wait(lk);
+      }
+    }
+    void release(uint64_t offset) {
+      std::lock_guard<std::mutex> lk(mu);
+      inflight.erase(offset);
+      cv.notify_all();
+    }
+  };
+  DecompressArena decompress_arena_;
   // Per-chunk inflight byte counter for CC window checks.
   // Unlike tracker_->getTotalInflightBytes() which only decreases when ALL
   // chunks of a message are acked, this counter decreases on each chunk CQE.
@@ -641,11 +722,111 @@ class SendConnection : public RDMAConnection {
     Compressor::getInstance().compress(req);
   }
 
+  // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
+  // across data channels. Bypasses ChunkSplitStrategy to keep WR count low.
+  void postCompressedSegment(std::shared_ptr<RDMASendRequest> const& req,
+                             size_t seg_size, size_t num_chunks,
+                             size_t num_channels) {
+    if (num_chunks == 0 || seg_size == 0 || num_channels == 0) return;
+    size_t chunk_size = (seg_size + num_chunks - 1) / num_chunks;
+    int dummy_expected = static_cast<int>(num_chunks);
+    for (size_t i = 0; i < num_chunks; ++i) {
+      uint64_t offset = static_cast<uint64_t>(i) * chunk_size;
+      if (offset >= seg_size) break;
+      size_t this_size = std::min(chunk_size, seg_size - offset);
+      MessageChunk chunk(offset, this_size);
+      if (!postSingleChunk(req, chunk, i, num_chunks, num_channels,
+                           dummy_expected)) {
+        UCCL_LOG(WARN) << "postCompressedSegment: chunk " << i
+                       << " post failed";
+      }
+    }
+  }
+
+  // Two-phase compressed RDMA WRITE into one decompress_buffer slot.
+  // WriteReqMeta is pushed after all data WCs land (see pollDataChannels).
+  int64_t compressWriteRequestSplitFirst(std::shared_ptr<RDMASendRequest> req) {
+    int64_t wr_id = req->wr_id;
+    uint32_t total_uncomp = req->local_mem->size;
+    uint64_t user_remote_addr = req->remote_mem->addr;
+    uint32_t user_remote_rkey =
+        req->remote_mem->getKeyByContextID(0);  // diagnostic / logging only
+
+    // Reserve space in the peer's decompress_buffer; released on ack receipt.
+    uint64_t arena_bytes = static_cast<uint64_t>(total_uncomp);
+    uint64_t arena_offset = decompress_arena_.reserve(arena_bytes);
+    uint32_t ack_slot = static_cast<uint32_t>(
+        next_ack_slot_.fetch_add(1, std::memory_order_relaxed) % kAckRingDepth);
+    static_cast<AckSlot*>(ack_ring_->addr)[ack_slot].value.store(
+        0, std::memory_order_relaxed);
+    uint64_t slot_base = remote_decompress_buf_.addr + arena_offset;
+
+    // Phase 1: split into compress_buffer, post to slot_base.
+    Compressor::getInstance().compressSplitOneBatch(req);
+    uint32_t first_seg = req->local_mem->size;
+    req->remote_mem = std::make_shared<RemoteMemInfo>(
+        slot_base, arena_bytes, remote_decompress_buf_.rkey_array,
+        remote_decompress_buf_.type);
+
+    auto [channel_id, _ch_ptr] = selectNextChannelRoundRobinFast();
+    req->channel_id = channel_id ? channel_id : 1;
+    size_t num_channels = normalChannelCount();
+    if (num_channels == 0) num_channels = 1;
+    // 2 chunks per channel keeps WR density similar to non-compressed writes.
+    size_t first_chunks =
+        std::min<size_t>(num_channels * 2,
+                         static_cast<size_t>(ChunkSplitStrategy::kMaxSplitNum));
+    if (first_chunks > first_seg) first_chunks = first_seg > 0 ? 1 : 0;
+    PendingCompressed entry{};
+    entry.ack_slot = ack_slot;
+    entry.arena_offset = arena_offset;
+    entry.arena_bytes = arena_bytes;
+    entry.meta.user_remote_addr = user_remote_addr;
+    entry.meta.user_rkey = user_remote_rkey;
+    entry.meta.total_uncomp_size = total_uncomp;
+    entry.meta.decompress_offset = arena_offset;
+    entry.meta.float_type = static_cast<uint32_t>(
+        req->compress_ctx ? req->compress_ctx->getFloatType()
+                          : uccl::FloatType::kUndefined);
+    entry.meta.ack_slot = ack_slot;
+    entry.meta.wr_id = wr_id;
+    {
+      std::lock_guard<std::mutex> lk(pending_compressed_mu_);
+      pending_compressed_.emplace(wr_id, entry);
+      pending_compressed_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    tracker_->updateExpectedAckCount(wr_id,
+                                     std::numeric_limits<uint32_t>::max());
+
+    // No DeferGuard: per-chunk auto-flush gives the round-robin interleaving
+    // required on Broadcom bnxt_re (batching causes LOC_QP_OP_ERR vendor=0x3).
+    postCompressedSegment(req, first_seg, first_chunks, num_channels);
+    flushBatches();
+
+    // Phase 2: encode tail, post as a single chunk on one channel.
+    // Mixing phase-2 chunks across QPs with phase 1 halves throughput;
+    // one chunk lets the NIC's per-QP bandwidth arbitration rebalance.
+    uint32_t compressed_size =
+        Compressor::getInstance().compressEncodeOneBatch(req);
+    uint32_t second_seg = req->local_mem->size;
+    size_t second_chunks = second_seg > 0 ? 1 : 0;
+
+    {
+      std::lock_guard<std::mutex> lk(pending_compressed_mu_);
+      pending_compressed_[wr_id].meta.compressed_size = compressed_size;
+    }
+
+    // Advance past phase-1 channels so phase-2 lands on the next one.
+    req->channel_id = ((req->channel_id - 1 + first_chunks) % num_channels) + 1;
+    postCompressedSegment(req, second_seg, second_chunks, num_channels);
+    tracker_->updateExpectedAckCount(wr_id, first_chunks + second_chunks);
+    return wr_id;
+  }
+
   inline void compressSendRequestSplitFirst(
       std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
     Compressor::getInstance().compressSplitOneBatch(req);
 
-    // compressed data / chunk size = chunk count
     uint32_t send_chunks_first =
         req->local_mem->size /
         ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize,
@@ -693,24 +874,77 @@ class SendConnection : public RDMAConnection {
           acks.clear();
           channel->expandCompletion(cq_data.wr_id, acks);
           for (uint64_t wid : acks) {
+            uint32_t msg_seq;
             if (cc_.enabled()) {
               // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
-              uint32_t msg_seq = static_cast<uint32_t>(wid);
+              msg_seq = static_cast<uint32_t>(wid);
               uint32_t tsc_id = static_cast<uint32_t>(wid >> 32);
               tracker_->acknowledge(msg_seq);
               cc_.onAck(tsc_id, cq_data.len);
-              // Decrease per-chunk inflight counter so CC window checks
-              // unblock pending chunks without waiting for the whole message.
               size_t prev = cc_inflight_bytes_.load(std::memory_order_relaxed);
               size_t sub = std::min(prev, static_cast<size_t>(cq_data.len));
               cc_inflight_bytes_.fetch_sub(sub, std::memory_order_relaxed);
             } else {
-              tracker_->acknowledge(static_cast<uint32_t>(wid));
+              msg_seq = static_cast<uint32_t>(wid);
+              tracker_->acknowledge(msg_seq);
             }
+            maybePushCompressedMeta(static_cast<int64_t>(msg_seq));
           }
         }
       }
     }
+    pollAckRing();
+  }
+
+  // Release arena slots for completed acks. Only scans in-flight entries.
+  void pollAckRing() {
+    if (!ack_ring_) return;
+    if (pending_compressed_count_.load(std::memory_order_relaxed) == 0) return;
+    auto* slots = static_cast<AckSlot*>(ack_ring_->addr);
+    std::vector<uint64_t> released_offsets;
+    {
+      std::lock_guard<std::mutex> lk(pending_compressed_mu_);
+      for (auto it = pending_compressed_.begin();
+           it != pending_compressed_.end();) {
+        uint32_t ack_slot = it->second.ack_slot;
+        uint64_t v = slots[ack_slot].value.load(std::memory_order_acquire);
+        if (v == 0) {
+          ++it;
+          continue;
+        }
+        slots[ack_slot].value.store(0, std::memory_order_relaxed);
+        if (it->second.arena_bytes > 0)
+          released_offsets.push_back(it->second.arena_offset);
+        it = pending_compressed_.erase(it);
+        pending_compressed_count_.fetch_sub(1, std::memory_order_relaxed);
+      }
+    }
+    for (auto off : released_offsets) decompress_arena_.release(off);
+  }
+
+  // Push WriteReqMeta once all data WCs for wr_id have arrived.
+  void maybePushCompressedMeta(int64_t wr_id) {
+    WriteReqMeta meta_to_push{};
+    uint32_t push_slot = 0;
+    {
+      std::lock_guard<std::mutex> lk(pending_compressed_mu_);
+      auto it = pending_compressed_.find(wr_id);
+      if (it == pending_compressed_.end() || it->second.meta_pushed) return;
+      if (!tracker_->isAcknowledged(wr_id)) return;
+      it->second.meta_pushed = true;
+      meta_to_push = it->second.meta;
+      push_slot = static_cast<uint32_t>(static_cast<uint64_t>(wr_id) %
+                                        kWriteMetaRingCapacity);
+    }
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "SendConnection::maybePushCompressedMeta - pushing wr_id=" << wr_id
+        << " slot=" << push_slot
+        << " decompress_offset=" << meta_to_push.decompress_offset
+        << " compressed_size=" << meta_to_push.compressed_size
+        << " ack_slot=" << meta_to_push.ack_slot << " user_remote_addr=0x"
+        << std::hex << meta_to_push.user_remote_addr << std::dec;
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
+    if (ctrl_channel_) ctrl_channel_->pushWriteMeta(meta_to_push, push_slot);
   }
 
   void pollingLoop() {
@@ -812,10 +1046,24 @@ class RecvConnection : public RDMAConnection {
 
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
 
+  void setRemoteAckRing(RemoteMemInfo const& m) {
+    if (m.length == 0) return;
+    remote_ack_ring_ = m;
+    // The compressed-write path needs the receive side to actively poll its
+    // control-channel CQ for incoming WriteReqMeta IMMs — but for pure
+    // one-sided writes the benchmark/user never calls recv_async +
+    // poll_async, so user-driven recvRoutine() never runs. Force the
+    // polling thread up here regardless of auto_start_polling_.
+    if (!running_.load(std::memory_order_acquire)) startPolling();
+  }
+
   void pollAndProcessCompletions() {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     if (ctrl_channel_) {
       ctrl_channel_->noblockingPoll();
+      for (auto const& m : ctrl_channel_->drainPendingWriteMetas()) {
+        handleCompressedWriteArrival(m);
+      }
     }
     for (auto& [channel_id, channel] : channels_) {
       if (!channel) continue;
@@ -868,12 +1116,62 @@ class RecvConnection : public RDMAConnection {
     UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::pollingLoop - Stopped";
   }
 
+  // Context for the async-decompress callback path (currently unused).
+  struct AsyncAckCtx {
+    int64_t wr_id;
+    uint32_t ack_slot;
+    uint64_t remote_ack_addr;
+    uint32_t remote_ack_rkey;
+    std::shared_ptr<RecvControlChannel> ctrl_channel;
+  };
+
+  static void postAckHostFn(void* user_data) {
+    std::unique_ptr<AsyncAckCtx> ctx(static_cast<AsyncAckCtx*>(user_data));
+    ctx->ctrl_channel->postAckWrite(ctx->remote_ack_addr, ctx->remote_ack_rkey,
+                                    ctx->ack_slot,
+                                    static_cast<uint64_t>(ctx->wr_id) + 1);
+  }
+
+  void handleCompressedWriteArrival(WriteReqMeta const& m) {
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "RecvConnection::handleCompressedWriteArrival - wr_id=" << m.wr_id
+        << " decompress_offset=" << m.decompress_offset
+        << " compressed_size=" << m.compressed_size
+        << " total_uncomp=" << m.total_uncomp_size
+        << " float_type=" << m.float_type << " ack_slot=" << m.ack_slot;
+    auto decomp_buf = Compressor::getInstance().getDecompressBuffer();
+    if (unlikely(!decomp_buf || remote_ack_ring_.length == 0)) {
+      UCCL_LOG(WARN) << "handleCompressedWriteArrival: missing infra";
+      return;
+    }
+    uint64_t slot_base =
+        reinterpret_cast<uint64_t>(decomp_buf->addr) + m.decompress_offset;
+    RemoteMemInfo in(slot_base, m.compressed_size, decomp_buf->mr_array,
+                     MemoryType::GPU);
+    RegMemBlock out(reinterpret_cast<void*>(m.user_remote_addr),
+                    m.total_uncomp_size, MemoryType::GPU);
+
+    // Ack immediately: meta arrival implies data is already in
+    // decompress_buffer (sender posts meta only after all chunk WCs). wr_id+1
+    // avoids writing the zero sentinel that pollAckRing uses to mean "not yet
+    // acked".
+    ctrl_channel_->postAckWrite(
+        remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
+        remote_ack_ring_.getKeyByContextID(0), m.ack_slot,
+        static_cast<uint64_t>(m.wr_id) + 1);
+
+    Compressor::getInstance().decompressAsync(
+        in, out, static_cast<uccl::FloatType>(m.float_type),
+        /*on_done=*/nullptr, /*user_data=*/nullptr);
+  }
+
  private:
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> poll_thread_;
   bool auto_start_polling_;
   int numa_node_ = 0;
+  RemoteMemInfo remote_ack_ring_;  // peer (sender) ack ring — write target
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure

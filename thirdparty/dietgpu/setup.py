@@ -67,7 +67,7 @@ if __name__ == "__main__":
                 if torch.version.cuda and f.endswith("_hip.cpp"):
                     continue
                 sources.append(f)
-    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa", "cuda"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT, PROJECT_ROOT / ".." / ".." / "include"]
     library_dirs = []
     nvcc_dlink = []
@@ -77,6 +77,7 @@ if __name__ == "__main__":
         # Add CUDA library directory to library_dirs
         cuda_home = os.getenv("CUDA_HOME", "/usr/local/cuda")
         library_dirs.append(str(Path(cuda_home) / "lib64"))
+        libraries.append("cuda")
 
         # EFA (Elastic Fabric Adapter) Detection
         efa_home = os.getenv("EFA_HOME", "/opt/amazon/efa")
