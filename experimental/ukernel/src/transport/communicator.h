@@ -25,6 +25,7 @@ class TransportAdapter;
 class IpcAdapter;
 class TcpTransportAdapter;
 class UcclTransportAdapter;
+class RdmaTransportAdapter;
 
 class Communicator {
  public:
@@ -102,8 +103,11 @@ class Communicator {
   };
 
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
+  RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta);
   bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
                                UCCLP2PInfo* out_remote_p2p_info);
+  bool exchange_rdma_peer_info(int rank, RdmaTransportAdapter& rdma_adapter,
+                               RdmaP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
 
   bool has_put_path(int rank) const;
@@ -121,7 +125,9 @@ class Communicator {
   void cleanup_tracked_request(TrackedRequest& tracked);
 
   void register_existing_local_mrs_with_uccl();
+  void register_existing_local_mrs_with_rdma();
   bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
+  bool ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
   gpuEvent_t acquire_event();
   void release_event(gpuEvent_t event);
@@ -140,6 +146,7 @@ class Communicator {
 
   std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
+  std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
   gpuStream_t host_copy_stream_ = nullptr;
 
@@ -164,7 +171,15 @@ class Communicator {
   mutable std::mutex uccl_reg_mu_;
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> uccl_registered_mrs_;
+  mutable std::mutex rdma_reg_mu_;
+  std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
+  std::unordered_set<uint64_t> rdma_registered_mrs_;
   std::atomic<uint32_t> next_ephemeral_buffer_id_{0x80000000u};
+  std::atomic<uint64_t> mr_generation_{1};
+  std::atomic<uint64_t> ipc_generation_{1};
+  mutable std::mutex mr_gen_mu_;
+  std::unordered_map<uint64_t, uint64_t> last_mr_generation_;
+  std::unordered_map<uint64_t, uint64_t> last_ipc_generation_;
 };
 
 }  // namespace Transport

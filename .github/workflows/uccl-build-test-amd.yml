@@ -98,7 +98,7 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
             ./build.sh roc7 all --install 2>&1 | tee build.log
@@ -107,7 +107,7 @@ jobs:
           if [ "$SHARED_NFS" != "true" ]; then
             ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF'
               set -euo pipefail
-              bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+              bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
               source ~/uccl-ci-sandbox/.venv/bin/activate
               cd ~/uccl-ci-sandbox
               ./build.sh roc7 all --install 2>&1 | tee build.log
@@ -122,15 +122,21 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host0.log
+            sleep 1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl_readwrite.py 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
           EOF
           PID0=$!
 
@@ -138,15 +144,21 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host1.log
+            sleep 1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl_readwrite.py 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
           EOF
           PID1=$!
 
@@ -170,10 +182,11 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
+            export PYTHONUNBUFFERED=1
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host0.log
           EOF
@@ -183,10 +196,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
+            export PYTHONUNBUFFERED=1
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host1.log
           EOF
@@ -212,10 +226,11 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
+            export PYTHONUNBUFFERED=1
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host0.log
           EOF
@@ -225,10 +240,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
-            export PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
+            export PYTHONUNBUFFERED=1
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host1.log
           EOF

@@ -29,7 +29,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp };
+enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp, Rdma };
 
 struct CommunicatorMeta;
 
@@ -108,7 +108,24 @@ struct TcpP2PInfo {
   UK_OOB_SERDE_METHODS(TcpP2PInfo)
 };
 
+struct RdmaP2PInfo {
+  uint32_t data_qpn0 = 0;
+  uint32_t data_qpn1 = 0;
+  uint32_t data_qpn2 = 0;
+  uint32_t data_qpn3 = 0;
+  uint32_t signal_qpn = 0;
+  uint8_t num_qps = 4;
+  uint16_t lid = 0;
+  uint64_t gid_prefix = 0;
+  uint64_t gid_iface = 0;
+  int dev_idx = -1;
+  int gpu_idx = -1;
+
+  UK_OOB_SERDE_METHODS(RdmaP2PInfo)
+};
+
 struct IpcBufferInfo {
+  uint64_t generation = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -139,7 +156,14 @@ UK_OOB_DEFINE_VISIT_FIELDS(NamedMRInfos, f("generation", v.generation);
 UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
                            f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
 UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
-UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("handle", v.handle);
+UK_OOB_DEFINE_VISIT_FIELDS(
+    RdmaP2PInfo, f("data_qpn0", v.data_qpn0); f("data_qpn1", v.data_qpn1);
+    f("data_qpn2", v.data_qpn2); f("data_qpn3", v.data_qpn3);
+    f("signal_qpn", v.signal_qpn); f("num_qps", v.num_qps); f("lid", v.lid);
+    f("gid_prefix", v.gid_prefix); f("gid_iface", v.gid_iface);
+    f("dev_idx", v.dev_idx); f("gpu_idx", v.gpu_idx);)
+UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("generation", v.generation);
+                           f("handle", v.handle);
                            f("base_offset", v.base_offset); f("bytes", v.bytes);
                            f("device_idx", v.device_idx); f("valid", v.valid);)
 

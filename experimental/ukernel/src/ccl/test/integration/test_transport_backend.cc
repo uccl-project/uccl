@@ -255,6 +255,7 @@ Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "ipc") return Transport::PreferredTransport::Ipc;
   if (value == "uccl") return Transport::PreferredTransport::Uccl;
   if (value == "tcp") return Transport::PreferredTransport::Tcp;
+  if (value == "rdma") return Transport::PreferredTransport::Rdma;
   fail("unknown transport: " + value);
   return Transport::PreferredTransport::Auto;
 }

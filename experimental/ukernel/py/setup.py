@@ -48,6 +48,7 @@ transport_sources = [
     rel(ROOT / "src" / "transport" / "adapter" / "shmring_exchanger.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "rdma_adapter.cc"),
     rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
 ]
 

@@ -1,4 +1,5 @@
 #include "rdma.hpp"
+#include "adaptive_sleeper.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
@@ -488,13 +489,24 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         selected_nic_name = candidates[thread_idx % 4];
         use_ll_sl = true;
       } else if (num_efas == 16) {
-        assert(candidates.size() == 4);
-        // On p5e/p5en, there are 4 NICs with the same distance.
-        // We hardcode the first half Proxies to use the first NIC, and the
-        // second half to use the second NIC.
-        auto half = (local_rank % 2) * 2;
-        // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
-        selected_nic_name = candidates[thread_idx % 2 + half];
+        if (candidates.size() == 4) {
+          // On p5e/p5en, there are 4 NICs with the same distance per GPU.
+          // We hardcode the first half Proxies to use the first NIC, and the
+          // second half to use the second NIC.
+          auto half = (local_rank % 2) * 2;
+          // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+          selected_nic_name = candidates[thread_idx % 2 + half];
+        } else if (candidates.size() == 2) {
+          // On p6-b300.48xlarge (B300, 16x400Gbps EFA), there are 2 NICs with
+          // the same distance per GPU. Stripe all proxy threads across both.
+          selected_nic_name = candidates[thread_idx % 2];
+        } else {
+          fprintf(stderr,
+                  "[WARN] num_efas=16 with unexpected candidates size %zu, "
+                  "defaulting to candidates[0]\n",
+                  candidates.size());
+          selected_nic_name = candidates[0];
+        }
         use_ll_sl = true;
       } else {
         // On p6-b200, there is 2 NICs with the same distance.
@@ -2184,7 +2196,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode) {
+                  int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
+                  bool use_normal_mode) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
@@ -2194,6 +2207,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
                                  use_normal_mode);
+      adaptive_sleeper.update_timer();
     }
   };
   if (get_cq(S)) poll_one(get_cq(S));

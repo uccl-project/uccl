@@ -39,7 +39,7 @@ def run_server() -> None:
             raise RuntimeError("reg_ipc(recv) failed")
         ipc_registered = True
 
-    comm.recv(1, recv)
+    comm.recv(1, recv_buffer_id)
     print(f"[rank {rank}] received: {recv}")
 
     if recv.sum() == 0:
@@ -81,7 +81,7 @@ def run_client() -> None:
     if selected == "uccl" and not comm.wait_mr(0, recv_buffer_id):
         raise RuntimeError("wait_mr(server recv buffer) failed")
 
-    comm.send(0, send, recv_buffer_id, remote_offset=0)
+    comm.send(0, send_buffer_id, recv_buffer_id, remote_offset=0)
     comm.unreg_rdma(send_buffer_id)
     print(f"[rank {rank}] sent: {send}")
     print(f"[rank {rank}] P2P client test passed!")

@@ -20,6 +20,8 @@ def env_int(name: str, default: int) -> int:
 
 def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     """Benchmark ukernel_p2p send/recv bandwidth."""
+    rank = comm.rank
+    print(f"[rank {rank}] bench_p2p_ukernel start size={size_bytes}", flush=True)
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
@@ -34,31 +36,27 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     if selected_transport == "ipc":
         if not comm.reg_ipc(recv_buffer_id, recv_buf, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
-        # Synchronize after publish so both ranks overwrite OOB entries
-        # before either reads — avoids reading a stale IPC handle from a
-        # previous iteration whose backing tensor may have been freed.
-        if not comm.barrier("p2p_ipc_ready", 30000):
-            raise RuntimeError("ukernel barrier(p2p_ipc_ready) failed")
         if not comm.wait_ipc(peer, recv_buffer_id):
             raise RuntimeError("wait_ipc(peer recv buffer) failed")
         ipc_registered = True
-    elif selected_transport == "uccl":
+    elif selected_transport == "uccl" or selected_transport == "rdma":
+        # print(f"[rank {comm.rank}] wait_mr peer={peer} buf={recv_buffer_id}...", flush=True)
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
 
     def do_send():
-        # Sender writes into peer's recv buffer id.
-        comm.send(peer, send_buf, remote_buffer_id=recv_buffer_id, remote_offset=0)
+        comm.send(peer, send_buffer_id, remote_buffer_id=recv_buffer_id)
 
     def do_recv():
-        comm.recv(peer, recv_buf)
+        comm.recv(peer, recv_buffer_id)
 
     rank = comm.rank
+    # print(f"[rank {rank}] warmup loop start", flush=True)
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
             do_recv()
-            do_send()  # echo back
+            do_send()
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -153,13 +151,17 @@ def _exchange_uccl_metadata(local_metadata: bytes, rank: int):
     return remote_metadata
 
 
-def _exchange_local_gpu_idx(local_gpu_idx: int, rank: int) -> int:
+def _exchange_local_gpu_bdf(uc_ep, rank: int) -> str:
+    local_meta = bytes(uc_ep.get_metadata())
+    _, _, local_bdf = uccl_p2p.Endpoint.parse_metadata(local_meta)
+    local_bdf = str(local_bdf)
+    local_payload = local_bdf.encode()
     if rank == 0:
-        _send_i64(local_gpu_idx, dst=1)
-        return _recv_i64(src=1)
-    remote_gpu_idx = _recv_i64(src=0)
-    _send_i64(local_gpu_idx, dst=0)
-    return remote_gpu_idx
+        _send_bytes(local_payload, dst=1)
+        return _recv_bytes(src=1).decode()
+    remote_payload = _recv_bytes(src=0)
+    _send_bytes(local_payload, dst=0)
+    return remote_payload.decode()
 
 
 def _create_uccl_endpoint(local_gpu_idx: int, rank: int):
@@ -320,16 +322,16 @@ def main() -> None:
                 raise RuntimeError(
                     f"[uccl] ipc mode requested but endpoint lacks API: {missing}"
                 )
-            remote_gpu_idx = _exchange_local_gpu_idx(local_rank, rank)
+            remote_gpu_bdf = _exchange_local_gpu_bdf(uc_ep, rank)
             if rank == 0:
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(0->1) failed"
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(1->0) failed"
             else:
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(0->1) failed"
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(1->0) failed"
         else:
             local_meta = bytes(uc_ep.get_metadata())
