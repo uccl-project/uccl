@@ -338,26 +338,16 @@ __global__ void notify_dispatch(
     // Calculate meta data
     int dst_rdma_rank = sm_id - 1;
 
-    // Empty-rank fast path (DP-attention "forward_idle" microbatch).
-    // ``is_token_in_rank`` is allowed to be ``nullptr`` on a rank with
-    // ``num_tokens == 0`` (see the matching gate in
-    // ``Buffer::internode_prepare``: the assertion against a non-null
-    // ``is_token_in_rank_ptr`` is skipped when there are no tokens to
-    // route). The per-token inner loop below is logically a no-op for
-    // ``num_tokens == 0`` -- but the surrounding per-channel bookkeeping
-    // still indexes into ``rdma_channel_prefix_matrix`` and
-    // ``gbl_channel_prefix_matrix``. Take the explicit zero-write path
-    // here so that the empty-rank case is provably free of any
-    // ``is_token_in_rank`` dereference and never relies on the inner
-    // loop short-circuiting correctly under future refactors.
+    // Empty-rank fast path (DP-attention "forward_idle" micro-batch):
+    // ``is_token_in_rank`` may be nullptr when ``num_tokens == 0``, so write
+    // zero prefix counts directly instead of relying on the per-token loop
+    // below to short-circuit.
     if (num_tokens == 0) {
       for (int channel_id = thread_id; channel_id < num_channels;
            channel_id += num_threads) {
         rdma_channel_prefix_matrix[dst_rdma_rank * num_channels + channel_id] =
             0;
       }
-      // Same for the gbl matrix: kNumNvlPeers consecutive rows per
-      // dst_rdma_rank, each `num_channels` wide.
       int const gbl_total = NUM_MAX_NVL_PEERS * num_channels;
       int const gbl_base = dst_rdma_rank * NUM_MAX_NVL_PEERS * num_channels;
       for (int k = thread_id; k < gbl_total; k += num_threads) {

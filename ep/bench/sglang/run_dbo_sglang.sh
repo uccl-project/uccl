@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 # ---- Activate ziming uv env (has torch 2.9.1+cu128, sglang editable, uccl.ep, deep_ep)
 source "$REPO_DIR/ziming/bin/activate"

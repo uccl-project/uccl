@@ -36,29 +36,8 @@ except ImportError:
 
 
 def _record_stream_safe(tensors, stream):
-    """Best-effort ``Tensor.record_stream(stream)`` across a mixed iterable.
-
-    Bug 2 / Bug 1 family: under DBO/TBO sglang queues many kernels on
-    ``comm_stream`` while ``compute_stream`` (the default stream) keeps
-    allocating and freeing tensors. The PyTorch caching allocator
-    tracks a storage's lifetime by *the stream that allocated it*, not
-    by every stream that reads or writes it. If we hand a tensor to a
-    kernel running on ``comm_stream`` and the Python reference goes
-    away after the call returns, the allocator can hand that same
-    storage back to ``torch.empty`` on ``compute_stream`` while our
-    kernel is still mid-read.
-
-    DeepEP's ``Buffer::internode_dispatch`` / ``::internode_combine``
-    fix this with a tight ``for t in {...}: t.record_stream(comm)``
-    block at the tail (with a matching ``t.record_stream(compute)``
-    when ``allocate_on_comm_stream`` is set). We mirror that here in
-    Python because uccl_ep.cc receives raw pointers and so can't
-    reach the underlying ``c10::Storage`` from C++.
-
-    Skips ``None``s, non-tensors (handles are tuples), and tensors on
-    a different device. Recurses one level into iterables so that
-    passing ``handle`` directly works.
-    """
+    """``record_stream`` each CUDA tensor; skip ``None`` and recurse one level
+    so a ``handle`` tuple can be passed in alongside flat tensors."""
     if stream is None:
         return
     for t in tensors:
@@ -1561,18 +1540,10 @@ class Buffer:
                 and is_token_in_rank is not None
                 and num_tokens_per_expert is not None
             )
-            # Allocate the prefix-matrix / prefix-sum tensors on comm_stream so
-            # PyTorch's caching allocator tags them as owned by comm_stream and
-            # won't return their memory to the cache pool until comm_stream has
-            # actually progressed past the kernels that read them. Without this,
-            # under DBO/TBO (two dispatches queued back-to-back on the SAME
-            # comm_stream), the second dispatch's `torch.empty()` happily reuses
-            # the first dispatch's still-in-flight memory because the allocator
-            # tracks lifetime via the user's default stream. Result: the kernel
-            # reads garbage (e.g. IEEE-754 float bit patterns left over from
-            # whatever else PyTorch put in that block). DeepEP's C++ wrapper
-            # does the equivalent via at::cuda::setCurrentCUDAStream(comm_stream)
-            # around its torch::empty calls; we mirror that here in Python.
+            # Allocate prefix-matrix / prefix-sum tensors on comm_stream so
+            # the PyTorch caching allocator ties their lifetime to comm_stream
+            # (mirrors DeepEP's at::cuda::setCurrentCUDAStream(comm_stream)
+            # around its torch::empty calls).
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
                 if allocate_on_comm_stream
@@ -1677,8 +1648,8 @@ class Buffer:
                 recv_gbl_channel_prefix_matrix = torch.empty(
                     (self.group_size, num_channels), dtype=torch.int32, device=x.device
                 )
-                # Keep at least 1 row so data_ptr() is never null when
-                # x.size(0) == 0 (DP-attention / TBO empty-micro-batch case).
+                # Keep at least 1 row so data_ptr() is never null on the
+                # DP-attention / TBO empty-micro-batch case (x.size(0) == 0).
                 send_rdma_head = torch.empty(
                     (max(x.size(0), 1), num_rdma_ranks),
                     dtype=torch.int32,
@@ -1770,22 +1741,9 @@ class Buffer:
                 recv_topk_idx,
                 recv_topk_weights,
             )
-            # Bug 2 fix: under DBO/TBO sglang queues many kernels on
-            # comm_stream while the compute (default) stream continues to
-            # allocate/free tensors. The PyTorch caching allocator tracks
-            # tensor lifetime by the stream that *allocated* the tensor,
-            # not by every stream that reads it. Without record_stream,
-            # an externally-allocated input (e.g. `x`, `topk_idx`,
-            # `is_token_in_rank`, the MLP output handed to combine, etc.)
-            # can be returned to the pool and re-handed-out on the
-            # compute stream *while* our notify_dispatch/dispatch kernels
-            # on comm_stream are still reading it. Result: garbage data
-            # → SM-warp OOB / silent fault (matches DeepEP's
-            # `t.record_stream(comm_stream)` calls in their
-            # internode_dispatch tail). Internally-allocated tensors
-            # (the prefix matrices, recv buffers) are already tagged as
-            # owned by comm_stream via `alloc_ctx` (Bug 1 fix) so the
-            # extra record_stream is harmless but cheap insurance.
+            # Mirror DeepEP's record_stream tail: tag every tensor read or
+            # written by comm_stream so the caching allocator does not recycle
+            # their storage on the compute stream mid-kernel.
             comm_stream = self.get_comm_stream()
             _record_stream_safe(tensors_to_record, comm_stream)
             if allocate_on_comm_stream:
@@ -1911,15 +1869,7 @@ class Buffer:
             combined_x,
             combined_topk_weights,
         )
-        # Bug 2 fix (same rationale as in internode_dispatch above): tag
-        # every tensor read or written by the comm_stream so the
-        # PyTorch caching allocator does not recycle their storage on
-        # the compute stream while our combine kernels are still
-        # reading them. This is what DeepEP's
-        # `Buffer::internode_combine` does at its tail
-        # (`for t in {...}: t.record_stream(comm_stream)`); we mirror
-        # it here in Python because uccl_ep.cc receives raw pointers
-        # and so cannot do it C++-side.
+        # See internode_dispatch above for rationale on record_stream tail.
         comm_stream = self.get_comm_stream()
         _record_stream_safe(tensors_to_record, comm_stream)
         if allocate_on_comm_stream:

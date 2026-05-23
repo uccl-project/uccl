@@ -102,12 +102,7 @@ INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp
 SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
-# Non-binding .cc translation units that need to be compiled and linked into
-# the shared library. ``adaptive_sleeper.cc`` defines methods declared in
-# ``include/adaptive_sleeper.hpp`` (used by ``proxy.cpp`` and ``uccl_ep.cc``);
-# without it the link silently succeeds but the .so has unresolved symbols
-# (e.g. ``AdaptiveSleeper::maybe_wake_proxy_thread``) and fails at runtime
-# with ``ImportError: ... undefined symbol: _ZN15AdaptiveSleeper...``.
+# Non-binding .cc translation units linked into the shared library.
 SRC_CC_LIB := src/adaptive_sleeper.cc
 
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
