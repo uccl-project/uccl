@@ -8,6 +8,9 @@
 #include <sys/eventfd.h>
 #include <sys/poll.h>
 
+// to enable Adaptive Sleeper, set UCCL_RDMA_ADAPTIVE_SLEEP=1
+// handles level of sleep on the proxy thread, based on async / RDMA request
+// volume Adaptive sleeper states:
 class P2PAdaptiveSleeper {
  public:
   enum SleepState { POLL = 0, SLEEP };
@@ -76,6 +79,8 @@ class P2PAdaptiveSleeper {
     UCCL_CHECK(ret == 0);
   }
 
+  // this function kickk starts the inactivity timer, and is guarded by the
+  // UCCL_RDMA_ADAPTIVE_SLEEP flag
   void update_timer() {
     if (!is_adaptive_sleep_) {
       return;
@@ -87,7 +92,7 @@ class P2PAdaptiveSleeper {
 
  private:
   // TODO: change after testing
-  static constexpr auto kNoActivityThreshold = std::chrono::seconds(2);
+  static constexpr auto kNoActivityThreshold = std::chrono::seconds(120);
   static constexpr int kNumActivitiesToPoll = 1;
   static constexpr struct timespec kPollSleepDuration = {
       .tv_sec = 5,
