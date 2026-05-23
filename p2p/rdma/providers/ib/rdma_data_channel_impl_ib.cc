@@ -266,8 +266,7 @@ inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
 
 inline int IBChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
                                     uint32_t remote_qpn, uint64_t wr_id,
-                                    struct ibv_sge* sge,
-                                    uint64_t remote_addr,
+                                    struct ibv_sge* sge, uint64_t remote_addr,
                                     uint32_t remote_rkey, bool signaled) {
   (void)ah;
   (void)remote_qpn;

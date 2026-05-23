@@ -267,9 +267,13 @@ class RDMADataChannel {
   std::vector<uint64_t> ack_staging_;  // staging buffer for postAckWrite
   struct ibv_mr* ack_staging_mr_ = nullptr;
 
-  struct ibv_cq_ex* getCQ() const { return cq_ex_; }
+  struct ibv_cq_ex* getCQ() const {
+    return cq_ex_;
+  }
 
-  struct ibv_qp* getQP() const { return qp_; }
+  struct ibv_qp* getQP() const {
+    return qp_;
+  }
 
   // Post send request based on send_type
   // Returns 0 on success, error code on failure

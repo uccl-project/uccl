@@ -210,8 +210,7 @@ inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
 
 inline int EFAChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
                                      uint32_t remote_qpn, uint64_t wr_id,
-                                     struct ibv_sge* sge,
-                                     uint64_t remote_addr,
+                                     struct ibv_sge* sge, uint64_t remote_addr,
                                      uint32_t remote_rkey, bool signaled) {
   (void)signaled;
   auto* qpx = ibv_qp_to_qp_ex(qp);
