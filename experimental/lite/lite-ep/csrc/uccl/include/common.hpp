@@ -19,11 +19,11 @@
 // thread-safe static. The proxy never expects these to change at
 // runtime, so caching is safe.
 inline bool ep_uccl_debug_enabled() {
-  static const bool v = (std::getenv("EP_UCCL_DEBUG") != nullptr);
+  static bool const v = (std::getenv("EP_UCCL_DEBUG") != nullptr);
   return v;
 }
 inline bool uccl_proxy_trace_enabled() {
-  static const bool v = (std::getenv("UCCL_PROXY_TRACE") != nullptr);
+  static bool const v = (std::getenv("UCCL_PROXY_TRACE") != nullptr);
   return v;
 }
 

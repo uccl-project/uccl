@@ -15,7 +15,8 @@
   cfg.attrs = attr;                                                           \
   cfg.numAttrs = 2
 #else
-// sm_89 path: cooperative launch (for cg::this_grid().sync()) but NO cluster dims
+// sm_89 path: cooperative launch (for cg::this_grid().sync()) but NO cluster
+// dims
 #define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream)                     \
   cudaLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream, nullptr, 0}; \
   cudaLaunchAttribute attr[1];                                                \

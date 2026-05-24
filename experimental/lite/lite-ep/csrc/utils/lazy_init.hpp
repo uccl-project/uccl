@@ -9,19 +9,18 @@ namespace deep_ep {
 
 template <typename T>
 class LazyInit {
-public:
-    explicit LazyInit(std::function<std::shared_ptr<T>()> factory)
-        : factory(std::move(factory)) {}
+ public:
+  explicit LazyInit(std::function<std::shared_ptr<T>()> factory)
+      : factory(std::move(factory)) {}
 
-    T* operator -> () {
-        if (ptr == nullptr)
-            ptr = factory();
-        return ptr.get();
-    }
+  T* operator->() {
+    if (ptr == nullptr) ptr = factory();
+    return ptr.get();
+  }
 
-private:
-    std::shared_ptr<T> ptr;
-    std::function<std::shared_ptr<T>()> factory;
+ private:
+  std::shared_ptr<T> ptr;
+  std::function<std::shared_ptr<T>()> factory;
 };
 
-} // namespace deep_ep
+}  // namespace deep_ep

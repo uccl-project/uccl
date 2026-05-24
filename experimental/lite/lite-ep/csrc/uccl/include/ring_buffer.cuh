@@ -460,8 +460,8 @@ typedef RingBuffer<CopyTask, FlowDirection::HostToHost, COPY_RING_CAP>
 
 static inline uintptr_t alloc_cmd_ring() {
   void* raw = nullptr;
-  auto err = cudaHostAlloc(&raw, sizeof(DeviceToHostCmdBuffer),
-                           cudaHostAllocMapped);
+  auto err =
+      cudaHostAlloc(&raw, sizeof(DeviceToHostCmdBuffer), cudaHostAllocMapped);
   if (err != cudaSuccess || raw == nullptr) {
     throw std::runtime_error("cudaHostAlloc(DeviceToHostCmdBuffer) failed");
   }
@@ -472,10 +472,11 @@ static inline uintptr_t alloc_cmd_ring() {
 
 static inline uintptr_t get_cmd_ring_device_addr(uintptr_t host_addr) {
   void* device_ptr = nullptr;
-  auto err = cudaHostGetDevicePointer(
-      &device_ptr, reinterpret_cast<void*>(host_addr), 0);
+  auto err = cudaHostGetDevicePointer(&device_ptr,
+                                      reinterpret_cast<void*>(host_addr), 0);
   if (err != cudaSuccess || device_ptr == nullptr) {
-    throw std::runtime_error("cudaHostGetDevicePointer(DeviceToHostCmdBuffer) failed");
+    throw std::runtime_error(
+        "cudaHostGetDevicePointer(DeviceToHostCmdBuffer) failed");
   }
   return reinterpret_cast<uintptr_t>(device_ptr);
 }

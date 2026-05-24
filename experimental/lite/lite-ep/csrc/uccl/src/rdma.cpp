@@ -550,10 +550,11 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       S.numa_node = entry.numa_node;
       entry.refcount++;
       if (ep_uccl_debug_enabled()) {
-        fprintf(stderr,
-                "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
-                "for GPU %d\n",
-                thread_idx, selected_nic_name.c_str(), entry.refcount - 1, gpu_idx);
+        fprintf(
+            stderr,
+            "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
+            "for GPU %d\n",
+            thread_idx, selected_nic_name.c_str(), entry.refcount - 1, gpu_idx);
       }
       ibv_free_device_list(dev_list);
       return;
@@ -582,7 +583,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
   if (ep_uccl_debug_enabled()) {
-    fprintf(stderr, "[RDMA] Selected NIC %s (index %d) for GPU %d, NUMA node %d\n",
+    fprintf(stderr,
+            "[RDMA] Selected NIC %s (index %d) for GPU %d, NUMA node %d\n",
             selected_nic_name.c_str(), selected_dev_idx, gpu_idx, S.numa_node);
   }
   ibv_free_device_list(dev_list);
@@ -1056,12 +1058,13 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
         reinterpret_cast<uintptr_t>(S.atomic_buffer_mr->addr);
     local_info->atomic_buffer_len = S.atomic_buffer_mr->length;
     if (ep_uccl_debug_enabled()) {
-      fprintf(stderr,
-              "[create_per_thread_qp] Populated atomic buffer info: addr=0x%llx, "
-              "len=%zu, rkey=0x%x\n",
-              (unsigned long long)local_info->atomic_buffer_addr,
-              (size_t)local_info->atomic_buffer_len,
-              local_info->atomic_buffer_rkey);
+      fprintf(
+          stderr,
+          "[create_per_thread_qp] Populated atomic buffer info: addr=0x%llx, "
+          "len=%zu, rkey=0x%x\n",
+          (unsigned long long)local_info->atomic_buffer_addr,
+          (size_t)local_info->atomic_buffer_len,
+          local_info->atomic_buffer_rkey);
     }
   } else {
     // TODO(MaoZiming): Only for non-EFA case.
@@ -1117,8 +1120,7 @@ void modify_qp_to_init(ProxyCtx& S) {
     }
   }
 
-  if (ep_uccl_debug_enabled())
-    fprintf(stderr, "QP modified to INIT state\n");
+  if (ep_uccl_debug_enabled()) fprintf(stderr, "QP modified to INIT state\n");
 }
 
 struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
@@ -1170,12 +1172,10 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   }
 
   if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
-    if (ep_uccl_debug_enabled())
-      fprintf(stderr, "RoCE detected (Ethernet)\n");
+    if (ep_uccl_debug_enabled()) fprintf(stderr, "RoCE detected (Ethernet)\n");
     is_roce = 1;
   } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
-    if (ep_uccl_debug_enabled())
-      fprintf(stderr, "InfiniBand detected\n");
+    if (ep_uccl_debug_enabled()) fprintf(stderr, "InfiniBand detected\n");
     is_roce = 0;
   } else {
     fprintf(stderr, "Unknown link layer: %d\n", port_attr.link_layer);
@@ -1253,8 +1253,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  if (ep_uccl_debug_enabled())
-    fprintf(stderr, "QP modified to RTR state\n");
+  if (ep_uccl_debug_enabled()) fprintf(stderr, "QP modified to RTR state\n");
 
   if (S.ack_qp) {
     attr.dest_qp_num = remote->recv_ack_qp_num;
@@ -1312,8 +1311,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     }
   }
 
-  if (ep_uccl_debug_enabled())
-    fprintf(stderr, "QP modified to RTS state\n");
+  if (ep_uccl_debug_enabled()) fprintf(stderr, "QP modified to RTS state\n");
 
   attr.sq_psn = local_info->ack_psn;
   int ret = ibv_modify_qp(S.ack_qp, &attr, flags);
@@ -2058,10 +2056,10 @@ void local_process_completions(ProxyCtx& S,
   for (int i = 0; i < ne; ++i) {
     if (wc[i].status != IBV_WC_SUCCESS) {
       fprintf(stderr,
-              "[thread=%d] CQE ERROR wr_id=%llu status=%d(%s) opcode=%d byte_len=%u "
+              "[thread=%d] CQE ERROR wr_id=%llu status=%d(%s) opcode=%d "
+              "byte_len=%u "
               "vendor_err=0x%x qp_num=0x%x\n",
-              thread_idx,
-              (unsigned long long)wc[i].wr_id, wc[i].status,
+              thread_idx, (unsigned long long)wc[i].wr_id, wc[i].status,
               ibv_wc_status_str(wc[i].status), wc[i].opcode, wc[i].byte_len,
               wc[i].vendor_err, wc[i].qp_num);
       // Don't abort — allow straggling ops to fail gracefully
@@ -2239,8 +2237,11 @@ void remote_process_completions_normal_mode(
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
-      fprintf(stderr, "[thread=%d] RDMA remote error (normal): %s qp_num=0x%x wr_id=%llu\n",
-              idx, ibv_wc_status_str(cqe.status), cqe.qp_num, (unsigned long long)cqe.wr_id);
+      fprintf(
+          stderr,
+          "[thread=%d] RDMA remote error (normal): %s qp_num=0x%x wr_id=%llu\n",
+          idx, ibv_wc_status_str(cqe.status), cqe.qp_num,
+          (unsigned long long)cqe.wr_id);
       continue;
     }
     if (cqe.opcode == IBV_WC_SEND) {
@@ -2416,8 +2417,11 @@ void remote_process_completions_fast_mode(
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
-      fprintf(stderr, "[thread=%d] RDMA remote error (fast): %s qp_num=0x%x wr_id=%llu\n",
-              idx, ibv_wc_status_str(cqe.status), cqe.qp_num, (unsigned long long)cqe.wr_id);
+      fprintf(
+          stderr,
+          "[thread=%d] RDMA remote error (fast): %s qp_num=0x%x wr_id=%llu\n",
+          idx, ibv_wc_status_str(cqe.status), cqe.qp_num,
+          (unsigned long long)cqe.wr_id);
       continue;
     }
     if (cqe.opcode == IBV_WC_SEND) {
@@ -3201,9 +3205,9 @@ static void post_atomic_operations_fast_mode_native_rdma(
           ctx->remote_atomic_buffer_addr + cmd.req_rptr;
       assert((remote_atomic_addr & 0x7) == 0);
       assert(remote_atomic_addr >= ctx->remote_atomic_buffer_addr &&
-                     remote_atomic_addr + sizeof(uint64_t) <=
-                         ctx->remote_atomic_buffer_addr +
-                             ctx->remote_atomic_buffer_len);
+             remote_atomic_addr + sizeof(uint64_t) <=
+                 ctx->remote_atomic_buffer_addr +
+                     ctx->remote_atomic_buffer_len);
 
       // Write the signaling value into local scratch, then RDMA_WRITE it to
       // the remote atomic slot.  Each slot is written by exactly one sender
@@ -3334,9 +3338,9 @@ static void post_atomic_operations_native_rdma(
 
         assert((remote_atomic_addr & 0x7) == 0);
         assert(remote_atomic_addr >= ctx->remote_atomic_buffer_addr &&
-                       remote_atomic_addr + sizeof(uint64_t) <=
-                           ctx->remote_atomic_buffer_addr +
-                               ctx->remote_atomic_buffer_len);
+               remote_atomic_addr + sizeof(uint64_t) <=
+                   ctx->remote_atomic_buffer_addr +
+                       ctx->remote_atomic_buffer_len);
 
         // Write the delta value directly (same rationale as fast-mode path).
         atomic_old_values_64[t] = static_cast<uint64_t>(v64);

@@ -169,7 +169,7 @@ void UcclProxy::start_local() { start(Mode::Local); }
 void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::wait_until_ready() const {
-  const auto deadline =
+  auto const deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(30);
   while (!ready_.load(std::memory_order_acquire)) {
     if (!running_.load(std::memory_order_acquire)) {
@@ -207,7 +207,8 @@ void UcclProxy::start(Mode m) {
     if (proxy_->cfg_.cuda_device >= 0) {
       cudaError_t cuda_status = cudaSetDevice(proxy_->cfg_.cuda_device);
       if (cuda_status != cudaSuccess) {
-        fprintf(stderr, "Failed to set CUDA device %d in UCCL proxy thread: %s\n",
+        fprintf(stderr,
+                "Failed to set CUDA device %d in UCCL proxy thread: %s\n",
                 proxy_->cfg_.cuda_device, cudaGetErrorString(cuda_status));
         std::abort();
       }

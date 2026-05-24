@@ -15,9 +15,9 @@
 #include <unordered_map>
 #include <vector>
 #include <assert.h>
+#include <cuda_runtime.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <cuda_runtime.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
@@ -57,7 +57,8 @@ class Proxy {
         false;  // Runtime flag for normal mode (batching optimization)
     bool is_intranode = false;
     bool free_buffer_with_cuda_free_host = false;
-    bool owns_gpu_buffer = true;  // false when gpu_buffer is a shared-memory slice
+    bool owns_gpu_buffer =
+        true;  // false when gpu_buffer is a shared-memory slice
     std::atomic<bool>* ready_flag = nullptr;
 
     // Shared-memory intra-node transfer (no RDMA loopback).
@@ -68,7 +69,6 @@ class Proxy {
     void* shared_atomic_base = nullptr;  // mmap'd base of shared atomic buffer
     size_t shared_atomic_per_rank = 0;   // bytes per rank in shared atomic buf
     int local_world_size = 0;            // number of ranks on this node
-
   };
 
   Proxy(Config const& cfg);

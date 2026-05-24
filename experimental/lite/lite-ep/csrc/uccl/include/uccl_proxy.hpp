@@ -82,7 +82,6 @@ class UcclProxy {
     proxy_->set_bench_d2h_channel_addrs(addrs);
   }
 
-
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
@@ -100,7 +99,7 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   bool atomic_buffer_is_host_allocated_ =
-      false;  // true => cudaFreeHost, false => cudaFree
+      false;                        // true => cudaFreeHost, false => cudaFree
   bool owns_atomic_buffer_ = true;  // false when using shared atomic buffer
   int node_idx_;
   bool is_intranode_;

@@ -21,8 +21,9 @@ enum class CmdType : uint8_t {
   PUT_VALUE = 5,
 };
 
-__device__ __host__ __forceinline__ CmdType make_cmd_type(
-    CmdType base, bool is_combine, bool low_latency) {
+__device__ __host__ __forceinline__ CmdType make_cmd_type(CmdType base,
+                                                          bool is_combine,
+                                                          bool low_latency) {
   uint8_t v = static_cast<uint8_t>(base);
   if (is_combine) v |= (1u << 6);
   if (low_latency) v |= (1u << 7);
@@ -69,19 +70,13 @@ __device__ __forceinline__ uint64_t ld_volatile_u64(uint64_t* ptr) {
 
 __device__ __forceinline__ uint64_t ld_cv_u64(uint64_t const* ptr) {
   uint64_t ans;
-  asm volatile("ld.global.cv.u64 %0, [%1];"
-               : "=l"(ans)
-               : "l"(ptr)
-               : "memory");
+  asm volatile("ld.global.cv.u64 %0, [%1];" : "=l"(ans) : "l"(ptr) : "memory");
   return ans;
 }
 
 __device__ __forceinline__ uint32_t ld_cv_u32(uint32_t const* ptr) {
   uint32_t ans;
-  asm volatile("ld.global.cv.u32 %0, [%1];"
-               : "=r"(ans)
-               : "l"(ptr)
-               : "memory");
+  asm volatile("ld.global.cv.u32 %0, [%1];" : "=r"(ans) : "l"(ptr) : "memory");
   return ans;
 }
 
@@ -137,9 +132,7 @@ struct alignas(128) DeviceToHostCmdBuffer {
   }
 };
 
-__device__ __forceinline__ void trap() {
-  asm volatile("trap;");
-}
+__device__ __forceinline__ void trap() { asm volatile("trap;"); }
 
 template <bool use_normal_mode = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
@@ -152,19 +145,22 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   int per_thread_d2h_channel_idx =
       (expert_idx % num_d2h_channel_addrs) / kNumProxyThs;
   EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
-  int d2h_channel_idx = thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
+  int d2h_channel_idx =
+      thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
   EP_DEVICE_ASSERT(d2h_channel_idx < num_d2h_channel_addrs);
 
   auto* h = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 #ifdef EP_UCCL_DEVICE_TRACE
   if (expert_idx < 2048) {
-    printf("[UCCL_DEVICE_TRACE] WRITE before commit ch=%d ring=%p dst=%d bytes=%lu lptr_off=%lu rptr_off=%lu head=%lu tail=%lu\n",
-           d2h_channel_idx, h, dst_rank, static_cast<unsigned long>(bytes),
-           static_cast<unsigned long>(req_lptr),
-           static_cast<unsigned long>(req_rptr),
-           static_cast<unsigned long>(h->volatile_head()),
-           static_cast<unsigned long>(h->volatile_tail()));
+    printf(
+        "[UCCL_DEVICE_TRACE] WRITE before commit ch=%d ring=%p dst=%d "
+        "bytes=%lu lptr_off=%lu rptr_off=%lu head=%lu tail=%lu\n",
+        d2h_channel_idx, h, dst_rank, static_cast<unsigned long>(bytes),
+        static_cast<unsigned long>(req_lptr),
+        static_cast<unsigned long>(req_rptr),
+        static_cast<unsigned long>(h->volatile_head()),
+        static_cast<unsigned long>(h->volatile_tail()));
   }
 #endif
   constexpr int kWriteAddrShift = kWriteAddrShiftNormal;
@@ -175,7 +171,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   EP_DEVICE_ASSERT((bytes >> 24) == 0);
 
   TransferCmd cmd{};
-  cmd.cmd_type = make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
+  cmd.cmd_type =
+      make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
   cmd.req_rptr = static_cast<uint32_t>(req_rptr >> kWriteAddrShift);
   cmd.req_lptr = static_cast<uint32_t>(req_lptr >> kWriteAddrShift);
   cmd.bytes = static_cast<uint32_t>(bytes);
@@ -194,34 +191,38 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   h->atomic_set_and_commit(cmd, &slot);
 #ifdef EP_UCCL_DEVICE_TRACE
   if (slot < 8) {
-    printf("[UCCL_DEVICE_TRACE] WRITE ch=%d ring=%p slot=%lu dst=%d bytes=%lu lptr=%lu rptr=%lu head=%lu tail=%lu\n",
-           d2h_channel_idx, h, static_cast<unsigned long>(slot), dst_rank,
-           static_cast<unsigned long>(bytes),
-           static_cast<unsigned long>(cmd.req_lptr),
-           static_cast<unsigned long>(cmd.req_rptr),
-           static_cast<unsigned long>(h->volatile_head()),
-           static_cast<unsigned long>(h->volatile_tail()));
+    printf(
+        "[UCCL_DEVICE_TRACE] WRITE ch=%d ring=%p slot=%lu dst=%d bytes=%lu "
+        "lptr=%lu rptr=%lu head=%lu tail=%lu\n",
+        d2h_channel_idx, h, static_cast<unsigned long>(slot), dst_rank,
+        static_cast<unsigned long>(bytes),
+        static_cast<unsigned long>(cmd.req_lptr),
+        static_cast<unsigned long>(cmd.req_rptr),
+        static_cast<unsigned long>(h->volatile_head()),
+        static_cast<unsigned long>(h->volatile_tail()));
   }
 #endif
 }
 
 __device__ __forceinline__ void nvshmemi_ibgda_put_value_nbi(
     uint64_t rptr_offset, uint64_t value, size_t bytes, int dst_rank,
-    int channel_idx, const uint64_t* d2h_channel_addrs,
+    int channel_idx, uint64_t const* d2h_channel_addrs,
     int num_d2h_channel_addrs) {
   if (num_d2h_channel_addrs <= 0) return;
   int logical_channel_idx = channel_idx % num_d2h_channel_addrs;
   int thread_idx = logical_channel_idx % kNumProxyThs;
   int per_thread_d2h_channel_idx = logical_channel_idx / kNumProxyThs;
   EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
-  int d2h_channel_idx = thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
+  int d2h_channel_idx =
+      thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
   auto* h = reinterpret_cast<DeviceToHostCmdBuffer*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
   TransferCmd cmd{};
   cmd.cmd_type = CmdType::PUT_VALUE;
   cmd.dst_rank = static_cast<uint8_t>(dst_rank);
   cmd.bytes_and_val = static_cast<uint32_t>(value);
-  EP_DEVICE_ASSERT((rptr_offset & ((1ull << kWriteAddrShiftNormal) - 1ull)) == 0);
+  EP_DEVICE_ASSERT((rptr_offset & ((1ull << kWriteAddrShiftNormal) - 1ull)) ==
+                   0);
   EP_DEVICE_ASSERT(bytes > 0 && bytes <= sizeof(uint64_t));
   cmd.req_rptr = static_cast<uint32_t>(rptr_offset >> kWriteAddrShiftNormal);
   cmd.req_lptr = static_cast<uint32_t>(value >> 32);
@@ -230,13 +231,15 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_value_nbi(
   h->atomic_set_and_commit(cmd, &slot);
 #ifdef EP_UCCL_DEVICE_TRACE
   if (slot < 8) {
-    printf("[UCCL_DEVICE_TRACE] PUT_VALUE ch=%d ring=%p slot=%lu dst=%d bytes=%lu rptr=%lu value=%lu head=%lu tail=%lu\n",
-           d2h_channel_idx, h, static_cast<unsigned long>(slot), dst_rank,
-           static_cast<unsigned long>(bytes),
-           static_cast<unsigned long>(cmd.req_rptr),
-           static_cast<unsigned long>(value),
-           static_cast<unsigned long>(h->volatile_head()),
-           static_cast<unsigned long>(h->volatile_tail()));
+    printf(
+        "[UCCL_DEVICE_TRACE] PUT_VALUE ch=%d ring=%p slot=%lu dst=%d bytes=%lu "
+        "rptr=%lu value=%lu head=%lu tail=%lu\n",
+        d2h_channel_idx, h, static_cast<unsigned long>(slot), dst_rank,
+        static_cast<unsigned long>(bytes),
+        static_cast<unsigned long>(cmd.req_rptr),
+        static_cast<unsigned long>(value),
+        static_cast<unsigned long>(h->volatile_head()),
+        static_cast<unsigned long>(h->volatile_tail()));
   }
 #endif
 }
@@ -250,11 +253,13 @@ __device__ __forceinline__ void wait_until_cmd_consumed(
     if (cur_tail > slot) break;
     if ((clock64() - last_print) > kPrintCycleInterval) {
 #ifdef EP_UCCL_DEVICE_TRACE
-      printf("[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting head=%lu tail=%lu slot=%lu\n",
-             nvl_rank, static_cast<int>(cmd_type), label,
-             static_cast<unsigned long>(h->volatile_head()),
-             static_cast<unsigned long>(cur_tail),
-             static_cast<unsigned long>(slot));
+      printf(
+          "[wait_until_cmd_consumed nvl:%d cmd:%d label:%d] waiting head=%lu "
+          "tail=%lu slot=%lu\n",
+          nvl_rank, static_cast<int>(cmd_type), label,
+          static_cast<unsigned long>(h->volatile_head()),
+          static_cast<unsigned long>(cur_tail),
+          static_cast<unsigned long>(slot));
 #endif
       last_print = clock64();
     }
@@ -270,11 +275,12 @@ __device__ __forceinline__ void wait_until_tail_reaches(
     if (cur_tail >= target) break;
     if ((clock64() - last_print) > kPrintCycleInterval) {
 #ifdef EP_UCCL_DEVICE_TRACE
-      printf("[wait_until_tail_reaches nvl:%d label:%d] waiting head=%lu tail=%lu target=%lu\n",
-             nvl_rank, label,
-             static_cast<unsigned long>(h->volatile_head()),
-             static_cast<unsigned long>(cur_tail),
-             static_cast<unsigned long>(target));
+      printf(
+          "[wait_until_tail_reaches nvl:%d label:%d] waiting head=%lu tail=%lu "
+          "target=%lu\n",
+          nvl_rank, label, static_cast<unsigned long>(h->volatile_head()),
+          static_cast<unsigned long>(cur_tail),
+          static_cast<unsigned long>(target));
 #endif
       last_print = clock64();
     }
@@ -294,11 +300,13 @@ __device__ __forceinline__ void nvshmemi_ibgda_quiet(
     targets[d2h_channel_idx] = h->volatile_head();
 #ifdef EP_UCCL_DEVICE_TRACE
     if (targets[d2h_channel_idx] != h->volatile_tail()) {
-      printf("[UCCL_DEVICE_TRACE] QUIET-DRAIN ch=%d ring=%p target=%lu head=%lu tail=%lu\n",
-             d2h_channel_idx, h,
-             static_cast<unsigned long>(targets[d2h_channel_idx]),
-             static_cast<unsigned long>(h->volatile_head()),
-             static_cast<unsigned long>(h->volatile_tail()));
+      printf(
+          "[UCCL_DEVICE_TRACE] QUIET-DRAIN ch=%d ring=%p target=%lu head=%lu "
+          "tail=%lu\n",
+          d2h_channel_idx, h,
+          static_cast<unsigned long>(targets[d2h_channel_idx]),
+          static_cast<unsigned long>(h->volatile_head()),
+          static_cast<unsigned long>(h->volatile_tail()));
     }
 #endif
   }
@@ -321,10 +329,11 @@ __device__ __forceinline__ void debug_post_marker(
   cmd.cmd_type = CmdType::QUIET;
   uint64_t slot = 0;
   h->atomic_set_and_commit(cmd, &slot);
-  printf("[UCCL_DEVICE_TRACE] MARK label=%d ring=%p slot=%lu head=%lu tail=%lu\n",
-         label, h, static_cast<unsigned long>(slot),
-         static_cast<unsigned long>(h->volatile_head()),
-         static_cast<unsigned long>(h->volatile_tail()));
+  printf(
+      "[UCCL_DEVICE_TRACE] MARK label=%d ring=%p slot=%lu head=%lu tail=%lu\n",
+      label, h, static_cast<unsigned long>(slot),
+      static_cast<unsigned long>(h->volatile_head()),
+      static_cast<unsigned long>(h->volatile_tail()));
 }
 #endif
 

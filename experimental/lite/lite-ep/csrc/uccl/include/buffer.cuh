@@ -98,8 +98,7 @@ struct AsymBuffer {
   }
 
   __device__ __forceinline__ dtype_t* buffer_by(int rank_idx, int idx = 0) {
-    EP_STATIC_ASSERT(kNumRanks >= 1,
-                     "`buffer_by` requires at least 1 rank");
+    EP_STATIC_ASSERT(kNumRanks >= 1, "`buffer_by` requires at least 1 rank");
     return reinterpret_cast<dtype_t*>(ptrs[rank_idx] + num_bytes * idx);
   }
 };

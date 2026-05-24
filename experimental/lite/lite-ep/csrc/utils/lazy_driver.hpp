@@ -1,34 +1,34 @@
 #pragma once
 
+#include <deep_ep/common/exception.cuh>
 #include <cuda.h>
 #include <dlfcn.h>
-
-#include <deep_ep/common/exception.cuh>
 
 namespace deep_ep {
 
 // Lazy loading all driver symbols
 static void* get_driver_handle() {
-    static void* handle = nullptr;
-    if (handle == nullptr) {
-        handle = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_LOCAL);
-        EP_HOST_ASSERT(handle != nullptr and "Failed to load CUDA driver `libcuda.so.1`");
-    }
-    return handle;
+  static void* handle = nullptr;
+  if (handle == nullptr) {
+    handle = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_LOCAL);
+    EP_HOST_ASSERT(handle != nullptr and
+                   "Failed to load CUDA driver `libcuda.so.1`");
+  }
+  return handle;
 }
 
 // Macro to define wrapper functions named `lazy_cu{API name}`
-#define DECL_LAZY_CUDA_DRIVER_FUNCTION(name) \
-template <typename... Args> \
-static auto lazy_##name(Args&&... args) -> decltype(name(args...)) { \
-    using FuncType = decltype(&name); \
-    static FuncType func = nullptr; \
-    if (func == nullptr) { \
-        func = reinterpret_cast<FuncType>(dlsym(get_driver_handle(), #name)); \
-        EP_HOST_ASSERT(func != nullptr and "Failed to load CUDA driver API"); \
-    } \
-    return func(std::forward<decltype(args)>(args)...); \
-}
+#define DECL_LAZY_CUDA_DRIVER_FUNCTION(name)                                \
+  template <typename... Args>                                               \
+  static auto lazy_##name(Args&&... args)->decltype(name(args...)) {        \
+    using FuncType = decltype(&name);                                       \
+    static FuncType func = nullptr;                                         \
+    if (func == nullptr) {                                                  \
+      func = reinterpret_cast<FuncType>(dlsym(get_driver_handle(), #name)); \
+      EP_HOST_ASSERT(func != nullptr and "Failed to load CUDA driver API"); \
+    }                                                                       \
+    return func(std::forward<decltype(args)>(args)...);                     \
+  }
 
 DECL_LAZY_CUDA_DRIVER_FUNCTION(cuGetErrorName);
 DECL_LAZY_CUDA_DRIVER_FUNCTION(cuGetErrorString);

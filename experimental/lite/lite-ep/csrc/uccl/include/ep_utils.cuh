@@ -159,7 +159,7 @@ __device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
 // Last arriver resets the counter to 0; others spin until reset.
 #if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
 __device__ __forceinline__ void grid_sync_then_zero(int* bar_ptr,
-                                                     int num_blocks) {
+                                                    int num_blocks) {
   __syncthreads();
   if (threadIdx.x == 0) {
     __threadfence();
@@ -169,8 +169,7 @@ __device__ __forceinline__ void grid_sync_then_zero(int* bar_ptr,
       atomicExch(bar_ptr, 0);
     } else {
       // Spin until last arriver resets.
-      while (atomicAdd(bar_ptr, 0) != 0)
-        __nanosleep(100);
+      while (atomicAdd(bar_ptr, 0) != 0) __nanosleep(100);
     }
   }
   __syncthreads();

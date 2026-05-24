@@ -6,12 +6,12 @@
 #include <chrono>
 #include <cstdlib>
 #include <thread>
+#include <cuda_runtime.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <cuda_runtime.h>
 
 namespace {
 
@@ -31,11 +31,8 @@ std::string cuda_ipc_cache_key(int cuda_device,
   return key;
 }
 
-void* acquire_cuda_ipc_ptr(int cuda_device,
-                           cudaIpcMemHandle_t const& handle,
-                           std::string const& key,
-                           int rank,
-                           int thread_idx,
+void* acquire_cuda_ipc_ptr(int cuda_device, cudaIpcMemHandle_t const& handle,
+                           std::string const& key, int rank, int thread_idx,
                            int peer) {
   std::lock_guard<std::mutex> lock(g_cuda_ipc_cache_mutex);
   auto it = g_cuda_ipc_cache.find(key);
@@ -60,9 +57,10 @@ void* acquire_cuda_ipc_ptr(int cuda_device,
       cudaIpcOpenMemHandle(&ipc_ptr, handle, cudaIpcMemLazyEnablePeerAccess);
   if (err != cudaSuccess) {
     if (ep_uccl_debug_enabled()) {
-      fprintf(stderr,
-              "[Proxy] rank=%d thread=%d failed to open CUDA IPC for peer %d: %s\n",
-              rank, thread_idx, peer, cudaGetErrorString(err));
+      fprintf(
+          stderr,
+          "[Proxy] rank=%d thread=%d failed to open CUDA IPC for peer %d: %s\n",
+          rank, thread_idx, peer, cudaGetErrorString(err));
     }
     return nullptr;
   }
@@ -215,10 +213,11 @@ void Proxy::pin_thread_to_numa_wrapper() {
 
     if (ep_uccl_debug_enabled()) {
       fprintf(stderr,
-          "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
-          "%d, "
-          "running on CPU %d.\n",
-          ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
+              "Local CPU thread pinned to NUMA node %d, thread_idx: %d, "
+              "local_rank: "
+              "%d, "
+              "running on CPU %d.\n",
+              ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
     }
   }
 }
@@ -294,7 +293,8 @@ void Proxy::init_common() {
               "[Proxy] Registered atomic_buffer_ptr MR: addr=0x%llx, len=%zu, "
               "rkey=0x%x\n",
               (unsigned long long)ctx_.atomic_buffer_mr->addr,
-              (size_t)ctx_.atomic_buffer_mr->length, ctx_.atomic_buffer_mr->rkey);
+              (size_t)ctx_.atomic_buffer_mr->length,
+              ctx_.atomic_buffer_mr->rkey);
     }
   }
 
@@ -446,13 +446,16 @@ void Proxy::init_common() {
     c.remote_len = remote_infos_[peer].len;
 
     if (ep_uccl_debug_enabled()) {
-      fprintf(stderr, "[Proxy] thread=%d peer=%d remote_addr=0x%llx remote_len=%zu remote_rkey=0x%x "
-              "local_mr_addr=0x%llx local_mr_len=%zu local_mr_lkey=0x%x local_mr_rkey=0x%x "
+      fprintf(stderr,
+              "[Proxy] thread=%d peer=%d remote_addr=0x%llx remote_len=%zu "
+              "remote_rkey=0x%x "
+              "local_mr_addr=0x%llx local_mr_len=%zu local_mr_lkey=0x%x "
+              "local_mr_rkey=0x%x "
               "local_qpn=0x%x remote_qpn=%u ack_qpn=0x%x recv_ack_qpn=0x%x\n",
-              cfg_.thread_idx, peer,
-              (unsigned long long)c.remote_addr, (size_t)c.remote_len, c.remote_rkey,
-              (unsigned long long)c.mr->addr, (size_t)c.mr->length, c.mr->lkey, c.mr->rkey,
-              c.qp->qp_num, remote_infos_[peer].qp_num,
+              cfg_.thread_idx, peer, (unsigned long long)c.remote_addr,
+              (size_t)c.remote_len, c.remote_rkey,
+              (unsigned long long)c.mr->addr, (size_t)c.mr->length, c.mr->lkey,
+              c.mr->rkey, c.qp->qp_num, remote_infos_[peer].qp_num,
               c.ack_qp ? c.ack_qp->qp_num : 0,
               c.recv_ack_qp ? c.recv_ack_qp->qp_num : 0);
     }
@@ -559,10 +562,9 @@ void Proxy::init_common() {
       }
       std::string key =
           cuda_ipc_cache_key(cfg_.cuda_device, peers_[peer].cuda_ipc_handle);
-      void* ipc_ptr = acquire_cuda_ipc_ptr(cfg_.cuda_device,
-                                           peers_[peer].cuda_ipc_handle,
-                                           key, cfg_.rank, cfg_.thread_idx,
-                                           peer);
+      void* ipc_ptr =
+          acquire_cuda_ipc_ptr(cfg_.cuda_device, peers_[peer].cuda_ipc_handle,
+                               key, cfg_.rank, cfg_.thread_idx, peer);
       if (ipc_ptr != nullptr) {
         cuda_ipc_peer_ptrs_[peer] = ipc_ptr;
         cuda_ipc_peer_keys_[peer] = std::move(key);
@@ -639,7 +641,9 @@ void Proxy::run_remote() {
 void Proxy::run_dual() {
   init_common();
   if (ep_uccl_debug_enabled()) {
-    fprintf(stderr, "[EP_UCCL_DEBUG] proxy rank=%d thread=%d entered run_dual loop with %zu rings\n",
+    fprintf(stderr,
+            "[EP_UCCL_DEBUG] proxy rank=%d thread=%d entered run_dual loop "
+            "with %zu rings\n",
             cfg_.rank, cfg_.thread_idx, cfg_.d2h_queues.size());
     fflush(stderr);
   }
@@ -670,11 +674,12 @@ void Proxy::run_dual() {
         if (!cfg_.d2h_queues.empty()) {
           auto* h = &cfg_.d2h_queues[0];
           fprintf(stderr,
-                  "[EP_UCCL_DEBUG] proxy rank=%d thread=%d ring0 head=%lu tail=%lu seen=%zu acked=%zu\n",
+                  "[EP_UCCL_DEBUG] proxy rank=%d thread=%d ring0 head=%lu "
+                  "tail=%lu seen=%zu acked=%zu\n",
                   cfg_.rank, cfg_.thread_idx,
                   static_cast<unsigned long>(h->volatile_head()),
-                  static_cast<unsigned long>(h->volatile_tail()),
-                  seen, acked_wrs_.size());
+                  static_cast<unsigned long>(h->volatile_tail()), seen,
+                  acked_wrs_.size());
           fflush(stderr);
         }
         last_debug = now;
@@ -997,7 +1002,8 @@ void Proxy::run_local() {
 
           if (!ctx_.progress_run.load(std::memory_order_acquire)) {
             if (ep_uccl_debug_enabled()) {
-              fprintf(stderr, "Local thread %d stopping early at total_seen=%d\n",
+              fprintf(stderr,
+                      "Local thread %d stopping early at total_seen=%d\n",
                       cfg_.thread_idx, total_seen);
             }
             return;
@@ -1034,7 +1040,8 @@ void Proxy::run_local() {
   }
 
   if (ep_uccl_debug_enabled()) {
-    fprintf(stderr, "Local thread %d finished %d commands across %zu ring buffers\n",
+    fprintf(stderr,
+            "Local thread %d finished %d commands across %zu ring buffers\n",
             cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
   }
 }
@@ -1045,8 +1052,10 @@ void Proxy::post_gpu_commands_mixed(
   // Separate atomic operations from regular RDMA writes.
   // Also separate intra-node commands (P2P DMA or shared-memory memcpy) from
   // inter-node (RDMA).
-  std::vector<uint64_t> rdma_wrs, atomic_wrs, put_value_wrs, quiet_wrs, barrier_wrs;
-  std::vector<TransferCmd> rdma_cmds, atomic_cmds, put_value_cmds, quiet_cmds, barrier_cmds;
+  std::vector<uint64_t> rdma_wrs, atomic_wrs, put_value_wrs, quiet_wrs,
+      barrier_wrs;
+  std::vector<TransferCmd> rdma_cmds, atomic_cmds, put_value_cmds, quiet_cmds,
+      barrier_cmds;
 
   // Intra-node commands (handled via P2P DMA or shared-memory memcpy).
   std::vector<uint64_t> shm_write_wrs, shm_atomic_wrs, shm_put_value_wrs;
@@ -1062,9 +1071,9 @@ void Proxy::post_gpu_commands_mixed(
 
     // Check if this command targets an intra-node peer.
     bool is_intra = false;
-    if (use_intranode && (base_cmd == CmdType::WRITE ||
-                          base_cmd == CmdType::ATOMIC ||
-                          base_cmd == CmdType::PUT_VALUE)) {
+    if (use_intranode &&
+        (base_cmd == CmdType::WRITE || base_cmd == CmdType::ATOMIC ||
+         base_cmd == CmdType::PUT_VALUE)) {
       int dst = static_cast<int>(cmds_to_post[i].dst_rank);
       if (dst == cfg_.rank) {
         is_intra = true;
@@ -1074,8 +1083,8 @@ void Proxy::post_gpu_commands_mixed(
       }
     }
     bool is_cuda_ipc = false;
-    if (use_cuda_ipc && (base_cmd == CmdType::WRITE ||
-                         base_cmd == CmdType::PUT_VALUE)) {
+    if (use_cuda_ipc &&
+        (base_cmd == CmdType::WRITE || base_cmd == CmdType::PUT_VALUE)) {
       int dst = static_cast<int>(cmds_to_post[i].dst_rank);
       if (dst >= 0 && dst < (int)cuda_ipc_peer_ptrs_.size() &&
           cuda_ipc_peer_ptrs_[dst] != nullptr) {
@@ -1237,8 +1246,7 @@ void Proxy::post_gpu_commands_mixed(
       // atomic buffer — same layout as the RDMA atomic path.
       auto* dst_slot = reinterpret_cast<std::atomic<int64_t>*>(
           static_cast<uint8_t*>(cfg_.shared_atomic_base) +
-          dst_local_rank * cfg_.shared_atomic_per_rank +
-          cmd.req_rptr);
+          dst_local_rank * cfg_.shared_atomic_per_rank + cmd.req_rptr);
       dst_slot->fetch_add(v64, std::memory_order_release);
 
       // Immediately mark as completed.
@@ -1254,7 +1262,8 @@ void Proxy::post_gpu_commands_mixed(
       auto const& cmd = shm_put_value_cmds[i];
       int dst_rank = static_cast<int>(cmd.dst_rank);
       int dst_local_rank = dst_rank % cfg_.local_world_size;
-      uint16_t bytes = cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
+      uint16_t bytes =
+          cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
       if (bytes > sizeof(uint64_t)) {
         fprintf(stderr, "[ERROR] PUT_VALUE bytes=%u exceeds 8\n", bytes);
         std::abort();
@@ -1274,8 +1283,8 @@ void Proxy::post_gpu_commands_mixed(
                 "dst_local=%d roff=%llu bytes=%u value=%llu readback=%llu "
                 "dst=%p\n",
                 cfg_.rank, cfg_.thread_idx, dst_rank, dst_local_rank,
-                (unsigned long long)roff, bytes,
-                (unsigned long long)value, (unsigned long long)readback, dst);
+                (unsigned long long)roff, bytes, (unsigned long long)value,
+                (unsigned long long)readback, dst);
       }
       acked_wrs_.insert(shm_put_value_wrs[i]);
     }
@@ -1296,8 +1305,8 @@ void Proxy::post_gpu_commands_mixed(
       uint64_t roff = decode_write_offset(cmd.req_rptr, is_ll);
       void* src = static_cast<uint8_t*>(cfg_.gpu_buffer) + loff;
       void* dst = static_cast<uint8_t*>(cuda_ipc_peer_ptrs_[dst_rank]) + roff;
-      cudaError_t err = cudaMemcpyAsync(dst, src, cmd.bytes, cudaMemcpyDeviceToDevice,
-                                        ctx_.copy_stream);
+      cudaError_t err = cudaMemcpyAsync(
+          dst, src, cmd.bytes, cudaMemcpyDeviceToDevice, ctx_.copy_stream);
       if (err != cudaSuccess) {
         fprintf(stderr, "[ERROR] CUDA IPC WRITE failed dst=%d bytes=%u: %s\n",
                 dst_rank, static_cast<unsigned>(cmd.bytes),
@@ -1325,19 +1334,22 @@ void Proxy::post_gpu_commands_mixed(
     for (size_t i = 0; i < ipc_put_value_cmds.size(); ++i) {
       auto const& cmd = ipc_put_value_cmds[i];
       int dst_rank = static_cast<int>(cmd.dst_rank);
-      uint16_t bytes = cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
+      uint16_t bytes =
+          cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
       if (bytes > sizeof(uint64_t)) {
-        fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE bytes=%u exceeds 8\n", bytes);
+        fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE bytes=%u exceeds 8\n",
+                bytes);
         std::abort();
       }
       values[i] = static_cast<uint64_t>(cmd.bytes_and_val) |
                   (static_cast<uint64_t>(cmd.req_lptr) << 32);
       uint64_t roff = decode_write_offset(cmd.req_rptr, false);
       void* dst = static_cast<uint8_t*>(cuda_ipc_peer_ptrs_[dst_rank]) + roff;
-      cudaError_t err = cudaMemcpyAsync(dst, &values[i], bytes,
-                                        cudaMemcpyHostToDevice, ctx_.copy_stream);
+      cudaError_t err = cudaMemcpyAsync(
+          dst, &values[i], bytes, cudaMemcpyHostToDevice, ctx_.copy_stream);
       if (err != cudaSuccess) {
-        fprintf(stderr, "[ERROR] CUDA IPC PUT_VALUE failed dst=%d bytes=%u: %s\n",
+        fprintf(stderr,
+                "[ERROR] CUDA IPC PUT_VALUE failed dst=%d bytes=%u: %s\n",
                 dst_rank, bytes, cudaGetErrorString(err));
         std::abort();
       }
@@ -1379,13 +1391,17 @@ void Proxy::post_gpu_commands_mixed(
     for (size_t i = 0; i < put_value_cmds.size(); ++i) {
       auto const& cmd = put_value_cmds[i];
       int dst_rank = static_cast<int>(cmd.dst_rank);
-      if (dst_rank == cfg_.rank || dst_rank >= static_cast<int>(ctxs_for_all_ranks_.size())) {
-        fprintf(stderr, "[ERROR] Invalid PUT_VALUE dst=%d rank=%d\n", dst_rank, cfg_.rank);
+      if (dst_rank == cfg_.rank ||
+          dst_rank >= static_cast<int>(ctxs_for_all_ranks_.size())) {
+        fprintf(stderr, "[ERROR] Invalid PUT_VALUE dst=%d rank=%d\n", dst_rank,
+                cfg_.rank);
         std::abort();
       }
       ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
       if (!ctx || !ctx->qp) {
-        fprintf(stderr, "[ERROR] PUT_VALUE destination ctx missing for dst=%d\n", dst_rank);
+        fprintf(stderr,
+                "[ERROR] PUT_VALUE destination ctx missing for dst=%d\n",
+                dst_rank);
         std::abort();
       }
       size_t ring_idx = static_cast<size_t>(put_value_wrs[i] >> 32);
@@ -1394,23 +1410,28 @@ void Proxy::post_gpu_commands_mixed(
                        ? ctx->data_qps_by_channel[ring_idx % local_ring_count]
                        : ctx->qp;
       if (!qp) {
-        fprintf(stderr, "[ERROR] PUT_VALUE destination QP missing for dst=%d ring=%zu\n",
-                dst_rank, ring_idx);
+        fprintf(
+            stderr,
+            "[ERROR] PUT_VALUE destination QP missing for dst=%d ring=%zu\n",
+            dst_rank, ring_idx);
         std::abort();
       }
       indices_by_qp[qp].push_back(i);
-      uint16_t bytes = cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
+      uint16_t bytes =
+          cmd.atomic_offset == 0 ? sizeof(uint64_t) : cmd.atomic_offset;
       if (bytes > sizeof(uint64_t)) {
         fprintf(stderr, "[ERROR] PUT_VALUE bytes=%u exceeds 8\n", bytes);
         std::abort();
       }
       values[i] = static_cast<uint64_t>(cmd.bytes_and_val) |
                   (static_cast<uint64_t>(cmd.req_lptr) << 32);
-      uint64_t remote_addr = ctx->remote_addr + decode_write_offset(cmd.req_rptr, false);
+      uint64_t remote_addr =
+          ctx->remote_addr + decode_write_offset(cmd.req_rptr, false);
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
       if (remote_addr < ctx->remote_addr || remote_addr + bytes > remote_end) {
         fprintf(stderr,
-                "[ERROR] PUT_VALUE remote OOB: addr=0x%llx len=%u base=0x%llx size=%zu\n",
+                "[ERROR] PUT_VALUE remote OOB: addr=0x%llx len=%u base=0x%llx "
+                "size=%zu\n",
                 (unsigned long long)remote_addr, bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len);
         std::abort();
@@ -1440,7 +1461,8 @@ void Proxy::post_gpu_commands_mixed(
     for (auto& [qp, indices] : indices_by_qp) {
       for (size_t j = 0; j < indices.size(); ++j) {
         size_t idx = indices[j];
-        wrs[idx].next = (j + 1 < indices.size()) ? &wrs[indices[j + 1]] : nullptr;
+        wrs[idx].next =
+            (j + 1 < indices.size()) ? &wrs[indices[j + 1]] : nullptr;
       }
       size_t last_idx = indices.back();
       wrs[last_idx].send_flags |= IBV_SEND_SIGNALED;
@@ -1449,7 +1471,8 @@ void Proxy::post_gpu_commands_mixed(
       for (size_t idx : indices) batch_wrids.push_back(put_value_wrs[idx]);
       ctx_.batched_wr_completions[wrs[last_idx].wr_id] = std::move(batch_wrids);
       ibv_send_wr* bad_wr = nullptr;
-      if (int ret = ibv_post_send(qp, &wrs[indices.front()], &bad_wr); ret != 0) {
+      if (int ret = ibv_post_send(qp, &wrs[indices.front()], &bad_wr);
+          ret != 0) {
         fprintf(stderr, "[ERROR] ibv_post_send PUT_VALUE failed: %s (%d)\n",
                 strerror(ret), ret);
         std::abort();

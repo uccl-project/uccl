@@ -1,11 +1,5 @@
 #pragma once
 
-#include <cuda_runtime.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include "common.hpp"
 #include <algorithm>
 #include <atomic>
@@ -13,6 +7,11 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <cuda_runtime.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // Shared host-pinned buffer for intra-node communication.
 //
@@ -25,16 +24,17 @@
 //   Sender proxy: memcpy(dst_rank_slice + rptr, my_slice + lptr, bytes)
 //   No RDMA NIC involvement for same-node peers.
 struct SharedBuffer {
-  void* mmap_ptr = nullptr;        // mmap'd host pointer (full region)
-  void* device_ptr = nullptr;      // virtual CUDA base; my slice is device_slice(local_rank)
+  void* mmap_ptr = nullptr;  // mmap'd host pointer (full region)
+  void* device_ptr =
+      nullptr;  // virtual CUDA base; my slice is device_slice(local_rank)
   void* registered_host_ptr = nullptr;
-  size_t total_size = 0;           // per_rank_size * local_world_size
+  size_t total_size = 0;  // per_rank_size * local_world_size
   size_t per_rank_size = 0;
   int local_rank = -1;
   int local_world_size = 0;
   std::string shm_name;
   int fd = -1;
-  bool is_creator = false;         // rank 0 creates, others open
+  bool is_creator = false;  // rank 0 creates, others open
 
   // Host pointer to a specific local rank's slice.
   void* host_slice(int lr) const {
@@ -57,7 +57,7 @@ struct SharedBuffer {
 // local_rank 0 creates; others spin-wait until it exists.
 // Returns a fully initialized SharedBuffer with CUDA registration.
 inline SharedBuffer allocate_shared_buffer(
-    const char* tag, size_t per_rank_bytes, int local_rank,
+    char const* tag, size_t per_rank_bytes, int local_rank,
     int local_world_size, int device_index,
     size_t zero_bytes = static_cast<size_t>(-1)) {
   SharedBuffer sb;
@@ -109,8 +109,8 @@ inline SharedBuffer allocate_shared_buffer(
     sb.is_creator = false;
   }
 
-  sb.mmap_ptr =
-      mmap(nullptr, sb.total_size, PROT_READ | PROT_WRITE, MAP_SHARED, sb.fd, 0);
+  sb.mmap_ptr = mmap(nullptr, sb.total_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                     sb.fd, 0);
   if (sb.mmap_ptr == MAP_FAILED) {
     perror("mmap");
     std::abort();
@@ -118,8 +118,9 @@ inline SharedBuffer allocate_shared_buffer(
 
   // Zero the caller-requested prefix of my slice. Large data buffers are
   // overwritten by kernels/proxies and do not need an O(buffer_size) memset.
-  const size_t bytes_to_zero =
-      std::min(per_rank_bytes, zero_bytes == static_cast<size_t>(-1) ? per_rank_bytes : zero_bytes);
+  const size_t bytes_to_zero = std::min(
+      per_rank_bytes,
+      zero_bytes == static_cast<size_t>(-1) ? per_rank_bytes : zero_bytes);
   std::memset(sb.my_host_ptr(), 0, bytes_to_zero);
 
   // Only this rank's slice is accessed by its GPU kernels. Keep device_ptr as a
@@ -140,15 +141,15 @@ inline SharedBuffer allocate_shared_buffer(
             cudaGetErrorString(err));
     std::abort();
   }
-  sb.device_ptr = static_cast<uint8_t*>(my_device_ptr) -
-                  local_rank * sb.per_rank_size;
+  sb.device_ptr =
+      static_cast<uint8_t*>(my_device_ptr) - local_rank * sb.per_rank_size;
 
   if (ep_uccl_debug_enabled()) {
     fprintf(stderr,
-             "[SharedBuffer] rank %d: tag=%s total=%.1f MiB per_rank=%.1f MiB "
-             "host=%p dev=%p\n",
-             local_rank, tag, sb.total_size / (1024.0 * 1024.0),
-             per_rank_bytes / (1024.0 * 1024.0), sb.mmap_ptr, sb.device_ptr);
+            "[SharedBuffer] rank %d: tag=%s total=%.1f MiB per_rank=%.1f MiB "
+            "host=%p dev=%p\n",
+            local_rank, tag, sb.total_size / (1024.0 * 1024.0),
+            per_rank_bytes / (1024.0 * 1024.0), sb.mmap_ptr, sb.device_ptr);
   }
 
   return sb;

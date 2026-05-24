@@ -78,7 +78,8 @@ bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
   int now = sched_getcpu();
   if (ep_uccl_debug_enabled()) {
     fprintf(stderr,
-            "Pinned to NUMA node %d, thread_idx: %d, local_rank: %d, running on CPU "
+            "Pinned to NUMA node %d, thread_idx: %d, local_rank: %d, running "
+            "on CPU "
             "%d.\n",
             numa_node, thread_idx, local_rank, now);
   }
