@@ -35,6 +35,7 @@
 #include "compression.h"
 #include "memory_allocator.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include <gflags/gflags.h>
 #include <chrono>
 #include <cmath>

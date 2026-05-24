@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
 #include "memory_allocator.h"
+#include "util/gpu_rt.h"
 #include <cstddef>
 #include <cstdint>
 

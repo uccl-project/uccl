@@ -1,6 +1,8 @@
 #include "rdma_data_channel.h"
 #include "providers/efa_data_channel_impl.h"
 #include "providers/ib_data_channel_impl.h"
+#include "util/debug.h"
+#include "util/util.h"
 #include <cassert>
 #include <cerrno>
 #include <cstring>

@@ -1,4 +1,5 @@
 #include "epoll_client.h"
+#include "util/debug.h"
 
 EpollClient::EpollClient(int max_events)
     : max_events_(max_events), running_(false) {}

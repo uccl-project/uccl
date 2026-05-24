@@ -1,4 +1,7 @@
 #include "rdma_endpoint.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
+#include "util/util.h"
 
 RDMAEndpoint::RDMAEndpoint(int gpu_index, uint64_t rank_id, uint64_t port,
                            bool auto_start_polling,

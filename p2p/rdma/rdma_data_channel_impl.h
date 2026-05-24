@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
 #include "rdma_context.h"
+#include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <cstdio>
 #include <cstdlib>

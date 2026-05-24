@@ -1,4 +1,6 @@
 #include "endpoint_wrapper.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>

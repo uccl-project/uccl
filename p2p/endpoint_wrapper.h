@@ -1,5 +1,7 @@
 #pragma once
 #include "engine.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

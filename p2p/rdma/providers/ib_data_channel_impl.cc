@@ -1,5 +1,6 @@
 #include "ib_data_channel_impl.h"
 #include "util/debug.h"
+#include "util/util.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>

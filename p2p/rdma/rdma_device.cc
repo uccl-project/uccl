@@ -1,4 +1,6 @@
 #include "rdma_device.h"
+#include "util/debug.h"
+#include "util/util.h"
 #include <cstdlib>
 
 RdmaDevice::RdmaDevice(struct ibv_device* dev)

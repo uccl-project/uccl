@@ -155,12 +155,13 @@ define safe_install
 endef
 
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
-	@mkdir -p $(INSTALL_DIR)
+	@mkdir -p $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@install -m 644 util/common.h $(INCDIR)/common.h
 
 # Clean build artifacts
 clean:

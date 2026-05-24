@@ -1,5 +1,6 @@
 #include "efa_data_channel_impl.h"
 #include "util/debug.h"
+#include "util/util.h"
 #include <cstring>
 #include <errno.h>
 

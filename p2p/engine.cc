@@ -2,6 +2,7 @@
 #include "compression.h"
 #include "endpoint_wrapper.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>

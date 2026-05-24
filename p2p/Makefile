@@ -93,7 +93,7 @@ LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
-CAPI_HEADER := uccl_engine.h util/common.h
+CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 # dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
 DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
@@ -161,12 +161,13 @@ endef
 
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
-	@mkdir -p $(INSTALL_DIR)
+	@mkdir -p $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@install -m 644 util/common.h $(INCDIR)/common.h
 	@echo "Installation complete!"
 
 # Clean build artifacts

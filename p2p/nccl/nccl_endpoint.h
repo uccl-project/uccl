@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "nccl_types.h"
+#include "util/gpu_rt.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

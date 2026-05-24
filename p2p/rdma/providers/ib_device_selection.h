@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "util/debug.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>

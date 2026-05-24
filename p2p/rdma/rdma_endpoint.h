@@ -8,6 +8,7 @@
 #include "rdma_context.h"
 #include "rdma_device.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/net.h"
 #include <cc/link_bandwidth.h>
 #include <unordered_map>

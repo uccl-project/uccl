@@ -3,6 +3,8 @@
 #include "engine.h"
 #include "epoll_client.h"
 #include "transport_type.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>

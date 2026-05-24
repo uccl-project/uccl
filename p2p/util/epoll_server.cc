@@ -1,4 +1,5 @@
 #include "epoll_server.h"
+#include "util/debug.h"
 
 ThreadPool::ThreadPool(size_t nthreads) : stop_(false) {
   for (size_t i = 0; i < nthreads; ++i) {

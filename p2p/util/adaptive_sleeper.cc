@@ -1,4 +1,5 @@
 #include "adaptive_sleeper.h"
+#include "util/debug.h"
 #include <cstdlib>
 #include <unistd.h>
 

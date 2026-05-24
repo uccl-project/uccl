@@ -1,4 +1,6 @@
 #include "rdma_ctrl_channel.h"
+#include "util/debug.h"
+#include "util/util.h"
 
 SendControlChannel::SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                                        uint32_t channel_id)

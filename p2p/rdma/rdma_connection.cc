@@ -1,4 +1,6 @@
 #include "rdma_connection.h"
+#include "util/debug.h"
+#include "util/util.h"
 
 RDMAConnection::RDMAConnection() : last_channel_id_(0) {}
 
@@ -482,7 +484,7 @@ void SendConnection::stopPolling() {
 void SendConnection::pollingLoopForMeta() {
   pollControlChannel();
   pollDataChannels();
-  LOG_EVERY_N_ENDPOINT(INFO, 100000000)
+  UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
       << "SendConnection::pollingLoop - Still running";
 }
 
@@ -956,7 +958,7 @@ void SendConnection::pollingLoop() {
     processSendRequests();
     pollDataChannels();
 
-    LOG_EVERY_N_ENDPOINT(INFO, 100000000)
+    UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
         << "SendConnection::pollingLoop - Still running";
   }
   UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection::pollingLoop - Stopped";
@@ -1114,7 +1116,7 @@ void RecvConnection::pollAndProcessCompletions() {
       }
     }
   }
-  LOG_EVERY_N_ENDPOINT(INFO, 100000000)
+  UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
       << "RecvConnection::pollingLoop - Still running, channels: "
       << channels_.size();
 }

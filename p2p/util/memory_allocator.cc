@@ -1,4 +1,5 @@
 #include "memory_allocator.h"
+#include "util/gpu_rt.h"
 
 MemoryAllocator::MemoryAllocator() : page_size_(sysconf(_SC_PAGESIZE)) {
   if (page_size_ <= 0) {
