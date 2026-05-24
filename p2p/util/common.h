@@ -832,9 +832,9 @@ struct MetaInfoToExchange {
                      uint16_t oob_p = 0)
       : rank_id(rid),
         channel_id(cid),
+        flag(flag_in),
         channel_meta{},
         mem_meta{},
-        flag(flag_in),
         gpu_id(gid),
         oob_port(oob_p) {
     if (ch_meta) {
