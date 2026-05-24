@@ -3,6 +3,7 @@
 
 #include "rdma_data_channel_impl_ib.h"
 #include "util/debug.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -15,10 +16,21 @@
 #define RNR_RETRY 7
 #define RETRY_CNT 7
 #define TIMEOUT 14
-#define MAX_RD_ATOMIC 1
-#define MAX_DEST_RD_ATOMIC 1
+static constexpr uint32_t kDefaultMaxReadAtomic = 16;
 static constexpr int kMaxCqe = kMaxSendWr + kMaxRecvWr;
 static constexpr uint64_t kRecvWrIdMask = 1ull << 63;
+
+static inline uint8_t get_read_atomic_depth(char const* env_name,
+                                            uint8_t device_cap) {
+  uint32_t requested = kDefaultMaxReadAtomic;
+  if (char const* env = std::getenv(env_name)) {
+    char* end = nullptr;
+    unsigned long value = std::strtoul(env, &end, 10);
+    if (end != env && value > 0) requested = static_cast<uint32_t>(value);
+  }
+  uint32_t cap = device_cap == 0 ? 1 : static_cast<uint32_t>(device_cap);
+  return static_cast<uint8_t>(std::max<uint32_t>(1, std::min(requested, cap)));
+}
 
 inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
@@ -104,7 +116,8 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.path_mtu = port_attr.active_mtu;
   attr.dest_qp_num = remote_meta.qpn;
   attr.rq_psn = 0;
-  attr.max_dest_rd_atomic = MAX_DEST_RD_ATOMIC;
+  attr.max_dest_rd_atomic = get_read_atomic_depth(
+      "UCCL_P2P_RDMA_MAX_DEST_RD_ATOMIC", ctx->getMaxQpRdAtom());
   attr.min_rnr_timer = MIN_RNR_TIMER;
   if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
     // RoCE
@@ -148,7 +161,8 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.retry_cnt = RETRY_CNT;
   attr.rnr_retry = RNR_RETRY;
   attr.sq_psn = 0;
-  attr.max_rd_atomic = MAX_RD_ATOMIC;
+  attr.max_rd_atomic = get_read_atomic_depth("UCCL_P2P_RDMA_MAX_RD_ATOMIC",
+                                             ctx->getMaxQpInitRdAtom());
   flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
           IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
   int const rts_rc = ibv_modify_qp(qp, &attr, flags);

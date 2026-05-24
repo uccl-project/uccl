@@ -5,6 +5,8 @@
 #include "rdma_data_channel.h"
 #include <cc/cc_state.h>
 #include <cc/link_bandwidth.h>
+#include <array>
+#include <limits>
 #include <optional>
 #include <random>
 
@@ -153,6 +155,13 @@ class RDMAConnection {
 
 class SendConnection : public RDMAConnection {
  public:
+  struct OneSidedBatchOp {
+    void* local_addr = nullptr;
+    size_t size = 0;
+    MRArray const* local_mr_array = nullptr;
+    FifoItem const* slot_item = nullptr;
+  };
+
   SendConnection(int numa_node, bool auto_start_polling = true,
                  double link_bandwidth_bps = 400.0 * 1e9 / 8.0)
       : numa_node_(numa_node),
@@ -360,6 +369,145 @@ class SendConnection : public RDMAConnection {
   }
 
   bool check(int64_t wr_id) { return tracker_->isAcknowledged(wr_id); }
+
+  bool canUseRawOneSidedBatch(SendType send_type) {
+    if (cc_.enabled()) return false;
+    if (send_type == SendType::Write &&
+        Compressor::getInstance().getCompressStrategy() !=
+            CompressStrategy::kNone) {
+      return false;
+    }
+    return true;
+  }
+
+  bool postWriteOrReadBatch(SendType send_type, OneSidedBatchOp const* ops,
+                            size_t num_ops, int64_t* wr_ids) {
+    if (unlikely(send_type != SendType::Write && send_type != SendType::Read)) {
+      UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - invalid "
+                         "send_type";
+      return false;
+    }
+    if (unlikely(!canUseRawOneSidedBatch(send_type))) return false;
+    if (unlikely((num_ops > 0 && ops == nullptr) || wr_ids == nullptr)) {
+      UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - null input";
+      return false;
+    }
+
+    size_t const num_channels = normalChannelCount();
+    if (unlikely(num_channels == 0 || num_channels > kQpNumPerChannel)) {
+      UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - invalid "
+                         "channel count: "
+                      << num_channels;
+      return false;
+    }
+
+    for (size_t i = 0; i < num_ops; ++i) {
+      auto const& op = ops[i];
+      if (unlikely(op.local_addr == nullptr || op.size == 0 ||
+                   op.size > std::numeric_limits<uint32_t>::max() ||
+                   op.local_mr_array == nullptr || op.slot_item == nullptr)) {
+        UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - invalid op "
+                        << i;
+        return false;
+      }
+      if (unlikely(ChunkSplitStrategy::getMessageChunkCount(op.size) != 1)) {
+        UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - op " << i
+                        << " requires chunking";
+        return false;
+      }
+    }
+
+    struct PreparedBatchOp {
+      size_t op_index = 0;
+      uint32_t channel_id = 0;
+      RDMADataChannel* channel = nullptr;
+      uint32_t local_key = 0;
+      uint32_t remote_key = 0;
+    };
+
+    std::vector<PreparedBatchOp> prepared_ops;
+    prepared_ops.reserve(num_ops);
+    for (size_t i = 0; i < num_ops; ++i) {
+      auto const& op = ops[i];
+      auto [channel_id, ch_ptr] = selectNextChannelRoundRobinFast();
+      if (unlikely(channel_id == 0 || ch_ptr == nullptr ||
+                   channel_id > num_channels ||
+                   channel_id > kQpNumPerChannel)) {
+        UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - failed to "
+                           "select channel";
+        return false;
+      }
+
+      auto* local_mr = op.local_mr_array->getKeyByChannelID(channel_id);
+      if (unlikely(local_mr == nullptr)) {
+        UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - missing "
+                           "local MR for op "
+                        << i << " channel " << channel_id;
+        return false;
+      }
+
+      RKeyArray remote_rkeys;
+      remote_rkeys.copyFrom(static_cast<char const*>(op.slot_item->padding));
+
+      PreparedBatchOp prepared{};
+      prepared.op_index = i;
+      prepared.channel_id = channel_id;
+      prepared.channel = ch_ptr;
+      prepared.local_key = local_mr->lkey;
+      prepared.remote_key = remote_rkeys.getKeyByChannelID(channel_id);
+      prepared_ops.push_back(prepared);
+    }
+
+    for (size_t i = 0; i < num_ops; ++i) wr_ids[i] = -1;
+    std::array<std::vector<RDMADataChannel::RawSendRequest>, kQpNumPerChannel>
+        channel_batches;
+    std::array<RDMADataChannel*, kQpNumPerChannel> channel_ptrs{};
+    size_t const reserve_per_channel =
+        (num_ops + num_channels - 1) / num_channels;
+    for (size_t i = 0; i < num_channels; ++i) {
+      channel_batches[i].reserve(reserve_per_channel);
+    }
+
+    for (auto const& prepared : prepared_ops) {
+      auto const& op = ops[prepared.op_index];
+
+      int64_t wr_id = tracker_->sendPacket(op.size);
+      if (unlikely(wr_id < 0)) {
+        UCCL_LOG(ERROR) << "SendConnection::postWriteOrReadBatch - failed to "
+                           "allocate tracker wr_id for op "
+                        << prepared.op_index;
+        return false;
+      }
+      wr_ids[prepared.op_index] = wr_id;
+
+      RDMADataChannel::RawSendRequest raw{};
+      raw.send_type = send_type;
+      raw.wr_id = static_cast<uint64_t>(wr_id);
+      raw.local_addr = reinterpret_cast<uint64_t>(op.local_addr);
+      raw.local_len = static_cast<uint32_t>(op.size);
+      raw.local_key = prepared.local_key;
+      raw.remote_addr = op.slot_item->addr;
+      raw.remote_key = prepared.remote_key;
+
+      size_t const channel_idx = prepared.channel_id - 1;
+      channel_ptrs[channel_idx] = prepared.channel;
+      channel_batches[channel_idx].push_back(raw);
+    }
+
+    for (size_t i = 0; i < num_channels; ++i) {
+      if (channel_batches[i].empty()) continue;
+      if (unlikely(channel_ptrs[i] == nullptr ||
+                   channel_ptrs[i]->postRawBatch(channel_batches[i]) != 0)) {
+        UCCL_LOG(FATAL) << "SendConnection::postWriteOrReadBatch - failed to "
+                           "post channel batch "
+                        << (i + 1)
+                        << "; raw one-sided batch post failure is "
+                           "unrecoverable after tracker wr_ids are allocated";
+        return false;
+      }
+    }
+    return true;
+  }
 
   void setRemoteDecompressBuf(RemoteMemInfo const& m) {
     if (m.length == 0) return;

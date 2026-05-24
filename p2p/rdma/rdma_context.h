@@ -62,6 +62,8 @@ class RdmaContext {
       throw std::runtime_error("ibv_query_device failed");
     }
     vendor_id_ = dev_attr.vendor_id;
+    max_qp_rd_atom_ = dev_attr.max_qp_rd_atom;
+    max_qp_init_rd_atom_ = dev_attr.max_qp_init_rd_atom;
 
     struct ibv_pd* pd = ibv_alloc_pd(ctx_.get());
     if (!pd) throw std::runtime_error("Failed to alloc pd");
@@ -84,6 +86,8 @@ class RdmaContext {
   }
 
   uint32_t getVendorID() const { return vendor_id_; }
+  uint8_t getMaxQpRdAtom() const { return max_qp_rd_atom_; }
+  uint8_t getMaxQpInitRdAtom() const { return max_qp_init_rd_atom_; }
 
   // Query GID by index
   void getGID(int gid_index, union ibv_gid* gid, int port = 1) const {
@@ -457,6 +461,8 @@ class RdmaContext {
 
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
+  uint8_t max_qp_rd_atom_ = 1;
+  uint8_t max_qp_init_rd_atom_ = 1;
   std::mutex mr_cache_mu_;
   std::unordered_map<MrCacheKey, std::unique_ptr<MrCacheEntry>, MrCacheKeyHash>
       mr_cache_;
