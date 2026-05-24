@@ -2,9 +2,9 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
-#include "include/transport_type.h"
-#include "nccl/nccl_endpoint.h"
-#include "rdma/rdma_endpoint.h"
+#include "nccl_endpoint.h"
+#include "rdma_endpoint.h"
+#include "transport_type.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -26,13 +26,14 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint: holds either RDMA or NCCL/TCP endpoint.
-using RDMAEndPoint = std::variant<std::shared_ptr<NICEndpoint>,
-                                  std::shared_ptr<tcp::TCPEndpoint>>;
+// Runtime-polymorphic endpoint: holds either RDMA or NCCL endpoint.
+using GenericEndpoint =
+    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
 enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+
 struct ucclRequest {
   enum ReqType type;
   uint32_t n;
@@ -467,7 +468,7 @@ class Endpoint {
 
   Conn* get_conn(uint64_t conn_id) const;
 
-  RDMAEndPoint get_endpoint() const;
+  GenericEndpoint get_endpoint() const;
 
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
@@ -477,7 +478,7 @@ class Endpoint {
   int local_gpu_idx_;       // CUDA device ordinal (within visible set)
   std::string gpu_bus_id_;  // PCI Bus ID string (cross-process identity)
   int numa_node_;
-  RDMAEndPoint ep_;
+  GenericEndpoint ep_;
   bool engine_initialized_ = false;
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;

@@ -1,11 +1,14 @@
 #include "engine.h"
+#include "compression.h"
 #include "endpoint_wrapper.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
 #include <netinet/in.h>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -212,15 +215,15 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
   if (uccl::is_nccl_transport()) {
-    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
+    numa_node_ = get_numa_node_from_iface();
   } else {
     // Enable the polling thread when congestion control is active.
     bool cc_polling =
         uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
         uccl::cc::CongestionControlState::Mode::kNone;
-    ep_ = std::shared_ptr<NICEndpoint>(
-        new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
+    ep_ = std::shared_ptr<RDMAEndpoint>(
+        new RDMAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
@@ -291,10 +294,10 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
   if (uccl::is_nccl_transport()) {
-    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
-    ep_ = std::shared_ptr<NICEndpoint>(
-        new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+    ep_ = std::shared_ptr<RDMAEndpoint>(
+        new RDMAEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
   }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -1060,18 +1063,34 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
 
-  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
-  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
-  // lookup), flush once, then poll until all are acked.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
-    ucclRequest ureqs[kMaxInflightOps] = {};
+  bool raw_batch_eligible = true;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+      raw_batch_eligible = false;
+      break;
+    }
+  }
+
+  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
+  // Post raw one-sided WRs directly by channel and skip per-iov request-object
+  // construction.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
+      raw_batch_eligible &&
+      send_group->canUseRawOneSidedBatch(SendType::Read)) {
+    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+    int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
 
     for (size_t i = 0; i < num_iovs; ++i) {
-      uccl_read_async_on_group(send_group, conn, mhandle_v[i], dst_v[i],
-                               size_v[i], slot_item_v[i], &ureqs[i]);
+      ops[i].local_addr = dst_v[i];
+      ops[i].size = size_v[i];
+      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
+      ops[i].slot_item = &slot_item_v[i];
     }
-    uccl_flush_send(ep_);
+    if (!send_group->postWriteOrReadBatch(SendType::Read, ops.data(), num_iovs,
+                                          wr_ids)) {
+      return false;
+    }
 
     size_t num_done = 0;
     while (num_done < num_iovs) {
@@ -1079,7 +1098,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_drive_send(ep_);
       for (size_t i = 0; i < num_iovs; ++i) {
         if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
           done[i] = true;
           num_done++;
         }
@@ -1289,18 +1308,34 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
 
-  // Fastest path: RDMA, fits in one inflight window. Post all iovs back to
-  // back (no per-iov slot scan, no variant visit, no send_channel_groups_
-  // lookup), flush once, then poll until all are acked.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps) {
-    ucclRequest ureqs[kMaxInflightOps] = {};
+  bool raw_batch_eligible = true;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+      raw_batch_eligible = false;
+      break;
+    }
+  }
+
+  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
+  // Post raw one-sided WRs directly by channel and skip per-iov request-object
+  // construction.
+  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
+      raw_batch_eligible &&
+      send_group->canUseRawOneSidedBatch(SendType::Write)) {
+    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+    int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
 
     for (size_t i = 0; i < num_iovs; ++i) {
-      uccl_write_async_on_group(send_group, conn, mhandle_v[i], src_v[i],
-                                size_v[i], slot_item_v[i], &ureqs[i]);
+      ops[i].local_addr = src_v[i];
+      ops[i].size = size_v[i];
+      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
+      ops[i].slot_item = &slot_item_v[i];
     }
-    uccl_flush_send(ep_);
+    if (!send_group->postWriteOrReadBatch(SendType::Write, ops.data(), num_iovs,
+                                          wr_ids)) {
+      return false;
+    }
 
     size_t num_done = 0;
     while (num_done < num_iovs) {
@@ -1308,7 +1343,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_drive_send(ep_);
       for (size_t i = 0; i < num_iovs; ++i) {
         if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, ureqs[i].engine_idx)) {
+        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
           done[i] = true;
           num_done++;
         }
@@ -2613,9 +2648,9 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (flow_id == UINT64_MAX) {
     return -1;
   }
-  auto* tcp_ep = std::get_if<std::shared_ptr<tcp::TCPEndpoint>>(&ep_);
-  if (!tcp_ep || !*tcp_ep) return -1;
-  return (*tcp_ep)->send_notification(flow_id, notification);
+  auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
+  if (!nccl_ep || !*nccl_ep) return -1;
+  return (*nccl_ep)->send_notification(flow_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2644,14 +2679,14 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
   return it->second;
 }
 
-RDMAEndPoint Endpoint::get_endpoint() const { return ep_; }
+GenericEndpoint Endpoint::get_endpoint() const { return ep_; }
 
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (uccl::is_nccl_transport()) {
-    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+    numa_node_ = get_numa_node_from_iface();
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);

@@ -1,6 +1,6 @@
-#include "../efa_endpoint.h"
-#include "../memory_allocator.h"
-#include "../rdma_device.h"
+#include "efa_endpoint.h"
+#include "memory_allocator.h"
+#include "rdma_device.h"
 #include "util/debug.h"
 #include <gflags/gflags.h>
 #include <chrono>
@@ -49,7 +49,7 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 // --iterations=100 --buffer_size=104857600
 
 // Correctness test: perform 100 send/recv operations and verify results
-void correctness_test(NICEndpoint& endpoint, MemoryAllocator& allocator) {
+void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
   std::cout << "\n=== Starting Correctness Test (100 iterations) ===\n"
             << std::flush;
 
@@ -194,7 +194,7 @@ void correctness_test(NICEndpoint& endpoint, MemoryAllocator& allocator) {
 }
 
 // Unidirectional bandwidth test: rank 0 only sends, rank 1 only receives
-void unidirectional_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
+void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
                          int iterations) {
   std::cout << "\n=== Starting Unidirectional Bandwidth Test (" << iterations
             << " iterations) ===\n";
@@ -323,7 +323,7 @@ void unidirectional_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
 }
 
 // Bandwidth test: perform N send/recv operations and measure bandwidth
-void bandwidth_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
+void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
                     int iterations) {
   std::cout << "\n=== Starting Bandwidth Test (" << iterations
             << " iterations) ===\n"
@@ -459,7 +459,7 @@ int main(int argc, char* argv[]) {
   uccl::ucclLogger.setLogLevel(uccl::WARN);
 
   // Parse command line flags
-  gflags::SetUsageMessage("NICEndpoint usage example");
+  gflags::SetUsageMessage("RDMAEndpoint usage example");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   // Validate required flags
@@ -469,7 +469,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::cout << "=== NICEndpoint Usage Example ===\n";
+  std::cout << "=== RDMAEndpoint Usage Example ===\n";
   std::cout << "GPU Index: " << FLAGS_gpu_index << "\n";
   std::cout << "Rank ID: " << FLAGS_rank_id << "\n";
   std::cout << "Port: " << FLAGS_port << "\n";
@@ -511,11 +511,11 @@ int main(int argc, char* argv[]) {
     std::cout << "Found " << device_manager.deviceCount()
               << " RDMA device(s)\n\n";
 
-    // Create NICEndpoint with device_ids = {0}
-    std::cout << "Creating NICEndpoint...\n";
+    // Create RDMAEndpoint with device_ids = {0}
+    std::cout << "Creating RDMAEndpoint...\n";
     std::vector<size_t> device_ids = {0, 1};
-    NICEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
-    std::cout << "NICEndpoint created successfully\n\n";
+    RDMAEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
+    std::cout << "RDMAEndpoint created successfully\n\n";
 
     // Create OOBMetaData for remote rank
     std::cout << "Setting up remote rank metadata...\n";

@@ -1,6 +1,7 @@
 #pragma once
-#include "define.h"
+#include "common.h"
 #include "rdma_context.h"
+#include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <cstdio>
 #include <cstdlib>
@@ -95,9 +96,9 @@ class RDMADataChannelImpl {
 };
 
 // Forward declarations for implementations
-class EFAChannelImpl;
-class IBChannelImpl;
+class EFADataChannelImpl;
+class IBDataChannelImpl;
 
-// Factory function declaration (defined in rdma_data_channel.h after
+// Factory function declaration (defined in rdma_data_channel.cc after
 // including provider headers)
 std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl();
