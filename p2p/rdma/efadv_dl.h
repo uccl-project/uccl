@@ -9,7 +9,6 @@
 #include <utility>
 #include <dlfcn.h>
 
-namespace uccl {
 namespace efa_dl {
 
 inline void* get_handle() {
@@ -52,4 +51,3 @@ UCCL_EFA_WRAP(efadv_create_qp_ex)
 #undef UCCL_EFA_WRAP
 
 }  // namespace efa_dl
-}  // namespace uccl

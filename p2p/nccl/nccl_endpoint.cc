@@ -15,10 +15,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace nccl {
 namespace {
-inline void serialize_uccl_fifo_item(uccl::FifoItem const& item, char* buf) {
-  static_assert(sizeof(uccl::FifoItem) == 64, "FifoItem must be 64 bytes");
+inline void serialize_nccl_fifo_item(NcclFifoItem const& item, char* buf) {
+  static_assert(sizeof(NcclFifoItem) == 64, "NcclFifoItem must be 64 bytes");
   std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
   std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
   std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
@@ -106,9 +105,9 @@ bool fence_default_stream(int device, gpuStream_t stream) {
 #endif
 }
 
-uccl::ConnID make_invalid_conn() {
+NcclConnID make_invalid_conn() {
   // Helper to return a consistent "invalid" connection.
-  uccl::ConnID invalid{};
+  NcclConnID invalid{};
   invalid.context = nullptr;
   invalid.sock_fd = -1;
   invalid.flow_id = UINT64_MAX;
@@ -318,7 +317,7 @@ void NCCLEndpoint::control_loop_(Conn* conn) {
     size_t size = static_cast<size_t>(msg.size);
     if (size == 0) continue;
 
-    uccl::ucclRequest ureq{};
+    NcclRequest ureq{};
     int comm_index = comm_index_for_recv_(*conn);
     bool ok = false;
     switch (msg.type) {
@@ -361,7 +360,7 @@ int NCCLEndpoint::comm_index_for_recv_(Conn const& conn) const {
 }
 
 bool NCCLEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
-                                  int comm_index, uccl::ucclRequest* ureq) {
+                                  int comm_index, NcclRequest* ureq) {
   if (!ureq) return false;
   if (size == 0) {
     ureq->context = nullptr;
@@ -401,7 +400,7 @@ bool NCCLEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
 }
 
 bool NCCLEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
-                                  int comm_index, uccl::ucclRequest* ureq) {
+                                  int comm_index, NcclRequest* ureq) {
   if (!ureq) return false;
   if (size == 0) {
     ureq->context = nullptr;
@@ -468,10 +467,9 @@ void NCCLEndpoint::cleanup_conn_(Conn& conn) {
   }
 }
 
-uccl::ConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx,
-                                        int remote_dev, int remote_gpuidx,
-                                        std::string remote_ip,
-                                        uint16_t remote_port) {
+NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
+                                      int remote_gpuidx, std::string remote_ip,
+                                      uint16_t remote_port) {
   // remote_dev/gpuidx are unused for NCCL but part of the common API.
   (void)remote_dev;
   (void)remote_gpuidx;
@@ -536,7 +534,7 @@ uccl::ConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx,
   conn_ptr->ctrl_thread =
       std::thread(&NCCLEndpoint::control_loop_, this, conn_ptr);
 
-  uccl::ConnID conn_id{};
+  NcclConnID conn_id{};
   conn_id.context = conn_ptr;
   conn_id.sock_fd = conn_ptr->sock_fd;
   conn_id.flow_id = flow_id;
@@ -545,9 +543,9 @@ uccl::ConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx,
   return conn_id;
 }
 
-uccl::ConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                                       std::string& remote_ip, int* remote_dev,
-                                       int* remote_gpuidx) {
+NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
+                                     std::string& remote_ip, int* remote_dev,
+                                     int* remote_gpuidx) {
   int local_idx = local_gpuidx >= 0 ? local_gpuidx : gpu_index_;
   if (local_gpuidx >= 0) gpu_index_ = local_gpuidx;
   int fd = listen_fd >= 0 ? listen_fd : listen_fd_;
@@ -647,7 +645,7 @@ uccl::ConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   conn_ptr->ctrl_thread =
       std::thread(&NCCLEndpoint::control_loop_, this, conn_ptr);
 
-  uccl::ConnID conn_id{};
+  NcclConnID conn_id{};
   conn_id.context = conn_ptr;
   conn_id.sock_fd = conn_ptr->sock_fd;
   conn_id.flow_id = flow_id;
@@ -656,8 +654,8 @@ uccl::ConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   return conn_id;
 }
 
-int NCCLEndpoint::uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len,
-                             int type, struct uccl::Mhandle** mhandle) {
+int NCCLEndpoint::uccl_regmr(NcclFlow* flow, void* data, size_t len, int type,
+                             NcclMhandle** mhandle) {
   // NCCL path does not register memory; keep for API compatibility.
   (void)flow;
   (void)data;
@@ -667,7 +665,7 @@ int NCCLEndpoint::uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len,
   return 0;
 }
 
-int NCCLEndpoint::uccl_regmr(void* data, size_t len, MRArray& mr_array) {
+int NCCLEndpoint::uccl_regmr(void* data, size_t len, NcclMRArray& mr_array) {
   // No-op for NCCL.
   (void)data;
   (void)len;
@@ -676,7 +674,7 @@ int NCCLEndpoint::uccl_regmr(void* data, size_t len, MRArray& mr_array) {
 }
 
 int NCCLEndpoint::uccl_regmr(int dev, void* data, size_t len, int type,
-                             struct uccl::Mhandle** mhandle) {
+                             NcclMhandle** mhandle) {
   // No-op for NCCL.
   (void)dev;
   (void)data;
@@ -686,16 +684,16 @@ int NCCLEndpoint::uccl_regmr(int dev, void* data, size_t len, int type,
   return 0;
 }
 
-void NCCLEndpoint::uccl_deregmr(struct uccl::Mhandle* mhandle) {
+void NCCLEndpoint::uccl_deregmr(NcclMhandle* mhandle) {
   // No-op for NCCL.
   (void)mhandle;
 }
 
-void NCCLEndpoint::uccl_deregmr(MRArray const& mr_array) { (void)mr_array; }
+void NCCLEndpoint::uccl_deregmr(NcclMRArray const& mr_array) { (void)mr_array; }
 
-int NCCLEndpoint::uccl_send_async(uccl::UcclFlow* flow,
-                                  struct uccl::Mhandle* mh, void const* data,
-                                  size_t size, struct uccl::ucclRequest* ureq) {
+int NCCLEndpoint::uccl_send_async(NcclFlow* flow, NcclMhandle* mh,
+                                  void const* data, size_t size,
+                                  NcclRequest* ureq) {
   // Two-sided send: enqueue ncclSend on the send communicator.
   (void)mh;
   if (!flow || !ureq) return -1;
@@ -704,10 +702,9 @@ int NCCLEndpoint::uccl_send_async(uccl::UcclFlow* flow,
   return send_internal_(*conn, data, size, comm_index, ureq) ? 0 : -1;
 }
 
-int NCCLEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
-                                  struct uccl::Mhandle** mhandles, void** data,
-                                  int* sizes, int n,
-                                  struct uccl::ucclRequest* ureq) {
+int NCCLEndpoint::uccl_recv_async(NcclFlow* flow, NcclMhandle** mhandles,
+                                  void** data, int* sizes, int n,
+                                  NcclRequest* ureq) {
   // Two-sided recv: enqueue ncclRecv on the recv communicator.
   (void)mhandles;
   if (!flow || !ureq || !data || !sizes || n != 1) return -1;
@@ -717,10 +714,9 @@ int NCCLEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
   return recv_internal_(*conn, data[0], size, comm_index, ureq) ? 0 : -1;
 }
 
-int NCCLEndpoint::uccl_read_async(uccl::UcclFlow* flow,
-                                  struct uccl::Mhandle* mh, void* dst,
-                                  size_t size, uccl::FifoItem const& slot_item,
-                                  uccl::ucclRequest* ureq) {
+int NCCLEndpoint::uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst,
+                                  size_t size, NcclFifoItem const& slot_item,
+                                  NcclRequest* ureq) {
   // One-sided read: tell the peer to send, then post a local recv.
   (void)mh;
   if (!flow || !ureq) return -1;
@@ -750,10 +746,9 @@ int NCCLEndpoint::uccl_read_async(uccl::UcclFlow* flow,
   return recv_internal_(*conn, dst, xfer_size, comm_index, ureq) ? 0 : -1;
 }
 
-int NCCLEndpoint::uccl_write_async(uccl::UcclFlow* flow,
-                                   struct uccl::Mhandle* mh, void* src,
-                                   size_t size, uccl::FifoItem const& slot_item,
-                                   uccl::ucclRequest* ureq) {
+int NCCLEndpoint::uccl_write_async(NcclFlow* flow, NcclMhandle* mh, void* src,
+                                   size_t size, NcclFifoItem const& slot_item,
+                                   NcclRequest* ureq) {
   // One-sided write: tell the peer to recv, then post a local send.
   (void)mh;
   if (!flow || !ureq) return -1;
@@ -783,7 +778,7 @@ int NCCLEndpoint::uccl_write_async(uccl::UcclFlow* flow,
   return send_internal_(*conn, src, xfer_size, comm_index, ureq) ? 0 : -1;
 }
 
-bool NCCLEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
+bool NCCLEndpoint::uccl_poll_ureq_once(NcclRequest* ureq) {
   if (!ureq) return true;
   auto* handle = reinterpret_cast<AsyncHandle*>(ureq->context);
   if (!handle) return true;
@@ -806,18 +801,17 @@ bool NCCLEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
   return true;
 }
 
-int NCCLEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
-                                        struct uccl::Mhandle** mhandle,
+int NCCLEndpoint::prepare_fifo_metadata(NcclFlow* flow, NcclMhandle** mhandle,
                                         void const* data, size_t size,
                                         char* out_buf) {
-  // Encode addr/size into uccl::FifoItem and serialize.
+  // Encode addr/size into NcclFifoItem and serialize.
   (void)flow;
   (void)mhandle;
-  uccl::FifoItem item{};
+  NcclFifoItem item{};
   item.addr = reinterpret_cast<uint64_t>(data);
   item.size = static_cast<uint32_t>(size);
   std::memset(item.padding, 0, sizeof(item.padding));
-  serialize_uccl_fifo_item(item, out_buf);
+  serialize_nccl_fifo_item(item, out_buf);
   return 0;
 }
 
@@ -856,5 +850,3 @@ int NCCLEndpoint::send_notification(uint64_t flow_id,
   }
   return 0;
 }
-
-}  // namespace nccl

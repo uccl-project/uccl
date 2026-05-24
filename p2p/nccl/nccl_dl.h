@@ -9,7 +9,6 @@
 #include <utility>
 #include <dlfcn.h>
 
-namespace uccl {
 namespace nccl_dl {
 
 inline void* get_handle() {
@@ -58,4 +57,3 @@ UCCL_NCCL_WRAP(ncclGetErrorString)
 #undef UCCL_NCCL_WRAP
 
 }  // namespace nccl_dl
-}  // namespace uccl

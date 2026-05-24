@@ -10,23 +10,21 @@
 #include <string>
 #include <unordered_map>
 
-namespace uccl {
+using NcclFlowID = uint64_t;
+using NcclPeerID = uint64_t;
 
-using FlowID = uint64_t;
-using PeerID = uint64_t;
-
-struct ConnID {
+struct NcclConnID {
   void* context;
   int sock_fd;
-  FlowID flow_id;
-  PeerID peer_id;
+  NcclFlowID flow_id;
+  NcclPeerID peer_id;
   int dev;
 };
 
-struct Mhandle;
-class UcclFlow;
+struct NcclMhandle;
+class NcclFlow;
 
-struct FifoItem {
+struct NcclFifoItem {
   uint64_t addr;
   uint32_t size;
   uint32_t rkey;
@@ -36,28 +34,25 @@ struct FifoItem {
   uint32_t engine_offset;
   char padding[28];
 };
-static_assert(sizeof(struct FifoItem) == 64, "FifoItem must be 64 bytes");
+static_assert(sizeof(struct NcclFifoItem) == 64,
+              "NcclFifoItem must be 64 bytes");
 
-enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+enum class NcclReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
 
-struct ucclRequest {
-  enum ReqType type;
+struct NcclRequest {
+  NcclReqType type;
   uint32_t n;
   void* context;
   uint32_t engine_idx;
 };
 
-}  // namespace uccl
-
 class EpollClient;
-
-namespace nccl {
 
 int get_numa_node_from_iface();
 
 // Placeholder for RDMA-style MR arrays. NCCL does not register memory, but the
 // unified interface expects the type.
-struct MRArray {
+struct NcclMRArray {
   void* dummy = nullptr;
 };
 
@@ -80,46 +75,41 @@ class NCCLEndpoint {
 
   // Establish a NCCL control connection, exchange NCCL IDs, and start a control
   // thread for one-sided read/write requests.
-  uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
-                            int remote_gpuidx, std::string remote_ip,
-                            uint16_t remote_port);
+  NcclConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
+                          int remote_gpuidx, std::string remote_ip,
+                          uint16_t remote_port);
   // Listen socket metadata. dev is unused for NCCL but required by the API.
   uint16_t get_p2p_listen_port(int dev) { return listen_port_; }
   int get_p2p_listen_fd(int dev) { return listen_fd_; }
   // Accept a NCCL control connection and initialize NCCL communicators.
-  uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                           std::string& remote_ip, int* remote_dev,
-                           int* remote_gpuidx);
+  NcclConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
+                         std::string& remote_ip, int* remote_dev,
+                         int* remote_gpuidx);
 
   // Memory registration is a no-op for NCCL; we keep the interface.
-  int uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len, int type,
-                 struct uccl::Mhandle** mhandle);
-  int uccl_regmr(void* data, size_t len, MRArray& mr_array);
+  int uccl_regmr(NcclFlow* flow, void* data, size_t len, int type,
+                 NcclMhandle** mhandle);
+  int uccl_regmr(void* data, size_t len, NcclMRArray& mr_array);
   int uccl_regmr(int dev, void* data, size_t len, int type,
-                 struct uccl::Mhandle** mhandle);
-  void uccl_deregmr(struct uccl::Mhandle* mhandle);
-  void uccl_deregmr(MRArray const& mr_array);
+                 NcclMhandle** mhandle);
+  void uccl_deregmr(NcclMhandle* mhandle);
+  void uccl_deregmr(NcclMRArray const& mr_array);
 
   // Two-sided NCCL send/recv (async) used by the engine.
-  int uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
-                      void const* data, size_t size,
-                      struct uccl::ucclRequest* ureq);
-  int uccl_recv_async(uccl::UcclFlow* flow, struct uccl::Mhandle** mhandles,
-                      void** data, int* sizes, int n,
-                      struct uccl::ucclRequest* ureq);
+  int uccl_send_async(NcclFlow* flow, NcclMhandle* mh, void const* data,
+                      size_t size, NcclRequest* ureq);
+  int uccl_recv_async(NcclFlow* flow, NcclMhandle** mhandles, void** data,
+                      int* sizes, int n, NcclRequest* ureq);
   // One-sided semantics built on a control message + NCCL send/recv.
-  int uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh, void* dst,
-                      size_t size, uccl::FifoItem const& slot_item,
-                      uccl::ucclRequest* ureq);
-  int uccl_write_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
-                       void* src, size_t size, uccl::FifoItem const& slot_item,
-                       uccl::ucclRequest* ureq);
-  // Poll a ucclRequest created by send/recv/read/write.
-  bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq);
+  int uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst, size_t size,
+                      NcclFifoItem const& slot_item, NcclRequest* ureq);
+  int uccl_write_async(NcclFlow* flow, NcclMhandle* mh, void* src, size_t size,
+                       NcclFifoItem const& slot_item, NcclRequest* ureq);
+  // Poll a NcclRequest created by send/recv/read/write.
+  bool uccl_poll_ureq_once(NcclRequest* ureq);
   // Serialize a FIFO descriptor (addr/size) for control-plane exchange.
-  int prepare_fifo_metadata(uccl::UcclFlow* flow,
-                            struct uccl::Mhandle** mhandle, void const* data,
-                            size_t size, char* out_buf);
+  int prepare_fifo_metadata(NcclFlow* flow, NcclMhandle** mhandle,
+                            void const* data, size_t size, char* out_buf);
 
   // NCCL has no device selection or unified socket; keep these as no-ops.
   int get_best_dev_idx(int gpu_idx) { return 0; }
@@ -159,11 +149,11 @@ class NCCLEndpoint {
   void control_loop_(Conn* conn);
   int comm_index_for_send_(Conn const& conn) const;
   int comm_index_for_recv_(Conn const& conn) const;
-  // Internal NCCL send/recv with completion events in ucclRequest.
+  // Internal NCCL send/recv with completion events in NcclRequest.
   bool send_internal_(Conn& conn, void const* data, size_t size, int comm_index,
-                      uccl::ucclRequest* ureq);
+                      NcclRequest* ureq);
   bool recv_internal_(Conn& conn, void* data, size_t size, int comm_index,
-                      uccl::ucclRequest* ureq);
+                      NcclRequest* ureq);
   void cleanup_conn_(Conn& conn);
 
   // GPU index the endpoint binds to by default.
@@ -176,5 +166,3 @@ class NCCLEndpoint {
   std::mutex conn_mu_;
   std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
 };
-
-}  // namespace nccl

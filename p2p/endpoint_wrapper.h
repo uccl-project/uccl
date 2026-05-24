@@ -6,25 +6,25 @@
 template <class T>
 struct always_false : std::false_type {};
 
-// Convert between the global ucclRequest and uccl::ucclRequest.
-// They have different layouts (uccl:: version has an extra context pointer).
-static inline uccl::ucclRequest to_nccl_req(ucclRequest const& r) {
-  uccl::ucclRequest out{};
-  out.type = static_cast<uccl::ReqType>(r.type);
+// Convert between the global ucclRequest and NcclRequest.
+// They have different layouts (NCCL version has an extra context pointer).
+static inline NcclRequest to_nccl_req(ucclRequest const& r) {
+  NcclRequest out{};
+  out.type = static_cast<NcclReqType>(static_cast<int>(r.type));
   out.n = r.n;
   out.context = nullptr;
   out.engine_idx = r.engine_idx;
   return out;
 }
-static inline void from_nccl_req(uccl::ucclRequest const& in,
-                                 ucclRequest* out) {
-  out->type = static_cast<ReqType>(in.type);
+
+static inline void from_nccl_req(NcclRequest const& in, ucclRequest* out) {
+  out->type = static_cast<ReqType>(static_cast<int>(in.type));
   out->n = in.n;
   out->engine_idx = in.engine_idx;
 }
 
 // Convert NCCL ConnID to the common ConnID used by Endpoint.
-static inline ConnID to_conn_id(uccl::ConnID const& in) {
+static inline ConnID to_conn_id(NcclConnID const& in) {
   ConnID out{};
   out.context = in.context;
   out.sock_fd = in.sock_fd;
@@ -132,7 +132,7 @@ inline ConnID uccl_connect(GenericEndpoint const& ep, int remote_gpuidx,
   return std::visit(
       [&](auto const& s) -> ConnID {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           int local_gpu = s->gpuIndex();
           auto c = s->uccl_connect(0, local_gpu, 0, remote_gpuidx, remote_ip,
                                    remote_port);
@@ -148,7 +148,7 @@ inline uint16_t get_p2p_listen_port(GenericEndpoint const& ep) {
   return std::visit(
       [](auto const& s) -> uint16_t {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
+        if constexpr (std::is_same_v<T, NCCLEndpoint>)
           return s->get_p2p_listen_port(0);
         else
           return s->get_p2p_listen_port();
@@ -160,7 +160,7 @@ inline int get_p2p_listen_fd(GenericEndpoint const& ep) {
   return std::visit(
       [](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
+        if constexpr (std::is_same_v<T, NCCLEndpoint>)
           return s->get_p2p_listen_fd(0);
         else
           return s->get_p2p_listen_fd();
@@ -173,7 +173,7 @@ inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
   return std::visit(
       [&](auto const& s) -> ConnID {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           int remote_dev = 0;
           int local_gpu = s->gpuIndex();
           auto c = s->uccl_accept(0, -1, local_gpu, remote_ip, &remote_dev,
@@ -195,7 +195,7 @@ inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)data;
           (void)len;
           (void)mhandle;
@@ -214,14 +214,14 @@ inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandle;
           ureq->type = ReqType::ReqTx;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_send_async(
-              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, data, size, &nreq);
+              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+              data, size, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -251,14 +251,14 @@ inline int uccl_recv_async(GenericEndpoint const& ep, Conn* conn,
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandles;
           ureq->type = ReqType::ReqRx;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_recv_async(
-              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, data, size, n, &nreq);
+              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+              data, size, n, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -280,8 +280,8 @@ inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
+          NcclRequest nreq = to_nccl_req(*ureq);
           bool ret = s->uccl_poll_ureq_once(&nreq);
           from_nccl_req(nreq, ureq);
           return ret;
@@ -308,7 +308,7 @@ inline void uccl_drive_send(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
           s->sendRoutine();
         }
       },
@@ -321,7 +321,7 @@ inline void uccl_flush_send(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
           s->flushAllSends();
         }
       },
@@ -337,7 +337,7 @@ inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
           result = s->getSendGroupRaw(rank_id);
         }
       },
@@ -354,7 +354,7 @@ inline void uccl_drive_recv(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
           s->recvRoutine();
         }
       },
@@ -368,8 +368,8 @@ inline bool uccl_check_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
+          NcclRequest nreq = to_nccl_req(*ureq);
           bool ret = s->uccl_poll_ureq_once(&nreq);
           from_nccl_req(nreq, ureq);
           return ret;
@@ -393,18 +393,18 @@ inline int uccl_read_async(GenericEndpoint const& ep, Conn* conn,
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqRead;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::FifoItem nccl_item{};
+          NcclFifoItem nccl_item{};
           nccl_item.addr = slot_item.addr;
           nccl_item.size = static_cast<uint32_t>(size);
           std::memset(nccl_item.padding, 0, sizeof(nccl_item.padding));
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_read_async(
-              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, dst, size, nccl_item, &nreq);
+              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+              dst, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -421,18 +421,18 @@ inline int uccl_write_async(GenericEndpoint const& ep, Conn* conn,
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqWrite;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::FifoItem nccl_item{};
+          NcclFifoItem nccl_item{};
           nccl_item.addr = slot_item.addr;
           nccl_item.size = static_cast<uint32_t>(size);
           std::memset(nccl_item.padding, 0, sizeof(nccl_item.padding));
-          uccl::ucclRequest nreq = to_nccl_req(*ureq);
+          NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_write_async(
-              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, src, size, nccl_item, &nreq);
+              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+              src, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -469,7 +469,7 @@ inline int prepare_fifo_metadata(GenericEndpoint const& ep, Conn* conn,
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)conn;
           (void)mhandle;
           return s->prepare_fifo_metadata(nullptr, nullptr, data, size,
@@ -493,7 +493,7 @@ inline void uccl_deregmr(GenericEndpoint const& ep, P2PMhandle* mhandle) {
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandle;
         } else {
           s->uccl_deregmr(mhandle->cache_refs);
@@ -506,7 +506,7 @@ inline bool initialize_rdma_ctx_for_gpu(GenericEndpoint const& ep, int dev) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
+        if constexpr (std::is_same_v<T, NCCLEndpoint>)
           return s->initialize_engine_by_dev(dev, true);
         else
           return s->initialize_rdma_ctx_for_gpu(dev);
@@ -518,7 +518,7 @@ inline void create_unified_p2p_socket(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
+        if constexpr (std::is_same_v<T, NCCLEndpoint>)
           (void)s;
         else
           s->create_unified_p2p_socket();

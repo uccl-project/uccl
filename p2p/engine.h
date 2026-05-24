@@ -27,12 +27,13 @@
 extern thread_local bool inside_python;
 
 // Runtime-polymorphic endpoint: holds either RDMA or NCCL endpoint.
-using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>,
-                                     std::shared_ptr<nccl::NCCLEndpoint>>;
+using GenericEndpoint =
+    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
 enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+
 struct ucclRequest {
   enum ReqType type;
   uint32_t n;

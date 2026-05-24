@@ -4,9 +4,7 @@
 #include "efadv_dl.h"
 #include <infiniband/efadv.h>
 
-static void* efa_resolve(char const* name) {
-  return uccl::efa_dl::resolve(name);
-}
+static void* efa_resolve(char const* name) { return efa_dl::resolve(name); }
 
 extern "C" {
 
