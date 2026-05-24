@@ -440,20 +440,11 @@ class RdmaContext {
 
   RegistrationMode getRegistrationMode(void* addr) const {
     bool is_gpu = isGpuPointer(addr);
-    auto env_enabled = [](char const* name) {
-      char const* value = std::getenv(name);
-      return value != nullptr &&
-             (std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0 ||
-              std::strcmp(value, "TRUE") == 0 ||
-              std::strcmp(value, "on") == 0 || std::strcmp(value, "ON") == 0);
-    };
-    bool force_dmabuf =
-        env_enabled("UCCL_P2P_USE_DMABUF") || env_enabled("USE_DMABUF");
-    bool use_dmabuf = is_gpu && (force_dmabuf || vendor_id_ == 0x8086);
+    bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
     if (use_dmabuf) {
       UCCL_LOG(INFO, UCCL_RDMA)
-          << "GPU memory detected (vendor=0x" << std::hex << vendor_id_
-          << std::dec << "), using DMA-BUF registration";
+          << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
+          << vendor_id_ << std::dec << "), using DMA-BUF registration";
     }
     return {is_gpu, use_dmabuf};
   }
