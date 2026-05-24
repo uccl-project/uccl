@@ -332,22 +332,14 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
       CollectiveKind::AllReduce, config.nranks, config.tensor_bytes,
       config.tile_bytes, config.dtype, config.num_flows);
   plan.num_flows = num_flows;
-  plan.staging_bytes_required =
-      static_cast<size_t>(tiles_per_shard) * config.tile_bytes;
-  if (config.staging_bytes < plan.staging_bytes_required) {
-    throw std::invalid_argument(
-        "allreduce ring requires staging_bytes >= tiles_per_shard * tile_bytes");
-  }
+  plan.staging_bytes_required = 0;  // SM IPC: no staging
 
   PlanBuilder builder(std::move(plan));
+  uint64_t tile_seq = 0;  // local counter — executor adds global base later
 
   std::vector<std::vector<uint32_t>> ready_ops(
       static_cast<size_t>(config.nranks),
       std::vector<uint32_t>(tiles_per_shard, kNoOp));
-  std::vector<uint32_t> last_send_to_peer(static_cast<size_t>(config.nranks),
-                                          kNoOp);
-  std::vector<uint32_t> last_recv_from_peer(static_cast<size_t>(config.nranks),
-                                            kNoOp);
 
   for (uint32_t flow_slot = 0; flow_slot < num_flows; ++flow_slot) {
     for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
@@ -366,9 +358,11 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
             tile_size(send_bytes, config.tile_bytes, tile_index);
         size_t recv_tile_bytes =
             tile_size(recv_bytes, config.tile_bytes, tile_index);
-        size_t staging_offset = tile_index * config.tile_bytes;  // unique per tile
 
-        if (send_tile_bytes > 0) {
+        if (send_tile_bytes > 0 || recv_tile_bytes > 0) {
+          // One seq per tile pair — send and reduce/recv share it.
+          uint64_t ts = tile_seq++;
+          if (send_tile_bytes > 0) {
           size_t offset =
               balanced_shard_offset_bytes(config.tensor_bytes, elem_bytes,
                                           config.nranks, send_owner) +
@@ -379,12 +373,11 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
           std::vector<uint32_t> deps;
           add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
           uint32_t send_op = builder.add_op(
-              OpKind::TransportSend, send_tile,
+              OpKind::DeviceSendRemote, send_tile,
               input_ref(config, send_tile.offset_bytes),
-              peer_staging_ref(config, send_peer, staging_offset),
-              op_dtype(config, OpKind::TransportSend),
-              op_reduction(config, OpKind::TransportSend), std::move(deps));
-          last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
+              peer_input_ref(config, send_peer, send_tile.offset_bytes),
+              ScalarType::Int8, ReductionKind::None, std::move(deps));
+          builder.plan.ops.back().signal_seq = ts;
         }
 
         if (recv_tile_bytes > 0) {
@@ -395,28 +388,14 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
           TileRef recv_tile = make_tile(config, recv_owner, flow_slot,
                                         tile_index, offset, recv_tile_bytes);
 
-          std::vector<uint32_t> recv_deps;
-          add_dep(recv_deps,
-                  last_recv_from_peer[static_cast<size_t>(recv_peer)]);
-          uint32_t recv_op = builder.add_op(
-              OpKind::TransportRecv, recv_tile,
-              peer_input_ref(config, recv_peer, recv_tile.offset_bytes),
-              staging_ref(config, staging_offset),
-              op_dtype(config, OpKind::TransportRecv),
-              op_reduction(config, OpKind::TransportRecv),
-              std::move(recv_deps));
-          last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
-
-          std::vector<uint32_t> reduce_deps;
-          add_dep(reduce_deps, recv_op);
           uint32_t reduce_op =
-              builder.add_op(OpKind::DeviceReduce, recv_tile,
-                             staging_ref(config, staging_offset),
+              builder.add_op(OpKind::DeviceReduceRemote, recv_tile,
+                             peer_input_ref(config, recv_peer, recv_tile.offset_bytes),
                              input_ref(config, recv_tile.offset_bytes),
-                             op_dtype(config, OpKind::DeviceReduce),
-                             op_reduction(config, OpKind::DeviceReduce),
-                             std::move(reduce_deps));
+                             config.dtype, config.reduction, {});
+          builder.plan.ops.back().signal_seq = ts;
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = reduce_op;
+        }
         }
       }
     }
@@ -440,7 +419,9 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
         size_t recv_tile_bytes =
             tile_size(recv_bytes, config.tile_bytes, tile_index);
 
-        if (send_tile_bytes > 0) {
+        if (send_tile_bytes > 0 || recv_tile_bytes > 0) {
+          uint64_t ts = tile_seq++;
+          if (send_tile_bytes > 0) {
           size_t offset =
               balanced_shard_offset_bytes(config.tensor_bytes, elem_bytes,
                                           config.nranks, send_owner) +
@@ -450,14 +431,12 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
 
           std::vector<uint32_t> deps;
           add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
-          add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
           uint32_t send_op = builder.add_op(
-              OpKind::TransportSend, send_tile,
+              OpKind::DeviceSendRemote, send_tile,
               input_ref(config, send_tile.offset_bytes),
               peer_input_ref(config, send_peer, send_tile.offset_bytes),
-              op_dtype(config, OpKind::TransportSend),
-              op_reduction(config, OpKind::TransportSend), std::move(deps));
-          last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
+              ScalarType::Int8, ReductionKind::None, std::move(deps));
+          builder.plan.ops.back().signal_seq = ts;
         }
 
         if (recv_tile_bytes > 0) {
@@ -468,18 +447,14 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
           TileRef recv_tile = make_tile(config, recv_owner, flow_slot,
                                         tile_index, offset, recv_tile_bytes);
 
-          std::vector<uint32_t> recv_deps;
-          add_dep(recv_deps,
-                  last_recv_from_peer[static_cast<size_t>(recv_peer)]);
           uint32_t recv_op = builder.add_op(
-              OpKind::TransportRecv, recv_tile,
+              OpKind::DeviceRecvRemote, recv_tile,
               peer_input_ref(config, recv_peer, recv_tile.offset_bytes),
               input_ref(config, recv_tile.offset_bytes),
-              op_dtype(config, OpKind::TransportRecv),
-              op_reduction(config, OpKind::TransportRecv),
-              std::move(recv_deps));
-          last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
+              ScalarType::Int8, ReductionKind::None, {});
+          builder.plan.ops.back().signal_seq = ts;
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = recv_op;
+        }
         }
       }
     }
@@ -488,7 +463,7 @@ CollectivePlan build_allreduce_ring_plan(CollectiveConfig const& config) {
   return std::move(builder.plan);
 }
 
-CollectivePlan build_alltoall_pairwise_plan(CollectiveConfig const& config,
+CollectivePlan build_alltoall_pairwise_plan_dma(CollectiveConfig const& config,
                                             bool inplace) {
   CollectivePlan plan = make_empty_alltoall_plan(config);
   plan.algorithm = AlgorithmKind::Pairwise;
@@ -635,16 +610,120 @@ CollectivePlan build_alltoall_pairwise_plan(CollectiveConfig const& config,
   return std::move(builder.plan);
 }
 
+CollectivePlan build_alltoall_pairwise_plan_sm(CollectiveConfig const& config,
+                                               bool inplace) {
+  CollectivePlan plan = make_empty_alltoall_plan(config);
+  plan.algorithm = AlgorithmKind::Pairwise;
+  size_t input_bytes = alltoall_input_bytes(config);
+  size_t output_bytes = alltoall_output_bytes(config);
+
+  std::vector<size_t> input_splits =
+      config.input_split_bytes.empty()
+          ? equal_alltoall_splits(input_bytes, config.nranks)
+          : config.input_split_bytes;
+  std::vector<size_t> output_splits =
+      config.output_split_bytes.empty()
+          ? equal_alltoall_splits(output_bytes, config.nranks)
+          : config.output_split_bytes;
+  std::vector<size_t> input_prefix = prefix_bytes(input_splits);
+  std::vector<size_t> output_prefix = prefix_bytes(output_splits);
+
+  size_t max_slice_bytes = 0;
+  for (size_t bytes : input_splits) max_slice_bytes = std::max(max_slice_bytes, bytes);
+  for (size_t bytes : output_splits) max_slice_bytes = std::max(max_slice_bytes, bytes);
+  size_t tiles_per_slice = ceil_div(max_slice_bytes, config.tile_bytes);
+  uint32_t num_flows = clamp_num_flows(config.num_flows, tiles_per_slice);
+  plan.num_flows = num_flows;
+  plan.input_split_bytes = input_splits;
+  plan.output_split_bytes = output_splits;
+  plan.staging_bytes_required = 0;  // SM IPC: no staging
+
+  PlanBuilder builder(std::move(plan));
+  uint64_t tile_seq = 0;
+
+  size_t self_input_offset = input_prefix[static_cast<size_t>(config.rank)];
+  size_t self_output_offset = output_prefix[static_cast<size_t>(config.rank)];
+  size_t self_slice_bytes = input_splits[static_cast<size_t>(config.rank)];
+  if (self_slice_bytes != output_splits[static_cast<size_t>(config.rank)])
+    throw std::invalid_argument("alltoall self split size must match between input and output");
+
+  // Self-copy: local DeviceCopy (same as DMA).
+  if (self_slice_bytes != 0 && !inplace) {
+    size_t self_tiles = ceil_div(self_slice_bytes, config.tile_bytes);
+    for (size_t tile_index = 0; tile_index < self_tiles; ++tile_index) {
+      size_t bytes = tile_size(self_slice_bytes, config.tile_bytes, tile_index);
+      if (bytes == 0) continue;
+      size_t in_off = self_input_offset + tile_offset(tile_index, config.tile_bytes);
+      size_t out_off = self_output_offset + tile_offset(tile_index, config.tile_bytes);
+      TileRef tile = make_tile(config, config.rank,
+                               static_cast<uint32_t>(tile_index % num_flows),
+                               tile_index, out_off, bytes);
+      builder.add_op(OpKind::DeviceCopy, tile,
+                     input_ref(config, in_off), output_ref(config, out_off),
+                     op_dtype(config, OpKind::DeviceCopy),
+                     op_reduction(config, OpKind::DeviceCopy), {});
+    }
+  }
+
+  // Per-peer SM IPC: DeviceSendRemote + DeviceRecvRemote.
+  for (int peer = 0; peer < config.nranks; ++peer) {
+    if (peer == config.rank) continue;
+
+    size_t send_offset = input_prefix[static_cast<size_t>(peer)];
+    size_t send_bytes = input_splits[static_cast<size_t>(peer)];
+    size_t recv_offset = output_prefix[static_cast<size_t>(peer)];
+    size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
+    size_t send_tiles = ceil_div(send_bytes, config.tile_bytes);
+    size_t recv_tiles = ceil_div(recv_bytes, config.tile_bytes);
+    size_t tiles = std::max(send_tiles, recv_tiles);
+
+    for (size_t tile_index = 0; tile_index < tiles; ++tile_index) {
+      size_t stb = (tile_index < send_tiles)
+          ? tile_size(send_bytes, config.tile_bytes, tile_index) : 0;
+      size_t rtb = (tile_index < recv_tiles)
+          ? tile_size(recv_bytes, config.tile_bytes, tile_index) : 0;
+      if (stb > 0 || rtb > 0) {
+        uint64_t ts = tile_seq++;
+        if (stb > 0) {
+          size_t off = send_offset + tile_offset(tile_index, config.tile_bytes);
+          TileRef send_tile = make_tile(config, config.rank,
+                                        static_cast<uint32_t>(tile_index % num_flows),
+                                        tile_index, off, stb);
+          uint32_t send_op = builder.add_op(
+              OpKind::DeviceSendRemote, send_tile,
+              input_ref(config, off),
+              peer_input_ref(config, peer, off),
+              ScalarType::Int8, ReductionKind::None, {});
+          builder.plan.ops.back().signal_seq = ts;
+        }
+        if (rtb > 0) {
+          size_t off = recv_offset + tile_offset(tile_index, config.tile_bytes);
+          TileRef recv_tile = make_tile(config, peer,
+                                        static_cast<uint32_t>(tile_index % num_flows),
+                                        tile_index, off, rtb);
+          uint32_t recv_op = builder.add_op(
+              OpKind::DeviceRecvRemote, recv_tile,
+              peer_input_ref(config, peer, off),
+              output_ref(config, off),
+              ScalarType::Int8, ReductionKind::None, {});
+          builder.plan.ops.back().signal_seq = ts;
+        }
+      }
+    }
+  }
+
+  return std::move(builder.plan);
+}
+
 char const* op_kind_name(OpKind kind) {
   switch (kind) {
-    case OpKind::TransportSend:
-      return "send";
-    case OpKind::TransportRecv:
-      return "recv";
-    case OpKind::DeviceCopy:
-      return "copy";
-    case OpKind::DeviceReduce:
-      return "reduce";
+    case OpKind::TransportSend:       return "send";
+    case OpKind::TransportRecv:       return "recv";
+    case OpKind::DeviceCopy:          return "copy";
+    case OpKind::DeviceReduce:        return "reduce";
+    case OpKind::DeviceSendRemote:    return "sm_send";
+    case OpKind::DeviceReduceRemote:  return "sm_reduce";
+    case OpKind::DeviceRecvRemote:    return "sm_recv";
   }
   return "unknown";
 }
@@ -675,7 +754,9 @@ CollectivePlan build_plan(CollectiveConfig const& config, bool inplace) {
         throw std::invalid_argument(
             "alltoall currently supports only pairwise algorithm");
       }
-      return build_alltoall_pairwise_plan(config, inplace);
+      if (config.use_sm_ipc)
+        return build_alltoall_pairwise_plan_sm(config, inplace);
+      return build_alltoall_pairwise_plan_dma(config, inplace);
   }
   throw std::invalid_argument("unsupported collective kind");
 }

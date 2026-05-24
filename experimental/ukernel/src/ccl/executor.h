@@ -127,6 +127,14 @@ class Executor {
   uint64_t next_handle_ = 1;
   uint64_t validated_sig_ = 0;
 
+  // SM IPC GPU completion buffers (local + IPC-mapped remote).
+  struct GpuCompPeer {
+    void* local = nullptr;   // cudaMalloc, local GPU VA
+    void* remote = nullptr;  // IPC-mapped peer GPU VA
+  };
+  std::vector<GpuCompPeer> gpu_comp_;
+  bool gpu_comp_ready_ = false;
+
   struct PlanCacheKey {
     CollectiveKind kind;
     bool inplace;

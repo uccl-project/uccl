@@ -11,7 +11,9 @@ constexpr uint32_t kCommandRun = 1;
 constexpr uint32_t kCommandExit = 2;
 
 __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
-  return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce;
+  return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce ||
+         ttype == TaskType::CollCopyRemote || ttype == TaskType::CollReduceRemote ||
+         ttype == TaskType::CollRecvRemote;
 }
 
 __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
@@ -91,6 +93,69 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
+// ── SM IPC completion buffer helpers ─────────────────────────────────
+
+struct alignas(16) GpuComp {
+  uint64_t last[2];  // [0]=peer_a→peer_b, [1]=peer_b→peer_a, both pp accessible
+};
+
+__device__ __forceinline__ void sm_write_seq(TaskArgs const& a) {
+  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
+  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
+  cmp->last[dir] = a.redTypeRaw >> 8;
+  __threadfence_system();
+}
+
+__device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
+  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
+  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
+  uint64_t target = a.redTypeRaw >> 8;
+  for (int spin = 0; spin < 16; ++spin)
+    if (cmp->last[dir] >= target) return;
+  while (cmp->last[dir] < target)
+    __nanosleep(200);
+}
+
+// ── SM IPC kernel functions ──────────────────────────────────────────
+
+template <typename T>
+__device__ __forceinline__ void run_send_remote(TaskArgs const& a,
+                                                 uint32_t block_id,
+                                                 uint32_t num_blocks,
+                                                 void* smem_buf) {
+  run_typed_copy<T>(a, block_id, num_blocks, smem_buf);
+  sm_write_seq(a);
+}
+
+template <typename T>
+__device__ __forceinline__ void run_reduce_remote(TaskArgs const& a,
+                                                   uint32_t block_id,
+                                                   uint32_t num_blocks,
+                                                   void* smem_buf) {
+  sm_wait_seq(a);
+  ReduceType red = static_cast<ReduceType>(a.redTypeRaw & 0xFF);
+
+  T* dst = reinterpret_cast<T*>(a.dst);
+  T const* src = reinterpret_cast<T const*>(a.src);
+  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
+  if (blockDim.x > 1024) return;
+
+  const uint64_t count_per_block = total_count / num_blocks;
+  const uint64_t block_offset = block_id * count_per_block;
+  const uint64_t my_count = (block_id + 1 == num_blocks)
+                                ? (total_count - block_offset)
+                                : count_per_block;
+
+  read_reduce_store<T>(dst + block_offset, src + block_offset,
+                       static_cast<size_t>(my_count), red, smem_buf);
+}
+
+__device__ __forceinline__ void run_recv_remote(TaskArgs const& a) {
+  sm_wait_seq(a);
+}
+
+// ── benchmarks ────────────────────────────────────────────────────────
+
 __global__ void benchDispatchNopKernel() {}
 
 __global__ void benchDispatchCopyFp32Kernel(TaskArgs args) {
@@ -101,6 +166,36 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
   run_reduce<float>(args, blockIdx.x, gridDim.x, nullptr);
 }
 
+// ── dispatch ──────────────────────────────────────────────────────────
+
+#define RUN_COPY_BODY(dtype, fn) \
+  if (dtype == DataType::Int8) fn<int8_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int32) fn<int32_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int64) fn<int64_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp16) fn<__half>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp32) fn<float>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp64) fn<double>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Bf16) fn<nv_bfloat16>(args, block_id, num_blocks, smem_buf); \
+  else run_copy(args, block_id, num_blocks, smem_buf)
+
+#define RUN_REDUCE_BODY(dtype) \
+  if (dtype == DataType::Fp32) run_reduce<float>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp16) run_reduce<__half>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int8) run_reduce<int8_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int32) run_reduce<int32_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int64) run_reduce<int64_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp64) run_reduce<double>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Bf16) run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
+
+#define RUN_REDUCE_REMOTE_BODY(dtype) \
+  if (dtype == DataType::Fp32) run_reduce_remote<float>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp16) run_reduce_remote<__half>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int8) run_reduce_remote<int8_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int32) run_reduce_remote<int32_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int64) run_reduce_remote<int64_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp64) run_reduce_remote<double>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Bf16) run_reduce_remote<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
+
 __device__ __forceinline__ void dispatch_task(Task const& task,
                                               TaskArgs const* ready_args,
                                               uint32_t block_id,
@@ -109,62 +204,39 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
   const TaskType ttype = static_cast<TaskType>(task.type_u8());
   const DataType dtype = static_cast<DataType>(task.dtype_u8());
 
+  if (ready_args == nullptr) return;
+  TaskArgs const& args = *ready_args;
+
   switch (ttype) {
     case TaskType::CollCopy:
-    case TaskType::CollReduce: {
-      if (ready_args == nullptr) {
-        return;
-      }
-      TaskArgs const& args = *ready_args;
-
-      if (ttype == TaskType::CollCopy) {
-        if (dtype == DataType::Int8) {
-          run_typed_copy<int8_t>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Int32) {
-          run_typed_copy<int32_t>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Int64) {
-          run_typed_copy<int64_t>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Fp16) {
-          run_typed_copy<__half>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Fp32) {
-          run_typed_copy<float>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Fp64) {
-          run_typed_copy<double>(args, block_id, num_blocks, smem_buf);
-        } else if (dtype == DataType::Bf16) {
-          run_typed_copy<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
-        } else {
-          run_copy(args, block_id, num_blocks, smem_buf);
-        }
-      } else if (dtype == DataType::Fp32) {
-        run_reduce<float>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Fp16) {
-        run_reduce<__half>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Int8) {
-        run_reduce<int8_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Int32) {
-        run_reduce<int32_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Int64) {
-        run_reduce<int64_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Fp64) {
-        run_reduce<double>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Bf16) {
-        run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
-      }
+      RUN_COPY_BODY(dtype, run_typed_copy);
       break;
-    }
-    case TaskType::BenchNop:
-    case TaskType::Stop:
+    case TaskType::CollCopyRemote:
+      RUN_COPY_BODY(dtype, run_send_remote);
+      break;
+    case TaskType::CollReduce:
+      RUN_REDUCE_BODY(dtype);
+      break;
+    case TaskType::CollReduceRemote:
+      RUN_REDUCE_REMOTE_BODY(dtype);
+      break;
+    case TaskType::CollRecvRemote:
+      run_recv_remote(args);
       break;
     default:
       break;
   }
 }
 
+#undef RUN_COPY_BODY
+#undef RUN_REDUCE_BODY
+#undef RUN_REDUCE_REMOTE_BODY
+
 __device__ __forceinline__ void process_task(Task const& task,
-                                             TaskArgs* d_task_args,
-                                             uint32_t block_id,
-                                             uint32_t num_blocks,
-                                             void* smem_buf) {
+                                              TaskArgs* d_task_args,
+                                              uint32_t block_id,
+                                              uint32_t num_blocks,
+                                              void* smem_buf) {
   TaskArgs* ready_args = nullptr;
   const TaskType ttype = static_cast<TaskType>(task.type_u8());
   if (task_uses_args(ttype)) {
@@ -216,46 +288,38 @@ __global__ void singlePersistentKernel(
         if (cached_tail < cached_head) {
           current_task = fifo.buffer[cached_tail % fifo.size];
           has_current_args = false;
-          command =
-              (current_task.type_u8() == static_cast<uint8_t>(TaskType::Stop))
-                  ? kCommandExit
-                  : kCommandRun;
-          if (command == kCommandRun &&
-              task_uses_args(static_cast<TaskType>(current_task.type_u8()))) {
-            const uint32_t idx = current_task.args_index();
-            if (idx < (1UL << TaskArgsIndexSize)) {
-              TaskArgs* args = d_task_args + idx;
-              *current_args = *args;
-              has_current_args = true;
-            }
-          }
-          if (command == kCommandExit) {
-            ++cached_tail;
-            publish_tail_progress(fifo.tail, cached_tail);
-          }
+          command = kCommandRun;
         }
       }
     }
     __syncthreads();
 
-    if (command == kCommandIdle) {
-      continue;
-    }
-    if (command == kCommandExit) {
-      return;
-    }
+    if (command == kCommandExit) break;
+    if (command != kCommandRun) continue;
 
-    dispatch_task(current_task, has_current_args ? current_args : nullptr, 0, 1,
-                  smem_buf);
+    const TaskType ttype = static_cast<TaskType>(current_task.type_u8());
+    if (task_uses_args(ttype)) {
+      if (threadIdx.x == 0 && !has_current_args) {
+        const uint32_t idx = current_task.args_index();
+        if (idx < (1UL << TaskArgsIndexSize)) {
+          *current_args = d_task_args[idx];
+          has_current_args = true;
+        }
+      }
+      __syncthreads();
+      if (!has_current_args) continue;
+    }
+    __syncthreads();
+
+    dispatch_task(current_task, task_uses_args(ttype) ? current_args : nullptr,
+                  blockIdx.x, gridDim.x, smem_buf);
     __syncthreads();
 
     if (threadIdx.x == 0) {
-      // Publish task writes before advancing the FIFO tail. Host-side polling
-      // treats fifo.pop() as completion, so tensor/staging updates must be
-      // globally visible first.
       ++cached_tail;
       publish_tail_progress(fifo.tail, cached_tail);
     }
+    __syncthreads();
   }
 }
 

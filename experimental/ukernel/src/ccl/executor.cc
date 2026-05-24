@@ -1,5 +1,6 @@
 #include "executor.h"
 #include "utils.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -19,7 +20,9 @@ bool is_remote_ref(BufferRef const& ref) {
 }
 
 bool is_device_op(OpKind kind) {
-  return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce;
+  return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
+         kind == OpKind::DeviceSendRemote || kind == OpKind::DeviceReduceRemote ||
+         kind == OpKind::DeviceRecvRemote;
 }
 
 bool is_transport_op(OpKind kind) {
@@ -90,6 +93,8 @@ Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
 }
 
 }  // namespace
+
+static std::atomic<uint64_t> g_seq{1};
 
 static void init_run_state(CollectiveRun& run) {
   run.completed.assign(run.total_ops, false);
@@ -172,6 +177,24 @@ CollectiveOpHandle Executor::submit_collective(
   } else {
     plan = build_plan(cfg, inplace);
     plan_cache_.emplace(key, plan);
+  }
+
+  // Add global base to signal_seq — plan assigns local tile_seq (0,1,2...);
+  // executor adds a fresh monotonic base so cached plans get unique seqs.
+  if (plan.collective == CollectiveKind::AllReduce ||
+      plan.collective == CollectiveKind::AllToAll) {
+    uint64_t max_seq = 0;
+    for (auto const& o : plan.ops)
+      if (o.signal_seq > max_seq) max_seq = o.signal_seq;
+    if (max_seq > 0 || !plan.ops.empty()) {
+      uint64_t base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
+      for (Op& o : plan.ops) {
+        if (o.kind == OpKind::DeviceSendRemote ||
+            o.kind == OpKind::DeviceReduceRemote ||
+            o.kind == OpKind::DeviceRecvRemote)
+          o.signal_seq += base;
+      }
+    }
   }
 
   // One-time backend init (skip if same plan+binding as previous).
@@ -275,6 +298,16 @@ void Executor::advance_run(CollectiveRun& run) {
       if (!is_remote_ref(submit_op.dst))
         submit_op.resolved_dst =
             local_mutable_ptr(*run.binding, submit_op.dst, submit_op.tile.size_bytes);
+    }
+
+    // SM IPC: set completion buffer pointer for signal/poll.
+    if (plan_op.kind == OpKind::DeviceSendRemote &&
+        submit_op.dst.kind == BufferKind::Remote && gpu_comp_ready_) {
+      submit_op.resolved_src2 = gpu_comp_[submit_op.dst.rank].remote;
+    } else if ((plan_op.kind == OpKind::DeviceReduceRemote ||
+                plan_op.kind == OpKind::DeviceRecvRemote) &&
+               submit_op.src.kind == BufferKind::Remote && gpu_comp_ready_) {
+      submit_op.resolved_src2 = gpu_comp_[submit_op.src.rank].local;
     }
 
     BackendToken token;
@@ -415,6 +448,23 @@ void Executor::run_plan(CollectivePlan const& plan,
   run.plan = plan;
   run.binding = &binding;
   run.total_ops = plan.ops.size();
+
+  // Allocate fresh seqs for SM IPC ops (same as submit_collective).
+  if (plan.collective == CollectiveKind::AllReduce ||
+      plan.collective == CollectiveKind::AllToAll) {
+    uint64_t max_seq = 0;
+    for (auto const& o : plan.ops)
+      if (o.signal_seq > max_seq) max_seq = o.signal_seq;
+    if (max_seq > 0 || !plan.ops.empty()) {
+      uint64_t base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
+      for (Op& o : run.plan.ops) {
+        if (o.kind == OpKind::DeviceSendRemote ||
+            o.kind == OpKind::DeviceReduceRemote ||
+            o.kind == OpKind::DeviceRecvRemote)
+          o.signal_seq += base;
+      }
+    }
+  }
 
   if (run.total_ops == 0) return;
 

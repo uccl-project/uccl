@@ -20,18 +20,16 @@ enum class AlgorithmKind : uint32_t {
   Pairwise,
 };
 
-// OpKind unifies planner-level primitive kinds and backend execution kinds
-// into a single type — no lowering pass needed.
 enum class OpKind : uint32_t {
   TransportSend,
   TransportRecv,
   DeviceCopy,
   DeviceReduce,
+  DeviceSendRemote,
+  DeviceReduceRemote,
+  DeviceRecvRemote,
 };
 
-// TileRef is the planner's logical scheduling unit: one tensor tile that moves
-// through the collective pipeline. In the current implementation a tile is a
-// contiguous byte range, but the name leaves room for richer tensor tiling.
 struct TileRef {
   uint32_t owner_rank = 0;
   uint32_t tile_index = 0;
@@ -40,9 +38,6 @@ struct TileRef {
   size_t size_bytes = 0;
 };
 
-// Op is a single operation in the collective DAG.  Planner fills in the
-// static scheduling fields; the Executor fills in the resolved pointer
-// fields before submitting to backends.
 struct Op {
   uint32_t op_id = 0;
   OpKind kind = OpKind::DeviceCopy;
@@ -53,15 +48,18 @@ struct Op {
   ReductionKind reduction = ReductionKind::None;
   std::vector<uint32_t> deps;
 
+  // Planner-assigned monotonic signal seq (SM IPC cross-rank sync).
+  uint64_t signal_seq = 0;
+
   // Runtime bindings — filled by the Executor, unset by the planner.
   void const* resolved_src = nullptr;
   void* resolved_dst = nullptr;
   int src_device = -1;
   int dst_device = -1;
+  // For SM IPC: GPU completion buffer ptr (DeviceSend/Reduce/RecvRemote).
+  void* resolved_src2 = nullptr;
 };
 
-// CollectiveConfig bundles all parameters needed to plan and execute a
-// single collective invocation.
 struct CollectiveConfig {
   CollectiveKind collective = CollectiveKind::AllReduce;
   int nranks = 1;
@@ -77,10 +75,9 @@ struct CollectiveConfig {
   AlgorithmKind algorithm = AlgorithmKind::Ring;
   ScalarType dtype = ScalarType::Float32;
   ReductionKind reduction = ReductionKind::Sum;
+  bool use_sm_ipc = true;
 };
 
-// Immutable plan — can be cached and reused across invocations with the
-// same config shape.
 struct CollectivePlan {
   CollectiveKind collective = CollectiveKind::AllReduce;
   AlgorithmKind algorithm = AlgorithmKind::Ring;

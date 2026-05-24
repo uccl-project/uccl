@@ -115,7 +115,9 @@ void DeviceBackend::validate(CollectivePlan const& plan,
 // ── submit ─────────────────────────────────────────────────────────────
 
 bool DeviceBackend::supports(OpKind kind) const {
-  return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce;
+  return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
+         kind == OpKind::DeviceSendRemote || kind == OpKind::DeviceReduceRemote ||
+         kind == OpKind::DeviceRecvRemote;
 }
 
 BackendToken DeviceBackend::submit(Op const& op,
@@ -145,8 +147,22 @@ BackendToken DeviceBackend::submit(Op const& op,
   args.dst_device = op.dst_device >= 0 ? op.dst_device : local_device_idx_;
   args.set_red_type(to_reduce_type(op.reduction));
 
-  Device::TaskType task_type = (op.kind == OpKind::DeviceReduce)
-      ? Device::TaskType::CollReduce : Device::TaskType::CollCopy;
+  // SM IPC fields: src2 = completion buffer ptr, redTypeRaw = packed (seq<<8 | red_type)
+  args.src2 = op.resolved_src2;
+  if (op.kind == OpKind::DeviceSendRemote || op.kind == OpKind::DeviceReduceRemote ||
+      op.kind == OpKind::DeviceRecvRemote) {
+    uint8_t red = static_cast<uint8_t>(to_reduce_type(op.reduction));
+    args.redTypeRaw = (op.signal_seq << 8) | red;
+  }
+
+  Device::TaskType task_type;
+  switch (op.kind) {
+    case OpKind::DeviceReduce:         task_type = Device::TaskType::CollReduce; break;
+    case OpKind::DeviceReduceRemote:   task_type = Device::TaskType::CollReduceRemote; break;
+    case OpKind::DeviceSendRemote:     task_type = Device::TaskType::CollCopyRemote; break;
+    case OpKind::DeviceRecvRemote:     task_type = Device::TaskType::CollRecvRemote; break;
+    default:                           task_type = Device::TaskType::CollCopy; break;
+  }
   uint32_t flow_id = op.tile.flow_index;
 
   auto fit = active_flows_.find(flow_id);

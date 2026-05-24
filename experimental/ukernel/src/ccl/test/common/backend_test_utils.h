@@ -117,11 +117,14 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     };
     validate_ref(op.src);
     validate_ref(op.dst);
-    if (op.kind == OpKind::TransportSend) {
+    if (op.kind == OpKind::TransportSend ||
+        op.kind == OpKind::DeviceSendRemote) {
       assert(op.src.kind == BufferKind::Local);
       assert(op.dst.kind == BufferKind::Remote);
     }
-    if (op.kind == OpKind::TransportRecv) {
+    if (op.kind == OpKind::TransportRecv ||
+        op.kind == OpKind::DeviceReduceRemote ||
+        op.kind == OpKind::DeviceRecvRemote) {
       assert(op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local);
     }
@@ -206,7 +209,9 @@ class MockDeviceBackend final : public Backend {
   char const* name() const override { return "device"; }
   void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind kind) const override {
-    return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce;
+    return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
+           kind == OpKind::DeviceSendRemote || kind == OpKind::DeviceReduceRemote ||
+           kind == OpKind::DeviceRecvRemote;
   }
 
   BackendToken submit(Op const& op, CollectiveBinding&) override {
