@@ -13,7 +13,6 @@
 #include <utility>
 #include <dlfcn.h>
 
-namespace uccl {
 namespace ibv_dl {
 
 // Lazy-load libibverbs.so handle.
@@ -91,4 +90,3 @@ UCCL_IBV_WRAP(ibv_wc_status_str)
 // correctly via dlsym.
 
 }  // namespace ibv_dl
-}  // namespace uccl

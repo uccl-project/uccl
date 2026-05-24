@@ -1,9 +1,6 @@
-#pragma once
-#include "common.h"
-#include "env.h"
-#include "util/debug.h"
-#include "util/gpu_rt.h"
-#include "util/util.h"
+#ifndef COMMON_H
+#define COMMON_H
+
 #include <arpa/inet.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
@@ -19,6 +16,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -28,7 +26,9 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <errno.h>
@@ -37,6 +37,52 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+typedef uint64_t FlowID;
+struct ConnID {
+  void* context;
+  int sock_fd;
+  int dev;
+  FlowID flow_id;
+};
+
+typedef struct AcceptedMeta {
+  std::string ip;
+  uint16_t port;
+  int gpu_id;
+  uint64_t rank_id;
+} AcceptedMeta;
+
+// Notifications
+static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
+static constexpr size_t NOTIFY_MSG_SIZE = 256;
+
+struct NotifyMsg {
+  uint32_t magic;
+  uint32_t msg_type;
+  char name[NOTIFY_MSG_SIZE];
+  char msg[NOTIFY_MSG_SIZE];
+};
+
+inline std::vector<NotifyMsg> notify_list;
+inline std::mutex notify_mutex;
+
+// FifoItem struct for RDMA operations (64-byte layout)
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  char padding[32];
+};
+static_assert(sizeof(FifoItem) == 64, "FifoItem size must be 64 bytes");
+
+void serialize_fifo_item(FifoItem const& item, char* buf);
+
+void deserialize_fifo_item(char const* buf, FifoItem* item);
+enum class MemoryType { HOST, GPU };
 
 namespace uccl {
 enum class FloatType : uint32_t {
@@ -49,136 +95,66 @@ enum class FloatType : uint32_t {
 };
 }
 
-#if defined USE_DIETGPU
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
-    defined(__HIPCC__)
-#include "dietgpu/float/GpuFloatCodec_hip.h"
-#include "dietgpu/utils/DeviceUtils_hip.h"
-#include "dietgpu/utils/StackDeviceMemory_hip.h"
-#include <hip/hip_fp16.h>
-#else
-#include "dietgpu/float/GpuFloatCodec.h"
-#include "dietgpu/utils/DeviceUtils.h"
-#include "dietgpu/utils/StackDeviceMemory.h"
-#include <cuda_fp16.h>
-#endif
+struct CompressionContext {
+  virtual ~CompressionContext() = default;
+  virtual uccl::FloatType getFloatType() const = 0;
+  virtual size_t getMaxSize() const = 0;
+};
 
-inline dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
-  switch (t) {
-    case uccl::FloatType::kFloat16:
-      return dietgpu::FloatType::kFloat16;
-    case uccl::FloatType::kBFloat16:
-      return dietgpu::FloatType::kBFloat16;
-    case uccl::FloatType::kFloat32:
-      return dietgpu::FloatType::kFloat32;
-    case uccl::FloatType::kFloat8E4M3FN:
-      return dietgpu::FloatType::kFloat8E4M3FN;
-    case uccl::FloatType::kFloat8E5M2:
-      return dietgpu::FloatType::kFloat8E5M2;
-    case uccl::FloatType::kUndefined:
-    default:
-      return dietgpu::FloatType::kUndefined;
+using CompressCtx = std::shared_ptr<CompressionContext>;
+
+static constexpr uint8_t kPortNum = 1;
+
+enum class NicMode { EFA, IB };
+
+inline bool is_nic_usable(std::string const& nic_name, NicMode mode) {
+  if (mode == NicMode::EFA && strncmp(nic_name.c_str(), "rdmap", 5) != 0) {
+    return false;
   }
-}
 
-inline uccl::FloatType from_dietgpu(dietgpu::FloatType t) {
-  switch (t) {
-    case dietgpu::FloatType::kFloat16:
-      return uccl::FloatType::kFloat16;
-    case dietgpu::FloatType::kBFloat16:
-      return uccl::FloatType::kBFloat16;
-    case dietgpu::FloatType::kFloat32:
-      return uccl::FloatType::kFloat32;
-    case dietgpu::FloatType::kFloat8E4M3FN:
-      return uccl::FloatType::kFloat8E4M3FN;
-    case dietgpu::FloatType::kFloat8E5M2:
-      return uccl::FloatType::kFloat8E5M2;
-    default:
-      return uccl::FloatType::kUndefined;
+  int dev_count = 0;
+  ibv_device** dev_list = ibv_get_device_list(&dev_count);
+  if (!dev_list) {
+    return false;
   }
-}
-
-/**
- * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
- * uccl::FloatType-based constructor and getFloatType() accessor, hiding the
- * internal dietgpu::FloatType from external callers.
- */
-struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext {
-  FloatCompressCtx() = default;
-  explicit FloatCompressCtx(uccl::FloatType ft)
-      : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
-
-  // Raw device buffer for the [in_ptr, inSize, out_ptr] tuple in params_dev.
-  // Plain cudaMalloc so each ctx frees independently (no LIFO constraint).
-  void* raw_params_dev = nullptr;
-
-  FloatCompressCtx(FloatCompressCtx const&) = delete;
-  FloatCompressCtx& operator=(FloatCompressCtx const&) = delete;
-
-  ~FloatCompressCtx() {
-    if (raw_params_dev) {
-      // dietgpu's ~GpuMemoryReservation does `if (ptr) CHECK(res)`. Our
-      // hand-constructed params_dev has res=nullptr, so clear ptr first to
-      // disarm the assertion; we own the buffer and free it directly.
-      params_dev.ptr = nullptr;
-      params_dev.res = nullptr;
-      gpuFree(raw_params_dev);
-      raw_params_dev = nullptr;
+  bool usable = false;
+  for (int i = 0; i < dev_count; ++i) {
+    if (std::strcmp(ibv_get_device_name(dev_list[i]), nic_name.c_str()) != 0) {
+      continue;
     }
+    ibv_context* ctx = ibv_open_device(dev_list[i]);
+    if (!ctx) break;
+
+    ibv_port_attr port_attr{};
+    if (ibv_query_port(ctx, kPortNum, &port_attr) == 0) {
+      if (mode == NicMode::EFA) {
+        if (port_attr.state == IBV_PORT_ACTIVE &&
+            (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED ||
+             port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
+             port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND)) {
+          usable = true;
+        }
+      } else {
+        if (port_attr.state == IBV_PORT_ACTIVE &&
+            (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
+             port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) &&
+            (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET ||
+             port_attr.gid_tbl_len > 0)) {
+          usable = true;
+        }
+      }
+    }
+    ibv_close_device(ctx);
+    break;
   }
-
-  uccl::FloatType getFloatType() const { return from_dietgpu(float_type); }
-};
-
-using CompressCtx = std::shared_ptr<FloatCompressCtx>;
-
-inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
-  return std::make_shared<FloatCompressCtx>(ft);
+  ibv_free_device_list(dev_list);
+  return usable;
 }
-
-#else
-
-/**
- * @brief Dummy device allocation that mimics dietgpu's
- * StackDeviceMemory::Reservation. Provides a no-op release() method for
- * compatibility.
- */
-struct DummyDevAlloc {
-  void release() {}
-  void* data() { return nullptr; }
-};
-
-/**
- * @brief Dummy compression context that mirrors the interface of
- * dietgpu::FloatCompressSplitContext. This allows code to compile
- * without #ifdef guards scattered throughout.
- */
-struct DummyCompressCtx {
-  uccl::FloatType float_type = uccl::FloatType::kUndefined;
-  size_t maxSize = 0;
-  DummyDevAlloc params_dev;
-  DummyDevAlloc histogram_dev;
-  DummyDevAlloc toComp_dev;
-
-  DummyCompressCtx() = default;
-  explicit DummyCompressCtx(uccl::FloatType ft) : float_type(ft), maxSize(0) {}
-
-  uccl::FloatType getFloatType() const { return float_type; }
-};
-
-using CompressCtx = std::shared_ptr<DummyCompressCtx>;
-
-inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
-  return std::make_shared<DummyCompressCtx>(ft);
-}
-
-#endif
 
 static constexpr int kNumEngines = 4;
 static constexpr int kNumGpuRtStreams = 4;
 
 static constexpr int kRankIDPlaceHolder = 9999;
-static constexpr uint8_t kPortNum = 1;
 
 // Use max 4 to accommodate AWS p5 instance
 static constexpr int kQpNumPerChannel = 4;
@@ -202,9 +178,7 @@ static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
 static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
-inline size_t channelIdToContextId(uint32_t channel_id) {
-  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
-}
+size_t channelIdToContextId(uint32_t channel_id);
 
 template <typename T = uint32_t>
 struct ContextArrayT {
@@ -357,40 +331,14 @@ struct ChunkSplitStrategy {
   static constexpr uint64_t kMessageChunkSizeKB = 512;
   static constexpr uint64_t kMaxSplitNum = 16;
 
-  static size_t getMessageChunkCount(size_t message_size) {
-    constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
-    if (message_size == 0) return 0;
-    size_t chunk_count =
-        (message_size + chunk_size_bytes - 1) / chunk_size_bytes;
-    return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
-  }
+  static size_t getMessageChunkCount(size_t message_size);
 
-  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
-    size_t chunk_count = getMessageChunkCount(message_size);
-    std::vector<MessageChunk> chunks;
-    chunks.reserve(chunk_count);
-    size_t actual_chunk_size = getRegularChunkSize(message_size, chunk_count);
-    for (size_t i = 0; i < chunk_count; ++i) {
-      uint64_t offset = i * actual_chunk_size;
-      size_t size = std::min(actual_chunk_size, message_size - offset);
-      chunks.emplace_back(offset, size);
-    }
-    return chunks;
-  }
+  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size);
 
   // Given message_size and chunk_count, return the uniform chunk size used for
   // all but the (potentially smaller) last chunk.
-  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count) {
-    if (chunk_count == 0 || message_size == 0) return 0;
-    return (message_size + chunk_count - 1) / chunk_count;
-  }
+  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count);
 };
-
-#define LOG_EVERY_N_ENDPOINT(severity, freq)             \
-  static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
-  if (++LOG_OCCURRENCES_##__LINE__ % (freq) == 0)        \
-  UCCL_LOG(severity, UCCL_RDMA)                          \
-      << "[count=" << LOG_OCCURRENCES_##__LINE__ << "] "
 
 struct ChannelMetaData {
   uint32_t qpn;
@@ -414,27 +362,10 @@ struct ChannelMetaData {
 
 enum class ChannelType : int16_t { Control, Normal };
 
-inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
-                                     RKeyArray& rkey_array) {
-  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-    ibv_mr* mr = mr_array.getKeyByContextID(ctx);
-    uint32_t rkey = mr ? mr->rkey : 0;
-    rkey_array.setKeyByContextID(ctx, rkey);
-  }
-}
+void copyRKeyArrayFromMRArray(MRArray const& mr_array, RKeyArray& rkey_array);
 
-inline void copyRKeysFromMRArrayToBytes(MRArray const& mr_array, char* dst,
-                                        size_t dst_size) {
-  constexpr size_t needed = sizeof(uint32_t) * kNICContextNumber;
-  assert(dst_size >= needed);
-
-  uint32_t* out = reinterpret_cast<uint32_t*>(dst);
-
-  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-    ibv_mr* mr = mr_array.getKeyByContextID(ctx);
-    out[ctx] = mr ? mr->rkey : 0;
-  }
-}
+void copyRKeysFromMRArrayToBytes(MRArray const& mr_array, char* dst,
+                                 size_t dst_size);
 
 struct OOBMetaData {
   std::string server_ip;
@@ -901,9 +832,9 @@ struct MetaInfoToExchange {
                      uint16_t oob_p = 0)
       : rank_id(rid),
         channel_id(cid),
+        flag(flag_in),
         channel_meta{},
         mem_meta{},
-        flag(flag_in),
         gpu_id(gid),
         oob_port(oob_p) {
     if (ch_meta) {
@@ -947,35 +878,18 @@ struct MetaInfoToExchange {
 };
 
 // Helper function: make socket non-blocking
-static inline int make_socket_non_blocking(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags == -1) return -1;
-  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) return -1;
-  return 0;
-}
+int make_socket_non_blocking(int fd);
 
 // Helper function: try send entire buffer, return bytes_sent
-static inline ssize_t try_send(int fd, char const* buf, size_t len) {
-  ssize_t n = ::send(fd, buf, len, MSG_NOSIGNAL);
-  if (n < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-    return -1;
-  }
-  return n;
-}
+ssize_t try_send(int fd, char const* buf, size_t len);
 
 // Hash support for RegMemBlock (based on size and type only)
 namespace std {
 template <>
 struct hash<RegMemBlock> {
-  size_t operator()(RegMemBlock const& block) const {
-    // Combine hash of size and type
-    size_t h1 = hash<size_t>{}(block.size);
-    size_t h2 = hash<int>{}(static_cast<int>(block.type));
-
-    // Use a simple hash combining algorithm
-    return h1 ^ (h2 << 1);
-  }
+  size_t operator()(RegMemBlock const& block) const;
 };
 
 }  // namespace std
+
+#endif

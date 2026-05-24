@@ -79,13 +79,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rsync -az --exclude .venv --exclude .git \
+          rsync -az --exclude .venv --exclude .git --delete \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             -e "ssh -o BatchMode=yes" \
             ./ amd0:~/uccl-ci-sandbox/
 
           if [ "$SHARED_NFS" != "true" ]; then
-            rsync -az --exclude .venv --exclude .git \
+            rsync -az --exclude .venv --exclude .git --delete \
               --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
               -e "ssh -o BatchMode=yes" \
               ./ amd1:~/uccl-ci-sandbox/

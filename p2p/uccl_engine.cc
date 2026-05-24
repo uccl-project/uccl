@@ -1,8 +1,10 @@
 #include "uccl_engine.h"
 #include "endpoint_wrapper.h"
 #include "engine.h"
-#include "include/transport_type.h"
-#include "rdma/epoll_client.h"
+#include "epoll_client.h"
+#include "transport_type.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
@@ -30,7 +32,7 @@ struct uccl_engine {
   std::thread local_accept_thread;
   std::atomic<bool> local_accept_started{false};
   // Standalone OOB client for cross-process local notifications when the
-  // transport endpoint does not provide one (e.g. NCCL/TCP build).
+  // transport endpoint does not provide one (e.g. NCCL build).
   std::shared_ptr<EpollClient> local_oob_client;
 };
 
@@ -106,7 +108,7 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
 }
 
 // Check UCCL_P2P_DISABLE_IPC=1 to force all transfers through the network
-// transport (RDMA or TCP) even for intra-node peers.  Useful for CI testing.
+// transport (RDMA or NCCL) even for intra-node peers.  Useful for CI testing.
 static bool ipc_disabled() {
   static bool disabled = [] {
     char const* val = std::getenv("UCCL_P2P_DISABLE_IPC");
@@ -170,11 +172,11 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   //   - Cross-process same-GPU same-node: network (shm ring self-skip issue)
   //   - Remote inter-node: network (RDMA)
   //
-  // NCCL/TCP build:
+  // NCCL build:
   //   - Same-process: IPC (direct ring access)
   //   - Cross-process same-node: network (NCCL). Data still uses IPC via
   //     NIXL ipc_bufs since conn->is_local is set true.
-  //     NOTE: same-GPU cross-process is unsupported with NCCL/TCP because
+  //     NOTE: same-GPU cross-process is unsupported with NCCL because
   //     ncclCommInitRank rejects two ranks on the same physical GPU.
   //   - Remote inter-node: network (NCCL)
   bool use_ipc;
@@ -584,7 +586,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   }
 
   // Cross-process local connection: send via OOB client (works for both
-  // RDMA and TCP builds).  The oob_conn_key was set up in uccl_engine_connect.
+  // RDMA and NCCL builds).  The oob_conn_key was set up in uccl_engine_connect.
   if (conn->is_local && !conn->oob_conn_key.empty()) {
     auto oob_client = conn->engine->endpoint->get_oob_client();
     if (!oob_client) {

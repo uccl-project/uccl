@@ -1,26 +1,24 @@
 #pragma once
-// Runtime dlsym wrapper for libnccl (or librccl on ROCm).
-// Uses nccl_types.h for type definitions - no nccl.h needed at compile time.
-// Custom library path: set UCCL_NCCL_SO environment variable.
+// Runtime dlsym wrapper for libefa (EFA vendor extensions).
+// Keeps #include <infiniband/efadv.h> for types and structs.
+// Custom library path: set UCCL_EFA_SO environment variable.
 
-#include "nccl_types.h"
+#include <infiniband/efadv.h>
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
 #include <dlfcn.h>
 
-namespace uccl {
-namespace nccl_dl {
+namespace efa_dl {
 
 inline void* get_handle() {
   static void* h = [] {
-    char const* custom = std::getenv("UCCL_NCCL_SO");
+    char const* custom = std::getenv("UCCL_EFA_SO");
     void* handle = custom ? dlopen(custom, RTLD_NOW) : nullptr;
-    if (!handle) handle = dlopen("libnccl.so", RTLD_NOW);
-    if (!handle) handle = dlopen("libnccl.so.2", RTLD_NOW);
-    if (!handle) handle = dlopen("librccl.so", RTLD_NOW);  // ROCm
+    if (!handle) handle = dlopen("libefa.so", RTLD_NOW);
+    if (!handle) handle = dlopen("libefa.so.1", RTLD_NOW);
     if (!handle) {
-      std::fprintf(stderr, "UCCL P2P: failed to load libnccl.so: %s\n",
+      std::fprintf(stderr, "UCCL P2P: failed to load libefa.so: %s\n",
                    dlerror());
     }
     return handle;
@@ -39,7 +37,7 @@ inline void* resolve(char const* name) {
   return sym;
 }
 
-#define UCCL_NCCL_WRAP(func_name)                                     \
+#define UCCL_EFA_WRAP(func_name)                                      \
   template <typename... Args>                                         \
   inline auto func_name(Args&&... args)                               \
       ->decltype(::func_name(std::forward<Args>(args)...)) {          \
@@ -48,14 +46,8 @@ inline void* resolve(char const* name) {
     return fn(std::forward<Args>(args)...);                           \
   }
 
-UCCL_NCCL_WRAP(ncclGetUniqueId)
-UCCL_NCCL_WRAP(ncclCommInitRank)
-UCCL_NCCL_WRAP(ncclCommDestroy)
-UCCL_NCCL_WRAP(ncclSend)
-UCCL_NCCL_WRAP(ncclRecv)
-UCCL_NCCL_WRAP(ncclGetErrorString)
+UCCL_EFA_WRAP(efadv_create_qp_ex)
 
-#undef UCCL_NCCL_WRAP
+#undef UCCL_EFA_WRAP
 
-}  // namespace nccl_dl
-}  // namespace uccl
+}  // namespace efa_dl
