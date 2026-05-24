@@ -1,12 +1,12 @@
 #pragma once
-#include "rdma/define.h"
-#include "rdma/rdma_data_channel_impl.h"
+#include "common.h"
+#include "rdma_data_channel_impl.h"
 #include "util/debug.h"
 
-class IBChannelImpl : public RDMADataChannelImpl {
+class EFAChannelImpl : public RDMADataChannelImpl {
  public:
-  IBChannelImpl() = default;
-  ~IBChannelImpl() override { delete[] pre_alloc_recv_wrs_; }
+  EFAChannelImpl() = default;
+  ~EFAChannelImpl() override = default;
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;
@@ -27,11 +27,4 @@ class IBChannelImpl : public RDMADataChannelImpl {
                 uint32_t remote_rkey, bool signaled) override;
 
   void initPreAllocResources() override;
-
- private:
-  void ibrcQP_rtr_rts(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-                      ChannelMetaData const& remote_meta);
 };
-
-// Implementation (inline to avoid separate .cc file)
-#include "rdma_data_channel_impl_ib.cc"

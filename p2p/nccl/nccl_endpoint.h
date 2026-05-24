@@ -1,7 +1,7 @@
 #pragma once
 
-#include "include/common.h"
-#include "include/nccl_types.h"
+#include "common.h"
+#include "nccl_types.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -51,26 +51,26 @@ struct ucclRequest {
 
 class EpollClient;
 
-namespace tcp {
+namespace nccl {
 
-int get_tcp_numa_node_from_iface();
+int get_numa_node_from_iface();
 
-// Placeholder for RDMA-style MR arrays. TCP does not register memory, but the
+// Placeholder for RDMA-style MR arrays. NCCL does not register memory, but the
 // unified interface expects the type.
 struct MRArray {
   void* dummy = nullptr;
 };
 
-class TCPEndpoint {
+class NCCLEndpoint {
  public:
-  // NCCL-over-TCP endpoint: TCP control-plane + NCCL send/recv data-plane.
-  explicit TCPEndpoint(int gpu_index, uint16_t port = 0);
-  ~TCPEndpoint();
+  // NCCL endpoint: NCCL control-plane + NCCL send/recv data-plane.
+  explicit NCCLEndpoint(int gpu_index, uint16_t port = 0);
+  ~NCCLEndpoint();
 
   // GPU index selected by the engine; may be overridden by uccl_connect/accept.
   int gpuIndex() const { return gpu_index_; }
 
-  // RDMA endpoint exposes these for OOB metadata exchange; TCP path doesn't
+  // RDMA endpoint exposes these for OOB metadata exchange; NCCL path doesn't
   // use EpollClient but we keep stubs so engine code can compile unchanged.
   std::shared_ptr<EpollClient> get_oob_client() const { return nullptr; }
   std::string get_oob_conn_key(uint64_t rank_id) const {
@@ -78,20 +78,20 @@ class TCPEndpoint {
     return "";
   }
 
-  // Establish a TCP control connection, exchange NCCL IDs, and start a control
+  // Establish a NCCL control connection, exchange NCCL IDs, and start a control
   // thread for one-sided read/write requests.
   uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
                             int remote_gpuidx, std::string remote_ip,
                             uint16_t remote_port);
-  // Listen socket metadata. dev is unused for TCP but required by the API.
+  // Listen socket metadata. dev is unused for NCCL but required by the API.
   uint16_t get_p2p_listen_port(int dev) { return listen_port_; }
   int get_p2p_listen_fd(int dev) { return listen_fd_; }
-  // Accept a TCP control connection and initialize NCCL communicators.
+  // Accept a NCCL control connection and initialize NCCL communicators.
   uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                            std::string& remote_ip, int* remote_dev,
                            int* remote_gpuidx);
 
-  // Memory registration is a no-op for TCP; we keep the interface.
+  // Memory registration is a no-op for NCCL; we keep the interface.
   int uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len, int type,
                  struct uccl::Mhandle** mhandle);
   int uccl_regmr(void* data, size_t len, MRArray& mr_array);
@@ -121,7 +121,7 @@ class TCPEndpoint {
                             struct uccl::Mhandle** mhandle, void const* data,
                             size_t size, char* out_buf);
 
-  // TCP has no device selection or unified socket; keep these as no-ops.
+  // NCCL has no device selection or unified socket; keep these as no-ops.
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
   // Get the socket file descriptor for a connection.
@@ -177,4 +177,4 @@ class TCPEndpoint {
   std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
 };
 
-}  // namespace tcp
+}  // namespace nccl

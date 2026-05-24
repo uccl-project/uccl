@@ -1,5 +1,5 @@
 #pragma once
-#include "define.h"
+#include "common.h"
 #include "rdma_context.h"
 #include <infiniband/verbs.h>
 #include <cstdio>
@@ -98,6 +98,6 @@ class RDMADataChannelImpl {
 class EFAChannelImpl;
 class IBChannelImpl;
 
-// Factory function declaration (defined in rdma_data_channel.h after
+// Factory function declaration (defined in rdma_data_channel.cc after
 // including provider headers)
 std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl();

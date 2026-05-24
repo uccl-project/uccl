@@ -7,7 +7,8 @@ HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 RDMA_HOME := ../collective/rdma
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
+	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lz -lelf -libverbs -lpthread
 
@@ -48,7 +49,25 @@ RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc engine_api.cc
+P2P_IMPL_SOURCES := \
+	util/adaptive_sleeper.cc \
+	util/common.cc \
+	rdma/compression.cc \
+	util/epoll_client.cc \
+	util/epoll_server.cc \
+	util/memory_allocator.cc \
+	rdma/rdma_context.cc \
+	rdma/rdma_connection.cc \
+	rdma/rdma_ctrl_channel.cc \
+	rdma/rdma_data_channel.cc \
+	rdma/rdma_device.cc \
+	rdma/rdma_endpoint.cc \
+	util/seq_num.cc \
+	rdma/providers/rdma_data_channel_impl_efa.cc \
+	rdma/providers/rdma_data_channel_impl_ib.cc
+P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
+SOURCES := engine.cc engine_api.cc $(P2P_IMPL_SOURCES)
+CORE_OBJECT := engine.o $(P2P_IMPL_OBJECTS)
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target

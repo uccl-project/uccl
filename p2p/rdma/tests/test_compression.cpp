@@ -32,8 +32,8 @@
 //     -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
 //    -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
 //     -lamdhip64 -libverbs -lgflags -lpthread -std=c++17
-#include "../compression.h"
-#include "../memory_allocator.h"
+#include "compression.h"
+#include "memory_allocator.h"
 #include "util/debug.h"
 #include <gflags/gflags.h>
 #include <chrono>

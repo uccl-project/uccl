@@ -1,5 +1,5 @@
 #pragma once
-#include "define.h"
+#include "common.h"
 
 template <typename T, size_t Capacity>
 class EmptyRingBuffer {

@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "compression.h"
 #include "endpoint_wrapper.h"
 #include "util/debug.h"
 #include "util/pause.h"
@@ -213,15 +214,15 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
   if (uccl::is_nccl_transport()) {
-    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+    ep_ = std::make_shared<nccl::NCCLEndpoint>(local_gpu_idx_, 0);
+    numa_node_ = nccl::get_numa_node_from_iface();
   } else {
     // Enable the polling thread when congestion control is active.
     bool cc_polling =
         uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
         uccl::cc::CongestionControlState::Mode::kNone;
-    ep_ = std::shared_ptr<NICEndpoint>(
-        new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
+    ep_ = std::shared_ptr<RDMAEndpoint>(
+        new RDMAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
@@ -292,10 +293,10 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
   if (uccl::is_nccl_transport()) {
-    ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+    ep_ = std::make_shared<nccl::NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
-    ep_ = std::shared_ptr<NICEndpoint>(
-        new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+    ep_ = std::shared_ptr<RDMAEndpoint>(
+        new RDMAEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
   }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -2646,9 +2647,9 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (flow_id == UINT64_MAX) {
     return -1;
   }
-  auto* tcp_ep = std::get_if<std::shared_ptr<tcp::TCPEndpoint>>(&ep_);
-  if (!tcp_ep || !*tcp_ep) return -1;
-  return (*tcp_ep)->send_notification(flow_id, notification);
+  auto* nccl_ep = std::get_if<std::shared_ptr<nccl::NCCLEndpoint>>(&ep_);
+  if (!nccl_ep || !*nccl_ep) return -1;
+  return (*nccl_ep)->send_notification(flow_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2677,14 +2678,14 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
   return it->second;
 }
 
-RDMAEndPoint Endpoint::get_endpoint() const { return ep_; }
+GenericEndpoint Endpoint::get_endpoint() const { return ep_; }
 
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (uccl::is_nccl_transport()) {
-    numa_node_ = tcp::get_tcp_numa_node_from_iface();
+    numa_node_ = nccl::get_numa_node_from_iface();
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);

@@ -47,7 +47,7 @@ struct PooledSendBundle {
       : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
 };
 
-static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
+static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
                               ucclRequest* ureq) {
@@ -81,7 +81,7 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   return ureq->engine_idx;
 }
 
-// Same as set_request() but skips NICEndpoint::writeOrRead() (which does a
+// Same as set_request() but skips RDMAEndpoint::writeOrRead() (which does a
 // per-call map.find on send_channel_groups_) by taking a pre-resolved
 // SendConnection pointer directly. Used by writev/readv hot paths.
 static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
@@ -127,12 +127,12 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
 // at runtime. The if constexpr branches are resolved at compile time so
 // there is no overhead beyond the variant type check.
 
-inline ConnID uccl_connect(RDMAEndPoint const& ep, int remote_gpuidx,
+inline ConnID uccl_connect(GenericEndpoint const& ep, int remote_gpuidx,
                            std::string remote_ip, uint16_t remote_port) {
   return std::visit(
       [&](auto const& s) -> ConnID {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           int local_gpu = s->gpuIndex();
           auto c = s->uccl_connect(0, local_gpu, 0, remote_gpuidx, remote_ip,
                                    remote_port);
@@ -144,11 +144,11 @@ inline ConnID uccl_connect(RDMAEndPoint const& ep, int remote_gpuidx,
       ep);
 }
 
-inline uint16_t get_p2p_listen_port(RDMAEndPoint const& ep) {
+inline uint16_t get_p2p_listen_port(GenericEndpoint const& ep) {
   return std::visit(
       [](auto const& s) -> uint16_t {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>)
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
           return s->get_p2p_listen_port(0);
         else
           return s->get_p2p_listen_port();
@@ -156,11 +156,11 @@ inline uint16_t get_p2p_listen_port(RDMAEndPoint const& ep) {
       ep);
 }
 
-inline int get_p2p_listen_fd(RDMAEndPoint const& ep) {
+inline int get_p2p_listen_fd(GenericEndpoint const& ep) {
   return std::visit(
       [](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>)
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
           return s->get_p2p_listen_fd(0);
         else
           return s->get_p2p_listen_fd();
@@ -168,12 +168,12 @@ inline int get_p2p_listen_fd(RDMAEndPoint const& ep) {
       ep);
 }
 
-inline ConnID uccl_accept(RDMAEndPoint const& ep, std::string& remote_ip,
+inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
                           int* remote_gpuidx) {
   return std::visit(
       [&](auto const& s) -> ConnID {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           int remote_dev = 0;
           int local_gpu = s->gpuIndex();
           auto c = s->uccl_accept(0, -1, local_gpu, remote_ip, &remote_dev,
@@ -186,16 +186,16 @@ inline ConnID uccl_accept(RDMAEndPoint const& ep, std::string& remote_ip,
       ep);
 }
 
-inline void stop_accept(RDMAEndPoint const& ep) {
+inline void stop_accept(GenericEndpoint const& ep) {
   std::visit([](auto const& s) { s->stop_accept(); }, ep);
 }
 
-inline bool uccl_regmr(RDMAEndPoint const& ep, void* data, size_t len,
+inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
                        struct P2PMhandle* mhandle) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)data;
           (void)len;
           (void)mhandle;
@@ -208,13 +208,13 @@ inline bool uccl_regmr(RDMAEndPoint const& ep, void* data, size_t len,
       ep);
 }
 
-inline int uccl_send_async(RDMAEndPoint const& ep, Conn* conn,
+inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* mhandle, void const* data,
                            size_t const size, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)mhandle;
           ureq->type = ReqType::ReqTx;
           ureq->n = conn->uccl_conn_id_.flow_id;
@@ -245,13 +245,13 @@ inline int uccl_send_async(RDMAEndPoint const& ep, Conn* conn,
       ep);
 }
 
-inline int uccl_recv_async(RDMAEndPoint const& ep, Conn* conn,
+inline int uccl_recv_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* mhandles, void** data, int* size, int n,
                            ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)mhandles;
           ureq->type = ReqType::ReqRx;
           ureq->n = conn->uccl_conn_id_.flow_id;
@@ -276,11 +276,11 @@ inline int uccl_recv_async(RDMAEndPoint const& ep, Conn* conn,
       ep);
 }
 
-inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
+inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           uccl::ucclRequest nreq = to_nccl_req(*ureq);
           bool ret = s->uccl_poll_ureq_once(&nreq);
           from_nccl_req(nreq, ureq);
@@ -304,11 +304,11 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
 // Drive the send/recv pollers once for the whole endpoint. Cheap to call
 // repeatedly but should be called only once per outer poll pass when
 // completing many in-flight requests (see writev/readv).
-inline void uccl_drive_send(RDMAEndPoint const& ep) {
+inline void uccl_drive_send(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
           s->sendRoutine();
         }
       },
@@ -317,11 +317,11 @@ inline void uccl_drive_send(RDMAEndPoint const& ep) {
 
 // Flush any batched send WRs (doorbell-batched posting). Use together with
 // the thread-local g_uccl_batch_post flag.
-inline void uccl_flush_send(RDMAEndPoint const& ep) {
+inline void uccl_flush_send(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
           s->flushAllSends();
         }
       },
@@ -329,15 +329,15 @@ inline void uccl_flush_send(RDMAEndPoint const& ep) {
 }
 
 // Resolve the SendConnection for a rank_id once. Returns nullptr on the
-// TCP path or if not found. Callers can then use uccl_check_wr_fast() to
+// NCCL path or if not found. Callers can then use uccl_check_wr_fast() to
 // avoid the per-call mutex + map lookup in checkSendComplete_once().
-inline SendConnection* uccl_resolve_send_group(RDMAEndPoint const& ep,
+inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
                                                uint64_t rank_id) {
   SendConnection* result = nullptr;
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
           result = s->getSendGroupRaw(rank_id);
         }
       },
@@ -350,11 +350,11 @@ inline bool uccl_check_wr_fast(SendConnection* send_group, int64_t wr_id) {
   return send_group->check(wr_id);
 }
 
-inline void uccl_drive_recv(RDMAEndPoint const& ep) {
+inline void uccl_drive_recv(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (!std::is_same_v<T, nccl::NCCLEndpoint>) {
           s->recvRoutine();
         }
       },
@@ -364,11 +364,11 @@ inline void uccl_drive_recv(RDMAEndPoint const& ep) {
 // Check completion of a single request without driving the send/recv pollers.
 // Use together with uccl_drive_send/uccl_drive_recv to amortize the polling
 // work across many in-flight requests.
-inline bool uccl_check_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
+inline bool uccl_check_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           uccl::ucclRequest nreq = to_nccl_req(*ureq);
           bool ret = s->uccl_poll_ureq_once(&nreq);
           from_nccl_req(nreq, ureq);
@@ -387,24 +387,24 @@ inline bool uccl_check_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
       ep);
 }
 
-inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
+inline int uccl_read_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* local_mh, void* dst, size_t size,
                            FifoItem const& slot_item, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqRead;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::FifoItem tcp_item{};
-          tcp_item.addr = slot_item.addr;
-          tcp_item.size = static_cast<uint32_t>(size);
-          std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
+          uccl::FifoItem nccl_item{};
+          nccl_item.addr = slot_item.addr;
+          nccl_item.size = static_cast<uint32_t>(size);
+          std::memset(nccl_item.padding, 0, sizeof(nccl_item.padding));
           uccl::ucclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_read_async(
               reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, dst, size, tcp_item, &nreq);
+              nullptr, dst, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -415,24 +415,24 @@ inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
       ep);
 }
 
-inline int uccl_write_async(RDMAEndPoint const& ep, Conn* conn,
+inline int uccl_write_async(GenericEndpoint const& ep, Conn* conn,
                             P2PMhandle* local_mh, void* src, size_t size,
                             FifoItem const& slot_item, ucclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqWrite;
           ureq->n = conn->uccl_conn_id_.flow_id;
-          uccl::FifoItem tcp_item{};
-          tcp_item.addr = slot_item.addr;
-          tcp_item.size = static_cast<uint32_t>(size);
-          std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
+          uccl::FifoItem nccl_item{};
+          nccl_item.addr = slot_item.addr;
+          nccl_item.size = static_cast<uint32_t>(size);
+          std::memset(nccl_item.padding, 0, sizeof(nccl_item.padding));
           uccl::ucclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_write_async(
               reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-              nullptr, src, size, tcp_item, &nreq);
+              nullptr, src, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
@@ -463,13 +463,13 @@ inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
                               ureq);
 }
 
-inline int prepare_fifo_metadata(RDMAEndPoint const& ep, Conn* conn,
+inline int prepare_fifo_metadata(GenericEndpoint const& ep, Conn* conn,
                                  P2PMhandle* mhandle, void const* data,
                                  size_t size, char* out_buf) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)conn;
           (void)mhandle;
           return s->prepare_fifo_metadata(nullptr, nullptr, data, size,
@@ -489,11 +489,11 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& ep, Conn* conn,
       ep);
 }
 
-inline void uccl_deregmr(RDMAEndPoint const& ep, P2PMhandle* mhandle) {
+inline void uccl_deregmr(GenericEndpoint const& ep, P2PMhandle* mhandle) {
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>) {
           (void)mhandle;
         } else {
           s->uccl_deregmr(mhandle->cache_refs);
@@ -502,11 +502,11 @@ inline void uccl_deregmr(RDMAEndPoint const& ep, P2PMhandle* mhandle) {
       ep);
 }
 
-inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& ep, int dev) {
+inline bool initialize_rdma_ctx_for_gpu(GenericEndpoint const& ep, int dev) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>)
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
           return s->initialize_engine_by_dev(dev, true);
         else
           return s->initialize_rdma_ctx_for_gpu(dev);
@@ -514,11 +514,11 @@ inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& ep, int dev) {
       ep);
 }
 
-inline void create_unified_p2p_socket(RDMAEndPoint const& ep) {
+inline void create_unified_p2p_socket(GenericEndpoint const& ep) {
   std::visit(
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, tcp::TCPEndpoint>)
+        if constexpr (std::is_same_v<T, nccl::NCCLEndpoint>)
           (void)s;
         else
           s->create_unified_p2p_socket();
@@ -526,7 +526,7 @@ inline void create_unified_p2p_socket(RDMAEndPoint const& ep) {
       ep);
 }
 
-inline std::shared_ptr<EpollClient> get_oob_client(RDMAEndPoint const& ep) {
+inline std::shared_ptr<EpollClient> get_oob_client(GenericEndpoint const& ep) {
   return std::visit(
       [](auto const& s) -> std::shared_ptr<EpollClient> {
         return s->get_oob_client();
@@ -534,7 +534,8 @@ inline std::shared_ptr<EpollClient> get_oob_client(RDMAEndPoint const& ep) {
       ep);
 }
 
-inline std::string get_oob_conn_key(RDMAEndPoint const& ep, uint64_t rank_id) {
+inline std::string get_oob_conn_key(GenericEndpoint const& ep,
+                                    uint64_t rank_id) {
   return std::visit(
       [&](auto const& s) -> std::string {
         return s->get_oob_conn_key(rank_id);
