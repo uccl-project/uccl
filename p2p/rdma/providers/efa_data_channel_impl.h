@@ -3,10 +3,10 @@
 #include "rdma_data_channel_impl.h"
 #include "util/debug.h"
 
-class EFAChannelImpl : public RDMADataChannelImpl {
+class EFADataChannelImpl : public RDMADataChannelImpl {
  public:
-  EFAChannelImpl() = default;
-  ~EFAChannelImpl() override = default;
+  EFADataChannelImpl() = default;
+  ~EFADataChannelImpl() override = default;
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;

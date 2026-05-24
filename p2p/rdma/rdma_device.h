@@ -17,8 +17,8 @@ class RDMADeviceSelectionStrategy {
       int gpu_idx) = 0;
 };
 
-#include "providers/rdma_device_selection_efa.h"
-#include "providers/rdma_device_selection_ib.h"
+#include "providers/efa_device_selection.h"
+#include "providers/ib_device_selection.h"
 #include "transport_type.h"
 
 // Factory: select IB or EFA device strategy at runtime.

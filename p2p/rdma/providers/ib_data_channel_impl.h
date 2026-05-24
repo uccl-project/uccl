@@ -3,10 +3,10 @@
 #include "rdma_data_channel_impl.h"
 #include "util/debug.h"
 
-class IBChannelImpl : public RDMADataChannelImpl {
+class IBDataChannelImpl : public RDMADataChannelImpl {
  public:
-  IBChannelImpl() = default;
-  ~IBChannelImpl() override { delete[] pre_alloc_recv_wrs_; }
+  IBDataChannelImpl() = default;
+  ~IBDataChannelImpl() override { delete[] pre_alloc_recv_wrs_; }
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;

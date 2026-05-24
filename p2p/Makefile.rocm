@@ -106,8 +106,8 @@ P2P_IMPL_SOURCES := \
 	rdma/rdma_device.cc \
 	rdma/rdma_endpoint.cc \
 	util/seq_num.cc \
-	rdma/providers/rdma_data_channel_impl_efa.cc \
-	rdma/providers/rdma_data_channel_impl_ib.cc
+	rdma/providers/efa_data_channel_impl.cc \
+	rdma/providers/ib_data_channel_impl.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS)

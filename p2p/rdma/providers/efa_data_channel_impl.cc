@@ -1,4 +1,4 @@
-#include "rdma_data_channel_impl_efa.h"
+#include "efa_data_channel_impl.h"
 #include "util/debug.h"
 #include <cstring>
 #include <errno.h>
@@ -43,9 +43,9 @@ inline void set_efa_flags(T& attr) {
   }
 }
 
-void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
-                            struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
-                            ChannelMetaData* local_meta) {
+void EFADataChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
+                                struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
+                                ChannelMetaData* local_meta) {
   struct ibv_cq_init_attr_ex cq_attr = {0};
   cq_attr.cqe = MAX_CQE;
   cq_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
@@ -124,17 +124,17 @@ void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   local_meta->lid = LID_EFA;
 }
 
-void EFAChannelImpl::connectQP(struct ibv_qp* qp,
-                               std::shared_ptr<RdmaContext> ctx,
-                               ChannelMetaData const& remote_meta) {
+void EFADataChannelImpl::connectQP(struct ibv_qp* qp,
+                                   std::shared_ptr<RdmaContext> ctx,
+                                   ChannelMetaData const& remote_meta) {
   (void)qp;
   (void)ctx;
   (void)remote_meta;
 }
 
-bool EFAChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
-                              std::vector<CQMeta>& cq_datas,
-                              uint32_t channel_id, uint32_t& nb_post_recv) {
+bool EFADataChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+                                  std::vector<CQMeta>& cq_datas,
+                                  uint32_t channel_id, uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     UCCL_LOG(INFO, UCCL_P2P)
@@ -191,22 +191,22 @@ bool EFAChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-void EFAChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
-                                      bool force) {
+void EFADataChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+                                          bool force) {
   (void)qp;
   (void)n;
   (void)force;
 }
 
-void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
-                                   uint32_t remote_qpn) {
+void EFADataChannelImpl::setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
+                                       uint32_t remote_qpn) {
   ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
 }
 
-int EFAChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
-                              uint32_t remote_qpn, uint64_t wr_id,
-                              struct ibv_sge* sge, uint64_t remote_addr,
-                              uint32_t remote_rkey, bool signaled) {
+int EFADataChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                                  uint32_t remote_qpn, uint64_t wr_id,
+                                  struct ibv_sge* sge, uint64_t remote_addr,
+                                  uint32_t remote_rkey, bool signaled) {
   (void)signaled;
   auto* qpx = ibv_qp_to_qp_ex(qp);
   ibv_wr_start(qpx);
@@ -219,4 +219,4 @@ int EFAChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
   return ibv_wr_complete(qpx);
 }
 
-void EFAChannelImpl::initPreAllocResources() {}
+void EFADataChannelImpl::initPreAllocResources() {}

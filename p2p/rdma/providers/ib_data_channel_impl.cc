@@ -1,4 +1,4 @@
-#include "rdma_data_channel_impl_ib.h"
+#include "ib_data_channel_impl.h"
 #include "util/debug.h"
 #include <algorithm>
 #include <cstdint>
@@ -28,9 +28,9 @@ static inline uint8_t get_read_atomic_depth(char const* env_name,
   uint32_t cap = device_cap == 0 ? 1 : static_cast<uint32_t>(device_cap);
   return static_cast<uint8_t>(std::max<uint32_t>(1, std::min(requested, cap)));
 }
-void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
-                           struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
-                           ChannelMetaData* local_meta) {
+void IBDataChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
+                               struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
+                               ChannelMetaData* local_meta) {
   *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), kMaxCqe, nullptr,
                                             nullptr, 0);
   assert(*cq_ex);
@@ -87,15 +87,15 @@ void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   local_meta->lid = ctx->queryLid(kPortNum);
 }
 
-void IBChannelImpl::connectQP(struct ibv_qp* qp,
-                              std::shared_ptr<RdmaContext> ctx,
-                              ChannelMetaData const& remote_meta) {
+void IBDataChannelImpl::connectQP(struct ibv_qp* qp,
+                                  std::shared_ptr<RdmaContext> ctx,
+                                  ChannelMetaData const& remote_meta) {
   ibrcQP_rtr_rts(qp, ctx, remote_meta);
 }
 
-void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
-                                   std::shared_ptr<RdmaContext> ctx,
-                                   ChannelMetaData const& remote_meta) {
+void IBDataChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
+                                       std::shared_ptr<RdmaContext> ctx,
+                                       ChannelMetaData const& remote_meta) {
   int flags = 0;
   struct ibv_qp_attr attr = {};
   struct ibv_port_attr port_attr;
@@ -169,9 +169,9 @@ void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   }
 }
 
-bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
-                             std::vector<CQMeta>& cq_datas, uint32_t channel_id,
-                             uint32_t& nb_post_recv) {
+bool IBDataChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+                                 std::vector<CQMeta>& cq_datas,
+                                 uint32_t channel_id, uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     UCCL_LOG(INFO, UCCL_P2P)
@@ -228,8 +228,8 @@ bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
-                                     bool force) {
+void IBDataChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+                                         bool force) {
   pending_post_recv_ += n;
   while (pending_post_recv_ >= kBatchPostRecvWr) {
     struct ibv_recv_wr* bad_wr = nullptr;
@@ -266,18 +266,18 @@ void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
   }
 }
 
-void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
-                                  uint32_t remote_qpn) {
+void IBDataChannelImpl::setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
+                                      uint32_t remote_qpn) {
   // IB RC doesn't need UD address setup
   (void)qpx;
   (void)ah;
   (void)remote_qpn;
 }
 
-int IBChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
-                             uint32_t remote_qpn, uint64_t wr_id,
-                             struct ibv_sge* sge, uint64_t remote_addr,
-                             uint32_t remote_rkey, bool signaled) {
+int IBDataChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
+                                 uint32_t remote_qpn, uint64_t wr_id,
+                                 struct ibv_sge* sge, uint64_t remote_addr,
+                                 uint32_t remote_rkey, bool signaled) {
   (void)ah;
   (void)remote_qpn;
   ibv_send_wr wr{};
@@ -292,7 +292,7 @@ int IBChannelImpl::postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
   return ibv_post_send(qp, &wr, &bad);
 }
 
-void IBChannelImpl::initPreAllocResources() {
+void IBDataChannelImpl::initPreAllocResources() {
   pre_alloc_recv_wrs_ = new struct ibv_recv_wr[kMaxRecvWr];
   pending_post_recv_ = 0;
   for (int i = 0; i < kMaxRecvWr; i++) {

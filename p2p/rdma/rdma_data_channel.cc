@@ -1,6 +1,6 @@
 #include "rdma_data_channel.h"
-#include "providers/rdma_data_channel_impl_efa.h"
-#include "providers/rdma_data_channel_impl_ib.h"
+#include "providers/efa_data_channel_impl.h"
+#include "providers/ib_data_channel_impl.h"
 #include <cassert>
 #include <cerrno>
 #include <cstring>
@@ -9,9 +9,9 @@
 
 std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
   if (uccl::is_efa_transport())
-    return std::make_unique<EFAChannelImpl>();
+    return std::make_unique<EFADataChannelImpl>();
   else
-    return std::make_unique<IBChannelImpl>();
+    return std::make_unique<IBDataChannelImpl>();
 }
 
 RDMADataChannel::RDMADataChannel(std::shared_ptr<RdmaContext> ctx,

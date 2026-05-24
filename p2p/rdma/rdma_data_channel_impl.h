@@ -95,8 +95,8 @@ class RDMADataChannelImpl {
 };
 
 // Forward declarations for implementations
-class EFAChannelImpl;
-class IBChannelImpl;
+class EFADataChannelImpl;
+class IBDataChannelImpl;
 
 // Factory function declaration (defined in rdma_data_channel.cc after
 // including provider headers)
