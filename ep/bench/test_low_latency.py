@@ -17,7 +17,6 @@ import argparse
 import random
 import time
 import os
-import gc
 import torch
 import torch.distributed as dist
 import numpy as np
@@ -572,15 +571,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         )
                 # assert current_hash == ref_hash, f"Error: seed={seed}"
 
-    torch.cuda.synchronize()
-    dist.barrier()
-
+    # Destroy the buffer runtime and communication group
     buffer.destroy()
-    torch.cuda.synchronize()
     dist.barrier()
-
-    del buffer
-    gc.collect()
     dist.destroy_process_group()
 
 
