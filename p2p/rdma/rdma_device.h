@@ -24,7 +24,7 @@ class RDMADeviceSelectionStrategy {
 // Factory: select IB or EFA device strategy at runtime.
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
 createDeviceSelectionStrategy() {
-  if (uccl::is_efa_transport())
+  if (is_efa_transport())
     return std::make_unique<EFADeviceSelectionStrategy>();
   else
     return std::make_unique<IBDeviceSelectionStrategy>();

@@ -292,7 +292,7 @@ class Endpoint {
 
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
-           uccl::FloatType float_type = uccl::FloatType::kFloat32);
+           FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);

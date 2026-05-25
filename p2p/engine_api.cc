@@ -170,13 +170,13 @@ NB_MODULE(p2p, m) {
                " size=" + std::to_string(d.size) +
                " mr_id=" + std::to_string(d.mr_id) + ">";
       });
-  nb::enum_<uccl::FloatType>(m, "FloatType")
-      .value("kUndefined", uccl::FloatType::kUndefined)
-      .value("kFloat16", uccl::FloatType::kFloat16)
-      .value("kBFloat16", uccl::FloatType::kBFloat16)
-      .value("kFloat32", uccl::FloatType::kFloat32)
-      .value("kFloat8E4M3FN", uccl::FloatType::kFloat8E4M3FN)
-      .value("kFloat8E5M2", uccl::FloatType::kFloat8E5M2)
+  nb::enum_<FloatType>(m, "FloatType")
+      .value("kUndefined", FloatType::kUndefined)
+      .value("kFloat16", FloatType::kFloat16)
+      .value("kBFloat16", FloatType::kBFloat16)
+      .value("kFloat32", FloatType::kFloat32)
+      .value("kFloat8E4M3FN", FloatType::kFloat8E4M3FN)
+      .value("kFloat8E5M2", FloatType::kFloat8E5M2)
       .export_values();
 
   // Endpoint class binding
@@ -279,8 +279,7 @@ NB_MODULE(p2p, m) {
           "Accept an incoming connection")
       .def(
           "reg",
-          [](Endpoint& self, uint64_t ptr, size_t size,
-             uccl::FloatType floatType) {
+          [](Endpoint& self, uint64_t ptr, size_t size, FloatType floatType) {
             uint64_t mr_id;
             bool success;
             {
@@ -292,7 +291,7 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, mr_id);
           },
           "Register a data buffer", nb::arg("ptr"), nb::arg("size"),
-          nb::arg("floatType") = uccl::FloatType::kUndefined)
+          nb::arg("floatType") = FloatType::kUndefined)
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,

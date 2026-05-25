@@ -180,7 +180,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   //     ncclCommInitPeer rejects two ranks on the same physical GPU.
   //   - Remote inter-node: network (NCCL)
   bool use_ipc;
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     use_ipc = is_local && (same_process ||
                            remote_bdf != engine->endpoint->get_gpu_bus_id());
   } else {
@@ -213,7 +213,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                    conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-      if (!uccl::is_nccl_transport()) {
+      if (!is_nccl_transport()) {
         conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
       }
     }
@@ -235,7 +235,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     engine->endpoint->start_passive_accept();
   }
   uccl_conn_t* conn = new uccl_conn;
@@ -251,7 +251,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
   }
   conn->engine = engine;
@@ -324,7 +324,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     // The NIXL UCCL backend always uses the vector API, even for a single iov.
     // For the NCCL path, bypass the generic readv proxy-thread machinery in
     // that case and issue the scalar read directly.
@@ -414,7 +414,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     // Mirror the single-iov fast path for writes so the merged NCCL endpoint
     // does not force 1-buffer transfers through the vector proxy path.
     if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
@@ -603,7 +603,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
                : -1;
   }
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
   }
 

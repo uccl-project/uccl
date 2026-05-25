@@ -10,7 +10,7 @@
 #include <utility>
 
 std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
-  if (uccl::is_efa_transport())
+  if (is_efa_transport())
     return std::make_unique<EFADataChannelImpl>();
   else
     return std::make_unique<IBDataChannelImpl>();
@@ -52,7 +52,7 @@ RDMADataChannel::~RDMADataChannel() {
 
 void RDMADataChannel::establishChannel(ChannelMetaData const& remote_meta) {
   remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
-  if (uccl::is_efa_transport()) {
+  if (is_efa_transport()) {
     ah_ = ctx_->createAH(remote_meta_->gid);
   }
   impl_->connectQP(qp_, ctx_, *remote_meta_);
@@ -343,7 +343,7 @@ int RDMADataChannel::__flushBatch_ex(
   // SGE storage must remain valid until ibv_wr_complete.
   std::vector<struct ibv_sge> sges(batch.size());
   size_t const last = batch.size() - 1;
-  bool const signal_all = uccl::is_efa_transport();
+  bool const signal_all = is_efa_transport();
   std::vector<uint64_t> unsignaled;
   if (!signal_all) unsignaled.reserve(last);
   auto* qpx = ibv_qp_to_qp_ex(qp_);
@@ -444,7 +444,7 @@ int RDMADataChannel::__postRawBatch_ex(
   if (batch.empty()) return 0;
   std::vector<struct ibv_sge> sges(batch.size());
   size_t const last = batch.size() - 1;
-  bool const signal_all = uccl::is_efa_transport();
+  bool const signal_all = is_efa_transport();
   std::vector<uint64_t> unsignaled;
   if (!signal_all) unsignaled.reserve(last);
   auto* qpx = ibv_qp_to_qp_ex(qp_);

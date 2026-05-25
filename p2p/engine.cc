@@ -214,7 +214,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
   } else {
@@ -234,7 +234,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
   }
@@ -293,7 +293,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
     ep_ =
@@ -573,7 +573,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
-                   uccl::FloatType float_type) {
+                   FloatType float_type) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {
@@ -2635,7 +2635,7 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
 
 int Endpoint::send_notification(uint64_t conn_id,
                                 NotifyMsg const& notification) const {
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     (void)conn_id;
     (void)notification;
     return -1;
@@ -2685,7 +2685,7 @@ void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
