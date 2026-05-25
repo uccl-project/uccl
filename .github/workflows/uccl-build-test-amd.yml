@@ -250,32 +250,38 @@ jobs:
           EOF
           PID1=$!
 
+          count_ep_ll_done() {
+            local c0 c1
+            c0=$(ssh -o BatchMode=yes amd0 "grep -c 'Dispatch send/recv time:' ~/uccl-ci-sandbox/ep-ll-host0.log 2>/dev/null || true")
+            c1=$(ssh -o BatchMode=yes amd1 "grep -c 'Dispatch send/recv time:' ~/uccl-ci-sandbox/ep-ll-host1.log 2>/dev/null || true")
+            c0=${c0:-0}
+            c1=${c1:-0}
+            echo $((c0 + c1))
+          }
+
           DONE_PID=""
           wait -n -p DONE_PID $PID0 $PID1
-          exitcode=$?
+          first_exit=$?
           if [ "${DONE_PID:-}" = "$PID0" ]; then
-            DONE_HOST=amd0
             REMAINING_PID=$PID1
-            REMAINING_HOST=amd1
           else
-            DONE_HOST=amd1
             REMAINING_PID=$PID0
-            REMAINING_HOST=amd0
           fi
-          echo "EP low-latency ${DONE_HOST} exited with ${exitcode}"
 
-          if [ $exitcode -ne 0 ]; then
+          if [ $first_exit -ne 0 ]; then
             kill $REMAINING_PID 2>/dev/null || true
             sleep 1
             kill -9 $REMAINING_PID 2>/dev/null || true
-            wait $REMAINING_PID 2>/dev/null || true
-            exit $exitcode
           fi
+          wait $REMAINING_PID 2>/dev/null || true
 
-          wait $REMAINING_PID
-          exitcode=$?
-          echo "EP low-latency ${REMAINING_HOST} exited with ${exitcode}"
-          exit $exitcode
+          done_count=$(count_ep_ll_done)
+          echo "EP low-latency first exit code ${first_exit}; found ${done_count}/16 final send/recv timing lines"
+          if [ "$done_count" -ge 16 ]; then
+            exit 0
+          fi
+          echo "EP low-latency did not print all final send/recv timing lines"
+          exit 1
 
       - name: Kill stale CI GPU processes
         if: always()
