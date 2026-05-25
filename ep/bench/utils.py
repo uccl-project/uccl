@@ -658,6 +658,11 @@ def destroy_uccl(proxies, workers):
     except Exception:
         pass
 
+    try:
+        proxies.clear()
+    except Exception:
+        pass
+
 
 def _fp8_e4m3_dtype() -> torch.dtype:
     """Return the correct FP8 E4M3 dtype for the current GPU."""

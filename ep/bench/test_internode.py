@@ -27,6 +27,7 @@ This benchmark verifies:
 import argparse
 import os
 import time
+import gc
 import torch
 import torch.distributed as dist
 
@@ -616,9 +617,15 @@ def test_loop(
                     print("", flush=True)
             assert current_hash == ref_hash
 
-    # Destroy the buffer runtime and communication group
-    buffer.destroy()
+    torch.cuda.synchronize()
     dist.barrier()
+
+    buffer.destroy()
+    torch.cuda.synchronize()
+    dist.barrier()
+
+    del buffer
+    gc.collect()
     dist.destroy_process_group()
 
 
