@@ -11,13 +11,11 @@
 #include <string>
 #include <unordered_map>
 
-using NcclFlowID = uint64_t;
 using NcclPeerID = uint64_t;
 
 struct NcclConnID {
   void* context;
   int sock_fd;
-  NcclFlowID flow_id;
   NcclPeerID peer_id;
   int dev;
 };
@@ -42,7 +40,7 @@ enum class NcclReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
 
 struct NcclRequest {
   NcclReqType type;
-  uint32_t n;
+  uint32_t peer_id;
   void* context;
   uint32_t engine_idx;
 };
@@ -69,8 +67,8 @@ class NCCLEndpoint {
   // RDMA endpoint exposes these for OOB metadata exchange; NCCL path doesn't
   // use EpollClient but we keep stubs so engine code can compile unchanged.
   std::shared_ptr<EpollClient> get_oob_client() const { return nullptr; }
-  std::string get_oob_conn_key(uint64_t rank_id) const {
-    (void)rank_id;
+  std::string get_oob_conn_key(uint64_t peer_id) const {
+    (void)peer_id;
     return "";
   }
 
@@ -116,10 +114,10 @@ class NCCLEndpoint {
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
   // Get the socket file descriptor for a connection.
-  int get_sock_fd(uint64_t flow_id);
+  int get_sock_fd(uint64_t peer_id);
 
   // Send a notification message to a peer (uses NotifyMsg from common.h)
-  int send_notification(uint64_t flow_id,
+  int send_notification(uint64_t peer_id,
                         struct ::NotifyMsg const& notification);
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
@@ -162,7 +160,7 @@ class NCCLEndpoint {
   // Control-plane listening socket.
   uint16_t listen_port_;
   int listen_fd_;
-  std::atomic<uint64_t> next_flow_id_{1};
+  std::atomic<uint64_t> next_peer_id_{1};
   std::atomic<bool> stop_accept_{false};
   std::mutex conn_mu_;
   std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;

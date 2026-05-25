@@ -110,8 +110,7 @@ NcclConnID make_invalid_conn() {
   NcclConnID invalid{};
   invalid.context = nullptr;
   invalid.sock_fd = -1;
-  invalid.flow_id = UINT64_MAX;
-  invalid.peer_id = 0;
+  invalid.peer_id = UINT64_MAX;
   invalid.dev = -1;
   return invalid;
 }
@@ -137,8 +136,8 @@ int get_numa_node_from_iface() {
 struct NCCLEndpoint::Conn {
   // One NCCL control socket + two NCCL communicators (one per direction).
   int sock_fd = -1;
-  int rank = -1;
-  int remote_rank = -1;
+  int peer = -1;
+  int remote_peer = -1;
   int local_gpu_idx = 0;
   ncclComm_t comm[2] = {nullptr, nullptr};
   gpuStream_t stream[2] = {nullptr, nullptr};
@@ -262,9 +261,9 @@ bool NCCLEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
   // comm_index selects which NCCL communicator (0 or 1) to init.
   if (comm_index < 0 || comm_index > 1) return false;
   if (gpuSetDevice(conn.local_gpu_idx) != gpuSuccess) return false;
-  ncclResult_t rc = ncclCommInitRank(&conn.comm[comm_index], 2, uid, conn.rank);
+  ncclResult_t rc = ncclCommInitRank(&conn.comm[comm_index], 2, uid, conn.peer);
   if (rc != ncclSuccess) {
-    std::cerr << "[nccl] ncclCommInitRank failed: " << ncclGetErrorString(rc)
+    std::cerr << "[nccl] ncclCommInitPeer failed: " << ncclGetErrorString(rc)
               << std::endl;
     return false;
   }
@@ -374,7 +373,7 @@ bool NCCLEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
   // Enqueue NCCL send on the selected communicator/stream.
-  ncclResult_t rc = ncclSend(data, size, ncclChar, conn.remote_rank,
+  ncclResult_t rc = ncclSend(data, size, ncclChar, conn.remote_peer,
                              conn.comm[comm_index], conn.stream[comm_index]);
   if (rc != ncclSuccess) {
     std::cerr << "[nccl] ncclSend failed: " << ncclGetErrorString(rc)
@@ -391,7 +390,7 @@ bool NCCLEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
 
-  // Track completion via ucclRequest.
+  // Track completion via UcclRequest.
   auto* handle = new AsyncHandle();
   handle->event = evt;
   ureq->context = handle;
@@ -414,7 +413,7 @@ bool NCCLEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
   // Enqueue NCCL recv on the selected communicator/stream.
-  ncclResult_t rc = ncclRecv(data, size, ncclChar, conn.remote_rank,
+  ncclResult_t rc = ncclRecv(data, size, ncclChar, conn.remote_peer,
                              conn.comm[comm_index], conn.stream[comm_index]);
   if (rc != ncclSuccess) {
     std::cerr << "[nccl] ncclRecv failed: " << ncclGetErrorString(rc)
@@ -431,7 +430,7 @@ bool NCCLEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
 
-  // Track completion via ucclRequest.
+  // Track completion via UcclRequest.
   auto* handle = new AsyncHandle();
   handle->event = evt;
   ureq->context = handle;
@@ -516,8 +515,8 @@ NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   // Build connection state and initialize NCCL communicators.
   auto conn = std::make_unique<Conn>();
   conn->sock_fd = fd;
-  conn->rank = 1;
-  conn->remote_rank = 0;
+  conn->peer = 1;
+  conn->remote_peer = 0;
   conn->local_gpu_idx = local_idx;
 
   if (!init_comms_(*conn, sh.uid_rank0, sh.uid_rank1)) {
@@ -525,11 +524,11 @@ NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     return make_invalid_conn();
   }
 
-  uint64_t flow_id = next_flow_id_.fetch_add(1);
+  uint64_t peer_id = next_peer_id_.fetch_add(1);
   Conn* conn_ptr = conn.get();
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
-    conn_map_.emplace(flow_id, std::move(conn));
+    conn_map_.emplace(peer_id, std::move(conn));
   }
   conn_ptr->ctrl_thread =
       std::thread(&NCCLEndpoint::control_loop_, this, conn_ptr);
@@ -537,8 +536,7 @@ NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   NcclConnID conn_id{};
   conn_id.context = conn_ptr;
   conn_id.sock_fd = conn_ptr->sock_fd;
-  conn_id.flow_id = flow_id;
-  conn_id.peer_id = 0;
+  conn_id.peer_id = peer_id;
   conn_id.dev = dev;
   return conn_id;
 }
@@ -627,8 +625,8 @@ NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   // Build connection state and initialize NCCL communicators.
   auto conn = std::make_unique<Conn>();
   conn->sock_fd = conn_fd;
-  conn->rank = 0;
-  conn->remote_rank = 1;
+  conn->peer = 0;
+  conn->remote_peer = 1;
   conn->local_gpu_idx = local_idx;
 
   if (!init_comms_(*conn, uid_rank0, uid_rank1)) {
@@ -636,11 +634,11 @@ NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     return make_invalid_conn();
   }
 
-  uint64_t flow_id = next_flow_id_.fetch_add(1);
+  uint64_t peer_id = next_peer_id_.fetch_add(1);
   Conn* conn_ptr = conn.get();
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
-    conn_map_.emplace(flow_id, std::move(conn));
+    conn_map_.emplace(peer_id, std::move(conn));
   }
   conn_ptr->ctrl_thread =
       std::thread(&NCCLEndpoint::control_loop_, this, conn_ptr);
@@ -648,8 +646,7 @@ NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   NcclConnID conn_id{};
   conn_id.context = conn_ptr;
   conn_id.sock_fd = conn_ptr->sock_fd;
-  conn_id.flow_id = flow_id;
-  conn_id.peer_id = 0;
+  conn_id.peer_id = peer_id;
   conn_id.dev = dev;
   return conn_id;
 }
@@ -815,19 +812,19 @@ int NCCLEndpoint::prepare_fifo_metadata(NcclFlow* flow, NcclMhandle** mhandle,
   return 0;
 }
 
-int NCCLEndpoint::get_sock_fd(uint64_t flow_id) {
+int NCCLEndpoint::get_sock_fd(uint64_t peer_id) {
   std::lock_guard<std::mutex> lock(conn_mu_);
-  auto it = conn_map_.find(flow_id);
+  auto it = conn_map_.find(peer_id);
   if (it == conn_map_.end()) {
     return -1;
   }
   return it->second->sock_fd;
 }
 
-int NCCLEndpoint::send_notification(uint64_t flow_id,
+int NCCLEndpoint::send_notification(uint64_t peer_id,
                                     ::NotifyMsg const& notification) {
   std::lock_guard<std::mutex> lock(conn_mu_);
-  auto it = conn_map_.find(flow_id);
+  auto it = conn_map_.find(peer_id);
   if (it == conn_map_.end()) {
     return -1;
   }

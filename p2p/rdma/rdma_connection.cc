@@ -607,8 +607,8 @@ bool SendConnection::postSingleChunk(
   }
 
   chunk_req->channel_id = chunk_channel_id;
-  chunk_req->from_rank_id = req->from_rank_id;
-  chunk_req->to_rank_id = req->to_rank_id;
+  chunk_req->from_peer_id = req->from_peer_id;
+  chunk_req->to_peer_id = req->to_peer_id;
   chunk_req->wr_id = req->wr_id;
   chunk_req->send_type = req->send_type;
 

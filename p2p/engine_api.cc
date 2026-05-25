@@ -1504,9 +1504,8 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", nb::arg("transfer_id"))
-      .def(
-          "conn_id_of_rank", &Endpoint::conn_id_of_rank,
-          "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
-          nb::arg("rank"))
+      .def("conn_id_of_rank", &Endpoint::conn_id_of_rank,
+           "Get the connection ID for a given peer (or UINT64_MAX if none)",
+           nb::arg("rank"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

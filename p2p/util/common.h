@@ -38,19 +38,19 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-typedef uint64_t FlowID;
+typedef uint64_t PeerID;
 struct ConnID {
   void* context;
   int sock_fd;
   int dev;
-  FlowID flow_id;
+  PeerID peer_id;
 };
 
 typedef struct AcceptedMeta {
   std::string ip;
   uint16_t port;
   int gpu_id;
-  uint64_t rank_id;
+  uint64_t peer_id;
 } AcceptedMeta;
 
 // Notifications
@@ -174,7 +174,7 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-static constexpr uint32_t INVALID_RANK_ID =
+static constexpr uint32_t INVALID_PEER_ID =
     std::numeric_limits<uint32_t>::max();
 static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
@@ -508,8 +508,9 @@ typedef struct RemoteMemInfo {
 } RemoteMemInfo;
 
 typedef struct RDMARecvRequest {
-  uint32_t from_rank_id = INVALID_RANK_ID;
-  uint32_t to_rank_id = INVALID_RANK_ID;
+  // Peer id is local to this endpoint, not necessarily global.
+  uint32_t from_peer_id = INVALID_PEER_ID;
+  uint32_t to_peer_id = INVALID_PEER_ID;
   uint32_t channel_id = 0;
   int64_t wr_id = -1;
   std::shared_ptr<RegMemBlock> local_mem;
@@ -533,8 +534,8 @@ typedef struct RDMARecvRequest {
   friend std::ostream& operator<<(std::ostream& os,
                                   RDMARecvRequest const& req) {
     os << "RDMARecvRequest{";
-    os << "from_rank_id: " << req.from_rank_id
-       << ", to_rank_id: " << req.to_rank_id
+    os << "from_peer_id: " << req.from_peer_id
+       << ", to_peer_id: " << req.to_peer_id
        << ", channel_id: " << req.channel_id;
     if (req.local_mem) {
       os << ", local_mem: " << *req.local_mem;
@@ -549,7 +550,7 @@ typedef struct RDMARecvRequest {
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
 
 struct alignas(64) SendReqMeta {
-  uint32_t rank_id;
+  uint32_t peer_id;
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
   RegMemBlock local_mem;
@@ -558,22 +559,22 @@ struct alignas(64) SendReqMeta {
   uint32_t received_chunk_count;  // Number of chunks already received
 
   SendReqMeta()
-      : rank_id(0),
+      : peer_id(0),
         channel_id(0),
         remote_mem{},
         expected_chunk_count(0),
         received_chunk_count(0) {}
 
-  SendReqMeta(uint32_t rid, uint32_t cid, RemoteMemInfo const& rmem,
+  SendReqMeta(uint32_t pid, uint32_t cid, RemoteMemInfo const& rmem,
               uint32_t expected = 0, uint32_t received = 0)
-      : rank_id(rid),
+      : peer_id(pid),
         channel_id(cid),
         remote_mem(rmem),
         expected_chunk_count(expected),
         received_chunk_count(received) {}
 
   SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req) {
-    rank_id = rev_req->from_rank_id;
+    peer_id = rev_req->from_peer_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
     local_mem =
@@ -587,7 +588,7 @@ struct alignas(64) SendReqMeta {
   }
 
   friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
-    os << "SendReqMeta{rank_id: " << meta.rank_id
+    os << "SendReqMeta{peer_id: " << meta.peer_id
        << ", channel_id: " << meta.channel_id
        << ", remote_mem: " << meta.remote_mem
        << ", expected_chunk_count: " << meta.expected_chunk_count
@@ -704,11 +705,13 @@ inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
                                 SendReqMeta& dst) { dst = src.meta; };
 
 enum class SendType { Send, Write, Read };
+
 struct RDMASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
-  uint32_t from_rank_id = INVALID_RANK_ID;
-  uint32_t to_rank_id = INVALID_RANK_ID;
+  // Peer id is local to this endpoint, not necessarily global.
+  uint32_t from_peer_id = INVALID_PEER_ID;
+  uint32_t to_peer_id = INVALID_PEER_ID;
   uint32_t channel_id = 0;
   ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
                          // index (low 16 bits)
@@ -765,8 +768,8 @@ struct RDMASendRequest {
   friend std::ostream& operator<<(std::ostream& os,
                                   RDMASendRequest const& req) {
     os << "RDMASendRequest{";
-    os << "from_rank_id: " << req.from_rank_id
-       << ", to_rank_id: " << req.to_rank_id
+    os << "from_peer_id: " << req.from_peer_id
+       << ", to_peer_id: " << req.to_peer_id
        << ", channel_id: " << req.channel_id << ", imm_data: " << req.imm_data
        << ", need_signaled: " << req.need_signaled;
     if (req.local_mem) {
@@ -801,7 +804,7 @@ T deserialize(std::string const& s) {
 
 // Example MetaInfo struct for metadata exchange
 struct MetaInfoToExchange {
-  int32_t rank_id;
+  int32_t peer_id;
   int32_t channel_id;
   ChannelType flag;
   ChannelMetaData channel_meta;
@@ -815,7 +818,7 @@ struct MetaInfoToExchange {
 
   // Default constructor
   MetaInfoToExchange()
-      : rank_id(0),
+      : peer_id(0),
         channel_id(0),
         flag(ChannelType::Normal),
         channel_meta{},
@@ -823,14 +826,14 @@ struct MetaInfoToExchange {
         gpu_id(0),
         oob_port(0) {}
 
-  // Constructor with required rank_id and channel_id, optional channel_meta and
+  // Constructor with required peer_id and channel_id, optional channel_meta and
   // mem_meta
-  MetaInfoToExchange(int32_t rid, int32_t cid,
+  MetaInfoToExchange(int32_t pid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
                      ChannelType flag_in = ChannelType::Normal, int gid = 0,
                      uint16_t oob_p = 0)
-      : rank_id(rid),
+      : peer_id(pid),
         channel_id(cid),
         flag(flag_in),
         channel_meta{},
@@ -849,7 +852,7 @@ struct MetaInfoToExchange {
   friend std::ostream& operator<<(std::ostream& os,
                                   MetaInfoToExchange const& meta) {
     os << "=== MetaInfoToExchange ===" << std::endl;
-    os << "  rank_id: " << meta.rank_id << std::endl;
+    os << "  peer_id: " << meta.peer_id << std::endl;
     os << "  channel_id: " << meta.channel_id << std::endl;
 
     os << "  channel_meta:" << std::endl;

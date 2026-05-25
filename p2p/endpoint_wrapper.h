@@ -4,24 +4,20 @@
 #include "util/gpu_rt.h"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-template <class T>
-struct always_false : std::false_type {};
-
-// Convert between the global ucclRequest and NcclRequest.
+// Convert between the global UcclRequest and NcclRequest.
 // They have different layouts (NCCL version has an extra context pointer).
-static inline NcclRequest to_nccl_req(ucclRequest const& r) {
+static inline NcclRequest to_nccl_req(UcclRequest const& r) {
   NcclRequest out{};
   out.type = static_cast<NcclReqType>(static_cast<int>(r.type));
-  out.n = r.n;
+  out.peer_id = r.peer_id;
   out.context = nullptr;
   out.engine_idx = r.engine_idx;
   return out;
 }
 
-static inline void from_nccl_req(NcclRequest const& in, ucclRequest* out) {
+static inline void from_nccl_req(NcclRequest const& in, UcclRequest* out) {
   out->type = static_cast<ReqType>(static_cast<int>(in.type));
-  out->n = in.n;
+  out->peer_id = in.peer_id;
   out->engine_idx = in.engine_idx;
 }
 
@@ -31,7 +27,7 @@ static inline ConnID to_conn_id(NcclConnID const& in) {
   out.context = in.context;
   out.sock_fd = in.sock_fd;
   out.dev = in.dev;
-  out.flow_id = in.flow_id;
+  out.peer_id = in.peer_id;
   return out;
 }
 
@@ -52,7 +48,7 @@ struct PooledSendBundle {
 static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
-                              ucclRequest* ureq) {
+                              UcclRequest* ureq) {
   auto bundle = std::make_shared<PooledSendBundle>();
 
   bundle->remote_mem_obj.addr = slot_item.addr;
@@ -71,7 +67,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
   bundle->req.compress_ctx = local_mh->compress_ctx;
-  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
   bundle->req.need_signaled = true;
@@ -79,7 +75,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
   auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
 
   ureq->engine_idx = obj->writeOrRead(req);
-  ureq->n = conn->uccl_conn_id_.flow_id;
+  ureq->peer_id = conn->uccl_conn_id_.peer_id;
   return ureq->engine_idx;
 }
 
@@ -89,7 +85,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
 static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
                                        P2PMhandle* local_mh, void* src,
                                        size_t size, FifoItem const& slot_item,
-                                       ucclRequest* ureq) {
+                                       UcclRequest* ureq) {
   auto bundle = std::make_shared<PooledSendBundle>();
 
   bundle->remote_mem_obj.addr = slot_item.addr;
@@ -107,7 +103,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
   bundle->req.compress_ctx = local_mh->compress_ctx;
-  bundle->req.to_rank_id = conn->uccl_conn_id_.flow_id;
+  bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
   bundle->req.need_signaled = true;
@@ -120,7 +116,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
     if (wr_id < 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
   }
   ureq->engine_idx = static_cast<int>(wr_id);
-  ureq->n = conn->uccl_conn_id_.flow_id;
+  ureq->peer_id = conn->uccl_conn_id_.peer_id;
   return ureq->engine_idx;
 }
 
@@ -212,14 +208,14 @@ inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
 
 inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* mhandle, void const* data,
-                           size_t const size, ucclRequest* ureq) {
+                           size_t const size, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandle;
           ureq->type = ReqType::ReqTx;
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_send_async(
               reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
@@ -234,13 +230,12 @@ inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
           auto send_req =
               std::make_shared<RDMASendRequest>(send_mem, remote_mem);
           send_req->compress_ctx = mhandle->compress_ctx;
+          send_req->to_peer_id = conn->uccl_conn_id_.peer_id;
           ureq->type = ReqType::ReqTx;
-          send_req->to_rank_id = conn->uccl_conn_id_.flow_id;
-          ureq->engine_idx = s->sendWithoutInnerQueue(send_req);
-          while (ureq->engine_idx < 0) {
+          do {
             ureq->engine_idx = s->sendWithoutInnerQueue(send_req);
-          }
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          } while (ureq->engine_idx < 0);
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           return ureq->engine_idx;
         }
       },
@@ -249,14 +244,14 @@ inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
 
 inline int uccl_recv_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* mhandles, void** data, int* size, int n,
-                           ucclRequest* ureq) {
+                           UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandles;
           ureq->type = ReqType::ReqRx;
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           NcclRequest nreq = to_nccl_req(*ureq);
           int ret = s->uccl_recv_async(
               reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
@@ -270,15 +265,15 @@ inline int uccl_recv_async(GenericEndpoint const& ep, Conn* conn,
           auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
           recv_req->compress_ctx = mhandles->compress_ctx;
           ureq->type = ReqType::ReqRx;
-          ureq->engine_idx = s->recv(conn->uccl_conn_id_.flow_id, recv_req);
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          ureq->engine_idx = s->recv(conn->uccl_conn_id_.peer_id, recv_req);
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           return ureq->engine_idx;
         }
       },
       ep);
 }
 
-inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
+inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
@@ -291,10 +286,10 @@ inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
           if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
             s->sendRoutine();
-            return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
+            return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
           } else if (ureq->type == ReqType::ReqRx) {
             s->recvRoutine();
-            return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
+            return s->checkRecvComplete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;
@@ -330,17 +325,17 @@ inline void uccl_flush_send(GenericEndpoint const& ep) {
       ep);
 }
 
-// Resolve the SendConnection for a rank_id once. Returns nullptr on the
+// Resolve the SendConnection for a peer_id once. Returns nullptr on the
 // NCCL path or if not found. Callers can then use uccl_check_wr_fast() to
 // avoid the per-call mutex + map lookup in checkSendComplete_once().
 inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
-                                               uint64_t rank_id) {
+                                               uint64_t peer_id) {
   SendConnection* result = nullptr;
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
-          result = s->getSendGroupRaw(rank_id);
+          result = s->getSendGroupRaw(peer_id);
         }
       },
       ep);
@@ -366,7 +361,7 @@ inline void uccl_drive_recv(GenericEndpoint const& ep) {
 // Check completion of a single request without driving the send/recv pollers.
 // Use together with uccl_drive_send/uccl_drive_recv to amortize the polling
 // work across many in-flight requests.
-inline bool uccl_check_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
+inline bool uccl_check_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
         using T = std::decay_t<decltype(*s)>;
@@ -378,9 +373,9 @@ inline bool uccl_check_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
         } else {
           if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
-            return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
+            return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
           } else if (ureq->type == ReqType::ReqRx) {
-            return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
+            return s->checkRecvComplete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;
@@ -391,14 +386,14 @@ inline bool uccl_check_ureq_once(GenericEndpoint const& ep, ucclRequest* ureq) {
 
 inline int uccl_read_async(GenericEndpoint const& ep, Conn* conn,
                            P2PMhandle* local_mh, void* dst, size_t size,
-                           FifoItem const& slot_item, ucclRequest* ureq) {
+                           FifoItem const& slot_item, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqRead;
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           NcclFifoItem nccl_item{};
           nccl_item.addr = slot_item.addr;
           nccl_item.size = static_cast<uint32_t>(size);
@@ -419,14 +414,14 @@ inline int uccl_read_async(GenericEndpoint const& ep, Conn* conn,
 
 inline int uccl_write_async(GenericEndpoint const& ep, Conn* conn,
                             P2PMhandle* local_mh, void* src, size_t size,
-                            FifoItem const& slot_item, ucclRequest* ureq) {
+                            FifoItem const& slot_item, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)local_mh;
           ureq->type = ReqType::ReqWrite;
-          ureq->n = conn->uccl_conn_id_.flow_id;
+          ureq->peer_id = conn->uccl_conn_id_.peer_id;
           NcclFifoItem nccl_item{};
           nccl_item.addr = slot_item.addr;
           nccl_item.size = static_cast<uint32_t>(size);
@@ -450,7 +445,7 @@ inline int uccl_write_async(GenericEndpoint const& ep, Conn* conn,
 inline int uccl_write_async_on_group(SendConnection* send_group, Conn* conn,
                                      P2PMhandle* local_mh, void* src,
                                      size_t size, FifoItem const& slot_item,
-                                     ucclRequest* ureq) {
+                                     UcclRequest* ureq) {
   ureq->type = ReqType::ReqWrite;
   return set_request_on_group(send_group, conn, local_mh, src, size, slot_item,
                               ureq);
@@ -459,7 +454,7 @@ inline int uccl_write_async_on_group(SendConnection* send_group, Conn* conn,
 inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
                                     P2PMhandle* local_mh, void* dst,
                                     size_t size, FifoItem const& slot_item,
-                                    ucclRequest* ureq) {
+                                    UcclRequest* ureq) {
   ureq->type = ReqType::ReqRead;
   return set_request_on_group(send_group, conn, local_mh, dst, size, slot_item,
                               ureq);
@@ -537,10 +532,10 @@ inline std::shared_ptr<EpollClient> get_oob_client(GenericEndpoint const& ep) {
 }
 
 inline std::string get_oob_conn_key(GenericEndpoint const& ep,
-                                    uint64_t rank_id) {
+                                    uint64_t peer_id) {
   return std::visit(
       [&](auto const& s) -> std::string {
-        return s->get_oob_conn_key(rank_id);
+        return s->get_oob_conn_key(peer_id);
       },
       ep);
 }

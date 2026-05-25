@@ -177,7 +177,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   //   - Cross-process same-node: network (NCCL). Data still uses IPC via
   //     NIXL ipc_bufs since conn->is_local is set true.
   //     NOTE: same-GPU cross-process is unsupported with NCCL because
-  //     ncclCommInitRank rejects two ranks on the same physical GPU.
+  //     ncclCommInitPeer rejects two ranks on the same physical GPU.
   //   - Remote inter-node: network (NCCL)
   bool use_ipc;
   if (!uccl::is_nccl_transport()) {

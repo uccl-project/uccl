@@ -387,6 +387,7 @@ bool RdmaContext::containsRange(uintptr_t outer_addr, size_t outer_size,
 RdmaContext::RegistrationMode RdmaContext::getRegistrationMode(
     void* addr) const {
   bool is_gpu = isGpuPointer(addr);
+  // Intel RDMA NICs use DMA-BUF for GPU memory registration.
   bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
   if (use_dmabuf) {
     UCCL_LOG(INFO, UCCL_RDMA)
