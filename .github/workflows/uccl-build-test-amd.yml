@@ -250,17 +250,32 @@ jobs:
           EOF
           PID1=$!
 
-          wait -n $PID0 $PID1
+          DONE_PID=""
+          wait -n -p DONE_PID $PID0 $PID1
           exitcode=$?
+          if [ "${DONE_PID:-}" = "$PID0" ]; then
+            DONE_HOST=amd0
+            REMAINING_PID=$PID1
+            REMAINING_HOST=amd1
+          else
+            DONE_HOST=amd1
+            REMAINING_PID=$PID0
+            REMAINING_HOST=amd0
+          fi
+          echo "EP low-latency ${DONE_HOST} exited with ${exitcode}"
+
           if [ $exitcode -ne 0 ]; then
-            kill $PID0 $PID1 2>/dev/null || true
+            kill $REMAINING_PID 2>/dev/null || true
             sleep 1
-            kill -9 $PID0 $PID1 2>/dev/null || true
-            wait $PID0 $PID1 2>/dev/null || true
+            kill -9 $REMAINING_PID 2>/dev/null || true
+            wait $REMAINING_PID 2>/dev/null || true
             exit $exitcode
           fi
-          wait $PID0 $PID1
-          exit $?
+
+          wait $REMAINING_PID
+          exitcode=$?
+          echo "EP low-latency ${REMAINING_HOST} exited with ${exitcode}"
+          exit $exitcode
 
       - name: Kill stale CI GPU processes
         if: always()
