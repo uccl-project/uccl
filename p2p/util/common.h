@@ -449,7 +449,7 @@ struct alignas(64) WriteReqMeta {
   uint32_t total_uncomp_size;  // original message size in bytes
   uint32_t compressed_size;    // split + encode output total bytes
   uint32_t float_type;         // FloatType
-  uint32_t ack_slot;           // sender expects ack written here in its ack_ring
+  uint32_t ack_slot;  // sender expects ack written here in its ack_ring
   uint32_t _pad;
   int64_t wr_id;
 };
