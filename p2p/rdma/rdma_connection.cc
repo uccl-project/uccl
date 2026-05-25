@@ -208,8 +208,8 @@ int64_t SendConnection::postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
   bool c_ack = static_cast<bool>(ack_ring_);
   bool c_rdb = remote_decompress_buf_.length > 0;
   bool c_ctx = static_cast<bool>(req->compress_ctx);
-  bool c_ft = c_ctx && (req->compress_ctx->getFloatType() !=
-                        uccl::FloatType::kUndefined);
+  bool c_ft =
+      c_ctx && (req->compress_ctx->getFloatType() != FloatType::kUndefined);
   bool c_fit = static_cast<uint64_t>(req->local_mem->size) <=
                remote_decompress_buf_.length;
   bool c_should = Compressor::getInstance().shouldCompressAndSplitFirst(
@@ -607,8 +607,8 @@ bool SendConnection::postSingleChunk(
   }
 
   chunk_req->channel_id = chunk_channel_id;
-  chunk_req->from_rank_id = req->from_rank_id;
-  chunk_req->to_rank_id = req->to_rank_id;
+  chunk_req->from_peer_id = req->from_peer_id;
+  chunk_req->to_peer_id = req->to_peer_id;
   chunk_req->wr_id = req->wr_id;
   chunk_req->send_type = req->send_type;
 
@@ -794,7 +794,7 @@ int64_t SendConnection::compressWriteRequestSplitFirst(
   entry.meta.decompress_offset = arena_offset;
   entry.meta.float_type = static_cast<uint32_t>(
       req->compress_ctx ? req->compress_ctx->getFloatType()
-                        : uccl::FloatType::kUndefined);
+                        : FloatType::kUndefined);
   entry.meta.ack_slot = ack_slot;
   entry.meta.wr_id = wr_id;
   {
@@ -1168,7 +1168,7 @@ void RecvConnection::handleCompressedWriteArrival(WriteReqMeta const& m) {
       static_cast<uint64_t>(m.wr_id) + 1);
 
   Compressor::getInstance().decompressAsync(
-      in, out, static_cast<uccl::FloatType>(m.float_type),
+      in, out, static_cast<FloatType>(m.float_type),
       /*on_done=*/nullptr, /*user_data=*/nullptr);
 }
 

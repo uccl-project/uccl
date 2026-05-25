@@ -34,9 +34,9 @@ using GenericEndpoint =
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
 enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
 
-struct ucclRequest {
+struct UcclRequest {
   enum ReqType type;
-  uint32_t n;
+  uint32_t peer_id;
   uint32_t engine_idx;
 };
 
@@ -180,7 +180,7 @@ struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
   bool poll_net_ureq{false};
-  ucclRequest ureq{};
+  UcclRequest ureq{};
 };
 
 struct alignas(64) UnifiedTask {
@@ -292,7 +292,7 @@ class Endpoint {
 
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
-           uccl::FloatType float_type = uccl::FloatType::kFloat32);
+           FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);

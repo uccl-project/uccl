@@ -5,8 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace uccl {
-
 enum class TransportType { RDMA, NCCL, EFA };
 
 inline TransportType get_transport_type() {
@@ -29,5 +27,3 @@ inline bool is_nccl_transport() {
 inline bool is_efa_transport() {
   return get_transport_type() == TransportType::EFA;
 }
-
-}  // namespace uccl

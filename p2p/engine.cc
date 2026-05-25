@@ -214,7 +214,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
   } else {
@@ -223,7 +223,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
         uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
         uccl::cc::CongestionControlState::Mode::kNone;
     ep_ = std::shared_ptr<RDMAEndpoint>(
-        new RDMAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, cc_polling));
+        new RDMAEndpoint(local_gpu_idx_, 0, cc_polling));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
@@ -234,7 +234,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
   }
@@ -293,11 +293,11 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
-    ep_ = std::shared_ptr<RDMAEndpoint>(
-        new RDMAEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+    ep_ =
+        std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0, false));
   }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -559,7 +559,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 
   // Return if Conn ID is invalid
-  if (uccl_conn_id.sock_fd < 0 || uccl_conn_id.flow_id == UINT64_MAX) {
+  if (uccl_conn_id.sock_fd < 0 || uccl_conn_id.peer_id == UINT64_MAX) {
     return false;
   }
 
@@ -573,7 +573,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 }
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
-                   uccl::FloatType float_type) {
+                   FloatType float_type) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {
@@ -696,7 +696,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     return false;
   }
 
-  ucclRequest ureq;
+  UcclRequest ureq;
 
   auto* cur_data = const_cast<void*>(data);
   auto to_send = size;
@@ -723,7 +723,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   }
   int size_int = static_cast<int>(size);
 
-  ucclRequest ureq;
+  UcclRequest ureq;
 
   void* cur_data = data;
   while (uccl_recv_async(ep_, conn, mhandle, &cur_data, &size_int, 1, &ureq) ==
@@ -788,7 +788,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  ucclRequest ureq[kMaxInflightOps] = {};
+  UcclRequest ureq[kMaxInflightOps] = {};
   bool done[kMaxInflightOps] = {false};
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
@@ -874,7 +874,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  ucclRequest ureq[kMaxInflightOps] = {};
+  UcclRequest ureq[kMaxInflightOps] = {};
   bool done[kMaxInflightOps] = {false};
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
@@ -961,7 +961,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     return false;
   }
 
-  ucclRequest ureq = {};
+  UcclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
@@ -996,7 +996,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
       return false;
     }
 
-    ucclRequest ureq = {};
+    UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
     while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
@@ -1061,7 +1061,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   // Resolve the send group once so per-slot completion checks avoid the
   // per-call shared_lock + map.find().
   SendConnection* send_group =
-      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   bool raw_batch_eligible = true;
   for (size_t i = 0; i < num_iovs; ++i) {
@@ -1107,7 +1107,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     return true;
   }
 
-  ucclRequest ureq[kMaxInflightOps] = {};
+  UcclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};
 
   size_t next_iov = 0;
@@ -1204,7 +1204,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
-  ucclRequest ureq = {};
+  UcclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
@@ -1239,7 +1239,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
       return false;
     }
 
-    ucclRequest ureq = {};
+    UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
     while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
@@ -1306,7 +1306,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   // Resolve the send group once so per-slot completion checks avoid the
   // per-call shared_lock + map.find().
   SendConnection* send_group =
-      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.flow_id);
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   bool raw_batch_eligible = true;
   for (size_t i = 0; i < num_iovs; ++i) {
@@ -1352,7 +1352,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     return true;
   }
 
-  ucclRequest ureq[kMaxInflightOps] = {};
+  UcclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};
 
   size_t next_iov = 0;
@@ -2624,18 +2624,18 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
   if (it == conn_id_to_conn_.end()) {
     return "";
   }
-  uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
+  uint64_t peer_id = it->second->uccl_conn_id_.peer_id;
 
   return std::visit(
       [&](auto const& s) -> std::string {
-        return s->get_oob_conn_key(rank_id);
+        return s->get_oob_conn_key(peer_id);
       },
       ep_);
 }
 
 int Endpoint::send_notification(uint64_t conn_id,
                                 NotifyMsg const& notification) const {
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     (void)conn_id;
     (void)notification;
     return -1;
@@ -2644,13 +2644,13 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (conn == nullptr) {
     return -1;
   }
-  uint64_t flow_id = conn->uccl_conn_id_.flow_id;
-  if (flow_id == UINT64_MAX) {
+  uint64_t peer_id = conn->uccl_conn_id_.peer_id;
+  if (peer_id == UINT64_MAX) {
     return -1;
   }
   auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
   if (!nccl_ep || !*nccl_ep) return -1;
-  return (*nccl_ep)->send_notification(flow_id, notification);
+  return (*nccl_ep)->send_notification(peer_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2685,7 +2685,7 @@ void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(

@@ -62,44 +62,44 @@ CompressStrategy getCompressStrategyFromEnv() {
 }
 
 #if defined USE_DIETGPU
-dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
+dietgpu::FloatType to_dietgpu(FloatType t) {
   switch (t) {
-    case uccl::FloatType::kFloat16:
+    case FloatType::kFloat16:
       return dietgpu::FloatType::kFloat16;
-    case uccl::FloatType::kBFloat16:
+    case FloatType::kBFloat16:
       return dietgpu::FloatType::kBFloat16;
-    case uccl::FloatType::kFloat32:
+    case FloatType::kFloat32:
       return dietgpu::FloatType::kFloat32;
-    case uccl::FloatType::kFloat8E4M3FN:
+    case FloatType::kFloat8E4M3FN:
       return dietgpu::FloatType::kFloat8E4M3FN;
-    case uccl::FloatType::kFloat8E5M2:
+    case FloatType::kFloat8E5M2:
       return dietgpu::FloatType::kFloat8E5M2;
-    case uccl::FloatType::kUndefined:
+    case FloatType::kUndefined:
     default:
       return dietgpu::FloatType::kUndefined;
   }
 }
 
-uccl::FloatType from_dietgpu(dietgpu::FloatType t) {
+FloatType from_dietgpu(dietgpu::FloatType t) {
   switch (t) {
     case dietgpu::FloatType::kFloat16:
-      return uccl::FloatType::kFloat16;
+      return FloatType::kFloat16;
     case dietgpu::FloatType::kBFloat16:
-      return uccl::FloatType::kBFloat16;
+      return FloatType::kBFloat16;
     case dietgpu::FloatType::kFloat32:
-      return uccl::FloatType::kFloat32;
+      return FloatType::kFloat32;
     case dietgpu::FloatType::kFloat8E4M3FN:
-      return uccl::FloatType::kFloat8E4M3FN;
+      return FloatType::kFloat8E4M3FN;
     case dietgpu::FloatType::kFloat8E5M2:
-      return uccl::FloatType::kFloat8E5M2;
+      return FloatType::kFloat8E5M2;
     default:
-      return uccl::FloatType::kUndefined;
+      return FloatType::kUndefined;
   }
 }
 
 FloatCompressCtx::FloatCompressCtx() = default;
 
-FloatCompressCtx::FloatCompressCtx(uccl::FloatType ft)
+FloatCompressCtx::FloatCompressCtx(FloatType ft)
     : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
 
 FloatCompressCtx::~FloatCompressCtx() {
@@ -114,13 +114,13 @@ FloatCompressCtx::~FloatCompressCtx() {
   }
 }
 
-uccl::FloatType FloatCompressCtx::getFloatType() const {
+FloatType FloatCompressCtx::getFloatType() const {
   return from_dietgpu(float_type);
 }
 
 size_t FloatCompressCtx::getMaxSize() const { return maxSize; }
 
-CompressCtx makeCompressCtx(uccl::FloatType ft) {
+CompressCtx makeCompressCtx(FloatType ft) {
   return std::make_shared<FloatCompressCtx>(ft);
 }
 
@@ -128,14 +128,13 @@ CompressCtx makeCompressCtx(uccl::FloatType ft) {
 
 DummyCompressCtx::DummyCompressCtx() = default;
 
-DummyCompressCtx::DummyCompressCtx(uccl::FloatType ft)
-    : float_type(ft), maxSize(0) {}
+DummyCompressCtx::DummyCompressCtx(FloatType ft) : float_type(ft), maxSize(0) {}
 
-uccl::FloatType DummyCompressCtx::getFloatType() const { return float_type; }
+FloatType DummyCompressCtx::getFloatType() const { return float_type; }
 
 size_t DummyCompressCtx::getMaxSize() const { return maxSize; }
 
-CompressCtx makeCompressCtx(uccl::FloatType ft) {
+CompressCtx makeCompressCtx(FloatType ft) {
   return std::make_shared<DummyCompressCtx>(ft);
 }
 
@@ -166,13 +165,13 @@ bool NullCompressorBackend::prepareDecompress(
 
 bool NullCompressorBackend::decompress(RemoteMemInfo const& /*input*/,
                                        RegMemBlock& /*output*/,
-                                       uccl::FloatType /*float_type*/) {
+                                       FloatType /*float_type*/) {
   return false;
 }
 
 void NullCompressorBackend::decompressAsync(RemoteMemInfo const& /*input*/,
                                             RegMemBlock& /*output*/,
-                                            uccl::FloatType /*float_type*/,
+                                            FloatType /*float_type*/,
                                             gpuHostFn_t on_done,
                                             void* user_data) {
   if (on_done) on_done(user_data);  // synchronous fallback
@@ -323,7 +322,7 @@ bool DietGPUCompressorBackend::prepareDecompress(
 
 bool DietGPUCompressorBackend::decompress(RemoteMemInfo const& input,
                                           RegMemBlock& output,
-                                          uccl::FloatType float_type) {
+                                          FloatType float_type) {
   if (unlikely(!stream_ || !res_)) {
     UCCL_LOG(WARN)
         << "DietGPUCompressorBackend::decompress - Invalid internal state";
@@ -383,7 +382,7 @@ bool DietGPUCompressorBackend::decompress(RemoteMemInfo const& input,
 
 void DietGPUCompressorBackend::decompressAsync(RemoteMemInfo const& input,
                                                RegMemBlock& output,
-                                               uccl::FloatType float_type,
+                                               FloatType float_type,
                                                gpuHostFn_t on_done,
                                                void* user_data) {
   if (unlikely(!stream_ || !res_ || input.addr == 0 || input.length == 0 ||
@@ -439,7 +438,7 @@ void DietGPUCompressorBackend::prepareSplitContext(void* addr, size_t size,
     return;
   }
   // kUndefined means no float_type was supplied; skip compression.
-  if (unlikely(ctx->getFloatType() == uccl::FloatType::kUndefined)) {
+  if (unlikely(ctx->getFloatType() == FloatType::kUndefined)) {
     return;
   }
   auto float_ctx = std::static_pointer_cast<FloatCompressCtx>(ctx);
@@ -572,13 +571,12 @@ bool Compressor::prepareDecompress(std::shared_ptr<RDMARecvRequest> req) {
 }
 
 bool Compressor::decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                            uccl::FloatType float_type) {
+                            FloatType float_type) {
   return backend_->decompress(input, output, float_type);
 }
 
 void Compressor::decompressAsync(RemoteMemInfo const& input,
-                                 RegMemBlock& output,
-                                 uccl::FloatType float_type,
+                                 RegMemBlock& output, FloatType float_type,
                                  gpuHostFn_t on_done, void* user_data) {
   backend_->decompressAsync(input, output, float_type, on_done, user_data);
 }

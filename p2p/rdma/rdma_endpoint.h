@@ -17,8 +17,8 @@
 class RDMAEndpoint {
  public:
   explicit RDMAEndpoint(
-      int gpu_index = INVALID_GPU, uint64_t rank_id = INVALID_RANK_ID,
-      uint64_t port = 0, bool auto_start_polling = true,
+      int gpu_index = INVALID_GPU, uint64_t port = 0,
+      bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>());
   // Destructor
   ~RDMAEndpoint();
@@ -46,35 +46,35 @@ class RDMAEndpoint {
 
   bool deregMem(std::shared_ptr<RegMemBlock> reg_block);
 
-  int build_connect(uint64_t rank_id, bool sync = true, int timeout_ms = 10000);
+  int build_connect(uint64_t peer_id, bool sync = true, int timeout_ms = 10000);
 
   // Blocking check for send completion
-  void checkSendComplete(uint64_t rank_id, int64_t wr_id);
+  void checkSendComplete(uint64_t peer_id, int64_t wr_id);
 
-  bool checkSendComplete_once(uint64_t rank_id, int64_t wr_id);
+  bool checkSendComplete_once(uint64_t peer_id, int64_t wr_id);
 
-  // Resolve the SendConnection for a given rank_id once so the caller can
+  // Resolve the SendConnection for a given peer_id once so the caller can
   // perform many completion checks without re-acquiring the mutex + doing a
   // map lookup per check.
-  SendConnection* getSendGroupRaw(uint64_t rank_id);
+  SendConnection* getSendGroupRaw(uint64_t peer_id);
 
-  bool checkRecvComplete_once(uint64_t rank_id, uint64_t index);
+  bool checkRecvComplete_once(uint64_t peer_id, uint64_t index);
 
   // Blocking check for recv completion
-  void checkRecvComplete(uint64_t rank_id, uint64_t index);
+  void checkRecvComplete(uint64_t peer_id, uint64_t index);
 
   int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req);
 
-  // Blocking send: wraps SendConnection::send with rank_id parameter
+  // Blocking send: wraps SendConnection::send with peer_id parameter
   // Returns wr_id for checking completion later
-  int64_t send(uint64_t rank_id, std::shared_ptr<RDMASendRequest> req);
+  int64_t send(uint64_t peer_id, std::shared_ptr<RDMASendRequest> req);
 
-  // Blocking recv: wraps RecvConnection::recv with rank_id parameter
+  // Blocking recv: wraps RecvConnection::recv with peer_id parameter
   // Returns index for checking completion later
-  int64_t recv(uint64_t rank_id, std::shared_ptr<RDMARecvRequest> req);
+  int64_t recv(uint64_t peer_id, std::shared_ptr<RDMARecvRequest> req);
 
-  // Add or update rank OOB metadata from a given map
-  void add_rank_oob_meta(
+  // Add or update peer OOB metadata from a given map
+  void add_peer_oob_meta(
       std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> const&
           new_meta);
   ConnID uccl_connect(int remote_gpuidx, std::string remote_ip,
@@ -86,7 +86,7 @@ class RDMAEndpoint {
 
   std::shared_ptr<EpollClient> get_oob_client();
 
-  std::string get_oob_conn_key(uint64_t rank_id);
+  std::string get_oob_conn_key(uint64_t peer_id);
 
   ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx);
 
@@ -129,39 +129,38 @@ class RDMAEndpoint {
   uint64_t handle_send_meta_response(std::shared_ptr<RDMADataChannel> channel,
                                      std::string const& response);
 
-  std::shared_ptr<RecvConnection> getOrCreateRecvGroup(uint64_t rank_id);
+  std::shared_ptr<RecvConnection> getOrCreateRecvGroup(uint64_t peer_id);
 
-  void addOneRecvChannel(uint64_t rank_id, uint32_t channel_id,
+  void addOneRecvChannel(uint64_t peer_id, uint32_t channel_id,
                          std::shared_ptr<RDMADataChannel> new_channel);
 
   void setRecvControlChannel(
-      uint64_t rank_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel);
+      uint64_t peer_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel);
 
-  std::shared_ptr<SendConnection> getOrCreateSendGroup(uint64_t rank_id);
+  std::shared_ptr<SendConnection> getOrCreateSendGroup(uint64_t peer_id);
 
-  void addOneSendChannel(uint64_t rank_id, uint32_t channel_id,
+  void addOneSendChannel(uint64_t peer_id, uint32_t channel_id,
                          std::shared_ptr<RDMADataChannel> new_channel);
 
   void setSendControlChannel(
-      uint64_t rank_id, std::shared_ptr<SendControlChannel>&& ctrl_channel);
+      uint64_t peer_id, std::shared_ptr<SendControlChannel>&& ctrl_channel);
 
   // Hand the peer-side compression descriptors to the corresponding
   // connection so the compressed-write data path can target them.
-  void setSendCompressionPeerMeta(uint64_t rank_id,
+  void setSendCompressionPeerMeta(uint64_t peer_id,
                                   MetaInfoToExchange const& peer);
 
-  void setRecvCompressionPeerMeta(uint64_t rank_id,
+  void setRecvCompressionPeerMeta(uint64_t peer_id,
                                   MetaInfoToExchange const& peer);
 
-  std::string const build_oob_connect(uint64_t rank_id);
+  std::string const build_oob_connect(uint64_t peer_id);
 
-  int build_control_channel(std::string const& oob_con, uint64_t rank_id,
+  int build_control_channel(std::string const& oob_con, uint64_t peer_id,
                             bool sync = true, int timeout_ms = 10000);
 
-  bool build_normal_channels(std::string const& oob_con, uint64_t rank_id,
-                             bool sync = true, int timeout_ms = 10000);
+  bool build_data_channels(std::string const& oob_con, uint64_t peer_id,
+                           bool sync = true, int timeout_ms = 10000);
 
-  uint64_t rank_id_;
   int gpu_index_;
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
   mutable std::shared_mutex recv_channel_mutex_;
@@ -171,10 +170,10 @@ class RDMAEndpoint {
   std::unordered_map<uint64_t, std::shared_ptr<SendConnection>>
       send_channel_groups_;
 
-  std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;
-  mutable std::shared_mutex rank_oob_conn_keys_mutex_;
+  std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> peer_oob_meta_;
+  mutable std::shared_mutex peer_oob_conn_keys_mutex_;
   std::unordered_map<uint64_t, std::string>
-      rank_oob_conn_keys_;  // Track conn_key per rank
+      peer_oob_conn_keys_;  // Track conn_key per peer
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
   std::shared_ptr<MemoryAllocator> allocator_;
@@ -183,8 +182,8 @@ class RDMAEndpoint {
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
   bool auto_start_polling_;
-  std::atomic<int32_t> send_id_;
-  std::atomic<int32_t> recv_id_;
+  std::atomic<int32_t> next_send_peer_id_;
+  std::atomic<int32_t> next_recv_peer_id_;
 
   std::atomic<bool> stop_accept_{false};
 };

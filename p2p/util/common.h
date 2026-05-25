@@ -38,19 +38,19 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-typedef uint64_t FlowID;
+typedef uint64_t PeerID;
 struct ConnID {
   void* context;
   int sock_fd;
   int dev;
-  FlowID flow_id;
+  PeerID peer_id;
 };
 
 typedef struct AcceptedMeta {
   std::string ip;
   uint16_t port;
   int gpu_id;
-  uint64_t rank_id;
+  uint64_t peer_id;
 } AcceptedMeta;
 
 // Notifications
@@ -84,7 +84,6 @@ void serialize_fifo_item(FifoItem const& item, char* buf);
 void deserialize_fifo_item(char const* buf, FifoItem* item);
 enum class MemoryType { HOST, GPU };
 
-namespace uccl {
 enum class FloatType : uint32_t {
   kUndefined = 0,
   kFloat16 = 1,
@@ -93,64 +92,18 @@ enum class FloatType : uint32_t {
   kFloat8E4M3FN = 4,
   kFloat8E5M2 = 5,
 };
-}
 
 struct CompressionContext {
   virtual ~CompressionContext() = default;
-  virtual uccl::FloatType getFloatType() const = 0;
+  virtual FloatType getFloatType() const = 0;
   virtual size_t getMaxSize() const = 0;
 };
 
 using CompressCtx = std::shared_ptr<CompressionContext>;
 
-static constexpr uint8_t kPortNum = 1;
-
 enum class NicMode { EFA, IB };
 
-inline bool is_nic_usable(std::string const& nic_name, NicMode mode) {
-  if (mode == NicMode::EFA && strncmp(nic_name.c_str(), "rdmap", 5) != 0) {
-    return false;
-  }
-
-  int dev_count = 0;
-  ibv_device** dev_list = ibv_get_device_list(&dev_count);
-  if (!dev_list) {
-    return false;
-  }
-  bool usable = false;
-  for (int i = 0; i < dev_count; ++i) {
-    if (std::strcmp(ibv_get_device_name(dev_list[i]), nic_name.c_str()) != 0) {
-      continue;
-    }
-    ibv_context* ctx = ibv_open_device(dev_list[i]);
-    if (!ctx) break;
-
-    ibv_port_attr port_attr{};
-    if (ibv_query_port(ctx, kPortNum, &port_attr) == 0) {
-      if (mode == NicMode::EFA) {
-        if (port_attr.state == IBV_PORT_ACTIVE &&
-            (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED ||
-             port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
-             port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND)) {
-          usable = true;
-        }
-      } else {
-        if (port_attr.state == IBV_PORT_ACTIVE &&
-            (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
-             port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) &&
-            (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET ||
-             port_attr.gid_tbl_len > 0)) {
-          usable = true;
-        }
-      }
-    }
-    ibv_close_device(ctx);
-    break;
-  }
-  ibv_free_device_list(dev_list);
-  return usable;
-}
-
+static constexpr uint8_t kPortNum = 1;
 static constexpr int kNumEngines = 4;
 static constexpr int kNumGpuRtStreams = 4;
 
@@ -174,7 +127,7 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-static constexpr uint32_t INVALID_RANK_ID =
+static constexpr uint32_t INVALID_PEER_ID =
     std::numeric_limits<uint32_t>::max();
 static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
@@ -261,15 +214,10 @@ class ImmData {
   }
 
   // Set chunk_count (preserves index)
-  void set_chunk_count(uint16_t chunk_count) {
-    data_ = (static_cast<uint32_t>(chunk_count) << 16) | (data_ & 0xFFFF);
-  }
+  void set_chunk_count(uint16_t chunk_count);
 
   // Set index (preserves chunk_count + write_meta flag)
-  void set_index(uint16_t index) {
-    data_ =
-        (data_ & 0xFFFF0000) | (index & kIndexMask) | (data_ & kWriteMetaBit);
-  }
+  void set_index(uint16_t index);
 
   // Distinguishes WriteReqMeta entries from SendReqMeta entries on the
   // control channel. kRingCapacity = 16384 only needs 14 bits, so bit 15 of
@@ -277,7 +225,7 @@ class ImmData {
   static constexpr uint32_t kWriteMetaBit = 1u << 15;
   static constexpr uint32_t kIndexMask = 0x7FFFu;
   constexpr bool is_write_meta() const { return data_ & kWriteMetaBit; }
-  void set_write_meta() { data_ |= kWriteMetaBit; }
+  void set_write_meta();
   constexpr uint16_t plain_index() const {
     return static_cast<uint16_t>(data_ & kIndexMask);
   }
@@ -286,10 +234,7 @@ class ImmData {
   constexpr operator uint32_t() const { return data_; }
 
   // Assignment from uint32_t
-  ImmData& operator=(uint32_t raw) {
-    data_ = raw;
-    return *this;
-  }
+  ImmData& operator=(uint32_t raw);
 
   // Get raw value
   constexpr uint32_t raw() const { return data_; }
@@ -304,11 +249,7 @@ class ImmData {
   constexpr bool operator==(uint32_t other) const { return data_ == other; }
   constexpr bool operator!=(uint32_t other) const { return data_ != other; }
 
-  friend std::ostream& operator<<(std::ostream& os, ImmData const& imm) {
-    os << "ImmData{raw: " << imm.data_ << ", chunk_count: " << imm.chunk_count()
-       << ", index: " << imm.index() << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, ImmData const& imm);
 
  private:
   uint32_t data_;
@@ -318,13 +259,9 @@ struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
   size_t size;      // Size of this chunk in bytes
 
-  MessageChunk(uint64_t off, size_t sz) : offset(off), size(sz) {}
+  MessageChunk(uint64_t off, size_t sz);
 
-  friend std::ostream& operator<<(std::ostream& os, MessageChunk const& chunk) {
-    os << "MessageChunk{offset: " << chunk.offset << ", size: " << chunk.size
-       << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, MessageChunk const& chunk);
 };
 
 struct ChunkSplitStrategy {
@@ -346,18 +283,7 @@ struct ChannelMetaData {
   uint16_t lid;       // Infiniband
 
   friend std::ostream& operator<<(std::ostream& os,
-                                  ChannelMetaData const& meta) {
-    os << "ChannelMetaData{qpn: " << meta.qpn << ", gid: ";
-    std::ios_base::fmtflags flags = os.flags();
-    for (int i = 0; i < 16; ++i) {
-      os << std::hex << std::setw(2) << std::setfill('0')
-         << static_cast<int>(meta.gid.raw[i]);
-      if (i == 7) os << ":";
-    }
-    os.flags(flags);
-    os << "}";
-    return os;
-  }
+                                  ChannelMetaData const& meta);
 };
 
 enum class ChannelType : int16_t { Control, Normal };
@@ -371,15 +297,9 @@ struct OOBMetaData {
   std::string server_ip;
   int64_t server_port;
   int gpu_id;
-  OOBMetaData() : server_ip(""), server_port(0), gpu_id(0) {}
-  OOBMetaData(std::string conn_key_, uint16_t remote_port_)
-      : server_ip(std::move(conn_key_)), server_port(remote_port_), gpu_id(0) {}
-  friend std::ostream& operator<<(std::ostream& os, OOBMetaData const& meta) {
-    os << "OOBMetaData{server_ip: " << meta.server_ip
-       << ", server_port: " << meta.server_port << ", gpu_id: " << meta.gpu_id
-       << "}";
-    return os;
-  }
+  OOBMetaData();
+  OOBMetaData(std::string conn_key_, uint16_t remote_port_);
+  friend std::ostream& operator<<(std::ostream& os, OOBMetaData const& meta);
 };
 
 struct CQMeta {
@@ -387,14 +307,9 @@ struct CQMeta {
   ibv_wc_opcode op_code;
   uint32_t len;
   ImmData imm;
-  inline bool hasIMM() const { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
+  bool hasIMM() const;
 
-  friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta) {
-    os << "CQMeta{wr_id: " << meta.wr_id << ", op_code: " << meta.op_code
-       << ", len: " << meta.len << ", imm: " << meta.imm
-       << ", hasIMM: " << (meta.op_code == IBV_WC_RECV_RDMA_WITH_IMM) << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta);
 };
 
 // Registered memory region info
@@ -404,59 +319,33 @@ typedef struct RegMemBlock {
   MemoryType type;
   MRArray mr_array;  // Array of MR pointers for multiple contexts
 
-  RegMemBlock() : addr(nullptr), size(0), type(MemoryType::HOST) {}
-  RegMemBlock(void* a, size_t s, MemoryType t) : addr(a), size(s), type(t) {}
+  RegMemBlock();
+  RegMemBlock(void* a, size_t s, MemoryType t);
 
-  RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t)
-      : addr(a), size(s), type(t) {
-    mr_array.copyFrom(mr_array_in);
-  }
+  RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t);
 
   // Equality operator for hash support (based on size and type only)
-  bool operator==(RegMemBlock const& other) const {
-    return addr == other.addr && size == other.size && type == other.type;
-  }
+  bool operator==(RegMemBlock const& other) const;
 
   // Set MR by context ID
-  inline void setMRByContextID(uint32_t context_id, struct ibv_mr* mr) {
-    mr_array.setKeyByContextID(context_id, mr);
-  }
+  void setMRByContextID(uint32_t context_id, struct ibv_mr* mr);
 
   // Set MR by channel ID
-  inline void setMRByChannelID(uint32_t channel_id, struct ibv_mr* mr) {
-    mr_array.setKeyByChannelID(channel_id, mr);
-  }
+  void setMRByChannelID(uint32_t channel_id, struct ibv_mr* mr);
 
   // Get MR by channel ID
-  inline struct ibv_mr* getMRByChannelID(uint32_t channel_id) const {
-    return mr_array.getKeyByChannelID(channel_id);
-  }
+  struct ibv_mr* getMRByChannelID(uint32_t channel_id) const;
 
   // Get MR by context ID
-  inline struct ibv_mr* getMRByContextID(uint32_t context_id) const {
-    return mr_array.getKeyByContextID(context_id);
-  }
+  struct ibv_mr* getMRByContextID(uint32_t context_id) const;
 
   // Get rkey by channel ID (for backward compatibility)
-  inline uint32_t getKeyByChannelID(uint32_t channel_id) const {
-    struct ibv_mr* mr = getMRByChannelID(channel_id);
-    return mr ? mr->rkey : 0;
-  }
+  uint32_t getKeyByChannelID(uint32_t channel_id) const;
 
   // Get rkey by context ID (for backward compatibility)
-  inline uint32_t getKeyByContextID(uint32_t context_id) const {
-    struct ibv_mr* mr = getMRByContextID(context_id);
-    return mr ? mr->rkey : 0;
-  }
+  uint32_t getKeyByContextID(uint32_t context_id) const;
 
-  friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block) {
-    os << "RegMemBlock{addr: " << block.addr << ", size: " << block.size
-       << ", type: " << (block.type == MemoryType::HOST ? "HOST" : "GPU")
-       << block.mr_array << std::endl;
-
-    os << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block);
 } RegMemBlock;
 
 typedef struct RemoteMemInfo {
@@ -464,52 +353,27 @@ typedef struct RemoteMemInfo {
   RKeyArray rkey_array;  // For multiple memory regions (e.g., GPU memory)
   size_t length;
   MemoryType type;
-  RemoteMemInfo() : addr(0), length(0), type(MemoryType::HOST) {}
+  RemoteMemInfo();
 
-  RemoteMemInfo(uint64_t a, size_t len, RKeyArray const& rkey, MemoryType t)
-      : addr(a), length(len), type(t) {
-    rkey_array.copyFrom(rkey);
-  }
-  RemoteMemInfo(uint64_t a, size_t len, MRArray const& mrs, MemoryType t)
-      : addr(a), length(len), type(t) {
-    copyRKeyArrayFromMRArray(mrs, rkey_array);
-  }
+  RemoteMemInfo(uint64_t a, size_t len, RKeyArray const& rkey, MemoryType t);
+  RemoteMemInfo(uint64_t a, size_t len, MRArray const& mrs, MemoryType t);
 
-  RemoteMemInfo(RegMemBlock const& block)
-      : addr(reinterpret_cast<uint64_t>(block.addr)),
-        length(block.size),
-        type(block.type) {
-    copyRKeyArrayFromMRArray(block.mr_array, rkey_array);
-  }
+  RemoteMemInfo(RegMemBlock const& block);
 
-  RemoteMemInfo(std::shared_ptr<RegMemBlock> const block)
-      : addr(reinterpret_cast<uint64_t>(block->addr)),
-        length(block->size),
-        type(block->type) {
-    copyRKeyArrayFromMRArray(block->mr_array, rkey_array);
-  }
+  RemoteMemInfo(std::shared_ptr<RegMemBlock> const block);
 
-  inline uint32_t getKeyByChannelID(uint32_t channel_id) const {
-    return rkey_array.getKeyByChannelID(channel_id);
-  }
+  uint32_t getKeyByChannelID(uint32_t channel_id) const;
 
   // Get rkey by context ID (direct index access)
-  inline uint32_t getKeyByContextID(size_t context_id) const {
-    return rkey_array.getKeyByContextID(context_id);
-  }
+  uint32_t getKeyByContextID(size_t context_id) const;
 
-  friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info) {
-    os << "RemoteMemInfo{addr: 0x" << std::hex << info.addr << std::dec
-       << ", length: " << info.length
-       << ", type: " << (info.type == MemoryType::HOST ? "HOST" : "GPU")
-       << "rkey_array " << info.rkey_array << "}" << std::endl;
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info);
 } RemoteMemInfo;
 
 typedef struct RDMARecvRequest {
-  uint32_t from_rank_id = INVALID_RANK_ID;
-  uint32_t to_rank_id = INVALID_RANK_ID;
+  // Peer id is local to this endpoint, not necessarily global.
+  uint32_t from_peer_id = INVALID_PEER_ID;
+  uint32_t to_peer_id = INVALID_PEER_ID;
   uint32_t channel_id = 0;
   int64_t wr_id = -1;
   std::shared_ptr<RegMemBlock> local_mem;
@@ -517,120 +381,60 @@ typedef struct RDMARecvRequest {
   CompressCtx compress_ctx;
 
   // Constructor
-  RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
+  RDMARecvRequest(std::shared_ptr<RegMemBlock> local);
 
   // Getter methods
-  inline uint32_t getLocalKey() const {
-    return local_mem->getKeyByChannelID(channel_id);
-  }
+  uint32_t getLocalKey() const;
 
-  inline uint64_t getLocalAddress() const {
-    return reinterpret_cast<uint64_t>(local_mem->addr);
-  }
+  uint64_t getLocalAddress() const;
 
-  inline uint32_t getLocalLen() const { return local_mem->size; }
+  uint32_t getLocalLen() const;
 
-  friend std::ostream& operator<<(std::ostream& os,
-                                  RDMARecvRequest const& req) {
-    os << "RDMARecvRequest{";
-    os << "from_rank_id: " << req.from_rank_id
-       << ", to_rank_id: " << req.to_rank_id
-       << ", channel_id: " << req.channel_id;
-    if (req.local_mem) {
-      os << ", local_mem: " << *req.local_mem;
-    } else {
-      os << ", local_mem: nullptr";
-    }
-    os << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, RDMARecvRequest const& req);
 } RDMARecvRequest;
 
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
 
 struct alignas(64) SendReqMeta {
-  uint32_t rank_id;
+  uint32_t peer_id;
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
   RegMemBlock local_mem;
-  uccl::FloatType float_type = uccl::FloatType::kUndefined;
+  FloatType float_type = FloatType::kUndefined;
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
 
-  SendReqMeta()
-      : rank_id(0),
-        channel_id(0),
-        remote_mem{},
-        expected_chunk_count(0),
-        received_chunk_count(0) {}
+  SendReqMeta();
 
-  SendReqMeta(uint32_t rid, uint32_t cid, RemoteMemInfo const& rmem,
-              uint32_t expected = 0, uint32_t received = 0)
-      : rank_id(rid),
-        channel_id(cid),
-        remote_mem(rmem),
-        expected_chunk_count(expected),
-        received_chunk_count(received) {}
+  SendReqMeta(uint32_t pid, uint32_t cid, RemoteMemInfo const& rmem,
+              uint32_t expected = 0, uint32_t received = 0);
 
-  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req) {
-    rank_id = rev_req->from_rank_id;
-    channel_id = rev_req->channel_id;
-    remote_mem = rev_req->local_mem;
-    local_mem =
-        *(rev_req->local_compression_mem ? rev_req->local_compression_mem
-                                         : rev_req->local_mem);
-    float_type = rev_req->compress_ctx ? rev_req->compress_ctx->getFloatType()
-                                       : uccl::FloatType::kUndefined;
-    expected_chunk_count =
-        ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
-    received_chunk_count = 0;
-  }
+  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req);
 
-  friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
-    os << "SendReqMeta{rank_id: " << meta.rank_id
-       << ", channel_id: " << meta.channel_id
-       << ", remote_mem: " << meta.remote_mem
-       << ", expected_chunk_count: " << meta.expected_chunk_count
-       << ", received_chunk_count: " << meta.received_chunk_count << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta);
 };
 
 struct alignas(64) SendReqMetaOnRing {
   SendReqMeta meta;
   std::atomic<ReqFlag> flag;
 
-  SendReqMetaOnRing() : meta{}, flag{ReqFlag::PENDING} {}
+  SendReqMetaOnRing();
 
-  SendReqMetaOnRing(SendReqMetaOnRing const& other)
-      : meta(other.meta), flag{other.flag.load(std::memory_order_relaxed)} {}
+  SendReqMetaOnRing(SendReqMetaOnRing const& other);
 
-  SendReqMetaOnRing& operator=(SendReqMetaOnRing const& other) {
-    meta = other.meta;
-    flag.store(other.flag.load(std::memory_order_relaxed),
-               std::memory_order_relaxed);
-    return *this;
-  }
+  SendReqMetaOnRing& operator=(SendReqMetaOnRing const& other);
 
   // Get SendReqMeta from SendReqMetaOnRing
-  SendReqMeta getSendReqMeta() const { return meta; }
+  SendReqMeta getSendReqMeta() const;
 
   // Set SendReqMeta part
-  void setSendReqMeta(SendReqMeta const& m) { meta = m; }
+  void setSendReqMeta(SendReqMeta const& m);
 
   friend std::ostream& operator<<(std::ostream& os,
-                                  SendReqMetaOnRing const& ring) {
-    auto flag_val = ring.flag.load(std::memory_order_relaxed);
-    os << "SendReqMetaOnRing{meta: " << ring.meta << ", flag: "
-       << (flag_val == ReqFlag::PENDING       ? "PENDING"
-           : flag_val == ReqFlag::IN_PROGRESS ? "IN_PROGRESS"
-                                              : "IS_DONE")
-       << "}";
-    return os;
-  }
+                                  SendReqMetaOnRing const& ring);
 };
 
-// Ring buffer size for control channel
+// Ring buffer size for control channel.
 static constexpr size_t kRingBufferSize =
     sizeof(SendReqMetaOnRing) * kRingCapacity;
 
@@ -644,7 +448,7 @@ struct alignas(64) WriteReqMeta {
   uint32_t user_rkey;          // user-provided rkey (for logging/validation)
   uint32_t total_uncomp_size;  // original message size in bytes
   uint32_t compressed_size;    // split + encode output total bytes
-  uint32_t float_type;         // uccl::FloatType
+  uint32_t float_type;         // FloatType
   uint32_t ack_slot;  // sender expects ack written here in its ack_ring
   uint32_t _pad;
   int64_t wr_id;
@@ -653,6 +457,7 @@ struct alignas(64) WriteReqMeta {
 // A small on-host ack slot. Receiver writes |wr_id| (or wr_id|kAckErrBit) once
 // decompress completes. Sender polls the value to determine completion.
 static constexpr uint64_t kAckErrBit = 1ull << 63;
+
 struct alignas(64) AckSlot {
   std::atomic<uint64_t> value;
 };
@@ -704,11 +509,13 @@ inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
                                 SendReqMeta& dst) { dst = src.meta; };
 
 enum class SendType { Send, Write, Read };
+
 struct RDMASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
-  uint32_t from_rank_id = INVALID_RANK_ID;
-  uint32_t to_rank_id = INVALID_RANK_ID;
+  // Peer id is local to this endpoint, not necessarily global.
+  uint32_t from_peer_id = INVALID_PEER_ID;
+  uint32_t to_peer_id = INVALID_PEER_ID;
   uint32_t channel_id = 0;
   ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
                          // index (low 16 bits)
@@ -719,69 +526,32 @@ struct RDMASendRequest {
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
                   std::shared_ptr<RemoteMemInfo> remote,
-                  ImmData imm = ImmData(), bool signaled = true)
-      : local_mem(local),
-        remote_mem(remote),
-        imm_data(imm),
-        need_signaled(signaled) {}
+                  ImmData imm = ImmData(), bool signaled = true);
 
   // Constructor from shared_ptr<RDMASendRequest>
   RDMASendRequest(std::shared_ptr<RDMASendRequest> other,
                   std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
-                  bool signaled = true)
-      : local_mem(local),
-        remote_mem(other->remote_mem),
-        imm_data(imm),
-        need_signaled(signaled) {}
+                  bool signaled = true);
 
   // Constructor from const RDMASendRequest&
   RDMASendRequest(RDMASendRequest const& other,
                   std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
-                  bool signaled = true)
-      : local_mem(local),
-        remote_mem(other.remote_mem),
-        imm_data(imm),
-        need_signaled(signaled) {}
+                  bool signaled = true);
 
   // Getter methods
-  inline uint32_t getLocalKey() const {
-    return local_mem->getKeyByChannelID(channel_id);
-  }
+  uint32_t getLocalKey() const;
 
-  inline uint32_t getRemoteKey() const {
-    return remote_mem->getKeyByChannelID(channel_id);
-  }
+  uint32_t getRemoteKey() const;
 
-  inline uint64_t getLocalAddress() const {
-    return reinterpret_cast<uint64_t>(local_mem->addr);
-  }
+  uint64_t getLocalAddress() const;
 
-  inline uint64_t getRemoteAddress() const { return remote_mem->addr; }
+  uint64_t getRemoteAddress() const;
 
-  inline ImmData getImm() const { return imm_data; }
+  ImmData getImm() const;
 
-  inline uint32_t getLocalLen() const { return local_mem->size; }
+  uint32_t getLocalLen() const;
 
-  friend std::ostream& operator<<(std::ostream& os,
-                                  RDMASendRequest const& req) {
-    os << "RDMASendRequest{";
-    os << "from_rank_id: " << req.from_rank_id
-       << ", to_rank_id: " << req.to_rank_id
-       << ", channel_id: " << req.channel_id << ", imm_data: " << req.imm_data
-       << ", need_signaled: " << req.need_signaled;
-    if (req.local_mem) {
-      os << ", local_mem: " << *req.local_mem;
-    } else {
-      os << ", local_mem: nullptr";
-    }
-    if (req.remote_mem) {
-      os << ", remote_mem: " << *req.remote_mem;
-    } else {
-      os << ", remote_mem: nullptr";
-    }
-    os << "}";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, RDMASendRequest const& req);
 };
 
 template <typename T>
@@ -801,7 +571,7 @@ T deserialize(std::string const& s) {
 
 // Example MetaInfo struct for metadata exchange
 struct MetaInfoToExchange {
-  int32_t rank_id;
+  int32_t peer_id;
   int32_t channel_id;
   ChannelType flag;
   ChannelMetaData channel_meta;
@@ -814,67 +584,19 @@ struct MetaInfoToExchange {
   RemoteMemInfo ack_ring_meta;
 
   // Default constructor
-  MetaInfoToExchange()
-      : rank_id(0),
-        channel_id(0),
-        flag(ChannelType::Normal),
-        channel_meta{},
-        mem_meta{},
-        gpu_id(0),
-        oob_port(0) {}
+  MetaInfoToExchange();
 
-  // Constructor with required rank_id and channel_id, optional channel_meta and
+  // Constructor with required peer_id and channel_id, optional channel_meta and
   // mem_meta
-  MetaInfoToExchange(int32_t rid, int32_t cid,
+  MetaInfoToExchange(int32_t pid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
                      ChannelType flag_in = ChannelType::Normal, int gid = 0,
-                     uint16_t oob_p = 0)
-      : rank_id(rid),
-        channel_id(cid),
-        flag(flag_in),
-        channel_meta{},
-        mem_meta{},
-        gpu_id(gid),
-        oob_port(oob_p) {
-    if (ch_meta) {
-      channel_meta = *ch_meta;
-    }
-    if (mem_meta_ptr) {
-      mem_meta = *mem_meta_ptr;
-    }
-  }
+                     uint16_t oob_p = 0);
 
   // Overload << operator for printing
   friend std::ostream& operator<<(std::ostream& os,
-                                  MetaInfoToExchange const& meta) {
-    os << "=== MetaInfoToExchange ===" << std::endl;
-    os << "  rank_id: " << meta.rank_id << std::endl;
-    os << "  channel_id: " << meta.channel_id << std::endl;
-
-    os << "  channel_meta:" << std::endl;
-    os << "    qpn: " << meta.channel_meta.qpn << std::endl;
-    os << "    gid: ";
-
-    // Save stream flags
-    std::ios_base::fmtflags flags = os.flags();
-
-    for (int i = 0; i < 16; ++i) {
-      os << std::hex << std::setw(2) << std::setfill('0')
-         << static_cast<int>(meta.channel_meta.gid.raw[i]);
-      if (i == 7) os << ":";
-    }
-
-    // Restore stream flags
-    os.flags(flags);
-    os << std::endl;
-
-    os << "  mem_meta:" << meta.mem_meta << std::endl;
-    os << "  gpu_id: " << meta.gpu_id << std::endl;
-    os << "=========================" << std::endl;
-
-    return os;
-  }
+                                  MetaInfoToExchange const& meta);
 };
 
 // Helper function: make socket non-blocking
@@ -882,6 +604,8 @@ int make_socket_non_blocking(int fd);
 
 // Helper function: try send entire buffer, return bytes_sent
 ssize_t try_send(int fd, char const* buf, size_t len);
+
+bool is_nic_usable(std::string const& nic_name, NicMode mode);
 
 // Hash support for RegMemBlock (based on size and type only)
 namespace std {

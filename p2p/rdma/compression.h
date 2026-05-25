@@ -35,18 +35,18 @@ CompressStrategy getCompressStrategyFromEnv();
 #include <cuda_fp16.h>
 #endif
 
-dietgpu::FloatType to_dietgpu(uccl::FloatType t);
-uccl::FloatType from_dietgpu(dietgpu::FloatType t);
+dietgpu::FloatType to_dietgpu(FloatType t);
+FloatType from_dietgpu(dietgpu::FloatType t);
 
 /**
  * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
- * uccl::FloatType-based constructor and getFloatType() accessor, hiding the
+ * FloatType-based constructor and getFloatType() accessor, hiding the
  * internal dietgpu::FloatType from external callers.
  */
 struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext,
                           public CompressionContext {
   FloatCompressCtx();
-  explicit FloatCompressCtx(uccl::FloatType ft);
+  explicit FloatCompressCtx(FloatType ft);
 
   // Raw device buffer for the [in_ptr, inSize, out_ptr] tuple in params_dev.
   // Plain cudaMalloc so each ctx frees independently (no LIFO constraint).
@@ -57,7 +57,7 @@ struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext,
 
   ~FloatCompressCtx() override;
 
-  uccl::FloatType getFloatType() const override;
+  FloatType getFloatType() const override;
   size_t getMaxSize() const override;
 };
 
@@ -79,22 +79,22 @@ struct DummyDevAlloc {
  * without #ifdef guards scattered throughout.
  */
 struct DummyCompressCtx : public CompressionContext {
-  uccl::FloatType float_type = uccl::FloatType::kUndefined;
+  FloatType float_type = FloatType::kUndefined;
   size_t maxSize = 0;
   DummyDevAlloc params_dev;
   DummyDevAlloc histogram_dev;
   DummyDevAlloc toComp_dev;
 
   DummyCompressCtx();
-  explicit DummyCompressCtx(uccl::FloatType ft);
+  explicit DummyCompressCtx(FloatType ft);
 
-  uccl::FloatType getFloatType() const override;
+  FloatType getFloatType() const override;
   size_t getMaxSize() const override;
 };
 
 #endif
 
-CompressCtx makeCompressCtx(uccl::FloatType ft);
+CompressCtx makeCompressCtx(FloatType ft);
 
 /**
  * @brief Abstract interface for compressor backends.
@@ -141,12 +141,12 @@ class ICompressorBackend {
    * @return true on success, false on failure.
    */
   virtual bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                          uccl::FloatType float_type) = 0;
+                          FloatType float_type) = 0;
 
   // Queue decompress asynchronously. on_done fires via gpuLaunchHostFunc after
   // the kernel completes; it must not call any GPU APIs.
   virtual void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                               uccl::FloatType float_type, gpuHostFn_t on_done,
+                               FloatType float_type, gpuHostFn_t on_done,
                                void* user_data) = 0;
 
   /**
@@ -214,10 +214,10 @@ class NullCompressorBackend : public ICompressorBackend {
   bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                  uccl::FloatType float_type) override;
+                  FloatType float_type) override;
 
   void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       uccl::FloatType float_type, gpuHostFn_t on_done,
+                       FloatType float_type, gpuHostFn_t on_done,
                        void* user_data) override;
 
   bool shouldCompress(size_t size) override;
@@ -258,10 +258,10 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                  uccl::FloatType float_type) override;
+                  FloatType float_type) override;
 
   void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       uccl::FloatType float_type, gpuHostFn_t on_done,
+                       FloatType float_type, gpuHostFn_t on_done,
                        void* user_data) override;
 
   bool shouldCompress(size_t size) override;
@@ -339,10 +339,10 @@ class Compressor {
    * @return true on success, false on failure.
    */
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                  uccl::FloatType float_type);
+                  FloatType float_type);
 
   void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       uccl::FloatType float_type, gpuHostFn_t on_done,
+                       FloatType float_type, gpuHostFn_t on_done,
                        void* user_data);
 
   /**

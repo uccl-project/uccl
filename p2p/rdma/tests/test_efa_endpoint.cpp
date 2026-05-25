@@ -12,9 +12,9 @@
 
 // Define command line flags
 DEFINE_int32(gpu_index, 0, "GPU index to use");
-DEFINE_uint64(rank_id, 0, "Local rank ID");
+DEFINE_uint64(peer_id, 0, "Local peer ID");
 DEFINE_uint64(port, 19997, "Local port for OOB server");
-DEFINE_uint64(remote_rank, 1, "Remote rank ID to connect to");
+DEFINE_uint64(remote_peer, 1, "Remote peer ID to connect to");
 DEFINE_string(remote_ip, "", "Remote IP address");
 DEFINE_uint64(remote_port, 19997, "Remote port number");
 DEFINE_string(test_mode, "correctness",
@@ -24,27 +24,27 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// ./test_efa_endpoint --gpu_index=0 --peer_id=0 --port=19997 --remote_peer=1
 // --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness
 // --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// ./test_efa_endpoint --gpu_index=0 --peer_id=1 --port=19997 --remote_peer=0
 // --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness
 // --buffer_size=104857600
 //
 //
-// Unidirectional test (rank 0 sends, rank 1 receives):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// Unidirectional test (rank 0 sends, peer 1 receives):
+// ./test_efa_endpoint --gpu_index=0 --peer_id=0 --port=19997 --remote_peer=1
 // --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=unidirectional
 // --iterations=100 --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// ./test_efa_endpoint --gpu_index=0 --peer_id=1 --port=19997 --remote_peer=0
 // --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=unidirectional
 // --iterations=100 --buffer_size=104857600
 
 // Bandwidth test (bidirectional):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// ./test_efa_endpoint --gpu_index=0 --peer_id=0 --port=19997 --remote_peer=1
 // --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=bandwidth
 // --iterations=100 --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// ./test_efa_endpoint --gpu_index=0 --peer_id=1 --port=19997 --remote_peer=0
 // --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=bandwidth
 // --iterations=100 --buffer_size=104857600
 
@@ -79,9 +79,9 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
 
   for (int i = 0; i < num_iterations; i++) {
     // Prepare unique test data for this iteration with header and footer
-    std::string header = "START:Rank " + std::to_string(FLAGS_rank_id) +
+    std::string header = "START:Peer " + std::to_string(FLAGS_peer_id) +
                          " iteration " + std::to_string(i);
-    std::string footer = "END:Rank " + std::to_string(FLAGS_rank_id) +
+    std::string footer = "END:Peer " + std::to_string(FLAGS_peer_id) +
                          " iteration " + std::to_string(i);
 
     memset(h_send_data, 0, test_buffer_size);
@@ -108,7 +108,7 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
     auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
     // Post recv first
-    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+    int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
     std::cout << "recv_index:" << recv_index << std::endl << std::flush;
     if (recv_index < 0) {
       std::cerr << "Failed to post recv request\n" << std::flush;
@@ -117,7 +117,7 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
 
     // Post send
-    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
 
     std::cout << "send_wr_id:" << send_wr_id << std::endl << std::flush;
     ;
@@ -128,20 +128,20 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
 
     // Wait for completion
-    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
     std::cout << "After checkRecvComplete\n" << std::flush;
     ;
-    endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
 
     // Verify received data - check both header and footer
     cudaMemcpy(h_recv_data, recv_mem->addr, test_buffer_size,
                cudaMemcpyDeviceToHost);
 
-    std::string expected_header = "START:Rank " +
-                                  std::to_string(FLAGS_remote_rank) +
+    std::string expected_header = "START:Peer " +
+                                  std::to_string(FLAGS_remote_peer) +
                                   " iteration " + std::to_string(i);
-    std::string expected_footer = "END:Rank " +
-                                  std::to_string(FLAGS_remote_rank) +
+    std::string expected_footer = "END:Peer " +
+                                  std::to_string(FLAGS_remote_peer) +
                                   " iteration " + std::to_string(i);
 
     // Extract received header and footer
@@ -193,13 +193,13 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
   std::cout << "Success rate: " << (100.0 * passed / num_iterations) << "%\n";
 }
 
-// Unidirectional bandwidth test: rank 0 only sends, rank 1 only receives
+// Unidirectional bandwidth test: peer 0 only sends, peer 1 only receives
 void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
                          int iterations) {
   std::cout << "\n=== Starting Unidirectional Bandwidth Test (" << iterations
             << " iterations) ===\n";
-  std::cout << "Rank " << FLAGS_rank_id
-            << " role: " << (FLAGS_rank_id == 0 ? "SENDER" : "RECEIVER")
+  std::cout << "Peer " << FLAGS_peer_id
+            << " role: " << (FLAGS_peer_id == 0 ? "SENDER" : "RECEIVER")
             << "\n";
 
   size_t test_buffer_size = FLAGS_buffer_size;
@@ -227,18 +227,18 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   // Warmup
   std::cout << "Running warmup (10 iterations)...\n";
   for (int i = 0; i < 50; i++) {
-    if (FLAGS_rank_id == 0) {
-      // Rank 0: only send
+    if (FLAGS_peer_id == 0) {
+      // Peer 0: only send
       auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
       auto send_req =
           std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
-      int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
-      endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+      int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
+      endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
     } else {
-      // Rank 1: only receive
+      // Peer 1: only receive
       auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
-      int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
-      endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+      int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
+      endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
     }
   }
 
@@ -247,8 +247,8 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   // Benchmark
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  if (FLAGS_rank_id == 0) {
-    // Rank 0: sender only
+  if (FLAGS_peer_id == 0) {
+    // Peer 0: sender only
     std::vector<std::pair<int, int64_t>>
         send_infos;  // (channel_id, send_wr_id)
     send_infos.reserve(iterations);
@@ -259,9 +259,9 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
       auto send_req =
           std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
 
-      int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+      int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
       send_infos.push_back({send_req->channel_id, send_wr_id});
-      endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+      endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
       // if ((i + 1) % 100 == 0) {
       //   std::cout << "Sent " << (i + 1) << " messages\n";
       // }
@@ -269,11 +269,11 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
     // Then, check all send completions
     // for (auto const& [channel_id, send_wr_id] : send_infos) {
-    //   endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+    //   endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
     // }
     // std::cout << "All sends completed\n";
   } else {
-    // Rank 1: receiver only
+    // Peer 1: receiver only
     std::vector<int64_t> recv_indices;
     recv_indices.reserve(iterations);
 
@@ -281,9 +281,9 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
     for (int i = 0; i < iterations; i++) {
       auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
-      int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+      int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
       recv_indices.push_back(recv_index);
-      endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+      endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
       // if ((i + 1) % 100 == 0) {
       //   std::cout << "Received " << (i + 1) << " messages\n";
       // }
@@ -291,7 +291,7 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
     // Then, check all recv completions
     // for (int64_t recv_index : recv_indices) {
-    //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    //   endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
     // }
   }
 
@@ -309,9 +309,9 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   double bandwidth_gbps = (total_bytes / elapsed_seconds) / 1e9;
   double latency_us = (elapsed_seconds / iterations) * 1000000.0;
 
-  std::cout << "\n=== Unidirectional Bandwidth Test Results (Rank "
-            << FLAGS_rank_id << ") ===\n";
-  std::cout << "Role: " << (FLAGS_rank_id == 0 ? "SENDER" : "RECEIVER") << "\n";
+  std::cout << "\n=== Unidirectional Bandwidth Test Results (Peer "
+            << FLAGS_peer_id << ") ===\n";
+  std::cout << "Role: " << (FLAGS_peer_id == 0 ? "SENDER" : "RECEIVER") << "\n";
   std::cout << "Iterations: " << iterations << "\n";
   std::cout << "Buffer size: " << test_buffer_size << " bytes\n";
   std::cout << "Total time: " << elapsed_seconds << " seconds\n";
@@ -360,11 +360,11 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
         std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
     auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
-    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
-    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+    int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
 
-    endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
-    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
   }
 
   std::cout << "Starting benchmark...\n" << std::flush;
@@ -384,13 +384,13 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
         std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
     auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
-    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+    int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
     recv_indices.push_back(recv_index);
 
-    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
     send_infos.push_back({send_req->channel_id, send_wr_id});
-    endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
-    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
     // if ((i + 1) % 100 == 0) {
     //   std::cout << "Completed " << (i + 1) << " iterations\n";
     // }
@@ -406,11 +406,11 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   // for (auto const& [channel_id, send_wr_id] : send_infos) {
   //   // std::cout << "channel_id:" <<channel_id<<",
   //   // send_wr_id:"<<send_wr_id<<std::endl<<std::flush;
-  //   endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+  //   endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
   // }
   // for (int64_t recv_index : recv_indices) {
   //   // std::cout << "recv_index:" <<recv_index<<std::endl<<std::flush;
-  //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+  //   endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
   // }
   auto phase2_end = std::chrono::high_resolution_clock::now();
   double phase2_time =
@@ -471,9 +471,9 @@ int main(int argc, char* argv[]) {
 
   std::cout << "=== RDMAEndpoint Usage Example ===\n";
   std::cout << "GPU Index: " << FLAGS_gpu_index << "\n";
-  std::cout << "Rank ID: " << FLAGS_rank_id << "\n";
+  std::cout << "Peer ID: " << FLAGS_peer_id << "\n";
   std::cout << "Port: " << FLAGS_port << "\n";
-  std::cout << "Remote Rank: " << FLAGS_remote_rank << "\n";
+  std::cout << "Remote Peer: " << FLAGS_remote_peer << "\n";
   std::cout << "Remote IP: " << FLAGS_remote_ip << "\n";
   std::cout << "Remote Port: " << FLAGS_remote_port << "\n";
   std::cout << "================================\n\n";
@@ -514,20 +514,20 @@ int main(int argc, char* argv[]) {
     // Create RDMAEndpoint with device_ids = {0}
     std::cout << "Creating RDMAEndpoint...\n";
     std::vector<size_t> device_ids = {0, 1};
-    RDMAEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
+    RDMAEndpoint endpoint(FLAGS_gpu_index, FLAGS_port);
     std::cout << "RDMAEndpoint created successfully\n\n";
 
-    // Create OOBMetaData for remote rank
-    std::cout << "Setting up remote rank metadata...\n";
+    // Create OOBMetaData for remote peer
+    std::cout << "Setting up remote peer metadata...\n";
     auto remote_meta = std::make_shared<OOBMetaData>();
     remote_meta->server_ip = FLAGS_remote_ip;
     remote_meta->server_port = FLAGS_remote_port;
 
-    // Add remote rank metadata
-    std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_meta_map;
-    rank_meta_map[FLAGS_remote_rank] = remote_meta;
-    endpoint.add_rank_oob_meta(rank_meta_map);
-    std::cout << "Added remote rank " << FLAGS_remote_rank
+    // Add remote peer metadata
+    std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> peer_meta_map;
+    peer_meta_map[FLAGS_remote_peer] = remote_meta;
+    endpoint.add_peer_oob_meta(peer_meta_map);
+    std::cout << "Added remote peer " << FLAGS_remote_peer
               << " metadata (IP: " << FLAGS_remote_ip
               << ", Port: " << FLAGS_remote_port << ")\n\n";
 
@@ -536,27 +536,27 @@ int main(int argc, char* argv[]) {
         << "Waiting for 2 seconds to ensure both endpoints are ready...\n";
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    // Connect to remote rank
-    std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
-    int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync
+    // Connect to remote peer
+    std::cout << "Connecting to remote peer " << FLAGS_remote_peer << "...\n";
+    int connect_result = endpoint.build_connect(FLAGS_remote_peer);  // sync
     // mode (default)
-    // // int connect_result = endpoint.build_connect(FLAGS_remote_rank, false);
-    // // async mode endpoint.connect_check(FLAGS_remote_rank);
+    // // int connect_result = endpoint.build_connect(FLAGS_remote_peer, false);
+    // // async mode endpoint.connect_check(FLAGS_remote_peer);
     std::string remote_ip;
     int remote_dev;
     int remote_gpuidx;
-    // if(FLAGS_rank_id==0){
+    // if(FLAGS_peer_id==0){
     // endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
     // // }
     // // else{
     // endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
     // }
     // if (connect_result>=0) {
-    //   std::cout << "Successfully connected to remote rank " <<
-    //   FLAGS_remote_rank
+    //   std::cout << "Successfully connected to remote peer " <<
+    //   FLAGS_remote_peer
     //             << "\n";
     // } else {
-    //   std::cerr << "Failed to connect to remote rank " << FLAGS_remote_rank
+    //   std::cerr << "Failed to connect to remote peer " << FLAGS_remote_peer
     //             << "\n";
     //   return 1;
     // }
