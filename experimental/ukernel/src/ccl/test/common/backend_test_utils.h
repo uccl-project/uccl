@@ -74,17 +74,14 @@ inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
 
 inline CollectiveConfig make_test_config(int nranks, int rank,
                                           size_t tensor_bytes, size_t tile_bytes,
-                                          uint32_t num_flows = 1) {
+                                          uint32_t num_streams = 1) {
   CollectiveConfig config{};
   config.nranks = nranks;
   config.rank = rank;
-  config.num_flows = num_flows;
-  config.tensor_bytes = tensor_bytes;
+  config.num_streams = num_streams;
+  config.input_bytes = tensor_bytes;
+  config.output_bytes = tensor_bytes;
   config.tile_bytes = tile_bytes;
-  // staging must cover max per-tile slots
-  config.staging_bytes =
-      std::max(static_cast<size_t>(nranks > 0 ? nranks - 1 : 0) * tile_bytes,
-               (tensor_bytes / tile_bytes + 1) * tile_bytes);
   config.algorithm = AlgorithmKind::Ring;
   return config;
 }
@@ -92,52 +89,36 @@ inline CollectiveConfig make_test_config(int nranks, int rank,
 inline void validate_basic_plan(CollectivePlan const& plan) {
   assert(plan.nranks >= 2);
   assert(plan.rank >= 0 && plan.rank < plan.nranks);
-  assert(plan.num_flows >= 1);
-  assert(plan.tensor_bytes > 0);
+  assert(plan.num_streams >= 1);
+  assert(plan.input_bytes > 0);
   assert(plan.tile_bytes > 0);
   assert(!plan.ops.empty());
 
-  std::unordered_set<uint32_t> op_ids;
   for (size_t index = 0; index < plan.ops.size(); ++index) {
     auto const& op = plan.ops[index];
-    assert(op_ids.insert(op.op_id).second);
-    assert(op.op_id == index);
-    assert(op.tile.size_bytes > 0);
-    assert(op.tile.flow_index < plan.num_flows);
-    assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
-    auto validate_ref = [&](BufferRef const& ref) {
-      assert(ref.buffer_id != kInvalidBufferId);
-      if (ref.kind == BufferKind::Remote) {
-        assert(ref.rank >= 0);
-        assert(ref.rank < plan.nranks);
-        assert(ref.rank != plan.rank);
-      } else {
-        assert(ref.rank < 0);
-      }
-    };
-    validate_ref(op.src);
-    validate_ref(op.dst);
+    assert(op.bytes > 0);
+    assert(op.stream_index < plan.num_streams);
     if (op.kind == OpKind::TransportSend ||
-        op.kind == OpKind::DeviceSendRemote) {
-      assert(op.src.kind == BufferKind::Local);
-      assert(op.dst.kind == BufferKind::Remote);
+        op.kind == OpKind::DeviceSend) {
+      assert(op.src_peer == ~0u);
+      assert(op.dst_peer != ~0u);
+      assert(op.dst_peer < static_cast<uint32_t>(plan.nranks));
     }
     if (op.kind == OpKind::TransportRecv ||
-        op.kind == OpKind::DeviceReduceRemote ||
-        op.kind == OpKind::DeviceRecvRemote) {
-      assert(op.src.kind == BufferKind::Remote);
-      assert(op.dst.kind == BufferKind::Local);
+        op.kind == OpKind::DeviceRecvReduce ||
+        op.kind == OpKind::DeviceRecv) {
+      assert(op.src_peer != ~0u);
+      assert(op.src_peer < static_cast<uint32_t>(plan.nranks));
+      assert(op.dst_peer == ~0u);
     }
     if (op.kind == OpKind::DeviceCopy ||
         op.kind == OpKind::DeviceReduce) {
-      assert(op.src.kind == BufferKind::Local ||
-               op.src.kind == BufferKind::Remote);
-      assert(op.dst.kind == BufferKind::Local ||
-               op.dst.kind == BufferKind::Remote);
+      assert(op.src_peer == ~0u || op.src_peer < static_cast<uint32_t>(plan.nranks));
+      assert(op.dst_peer == ~0u || op.dst_peer < static_cast<uint32_t>(plan.nranks));
     }
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
-      assert(dep < op.op_id);
+      assert(dep < index);
     }
   }
 }
@@ -168,7 +149,7 @@ class MockBackend final : public Backend {
   void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind) const override { return true; }
 
-  BackendToken submit(Op const&, CollectiveBinding&) override {
+  BackendToken submit(Op const&, OpBindings const&, CollectiveBinding&) override {
     BackendToken t{next_token_++};
     ++submissions_;
     pending_polls_[t.value] = polls_before_ready_;
@@ -210,11 +191,11 @@ class MockDeviceBackend final : public Backend {
   void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind kind) const override {
     return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
-           kind == OpKind::DeviceSendRemote || kind == OpKind::DeviceReduceRemote ||
-           kind == OpKind::DeviceRecvRemote;
+           kind == OpKind::DeviceSend || kind == OpKind::DeviceRecvReduce ||
+           kind == OpKind::DeviceRecv;
   }
 
-  BackendToken submit(Op const& op, CollectiveBinding&) override {
+  BackendToken submit(Op const& op, OpBindings const&, CollectiveBinding&) override {
     if (!supports(op.kind))
       throw std::invalid_argument("device backend does not support this op");
     BackendToken t{next_token_++};
@@ -257,7 +238,7 @@ class ThrowingBackend final : public Backend {
   char const* name() const override { return "throwing"; }
   void validate(CollectivePlan const&, CollectiveBinding&) override {}
   bool supports(OpKind) const override { return true; }
-  BackendToken submit(Op const&, CollectiveBinding&) override {
+  BackendToken submit(Op const&, OpBindings const&, CollectiveBinding&) override {
     throw std::runtime_error(message_);
   }
   size_t drain(BackendToken*, size_t) override { return 0; }

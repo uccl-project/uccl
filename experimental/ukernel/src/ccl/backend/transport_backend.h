@@ -31,7 +31,8 @@ class CommunicatorTransportBackend final : public Backend {
   void validate(CollectivePlan const& plan,
                 CollectiveBinding& binding) override;
   bool supports(OpKind kind) const override;
-  BackendToken submit(Op const& op, CollectiveBinding& binding) override;
+  BackendToken submit(Op const& op, OpBindings const& bind,
+                      CollectiveBinding& binding) override;
   size_t drain(BackendToken* out, size_t max_count) override;
 
   UKernel::Transport::Communicator& communicator();

@@ -150,7 +150,7 @@ class ProcessGroup:
         op: ReduceOp = ReduceOp.SUM,
         async_op: bool = False,
         tile_bytes: int = 64 << 10,
-        num_flows: int = 2,
+        num_streams: int = 2,
     ):
         op = _canonical_reduce_op(op)
         _ensure_cuda_tensor(tensor, "tensor")
@@ -159,7 +159,7 @@ class ProcessGroup:
         self._impl.allreduce(
             tensor,
             tile_bytes=tile_bytes,
-            num_flows=num_flows,
+            num_streams=num_streams,
         )
         if async_op:
             return Work(tensor)
@@ -173,7 +173,7 @@ class ProcessGroup:
         input_split_sizes=None,
         async_op: bool = False,
         tile_bytes: int = 64 << 10,
-        num_flows: int = 2,
+        num_streams: int = 2,
     ):
         _ensure_cuda_tensor(output, "output tensor")
         _ensure_cuda_tensor(input, "input tensor")
@@ -183,13 +183,13 @@ class ProcessGroup:
         if output_split_sizes is None and input_split_sizes is None:
             self._impl.alltoall_out(
                 output, input,
-                tile_bytes=tile_bytes, num_flows=num_flows,
+                tile_bytes=tile_bytes, num_streams=num_streams,
             )
         else:
             self._impl.alltoallv_out(
                 output, input,
                 output_split_sizes or [], input_split_sizes or [],
-                tile_bytes=tile_bytes, num_flows=num_flows,
+                tile_bytes=tile_bytes, num_streams=num_streams,
             )
         if async_op:
             return _CompletedWork(output)
@@ -299,7 +299,7 @@ def all_reduce(
     async_op: bool = False,
     *,
     tile_bytes: int = 64 << 10,
-    num_flows: int = 2,
+    num_streams: int = 2,
 ):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
@@ -309,7 +309,7 @@ def all_reduce(
         op=op,
         async_op=async_op,
         tile_bytes=tile_bytes,
-        num_flows=num_flows,
+        num_streams=num_streams,
     )
 
 
@@ -322,7 +322,7 @@ def all_to_all_single(
     async_op: bool = False,
     *,
     tile_bytes: int = 64 << 10,
-    num_flows: int = 2,
+    num_streams: int = 2,
 ):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
@@ -334,7 +334,7 @@ def all_to_all_single(
         input_split_sizes=input_split_sizes,
         async_op=async_op,
         tile_bytes=tile_bytes,
-        num_flows=num_flows,
+        num_streams=num_streams,
     )
 
 

@@ -16,7 +16,7 @@ TRANSPORT=auto
 TILE_BYTES=$((64 * 1024))
 # 15 * 64KB = 983040, divisible by tile_bytes and by (3 * sizeof(float)=12).
 BYTES_PER_RANK=$((15 * TILE_BYTES))
-NUM_FLOWS=2
+NUM_STREAMS=2
 UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-$(date +%s)-$$}
 
 cleanup_ipc_shm() {
@@ -35,7 +35,7 @@ run_case() {
   }
   trap cleanup EXIT
 
-  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_flows=${NUM_FLOWS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
+  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_streams=${NUM_STREAMS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
 
   cleanup_ipc_shm "${host_id_override}"
   CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
@@ -54,7 +54,7 @@ run_case() {
       --transport "${TRANSPORT}" \
       --bytes-per-rank "${BYTES_PER_RANK}" \
       --tile-bytes "${TILE_BYTES}" \
-      --num-flows "${NUM_FLOWS}" \
+      --num-streams "${NUM_STREAMS}" \
       --exchanger-ip "${MASTER_ADDR}" \
       --exchanger-port "${exchanger_port}"
 

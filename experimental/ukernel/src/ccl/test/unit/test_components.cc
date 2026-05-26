@@ -23,7 +23,7 @@ CollectivePlan build_test_plan(CollectiveKind kind,
                                CollectiveConfig const& config) {
   CollectiveBinding binding = Testing::make_test_memory(
       config.rank, config.nranks,
-      std::max(config.tensor_bytes, config.staging_bytes));
+      std::max(config.input_bytes, config.output_bytes));
   bool inplace =
       binding.roles.input_buffer_id == binding.roles.output_buffer_id;
   CollectiveConfig cfg = config;
@@ -44,11 +44,11 @@ void test_lowering_routes_ops_to_execution_kinds() {
   CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
 
   Testing::validate_basic_exec_plan(plan);
-  assert(Testing::count_exec_ops(plan, OpKind::DeviceSendRemote) > 0);
+  assert(Testing::count_exec_ops(plan, OpKind::DeviceSend) > 0);
   assert(Testing::count_exec_ops(plan, OpKind::TransportRecv) > 0 ||
-         Testing::count_exec_ops(plan, OpKind::DeviceReduceRemote) > 0);
+         Testing::count_exec_ops(plan, OpKind::DeviceRecvReduce) > 0);
   assert(Testing::count_exec_ops(plan, OpKind::DeviceReduce) > 0 ||
-         Testing::count_exec_ops(plan, OpKind::DeviceReduceRemote) > 0);
+         Testing::count_exec_ops(plan, OpKind::DeviceRecvReduce) > 0);
 }
 
 void test_planner_emits_valid_collective_dags() {
@@ -60,9 +60,8 @@ void test_planner_emits_valid_collective_dags() {
       build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
   Testing::validate_basic_plan(allreduce_plan);
   assert(allreduce_plan.collective == CollectiveKind::AllReduce);
-  assert(allreduce_plan.algorithm == AlgorithmKind::Ring);
-  assert(Testing::count_ops(allreduce_plan, OpKind::DeviceSendRemote) > 0);
-  assert(Testing::count_ops(allreduce_plan, OpKind::DeviceReduceRemote) > 0 ||
+  assert(Testing::count_ops(allreduce_plan, OpKind::DeviceSend) > 0);
+  assert(Testing::count_ops(allreduce_plan, OpKind::DeviceRecvReduce) > 0 ||
          Testing::count_ops(allreduce_plan, OpKind::DeviceReduce) > 0);
   assert(allreduce_plan.staging_bytes_required == 0);
 
@@ -72,14 +71,13 @@ void test_planner_emits_valid_collective_dags() {
       build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
   Testing::validate_basic_plan(alltoall_plan);
   assert(alltoall_plan.collective == CollectiveKind::AllToAll);
-  assert(alltoall_plan.algorithm == AlgorithmKind::Pairwise);
-  assert(Testing::count_ops(alltoall_plan, OpKind::DeviceSendRemote) > 0);
-  assert(Testing::count_ops(alltoall_plan, OpKind::DeviceRecvRemote) > 0);
+  assert(Testing::count_ops(alltoall_plan, OpKind::DeviceSend) > 0);
+  assert(Testing::count_ops(alltoall_plan, OpKind::DeviceRecv) > 0);
   assert(alltoall_plan.staging_bytes_required == 0);
 }
 
 void test_planner_clamps_flow_count_to_available_tiles() {
-  printf("[test] planner clamps flow count to available tiles...\n");
+  printf("[test] planner clamps stream count to available tiles...\n");
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(3, 0, 196608, 65536, 2);
@@ -88,10 +86,10 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   CollectivePlan allreduce_plan =
       build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
   Testing::validate_basic_plan(allreduce_plan);
-  assert(allreduce_plan.num_flows == 1);
+  assert(allreduce_plan.num_streams == 1);
   assert(allreduce_plan.staging_bytes_required == 0);
   for (auto const& op : allreduce_plan.ops) {
-    assert(op.tile.flow_index < allreduce_plan.num_flows);
+    assert(op.stream_index < allreduce_plan.num_streams);
   }
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256, 2);
@@ -99,10 +97,10 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   CollectivePlan alltoall_plan =
       build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
   Testing::validate_basic_plan(alltoall_plan);
-  assert(alltoall_plan.num_flows == 1);
+  assert(alltoall_plan.num_streams == 1);
   assert(alltoall_plan.staging_bytes_required == 0);
   for (auto const& op : alltoall_plan.ops) {
-    assert(op.tile.flow_index < alltoall_plan.num_flows);
+    assert(op.stream_index < alltoall_plan.num_streams);
   }
 }
 
@@ -125,25 +123,20 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   cfg.collective = CollectiveKind::AllToAll;
   CollectivePlan plan = build_plan(cfg, /*inplace=*/false);
   Testing::validate_basic_plan(plan);
-  assert(plan.input_split_bytes == cfg.input_split_bytes);
-  assert(plan.output_split_bytes == cfg.output_split_bytes);
 
   std::vector<size_t> sent_bytes(3, 0);
   std::vector<size_t> recv_bytes(3, 0);
   size_t self_copy_bytes = 0;
   for (auto const& op : plan.ops) {
-    if (op.kind == OpKind::DeviceSendRemote) {
-      assert(op.dst.rank >= 0 && op.dst.rank < 3);
-      sent_bytes[static_cast<size_t>(op.dst.rank)] += op.tile.size_bytes;
-    } else if (op.kind == OpKind::DeviceRecvRemote) {
-      assert(op.src.rank >= 0 && op.src.rank < 3);
-      recv_bytes[static_cast<size_t>(op.src.rank)] += op.tile.size_bytes;
+    if (op.kind == OpKind::DeviceSend) {
+      assert(op.dst_peer >= 0 && op.dst_peer < 3);
+      sent_bytes[static_cast<size_t>(op.dst_peer)] += op.bytes;
+    } else if (op.kind == OpKind::DeviceRecv) {
+      assert(op.src_peer >= 0 && op.src_peer < 3);
+      recv_bytes[static_cast<size_t>(op.src_peer)] += op.bytes;
     } else if (op.kind == OpKind::DeviceCopy &&
-               op.src.kind == BufferKind::Local &&
-               op.dst.kind == BufferKind::Local &&
-               op.src.buffer_id == PlanBuffer::Input &&
-               op.dst.buffer_id == PlanBuffer::Output) {
-      self_copy_bytes += op.tile.size_bytes;
+               op.src_peer == ~0u && op.dst_peer == ~0u) {
+      self_copy_bytes += op.bytes;
     }
   }
 
@@ -173,22 +166,18 @@ void test_planner_honors_custom_role_buffer_ids() {
   bool saw_input = false;
   bool saw_scratch = false;
   for (auto const& op : plan.ops) {
-    for (BufferRef const* ref : {&op.src, &op.dst}) {
-      assert_ref_uses_only_roles(*ref, roles);
-      saw_input = saw_input || ref->buffer_id == PlanBuffer::Input;
-      saw_scratch = saw_scratch || ref->buffer_id == PlanBuffer::Scratch;
-    }
+    auto check_role = [&](OpKind k, bool is_src) {
+      auto role = buf_role(k, is_src, op.copy_from_staging);
+      if (role == CollectiveBufferRole::Input) saw_input = true;
+      if (role == CollectiveBufferRole::Scratch) saw_scratch = true;
+    };
+    check_role(op.kind, true);
+    check_role(op.kind, false);
   }
   assert(saw_input);
-  // SM IPC has no staging — scratch is only for alltoall
-  if (plan.algorithm == AlgorithmKind::Pairwise)
+  // SM IPC has no staging — scratch is only for alltoall DMA
+  if (plan.staging_bytes_required > 0)
     assert(saw_scratch);
-
-  Testing::validate_basic_exec_plan(plan);
-  for (auto const& op : plan.ops) {
-    assert_ref_uses_only_roles(op.src, roles);
-    assert_ref_uses_only_roles(op.dst, roles);
-  }
 }
 
 void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
@@ -205,17 +194,13 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   Op const& ag_send = plan.ops[2];
   Op const& ag_recv = plan.ops[3];
 
-  assert(rs_send.kind == OpKind::DeviceSendRemote);
-  assert(rs_send.tile.owner_rank == 0);
-  assert(rs_reduce.kind == OpKind::DeviceReduceRemote);
-  assert(rs_reduce.tile.owner_rank == 1);
+  assert(rs_send.kind == OpKind::DeviceSend);
+  assert(rs_reduce.kind == OpKind::DeviceRecvReduce);
 
   // The first allgather send must forward the fully reduced shard produced by
   // the reduce-scatter phase, which for rank 0 in a two-rank ring is shard 1.
-  assert(ag_send.kind == OpKind::DeviceSendRemote);
-  assert(ag_send.tile.owner_rank == 1);
-  assert(ag_recv.kind == OpKind::DeviceRecvRemote);
-  assert(ag_recv.tile.owner_rank == 0);
+  assert(ag_send.kind == OpKind::DeviceSend);
+  assert(ag_recv.kind == OpKind::DeviceRecv);
 }
 
 void test_three_rank_ring_allreduce_plans_tail_elements() {
@@ -227,7 +212,7 @@ void test_three_rank_ring_allreduce_plans_tail_elements() {
   Testing::validate_basic_plan(plan);
   bool saw_short_tail = false;
   for (auto const& op : plan.ops) {
-    if (op.tile.size_bytes != cfg.tile_bytes) saw_short_tail = true;
+    if (op.bytes != cfg.tile_bytes) saw_short_tail = true;
   }
   assert(saw_short_tail && "non-divisible allreduce should produce a shorter tail tile");
 }
@@ -242,11 +227,10 @@ void test_lowering_preserves_dependency_dag() {
 
   for (size_t i = 0; i < plan.ops.size(); ++i) {
     auto const& op = plan.ops[i];
-    assert(op.op_id == i);
-    assert(op.tile.size_bytes > 0);
-    assert(op.tile.flow_index < plan.num_flows);
+    assert(op.bytes > 0);
+    assert(op.stream_index < plan.num_streams);
     for (uint32_t dep : op.deps) {
-      assert(dep < op.op_id);
+    assert(dep < i);
     }
   }
 }

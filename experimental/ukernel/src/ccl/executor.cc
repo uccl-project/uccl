@@ -15,75 +15,67 @@ namespace CCL {
 
 namespace {
 
-bool is_remote_ref(BufferRef const& ref) {
-  return ref.kind == BufferKind::Remote;
-}
 
 bool is_device_op(OpKind kind) {
   return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
-         kind == OpKind::DeviceSendRemote || kind == OpKind::DeviceReduceRemote ||
-         kind == OpKind::DeviceRecvRemote;
+         kind == OpKind::DeviceSend || kind == OpKind::DeviceRecvReduce ||
+         kind == OpKind::DeviceRecv;
 }
 
 bool is_transport_op(OpKind kind) {
   return kind == OpKind::TransportSend || kind == OpKind::TransportRecv;
 }
 
-void* local_mutable_ptr(CollectiveBinding const& binding, BufferRef const& ref,
-                        size_t bytes) {
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (ref.kind != BufferKind::Local)
-    throw std::invalid_argument("local binding cannot target remote buffer");
-  if (buffer.local_ptr == nullptr)
-    throw std::invalid_argument("local registered buffer is missing");
-  validate_span("local registered buffer", ref.offset_bytes, bytes, buffer.bytes);
-  return byte_offset(buffer.local_ptr, ref.offset_bytes);
+
+
+
+
+void* local_ptr(CollectiveBinding const& binding,
+                CollectiveBufferRole role, size_t offset) {
+  return byte_offset(binding.role_buffer(role).local_ptr, offset);
 }
 
-void const* local_const_ptr(CollectiveBinding const& binding,
-                            BufferRef const& ref, size_t bytes) {
-  return local_mutable_ptr(binding, ref, bytes);
-}
-
-uint32_t remote_buffer_id_for_ipc(CollectiveBinding const& binding,
-                                  BufferRef const& ref) {
-  if (!is_remote_ref(ref) || ref.rank < 0)
-    throw std::invalid_argument("remote IPC lookup requires a remote buffer ref");
-  RegisteredBuffer const& buffer = binding.buffer_for_ref(ref);
-  if (static_cast<size_t>(ref.rank) >= buffer.peer_views.size())
-    throw std::invalid_argument("remote buffer peer rank out of range");
-  return buffer.peer_views[static_cast<size_t>(ref.rank)].buffer_id;
+uint32_t remote_buffer_id_for_role(CollectiveBinding const& binding,
+                                     CollectiveBufferRole role, int peer_rank) {
+  RegisteredBuffer const& buf = binding.role_buffer(role);
+  if (static_cast<size_t>(peer_rank) >= buf.peer_views.size())
+    throw std::invalid_argument("peer rank out of range for remote buffer lookup");
+  return buf.peer_views[static_cast<size_t>(peer_rank)].buffer_id;
 }
 
 void resolve_remote_ptrs(
-    Op& bound, CollectiveBinding const& binding,
+    Op const& op, OpBindings& bind, CollectiveBinding const& binding,
     std::function<bool(int, uint32_t, size_t, size_t, void**, int*)> const&
         resolve_remote) {
-  if (is_remote_ref(bound.src)) {
-    uint32_t remote_id = remote_buffer_id_for_ipc(binding, bound.src);
+  if (op.src_peer != ~0u) {
+    auto role = buf_role(op.kind, true, op.copy_from_staging);
+    uint32_t remote_id = remote_buffer_id_for_role(binding, role, op.src_peer);
     void* ptr = nullptr;
     int dev = -1;
     if (!resolve_remote ||
-        !resolve_remote(bound.src.rank, remote_id, bound.src.offset_bytes,
-                        bound.tile.size_bytes, &ptr, &dev))
+        !resolve_remote(op.src_peer, remote_id, op.src_off,
+                        op.bytes, &ptr, &dev))
       throw std::runtime_error("failed to resolve remote source pointer");
-    bound.resolved_src = ptr;
-    bound.src_device = dev;
+    bind.resolved_src = ptr;
+    bind.src_device = dev;
   } else {
-    bound.resolved_src = local_const_ptr(binding, bound.src, bound.tile.size_bytes);
+    bind.resolved_src = local_ptr(binding,
+        buf_role(op.kind, true, op.copy_from_staging), op.src_off);
   }
-  if (is_remote_ref(bound.dst)) {
-    uint32_t remote_id = remote_buffer_id_for_ipc(binding, bound.dst);
+  if (op.dst_peer != ~0u) {
+    auto role = buf_role(op.kind, false, op.copy_from_staging);
+    uint32_t remote_id = remote_buffer_id_for_role(binding, role, op.dst_peer);
     void* ptr = nullptr;
     int dev = -1;
     if (!resolve_remote ||
-        !resolve_remote(bound.dst.rank, remote_id, bound.dst.offset_bytes,
-                        bound.tile.size_bytes, &ptr, &dev))
+        !resolve_remote(op.dst_peer, remote_id, op.dst_off,
+                        op.bytes, &ptr, &dev))
       throw std::runtime_error("failed to resolve remote destination pointer");
-    bound.resolved_dst = ptr;
-    bound.dst_device = dev;
+    bind.resolved_dst = ptr;
+    bind.dst_device = dev;
   } else {
-    bound.resolved_dst = local_mutable_ptr(binding, bound.dst, bound.tile.size_bytes);
+    bind.resolved_dst = local_ptr(binding,
+        buf_role(op.kind, false, op.copy_from_staging), op.dst_off);
   }
 }
 
@@ -100,8 +92,8 @@ static void init_run_state(CollectiveRun& run) {
   run.completed.assign(run.total_ops, false);
   run.tokens.resize(run.total_ops);
   run.op_backend.resize(run.total_ops, nullptr);
-  run.flow_ops = run.plan.flow_ops;  // pre-computed by planner
-  run.flow_head.assign(run.plan.num_flows, 0);
+  run.stream_ops = run.plan.stream_ops;  // pre-computed by planner
+  run.stream_head.assign(run.plan.num_streams, 0);
 }
 
 // PlanCacheKey helpers
@@ -109,16 +101,15 @@ bool Executor::PlanCacheKey::operator==(PlanCacheKey const& o) const {
   return kind == o.kind && inplace == o.inplace &&
          config.nranks == o.config.nranks &&
          config.rank == o.config.rank &&
-         config.num_flows == o.config.num_flows &&
-         config.tensor_bytes == o.config.tensor_bytes &&
+         config.num_streams == o.config.num_streams &&
          config.input_bytes == o.config.input_bytes &&
          config.output_bytes == o.config.output_bytes &&
          config.tile_bytes == o.config.tile_bytes &&
          config.input_split_bytes == o.config.input_split_bytes &&
          config.output_split_bytes == o.config.output_split_bytes &&
          config.algorithm == o.config.algorithm &&
-         config.dtype == o.config.dtype &&
-         config.reduction == o.config.reduction;
+         config.reduction == o.config.reduction &&
+         config.use_sm_ipc == o.config.use_sm_ipc;
 }
 
 size_t Executor::PlanCacheKeyHash::operator()(PlanCacheKey const& key) const {
@@ -129,14 +120,13 @@ size_t Executor::PlanCacheKeyHash::operator()(PlanCacheKey const& key) const {
   s = h(s, key.inplace ? 1 : 0);
   s = h(s, static_cast<size_t>(key.config.nranks));
   s = h(s, static_cast<size_t>(key.config.rank));
-  s = h(s, key.config.num_flows);
-  s = h(s, key.config.tensor_bytes);
+  s = h(s, key.config.num_streams);
   s = h(s, key.config.input_bytes);
   s = h(s, key.config.output_bytes);
   s = h(s, key.config.tile_bytes);
   s = h(s, static_cast<size_t>(key.config.algorithm));
-  s = h(s, static_cast<size_t>(key.config.dtype));
   s = h(s, static_cast<size_t>(key.config.reduction));
+  s = h(s, key.config.use_sm_ipc ? 1 : 0);
   for (auto v : key.config.input_split_bytes) s = h(s, v);
   for (auto v : key.config.output_split_bytes) s = h(s, v);
   return s;
@@ -179,28 +169,22 @@ CollectiveOpHandle Executor::submit_collective(
     plan_cache_.emplace(key, plan);
   }
 
-  // Add global base to signal_seq — plan assigns local tile_seq (0,1,2...);
+  // Compute global base for tile_seq — planner assigns local counter (0,1,2...);
   // executor adds a fresh monotonic base so cached plans get unique seqs.
+  uint64_t seq_base = 0;
   if (plan.collective == CollectiveKind::AllReduce ||
       plan.collective == CollectiveKind::AllToAll) {
     uint64_t max_seq = 0;
     for (auto const& o : plan.ops)
-      if (o.signal_seq > max_seq) max_seq = o.signal_seq;
-    if (max_seq > 0 || !plan.ops.empty()) {
-      uint64_t base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
-      for (Op& o : plan.ops) {
-        if (o.kind == OpKind::DeviceSendRemote ||
-            o.kind == OpKind::DeviceReduceRemote ||
-            o.kind == OpKind::DeviceRecvRemote)
-          o.signal_seq += base;
-      }
-    }
+      if (o.seq > max_seq) max_seq = o.seq;
+    if (max_seq > 0 || !plan.ops.empty())
+      seq_base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
   }
 
   // One-time backend init (skip if same plan+binding as previous).
   uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
       (static_cast<uint64_t>(plan.ops.size()) << 32) ^
-      static_cast<uint64_t>(plan.tensor_bytes);
+      static_cast<uint64_t>(std::max(plan.input_bytes, plan.output_bytes));
   if (sig != validated_sig_) {
     if (backends_.transport) backends_.transport->validate(plan, binding);
     if (backends_.device && backends_.device != backends_.transport)
@@ -215,6 +199,7 @@ CollectiveOpHandle Executor::submit_collective(
   run.plan = std::move(plan);
   run.binding = &binding;
   run.total_ops = run.plan.ops.size();
+  run.signal_seq_base = seq_base;
 
   if (run.total_ops == 0) {
     run.status = CollectiveOpStatus::Completed;
@@ -254,13 +239,13 @@ void Executor::advance_run(CollectiveRun& run) {
 
   // Phase 1: Collect all ops whose dependencies are satisfied.
   run.ready.clear();
-  run.ready.reserve(run.plan.num_flows * 2);  // typical inflight per cycle
+  run.ready.reserve(run.plan.num_streams * 2);  // typical inflight per cycle
 
-  for (uint32_t fid = 0; fid < run.plan.num_flows; ++fid) {
-    while (run.flow_head[fid] < run.flow_ops[fid].size()) {
-      uint32_t op_idx = run.flow_ops[fid][run.flow_head[fid]];
+  for (uint32_t fid = 0; fid < run.plan.num_streams; ++fid) {
+    while (run.stream_head[fid] < run.stream_ops[fid].size()) {
+      uint32_t op_idx = run.stream_ops[fid][run.stream_head[fid]];
       if (run.completed[op_idx]) {
-        ++run.flow_head[fid];
+        ++run.stream_head[fid];
         continue;
       }
       bool deps_ok = true;
@@ -269,7 +254,7 @@ void Executor::advance_run(CollectiveRun& run) {
       }
       if (!deps_ok) break;
       run.ready.push_back({fid, op_idx});
-      ++run.flow_head[fid];
+      ++run.stream_head[fid];
     }
   }
 
@@ -281,10 +266,10 @@ void Executor::advance_run(CollectiveRun& run) {
     Backend* backend = pick_backend(backends_, plan_op.kind);
     if (backend == nullptr) continue;
 
-    Op submit_op = plan_op;
+    OpBindings bind;
     if (is_device_op(plan_op.kind) && resolve_ipc_buffer_pointer_) {
       try {
-        resolve_remote_ptrs(submit_op, *run.binding, resolve_ipc_buffer_pointer_);
+        resolve_remote_ptrs(plan_op, bind, *run.binding, resolve_ipc_buffer_pointer_);
       } catch (std::exception const& e) {
         run.status = CollectiveOpStatus::Failed;
         run.error_message = std::string("IPC resolution failed for op ") +
@@ -292,27 +277,18 @@ void Executor::advance_run(CollectiveRun& run) {
         return;
       }
     } else {
-      if (!is_remote_ref(submit_op.src))
-        submit_op.resolved_src =
-            local_const_ptr(*run.binding, submit_op.src, submit_op.tile.size_bytes);
-      if (!is_remote_ref(submit_op.dst))
-        submit_op.resolved_dst =
-            local_mutable_ptr(*run.binding, submit_op.dst, submit_op.tile.size_bytes);
+      if (plan_op.src_peer == ~0u)
+        bind.resolved_src = local_ptr(*run.binding,
+            buf_role(plan_op.kind, true, plan_op.copy_from_staging), plan_op.src_off);
+      if (plan_op.dst_peer == ~0u)
+        bind.resolved_dst = local_ptr(*run.binding,
+            buf_role(plan_op.kind, false, plan_op.copy_from_staging), plan_op.dst_off);
     }
-
-    // SM IPC: set completion buffer pointer for signal/poll.
-    if (plan_op.kind == OpKind::DeviceSendRemote &&
-        submit_op.dst.kind == BufferKind::Remote && gpu_comp_ready_) {
-      submit_op.resolved_src2 = gpu_comp_[submit_op.dst.rank].remote;
-    } else if ((plan_op.kind == OpKind::DeviceReduceRemote ||
-                plan_op.kind == OpKind::DeviceRecvRemote) &&
-               submit_op.src.kind == BufferKind::Remote && gpu_comp_ready_) {
-      submit_op.resolved_src2 = gpu_comp_[submit_op.src.rank].local;
-    }
+    bind.signal_seq = plan_op.seq + run.signal_seq_base;
 
     BackendToken token;
     try {
-      token = backend->submit(submit_op, *run.binding);
+      token = backend->submit(plan_op, bind, *run.binding);
     } catch (std::exception const& e) {
       run.status = CollectiveOpStatus::Failed;
       run.error_message = e.what();
@@ -320,7 +296,7 @@ void Executor::advance_run(CollectiveRun& run) {
     }
 
     if (token.value == 0) {
-      --run.flow_head[fid];  // backpressure — retry next cycle
+      --run.stream_head[fid];  // backpressure — retry next cycle
       continue;
     }
     run.tokens[op_idx] = token;
@@ -433,7 +409,7 @@ void Executor::run_plan(CollectivePlan const& plan,
                         CollectiveBinding& binding) {
   uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
       (static_cast<uint64_t>(plan.ops.size()) << 32) ^
-      static_cast<uint64_t>(plan.tensor_bytes);
+      static_cast<uint64_t>(std::max(plan.input_bytes, plan.output_bytes));
   if (sig != validated_sig_) {
     if (backends_.transport) backends_.transport->validate(plan, binding);
     if (backends_.device && backends_.device != backends_.transport)
@@ -449,22 +425,17 @@ void Executor::run_plan(CollectivePlan const& plan,
   run.binding = &binding;
   run.total_ops = plan.ops.size();
 
-  // Allocate fresh seqs for SM IPC ops (same as submit_collective).
+  // Allocate fresh seq base (same as submit_collective).
+  uint64_t seq_base = 0;
   if (plan.collective == CollectiveKind::AllReduce ||
       plan.collective == CollectiveKind::AllToAll) {
     uint64_t max_seq = 0;
     for (auto const& o : plan.ops)
-      if (o.signal_seq > max_seq) max_seq = o.signal_seq;
-    if (max_seq > 0 || !plan.ops.empty()) {
-      uint64_t base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
-      for (Op& o : run.plan.ops) {
-        if (o.kind == OpKind::DeviceSendRemote ||
-            o.kind == OpKind::DeviceReduceRemote ||
-            o.kind == OpKind::DeviceRecvRemote)
-          o.signal_seq += base;
-      }
-    }
+      if (o.seq > max_seq) max_seq = o.seq;
+    if (max_seq > 0 || !plan.ops.empty())
+      seq_base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
   }
+  run.signal_seq_base = seq_base;
 
   if (run.total_ops == 0) return;
 

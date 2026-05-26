@@ -3,6 +3,7 @@
 #include "../collective_memory.h"
 #include "../plan.h"
 #include <cstdint>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
@@ -12,11 +13,42 @@ struct BackendToken {
   bool failed = false;
 };
 
+struct GpuSignalPeer {
+  void* local = nullptr;
+  void* remote = nullptr;
+};
+
+struct OpBindings {
+  void const* resolved_src = nullptr;
+  void* resolved_dst = nullptr;
+  int src_device = -1;
+  int dst_device = -1;
+  uint64_t signal_seq = 0;
+};
+
+inline CollectiveBufferRole buf_role(OpKind kind, bool is_src,
+                                     bool copy_from_staging) {
+  switch (kind) {
+    case OpKind::DeviceSend:
+    case OpKind::DeviceRecvReduce:
+    case OpKind::DeviceRecv:     return CollectiveBufferRole::Input;
+    case OpKind::DeviceReduce:   return CollectiveBufferRole::Input;
+    case OpKind::DeviceCopy:     return is_src ? (copy_from_staging
+        ? CollectiveBufferRole::Scratch : CollectiveBufferRole::Input)
+        : CollectiveBufferRole::Output;
+    case OpKind::TransportSend:  return is_src ? CollectiveBufferRole::Input
+        : CollectiveBufferRole::Scratch;
+    case OpKind::TransportRecv:  return is_src ? CollectiveBufferRole::Input
+        : CollectiveBufferRole::Scratch;
+  }
+  return CollectiveBufferRole::Input;
+}
+
 // Minimal backend interface:
 //   validate  — one-time init (memory bindings, peer paths, worker warmup)
 //   submit    — enqueue one op, returns opaque token (value==0 = backpressure)
 //   drain     — harvest all completed ops; backend cleans its own resources
-//   stop      — end-of-flow cleanup (optional)
+//   stop      — end-of-stream cleanup (optional)
 class Backend {
  public:
   virtual ~Backend() = default;
@@ -25,9 +57,10 @@ class Backend {
   virtual void validate(CollectivePlan const& plan,
                         CollectiveBinding& binding) = 0;
   virtual bool supports(OpKind kind) const = 0;
-  virtual BackendToken submit(Op const& op, CollectiveBinding& binding) = 0;
+  virtual BackendToken submit(Op const& op, OpBindings const& bind,
+                              CollectiveBinding& binding) = 0;
   virtual size_t drain(BackendToken* out, size_t max_count) = 0;
-  virtual void stop(uint32_t flow_id) { (void)flow_id; }
+  virtual void stop(uint32_t stream_id) { (void)stream_id; }
 };
 
 struct ExecutorBackends {

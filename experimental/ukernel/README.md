@@ -206,10 +206,10 @@ pg = ProcessGroup(
 )
 
 x = torch.randn(1024 * world + 1, device="cuda", dtype=torch.float32)
-pg.allreduce(x, tile_bytes=65536, num_flows=2)
+pg.allreduce(x, tile_bytes=65536, num_streams=2)
 
 y = torch.randn(1024 * world, device="cuda", dtype=torch.float32)
-pg.alltoall(y, tile_bytes=65536, num_flows=2)
+pg.alltoall(y, tile_bytes=65536, num_streams=2)
 
 send = torch.randn(13, device="cuda", dtype=torch.float32)
 recv = torch.empty(13, device="cuda", dtype=torch.float32)
@@ -220,7 +220,7 @@ dist.all_to_all_single(
     input_split_sizes=[4, 5, 4],
     group=pg,
     tile_bytes=65536,
-    num_flows=2,
+    num_streams=2,
 )
 ```
 

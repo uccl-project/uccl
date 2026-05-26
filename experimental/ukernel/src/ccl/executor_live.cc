@@ -57,6 +57,9 @@ Executor::Executor(ExecutorConfig const& config) {
                                           &gpu_comp_[peer].remote, &remote_dev);
   }
   gpu_comp_ready_ = true;
+
+  static_cast<DeviceBackend*>(owned_device_backend_.get())
+      ->set_signal_buffers(gpu_comp_);
 }
 
 UKernel::Transport::Communicator* Executor::communicator() {

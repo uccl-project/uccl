@@ -252,13 +252,12 @@ size_t plan_cache_key(CollectiveKind collective,
   combine(static_cast<uint32_t>(config.algorithm));
   combine(config.nranks);
   combine(config.rank);
-  combine(config.num_flows);
-  combine(config.tensor_bytes);
+  combine(config.num_streams);
   combine(config.input_bytes);
   combine(config.output_bytes);
   combine(config.tile_bytes);
-  combine(static_cast<uint32_t>(config.dtype));
   combine(static_cast<uint32_t>(config.reduction));
+  combine(config.use_sm_ipc ? 1u : 0u);
   combine(inplace ? 1u : 0u);
   for (auto v : config.input_split_bytes) combine(v);
   for (auto v : config.output_split_bytes) combine(v);
@@ -335,28 +334,28 @@ class ProcessGroup {
   int gpu_id() const { return gpu_id_; }
 
   void allreduce(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                 uint32_t num_flows = 2) {
+                 uint32_t num_streams = 2) {
     allreduce(std::move(tensor),
               static_cast<uint32_t>(ReductionKind::Sum),
-              tile_bytes, num_flows);
+              tile_bytes, num_streams);
   }
 
   void alltoall(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                uint32_t num_flows = 2) {
-    alltoall_out(std::move(tensor), std::move(tensor), tile_bytes, num_flows);
+                uint32_t num_streams = 2) {
+    alltoall_out(std::move(tensor), std::move(tensor), tile_bytes, num_streams);
   }
 
   void alltoall_out(torch::Tensor output, torch::Tensor input,
-                    size_t tile_bytes = 64ull << 10, uint32_t num_flows = 2) {
+                    size_t tile_bytes = 64ull << 10, uint32_t num_streams = 2) {
     alltoallv_out(std::move(output), std::move(input), {}, {}, tile_bytes,
-                  num_flows);
+                  num_streams);
   }
 
   void alltoallv_out(torch::Tensor output, torch::Tensor input,
                      std::vector<int64_t> output_split_sizes,
                      std::vector<int64_t> input_split_sizes,
                      size_t tile_bytes = 64ull << 10,
-                     uint32_t num_flows = 2) {
+                     uint32_t num_streams = 2) {
     std::lock_guard<std::mutex> lock(mu_);
     GPU_RT_CHECK(gpuSetDevice(gpu_id_));
 
@@ -406,21 +405,20 @@ class ProcessGroup {
     CollectiveConfig config{};
     config.nranks = world_size_;
     config.rank = rank_;
-    config.num_flows = num_flows;
-    config.tensor_bytes = std::max(input_bytes, output_bytes);
+    config.num_streams = num_streams;
     config.input_bytes = input_bytes;
     config.output_bytes = output_bytes;
     config.input_split_bytes = std::move(input_split_bytes);
     config.output_split_bytes = std::move(output_split_bytes);
     config.tile_bytes = tile_bytes;
-    config.staging_bytes = std::max(
-        tile_bytes * (world_size_ - 1),
-        ((config.tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
     config.algorithm = AlgorithmKind::Pairwise;
     config.dtype = input_dtype;
     config.reduction = ReductionKind::None;
 
-    size_t staging_req = config.staging_bytes;
+    size_t max_bytes = std::max(input_bytes, output_bytes);
+    size_t staging_req = std::max(
+        tile_bytes * (world_size_ - 1),
+        ((max_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
     void* old_staging_ptr =
         staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
     torch::Tensor staging = ensure_staging(staging_req);
@@ -596,7 +594,7 @@ class ProcessGroup {
 
   void allreduce(torch::Tensor tensor, uint32_t reduction,
                  size_t tile_bytes = 64ull << 10,
-                 uint32_t num_flows = 2) {
+                 uint32_t num_streams = 2) {
     std::lock_guard<std::mutex> lock(mu_);
     GPU_RT_CHECK(gpuSetDevice(gpu_id_));
 
@@ -608,17 +606,17 @@ class ProcessGroup {
     CollectiveConfig config{};
     config.nranks = world_size_;
     config.rank = rank_;
-    config.num_flows = num_flows;
-    config.tensor_bytes = tensor_bytes;
+    config.num_streams = num_streams;
+    config.input_bytes = tensor_bytes;
+    config.output_bytes = tensor_bytes;
     config.tile_bytes = tile_bytes;
-    config.staging_bytes = std::max(
-        tile_bytes * num_flows,
+    size_t staging_req = std::max(
+        tile_bytes * num_streams,
         ((tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
     config.algorithm = AlgorithmKind::Ring;
     config.dtype = dtype;
     config.reduction = static_cast<ReductionKind>(reduction);
 
-    size_t staging_req = config.staging_bytes;
     void* old_staging_ptr =
         staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
     torch::Tensor staging = ensure_staging(staging_req);
@@ -711,49 +709,49 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(
           "allreduce",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-             uint32_t num_flows) {
+             uint32_t num_streams) {
             self.allreduce(
                 UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
-                tile_bytes, num_flows);
+                tile_bytes, num_streams);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_flows") = 2)
+          nb::arg("num_streams") = 2)
       .def(
           "alltoall",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-             uint32_t num_flows) {
+             uint32_t num_streams) {
             self.alltoall(
                 UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
-                tile_bytes, num_flows);
+                tile_bytes, num_streams);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_flows") = 2)
+          nb::arg("num_streams") = 2)
       .def(
           "alltoall_out",
           [](ProcessGroup& self, nb::handle output, nb::handle input,
-             size_t tile_bytes, uint32_t num_flows) {
+             size_t tile_bytes, uint32_t num_streams) {
             self.alltoall_out(
                 UKernel::CCL::Python::tensor_from_python(output, "output"),
                 UKernel::CCL::Python::tensor_from_python(input, "input"),
-                tile_bytes, num_flows);
+                tile_bytes, num_streams);
           },
           nb::arg("output"), nb::arg("input"),
-          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_streams") = 2)
       .def(
           "alltoallv_out",
           [](ProcessGroup& self, nb::handle output, nb::handle input,
              std::vector<int64_t> output_split_sizes,
              std::vector<int64_t> input_split_sizes, size_t tile_bytes,
-             uint32_t num_flows) {
+             uint32_t num_streams) {
             self.alltoallv_out(
                 UKernel::CCL::Python::tensor_from_python(output, "output"),
                 UKernel::CCL::Python::tensor_from_python(input, "input"),
                 std::move(output_split_sizes), std::move(input_split_sizes),
-                tile_bytes, num_flows);
+                tile_bytes, num_streams);
           },
           nb::arg("output"), nb::arg("input"), nb::arg("output_split_sizes"),
           nb::arg("input_split_sizes"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_flows") = 2)
+          nb::arg("num_streams") = 2)
       .def("barrier", [](ProcessGroup& self) { self.barrier(); })
       .def("same_host", &ProcessGroup::same_host, nb::arg("peer_rank"))
       .def("peer_transport", &ProcessGroup::peer_transport,

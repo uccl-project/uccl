@@ -12,8 +12,8 @@ constexpr uint32_t kCommandExit = 2;
 
 __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
   return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce ||
-         ttype == TaskType::CollCopyRemote || ttype == TaskType::CollReduceRemote ||
-         ttype == TaskType::CollRecvRemote;
+         ttype == TaskType::CollSend || ttype == TaskType::CollRecvReduce ||
+         ttype == TaskType::CollRecv;
 }
 
 __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
@@ -95,8 +95,8 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
 
 // ── SM IPC completion buffer helpers ─────────────────────────────────
 
-struct alignas(16) GpuComp {
-  uint64_t last[2];  // [0]=peer_a→peer_b, [1]=peer_b→peer_a, both pp accessible
+struct GpuComp {
+  uint64_t last[2];
 };
 
 __device__ __forceinline__ void sm_write_seq(TaskArgs const& a) {
@@ -119,19 +119,19 @@ __device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
 // ── SM IPC kernel functions ──────────────────────────────────────────
 
 template <typename T>
-__device__ __forceinline__ void run_send_remote(TaskArgs const& a,
-                                                 uint32_t block_id,
-                                                 uint32_t num_blocks,
-                                                 void* smem_buf) {
+__device__ __forceinline__ void run_send(TaskArgs const& a,
+                                         uint32_t block_id,
+                                         uint32_t num_blocks,
+                                         void* smem_buf) {
   run_typed_copy<T>(a, block_id, num_blocks, smem_buf);
   sm_write_seq(a);
 }
 
 template <typename T>
-__device__ __forceinline__ void run_reduce_remote(TaskArgs const& a,
-                                                   uint32_t block_id,
-                                                   uint32_t num_blocks,
-                                                   void* smem_buf) {
+__device__ __forceinline__ void run_recv_reduce(TaskArgs const& a,
+                                                 uint32_t block_id,
+                                                 uint32_t num_blocks,
+                                                 void* smem_buf) {
   sm_wait_seq(a);
   ReduceType red = static_cast<ReduceType>(a.redTypeRaw & 0xFF);
 
@@ -148,10 +148,6 @@ __device__ __forceinline__ void run_reduce_remote(TaskArgs const& a,
 
   read_reduce_store<T>(dst + block_offset, src + block_offset,
                        static_cast<size_t>(my_count), red, smem_buf);
-}
-
-__device__ __forceinline__ void run_recv_remote(TaskArgs const& a) {
-  sm_wait_seq(a);
 }
 
 // ── benchmarks ────────────────────────────────────────────────────────
@@ -187,15 +183,6 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
   else if (dtype == DataType::Fp64) run_reduce<double>(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Bf16) run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
 
-#define RUN_REDUCE_REMOTE_BODY(dtype) \
-  if (dtype == DataType::Fp32) run_reduce_remote<float>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp16) run_reduce_remote<__half>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int8) run_reduce_remote<int8_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int32) run_reduce_remote<int32_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int64) run_reduce_remote<int64_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp64) run_reduce_remote<double>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Bf16) run_reduce_remote<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
-
 __device__ __forceinline__ void dispatch_task(Task const& task,
                                               TaskArgs const* ready_args,
                                               uint32_t block_id,
@@ -211,16 +198,25 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
     case TaskType::CollCopy:
       RUN_COPY_BODY(dtype, run_typed_copy);
       break;
-    case TaskType::CollCopyRemote:
-      RUN_COPY_BODY(dtype, run_send_remote);
+    case TaskType::CollSend:
+      RUN_COPY_BODY(dtype, run_send);
       break;
     case TaskType::CollReduce:
       RUN_REDUCE_BODY(dtype);
       break;
-    case TaskType::CollReduceRemote:
-      RUN_REDUCE_REMOTE_BODY(dtype);
+    case TaskType::CollRecvReduce:
+      RUN_COPY_BODY(dtype, run_recv_reduce);
       break;
-    case TaskType::CollRecvRemote:
+    case TaskType::CollRecv:
+      sm_wait_seq(args);
+      break;
+    default:
+      break;
+  }
+}
+
+#undef RUN_COPY_BODY
+#undef RUN_REDUCE_BODY
       run_recv_remote(args);
       break;
     default:
@@ -230,7 +226,6 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
 
 #undef RUN_COPY_BODY
 #undef RUN_REDUCE_BODY
-#undef RUN_REDUCE_REMOTE_BODY
 
 __device__ __forceinline__ void process_task(Task const& task,
                                               TaskArgs* d_task_args,

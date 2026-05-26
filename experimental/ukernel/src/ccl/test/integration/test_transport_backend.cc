@@ -208,9 +208,8 @@ CollectivePlan make_single_op_plan(int rank, int nranks, Op const& op) {
   CollectivePlan plan;
   plan.rank = rank;
   plan.nranks = nranks;
-  plan.num_flows = 1;
-  plan.tensor_bytes = op.tile.size_bytes;
-  plan.tile_bytes = op.tile.size_bytes;
+  plan.num_streams = 1;
+  plan.tile_bytes = op.bytes;
   plan.ops.push_back(op);
   return plan;
 }
@@ -336,8 +335,8 @@ int run_rank(Options const& opts) {
   op1.op_id = 0;
   op1.kind =
       (opts.rank == 0) ? OpKind::TransportSend : OpKind::TransportRecv;
-  op1.tile.flow_index = 0;
-  op1.tile.size_bytes = opts.bytes;
+  op1.stream_index = 0;
+  op1.bytes = opts.bytes;
   op1.src = (opts.rank == 0) ? local_buffer_ref(PlanBuffer::Input, 0)
                              : remote_buffer_ref(PlanBuffer::Scratch, 0, 0);
   op1.dst = (opts.rank == 0) ? remote_buffer_ref(PlanBuffer::Scratch, 1, 0)
@@ -374,8 +373,8 @@ int run_rank(Options const& opts) {
   op2.op_id = 0;
   op2.kind =
       (opts.rank == 1) ? OpKind::TransportSend : OpKind::TransportRecv;
-  op2.tile.flow_index = 0;
-  op2.tile.size_bytes = opts.bytes;
+  op2.stream_index = 0;
+  op2.bytes = opts.bytes;
   op2.src = (opts.rank == 1) ? local_buffer_ref(PlanBuffer::Scratch, 0)
                              : remote_buffer_ref(PlanBuffer::Input, 1, 0);
   op2.dst = (opts.rank == 1) ? remote_buffer_ref(PlanBuffer::Input, 0, 0)

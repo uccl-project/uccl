@@ -15,15 +15,9 @@ namespace {
 std::atomic<uint64_t> g_next_transport_backend_cache_key{1};
 constexpr int kMemoryBindingTimeoutMs = 30000;
 
-bool is_peer_ref(BufferRef const& ref) {
-  return ref.kind == BufferKind::Remote;
-}
-
 int transport_peer_rank(Op const& op) {
-  if (op.kind == OpKind::TransportSend)
-    return is_peer_ref(op.dst) ? op.dst.rank : -1;
-  if (op.kind == OpKind::TransportRecv)
-    return is_peer_ref(op.src) ? op.src.rank : -1;
+  if (op.kind == OpKind::TransportSend) return op.dst_peer;
+  if (op.kind == OpKind::TransportRecv) return op.src_peer;
   return -1;
 }
 
@@ -234,7 +228,9 @@ bool CommunicatorTransportBackend::supports(OpKind kind) const {
 }
 
 BackendToken CommunicatorTransportBackend::submit(Op const& op,
-                                                   CollectiveBinding& binding) {
+                                                    OpBindings const& bind,
+                                                    CollectiveBinding& binding) {
+  (void)bind;
   (void)binding;
   int peer_rank = resolve_peer_rank(op);
   size_t idx = static_cast<size_t>(peer_rank);
@@ -248,20 +244,18 @@ BackendToken CommunicatorTransportBackend::submit(Op const& op,
 
   unsigned request_id = 0;
   if (op.kind == OpKind::TransportSend) {
-    uint32_t dst_buf_id = 0;
-    size_t dst_off = 0;
-    if (op.dst.kind == BufferKind::Remote) {
-      dst_buf_id = resolve_remote_buffer_id(binding, op.dst);
-      dst_off = op.dst.offset_bytes;
-    }
-    uint32_t src_buf = resolve_local_buffer_id(binding, op.src);
+    uint32_t src_buf = binding.role_buffer(CollectiveBufferRole::Input).local_buffer_id;
+    auto const& scratch_buf = binding.role_buffer(CollectiveBufferRole::Scratch);
+    uint32_t dst_buf_id = scratch_buf.peer_views[static_cast<size_t>(peer_rank)].buffer_id;
     request_id = communicator_->isend(
-        peer_rank, src_buf, op.src.offset_bytes, op.tile.size_bytes,
-        dst_buf_id, dst_off);
+        peer_rank, src_buf, op.src_off, op.bytes,
+        dst_buf_id, op.dst_off);
   } else {
-    uint32_t dst_buf = resolve_local_buffer_id(binding, op.dst);
+    uint32_t dst_buf = binding.role_buffer(CollectiveBufferRole::Scratch).local_buffer_id;
+    auto const& input_buf = binding.role_buffer(CollectiveBufferRole::Input);
+    uint32_t src_buf_id = input_buf.peer_views[static_cast<size_t>(peer_rank)].buffer_id;
     request_id = communicator_->irecv(
-        peer_rank, dst_buf, op.dst.offset_bytes, op.tile.size_bytes);
+        peer_rank, dst_buf, op.dst_off, op.bytes);
   }
   if (request_id == 0)
     throw std::runtime_error("transport request submission failed");
@@ -307,14 +301,14 @@ size_t CommunicatorTransportBackend::drain(BackendToken* out, size_t max_count) 
 
 int CommunicatorTransportBackend::resolve_peer_rank(Op const& op) const {
   if (op.kind == OpKind::TransportSend) {
-    if (!is_peer_ref(op.dst) || op.dst.rank < 0)
+    if (op.dst_peer == ~0u)
       throw std::invalid_argument("transport send requires a peer destination");
-    return op.dst.rank;
+    return op.dst_peer;
   }
   if (op.kind == OpKind::TransportRecv) {
-    if (!is_peer_ref(op.src) || op.src.rank < 0)
+    if (op.src_peer == ~0u)
       throw std::invalid_argument("transport recv requires a peer source");
-    return op.src.rank;
+    return op.src_peer;
   }
   throw std::invalid_argument("non-transport op");
 }

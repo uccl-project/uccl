@@ -27,17 +27,10 @@ void test_mock_backend_submit_drain_single() {
   CollectiveBinding dummy_binding;
   Op dummy_op;
   dummy_op.kind = OpKind::TransportSend;
-  dummy_op.src.kind = BufferKind::Local;
-  dummy_op.src.buffer_id = PlanBuffer::Input;
-  dummy_op.src.offset_bytes = 0;
-  dummy_op.dst.kind = BufferKind::Remote;
-  dummy_op.dst.buffer_id = PlanBuffer::Scratch;
-  dummy_op.dst.rank = 1;
-  dummy_op.tile.size_bytes = 256;
-  dummy_op.tile.flow_index = 0;
-  dummy_op.tile.owner_rank = 0;
+  dummy_op.dst_peer = 1;
+  dummy_op.bytes = 256;
 
-  BackendToken t0 = backend.submit(dummy_op, dummy_binding);
+  BackendToken t0 = backend.submit(dummy_op, OpBindings{}, dummy_binding);
   assert(t0.value != 0);
 
   BackendToken out[4];
@@ -57,19 +50,13 @@ void test_mock_backend_submit_drain_many() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::TransportSend;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Remote;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.dst.rank = 1;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.dst_peer = 1;
+  op.bytes = 256;
 
   constexpr int kN = 100;
   uint64_t tokens[kN];
   for (int i = 0; i < kN; ++i)
-    tokens[i] = backend.submit(op, dummy).value;
+    tokens[i] = backend.submit(op, OpBindings{}, dummy).value;
 
   BackendToken out[200];
   size_t total_drained = 0;
@@ -101,16 +88,10 @@ void test_mock_backend_max_count_clamping() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::DeviceCopy;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Local;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.bytes = 256;
 
   for (int i = 0; i < 10; ++i)
-    backend.submit(op, dummy);
+    backend.submit(op, OpBindings{}, dummy);
 
   // First drain: max_count=3 → only 3 returned
   BackendToken out[10];
@@ -134,22 +115,15 @@ void test_device_mock_submit_drain() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::DeviceCopy;
-  op.dtype = ScalarType::Float32;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Local;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.bytes = 256;
 
-  BackendToken t = backend.submit(op, dummy);
+  BackendToken t = backend.submit(op, OpBindings{}, dummy);
   assert(t.value != 0);
 
   // Should reject unsupported op kind
   Op bad_op = op;
   bad_op.kind = OpKind::TransportSend;
-  assert(throws([&] { backend.submit(bad_op, dummy); }));
+  assert(throws([&] { backend.submit(bad_op, OpBindings{}, dummy); }));
 
   // 2 polls needed → first drain returns 0, second harvests
   BackendToken out[4];
@@ -168,7 +142,7 @@ void test_throwing_backend_drain_empty() {
   CollectiveBinding dummy;
   Op op;
 
-  assert(throws([&] { backend.submit(op, dummy); }));
+  assert(throws([&] { backend.submit(op, OpBindings{}, dummy); }));
   BackendToken out[4];
   assert(backend.drain(out, 4) == 0);
 }
@@ -182,14 +156,8 @@ void bench_mock_drain_throughput() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::TransportSend;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Remote;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.dst.rank = 1;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.dst_peer = 1;
+  op.bytes = 256;
 
   constexpr int kTotal = 50000;
   constexpr int kBatch = 1024;
@@ -199,7 +167,7 @@ void bench_mock_drain_throughput() {
   // Submit phase
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kTotal; ++i)
-    backend.submit(op, dummy);
+    backend.submit(op, OpBindings{}, dummy);
   auto t1 = std::chrono::high_resolution_clock::now();
   double submit_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
 
@@ -227,20 +195,14 @@ void bench_mock_drain_with_delay() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::DeviceCopy;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Local;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.bytes = 256;
 
   constexpr int kTotal = 10000;
   constexpr int kBatch = 1024;
   BackendToken out[kBatch];
 
   for (int i = 0; i < kTotal; ++i)
-    backend.submit(op, dummy);
+    backend.submit(op, OpBindings{}, dummy);
 
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t total = 0;
@@ -268,20 +230,14 @@ void test_drain_no_duplicates_or_loss() {
   CollectiveBinding dummy;
   Op op;
   op.kind = OpKind::TransportSend;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = PlanBuffer::Input;
-  op.dst.kind = BufferKind::Remote;
-  op.dst.buffer_id = PlanBuffer::Scratch;
-  op.dst.rank = 1;
-  op.tile.size_bytes = 256;
-  op.tile.flow_index = 0;
-  op.tile.owner_rank = 0;
+  op.dst_peer = 1;
+  op.bytes = 256;
 
   constexpr int kN = 2000;
   std::vector<uint64_t> submitted;
   submitted.reserve(kN);
   for (int i = 0; i < kN; ++i)
-    submitted.push_back(backend.submit(op, dummy).value);
+    submitted.push_back(backend.submit(op, OpBindings{}, dummy).value);
 
   // Collect all drained tokens across many drain calls
   std::vector<uint64_t> drained;

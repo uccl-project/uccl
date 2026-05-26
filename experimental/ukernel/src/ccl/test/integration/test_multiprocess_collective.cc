@@ -385,7 +385,7 @@ struct Options {
   int world_size = 2;
   int gpu = 0;
   int exchanger_port = 6979;
-  uint32_t num_flows = 2;
+  uint32_t num_streams = 2;
   size_t bytes_per_rank = default_test_bytes_per_rank(2);
   size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
@@ -405,8 +405,8 @@ Options parse_options(int argc, char** argv) {
   opts.exchanger_port = get_int_arg(
       argc, argv, "--exchanger-port",
       get_env_int({"MASTER_PORT", "UHM_EXCHANGER_SERVER_PORT"}, 29500));
-  opts.num_flows = static_cast<uint32_t>(get_int_arg(
-      argc, argv, "--num-flows", get_env_int({"CCL_NUM_FLOWS"}, 2)));
+  opts.num_streams = static_cast<uint32_t>(get_int_arg(
+       argc, argv, "--num-streams", get_env_int({"CCL_NUM_STREAMS"}, 2)));
   opts.bytes_per_rank =
       get_size_arg(argc, argv, "--bytes-per-rank",
                    get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"},
@@ -472,7 +472,7 @@ int run_rank(Options const& opts) {
   executor_cfg.communicator_config->local_id = opts.rank;
   executor_cfg.communicator_config->preferred_transport =
       parse_transport(opts.transport);
-  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_flows, 1);
+  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_streams, 1);
   executor_cfg.device_task_capacity = 4096;
   executor_cfg.threads_per_block = 256;
   executor_cfg.fifo_capacity = 64;
@@ -481,7 +481,7 @@ int run_rank(Options const& opts) {
 
   CollectiveConfig config =
       Testing::make_test_config(opts.world_size, opts.rank, opts.bytes_per_rank,
-                                opts.tile_bytes, opts.num_flows);
+                                opts.tile_bytes, opts.num_streams);
   config.dtype = ScalarType::Float32;
   config.reduction = ReductionKind::Sum;
   if (opts.collective == CollectiveKind::AllToAll) {
@@ -517,9 +517,9 @@ int run_rank(Options const& opts) {
 
   std::printf(
       "[rank %d] %s verified, bytes_per_rank=%zu, tile_bytes=%zu, "
-      "num_flows=%u\n",
+      "num_streams=%u\n",
       opts.rank, collective_name(opts.collective), opts.bytes_per_rank,
-      opts.tile_bytes, opts.num_flows);
+      opts.tile_bytes, opts.num_streams);
   return 0;
 }
 

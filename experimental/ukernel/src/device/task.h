@@ -15,9 +15,9 @@ namespace Device {
 enum class TaskType : uint64_t {
   CollCopy,
   CollReduce,
-  CollCopyRemote,
-  CollReduceRemote,
-  CollRecvRemote,
+  CollSend,
+  CollRecv,
+  CollRecvReduce,
   BenchNop,
   Stop,
 };
@@ -205,9 +205,9 @@ class TaskManager {
   Task create_task(TaskArgs const& h, TaskType tt, DataType dt,
                    uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce ||
-           tt == TaskType::CollCopyRemote || tt == TaskType::CollReduceRemote ||
-           tt == TaskType::CollRecvRemote);
-    bool is_reduce = (tt == TaskType::CollReduce || tt == TaskType::CollReduceRemote);
+           tt == TaskType::CollSend || tt == TaskType::CollRecvReduce ||
+           tt == TaskType::CollRecv);
+    bool is_reduce = (tt == TaskType::CollReduce || tt == TaskType::CollRecvReduce);
     assert(!is_reduce || is_supported_reduce_dtype(dt));
     if (is_reduce) {
       uint8_t red = static_cast<uint8_t>(h.redTypeRaw & 0xFF);

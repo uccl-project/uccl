@@ -123,24 +123,14 @@ void submit_and_drain(DeviceBackend& backend, Op const& op,
   drain_all(backend, tokens, timeout);
 }
 
-Op make_device_op(uint32_t op_id, OpKind kind, uint32_t flow_index,
-                  size_t offset_bytes, size_t size_bytes, BufferId src,
-                  BufferId dst,
-                  ReductionKind reduction = ReductionKind::None) {
+Op make_device_op(OpKind kind, uint32_t stream_index,
+                  size_t offset_bytes, size_t size_bytes) {
   Op op;
-  op.op_id = op_id;
   op.kind = kind;
-  op.tile.flow_index = flow_index;
-  op.tile.offset_bytes = offset_bytes;
-  op.tile.size_bytes = size_bytes;
-  op.src.kind = BufferKind::Local;
-  op.src.buffer_id = src;
-  op.src.offset_bytes = offset_bytes;
-  op.dst.kind = BufferKind::Local;
-  op.dst.buffer_id = dst;
-  op.dst.offset_bytes = offset_bytes;
-  op.dtype = ScalarType::Float32;
-  op.reduction = reduction;
+  op.stream_index = stream_index;
+  op.bytes = size_bytes;
+  op.src_off = offset_bytes;
+  op.dst_off = offset_bytes;
   return op;
 }
 
@@ -201,10 +191,8 @@ void validate_backend_for_op(DeviceBackend& backend, Op const& op,
   CollectivePlan plan;
   plan.nranks = 1;
   plan.rank = 0;
-  plan.num_flows = 1;
-  plan.tensor_bytes = op.tile.size_bytes;
-  plan.tile_bytes = op.tile.size_bytes;
-  plan.dtype = op.dtype;
+  plan.num_streams = 1;
+  plan.tile_bytes = op.bytes;
   plan.ops.push_back(op);
   backend.validate(plan, binding);
 }
@@ -226,7 +214,7 @@ void test_device_copy() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  Op op = make_device_op(0, OpKind::DeviceCopy, 0, 0, kBytes,
+  Op op = make_device_op(OpKind::DeviceCopy, 0, 0, kBytes,
                              kTestInputBufferId, kTestScratchBufferId);
   validate_backend_for_op(backend, op, memory);
   submit_and_drain(backend, op, memory, std::chrono::seconds(5));
@@ -254,7 +242,7 @@ void test_device_reduce_sum() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  Op op = make_device_op(0, OpKind::DeviceReduce, 0, 0, kBytes,
+  Op op = make_device_op(OpKind::DeviceReduce, 0, 0, kBytes,
                              kTestScratchBufferId, kTestInputBufferId,
                              ReductionKind::Sum);
   validate_backend_for_op(backend, op, memory);
@@ -266,7 +254,7 @@ void test_device_reduce_sum() {
 }
 
 void test_device_reduce_pipeline_same_flow() {
-  std::printf("[test] device backend reduce pipeline on one flow...\n");
+  std::printf("[test] device backend reduce pipeline on one stream...\n");
   constexpr size_t kTileElems = (64 << 10) / sizeof(float);
   constexpr size_t kTiles = 4;
   constexpr size_t kElems = kTileElems * kTiles;

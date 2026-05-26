@@ -70,12 +70,13 @@ struct CollectiveRun {
   };
   std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
 
-  std::vector<std::vector<uint32_t>> flow_ops;
-  std::vector<size_t> flow_head;
+  std::vector<std::vector<uint32_t>> stream_ops;
+  std::vector<size_t> stream_head;
   std::vector<BackendToken> done_buf;
   std::vector<std::pair<uint32_t, uint32_t>> ready;
   size_t completed_count = 0;
   size_t total_ops = 0;
+  uint64_t signal_seq_base = 0;
 };
 
 class Executor {
@@ -127,12 +128,7 @@ class Executor {
   uint64_t next_handle_ = 1;
   uint64_t validated_sig_ = 0;
 
-  // SM IPC GPU completion buffers (local + IPC-mapped remote).
-  struct GpuCompPeer {
-    void* local = nullptr;   // cudaMalloc, local GPU VA
-    void* remote = nullptr;  // IPC-mapped peer GPU VA
-  };
-  std::vector<GpuCompPeer> gpu_comp_;
+  std::vector<GpuSignalPeer> gpu_comp_;
   bool gpu_comp_ready_ = false;
 
   struct PlanCacheKey {
