@@ -617,8 +617,8 @@ def test_loop(
             assert current_hash == ref_hash
 
     # Destroy the buffer runtime and communication group
-    buffer.destroy()
     dist.barrier()
+    buffer.destroy()
     dist.destroy_process_group()
 
 
