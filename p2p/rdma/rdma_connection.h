@@ -108,6 +108,8 @@ class SendConnection : public RDMAConnection {
   // Start polling thread
   void startPolling();
 
+  bool isRunning() const { return running_.load(std::memory_order_acquire); }
+
   bool check(int64_t wr_id);
 
   bool canUseRawOneSidedBatch(SendType send_type);
@@ -280,6 +282,8 @@ class RecvConnection : public RDMAConnection {
 
   // Stop polling thread
   void stopPolling();
+
+  bool isRunning() const { return running_.load(std::memory_order_acquire); }
 
   int64_t recv(std::shared_ptr<RDMARecvRequest> req);
 

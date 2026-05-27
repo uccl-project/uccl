@@ -256,13 +256,13 @@ class CollectiveContext:
                     # Accept a remote connection
                     ok, r_ip, r_gpu, conn_id = self.ep.accept()
                     if ok:
-                        # Find the rank that corresponds to this IP/GPU combination
+                        # Match by IP only (r_gpu is int; parse_metadata returns BDF string).
                         for rank in range(self.world_size):
                             if rank != self.rank and not self.local_connections[rank]:
-                                ip, _, gpu_idx = p2p.Endpoint.parse_metadata(
+                                ip, _, _ = p2p.Endpoint.parse_metadata(
                                     all_metadata[rank]
                                 )
-                                if ip == r_ip and gpu_idx == r_gpu:
+                                if ip == r_ip:
                                     self.recv_connections[rank] = conn_id
                                     print(
                                         f"[Rank {self.rank}] Accepted remote connection from rank {rank} (IP {r_ip}, GPU {r_gpu}) for receiving (conn_id={conn_id})"

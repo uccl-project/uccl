@@ -662,9 +662,21 @@ void SendConnection::postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
   }
   // Split message into chunks
   size_t message_size = req->local_mem->size;
-  auto chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
-  if (expected_chunk_count == 0) {
-    expected_chunk_count = chunks.size();
+  std::vector<MessageChunk> chunks;
+  if (expected_chunk_count > 0) {
+    // Caller pre-determined chunk count; honour it exactly so tracker_ WR
+    // budget matches actual posts (used by compressSendRequestSplitFirst).
+    size_t n = static_cast<size_t>(expected_chunk_count);
+    size_t chunk_size =
+        ChunkSplitStrategy::getRegularChunkSize(message_size, n);
+    chunks.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+      uint64_t offset = static_cast<uint64_t>(i) * chunk_size;
+      chunks.emplace_back(offset, std::min(chunk_size, message_size - offset));
+    }
+  } else {
+    chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
+    expected_chunk_count = static_cast<int>(chunks.size());
     tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
   }
   UCCL_LOG(INFO, UCCL_RDMA)
@@ -837,14 +849,19 @@ void SendConnection::compressSendRequestSplitFirst(
       req->local_mem->size /
       ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->getMaxSize(),
                                               expected_chunk_count);
+  if (send_chunks_first == 0 && req->local_mem->size > 0) {
+    UCCL_LOG(WARN) << "compressSendRequestSplitFirst: send_chunks_first=0 but "
+                      "split data ("
+                   << req->local_mem->size
+                   << " bytes) is non-empty; phase-1 skipped, decompression "
+                      "may fail";
+  }
   if (send_chunks_first > 0) {
     postChunkedRequest(req, send_chunks_first);
   }
-  uint32_t uncompressed_size =
-      Compressor::getInstance().compressEncodeOneBatch(req);
+  Compressor::getInstance().compressEncodeOneBatch(req);
   postChunkedRequest(req, expected_chunk_count - send_chunks_first);
-  tracker_->updateExpectedAckCount(
-      req->wr_id, ChunkSplitStrategy::getMessageChunkCount(uncompressed_size));
+  tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
 }
 
 void SendConnection::processOnceSendRequests(
@@ -852,12 +869,18 @@ void SendConnection::processOnceSendRequests(
   req->imm_data.set_index(index);
   req->channel_id = meta.channel_id;
   req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
-  if (Compressor::getInstance().shouldCompressAndSplitFirst(
-          req->local_mem->size)) {
+  // kUndefined means prepareSplitContext was skipped; params_dev is null and
+  // compression would SIGABRT.
+  bool const ctx_ready =
+      req->compress_ctx &&
+      req->compress_ctx->getFloatType() != FloatType::kUndefined;
+  if (ctx_ready && Compressor::getInstance().shouldCompressAndSplitFirst(
+                       req->local_mem->size)) {
     compressSendRequestSplitFirst(req, meta.expected_chunk_count);
     return;
   }
-  if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
+  if (ctx_ready &&
+      Compressor::getInstance().shouldCompress(req->local_mem->size)) {
     compressSendRequest(req);
   }
   tracker_->updateExpectedAckCount(
@@ -1031,6 +1054,7 @@ void RecvConnection::startPolling() {
   if (running_.load()) {
     return;
   }
+  if (ctrl_channel_) ctrl_channel_->setHasConcurrentPoller(true);
   running_.store(true);
   poll_thread_ =
       std::make_unique<std::thread>(&RecvConnection::pollingLoop, this);
@@ -1044,6 +1068,7 @@ void RecvConnection::stopPolling() {
   if (poll_thread_ && poll_thread_->joinable()) {
     poll_thread_->join();
   }
+  if (ctrl_channel_) ctrl_channel_->setHasConcurrentPoller(false);
 }
 
 int64_t RecvConnection::recv(std::shared_ptr<RDMARecvRequest> req) {
@@ -1052,7 +1077,14 @@ int64_t RecvConnection::recv(std::shared_ptr<RDMARecvRequest> req) {
         << "RecvConnection: Failed to setup recv request with round robin";
     return -1;
   }
-  if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
+  // Skip prepareDecompress when float_type is kUndefined (prepareSplitContext
+  // was never called); it would wrongly replace local_mem with
+  // decompressBuffer.
+  bool const recv_ctx_ready =
+      req->compress_ctx &&
+      req->compress_ctx->getFloatType() != FloatType::kUndefined;
+  if (recv_ctx_ready &&
+      Compressor::getInstance().shouldCompress(req->local_mem->size)) {
     Compressor::getInstance().prepareDecompress(req);
   }
   return ctrl_channel_->postSendReq(req);
@@ -1101,8 +1133,9 @@ void RecvConnection::pollAndProcessCompletions() {
                      "recv_done("
                   << cq_data.imm.index() << ")";
             }
-            if (req_meta && Compressor::getInstance().shouldCompress(
-                                req_meta->local_mem.size)) {
+            if (req_meta && req_meta->float_type != FloatType::kUndefined &&
+                Compressor::getInstance().shouldCompress(
+                    req_meta->local_mem.size)) {
               Compressor::getInstance().decompress(req_meta->remote_mem,
                                                    req_meta->local_mem,
                                                    req_meta->float_type);

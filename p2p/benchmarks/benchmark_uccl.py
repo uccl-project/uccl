@@ -21,12 +21,45 @@ except ImportError as exc:
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
-def _make_buffer(size_bytes: int, device: str, gpu_idx: int, pinned: bool = False):
-    """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
+_FLOAT_TYPE_TORCH = {
+    "float16": (torch.float16, 2),
+    "bfloat16": (torch.bfloat16, 2),
+    "float32": (torch.float32, 4),
+}
+
+
+def _str_to_float_type(name: str) -> "p2p.FloatType":
+    return {
+        "float16": p2p.FloatType.kFloat16,
+        "bfloat16": p2p.FloatType.kBFloat16,
+        "float32": p2p.FloatType.kFloat32,
+        "none": p2p.FloatType.kUndefined,
+    }.get(name, p2p.FloatType.kUndefined)
+
+
+def _make_buffer(
+    size_bytes: int,
+    device: str,
+    gpu_idx: int,
+    pinned: bool = False,
+    float_type_str: str = "none",
+):
+    """Allocate a contiguous buffer and return (buffer, ptr).
+
+    If *float_type_str* is set, the GPU tensor uses the matching dtype so
+    bytes are valid float elements for the DietGPU compressor.
+    """
     if size_bytes <= 0:
         raise ValueError(f"buffer size must be positive, got {size_bytes}")
     if device == "gpu":
-        buf = torch.ones(size_bytes, dtype=torch.uint8, device=f"cuda:{gpu_idx}")
+        if float_type_str in _FLOAT_TYPE_TORCH:
+            dtype, esize = _FLOAT_TYPE_TORCH[float_type_str]
+            assert (
+                size_bytes % esize == 0
+            ), f"size {size_bytes} not divisible by {esize} for {float_type_str}"
+            buf = torch.ones(size_bytes // esize, dtype=dtype, device=f"cuda:{gpu_idx}")
+        else:
+            buf = torch.ones(size_bytes, dtype=torch.uint8, device=f"cuda:{gpu_idx}")
         assert buf.device.type == "cuda"
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
@@ -56,6 +89,7 @@ def _run_server(args, ep, remote_metadata):
     assert ok, "[Server] Failed to accept RDMA connection"
     print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
         size_per_block = size // args.num_iovs
         buf_v = []
@@ -64,9 +98,13 @@ def _run_server(args, ep, remote_metadata):
         size_v = []
         for _ in range(args.num_iovs):
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.device,
+                args.local_gpu_idx,
+                args.pinned,
+                args.float_type,
             )
-            ok, mr_id = ep.reg(ptr, size_per_block)
+            ok, mr_id = ep.reg(ptr, size_per_block, ft)
             assert ok, "[Server] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
@@ -156,6 +194,7 @@ def _run_client(args, ep, remote_metadata):
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
         size_per_block = size // args.num_iovs
         buf_v = []
@@ -164,9 +203,13 @@ def _run_client(args, ep, remote_metadata):
         size_v = []
         for _ in range(args.num_iovs):
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.device,
+                args.local_gpu_idx,
+                args.pinned,
+                args.float_type,
             )
-            ok, mr_id = ep.reg(ptr, size_per_block)
+            ok, mr_id = ep.reg(ptr, size_per_block, ft)
             assert ok, "[Client] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
@@ -259,14 +302,19 @@ def _run_server_dual(args, ep, remote_metadata):
     assert ok, "[Server] Failed to connect to client"
     print(f"[Server] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id2}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id = ep.reg(ptr, size)
+        buf, ptr = _make_buffer(
+            size, args.device, args.local_gpu_idx, args.pinned, args.float_type
+        )
+        ok, mr_id = ep.reg(ptr, size, ft)
         assert ok, "[Server] register failed"
         # ep.recv(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id2 = ep.reg(ptr2, size)
+        buf2, ptr2 = _make_buffer(
+            size, args.device, args.local_gpu_idx, args.pinned, args.float_type
+        )
+        ok, mr_id2 = ep.reg(ptr2, size, ft)
         assert ok, "[Server] register failed"
         # ep.send(conn_id, mr_id2, ptr2, size)
 
@@ -316,14 +364,19 @@ def _run_client_dual(args, ep, remote_metadata):
     assert ok, "[Client] Failed to accept RDMA connection"
     print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id = ep.reg(ptr, size)
+        buf, ptr = _make_buffer(
+            size, args.device, args.local_gpu_idx, args.pinned, args.float_type
+        )
+        ok, mr_id = ep.reg(ptr, size, ft)
         assert ok, "[Client] register failed"
         # ep.send(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id2 = ep.reg(ptr2, size)
+        buf2, ptr2 = _make_buffer(
+            size, args.device, args.local_gpu_idx, args.pinned, args.float_type
+        )
+        ok, mr_id2 = ep.reg(ptr2, size, ft)
         assert ok, "[Client] register failed"
         # ep.recv(conn_id, mr_id2, ptr2, size)
 
@@ -804,6 +857,16 @@ def main():
         help="Iterations per message size (excluding 1 warm-up)",
     )
     p.add_argument(
+        "--float-type",
+        choices=["float16", "bfloat16", "float32", "none"],
+        default="float16",
+        help=(
+            "Float element type passed to ep.reg for compression context. "
+            "Use 'none' to disable compression (kUndefined). "
+            "Default: float16."
+        ),
+    )
+    p.add_argument(
         "--num-iovs",
         type=int,
         default=1,
@@ -891,6 +954,8 @@ def main():
         args.local_gpu_idx = rank
 
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
+    if not is_ipc_mode:
+        print("Float type:", args.float_type)
     pinned_str = " (pinned)" if args.pinned else ""
     if is_ipc_mode:
         iovs_str = (
