@@ -515,7 +515,7 @@ void RDMAEndpoint::recvRoutine() {
   }
   std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
   for (auto& [peer_id, recv_group] : recv_channel_groups_) {
-    if (recv_group) {
+    if (recv_group && !recv_group->isRunning()) {
       recv_group->pollAndProcessCompletions();
     }
   }
@@ -527,7 +527,7 @@ void RDMAEndpoint::sendRoutine() {
   }
   std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
   for (auto& [peer_id, send_group] : send_channel_groups_) {
-    if (send_group) {
+    if (send_group && !send_group->isRunning()) {
       send_group->pollingLoopForMeta();
     }
   }
@@ -568,7 +568,7 @@ int RDMAEndpoint::sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req) {
   // When the polling thread is active, enqueue via send() so that
   // only the polling thread touches QPs (avoids concurrent ibv_post_*
   // from two threads).
-  if (auto_start_polling_) {
+  if (send_group->isRunning()) {
     return send_group->send(req);
   }
 

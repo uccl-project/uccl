@@ -170,7 +170,9 @@ int RecvControlChannel::postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
   send_ptr->channel_id = kControlChannelID;
   send_ptr->wr_id = index;
   while (RDMADataChannel::send(send_ptr) < 0) {
-    noblockingPoll();
+    if (!has_concurrent_poller_.load(std::memory_order_acquire)) {
+      noblockingPoll();
+    }
     std::this_thread::yield();
   }
   return index;

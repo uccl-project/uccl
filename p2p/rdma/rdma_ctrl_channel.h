@@ -77,7 +77,15 @@ class RecvControlChannel : public RDMADataChannel {
 
   bool check_done(uint64_t index);
 
+  // Called by RecvConnection::startPolling/stopPolling. While true,
+  // postSendReq()'s retry skips noblockingPoll() to avoid concurrent
+  // lazyPostRecvWrsN() on the non-atomic pending_post_recv_.
+  void setHasConcurrentPoller(bool v) {
+    has_concurrent_poller_.store(v, std::memory_order_release);
+  }
+
  private:
+  std::atomic<bool> has_concurrent_poller_{false};
   std::unique_ptr<EmptyRingBuffer<SendReqMetaOnRing, kRingCapacity>> empty_rb_;
   std::unique_ptr<RemoteMemInfo> remote_info_;
   std::shared_ptr<RegMemBlock> local_info_;
