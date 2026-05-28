@@ -82,7 +82,11 @@ typedef uint16_t __hip_fp8x2_storage_t;
 #ifndef DISABLE_SM90_FEATURES
 #include <cuda_fp8.h>
 #else
-// Ampere does not support FP8 features
+// Ampere does not support FP8 features, but CUDA 13+ always provides the
+// header.
+#if __CUDACC_VER_MAJOR__ >= 13
+#include <cuda_fp8.h>
+#else
 #define __NV_E4M3 0
 #define __NV_E5M2 1
 typedef int __nv_fp8_interpretation_t;
@@ -91,5 +95,6 @@ typedef uint8_t __nv_fp8_storage_t;
 typedef uint16_t __nv_fp8x2_storage_t;
 #define __NV_SATFINITE 0
 #define __nv_cvt_float2_to_fp8x2(a, b, c) ((uint16_t)0)
+#endif
 #endif
 #endif
