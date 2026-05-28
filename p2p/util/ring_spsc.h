@@ -11,7 +11,7 @@ class EmptyRingBuffer {
   }
 
   // Get address of element at given index (computed, no memory access)
-  uintptr_t getElementAddress(size_t index) const {
+  uintptr_t get_element_address(size_t index) const {
     size_t actual_index = index & (Capacity - 1);
     return base_addr_ + actual_index * sizeof(T);
   }
@@ -20,7 +20,7 @@ class EmptyRingBuffer {
   constexpr size_t capacity() const { return Capacity; }
 
   // Get the total size in bytes
-  constexpr size_t sizeInBytes() const { return Capacity * sizeof(T); }
+  constexpr size_t size_in_bytes() const { return Capacity * sizeof(T); }
 
  private:
   uintptr_t base_addr_;
@@ -226,10 +226,10 @@ class RingBuffer {
   }
 
   // Get the size of element type T
-  constexpr size_t elementSize() const { return sizeof(T); }
+  constexpr size_t element_size() const { return sizeof(T); }
 
   // Get the address of element at given index as uint64_t
-  uint64_t getElementAddress(size_t index) const {
+  uint64_t get_element_address(size_t index) const {
     size_t actual_index = index & (Capacity - 1);
     return reinterpret_cast<uint64_t>(&buffer_[actual_index]);
   }

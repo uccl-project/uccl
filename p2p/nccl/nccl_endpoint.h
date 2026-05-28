@@ -62,7 +62,7 @@ class NCCLEndpoint {
   ~NCCLEndpoint();
 
   // GPU index selected by the engine; may be overridden by uccl_connect/accept.
-  int gpuIndex() const { return gpu_index_; }
+  int gpu_index() const { return gpu_index_; }
 
   // RDMA endpoint exposes these for OOB metadata exchange; NCCL path doesn't
   // use EpollClient but we keep stubs so engine code can compile unchanged.

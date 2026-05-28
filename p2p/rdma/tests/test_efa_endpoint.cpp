@@ -60,10 +60,10 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
   auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
   auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
-  if (!endpoint.regMem(send_mem)) {
+  if (!endpoint.reg_mem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
   }
-  if (!endpoint.regMem(recv_mem)) {
+  if (!endpoint.reg_mem(recv_mem)) {
     throw std::runtime_error("Failed to register recv_mem");
   }
 
@@ -128,10 +128,10 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
 
     // Wait for completion
-    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
-    std::cout << "After checkRecvComplete\n" << std::flush;
+    endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
+    std::cout << "After check_recv_complete\n" << std::flush;
     ;
-    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+    endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
 
     // Verify received data - check both header and footer
     cudaMemcpy(h_recv_data, recv_mem->addr, test_buffer_size,
@@ -178,11 +178,11 @@ void correctness_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
   }
 
-  if (!endpoint.deregMem(send_mem)) {
-    throw std::runtime_error("Failed to deregMem send_mem");
+  if (!endpoint.dereg_mem(send_mem)) {
+    throw std::runtime_error("Failed to dereg_mem send_mem");
   }
-  if (!endpoint.deregMem(recv_mem)) {
-    throw std::runtime_error("Failed to deregMem recv_mem");
+  if (!endpoint.dereg_mem(recv_mem)) {
+    throw std::runtime_error("Failed to dereg_mem recv_mem");
   }
   free(h_send_data);
   free(h_recv_data);
@@ -208,10 +208,10 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
   auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
-  if (!endpoint.regMem(send_mem)) {
+  if (!endpoint.reg_mem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
   }
-  if (!endpoint.regMem(recv_mem)) {
+  if (!endpoint.reg_mem(recv_mem)) {
     throw std::runtime_error("Failed to register recv_mem");
   }
 
@@ -233,12 +233,12 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
       auto send_req =
           std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
       int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
-      endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+      endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
     } else {
       // Peer 1: only receive
       auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
       int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
-      endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+      endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
     }
   }
 
@@ -261,7 +261,7 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
       int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
       send_infos.push_back({send_req->channel_id, send_wr_id});
-      endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+      endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
       // if ((i + 1) % 100 == 0) {
       //   std::cout << "Sent " << (i + 1) << " messages\n";
       // }
@@ -269,7 +269,7 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
     // Then, check all send completions
     // for (auto const& [channel_id, send_wr_id] : send_infos) {
-    //   endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+    //   endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
     // }
     // std::cout << "All sends completed\n";
   } else {
@@ -283,7 +283,7 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
       int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
       recv_indices.push_back(recv_index);
-      endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+      endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
       // if ((i + 1) % 100 == 0) {
       //   std::cout << "Received " << (i + 1) << " messages\n";
       // }
@@ -291,16 +291,16 @@ void unidirectional_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
     // Then, check all recv completions
     // for (int64_t recv_index : recv_indices) {
-    //   endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+    //   endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
     // }
   }
 
   auto end_time = std::chrono::high_resolution_clock::now();
-  if (!endpoint.deregMem(send_mem)) {
-    throw std::runtime_error("Failed to deregMem send_mem");
+  if (!endpoint.dereg_mem(send_mem)) {
+    throw std::runtime_error("Failed to dereg_mem send_mem");
   }
-  if (!endpoint.deregMem(recv_mem)) {
-    throw std::runtime_error("Failed to deregMem recv_mem");
+  if (!endpoint.dereg_mem(recv_mem)) {
+    throw std::runtime_error("Failed to dereg_mem recv_mem");
   }
   // Calculate statistics
   double elapsed_seconds =
@@ -335,10 +335,10 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
   auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
-  if (!endpoint.regMem(send_mem)) {
+  if (!endpoint.reg_mem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
   }
-  if (!endpoint.regMem(recv_mem)) {
+  if (!endpoint.reg_mem(recv_mem)) {
     throw std::runtime_error("Failed to register recv_mem");
   }
 
@@ -363,8 +363,8 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
     int64_t recv_index = endpoint.recv(FLAGS_remote_peer, recv_req);
     int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
 
-    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
-    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+    endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
+    endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
   }
 
   std::cout << "Starting benchmark...\n" << std::flush;
@@ -389,8 +389,8 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
 
     int64_t send_wr_id = endpoint.send(FLAGS_remote_peer, send_req);
     send_infos.push_back({send_req->channel_id, send_wr_id});
-    endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
-    endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+    endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
+    endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
     // if ((i + 1) % 100 == 0) {
     //   std::cout << "Completed " << (i + 1) << " iterations\n";
     // }
@@ -406,11 +406,11 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
   // for (auto const& [channel_id, send_wr_id] : send_infos) {
   //   // std::cout << "channel_id:" <<channel_id<<",
   //   // send_wr_id:"<<send_wr_id<<std::endl<<std::flush;
-  //   endpoint.checkSendComplete(FLAGS_remote_peer, send_wr_id);
+  //   endpoint.check_send_complete(FLAGS_remote_peer, send_wr_id);
   // }
   // for (int64_t recv_index : recv_indices) {
   //   // std::cout << "recv_index:" <<recv_index<<std::endl<<std::flush;
-  //   endpoint.checkRecvComplete(FLAGS_remote_peer, recv_index);
+  //   endpoint.check_recv_complete(FLAGS_remote_peer, recv_index);
   // }
   auto phase2_end = std::chrono::high_resolution_clock::now();
   double phase2_time =
@@ -428,11 +428,11 @@ void bandwidth_test(RDMAEndpoint& endpoint, MemoryAllocator& allocator,
       static_cast<double>(test_buffer_size) * iterations * 2;  // send + recv
   double bandwidth_gbps = (total_bytes / elapsed_seconds) / 1e9;
   double latency_us = (elapsed_seconds / iterations) * 1000000.0;
-  if (!endpoint.deregMem(send_mem)) {
-    throw std::runtime_error("Failed to deregMem send_mem");
+  if (!endpoint.dereg_mem(send_mem)) {
+    throw std::runtime_error("Failed to dereg_mem send_mem");
   }
-  if (!endpoint.deregMem(recv_mem)) {
-    throw std::runtime_error("Failed to deregMem recv_mem");
+  if (!endpoint.dereg_mem(recv_mem)) {
+    throw std::runtime_error("Failed to dereg_mem recv_mem");
   }
   std::cout << "\n=== Bandwidth Test Results ===\n" << std::flush;
   std::cout << "Iterations: " << iterations << "\n" << std::flush;
@@ -508,7 +508,7 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "]\n";
 
-    std::cout << "Found " << device_manager.deviceCount()
+    std::cout << "Found " << device_manager.device_count()
               << " RDMA device(s)\n\n";
 
     // Create RDMAEndpoint with device_ids = {0}

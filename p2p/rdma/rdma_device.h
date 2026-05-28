@@ -12,7 +12,7 @@ class RDMADeviceSelectionStrategy {
 
   // Select NIC names from dist based on GPU index
   // dist: all NICs with their PCIe distances
-  virtual std::vector<std::string> selectNICs(
+  virtual std::vector<std::string> select_nics(
       std::vector<std::pair<std::string, uint32_t>> const& dist,
       int gpu_idx) = 0;
 };
@@ -23,7 +23,7 @@ class RDMADeviceSelectionStrategy {
 
 // Factory: select IB or EFA device strategy at runtime.
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
-createDeviceSelectionStrategy() {
+create_device_selection_strategy() {
   if (is_efa_transport())
     return std::make_unique<EFADeviceSelectionStrategy>();
   else
@@ -57,9 +57,9 @@ class RdmaDeviceManager {
   RdmaDeviceManager(RdmaDeviceManager&&) = delete;
   RdmaDeviceManager& operator=(RdmaDeviceManager&&) = delete;
 
-  std::shared_ptr<RdmaDevice> getDevice(size_t id);
+  std::shared_ptr<RdmaDevice> get_device(size_t id);
 
-  size_t deviceCount() const;
+  size_t device_count() const;
 
   std::vector<size_t> get_best_dev_idx(int gpu_idx);
 

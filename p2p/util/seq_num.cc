@@ -5,10 +5,10 @@ BitmapPacketTracker::BitmapPacketTracker(uint32_t initial_seq)
       base_seq_num_(initial_seq),
       next_seq_num_(initial_seq) {}
 
-uint32_t BitmapPacketTracker::sendPacket() {
+uint32_t BitmapPacketTracker::send_packet() {
   uint32_t seq_num = next_seq_num_++;
   if (seq_num - base_seq_num_ >= WINDOW_SIZE) {
-    slideWindow();
+    slide_window();
   }
   ack_bitmap_[seq_num % WINDOW_SIZE] = false;
   return seq_num;
@@ -17,18 +17,18 @@ uint32_t BitmapPacketTracker::sendPacket() {
 void BitmapPacketTracker::acknowledge(uint32_t seq_num) {
   if (seq_num >= base_seq_num_ && seq_num - base_seq_num_ < WINDOW_SIZE) {
     ack_bitmap_[seq_num % WINDOW_SIZE] = true;
-    slideWindow();
+    slide_window();
   }
 }
 
-bool BitmapPacketTracker::isAcknowledged(uint32_t seq_num) const {
+bool BitmapPacketTracker::is_acknowledged(uint32_t seq_num) const {
   if (seq_num < base_seq_num_ || seq_num - base_seq_num_ >= WINDOW_SIZE) {
     return true;
   }
   return ack_bitmap_[seq_num % WINDOW_SIZE];
 }
 
-std::vector<uint32_t> BitmapPacketTracker::getUnacknowledgedPackets() const {
+std::vector<uint32_t> BitmapPacketTracker::get_unacknowledged_packets() const {
   std::vector<uint32_t> unacked;
   for (uint32_t i = 0; i < WINDOW_SIZE; ++i) {
     uint32_t seq_num = base_seq_num_ + i;
@@ -39,7 +39,7 @@ std::vector<uint32_t> BitmapPacketTracker::getUnacknowledgedPackets() const {
   return unacked;
 }
 
-void BitmapPacketTracker::slideWindow() {
+void BitmapPacketTracker::slide_window() {
   while (base_seq_num_ < next_seq_num_ &&
          ack_bitmap_[base_seq_num_ % WINDOW_SIZE]) {
     ack_bitmap_[base_seq_num_ % WINDOW_SIZE] = false;
@@ -58,11 +58,11 @@ AtomicBitmapPacketTracker::AtomicBitmapPacketTracker(uint32_t initial_seq)
   }
 }
 
-uint32_t AtomicBitmapPacketTracker::sendPacket(size_t packet_size) {
+uint32_t AtomicBitmapPacketTracker::send_packet(size_t packet_size) {
   uint32_t seq_num = next_seq_num_.fetch_add(1, std::memory_order_acq_rel);
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num - base >= WINDOW_SIZE) {
-    slideWindow();
+    slide_window();
   }
   ack_bitmap_[seq_num % WINDOW_SIZE].store(false, std::memory_order_release);
   packet_sizes_[seq_num % WINDOW_SIZE].store(packet_size,
@@ -74,11 +74,11 @@ void AtomicBitmapPacketTracker::acknowledge(uint32_t seq_num) {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num >= base && seq_num - base < WINDOW_SIZE) {
     ack_bitmap_[seq_num % WINDOW_SIZE].store(true, std::memory_order_release);
-    slideWindow();
+    slide_window();
   }
 }
 
-bool AtomicBitmapPacketTracker::isAcknowledged(uint32_t seq_num) const {
+bool AtomicBitmapPacketTracker::is_acknowledged(uint32_t seq_num) const {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num < base || seq_num - base >= WINDOW_SIZE) {
     return true;
@@ -86,7 +86,7 @@ bool AtomicBitmapPacketTracker::isAcknowledged(uint32_t seq_num) const {
   return ack_bitmap_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire);
 }
 
-std::vector<uint32_t> AtomicBitmapPacketTracker::getUnacknowledgedPackets()
+std::vector<uint32_t> AtomicBitmapPacketTracker::get_unacknowledged_packets()
     const {
   std::vector<uint32_t> unacked;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
@@ -101,7 +101,7 @@ std::vector<uint32_t> AtomicBitmapPacketTracker::getUnacknowledgedPackets()
   return unacked;
 }
 
-uint32_t AtomicBitmapPacketTracker::getInflightCount() const {
+uint32_t AtomicBitmapPacketTracker::get_inflight_count() const {
   uint32_t count = 0;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -115,7 +115,7 @@ uint32_t AtomicBitmapPacketTracker::getInflightCount() const {
   return count;
 }
 
-size_t AtomicBitmapPacketTracker::getPacketSize(uint32_t seq_num) const {
+size_t AtomicBitmapPacketTracker::get_packet_size(uint32_t seq_num) const {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num < base || seq_num - base >= WINDOW_SIZE) {
     return 0;  // Packet is outside the window
@@ -123,7 +123,7 @@ size_t AtomicBitmapPacketTracker::getPacketSize(uint32_t seq_num) const {
   return packet_sizes_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire);
 }
 
-size_t AtomicBitmapPacketTracker::getTotalInflightBytes() const {
+size_t AtomicBitmapPacketTracker::get_total_inflight_bytes() const {
   size_t total_bytes = 0;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -138,7 +138,7 @@ size_t AtomicBitmapPacketTracker::getTotalInflightBytes() const {
   return total_bytes;
 }
 
-void AtomicBitmapPacketTracker::slideWindow() {
+void AtomicBitmapPacketTracker::slide_window() {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
 
@@ -175,13 +175,13 @@ AtomicBitmapPacketTrackerMultiAck::AtomicBitmapPacketTrackerMultiAck(
   }
 }
 
-uint32_t AtomicBitmapPacketTrackerMultiAck::sendPacket(size_t packet_size,
-                                                       uint32_t expected_ack) {
+uint32_t AtomicBitmapPacketTrackerMultiAck::send_packet(size_t packet_size,
+                                                        uint32_t expected_ack) {
   uint32_t seq_num = next_seq_num_.fetch_add(1, std::memory_order_acq_rel);
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
 
   if (seq_num - base >= WINDOW_SIZE) {
-    slideWindow();
+    slide_window();
   }
 
   size_t pos = seq_num % WINDOW_SIZE;
@@ -208,11 +208,11 @@ void AtomicBitmapPacketTrackerMultiAck::acknowledge(uint32_t seq_num) {
   if (cur >= need) {
     // Fully acknowledged
     ack_bitmap_[pos].store(true, std::memory_order_release);
-    slideWindow();
+    slide_window();
   }
 }
 
-bool AtomicBitmapPacketTrackerMultiAck::updateExpectedAckCount(
+bool AtomicBitmapPacketTrackerMultiAck::update_expected_ack_count(
     uint32_t seq_num, uint32_t new_expected_ack) {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -232,13 +232,14 @@ bool AtomicBitmapPacketTrackerMultiAck::updateExpectedAckCount(
 
   if (cur >= new_expected_ack) {
     ack_bitmap_[pos].store(true, std::memory_order_release);
-    slideWindow();
+    slide_window();
   }
 
   return true;
 }
 
-bool AtomicBitmapPacketTrackerMultiAck::isAcknowledged(uint32_t seq_num) const {
+bool AtomicBitmapPacketTrackerMultiAck::is_acknowledged(
+    uint32_t seq_num) const {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
 
   if (seq_num < base || seq_num - base >= WINDOW_SIZE) {
@@ -249,7 +250,7 @@ bool AtomicBitmapPacketTrackerMultiAck::isAcknowledged(uint32_t seq_num) const {
 }
 
 std::vector<uint32_t>
-AtomicBitmapPacketTrackerMultiAck::getUnacknowledgedPackets() const {
+AtomicBitmapPacketTrackerMultiAck::get_unacknowledged_packets() const {
   std::vector<uint32_t> unacked;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -264,7 +265,7 @@ AtomicBitmapPacketTrackerMultiAck::getUnacknowledgedPackets() const {
   return unacked;
 }
 
-uint32_t AtomicBitmapPacketTrackerMultiAck::getInflightCount() const {
+uint32_t AtomicBitmapPacketTrackerMultiAck::get_inflight_count() const {
   uint32_t count = 0;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -279,7 +280,7 @@ uint32_t AtomicBitmapPacketTrackerMultiAck::getInflightCount() const {
   return count;
 }
 
-size_t AtomicBitmapPacketTrackerMultiAck::getPacketSize(
+size_t AtomicBitmapPacketTrackerMultiAck::get_packet_size(
     uint32_t seq_num) const {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num < base || seq_num - base >= WINDOW_SIZE) {
@@ -288,7 +289,7 @@ size_t AtomicBitmapPacketTrackerMultiAck::getPacketSize(
   return packet_sizes_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire);
 }
 
-size_t AtomicBitmapPacketTrackerMultiAck::getTotalInflightBytes() const {
+size_t AtomicBitmapPacketTrackerMultiAck::get_total_inflight_bytes() const {
   size_t total = 0;
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
@@ -304,8 +305,8 @@ size_t AtomicBitmapPacketTrackerMultiAck::getTotalInflightBytes() const {
   return total;
 }
 
-void AtomicBitmapPacketTrackerMultiAck::updatePacketSize(uint32_t seq_num,
-                                                         size_t packet_size) {
+void AtomicBitmapPacketTrackerMultiAck::update_packet_size(uint32_t seq_num,
+                                                           size_t packet_size) {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   if (seq_num < base || seq_num - base >= WINDOW_SIZE) return;
 
@@ -313,7 +314,7 @@ void AtomicBitmapPacketTrackerMultiAck::updatePacketSize(uint32_t seq_num,
                                              std::memory_order_release);
 }
 
-void AtomicBitmapPacketTrackerMultiAck::slideWindow() {
+void AtomicBitmapPacketTrackerMultiAck::slide_window() {
   uint32_t base = base_seq_num_.load(std::memory_order_acquire);
   uint32_t next = next_seq_num_.load(std::memory_order_acquire);
 

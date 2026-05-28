@@ -28,7 +28,7 @@ SendControlChannel::SendControlChannel(std::shared_ptr<RdmaContext> ctx,
       std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(mem_block);
 }
 
-void SendControlChannel::bindWriteMetaRing(
+void SendControlChannel::bind_write_meta_ring(
     std::shared_ptr<RegMemBlock> local_mirror,
     RemoteMemInfo const& remote_ring) {
   write_meta_local_ = local_mirror;
@@ -37,8 +37,8 @@ void SendControlChannel::bindWriteMetaRing(
                                       remote_ring.rkey_array, remote_ring.type);
 }
 
-bool SendControlChannel::pushWriteMeta(WriteReqMeta const& meta,
-                                       uint32_t slot) {
+bool SendControlChannel::push_write_meta(WriteReqMeta const& meta,
+                                         uint32_t slot) {
   if (unlikely(!write_meta_local_ || !write_meta_remote_)) return false;
   auto* local = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
   *local = meta;
@@ -63,19 +63,19 @@ bool SendControlChannel::pushWriteMeta(WriteReqMeta const& meta,
   return RDMADataChannel::send(req) >= 0;
 }
 
-int SendControlChannel::getOneSendRequestMeta(SendReqMeta& meta) {
+int SendControlChannel::get_one_send_request_meta(SendReqMeta& meta) {
   // Pop from rb_ and generate req, return false if empty
   return rb_->pop_with_convert(meta, from_ring_meta);
 }
 
-bool SendControlChannel::getOneSendRequest(
+bool SendControlChannel::get_one_send_request(
     std::shared_ptr<RDMASendRequest>& req) {
   // Pop from rb_ and generate req, return false if empty
   SendReqMeta meta;
-  int index = getOneSendRequestMeta(meta);
+  int index = get_one_send_request_meta(meta);
   if (index < 0) {
     UCCL_LOG(INFO, UCCL_RDMA)
-        << "getOneSendRequest - Ring buffer is empty, cannot pop";
+        << "get_one_send_request - Ring buffer is empty, cannot pop";
     return false;
   }
 
@@ -87,20 +87,21 @@ bool SendControlChannel::getOneSendRequest(
   req->imm_data.set_index(index);
 
   // Log the received request with all information
-  UCCL_LOG(INFO, UCCL_RDMA) << "getOneSendRequest - Received request: " << *req;
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "get_one_send_request - Received request: " << *req;
   UCCL_LOG(INFO, UCCL_RDMA) << "  SendReqMeta from ring buffer: " << meta;
 
   return true;
 }
 
-bool SendControlChannel::noblockingPoll() {
+bool SendControlChannel::noblocking_poll() {
   std::vector<CQMeta> cq_datas;
-  if (RDMADataChannel::pollOnce(cq_datas)) {
+  if (RDMADataChannel::poll_once(cq_datas)) {
     for (auto const& cq_data : cq_datas) {
       UCCL_LOG(INFO, UCCL_RDMA)
-          << "SendControlChannel::noblockingPoll - Polled completion: "
+          << "SendControlChannel::noblocking_poll - Polled completion: "
           << cq_data;
-      if (cq_data.hasIMM()) {
+      if (cq_data.has_imm()) {
         rb_->modify_and_advance_write(cq_data.imm.index(), check_in_progress,
                                       set_in_progress);
       }
@@ -133,36 +134,38 @@ RecvControlChannel::RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
           reinterpret_cast<void*>(remote_meta.mem_meta.addr));
 }
 
-int RecvControlChannel::postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
+int RecvControlChannel::post_send_req(
+    std::shared_ptr<RDMARecvRequest> rev_req) {
   SendReqMeta req_meta(rev_req);
   UCCL_LOG(INFO, UCCL_RDMA)
-      << "postSendReq - Created SendReqMeta: " << req_meta;
+      << "post_send_req - Created SendReqMeta: " << req_meta;
 
   int index = rb_->push_with_convert(req_meta, to_ring_meta);
   if (index < 0) {
     UCCL_LOG(INFO, UCCL_RDMA)
-        << "postSendReq - Failed to push to ring buffer, index: " << index;
+        << "post_send_req - Failed to push to ring buffer, index: " << index;
     return index;
   }
 
   UCCL_LOG(INFO, UCCL_RDMA)
-      << "postSendReq - Successfully pushed to ring buffer at index: " << index;
+      << "post_send_req - Successfully pushed to ring buffer at index: "
+      << index;
   if (!remote_mem_ptr_) {
     remote_mem_ptr_ = std::make_shared<RemoteMemInfo>(
-        empty_rb_->getElementAddress(index), empty_rb_->sizeInBytes(),
+        empty_rb_->get_element_address(index), empty_rb_->size_in_bytes(),
         remote_info_->rkey_array, MemoryType::HOST);
   } else {
-    remote_mem_ptr_->addr = empty_rb_->getElementAddress(index);
-    remote_mem_ptr_->length = empty_rb_->sizeInBytes();
+    remote_mem_ptr_->addr = empty_rb_->get_element_address(index);
+    remote_mem_ptr_->length = empty_rb_->size_in_bytes();
   }
   if (!local_mem_ptr_) {
     local_mem_ptr_ = std::make_shared<RegMemBlock>(
-        reinterpret_cast<void*>(rb_->getElementAddress(index)),
-        rb_->elementSize(), local_info_->mr_array, MemoryType::HOST);
+        reinterpret_cast<void*>(rb_->get_element_address(index)),
+        rb_->element_size(), local_info_->mr_array, MemoryType::HOST);
   } else {
     local_mem_ptr_->addr =
-        reinterpret_cast<void*>(rb_->getElementAddress(index));
-    local_mem_ptr_->size = rb_->elementSize();
+        reinterpret_cast<void*>(rb_->get_element_address(index));
+    local_mem_ptr_->size = rb_->element_size();
   }
 
   std::shared_ptr<RDMASendRequest> send_ptr =
@@ -171,7 +174,7 @@ int RecvControlChannel::postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
   send_ptr->wr_id = index;
   while (RDMADataChannel::send(send_ptr) < 0) {
     if (!has_concurrent_poller_.load(std::memory_order_acquire)) {
-      noblockingPoll();
+      noblocking_poll();
     }
     std::this_thread::yield();
   }
@@ -197,15 +200,15 @@ std::shared_ptr<SendReqMeta> RecvControlChannel::recv_done(uint64_t index) {
   return nullptr;
 }
 
-bool RecvControlChannel::noblockingPoll() {
+bool RecvControlChannel::noblocking_poll() {
   std::vector<CQMeta> cq_datas;
-  if (!RDMADataChannel::pollOnce(cq_datas)) return false;
+  if (!RDMADataChannel::poll_once(cq_datas)) return false;
   for (auto const& cq_data : cq_datas) {
     UCCL_LOG(INFO, UCCL_RDMA)
-        << "RecvControlChannel::noblockingPoll - CQE: " << cq_data
+        << "RecvControlChannel::noblocking_poll - CQE: " << cq_data
         << ", is_write_meta=" << cq_data.imm.is_write_meta()
         << ", local_ring=" << (write_meta_local_ ? "set" : "NULL");
-    if (cq_data.hasIMM() && cq_data.imm.is_write_meta() && write_meta_local_) {
+    if (cq_data.has_imm() && cq_data.imm.is_write_meta() && write_meta_local_) {
       uint16_t slot = cq_data.imm.plain_index();
       auto* entry = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
       UCCL_LOG(INFO, UCCL_RDMA)
@@ -219,12 +222,12 @@ bool RecvControlChannel::noblockingPoll() {
   return true;
 }
 
-void RecvControlChannel::bindWriteMetaRing(
+void RecvControlChannel::bind_write_meta_ring(
     std::shared_ptr<RegMemBlock> local_ring) {
   write_meta_local_ = local_ring;
 }
 
-std::vector<WriteReqMeta> RecvControlChannel::drainPendingWriteMetas() {
+std::vector<WriteReqMeta> RecvControlChannel::drain_pending_write_metas() {
   std::vector<WriteReqMeta> out;
   out.swap(pending_write_metas_);
   return out;

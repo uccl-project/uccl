@@ -28,12 +28,12 @@ RdmaDeviceManager& RdmaDeviceManager::instance() {
   return inst;
 }
 
-std::shared_ptr<RdmaDevice> RdmaDeviceManager::getDevice(size_t id) {
+std::shared_ptr<RdmaDevice> RdmaDeviceManager::get_device(size_t id) {
   if (id >= devices_.size()) return nullptr;
   return devices_[id];
 }
 
-size_t RdmaDeviceManager::deviceCount() const { return devices_.size(); }
+size_t RdmaDeviceManager::device_count() const { return devices_.size(); }
 
 std::vector<size_t> RdmaDeviceManager::get_best_dev_idx(int gpu_idx) {
   // Allow user to override NIC selection via environment variable.
@@ -138,8 +138,8 @@ std::vector<size_t> RdmaDeviceManager::get_best_dev_idx(int gpu_idx) {
   if (dist.empty()) {
     UCCL_LOG(WARN) << "no NIC found, defaulting to empty";
   } else {
-    auto strategy = createDeviceSelectionStrategy();
-    auto selected = strategy->selectNICs(dist, gpu_idx);
+    auto strategy = create_device_selection_strategy();
+    auto selected = strategy->select_nics(dist, gpu_idx);
     if (selected.empty()) {
       UCCL_LOG(WARN) << "no candidate NIC found, defaulting to first";
       selected_nic_names.push_back(dist.front().first);

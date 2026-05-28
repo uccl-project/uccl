@@ -23,47 +23,47 @@ class RDMAEndpoint {
   // Destructor
   ~RDMAEndpoint();
 
-  void initCompressor();
+  void init_compressor();
 
   // Register a buffer once per UNIQUE RdmaContext and broadcast the resulting
   // MR pointer to every context slot that shares that context. Mirrors the
   // dedup logic in uccl_regmr — context slots can share an underlying device,
-  // and naïvely using getContextID() as the slot key would clobber all slots
+  // and naïvely using get_context_id() as the slot key would clobber all slots
   // onto context 0 and leave the others null.
-  void regMrForAllSlots(RegMemBlock& blk);
+  void reg_mr_for_all_slots(RegMemBlock& blk);
 
-  std::shared_ptr<RegMemBlock> ackRing() const;
-  std::shared_ptr<RegMemBlock> writeMetaRing() const;
+  std::shared_ptr<RegMemBlock> ack_ring() const;
+  std::shared_ptr<RegMemBlock> write_meta_ring() const;
 
   // Populate the three RemoteMemInfo fields in a Control-channel
   // MetaInfoToExchange. No-op if compression is disabled.
-  void fillCompressionMeta(MetaInfoToExchange& m) const;
-  int gpuIndex() const;
+  void fill_compression_meta(MetaInfoToExchange& m) const;
+  int gpu_index() const;
 
-  size_t contextCount() const;
+  size_t context_count() const;
 
-  bool regMem(std::shared_ptr<RegMemBlock> reg_block);
+  bool reg_mem(std::shared_ptr<RegMemBlock> reg_block);
 
-  bool deregMem(std::shared_ptr<RegMemBlock> reg_block);
+  bool dereg_mem(std::shared_ptr<RegMemBlock> reg_block);
 
   int build_connect(uint64_t peer_id, bool sync = true, int timeout_ms = 10000);
 
   // Blocking check for send completion
-  void checkSendComplete(uint64_t peer_id, int64_t wr_id);
+  void check_send_complete(uint64_t peer_id, int64_t wr_id);
 
   bool checkSendComplete_once(uint64_t peer_id, int64_t wr_id);
 
   // Resolve the SendConnection for a given peer_id once so the caller can
   // perform many completion checks without re-acquiring the mutex + doing a
   // map lookup per check.
-  SendConnection* getSendGroupRaw(uint64_t peer_id);
+  SendConnection* get_send_group_raw(uint64_t peer_id);
 
   bool checkRecvComplete_once(uint64_t peer_id, uint64_t index);
 
   // Blocking check for recv completion
-  void checkRecvComplete(uint64_t peer_id, uint64_t index);
+  void check_recv_complete(uint64_t peer_id, uint64_t index);
 
-  int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req);
+  int64_t write_or_read(std::shared_ptr<RDMASendRequest> req);
 
   // Blocking send: wraps SendConnection::send with peer_id parameter
   // Returns wr_id for checking completion later
@@ -103,24 +103,25 @@ class RDMAEndpoint {
   void create_unified_p2p_socket();
 
   // Manual polling routine for recv channels when auto_start_polling_ is false
-  void recvRoutine();
+  void recv_routine();
 
-  void sendRoutine();
+  void send_routine();
 
   // Flush any batched send WRs across all send connections. Used after
   // posting many small one-sided RDMA requests in g_uccl_batch_post mode.
-  void flushAllSends();
+  void flush_all_sends();
 
   // Manual polling routine for send channels when auto_start_polling_ is false
-  int sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req);
+  int send_without_inner_queue(std::shared_ptr<RDMASendRequest> req);
 
   void stop_accept();
 
  private:
   // Get context from channel_id
-  std::shared_ptr<RdmaContext> getContextByChannelId(uint32_t channel_id) const;
+  std::shared_ptr<RdmaContext> get_context_by_channel_id(
+      uint32_t channel_id) const;
 
-  void initializeContexts(std::vector<size_t> const& device_ids);
+  void initialize_contexts(std::vector<size_t> const& device_ids);
 
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port);
@@ -129,29 +130,29 @@ class RDMAEndpoint {
   uint64_t handle_send_meta_response(std::shared_ptr<RDMADataChannel> channel,
                                      std::string const& response);
 
-  std::shared_ptr<RecvConnection> getOrCreateRecvGroup(uint64_t peer_id);
+  std::shared_ptr<RecvConnection> get_or_create_recv_group(uint64_t peer_id);
 
-  void addOneRecvChannel(uint64_t peer_id, uint32_t channel_id,
-                         std::shared_ptr<RDMADataChannel> new_channel);
+  void add_one_recv_channel(uint64_t peer_id, uint32_t channel_id,
+                            std::shared_ptr<RDMADataChannel> new_channel);
 
-  void setRecvControlChannel(
+  void set_recv_control_channel(
       uint64_t peer_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel);
 
-  std::shared_ptr<SendConnection> getOrCreateSendGroup(uint64_t peer_id);
+  std::shared_ptr<SendConnection> get_or_create_send_group(uint64_t peer_id);
 
-  void addOneSendChannel(uint64_t peer_id, uint32_t channel_id,
-                         std::shared_ptr<RDMADataChannel> new_channel);
+  void add_one_send_channel(uint64_t peer_id, uint32_t channel_id,
+                            std::shared_ptr<RDMADataChannel> new_channel);
 
-  void setSendControlChannel(
+  void set_send_control_channel(
       uint64_t peer_id, std::shared_ptr<SendControlChannel>&& ctrl_channel);
 
   // Hand the peer-side compression descriptors to the corresponding
   // connection so the compressed-write data path can target them.
-  void setSendCompressionPeerMeta(uint64_t peer_id,
-                                  MetaInfoToExchange const& peer);
+  void set_send_compression_peer_meta(uint64_t peer_id,
+                                      MetaInfoToExchange const& peer);
 
-  void setRecvCompressionPeerMeta(uint64_t peer_id,
-                                  MetaInfoToExchange const& peer);
+  void set_recv_compression_peer_meta(uint64_t peer_id,
+                                      MetaInfoToExchange const& peer);
 
   std::string const build_oob_connect(uint64_t peer_id);
 

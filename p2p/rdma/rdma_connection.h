@@ -16,37 +16,37 @@ class RDMAConnection {
 
   virtual ~RDMAConnection();
 
-  virtual void addChannel(uint32_t channel_id,
-                          std::shared_ptr<RDMADataChannel> channel);
+  virtual void add_channel(uint32_t channel_id,
+                           std::shared_ptr<RDMADataChannel> channel);
 
-  virtual std::shared_ptr<RDMADataChannel> getChannel(
+  virtual std::shared_ptr<RDMADataChannel> get_channel(
       uint32_t channel_id) const;
 
-  virtual size_t channelCount() const;
+  virtual size_t channel_count() const;
 
   virtual std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
   channels() const;
 
   // Select next channel using round-robin algorithm
   // Returns: pair<channel_id, context_id>, or pair<0, 0> on failure
-  std::pair<uint32_t, uint64_t> selectNextChannelRoundRobin();
+  std::pair<uint32_t, uint64_t> select_next_channel_round_robin();
 
   // Select next channel using random selection algorithm
   // Returns: pair<channel_id, context_id>, or pair<0, 0> on failure
-  std::pair<uint32_t, uint64_t> selectNextChannelRandom();
+  std::pair<uint32_t, uint64_t> select_next_channel_random();
 
   // Lock-free hot-path channel cache. `channels_` is append-only during
   // connection setup, so once cached the snapshot stays valid for the
   // connection's lifetime. Falls back through the locked path if not built.
-  RDMADataChannel* getChannelFast(uint32_t channel_id) const;
+  RDMADataChannel* get_channel_fast(uint32_t channel_id) const;
 
   // Select next channel via round-robin without acquiring `mutex_` in the
   // common case. Returns (channel_id, channel_ptr); on first call this
   // primes the cache under a shared lock.
-  std::pair<uint32_t, RDMADataChannel*> selectNextChannelRoundRobinFast();
+  std::pair<uint32_t, RDMADataChannel*> select_next_channel_round_robin_fast();
 
  protected:
-  void buildFastChannelCache();
+  void build_fast_channel_cache();
 
   mutable std::shared_mutex mutex_;
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> channels_;
@@ -72,21 +72,21 @@ class SendConnection : public RDMAConnection {
 
   ~SendConnection();
 
-  void addChannel(uint32_t channel_id,
-                  std::shared_ptr<RDMADataChannel> channel) override;
+  void add_channel(uint32_t channel_id,
+                   std::shared_ptr<RDMADataChannel> channel) override;
 
-  std::shared_ptr<RDMADataChannel> getChannel(
+  std::shared_ptr<RDMADataChannel> get_channel(
       uint32_t channel_id) const override;
 
-  size_t channelCount() const override;
+  size_t channel_count() const override;
 
-  size_t normalChannelCount() const;
+  size_t normal_channel_count() const;
 
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
   channels() const override;
 
   template <typename T>
-  void setControlChannel(T&& ctrl_channel) {
+  void set_control_channel(T&& ctrl_channel) {
     std::unique_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     if (ctrl_channel_) {
       throw std::runtime_error(
@@ -95,43 +95,43 @@ class SendConnection : public RDMAConnection {
     ctrl_channel_ = std::forward<T>(ctrl_channel);
     lock.unlock();
     if (auto_start_polling_) {
-      startPolling();
+      start_polling();
     }
   }
 
   int64_t send(std::shared_ptr<RDMASendRequest> req);
 
-  int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req);
+  int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
 
   int64_t read(std::shared_ptr<RDMASendRequest> req);
 
   // Start polling thread
-  void startPolling();
+  void start_polling();
 
-  bool isRunning() const { return running_.load(std::memory_order_acquire); }
+  bool is_running() const { return running_.load(std::memory_order_acquire); }
 
   bool check(int64_t wr_id);
 
-  bool canUseRawOneSidedBatch(SendType send_type);
+  bool can_use_raw_one_sided_batch(SendType send_type);
 
-  bool postWriteOrReadBatch(SendType send_type, OneSidedBatchOp const* ops,
-                            size_t num_ops, int64_t* wr_ids);
+  bool post_write_or_read_batch(SendType send_type, OneSidedBatchOp const* ops,
+                                size_t num_ops, int64_t* wr_ids);
 
-  void setRemoteDecompressBuf(RemoteMemInfo const& m);
+  void set_remote_decompress_buf(RemoteMemInfo const& m);
 
-  void setLocalAckRing(std::shared_ptr<RegMemBlock> ring);
+  void set_local_ack_ring(std::shared_ptr<RegMemBlock> ring);
 
   // Stop polling thread
-  void stopPolling();
+  void stop_polling();
 
-  void pollingLoopForMeta();
+  void polling_loop_for_meta();
 
-  int processSendRequests(std::shared_ptr<RDMASendRequest> req);
+  int process_send_requests(std::shared_ptr<RDMASendRequest> req);
 
   // Flush any batched send WRs on all channels of this connection. Used to
   // amortize doorbell cost across many small RDMA writes/reads posted via
   // g_uccl_batch_post.
-  void flushBatches();
+  void flush_batches();
 
  private:
   std::shared_ptr<SendControlChannel> ctrl_channel_;
@@ -163,7 +163,7 @@ class SendConnection : public RDMAConnection {
   std::atomic<size_t> pending_compressed_count_{0};
 
   // Bump-pointer allocator over the peer's decompress_buffer. Released by
-  // pollAckRing() once the receiver's ack lands in ack_ring_.
+  // poll_ack_ring() once the receiver's ack lands in ack_ring_.
   struct DecompressArena {
     uint64_t size = 0;
     uint64_t head = 0;
@@ -177,7 +177,7 @@ class SendConnection : public RDMAConnection {
   };
   DecompressArena decompress_arena_;
   // Per-chunk inflight byte counter for CC window checks.
-  // Unlike tracker_->getTotalInflightBytes() which only decreases when ALL
+  // Unlike tracker_->get_total_inflight_bytes() which only decreases when ALL
   // chunks of a message are acked, this counter decreases on each chunk CQE.
   std::atomic<size_t> cc_inflight_bytes_{0};
 
@@ -190,59 +190,60 @@ class SendConnection : public RDMAConnection {
   };
   std::optional<PendingChunkedState> pending_chunked_;
 
-  size_t currentInflightLimitBytes();
+  size_t current_inflight_limit_bytes();
 
   // Return the inflight byte count, depends on CC enablement status
-  size_t currentInflightBytes();
+  size_t current_inflight_bytes();
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
-  bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req);
+  bool post_request_on_channel(std::shared_ptr<RDMASendRequest> req);
 
-  void pollControlChannel();
+  void poll_control_channel();
 
   // Build and post a single chunk from a split message.
-  bool postSingleChunk(std::shared_ptr<RDMASendRequest> const& req,
-                       MessageChunk const& chunk, size_t chunk_index,
-                       size_t total_chunks, size_t num_channels,
-                       int& expected_chunk_count);
+  bool post_single_chunk(std::shared_ptr<RDMASendRequest> const& req,
+                         MessageChunk const& chunk, size_t chunk_index,
+                         size_t total_chunks, size_t num_channels,
+                         int& expected_chunk_count);
 
   // Post remaining chunks from a previously paused request.
   // Returns true if all chunks are sent, false if still CC-blocked.
-  bool drainPendingChunks();
+  bool drain_pending_chunks();
 
-  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
-                          int expected_chunk_count = 0);
+  void post_chunked_request(std::shared_ptr<RDMASendRequest> req,
+                            int expected_chunk_count = 0);
 
-  void processSendRequests();
+  void process_send_requests();
 
-  void compressSendRequest(std::shared_ptr<RDMASendRequest> req);
+  void compress_send_request(std::shared_ptr<RDMASendRequest> req);
 
   // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
   // across data channels. Bypasses ChunkSplitStrategy to keep WR count low.
-  void postCompressedSegment(std::shared_ptr<RDMASendRequest> const& req,
-                             size_t seg_size, size_t num_chunks,
-                             size_t num_channels);
+  void post_compressed_segment(std::shared_ptr<RDMASendRequest> const& req,
+                               size_t seg_size, size_t num_chunks,
+                               size_t num_channels);
 
   // Two-phase compressed RDMA WRITE into one decompress_buffer slot.
-  // WriteReqMeta is pushed after all data WCs land (see pollDataChannels).
-  int64_t compressWriteRequestSplitFirst(std::shared_ptr<RDMASendRequest> req);
+  // WriteReqMeta is pushed after all data WCs land (see poll_data_channels).
+  int64_t compress_write_request_split_first(
+      std::shared_ptr<RDMASendRequest> req);
 
-  void compressSendRequestSplitFirst(std::shared_ptr<RDMASendRequest> req,
-                                     size_t expected_chunk_count);
+  void compress_send_request_split_first(std::shared_ptr<RDMASendRequest> req,
+                                         size_t expected_chunk_count);
 
-  void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
-                               SendReqMeta& meta, int index);
+  void process_once_send_requests(std::shared_ptr<RDMASendRequest> req,
+                                  SendReqMeta& meta, int index);
 
-  void pollDataChannels();
+  void poll_data_channels();
 
   // Release arena slots for completed acks. Only scans in-flight entries.
-  void pollAckRing();
+  void poll_ack_ring();
 
   // Push WriteReqMeta once all data WCs for wr_id have arrived.
-  void maybePushCompressedMeta(int64_t wr_id);
+  void maybe_push_compressed_meta(int64_t wr_id);
 
-  void pollingLoop();
+  void polling_loop();
 };
 
 class RecvConnection : public RDMAConnection {
@@ -251,49 +252,49 @@ class RecvConnection : public RDMAConnection {
 
   ~RecvConnection();
 
-  void addChannel(uint32_t channel_id,
-                  std::shared_ptr<RDMADataChannel> channel) override;
+  void add_channel(uint32_t channel_id,
+                   std::shared_ptr<RDMADataChannel> channel) override;
 
-  std::shared_ptr<RDMADataChannel> getChannel(
+  std::shared_ptr<RDMADataChannel> get_channel(
       uint32_t channel_id) const override;
 
-  size_t channelCount() const override;
+  size_t channel_count() const override;
 
-  size_t normalChannelCount() const;
+  size_t normal_channel_count() const;
 
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
   channels() const override;
 
   // Set the control channel
   template <typename T>
-  void setControlChannel(T&& ctrl_channel) {
+  void set_control_channel(T&& ctrl_channel) {
     if (ctrl_channel_) {
       throw std::runtime_error(
           "RecvConnection: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
     if (auto_start_polling_) {
-      startPolling();
+      start_polling();
     }
   }
 
   // Start polling thread
-  void startPolling();
+  void start_polling();
 
   // Stop polling thread
-  void stopPolling();
+  void stop_polling();
 
-  bool isRunning() const { return running_.load(std::memory_order_acquire); }
+  bool is_running() const { return running_.load(std::memory_order_acquire); }
 
   int64_t recv(std::shared_ptr<RDMARecvRequest> req);
 
   bool check(uint64_t index);
 
-  void setRemoteAckRing(RemoteMemInfo const& m);
+  void set_remote_ack_ring(RemoteMemInfo const& m);
 
-  void pollAndProcessCompletions();
+  void poll_and_process_completions();
 
-  void pollingLoop();
+  void polling_loop();
 
   // Context for the async-decompress callback path (currently unused).
   struct AsyncAckCtx {
@@ -304,9 +305,9 @@ class RecvConnection : public RDMAConnection {
     std::shared_ptr<RecvControlChannel> ctrl_channel;
   };
 
-  static void postAckHostFn(void* user_data);
+  static void post_ack_host_fn(void* user_data);
 
-  void handleCompressedWriteArrival(WriteReqMeta const& m);
+  void handle_compressed_write_arrival(WriteReqMeta const& m);
 
  private:
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
@@ -318,11 +319,11 @@ class RecvConnection : public RDMAConnection {
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure
-  bool collectRkeyForChannel(
+  bool collect_rkey_for_channel(
       int channel_id, std::unordered_map<int64_t, struct ibv_mr*> const& mr_map,
       uint32_t& rkey);
 
   // Round-robin channel selection and MR setup
-  bool setupRecvRequestChannelAndMemoryRegion(
+  bool setup_recv_request_channel_and_memory_region(
       std::shared_ptr<RDMARecvRequest> req);
 };

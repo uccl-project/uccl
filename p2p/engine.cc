@@ -593,7 +593,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
   }
 
   P2PMhandle* mhandle = new P2PMhandle();
-  mhandle->compress_ctx = makeCompressCtx(float_type);
+  mhandle->compress_ctx = make_compress_ctx(float_type);
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     delete mhandle;
     return false;
@@ -1065,7 +1065,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
 
   bool raw_batch_eligible = true;
   for (size_t i = 0; i < num_iovs; ++i) {
-    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) {
       raw_batch_eligible = false;
       break;
     }
@@ -1076,7 +1076,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   // construction.
   if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
       raw_batch_eligible &&
-      send_group->canUseRawOneSidedBatch(SendType::Read)) {
+      send_group->can_use_raw_one_sided_batch(SendType::Read)) {
     std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
     int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
@@ -1087,8 +1087,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       ops[i].local_mr_array = &mhandle_v[i]->mr_array;
       ops[i].slot_item = &slot_item_v[i];
     }
-    if (!send_group->postWriteOrReadBatch(SendType::Read, ops.data(), num_iovs,
-                                          wr_ids)) {
+    if (!send_group->post_write_or_read_batch(SendType::Read, ops.data(),
+                                              num_iovs, wr_ids)) {
       return false;
     }
 
@@ -1296,7 +1296,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   }
 
   // Enable doorbell-batched posting for the duration of this call. All
-  // submitRequest() calls from this thread accumulate WRs per channel; we
+  // submit_request() calls from this thread accumulate WRs per channel; we
   // flush once per outer pass before polling.
   struct BatchGuard {
     BatchGuard() { g_uccl_batch_post = true; }
@@ -1310,7 +1310,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
 
   bool raw_batch_eligible = true;
   for (size_t i = 0; i < num_iovs; ++i) {
-    if (ChunkSplitStrategy::getMessageChunkCount(size_v[i]) != 1) {
+    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) {
       raw_batch_eligible = false;
       break;
     }
@@ -1321,7 +1321,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   // construction.
   if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
       raw_batch_eligible &&
-      send_group->canUseRawOneSidedBatch(SendType::Write)) {
+      send_group->can_use_raw_one_sided_batch(SendType::Write)) {
     std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
     int64_t wr_ids[kMaxInflightOps] = {};
     bool done[kMaxInflightOps] = {false};
@@ -1332,8 +1332,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       ops[i].local_mr_array = &mhandle_v[i]->mr_array;
       ops[i].slot_item = &slot_item_v[i];
     }
-    if (!send_group->postWriteOrReadBatch(SendType::Write, ops.data(), num_iovs,
-                                          wr_ids)) {
+    if (!send_group->post_write_or_read_batch(SendType::Write, ops.data(),
+                                              num_iovs, wr_ids)) {
       return false;
     }
 
