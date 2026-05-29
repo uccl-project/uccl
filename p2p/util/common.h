@@ -124,9 +124,7 @@ inline bool is_broadcom_vendor(uint32_t vendor_id) {
          vendor_id == 0x1dd8;    // Existing Broadcom-like provider path
 }
 
-inline bool is_intel_vendor(uint32_t vendor_id) {
-  return vendor_id == 0x8086;
-}
+inline bool is_intel_vendor(uint32_t vendor_id) { return vendor_id == 0x8086; }
 
 inline bool uses_legacy_verbs_provider(uint32_t vendor_id) {
   return is_broadcom_vendor(vendor_id) || is_intel_vendor(vendor_id);
