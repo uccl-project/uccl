@@ -44,7 +44,7 @@ RUN CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+') && \
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})
 # ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 nanobind
+RUN python${PY_VER} -m pip install --no-cache-dir auditwheel build wheel pybind11 nanobind
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────

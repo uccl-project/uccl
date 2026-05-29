@@ -343,12 +343,14 @@ if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
 
     if [[ "$ARCH" == "aarch64" ]]; then
       ${CONTAINER_ENGINE} build \
+        --network=host \
         --platform=linux/arm64 \
         $BUILD_ARGS \
         -t "$IMAGE_NAME" \
         -f "$DOCKERFILE" .
     else
       ${CONTAINER_ENGINE} build \
+        --network=host \
         $BUILD_ARGS \
         -t "$IMAGE_NAME" \
         -f "$DOCKERFILE" .
