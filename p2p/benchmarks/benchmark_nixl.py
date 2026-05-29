@@ -322,7 +322,7 @@ def start_transfer(size, num_kvblocks, args):
         lat = avg_transfer_time  # Average latency per transfer
 
         print(
-            f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+            f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat * 1e6:8.2f} us"
         )
         if "server" in args.role:
             for i, block in enumerate(dataset):
@@ -510,7 +510,7 @@ def start_transfer_dual(size, num_kvblocks, args):
         lat = transfer_time / args.iters
 
         print(
-            f"[{args.role}] DUAL-WRITE {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+            f"[{args.role}] DUAL-WRITE {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat * 1e6:8.2f} us"
         )
 
         # Verify received data (should be opposite of what we sent)
@@ -611,7 +611,7 @@ def start_transfer_local(size, num_kvblocks, args):
         dst_dev = f"cuda:{dst_gpu}" if dst_device == "gpu" else "cpu"
         print(
             f"[local {src_dev}->{dst_dev}] {_pretty_size(size):>8} : "
-            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s"
+            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat * 1e6:8.2f} us"
         )
 
         agent.release_xfer_handle(transfer_handle)

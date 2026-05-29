@@ -88,8 +88,7 @@ int RDMADataChannel::flushBatch() {
     batch_bytes_ = 0;
   }
   std::lock_guard<std::mutex> post_lock(post_mu_);
-  bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
-                     ctx_->getVendorID() == 0x8086);   // Intel irdma
+  bool use_legacy = uses_legacy_verbs_provider(ctx_->getVendorID());
   if (use_legacy) {
     return __flushBatch_legacy(local);
   }
@@ -99,8 +98,7 @@ int RDMADataChannel::flushBatch() {
 int RDMADataChannel::postRawBatch(std::vector<RawSendRequest> const& batch) {
   if (batch.empty()) return 0;
   std::lock_guard<std::mutex> post_lock(post_mu_);
-  bool use_legacy = (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
-                     ctx_->getVendorID() == 0x8086);   // Intel irdma
+  bool use_legacy = uses_legacy_verbs_provider(ctx_->getVendorID());
   if (use_legacy) {
     return __postRawBatch_legacy(batch);
   }
@@ -328,8 +326,7 @@ int RDMADataChannel::__postRequest(std::shared_ptr<RDMASendRequest> req) {
 
 int RDMADataChannel::postRequest(std::shared_ptr<RDMASendRequest> req) {
   std::lock_guard<std::mutex> post_lock(post_mu_);
-  if (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
-      ctx_->getVendorID() == 0x8086) {  // Intel irdma
+  if (uses_legacy_verbs_provider(ctx_->getVendorID())) {
     // These NICs don't support ibv_wr_* extended posting API.
     return __postRequest(req);
   }

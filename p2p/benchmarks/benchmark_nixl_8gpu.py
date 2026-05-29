@@ -122,7 +122,7 @@ def run_one_size(role, sock, agent, register_descs, size, pair_idx, warmup=2):
     gbs = (size / elapsed) / 1e9
 
     print(
-        f"[{role} {pair_idx}] {size/1024/1024:8.1f} MB : {gbps:6.2f} Gbps | {gbs:6.2f} GB/s | {elapsed:.6f} s"
+        f"[{role} {pair_idx}] {size/1024/1024:8.1f} MB : {gbps:6.2f} Gbps | {gbs:6.2f} GB/s | {elapsed * 1e6:8.2f} us"
     )
     return gbps, gbs, elapsed
 

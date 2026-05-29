@@ -388,7 +388,7 @@ RdmaContext::RegistrationMode RdmaContext::getRegistrationMode(
     void* addr) const {
   bool is_gpu = isGpuPointer(addr);
   // Intel RDMA NICs use DMA-BUF for GPU memory registration.
-  bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
+  bool use_dmabuf = (is_intel_vendor(vendor_id_) && is_gpu);
   if (use_dmabuf) {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "GPU memory detected on irdma NIC (vendor=0x" << std::hex

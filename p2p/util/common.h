@@ -118,6 +118,18 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
+
+inline bool is_broadcom_vendor(uint32_t vendor_id) {
+  return vendor_id == 0x14e4 ||  // Broadcom / bnxt_re
+         vendor_id == 0x1dd8;    // Existing Broadcom-like provider path
+}
+
+inline bool is_intel_vendor(uint32_t vendor_id) { return vendor_id == 0x8086; }
+
+inline bool uses_legacy_verbs_provider(uint32_t vendor_id) {
+  return is_broadcom_vendor(vendor_id) || is_intel_vendor(vendor_id);
+}
+
 static constexpr uint32_t kBatchPostRecvWr = 32;
 static constexpr uint32_t kBatchPollCqe = 32;
 
