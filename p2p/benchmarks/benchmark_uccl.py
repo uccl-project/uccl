@@ -91,7 +91,7 @@ def _run_server(args, ep, remote_metadata):
 
     ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        size_per_block = size // args.num_iovs
+        size_per_block = size
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
@@ -183,7 +183,7 @@ def _run_server(args, ep, remote_metadata):
             lat = elapsed / args.iters
 
         print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Server] Benchmark complete")
 
@@ -196,7 +196,7 @@ def _run_client(args, ep, remote_metadata):
 
     ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        size_per_block = size // args.num_iovs
+        size_per_block = size
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
@@ -285,7 +285,7 @@ def _run_client(args, ep, remote_metadata):
             lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Client] Benchmark complete")
 
@@ -348,7 +348,7 @@ def _run_server_dual(args, ep, remote_metadata):
         lat = elapsed / args.iters
 
         print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Server] Benchmark complete")
 
@@ -410,7 +410,7 @@ def _run_client_dual(args, ep, remote_metadata):
         lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Client] Benchmark complete")
 
@@ -459,7 +459,7 @@ def _run_server_ipc(args, ep):
         lat = elapsed / args.iters if args.iters > 0 else 0
 
         print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Server] IPC Benchmark complete")
 
@@ -508,7 +508,7 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
         lat = elapsed / args.iters if args.iters > 0 else 0
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
     print("[Client] IPC Benchmark complete")
 
@@ -542,7 +542,7 @@ def _run_server_write_ipc(args, ep):
 
     num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_iovs
+        size_per_block = size
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
@@ -574,7 +574,7 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
 
     num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_iovs
+        size_per_block = size
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(
@@ -663,7 +663,7 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
         lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
 
         _send_bytes_dist(b"\x01", dst=1)
@@ -678,7 +678,7 @@ def _run_server_read_ipc(args, ep):
 
     num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_iovs
+        size_per_block = size
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
@@ -710,7 +710,7 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
 
     num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_iovs
+        size_per_block = size
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(
@@ -799,7 +799,7 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
         lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
 
         _send_bytes_dist(b"\x01", dst=1)
