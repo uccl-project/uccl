@@ -29,6 +29,7 @@ static inline uint8_t get_read_atomic_depth(char const* env_name,
   uint32_t cap = device_cap == 0 ? 1 : static_cast<uint32_t>(device_cap);
   return static_cast<uint8_t>(std::max<uint32_t>(1, std::min(requested, cap)));
 }
+
 void IBDataChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                ChannelMetaData* local_meta) {
@@ -40,7 +41,7 @@ void IBDataChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   memset(&qp_attr, 0, sizeof(qp_attr));
 
   uint32_t vendor_id = ctx->getVendorID();
-  if (vendor_id == 0x8086) {  // Intel irdma
+  if (is_intel_vendor(vendor_id)) {  // Intel irdma
     // Does not support IBV_QP_INIT_ATTR_SEND_OPS_FLAGS.
     qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
   } else {

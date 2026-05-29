@@ -51,7 +51,7 @@ def _run_server(args, ep, remote_metadata):
     if args.lazy:
         print("[Server] Pre-registering all memory...")
         for sz in args.sizes:
-            size_per_block = sz // args.num_iovs
+            size_per_block = sz
             buf_v = []
             ptr_v = []
             mr_id_v = []
@@ -88,7 +88,7 @@ def _run_server(args, ep, remote_metadata):
             size_v = pre_registered[sz]["size_v"]
         else:
             # Register memory on the fly
-            size_per_block = sz // args.num_iovs
+            size_per_block = sz
             buf_v = []
             ptr_v = []
             mr_id_v = []
@@ -121,7 +121,7 @@ def _run_client(args, ep, remote_metadata):
     if args.lazy:
         print("[Client] Pre-registering all memory...")
         for sz in args.sizes:
-            size_per_block = sz // args.num_iovs
+            size_per_block = sz
             buf_v = []
             ptr_v = []
             mr_id_v = []
@@ -158,7 +158,7 @@ def _run_client(args, ep, remote_metadata):
             size_v = pre_registered[sz]["size_v"]
         else:
             # Register memory on the fly
-            size_per_block = sz // args.num_iovs
+            size_per_block = sz
             buf_v = []
             ptr_v = []
             mr_id_v = []
@@ -279,7 +279,7 @@ def _run_client(args, ep, remote_metadata):
             f"[Client] {_pretty(sz):>8} : "
             f"{(total*8)/elapsed/1e9:6.2f} Gbps | "
             f"{total/elapsed/1e9:6.2f} GB/s | "
-            f"{elapsed/args.iters:6.6f} s"
+            f"{(elapsed/args.iters)*1e6:8.2f} us"
         )
         dist.barrier()
     print("[Client] Benchmark complete")
