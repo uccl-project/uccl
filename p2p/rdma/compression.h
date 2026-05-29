@@ -127,13 +127,6 @@ class ICompressorBackend {
   virtual bool compress(std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  virtual bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) = 0;
-
-  /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.
    * @param input The RemoteMemInfo containing compressed data.
    * @param output The RegMemBlock to write decompressed data to.
@@ -211,8 +204,6 @@ class NullCompressorBackend : public ICompressorBackend {
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override;
 
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
-
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   FloatType float_type) override;
 
@@ -254,8 +245,6 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   std::shared_ptr<RegMemBlock> getDecompressBuffer() const override;
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override;
-
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   FloatType float_type) override;
@@ -323,13 +312,6 @@ class Compressor {
    * @return true on success, false on failure.
    */
   bool compress(std::shared_ptr<RDMASendRequest> req);
-
-  /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req);
 
   /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.

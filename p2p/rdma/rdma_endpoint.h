@@ -58,20 +58,7 @@ class RDMAEndpoint {
   // map lookup per check.
   SendConnection* getSendGroupRaw(uint64_t peer_id);
 
-  bool checkRecvComplete_once(uint64_t peer_id, uint64_t index);
-
-  // Blocking check for recv completion
-  void checkRecvComplete(uint64_t peer_id, uint64_t index);
-
   int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req);
-
-  // Blocking send: wraps SendConnection::send with peer_id parameter
-  // Returns wr_id for checking completion later
-  int64_t send(uint64_t peer_id, std::shared_ptr<RDMASendRequest> req);
-
-  // Blocking recv: wraps RecvConnection::recv with peer_id parameter
-  // Returns index for checking completion later
-  int64_t recv(uint64_t peer_id, std::shared_ptr<RDMARecvRequest> req);
 
   // Add or update peer OOB metadata from a given map
   void add_peer_oob_meta(
@@ -110,9 +97,6 @@ class RDMAEndpoint {
   // Flush any batched send WRs across all send connections. Used after
   // posting many small one-sided RDMA requests in g_uccl_batch_post mode.
   void flushAllSends();
-
-  // Manual polling routine for send channels when auto_start_polling_ is false
-  int sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req);
 
   void stop_accept();
 

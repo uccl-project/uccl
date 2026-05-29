@@ -1,7 +1,6 @@
 #pragma once
 #include "common.h"
 #include "rdma_data_channel.h"
-#include "ring_spsc.h"
 #include "util/debug.h"
 
 class SendControlChannel : public RDMADataChannel {
@@ -35,17 +34,9 @@ class SendControlChannel : public RDMADataChannel {
   // the same 64 bytes on the receiver, triggering its IMM CQE handler.
   bool pushWriteMeta(WriteReqMeta const& meta, uint32_t slot);
 
-  int getOneSendRequestMeta(SendReqMeta& meta);
-
-  inline bool hasSendRequest() { return !rb_->empty(); }
-
-  // not thread safe
-  bool getOneSendRequest(std::shared_ptr<RDMASendRequest>& req);
-
   bool noblockingPoll();
 
  private:
-  std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
   std::shared_ptr<RegMemBlock> write_meta_local_;
   std::shared_ptr<RemoteMemInfo> write_meta_remote_;
 };
@@ -61,10 +52,6 @@ class RecvControlChannel : public RDMADataChannel {
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0);
 
-  int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req);
-
-  std::shared_ptr<SendReqMeta> recv_done(uint64_t index);
-
   bool noblockingPoll();
 
   // Adopt the local WriteReqMeta ring (HOST memory, registered for RDMA
@@ -75,23 +62,7 @@ class RecvControlChannel : public RDMADataChannel {
   // RecvConnection, which drives decompress + ack.
   std::vector<WriteReqMeta> drainPendingWriteMetas();
 
-  bool check_done(uint64_t index);
-
-  // Called by RecvConnection::startPolling/stopPolling. While true,
-  // postSendReq()'s retry skips noblockingPoll() to avoid concurrent
-  // lazyPostRecvWrsN() on the non-atomic pending_post_recv_.
-  void setHasConcurrentPoller(bool v) {
-    has_concurrent_poller_.store(v, std::memory_order_release);
-  }
-
  private:
-  std::atomic<bool> has_concurrent_poller_{false};
-  std::unique_ptr<EmptyRingBuffer<SendReqMetaOnRing, kRingCapacity>> empty_rb_;
-  std::unique_ptr<RemoteMemInfo> remote_info_;
-  std::shared_ptr<RegMemBlock> local_info_;
-  std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
-  std::shared_ptr<RemoteMemInfo> remote_mem_ptr_;
-  std::shared_ptr<RegMemBlock> local_mem_ptr_;
   std::shared_ptr<RegMemBlock> write_meta_local_;
   std::vector<WriteReqMeta> pending_write_metas_;
 };

@@ -206,73 +206,6 @@ inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
       ep);
 }
 
-inline int uccl_send_async(GenericEndpoint const& ep, Conn* conn,
-                           P2PMhandle* mhandle, void const* data,
-                           size_t const size, UcclRequest* ureq) {
-  return std::visit(
-      [&](auto const& s) -> int {
-        using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          (void)mhandle;
-          ureq->type = ReqType::ReqTx;
-          ureq->peer_id = conn->uccl_conn_id_.peer_id;
-          NcclRequest nreq = to_nccl_req(*ureq);
-          int ret = s->uccl_send_async(
-              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
-              data, size, &nreq);
-          from_nccl_req(nreq, ureq);
-          return ret;
-        } else {
-          auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data),
-                                                        size, MemoryType::GPU);
-          send_mem->mr_array = mhandle->mr_array;
-          auto remote_mem = std::make_shared<RemoteMemInfo>();
-          auto send_req =
-              std::make_shared<RDMASendRequest>(send_mem, remote_mem);
-          send_req->compress_ctx = mhandle->compress_ctx;
-          send_req->to_peer_id = conn->uccl_conn_id_.peer_id;
-          ureq->type = ReqType::ReqTx;
-          do {
-            ureq->engine_idx = s->sendWithoutInnerQueue(send_req);
-          } while (ureq->engine_idx < 0);
-          ureq->peer_id = conn->uccl_conn_id_.peer_id;
-          return ureq->engine_idx;
-        }
-      },
-      ep);
-}
-
-inline int uccl_recv_async(GenericEndpoint const& ep, Conn* conn,
-                           P2PMhandle* mhandles, void** data, int* size, int n,
-                           UcclRequest* ureq) {
-  return std::visit(
-      [&](auto const& s) -> int {
-        using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          (void)mhandles;
-          ureq->type = ReqType::ReqRx;
-          ureq->peer_id = conn->uccl_conn_id_.peer_id;
-          NcclRequest nreq = to_nccl_req(*ureq);
-          int ret = s->uccl_recv_async(
-              reinterpret_cast<NcclFlow*>(conn->uccl_conn_id_.context), nullptr,
-              data, size, n, &nreq);
-          from_nccl_req(nreq, ureq);
-          return ret;
-        } else {
-          auto recv_mem =
-              std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
-          recv_mem->mr_array = mhandles->mr_array;
-          auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
-          recv_req->compress_ctx = mhandles->compress_ctx;
-          ureq->type = ReqType::ReqRx;
-          ureq->engine_idx = s->recv(conn->uccl_conn_id_.peer_id, recv_req);
-          ureq->peer_id = conn->uccl_conn_id_.peer_id;
-          return ureq->engine_idx;
-        }
-      },
-      ep);
-}
-
 inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
   return std::visit(
       [&](auto const& s) -> bool {
@@ -283,13 +216,10 @@ inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
-          if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
+          if (ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
             s->sendRoutine();
             return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
-          } else if (ureq->type == ReqType::ReqRx) {
-            s->recvRoutine();
-            return s->checkRecvComplete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;
@@ -371,11 +301,9 @@ inline bool uccl_check_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
           from_nccl_req(nreq, ureq);
           return ret;
         } else {
-          if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
+          if (ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
             return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
-          } else if (ureq->type == ReqType::ReqRx) {
-            return s->checkRecvComplete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;

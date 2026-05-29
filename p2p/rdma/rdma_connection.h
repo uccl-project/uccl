@@ -99,8 +99,6 @@ class SendConnection : public RDMAConnection {
     }
   }
 
-  int64_t send(std::shared_ptr<RDMASendRequest> req);
-
   int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req);
 
   int64_t read(std::shared_ptr<RDMASendRequest> req);
@@ -126,8 +124,6 @@ class SendConnection : public RDMAConnection {
 
   void pollingLoopForMeta();
 
-  int processSendRequests(std::shared_ptr<RDMASendRequest> req);
-
   // Flush any batched send WRs on all channels of this connection. Used to
   // amortize doorbell cost across many small RDMA writes/reads posted via
   // g_uccl_batch_post.
@@ -138,8 +134,6 @@ class SendConnection : public RDMAConnection {
   mutable std::shared_mutex ctrl_channel_mutex_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> poll_thread_;
-  std::unique_ptr<RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>
-      request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
   bool auto_start_polling_;
   int numa_node_ = 0;
@@ -214,8 +208,6 @@ class SendConnection : public RDMAConnection {
   void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
                           int expected_chunk_count = 0);
 
-  void processSendRequests();
-
   void compressSendRequest(std::shared_ptr<RDMASendRequest> req);
 
   // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
@@ -230,9 +222,6 @@ class SendConnection : public RDMAConnection {
 
   void compressSendRequestSplitFirst(std::shared_ptr<RDMASendRequest> req,
                                      size_t expected_chunk_count);
-
-  void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
-                               SendReqMeta& meta, int index);
 
   void pollDataChannels();
 
@@ -285,10 +274,6 @@ class RecvConnection : public RDMAConnection {
 
   bool isRunning() const { return running_.load(std::memory_order_acquire); }
 
-  int64_t recv(std::shared_ptr<RDMARecvRequest> req);
-
-  bool check(uint64_t index);
-
   void setRemoteAckRing(RemoteMemInfo const& m);
 
   void pollAndProcessCompletions();
@@ -315,14 +300,4 @@ class RecvConnection : public RDMAConnection {
   bool auto_start_polling_;
   int numa_node_ = 0;
   RemoteMemInfo remote_ack_ring_;  // peer (sender) ack ring — write target
-
-  // Collect rkey for a specific channel
-  // Returns: true on success, false on failure
-  bool collectRkeyForChannel(
-      int channel_id, std::unordered_map<int64_t, struct ibv_mr*> const& mr_map,
-      uint32_t& rkey);
-
-  // Round-robin channel selection and MR setup
-  bool setupRecvRequestChannelAndMemoryRegion(
-      std::shared_ptr<RDMARecvRequest> req);
 };

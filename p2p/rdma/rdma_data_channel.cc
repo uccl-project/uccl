@@ -138,24 +138,6 @@ int64_t RDMADataChannel::send(std::shared_ptr<RDMASendRequest> req) {
   return req->wr_id;
 }
 
-int64_t RDMADataChannel::recv(std::shared_ptr<RDMARecvRequest> req) {
-  struct ibv_sge sge = {
-      .addr = (uintptr_t)req->getLocalAddress(),
-      .length = (uint32_t)req->getLocalLen(),
-      .lkey = req->getLocalKey(),
-  };
-  struct ibv_recv_wr wr = {0}, *bad_wr = nullptr;
-  int64_t wr_id = req->wr_id;
-  wr.wr_id = wr_id;
-  wr.sg_list = &sge;
-  wr.num_sge = 1;
-  if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-    UCCL_LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
-    return -1;
-  }
-  return wr_id;
-}
-
 bool RDMADataChannel::pollOnce(std::vector<CQMeta>& cq_datas) {
   uint32_t nb_post_recv = 0;
   bool result = impl_->pollOnce(cq_ex_, cq_datas, channel_id_, nb_post_recv);

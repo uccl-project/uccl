@@ -7,11 +7,6 @@ import ukernel_p2p as p2p
 
 import torch.distributed as dist
 
-try:
-    from uccl import p2p as uccl_p2p
-except Exception:
-    uccl_p2p = None
-
 
 def env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -141,99 +136,6 @@ def _recv_bytes(src: int) -> bytes:
     return bytes(t.tolist())
 
 
-def _exchange_uccl_metadata(local_metadata: bytes, rank: int):
-    if rank == 0:
-        _send_bytes(local_metadata, dst=1)
-        remote_metadata = _recv_bytes(src=1)
-    else:
-        remote_metadata = _recv_bytes(src=0)
-        _send_bytes(local_metadata, dst=0)
-    return remote_metadata
-
-
-def _exchange_local_gpu_bdf(uc_ep, rank: int) -> str:
-    local_meta = bytes(uc_ep.get_metadata())
-    _, _, local_bdf = uccl_p2p.Endpoint.parse_metadata(local_meta)
-    local_bdf = str(local_bdf)
-    local_payload = local_bdf.encode()
-    if rank == 0:
-        _send_bytes(local_payload, dst=1)
-        return _recv_bytes(src=1).decode()
-    remote_payload = _recv_bytes(src=0)
-    _send_bytes(local_payload, dst=0)
-    return remote_payload.decode()
-
-
-def _create_uccl_endpoint(local_gpu_idx: int, rank: int):
-    # Support multiple p2p python binding signatures.
-    for num_cpus in (rank, 0):
-        try:
-            return uccl_p2p.Endpoint(local_gpu_idx, num_cpus)
-        except TypeError:
-            pass
-    try:
-        return uccl_p2p.Endpoint(local_gpu_idx)
-    except TypeError:
-        return uccl_p2p.Endpoint(rank)
-
-
-def bench_p2p_uccl(ep, send_conn_id, recv_conn_id, rank, size_bytes, warmup, iters, mode):
-    """Benchmark uccl.p2p ping-pong bandwidth (rdma or ipc)."""
-    peer = 1 if rank == 0 else 0
-    _ = peer
-    n = size_bytes // 4
-    send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    if mode == "rdma":
-        ok, send_mr = ep.reg(send_buf.data_ptr(), size_bytes)
-        assert ok, "[uccl] reg(send) failed"
-        ok, recv_mr = ep.reg(recv_buf.data_ptr(), size_bytes)
-        assert ok, "[uccl] reg(recv) failed"
-    else:
-        send_mr = None
-        recv_mr = None
-
-    def _send():
-        if mode == "ipc":
-            ok = ep.send_ipc(send_conn_id, send_buf.data_ptr(), size_bytes)
-        else:
-            ok = ep.send(send_conn_id, send_mr, send_buf.data_ptr(), size_bytes)
-        assert ok, "[uccl] send failed"
-
-    def _recv():
-        if mode == "ipc":
-            ok = ep.recv_ipc(recv_conn_id, recv_buf.data_ptr(), size_bytes)
-        else:
-            ok = ep.recv(recv_conn_id, recv_mr, recv_buf.data_ptr(), size_bytes)
-        assert ok, "[uccl] recv failed"
-
-    if rank == 0:
-        for _ in range(warmup):
-            _recv()
-            _send()
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            _recv()
-            _send()
-        torch.cuda.synchronize()
-    else:
-        for _ in range(warmup):
-            _send()
-            _recv()
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            _send()
-            _recv()
-        torch.cuda.synchronize()
-
-    if mode == "rdma":
-        ep.dereg(send_mr)
-        ep.dereg(recv_mr)
-    return time.perf_counter() - t0
-
-
 def main() -> None:
     rank = env_int("RANK", 0)
     world = env_int("WORLD_SIZE", 2)
@@ -268,7 +170,7 @@ def main() -> None:
     dist.init_process_group(backend="gloo", rank=rank, world_size=world)
 
     uk_times = []
-    uc_times = [] if uccl_p2p is not None else None
+    uc_times = None
     nc_times = []
 
     # Phase 1: ukernel only
@@ -305,80 +207,8 @@ def main() -> None:
     del comm
     dist.barrier()
 
-    # Phase 2: uccl p2p only
-    if uc_times is not None:
-        uc_mode = os.getenv("UCCL_P2P_MODE", "ipc").strip().lower()
-        if uc_mode not in ("rdma", "ipc"):
-            raise RuntimeError(f"invalid UCCL_P2P_MODE={uc_mode}, expected rdma/ipc")
-
-        uc_ep = None
-        uc_send_conn_id = None
-        uc_recv_conn_id = None
-        uc_ep = _create_uccl_endpoint(local_rank, rank)
-        if uc_mode == "ipc":
-            required_ipc_api = ("connect_local", "accept_local", "send_ipc", "recv_ipc")
-            missing = [name for name in required_ipc_api if not hasattr(uc_ep, name)]
-            if missing:
-                raise RuntimeError(
-                    f"[uccl] ipc mode requested but endpoint lacks API: {missing}"
-                )
-            remote_gpu_bdf = _exchange_local_gpu_bdf(uc_ep, rank)
-            if rank == 0:
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
-                assert ok, "[uccl] connect_local(0->1) failed"
-                ok, _, uc_recv_conn_id = uc_ep.accept_local()
-                assert ok, "[uccl] accept_local(1->0) failed"
-            else:
-                ok, _, uc_recv_conn_id = uc_ep.accept_local()
-                assert ok, "[uccl] accept_local(0->1) failed"
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
-                assert ok, "[uccl] connect_local(1->0) failed"
-        else:
-            local_meta = bytes(uc_ep.get_metadata())
-            _, _, _ = uccl_p2p.Endpoint.parse_metadata(local_meta)
-            remote_meta = _exchange_uccl_metadata(local_meta, rank)
-            if rank == 0:
-                ip, port, remote_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                remote_gpu_bdf = str(remote_gpu_bdf)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_bdf, remote_port=port)
-                assert ok, "[uccl] connect(0->1) failed"
-                ok, _, _, uc_recv_conn_id = uc_ep.accept()
-                assert ok, "[uccl] accept(1->0) failed"
-            else:
-                ok, _, _, uc_recv_conn_id = uc_ep.accept()
-                assert ok, "[uccl] accept(0->1) failed"
-                ip, port, remote_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                remote_gpu_bdf = str(remote_gpu_bdf)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_bdf, remote_port=port)
-                assert ok, "[uccl] connect(1->0) failed"
-        dist.barrier()
-        if rank == 0:
-            print(
-                f"[uccl] p2p endpoint connected mode={uc_mode} "
-                f"(send_conn={uc_send_conn_id}, recv_conn={uc_recv_conn_id})"
-            )
-        for size in sizes:
-            if size % 4 != 0:
-                size = (size // 4) * 4
-            if size == 0:
-                uc_times.append(None)
-                continue
-            uc_times.append(
-                bench_p2p_uccl(
-                    uc_ep,
-                    uc_send_conn_id,
-                    uc_recv_conn_id,
-                    rank,
-                    size,
-                    warmup,
-                    iters,
-                    uc_mode,
-                )
-            )
-        del uc_ep
-    else:
-        if rank == 0:
-            print("[uccl] p2p python module not found; skip uccl column")
+    if rank == 0:
+        print("[uccl] skip uccl column: two-sided uccl.p2p APIs were removed")
     dist.barrier()
 
     # Phase 3: NCCL only

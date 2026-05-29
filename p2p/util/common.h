@@ -231,9 +231,9 @@ class ImmData {
   // Set index (preserves chunk_count + write_meta flag)
   void set_index(uint16_t index);
 
-  // Distinguishes WriteReqMeta entries from SendReqMeta entries on the
-  // control channel. kRingCapacity = 16384 only needs 14 bits, so bit 15 of
-  // the low halfword is free.
+  // Distinguishes WriteReqMeta entries on the control channel.
+  // kWriteMetaRingCapacity only needs 12 bits, so bit 15 of the low halfword
+  // is free.
   static constexpr uint32_t kWriteMetaBit = 1u << 15;
   static constexpr uint32_t kIndexMask = 0x7FFFu;
   constexpr bool is_write_meta() const { return data_ & kWriteMetaBit; }
@@ -382,74 +382,6 @@ typedef struct RemoteMemInfo {
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info);
 } RemoteMemInfo;
 
-typedef struct RDMARecvRequest {
-  // Peer id is local to this endpoint, not necessarily global.
-  uint32_t from_peer_id = INVALID_PEER_ID;
-  uint32_t to_peer_id = INVALID_PEER_ID;
-  uint32_t channel_id = 0;
-  int64_t wr_id = -1;
-  std::shared_ptr<RegMemBlock> local_mem;
-  std::shared_ptr<RegMemBlock> local_compression_mem;
-  CompressCtx compress_ctx;
-
-  // Constructor
-  RDMARecvRequest(std::shared_ptr<RegMemBlock> local);
-
-  // Getter methods
-  uint32_t getLocalKey() const;
-
-  uint64_t getLocalAddress() const;
-
-  uint32_t getLocalLen() const;
-
-  friend std::ostream& operator<<(std::ostream& os, RDMARecvRequest const& req);
-} RDMARecvRequest;
-
-enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
-
-struct alignas(64) SendReqMeta {
-  uint32_t peer_id;
-  uint32_t channel_id;
-  RemoteMemInfo remote_mem;
-  RegMemBlock local_mem;
-  FloatType float_type = FloatType::kUndefined;
-  uint32_t expected_chunk_count;  // Expected number of chunks to receive
-  uint32_t received_chunk_count;  // Number of chunks already received
-
-  SendReqMeta();
-
-  SendReqMeta(uint32_t pid, uint32_t cid, RemoteMemInfo const& rmem,
-              uint32_t expected = 0, uint32_t received = 0);
-
-  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req);
-
-  friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta);
-};
-
-struct alignas(64) SendReqMetaOnRing {
-  SendReqMeta meta;
-  std::atomic<ReqFlag> flag;
-
-  SendReqMetaOnRing();
-
-  SendReqMetaOnRing(SendReqMetaOnRing const& other);
-
-  SendReqMetaOnRing& operator=(SendReqMetaOnRing const& other);
-
-  // Get SendReqMeta from SendReqMetaOnRing
-  SendReqMeta getSendReqMeta() const;
-
-  // Set SendReqMeta part
-  void setSendReqMeta(SendReqMeta const& m);
-
-  friend std::ostream& operator<<(std::ostream& os,
-                                  SendReqMetaOnRing const& ring);
-};
-
-// Ring buffer size for control channel.
-static constexpr size_t kRingBufferSize =
-    sizeof(SendReqMetaOnRing) * kRingCapacity;
-
 // ── Compressed write infra ──────────────────────────────────────────────────
 // One entry per in-flight compressed write. Pushed by sender to receiver via
 // the control QP (RDMA WRITE WITH IMM, IMM carries the ring index + write_meta
@@ -482,43 +414,6 @@ constexpr size_t kAckRingDepth = 4096;
 constexpr size_t kWriteMetaRingBytes =
     sizeof(WriteReqMeta) * kWriteMetaRingCapacity;
 constexpr size_t kAckRingBytes = sizeof(AckSlot) * kAckRingDepth;
-
-// Helper functions for SendReqMetaOnRing to be used with
-// modify_and_advance_write
-inline auto check_in_progress = [](SendReqMetaOnRing const& item) {
-  return item.flag.load(std::memory_order_acquire) == ReqFlag::IN_PROGRESS;
-};
-
-inline auto check_is_done = [](SendReqMetaOnRing const& item) {
-  return item.flag.load(std::memory_order_acquire) == ReqFlag::IS_DONE;
-};
-
-inline auto set_in_progress = [](SendReqMetaOnRing& item) {
-  item.flag.store(ReqFlag::IN_PROGRESS, std::memory_order_release);
-};
-
-inline auto set_is_done = [](SendReqMetaOnRing& item) {
-  item.flag.store(ReqFlag::IS_DONE, std::memory_order_release);
-};
-
-// Check if all chunks have been received
-inline auto check_all_chunks_received = [](SendReqMetaOnRing const& item) {
-  return item.meta.received_chunk_count == item.meta.expected_chunk_count;
-};
-
-// Increment the received chunk count
-inline auto increment_received_chunk = [](SendReqMetaOnRing& item) {
-  item.meta.received_chunk_count++;
-};
-
-// Conversion functions between SendReqMeta and SendReqMetaOnRing
-inline auto to_ring_meta = [](SendReqMeta const& src, SendReqMetaOnRing& dst) {
-  dst.meta = src;
-  dst.flag.store(ReqFlag::PENDING, std::memory_order_relaxed);
-};
-
-inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
-                                SendReqMeta& dst) { dst = src.meta; };
 
 enum class SendType { Send, Write, Read };
 

@@ -216,39 +216,6 @@ SendConnection* RDMAEndpoint::getSendGroupRaw(uint64_t peer_id) {
   return it->second.get();
 }
 
-bool RDMAEndpoint::checkRecvComplete_once(uint64_t peer_id, uint64_t index) {
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "checkRecvComplete - Checking for peer_id: " << peer_id
-      << ", index: " << index;
-  auto it = recv_channel_groups_.find(peer_id);
-  if (unlikely(it == recv_channel_groups_.end())) {
-    throw std::runtime_error("Recv channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto recv_group = it->second;
-  return recv_group->check(index);
-}
-
-void RDMAEndpoint::checkRecvComplete(uint64_t peer_id, uint64_t index) {
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "checkRecvComplete - Checking for peer_id: " << peer_id
-      << ", index: " << index;
-  auto it = recv_channel_groups_.find(peer_id);
-  if (it == recv_channel_groups_.end()) {
-    throw std::runtime_error("Recv channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto recv_group = it->second;
-  while (!recv_group->check(index)) {
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
-  }
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "checkRecvComplete - Completed for peer_id: " << peer_id
-      << ", index: " << index;
-}
-
 int64_t RDMAEndpoint::writeOrRead(std::shared_ptr<RDMASendRequest> req) {
   uint64_t peer_id = req->to_peer_id;
   auto it = send_channel_groups_.find(peer_id);
@@ -274,54 +241,6 @@ int64_t RDMAEndpoint::writeOrRead(std::shared_ptr<RDMASendRequest> req) {
   }
 
   return wr_id;
-}
-
-int64_t RDMAEndpoint::send(uint64_t peer_id,
-                           std::shared_ptr<RDMASendRequest> req) {
-  auto it = send_channel_groups_.find(peer_id);
-  if (it == send_channel_groups_.end()) {
-    throw std::runtime_error("Send channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto send_group = it->second;
-  int64_t wr_id = -1;
-
-  // Blocking call until send succeeds
-  while (wr_id < 0) {
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "RDMAEndpoint::send - Attempting to send to peer_id: " << peer_id;
-    wr_id = send_group->send(req);
-
-    if (wr_id < 0) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-  }
-
-  return wr_id;
-}
-
-int64_t RDMAEndpoint::recv(uint64_t peer_id,
-                           std::shared_ptr<RDMARecvRequest> req) {
-  auto it = recv_channel_groups_.find(peer_id);
-  if (it == recv_channel_groups_.end()) {
-    throw std::runtime_error("Recv channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto recv_group = it->second;
-  int64_t index = -1;
-  // Blocking call until recv succeeds
-  while (index < 0) {
-    index = recv_group->recv(req);
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "RDMAEndpoint::recv - Attempting to recv from peer_id: " << peer_id;
-    if (index < 0) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-  }
-
-  return index;
 }
 
 void RDMAEndpoint::add_peer_oob_meta(
@@ -540,41 +459,6 @@ void RDMAEndpoint::flushAllSends() {
   }
 }
 
-int RDMAEndpoint::sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req) {
-  if (!req) {
-    UCCL_LOG(WARN) << "RDMAEndpoint::sendRoutine - null request";
-    return -1;
-  }
-
-  uint64_t peer_id = req->to_peer_id;
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  auto it = send_channel_groups_.find(peer_id);
-  if (it == send_channel_groups_.end()) {
-    UCCL_LOG(WARN)
-        << "RDMAEndpoint::sendRoutine - Send channel group not found "
-           "for peer_id: "
-        << peer_id;
-    return -1;
-  }
-
-  auto send_group = it->second;
-  if (!send_group) {
-    UCCL_LOG(WARN) << "RDMAEndpoint::sendRoutine - Send channel group is null "
-                      "for peer_id: "
-                   << peer_id;
-    return -1;
-  }
-
-  // When the polling thread is active, enqueue via send() so that
-  // only the polling thread touches QPs (avoids concurrent ibv_post_*
-  // from two threads).
-  if (send_group->isRunning()) {
-    return send_group->send(req);
-  }
-
-  return send_group->processSendRequests(req);
-}
-
 void RDMAEndpoint::stop_accept() {
   stop_accept_.store(true, std::memory_order_release);
 }
@@ -660,7 +544,7 @@ void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
         next_recv_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
     auto ctrl_mem =
-        allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctx_ptr);
+        allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, ctx_ptr);
     UCCL_LOG(INFO, UCCL_RDMA)
         << "process_meta: Allocated " << ctrl_mem->size
         << " bytes for recv control channel ring buffer at " << ctrl_mem->addr;
@@ -861,7 +745,7 @@ int RDMAEndpoint::build_control_channel(std::string const& oob_con,
                                         uint64_t peer_id, bool sync,
                                         int timeout_ms) {
   auto ctrl_mem =
-      allocator_->allocate(kRingBufferSize, MemoryType::HOST, contexts_[0]);
+      allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, contexts_[0]);
   auto control_channel = std::make_shared<SendControlChannel>(
       contexts_[0], ctrl_mem, kControlChannelID);
   auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);

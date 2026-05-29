@@ -133,8 +133,6 @@ SendConnection::SendConnection(int numa_node, bool auto_start_polling,
       cc_(uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC"),
           uccl::freq_ghz, link_bandwidth_bps) {
   tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
-  request_queue_ = std::make_unique<
-      RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>();
 }
 
 SendConnection::~SendConnection() { stopPolling(); }
@@ -166,20 +164,6 @@ size_t SendConnection::normalChannelCount() const {
 std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
 SendConnection::channels() const {
   return RDMAConnection::channels();
-}
-
-int64_t SendConnection::send(std::shared_ptr<RDMASendRequest> req) {
-  // Allocate seq_num without counting bytes — actual size is registered
-  // later by the polling thread after popping from the queue, so that
-  // getTotalInflightBytes() only reflects requests actually being sent.
-  int64_t wr_id = tracker_->sendPacket(0);
-  req->wr_id = wr_id;
-  while (unlikely(request_queue_->push(req) < 0)) {
-    UCCL_LOG(WARN) << "SendConnection: isend request queue is full, wr_id="
-                   << wr_id;
-    std::this_thread::yield();
-  }
-  return wr_id;
 }
 
 int64_t SendConnection::postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
@@ -488,30 +472,6 @@ void SendConnection::pollingLoopForMeta() {
       << "SendConnection::pollingLoop - Still running";
 }
 
-int SendConnection::processSendRequests(std::shared_ptr<RDMASendRequest> req) {
-  pollControlChannel();
-  if (unlikely(ctrl_channel_ == nullptr)) {
-    return -1;
-  }
-  // Enforce CC window before accepting a new request
-  size_t inflight_limit_bytes = currentInflightLimitBytes();
-  if (currentInflightBytes() > inflight_limit_bytes) {
-    return -1;
-  }
-  SendReqMeta meta;
-  std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-  int index = ctrl_channel_->getOneSendRequestMeta(meta);
-  if (index < 0) {
-    return -1;
-  }
-  int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
-  req->wr_id = wr_id;
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "SendConnection: Processing send request meta: " << meta;
-  processOnceSendRequests(req, meta, index);
-  return wr_id;
-}
-
 void SendConnection::flushBatches() {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   for (auto& [cid, channel] : channels_) {
@@ -702,46 +662,6 @@ void SendConnection::postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
   }
 }
 
-void SendConnection::processSendRequests() {
-  if (unlikely(ctrl_channel_ == nullptr)) {
-    return;
-  }
-
-  // First, try to drain any pending chunks from a previous request
-  // that was paused due to CC window limits.
-  if (!drainPendingChunks()) {
-    return;  // Still CC-blocked, don't dequeue new requests.
-  }
-
-  SendReqMeta meta;
-  bool has_meta = false;
-  int index = -1;
-  // {
-  std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-  has_meta = ctrl_channel_->hasSendRequest();
-  // }
-  while (has_meta) {
-    std::shared_ptr<RDMASendRequest> req;
-    size_t inflight_limit_bytes = currentInflightLimitBytes();
-    if (currentInflightBytes() > inflight_limit_bytes ||
-        !request_queue_->pop(req)) {
-      if (currentInflightBytes() > inflight_limit_bytes) {
-        UCCL_LOG(WARN) << "SendConnection: In-flight bytes exceed "
-                          "limit,pausing sending."
-                       << currentInflightBytes() << " bytes in-flight.";
-      }
-      break;
-    }
-    // Register actual packet size now that we are about to send it.
-    tracker_->updatePacketSize(req->wr_id, req->getLocalLen());
-    index = ctrl_channel_->getOneSendRequestMeta(meta);
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "SendConnection: Processing send request meta: " << meta;
-    processOnceSendRequests(req, meta, index);
-    has_meta = ctrl_channel_->hasSendRequest();
-  }
-}
-
 void SendConnection::compressSendRequest(std::shared_ptr<RDMASendRequest> req) {
   Compressor::getInstance().compress(req);
 }
@@ -864,31 +784,6 @@ void SendConnection::compressSendRequestSplitFirst(
   tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
 }
 
-void SendConnection::processOnceSendRequests(
-    std::shared_ptr<RDMASendRequest> req, SendReqMeta& meta, int index) {
-  req->imm_data.set_index(index);
-  req->channel_id = meta.channel_id;
-  req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
-  // kUndefined means prepareSplitContext was skipped; params_dev is null and
-  // compression would SIGABRT.
-  bool const ctx_ready =
-      req->compress_ctx &&
-      req->compress_ctx->getFloatType() != FloatType::kUndefined;
-  if (ctx_ready && Compressor::getInstance().shouldCompressAndSplitFirst(
-                       req->local_mem->size)) {
-    compressSendRequestSplitFirst(req, meta.expected_chunk_count);
-    return;
-  }
-  if (ctx_ready &&
-      Compressor::getInstance().shouldCompress(req->local_mem->size)) {
-    compressSendRequest(req);
-  }
-  tracker_->updateExpectedAckCount(
-      req->wr_id,
-      ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size));
-  postChunkedRequest(req, meta.expected_chunk_count);
-}
-
 void SendConnection::pollDataChannels() {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   for (auto& [channel_id, channel] : channels_) {
@@ -978,7 +873,6 @@ void SendConnection::pollingLoop() {
   uccl::pin_thread_to_numa(numa_node_);
   while (running_.load(std::memory_order_acquire)) {
     pollControlChannel();
-    processSendRequests();
     pollDataChannels();
 
     UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
@@ -1054,7 +948,6 @@ void RecvConnection::startPolling() {
   if (running_.load()) {
     return;
   }
-  if (ctrl_channel_) ctrl_channel_->setHasConcurrentPoller(true);
   running_.store(true);
   poll_thread_ =
       std::make_unique<std::thread>(&RecvConnection::pollingLoop, this);
@@ -1068,40 +961,13 @@ void RecvConnection::stopPolling() {
   if (poll_thread_ && poll_thread_->joinable()) {
     poll_thread_->join();
   }
-  if (ctrl_channel_) ctrl_channel_->setHasConcurrentPoller(false);
-}
-
-int64_t RecvConnection::recv(std::shared_ptr<RDMARecvRequest> req) {
-  if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
-    UCCL_LOG(WARN)
-        << "RecvConnection: Failed to setup recv request with round robin";
-    return -1;
-  }
-  // Skip prepareDecompress when float_type is kUndefined (prepareSplitContext
-  // was never called); it would wrongly replace local_mem with
-  // decompressBuffer.
-  bool const recv_ctx_ready =
-      req->compress_ctx &&
-      req->compress_ctx->getFloatType() != FloatType::kUndefined;
-  if (recv_ctx_ready &&
-      Compressor::getInstance().shouldCompress(req->local_mem->size)) {
-    Compressor::getInstance().prepareDecompress(req);
-  }
-  return ctrl_channel_->postSendReq(req);
-}
-
-bool RecvConnection::check(uint64_t index) {
-  return ctrl_channel_->check_done(index);
 }
 
 void RecvConnection::setRemoteAckRing(RemoteMemInfo const& m) {
   if (m.length == 0) return;
   remote_ack_ring_ = m;
   // The compressed-write path needs the receive side to actively poll its
-  // control-channel CQ for incoming WriteReqMeta IMMs — but for pure
-  // one-sided writes the benchmark/user never calls recv_async +
-  // poll_async, so user-driven recvRoutine() never runs. Force the
-  // polling thread up here regardless of auto_start_polling_.
+  // control-channel CQ for incoming WriteReqMeta IMMs.
   if (!running_.load(std::memory_order_acquire)) startPolling();
 }
 
@@ -1120,32 +986,9 @@ void RecvConnection::pollAndProcessCompletions() {
     polled = channel->pollOnce(cq_datas);
     if (polled) {
       for (auto const& cq_data : cq_datas) {
-        if (cq_data.hasIMM()) {
-          UCCL_LOG(INFO, UCCL_RDMA)
-              << "RecvConnection::pollAndProcessCompletions - Channel "
-              << channel_id << " polled completion: " << cq_data;
-          if (ctrl_channel_) {
-            std::shared_ptr<SendReqMeta> req_meta;
-            for (int i = 0; i < cq_data.imm.chunk_count(); ++i) {
-              req_meta = ctrl_channel_->recv_done(cq_data.imm.index());
-              UCCL_LOG(INFO, UCCL_RDMA)
-                  << "RecvConnection::pollAndProcessCompletions - Called "
-                     "recv_done("
-                  << cq_data.imm.index() << ")";
-            }
-            if (req_meta && req_meta->float_type != FloatType::kUndefined &&
-                Compressor::getInstance().shouldCompress(
-                    req_meta->local_mem.size)) {
-              Compressor::getInstance().decompress(req_meta->remote_mem,
-                                                   req_meta->local_mem,
-                                                   req_meta->float_type);
-            }
-
-          } else {
-            UCCL_LOG(WARN) << "RecvConnection::pollAndProcessCompletions - "
-                              "ctrl_channel_ is null, cannot call recv_done";
-          }
-        }
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "RecvConnection::pollAndProcessCompletions - Channel "
+            << channel_id << " polled completion: " << cq_data;
       }
     }
   }
@@ -1203,42 +1046,4 @@ void RecvConnection::handleCompressedWriteArrival(WriteReqMeta const& m) {
   Compressor::getInstance().decompressAsync(
       in, out, static_cast<FloatType>(m.float_type),
       /*on_done=*/nullptr, /*user_data=*/nullptr);
-}
-
-bool RecvConnection::collectRkeyForChannel(
-    int channel_id, std::unordered_map<int64_t, struct ibv_mr*> const& mr_map,
-    uint32_t& rkey) {
-  auto channel = getChannel(channel_id);
-  if (unlikely(!channel)) {
-    UCCL_LOG(WARN) << "RecvConnection: Channel not found for channel_id "
-                   << channel_id;
-    return false;
-  }
-
-  uint64_t context_id = channel->getContextID();
-  auto it = mr_map.find(context_id);
-  if (unlikely(it == mr_map.end())) {
-    UCCL_LOG(WARN) << "RecvConnection: MR not found for context_id "
-                   << context_id;
-    return false;
-  }
-
-  rkey = it->second->rkey;
-  return true;
-}
-
-bool RecvConnection::setupRecvRequestChannelAndMemoryRegion(
-    std::shared_ptr<RDMARecvRequest> req) {
-  if (unlikely(!req || !req->local_mem)) {
-    return false;
-  }
-
-  // Select next channel using round-robin
-  auto [channel_id, context_id] = selectNextChannelRoundRobin();
-  // auto [channel_id, context_id] = selectNextChannelRandom();
-  if (channel_id == 0) {
-    return false;
-  }
-  req->channel_id = channel_id;
-  return true;
 }

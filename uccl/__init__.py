@@ -22,7 +22,6 @@ is_efa = has_efa()
 if not is_efa:
     try:
         from . import p2p
-        from . import collective
     except ImportError:
         pass
 

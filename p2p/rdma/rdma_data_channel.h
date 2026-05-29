@@ -67,7 +67,6 @@ class RDMADataChannel {
 
   int64_t read(std::shared_ptr<RDMASendRequest> req);
   int64_t send(std::shared_ptr<RDMASendRequest> req);
-  int64_t recv(std::shared_ptr<RDMARecvRequest> req);
   bool pollOnce(std::vector<CQMeta>& cq_datas);
 
   // Post an 8-byte RDMA WRITE ack to the sender's ack_ring.

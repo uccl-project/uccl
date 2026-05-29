@@ -158,11 +158,6 @@ bool NullCompressorBackend::compress(std::shared_ptr<RDMASendRequest> /*req*/) {
   return false;
 }
 
-bool NullCompressorBackend::prepareDecompress(
-    std::shared_ptr<RDMARecvRequest> /*req*/) {
-  return false;
-}
-
 bool NullCompressorBackend::decompress(RemoteMemInfo const& /*input*/,
                                        RegMemBlock& /*output*/,
                                        FloatType /*float_type*/) {
@@ -296,27 +291,6 @@ bool DietGPUCompressorBackend::compress(std::shared_ptr<RDMASendRequest> req) {
   // Update request to use compressed buffer
   req->local_mem = std::make_shared<RegMemBlock>(
       buffer_->addr, compressedSize, buffer_->mr_array, buffer_->type);
-  return true;
-}
-
-bool DietGPUCompressorBackend::prepareDecompress(
-    std::shared_ptr<RDMARecvRequest> req) {
-  if (unlikely(!req || !req->local_mem)) {
-    UCCL_LOG(WARN)
-        << "DietGPUCompressorBackend::prepareDecompress - Invalid parameters";
-    return false;
-  }
-
-  // Backup local_mem to local_compression_mem
-  req->local_compression_mem = req->local_mem;
-  req->local_mem = std::make_shared<RegMemBlock>(
-      decompressBuffer_->addr, decompressBuffer_->size,
-      decompressBuffer_->mr_array, decompressBuffer_->type);
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "DietGPUCompressorBackend: Prepared for decompression, backed "
-         "up local_mem ("
-      << req->local_compression_mem->size << " bytes) to local_compression_mem";
-
   return true;
 }
 
@@ -564,10 +538,6 @@ std::shared_ptr<RegMemBlock> Compressor::getDecompressBuffer() const {
 
 bool Compressor::compress(std::shared_ptr<RDMASendRequest> req) {
   return backend_->compress(req);
-}
-
-bool Compressor::prepareDecompress(std::shared_ptr<RDMARecvRequest> req) {
-  return backend_->prepareDecompress(req);
 }
 
 bool Compressor::decompress(RemoteMemInfo const& input, RegMemBlock& output,

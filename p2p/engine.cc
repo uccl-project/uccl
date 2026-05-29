@@ -42,7 +42,6 @@ TaskBatch::TaskBatch() : num_iovs(0) {}
 
 TaskBatch::TaskBatch(TaskBatch&& other) noexcept
     : num_iovs(other.num_iovs),
-      const_data_ptr(std::move(other.const_data_ptr)),
       data_ptr(std::move(other.data_ptr)),
       size_ptr(std::move(other.size_ptr)),
       mr_id_ptr(std::move(other.mr_id_ptr)),
@@ -51,7 +50,6 @@ TaskBatch::TaskBatch(TaskBatch&& other) noexcept
 TaskBatch& TaskBatch::operator=(TaskBatch&& other) noexcept {
   if (this != &other) {
     num_iovs = other.num_iovs;
-    const_data_ptr = std::move(other.const_data_ptr);
     data_ptr = std::move(other.data_ptr);
     size_ptr = std::move(other.size_ptr);
     mr_id_ptr = std::move(other.mr_id_ptr);
@@ -60,10 +58,6 @@ TaskBatch& TaskBatch::operator=(TaskBatch&& other) noexcept {
   return *this;
 }
 
-void const** TaskBatch::const_data_v() const {
-  if (!const_data_ptr) return nullptr;
-  return const_data_ptr->data();
-}
 void** TaskBatch::data_v() const {
   if (!data_ptr) return nullptr;
   return data_ptr->data();
@@ -83,7 +77,7 @@ FifoItem* TaskBatch::slot_item_v() const {
 
 // UnifiedTask (declaration order: after TaskBatch, before Endpoint)
 UnifiedTask::UnifiedTask()
-    : type(TaskType::SEND_NET),
+    : type(TaskType::WRITE_NET),
       data(nullptr),
       size(0),
       conn_id(0),
@@ -116,8 +110,7 @@ TaskBatch const& UnifiedTask::task_batch() const {
 }
 
 bool UnifiedTask::is_batch_task() const {
-  return type == TaskType::SENDV || type == TaskType::RECVV ||
-         type == TaskType::WRITEV || type == TaskType::READV;
+  return type == TaskType::WRITEV || type == TaskType::READV;
 }
 
 UnifiedTask::SpecificData::SpecificData() : base{} {}
@@ -677,272 +670,6 @@ bool Endpoint::dereg(uint64_t mr_id) {
   uccl_deregmr(ep_, mr->mhandle_);
   delete mr->mhandle_;
   delete mr;
-  return true;
-}
-
-bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
-                    size_t size) {
-  UCCL_DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
-
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[send] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  P2PMhandle* mhandle = get_mhandle(mr_id);
-  if (unlikely(mhandle == nullptr)) {
-    std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
-    return false;
-  }
-
-  UcclRequest ureq;
-
-  auto* cur_data = const_cast<void*>(data);
-  auto to_send = size;
-  while (uccl_send_async(ep_, conn, mhandle, cur_data, to_send, &ureq) == -1)
-    ;
-  while (!uccl_poll_ureq_once(ep_, &ureq)) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  }
-
-  return true;
-}
-
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[recv] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  P2PMhandle* mhandle = get_mhandle(mr_id);
-  if (unlikely(mhandle == nullptr)) {
-    std::cerr << "[recv] Error: Invalid mr_id " << mr_id << std::endl;
-    return false;
-  }
-  int size_int = static_cast<int>(size);
-
-  UcclRequest ureq;
-
-  void* cur_data = data;
-  while (uccl_recv_async(ep_, conn, mhandle, &cur_data, &size_int, 1, &ureq) ==
-         -1)
-    ;
-  while (!uccl_poll_ureq_once(ep_, &ureq)) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  }
-
-  return true;
-}
-
-bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                          size_t size, uint64_t* transfer_id) {
-  auto task_ptr = create_task(conn_id, mr_id, TaskType::SEND_NET,
-                              const_cast<void*>(data), size);
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
-
-  return true;
-}
-
-bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
-                          size_t size, uint64_t* transfer_id) {
-  auto task_ptr = create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
-
-  return true;
-}
-
-bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                     std::vector<void const*> data_v,
-                     std::vector<size_t> size_v, size_t num_iovs) {
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  UcclRequest ureq[kMaxInflightOps] = {};
-  bool done[kMaxInflightOps] = {false};
-  std::vector<P2PMhandle*> mhandles(num_iovs);
-
-  // Check if mhandles are all valid
-  for (int i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
-      std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-      return false;
-    }
-  }
-
-  size_t iov_issued = 0, iov_finished = 0;
-
-  while (iov_finished < num_iovs) {
-    while (iov_issued < num_iovs &&
-           iov_issued - iov_finished < kMaxInflightOps) {
-      size_t slot = iov_issued % kMaxInflightOps;
-      void* cur_data = (void*)data_v[iov_issued];
-      size_t cur_size = size_v[iov_issued];
-
-      auto rc = uccl_send_async(ep_, conn, mhandles[iov_issued], cur_data,
-                                cur_size, &ureq[slot]);
-      if (rc == -1) break;
-      done[slot] = false;
-      iov_issued++;
-    }
-
-    for (size_t i = iov_finished; i < iov_issued; i++) {
-      size_t slot = i % kMaxInflightOps;
-      if (done[slot]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
-        done[slot] = true;
-      }
-    }
-
-    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
-      iov_finished++;
-    }
-
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  }
-
-  return true;
-}
-
-bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void const*> data_v,
-                           std::vector<size_t> size_v, size_t num_iovs,
-                           uint64_t* transfer_id) {
-  auto const_data_ptr =
-      std::make_shared<std::vector<void const*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-
-  auto task_ptr = create_sendv_task(conn_id, std::move(const_data_ptr),
-                                    std::move(size_ptr), std::move(mr_id_ptr));
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
-
-  return true;
-}
-
-bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                     std::vector<void*> data_v, std::vector<size_t> size_v,
-                     size_t num_iovs) {
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  UcclRequest ureq[kMaxInflightOps] = {};
-  bool done[kMaxInflightOps] = {false};
-  std::vector<P2PMhandle*> mhandles(num_iovs);
-
-  // Check if mhandles are all valid
-  for (int i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
-      std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-      return false;
-    }
-  }
-  size_t iov_issued = 0, iov_finished = 0;
-
-  while (iov_finished < num_iovs) {
-    while (iov_issued < num_iovs &&
-           iov_issued - iov_finished < kMaxInflightOps) {
-      size_t slot = iov_issued % kMaxInflightOps;
-      void* cur_data = data_v[iov_issued];
-      int size_int = static_cast<int>(size_v[iov_issued]);
-
-      auto rc = uccl_recv_async(ep_, conn, mhandles[iov_issued], &cur_data,
-                                &size_int, 1, &ureq[slot]);
-      if (rc == -1) break;
-      done[slot] = false;
-      iov_issued++;
-    }
-
-    for (size_t i = iov_finished; i < iov_issued; i++) {
-      size_t slot = i % kMaxInflightOps;
-      if (done[slot]) continue;
-      if (uccl_poll_ureq_once(ep_, &ureq[slot])) {
-        done[slot] = true;
-      }
-    }
-
-    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
-      iov_finished++;
-    }
-
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-  }
-
-  return true;
-}
-
-bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void*> data_v,
-                           std::vector<size_t> size_v, size_t num_iovs,
-                           uint64_t* transfer_id) {
-  // Use move semantics to reduce memory copies
-  auto task_ptr = create_recvv_task(conn_id, std::move(data_v),
-                                    std::move(size_v), std::move(mr_id_v));
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-  recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
-
   return true;
 }
 
@@ -1612,275 +1339,6 @@ got:
     conn->uccl_conn_id_ = dummy;
     conn->is_local_ = true;
     conn_id_to_conn_[conn_id] = conn;
-  }
-
-  return true;
-}
-
-bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
-  UCCL_CHECK(data != nullptr) << "send_ipc: data pointer is null!";
-
-  // Get connection info
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[send_ipc] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  bool sender_is_host = (uccl::get_dev_idx(data) == -1);
-
-  int orig_device;
-  GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
-
-  // Receive receiver's IPC_HANDLE message
-  ShmMsg msg;
-  shm_ring_recv(inbox_rings_[conn->remote_gpu_bdf_].ring, msg);
-  UCCL_CHECK(msg.type == ShmMsgType::IPC_HANDLE);
-  auto info = msg.info;
-
-  if (!info.is_host) {
-    // GPU receiver: open remote handle and copy into it
-    void* base = nullptr;
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    GPU_RT_CHECK(
-        gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
-    void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
-                                            info.offset);
-
-    auto copy_kind =
-        sender_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
-
-    std::vector<gpuStream_t>& dst_streams = ipc_streams_[local_gpu_idx_];
-    int num_streams = std::min(
-        dst_streams.size(),
-        size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
-    size_t chunk_size = size / num_streams;
-
-    for (int i = 0; i < num_streams; ++i) {
-      void* chunk_data = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(data) + i * chunk_size);
-      void* chunk_dst_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
-      auto copy_size =
-          i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
-                                  copy_kind, dst_streams[i]));
-    }
-
-    for (auto& stream : dst_streams) {
-      GPU_RT_CHECK(gpuStreamSynchronize(stream));
-    }
-
-    // Notify receiver completion
-    ShmMsg ack;
-    std::strncpy(ack.src_bdf, gpu_bus_id_.c_str(), sizeof(ack.src_bdf) - 1);
-    ack.src_bdf[sizeof(ack.src_bdf) - 1] = '\0';
-    ack.type = ShmMsgType::COMPLETION;
-    ack.completion = 1;
-    shm_ring_send(conn->remote_inbox_.ring, ack);
-  } else {
-    // CPU receiver, GPU sender: role reversal - sender shares its GPU handle,
-    // receiver does the copy
-    UCCL_CHECK(!sender_is_host)
-        << "send_ipc: both sender and receiver are CPU - not supported";
-
-    // Create IPC handle for our GPU buffer
-    IpcTransferInfo sender_info = {};
-    sender_info.size = size;
-    sender_info.operation = 0;
-    sender_info.is_host = false;
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&sender_info.handle, data));
-
-    void* base = nullptr;
-    size_t base_size;
-    GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
-    sender_info.offset =
-        reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
-
-    // Send our handle to the receiver
-    ShmMsg handle_msg;
-    handle_msg.type = ShmMsgType::IPC_HANDLE;
-    std::strncpy(handle_msg.src_bdf, gpu_bus_id_.c_str(),
-                 sizeof(handle_msg.src_bdf) - 1);
-    handle_msg.src_bdf[sizeof(handle_msg.src_bdf) - 1] = '\0';
-    handle_msg.info = sender_info;
-    shm_ring_send(conn->remote_inbox_.ring, handle_msg);
-
-    // Wait for receiver to complete the copy
-    ShmMsg ack;
-    shm_ring_recv(inbox_rings_[conn->remote_gpu_bdf_].ring, ack);
-    UCCL_CHECK(ack.type == ShmMsgType::COMPLETION)
-        << "Failed to receive completion notification, unexpected ack.type="
-        << static_cast<uint32_t>(ack.type);
-    UCCL_CHECK(std::string(ack.src_bdf) == conn->remote_gpu_bdf_)
-        << "Failed to receive completion notification, unexpected ack.src_bdf="
-        << ack.src_bdf;
-    UCCL_CHECK_EQ(ack.completion, 1) << "Receiver reported failure";
-  }
-
-  return true;
-}
-
-bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
-  UCCL_CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
-
-  // Get connection info
-  Conn* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[recv_ipc] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
-  bool is_host = (uccl::get_dev_idx(data) == -1);
-
-  if (!is_host) {
-    // GPU receiver: share our GPU buffer handle, sender copies into it
-    IpcTransferInfo info = {};
-    info.size = size;
-    info.operation = 1;
-    info.is_host = false;
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&info.handle, data));
-
-    void* base = nullptr;
-    size_t base_size;
-    GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
-    info.offset =
-        reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
-
-    ShmMsg msg;
-    msg.type = ShmMsgType::IPC_HANDLE;
-    std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
-    msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';
-    msg.info = info;
-    shm_ring_send(conn->remote_inbox_.ring, msg);
-
-    // Wait completion on local inbox
-    ShmMsg ack;
-    shm_ring_recv(inbox_rings_[conn->remote_gpu_bdf_].ring, ack);
-    UCCL_CHECK(ack.type == ShmMsgType::COMPLETION)
-        << "Failed to receive completion notification, unexpected ack.type="
-        << static_cast<uint32_t>(ack.type);
-    UCCL_CHECK(std::string(ack.src_bdf) == conn->remote_gpu_bdf_)
-        << "Failed to receive completion notification, unexpected ack.src_bdf="
-        << ack.src_bdf;
-    UCCL_CHECK_EQ(ack.completion, 1) << "Sender reported failure";
-  } else {
-    // CPU receiver: tell sender we are host, then receive sender's GPU handle
-    // and copy D2H ourselves (zero-copy role reversal)
-    IpcTransferInfo info = {};
-    info.size = size;
-    info.operation = 1;
-    info.is_host = true;
-
-    ShmMsg msg;
-    msg.type = ShmMsgType::IPC_HANDLE;
-    std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
-    msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';
-    msg.info = info;
-    shm_ring_send(conn->remote_inbox_.ring, msg);
-
-    // Wait for sender's GPU handle
-    ShmMsg sender_msg;
-    shm_ring_recv(inbox_rings_[conn->remote_gpu_bdf_].ring, sender_msg);
-    UCCL_CHECK(sender_msg.type == ShmMsgType::IPC_HANDLE);
-    auto sender_info = sender_msg.info;
-    UCCL_CHECK(!sender_info.is_host)
-        << "recv_ipc: both sender and receiver are CPU - not supported";
-
-    int orig_device;
-    GPU_RT_CHECK(gpuGetDevice(&orig_device));
-    auto dev_reset =
-        uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
-
-    // Open sender's GPU buffer
-    void* base = nullptr;
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, sender_info.handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    void* src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
-                                            sender_info.offset);
-
-    // Copy from sender's GPU to our CPU buffer using multiple streams
-    std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
-    int num_streams = std::min(
-        streams.size(),
-        size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
-    size_t chunk_size = size / num_streams;
-
-    for (int i = 0; i < num_streams; ++i) {
-      void* chunk_src = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
-      void* chunk_dst = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(data) + i * chunk_size);
-      auto copy_size =
-          i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
-                                  gpuMemcpyDeviceToHost, streams[i]));
-    }
-
-    for (auto& stream : streams) {
-      GPU_RT_CHECK(gpuStreamSynchronize(stream));
-    }
-
-    // Send completion to sender
-    ShmMsg ack;
-    std::strncpy(ack.src_bdf, gpu_bus_id_.c_str(), sizeof(ack.src_bdf) - 1);
-    ack.src_bdf[sizeof(ack.src_bdf) - 1] = '\0';
-    ack.type = ShmMsgType::COMPLETION;
-    ack.completion = 1;
-    shm_ring_send(conn->remote_inbox_.ring, ack);
-  }
-
-  return true;
-}
-
-bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                              uint64_t* transfer_id) {
-  // Create a task for IPC send operation
-  auto task_ptr = create_task(conn_id, 0, TaskType::SEND_IPC,
-                              const_cast<void*>(data), size);
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  // For now, we'll use the existing async infrastructure but call our IPC
-  // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-  send_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
-
-  return true;
-}
-
-bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                              uint64_t* transfer_id) {
-  // Create a task for IPC receive operation
-  auto task_ptr = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  // For now, we'll use the existing async infrastructure but call our IPC
-  // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
   }
 
   return true;
@@ -2741,28 +2199,10 @@ void Endpoint::send_proxy_thread_func() {
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
-        case TaskType::SEND_IPC:
-          send_ipc(task->conn_id, task->data, task->size);
-          break;
         case TaskType::WRITE_NET:
           write(task->conn_id, task->mr_id, task->data, task->size,
                 task->slot_item());
           break;
-        case TaskType::SEND_NET:
-          send(task->conn_id, task->mr_id, task->data, task->size);
-          break;
-        case TaskType::SENDV: {
-          TaskBatch const& batch = task->task_batch();
-          std::vector<void const*> const_data_v(
-              batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-
-          sendv(task->conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
-          break;
-        }
         case TaskType::WRITEV: {
           TaskBatch const& batch = task->task_batch();
           writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
@@ -2796,36 +2236,16 @@ void Endpoint::recv_proxy_thread_func() {
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
-        case TaskType::RECV_IPC:
-          recv_ipc(task->conn_id, task->data, task->size);
-          break;
         case TaskType::READ_NET:
           read(task->conn_id, task->mr_id, task->data, task->size,
                task->slot_item());
           break;
-        case TaskType::RECV_NET:
-          recv(task->conn_id, task->mr_id, task->data, task->size);
-          break;
-        case TaskType::RECVV: {
-          TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-
-          recvv(task->conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
-          break;
-        }
         case TaskType::READV: {
           TaskBatch const& batch = task->task_batch();
           readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
                 *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
-        case TaskType::SEND_NET:
-        case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
           UCCL_LOG(ERROR) << "Unexpected task type in receive processing: "
@@ -2955,42 +2375,6 @@ std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(uint64_t conn_id,
   task->size = 0;
   new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
   return task;
-}
-
-std::shared_ptr<UnifiedTask> Endpoint::create_sendv_task(
-    uint64_t conn_id, std::shared_ptr<std::vector<void const*>> const_data_ptr,
-    std::shared_ptr<std::vector<size_t>> size_ptr,
-    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
-  if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
-      const_data_ptr->size() != size_ptr->size() ||
-      size_ptr->size() != mr_id_ptr->size()) {
-    return nullptr;
-  }
-  size_t num_iovs = const_data_ptr->size();
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.const_data_ptr = std::move(const_data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
-}
-
-std::shared_ptr<UnifiedTask> Endpoint::create_recvv_task(
-    uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
-    std::vector<uint64_t>&& mr_id_v) {
-  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
-    return nullptr;
-  }
-  size_t num_iovs = data_v.size();
-  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.data_ptr = std::move(data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
 }
 
 std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
