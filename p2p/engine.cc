@@ -125,6 +125,14 @@ static inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
+static inline bool raw_one_sided_batch_eligible(
+    std::vector<size_t> const& size_v, size_t num_iovs) {
+  for (size_t i = 0; i < num_iovs; ++i) {
+    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) return false;
+  }
+  return true;
+}
+
 // ShmChannel helper function
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
@@ -790,48 +798,10 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
-  bool raw_batch_eligible = true;
-  for (size_t i = 0; i < num_iovs; ++i) {
-    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) {
-      raw_batch_eligible = false;
-      break;
-    }
-  }
-
-  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
-  // Post raw one-sided WRs directly by channel and skip per-iov request-object
-  // construction.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
-      raw_batch_eligible &&
+  if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
       send_group->can_use_raw_one_sided_batch(SendType::Read)) {
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    int64_t wr_ids[kMaxInflightOps] = {};
-    bool done[kMaxInflightOps] = {false};
-
-    for (size_t i = 0; i < num_iovs; ++i) {
-      ops[i].local_addr = dst_v[i];
-      ops[i].size = size_v[i];
-      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
-      ops[i].slot_item = &slot_item_v[i];
-    }
-    if (!send_group->post_write_or_read_batch(SendType::Read, ops.data(),
-                                              num_iovs, wr_ids)) {
-      return false;
-    }
-
-    size_t num_done = 0;
-    while (num_done < num_iovs) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-      uccl_drive_send(ep_);
-      for (size_t i = 0; i < num_iovs; ++i) {
-        if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
-          done[i] = true;
-          num_done++;
-        }
-      }
-    }
-    return true;
+    return run_raw_one_sided_pipeline(send_group, SendType::Read, mhandle_v,
+                                      dst_v, size_v, slot_item_v, num_iovs);
   }
 
   UcclRequest ureq[kMaxInflightOps] = {};
@@ -850,8 +820,13 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       UCCL_DCHECK(slot < kMaxInflightOps);
 
       auto rc =
-          uccl_read_async(ep_, conn, mhandle_v[next_iov], dst_v[next_iov],
-                          size_v[next_iov], slot_item_v[next_iov], &ureq[slot]);
+          send_group != nullptr
+              ? uccl_read_async_on_group(send_group, conn, mhandle_v[next_iov],
+                                         dst_v[next_iov], size_v[next_iov],
+                                         slot_item_v[next_iov], &ureq[slot])
+              : uccl_read_async(ep_, conn, mhandle_v[next_iov], dst_v[next_iov],
+                                size_v[next_iov], slot_item_v[next_iov],
+                                &ureq[slot]);
       if (rc == -1) break;
       active[slot] = true;
       next_iov++;
@@ -914,6 +889,85 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                                nullptr) != 1) {
   }
   recv_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
+
+  return true;
+}
+
+bool Endpoint::run_raw_one_sided_pipeline(
+    SendConnection* send_group, SendType send_type,
+    std::vector<P2PMhandle*> const& mhandle_v,
+    std::vector<void*> const& local_addr_v, std::vector<size_t> const& size_v,
+    std::vector<FifoItem> const& slot_item_v, size_t num_iovs) {
+  struct PendingRawWait {
+    SendConnection::RawBatchWait wait;
+    bool active = false;
+  };
+
+  std::array<PendingRawWait, kMaxInflightOps> pending_waits{};
+  size_t next_iov = 0;
+  size_t num_completed = 0;
+  size_t num_inflight = 0;
+
+  auto post_raw_window = [&]() -> bool {
+    if (next_iov >= num_iovs || num_inflight >= kMaxInflightOps) return true;
+
+    size_t const batch_iovs =
+        std::min<size_t>(kMaxInflightOps - num_inflight, num_iovs - next_iov);
+    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
+    int64_t wr_ids[kMaxInflightOps] = {};
+    std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
+    size_t num_waits = 0;
+
+    for (size_t i = 0; i < batch_iovs; ++i) {
+      size_t const iov = next_iov + i;
+      ops[i].local_addr = local_addr_v[iov];
+      ops[i].size = size_v[iov];
+      ops[i].local_mr_array = &mhandle_v[iov]->mr_array;
+      ops[i].slot_item = &slot_item_v[iov];
+    }
+
+    if (!send_group->post_write_or_read_batch(send_type, ops.data(), batch_iovs,
+                                          wr_ids, waits.data(), &num_waits)) {
+      return false;
+    }
+    if (unlikely(num_waits == 0)) return false;
+
+    for (size_t i = 0; i < num_waits; ++i) {
+      bool inserted = false;
+      for (auto& pending : pending_waits) {
+        if (pending.active) continue;
+        pending.wait = waits[i];
+        pending.active = true;
+        inserted = true;
+        break;
+      }
+      if (unlikely(!inserted)) return false;
+    }
+
+    next_iov += batch_iovs;
+    num_inflight += batch_iovs;
+    return true;
+  };
+
+  while (num_completed < num_iovs) {
+    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+      if (!post_raw_window()) return false;
+    }
+
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    uccl_drive_send(ep_);
+
+    for (auto& pending : pending_waits) {
+      if (!pending.active) continue;
+      if (!uccl_check_wr_fast(send_group, pending.wait.wr_id)) continue;
+
+      pending.active = false;
+      num_completed += pending.wait.iov_count;
+      UCCL_DCHECK(num_inflight >= pending.wait.iov_count);
+      num_inflight -= pending.wait.iov_count;
+      pending.wait = {};
+    }
+  }
 
   return true;
 }
@@ -1035,48 +1089,10 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
-  bool raw_batch_eligible = true;
-  for (size_t i = 0; i < num_iovs; ++i) {
-    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) {
-      raw_batch_eligible = false;
-      break;
-    }
-  }
-
-  // Fastest path: RDMA, fits in one inflight window, compression/CC disabled.
-  // Post raw one-sided WRs directly by channel and skip per-iov request-object
-  // construction.
-  if (send_group != nullptr && num_iovs <= kMaxInflightOps &&
-      raw_batch_eligible &&
+  if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
       send_group->can_use_raw_one_sided_batch(SendType::Write)) {
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    int64_t wr_ids[kMaxInflightOps] = {};
-    bool done[kMaxInflightOps] = {false};
-
-    for (size_t i = 0; i < num_iovs; ++i) {
-      ops[i].local_addr = src_v[i];
-      ops[i].size = size_v[i];
-      ops[i].local_mr_array = &mhandle_v[i]->mr_array;
-      ops[i].slot_item = &slot_item_v[i];
-    }
-    if (!send_group->post_write_or_read_batch(SendType::Write, ops.data(),
-                                              num_iovs, wr_ids)) {
-      return false;
-    }
-
-    size_t num_done = 0;
-    while (num_done < num_iovs) {
-      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-      uccl_drive_send(ep_);
-      for (size_t i = 0; i < num_iovs; ++i) {
-        if (done[i]) continue;
-        if (uccl_check_wr_fast(send_group, wr_ids[i])) {
-          done[i] = true;
-          num_done++;
-        }
-      }
-    }
-    return true;
+    return run_raw_one_sided_pipeline(send_group, SendType::Write, mhandle_v,
+                                      src_v, size_v, slot_item_v, num_iovs);
   }
 
   UcclRequest ureq[kMaxInflightOps] = {};
@@ -1094,7 +1110,12 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       }
       UCCL_DCHECK(slot < kMaxInflightOps);
 
-      auto rc = uccl_write_async(ep_, conn, mhandle_v[next_iov],
+      auto rc =
+          send_group != nullptr
+              ? uccl_write_async_on_group(send_group, conn, mhandle_v[next_iov],
+                                          src_v[next_iov], size_v[next_iov],
+                                          slot_item_v[next_iov], &ureq[slot])
+              : uccl_write_async(ep_, conn, mhandle_v[next_iov],
                                  src_v[next_iov], size_v[next_iov],
                                  slot_item_v[next_iov], &ureq[slot]);
       if (rc == -1) break;

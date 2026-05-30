@@ -67,6 +67,11 @@ class SendConnection : public RDMAConnection {
     FifoItem const* slot_item = nullptr;
   };
 
+  struct RawBatchWait {
+    int64_t wr_id = -1;
+    size_t iov_count = 0;
+  };
+
   SendConnection(int numa_node, bool auto_start_polling = true,
                  double link_bandwidth_bps = 400.0 * 1e9 / 8.0);
 
@@ -113,7 +118,9 @@ class SendConnection : public RDMAConnection {
   bool can_use_raw_one_sided_batch(SendType send_type);
 
   bool post_write_or_read_batch(SendType send_type, OneSidedBatchOp const* ops,
-                                size_t num_ops, int64_t* wr_ids);
+                            size_t num_ops, int64_t* wr_ids,
+                            RawBatchWait* waits = nullptr,
+                            size_t* num_waits = nullptr);
 
   void set_remote_decompress_buf(RemoteMemInfo const& m);
 

@@ -318,15 +318,19 @@ bool SendConnection::can_use_raw_one_sided_batch(SendType send_type) {
 }
 
 bool SendConnection::post_write_or_read_batch(SendType send_type,
-                                              OneSidedBatchOp const* ops,
-                                              size_t num_ops, int64_t* wr_ids) {
+                                          OneSidedBatchOp const* ops,
+                                          size_t num_ops, int64_t* wr_ids,
+                                          RawBatchWait* waits,
+                                          size_t* num_waits) {
+  if (num_waits != nullptr) *num_waits = 0;
   if (unlikely(send_type != SendType::Write && send_type != SendType::Read)) {
     UCCL_LOG(ERROR) << "SendConnection::post_write_or_read_batch - invalid "
                        "send_type";
     return false;
   }
   if (unlikely(!can_use_raw_one_sided_batch(send_type))) return false;
-  if (unlikely((num_ops > 0 && ops == nullptr) || wr_ids == nullptr)) {
+  if (unlikely((num_ops > 0 && ops == nullptr) || wr_ids == nullptr ||
+               (waits != nullptr && num_waits == nullptr))) {
     UCCL_LOG(ERROR) << "SendConnection::post_write_or_read_batch - null input";
     return false;
   }
@@ -431,6 +435,7 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
     channel_batches[channel_idx].push_back(raw);
   }
 
+  bool const wait_all_wr_ids = is_efa_transport();
   for (size_t i = 0; i < num_channels; ++i) {
     if (channel_batches[i].empty()) continue;
     if (unlikely(channel_ptrs[i] == nullptr ||
@@ -441,6 +446,20 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
                       << "; raw one-sided batch post failure is "
                          "unrecoverable after tracker wr_ids are allocated";
       return false;
+    }
+    if (waits != nullptr) {
+      if (wait_all_wr_ids) {
+        for (auto const& raw : channel_batches[i]) {
+          size_t const wait_idx = (*num_waits)++;
+          waits[wait_idx].wr_id = static_cast<int64_t>(raw.wr_id);
+          waits[wait_idx].iov_count = 1;
+        }
+      } else {
+        size_t const wait_idx = (*num_waits)++;
+        waits[wait_idx].wr_id =
+            static_cast<int64_t>(channel_batches[i].back().wr_id);
+        waits[wait_idx].iov_count = channel_batches[i].size();
+      }
     }
   }
   return true;
