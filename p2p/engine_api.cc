@@ -29,7 +29,7 @@ struct XferHandle {
   uint64_t transfer_id;
 };
 
-bool IsHostPtr(void const* ptr) {
+bool is_host_ptr(void const* ptr) {
   return uccl::get_dev_idx(const_cast<void*>(ptr)) == -1;
 }
 
@@ -354,7 +354,7 @@ NB_MODULE(p2p, m) {
                   assert(mhandle != nullptr);
                   xfer_desc.mr_id = mr_id;
                   for (size_t j = 0; j < kNICContextNumber; j++) {
-                    auto mr = mhandle->mr_array.getKeyByContextID(j);
+                    auto mr = mhandle->mr_array.get_key_by_context_id(j);
                     assert(mr != nullptr);
                     xfer_desc.lkeys.push_back(mr->lkey);
                     xfer_desc.rkeys.push_back(mr->rkey);
@@ -477,7 +477,7 @@ NB_MODULE(p2p, m) {
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
-                if (IsHostPtr(ldesc.addr) && info.is_host) {
+                if (is_host_ptr(ldesc.addr) && info.is_host) {
                   use_loopback_rdma = true;
                   break;
                 }
@@ -674,148 +674,6 @@ NB_MODULE(p2p, m) {
             return ok;
           },
           "Deregister a memory region", nb::arg("mr_id"))
-      .def(
-          "send",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send(conn_id, mr_id,
-                                  reinterpret_cast<void const*>(ptr), size);
-            }
-            return success;
-          },
-          "Send a data buffer, optionally using metadata (serialized FifoItem)",
-          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Receive a key-value buffer", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "send_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send_async(conn_id, mr_id,
-                                        reinterpret_cast<void const*>(ptr),
-                                        size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "sendv",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void const*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void const*>(ptr));
-            }
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.sendv(conn_id, mr_id_v, data_v, size_v, num_iovs);
-            }
-            return success;
-          },
-          "Send multiple data buffers", nb::arg("conn_id"), nb::arg("mr_id_v"),
-          nb::arg("data_ptr_v"), nb::arg("size_v"), nb::arg("num_iovs"))
-      .def(
-          "recvv",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void*>(ptr));
-            }
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
-            }
-            return success;
-          },
-          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
-      .def(
-          "sendv_async",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void const*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void const*>(ptr));
-            }
-            uint64_t transfer_id;
-            bool success = self.sendv_async(conn_id, mr_id_v, data_v, size_v,
-                                            num_iovs, &transfer_id);
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
-      .def(
-          "recvv_async",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void*>(ptr));
-            }
-            uint64_t transfer_id;
-            bool success = self.recvv_async(conn_id, mr_id_v, data_v, size_v,
-                                            num_iovs, &transfer_id);
-
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
       .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
@@ -1164,67 +1022,6 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, remote_gpu_bdf, conn_id);
           },
           "Accept an incoming local connection via shared memory")
-      .def(
-          "send_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "send_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send_ipc_async(conn_id,
-                                            reinterpret_cast<void const*>(ptr),
-                                            size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously via IPC using CUDA/HIP memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.recv_ipc_async(
-                  conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously via IPC using CUDA/HIP memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "write_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,

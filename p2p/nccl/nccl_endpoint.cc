@@ -688,29 +688,6 @@ void NCCLEndpoint::uccl_deregmr(NcclMhandle* mhandle) {
 
 void NCCLEndpoint::uccl_deregmr(NcclMRArray const& mr_array) { (void)mr_array; }
 
-int NCCLEndpoint::uccl_send_async(NcclFlow* flow, NcclMhandle* mh,
-                                  void const* data, size_t size,
-                                  NcclRequest* ureq) {
-  // Two-sided send: enqueue ncclSend on the send communicator.
-  (void)mh;
-  if (!flow || !ureq) return -1;
-  Conn* conn = reinterpret_cast<Conn*>(flow);
-  int comm_index = comm_index_for_send_(*conn);
-  return send_internal_(*conn, data, size, comm_index, ureq) ? 0 : -1;
-}
-
-int NCCLEndpoint::uccl_recv_async(NcclFlow* flow, NcclMhandle** mhandles,
-                                  void** data, int* sizes, int n,
-                                  NcclRequest* ureq) {
-  // Two-sided recv: enqueue ncclRecv on the recv communicator.
-  (void)mhandles;
-  if (!flow || !ureq || !data || !sizes || n != 1) return -1;
-  Conn* conn = reinterpret_cast<Conn*>(flow);
-  int comm_index = comm_index_for_recv_(*conn);
-  size_t size = static_cast<size_t>(sizes[0]);
-  return recv_internal_(*conn, data[0], size, comm_index, ureq) ? 0 : -1;
-}
-
 int NCCLEndpoint::uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst,
                                   size_t size, NcclFifoItem const& slot_item,
                                   NcclRequest* ureq) {

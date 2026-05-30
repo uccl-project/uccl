@@ -26,7 +26,7 @@ RdmaContext::RdmaContext(std::shared_ptr<RdmaDevice> dev, uint64_t context_id)
   pd_.reset(pd, [](ibv_pd* p) { ibv_dealloc_pd(p); });
 }
 
-struct ibv_context* RdmaContext::getCtx() const {
+struct ibv_context* RdmaContext::get_ctx() const {
   return ctx_.get();
 }
 
@@ -34,7 +34,7 @@ struct ibv_context* RdmaContext::ctx() const {
   return ctx_.get();
 }
 
-struct ibv_pd* RdmaContext::getPD() const {
+struct ibv_pd* RdmaContext::get_pd() const {
   return pd_.get();
 }
 
@@ -42,13 +42,15 @@ struct ibv_pd* RdmaContext::pd() const {
   return pd_.get();
 }
 
-uint32_t RdmaContext::getVendorID() const { return vendor_id_; }
+uint32_t RdmaContext::get_vendor_id() const { return vendor_id_; }
 
-uint8_t RdmaContext::getMaxQpRdAtom() const { return max_qp_rd_atom_; }
+uint8_t RdmaContext::get_max_qp_rd_atom() const { return max_qp_rd_atom_; }
 
-uint8_t RdmaContext::getMaxQpInitRdAtom() const { return max_qp_init_rd_atom_; }
+uint8_t RdmaContext::get_max_qp_init_rd_atom() const {
+  return max_qp_init_rd_atom_;
+}
 
-void RdmaContext::getGID(int gid_index, union ibv_gid* gid, int port) const {
+void RdmaContext::get_gid(int gid_index, union ibv_gid* gid, int port) const {
   if (ibv_query_gid(ctx_.get(), port, gid_index, gid)) {
     perror("ibv_query_gid");
     throw std::runtime_error("query_gid failed");
@@ -57,13 +59,13 @@ void RdmaContext::getGID(int gid_index, union ibv_gid* gid, int port) const {
   UCCL_LOG(INFO, UCCL_RDMA) << "GID[" << gid_index << "]: " << inet_ntoa(ip);
 }
 
-union ibv_gid RdmaContext::queryGid(int gid_index, int port) const {
+union ibv_gid RdmaContext::query_gid(int gid_index, int port) const {
   union ibv_gid gid {};
-  getGID(gid_index, &gid, port);
+  get_gid(gid_index, &gid, port);
   return gid;
 }
 
-union ibv_gid RdmaContext::detectGid(int gid_index, int port) const {
+union ibv_gid RdmaContext::detect_gid(int gid_index, int port) const {
   struct ibv_port_attr port_attr;
 
   char const* env = getenv("UCCL_P2P_RDMA_GID_INDEX");
@@ -72,7 +74,7 @@ union ibv_gid RdmaContext::detectGid(int gid_index, int port) const {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "Using GID index from environment: " << env_gid_index;
     gid_index_ = env_gid_index;
-    return queryGid(gid_index_);
+    return query_gid(gid_index_);
   }
 
   if (ibv_query_port(ctx_.get(), port, &port_attr)) {
@@ -162,22 +164,22 @@ union ibv_gid RdmaContext::detectGid(int gid_index, int port) const {
   UCCL_LOG(INFO, UCCL_RDMA)
       << "Auto-detect GID failed, using default " << gid_index;
   gid_index_ = gid_index;
-  return queryGid(gid_index_, port);
+  return query_gid(gid_index_, port);
 }
 
-int RdmaContext::getGidIndex(int gid_index, int port) const {
+int RdmaContext::get_gid_index(int gid_index, int port) const {
   union ibv_gid gid;
   // Return cached value if available
   if (gid_index_ >= 0) {
     return gid_index_;
   }
 
-  gid = detectGid(gid_index, port);
+  gid = detect_gid(gid_index, port);
 
   return gid_index_;
 }
 
-uint16_t RdmaContext::queryLid(int port) const {
+uint16_t RdmaContext::query_lid(int port) const {
   struct ibv_port_attr port_attr;
   int const query_port_rc = ibv_query_port(ctx_.get(), port, &port_attr);
   if (unlikely(query_port_rc != 0)) {
@@ -189,7 +191,8 @@ uint16_t RdmaContext::queryLid(int port) const {
   return port_attr.lid;
 }
 
-struct ibv_ah* RdmaContext::createAH(union ibv_gid remote_gid, int port) const {
+struct ibv_ah* RdmaContext::create_ah(union ibv_gid remote_gid,
+                                      int port) const {
   struct ibv_ah_attr attr = {};
   attr.is_global = 1;
   attr.port_num = port;
@@ -199,7 +202,7 @@ struct ibv_ah* RdmaContext::createAH(union ibv_gid remote_gid, int port) const {
   return ah;
 }
 
-bool RdmaContext::isGpuPointer(void* ptr) {
+bool RdmaContext::is_gpu_pointer(void* ptr) {
   gpuPointerAttribute_t attrs = {};
   gpuError_t err = gpuPointerGetAttributes(&attrs, ptr);
   if (err != gpuSuccess) {
@@ -209,7 +212,7 @@ bool RdmaContext::isGpuPointer(void* ptr) {
   return (attrs.type == gpuMemoryTypeDevice);
 }
 
-struct ibv_mr* RdmaContext::regMemGpuDmabuf(void* addr, size_t size) const {
+struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
   // GPU page granularity for DMA-BUF export (2 MiB on modern GPUs).
   static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
 
@@ -296,12 +299,12 @@ struct ibv_mr* RdmaContext::regMemGpuDmabuf(void* addr, size_t size) const {
   return mr;
 }
 
-struct ibv_mr* RdmaContext::regMem(void* addr, size_t size) const {
-  return regMemImpl(addr, size, getRegistrationMode(addr).use_dmabuf);
+struct ibv_mr* RdmaContext::reg_mem(void* addr, size_t size) const {
+  return reg_mem_impl(addr, size, get_registration_mode(addr).use_dmabuf);
 }
 
-MrCacheEntry* RdmaContext::acquireCachedMr(void* addr, size_t size) {
-  RegistrationMode mode = getRegistrationMode(addr);
+MrCacheEntry* RdmaContext::acquire_cached_mr(void* addr, size_t size) {
+  RegistrationMode mode = get_registration_mode(addr);
   MrCacheKey key{reinterpret_cast<uintptr_t>(addr), size, mode.is_gpu,
                  mode.use_dmabuf};
 
@@ -312,7 +315,7 @@ MrCacheEntry* RdmaContext::acquireCachedMr(void* addr, size_t size) {
         cached_key.use_dmabuf != key.use_dmabuf) {
       continue;
     }
-    if (!containsRange(cached_key.addr, cached_key.size, key.addr, key.size)) {
+    if (!contains_range(cached_key.addr, cached_key.size, key.addr, key.size)) {
       continue;
     }
 
@@ -325,7 +328,7 @@ MrCacheEntry* RdmaContext::acquireCachedMr(void* addr, size_t size) {
     return best_match;
   }
 
-  struct ibv_mr* mr = regMemImpl(addr, size, mode.use_dmabuf);
+  struct ibv_mr* mr = reg_mem_impl(addr, size, mode.use_dmabuf);
   if (!mr) {
     return nullptr;
   }
@@ -340,7 +343,7 @@ MrCacheEntry* RdmaContext::acquireCachedMr(void* addr, size_t size) {
   return entry_ptr;
 }
 
-void RdmaContext::releaseCachedMr(MrCacheEntry* entry) {
+void RdmaContext::release_cached_mr(MrCacheEntry* entry) {
   if (!entry) {
     return;
   }
@@ -360,18 +363,18 @@ void RdmaContext::releaseCachedMr(MrCacheEntry* entry) {
   }
 
   if (mr_to_dereg) {
-    deregMem(mr_to_dereg);
+    dereg_mem(mr_to_dereg);
   }
 }
 
-void RdmaContext::deregMem(struct ibv_mr* mr) {
+void RdmaContext::dereg_mem(struct ibv_mr* mr) {
   if (mr) ibv_dereg_mr(mr);
 }
 
-const uint64_t RdmaContext::getContextID() const { return context_id_; }
+const uint64_t RdmaContext::get_context_id() const { return context_id_; }
 
-bool RdmaContext::containsRange(uintptr_t outer_addr, size_t outer_size,
-                                uintptr_t inner_addr, size_t inner_size) {
+bool RdmaContext::contains_range(uintptr_t outer_addr, size_t outer_size,
+                                 uintptr_t inner_addr, size_t inner_size) {
   if (inner_addr < outer_addr) {
     return false;
   }
@@ -384,9 +387,9 @@ bool RdmaContext::containsRange(uintptr_t outer_addr, size_t outer_size,
          inner_end <= outer_end;
 }
 
-RdmaContext::RegistrationMode RdmaContext::getRegistrationMode(
+RdmaContext::RegistrationMode RdmaContext::get_registration_mode(
     void* addr) const {
-  bool is_gpu = isGpuPointer(addr);
+  bool is_gpu = is_gpu_pointer(addr);
   // Intel RDMA NICs use DMA-BUF for GPU memory registration.
   bool use_dmabuf = (is_intel_vendor(vendor_id_) && is_gpu);
   if (use_dmabuf) {
@@ -397,10 +400,10 @@ RdmaContext::RegistrationMode RdmaContext::getRegistrationMode(
   return {is_gpu, use_dmabuf};
 }
 
-struct ibv_mr* RdmaContext::regMemImpl(void* addr, size_t size,
-                                       bool use_dmabuf) const {
+struct ibv_mr* RdmaContext::reg_mem_impl(void* addr, size_t size,
+                                         bool use_dmabuf) const {
   if (use_dmabuf) {
-    return regMemGpuDmabuf(addr, size);
+    return reg_mem_gpu_dmabuf(addr, size);
   }
 
   int access_flags =

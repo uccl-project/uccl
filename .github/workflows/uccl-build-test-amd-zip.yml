@@ -1,22 +1,22 @@
-name: UCCL Build & Test (AMD)
+name: UCCL Build & Test (AMD, DietGPU)
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
   pull_request:
     branches:
       - main
     types: [labeled, synchronize, reopened]
 
+# Share the concurrency group with uccl-build-test-amd.yml so only one AMD
+# workflow uses the hosts at a time.
 concurrency:
   group: amd-uccl-build-test
   cancel-in-progress: false
 
 jobs:
-  build-and-test-on-amd:
+  build-with-dietgpu-on-amd:
     if: >
-      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
     runs-on: ubuntu-latest
@@ -90,7 +90,7 @@ jobs:
             -e "ssh -o BatchMode=yes" \
             ./ amd0:~/uccl-ci-sandbox/
 
-      - name: Build and install
+      - name: Build and install (USE_DIETGPU=1)
         shell: bash
         run: |
           set -euo pipefail
@@ -100,7 +100,7 @@ jobs:
             bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
-            ./build.sh roc7 all --install 2>&1 | tee build.log
+            USE_DIETGPU=1 ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
 
           if [ "$SHARED_NFS" != "true" ]; then
@@ -124,12 +124,12 @@ jobs:
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             export PYTHONUNBUFFERED=1
-            torchrun --nnodes=2 --nproc_per_node=1 \
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host0.log
             sleep 1
-            torchrun --nnodes=2 --nproc_per_node=1 \
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
@@ -146,12 +146,12 @@ jobs:
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             export PYTHONUNBUFFERED=1
-            torchrun --nnodes=2 --nproc_per_node=1 \
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host1.log
             sleep 1
-            torchrun --nnodes=2 --nproc_per_node=1 \
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
               benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
@@ -169,134 +169,6 @@ jobs:
           fi
           wait $PID0 $PID1
           exit $?
-
-      - name: Run EP high-throughput test
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          set -uo pipefail
-
-          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
-            set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
-            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
-            source ~/uccl-ci-sandbox/.venv/bin/activate
-            export PYTHONUNBUFFERED=1
-            cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host0.log
-          EOF
-          PID0=$!
-
-          sleep 2
-
-          ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
-            set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
-            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
-            source ~/uccl-ci-sandbox/.venv/bin/activate
-            export PYTHONUNBUFFERED=1
-            cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host1.log
-          EOF
-          PID1=$!
-
-          wait -n $PID0 $PID1
-          exitcode=$?
-          if [ $exitcode -ne 0 ]; then
-            kill $PID0 $PID1 2>/dev/null || true
-            sleep 1
-            kill -9 $PID0 $PID1 2>/dev/null || true
-            wait $PID0 $PID1 2>/dev/null || true
-            exit $exitcode
-          fi
-          wait $PID0 $PID1
-          exit $?
-
-      - name: Run EP low-latency test
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          set -uo pipefail
-
-          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
-            set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
-            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
-            source ~/uccl-ci-sandbox/.venv/bin/activate
-            export PYTHONUNBUFFERED=1
-            cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host0.log || true
-          EOF
-          PID0=$!
-
-          sleep 2
-
-          ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
-            set -euo pipefail
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
-            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
-            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
-            source ~/uccl-ci-sandbox/.venv/bin/activate
-            export PYTHONUNBUFFERED=1
-            cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host1.log || true
-          EOF
-          PID1=$!
-
-          count_ep_ll_done() {
-            local c0 c1
-            c0=$(ssh -o BatchMode=yes amd0 "grep -o 'Dispatch bandwidth:' ~/uccl-ci-sandbox/ep-ll-host0.log 2>/dev/null | wc -l | tr -d ' ' || true")
-            c1=$(ssh -o BatchMode=yes amd1 "grep -o 'Dispatch bandwidth:' ~/uccl-ci-sandbox/ep-ll-host1.log 2>/dev/null | wc -l | tr -d ' ' || true")
-            c0=${c0:-0}
-            c1=${c1:-0}
-            echo $((c0 + c1))
-          }
-
-          EP_LL_TIMEOUT_SEC=45
-          start_ts=$(date +%s)
-
-          while true; do
-            done_count=$(count_ep_ll_done)
-            if [ "$done_count" -ge 16 ]; then
-              echo "EP low-latency reached ${done_count}/16 Dispatch bandwidth lines; stopping runners"
-              kill $PID0 $PID1 2>/dev/null || true
-              break
-            fi
-
-            running=0
-            kill -0 $PID0 2>/dev/null && running=1
-            kill -0 $PID1 2>/dev/null && running=1
-            if [ "$running" -eq 0 ]; then
-              break
-            fi
-
-            now_ts=$(date +%s)
-            if [ $((now_ts - start_ts)) -ge "$EP_LL_TIMEOUT_SEC" ]; then
-              echo "EP low-latency timed out after ${EP_LL_TIMEOUT_SEC}s; killing runners"
-              kill $PID0 $PID1 2>/dev/null || true
-              sleep 1
-              kill -9 $PID0 $PID1 2>/dev/null || true
-              break
-            fi
-
-            sleep 2
-          done
-
-          wait $PID0 2>/dev/null || true
-          exit0=$?
-          wait $PID1 2>/dev/null || true
-          exit1=$?
-
-          done_count=$(count_ep_ll_done)
-          echo "EP low-latency exit codes: host0=${exit0} host1=${exit1}; found ${done_count}/16 Dispatch bandwidth lines"
-          if [ "$done_count" -ge 16 ]; then
-            exit 0
-          fi
-          echo "EP low-latency did not print all Dispatch bandwidth lines"
-          exit 1
 
       - name: Kill stale CI GPU processes
         if: always()
@@ -317,7 +189,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          for log in build ep-ll-host0 ep-ll-host1 ep-ht-host0 ep-ht-host1 p2p-host0 p2p-host1; do
+          for log in build p2p-host0 p2p-host1; do
             scp -o BatchMode=yes amd0:~/uccl-ci-sandbox/${log}.log ./amd0-${log}.log 2>/dev/null || true
             scp -o BatchMode=yes amd1:~/uccl-ci-sandbox/${log}.log ./amd1-${log}.log 2>/dev/null || true
           done
@@ -326,7 +198,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: amd-build-and-test-logs
+          name: amd-build-dietgpu-logs
           path: |
             amd0-*.log
             amd1-*.log

@@ -13,16 +13,16 @@ class BitmapPacketTracker {
  public:
   BitmapPacketTracker(uint32_t initial_seq = 0);
 
-  uint32_t sendPacket();
+  uint32_t send_packet();
 
   void acknowledge(uint32_t seq_num);
 
-  bool isAcknowledged(uint32_t seq_num) const;
+  bool is_acknowledged(uint32_t seq_num) const;
 
-  std::vector<uint32_t> getUnacknowledgedPackets() const;
+  std::vector<uint32_t> get_unacknowledged_packets() const;
 
  private:
-  void slideWindow();
+  void slide_window();
 };
 
 class AtomicBitmapPacketTracker {
@@ -36,25 +36,25 @@ class AtomicBitmapPacketTracker {
  public:
   AtomicBitmapPacketTracker(uint32_t initial_seq = 0);
 
-  uint32_t sendPacket(size_t packet_size = 0);
+  uint32_t send_packet(size_t packet_size = 0);
 
   void acknowledge(uint32_t seq_num);
 
-  bool isAcknowledged(uint32_t seq_num) const;
+  bool is_acknowledged(uint32_t seq_num) const;
 
-  std::vector<uint32_t> getUnacknowledgedPackets() const;
+  std::vector<uint32_t> get_unacknowledged_packets() const;
 
   // Get the number of inflight (unacknowledged) packets
-  uint32_t getInflightCount() const;
+  uint32_t get_inflight_count() const;
 
   // Get the size of a specific packet
-  size_t getPacketSize(uint32_t seq_num) const;
+  size_t get_packet_size(uint32_t seq_num) const;
 
   // Get the total bytes of inflight (unacknowledged) packets
-  size_t getTotalInflightBytes() const;
+  size_t get_total_inflight_bytes() const;
 
  private:
-  void slideWindow();
+  void slide_window();
 };
 
 class AtomicBitmapPacketTrackerMultiAck {
@@ -80,28 +80,28 @@ class AtomicBitmapPacketTrackerMultiAck {
   AtomicBitmapPacketTrackerMultiAck(uint32_t initial_seq = 0);
 
   // Send a packet with expected number of ACKs required
-  uint32_t sendPacket(size_t packet_size = 0, uint32_t expected_ack = 1);
+  uint32_t send_packet(size_t packet_size = 0, uint32_t expected_ack = 1);
 
   // Acknowledge one “sub-ACK”
   void acknowledge(uint32_t seq_num);
 
-  bool updateExpectedAckCount(uint32_t seq_num, uint32_t new_expected_ack);
+  bool update_expected_ack_count(uint32_t seq_num, uint32_t new_expected_ack);
 
   // Query if fully acked
-  bool isAcknowledged(uint32_t seq_num) const;
+  bool is_acknowledged(uint32_t seq_num) const;
 
-  std::vector<uint32_t> getUnacknowledgedPackets() const;
+  std::vector<uint32_t> get_unacknowledged_packets() const;
 
-  uint32_t getInflightCount() const;
+  uint32_t get_inflight_count() const;
 
-  size_t getPacketSize(uint32_t seq_num) const;
+  size_t get_packet_size(uint32_t seq_num) const;
 
-  size_t getTotalInflightBytes() const;
+  size_t get_total_inflight_bytes() const;
 
   // Update packet size for a seq_num that was registered with size 0.
   // Used when the actual size is known later (e.g. after popping from queue).
-  void updatePacketSize(uint32_t seq_num, size_t packet_size);
+  void update_packet_size(uint32_t seq_num, size_t packet_size);
 
  private:
-  void slideWindow();
+  void slide_window();
 };

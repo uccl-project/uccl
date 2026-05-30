@@ -5,10 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 
-size_t getMinCompressBytesFromEnv();
+size_t get_min_compress_bytes_from_env();
 extern size_t const& kMinCompressBytes;
 
-size_t getCompressBufferBytesFromEnv();
+size_t get_compress_buffer_bytes_from_env();
 extern size_t const& kCompressBufferSize;
 
 enum class CompressStrategy {
@@ -17,7 +17,7 @@ enum class CompressStrategy {
   kSplitEncode,  // split + encode (default)
 };
 
-CompressStrategy getCompressStrategyFromEnv();
+CompressStrategy get_compress_strategy_from_env();
 
 #if defined USE_DIETGPU
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
@@ -40,7 +40,7 @@ FloatType from_dietgpu(dietgpu::FloatType t);
 
 /**
  * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
- * FloatType-based constructor and getFloatType() accessor, hiding the
+ * FloatType-based constructor and get_float_type() accessor, hiding the
  * internal dietgpu::FloatType from external callers.
  */
 struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext,
@@ -57,8 +57,8 @@ struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext,
 
   ~FloatCompressCtx() override;
 
-  FloatType getFloatType() const override;
-  size_t getMaxSize() const override;
+  FloatType get_float_type() const override;
+  size_t get_max_size() const override;
 };
 
 #else
@@ -80,7 +80,7 @@ struct DummyDevAlloc {
  */
 struct DummyCompressCtx : public CompressionContext {
   FloatType float_type = FloatType::kUndefined;
-  size_t maxSize = 0;
+  size_t max_size = 0;
   DummyDevAlloc params_dev;
   DummyDevAlloc histogram_dev;
   DummyDevAlloc toComp_dev;
@@ -88,13 +88,13 @@ struct DummyCompressCtx : public CompressionContext {
   DummyCompressCtx();
   explicit DummyCompressCtx(FloatType ft);
 
-  FloatType getFloatType() const override;
-  size_t getMaxSize() const override;
+  FloatType get_float_type() const override;
+  size_t get_max_size() const override;
 };
 
 #endif
 
-CompressCtx makeCompressCtx(FloatType ft);
+CompressCtx make_compress_ctx(FloatType ft);
 
 /**
  * @brief Abstract interface for compressor backends.
@@ -111,13 +111,13 @@ class ICompressorBackend {
    * @brief Get the compression buffer.
    * @return Shared pointer to the compression buffer RegMemBlock.
    */
-  virtual std::shared_ptr<RegMemBlock> getCompressBuffer() const = 0;
+  virtual std::shared_ptr<RegMemBlock> get_compress_buffer() const = 0;
 
   /**
    * @brief Get the decompression buffer.
    * @return Shared pointer to the decompression buffer RegMemBlock.
    */
-  virtual std::shared_ptr<RegMemBlock> getDecompressBuffer() const = 0;
+  virtual std::shared_ptr<RegMemBlock> get_decompress_buffer() const = 0;
 
   /**
    * @brief Compress a send request's data.
@@ -125,13 +125,6 @@ class ICompressorBackend {
    * @return true on success, false on failure.
    */
   virtual bool compress(std::shared_ptr<RDMASendRequest> req) = 0;
-
-  /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  virtual bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) = 0;
 
   /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.
@@ -145,23 +138,23 @@ class ICompressorBackend {
 
   // Queue decompress asynchronously. on_done fires via gpuLaunchHostFunc after
   // the kernel completes; it must not call any GPU APIs.
-  virtual void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                               FloatType float_type, gpuHostFn_t on_done,
-                               void* user_data) = 0;
+  virtual void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                                FloatType float_type, gpuHostFn_t on_done,
+                                void* user_data) = 0;
 
   /**
    * @brief Check if a request should be compressed based on size threshold.
    * @param size The size in bytes to check.
    * @return true if the size meets the minimum compression threshold.
    */
-  virtual bool shouldCompress(size_t size) = 0;
+  virtual bool should_compress(size_t size) = 0;
 
   /**
    * @brief Check if data should be compressed and split first.
    * @param size The size in bytes to check.
    * @return true if should compress and split first.
    */
-  virtual bool shouldCompressAndSplitFirst(size_t size) = 0;
+  virtual bool should_compress_and_split_first(size_t size) = 0;
 
   /**
    * @brief Prepare a context for split+encode two-phase compression.
@@ -169,29 +162,30 @@ class ICompressorBackend {
    * @param size Size of the input data in bytes.
    * @param ctx Compression context.
    */
-  virtual void prepareSplitContext(void* addr, size_t size,
-                                   CompressCtx ctx) = 0;
+  virtual void prepare_split_context(void* addr, size_t size,
+                                     CompressCtx ctx) = 0;
 
   /**
    * @brief Phase 1 of two-phase compression: split float data.
    * @param req The send request with compress_ctx already prepared.
    * @return true on success, false on failure.
    */
-  virtual bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) = 0;
+  virtual bool compress_split_one_batch(
+      std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
    * @brief Phase 2 of two-phase compression: ANS encode.
    * @param req The send request with compress_ctx already split.
    * @return compressed size on success, 0 on failure.
    */
-  virtual uint32_t compressEncodeOneBatch(
+  virtual uint32_t compress_encode_one_batch(
       std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
    * @brief Get the compression strategy.
    * @return The current compression strategy.
    */
-  virtual CompressStrategy getCompressStrategy() = 0;
+  virtual CompressStrategy get_compress_strategy() = 0;
 };
 
 /**
@@ -205,33 +199,31 @@ class NullCompressorBackend : public ICompressorBackend {
   NullCompressorBackend();
   ~NullCompressorBackend() override;
 
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override;
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const override;
 
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const override;
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const override;
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override;
-
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   FloatType float_type) override;
 
-  void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       FloatType float_type, gpuHostFn_t on_done,
-                       void* user_data) override;
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data) override;
 
-  bool shouldCompress(size_t size) override;
+  bool should_compress(size_t size) override;
 
-  bool shouldCompressAndSplitFirst(size_t size) override;
+  bool should_compress_and_split_first(size_t size) override;
 
-  void prepareSplitContext(void* addr, size_t size, CompressCtx ctx) override;
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx) override;
 
-  bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) override;
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req) override;
 
-  uint32_t compressEncodeOneBatch(
+  uint32_t compress_encode_one_batch(
       std::shared_ptr<RDMASendRequest> req) override;
 
-  CompressStrategy getCompressStrategy() override;
+  CompressStrategy get_compress_strategy() override;
 
  private:
   CompressStrategy compress_strategy_;
@@ -249,36 +241,34 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   DietGPUCompressorBackend();
   ~DietGPUCompressorBackend() override;
 
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override;
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const override;
 
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const override;
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const override;
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override;
-
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   FloatType float_type) override;
 
-  void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       FloatType float_type, gpuHostFn_t on_done,
-                       void* user_data) override;
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data) override;
 
-  bool shouldCompress(size_t size) override;
+  bool should_compress(size_t size) override;
 
-  bool shouldCompressAndSplitFirst(size_t size) override;
+  bool should_compress_and_split_first(size_t size) override;
 
-  void prepareSplitContext(void* addr, size_t size, CompressCtx ctx) override;
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx) override;
 
-  bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) override;
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req) override;
 
-  uint32_t compressEncodeOneBatch(
+  uint32_t compress_encode_one_batch(
       std::shared_ptr<RDMASendRequest> req) override;
 
-  CompressStrategy getCompressStrategy() override;
+  CompressStrategy get_compress_strategy() override;
 
  private:
-  uint32_t* devCompressedSize_;
+  uint32_t* dev_compressed_size_;
   std::shared_ptr<RegMemBlock> buffer_;            // Compression buffer
   std::shared_ptr<RegMemBlock> decompressBuffer_;  // Decompression buffer
   gpuStream_t stream_;                             // GPU stream
@@ -297,7 +287,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
  */
 class Compressor {
  public:
-  static Compressor& getInstance();
+  static Compressor& get_instance();
 
   // Non-copyable, non-movable
   Compressor(Compressor const&) = delete;
@@ -309,13 +299,13 @@ class Compressor {
    * @brief Get the compression buffer.
    * @return Shared pointer to the compression buffer RegMemBlock.
    */
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const;
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const;
 
   /**
    * @brief Get the decompression buffer.
    * @return Shared pointer to the decompression buffer RegMemBlock.
    */
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const;
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const;
 
   /**
    * @brief Compress a send request's data.
@@ -323,13 +313,6 @@ class Compressor {
    * @return true on success, false on failure.
    */
   bool compress(std::shared_ptr<RDMASendRequest> req);
-
-  /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req);
 
   /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.
@@ -341,23 +324,23 @@ class Compressor {
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   FloatType float_type);
 
-  void decompressAsync(RemoteMemInfo const& input, RegMemBlock& output,
-                       FloatType float_type, gpuHostFn_t on_done,
-                       void* user_data);
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data);
 
   /**
    * @brief Check if a request should be compressed based on size threshold.
    * @param size The size in bytes to check.
    * @return true if the size meets the minimum compression threshold.
    */
-  bool shouldCompress(size_t size);
+  bool should_compress(size_t size);
 
   /**
    * @brief Check if data should be compressed and split first.
    * @param size The size in bytes to check.
    * @return true if should compress and split first.
    */
-  bool shouldCompressAndSplitFirst(size_t size);
+  bool should_compress_and_split_first(size_t size);
 
   /**
    * @brief Prepare a context for split+encode two-phase compression.
@@ -365,27 +348,27 @@ class Compressor {
    * @param size Size of the input data in bytes.
    * @param ctx Compression context.
    */
-  void prepareSplitContext(void* addr, size_t size, CompressCtx ctx);
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx);
 
   /**
    * @brief Phase 1 of two-phase compression: split float data.
    * @param req The send request with compress_ctx already prepared.
    * @return true on success, false on failure.
    */
-  bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req);
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req);
 
   /**
    * @brief Phase 2 of two-phase compression: ANS encode.
    * @param req The send request with compress_ctx already split.
    * @return compressed size on success, 0 on failure.
    */
-  uint32_t compressEncodeOneBatch(std::shared_ptr<RDMASendRequest> req);
+  uint32_t compress_encode_one_batch(std::shared_ptr<RDMASendRequest> req);
 
   /**
    * @brief Get the compression strategy.
    * @return The current compression strategy.
    */
-  CompressStrategy getCompressStrategy();
+  CompressStrategy get_compress_strategy();
 
  private:
   Compressor();

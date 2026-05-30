@@ -95,8 +95,8 @@ enum class FloatType : uint32_t {
 
 struct CompressionContext {
   virtual ~CompressionContext() = default;
-  virtual FloatType getFloatType() const = 0;
-  virtual size_t getMaxSize() const = 0;
+  virtual FloatType get_float_type() const = 0;
+  virtual size_t get_max_size() const = 0;
 };
 
 using CompressCtx = std::shared_ptr<CompressionContext>;
@@ -143,7 +143,7 @@ static constexpr uint32_t INVALID_PEER_ID =
     std::numeric_limits<uint32_t>::max();
 static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
-size_t channelIdToContextId(uint32_t channel_id);
+size_t channel_id_to_context_id(uint32_t channel_id);
 
 template <typename T = uint32_t>
 struct ContextArrayT {
@@ -151,32 +151,32 @@ struct ContextArrayT {
 
   ContextArrayT() { std::memset(data, 0, sizeof(data)); }
 
-  inline void copyFrom(ContextArrayT<T> const& other) {
+  inline void copy_from(ContextArrayT<T> const& other) {
     static_assert(std::is_trivially_copyable_v<T>,
-                  "ContextArrayT::copyFrom requires trivially copyable T");
+                  "ContextArrayT::copy_from requires trivially copyable T");
     std::memcpy(data, other.data, sizeof(data));
   }
 
-  inline void copyFrom(char const* other) {
+  inline void copy_from(char const* other) {
     static_assert(std::is_trivially_copyable_v<T>,
-                  "ContextArrayT::copyFrom requires trivially copyable T");
+                  "ContextArrayT::copy_from requires trivially copyable T");
     std::memcpy(data, other, sizeof(data));
   }
 
-  inline T getKeyByChannelID(uint32_t channel_id) const {
-    return getKeyByContextID(channelIdToContextId(channel_id));
+  inline T get_key_by_channel_id(uint32_t channel_id) const {
+    return get_key_by_context_id(channel_id_to_context_id(channel_id));
   }
 
-  inline T getKeyByContextID(size_t context_id) const {
+  inline T get_key_by_context_id(size_t context_id) const {
     return data[context_id];
   }
 
-  inline void setKeyByContextID(uint32_t context_id, T key) {
+  inline void set_key_by_context_id(uint32_t context_id, T key) {
     data[context_id] = key;
   }
 
-  inline void setKeyByChannelID(uint32_t channel_id, T key) {
-    setKeyByContextID(channelIdToContextId(channel_id), key);
+  inline void set_key_by_channel_id(uint32_t channel_id, T key) {
+    set_key_by_context_id(channel_id_to_context_id(channel_id), key);
   }
 
   T& operator[](int index) { return data[index]; }
@@ -231,9 +231,9 @@ class ImmData {
   // Set index (preserves chunk_count + write_meta flag)
   void set_index(uint16_t index);
 
-  // Distinguishes WriteReqMeta entries from SendReqMeta entries on the
-  // control channel. kRingCapacity = 16384 only needs 14 bits, so bit 15 of
-  // the low halfword is free.
+  // Distinguishes WriteReqMeta entries on the control channel.
+  // kWriteMetaRingCapacity only needs 12 bits, so bit 15 of the low halfword
+  // is free.
   static constexpr uint32_t kWriteMetaBit = 1u << 15;
   static constexpr uint32_t kIndexMask = 0x7FFFu;
   constexpr bool is_write_meta() const { return data_ & kWriteMetaBit; }
@@ -280,13 +280,13 @@ struct ChunkSplitStrategy {
   static constexpr uint64_t kMessageChunkSizeKB = 512;
   static constexpr uint64_t kMaxSplitNum = 16;
 
-  static size_t getMessageChunkCount(size_t message_size);
+  static size_t get_message_chunk_count(size_t message_size);
 
-  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size);
+  static std::vector<MessageChunk> split_message_to_chunks(size_t message_size);
 
   // Given message_size and chunk_count, return the uniform chunk size used for
   // all but the (potentially smaller) last chunk.
-  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count);
+  static size_t get_regular_chunk_size(size_t message_size, size_t chunk_count);
 };
 
 struct ChannelMetaData {
@@ -300,10 +300,11 @@ struct ChannelMetaData {
 
 enum class ChannelType : int16_t { Control, Normal };
 
-void copyRKeyArrayFromMRArray(MRArray const& mr_array, RKeyArray& rkey_array);
+void copy_rkey_array_from_mr_array(MRArray const& mr_array,
+                                   RKeyArray& rkey_array);
 
-void copyRKeysFromMRArrayToBytes(MRArray const& mr_array, char* dst,
-                                 size_t dst_size);
+void copy_rkeys_from_mr_array_to_bytes(MRArray const& mr_array, char* dst,
+                                       size_t dst_size);
 
 struct OOBMetaData {
   std::string server_ip;
@@ -319,7 +320,7 @@ struct CQMeta {
   ibv_wc_opcode op_code;
   uint32_t len;
   ImmData imm;
-  bool hasIMM() const;
+  bool has_imm() const;
 
   friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta);
 };
@@ -340,22 +341,22 @@ typedef struct RegMemBlock {
   bool operator==(RegMemBlock const& other) const;
 
   // Set MR by context ID
-  void setMRByContextID(uint32_t context_id, struct ibv_mr* mr);
+  void set_mr_by_context_id(uint32_t context_id, struct ibv_mr* mr);
 
   // Set MR by channel ID
-  void setMRByChannelID(uint32_t channel_id, struct ibv_mr* mr);
+  void set_mr_by_channel_id(uint32_t channel_id, struct ibv_mr* mr);
 
   // Get MR by channel ID
-  struct ibv_mr* getMRByChannelID(uint32_t channel_id) const;
+  struct ibv_mr* get_mr_by_channel_id(uint32_t channel_id) const;
 
   // Get MR by context ID
-  struct ibv_mr* getMRByContextID(uint32_t context_id) const;
+  struct ibv_mr* get_mr_by_context_id(uint32_t context_id) const;
 
   // Get rkey by channel ID (for backward compatibility)
-  uint32_t getKeyByChannelID(uint32_t channel_id) const;
+  uint32_t get_key_by_channel_id(uint32_t channel_id) const;
 
   // Get rkey by context ID (for backward compatibility)
-  uint32_t getKeyByContextID(uint32_t context_id) const;
+  uint32_t get_key_by_context_id(uint32_t context_id) const;
 
   friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block);
 } RegMemBlock;
@@ -374,81 +375,13 @@ typedef struct RemoteMemInfo {
 
   RemoteMemInfo(std::shared_ptr<RegMemBlock> const block);
 
-  uint32_t getKeyByChannelID(uint32_t channel_id) const;
+  uint32_t get_key_by_channel_id(uint32_t channel_id) const;
 
   // Get rkey by context ID (direct index access)
-  uint32_t getKeyByContextID(size_t context_id) const;
+  uint32_t get_key_by_context_id(size_t context_id) const;
 
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info);
 } RemoteMemInfo;
-
-typedef struct RDMARecvRequest {
-  // Peer id is local to this endpoint, not necessarily global.
-  uint32_t from_peer_id = INVALID_PEER_ID;
-  uint32_t to_peer_id = INVALID_PEER_ID;
-  uint32_t channel_id = 0;
-  int64_t wr_id = -1;
-  std::shared_ptr<RegMemBlock> local_mem;
-  std::shared_ptr<RegMemBlock> local_compression_mem;
-  CompressCtx compress_ctx;
-
-  // Constructor
-  RDMARecvRequest(std::shared_ptr<RegMemBlock> local);
-
-  // Getter methods
-  uint32_t getLocalKey() const;
-
-  uint64_t getLocalAddress() const;
-
-  uint32_t getLocalLen() const;
-
-  friend std::ostream& operator<<(std::ostream& os, RDMARecvRequest const& req);
-} RDMARecvRequest;
-
-enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
-
-struct alignas(64) SendReqMeta {
-  uint32_t peer_id;
-  uint32_t channel_id;
-  RemoteMemInfo remote_mem;
-  RegMemBlock local_mem;
-  FloatType float_type = FloatType::kUndefined;
-  uint32_t expected_chunk_count;  // Expected number of chunks to receive
-  uint32_t received_chunk_count;  // Number of chunks already received
-
-  SendReqMeta();
-
-  SendReqMeta(uint32_t pid, uint32_t cid, RemoteMemInfo const& rmem,
-              uint32_t expected = 0, uint32_t received = 0);
-
-  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req);
-
-  friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta);
-};
-
-struct alignas(64) SendReqMetaOnRing {
-  SendReqMeta meta;
-  std::atomic<ReqFlag> flag;
-
-  SendReqMetaOnRing();
-
-  SendReqMetaOnRing(SendReqMetaOnRing const& other);
-
-  SendReqMetaOnRing& operator=(SendReqMetaOnRing const& other);
-
-  // Get SendReqMeta from SendReqMetaOnRing
-  SendReqMeta getSendReqMeta() const;
-
-  // Set SendReqMeta part
-  void setSendReqMeta(SendReqMeta const& m);
-
-  friend std::ostream& operator<<(std::ostream& os,
-                                  SendReqMetaOnRing const& ring);
-};
-
-// Ring buffer size for control channel.
-static constexpr size_t kRingBufferSize =
-    sizeof(SendReqMetaOnRing) * kRingCapacity;
 
 // ── Compressed write infra ──────────────────────────────────────────────────
 // One entry per in-flight compressed write. Pushed by sender to receiver via
@@ -483,43 +416,6 @@ constexpr size_t kWriteMetaRingBytes =
     sizeof(WriteReqMeta) * kWriteMetaRingCapacity;
 constexpr size_t kAckRingBytes = sizeof(AckSlot) * kAckRingDepth;
 
-// Helper functions for SendReqMetaOnRing to be used with
-// modify_and_advance_write
-inline auto check_in_progress = [](SendReqMetaOnRing const& item) {
-  return item.flag.load(std::memory_order_acquire) == ReqFlag::IN_PROGRESS;
-};
-
-inline auto check_is_done = [](SendReqMetaOnRing const& item) {
-  return item.flag.load(std::memory_order_acquire) == ReqFlag::IS_DONE;
-};
-
-inline auto set_in_progress = [](SendReqMetaOnRing& item) {
-  item.flag.store(ReqFlag::IN_PROGRESS, std::memory_order_release);
-};
-
-inline auto set_is_done = [](SendReqMetaOnRing& item) {
-  item.flag.store(ReqFlag::IS_DONE, std::memory_order_release);
-};
-
-// Check if all chunks have been received
-inline auto check_all_chunks_received = [](SendReqMetaOnRing const& item) {
-  return item.meta.received_chunk_count == item.meta.expected_chunk_count;
-};
-
-// Increment the received chunk count
-inline auto increment_received_chunk = [](SendReqMetaOnRing& item) {
-  item.meta.received_chunk_count++;
-};
-
-// Conversion functions between SendReqMeta and SendReqMetaOnRing
-inline auto to_ring_meta = [](SendReqMeta const& src, SendReqMetaOnRing& dst) {
-  dst.meta = src;
-  dst.flag.store(ReqFlag::PENDING, std::memory_order_relaxed);
-};
-
-inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
-                                SendReqMeta& dst) { dst = src.meta; };
-
 enum class SendType { Send, Write, Read };
 
 struct RDMASendRequest {
@@ -551,17 +447,17 @@ struct RDMASendRequest {
                   bool signaled = true);
 
   // Getter methods
-  uint32_t getLocalKey() const;
+  uint32_t get_local_key() const;
 
-  uint32_t getRemoteKey() const;
+  uint32_t get_remote_key() const;
 
-  uint64_t getLocalAddress() const;
+  uint64_t get_local_address() const;
 
-  uint64_t getRemoteAddress() const;
+  uint64_t get_remote_address() const;
 
-  ImmData getImm() const;
+  ImmData get_imm() const;
 
-  uint32_t getLocalLen() const;
+  uint32_t get_local_len() const;
 
   friend std::ostream& operator<<(std::ostream& os, RDMASendRequest const& req);
 };

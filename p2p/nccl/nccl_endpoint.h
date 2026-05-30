@@ -36,7 +36,7 @@ struct NcclFifoItem {
 static_assert(sizeof(struct NcclFifoItem) == 64,
               "NcclFifoItem must be 64 bytes");
 
-enum class NcclReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+enum class NcclReqType { ReqRead, ReqWrite };
 
 struct NcclRequest {
   NcclReqType type;
@@ -62,7 +62,7 @@ class NCCLEndpoint {
   ~NCCLEndpoint();
 
   // GPU index selected by the engine; may be overridden by uccl_connect/accept.
-  int gpuIndex() const { return gpu_index_; }
+  int gpu_index() const { return gpu_index_; }
 
   // RDMA endpoint exposes these for OOB metadata exchange; NCCL path doesn't
   // use EpollClient but we keep stubs so engine code can compile unchanged.
@@ -94,11 +94,6 @@ class NCCLEndpoint {
   void uccl_deregmr(NcclMhandle* mhandle);
   void uccl_deregmr(NcclMRArray const& mr_array);
 
-  // Two-sided NCCL send/recv (async) used by the engine.
-  int uccl_send_async(NcclFlow* flow, NcclMhandle* mh, void const* data,
-                      size_t size, NcclRequest* ureq);
-  int uccl_recv_async(NcclFlow* flow, NcclMhandle** mhandles, void** data,
-                      int* sizes, int n, NcclRequest* ureq);
   // One-sided semantics built on a control message + NCCL send/recv.
   int uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst, size_t size,
                       NcclFifoItem const& slot_item, NcclRequest* ureq);

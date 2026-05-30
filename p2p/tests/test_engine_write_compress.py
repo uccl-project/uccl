@@ -59,7 +59,7 @@ def main():
         help="bytes to transfer per iteration (>2 MB for compression)",
     )
     ap.add_argument("--dtype", choices=list(_DTYPES), default="bfloat16")
-    ap.add_argument("--iters", type=int, default=3)
+    ap.add_argument("--iters", type=int, default=128)
     args = ap.parse_args()
 
     dtype = _DTYPES[args.dtype]

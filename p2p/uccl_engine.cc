@@ -363,19 +363,31 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
 
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, uint64_t* transfer_id) {
-  if (!conn || !data) return -1;
-  return conn->engine->endpoint->send_async(conn->conn_id, mr, data, size,
-                                            transfer_id)
-             ? 0
-             : -1;
+  (void)conn;
+  (void)mr;
+  (void)data;
+  (void)size;
+  (void)transfer_id;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_send is unsupported: two-sided send/recv path was "
+         "removed; use uccl_engine_write/read instead";
+  return -1;
 }
 
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
-                     size_t data_size) {
-  if (!conn || !data) return -1;
-
-  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size) ? 0
-                                                                          : -1;
+int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void const*> src_v,
+                            std::vector<size_t> size_v, int num_iovs,
+                            uint64_t* transfer_id) {
+  (void)conn;
+  (void)mr_ids;
+  (void)src_v;
+  (void)size_v;
+  (void)num_iovs;
+  (void)transfer_id;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_send_vector is unsupported: two-sided send/recv path "
+         "was removed; use uccl_engine_write_vector/read_vector instead";
+  return -1;
 }
 
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
@@ -449,6 +461,18 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                                               transfer_id)
              ? 0
              : -1;
+}
+
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
+                     size_t data_size) {
+  (void)conn;
+  (void)mr;
+  (void)data;
+  (void)data_size;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_recv is unsupported: two-sided send/recv path was "
+         "removed; use uccl_engine_write/read instead";
+  return -1;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {

@@ -94,13 +94,9 @@ Notes:
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * You can specify `UCCL_P2P_TRANSPORT=ib|efa|nccl|tcp|tcpx` at runtime to choose different network backends. The default is `ib` that works for NVIDIA, Broadcom, AMD, and Intel RDMA NICs. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
-* To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
-* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
+* One-sided network write is the default in `benchmark_uccl.py`; use `--mode read` for RDMA read.
 * To benchmark one-sided IPC write (GPU-to-GPU or CPU-to-GPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc`. Use `--device cpu --pinned` for CPU source buffers.
 * To benchmark one-sided IPC read (GPU-to-GPU or GPU-to-CPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc`. Use `--device cpu --pinned` for CPU destination buffers.
-* To benchmark one-sided READ/WRITE transfer, `benchmark_uccl_readwrite.py`.
-* To benchmark UCCL copy-only collectives (eg, sendrecv, allgather), `benchmark_uccl_collective.py`. You can also run ring-like communication pattern with `--ring`.
-* From CollectiveContext, the default parameter `use_copy_engine_for_intra` is `False`, which means it will use NCCL/RCCL via `torch.distributed` for intra-node communication; if setting to `True`, it will use GPU copy engine (eg, `cudaMemcpy`) via UCCL for intranode communication. 
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
@@ -141,7 +137,6 @@ NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank
 Notes: 
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
-* To benchmark dual direction transfer, you can add `--dual`. 
 * Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
@@ -253,9 +248,6 @@ UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nix
 UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
 
-Notes: 
-* You can specify `--dual --remote-ip <Remote IP>` to benchmark dual-direction NIXL transfer. 
-
 ### Running NIXL with Mooncake backend
 
 If you have not installed nixl with Mooncake backend, you can follow:
@@ -359,111 +351,9 @@ if success:
     print(f"Connected with conn_id={conn_id}")
 ```
 
-### PyTorch Tensor Transfer
-
-```python
-# Sender side
-send_tensor = torch.ones(1024, dtype=torch.float32)
-assert send_tensor.is_contiguous()  # Ensure tensor is contiguous
-
-# Register tensor for RDMA
-success, mr_id = endpoint.reg(send_tensor.data_ptr(), send_tensor.numel() * 4)
-assert success
-
-# Send the tensor
-success = endpoint.send(conn_id, mr_id, send_tensor.data_ptr(), send_tensor.numel() * 4)
-assert success
-
-# Receiver side
-recv_tensor = torch.zeros(1024, dtype=torch.float32)
-assert recv_tensor.is_contiguous()
-
-# Register receive buffer
-success, mr_id = endpoint.reg(recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success
-
-# Receive the tensor
-success = endpoint.recv(conn_id, mr_id, recv_tensor.data_ptr(), recv_tensor.numel() * 4)
-assert success
-```
-
-### NumPy Array Transfer
-
-```python
-import numpy as np
-
-# Create and prepare NumPy array
-data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
-assert data.flags['C_CONTIGUOUS']  # Ensure array is contiguous
-
-# Register for RDMA
-ptr = data.ctypes.data
-size = data.nbytes
-success, mr_id = endpoint.reg(ptr, size)
-
-# Send array
-if success:
-    success = endpoint.send(conn_id, mr_id, ptr, size)
-    
-# Receive array
-recv_data = np.zeros_like(data)
-recv_ptr = recv_data.ctypes.data
-success, recv_mr_id = endpoint.reg(recv_ptr, recv_data.nbytes)
-success = endpoint.recv(conn_id, recv_mr_id, recv_ptr, recv_data.nbytes)
-```
-
-### Vectorized Multi-Tensor Transfer
-
-```python
-# Sender side - send multiple tensors at once
-tensors = [
-    torch.ones(512, dtype=torch.float32),
-    torch.ones(1024, dtype=torch.float32),
-    torch.ones(256, dtype=torch.float32)
-]
-
-# Ensure all tensors are contiguous
-for tensor in tensors:
-    assert tensor.is_contiguous()
-
-# Register all tensors
-mr_ids = []
-for tensor in tensors:
-    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
-    assert success
-    mr_ids.append(mr_id)
-
-# Prepare data for vectorized send
-ptr_list = [tensor.data_ptr() for tensor in tensors]
-size_list = [tensor.numel() * 4 for tensor in tensors]
-num_iovs = len(tensors)
-
-# Send all tensors in one operation
-success = endpoint.sendv(conn_id, mr_ids, ptr_list, size_list, num_iovs)
-assert success
-
-# Receiver side - receive multiple tensors at once
-recv_tensors = [
-    torch.zeros(512, dtype=torch.float32),
-    torch.zeros(1024, dtype=torch.float32),
-    torch.zeros(256, dtype=torch.float32)
-]
-
-# Register receive buffers
-recv_mr_ids = []
-for tensor in recv_tensors:
-    success, mr_id = endpoint.reg(tensor.data_ptr(), tensor.numel() * 4)
-    assert success
-    recv_mr_ids.append(mr_id)
-
-# Prepare data for vectorized receive
-recv_ptr_list = [tensor.data_ptr() for tensor in recv_tensors]
-size_list = [tensor.numel() * 4 for tensor in recv_tensors]
-
-# Receive all tensors in one operation
-success = endpoint.recvv(conn_id, recv_mr_ids, recv_ptr_list, size_list, num_iovs)
-assert success
-```
+The active transfer API is one-sided RDMA READ/WRITE. See
+`benchmark_uccl.py` for end-to-end examples using registered buffers and FIFO
+metadata.
 
 </details>
 
@@ -545,110 +435,6 @@ Register a memory region for RDMA operations.
 **Returns:**
 - `success` (bool): Whether registration succeeded
 - `mr_id` (int): Memory region ID for transfer operations
-
-#### Data Transfer
-
-```python
-send(conn_id, mr_id, ptr, size) -> success
-```
-Send data to remote endpoint (blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
-- `ptr` (int): Pointer to data to send
-- `size` (int): Number of bytes to send
-
-**Returns:**
-- `success` (bool): Whether send completed successfully
-
-```python
-recv(conn_id, mr_id, ptr, size) -> success
-```
-Receive data from remote endpoint (blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
-- `ptr` (int): Pointer to buffer for received data
-- `size` (int): Number of bytes to receive
-
-**Returns:**
-- `success` (bool): Whether receive completed successfully
-
-```python
-sendv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
-```
-Send multiple memory regions to remote endpoint in a single operation (blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs from register
-- `ptr_list` (list[int]): List of pointers to data to send
-- `size_list` (list[int]): List of sizes in bytes for each memory region
-- `num_iovs` (int): Number of I/O vectors (length of the lists)
-
-**Returns:**
-- `success` (bool): Whether send completed successfully
-
-```python
-recvv(conn_id, mr_id_list, ptr_list, size_list, num_iovs) -> success
-```
-Receive multiple memory regions from remote endpoint in a single operation (blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id_list` (list[int]): List of memory region IDs from register
-- `ptr_list` (list[int]): List of pointers to buffers for received data
-- `size_list` (list[int]): List of sizes in bytes for each memory region
-- `num_iovs` (int): Number of I/O vectors (length of the lists)
-
-**Returns:**
-- `success` (bool): Whether receive completed successfully
-
-#### Asynchronous Transfer Operations
-
-```python
-send_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
-```
-Send data to remote endpoint asynchronously (non-blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
-- `ptr` (int): Pointer to data to send
-- `size` (int): Number of bytes to send
-
-**Returns:**
-- `success` (bool): Whether send was initiated successfully
-- `transfer_id` (int): Transfer ID for polling completion
-
-```python
-recv_async(conn_id, mr_id, ptr, size) -> (success, transfer_id)
-```
-Receive data from remote endpoint asynchronously (non-blocking).
-
-**Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
-- `mr_id` (int): Memory region ID from register
-- `ptr` (int): Pointer to buffer for received data
-- `size` (int): Exact number of bytes to receive
-
-**Returns:**
-- `success` (bool): Whether receive was initiated successfully
-- `transfer_id` (int): Transfer ID for polling completion
-
-```python
-poll_async(transfer_id) -> (success, is_done)
-```
-Poll the status of an asynchronous transfer operation.
-
-**Parameters:**
-- `transfer_id` (int): Transfer ID returned by send_async or recv_async
-
-**Returns:**
-- `success` (bool): Whether polling succeeded
-- `is_done` (bool): Whether the transfer has completed
 
 #### One-Sided RDMA Operations
 
@@ -783,27 +569,11 @@ Write multiple memory regions to remote endpoint using one-sided RDMA WRITE oper
 ## Testing
 
 ```bash
-python tests/test_engine_send.py
 python tests/test_engine_read.py
 python tests/test_engine_write.py
-python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
 
 # One-sided IPC correctness tests (write_ipc, read_ipc, writev_ipc, readv_ipc — sync and async)
 # Verifies that each API correctly copies data from source to destination buffers.
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_onesided_ipc.py
-
-# One-sided IPC benchmarks (write_ipc / read_ipc)
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --device cpu --pinned
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --device cpu --pinned
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --async-api
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --async-api
-
-# Vectorized one-sided IPC benchmarks (writev_ipc / readv_ipc), e.g. 4 buffers per call
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4 --async-api
-torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4 --async-api
 ```

@@ -32,7 +32,7 @@ using GenericEndpoint =
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
-enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+enum ReqType { ReqRead, ReqWrite };
 
 struct UcclRequest {
   enum ReqType type;
@@ -85,7 +85,7 @@ struct IpcTransferInfo {
   gpuIpcMemHandle_t handle;
   uintptr_t offset;
   size_t size;
-  uint32_t operation;         // 0 = send_ipc request, 1 = recv_ipc response
+  uint32_t operation;         // 0 = write_ipc, 1 = read_ipc
   bool is_host;               // true if this side's buffer is CPU memory
   int gpu_idx = -1;           // target GPU local index for direct_addr path
   uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
@@ -109,24 +109,17 @@ struct ShmMsg {
 };
 
 enum class TaskType {
-  SEND_NET,
-  RECV_NET,
-  SEND_IPC,
-  RECV_IPC,
   WRITE_NET,
   READ_NET,
   WRITE_IPC,
   READ_IPC,
-  SENDV,
-  RECVV,
   WRITEV,
   READV,
 };
 
 struct TaskBatch {
-  size_t num_iovs;  // Number of IO vectors
-  std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
-  std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
+  size_t num_iovs;                               // Number of IO vectors
+  std::shared_ptr<std::vector<void*>> data_ptr;  // for READV/WRITEV
   std::shared_ptr<std::vector<size_t>> size_ptr;
   std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
   std::shared_ptr<std::vector<FifoItem>> slot_item_ptr;  // for READV/WRITEV
@@ -138,7 +131,6 @@ struct TaskBatch {
   TaskBatch(TaskBatch const&) = delete;
   TaskBatch& operator=(TaskBatch const&) = delete;
 
-  void const** const_data_v() const;
   void** data_v() const;
   size_t* size_v() const;
   uint64_t* mr_id_v() const;
@@ -299,40 +291,6 @@ class Endpoint {
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
   bool dereg(uint64_t mr_id);
 
-  /*Send data to the remote server. Blocking. */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
-
-  /*Receive data from the remote server. Blocking.*/
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
-
-  /* Send data to the remote server asynchronously. */
-  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                  size_t size, uint64_t* transfer_id);
-
-  /* Receive data from the remote server asynchronously. */
-  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                  uint64_t* transfer_id);
-
-  /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Send a vector of data chunks asynchronously. */
-  bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                   std::vector<void const*> data_v, std::vector<size_t> size_v,
-                   size_t num_iovs, uint64_t* transfer_id);
-
-  /* Receive a vector of data chunks. Blocking. */
-  bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Receive a vector of data chunks asynchronously. */
-  bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                   std::vector<void*> data_v, std::vector<size_t> size_v,
-                   size_t num_iovs, uint64_t* transfer_id);
-
   /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
             FifoItem const& slot_item);
@@ -394,19 +352,6 @@ class Endpoint {
 
   /*Accept an incoming local connection via shared memory. */
   bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
-
-  /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
-   * gpuIpcMemHandle_t will be passed via shm-jring from recv_ipc to send_ipc
-   * function. */
-  bool send_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool recv_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                      uint64_t* transfer_id);
-
-  bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                      uint64_t* transfer_id);
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,
@@ -498,7 +443,7 @@ class Endpoint {
   std::unordered_map<std::string, ShmRingHandle> inbox_rings_;
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
-  /* For both net and ipc send/recv tasks. */
+  /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
   jring_t* recv_unified_task_ring_ = nullptr;
   jring_t* ipc_inflight_ring_ = nullptr;
@@ -521,7 +466,7 @@ class Endpoint {
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
 
-  /* Background threads for send/recv/ipc/passive accept. */
+  /* Background threads for read/write, IPC, and passive accept. */
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
@@ -534,14 +479,6 @@ class Endpoint {
   std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id,
                                                  TaskType type,
                                                  TaskBatch&& batch);
-  std::shared_ptr<UnifiedTask> create_sendv_task(
-      uint64_t conn_id,
-      std::shared_ptr<std::vector<void const*>> const_data_ptr,
-      std::shared_ptr<std::vector<size_t>> size_ptr,
-      std::shared_ptr<std::vector<uint64_t>> mr_id_ptr);
-  std::shared_ptr<UnifiedTask> create_recvv_task(
-      uint64_t conn_id, std::vector<void*>&& data_v,
-      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v);
   std::shared_ptr<UnifiedTask> create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,

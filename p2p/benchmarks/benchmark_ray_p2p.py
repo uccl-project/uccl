@@ -318,20 +318,28 @@ def main():
         "--sizes",
         type=parse_sizes,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            67108864,
-            104857600,
         ],
         help="Comma-separated list of message sizes in bytes",
     )
-    p.add_argument("--iters", type=int, default=50, help="Number of iterations")
+    p.add_argument("--iters", type=int, default=128, help="Number of iterations")
     p.add_argument(
         "--num-iovs",
         type=int,

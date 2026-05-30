@@ -14,12 +14,12 @@ class RDMADeviceSelectionStrategy;
 // EFA device selection strategy
 class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
  public:
-  std::vector<std::string> selectNICs(
+  std::vector<std::string> select_nics(
       std::vector<std::pair<std::string, uint32_t>> const& dist,
       int gpu_idx) override;
 };
 
-inline std::vector<std::string> EFADeviceSelectionStrategy::selectNICs(
+inline std::vector<std::string> EFADeviceSelectionStrategy::select_nics(
     std::vector<std::pair<std::string, uint32_t>> const& dist, int gpu_idx) {
   std::vector<std::pair<std::string, uint32_t>> usable_dist;
   usable_dist.reserve(dist.size());

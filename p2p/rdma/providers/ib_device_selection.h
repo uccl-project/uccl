@@ -15,12 +15,12 @@ class RDMADeviceSelectionStrategy;
 // IB device selection strategy
 class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
  public:
-  std::vector<std::string> selectNICs(
+  std::vector<std::string> select_nics(
       std::vector<std::pair<std::string, uint32_t>> const& dist,
       int gpu_idx) override;
 };
 
-inline std::vector<std::string> IBDeviceSelectionStrategy::selectNICs(
+inline std::vector<std::string> IBDeviceSelectionStrategy::select_nics(
     std::vector<std::pair<std::string, uint32_t>> const& dist, int gpu_idx) {
   (void)gpu_idx;
 
