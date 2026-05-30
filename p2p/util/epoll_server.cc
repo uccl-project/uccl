@@ -1,37 +1,6 @@
 #include "epoll_server.h"
 #include "util/debug.h"
 
-ThreadPool::ThreadPool(size_t nthreads) : stop_(false) {
-  for (size_t i = 0; i < nthreads; ++i) {
-    workers_.emplace_back([this] {
-      while (true) {
-        std::function<void()> task;
-        {
-          std::unique_lock<std::mutex> lock(mtx_);
-          cv_.wait(lock, [this] { return stop_ || !tasks_.empty(); });
-          if (stop_ && tasks_.empty()) return;
-          task = std::move(tasks_.front());
-          tasks_.pop();
-        }
-        try {
-          task();
-        } catch (const std::exception& e) {
-          std::cerr << "Task exception: " << e.what() << "\n";
-        }
-      }
-    });
-  }
-}
-
-ThreadPool::~ThreadPool() {
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    stop_ = true;
-  }
-  cv_.notify_all();
-  for (auto& w : workers_) w.join();
-}
-
 EpollServer::EpollServer(int port, MetaHandler handler, int max_events)
     : port_(port),
       handler_(std::move(handler)),

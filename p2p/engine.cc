@@ -373,7 +373,7 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
-void Endpoint::stop_accept() { stop_accept(ep_); }
+void Endpoint::stop_accept() { uccl_stop_accept(ep_); }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
@@ -519,7 +519,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     if (passive_accept_ &&
         passive_accept_stop_.load(std::memory_order_acquire)) {
       std::cout << "Stop background accept..." << std::endl;
-      stop_accept(ep_);
+      uccl_stop_accept(ep_);
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     std::this_thread::sleep_for(std::chrono::seconds(1));

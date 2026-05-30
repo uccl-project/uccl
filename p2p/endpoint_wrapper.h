@@ -184,7 +184,7 @@ inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
       ep);
 }
 
-inline void stop_accept(GenericEndpoint const& ep) {
+inline void uccl_stop_accept(GenericEndpoint const& ep) {
   std::visit([](auto const& s) { s->stop_accept(); }, ep);
 }
 
