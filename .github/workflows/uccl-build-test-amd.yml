@@ -252,8 +252,8 @@ jobs:
 
           count_ep_ll_done() {
             local c0 c1
-            c0=$(ssh -o BatchMode=yes amd0 "grep -c 'Dispatch send/recv time:' ~/uccl-ci-sandbox/ep-ll-host0.log 2>/dev/null || true")
-            c1=$(ssh -o BatchMode=yes amd1 "grep -c 'Dispatch send/recv time:' ~/uccl-ci-sandbox/ep-ll-host1.log 2>/dev/null || true")
+            c0=$(ssh -o BatchMode=yes amd0 "grep -o 'Dispatch bandwidth:' ~/uccl-ci-sandbox/ep-ll-host0.log 2>/dev/null | wc -l | tr -d ' ' || true")
+            c1=$(ssh -o BatchMode=yes amd1 "grep -o 'Dispatch bandwidth:' ~/uccl-ci-sandbox/ep-ll-host1.log 2>/dev/null | wc -l | tr -d ' ' || true")
             c0=${c0:-0}
             c1=${c1:-0}
             echo $((c0 + c1))
