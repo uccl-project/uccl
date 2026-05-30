@@ -72,7 +72,7 @@ jobs:
             echo "Shared NFS detected — will sync and build on amd0 only"
           else
             echo "SHARED_NFS=false" >> "$GITHUB_ENV"
-            echo "No shared NFS — will sync and build on both hosts"
+            echo "No shared NFS — will build on amd0 and sync sandbox to amd1"
           fi
 
       - name: Sync code to AMD hosts
@@ -84,47 +84,25 @@ jobs:
             -e "ssh -o BatchMode=yes" \
             ./ amd0:~/uccl-ci-sandbox/
 
-          if [ "$SHARED_NFS" != "true" ]; then
-            rsync -az --exclude .venv --exclude .git --delete \
-              --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
-              -e "ssh -o BatchMode=yes" \
-              ./ amd1:~/uccl-ci-sandbox/
-          fi
-
       - name: Build and install (USE_DIETGPU=1)
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
-          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
             USE_DIETGPU=1 ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
-          PID0=$!
 
-          PID1=""
           if [ "$SHARED_NFS" != "true" ]; then
-            ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
-              set -euo pipefail
-              bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
-              source ~/uccl-ci-sandbox/.venv/bin/activate
-              cd ~/uccl-ci-sandbox
-              USE_DIETGPU=1 ./build.sh roc7 all --install 2>&1 | tee build.log
-            EOF
-            PID1=$!
-          fi
-
-          if [ -n "$PID1" ]; then
-            wait $PID0 $PID1
-          else
-            wait $PID0
-          fi
-          if [ $? -ne 0 ]; then
-            echo "Build failed"
-            exit 1
+            echo "Syncing sandbox from amd0 to amd1..."
+            rsync -az --exclude .git --delete \
+              --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+              -e "ssh -o BatchMode=yes" \
+              amd0:~/uccl-ci-sandbox/ amd1:~/uccl-ci-sandbox/
           fi
 
       - name: Run P2P benchmark
