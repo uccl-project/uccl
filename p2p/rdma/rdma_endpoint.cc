@@ -625,7 +625,7 @@ void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
     // Create response (echo back the same data)
     MetaInfoToExchange response(INVALID_PEER_ID, meta.channel_id,
                                 new_channel->get_local_meta(), nullptr,
-                                ChannelType::Normal, gpu_index_);
+                                ChannelType::Data, gpu_index_);
     UCCL_LOG(INFO, UCCL_RDMA) << "response:::::::" << response;
     output = serialize(response);
     add_one_recv_channel(actual_peer_id, meta.channel_id, new_channel);
@@ -828,7 +828,7 @@ bool RDMAEndpoint::build_data_channels(std::string const& oob_con,
 
     MetaInfoToExchange meta(INVALID_PEER_ID, channel_id,
                             channel->get_local_meta(), nullptr,
-                            ChannelType::Normal, gpu_index_);
+                            ChannelType::Data, gpu_index_);
 
     UCCL_LOG(INFO, UCCL_RDMA) << meta << std::endl;
     std::string serialized_meta = serialize(meta);
@@ -854,7 +854,7 @@ bool RDMAEndpoint::build_data_channels(std::string const& oob_con,
 
   if (!sync) {
     UCCL_LOG(INFO, UCCL_RDMA)
-        << "Normal channels async build initiated for peer " << peer_id;
+        << "Data channels async build initiated for peer " << peer_id;
     return true;
   }
 
@@ -877,7 +877,7 @@ bool RDMAEndpoint::build_data_channels(std::string const& oob_con,
 
   UCCL_LOG(INFO, UCCL_RDMA)
       << "All " << kQpNumPerChannel
-      << " normal channels built successfully for peer " << peer_id;
+      << " data channels built successfully for peer " << peer_id;
 
   return true;
 }

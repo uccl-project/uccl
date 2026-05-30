@@ -158,7 +158,7 @@ size_t SendConnection::channel_count() const {
   return result;
 }
 
-size_t SendConnection::normal_channel_count() const {
+size_t SendConnection::data_channel_count() const {
   return RDMAConnection::channel_count();
 }
 
@@ -335,7 +335,7 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
     return false;
   }
 
-  size_t const num_channels = normal_channel_count();
+  size_t const num_channels = data_channel_count();
   if (unlikely(num_channels == 0 || num_channels > kQpNumPerChannel)) {
     UCCL_LOG(ERROR) << "SendConnection::post_write_or_read_batch - invalid "
                        "channel count: "
@@ -601,7 +601,7 @@ bool SendConnection::drain_pending_chunks() {
   if (!pending_chunked_) return true;
 
   auto& ps = *pending_chunked_;
-  size_t num_channels = normal_channel_count();
+  size_t num_channels = data_channel_count();
 
   while (ps.next_chunk_idx < ps.chunks.size()) {
     // Per-chunk CC: check window before each chunk.
@@ -664,7 +664,7 @@ void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req,
   UCCL_LOG(INFO, UCCL_RDMA)
       << "SendConnection: Splitting message into " << chunks.size()
       << " chunks (message_size: " << message_size << ")";
-  size_t num_channels = normal_channel_count();
+  size_t num_channels = data_channel_count();
 
   for (size_t i = 0; i < chunks.size(); ++i) {
     // Per-chunk CC: if over budget, save remaining chunks and return.
@@ -734,7 +734,7 @@ int64_t SendConnection::compress_write_request_split_first(
 
   auto [channel_id, _ch_ptr] = select_next_channel_round_robin_fast();
   req->channel_id = channel_id ? channel_id : 1;
-  size_t num_channels = normal_channel_count();
+  size_t num_channels = data_channel_count();
   if (num_channels == 0) num_channels = 1;
   // 2 chunks per channel keeps WR density similar to non-compressed writes.
   size_t first_chunks = std::min<size_t>(
@@ -961,7 +961,7 @@ size_t RecvConnection::channel_count() const {
   return result;
 }
 
-size_t RecvConnection::normal_channel_count() const {
+size_t RecvConnection::data_channel_count() const {
   return RDMAConnection::channel_count();
 }
 

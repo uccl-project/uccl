@@ -298,7 +298,7 @@ struct ChannelMetaData {
                                   ChannelMetaData const& meta);
 };
 
-enum class ChannelType : int16_t { Control, Normal };
+enum class ChannelType : int16_t { Control, Data };
 
 void copy_rkey_array_from_mr_array(MRArray const& mr_array,
                                    RKeyArray& rkey_array);
@@ -499,7 +499,7 @@ struct MetaInfoToExchange {
   MetaInfoToExchange(int32_t pid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
-                     ChannelType flag_in = ChannelType::Normal, int gid = 0,
+                     ChannelType flag_in = ChannelType::Data, int gid = 0,
                      uint16_t oob_p = 0);
 
   // Overload << operator for printing

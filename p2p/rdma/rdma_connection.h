@@ -85,7 +85,7 @@ class SendConnection : public RDMAConnection {
 
   size_t channel_count() const override;
 
-  size_t normal_channel_count() const;
+  size_t data_channel_count() const;
 
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
   channels() const override;
@@ -256,7 +256,7 @@ class RecvConnection : public RDMAConnection {
 
   size_t channel_count() const override;
 
-  size_t normal_channel_count() const;
+  size_t data_channel_count() const;
 
   std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
   channels() const override;
