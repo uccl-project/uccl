@@ -255,25 +255,34 @@ class Endpoint {
   explicit Endpoint(uint32_t const local_gpu_idx);
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
-   * done during  memory registration. Additionally, open a unified P2P socket
-   * for metadata exchanges. If passive_accept is true, the endpoint will not
-   * call accept() but delegate it to a background thread.
+   * done during memory registration. Additionally, open a unified P2P socket
+   * for metadata exchanges.
    */
   Endpoint();
 
+  /* Add a remote endpoint with metadata - connect only once per remote
+   * endpoint. */
+  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                           uint64_t& conn_id);
+
+  /* Remove a remote endpoint previously added via add_remote_endpoint. */
+  bool remove_remote_endpoint(uint64_t conn_id);
+
+  /* Start a background thread for accepting, and one should not call accept()
+   * afterwards. */
+  bool start_passive_accept();
+
   ~Endpoint();
 
-  /* Stop accepting incoming connections. */
-  void stop_accepting();
+  /* Stop accepting incoming connections, used in ~Endpoint() by setting
+   * passive_accept_stop_=true to stop background accepting threads */
+  void stop_accept();
 
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
 
   std::vector<uint8_t> get_metadata();
-
-  /* Get the unified metadata for all devices. */
-  std::vector<uint8_t> get_unified_metadata();
 
   /* Parse endpoint metadata to extract IP address, port, and GPU index.
    * Returns a tuple of (ip_address, port, gpu_index). */
@@ -330,21 +339,13 @@ class Endpoint {
                     std::vector<FifoItem> slot_item_v, size_t num_iovs,
                     uint64_t* transfer_id);
 
-  /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
-  bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                 size_t size, void const* meta, size_t meta_len);
-
-  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
-                 char* out_buf);
-
-  /* Prepare Fifo without requiring a connection (for pre-computing fifo_item).
-   */
-  bool prepare_fifo(uint64_t mr_id, void* addr, size_t len, char* out_buf);
+  /* Advertise a data chunk for remote side to write/read */
+  bool advertise(uint64_t mr_id, void* addr, size_t len, char* out_buf);
 
   /* Advertise a vector of data chunks. */
-  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                  std::vector<void*> addr_v, std::vector<size_t> len_v,
-                  std::vector<char*> out_buf_v, size_t num_iovs);
+  bool advertisev(std::vector<uint64_t> mr_id_v, std::vector<void*> addr_v,
+                  std::vector<size_t> len_v, std::vector<char*> out_buf_v,
+                  size_t num_iovs);
 
   /*Connect to a local process via shared memory.*/
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
@@ -380,17 +381,6 @@ class Endpoint {
   bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
-
-  /* Add a remote endpoint with metadata - connect only once per remote
-   * endpoint. */
-  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
-                           uint64_t& conn_id);
-
-  /* Remove a remote endpoint previously added via add_remote_endpoint. */
-  bool remove_remote_endpoint(uint64_t conn_id);
-
-  /* Start a background thread for accepting. */
-  bool start_passive_accept();
 
   /***************************************************/
   /* API for Ray */

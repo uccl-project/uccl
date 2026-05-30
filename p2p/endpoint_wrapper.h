@@ -388,19 +388,16 @@ inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
                               ureq);
 }
 
-inline int prepare_fifo_metadata(GenericEndpoint const& ep, Conn* conn,
-                                 P2PMhandle* mhandle, void const* data,
-                                 size_t size, char* out_buf) {
+inline int prepare_fifo_metadata(GenericEndpoint const& ep, P2PMhandle* mhandle,
+                                 void const* data, size_t size, char* out_buf) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          (void)conn;
           (void)mhandle;
           return s->prepare_fifo_metadata(nullptr, nullptr, data, size,
                                           out_buf);
         } else {
-          (void)conn;
           FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;

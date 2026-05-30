@@ -373,7 +373,7 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
-void Endpoint::stop_accepting() { stop_accept(ep_); }
+void Endpoint::stop_accept() { stop_accept(ep_); }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
@@ -438,40 +438,6 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   // Copy BDF string (1 byte length + string data)
   metadata[ip_len + 2] = bdf_len;
   std::memcpy(metadata.data() + ip_len + 3, gpu_bus_id_.data(), bdf_len);
-
-  return metadata;
-}
-
-std::vector<uint8_t> Endpoint::get_unified_metadata() {
-  std::string ip_str = uccl::get_oob_ip();
-  uint16_t port = get_p2p_listen_port(ep_);
-
-  bool is_ipv6 = ip_str.find(':') != std::string::npos;
-  size_t ip_len = is_ipv6 ? 16 : 4;
-
-  // 2 bytes port + 1 byte BDF length + 0 bytes (empty BDF for unified)
-  size_t total_len = ip_len + 2 + 1;
-  std::vector<uint8_t> metadata(total_len);
-
-  // Copy IP
-  if (is_ipv6) {
-    struct in6_addr ip6_bin;
-    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
-      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip6_bin, 16);
-  } else {
-    struct in_addr ip4_bin;
-    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
-      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
-    std::memcpy(metadata.data(), &ip4_bin, 4);
-  }
-
-  // Copy port in network byte order
-  uint16_t net_port = htons(port);
-  std::memcpy(metadata.data() + ip_len, &net_port, 2);
-
-  // Empty BDF for unified metadata
-  metadata[ip_len + 2] = 0;
 
   return metadata;
 }
@@ -1188,44 +1154,23 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
-                         size_t len, char* out_buf) {
-  auto* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[advertise] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
+bool Endpoint::advertise(uint64_t mr_id, void* addr, size_t len,
+                         char* out_buf) {
   auto mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[advertise] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
-  if (prepare_fifo_metadata(ep_, conn, mhandle, addr, len, out_buf) == -1)
+  if (prepare_fifo_metadata(ep_, mhandle, addr, len, out_buf) == -1)
     return false;
   return true;
 }
 
-bool Endpoint::prepare_fifo(uint64_t mr_id, void* addr, size_t len,
-                            char* out_buf) {
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  // prepare_fifo_metadata doesn't actually use the endpoint or conn parameters
-  if (prepare_fifo_metadata(ep_, nullptr, mhandle, addr, len, out_buf) == -1)
-    return false;
-  return true;
-}
-
-bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
-  auto* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[advertisev] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
-  // Check if mhandles are all valid
   for (int i = 0; i < num_iovs; i++) {
     mhandles[i] = get_mhandle(mr_id_v[i]);
     if (unlikely(mhandles[i] == nullptr)) {
@@ -1236,8 +1181,7 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   for (size_t i = 0; i < num_iovs; ++i) {
-    auto mhandle = mhandles[i];
-    if (prepare_fifo_metadata(ep_, conn, mhandle, addr_v[i], len_v[i],
+    if (prepare_fifo_metadata(ep_, mhandles[i], addr_v[i], len_v[i],
                               out_buf_v[i]) == -1) {
       return false;
     }

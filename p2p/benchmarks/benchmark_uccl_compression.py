@@ -118,7 +118,7 @@ def _run_server(args, ep: "p2p.Endpoint") -> List[Tuple]:
         ok, mr_id = ep.reg(tensor.data_ptr(), size, ft)
         assert ok, "[Server] register failed"
 
-        ok, fifo_blob = ep.advertise(conn_id, mr_id, tensor.data_ptr(), size)
+        ok, fifo_blob = ep.advertise(mr_id, tensor.data_ptr(), size)
         assert ok, "[Server] advertise failed"
         _send_bytes(bytes(fifo_blob), dst=peer)
 
