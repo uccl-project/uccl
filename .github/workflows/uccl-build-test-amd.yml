@@ -48,6 +48,7 @@ jobs:
               User "${{secrets.UCCL_DEV_AMD_USER}}"
               IdentityFile ~/.ssh/uccl-dev
               IdentitiesOnly yes
+              ForwardAgent yes
 
           Host amd1
               HostName "${{secrets.UCCL_DEV_AMD_HOST1}}"
@@ -55,6 +56,9 @@ jobs:
               IdentityFile ~/.ssh/uccl-dev
               IdentitiesOnly yes
           EOF
+
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/uccl-dev
 
           ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST0}}" >> ~/.ssh/known_hosts
           ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST1}}" >> ~/.ssh/known_hosts
@@ -99,10 +103,17 @@ jobs:
 
           if [ "$SHARED_NFS" != "true" ]; then
             echo "Syncing sandbox from amd0 to amd1..."
-            rsync -az --exclude .git --delete \
-              --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
-              -e "ssh -o BatchMode=yes" \
-              amd0:~/uccl-ci-sandbox/ amd1:~/uccl-ci-sandbox/
+            ssh -o BatchMode=yes amd0 bash --norc --noprofile << EOF
+              set -euo pipefail
+              mkdir -p ~/.ssh
+              chmod 700 ~/.ssh
+              ssh-keyscan -H "${{ secrets.UCCL_DEV_AMD_HOST1 }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+              rsync -az --exclude .git --delete \
+                -e "ssh -o BatchMode=yes" \
+                --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+                ~/uccl-ci-sandbox/ \
+                "${{ secrets.UCCL_DEV_AMD_USER }}@${{ secrets.UCCL_DEV_AMD_HOST1 }}:~/uccl-ci-sandbox/"
+            EOF
           fi
 
       - name: Run P2P benchmark
