@@ -252,10 +252,16 @@ races when the application pipelines many iterations.
 
 ## Performance Comparison vs NCCL
 
-Benchmarked with `nccl-tests sendrecv_perf`, 20 iterations, 10 warmup.
-NCCL baseline is **tuned** with `NCCL_P2P_NET_CHUNKSIZE=2M` (best config found
-via parameter sweep; default 128 KB leaves ~20% throughput on the table for
-large messages).
+Benchmarked with `nccl-tests sendrecv_perf` after enough warmup to reach the
+steady-state send/recv path.  NCCL baseline is **tuned** with
+`NCCL_P2P_NET_CHUNKSIZE=2M` (best config found via parameter sweep; default
+128 KB leaves ~20% throughput on the table for large messages).
+
+For reproducible L40/L41 commands and the current recommended warmup/iteration
+settings, see [l40-l41-p2p-runbook.md](l40-l41-p2p-runbook.md).  In particular,
+small-message latency and large-message NCCL throughput are sensitive to
+insufficient warmup; use the runbook settings before comparing against these
+tables.
 
 ### Intra-Node (2× L4, same machine, PCIe P2P)
 
