@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <string>
 
-size_t getMinCompressBytesFromEnv() {
+size_t get_min_compress_bytes_from_env() {
   char const* env = std::getenv("UCCL_P2P_MIN_COMPRESS_BYTES");
   if (!env) return 16ull * 1024 * 1024;
   char* end = nullptr;
@@ -17,11 +17,11 @@ size_t getMinCompressBytesFromEnv() {
 }
 
 size_t const& kMinCompressBytes = []() -> size_t const& {
-  static size_t v = getMinCompressBytesFromEnv();
+  static size_t v = get_min_compress_bytes_from_env();
   return v;
 }();
 
-size_t getCompressBufferBytesFromEnv() {
+size_t get_compress_buffer_bytes_from_env() {
   char const* env = std::getenv("UCCL_P2P_COMPRESS_BUFFER_BYTES");
   if (!env) return 2ull * 1024 * 1024 * 1024;
   char* end = nullptr;
@@ -31,11 +31,11 @@ size_t getCompressBufferBytesFromEnv() {
 }
 
 size_t const& kCompressBufferSize = []() -> size_t const& {
-  static size_t v = getCompressBufferBytesFromEnv();
+  static size_t v = get_compress_buffer_bytes_from_env();
   return v;
 }();
 
-CompressStrategy getCompressStrategyFromEnv() {
+CompressStrategy get_compress_strategy_from_env() {
   char const* env = std::getenv("UCCL_P2P_COMPRESS_STRATEGY");
 
   if (!env || env[0] == '\0') {
@@ -114,13 +114,13 @@ FloatCompressCtx::~FloatCompressCtx() {
   }
 }
 
-FloatType FloatCompressCtx::getFloatType() const {
+FloatType FloatCompressCtx::get_float_type() const {
   return from_dietgpu(float_type);
 }
 
-size_t FloatCompressCtx::getMaxSize() const { return maxSize; }
+size_t FloatCompressCtx::get_max_size() const { return maxSize; }
 
-CompressCtx makeCompressCtx(FloatType ft) {
+CompressCtx make_compress_ctx(FloatType ft) {
   return std::make_shared<FloatCompressCtx>(ft);
 }
 
@@ -128,13 +128,14 @@ CompressCtx makeCompressCtx(FloatType ft) {
 
 DummyCompressCtx::DummyCompressCtx() = default;
 
-DummyCompressCtx::DummyCompressCtx(FloatType ft) : float_type(ft), maxSize(0) {}
+DummyCompressCtx::DummyCompressCtx(FloatType ft)
+    : float_type(ft), max_size(0) {}
 
-FloatType DummyCompressCtx::getFloatType() const { return float_type; }
+FloatType DummyCompressCtx::get_float_type() const { return float_type; }
 
-size_t DummyCompressCtx::getMaxSize() const { return maxSize; }
+size_t DummyCompressCtx::get_max_size() const { return max_size; }
 
-CompressCtx makeCompressCtx(FloatType ft) {
+CompressCtx make_compress_ctx(FloatType ft) {
   return std::make_shared<DummyCompressCtx>(ft);
 }
 
@@ -145,11 +146,12 @@ NullCompressorBackend::NullCompressorBackend()
 
 NullCompressorBackend::~NullCompressorBackend() = default;
 
-std::shared_ptr<RegMemBlock> NullCompressorBackend::getCompressBuffer() const {
+std::shared_ptr<RegMemBlock> NullCompressorBackend::get_compress_buffer()
+    const {
   return nullptr;
 }
 
-std::shared_ptr<RegMemBlock> NullCompressorBackend::getDecompressBuffer()
+std::shared_ptr<RegMemBlock> NullCompressorBackend::get_decompress_buffer()
     const {
   return nullptr;
 }
@@ -164,41 +166,42 @@ bool NullCompressorBackend::decompress(RemoteMemInfo const& /*input*/,
   return false;
 }
 
-void NullCompressorBackend::decompressAsync(RemoteMemInfo const& /*input*/,
-                                            RegMemBlock& /*output*/,
-                                            FloatType /*float_type*/,
-                                            gpuHostFn_t on_done,
-                                            void* user_data) {
+void NullCompressorBackend::decompress_async(RemoteMemInfo const& /*input*/,
+                                             RegMemBlock& /*output*/,
+                                             FloatType /*float_type*/,
+                                             gpuHostFn_t on_done,
+                                             void* user_data) {
   if (on_done) on_done(user_data);  // synchronous fallback
 }
 
-bool NullCompressorBackend::shouldCompress(size_t /*size*/) { return false; }
+bool NullCompressorBackend::should_compress(size_t /*size*/) { return false; }
 
-bool NullCompressorBackend::shouldCompressAndSplitFirst(size_t /*size*/) {
+bool NullCompressorBackend::should_compress_and_split_first(size_t /*size*/) {
   return false;
 }
 
-void NullCompressorBackend::prepareSplitContext(void* /*addr*/, size_t /*size*/,
-                                                CompressCtx /*ctx*/) {}
+void NullCompressorBackend::prepare_split_context(void* /*addr*/,
+                                                  size_t /*size*/,
+                                                  CompressCtx /*ctx*/) {}
 
-bool NullCompressorBackend::compressSplitOneBatch(
+bool NullCompressorBackend::compress_split_one_batch(
     std::shared_ptr<RDMASendRequest> /*req*/) {
   return false;
 }
 
-uint32_t NullCompressorBackend::compressEncodeOneBatch(
+uint32_t NullCompressorBackend::compress_encode_one_batch(
     std::shared_ptr<RDMASendRequest> /*req*/) {
   return 0;
 }
 
-CompressStrategy NullCompressorBackend::getCompressStrategy() {
+CompressStrategy NullCompressorBackend::get_compress_strategy() {
   return compress_strategy_;
 }
 
 #ifdef USE_DIETGPU
 DietGPUCompressorBackend::DietGPUCompressorBackend()
-    : stream_(nullptr), res_(nullptr), devCompressedSize_(nullptr) {
-  compress_strategy_ = getCompressStrategyFromEnv();
+    : stream_(nullptr), res_(nullptr), dev_compressed_size_(nullptr) {
+  compress_strategy_ = get_compress_strategy_from_env();
   if (compress_strategy_ == CompressStrategy::kNone) {
     return;
   }
@@ -206,7 +209,7 @@ DietGPUCompressorBackend::DietGPUCompressorBackend()
   // memory) so that they all belong to the green context.
   dietgpu::initGreenContextIfNeeded(dietgpu::getCurrentDevice());
 
-  GPU_RT_CHECK(gpuMalloc(&devCompressedSize_, sizeof(uint32_t)));
+  GPU_RT_CHECK(gpuMalloc(&dev_compressed_size_, sizeof(uint32_t)));
   // Initialize compression buffer
   auto allocator = std::make_shared<MemoryAllocator>();
   buffer_ = allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
@@ -234,17 +237,17 @@ DietGPUCompressorBackend::~DietGPUCompressorBackend() {
     delete res_;
     res_ = nullptr;
   }
-  if (devCompressedSize_) {
-    GPU_RT_CHECK(gpuFree(devCompressedSize_));
+  if (dev_compressed_size_) {
+    GPU_RT_CHECK(gpuFree(dev_compressed_size_));
   }
 }
 
-std::shared_ptr<RegMemBlock> DietGPUCompressorBackend::getCompressBuffer()
+std::shared_ptr<RegMemBlock> DietGPUCompressorBackend::get_compress_buffer()
     const {
   return buffer_;
 }
 
-std::shared_ptr<RegMemBlock> DietGPUCompressorBackend::getDecompressBuffer()
+std::shared_ptr<RegMemBlock> DietGPUCompressorBackend::get_decompress_buffer()
     const {
   return decompressBuffer_;
 }
@@ -258,13 +261,13 @@ bool DietGPUCompressorBackend::compress(std::shared_ptr<RDMASendRequest> req) {
   auto ctx = std::static_pointer_cast<FloatCompressCtx>(req->compress_ctx);
   // Setup compression config
   dietgpu::FloatCompressConfig compressConfig;
-  compressConfig.floatType = to_dietgpu(ctx->getFloatType());
+  compressConfig.floatType = to_dietgpu(ctx->get_float_type());
   compressConfig.useChecksum = false;
   compressConfig.is16ByteAligned = true;
 
   // Calculate element count from bytes
   uint32_t numFloats = dietgpu::getElementCountFromBytes(
-      to_dietgpu(ctx->getFloatType()), req->local_mem->size);
+      to_dietgpu(ctx->get_float_type()), req->local_mem->size);
 
   // Setup batch (single element batch)
   void const* inPtrs[1] = {req->local_mem->addr};
@@ -274,11 +277,12 @@ bool DietGPUCompressorBackend::compress(std::shared_ptr<RDMASendRequest> req) {
   // Compress
   dietgpu::floatCompress(*res_, compressConfig,
                          1,  // numInBatch
-                         inPtrs, inSizes, outPtrs, devCompressedSize_, stream_);
+                         inPtrs, inSizes, outPtrs, dev_compressed_size_,
+                         stream_);
   GPU_RT_CHECK(gpuStreamSynchronize(stream_));
   // Get compressed size
   uint32_t compressedSize = 0;
-  GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
+  GPU_RT_CHECK(gpuMemcpy(&compressedSize, dev_compressed_size_,
                          sizeof(compressedSize), gpuMemcpyDeviceToHost));
 
   UCCL_LOG(INFO, UCCL_RDMA)
@@ -336,8 +340,8 @@ bool DietGPUCompressorBackend::decompress(RemoteMemInfo const& input,
       dietgpu::floatDecompress(*res_, decompressConfig,
                                1,  // numInBatch
                                compInPtrs, decompOutPtrs, outCapacities,
-                               nullptr,  // outSuccess_dev (optional)
-                               nullptr,  // outSize_dev (optional)
+                               nullptr,  // out_success_dev (optional)
+                               nullptr,  // out_size_dev (optional)
                                stream_);
 
   GPU_RT_CHECK(gpuStreamSynchronize(stream_));
@@ -354,14 +358,14 @@ bool DietGPUCompressorBackend::decompress(RemoteMemInfo const& input,
   return true;
 }
 
-void DietGPUCompressorBackend::decompressAsync(RemoteMemInfo const& input,
-                                               RegMemBlock& output,
-                                               FloatType float_type,
-                                               gpuHostFn_t on_done,
-                                               void* user_data) {
+void DietGPUCompressorBackend::decompress_async(RemoteMemInfo const& input,
+                                                RegMemBlock& output,
+                                                FloatType float_type,
+                                                gpuHostFn_t on_done,
+                                                void* user_data) {
   if (unlikely(!stream_ || !res_ || input.addr == 0 || input.length == 0 ||
                output.addr == nullptr || output.size == 0)) {
-    UCCL_LOG(WARN) << "decompressAsync - invalid params; firing on_done "
+    UCCL_LOG(WARN) << "decompress_async - invalid params; firing on_done "
                       "synchronously";
     if (on_done) on_done(user_data);
     return;
@@ -384,12 +388,12 @@ void DietGPUCompressorBackend::decompressAsync(RemoteMemInfo const& input,
   }
 }
 
-bool DietGPUCompressorBackend::shouldCompress(size_t size) {
+bool DietGPUCompressorBackend::should_compress(size_t size) {
   if (compress_strategy_ == CompressStrategy::kNone) {
     return false;
   }
   if (unlikely(size > buffer_->size)) {
-    UCCL_LOG(ERROR) << "DietGPUCompressorBackend::shouldCompress: data size ("
+    UCCL_LOG(ERROR) << "DietGPUCompressorBackend::should_compress: data size ("
                     << size << " bytes) exceeds compress buffer capacity ("
                     << buffer_->size << " bytes), skipping compression";
     return false;
@@ -397,26 +401,26 @@ bool DietGPUCompressorBackend::shouldCompress(size_t size) {
   return size >= kMinCompressBytes;
 }
 
-bool DietGPUCompressorBackend::shouldCompressAndSplitFirst(size_t size) {
+bool DietGPUCompressorBackend::should_compress_and_split_first(size_t size) {
   return compress_strategy_ == CompressStrategy::kSplitOnly &&
-         shouldCompress(size);
+         should_compress(size);
 }
 
-void DietGPUCompressorBackend::prepareSplitContext(void* addr, size_t size,
-                                                   CompressCtx ctx) {
+void DietGPUCompressorBackend::prepare_split_context(void* addr, size_t size,
+                                                     CompressCtx ctx) {
   if (unlikely(ctx == nullptr)) {
     std::cout << "unlikely(ctx == nullptr)" << std::endl;
     return;
   }
-  if (unlikely(!shouldCompress(size))) {
+  if (unlikely(!should_compress(size))) {
     return;
   }
   // kUndefined means no float_type was supplied; skip compression.
-  if (unlikely(ctx->getFloatType() == FloatType::kUndefined)) {
+  if (unlikely(ctx->get_float_type() == FloatType::kUndefined)) {
     return;
   }
   auto float_ctx = std::static_pointer_cast<FloatCompressCtx>(ctx);
-  dietgpu::FloatType float_type = to_dietgpu(float_ctx->getFloatType());
+  dietgpu::FloatType float_type = to_dietgpu(float_ctx->get_float_type());
   uint32_t numFloats = static_cast<uint32_t>(
       dietgpu::getElementCountFromBytes(float_type, size));
   // FP8 types pack two values into one uint16 pair, so the split kernel
@@ -453,51 +457,52 @@ void DietGPUCompressorBackend::prepareSplitContext(void* addr, size_t size,
   float_ctx->maxSize = size;
 }
 
-bool DietGPUCompressorBackend::compressSplitOneBatch(
+bool DietGPUCompressorBackend::compress_split_one_batch(
     std::shared_ptr<RDMASendRequest> req) {
   if (unlikely(!req || !req->compress_ctx || !stream_ || !res_)) {
-    UCCL_LOG(WARN) << "DietGPUCompressorBackend::compressSplitOneBatch - "
+    UCCL_LOG(WARN) << "DietGPUCompressorBackend::compress_split_one_batch - "
                       "Invalid parameters";
     return false;
   }
   auto ctx = std::static_pointer_cast<FloatCompressCtx>(req->compress_ctx);
 
   dietgpu::FloatCompressConfig compressConfig;
-  compressConfig.floatType = to_dietgpu(ctx->getFloatType());
+  compressConfig.floatType = to_dietgpu(ctx->get_float_type());
   compressConfig.useChecksum = false;
   compressConfig.is16ByteAligned = true;
 
   dietgpu::floatCompressSplitOneBatch(*res_, compressConfig, stream_, *ctx);
 
-  int32_t data_size = dietgpu::roundDown(
-      getUncompDataSizeFromByteSize(compressConfig.floatType, ctx->maxSize),
-      ChunkSplitStrategy::kMessageChunkSizeKB);
+  int32_t data_size =
+      dietgpu::roundDown(dietgpu::getUncompDataSizeFromByteSize(
+                             compressConfig.floatType, ctx->maxSize),
+                         ChunkSplitStrategy::kMessageChunkSizeKB);
   GPU_RT_CHECK(gpuStreamSynchronize(stream_));
   req->local_mem = std::make_shared<RegMemBlock>(
       buffer_->addr, data_size, buffer_->mr_array, buffer_->type);
   return true;
 }
 
-uint32_t DietGPUCompressorBackend::compressEncodeOneBatch(
+uint32_t DietGPUCompressorBackend::compress_encode_one_batch(
     std::shared_ptr<RDMASendRequest> req) {
   if (unlikely(!req || !req->compress_ctx || !stream_ || !res_ || !buffer_)) {
-    UCCL_LOG(WARN) << "DietGPUCompressorBackend::compressEncodeOneBatch - "
+    UCCL_LOG(WARN) << "DietGPUCompressorBackend::compress_encode_one_batch - "
                       "Invalid parameters";
     return 0;
   }
   auto ctx = std::static_pointer_cast<FloatCompressCtx>(req->compress_ctx);
 
   dietgpu::FloatCompressConfig compressConfig;
-  compressConfig.floatType = to_dietgpu(ctx->getFloatType());
+  compressConfig.floatType = to_dietgpu(ctx->get_float_type());
   compressConfig.useChecksum = false;
   compressConfig.is16ByteAligned = true;
 
   dietgpu::floatCompressEncodeOneBatch(*res_, compressConfig, *ctx,
-                                       devCompressedSize_, stream_);
+                                       dev_compressed_size_, stream_);
   GPU_RT_CHECK(gpuStreamSynchronize(stream_));
   // Get compressed size
   uint32_t compressedSize = 0;
-  GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
+  GPU_RT_CHECK(gpuMemcpy(&compressedSize, dev_compressed_size_,
                          sizeof(compressedSize), gpuMemcpyDeviceToHost));
 
   UCCL_LOG(INFO, UCCL_RDMA)
@@ -518,22 +523,22 @@ uint32_t DietGPUCompressorBackend::compressEncodeOneBatch(
   return compressedSize;
 }
 
-CompressStrategy DietGPUCompressorBackend::getCompressStrategy() {
+CompressStrategy DietGPUCompressorBackend::get_compress_strategy() {
   return compress_strategy_;
 }
 #endif  // USE_DIETGPU
 
-Compressor& Compressor::getInstance() {
+Compressor& Compressor::get_instance() {
   static Compressor instance;
   return instance;
 }
 
-std::shared_ptr<RegMemBlock> Compressor::getCompressBuffer() const {
-  return backend_->getCompressBuffer();
+std::shared_ptr<RegMemBlock> Compressor::get_compress_buffer() const {
+  return backend_->get_compress_buffer();
 }
 
-std::shared_ptr<RegMemBlock> Compressor::getDecompressBuffer() const {
-  return backend_->getDecompressBuffer();
+std::shared_ptr<RegMemBlock> Compressor::get_decompress_buffer() const {
+  return backend_->get_decompress_buffer();
 }
 
 bool Compressor::compress(std::shared_ptr<RDMASendRequest> req) {
@@ -545,35 +550,37 @@ bool Compressor::decompress(RemoteMemInfo const& input, RegMemBlock& output,
   return backend_->decompress(input, output, float_type);
 }
 
-void Compressor::decompressAsync(RemoteMemInfo const& input,
-                                 RegMemBlock& output, FloatType float_type,
-                                 gpuHostFn_t on_done, void* user_data) {
-  backend_->decompressAsync(input, output, float_type, on_done, user_data);
+void Compressor::decompress_async(RemoteMemInfo const& input,
+                                  RegMemBlock& output, FloatType float_type,
+                                  gpuHostFn_t on_done, void* user_data) {
+  backend_->decompress_async(input, output, float_type, on_done, user_data);
 }
 
-bool Compressor::shouldCompress(size_t size) {
-  return backend_->shouldCompress(size);
+bool Compressor::should_compress(size_t size) {
+  return backend_->should_compress(size);
 }
 
-bool Compressor::shouldCompressAndSplitFirst(size_t size) {
-  return backend_->shouldCompressAndSplitFirst(size);
+bool Compressor::should_compress_and_split_first(size_t size) {
+  return backend_->should_compress_and_split_first(size);
 }
 
-void Compressor::prepareSplitContext(void* addr, size_t size, CompressCtx ctx) {
-  backend_->prepareSplitContext(addr, size, ctx);
+void Compressor::prepare_split_context(void* addr, size_t size,
+                                       CompressCtx ctx) {
+  backend_->prepare_split_context(addr, size, ctx);
 }
 
-bool Compressor::compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) {
-  return backend_->compressSplitOneBatch(req);
-}
-
-uint32_t Compressor::compressEncodeOneBatch(
+bool Compressor::compress_split_one_batch(
     std::shared_ptr<RDMASendRequest> req) {
-  return backend_->compressEncodeOneBatch(req);
+  return backend_->compress_split_one_batch(req);
 }
 
-CompressStrategy Compressor::getCompressStrategy() {
-  return backend_->getCompressStrategy();
+uint32_t Compressor::compress_encode_one_batch(
+    std::shared_ptr<RDMASendRequest> req) {
+  return backend_->compress_encode_one_batch(req);
+}
+
+CompressStrategy Compressor::get_compress_strategy() {
+  return backend_->get_compress_strategy();
 }
 
 Compressor::Compressor() {

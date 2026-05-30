@@ -29,7 +29,7 @@ struct XferHandle {
   uint64_t transfer_id;
 };
 
-bool IsHostPtr(void const* ptr) {
+bool is_host_ptr(void const* ptr) {
   return uccl::get_dev_idx(const_cast<void*>(ptr)) == -1;
 }
 
@@ -354,7 +354,7 @@ NB_MODULE(p2p, m) {
                   assert(mhandle != nullptr);
                   xfer_desc.mr_id = mr_id;
                   for (size_t j = 0; j < kNICContextNumber; j++) {
-                    auto mr = mhandle->mr_array.getKeyByContextID(j);
+                    auto mr = mhandle->mr_array.get_key_by_context_id(j);
                     assert(mr != nullptr);
                     xfer_desc.lkeys.push_back(mr->lkey);
                     xfer_desc.rkeys.push_back(mr->rkey);
@@ -477,7 +477,7 @@ NB_MODULE(p2p, m) {
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
-                if (IsHostPtr(ldesc.addr) && info.is_host) {
+                if (is_host_ptr(ldesc.addr) && info.is_host) {
                   use_loopback_rdma = true;
                   break;
                 }

@@ -54,7 +54,7 @@ DEFINE_int32(iterations, 10, "Number of iterations for the test");
 DEFINE_bool(verbose, false, "Enable verbose output");
 
 // Helper to get FloatType from string
-dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
+dietgpu::FloatType get_float_type_from_string(std::string const& type_str) {
   if (type_str == "fp16" || type_str == "float16") {
     return dietgpu::FloatType::kFloat16;
   } else if (type_str == "bf16" || type_str == "bfloat16") {
@@ -69,7 +69,7 @@ dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
 }
 
 // Get element size for a given float type
-size_t getElementSize(dietgpu::FloatType float_type) {
+size_t get_element_size(dietgpu::FloatType float_type) {
   switch (float_type) {
     case dietgpu::FloatType::kFloat16:
     case dietgpu::FloatType::kBFloat16:
@@ -82,8 +82,8 @@ size_t getElementSize(dietgpu::FloatType float_type) {
 }
 
 // Fill buffer with random float data
-void fillRandomFloatData(void* host_buf, size_t num_elements,
-                         dietgpu::FloatType float_type) {
+void fill_random_float_data(void* host_buf, size_t num_elements,
+                            dietgpu::FloatType float_type) {
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
@@ -124,8 +124,8 @@ void fillRandomFloatData(void* host_buf, size_t num_elements,
 }
 
 // Compare two buffers with tolerance
-bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
-                    dietgpu::FloatType float_type, float tolerance = 1e-5f) {
+bool compare_buffers(void const* buf1, void const* buf2, size_t num_elements,
+                     dietgpu::FloatType float_type, float tolerance = 1e-5f) {
   size_t mismatches = 0;
   const size_t max_print = 10;
 
@@ -165,12 +165,12 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
 }
 
 // Test basic compression and decompression roundtrip
-bool testCompressionRoundtrip(Compressor& compressor,
-                              MemoryAllocator& allocator, size_t buffer_size,
-                              dietgpu::FloatType float_type) {
+bool test_compression_roundtrip(Compressor& compressor,
+                                MemoryAllocator& allocator, size_t buffer_size,
+                                dietgpu::FloatType float_type) {
   UCCL_LOG(INFO, UCCL_RDMA) << "=== Testing Compression Roundtrip ===";
 
-  size_t elem_size = getElementSize(float_type);
+  size_t elem_size = get_element_size(float_type);
   size_t num_elements = buffer_size / elem_size;
 
   UCCL_LOG(INFO, UCCL_RDMA) << "Buffer size: " << buffer_size << " bytes";
@@ -186,7 +186,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
   std::vector<char> h_output(buffer_size);
 
   // Fill input with random data
-  fillRandomFloatData(h_input.data(), num_elements, float_type);
+  fill_random_float_data(h_input.data(), num_elements, float_type);
 
   // Copy input to GPU
   GPU_RT_CHECK(
@@ -249,8 +249,8 @@ bool testCompressionRoundtrip(Compressor& compressor,
                           GPU_MEMCPY_D2H));
 
   // Compare
-  bool match =
-      compareBuffers(h_input.data(), h_output.data(), num_elements, float_type);
+  bool match = compare_buffers(h_input.data(), h_output.data(), num_elements,
+                               float_type);
 
   if (match) {
     UCCL_LOG(INFO, UCCL_RDMA) << "Roundtrip test PASSED!";
@@ -262,13 +262,13 @@ bool testCompressionRoundtrip(Compressor& compressor,
 }
 
 // Bandwidth test
-void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
-                   size_t buffer_size, dietgpu::FloatType float_type,
-                   int iterations) {
+void test_bandwidth(Compressor& compressor, MemoryAllocator& allocator,
+                    size_t buffer_size, dietgpu::FloatType float_type,
+                    int iterations) {
   UCCL_LOG(INFO, UCCL_RDMA)
       << "=== Testing Bandwidth (" << iterations << " iterations) ===";
 
-  size_t elem_size = getElementSize(float_type);
+  size_t elem_size = get_element_size(float_type);
   size_t num_elements = buffer_size / elem_size;
 
   // Allocate GPU buffers
@@ -277,7 +277,7 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
 
   // Allocate host buffer and fill with random data
   std::vector<char> h_input(buffer_size);
-  fillRandomFloatData(h_input.data(), num_elements, float_type);
+  fill_random_float_data(h_input.data(), num_elements, float_type);
 
   GPU_RT_CHECK(
       GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size, GPU_MEMCPY_H2D));
@@ -358,7 +358,7 @@ int main(int argc, char* argv[]) {
   UCCL_LOG(INFO, UCCL_RDMA) << "Using GPU device: " << FLAGS_gpu_index;
 
   // Get float type
-  dietgpu::FloatType float_type = getFloatTypeFromString(FLAGS_float_type);
+  dietgpu::FloatType float_type = get_float_type_from_string(FLAGS_float_type);
   UCCL_LOG(INFO, UCCL_RDMA) << "Float type: " << FLAGS_float_type;
   UCCL_LOG(INFO, UCCL_RDMA) << "Buffer size: " << FLAGS_buffer_size << " bytes";
   UCCL_LOG(INFO, UCCL_RDMA) << "";
@@ -370,15 +370,15 @@ int main(int argc, char* argv[]) {
   bool all_passed = true;
 
   // Test compression roundtrip
-  if (!testCompressionRoundtrip(compressor, allocator, FLAGS_buffer_size,
-                                float_type)) {
+  if (!test_compression_roundtrip(compressor, allocator, FLAGS_buffer_size,
+                                  float_type)) {
     all_passed = false;
   }
   UCCL_LOG(INFO, UCCL_RDMA) << "";
 
   // Bandwidth test
-  testBandwidth(compressor, allocator, FLAGS_buffer_size, float_type,
-                FLAGS_iterations);
+  test_bandwidth(compressor, allocator, FLAGS_buffer_size, float_type,
+                 FLAGS_iterations);
   UCCL_LOG(INFO, UCCL_RDMA) << "";
 
   UCCL_LOG(INFO, UCCL_RDMA) << "========================================";

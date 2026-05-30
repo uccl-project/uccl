@@ -26,7 +26,7 @@ SendControlChannel::SendControlChannel(std::shared_ptr<RdmaContext> ctx,
   (void)mem_block;
 }
 
-void SendControlChannel::bindWriteMetaRing(
+void SendControlChannel::bind_write_meta_ring(
     std::shared_ptr<RegMemBlock> local_mirror,
     RemoteMemInfo const& remote_ring) {
   write_meta_local_ = local_mirror;
@@ -35,8 +35,8 @@ void SendControlChannel::bindWriteMetaRing(
                                       remote_ring.rkey_array, remote_ring.type);
 }
 
-bool SendControlChannel::pushWriteMeta(WriteReqMeta const& meta,
-                                       uint32_t slot) {
+bool SendControlChannel::push_write_meta(WriteReqMeta const& meta,
+                                         uint32_t slot) {
   if (unlikely(!write_meta_local_ || !write_meta_remote_)) return false;
   auto* local = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
   *local = meta;
@@ -61,12 +61,12 @@ bool SendControlChannel::pushWriteMeta(WriteReqMeta const& meta,
   return RDMADataChannel::send(req) >= 0;
 }
 
-bool SendControlChannel::noblockingPoll() {
+bool SendControlChannel::noblocking_poll() {
   std::vector<CQMeta> cq_datas;
-  if (RDMADataChannel::pollOnce(cq_datas)) {
+  if (RDMADataChannel::poll_once(cq_datas)) {
     for (auto const& cq_data : cq_datas) {
       UCCL_LOG(INFO, UCCL_RDMA)
-          << "SendControlChannel::noblockingPoll - Polled completion: "
+          << "SendControlChannel::noblocking_poll - Polled completion: "
           << cq_data;
     }
     return true;
@@ -89,15 +89,15 @@ RecvControlChannel::RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
   (void)mem_block;
 }
 
-bool RecvControlChannel::noblockingPoll() {
+bool RecvControlChannel::noblocking_poll() {
   std::vector<CQMeta> cq_datas;
-  if (!RDMADataChannel::pollOnce(cq_datas)) return false;
+  if (!RDMADataChannel::poll_once(cq_datas)) return false;
   for (auto const& cq_data : cq_datas) {
     UCCL_LOG(INFO, UCCL_RDMA)
-        << "RecvControlChannel::noblockingPoll - CQE: " << cq_data
+        << "RecvControlChannel::noblocking_poll - CQE: " << cq_data
         << ", is_write_meta=" << cq_data.imm.is_write_meta()
         << ", local_ring=" << (write_meta_local_ ? "set" : "NULL");
-    if (cq_data.hasIMM() && cq_data.imm.is_write_meta() && write_meta_local_) {
+    if (cq_data.has_imm() && cq_data.imm.is_write_meta() && write_meta_local_) {
       uint16_t slot = cq_data.imm.plain_index();
       auto* entry = static_cast<WriteReqMeta*>(write_meta_local_->addr) + slot;
       UCCL_LOG(INFO, UCCL_RDMA)
@@ -111,12 +111,12 @@ bool RecvControlChannel::noblockingPoll() {
   return true;
 }
 
-void RecvControlChannel::bindWriteMetaRing(
+void RecvControlChannel::bind_write_meta_ring(
     std::shared_ptr<RegMemBlock> local_ring) {
   write_meta_local_ = local_ring;
 }
 
-std::vector<WriteReqMeta> RecvControlChannel::drainPendingWriteMetas() {
+std::vector<WriteReqMeta> RecvControlChannel::drain_pending_write_metas() {
   std::vector<WriteReqMeta> out;
   out.swap(pending_write_metas_);
   return out;

@@ -15,9 +15,9 @@ std::shared_ptr<RegMemBlock> MemoryAllocator::allocate(
   struct ibv_mr* mr = nullptr;
 
   if (type == MemoryType::GPU) {
-    addr = allocateGPU(size);
+    addr = allocate_gpu(size);
   } else {  // MemoryType::HOST
-    addr = allocateHost(size);
+    addr = allocate_host(size);
   }
 
   if (!addr) {
@@ -27,26 +27,26 @@ std::shared_ptr<RegMemBlock> MemoryAllocator::allocate(
   // Create RegMemBlock with custom deleter
   auto deleter = [this, type](RegMemBlock* block) {
     if (block) {
-      if (block->addr) deallocateRaw(block->addr, type);
+      if (block->addr) deallocate_raw(block->addr, type);
       delete block;
     }
   };
 
   auto block = new RegMemBlock(addr, size, type);
   if (ctx) {
-    mr = ctx->regMem(addr, size);
+    mr = ctx->reg_mem(addr, size);
 
     if (!mr) {
-      deallocateRaw(addr, type);
+      deallocate_raw(addr, type);
       throw std::runtime_error("Failed to register memory with RDMA");
     }
-    block->setMRByContextID(ctx->getContextID(), mr);
+    block->set_mr_by_context_id(ctx->get_context_id(), mr);
   }
 
   return std::shared_ptr<RegMemBlock>(block, deleter);
 }
 
-void* MemoryAllocator::allocateHost(size_t size) {
+void* MemoryAllocator::allocate_host(size_t size) {
   void* addr = nullptr;
   int ret = posix_memalign(&addr, page_size_, size);
   if (ret != 0) {
@@ -57,7 +57,7 @@ void* MemoryAllocator::allocateHost(size_t size) {
   return addr;
 }
 
-void* MemoryAllocator::allocateGPU(size_t size) {
+void* MemoryAllocator::allocate_gpu(size_t size) {
   void* addr = nullptr;
   gpuError_t err = gpuMalloc(&addr, size);
   if (err != gpuSuccess) {
@@ -67,7 +67,7 @@ void* MemoryAllocator::allocateGPU(size_t size) {
   return addr;
 }
 
-void MemoryAllocator::deallocateRaw(void* addr, MemoryType type) {
+void MemoryAllocator::deallocate_raw(void* addr, MemoryType type) {
   if (!addr) return;
 
   if (type == MemoryType::GPU) {

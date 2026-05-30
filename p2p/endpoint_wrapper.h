@@ -54,7 +54,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
   bundle->remote_mem_obj.addr = slot_item.addr;
   bundle->remote_mem_obj.length = slot_item.size;
   bundle->remote_mem_obj.type = MemoryType::GPU;
-  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+  bundle->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
 
   bundle->local_mem_obj.addr = src;
   bundle->local_mem_obj.size = size;
@@ -74,12 +74,12 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
 
   auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
 
-  ureq->engine_idx = obj->writeOrRead(req);
+  ureq->engine_idx = obj->write_or_read(req);
   ureq->peer_id = conn->uccl_conn_id_.peer_id;
   return ureq->engine_idx;
 }
 
-// Same as set_request() but skips RDMAEndpoint::writeOrRead() (which does a
+// Same as set_request() but skips RDMAEndpoint::write_or_read() (which does a
 // per-call map.find on send_channel_groups_) by taking a pre-resolved
 // SendConnection pointer directly. Used by writev/readv hot paths.
 static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
@@ -91,7 +91,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
   bundle->remote_mem_obj.addr = slot_item.addr;
   bundle->remote_mem_obj.length = slot_item.size;
   bundle->remote_mem_obj.type = MemoryType::GPU;
-  bundle->remote_mem_obj.rkey_array.copyFrom(slot_item.padding);
+  bundle->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
 
   bundle->local_mem_obj.addr = src;
   bundle->local_mem_obj.size = size;
@@ -112,7 +112,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
 
   int64_t wr_id = -1;
   while (wr_id < 0) {
-    wr_id = send_group->postWriteOrRead(req);
+    wr_id = send_group->post_write_or_read(req);
     if (wr_id < 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
   }
   ureq->engine_idx = static_cast<int>(wr_id);
@@ -131,7 +131,7 @@ inline ConnID uccl_connect(GenericEndpoint const& ep, int remote_gpuidx,
       [&](auto const& s) -> ConnID {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          int local_gpu = s->gpuIndex();
+          int local_gpu = s->gpu_index();
           auto c = s->uccl_connect(0, local_gpu, 0, remote_gpuidx, remote_ip,
                                    remote_port);
           return to_conn_id(c);
@@ -173,7 +173,7 @@ inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           int remote_dev = 0;
-          int local_gpu = s->gpuIndex();
+          int local_gpu = s->gpu_index();
           auto c = s->uccl_accept(0, -1, local_gpu, remote_ip, &remote_dev,
                                   remote_gpuidx);
           return to_conn_id(c);
@@ -218,8 +218,8 @@ inline bool uccl_poll_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
         } else {
           if (ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
-            s->sendRoutine();
-            return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
+            s->send_routine();
+            return s->check_send_complete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;
@@ -236,7 +236,7 @@ inline void uccl_drive_send(GenericEndpoint const& ep) {
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
-          s->sendRoutine();
+          s->send_routine();
         }
       },
       ep);
@@ -249,7 +249,7 @@ inline void uccl_flush_send(GenericEndpoint const& ep) {
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
-          s->flushAllSends();
+          s->flush_all_sends();
         }
       },
       ep);
@@ -257,7 +257,7 @@ inline void uccl_flush_send(GenericEndpoint const& ep) {
 
 // Resolve the SendConnection for a peer_id once. Returns nullptr on the
 // NCCL path or if not found. Callers can then use uccl_check_wr_fast() to
-// avoid the per-call mutex + map lookup in checkSendComplete_once().
+// avoid the per-call mutex + map lookup in check_send_complete_once().
 inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
                                                uint64_t peer_id) {
   SendConnection* result = nullptr;
@@ -265,7 +265,7 @@ inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
-          result = s->getSendGroupRaw(peer_id);
+          result = s->get_send_group_raw(peer_id);
         }
       },
       ep);
@@ -282,7 +282,7 @@ inline void uccl_drive_recv(GenericEndpoint const& ep) {
       [](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
-          s->recvRoutine();
+          s->recv_routine();
         }
       },
       ep);
@@ -303,7 +303,7 @@ inline bool uccl_check_ureq_once(GenericEndpoint const& ep, UcclRequest* ureq) {
         } else {
           if (ureq->type == ReqType::ReqWrite ||
               ureq->type == ReqType::ReqRead) {
-            return s->checkSendComplete_once(ureq->peer_id, ureq->engine_idx);
+            return s->check_send_complete_once(ureq->peer_id, ureq->engine_idx);
           }
           UCCL_LOG(ERROR) << "Invalid request type: " << ureq->type;
           return false;
@@ -404,7 +404,7 @@ inline int prepare_fifo_metadata(GenericEndpoint const& ep, Conn* conn,
           FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;
-          copyRKeysFromMRArrayToBytes(
+          copy_rkeys_from_mr_array_to_bytes(
               mhandle->mr_array, static_cast<char*>(remote_mem_info.padding),
               sizeof(remote_mem_info.padding));
           serialize_fifo_item(remote_mem_info, out_buf);

@@ -17,10 +17,10 @@ class MemoryAllocator {
  private:
   long page_size_;
 
-  void* allocateHost(size_t size);
+  void* allocate_host(size_t size);
 
-  void* allocateGPU(size_t size);
+  void* allocate_gpu(size_t size);
 
   // Deallocate memory without RDMA deregistration
-  void deallocateRaw(void* addr, MemoryType type);
+  void deallocate_raw(void* addr, MemoryType type);
 };

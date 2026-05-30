@@ -62,33 +62,34 @@ class RDMADataChannelImpl {
   virtual ~RDMADataChannelImpl() = default;
 
   // Initialize QP and CQ
-  virtual void initQP(std::shared_ptr<RdmaContext> ctx,
-                      struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
-                      ChannelMetaData* local_meta) = 0;
+  virtual void init_qp(std::shared_ptr<RdmaContext> ctx,
+                       struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
+                       ChannelMetaData* local_meta) = 0;
 
   // Connect QP to remote
-  virtual void connectQP(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-                         ChannelMetaData const& remote_meta) = 0;
+  virtual void connect_qp(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
+                          ChannelMetaData const& remote_meta) = 0;
 
   // Poll completion queue
-  virtual bool pollOnce(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
-                        uint32_t channel_id, uint32_t& nb_post_recv) = 0;
+  virtual bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
+                         uint32_t channel_id, uint32_t& nb_post_recv) = 0;
 
   // Post receive work request
-  virtual void lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n, bool force) = 0;
+  virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
+                                    bool force) = 0;
 
   // Setup Destination address
-  virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
-                             uint32_t remote_qpn) = 0;
+  virtual void set_dst_address(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
+                               uint32_t remote_qpn) = 0;
 
   // Post an RDMA write
-  virtual int postWrite(struct ibv_qp* qp, struct ibv_ah* ah,
-                        uint32_t remote_qpn, uint64_t wr_id,
-                        struct ibv_sge* sge, uint64_t remote_addr,
-                        uint32_t remote_rkey, bool signaled) = 0;
+  virtual int post_write(struct ibv_qp* qp, struct ibv_ah* ah,
+                         uint32_t remote_qpn, uint64_t wr_id,
+                         struct ibv_sge* sge, uint64_t remote_addr,
+                         uint32_t remote_rkey, bool signaled) = 0;
 
   // Initialize pre-allocated resources
-  virtual void initPreAllocResources() = 0;
+  virtual void init_pre_alloc_resources() = 0;
 
  protected:
   struct ibv_recv_wr* pre_alloc_recv_wrs_ = nullptr;
@@ -101,4 +102,4 @@ class IBDataChannelImpl;
 
 // Factory function declaration (defined in rdma_data_channel.cc after
 // including provider headers)
-std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl();
+std::unique_ptr<RDMADataChannelImpl> create_rdma_data_channel_impl();
