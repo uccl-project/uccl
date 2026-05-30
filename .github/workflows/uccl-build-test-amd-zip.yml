@@ -59,6 +59,8 @@ jobs:
 
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/uccl-dev
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
           ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST0}}" >> ~/.ssh/known_hosts
           ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST1}}" >> ~/.ssh/known_hosts
@@ -102,16 +104,30 @@ jobs:
           EOF
 
           if [ "$SHARED_NFS" != "true" ]; then
-            echo "Syncing sandbox from amd0 to amd1..."
+            echo "Syncing sandbox from amd0 to amd1 via forwarded SSH agent..."
             AMD1_HOST="${{ secrets.UCCL_DEV_AMD_HOST1 }}"
             AMD1_USER="${{ secrets.UCCL_DEV_AMD_USER }}"
-            ssh -o BatchMode=yes amd0 bash --norc --noprofile << EOF
+            ssh -A -o BatchMode=yes -o ForwardAgent=yes amd0 \
+              "AMD1_HOST=${AMD1_HOST@Q} AMD1_USER=${AMD1_USER@Q} bash --norc --noprofile -s" << 'EOF'
           set -euo pipefail
+          if [ -z "${SSH_AUTH_SOCK:-}" ]; then
+            echo "ERROR: SSH agent forwarding unavailable (SSH_AUTH_SOCK unset on amd0)" >&2
+            exit 1
+          fi
+          if ! ssh-add -l >/dev/null 2>&1; then
+            echo "ERROR: Forwarded SSH agent has no keys on amd0" >&2
+            ssh-add -l >&2 || true
+            exit 1
+          fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           ssh-keyscan -H "$AMD1_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          RSYNC_RSH="ssh -o BatchMode=yes -o IdentitiesOnly=no -F /dev/null -o UserKnownHostsFile=${HOME}/.ssh/known_hosts"
+          ssh -o BatchMode=yes -o IdentitiesOnly=no -F /dev/null \
+            -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
+            "${AMD1_USER}@${AMD1_HOST}" true
           rsync -az --exclude .git --delete \
-            -e "ssh -o BatchMode=yes" \
+            -e "$RSYNC_RSH" \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             ~/uccl-ci-sandbox/ \
             "${AMD1_USER}@${AMD1_HOST}:~/uccl-ci-sandbox/"
