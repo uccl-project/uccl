@@ -183,14 +183,6 @@ def _run_client(args, ep: "p2p.Endpoint", remote_metadata: bytes) -> List[Tuple]
     return results
 
 
-def _run_dual_benchmark(args) -> List[Tuple]:
-    raise RuntimeError("--dual requires the removed two-sided send/recv path")
-
-
-def _run_ring_benchmark(args) -> List[Tuple]:
-    raise RuntimeError("--ring requires the removed two-sided send/recv path")
-
-
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -230,16 +222,6 @@ def main():
         help="Use asynchronous write transfers",
     )
     p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Unsupported: requires the removed two-sided send/recv path.",
-    )
-    p.add_argument(
-        "--ring",
-        action="store_true",
-        help="Unsupported: requires the removed two-sided send/recv path.",
-    )
-    p.add_argument(
         "--dtype",
         choices=["float16", "bfloat16", "float32", "float8_e4m3fn", "float8_e5m2"],
         default="float32",
@@ -262,19 +244,6 @@ def main():
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-
-    # Check for incompatible options
-    if args.dual and args.ring:
-        print("ERROR: --dual and --ring options are mutually exclusive")
-        sys.exit(1)
-
-    if args.dual:
-        print("ERROR: --dual requires the removed two-sided send/recv path")
-        sys.exit(1)
-
-    if args.ring:
-        print("ERROR: --ring requires the removed two-sided send/recv path")
-        sys.exit(1)
 
     if world_size != 2:
         print("ERROR: Default client-server benchmark requires exactly 2 processes.")

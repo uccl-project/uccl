@@ -604,11 +604,6 @@ def main():
         help="Use asynchronous transfers",
     )
     p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Run dual benchmark",
-    )
-    p.add_argument(
         "--sender-device",
         choices=["cpu", "gpu"],
         default=None,
@@ -639,9 +634,9 @@ def main():
         args.receiver_device = args.device
 
     # Check for incompatible options
-    mode_flags = sum([args.dual, args.write_ipc, args.read_ipc])
+    mode_flags = sum([args.write_ipc, args.read_ipc])
     if mode_flags > 1:
-        print("Error: --dual, --write-ipc, and --read-ipc are mutually exclusive")
+        print("Error: --write-ipc and --read-ipc are mutually exclusive")
         sys.exit(1)
 
     dist.init_process_group(backend="gloo")
@@ -654,8 +649,6 @@ def main():
         mode = "write_ipc"
     elif args.read_ipc:
         mode = "read_ipc"
-    elif args.dual:
-        mode = "Dual"
     else:
         mode = "Standard"
     api_type = "Async" if args.async_api else "Sync"
@@ -704,9 +697,7 @@ def main():
         dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
         remote_metadata = bytes(remote_metadata_tensor.tolist())
 
-    if args.dual:
-        raise RuntimeError("--dual requires the removed two-sided send/recv path")
-    elif args.write_ipc:
+    if args.write_ipc:
         _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
         if rank == 0:
             _run_client_write_ipc(args, ep, remote_gpu_idx)

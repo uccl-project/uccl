@@ -94,7 +94,6 @@ Notes:
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * You can specify `UCCL_P2P_TRANSPORT=ib|efa|nccl|tcp|tcpx` at runtime to choose different network backends. The default is `ib` that works for NVIDIA, Broadcom, AMD, and Intel RDMA NICs. 
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
-* To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
 * To benchmark one-sided IPC write (GPU-to-GPU or CPU-to-GPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc`. Use `--device cpu --pinned` for CPU source buffers.
 * To benchmark one-sided IPC read (GPU-to-GPU or GPU-to-CPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc`. Use `--device cpu --pinned` for CPU destination buffers.
 * To benchmark one-sided READ/WRITE transfer, `benchmark_uccl_readwrite.py`.
@@ -138,7 +137,6 @@ NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank
 Notes: 
 * You can specify `NCCL_IB_HCA=mlx5_2:1` to control which NIC and port to use. 
 * If you see errors like `message size truncated`, it is likely caused by NCCL version mismatch. We suggest specifying `LD_PRELOAD=<path to libnccl.so.2>`. 
-* To benchmark dual direction transfer, you can add `--dual`. 
 * Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
@@ -249,9 +247,6 @@ UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nix
 # On client
 UCX_MAX_RMA_LANES=4 UCX_NET_DEVICES=rdma3:1 UCX_TLS=rocm,rc python benchmark_nixl.py --role client --remote-ip <Server IP>
 ```
-
-Notes: 
-* You can specify `--dual --remote-ip <Remote IP>` to benchmark dual-direction NIXL transfer. 
 
 ### Running NIXL with Mooncake backend
 
