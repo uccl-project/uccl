@@ -318,10 +318,10 @@ bool SendConnection::can_use_raw_one_sided_batch(SendType send_type) {
 }
 
 bool SendConnection::post_write_or_read_batch(SendType send_type,
-                                          OneSidedBatchOp const* ops,
-                                          size_t num_ops, int64_t* wr_ids,
-                                          RawBatchWait* waits,
-                                          size_t* num_waits) {
+                                              OneSidedBatchOp const* ops,
+                                              size_t num_ops, int64_t* wr_ids,
+                                              RawBatchWait* waits,
+                                              size_t* num_waits) {
   if (num_waits != nullptr) *num_waits = 0;
   if (unlikely(send_type != SendType::Write && send_type != SendType::Read)) {
     UCCL_LOG(ERROR) << "SendConnection::post_write_or_read_batch - invalid "

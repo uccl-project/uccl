@@ -128,7 +128,8 @@ static inline void check_python_signals() {
 static inline bool raw_one_sided_batch_eligible(
     std::vector<size_t> const& size_v, size_t num_iovs) {
   for (size_t i = 0; i < num_iovs; ++i) {
-    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1) return false;
+    if (ChunkSplitStrategy::get_message_chunk_count(size_v[i]) != 1)
+      return false;
   }
   return true;
 }
@@ -927,7 +928,8 @@ bool Endpoint::run_raw_one_sided_pipeline(
     }
 
     if (!send_group->post_write_or_read_batch(send_type, ops.data(), batch_iovs,
-                                          wr_ids, waits.data(), &num_waits)) {
+                                              wr_ids, waits.data(),
+                                              &num_waits)) {
       return false;
     }
     if (unlikely(num_waits == 0)) return false;

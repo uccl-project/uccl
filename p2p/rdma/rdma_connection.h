@@ -118,9 +118,9 @@ class SendConnection : public RDMAConnection {
   bool can_use_raw_one_sided_batch(SendType send_type);
 
   bool post_write_or_read_batch(SendType send_type, OneSidedBatchOp const* ops,
-                            size_t num_ops, int64_t* wr_ids,
-                            RawBatchWait* waits = nullptr,
-                            size_t* num_waits = nullptr);
+                                size_t num_ops, int64_t* wr_ids,
+                                RawBatchWait* waits = nullptr,
+                                size_t* num_waits = nullptr);
 
   void set_remote_decompress_buf(RemoteMemInfo const& m);
 
