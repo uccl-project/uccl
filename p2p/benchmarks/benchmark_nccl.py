@@ -129,19 +129,27 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            16777216,
-            104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=10)
+    p.add_argument("--iters", type=int, default=128)
     args = p.parse_args()
 
     backend = "nccl" if args.device == "gpu" else "gloo"

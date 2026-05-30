@@ -1,0 +1,159 @@
+name: UCCL P2P Test (AMD)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: amd-ci-hosts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup-and-build:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
+    uses: ./.github/workflows/uccl-build-amd.yml
+    with:
+      build_type: p2p
+    secrets: inherit
+
+  p2p-test:
+    needs: setup-and-build
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+
+    steps:
+      - name: Setup SSH for AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
+          chmod 600 ~/.ssh/uccl-dev
+
+          cat >> ~/.ssh/config << 'EOF'
+          Host amd0
+              HostName "${{secrets.UCCL_DEV_AMD_HOST0}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+
+          Host amd1
+              HostName "${{secrets.UCCL_DEV_AMD_HOST1}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+          EOF
+
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST0}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST1}}" >> ~/.ssh/known_hosts
+
+      - name: Run P2P benchmark
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host0.log
+            sleep 1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
+          EOF
+          PID0=$!
+
+          sleep 2
+
+          ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host1.log
+            sleep 1
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
+          EOF
+          PID1=$!
+
+          wait -n $PID0 $PID1
+          exitcode=$?
+          if [ $exitcode -ne 0 ]; then
+            kill $PID0 $PID1 2>/dev/null || true
+            sleep 1
+            kill -9 $PID0 $PID1 2>/dev/null || true
+            wait $PID0 $PID1 2>/dev/null || true
+            exit $exitcode
+          fi
+          wait $PID0 $PID1
+          exit $?
+
+      - name: Kill stale CI GPU processes
+        if: always()
+        shell: bash
+        run: |
+          for host in amd0 amd1; do
+            ssh -o BatchMode=yes "$host" bash --norc --noprofile << 'EOF' || true
+              for pid in $(rocm-smi --showpids 2>/dev/null | grep -oE "[0-9]+" | sort -nu); do
+                [ -d "/proc/$pid" ] || continue
+                cwd="$(readlink -f /proc/$pid/cwd 2>/dev/null || true)"
+                case "$cwd" in "$HOME/uccl-ci-sandbox"*) kill -9 "$pid" 2>/dev/null || true ;; esac
+              done
+          EOF
+          done
+
+      - name: Fetch remote logs
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          for log in build p2p-host0 p2p-host1; do
+            scp -o BatchMode=yes amd0:~/uccl-ci-sandbox/${log}.log ./amd0-${log}.log 2>/dev/null || true
+            scp -o BatchMode=yes amd1:~/uccl-ci-sandbox/${log}.log ./amd1-${log}.log 2>/dev/null || true
+          done
+
+      - name: Upload log artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amd-p2p-logs
+          path: |
+            amd0-*.log
+            amd1-*.log
+          if-no-files-found: warn
