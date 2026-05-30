@@ -136,7 +136,7 @@ jobs:
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
-              benchmarks/benchmark_uccl_readwrite.py 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
           EOF
           PID0=$!
 
@@ -158,7 +158,7 @@ jobs:
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
-              benchmarks/benchmark_uccl_readwrite.py 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
           EOF
           PID1=$!
 
