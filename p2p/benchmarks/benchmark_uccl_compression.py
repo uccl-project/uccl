@@ -126,7 +126,6 @@ def _run_server(args, ep: "p2p.Endpoint") -> List[Tuple]:
         # barrier before reusing the advertised buffer for the next size.
         dist.barrier()
         ep.dereg(mr_id)
-        print(f"[Server] {_pretty_size(size):>9} : advertised write target")
         results.append(("Server", size, _pretty_size(size), 0.0, 0.0))
     print("[Server] Benchmark complete")
     return results

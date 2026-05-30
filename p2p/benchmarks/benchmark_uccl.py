@@ -119,10 +119,6 @@ def _run_server(args, ep, remote_metadata):
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
         dist.barrier()
-
-        print(
-            f"[Server] {_pretty_size(size):>8} : advertised {args.num_iovs} buffer(s)"
-        )
     print("[Server] Benchmark complete")
 
 
