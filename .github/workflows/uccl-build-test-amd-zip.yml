@@ -1,7 +1,9 @@
 name: UCCL Build & Test (AMD, DietGPU)
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -16,7 +18,7 @@ concurrency:
 jobs:
   build-with-dietgpu-on-amd:
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
     runs-on: ubuntu-latest
