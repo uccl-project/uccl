@@ -103,17 +103,19 @@ jobs:
 
           if [ "$SHARED_NFS" != "true" ]; then
             echo "Syncing sandbox from amd0 to amd1..."
+            AMD1_HOST="${{ secrets.UCCL_DEV_AMD_HOST1 }}"
+            AMD1_USER="${{ secrets.UCCL_DEV_AMD_USER }}"
             ssh -o BatchMode=yes amd0 bash --norc --noprofile << EOF
-              set -euo pipefail
-              mkdir -p ~/.ssh
-              chmod 700 ~/.ssh
-              ssh-keyscan -H "${{ secrets.UCCL_DEV_AMD_HOST1 }}" >> ~/.ssh/known_hosts 2>/dev/null || true
-              rsync -az --exclude .git --delete \
-                -e "ssh -o BatchMode=yes" \
-                --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
-                ~/uccl-ci-sandbox/ \
-                "${{ secrets.UCCL_DEV_AMD_USER }}@${{ secrets.UCCL_DEV_AMD_HOST1 }}:~/uccl-ci-sandbox/"
-            EOF
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "$AMD1_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -az --exclude .git --delete \
+            -e "ssh -o BatchMode=yes" \
+            --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+            ~/uccl-ci-sandbox/ \
+            "${AMD1_USER}@${AMD1_HOST}:~/uccl-ci-sandbox/"
+          EOF
           fi
 
       - name: Run P2P benchmark
