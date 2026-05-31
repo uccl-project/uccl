@@ -3,6 +3,7 @@
 #include "compression.h"
 #include "rdma_ctrl_channel.h"
 #include "rdma_data_channel.h"
+#include "seq_num.h"
 #include <cc/cc_state.h>
 #include <cc/link_bandwidth.h>
 #include <array>
