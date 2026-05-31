@@ -257,53 +257,18 @@ int64_t SendConnection::post_write_or_read(
   return wr_id;
 }
 
-int64_t SendConnection::read(std::shared_ptr<RDMASendRequest> req) {
-  if (unlikely(req->send_type != SendType::Read)) {
-    UCCL_LOG(ERROR) << "SendConnection::read - Invalid send_type, expected "
-                       "SendType::Read";
-    return -1;
-  }
-
-  // Enforce CC window before posting
-  if (cc_.enabled()) {
-    size_t inflight_limit_bytes = current_inflight_limit_bytes();
-    while (current_inflight_bytes() > inflight_limit_bytes) {
-      std::this_thread::yield();
-      inflight_limit_bytes = current_inflight_limit_bytes();
-    }
-  }
-
-  std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-  int64_t wr_id = tracker_->send_packet(req->get_local_len());
-  req->wr_id = wr_id;
-
-  auto [channel_id, context_id] = select_next_channel_round_robin();
-  if (unlikely(channel_id == 0)) {
-    UCCL_LOG(ERROR) << "SendConnection::read - Failed to select channel";
-    return -1;
-  }
-
-  req->channel_id = channel_id;
-  post_chunked_request(req);
-
-  // Draining any remaining chunks, as in post_write_or_read()
-  while (!drain_pending_chunks()) {
-    std::this_thread::yield();
-  }
-
-  return wr_id;
-}
-
 void SendConnection::start_polling() {
-  if (running_.load()) {
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true,
+                                       std::memory_order_acq_rel,
+                                       std::memory_order_acquire)) {
     return;
   }
-  running_.store(true);
   poll_thread_ =
       std::make_unique<std::thread>(&SendConnection::polling_loop, this);
 }
 
-bool SendConnection::check(int64_t wr_id) {
+bool SendConnection::check_completion(int64_t wr_id) {
   return tracker_->is_acknowledged(wr_id);
 }
 

@@ -168,7 +168,7 @@ void RDMAEndpoint::check_send_complete(uint64_t peer_id, int64_t wr_id) {
   }
 
   auto send_group = it->second;
-  while (!send_group->check(wr_id)) {
+  while (!send_group->check_completion(wr_id)) {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
   }
   UCCL_LOG(INFO, UCCL_RDMA)
@@ -187,7 +187,7 @@ bool RDMAEndpoint::check_send_complete_once(uint64_t peer_id, int64_t wr_id) {
   }
 
   auto send_group = it->second;
-  return send_group->check(wr_id);
+  return send_group->check_completion(wr_id);
 }
 
 SendConnection* RDMAEndpoint::get_send_group_raw(uint64_t peer_id) {

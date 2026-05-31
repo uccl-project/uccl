@@ -274,7 +274,7 @@ inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
 
 // Fast completion check using a pre-resolved SendConnection*.
 inline bool uccl_check_wr_fast(SendConnection* send_group, int64_t wr_id) {
-  return send_group->check(wr_id);
+  return send_group->check_completion(wr_id);
 }
 
 inline void uccl_drive_recv(GenericEndpoint const& ep) {

@@ -106,14 +106,12 @@ class SendConnection : public RDMAConnection {
 
   int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
 
-  int64_t read(std::shared_ptr<RDMASendRequest> req);
-
   // Start polling thread
   void start_polling();
 
   bool is_running() const { return running_.load(std::memory_order_acquire); }
 
-  bool check(int64_t wr_id);
+  bool check_completion(int64_t wr_id);
 
   bool can_use_raw_one_sided_batch(SendType send_type);
 
