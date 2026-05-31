@@ -45,8 +45,12 @@ void RDMAEndpoint::init_compressor() {
   Compressor& compressor = Compressor::get_instance();
   auto compress_buf = compressor.get_compress_buffer();
   auto decompress_buf = compressor.get_decompress_buffer();
-  if (compress_buf) reg_mr_for_all_slots(*compress_buf);
-  if (decompress_buf) reg_mr_for_all_slots(*decompress_buf);
+  if (compress_buf && !reg_mem(compress_buf)) {
+    UCCL_LOG(ERROR) << "Failed to register compression buffer";
+  }
+  if (decompress_buf && !reg_mem(decompress_buf)) {
+    UCCL_LOG(ERROR) << "Failed to register decompression buffer";
+  }
   if (compressor.get_compress_strategy() == CompressStrategy::kNone) return;
   // Host-side rings used to carry per-message compression metadata and
   // completion acks. Registered on every context slot so any data/control
@@ -56,42 +60,9 @@ void RDMAEndpoint::init_compressor() {
       allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, nullptr);
   std::memset(ack_ring_->addr, 0, kAckRingBytes);
   std::memset(write_meta_ring_->addr, 0, kWriteMetaRingBytes);
-  reg_mr_for_all_slots(*ack_ring_);
-  reg_mr_for_all_slots(*write_meta_ring_);
-}
-
-void RDMAEndpoint::reg_mr_for_all_slots(RegMemBlock& blk) {
-  std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
-  for (size_t slot = 0; slot < contexts_.size(); ++slot) {
-    auto ctx = contexts_[slot];
-    auto it = registered.find(ctx.get());
-    struct ibv_mr* mr = nullptr;
-    if (it != registered.end()) {
-      mr = it->second;
-    } else {
-      mr = ctx->reg_mem(blk.addr, blk.size);
-      if (!mr) {
-        UCCL_LOG(ERROR) << "reg_mr_for_all_slots: ibv_reg_mr FAILED for addr="
-                        << blk.addr << " size=" << blk.size << " slot=" << slot
-                        << " errno=" << errno << " (" << strerror(errno) << ")";
-      } else {
-        UCCL_LOG(INFO, UCCL_RDMA)
-            << "reg_mr_for_all_slots: registered addr=" << blk.addr
-            << " size=" << blk.size << " slot=" << slot << " lkey=0x"
-            << std::hex << mr->lkey << " rkey=0x" << mr->rkey << std::dec;
-      }
-      registered[ctx.get()] = mr;
-    }
-    blk.set_mr_by_context_id(slot, mr);
+  if (!reg_mem(ack_ring_) || !reg_mem(write_meta_ring_)) {
+    throw std::runtime_error("Failed to register compression metadata rings");
   }
-}
-
-std::shared_ptr<RegMemBlock> RDMAEndpoint::ack_ring() const {
-  return ack_ring_;
-}
-
-std::shared_ptr<RegMemBlock> RDMAEndpoint::write_meta_ring() const {
-  return write_meta_ring_;
 }
 
 void RDMAEndpoint::fill_compression_meta(MetaInfoToExchange& m) const {
@@ -105,6 +76,14 @@ void RDMAEndpoint::fill_compression_meta(MetaInfoToExchange& m) const {
 int RDMAEndpoint::gpu_index() const { return gpu_index_; }
 
 size_t RDMAEndpoint::context_count() const { return contexts_.size(); }
+
+std::shared_ptr<RegMemBlock> RDMAEndpoint::ack_ring() const {
+  return ack_ring_;
+}
+
+std::shared_ptr<RegMemBlock> RDMAEndpoint::write_meta_ring() const {
+  return write_meta_ring_;
+}
 
 bool RDMAEndpoint::reg_mem(std::shared_ptr<RegMemBlock> reg_block) {
   if (unlikely(!reg_block)) {

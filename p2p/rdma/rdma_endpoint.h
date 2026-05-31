@@ -25,15 +25,13 @@ class RDMAEndpoint {
 
   void init_compressor();
 
-  // Register a buffer once per UNIQUE RdmaContext and broadcast the resulting
-  // MR pointer to every context slot that shares that context. Mirrors the
-  // dedup logic in uccl_regmr — context slots can share an underlying device,
-  // and naïvely using get_context_id() as the slot key would clobber all slots
-  // onto context 0 and leave the others null.
-  void reg_mr_for_all_slots(RegMemBlock& blk);
+  // Register a buffer once per unique RdmaContext and broadcast the resulting
+  // MR pointer to every context slot that shares that context. Context slots
+  // can share an underlying device; naïvely using get_context_id() as the slot
+  // key would clobber all slots onto context 0 and leave the others null.
+  bool reg_mem(std::shared_ptr<RegMemBlock> reg_block);
 
-  std::shared_ptr<RegMemBlock> ack_ring() const;
-  std::shared_ptr<RegMemBlock> write_meta_ring() const;
+  bool dereg_mem(std::shared_ptr<RegMemBlock> reg_block);
 
   // Populate the three RemoteMemInfo fields in a Control-channel
   // MetaInfoToExchange. No-op if compression is disabled.
@@ -42,9 +40,8 @@ class RDMAEndpoint {
 
   size_t context_count() const;
 
-  bool reg_mem(std::shared_ptr<RegMemBlock> reg_block);
-
-  bool dereg_mem(std::shared_ptr<RegMemBlock> reg_block);
+  std::shared_ptr<RegMemBlock> ack_ring() const;
+  std::shared_ptr<RegMemBlock> write_meta_ring() const;
 
   int build_connect(uint64_t peer_id, bool sync = true, int timeout_ms = 10000);
 
