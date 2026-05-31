@@ -726,8 +726,8 @@ int64_t SendConnection::compress_write_request_split_first(
   tracker_->update_expected_ack_count(wr_id,
                                       std::numeric_limits<uint32_t>::max());
 
-  // No DeferGuard: per-chunk auto-flush gives the round-robin interleaving
-  // required on Broadcom bnxt_re (batching causes LOC_QP_OP_ERR vendor=0x3).
+  // Per-chunk auto-flush gives the round-robin interleaving required on
+  // Broadcom bnxt_re (batching causes LOC_QP_OP_ERR vendor=0x3).
   post_compressed_segment(req, first_seg, first_chunks, num_channels);
   flush_batches();
 

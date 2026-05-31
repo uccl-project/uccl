@@ -71,7 +71,7 @@ int64_t RDMADataChannel::submit_request(std::shared_ptr<RDMASendRequest> req) {
       std::lock_guard<std::mutex> lock(batch_mu_);
       batch_.push_back(std::move(req));
       batch_bytes_ += req_size;
-      should_flush = !g_uccl_defer_flush && (batch_bytes_ >= kBatchFlushBytes);
+      should_flush = batch_bytes_ >= kBatchFlushBytes;
     }
     if (should_flush) flush_batch();
     return 0;  // success; actual post deferred until flush_batch().

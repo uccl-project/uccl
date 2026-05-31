@@ -18,13 +18,6 @@
 // single doorbell per channel.
 inline thread_local bool g_uccl_batch_post = false;
 
-// Additional override: when true, submit_request() never auto-flushes a
-// batch regardless of accumulated bytes — caller must manually flush. Used
-// by the compressed-write split→encode pipeline to coalesce many >32KB
-// chunks into one doorbell per channel per phase, instead of one doorbell
-// per chunk (which kills NIC throughput on compressed writes).
-inline thread_local bool g_uccl_defer_flush = false;
-
 class RDMADataChannel {
  public:
   struct RawSendRequest {
