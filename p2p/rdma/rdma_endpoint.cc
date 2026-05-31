@@ -841,14 +841,6 @@ void RDMAEndpoint::send_routine() {
   }
 }
 
-bool RDMAEndpoint::has_pending_compressed_send() const {
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  for (auto const& [peer_id, send_group] : send_channel_groups_) {
-    if (send_group && send_group->has_pending_compressed()) return true;
-  }
-  return false;
-}
-
 void RDMAEndpoint::flush_all_sends() {
   std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
   for (auto& [peer_id, send_group] : send_channel_groups_) {

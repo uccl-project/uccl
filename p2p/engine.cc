@@ -143,6 +143,13 @@ static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
   return max_bytes;
 }
 
+static inline void drain_pending_compressed_send(SendConnection* send_group) {
+  if (send_group == nullptr) return;
+  while (send_group->has_pending_compressed()) {
+    send_group->send_routine();
+  }
+}
+
 // ShmChannel helper function
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
@@ -677,6 +684,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   bool done = false;
   while (!done) {
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    uccl_drive_recv(ep_);
     if (uccl_poll_ureq_once(ep_, &ureq)) {
       done = true;
     }
@@ -811,6 +819,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     if (num_inflight > 0) {
       uccl_flush_send(ep_);
       uccl_drive_send(ep_);
+      uccl_drive_recv(ep_);
     }
 
     if (send_group != nullptr) {
@@ -957,12 +966,17 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
   UcclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                          &ureq) == -1)
+  while ((send_group != nullptr
+              ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
+                                          curr_slot_item, &ureq)
+              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                                 &ureq)) == -1)
     ;
 
   bool done = false;
@@ -971,6 +985,10 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     if (uccl_poll_ureq_once(ep_, &ureq)) {
       done = true;
     }
+  }
+
+  if (size >= kMinCompressBytes) {
+    drain_pending_compressed_send(send_group);
   }
 
   return true;
@@ -1126,6 +1144,10 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
       }
     }
+  }
+
+  if (max_iov_bytes(size_v, num_iovs) >= kMinCompressBytes) {
+    drain_pending_compressed_send(send_group);
   }
 
   return true;
@@ -2165,7 +2187,6 @@ void Endpoint::send_proxy_thread_func() {
   send_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
-    if (uccl_has_pending_compressed_send(ep_)) uccl_drive_send(ep_);
     send_proxy_adaptive_sleeper_.maybe_sleep();
 
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
@@ -2204,7 +2225,6 @@ void Endpoint::recv_proxy_thread_func() {
   recv_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
-    uccl_drive_recv(ep_);
     recv_proxy_adaptive_sleeper_.maybe_sleep();
 
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
@@ -2231,6 +2251,8 @@ void Endpoint::recv_proxy_thread_func() {
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       recv_proxy_adaptive_sleeper_.update_timer();
+    } else {
+      uccl_drive_recv(ep_);
     }
   }
 }

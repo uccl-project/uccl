@@ -98,8 +98,6 @@ class RDMAEndpoint {
 
   void send_routine();
 
-  bool has_pending_compressed_send() const;
-
   // Flush batched send WRs across all send connections (g_uccl_batch_post).
   void flush_all_sends();
 

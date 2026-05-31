@@ -242,19 +242,6 @@ inline void uccl_drive_send(GenericEndpoint const& ep) {
       ep);
 }
 
-inline bool uccl_has_pending_compressed_send(GenericEndpoint const& ep) {
-  return std::visit(
-      [](auto const& s) -> bool {
-        using T = std::decay_t<decltype(*s)>;
-        if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          return false;
-        } else {
-          return s->has_pending_compressed_send();
-        }
-      },
-      ep);
-}
-
 // Flush any batched send WRs (doorbell-batched posting). Use together with
 // the thread-local g_uccl_batch_post flag.
 inline void uccl_flush_send(GenericEndpoint const& ep) {
