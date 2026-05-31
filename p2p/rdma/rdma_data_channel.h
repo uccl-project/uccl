@@ -2,7 +2,6 @@
 #include "common.h"
 #include "rdma_context.h"
 #include "rdma_data_channel_impl.h"
-#include "seq_num.h"
 #include "transport_type.h"
 #include "util/debug.h"
 #include "util/util.h"
@@ -31,6 +30,7 @@ class RDMADataChannel {
     ImmData imm_data = 0;
   };
 
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
   explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
                            uint32_t channel_id = 0);
   explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
@@ -43,13 +43,19 @@ class RDMADataChannel {
   ~RDMADataChannel();
 
   void establish_channel(ChannelMetaData const& remote_meta);
+
+  // ── Send posting and batching ──────────────────────────────────────────────
   int64_t submit_request(std::shared_ptr<RDMASendRequest> req);
+
+  // Immediate verbs post (bypasses g_uccl_batch_post). Returns 0 on success.
+  int post_request(std::shared_ptr<RDMASendRequest> req);
 
   // Flush all accumulated batched send requests in one doorbell. Safe to call
   // when nothing is batched (returns 0).
   int flush_batch();
   int post_raw_batch(std::vector<RawSendRequest> const& batch);
 
+  // ── Completion polling ─────────────────────────────────────────────────────
   // Given a CQE wr_id, return all wr_ids that should be acknowledged in the
   // tracker. With selective signaling, a single signaled CQE represents
   // completion of the WR with that wr_id plus all earlier unsignaled WRs
@@ -58,30 +64,27 @@ class RDMADataChannel {
   // only the original wr_id is returned.
   void expand_completion(uint64_t cqe_wr_id, std::vector<uint64_t>& acks);
 
-  int64_t read(std::shared_ptr<RDMASendRequest> req);
-  int64_t send(std::shared_ptr<RDMASendRequest> req);
   bool poll_once(std::vector<CQMeta>& cq_datas);
 
+  // ── Ack writes ─────────────────────────────────────────────────────────────
   // Post an 8-byte RDMA WRITE ack to the sender's ack_ring.
   // Uses a pre-registered staging slot (bnxt_re rejects IBV_SEND_INLINE).
   int post_ack_write(uint64_t remote_addr, uint32_t remote_rkey,
                      uint32_t ack_slot, uint64_t value);
 
-  // Get local metadata
+  // ── Accessors ──────────────────────────────────────────────────────────────
   std::shared_ptr<ChannelMetaData> get_local_meta() const;
-
-  // Get remote metadata
   std::shared_ptr<ChannelMetaData> get_remote_meta() const;
-
-  // Get RdmaContext
   std::shared_ptr<RdmaContext> const get_context() const;
   uint64_t const get_context_id() const;
   uint32_t get_channel_id() const;
 
  private:
+  // ── Constants ──────────────────────────────────────────────────────────────
   static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
   static constexpr uint32_t kAckSigEvery = 64;
 
+  // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<RdmaContext> ctx_;
   uint32_t channel_id_;
 
@@ -92,7 +95,6 @@ class RDMADataChannel {
   std::shared_ptr<ChannelMetaData> local_meta_;
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
-  std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMADataChannelImpl> impl_;
 
   // Per-channel buffer for batched doorbell posting. Protected by batch_mu_.
@@ -122,14 +124,16 @@ class RDMADataChannel {
   std::vector<uint64_t> ack_staging_;  // staging buffer for post_ack_write
   struct ibv_mr* ack_staging_mr_ = nullptr;
 
+  // ── QP init and SGE helpers ────────────────────────────────────────────────
   struct ibv_cq_ex* get_cq() const;
   struct ibv_qp* get_qp() const;
+  void init_qp();
+  int prepare_sge_list(struct ibv_sge* sge,
+                       std::shared_ptr<RDMASendRequest> req);
 
-  // Post send request based on send_type
-  // Returns 0 on success, error code on failure
+  // ── Verbs posting (internal) ───────────────────────────────────────────────
   int __post_request_ex(std::shared_ptr<RDMASendRequest> req);
   int __post_request(std::shared_ptr<RDMASendRequest> req);
-  int post_request(std::shared_ptr<RDMASendRequest> req);
 
   // Post all requests in `batch` using a single ibv_wr_start/ibv_wr_complete
   // pair (one doorbell). IB uses selective signaling; EFA SRD requires each
@@ -144,11 +148,4 @@ class RDMADataChannel {
 
   int __post_raw_batch_ex(std::vector<RawSendRequest> const& batch);
   int __post_raw_batch_legacy(std::vector<RawSendRequest> const& batch);
-
-  void init_qp();
-
-  // Prepare SGE list for send request
-  // Returns the number of SGE entries filled
-  int prepare_sge_list(struct ibv_sge* sge,
-                       std::shared_ptr<RDMASendRequest> req);
 };

@@ -9,12 +9,16 @@
 #include <sstream>
 #include <utility>
 
+// ── Provider factory ─────────────────────────────────────────────────────────
+
 std::unique_ptr<RDMADataChannelImpl> create_rdma_data_channel_impl() {
   if (is_efa_transport())
     return std::make_unique<EFADataChannelImpl>();
   else
     return std::make_unique<IBDataChannelImpl>();
 }
+
+// ── Lifecycle ────────────────────────────────────────────────────────────────
 
 RDMADataChannel::RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
                                  uint32_t channel_id)
@@ -59,6 +63,8 @@ void RDMADataChannel::establish_channel(ChannelMetaData const& remote_meta) {
   UCCL_LOG_EP << "RDMADataChannel connected to remote qpn=" << remote_meta.qpn;
 }
 
+// ── Send posting and batching ──────────────────────────────────────────────
+
 int64_t RDMADataChannel::submit_request(std::shared_ptr<RDMASendRequest> req) {
   if (g_uccl_batch_post) {
     // Cap how many bytes we accumulate before forcing a doorbell. This
@@ -77,6 +83,16 @@ int64_t RDMADataChannel::submit_request(std::shared_ptr<RDMASendRequest> req) {
     return 0;  // success; actual post deferred until flush_batch().
   }
   return post_request(req);
+}
+
+int RDMADataChannel::post_request(std::shared_ptr<RDMASendRequest> req) {
+  std::lock_guard<std::mutex> post_lock(post_mu_);
+  if (uses_legacy_verbs_provider(ctx_->get_vendor_id())) {
+    // These NICs don't support ibv_wr_* extended posting API.
+    return __post_request(req);
+  }
+
+  return __post_request_ex(req);
 }
 
 int RDMADataChannel::flush_batch() {
@@ -105,6 +121,8 @@ int RDMADataChannel::post_raw_batch(std::vector<RawSendRequest> const& batch) {
   return __post_raw_batch_ex(batch);
 }
 
+// ── Completion polling ─────────────────────────────────────────────────────
+
 void RDMADataChannel::expand_completion(uint64_t cqe_wr_id,
                                         std::vector<uint64_t>& acks) {
   std::lock_guard<std::mutex> lock(pending_mu_);
@@ -120,30 +138,14 @@ void RDMADataChannel::expand_completion(uint64_t cqe_wr_id,
   acks.push_back(cqe_wr_id);
 }
 
-int64_t RDMADataChannel::read(std::shared_ptr<RDMASendRequest> req) {
-  int ret = post_request(req);
-  if (ret != 0) {
-    UCCL_LOG(ERROR) << "Failed to post read request, wr_id=" << req->wr_id;
-    return -1;
-  }
-  return req->wr_id;
-}
-
-int64_t RDMADataChannel::send(std::shared_ptr<RDMASendRequest> req) {
-  int ret = post_request(req);
-  if (ret != 0) {
-    UCCL_LOG(ERROR) << "Failed to post send request, wr_id=" << req->wr_id;
-    return -1;
-  }
-  return req->wr_id;
-}
-
 bool RDMADataChannel::poll_once(std::vector<CQMeta>& cq_datas) {
   uint32_t nb_post_recv = 0;
   bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
   impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
   return result;
 }
+
+// ── Ack writes ─────────────────────────────────────────────────────────────
 
 int RDMADataChannel::post_ack_write(uint64_t remote_addr, uint32_t remote_rkey,
                                     uint32_t ack_slot, uint64_t value) {
@@ -170,6 +172,8 @@ int RDMADataChannel::post_ack_write(uint64_t remote_addr, uint32_t remote_rkey,
   return rc;
 }
 
+// ── Accessors ──────────────────────────────────────────────────────────────
+
 std::shared_ptr<ChannelMetaData> RDMADataChannel::get_local_meta() const {
   return local_meta_;
 }
@@ -188,6 +192,8 @@ uint64_t const RDMADataChannel::get_context_id() const {
 
 uint32_t RDMADataChannel::get_channel_id() const { return channel_id_; }
 
+// ── QP init and SGE helpers ──────────────────────────────────────────────────
+
 struct ibv_cq_ex* RDMADataChannel::get_cq() const {
   return cq_ex_;
 }
@@ -195,6 +201,30 @@ struct ibv_cq_ex* RDMADataChannel::get_cq() const {
 struct ibv_qp* RDMADataChannel::get_qp() const {
   return qp_;
 }
+
+void RDMADataChannel::init_qp() {
+  impl_->init_pre_alloc_resources();
+  impl_->init_qp(ctx_, &cq_ex_, &qp_, local_meta_.get());
+  // Staging buffer for post_ack_write (one slot per ack ring entry).
+  ack_staging_.resize(kAckRingDepth, 0);
+  ack_staging_mr_ =
+      ibv_reg_mr(ctx_->get_pd(), ack_staging_.data(),
+                 kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
+  assert(ack_staging_mr_);
+}
+
+int RDMADataChannel::prepare_sge_list(struct ibv_sge* sge,
+                                      std::shared_ptr<RDMASendRequest> req) {
+  uint32_t total_len = req->get_local_len();
+  uint64_t local_addr = req->get_local_address();
+  uint32_t local_key = req->get_local_key();
+  sge[0].addr = local_addr;
+  sge[0].length = total_len;
+  sge[0].lkey = local_key;
+  return 1;
+}
+
+// ── Verbs posting (internal) ─────────────────────────────────────────────────
 
 int RDMADataChannel::__post_request_ex(std::shared_ptr<RDMASendRequest> req) {
   auto* qpx = ibv_qp_to_qp_ex(qp_);
@@ -305,16 +335,6 @@ int RDMADataChannel::__post_request(std::shared_ptr<RDMASendRequest> req) {
                     << ", sge_list=" << sge_info.str();
   }
   return ret;
-}
-
-int RDMADataChannel::post_request(std::shared_ptr<RDMASendRequest> req) {
-  std::lock_guard<std::mutex> post_lock(post_mu_);
-  if (uses_legacy_verbs_provider(ctx_->get_vendor_id())) {
-    // These NICs don't support ibv_wr_* extended posting API.
-    return __post_request(req);
-  }
-
-  return __post_request_ex(req);
 }
 
 int RDMADataChannel::__flush_batch_ex(
@@ -519,26 +539,4 @@ int RDMADataChannel::__post_raw_batch_legacy(
     pending_groups_.push_back({batch[last].wr_id, std::move(unsignaled)});
   }
   return 0;
-}
-
-void RDMADataChannel::init_qp() {
-  impl_->init_pre_alloc_resources();
-  impl_->init_qp(ctx_, &cq_ex_, &qp_, local_meta_.get());
-  // Staging buffer for post_ack_write (one slot per ack ring entry).
-  ack_staging_.resize(kAckRingDepth, 0);
-  ack_staging_mr_ =
-      ibv_reg_mr(ctx_->get_pd(), ack_staging_.data(),
-                 kAckRingDepth * sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
-  assert(ack_staging_mr_);
-}
-
-int RDMADataChannel::prepare_sge_list(struct ibv_sge* sge,
-                                      std::shared_ptr<RDMASendRequest> req) {
-  uint32_t total_len = req->get_local_len();
-  uint64_t local_addr = req->get_local_address();
-  uint32_t local_key = req->get_local_key();
-  sge[0].addr = local_addr;
-  sge[0].length = total_len;
-  sge[0].lkey = local_key;
-  return 1;
 }

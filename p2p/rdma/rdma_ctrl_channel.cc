@@ -58,7 +58,7 @@ bool SendControlChannel::push_write_meta(WriteReqMeta const& meta,
   req->channel_id = kControlChannelID;
   req->wr_id = static_cast<int64_t>(slot);
   req->send_type = SendType::Send;  // -> RDMA_WRITE_WITH_IMM
-  return RDMADataChannel::send(req) >= 0;
+  return post_request(req) == 0;
 }
 
 bool SendControlChannel::noblocking_poll() {

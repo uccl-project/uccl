@@ -2,9 +2,13 @@
 #include "util/debug.h"
 #include "util/util.h"
 
+// ── RDMAConnection: Lifecycle ────────────────────────────────────────────────
+
 RDMAConnection::RDMAConnection() : last_channel_id_(0) {}
 
 RDMAConnection::~RDMAConnection() = default;
+
+// ── RDMAConnection: Channel registry ─────────────────────────────────────────
 
 void RDMAConnection::add_channel(uint32_t channel_id,
                                  std::shared_ptr<RDMADataChannel> channel) {
@@ -35,6 +39,8 @@ RDMAConnection::channels() const {
   mutex_.unlock_shared();  // just to annotate read lock expected
   return channels_;
 }
+
+// ── RDMAConnection: Channel selection ────────────────────────────────────────
 
 std::pair<uint32_t, uint64_t>
 RDMAConnection::select_next_channel_round_robin() {
@@ -89,6 +95,8 @@ std::pair<uint32_t, uint64_t> RDMAConnection::select_next_channel_random() {
   return {random_id, context_id};
 }
 
+// ── RDMAConnection: Fast channel cache ───────────────────────────────────────
+
 RDMADataChannel* RDMAConnection::get_channel_fast(uint32_t channel_id) const {
   if (likely(fast_channels_ready_.load(std::memory_order_acquire))) {
     if (likely(channel_id >= 1 &&
@@ -125,6 +133,8 @@ void RDMAConnection::build_fast_channel_cache() {
   fast_channels_ready_.store(true, std::memory_order_release);
 }
 
+// ── SendConnection: Lifecycle ────────────────────────────────────────────────
+
 SendConnection::SendConnection(int numa_node, bool auto_start_polling,
                                double link_bandwidth_bps)
     : numa_node_(numa_node),
@@ -137,6 +147,8 @@ SendConnection::SendConnection(int numa_node, bool auto_start_polling,
 }
 
 SendConnection::~SendConnection() { stop_polling(); }
+
+// ── SendConnection: Channel registry ─────────────────────────────────────────
 
 void SendConnection::add_channel(uint32_t channel_id,
                                  std::shared_ptr<RDMADataChannel> channel) {
@@ -166,6 +178,8 @@ std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
 SendConnection::channels() const {
   return RDMAConnection::channels();
 }
+
+// ── SendConnection: One-sided transfer ───────────────────────────────────────
 
 int64_t SendConnection::post_write_or_read(
     std::shared_ptr<RDMASendRequest> req) {
@@ -257,20 +271,7 @@ int64_t SendConnection::post_write_or_read(
   return wr_id;
 }
 
-void SendConnection::start_polling() {
-  bool expected = false;
-  if (!running_.compare_exchange_strong(expected, true,
-                                        std::memory_order_acq_rel,
-                                        std::memory_order_acquire)) {
-    return;
-  }
-  poll_thread_ =
-      std::make_unique<std::thread>(&SendConnection::polling_loop, this);
-}
-
-bool SendConnection::check_completion(int64_t wr_id) {
-  return tracker_->is_acknowledged(wr_id);
-}
+// ── SendConnection: One-sided batch transfer ─────────────────────────────────
 
 bool SendConnection::can_use_raw_one_sided_batch(SendType send_type) {
   if (cc_.enabled()) return false;
@@ -430,6 +431,8 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
   return true;
 }
 
+// ── SendConnection: Compression setup ────────────────────────────────────────
+
 void SendConnection::set_remote_decompress_buf(RemoteMemInfo const& m) {
   if (m.length == 0) return;
   remote_decompress_buf_ = m;
@@ -439,6 +442,25 @@ void SendConnection::set_remote_decompress_buf(RemoteMemInfo const& m) {
 
 void SendConnection::set_local_ack_ring(std::shared_ptr<RegMemBlock> ring) {
   ack_ring_ = ring;
+}
+
+// ── SendConnection: Completion ───────────────────────────────────────────────
+
+bool SendConnection::check_completion(int64_t wr_id) {
+  return tracker_->is_acknowledged(wr_id);
+}
+
+// ── SendConnection: Polling ──────────────────────────────────────────────────
+
+void SendConnection::start_polling() {
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+    return;
+  }
+  poll_thread_ =
+      std::make_unique<std::thread>(&SendConnection::polling_loop, this);
 }
 
 void SendConnection::stop_polling() {
@@ -465,6 +487,8 @@ void SendConnection::flush_batches() {
   }
 }
 
+// ── SendConnection: Congestion control ───────────────────────────────────────
+
 size_t SendConnection::current_inflight_limit_bytes() {
   return cc_.enabled() ? cc_.getWindowBytes() : kInFlightMaxSizeKB * 1024;
 }
@@ -473,6 +497,8 @@ size_t SendConnection::current_inflight_bytes() {
   return cc_.enabled() ? cc_inflight_bytes_.load(std::memory_order_relaxed)
                        : tracker_->get_total_inflight_bytes();
 }
+
+// ── SendConnection: Internal posting ─────────────────────────────────────────
 
 bool SendConnection::post_request_on_channel(
     std::shared_ptr<RDMASendRequest> req) {
@@ -512,6 +538,8 @@ bool SendConnection::post_request_on_channel(
   return true;
 }
 
+// ── SendConnection: Polling internals ────────────────────────────────────────
+
 void SendConnection::poll_control_channel() {
   std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
   if (ctrl_channel_) {
@@ -522,6 +550,8 @@ void SendConnection::poll_control_channel() {
     }
   }
 }
+
+// ── SendConnection: Chunked posting ──────────────────────────────────────────
 
 bool SendConnection::post_single_chunk(
     std::shared_ptr<RDMASendRequest> const& req, MessageChunk const& chunk,
@@ -648,6 +678,8 @@ void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req,
     }
   }
 }
+
+// ── SendConnection: Compression send path ────────────────────────────────────
 
 void SendConnection::compress_send_request(
     std::shared_ptr<RDMASendRequest> req) {
@@ -859,6 +891,8 @@ void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   if (ctrl_channel_) ctrl_channel_->push_write_meta(meta_to_push, push_slot);
 }
 
+// ── SendConnection: Polling loop ─────────────────────────────────────────────
+
 void SendConnection::polling_loop() {
   UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection::polling_loop - Started";
   uccl::pin_thread_to_numa(numa_node_);
@@ -899,6 +933,8 @@ void SendConnection::DecompressArena::release(uint64_t offset) {
   cv.notify_all();
 }
 
+// ── RecvConnection: Lifecycle ────────────────────────────────────────────────
+
 RecvConnection::RecvConnection(int numa_node, bool auto_start_polling)
     : numa_node_(numa_node),
       running_(false),
@@ -906,6 +942,8 @@ RecvConnection::RecvConnection(int numa_node, bool auto_start_polling)
       auto_start_polling_(auto_start_polling) {}
 
 RecvConnection::~RecvConnection() { stop_polling(); }
+
+// ── RecvConnection: Channel registry ─────────────────────────────────────────
 
 void RecvConnection::add_channel(uint32_t channel_id,
                                  std::shared_ptr<RDMADataChannel> channel) {
@@ -935,6 +973,9 @@ RecvConnection::channels() const {
   return RDMAConnection::channels();
 }
 
+// ── RecvConnection: Polling
+// ────────────────────────────────────────────────────
+
 void RecvConnection::start_polling() {
   if (running_.load()) {
     return;
@@ -954,56 +995,14 @@ void RecvConnection::stop_polling() {
   }
 }
 
+// ── RecvConnection: Compression recv path ────────────────────────────────────
+
 void RecvConnection::set_remote_ack_ring(RemoteMemInfo const& m) {
   if (m.length == 0) return;
   remote_ack_ring_ = m;
   // The compressed-write path needs the receive side to actively poll its
   // control-channel CQ for incoming WriteReqMeta IMMs.
   if (!running_.load(std::memory_order_acquire)) start_polling();
-}
-
-void RecvConnection::poll_and_process_completions() {
-  std::shared_lock<std::shared_mutex> lock(mutex_);
-  if (ctrl_channel_) {
-    ctrl_channel_->noblocking_poll();
-    for (auto const& m : ctrl_channel_->drain_pending_write_metas()) {
-      handle_compressed_write_arrival(m);
-    }
-  }
-  for (auto& [channel_id, channel] : channels_) {
-    if (!channel) continue;
-    bool polled = false;
-    std::vector<CQMeta> cq_datas;
-    polled = channel->poll_once(cq_datas);
-    if (polled) {
-      for (auto const& cq_data : cq_datas) {
-        UCCL_LOG(INFO, UCCL_RDMA)
-            << "RecvConnection::poll_and_process_completions - Channel "
-            << channel_id << " polled completion: " << cq_data;
-      }
-    }
-  }
-  UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
-      << "RecvConnection::polling_loop - Still running, channels: "
-      << channels_.size();
-}
-
-void RecvConnection::polling_loop() {
-  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Started";
-  uccl::pin_thread_to_numa(numa_node_);
-  while (running_.load(std::memory_order_acquire)) {
-    poll_and_process_completions();
-    // optional small sleep/yield to avoid busy-looping if desired:
-    // std::this_thread::yield();
-  }
-  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Stopped";
-}
-
-void RecvConnection::post_ack_host_fn(void* user_data) {
-  std::unique_ptr<AsyncAckCtx> ctx(static_cast<AsyncAckCtx*>(user_data));
-  ctx->ctrl_channel->post_ack_write(ctx->remote_ack_addr, ctx->remote_ack_rkey,
-                                    ctx->ack_slot,
-                                    static_cast<uint64_t>(ctx->wr_id) + 1);
 }
 
 void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
@@ -1037,4 +1036,50 @@ void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
   Compressor::get_instance().decompress_async(
       in, out, static_cast<FloatType>(m.float_type),
       /*on_done=*/nullptr, /*user_data=*/nullptr);
+}
+
+void RecvConnection::post_ack_host_fn(void* user_data) {
+  std::unique_ptr<AsyncAckCtx> ctx(static_cast<AsyncAckCtx*>(user_data));
+  ctx->ctrl_channel->post_ack_write(ctx->remote_ack_addr, ctx->remote_ack_rkey,
+                                    ctx->ack_slot,
+                                    static_cast<uint64_t>(ctx->wr_id) + 1);
+}
+
+// ── RecvConnection: Polling loop ─────────────────────────────────────────────
+
+void RecvConnection::poll_and_process_completions() {
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  if (ctrl_channel_) {
+    ctrl_channel_->noblocking_poll();
+    for (auto const& meta : ctrl_channel_->drain_pending_write_metas()) {
+      handle_compressed_write_arrival(meta);
+    }
+  }
+  for (auto& [channel_id, channel] : channels_) {
+    if (!channel) continue;
+    bool polled = false;
+    std::vector<CQMeta> cq_datas;
+    polled = channel->poll_once(cq_datas);
+    if (polled) {
+      for (auto const& cq_data : cq_datas) {
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "RecvConnection::poll_and_process_completions - Channel "
+            << channel_id << " polled completion: " << cq_data;
+      }
+    }
+  }
+  UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
+      << "RecvConnection::polling_loop - Still running, channels: "
+      << channels_.size();
+}
+
+void RecvConnection::polling_loop() {
+  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Started";
+  uccl::pin_thread_to_numa(numa_node_);
+  while (running_.load(std::memory_order_acquire)) {
+    poll_and_process_completions();
+    // optional small sleep/yield to avoid busy-looping if desired:
+    // std::this_thread::yield();
+  }
+  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Stopped";
 }
