@@ -135,18 +135,13 @@ void RDMAConnection::build_fast_channel_cache() {
 
 // ── SendConnection: Lifecycle ────────────────────────────────────────────────
 
-SendConnection::SendConnection(int numa_node, bool auto_start_polling,
-                               double link_bandwidth_bps)
-    : numa_node_(numa_node),
-      running_(false),
-      poll_thread_(nullptr),
-      auto_start_polling_(auto_start_polling),
-      cc_(uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC"),
+SendConnection::SendConnection(double link_bandwidth_bps)
+    : cc_(uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC"),
           uccl::freq_ghz, link_bandwidth_bps) {
   tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
 }
 
-SendConnection::~SendConnection() { stop_polling(); }
+SendConnection::~SendConnection() = default;
 
 // ── SendConnection: Channel registry ─────────────────────────────────────────
 
@@ -437,7 +432,6 @@ void SendConnection::set_remote_decompress_buf(RemoteMemInfo const& m) {
   if (m.length == 0) return;
   remote_decompress_buf_ = m;
   decompress_arena_.size = m.length;
-  if (!running_.load(std::memory_order_acquire)) start_polling();
 }
 
 void SendConnection::set_local_ack_ring(std::shared_ptr<RegMemBlock> ring) {
@@ -452,32 +446,12 @@ bool SendConnection::check_completion(int64_t wr_id) {
 
 // ── SendConnection: Polling ──────────────────────────────────────────────────
 
-void SendConnection::start_polling() {
-  bool expected = false;
-  if (!running_.compare_exchange_strong(expected, true,
-                                        std::memory_order_acq_rel,
-                                        std::memory_order_acquire)) {
-    return;
-  }
-  poll_thread_ =
-      std::make_unique<std::thread>(&SendConnection::polling_loop, this);
-}
-
-void SendConnection::stop_polling() {
-  if (!running_.load()) {
-    return;
-  }
-  running_.store(false);
-  if (poll_thread_ && poll_thread_->joinable()) {
-    poll_thread_->join();
-  }
-}
-
-void SendConnection::polling_loop_for_meta() {
+void SendConnection::send_routine() {
+  std::lock_guard<std::mutex> guard(send_routine_mu_);
   poll_control_channel();
   poll_data_channels();
   UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
-      << "SendConnection::polling_loop - Still running";
+      << "SendConnection::send_routine - Still running";
 }
 
 void SendConnection::flush_batches() {
@@ -620,16 +594,10 @@ bool SendConnection::drain_pending_chunks() {
   return true;
 }
 
-void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req,
-                                          int expected_chunk_count) {
-  // Fast path: single-chunk message. The default caller passes
-  // expected_chunk_count=0, in which case we compute chunk count from the
-  // message size; for messages that fit in a single chunk we post `req`
-  // directly and skip the chunk-wrapper allocations done by
-  // post_single_chunk().
-  if (expected_chunk_count == 1 ||
-      (expected_chunk_count == 0 && ChunkSplitStrategy::get_message_chunk_count(
-                                        req->local_mem->size) == 1)) {
+void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req) {
+  // Fast path: single-chunk message. Post `req` directly and skip the
+  // chunk-wrapper allocations done by post_single_chunk().
+  if (ChunkSplitStrategy::get_message_chunk_count(req->local_mem->size) == 1) {
     req->imm_data.set_chunk_count(1);
     if (!post_request_on_channel(req)) {
       UCCL_LOG(WARN) << "SendConnection: Failed to send request on channel_id "
@@ -639,23 +607,10 @@ void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req,
   }
   // Split message into chunks
   size_t message_size = req->local_mem->size;
-  std::vector<MessageChunk> chunks;
-  if (expected_chunk_count > 0) {
-    // Caller pre-determined chunk count; honour it exactly so tracker_ WR
-    // budget matches actual posts (used by compress_send_request_split_first).
-    size_t n = static_cast<size_t>(expected_chunk_count);
-    size_t chunk_size =
-        ChunkSplitStrategy::get_regular_chunk_size(message_size, n);
-    chunks.reserve(n);
-    for (size_t i = 0; i < n; ++i) {
-      uint64_t offset = static_cast<uint64_t>(i) * chunk_size;
-      chunks.emplace_back(offset, std::min(chunk_size, message_size - offset));
-    }
-  } else {
-    chunks = ChunkSplitStrategy::split_message_to_chunks(message_size);
-    expected_chunk_count = static_cast<int>(chunks.size());
-    tracker_->update_expected_ack_count(req->wr_id, expected_chunk_count);
-  }
+  std::vector<MessageChunk> chunks =
+      ChunkSplitStrategy::split_message_to_chunks(message_size);
+  int expected_chunk_count = static_cast<int>(chunks.size());
+  tracker_->update_expected_ack_count(req->wr_id, expected_chunk_count);
   UCCL_LOG(INFO, UCCL_RDMA)
       << "SendConnection: Splitting message into " << chunks.size()
       << " chunks (message_size: " << message_size << ")";
@@ -679,12 +634,7 @@ void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req,
   }
 }
 
-// ── SendConnection: Compression send path ────────────────────────────────────
-
-void SendConnection::compress_send_request(
-    std::shared_ptr<RDMASendRequest> req) {
-  Compressor::get_instance().compress(req);
-}
+// ── SendConnection: Compressed write path ────────────────────────────────────
 
 void SendConnection::post_compressed_segment(
     std::shared_ptr<RDMASendRequest> const& req, size_t seg_size,
@@ -783,30 +733,6 @@ int64_t SendConnection::compress_write_request_split_first(
   return wr_id;
 }
 
-void SendConnection::compress_send_request_split_first(
-    std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
-  Compressor::get_instance().compress_split_one_batch(req);
-
-  uint32_t send_chunks_first =
-      req->local_mem->size /
-      ChunkSplitStrategy::get_regular_chunk_size(
-          req->compress_ctx->get_max_size(), expected_chunk_count);
-  if (send_chunks_first == 0 && req->local_mem->size > 0) {
-    UCCL_LOG(WARN)
-        << "compress_send_request_split_first: send_chunks_first=0 but "
-           "split data ("
-        << req->local_mem->size
-        << " bytes) is non-empty; phase-1 skipped, decompression "
-           "may fail";
-  }
-  if (send_chunks_first > 0) {
-    post_chunked_request(req, send_chunks_first);
-  }
-  Compressor::get_instance().compress_encode_one_batch(req);
-  post_chunked_request(req, expected_chunk_count - send_chunks_first);
-  tracker_->update_expected_ack_count(req->wr_id, expected_chunk_count);
-}
-
 void SendConnection::poll_data_channels() {
   std::shared_lock<std::shared_mutex> lock(mutex_);
   for (auto& [channel_id, channel] : channels_) {
@@ -891,21 +817,6 @@ void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   if (ctrl_channel_) ctrl_channel_->push_write_meta(meta_to_push, push_slot);
 }
 
-// ── SendConnection: Polling loop ─────────────────────────────────────────────
-
-void SendConnection::polling_loop() {
-  UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection::polling_loop - Started";
-  uccl::pin_thread_to_numa(numa_node_);
-  while (running_.load(std::memory_order_acquire)) {
-    poll_control_channel();
-    poll_data_channels();
-
-    UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 100000000)
-        << "SendConnection::polling_loop - Still running";
-  }
-  UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection::polling_loop - Stopped";
-}
-
 uint64_t SendConnection::DecompressArena::reserve(uint64_t bytes) {
   std::unique_lock<std::mutex> lk(mu);
   while (true) {
@@ -935,13 +846,9 @@ void SendConnection::DecompressArena::release(uint64_t offset) {
 
 // ── RecvConnection: Lifecycle ────────────────────────────────────────────────
 
-RecvConnection::RecvConnection(int numa_node, bool auto_start_polling)
-    : numa_node_(numa_node),
-      running_(false),
-      poll_thread_(nullptr),
-      auto_start_polling_(auto_start_polling) {}
+RecvConnection::RecvConnection() = default;
 
-RecvConnection::~RecvConnection() { stop_polling(); }
+RecvConnection::~RecvConnection() = default;
 
 // ── RecvConnection: Channel registry ─────────────────────────────────────────
 
@@ -973,36 +880,11 @@ RecvConnection::channels() const {
   return RDMAConnection::channels();
 }
 
-// ── RecvConnection: Polling
-// ────────────────────────────────────────────────────
-
-void RecvConnection::start_polling() {
-  if (running_.load()) {
-    return;
-  }
-  running_.store(true);
-  poll_thread_ =
-      std::make_unique<std::thread>(&RecvConnection::polling_loop, this);
-}
-
-void RecvConnection::stop_polling() {
-  if (!running_.load()) {
-    return;
-  }
-  running_.store(false);
-  if (poll_thread_ && poll_thread_->joinable()) {
-    poll_thread_->join();
-  }
-}
-
 // ── RecvConnection: Compression recv path ────────────────────────────────────
 
 void RecvConnection::set_remote_ack_ring(RemoteMemInfo const& m) {
   if (m.length == 0) return;
   remote_ack_ring_ = m;
-  // The compressed-write path needs the receive side to actively poll its
-  // control-channel CQ for incoming WriteReqMeta IMMs.
-  if (!running_.load(std::memory_order_acquire)) start_polling();
 }
 
 void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
@@ -1073,13 +955,7 @@ void RecvConnection::poll_and_process_completions() {
       << channels_.size();
 }
 
-void RecvConnection::polling_loop() {
-  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Started";
-  uccl::pin_thread_to_numa(numa_node_);
-  while (running_.load(std::memory_order_acquire)) {
-    poll_and_process_completions();
-    // optional small sleep/yield to avoid busy-looping if desired:
-    // std::this_thread::yield();
-  }
-  UCCL_LOG(INFO, UCCL_RDMA) << "RecvConnection::polling_loop - Stopped";
+void RecvConnection::recv_routine() {
+  std::lock_guard<std::mutex> guard(recv_routine_mu_);
+  poll_and_process_completions();
 }

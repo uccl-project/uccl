@@ -220,12 +220,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
   } else {
-    // Enable the polling thread when congestion control is active.
-    bool cc_polling =
-        uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
-        uccl::cc::CongestionControlState::Mode::kNone;
-    ep_ = std::shared_ptr<RDMAEndpoint>(
-        new RDMAEndpoint(local_gpu_idx_, 0, cc_polling));
+    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
@@ -298,8 +293,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
-    ep_ =
-        std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0, false));
+    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
   }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -2160,6 +2154,7 @@ void Endpoint::send_proxy_thread_func() {
   send_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
+    uccl_drive_send(ep_);
     send_proxy_adaptive_sleeper_.maybe_sleep();
 
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
@@ -2198,7 +2193,9 @@ void Endpoint::recv_proxy_thread_func() {
   recv_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
+    uccl_drive_recv(ep_);
     recv_proxy_adaptive_sleeper_.maybe_sleep();
+    
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);

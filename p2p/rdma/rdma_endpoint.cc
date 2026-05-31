@@ -5,10 +5,8 @@
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 RDMAEndpoint::RDMAEndpoint(int gpu_index, uint64_t port,
-                           bool auto_start_polling,
                            std::vector<size_t> const& device_ids)
     : gpu_index_(gpu_index),
-      auto_start_polling_(auto_start_polling),
       next_send_peer_id_(0),
       next_recv_peer_id_(0) {
   if (gpu_index != INVALID_GPU) {
@@ -687,8 +685,6 @@ std::shared_ptr<SendConnection> RDMAEndpoint::get_or_create_send_group(
     auto it = send_channel_groups_.find(peer_id);
     if (it != send_channel_groups_.end()) return it->second;
   }
-  auto numa_node = RdmaDeviceManager::instance().get_numa_node(
-      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
   auto* ctx =
       (!contexts_.empty() && contexts_[0]) ? contexts_[0]->get_ctx() : nullptr;
   double link_bw =
@@ -696,8 +692,7 @@ std::shared_ptr<SendConnection> RDMAEndpoint::get_or_create_send_group(
   {
     std::unique_lock write_lock(send_channel_mutex_);
     auto [it, inserted] = send_channel_groups_.try_emplace(
-        peer_id, std::make_shared<SendConnection>(
-                     numa_node, auto_start_polling_, link_bw));
+        peer_id, std::make_shared<SendConnection>(link_bw));
     return it->second;
   }
 }
@@ -734,15 +729,12 @@ std::shared_ptr<RecvConnection> RDMAEndpoint::get_or_create_recv_group(
       return it->second;
     }
   }
-  auto numa_node = RdmaDeviceManager::instance().get_numa_node(
-      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
   {
     std::unique_lock write_lock(recv_channel_mutex_);
     auto [it, inserted] = recv_channel_groups_.try_emplace(
         peer_id,
-        std::make_shared<RecvConnection>(
-            numa_node, auto_start_polling_));  // try_emplace constructs only
-                                               // if inserting
+        std::make_shared<RecvConnection>());  // try_emplace constructs only
+                                             // if inserting
     return it->second;
   }
 }
@@ -838,26 +830,16 @@ SendConnection* RDMAEndpoint::get_send_group_raw(uint64_t peer_id) {
 
 // ── Polling and batching ─────────────────────────────────────────────────────
 void RDMAEndpoint::recv_routine() {
-  if (auto_start_polling_) {
-    return;  // Do nothing if auto polling is enabled
-  }
   std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
   for (auto& [peer_id, recv_group] : recv_channel_groups_) {
-    if (recv_group && !recv_group->is_running()) {
-      recv_group->poll_and_process_completions();
-    }
+    if (recv_group) recv_group->recv_routine();
   }
 }
 
 void RDMAEndpoint::send_routine() {
-  if (auto_start_polling_) {
-    return;  // Do nothing if auto polling is enabled
-  }
   std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
   for (auto& [peer_id, send_group] : send_channel_groups_) {
-    if (send_group && !send_group->is_running()) {
-      send_group->polling_loop_for_meta();
-    }
+    if (send_group) send_group->send_routine();
   }
 }
 
