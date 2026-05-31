@@ -6,9 +6,7 @@
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 RDMAEndpoint::RDMAEndpoint(int gpu_index, uint64_t port,
                            std::vector<size_t> const& device_ids)
-    : gpu_index_(gpu_index),
-      next_send_peer_id_(0),
-      next_recv_peer_id_(0) {
+    : gpu_index_(gpu_index), next_send_peer_id_(0), next_recv_peer_id_(0) {
   if (gpu_index != INVALID_GPU) {
     initialize_rdma_ctx_for_gpu(gpu_index, device_ids);
   }
@@ -734,7 +732,7 @@ std::shared_ptr<RecvConnection> RDMAEndpoint::get_or_create_recv_group(
     auto [it, inserted] = recv_channel_groups_.try_emplace(
         peer_id,
         std::make_shared<RecvConnection>());  // try_emplace constructs only
-                                             // if inserting
+                                              // if inserting
     return it->second;
   }
 }
@@ -841,6 +839,14 @@ void RDMAEndpoint::send_routine() {
   for (auto& [peer_id, send_group] : send_channel_groups_) {
     if (send_group) send_group->send_routine();
   }
+}
+
+bool RDMAEndpoint::has_pending_compressed_send() const {
+  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+  for (auto const& [peer_id, send_group] : send_channel_groups_) {
+    if (send_group && send_group->has_pending_compressed()) return true;
+  }
+  return false;
 }
 
 void RDMAEndpoint::flush_all_sends() {

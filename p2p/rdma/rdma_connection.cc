@@ -194,29 +194,24 @@ int64_t SendConnection::post_write_or_read(
     }
   }
 
-  std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
   int64_t wr_id = tracker_->send_packet(req->get_local_len());
   req->wr_id = wr_id;
 
-  // Use compressed write path when all preconditions are met.
-  bool c_send_type = (req->send_type == SendType::Write);
-  bool c_ack = static_cast<bool>(ack_ring_);
-  bool c_rdb = remote_decompress_buf_.length > 0;
-  bool c_ctx = static_cast<bool>(req->compress_ctx);
-  bool c_ft =
-      c_ctx && (req->compress_ctx->get_float_type() != FloatType::kUndefined);
-  bool c_fit = static_cast<uint64_t>(req->local_mem->size) <=
-               remote_decompress_buf_.length;
-  bool c_should = Compressor::get_instance().should_compress_and_split_first(
-      req->local_mem->size);
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "compressedWriteCheck size=" << req->local_mem->size
-      << " send_type=" << c_send_type << " ack=" << c_ack
-      << " rdb_len=" << remote_decompress_buf_.length << " (>" << 0 << ")"
-      << " ctx=" << c_ctx << " ft_ok=" << c_ft << " fit=" << c_fit
-      << " should=" << c_should;
-  if (c_send_type && c_ack && c_rdb && c_ctx && c_ft && c_fit && c_should) {
-    return compress_write_request_split_first(req);
+  // Size gate first: small messages must not touch compression state or call
+  // Compressor helpers even when compression is configured for the connection.
+  size_t const msg_size = req->local_mem->size;
+  if (msg_size >= kMinCompressBytes && req->send_type == SendType::Write) {
+    bool const c_ack = static_cast<bool>(ack_ring_);
+    bool const c_rdb = remote_decompress_buf_.length > 0;
+    bool const c_ctx = static_cast<bool>(req->compress_ctx);
+    bool const c_ft =
+        c_ctx && (req->compress_ctx->get_float_type() != FloatType::kUndefined);
+    bool const c_fit =
+        static_cast<uint64_t>(msg_size) <= remote_decompress_buf_.length;
+    if (c_ack && c_rdb && c_ctx && c_ft && c_fit &&
+        Compressor::get_instance().should_compress_and_split_first(msg_size)) {
+      return compress_write_request_split_first(req);
+    }
   }
 
   // Lock-free channel selection + direct pointer.
@@ -268,11 +263,13 @@ int64_t SendConnection::post_write_or_read(
 
 // ── SendConnection: One-sided batch transfer ─────────────────────────────────
 
-bool SendConnection::can_use_raw_one_sided_batch(SendType send_type) {
+bool SendConnection::can_use_raw_one_sided_batch(SendType send_type,
+                                                 size_t max_iov_bytes) {
   if (cc_.enabled()) return false;
-  if (send_type == SendType::Write &&
-      Compressor::get_instance().get_compress_strategy() !=
-          CompressStrategy::kNone) {
+  if (send_type != SendType::Write) return true;
+  if (max_iov_bytes < kMinCompressBytes) return true;
+  if (Compressor::get_instance().get_compress_strategy() !=
+      CompressStrategy::kNone) {
     return false;
   }
   return true;
@@ -289,7 +286,6 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
                        "send_type";
     return false;
   }
-  if (unlikely(!can_use_raw_one_sided_batch(send_type))) return false;
   if (unlikely((num_ops > 0 && ops == nullptr) || wr_ids == nullptr ||
                (waits != nullptr && num_waits == nullptr))) {
     UCCL_LOG(ERROR) << "SendConnection::post_write_or_read_batch - null input";
@@ -319,7 +315,6 @@ bool SendConnection::post_write_or_read_batch(SendType send_type,
       return false;
     }
   }
-
   struct PreparedBatchOp {
     size_t op_index = 0;
     uint32_t channel_id = 0;
@@ -445,6 +440,10 @@ bool SendConnection::check_completion(int64_t wr_id) {
 }
 
 // ── SendConnection: Polling ──────────────────────────────────────────────────
+
+bool SendConnection::has_pending_compressed() const {
+  return pending_compressed_count_.load(std::memory_order_relaxed) > 0;
+}
 
 void SendConnection::send_routine() {
   std::lock_guard<std::mutex> guard(send_routine_mu_);
@@ -594,7 +593,8 @@ bool SendConnection::drain_pending_chunks() {
   return true;
 }
 
-void SendConnection::post_chunked_request(std::shared_ptr<RDMASendRequest> req) {
+void SendConnection::post_chunked_request(
+    std::shared_ptr<RDMASendRequest> req) {
   // Fast path: single-chunk message. Post `req` directly and skip the
   // chunk-wrapper allocations done by post_single_chunk().
   if (ChunkSplitStrategy::get_message_chunk_count(req->local_mem->size) == 1) {

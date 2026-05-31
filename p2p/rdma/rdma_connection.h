@@ -109,7 +109,11 @@ class SendConnection : public RDMAConnection {
   // ── One-sided transfer ─────────────────────────────────────────────────────
   int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
 
-  bool can_use_raw_one_sided_batch(SendType send_type);
+  // max_iov_bytes: largest iov in the batch. Small write batches below
+  // kMinCompressBytes can stay on the raw path even when compression is
+  // enabled.
+  bool can_use_raw_one_sided_batch(SendType send_type,
+                                   size_t max_iov_bytes = 0);
 
   bool post_write_or_read_batch(SendType send_type, OneSidedBatchOp const* ops,
                                 size_t num_ops, int64_t* wr_ids,
@@ -126,6 +130,8 @@ class SendConnection : public RDMAConnection {
 
   // ── Polling ────────────────────────────────────────────────────────────────
   void send_routine();
+
+  bool has_pending_compressed() const;
 
   // Flush any batched send WRs on all channels of this connection. Used to
   // amortize doorbell cost across many small RDMA writes/reads posted via
@@ -232,7 +238,6 @@ class SendConnection : public RDMAConnection {
 
   // Release arena slots for completed acks. Only scans in-flight entries.
   void poll_ack_ring();
-
 };
 
 class RecvConnection : public RDMAConnection {

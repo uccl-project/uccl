@@ -134,6 +134,15 @@ static inline bool raw_one_sided_batch_eligible(
   return true;
 }
 
+static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
+                                   size_t num_iovs) {
+  size_t max_bytes = 0;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    max_bytes = std::max(max_bytes, size_v[i]);
+  }
+  return max_bytes;
+}
+
 // ShmChannel helper function
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
@@ -760,7 +769,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
-      send_group->can_use_raw_one_sided_batch(SendType::Read)) {
+      send_group->can_use_raw_one_sided_batch(
+          SendType::Read, max_iov_bytes(size_v, num_iovs))) {
     return run_raw_one_sided_pipeline(send_group, SendType::Read, mhandle_v,
                                       dst_v, size_v, slot_item_v, num_iovs);
   }
@@ -1052,7 +1062,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
-      send_group->can_use_raw_one_sided_batch(SendType::Write)) {
+      send_group->can_use_raw_one_sided_batch(
+          SendType::Write, max_iov_bytes(size_v, num_iovs))) {
     return run_raw_one_sided_pipeline(send_group, SendType::Write, mhandle_v,
                                       src_v, size_v, slot_item_v, num_iovs);
   }
@@ -2154,7 +2165,7 @@ void Endpoint::send_proxy_thread_func() {
   send_proxy_adaptive_sleeper_.update_timer();
 
   while (!stop_.load(std::memory_order_acquire)) {
-    uccl_drive_send(ep_);
+    if (uccl_has_pending_compressed_send(ep_)) uccl_drive_send(ep_);
     send_proxy_adaptive_sleeper_.maybe_sleep();
 
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
@@ -2195,7 +2206,7 @@ void Endpoint::recv_proxy_thread_func() {
   while (!stop_.load(std::memory_order_acquire)) {
     uccl_drive_recv(ep_);
     recv_proxy_adaptive_sleeper_.maybe_sleep();
-    
+
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
