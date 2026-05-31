@@ -260,8 +260,8 @@ int64_t SendConnection::post_write_or_read(
 void SendConnection::start_polling() {
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true,
-                                       std::memory_order_acq_rel,
-                                       std::memory_order_acquire)) {
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
     return;
   }
   poll_thread_ =
