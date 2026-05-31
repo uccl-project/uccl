@@ -143,13 +143,6 @@ static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
   return max_bytes;
 }
 
-static inline void drain_pending_compressed_send(SendConnection* send_group) {
-  if (send_group == nullptr) return;
-  while (send_group->has_pending_compressed()) {
-    send_group->send_routine();
-  }
-}
-
 // ShmChannel helper function
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
@@ -987,10 +980,6 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     }
   }
 
-  if (size >= kMinCompressBytes) {
-    drain_pending_compressed_send(send_group);
-  }
-
   return true;
 }
 
@@ -1144,10 +1133,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
       }
     }
-  }
-
-  if (max_iov_bytes(size_v, num_iovs) >= kMinCompressBytes) {
-    drain_pending_compressed_send(send_group);
   }
 
   return true;

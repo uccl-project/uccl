@@ -185,9 +185,8 @@ class SendConnection : public RDMAConnection {
     uint64_t head = 0;
     std::map<uint64_t, uint64_t> inflight;  // offset → bytes
     std::mutex mu;
-    std::condition_variable cv;
 
-    uint64_t reserve(uint64_t bytes);
+    bool try_reserve(uint64_t bytes, uint64_t* offset);
 
     void release(uint64_t offset);
   };

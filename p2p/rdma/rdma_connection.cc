@@ -665,7 +665,17 @@ int64_t SendConnection::compress_write_request_split_first(
 
   // Reserve space in the peer's decompress_buffer; released on ack receipt.
   uint64_t arena_bytes = static_cast<uint64_t>(total_uncomp);
-  uint64_t arena_offset = decompress_arena_.reserve(arena_bytes);
+  if (unlikely(arena_bytes > decompress_arena_.size)) {
+    UCCL_LOG(ERROR) << "compress_write_request_split_first: request size "
+                    << arena_bytes << " exceeds decompress arena size "
+                    << decompress_arena_.size;
+    return -1;
+  }
+  uint64_t arena_offset = 0;
+  while (!decompress_arena_.try_reserve(arena_bytes, &arena_offset)) {
+    send_routine();
+    std::this_thread::yield();
+  }
   uint32_t ack_slot = static_cast<uint32_t>(
       next_ack_slot_.fetch_add(1, std::memory_order_relaxed) % kAckRingDepth);
   static_cast<AckSlot*>(ack_ring_->addr)[ack_slot].value.store(
@@ -817,31 +827,29 @@ void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   if (ctrl_channel_) ctrl_channel_->push_write_meta(meta_to_push, push_slot);
 }
 
-uint64_t SendConnection::DecompressArena::reserve(uint64_t bytes) {
-  std::unique_lock<std::mutex> lk(mu);
-  while (true) {
-    if (head + bytes > size) head = 0;
-    uint64_t start = head, end = head + bytes;
-    auto it = inflight.lower_bound(start);
-    bool overlap = false;
-    if (it != inflight.end() && it->first < end) overlap = true;
-    if (!overlap && it != inflight.begin()) {
-      auto prev = std::prev(it);
-      if (prev->first + prev->second > start) overlap = true;
-    }
-    if (!overlap) {
-      inflight.emplace(start, bytes);
-      head = end;
-      return start;
-    }
-    cv.wait(lk);
+bool SendConnection::DecompressArena::try_reserve(uint64_t bytes,
+                                                  uint64_t* offset) {
+  std::lock_guard<std::mutex> lk(mu);
+  if (offset == nullptr || bytes == 0 || bytes > size) return false;
+  if (head + bytes > size) head = 0;
+  uint64_t start = head, end = head + bytes;
+  auto it = inflight.lower_bound(start);
+  bool overlap = false;
+  if (it != inflight.end() && it->first < end) overlap = true;
+  if (!overlap && it != inflight.begin()) {
+    auto prev = std::prev(it);
+    if (prev->first + prev->second > start) overlap = true;
   }
+  if (overlap) return false;
+  inflight.emplace(start, bytes);
+  head = end;
+  *offset = start;
+  return true;
 }
 
 void SendConnection::DecompressArena::release(uint64_t offset) {
   std::lock_guard<std::mutex> lk(mu);
   inflight.erase(offset);
-  cv.notify_all();
 }
 
 // ── RecvConnection: Lifecycle ────────────────────────────────────────────────
