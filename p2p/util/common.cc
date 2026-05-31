@@ -297,7 +297,7 @@ std::ostream& operator<<(std::ostream& os, RDMASendRequest const& req) {
 MetaInfoToExchange::MetaInfoToExchange()
     : peer_id(0),
       channel_id(0),
-      flag(ChannelType::Normal),
+      flag(ChannelType::Data),
       channel_meta{},
       mem_meta{},
       gpu_id(0),

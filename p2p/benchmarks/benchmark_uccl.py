@@ -112,9 +112,7 @@ def _run_server(args, ep, remote_metadata):
             data_ptr_v.append(ptr)
             size_v.append(size_per_block)
 
-        ok, fifo_blob_v = ep.advertisev(
-            conn_id, mr_id_v, data_ptr_v, size_v, args.num_iovs
-        )
+        ok, fifo_blob_v = ep.advertisev(mr_id_v, data_ptr_v, size_v, args.num_iovs)
         assert ok, "[Server] advertisev failed"
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)

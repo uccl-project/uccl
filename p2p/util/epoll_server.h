@@ -25,42 +25,16 @@
 
 #include "common.h"
 
-// // Message framing: [uint32_t len][payload bytes]
+// Message framing: [uint32_t len][payload bytes]
 
-// // ---------------------------
-// // Example MetaInfo struct
-// // ---------------------------
+// ---------------------------
+// Example MetaInfo struct
+// ---------------------------
 // struct MetaInfo {
 //     int32_t client_id;
 //     double value;
 //     char message[64];
 // };
-
-// ---------------------------
-// Simple thread pool
-// ---------------------------
-class ThreadPool {
- public:
-  explicit ThreadPool(size_t nthreads);
-
-  template <typename F>
-  void enqueue(F&& f) {
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      tasks_.emplace(std::forward<F>(f));
-    }
-    cv_.notify_one();
-  }
-
-  ~ThreadPool();
-
- private:
-  std::vector<std::thread> workers_;
-  std::queue<std::function<void()>> tasks_;
-  std::mutex mtx_;
-  std::condition_variable cv_;
-  bool stop_;
-};
 
 // ---------------------------
 // Connection state

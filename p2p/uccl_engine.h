@@ -226,9 +226,9 @@ std::vector<notify_msg_t> uccl_engine_get_notifs();
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
 
 /**
- * Prepare FIFO metadata for a memory region without requiring a connection.
- * This can be called at memory registration time to pre-compute the fifo_item
- * for true one-sided RDMA operations.
+ * Prepare FifoItem metadata for a registered memory region (same as advertise).
+ * Can be called at registration time to pre-compute fifo_item for one-sided
+ * RDMA.
  * @param engine        The engine instance.
  * @param mr            Memory region handle.
  * @param data          Pointer to the data buffer.

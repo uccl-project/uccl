@@ -938,7 +938,7 @@ NB_MODULE(p2p, m) {
           nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "advertise",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+          [](Endpoint& self, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
             char serialized[sizeof(FifoItem)]{};  // 64-byte scratch buffer
@@ -946,8 +946,8 @@ NB_MODULE(p2p, m) {
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              ok = self.advertise(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, serialized);
+              ok = self.advertise(mr_id, reinterpret_cast<void*>(ptr), size,
+                                  serialized);
             }
             /* return (success, bytes) — empty bytes when failed */
             return nb::make_tuple(ok,
@@ -955,10 +955,10 @@ NB_MODULE(p2p, m) {
                                      : nb::bytes("", 0));
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
-          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
+          nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "advertisev",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+          [](Endpoint& self, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
              size_t num_iovs) {
             std::vector<char*> serialized_vec(num_iovs);
@@ -975,8 +975,8 @@ NB_MODULE(p2p, m) {
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              ok = self.advertisev(conn_id, mr_id_v, data_v, size_v,
-                                   serialized_vec, num_iovs);
+              ok = self.advertisev(mr_id_v, data_v, size_v, serialized_vec,
+                                   num_iovs);
             }
 
             nb::list py_bytes_list;
@@ -991,8 +991,8 @@ NB_MODULE(p2p, m) {
           },
           "Expose multiple registered buffers for the peer to RDMA-READ or "
           "RDMA-WRITE",
-          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
-          nb::arg("size_v"), nb::arg("num_iovs"))
+          nb::arg("mr_id_v"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("num_iovs"))
       // IPC-specific functions for local (same-node) connections via CUDA IPC
       .def(
           "connect_local",

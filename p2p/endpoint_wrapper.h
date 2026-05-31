@@ -184,7 +184,7 @@ inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
       ep);
 }
 
-inline void stop_accept(GenericEndpoint const& ep) {
+inline void uccl_stop_accept(GenericEndpoint const& ep) {
   std::visit([](auto const& s) { s->stop_accept(); }, ep);
 }
 
@@ -274,7 +274,7 @@ inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
 
 // Fast completion check using a pre-resolved SendConnection*.
 inline bool uccl_check_wr_fast(SendConnection* send_group, int64_t wr_id) {
-  return send_group->check(wr_id);
+  return send_group->check_completion(wr_id);
 }
 
 inline void uccl_drive_recv(GenericEndpoint const& ep) {
@@ -388,19 +388,16 @@ inline int uccl_read_async_on_group(SendConnection* send_group, Conn* conn,
                               ureq);
 }
 
-inline int prepare_fifo_metadata(GenericEndpoint const& ep, Conn* conn,
-                                 P2PMhandle* mhandle, void const* data,
-                                 size_t size, char* out_buf) {
+inline int prepare_fifo_metadata(GenericEndpoint const& ep, P2PMhandle* mhandle,
+                                 void const* data, size_t size, char* out_buf) {
   return std::visit(
       [&](auto const& s) -> int {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
-          (void)conn;
           (void)mhandle;
           return s->prepare_fifo_metadata(nullptr, nullptr, data, size,
                                           out_buf);
         } else {
-          (void)conn;
           FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;

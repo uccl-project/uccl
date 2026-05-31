@@ -535,14 +535,13 @@ bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
 
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
   if (engine && engine->endpoint) {
-    engine->endpoint->stop_accepting();
+    engine->endpoint->stop_accept();
   }
 }
 
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-
     delete conn;
   }
 }
@@ -561,8 +560,8 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
                              void const* data, size_t size, char* fifo_buf) {
   if (!engine || !data || !fifo_buf) return -1;
 
-  return engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
-                                        fifo_buf)
+  return engine->endpoint->advertise(mr, const_cast<void*>(data), size,
+                                     fifo_buf)
              ? 0
              : -1;
 }

@@ -486,35 +486,33 @@ Read multiple memory regions from remote endpoint using one-sided RDMA READ oper
 - `success` (bool): Whether read completed successfully
 
 ```python
-advertise(conn_id, mr_id, addr, len, out_buf) -> success
+advertise(mr_id, addr, len) -> (success, meta_blob)
 ```
-Advertise memory region information to remote endpoint for one-sided RDMA operations.
+Advertise memory region information for one-sided RDMA operations.
 
 **Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
 - `mr_id` (int): Memory region ID to advertise
 - `addr` (int): Pointer to the memory region
 - `len` (int): Size of the memory region in bytes
-- `out_buf` (str): Output buffer to store advertisement metadata
 
 **Returns:**
 - `success` (bool): Whether advertisement completed successfully
+- `meta_blob` (bytes): 64-byte serialized FifoItem metadata
 
 ```python
-advertisev(conn_id, mr_id_list, addr_list, len_list, out_buf_list, num_iovs) -> success
+advertisev(mr_id_list, addr_list, len_list, num_iovs) -> (success, meta_blob_list)
 ```
-Advertise multiple memory regions to remote endpoint for one-sided RDMA operations in a single operation.
+Advertise multiple memory regions for one-sided RDMA operations in a single operation.
 
 **Parameters:**
-- `conn_id` (int): Connection ID from connect/accept
 - `mr_id_list` (list[int]): List of memory region IDs to advertise
 - `addr_list` (list[int]): List of pointers to memory regions
 - `len_list` (list[int]): List of sizes in bytes for each memory region
-- `out_buf_list` (list[str]): List of output buffers to store advertisement metadata
 - `num_iovs` (int): Number of I/O vectors (length of the lists)
 
 **Returns:**
 - `success` (bool): Whether advertisement completed successfully
+- `meta_blob_list` (list[bytes]): Serialized FifoItem metadata for each buffer
 
 ```python
 write(conn_id, mr_id, src, size, slot_item) -> success

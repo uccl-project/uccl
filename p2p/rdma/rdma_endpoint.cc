@@ -3,6 +3,7 @@
 #include "util/gpu_rt.h"
 #include "util/util.h"
 
+// ── Lifecycle ────────────────────────────────────────────────────────────────
 RDMAEndpoint::RDMAEndpoint(int gpu_index, uint64_t port,
                            bool auto_start_polling,
                            std::vector<size_t> const& device_ids)
@@ -41,12 +42,96 @@ RDMAEndpoint::~RDMAEndpoint() {
   }
 }
 
+// ── Initialization ───────────────────────────────────────────────────────────
+bool RDMAEndpoint::initialize_rdma_ctx_for_gpu(
+    int gpu_index, std::vector<size_t> const& device_ids) {
+  gpu_index_ = gpu_index;
+
+  // Find all devices used by the GPU
+  std::vector<size_t> actual_device_ids;
+  if (device_ids.size() == 0) {
+    actual_device_ids =
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
+  } else {
+    actual_device_ids = device_ids;
+  }
+
+  initialize_contexts(actual_device_ids);
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "RDMAEndpoint initialized with " << contexts_.size()
+      << " context(s) for GPU " << gpu_index;
+
+  for (auto dev : actual_device_ids) {
+    auto device = RdmaDeviceManager::instance().get_device(dev);
+    std::cout << "GPU " << gpu_index << " uses device " << dev << " ("
+              << device->name() << ")" << std::endl;
+  }
+  return true;
+}
+
+void RDMAEndpoint::initialize_contexts(std::vector<size_t> const& device_ids) {
+  auto& device_manager = RdmaDeviceManager::instance();
+  assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
+
+  // Share RdmaContext objects across context slots that map to the same
+  // physical NIC device.  Each unique ibv_context + ibv_pd triggers a
+  // separate memory registration (ibv_reg_mr or ibv_reg_dmabuf_mr).
+  // With DMA-BUF, each registration creates a GPU DMA mapping VA entry;
+  // with nvidia_peermem, each registration pins GPU pages under a separate
+  // PD.  Sharing avoids exhausting these resources when multiple
+  // subsystems (DeepEP, NCCL, NIXL) co-exist on the same GPU+NIC.
+  std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
+  int unique_count = 0;
+
+  for (int i = 0; i < kNICContextNumber; ++i) {
+    size_t device_id = device_ids[i % device_ids.size()];
+
+    auto it = device_ctx_map.find(device_id);
+    if (it != device_ctx_map.end()) {
+      // Same device as an earlier context - share it.
+      contexts_.push_back(it->second);
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "RDMAEndpoint: Context " << i << " shares device " << device_id
+          << " (" << device_manager.get_device(device_id)->name() << ")";
+      continue;
+    }
+
+    auto device = device_manager.get_device(device_id);
+    if (!device) {
+      UCCL_LOG(ERROR) << "Error: Device " << device_id << " not found";
+      throw std::runtime_error("Device " + std::to_string(device_id) +
+                               " not found");
+    }
+    auto context = std::make_shared<RdmaContext>(device, contexts_.size());
+    contexts_.push_back(context);
+    device_ctx_map[device_id] = context;
+    unique_count++;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "RDMAEndpoint: Created context " << i << " for device " << device_id
+        << " (" << device->name() << ")";
+  }
+
+  assert(contexts_.size() == kNICContextNumber);
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "RDMAEndpoint: " << kNICContextNumber << " context slots, "
+      << unique_count << " unique device(s)";
+}
+
+std::shared_ptr<RdmaContext> RDMAEndpoint::get_context_by_channel_id(
+    uint32_t channel_id) const {
+  return contexts_[channel_id_to_context_id(channel_id)];
+}
+
 void RDMAEndpoint::init_compressor() {
   Compressor& compressor = Compressor::get_instance();
   auto compress_buf = compressor.get_compress_buffer();
   auto decompress_buf = compressor.get_decompress_buffer();
-  if (compress_buf) reg_mr_for_all_slots(*compress_buf);
-  if (decompress_buf) reg_mr_for_all_slots(*decompress_buf);
+  if (compress_buf && !reg_mem(compress_buf)) {
+    UCCL_LOG(ERROR) << "Failed to register compression buffer";
+  }
+  if (decompress_buf && !reg_mem(decompress_buf)) {
+    UCCL_LOG(ERROR) << "Failed to register decompression buffer";
+  }
   if (compressor.get_compress_strategy() == CompressStrategy::kNone) return;
   // Host-side rings used to carry per-message compression metadata and
   // completion acks. Registered on every context slot so any data/control
@@ -56,42 +141,9 @@ void RDMAEndpoint::init_compressor() {
       allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, nullptr);
   std::memset(ack_ring_->addr, 0, kAckRingBytes);
   std::memset(write_meta_ring_->addr, 0, kWriteMetaRingBytes);
-  reg_mr_for_all_slots(*ack_ring_);
-  reg_mr_for_all_slots(*write_meta_ring_);
-}
-
-void RDMAEndpoint::reg_mr_for_all_slots(RegMemBlock& blk) {
-  std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
-  for (size_t slot = 0; slot < contexts_.size(); ++slot) {
-    auto ctx = contexts_[slot];
-    auto it = registered.find(ctx.get());
-    struct ibv_mr* mr = nullptr;
-    if (it != registered.end()) {
-      mr = it->second;
-    } else {
-      mr = ctx->reg_mem(blk.addr, blk.size);
-      if (!mr) {
-        UCCL_LOG(ERROR) << "reg_mr_for_all_slots: ibv_reg_mr FAILED for addr="
-                        << blk.addr << " size=" << blk.size << " slot=" << slot
-                        << " errno=" << errno << " (" << strerror(errno) << ")";
-      } else {
-        UCCL_LOG(INFO, UCCL_RDMA)
-            << "reg_mr_for_all_slots: registered addr=" << blk.addr
-            << " size=" << blk.size << " slot=" << slot << " lkey=0x"
-            << std::hex << mr->lkey << " rkey=0x" << mr->rkey << std::dec;
-      }
-      registered[ctx.get()] = mr;
-    }
-    blk.set_mr_by_context_id(slot, mr);
+  if (!reg_mem(ack_ring_) || !reg_mem(write_meta_ring_)) {
+    throw std::runtime_error("Failed to register compression metadata rings");
   }
-}
-
-std::shared_ptr<RegMemBlock> RDMAEndpoint::ack_ring() const {
-  return ack_ring_;
-}
-
-std::shared_ptr<RegMemBlock> RDMAEndpoint::write_meta_ring() const {
-  return write_meta_ring_;
 }
 
 void RDMAEndpoint::fill_compression_meta(MetaInfoToExchange& m) const {
@@ -102,10 +154,20 @@ void RDMAEndpoint::fill_compression_meta(MetaInfoToExchange& m) const {
   if (ack_ring_) m.ack_ring_meta = RemoteMemInfo(*ack_ring_);
 }
 
+// ── Accessors ────────────────────────────────────────────────────────────────
 int RDMAEndpoint::gpu_index() const { return gpu_index_; }
 
 size_t RDMAEndpoint::context_count() const { return contexts_.size(); }
 
+std::shared_ptr<RegMemBlock> RDMAEndpoint::ack_ring() const {
+  return ack_ring_;
+}
+
+std::shared_ptr<RegMemBlock> RDMAEndpoint::write_meta_ring() const {
+  return write_meta_ring_;
+}
+
+// ── Memory registration ──────────────────────────────────────────────────────
 bool RDMAEndpoint::reg_mem(std::shared_ptr<RegMemBlock> reg_block) {
   if (unlikely(!reg_block)) {
     UCCL_LOG(ERROR) << "Error: reg_mem called with null reg_block";
@@ -163,176 +225,6 @@ bool RDMAEndpoint::dereg_mem(std::shared_ptr<RegMemBlock> reg_block) {
     }
   }
   return true;
-}
-
-int RDMAEndpoint::build_connect(uint64_t peer_id, bool sync, int timeout_ms) {
-  std::string const oob_con = build_oob_connect(peer_id);
-  uint64_t receved_peer_id =
-      this->build_control_channel(oob_con, peer_id, sync, timeout_ms);
-  if (receved_peer_id < 0) {
-    return -1;
-  }
-  if (!this->build_data_channels(oob_con, peer_id, sync, timeout_ms)) {
-    return -1;
-  }
-  return static_cast<int>(receved_peer_id);
-}
-
-void RDMAEndpoint::check_send_complete(uint64_t peer_id, int64_t wr_id) {
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "check_send_complete - peer_id: " << peer_id << ", wr_id: " << wr_id;
-
-  auto it = send_channel_groups_.find(peer_id);
-  if (it == send_channel_groups_.end()) {
-    throw std::runtime_error("Send channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto send_group = it->second;
-  while (!send_group->check(wr_id)) {
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
-  }
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "check_send_complete - Completed for peer_id: " << peer_id
-      << ", wr_id: " << wr_id;
-}
-
-bool RDMAEndpoint::check_send_complete_once(uint64_t peer_id, int64_t wr_id) {
-  // UCCL_LOG(INFO, UCCL_RDMA) << "check_send_complete - peer_id: " << peer_id
-  //           << ", wr_id: " << wr_id;
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  auto it = send_channel_groups_.find(peer_id);
-  if (unlikely(it == send_channel_groups_.end())) {
-    throw std::runtime_error("Send channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto send_group = it->second;
-  return send_group->check(wr_id);
-}
-
-SendConnection* RDMAEndpoint::get_send_group_raw(uint64_t peer_id) {
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  auto it = send_channel_groups_.find(peer_id);
-  if (it == send_channel_groups_.end()) return nullptr;
-  return it->second.get();
-}
-
-int64_t RDMAEndpoint::write_or_read(std::shared_ptr<RDMASendRequest> req) {
-  uint64_t peer_id = req->to_peer_id;
-  auto it = send_channel_groups_.find(peer_id);
-  if (it == send_channel_groups_.end()) {
-    throw std::runtime_error("Send channel group not found for peer_id: " +
-                             std::to_string(peer_id));
-  }
-
-  auto send_group = it->second;
-  int64_t wr_id = -1;
-
-  // Blocking call until send succeeds
-  while (wr_id < 0) {
-    // UCCL_LOG(INFO, UCCL_RDMA) << "RDMAEndpoint::write - Attempting to send
-    // to peer_id:
-    // "
-    //           << peer_id;
-    wr_id = send_group->post_write_or_read(req);
-
-    if (wr_id < 0) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-  }
-
-  return wr_id;
-}
-
-void RDMAEndpoint::add_peer_oob_meta(
-    std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> const&
-        new_meta) {
-  for (auto const& [peer_id, meta_ptr] : new_meta) {
-    peer_oob_meta_[peer_id] = meta_ptr;
-  }
-}
-
-ConnID RDMAEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
-                                  uint16_t remote_port) {
-  int32_t current_send_peer_id =
-      next_send_peer_id_.fetch_add(1, std::memory_order_relaxed);
-
-  assert(gpu_index_ != INVALID_GPU);
-
-  add_peer_oob_meta({{current_send_peer_id,
-                      std::make_shared<OOBMetaData>(remote_ip, remote_port)}});
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "remote_gpuidx: " << remote_gpuidx << ", remote_ip: " << remote_ip
-      << ", remote_port: " << remote_port;
-  build_connect(current_send_peer_id);  // sync mode (default)
-  ConnID conn_id;
-  conn_id.context =
-      reinterpret_cast<void*>(static_cast<intptr_t>(current_send_peer_id));
-  conn_id.peer_id = current_send_peer_id;
-  return conn_id;
-}
-
-uint16_t RDMAEndpoint::get_p2p_listen_port() { return oob_server_->get_port(); }
-
-int RDMAEndpoint::get_p2p_listen_fd() { return oob_server_->get_listen_fd(); }
-
-std::shared_ptr<EpollClient> RDMAEndpoint::get_oob_client() {
-  return oob_client_;
-}
-
-std::string RDMAEndpoint::get_oob_conn_key(uint64_t peer_id) {
-  std::shared_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
-  auto it = peer_oob_conn_keys_.find(peer_id);
-  return (it != peer_oob_conn_keys_.end()) ? it->second : "";
-}
-
-ConnID RDMAEndpoint::uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
-  AcceptedMeta accepted;
-  uint64_t peer_id = 0;
-
-  // Block until there's an accepted connection
-  while (!stop_accept_.load(std::memory_order_acquire)) {
-    {
-      {
-        std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
-        if (!accepted_meta_.empty()) {
-          // Get the first accepted connection
-          auto it = accepted_meta_.begin();
-          peer_id = it->first;
-          accepted = it->second;
-          // Remove it from the map
-          if (get_or_create_recv_group(peer_id)->channel_count() ==
-              kQpNumPerChannel + 1) {
-            accepted_meta_.erase(it);
-            UCCL_LOG(INFO, UCCL_RDMA)
-                << "Accepted connection: peer_id=" << peer_id
-                << ", ip=" << accepted.ip << ", port=" << accepted.port
-                << ", gpu_id=" << accepted.gpu_id;
-            break;
-          }
-        }
-      }
-    }
-    // Wait before checking again
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "Done Accepted connection: peer_id=" << peer_id
-      << ", ip=" << accepted.ip << ", port=" << accepted.port
-      << ", gpu_id=" << accepted.gpu_id;
-  // Assign output parameters
-  remote_ip = accepted.ip;
-  if (remote_gpuidx != nullptr) {
-    *remote_gpuidx = accepted.gpu_id;
-  }
-
-  // Create and return ConnID
-  ConnID conn_id;
-  conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(peer_id));
-  conn_id.peer_id = peer_id;
-  conn_id.sock_fd = 0;
-  return conn_id;
 }
 
 int RDMAEndpoint::uccl_regmr(void* const data, size_t const len,
@@ -402,120 +294,271 @@ void RDMAEndpoint::uccl_deregmr(
   }
 }
 
-bool RDMAEndpoint::initialize_rdma_ctx_for_gpu(
-    int gpu_index, std::vector<size_t> const& device_ids) {
-  gpu_index_ = gpu_index;
-
-  // Find all devices used by the GPU
-  std::vector<size_t> actual_device_ids;
-  if (device_ids.size() == 0) {
-    actual_device_ids =
-        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
-  } else {
-    actual_device_ids = device_ids;
+// ── Connection setup ─────────────────────────────────────────────────────────
+void RDMAEndpoint::add_peer_oob_meta(
+    std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> const&
+        new_meta) {
+  for (auto const& [peer_id, meta_ptr] : new_meta) {
+    peer_oob_meta_[peer_id] = meta_ptr;
   }
+}
 
-  initialize_contexts(actual_device_ids);
+uint16_t RDMAEndpoint::get_p2p_listen_port() { return oob_server_->get_port(); }
+
+int RDMAEndpoint::get_p2p_listen_fd() { return oob_server_->get_listen_fd(); }
+
+std::shared_ptr<EpollClient> RDMAEndpoint::get_oob_client() {
+  return oob_client_;
+}
+
+std::string RDMAEndpoint::get_oob_conn_key(uint64_t peer_id) {
+  std::shared_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
+  auto it = peer_oob_conn_keys_.find(peer_id);
+  return (it != peer_oob_conn_keys_.end()) ? it->second : "";
+}
+
+ConnID RDMAEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
+                                  uint16_t remote_port) {
+  int32_t current_send_peer_id =
+      next_send_peer_id_.fetch_add(1, std::memory_order_relaxed);
+
+  assert(gpu_index_ != INVALID_GPU);
+
+  add_peer_oob_meta({{current_send_peer_id,
+                      std::make_shared<OOBMetaData>(remote_ip, remote_port)}});
   UCCL_LOG(INFO, UCCL_RDMA)
-      << "RDMAEndpoint initialized with " << contexts_.size()
-      << " context(s) for GPU " << gpu_index;
+      << "remote_gpuidx: " << remote_gpuidx << ", remote_ip: " << remote_ip
+      << ", remote_port: " << remote_port;
+  build_connect(current_send_peer_id);  // sync mode (default)
+  ConnID conn_id;
+  conn_id.context =
+      reinterpret_cast<void*>(static_cast<intptr_t>(current_send_peer_id));
+  conn_id.peer_id = current_send_peer_id;
+  return conn_id;
+}
 
-  for (auto dev : actual_device_ids) {
-    auto device = RdmaDeviceManager::instance().get_device(dev);
-    std::cout << "GPU " << gpu_index << " uses device " << dev << " ("
-              << device->name() << ")" << std::endl;
+int RDMAEndpoint::build_connect(uint64_t peer_id, bool sync, int timeout_ms) {
+  std::string const oob_con = build_oob_connect(peer_id);
+  uint64_t receved_peer_id =
+      this->build_control_channel(oob_con, peer_id, sync, timeout_ms);
+  if (receved_peer_id < 0) {
+    return -1;
   }
+  if (!this->build_data_channels(oob_con, peer_id, sync, timeout_ms)) {
+    return -1;
+  }
+  return static_cast<int>(receved_peer_id);
+}
+
+std::string const RDMAEndpoint::build_oob_connect(uint64_t peer_id) {
+  auto const& item = peer_oob_meta_.find(peer_id);
+  std::shared_ptr<OOBMetaData> ip_port_ptr = item->second;
+  std::string oob_con;
+  while (oob_con.empty()) {
+    oob_con = oob_client_->connect_to_server(ip_port_ptr->server_ip,
+                                             ip_port_ptr->server_port);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  }
+  // Store conn_key for later use (e.g., notifications)
+  std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
+  peer_oob_conn_keys_[peer_id] = oob_con;
+  return oob_con;
+}
+
+int RDMAEndpoint::build_control_channel(std::string const& oob_con,
+                                        uint64_t peer_id, bool sync,
+                                        int timeout_ms) {
+  auto ctrl_mem =
+      allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, contexts_[0]);
+  auto control_channel = std::make_shared<SendControlChannel>(
+      contexts_[0], ctrl_mem, kControlChannelID);
+  auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
+
+  // Include OOB server port for back-connection (notifications)
+  MetaInfoToExchange ctrl_meta(
+      INVALID_PEER_ID, kControlChannelID, control_channel->get_local_meta(),
+      ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
+  fill_compression_meta(ctrl_meta);
+
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Control Meta: " << ctrl_meta
+      << " Local Channel Meta: " << control_channel->get_local_meta()
+      << std::endl;
+
+  std::string ctrl_serialized_meta = serialize(ctrl_meta);
+
+  auto promise = std::make_shared<std::promise<uint64_t>>();
+  std::future<uint64_t> future = promise->get_future();
+
+  bool sent = oob_client_->send_meta(
+      oob_con, ctrl_serialized_meta,
+      [this, control_channel, promise,
+       peer_id](std::string const& response) mutable {
+        MetaInfoToExchange response_meta =
+            deserialize<MetaInfoToExchange>(response);
+        control_channel->establish_channel(response_meta.channel_meta);
+        // Bind WriteReqMeta ring: local mirror (this endpoint's own) +
+        // remote slot table on the peer receiver.
+        if (write_meta_ring_) {
+          control_channel->bind_write_meta_ring(
+              write_meta_ring_, response_meta.write_meta_ring_meta);
+        }
+        this->set_send_control_channel(peer_id, std::move(control_channel));
+        // Remember peer's decompress_buf so the SendConnection can target
+        // it during compress_write_request_split_first.
+        this->set_send_compression_peer_meta(peer_id, response_meta);
+        promise->set_value(response_meta.peer_id);  // no try/catch; fail-fast
+      });
+
+  if (!sent) {
+    UCCL_LOG(ERROR) << "Failed to send control channel metadata for peer "
+                    << peer_id;
+    return -1;
+  }
+
+  if (!sync) {
+    return peer_id;
+  }
+
+  if (future.wait_for(std::chrono::milliseconds(timeout_ms)) ==
+      std::future_status::timeout) {
+    UCCL_LOG(ERROR) << "Timeout waiting for control channel handshake for peer "
+                    << peer_id;
+    return -1;
+  }
+
+  uint64_t recv_peer_id = future.get();
+
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Control channel handshake completed successfully for peer "
+      << recv_peer_id;
+
+  return static_cast<int>(recv_peer_id);
+}
+
+bool RDMAEndpoint::build_data_channels(std::string const& oob_con,
+                                       uint64_t peer_id, bool sync,
+                                       int timeout_ms) {
+  std::vector<std::future<void>> futures;
+  futures.reserve(kQpNumPerChannel);
+
+  for (int i = 0; i < kQpNumPerChannel; i++) {
+    uint32_t channel_id = i + 1;
+
+    auto channel = std::make_shared<RDMADataChannel>(
+        get_context_by_channel_id(channel_id), channel_id);
+
+    MetaInfoToExchange meta(INVALID_PEER_ID, channel_id,
+                            channel->get_local_meta(), nullptr,
+                            ChannelType::Data, gpu_index_);
+
+    UCCL_LOG(INFO, UCCL_RDMA) << meta << std::endl;
+    std::string serialized_meta = serialize(meta);
+
+    auto promise = std::make_shared<std::promise<void>>();
+    futures.emplace_back(promise->get_future());
+
+    bool sent = oob_client_->send_meta(
+        oob_con, serialized_meta,
+        [this, channel, channel_id, promise,
+         peer_id](std::string const& response) {
+          uint64_t peer_rank =
+              this->handle_send_meta_response(channel, response);
+          add_one_send_channel(peer_id, channel_id, channel);
+          promise->set_value();  // no try/catch; fail-fast
+        });
+
+    if (!sent) {
+      UCCL_LOG(ERROR) << "Failed to send metadata for channel " << channel_id;
+      return false;
+    }
+  }
+
+  if (!sync) {
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "Data channels async build initiated for peer " << peer_id;
+    return true;
+  }
+
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+  for (size_t i = 0; i < futures.size(); i++) {
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now());
+
+    if (remaining.count() <= 0 ||
+        futures[i].wait_for(remaining) == std::future_status::timeout) {
+      UCCL_LOG(ERROR) << "Timeout waiting for channel " << (i + 1)
+                      << " to complete";
+      return false;
+    }
+
+    futures[i].get();
+  }
+
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "All " << kQpNumPerChannel
+      << " data channels built successfully for peer " << peer_id;
+
   return true;
 }
 
-void RDMAEndpoint::create_unified_p2p_socket() {}
+uint64_t RDMAEndpoint::handle_send_meta_response(
+    std::shared_ptr<RDMADataChannel> channel, std::string const& response) {
+  // Deserialize response as MetaInfoToExchange
+  MetaInfoToExchange response_meta = deserialize<MetaInfoToExchange>(response);
+  UCCL_LOG(INFO, UCCL_RDMA) << response_meta;
+  channel->establish_channel(response_meta.channel_meta);
+  return response_meta.peer_id;
+}
 
-void RDMAEndpoint::recv_routine() {
-  if (auto_start_polling_) {
-    return;  // Do nothing if auto polling is enabled
-  }
-  std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
-  for (auto& [peer_id, recv_group] : recv_channel_groups_) {
-    if (recv_group && !recv_group->is_running()) {
-      recv_group->poll_and_process_completions();
+ConnID RDMAEndpoint::uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
+  AcceptedMeta accepted;
+  uint64_t peer_id = 0;
+
+  // Block until there's an accepted connection
+  while (!stop_accept_.load(std::memory_order_acquire)) {
+    {
+      {
+        std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
+        if (!accepted_meta_.empty()) {
+          // Get the first accepted connection
+          auto it = accepted_meta_.begin();
+          peer_id = it->first;
+          accepted = it->second;
+          // Remove it from the map
+          if (get_or_create_recv_group(peer_id)->channel_count() ==
+              kQpNumPerChannel + 1) {
+            accepted_meta_.erase(it);
+            UCCL_LOG(INFO, UCCL_RDMA)
+                << "Accepted connection: peer_id=" << peer_id
+                << ", ip=" << accepted.ip << ", port=" << accepted.port
+                << ", gpu_id=" << accepted.gpu_id;
+            break;
+          }
+        }
+      }
     }
+    // Wait before checking again
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-}
-
-void RDMAEndpoint::send_routine() {
-  if (auto_start_polling_) {
-    return;  // Do nothing if auto polling is enabled
-  }
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  for (auto& [peer_id, send_group] : send_channel_groups_) {
-    if (send_group && !send_group->is_running()) {
-      send_group->polling_loop_for_meta();
-    }
-  }
-}
-
-void RDMAEndpoint::flush_all_sends() {
-  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-  for (auto& [peer_id, send_group] : send_channel_groups_) {
-    if (send_group) send_group->flush_batches();
-  }
-}
-
-void RDMAEndpoint::stop_accept() {
-  stop_accept_.store(true, std::memory_order_release);
-}
-
-std::shared_ptr<RdmaContext> RDMAEndpoint::get_context_by_channel_id(
-    uint32_t channel_id) const {
-  return contexts_[channel_id_to_context_id(channel_id)];
-}
-
-void RDMAEndpoint::initialize_contexts(std::vector<size_t> const& device_ids) {
-  auto& device_manager = RdmaDeviceManager::instance();
-  assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
-
-  // Share RdmaContext objects across context slots that map to the same
-  // physical NIC device.  Each unique ibv_context + ibv_pd triggers a
-  // separate memory registration (ibv_reg_mr or ibv_reg_dmabuf_mr).
-  // With DMA-BUF, each registration creates a GPU DMA mapping VA entry;
-  // with nvidia_peermem, each registration pins GPU pages under a separate
-  // PD.  Sharing avoids exhausting these resources when multiple
-  // subsystems (DeepEP, NCCL, NIXL) co-exist on the same GPU+NIC.
-  std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
-  int unique_count = 0;
-
-  for (int i = 0; i < kNICContextNumber; ++i) {
-    size_t device_id = device_ids[i % device_ids.size()];
-
-    auto it = device_ctx_map.find(device_id);
-    if (it != device_ctx_map.end()) {
-      // Same device as an earlier context - share it.
-      contexts_.push_back(it->second);
-      UCCL_LOG(INFO, UCCL_RDMA)
-          << "RDMAEndpoint: Context " << i << " shares device " << device_id
-          << " (" << device_manager.get_device(device_id)->name() << ")";
-      continue;
-    }
-
-    auto device = device_manager.get_device(device_id);
-    if (!device) {
-      UCCL_LOG(ERROR) << "Error: Device " << device_id << " not found";
-      throw std::runtime_error("Device " + std::to_string(device_id) +
-                               " not found");
-    }
-    auto context = std::make_shared<RdmaContext>(device, contexts_.size());
-    contexts_.push_back(context);
-    device_ctx_map[device_id] = context;
-    unique_count++;
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "RDMAEndpoint: Created context " << i << " for device " << device_id
-        << " (" << device->name() << ")";
-  }
-
-  assert(contexts_.size() == kNICContextNumber);
   UCCL_LOG(INFO, UCCL_RDMA)
-      << "RDMAEndpoint: " << kNICContextNumber << " context slots, "
-      << unique_count << " unique device(s)";
+      << "Done Accepted connection: peer_id=" << peer_id
+      << ", ip=" << accepted.ip << ", port=" << accepted.port
+      << ", gpu_id=" << accepted.gpu_id;
+  // Assign output parameters
+  remote_ip = accepted.ip;
+  if (remote_gpuidx != nullptr) {
+    *remote_gpuidx = accepted.gpu_id;
+  }
+
+  // Create and return ConnID
+  ConnID conn_id;
+  conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(peer_id));
+  conn_id.peer_id = peer_id;
+  conn_id.sock_fd = 0;
+  return conn_id;
 }
 
 void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
@@ -625,58 +668,18 @@ void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
     // Create response (echo back the same data)
     MetaInfoToExchange response(INVALID_PEER_ID, meta.channel_id,
                                 new_channel->get_local_meta(), nullptr,
-                                ChannelType::Normal, gpu_index_);
+                                ChannelType::Data, gpu_index_);
     UCCL_LOG(INFO, UCCL_RDMA) << "response:::::::" << response;
     output = serialize(response);
     add_one_recv_channel(actual_peer_id, meta.channel_id, new_channel);
   }
 }
 
-uint64_t RDMAEndpoint::handle_send_meta_response(
-    std::shared_ptr<RDMADataChannel> channel, std::string const& response) {
-  // Deserialize response as MetaInfoToExchange
-  MetaInfoToExchange response_meta = deserialize<MetaInfoToExchange>(response);
-  UCCL_LOG(INFO, UCCL_RDMA) << response_meta;
-  channel->establish_channel(response_meta.channel_meta);
-  return response_meta.peer_id;
+void RDMAEndpoint::stop_accept() {
+  stop_accept_.store(true, std::memory_order_release);
 }
 
-std::shared_ptr<RecvConnection> RDMAEndpoint::get_or_create_recv_group(
-    uint64_t peer_id) {
-  {
-    std::shared_lock read_lock(recv_channel_mutex_);
-    auto it = recv_channel_groups_.find(peer_id);
-    if (it != recv_channel_groups_.end()) {
-      return it->second;
-    }
-  }
-  auto numa_node = RdmaDeviceManager::instance().get_numa_node(
-      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
-  {
-    std::unique_lock write_lock(recv_channel_mutex_);
-    auto [it, inserted] = recv_channel_groups_.try_emplace(
-        peer_id,
-        std::make_shared<RecvConnection>(
-            numa_node, auto_start_polling_));  // try_emplace constructs only
-                                               // if inserting
-    return it->second;
-  }
-}
-
-void RDMAEndpoint::add_one_recv_channel(
-    uint64_t peer_id, uint32_t channel_id,
-    std::shared_ptr<RDMADataChannel> new_channel) {
-  std::shared_ptr<RecvConnection> group_ptr = get_or_create_recv_group(peer_id);
-  group_ptr->add_channel(channel_id, new_channel);
-}
-
-void RDMAEndpoint::set_recv_control_channel(
-    uint64_t peer_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel) {
-  auto it = get_or_create_recv_group(peer_id);
-  recv_channel_groups_[peer_id]->set_control_channel(
-      std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
-}
-
+// ── SendConnection group registry ────────────────────────────────────────────
 std::shared_ptr<SendConnection> RDMAEndpoint::get_or_create_send_group(
     uint64_t peer_id) {
   {
@@ -721,6 +724,43 @@ void RDMAEndpoint::set_send_compression_peer_meta(
   group->set_local_ack_ring(ack_ring_);
 }
 
+// ── RecvConnection group registry ────────────────────────────────────────────
+std::shared_ptr<RecvConnection> RDMAEndpoint::get_or_create_recv_group(
+    uint64_t peer_id) {
+  {
+    std::shared_lock read_lock(recv_channel_mutex_);
+    auto it = recv_channel_groups_.find(peer_id);
+    if (it != recv_channel_groups_.end()) {
+      return it->second;
+    }
+  }
+  auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
+  {
+    std::unique_lock write_lock(recv_channel_mutex_);
+    auto [it, inserted] = recv_channel_groups_.try_emplace(
+        peer_id,
+        std::make_shared<RecvConnection>(
+            numa_node, auto_start_polling_));  // try_emplace constructs only
+                                               // if inserting
+    return it->second;
+  }
+}
+
+void RDMAEndpoint::add_one_recv_channel(
+    uint64_t peer_id, uint32_t channel_id,
+    std::shared_ptr<RDMADataChannel> new_channel) {
+  std::shared_ptr<RecvConnection> group_ptr = get_or_create_recv_group(peer_id);
+  group_ptr->add_channel(channel_id, new_channel);
+}
+
+void RDMAEndpoint::set_recv_control_channel(
+    uint64_t peer_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel) {
+  auto it = get_or_create_recv_group(peer_id);
+  recv_channel_groups_[peer_id]->set_control_channel(
+      std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
+}
+
 void RDMAEndpoint::set_recv_compression_peer_meta(
     uint64_t peer_id, MetaInfoToExchange const& peer) {
   if (peer.ack_ring_meta.length == 0) return;
@@ -728,156 +768,104 @@ void RDMAEndpoint::set_recv_compression_peer_meta(
   group->set_remote_ack_ring(peer.ack_ring_meta);
 }
 
-std::string const RDMAEndpoint::build_oob_connect(uint64_t peer_id) {
-  auto const& item = peer_oob_meta_.find(peer_id);
-  std::shared_ptr<OOBMetaData> ip_port_ptr = item->second;
-  std::string oob_con;
-  while (oob_con.empty()) {
-    oob_con = oob_client_->connect_to_server(ip_port_ptr->server_ip,
-                                             ip_port_ptr->server_port);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-  }
-  // Store conn_key for later use (e.g., notifications)
-  std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
-  peer_oob_conn_keys_[peer_id] = oob_con;
-  return oob_con;
-}
-
-int RDMAEndpoint::build_control_channel(std::string const& oob_con,
-                                        uint64_t peer_id, bool sync,
-                                        int timeout_ms) {
-  auto ctrl_mem =
-      allocator_->allocate(kWriteMetaRingBytes, MemoryType::HOST, contexts_[0]);
-  auto control_channel = std::make_shared<SendControlChannel>(
-      contexts_[0], ctrl_mem, kControlChannelID);
-  auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
-
-  // Include OOB server port for back-connection (notifications)
-  MetaInfoToExchange ctrl_meta(
-      INVALID_PEER_ID, kControlChannelID, control_channel->get_local_meta(),
-      ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
-  fill_compression_meta(ctrl_meta);
-
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "Control Meta: " << ctrl_meta
-      << " Local Channel Meta: " << control_channel->get_local_meta()
-      << std::endl;
-
-  std::string ctrl_serialized_meta = serialize(ctrl_meta);
-
-  auto promise = std::make_shared<std::promise<uint64_t>>();
-  std::future<uint64_t> future = promise->get_future();
-
-  bool sent = oob_client_->send_meta(
-      oob_con, ctrl_serialized_meta,
-      [this, control_channel, promise,
-       peer_id](std::string const& response) mutable {
-        MetaInfoToExchange response_meta =
-            deserialize<MetaInfoToExchange>(response);
-        control_channel->establish_channel(response_meta.channel_meta);
-        // Bind WriteReqMeta ring: local mirror (this endpoint's own) +
-        // remote slot table on the peer receiver.
-        if (write_meta_ring_) {
-          control_channel->bind_write_meta_ring(
-              write_meta_ring_, response_meta.write_meta_ring_meta);
-        }
-        this->set_send_control_channel(peer_id, std::move(control_channel));
-        // Remember peer's decompress_buf so the SendConnection can target
-        // it during compress_write_request_split_first.
-        this->set_send_compression_peer_meta(peer_id, response_meta);
-        promise->set_value(response_meta.peer_id);  // no try/catch; fail-fast
-      });
-
-  if (!sent) {
-    UCCL_LOG(ERROR) << "Failed to send control channel metadata for peer "
-                    << peer_id;
-    return -1;
+// ── One-sided transfer and completion ────────────────────────────────────────
+int64_t RDMAEndpoint::write_or_read(std::shared_ptr<RDMASendRequest> req) {
+  uint64_t peer_id = req->to_peer_id;
+  auto it = send_channel_groups_.find(peer_id);
+  if (it == send_channel_groups_.end()) {
+    throw std::runtime_error("Send channel group not found for peer_id: " +
+                             std::to_string(peer_id));
   }
 
-  if (!sync) {
-    return peer_id;
-  }
+  auto send_group = it->second;
+  int64_t wr_id = -1;
 
-  if (future.wait_for(std::chrono::milliseconds(timeout_ms)) ==
-      std::future_status::timeout) {
-    UCCL_LOG(ERROR) << "Timeout waiting for control channel handshake for peer "
-                    << peer_id;
-    return -1;
-  }
+  // Blocking call until send succeeds
+  while (wr_id < 0) {
+    // UCCL_LOG(INFO, UCCL_RDMA) << "RDMAEndpoint::write - Attempting to send
+    // to peer_id:
+    // "
+    //           << peer_id;
+    wr_id = send_group->post_write_or_read(req);
 
-  uint64_t recv_peer_id = future.get();
-
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "Control channel handshake completed successfully for peer "
-      << recv_peer_id;
-
-  return static_cast<int>(recv_peer_id);
-}
-
-bool RDMAEndpoint::build_data_channels(std::string const& oob_con,
-                                       uint64_t peer_id, bool sync,
-                                       int timeout_ms) {
-  std::vector<std::future<void>> futures;
-  futures.reserve(kQpNumPerChannel);
-
-  for (int i = 0; i < kQpNumPerChannel; i++) {
-    uint32_t channel_id = i + 1;
-
-    auto channel = std::make_shared<RDMADataChannel>(
-        get_context_by_channel_id(channel_id), channel_id);
-
-    MetaInfoToExchange meta(INVALID_PEER_ID, channel_id,
-                            channel->get_local_meta(), nullptr,
-                            ChannelType::Normal, gpu_index_);
-
-    UCCL_LOG(INFO, UCCL_RDMA) << meta << std::endl;
-    std::string serialized_meta = serialize(meta);
-
-    auto promise = std::make_shared<std::promise<void>>();
-    futures.emplace_back(promise->get_future());
-
-    bool sent = oob_client_->send_meta(
-        oob_con, serialized_meta,
-        [this, channel, channel_id, promise,
-         peer_id](std::string const& response) {
-          uint64_t peer_rank =
-              this->handle_send_meta_response(channel, response);
-          add_one_send_channel(peer_id, channel_id, channel);
-          promise->set_value();  // no try/catch; fail-fast
-        });
-
-    if (!sent) {
-      UCCL_LOG(ERROR) << "Failed to send metadata for channel " << channel_id;
-      return false;
+    if (wr_id < 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
   }
 
-  if (!sync) {
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "Normal channels async build initiated for peer " << peer_id;
-    return true;
-  }
-
-  auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-
-  for (size_t i = 0; i < futures.size(); i++) {
-    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now());
-
-    if (remaining.count() <= 0 ||
-        futures[i].wait_for(remaining) == std::future_status::timeout) {
-      UCCL_LOG(ERROR) << "Timeout waiting for channel " << (i + 1)
-                      << " to complete";
-      return false;
-    }
-
-    futures[i].get();
-  }
-
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "All " << kQpNumPerChannel
-      << " normal channels built successfully for peer " << peer_id;
-
-  return true;
+  return wr_id;
 }
+
+void RDMAEndpoint::check_send_complete(uint64_t peer_id, int64_t wr_id) {
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "check_send_complete - peer_id: " << peer_id << ", wr_id: " << wr_id;
+
+  auto it = send_channel_groups_.find(peer_id);
+  if (it == send_channel_groups_.end()) {
+    throw std::runtime_error("Send channel group not found for peer_id: " +
+                             std::to_string(peer_id));
+  }
+
+  auto send_group = it->second;
+  while (!send_group->check_completion(wr_id)) {
+    std::this_thread::sleep_for(std::chrono::microseconds(1));
+  }
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "check_send_complete - Completed for peer_id: " << peer_id
+      << ", wr_id: " << wr_id;
+}
+
+bool RDMAEndpoint::check_send_complete_once(uint64_t peer_id, int64_t wr_id) {
+  // UCCL_LOG(INFO, UCCL_RDMA) << "check_send_complete - peer_id: " << peer_id
+  //           << ", wr_id: " << wr_id;
+  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+  auto it = send_channel_groups_.find(peer_id);
+  if (unlikely(it == send_channel_groups_.end())) {
+    throw std::runtime_error("Send channel group not found for peer_id: " +
+                             std::to_string(peer_id));
+  }
+
+  auto send_group = it->second;
+  return send_group->check_completion(wr_id);
+}
+
+SendConnection* RDMAEndpoint::get_send_group_raw(uint64_t peer_id) {
+  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+  auto it = send_channel_groups_.find(peer_id);
+  if (it == send_channel_groups_.end()) return nullptr;
+  return it->second.get();
+}
+
+// ── Polling and batching ─────────────────────────────────────────────────────
+void RDMAEndpoint::recv_routine() {
+  if (auto_start_polling_) {
+    return;  // Do nothing if auto polling is enabled
+  }
+  std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
+  for (auto& [peer_id, recv_group] : recv_channel_groups_) {
+    if (recv_group && !recv_group->is_running()) {
+      recv_group->poll_and_process_completions();
+    }
+  }
+}
+
+void RDMAEndpoint::send_routine() {
+  if (auto_start_polling_) {
+    return;  // Do nothing if auto polling is enabled
+  }
+  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+  for (auto& [peer_id, send_group] : send_channel_groups_) {
+    if (send_group && !send_group->is_running()) {
+      send_group->polling_loop_for_meta();
+    }
+  }
+}
+
+void RDMAEndpoint::flush_all_sends() {
+  std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+  for (auto& [peer_id, send_group] : send_channel_groups_) {
+    if (send_group) send_group->flush_batches();
+  }
+}
+
+void RDMAEndpoint::create_unified_p2p_socket() {}
