@@ -441,10 +441,6 @@ bool SendConnection::check_completion(int64_t wr_id) {
 
 // ── SendConnection: Polling ──────────────────────────────────────────────────
 
-bool SendConnection::has_pending_compressed() const {
-  return pending_compressed_count_.load(std::memory_order_relaxed) > 0;
-}
-
 void SendConnection::send_routine() {
   std::lock_guard<std::mutex> guard(send_routine_mu_);
   poll_control_channel();

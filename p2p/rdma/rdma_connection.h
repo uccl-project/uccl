@@ -131,8 +131,6 @@ class SendConnection : public RDMAConnection {
   // ── Polling ────────────────────────────────────────────────────────────────
   void send_routine();
 
-  bool has_pending_compressed() const;
-
   // Flush any batched send WRs on all channels of this connection. Used to
   // amortize doorbell cost across many small RDMA writes/reads posted via
   // g_uccl_batch_post.
