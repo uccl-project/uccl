@@ -19,7 +19,6 @@ class RDMAEndpoint {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   explicit RDMAEndpoint(
       int gpu_index = INVALID_GPU, uint64_t port = 0,
-      bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>());
   ~RDMAEndpoint();
 
@@ -94,7 +93,7 @@ class RDMAEndpoint {
   SendConnection* get_send_group_raw(uint64_t peer_id);
 
   // ── Polling and batching ───────────────────────────────────────────────────
-  // Used when auto_start_polling_ is false.
+  // Driven by the engine proxy threads or by explicit poll calls.
   void recv_routine();
 
   void send_routine();
@@ -169,7 +168,6 @@ class RDMAEndpoint {
   std::shared_ptr<RegMemBlock> write_meta_ring_;
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
-  bool auto_start_polling_;
   std::atomic<int32_t> next_send_peer_id_;
   std::atomic<int32_t> next_recv_peer_id_;
 

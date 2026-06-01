@@ -134,6 +134,15 @@ static inline bool raw_one_sided_batch_eligible(
   return true;
 }
 
+static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
+                                   size_t num_iovs) {
+  size_t max_bytes = 0;
+  for (size_t i = 0; i < num_iovs; ++i) {
+    max_bytes = std::max(max_bytes, size_v[i]);
+  }
+  return max_bytes;
+}
+
 // ShmChannel helper function
 static inline std::string shm_ring_name(std::string const& from_bdf,
                                         std::string const& to_bdf) {
@@ -220,12 +229,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
   } else {
-    // Enable the polling thread when congestion control is active.
-    bool cc_polling =
-        uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC") !=
-        uccl::cc::CongestionControlState::Mode::kNone;
-    ep_ = std::shared_ptr<RDMAEndpoint>(
-        new RDMAEndpoint(local_gpu_idx_, 0, cc_polling));
+    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
   }
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
@@ -298,8 +302,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else {
-    ep_ =
-        std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0, false));
+    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
   }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
@@ -674,6 +677,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   bool done = false;
   while (!done) {
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    uccl_drive_recv(ep_);
     if (uccl_poll_ureq_once(ep_, &ureq)) {
       done = true;
     }
@@ -766,7 +770,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
-      send_group->can_use_raw_one_sided_batch(SendType::Read)) {
+      send_group->can_use_raw_one_sided_batch(
+          SendType::Read, max_iov_bytes(size_v, num_iovs))) {
     return run_raw_one_sided_pipeline(send_group, SendType::Read, mhandle_v,
                                       dst_v, size_v, slot_item_v, num_iovs);
   }
@@ -807,6 +812,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     if (num_inflight > 0) {
       uccl_flush_send(ep_);
       uccl_drive_send(ep_);
+      uccl_drive_recv(ep_);
     }
 
     if (send_group != nullptr) {
@@ -953,12 +959,17 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
   UcclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                          &ureq) == -1)
+  while ((send_group != nullptr
+              ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
+                                          curr_slot_item, &ureq)
+              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                                 &ureq)) == -1)
     ;
 
   bool done = false;
@@ -1058,7 +1069,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
   if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
-      send_group->can_use_raw_one_sided_batch(SendType::Write)) {
+      send_group->can_use_raw_one_sided_batch(
+          SendType::Write, max_iov_bytes(size_v, num_iovs))) {
     return run_raw_one_sided_pipeline(send_group, SendType::Write, mhandle_v,
                                       src_v, size_v, slot_item_v, num_iovs);
   }
@@ -2199,6 +2211,7 @@ void Endpoint::recv_proxy_thread_func() {
 
   while (!stop_.load(std::memory_order_acquire)) {
     recv_proxy_adaptive_sleeper_.maybe_sleep();
+
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
@@ -2223,6 +2236,8 @@ void Endpoint::recv_proxy_thread_func() {
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       recv_proxy_adaptive_sleeper_.update_timer();
+    } else {
+      uccl_drive_recv(ep_);
     }
   }
 }

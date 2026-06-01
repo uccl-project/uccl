@@ -77,8 +77,7 @@ class SendConnection : public RDMAConnection {
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
-  SendConnection(int numa_node, bool auto_start_polling = true,
-                 double link_bandwidth_bps = 400.0 * 1e9 / 8.0);
+  explicit SendConnection(double link_bandwidth_bps = 400.0 * 1e9 / 8.0);
 
   ~SendConnection();
 
@@ -105,16 +104,16 @@ class SendConnection : public RDMAConnection {
           "SendConnection: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
-    lock.unlock();
-    if (auto_start_polling_) {
-      start_polling();
-    }
   }
 
   // ── One-sided transfer ─────────────────────────────────────────────────────
   int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
 
-  bool can_use_raw_one_sided_batch(SendType send_type);
+  // max_iov_bytes: largest iov in the batch. Small write batches below
+  // kMinCompressBytes can stay on the raw path even when compression is
+  // enabled.
+  bool can_use_raw_one_sided_batch(SendType send_type,
+                                   size_t max_iov_bytes = 0);
 
   bool post_write_or_read_batch(SendType send_type, OneSidedBatchOp const* ops,
                                 size_t num_ops, int64_t* wr_ids,
@@ -130,13 +129,7 @@ class SendConnection : public RDMAConnection {
   bool check_completion(int64_t wr_id);
 
   // ── Polling ────────────────────────────────────────────────────────────────
-  void start_polling();
-
-  void stop_polling();
-
-  bool is_running() const { return running_.load(std::memory_order_acquire); }
-
-  void polling_loop_for_meta();
+  void send_routine();
 
   // Flush any batched send WRs on all channels of this connection. Used to
   // amortize doorbell cost across many small RDMA writes/reads posted via
@@ -147,11 +140,8 @@ class SendConnection : public RDMAConnection {
   // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<SendControlChannel> ctrl_channel_;
   mutable std::shared_mutex ctrl_channel_mutex_;
-  std::atomic<bool> running_;
-  std::unique_ptr<std::thread> poll_thread_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
-  bool auto_start_polling_;
-  int numa_node_ = 0;
+  std::mutex send_routine_mu_;
 
   uccl::cc::CongestionControlState cc_;
   std::atomic<uint32_t> chunk_tsc_counter_{0};
@@ -193,9 +183,8 @@ class SendConnection : public RDMAConnection {
     uint64_t head = 0;
     std::map<uint64_t, uint64_t> inflight;  // offset → bytes
     std::mutex mu;
-    std::condition_variable cv;
 
-    uint64_t reserve(uint64_t bytes);
+    bool try_reserve(uint64_t bytes, uint64_t* offset);
 
     void release(uint64_t offset);
   };
@@ -222,12 +211,9 @@ class SendConnection : public RDMAConnection {
   // Returns true if all chunks are sent, false if still CC-blocked.
   bool drain_pending_chunks();
 
-  void post_chunked_request(std::shared_ptr<RDMASendRequest> req,
-                            int expected_chunk_count = 0);
+  void post_chunked_request(std::shared_ptr<RDMASendRequest> req);
 
   // ── Compression send path ──────────────────────────────────────────────────
-  void compress_send_request(std::shared_ptr<RDMASendRequest> req);
-
   // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
   // across data channels. Bypasses ChunkSplitStrategy to keep WR count low.
   void post_compressed_segment(std::shared_ptr<RDMASendRequest> const& req,
@@ -239,9 +225,6 @@ class SendConnection : public RDMAConnection {
   int64_t compress_write_request_split_first(
       std::shared_ptr<RDMASendRequest> req);
 
-  void compress_send_request_split_first(std::shared_ptr<RDMASendRequest> req,
-                                         size_t expected_chunk_count);
-
   // Push WriteReqMeta once all data WCs for wr_id have arrived.
   void maybe_push_compressed_meta(int64_t wr_id);
 
@@ -252,14 +235,12 @@ class SendConnection : public RDMAConnection {
 
   // Release arena slots for completed acks. Only scans in-flight entries.
   void poll_ack_ring();
-
-  void polling_loop();
 };
 
 class RecvConnection : public RDMAConnection {
  public:
   // ── Lifecycle ──────────────────────────────────────────────────────────────
-  RecvConnection(int numa_node, bool auto_start_polling = true);
+  RecvConnection();
 
   ~RecvConnection();
 
@@ -285,9 +266,6 @@ class RecvConnection : public RDMAConnection {
           "RecvConnection: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
-    if (auto_start_polling_) {
-      start_polling();
-    }
   }
 
   // ── Compression recv path
@@ -308,22 +286,13 @@ class RecvConnection : public RDMAConnection {
   static void post_ack_host_fn(void* user_data);
 
   // ── Polling ────────────────────────────────────────────────────────────────
-  void start_polling();
-
-  void stop_polling();
-
-  bool is_running() const { return running_.load(std::memory_order_acquire); }
-
   void poll_and_process_completions();
 
-  void polling_loop();
+  void recv_routine();
 
  private:
   // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
-  std::atomic<bool> running_;
-  std::unique_ptr<std::thread> poll_thread_;
-  bool auto_start_polling_;
-  int numa_node_ = 0;
+  std::mutex recv_routine_mu_;
   RemoteMemInfo remote_ack_ring_;  // peer (sender) ack ring — write target
 };
