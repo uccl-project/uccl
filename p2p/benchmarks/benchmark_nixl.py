@@ -322,7 +322,7 @@ def start_transfer(size, num_kvblocks, args):
         lat = avg_transfer_time  # Average latency per transfer
 
         print(
-            f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
+            f"[{args.role}] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat * 1e6:8.2f} us"
         )
         if "server" in args.role:
             for i, block in enumerate(dataset):
@@ -342,195 +342,6 @@ def start_transfer(size, num_kvblocks, args):
         cleanup_agent(agent)
         if args.backend == "mooncake" or args.backend == "uccl":
             zmq_socket.close()
-
-
-def create_nixl_agent_ucx_dual(role: str, send_dataset, recv_dataset):
-    """
-    Create Nixl agents based on the role.
-    """
-    port = listen_port
-    config = nixl_agent_config(True, True, port)
-    agent = nixl_agent(role, config)
-    send_descs = agent.get_reg_descs(send_dataset)
-    recv_descs = agent.get_reg_descs(recv_dataset)
-    send_register_descs = agent.register_memory(send_descs)
-    recv_register_descs = agent.register_memory(recv_descs)
-    return agent, send_register_descs, recv_register_descs
-
-
-def init_transfer_metadata_ucx_dual(
-    role: str,
-    agent: nixl_agent,
-    send_register_descs,
-    recv_register_descs,
-    remote_ip,
-    remote_port,
-):
-    """
-    Initialize transfer metadata for dual WRITE operations.
-    Both endpoints will write to each other simultaneously.
-    Both endpoints do symmetric operations: establish connection, exchange descriptors, create transfer handles.
-    """
-    send_local_xfer_descs = send_register_descs.trim()
-    recv_local_xfer_descs = recv_register_descs.trim()
-    remote_peer = "server" if "client" in role else "client"
-
-    # Both endpoints establish metadata connection (client connects, server waits)
-    if "client" in role:
-        agent.send_local_metadata(remote_ip, remote_port)
-        agent.fetch_remote_metadata(remote_peer, remote_ip, remote_port)
-        while not agent.check_remote_metadata(remote_peer):
-            continue
-    else:
-        while not agent.check_remote_metadata(remote_peer):
-            continue
-        agent.send_local_metadata(remote_ip, remote_port)
-        agent.fetch_remote_metadata(remote_peer, remote_ip, remote_port)
-
-    # Both endpoints send their descriptors to peer
-    recv_desc = agent.get_serialized_descs(recv_local_xfer_descs)
-    agent.send_notif(remote_peer, recv_desc)
-
-    # Both endpoints wait for peer descriptors
-    notifs = agent.get_new_notifs()
-    while len(notifs) == 0:
-        notifs = agent.get_new_notifs()
-
-    # Both endpoints parse remote descriptors
-    remote_recv_xfer_descs = agent.deserialize_descs(
-        notifs[remote_peer][0]
-    )  # What we write to
-
-    # Why twice? TBH, I do not know.
-    while not agent.check_remote_metadata(remote_peer):
-        continue
-
-    # Both endpoints initialize transfer handles
-    transfer_handle = agent.initialize_xfer(
-        "WRITE",
-        send_local_xfer_descs,
-        remote_recv_xfer_descs,
-        remote_peer,
-        "TRANSFER",
-    )
-
-    return transfer_handle
-
-
-def do_transfer_ucx_dual(role: str, agent: nixl_agent, transfer_handle):
-    """
-    Execute dual WRITE transfers where both endpoints simultaneously write to each other.
-    Both endpoints do the same operations: initiate transfers and wait for remote completion.
-    """
-    # Both endpoints initiate their outbound transfers
-    state = agent.transfer(transfer_handle)
-    assert state != "ERR", "Error in transfer initiation"
-
-    # Poll our outbound transfer and wait for remote inbound transfer to complete
-    done = False
-    remote_peer = "server" if "client" in role else "client"
-    recv_uid = "TRANSFER"
-
-    while not done or not agent.check_remote_xfer_done(
-        remote_peer, recv_uid.encode("utf-8")
-    ):
-        # Check our outbound transfer
-        if not done:
-            state = agent.check_xfer_state(transfer_handle)
-            assert state != "ERR", "Error in send transfer"
-            done = state == "DONE"
-
-
-def start_transfer_dual(size, num_kvblocks, args):
-    """
-    Dual direction transfer where both client and server simultaneously perform WRITE operations.
-    Each endpoint writes data to the other endpoint concurrently.
-    """
-    assert (
-        args.backend == "ucx"
-    ), "Dual direction transfer only supported with UCX backend"
-
-    try:
-        # Create datasets for both sending and receiving
-        # Dataset for sending (writing to remote)
-        send_dataset = create_dataset(
-            args.role, size, num_kvblocks, args.device, args.local_gpu_idx
-        )
-        # Dataset for receiving (where remote will write to)
-        recv_dataset = create_dataset(
-            (
-                "server" if "client" in args.role else "client"
-            ),  # opposite role for recv buffer
-            size,
-            num_kvblocks,
-            args.device,
-            args.local_gpu_idx,
-        )
-
-        agent = None
-        transfer_handle = None
-        send_register_descs = None
-        recv_register_descs = None
-
-        # Suppress stdout for better output
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
-
-        # Create agents and register memory for both send and receive datasets
-        agent, send_register_descs, recv_register_descs = create_nixl_agent_ucx_dual(
-            args.role, send_dataset, recv_dataset
-        )
-
-        # Initialize dual transfer handles for bidirectional WRITE operations
-        transfer_handle = init_transfer_metadata_ucx_dual(
-            args.role,
-            agent,
-            send_register_descs,
-            recv_register_descs,
-            args.remote_ip,
-            listen_port,
-        )
-
-        sys.stdout = old_stdout
-
-        total_size = 0
-        start = time.perf_counter()
-
-        # Perform dual direction WRITE transfers for specified iterations
-        for _ in range(args.iters):
-            # Both endpoints perform WRITE operations simultaneously using dual function
-            do_transfer_ucx_dual(args.role, agent, transfer_handle)
-            total_size += size
-
-        end = time.perf_counter()
-
-        transfer_time = end - start
-        gbps = (total_size * 8) / transfer_time / 1e9  # bits per second → Gbps
-        gb_sec = total_size / transfer_time / 1e9  # bytes per second → GB/s
-        lat = transfer_time / args.iters
-
-        print(
-            f"[{args.role}] DUAL-WRITE {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {lat:6.6f} s"
-        )
-
-        # Verify received data (should be opposite of what we sent)
-        expected_value = 0 if "client" in args.role else 1
-        for i, block in enumerate(recv_dataset):
-            block_mean = torch.mean(block).item()
-            assert (
-                abs(block_mean - expected_value) < 1e-6
-            ), f"Block {i} received value {block_mean}, expected {expected_value}"
-
-    except KeyboardInterrupt:
-        return 0.0
-    except Exception as e:
-        print(f"Error in dual write transfer {args.role}: {traceback.format_exc()}")
-        return 0.0
-    finally:
-        # Cleanup transfer handles and registered descriptors
-        cleanup_transfer(agent, transfer_handle, send_register_descs)
-        cleanup_transfer(agent, None, recv_register_descs)
-        cleanup_agent(agent)
 
 
 def start_transfer_local(size, num_kvblocks, args):
@@ -611,7 +422,7 @@ def start_transfer_local(size, num_kvblocks, args):
         dst_dev = f"cuda:{dst_gpu}" if dst_device == "gpu" else "cpu"
         print(
             f"[local {src_dev}->{dst_dev}] {_pretty_size(size):>8} : "
-            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s"
+            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat * 1e6:8.2f} us"
         )
 
         agent.release_xfer_handle(transfer_handle)
@@ -670,23 +481,31 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            16777216,
-            104857600,
         ],
         help="Comma separated list of message sizes in bytes",
     )
     p.add_argument(
         "--iters",
         type=int,
-        default=10,
+        default=128,
         help="Iterations per message size (excluding 1 warm-up)",
     )
     p.add_argument(
@@ -708,11 +527,6 @@ def main():
         help="Operation that nixl will use for the data transfer",
     )
     p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Run the benchmark on two directions",
-    )
-    p.add_argument(
         "--local",
         action="store_true",
         help="Single-process local transfer test (IPC path via supportsLocal)",
@@ -730,13 +544,6 @@ def main():
         help="Destination buffer location for local transfers (default: same as --device)",
     )
     args = p.parse_args()
-
-    assert not (
-        args.dual and args.backend == "mooncake"
-    ), "We do not support dual direction with Mooncake backend"
-    assert not (
-        args.dual and args.remote_ip == "0.0.0.0"
-    ), "Remote IP must be set for dual direction transfer"
 
     print("NIXL P2P Benchmark — role:", args.role)
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
@@ -756,9 +563,6 @@ def main():
         print(f"Local IPC transfer: {src_dev} \u2192 {dst_dev}")
         for size in args.sizes:
             start_transfer_local(size, args.num_kvblocks, args)
-    elif args.dual:
-        for size in args.sizes:
-            start_transfer_dual(size, args.num_kvblocks, args)
     else:
         for size in args.sizes:
             start_transfer(size, args.num_kvblocks, args)

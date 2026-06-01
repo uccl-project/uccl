@@ -20,8 +20,8 @@ ABSEIL_DIR="/tmp/abseil_ci_$$"
 ABSEIL_TAG="20240116.2"
 
 # TODO : Revert to upstream branch once PR1428 gets merged
-NIXL_REPO="https://github.com/praveingk/nixl.git"
-NIXL_BRANCH="uccl-local-xfer"
+NIXL_REPO="https://github.com/ai-dynamo/nixl.git"
+NIXL_BRANCH="main"
 
 ARCH=$(uname -m)
 [ "${ARCH}" = "arm64" ] && ARCH="aarch64"

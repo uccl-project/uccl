@@ -59,7 +59,7 @@ def main():
         help="bytes to transfer per iteration (>2 MB for compression)",
     )
     ap.add_argument("--dtype", choices=list(_DTYPES), default="bfloat16")
-    ap.add_argument("--iters", type=int, default=3)
+    ap.add_argument("--iters", type=int, default=128)
     args = ap.parse_args()
 
     dtype = _DTYPES[args.dtype]
@@ -146,7 +146,7 @@ def main():
         ok, mr_id = ep.reg(dst.data_ptr(), dst.nbytes, floatType=float_type)
         assert ok
 
-        ok, fifo_blob = ep.advertise(conn_id, mr_id, dst.data_ptr(), dst.nbytes)
+        ok, fifo_blob = ep.advertise(mr_id, dst.data_ptr(), dst.nbytes)
         assert ok and len(fifo_blob) == 64
         dist.send(torch.ByteTensor(list(fifo_blob)), dst=0)
 

@@ -102,9 +102,12 @@ INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp
 SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
+# Non-binding .cc translation units linked into the shared library.
+SRC_CC_LIB := src/adaptive_sleeper.cc
 
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
 OBJ_CU  := $(SRC_CU:.cu=.o)
+OBJ_CC_LIB := $(SRC_CC_LIB:.cc=.o)
 
 SRC_BIND := src/uccl_ep.cc
 OBJ_BIND := $(SRC_BIND:.cc=.o)
@@ -130,7 +133,7 @@ all: $(EP_EXT)
 nb_%.o: $(NB_SRC_DIR)/%.cpp
 	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
 
-$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS)
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_CC_LIB) $(OBJ_BIND) $(NB_OBJECTS)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
 	    $(INCLUDES) $(NB_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
@@ -156,10 +159,10 @@ install: $(EP_EXT)
 
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS) \
+	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(OBJ_CC_LIB) $(OBJ_BIND) $(NB_OBJECTS) \
 	      $(EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 
 # Automatically include dependency files if they exist
-DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_BIND:.o=.d)
+DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CC:.o=.d) $(OBJ_CC_LIB:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_BIND:.o=.d)
 -include $(DEPS)

@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule update --init --recursive thirdparty/nccl
-          rsync -az --delete \
+          rsync -az --exclude .venv --exclude .git --delete \
             --rsync-path="mkdir -p /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox && rsync" \
             ./ep ./ \
             spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox

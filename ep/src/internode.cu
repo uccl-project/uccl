@@ -337,6 +337,25 @@ __global__ void notify_dispatch(
   } else {
     // Calculate meta data
     int dst_rdma_rank = sm_id - 1;
+
+    // Empty-rank fast path (DP-attention "forward_idle" micro-batch):
+    // ``is_token_in_rank`` may be nullptr when ``num_tokens == 0``, so write
+    // zero prefix counts directly instead of relying on the per-token loop
+    // below to short-circuit.
+    if (num_tokens == 0) {
+      for (int channel_id = thread_id; channel_id < num_channels;
+           channel_id += num_threads) {
+        rdma_channel_prefix_matrix[dst_rdma_rank * num_channels + channel_id] =
+            0;
+      }
+      int const gbl_total = NUM_MAX_NVL_PEERS * num_channels;
+      int const gbl_base = dst_rdma_rank * NUM_MAX_NVL_PEERS * num_channels;
+      for (int k = thread_id; k < gbl_total; k += num_threads) {
+        gbl_channel_prefix_matrix[gbl_base + k] = 0;
+      }
+      return;
+    }
+
     for (int channel_id = warp_id; channel_id < num_channels;
          channel_id += num_warps) {
       int token_start_idx, token_end_idx;

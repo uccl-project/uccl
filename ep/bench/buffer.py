@@ -35,6 +35,24 @@ except ImportError:
     )
 
 
+def _record_stream_safe(tensors, stream):
+    """``record_stream`` each CUDA tensor; skip ``None`` and recurse one level
+    so a ``handle`` tuple can be passed in alongside flat tensors."""
+    if stream is None:
+        return
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, torch.Tensor):
+            if t.is_cuda:
+                t.record_stream(stream)
+            continue
+        if isinstance(t, (tuple, list)):
+            for inner in t:
+                if isinstance(inner, torch.Tensor) and inner.is_cuda:
+                    inner.record_stream(stream)
+
+
 class Buffer:
     """
     The core expert-parallel (EP) communication buffers for Mixture of Experts (MoE) model, which supports:
@@ -1522,18 +1540,36 @@ class Buffer:
                 and is_token_in_rank is not None
                 and num_tokens_per_expert is not None
             )
-            rdma_channel_prefix_matrix = torch.empty(
-                (num_rdma_ranks, num_channels), dtype=torch.int32, device=x.device
+            # Allocate prefix-matrix / prefix-sum tensors on comm_stream so
+            # the PyTorch caching allocator ties their lifetime to comm_stream
+            # (mirrors DeepEP's at::cuda::setCurrentCUDAStream(comm_stream)
+            # around its torch::empty calls).
+            alloc_ctx = (
+                torch.cuda.stream(self.get_comm_stream())
+                if allocate_on_comm_stream
+                else nullcontext()
             )
-            recv_rdma_rank_prefix_sum = torch.empty(
-                (num_rdma_ranks,), dtype=torch.int32, device=x.device
-            )
-            gbl_channel_prefix_matrix = torch.empty(
-                (self.group_size, num_channels), dtype=torch.int32, device=x.device
-            )
-            recv_gbl_rank_prefix_sum = torch.empty(
-                (self.group_size,), dtype=torch.int32, device=x.device
-            )
+            with alloc_ctx:
+                rdma_channel_prefix_matrix = torch.empty(
+                    (num_rdma_ranks, num_channels),
+                    dtype=torch.int32,
+                    device=x.device,
+                )
+                recv_rdma_rank_prefix_sum = torch.empty(
+                    (num_rdma_ranks,),
+                    dtype=torch.int32,
+                    device=x.device,
+                )
+                gbl_channel_prefix_matrix = torch.empty(
+                    (self.group_size, num_channels),
+                    dtype=torch.int32,
+                    device=x.device,
+                )
+                recv_gbl_rank_prefix_sum = torch.empty(
+                    (self.group_size,),
+                    dtype=torch.int32,
+                    device=x.device,
+                )
             (
                 num_recv_tokens,
                 num_rdma_recv_tokens,
@@ -1566,11 +1602,6 @@ class Buffer:
             # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_rdma_recv_tokens = max(num_rdma_recv_tokens, 1)
-            alloc_ctx = (
-                torch.cuda.stream(self.get_comm_stream())
-                if allocate_on_comm_stream
-                else nullcontext()
-            )
             with alloc_ctx:
                 recv_x = torch.empty(
                     (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
@@ -1617,8 +1648,12 @@ class Buffer:
                 recv_gbl_channel_prefix_matrix = torch.empty(
                     (self.group_size, num_channels), dtype=torch.int32, device=x.device
                 )
+                # Keep at least 1 row so data_ptr() is never null on the
+                # DP-attention / TBO empty-micro-batch case (x.size(0) == 0).
                 send_rdma_head = torch.empty(
-                    (x.size(0), num_rdma_ranks), dtype=torch.int32, device=x.device
+                    (max(x.size(0), 1), num_rdma_ranks),
+                    dtype=torch.int32,
+                    device=x.device,
                 )
                 send_nvl_head = torch.empty(
                     (alloc_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
@@ -1706,6 +1741,13 @@ class Buffer:
                 recv_topk_idx,
                 recv_topk_weights,
             )
+            # Mirror DeepEP's record_stream tail: tag every tensor read or
+            # written by comm_stream so the caching allocator does not recycle
+            # their storage on the compute stream mid-kernel.
+            comm_stream = self.get_comm_stream()
+            _record_stream_safe(tensors_to_record, comm_stream)
+            if allocate_on_comm_stream:
+                _record_stream_safe(tensors_to_record, torch.cuda.current_stream())
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
@@ -1827,6 +1869,11 @@ class Buffer:
             combined_x,
             combined_topk_weights,
         )
+        # See internode_dispatch above for rationale on record_stream tail.
+        comm_stream = self.get_comm_stream()
+        _record_stream_safe(tensors_to_record, comm_stream)
+        if allocate_on_comm_stream:
+            _record_stream_safe(tensors_to_record, torch.cuda.current_stream())
         return (
             combined_x,
             combined_topk_weights,
