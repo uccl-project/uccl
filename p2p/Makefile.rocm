@@ -84,7 +84,8 @@ IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_qp_to_qp_ex
 LDFLAGS = -L$(HIP_LIB) -lamdhip64 -Wl,-rpath,$(HIP_LIB) \
           -L${CONDA_LIB_HOME} \
-          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
+          -lz -lelf -lpthread -ldl -Wl,-Bsymbolic-functions \
+          $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
