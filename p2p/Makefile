@@ -87,7 +87,8 @@ IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_create_qp \
                   -Wl,--wrap=ibv_qp_to_qp_ex
 LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
-          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
+          -lz -lelf -lpthread -ldl -Wl,-Bsymbolic-functions \
+          $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
