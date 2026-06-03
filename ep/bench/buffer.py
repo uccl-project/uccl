@@ -438,6 +438,12 @@ class Buffer:
             packed_recv_x_scales_storage,
             cumulative_local_expert_recv_stats,
         )
+        # When the runtime takes the zero-token early-return path it returns
+        # hook=None. SGLang's caller does `hook() if return_recv_hook` and
+        # crashes on None, so substitute a no-op so idle DP-attention ranks
+        # participate in the collective without raising.
+        if return_recv_hook and hook is None:
+            hook = lambda: None
         return (
             (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
             packed_recv_count,
@@ -583,6 +589,9 @@ class Buffer:
             layout_range,
             combined_x,
         )
+        # See low_latency_dispatch — same zero-token hook=None no-op fix.
+        if return_recv_hook and hook is None:
+            hook = lambda: None
         return (
             combined_x,
             EventOverlap(event, tensors_to_record if async_finish else None),
