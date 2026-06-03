@@ -2363,13 +2363,14 @@ NB_MODULE(ep, m) {
   nb::class_<Stats>(m, "Stats");
   nb::class_<UcclProxy>(m, "Proxy")
       .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool>(),
+                    bool, bool, int>(),
            nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
            nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
            nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
            nb::arg("num_ranks") = -1, nb::arg("num_nodes") = 0,
            nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
-           nb::arg("gpu_buffer_is_host_allocated") = false)
+           nb::arg("gpu_buffer_is_host_allocated") = false,
+           nb::arg("barrier_local_rank") = -1)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
