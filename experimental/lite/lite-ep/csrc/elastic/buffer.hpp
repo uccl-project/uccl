@@ -231,9 +231,14 @@ class ElasticBuffer {
               ("deepepv2_window_" + this->uccl_shm_id).c_str(),
               total_window_bytes, local_rank, local_world_size, device_idx,
               layout::WorkspaceLayout::get_num_bytes());
+            constexpr size_t kHostPageSize = 4096;
+            size_t const atomic_per_rank_bytes =
+              ((static_cast<size_t>(kAtomicBufferSize) + kHostPageSize - 1) /
+               kHostPageSize) *
+              kHostPageSize;
           uccl_atomic_window = allocate_shared_buffer(
               ("deepepv2_atomic_" + this->uccl_shm_id).c_str(),
-              kAtomicBufferSize, local_rank, local_world_size, device_idx,
+              atomic_per_rank_bytes, local_rank, local_world_size, device_idx,
               kAtomicBufferSize);
           workspace = uccl_window.my_device_ptr();
         } else {

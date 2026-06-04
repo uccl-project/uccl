@@ -1,5 +1,8 @@
 #pragma once
 
+#include <deep_ep/common/layout.cuh>
+#include <deep_ep/common/math.cuh>
+
 #include "barrier.hpp"
 #include "combine.hpp"
 #include "dispatch.hpp"

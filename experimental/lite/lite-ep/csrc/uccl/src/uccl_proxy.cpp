@@ -82,15 +82,16 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   local_rank_ = local_rank;
   node_idx_ = node_idx;
 
-  if (thread_idx == 0) {
-    if (shared_atomic_base != 0 && shared_atomic_per_rank > 0) {
-      // Use the shared atomic buffer slice for this rank.
-      atomic_buffer_ptr_ = reinterpret_cast<void*>(
-          shared_atomic_base + local_rank * shared_atomic_per_rank);
-      atomic_buffer_is_host_allocated_ = true;
-      owns_atomic_buffer_ = false;  // Don't free in destructor
-      // Shared buffer is already zeroed by allocate_shared_buffer().
-    } else {
+  if (shared_atomic_base != 0 && shared_atomic_per_rank > 0) {
+    // All proxy threads must advertise the same atomic buffer; remote writes
+    // can arrive on any per-thread QP while kernels poll this rank's slice.
+    atomic_buffer_ptr_ = reinterpret_cast<void*>(
+        shared_atomic_base + local_rank * shared_atomic_per_rank);
+    atomic_buffer_is_host_allocated_ = true;
+    owns_atomic_buffer_ = false;  // Don't free in destructor
+    // Shared buffer is already zeroed by allocate_shared_buffer().
+    proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
+  } else if (thread_idx == 0) {
 #ifdef USE_GRACE_HOPPER
       cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
       atomic_buffer_is_host_allocated_ = false;
@@ -114,7 +115,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 #endif
       cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
       owns_atomic_buffer_ = true;
-    }
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }
 }

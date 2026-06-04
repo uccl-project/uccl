@@ -153,6 +153,10 @@ if __name__ == '__main__':
         cxx_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
         nvcc_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
 
+    if int(os.getenv('EP_UCCL_RECEIVER_BARRIER', '1')):
+        cxx_flags.append('-DUSE_RECEIVER_BARRIER')
+        nvcc_flags.append('-DUSE_RECEIVER_BARRIER')
+
     # Backward-compatible environment name
     if 'TOPK_IDX_BITS' in os.environ:
         assert 'EP_NUM_TOPK_IDX_BITS' not in os.environ

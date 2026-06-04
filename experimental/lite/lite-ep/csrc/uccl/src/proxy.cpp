@@ -273,17 +273,20 @@ void Proxy::init_common() {
   // This must be done after PD is initialized by per_thread_rdma_init
   // TODO(MaoZiming): Skip registering for EFA.
   if (atomic_buffer_ptr_ && !ctx_.atomic_buffer_mr) {
+    int atomic_access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
+  #if !defined(EFA) && !defined(USE_RECEIVER_BARRIER)
+    atomic_access |= IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
+  #endif
     ctx_.atomic_buffer_mr =
-        ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
-                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-#ifdef EFA
-                       IBV_ACCESS_REMOTE_READ
-#else
-                       IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC
-#endif
-        );
+      ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
+             atomic_access);
 
     if (!ctx_.atomic_buffer_mr) {
+      fprintf(stderr,
+              "[Proxy] rank=%d thread=%d failed atomic MR registration: "
+              "ptr=%p len=%zu access=0x%x\n",
+              cfg_.rank, cfg_.thread_idx, atomic_buffer_ptr_,
+              static_cast<size_t>(kAtomicBufferSize), atomic_access);
       perror("Failed to register atomic_buffer_ptr MR");
       std::abort();
     }

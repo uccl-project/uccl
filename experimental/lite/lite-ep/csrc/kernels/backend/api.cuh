@@ -5,6 +5,7 @@
 #include <vector>
 #include <nccl.h>
 #include <nccl_device.h>
+#include <pybind11/pytypes.h>
 
 namespace deep_ep::nccl {
 

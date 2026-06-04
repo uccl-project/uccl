@@ -94,6 +94,7 @@ init_jit()
 
 # Import APIs after initialization
 from .buffers.elastic import ElasticBuffer, EPHandle
+from .buffers.vllm_compat import Buffer, Config
 # noinspection PyUnresolvedReferences
 from .utils.event import EventOverlap, EventHandle
 from .utils.envs import get_physical_domain_size, get_logical_domain_size

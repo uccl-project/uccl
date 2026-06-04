@@ -1,5 +1,6 @@
 #include "rdma.hpp"
 #include "common.hpp"
+#include "ep_config.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
@@ -595,12 +596,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
-#ifndef EFA
-  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
-#else
+#if defined(EFA)
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
+#elif defined(USE_RECEIVER_BARRIER)
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
+#else
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_ATOMIC;
 #endif
 
   // Host-pinned (cudaHostAlloc/cudaMallocHost) buffers should be registered as
@@ -761,12 +764,11 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
   auto const it = cache.find(key);
   if (it != cache.end()) return it->second;
 
-#ifndef EFA
-  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+#if defined(EFA) || defined(USE_RECEIVER_BARRIER)
+  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
 #else
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_RELAXED_ORDERING;
+                     IBV_ACCESS_REMOTE_ATOMIC;
 #endif
 
   bool const result = probe_gpu_memory_registration(
@@ -818,12 +820,12 @@ bool can_register_gpu_memory_for_atomics(int gpu_idx) {
     return false;
   }
 
-#ifndef EFA
-  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
-#else
+#if defined(EFA) || defined(USE_RECEIVER_BARRIER)
   int const access =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+#else
+  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
 #endif
 
   bool const result = probe_gpu_memory_registration(
@@ -1085,7 +1087,10 @@ void modify_qp_to_init(ProxyCtx& S) {
   attr.port_num = 1;  // HCA port you use
   attr.pkey_index = 0;
   attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
-                         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+                         IBV_ACCESS_REMOTE_WRITE;
+#if !defined(EFA) && !defined(USE_RECEIVER_BARRIER)
+  attr.qp_access_flags |= IBV_ACCESS_REMOTE_ATOMIC;
+#endif
 
   int flags =
       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
@@ -1293,7 +1298,10 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
   attr.max_rd_atomic = 1;
-  attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE;
+#if !defined(EFA) && !defined(USE_RECEIVER_BARRIER)
+  attr.qp_access_flags |= IBV_ACCESS_REMOTE_ATOMIC;
+#endif
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
               IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC |
@@ -2443,13 +2451,14 @@ void remote_process_completions_fast_mode(
       //   align(max(dispatch_bytes, combine_bytes), 128)
 #ifdef PER_EXPERT_BATCHING
       size_t per_buffer_stride =
-          align<size_t>(std::max(static_cast<size_t>(num_ranks) * num_ranks,
-                                 static_cast<size_t>(num_experts)) *
-                            sizeof(int64_t),
-                        128);
+            uccl::align<size_t>(
+              std::max(static_cast<size_t>(num_ranks) * num_ranks,
+                   static_cast<size_t>(num_experts)) *
+                sizeof(int64_t),
+              128);
 #else
       size_t per_buffer_stride =
-          align<size_t>(num_experts * sizeof(int64_t), 128);
+            uccl::align<size_t>(num_experts * sizeof(int64_t), 128);
 #endif
       uint32_t new_offset = offset - low_latency_buffer_idx * per_buffer_stride;
       size_t new_index = new_offset / sizeof(int64_t);
