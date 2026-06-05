@@ -49,7 +49,8 @@ class Buffer:
             self.num_qps_per_rank = max(1, int(num_qps_per_rank or 1))
         self.explicitly_destroy = explicitly_destroy
         self._buffer: Optional[ElasticBuffer] = None
-        self._buffer_key: Optional[Tuple[int, int, int, bool]] = None
+        self._buffer_key: Optional[Tuple[int, int, bool]] = None
+        self._buffer_capacity_tokens = 0
         self._pending_num_experts: Optional[int] = None
 
     @staticmethod
@@ -107,14 +108,26 @@ class Buffer:
                                        Tuple[torch.Tensor, torch.Tensor]],
                               topk_idx: torch.Tensor,
                               num_experts: int) -> ElasticBuffer:
+        del num_experts
         token_tensor = x[0] if isinstance(x, tuple) else x
         num_tokens, hidden = token_tensor.shape
         num_topk = topk_idx.shape[1]
         use_fp8_dispatch = isinstance(x, tuple)
-        num_max_tokens_per_rank = self._max_tokens_per_rank(num_tokens, token_tensor.device)
-        key = (num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch)
-        if self._buffer is not None and self._buffer_key == key:
+        key = (hidden, num_topk, use_fp8_dispatch)
+        force_sizing_all_reduce = bool(
+            int(os.environ.get('LITE_EP_VLLM_ALWAYS_ALLREDUCE_MAX_TOKENS', '0'))
+        )
+        if self._buffer is not None and self._buffer_key == key and \
+                num_tokens <= self._buffer_capacity_tokens and \
+                not force_sizing_all_reduce:
             return self._buffer
+
+        num_max_tokens_per_rank = self._max_tokens_per_rank(
+            num_tokens, token_tensor.device)
+        if self._buffer is not None and self._buffer_key == key and \
+                num_max_tokens_per_rank <= self._buffer_capacity_tokens:
+            return self._buffer
+
         if self._buffer is not None:
             self._buffer.destroy()
         self._buffer = ElasticBuffer(
@@ -127,6 +140,7 @@ class Buffer:
             explicitly_destroy=True,
         )
         self._buffer_key = key
+        self._buffer_capacity_tokens = num_max_tokens_per_rank
         return self._buffer
 
     def get_dispatch_layout(self,
@@ -248,4 +262,5 @@ class Buffer:
             self._buffer.destroy()
             self._buffer = None
             self._buffer_key = None
+            self._buffer_capacity_tokens = 0
             self._pending_num_experts = None

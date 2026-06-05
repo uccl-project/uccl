@@ -534,6 +534,13 @@ output lengths:
 - `--temperature 0`
 - `--ignore-eos`
 
+Lite-EP vLLM performance note: the compatibility shim keeps its
+`ElasticBuffer` capacity in grow-only mode.  This avoids a per-MoE-layer
+`all_reduce(MAX)` used only for buffer sizing and prevents prefill→decode
+capacity shrink/recreate.  Set
+`LITE_EP_VLLM_ALWAYS_ALLREDUCE_MAX_TOKENS=1` only when debugging uneven token
+counts across EP ranks.
+
 For the built-in EP server:
 
 ```bash
@@ -597,7 +604,8 @@ Known-good official results on 2026-06-04:
 | Path | Output tok/s | Request/s | Mean TTFT | Median TTFT | P99 TTFT | Mean TPOT | Median TPOT | P99 TPOT | Mean ITL | P99 ITL |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | built-in EP | 19.24 | 0.301 | 107.7 ms | 106.5 ms | 115.4 ms | 51.09 ms | 50.93 ms | 52.08 ms | 50.29 ms | 53.02 ms |
-| Lite-EP | 7.85 | 0.123 | 2023.3 ms | 1203.3 ms | 7339.96 ms | 97.35 ms | 97.96 ms | 100.40 ms | 95.83 ms | 1086.02 ms |
+| Lite-EP before grow-only buffer reuse | 7.85 | 0.123 | 2023.3 ms | 1203.3 ms | 7339.96 ms | 97.35 ms | 97.96 ms | 100.40 ms | 95.83 ms | 1086.02 ms |
+| Lite-EP after grow-only buffer reuse | 13.79 | 0.22 | 136.42 ms | 136.71 ms | 144.73 ms | 71.49 ms | 70.30 ms | 75.94 ms | 70.38 ms | 98.84 ms |
 
 After the benchmark, run the cleanup commands below. Lite-EP shutdown can
 print NCCL/TCPStore warnings if the head exits before every worker finishes its

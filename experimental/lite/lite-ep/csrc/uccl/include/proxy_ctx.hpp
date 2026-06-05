@@ -69,6 +69,7 @@ struct ProxyCtx {
   ibv_cq_ex* cq_ex = nullptr;
   ibv_qp* qp = nullptr;
   std::vector<ibv_qp*> data_qps_by_channel;
+  uint32_t max_send_sge = 1;
   std::vector<uint32_t> dst_data_qpn_by_ring;
   // std::vector<ibv_cq*> extra_cqs;
   ibv_qp* ack_qp = nullptr;

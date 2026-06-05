@@ -94,6 +94,7 @@ static constexpr int kMaxMRChunks = 128;
 // #define kObjectSize 10752  // 10.5 KB
 // #define kObjectSize 14336  // 14 KB
 #define kMaxOutstandingSends 2048  // = max_send_wr, max_recv_wr, cq_depth / 2
+#define kMaxSendSge 16
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
@@ -155,6 +156,28 @@ static inline uint32_t get_max_inflight_normal() {
   static uint32_t val = []() -> uint32_t {
     char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
     return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightNormal;
+  }();
+  return val;
+}
+
+static inline bool get_rdma_write_coalescing_enabled();
+
+static inline uint32_t get_requested_max_send_sge() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_IB_MAX_SEND_SGE");
+    uint32_t requested = env ? static_cast<uint32_t>(atoi(env))
+                             : (get_rdma_write_coalescing_enabled()
+                                    ? kMaxSendSge
+                                    : 1u);
+    return requested == 0 ? 1u : requested;
+  }();
+  return val;
+}
+
+static inline bool get_rdma_write_coalescing_enabled() {
+  static bool const val = []() -> bool {
+    char const* env = getenv("UCCL_RDMA_COALESCE_WRITES");
+    return env ? atoi(env) != 0 : false;
   }();
   return val;
 }

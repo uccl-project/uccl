@@ -48,6 +48,29 @@ forwarding, and copy epilogue.  NCCL `allgather` avoids those steps
 because source/destination offsets are static and payloads are moved as
 bulk contiguous collective transfers.
 
+## vLLM batch-size-1 root cause fixed: per-layer sizing all-reduce
+
+The first vLLM compatibility shim ran `_max_tokens_per_rank()` on every
+non-cached `dispatch()`, which performs a tiny distributed `all_reduce(MAX)`
+solely to choose `ElasticBuffer` capacity.  It also shrank the buffer when the
+server moved from prefill to decode, destroying the larger prefill buffer and
+creating a decode-sized buffer.  vLLM's built-in `allgather_reducescatter` path
+does not pay this extra per-layer sizing collective, so the previous comparison
+included avoidable Lite-EP-only control-plane work.
+
+The shim now keeps the `ElasticBuffer` in grow-only mode: reuse if the current
+shape `(hidden, topk, fp8)` matches and the current local token count fits the
+existing capacity; only run the sizing all-reduce when the local token count
+exceeds current capacity.  Set `LITE_EP_VLLM_ALWAYS_ALLREDUCE_MAX_TOKENS=1` to
+restore the old conservative path for debugging uneven batches.
+
+Official `vllm bench serve` on the same batch-size-1 workload improved from
+`7.85` to `13.79` output tok/s, and mean TTFT fell from `2023.3 ms` to
+`136.42 ms`.  Mean TPOT improved from `97.35 ms` to `71.49 ms`.  The remaining
+gap to built-in EP (`19.24 tok/s`, `51.09 ms` TPOT) should be attacked next by
+removing DeepEP HT's per-layer CPU count sync / compact receive sizing path or
+by implementing a decode-oriented low-latency Lite-EP API.
+
 ### Reproducing on l40/l41
 
 Testbed aliases and common settings used for the dense 2n × 4g runs:
@@ -298,13 +321,18 @@ discovery + per-expert atomic counters).
 
 ## Open optimization ideas (ranked by expected payoff, post-refute)
 
-1. **Coalesce per-token RDMA WRITEs into per-peer bulk WRITEs** (2n × 4g
-   only).  EP currently posts ~400 WRs/iter on 2n × 4g (one per token).
-   Real fix needs the kernel to lay out remote slots contiguously so
-   multiple tokens share a single SGE — current layout interleaves
-   slots by `(channel, slot, rank)` which makes proxy-side multi-SGE
-   merging a no-op (already documented + tested).  Expected payoff:
-   up to ~600 µs on 2n × 4g.  Significant kernel-layout change.
+1. **Reduce per-token RDMA work at the kernel/layout level** (2n × 4g
+  only).  EP currently posts hundreds of payload WRs per iteration on
+  2n × 4g.  A proxy-only multi-SGE coalescing experiment is now
+  available behind `UCCL_RDMA_COALESCE_WRITES=1` and
+  `UCCL_IB_MAX_SEND_SGE=<N>`, but it is default-off because A/B runs on
+  2026-06-04 did not produce a stable win.  `max_sge=16` alternated
+  between apparent wins and regressions depending on run order; a
+  conservative `max_sge=4` matched the best no-coalesce control but did
+  not beat it.  The real fix still needs a kernel/layout change that
+  emits larger naturally-contiguous per-peer transfers rather than
+  relying on NIC gather WRs in the proxy.  Expected payoff: up to
+  ~600 µs on 2n × 4g.
 
 2. **Eliminate dispatch setup phase (token-count all-to-all + layout
    discovery)**.  Either run-ahead the count exchange a few iterations
@@ -336,6 +364,20 @@ discovery + per-expert atomic counters).
   enabled by default (`EP_UCCL_INTRANODE_DIRECT=1`) for the benefit of
   co-located workloads (e.g. KV cache prefetch, mixed RDMA traffic).
   Set `=0` to fall back to proxy memcpy for diagnostics.
+- **Proxy-only multi-SGE RDMA WRITE coalescing**: kept as an opt-in
+  experiment (`UCCL_RDMA_COALESCE_WRITES=1`, optionally
+  `UCCL_IB_MAX_SEND_SGE=4` or `16`) but default-off.  It can reduce the
+  number of posted WRs for dense routing, yet mlx5 gather-WR overhead and
+  run-to-run variance erased the expected benefit in 2n × 4g testing.
+  Representative max-rank dispatch latencies from 2026-06-04 runs:
+  no-coalesce controls ranged from ~2418 to ~2852 µs, `max_sge=16`
+  ranged from ~2521 to ~2971 µs, and `max_sge=4` reached ~2433 µs before
+  an immediate no-coalesce control reached ~2418 µs.
+- **Small-batch SM cap 24 → 16 or 12**: not promoted.  Explicit
+  `--num-sms=16` had one good 2n × 4g dispatch run (~2371 µs max-rank)
+  but repeated at ~2664 µs; `--num-sms=12` regressed to ~2542 µs; a
+  subsequent explicit `--num-sms=24` control reached ~2465 µs.  Keep the
+  default `EP_UCCL_SMALL_BATCH_NUM_SMS=24` for now.
 
 ## Validation harness
 

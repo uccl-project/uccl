@@ -102,6 +102,46 @@ class VllmBufferCompatTest(unittest.TestCase):
         self.assertIsInstance(combine_event, deep_ep.EventOverlap)
         self.assertEqual(FakeElasticBuffer.created[0].combine_calls[0]['num_sms'], 8)
 
+    def test_buffer_capacity_reuses_larger_prefill_for_decode(self):
+        buffer = deep_ep.Buffer(group=FakeGroup(), num_qps_per_rank=1, explicitly_destroy=True)
+        max_token_calls = []
+
+        def fake_max_tokens(num_tokens, device):
+            del device
+            max_token_calls.append(num_tokens)
+            return num_tokens
+
+        buffer._max_tokens_per_rank = fake_max_tokens
+
+        def run_dispatch(num_tokens):
+            x = torch.randn((num_tokens, 4), dtype=torch.bfloat16)
+            topk_idx = torch.zeros((num_tokens, 2), dtype=torch.int64)
+            topk_weights = torch.ones((num_tokens, 2), dtype=torch.float32)
+            layout = buffer.get_dispatch_layout(topk_idx=topk_idx, num_experts=2)
+            return buffer.dispatch(
+                x=x,
+                topk_idx=topk_idx,
+                topk_weights=topk_weights,
+                num_tokens_per_rank=layout[0],
+                num_tokens_per_rdma_rank=layout[1],
+                num_tokens_per_expert=layout[2],
+                is_token_in_rank=layout[3],
+                expert_alignment=1,
+            )
+
+        run_dispatch(4)
+        self.assertEqual(len(FakeElasticBuffer.created), 1)
+        self.assertEqual(max_token_calls, [4])
+
+        run_dispatch(1)
+        self.assertEqual(len(FakeElasticBuffer.created), 1)
+        self.assertEqual(max_token_calls, [4])
+
+        run_dispatch(6)
+        self.assertEqual(len(FakeElasticBuffer.created), 2)
+        self.assertEqual(max_token_calls, [4, 6])
+        self.assertEqual(FakeElasticBuffer.created[-1].kwargs['num_max_tokens_per_rank'], 6)
+
     def test_low_latency_is_explicitly_unsupported(self):
         with self.assertRaises(NotImplementedError):
             deep_ep.Buffer(group=FakeGroup(), low_latency_mode=True)

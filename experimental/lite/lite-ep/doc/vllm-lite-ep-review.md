@@ -208,7 +208,8 @@ official batch-size-1 results were:
 | Path | Served model | Output tok/s | Mean TTFT | Mean TPOT | Mean ITL |
 | --- | --- | ---: | ---: | ---: | ---: |
 | built-in EP | `deepseek-v2-lite-chat-builtin-ep` | 19.24 | 107.7 ms | 51.09 ms | 50.29 ms |
-| Lite-EP | `deepseek-v2-lite-chat-ep` | 7.85 | 2023.3 ms | 97.35 ms | 95.83 ms |
+| Lite-EP before grow-only buffer reuse | `deepseek-v2-lite-chat-ep` | 7.85 | 2023.3 ms | 97.35 ms | 95.83 ms |
+| Lite-EP after grow-only buffer reuse | `deepseek-v2-lite-chat-ep` | 13.79 | 136.42 ms | 71.49 ms | 70.38 ms |
 
 ## Important Negative Results
 
@@ -225,6 +226,43 @@ official batch-size-1 results were:
 - l41 should not run vLLM from the NFS Python environment for long jobs;
   it previously stalled in NFS/RPC waits. The working setup uses the SSD
   copy at `/ssd1/dsv2lite/envs/uccl312`.
+
+## Performance Root Cause: Extra Sizing Collectives
+
+The first Lite-EP vLLM shim recreated a DeepEPv2 `ElasticBuffer` key from
+the exact per-rank token count on every `dispatch()`.  To compute that
+capacity it ran a tiny distributed `all_reduce(MAX)` in
+`_max_tokens_per_rank()` every MoE layer, even after the buffer was already
+large enough for the current decode token count.  It also shrank the buffer
+when moving from prefill (`num_tokens ~= prompt length`) to decode
+(`num_tokens = 1`), causing an unnecessary destroy/recreate at the most
+latency-sensitive point.
+
+This is not present in vLLM's built-in `allgather_reducescatter` path, so the
+two workloads were not actually doing the same communication work: Lite-EP was
+paying an extra per-layer sizing collective before the EP transfer.
+
+The shim now uses grow-only buffer reuse:
+
+- reuse an existing `ElasticBuffer` when `(hidden, topk, fp8)` matches and its
+  capacity is already >= local `num_tokens`;
+- run the sizing all-reduce only on first creation or when local token count
+  exceeds current capacity;
+- never shrink from prefill capacity to decode capacity during serving.
+
+Set `LITE_EP_VLLM_ALWAYS_ALLREDUCE_MAX_TOKENS=1` to restore the old fully
+conservative behavior for debugging uneven dynamic batches.
+
+Post-fix official `vllm bench serve` on the same batch-size-1 workload improved
+output throughput by about 1.76x (`7.85` to `13.79` tok/s).  Mean TTFT fell
+from `2023.3 ms` to `136.42 ms`, which confirms the per-layer sizing collective
+and prefill-to-decode shrink/recreate were the dominant TTFT cliff.  Mean TPOT
+improved from `97.35 ms` to `71.49 ms`.
+
+The remaining gap to built-in EP (`19.24 tok/s`, `51.09 ms` mean TPOT) is now
+more likely the actual DeepEP HT dynamic routing path: CPU token-count sync for
+compact receive sizing, dynamic slot assignment, UCCL proxy verbs posting, and
+vLLM disabling CUDA graphs for DeepEP high-throughput decode.
 
 ## Review Checklist
 
