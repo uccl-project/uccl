@@ -33,6 +33,7 @@
 #include "ib.hpp"
 #include "logger.hpp"
 #include "memory_channel.hpp"
+#include "native_collectives.hpp"
 #include "nccl.h"
 #include "numa.hpp"
 #include "registered_memory.hpp"
@@ -935,70 +936,6 @@ static bool localP2PFallbackEnabled() {
 static bool cudaIpcEventSyncEnabled() {
   char const* env = std::getenv("MSCCLPP_NCCL_CUDAIPC_EVENT_SYNC");
   return env == nullptr || std::strcmp(env, "0") != 0;
-}
-
-template <typename T>
-__global__ void reduceScatterSimpleKernel(char const* tmp, void* output,
-                                          size_t count, size_t bytesPerRank,
-                                          int nRanks, ncclRedOp_t op) {
-  size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (idx >= count) return;
-
-  auto const* first = reinterpret_cast<T const*>(tmp);
-  T acc = first[idx];
-  for (int rank = 1; rank < nRanks; ++rank) {
-    auto const* shard =
-        reinterpret_cast<T const*>(tmp + static_cast<size_t>(rank) * bytesPerRank);
-    T value = shard[idx];
-    if (op == ncclSum) {
-      acc = acc + value;
-    } else if (op == ncclProd) {
-      acc = acc * value;
-    } else if (op == ncclMax) {
-      acc = value > acc ? value : acc;
-    } else if (op == ncclMin) {
-      acc = value < acc ? value : acc;
-    }
-  }
-  reinterpret_cast<T*>(output)[idx] = acc;
-}
-
-static ncclResult_t launchReduceScatterSimpleKernel(
-    void* tmp, void* output, size_t count, size_t bytesPerRank,
-    ncclDataType_t datatype, ncclRedOp_t op, int nRanks, cudaStream_t stream) {
-  if (op != ncclSum && op != ncclProd && op != ncclMax && op != ncclMin) {
-    WARN(MSCCLPP_NCCL, "unsupported reduce-scatter op %d", op);
-    return ncclInvalidArgument;
-  }
-
-  int constexpr threads = 256;
-  int blocks = static_cast<int>((count + threads - 1) / threads);
-  if (blocks == 0) return ncclSuccess;
-
-  switch (datatype) {
-    case ncclFloat32:
-      reduceScatterSimpleKernel<float><<<blocks, threads, 0, stream>>>(
-          static_cast<char const*>(tmp), output, count, bytesPerRank, nRanks, op);
-      break;
-    case ncclFloat64:
-      reduceScatterSimpleKernel<double><<<blocks, threads, 0, stream>>>(
-          static_cast<char const*>(tmp), output, count, bytesPerRank, nRanks, op);
-      break;
-    case ncclInt32:
-      reduceScatterSimpleKernel<int32_t><<<blocks, threads, 0, stream>>>(
-          static_cast<char const*>(tmp), output, count, bytesPerRank, nRanks, op);
-      break;
-    case ncclUint32:
-      reduceScatterSimpleKernel<uint32_t><<<blocks, threads, 0, stream>>>(
-          static_cast<char const*>(tmp), output, count, bytesPerRank, nRanks, op);
-      break;
-    default:
-      WARN(MSCCLPP_NCCL, "unsupported reduce-scatter datatype %d", datatype);
-      return ncclInvalidArgument;
-  }
-
-  CUDACHECK(cudaGetLastError());
-  return ncclSuccess;
 }
 
 static mscclpp::Transport selectSendRecvTransport(ncclComm_t comm, int peer) {
@@ -2080,40 +2017,10 @@ NCCL_API ncclResult_t ncclAllReduce(void const* sendbuff, void* recvbuff,
   }
 
   if (comm->nRanksPerNode != comm->worldSize) {
-    size_t tmpBytes = bytes * static_cast<size_t>(comm->worldSize);
-    if (tmpBytes <= comm->scratchBufferSize_) {
-      char* tmp = comm->scratchBuffer_.get();
-      CUDACHECK(cudaMemcpyAsync(tmp + static_cast<size_t>(rank) * bytes,
-                                sendbuff, bytes, cudaMemcpyDeviceToDevice,
-                                stream));
-
-      ncclResult_t groupResult = ncclGroupStart();
-      if (groupResult != ncclSuccess) return groupResult;
-
-      ncclResult_t enqueueResult = ncclSuccess;
-      for (int peer = 0; peer < comm->worldSize; ++peer) {
-        if (peer == rank) continue;
-        enqueueResult =
-            ncclSend(sendbuff, count, datatype, peer, comm, stream);
-        if (enqueueResult != ncclSuccess) break;
-      }
-      if (enqueueResult == ncclSuccess) {
-        for (int peer = 0; peer < comm->worldSize; ++peer) {
-          if (peer == rank) continue;
-          enqueueResult = ncclRecv(tmp + static_cast<size_t>(peer) * bytes,
-                                   count, datatype, peer, comm, stream);
-          if (enqueueResult != ncclSuccess) break;
-        }
-      }
-
-      groupResult = ncclGroupEnd();
-      if (enqueueResult != ncclSuccess) return enqueueResult;
-      if (groupResult != ncclSuccess) return groupResult;
-
-      return launchReduceScatterSimpleKernel(tmp, recvbuff, count, bytes,
-                                             datatype, reductionOperation,
-                                             comm->worldSize, stream);
-    }
+    return mscclpp::nccl::runSendRecvAllReduce(
+        sendbuff, recvbuff, count, datatype, reductionOperation, comm, stream,
+        rank, comm->worldSize, comm->scratchBuffer_.get(),
+        comm->scratchBufferSize_, comm->comm);
   }
 
   if (mscclppNcclDlopenSharedLib == true) {
@@ -2181,41 +2088,10 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
         ncclRedOpToMscclpp(op), stream, comm->executor, 0, 0, symmetricMemory));
   }
 
-  size_t tmpBytes = bytes * static_cast<size_t>(nRank);
-  if (tmpBytes <= comm->scratchBufferSize_) {
-    char* tmp = comm->scratchBuffer_.get();
-    auto const* send = static_cast<char const*>(sendbuff);
-    char* recvTmp = tmp + static_cast<size_t>(rank) * bytes;
-    CUDACHECK(cudaMemcpyAsync(recvTmp, send + static_cast<size_t>(rank) * bytes,
-                              bytes, cudaMemcpyDeviceToDevice, stream));
-
-    ncclResult_t groupResult = ncclGroupStart();
-    if (groupResult != ncclSuccess) return groupResult;
-
-    ncclResult_t enqueueResult = ncclSuccess;
-    for (int peer = 0; peer < nRank; ++peer) {
-      if (peer == rank) continue;
-      enqueueResult =
-          ncclSend(send + static_cast<size_t>(peer) * bytes, recvcount,
-                   datatype, peer, comm, stream);
-      if (enqueueResult != ncclSuccess) break;
-    }
-    if (enqueueResult == ncclSuccess) {
-      for (int peer = 0; peer < nRank; ++peer) {
-        if (peer == rank) continue;
-        enqueueResult = ncclRecv(tmp + static_cast<size_t>(peer) * bytes,
-                                 recvcount, datatype, peer, comm, stream);
-        if (enqueueResult != ncclSuccess) break;
-      }
-    }
-
-    groupResult = ncclGroupEnd();
-    if (enqueueResult != ncclSuccess) return enqueueResult;
-    if (groupResult != ncclSuccess) return groupResult;
-
-    return launchReduceScatterSimpleKernel(tmp, recvbuff, recvcount, bytes,
-                                           datatype, op, nRank, stream);
-  }
+  ncclResult_t nativeResult = mscclpp::nccl::runSendRecvReduceScatter(
+      sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
+      nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_, comm->comm);
+  if (nativeResult != ncclInvalidUsage) return nativeResult;
 
   if (mscclppNcclDlopenSharedLib == true) {
     return mscclppNcclOps.ReduceScatter(
@@ -2282,36 +2158,9 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
   }
 
   if (comm->nRanksPerNode != comm->worldSize) {
-    char const* send = static_cast<char const*>(sendbuff);
-    char* recv = static_cast<char*>(recvbuff);
-    size_t selfOffset = static_cast<size_t>(rank) * bytes;
-    if (send != recv + selfOffset) {
-      CUDACHECK(cudaMemcpyAsync(recv + selfOffset, send, bytes,
-                                cudaMemcpyDeviceToDevice, stream));
-    }
-
-    ncclResult_t groupResult = ncclGroupStart();
-    if (groupResult != ncclSuccess) return groupResult;
-
-    ncclResult_t enqueueResult = ncclSuccess;
-    for (int peer = 0; peer < nRank; ++peer) {
-      if (peer == rank) continue;
-      enqueueResult =
-          ncclSend(sendbuff, sendcount, datatype, peer, comm, stream);
-      if (enqueueResult != ncclSuccess) break;
-    }
-    if (enqueueResult == ncclSuccess) {
-      for (int peer = 0; peer < nRank; ++peer) {
-        if (peer == rank) continue;
-        enqueueResult = ncclRecv(recv + static_cast<size_t>(peer) * bytes,
-                                 sendcount, datatype, peer, comm, stream);
-        if (enqueueResult != ncclSuccess) break;
-      }
-    }
-
-    groupResult = ncclGroupEnd();
-    if (enqueueResult != ncclSuccess) return enqueueResult;
-    return groupResult;
+    return mscclpp::nccl::runSendRecvAllGather(
+        sendbuff, recvbuff, sendcount, bytes, datatype, comm, stream, rank,
+        nRank, comm->comm);
   }
 
   if (mscclppNcclDlopenSharedLib == true) {
