@@ -1,6 +1,6 @@
 #pragma once
 
-#include "collective_types.h"
+#include "coll_types.h"
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>

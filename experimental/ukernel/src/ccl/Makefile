@@ -41,7 +41,7 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := topology.cc plan.cc executor.cc
+CCL_CORE_SRC := topology.cc coll_algo.cc scheduler.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
@@ -77,7 +77,7 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_components test_backend_components
+UNIT_TEST_BINS := test_components test_backend_components test_modules
 INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_multiprocess_collective
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
@@ -91,6 +91,7 @@ test: test-unit test-integration
 test-unit: $(UNIT_TEST_BINS)
 	./test_components
 	./test_backend_components
+	./test_modules
 
 test-integration: $(INTEGRATION_TEST_BINS)
 	./test_device_backend
@@ -107,6 +108,9 @@ test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 test_backend_components: $(CCL_CORE_OBJ) test/unit/test_backend_components.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+
+test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 $(UCCL_RDMA_STATIC):

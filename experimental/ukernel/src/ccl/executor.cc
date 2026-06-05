@@ -1,4 +1,5 @@
 #include "executor.h"
+#include "scheduler.h"
 #include "utils.h"
 #include <atomic>
 #include <cstddef>
@@ -15,7 +16,6 @@ namespace CCL {
 
 namespace {
 
-
 bool is_device_op(OpKind kind) {
   return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
          kind == OpKind::DeviceSend || kind == OpKind::DeviceRecvReduce ||
@@ -26,20 +26,17 @@ bool is_transport_op(OpKind kind) {
   return kind == OpKind::TransportSend || kind == OpKind::TransportRecv;
 }
 
-
-
-
-
-void* local_ptr(CollectiveBinding const& binding,
-                CollectiveBufferRole role, size_t offset) {
+void* local_ptr(CollectiveBinding const& binding, CollectiveBufferRole role,
+                size_t offset) {
   return byte_offset(binding.role_buffer(role).local_ptr, offset);
 }
 
 uint32_t remote_buffer_id_for_role(CollectiveBinding const& binding,
-                                     CollectiveBufferRole role, int peer_rank) {
+                                   CollectiveBufferRole role, int peer_rank) {
   RegisteredBuffer const& buf = binding.role_buffer(role);
   if (static_cast<size_t>(peer_rank) >= buf.peer_views.size())
-    throw std::invalid_argument("peer rank out of range for remote buffer lookup");
+    throw std::invalid_argument(
+        "peer rank out of range for remote buffer lookup");
   return buf.peer_views[static_cast<size_t>(peer_rank)].buffer_id;
 }
 
@@ -52,30 +49,28 @@ void resolve_remote_ptrs(
     uint32_t remote_id = remote_buffer_id_for_role(binding, role, op.src_peer);
     void* ptr = nullptr;
     int dev = -1;
-    if (!resolve_remote ||
-        !resolve_remote(op.src_peer, remote_id, op.src_off,
-                        op.bytes, &ptr, &dev))
+    if (!resolve_remote || !resolve_remote(op.src_peer, remote_id, op.src_off,
+                                           op.bytes, &ptr, &dev))
       throw std::runtime_error("failed to resolve remote source pointer");
     bind.resolved_src = ptr;
     bind.src_device = dev;
   } else {
-    bind.resolved_src = local_ptr(binding,
-        buf_role(op.kind, true, op.copy_from_staging), op.src_off);
+    bind.resolved_src = local_ptr(
+        binding, buf_role(op.kind, true, op.copy_from_staging), op.src_off);
   }
   if (op.dst_peer != ~0u) {
     auto role = buf_role(op.kind, false, op.copy_from_staging);
     uint32_t remote_id = remote_buffer_id_for_role(binding, role, op.dst_peer);
     void* ptr = nullptr;
     int dev = -1;
-    if (!resolve_remote ||
-        !resolve_remote(op.dst_peer, remote_id, op.dst_off,
-                        op.bytes, &ptr, &dev))
+    if (!resolve_remote || !resolve_remote(op.dst_peer, remote_id, op.dst_off,
+                                           op.bytes, &ptr, &dev))
       throw std::runtime_error("failed to resolve remote destination pointer");
     bind.resolved_dst = ptr;
     bind.dst_device = dev;
   } else {
-    bind.resolved_dst = local_ptr(binding,
-        buf_role(op.kind, false, op.copy_from_staging), op.dst_off);
+    bind.resolved_dst = local_ptr(
+        binding, buf_role(op.kind, false, op.copy_from_staging), op.dst_off);
   }
 }
 
@@ -91,45 +86,7 @@ static std::atomic<uint64_t> g_seq{1};
 static void init_run_state(CollectiveRun& run) {
   run.completed.assign(run.total_ops, false);
   run.tokens.resize(run.total_ops);
-  run.op_backend.resize(run.total_ops, nullptr);
-  run.stream_ops = run.plan.stream_ops;  // pre-computed by planner
-  run.stream_head.assign(run.plan.num_streams, 0);
-}
-
-// PlanCacheKey helpers
-bool Executor::PlanCacheKey::operator==(PlanCacheKey const& o) const {
-  return kind == o.kind && inplace == o.inplace &&
-         config.nranks == o.config.nranks &&
-         config.rank == o.config.rank &&
-         config.num_streams == o.config.num_streams &&
-         config.input_bytes == o.config.input_bytes &&
-         config.output_bytes == o.config.output_bytes &&
-         config.tile_bytes == o.config.tile_bytes &&
-         config.input_split_bytes == o.config.input_split_bytes &&
-         config.output_split_bytes == o.config.output_split_bytes &&
-         config.algorithm == o.config.algorithm &&
-         config.reduction == o.config.reduction &&
-         config.use_sm_ipc == o.config.use_sm_ipc;
-}
-
-size_t Executor::PlanCacheKeyHash::operator()(PlanCacheKey const& key) const {
-  auto h = [](size_t seed, size_t v) {
-    return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
-  };
-  size_t s = static_cast<size_t>(key.kind);
-  s = h(s, key.inplace ? 1 : 0);
-  s = h(s, static_cast<size_t>(key.config.nranks));
-  s = h(s, static_cast<size_t>(key.config.rank));
-  s = h(s, key.config.num_streams);
-  s = h(s, key.config.input_bytes);
-  s = h(s, key.config.output_bytes);
-  s = h(s, key.config.tile_bytes);
-  s = h(s, static_cast<size_t>(key.config.algorithm));
-  s = h(s, static_cast<size_t>(key.config.reduction));
-  s = h(s, key.config.use_sm_ipc ? 1 : 0);
-  for (auto v : key.config.input_split_bytes) s = h(s, v);
-  for (auto v : key.config.output_split_bytes) s = h(s, v);
-  return s;
+  run.stream_head.assign(run.num_streams, 0);
 }
 
 Executor::Executor(
@@ -151,55 +108,42 @@ CollectiveRun const* Executor::get_run(CollectiveOpHandle handle) const {
   return it != runs_.end() ? &it->second : nullptr;
 }
 
-CollectiveOpHandle Executor::submit_collective(
-    CollectiveKind kind, CollectiveConfig const& config,
-    CollectiveBinding& binding) {
+CollectiveOpHandle Executor::submit_collective(CollectiveKind kind,
+                                               CollectiveConfig const& config,
+                                               CollectiveBinding& binding) {
   bool inplace =
       binding.roles.input_buffer_id == binding.roles.output_buffer_id;
 
   CollectiveConfig cfg = config;
   cfg.collective = kind;
-  PlanCacheKey key{kind, inplace, cfg};
-  auto cache_it = plan_cache_.find(key);
-  CollectivePlan plan;
-  if (cache_it != plan_cache_.end()) {
-    plan = cache_it->second;
-  } else {
-    plan = build_plan(cfg, inplace);
-    plan_cache_.emplace(key, plan);
-  }
+  TiledResult tiled = build_plan(cfg, inplace);
 
-  // Compute global base for tile_seq — planner assigns local counter (0,1,2...);
-  // executor adds a fresh monotonic base so cached plans get unique seqs.
-  uint64_t seq_base = 0;
-  if (plan.collective == CollectiveKind::AllReduce ||
-      plan.collective == CollectiveKind::AllToAll) {
-    uint64_t max_seq = 0;
-    for (auto const& o : plan.ops)
-      if (o.seq > max_seq) max_seq = o.seq;
-    if (max_seq > 0 || !plan.ops.empty())
-      seq_base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
-  }
+  uint64_t seq_base =
+      tiled.ops.empty() ? 0
+                       : g_seq.fetch_add(static_cast<uint64_t>(tiled.ops.size()),
+                                         std::memory_order_relaxed);
 
-  // One-time backend init (skip if same plan+binding as previous).
-  uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
-      (static_cast<uint64_t>(plan.ops.size()) << 32) ^
-      static_cast<uint64_t>(std::max(plan.input_bytes, plan.output_bytes));
+  uint64_t sig =
+      reinterpret_cast<uintptr_t>(&binding) ^
+      (static_cast<uint64_t>(tiled.ops.size()) << 32) ^
+      static_cast<uint64_t>(std::max(tiled.input_bytes, tiled.output_bytes));
   if (sig != validated_sig_) {
-    if (backends_.transport) backends_.transport->validate(plan, binding);
+    if (backends_.transport) backends_.transport->validate(tiled, binding);
     if (backends_.device && backends_.device != backends_.transport)
-      backends_.device->validate(plan, binding);
+      backends_.device->validate(tiled, binding);
     validated_sig_ = sig;
   }
 
   CollectiveOpHandle handle = next_handle_++;
   CollectiveRun run;
-  run.handle = handle;
   run.status = CollectiveOpStatus::Running;
-  run.plan = std::move(plan);
+  run.tiled = std::move(tiled);
   run.binding = &binding;
-  run.total_ops = run.plan.ops.size();
+  run.total_ops = run.tiled.ops.size();
   run.signal_seq_base = seq_base;
+  Schedule schedule = schedule_ops(run.tiled.ops);
+  run.num_streams = schedule.num_streams;
+  run.stream_ops = std::move(schedule.stream_ops);
 
   if (run.total_ops == 0) {
     run.status = CollectiveOpStatus::Completed;
@@ -228,8 +172,6 @@ CollectiveOpStatus Executor::status(CollectiveOpHandle handle) const {
   return run ? run->status : CollectiveOpStatus::Completed;
 }
 
-// ── advance_run: two-phase pipeline ────────────────────────────────────
-
 void Executor::advance_run(CollectiveRun& run) {
   if (run.status != CollectiveOpStatus::Running) return;
   if (run.completed_count == run.total_ops) {
@@ -237,11 +179,10 @@ void Executor::advance_run(CollectiveRun& run) {
     return;
   }
 
-  // Phase 1: Collect all ops whose dependencies are satisfied.
   run.ready.clear();
-  run.ready.reserve(run.plan.num_streams * 2);  // typical inflight per cycle
+  run.ready.reserve(run.num_streams * 2);
 
-  for (uint32_t fid = 0; fid < run.plan.num_streams; ++fid) {
+  for (uint32_t fid = 0; fid < run.num_streams; ++fid) {
     while (run.stream_head[fid] < run.stream_ops[fid].size()) {
       uint32_t op_idx = run.stream_ops[fid][run.stream_head[fid]];
       if (run.completed[op_idx]) {
@@ -249,8 +190,11 @@ void Executor::advance_run(CollectiveRun& run) {
         continue;
       }
       bool deps_ok = true;
-      for (uint32_t dep : run.plan.ops[op_idx].deps) {
-        if (!run.completed[dep]) { deps_ok = false; break; }
+      for (uint32_t dep : run.tiled.ops[op_idx].deps) {
+        if (!run.completed[dep]) {
+          deps_ok = false;
+          break;
+        }
       }
       if (!deps_ok) break;
       run.ready.push_back({fid, op_idx});
@@ -258,18 +202,19 @@ void Executor::advance_run(CollectiveRun& run) {
     }
   }
 
-  // Phase 2: Submit ready ops.
   for (auto& r : run.ready) {
     uint32_t fid = r.first;
     uint32_t op_idx = r.second;
-    Op const& plan_op = run.plan.ops[op_idx];
+    Op const& plan_op = run.tiled.ops[op_idx];
     Backend* backend = pick_backend(backends_, plan_op.kind);
     if (backend == nullptr) continue;
 
     OpBindings bind;
+    bind.stream_index = fid;
     if (is_device_op(plan_op.kind) && resolve_ipc_buffer_pointer_) {
       try {
-        resolve_remote_ptrs(plan_op, bind, *run.binding, resolve_ipc_buffer_pointer_);
+        resolve_remote_ptrs(plan_op, bind, *run.binding,
+                            resolve_ipc_buffer_pointer_);
       } catch (std::exception const& e) {
         run.status = CollectiveOpStatus::Failed;
         run.error_message = std::string("IPC resolution failed for op ") +
@@ -278,13 +223,17 @@ void Executor::advance_run(CollectiveRun& run) {
       }
     } else {
       if (plan_op.src_peer == ~0u)
-        bind.resolved_src = local_ptr(*run.binding,
-            buf_role(plan_op.kind, true, plan_op.copy_from_staging), plan_op.src_off);
+        bind.resolved_src =
+            local_ptr(*run.binding,
+                      buf_role(plan_op.kind, true, plan_op.copy_from_staging),
+                      plan_op.src_off);
       if (plan_op.dst_peer == ~0u)
-        bind.resolved_dst = local_ptr(*run.binding,
-            buf_role(plan_op.kind, false, plan_op.copy_from_staging), plan_op.dst_off);
+        bind.resolved_dst =
+            local_ptr(*run.binding,
+                      buf_role(plan_op.kind, false, plan_op.copy_from_staging),
+                      plan_op.dst_off);
     }
-    bind.signal_seq = plan_op.seq + run.signal_seq_base;
+    bind.signal_seq = op_idx + run.signal_seq_base;
 
     BackendToken token;
     try {
@@ -296,18 +245,13 @@ void Executor::advance_run(CollectiveRun& run) {
     }
 
     if (token.value == 0) {
-      --run.stream_head[fid];  // backpressure — retry next cycle
+      --run.stream_head[fid];
       continue;
     }
     run.tokens[op_idx] = token;
-    run.op_backend[op_idx] = backend;
     run.token_to_op_idx[{backend, token.value}] = op_idx;
   }
 
-  // Phase 3: Drain completions from each backend.
-  // Backend cleans its own resources inside drain(); we update op bookkeeping.
-  // Process ALL drain results even if a failure is detected, because drain
-  // has already released backend resources for every returned token.
   std::string failure_msg;
   for (Backend* backend : {backends_.transport, backends_.device}) {
     if (backend == nullptr) continue;
@@ -316,7 +260,10 @@ void Executor::advance_run(CollectiveRun& run) {
       auto it = run.token_to_op_idx.find({backend, run.done_buf[i].value});
       if (it == run.token_to_op_idx.end()) continue;
       size_t op_idx = it->second;
-      if (run.completed[op_idx]) { run.token_to_op_idx.erase(it); continue; }
+      if (run.completed[op_idx]) {
+        run.token_to_op_idx.erase(it);
+        continue;
+      }
 
       if (run.done_buf[i].failed && failure_msg.empty())
         failure_msg = std::string("backend '") + backend->name() +
@@ -337,8 +284,6 @@ void Executor::advance_run(CollectiveRun& run) {
     run.status = CollectiveOpStatus::Completed;
 }
 
-// ── public API ─────────────────────────────────────────────────────────
-
 bool Executor::poll(CollectiveOpHandle handle) {
   auto* run = get_run(handle);
   if (run == nullptr) return true;
@@ -349,8 +294,7 @@ bool Executor::poll(CollectiveOpHandle handle) {
 }
 
 void Executor::progress() {
-  for (auto& [handle, run] : runs_)
-    advance_run(run);
+  for (auto& [handle, run] : runs_) advance_run(run);
 }
 
 bool Executor::wait(CollectiveOpHandle handle,
@@ -363,8 +307,10 @@ bool Executor::wait(CollectiveOpHandle handle,
 
   if (timeout.count() == 0) {
     while (!poll(handle)) {
-      if (spin_count < kSpinIters) { ++spin_count; std::this_thread::yield(); }
-      else {
+      if (spin_count < kSpinIters) {
+        ++spin_count;
+        std::this_thread::yield();
+      } else {
         std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
         backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
       }
@@ -374,8 +320,10 @@ bool Executor::wait(CollectiveOpHandle handle,
   auto deadline = std::chrono::steady_clock::now() + timeout;
   do {
     if (poll(handle)) return true;
-    if (spin_count < kSpinIters) { ++spin_count; std::this_thread::yield(); }
-    else {
+    if (spin_count < kSpinIters) {
+      ++spin_count;
+      std::this_thread::yield();
+    } else {
       std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
       backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
     }
@@ -405,36 +353,33 @@ size_t Executor::active_count() const {
   return count;
 }
 
-void Executor::run_plan(CollectivePlan const& plan,
+void Executor::run_plan(TiledResult const& tiled,
                         CollectiveBinding& binding) {
-  uint64_t sig = reinterpret_cast<uintptr_t>(&binding) ^
-      (static_cast<uint64_t>(plan.ops.size()) << 32) ^
-      static_cast<uint64_t>(std::max(plan.input_bytes, plan.output_bytes));
+  uint64_t sig =
+      reinterpret_cast<uintptr_t>(&binding) ^
+      (static_cast<uint64_t>(tiled.ops.size()) << 32) ^
+      static_cast<uint64_t>(std::max(tiled.input_bytes, tiled.output_bytes));
   if (sig != validated_sig_) {
-    if (backends_.transport) backends_.transport->validate(plan, binding);
+    if (backends_.transport) backends_.transport->validate(tiled, binding);
     if (backends_.device && backends_.device != backends_.transport)
-      backends_.device->validate(plan, binding);
+      backends_.device->validate(tiled, binding);
     validated_sig_ = sig;
   }
 
-  CollectiveOpHandle handle = next_handle_++;
   CollectiveRun run;
-  run.handle = handle;
   run.status = CollectiveOpStatus::Running;
-  run.plan = plan;
+  run.tiled = tiled;
   run.binding = &binding;
-  run.total_ops = plan.ops.size();
+  run.total_ops = tiled.ops.size();
 
-  // Allocate fresh seq base (same as submit_collective).
-  uint64_t seq_base = 0;
-  if (plan.collective == CollectiveKind::AllReduce ||
-      plan.collective == CollectiveKind::AllToAll) {
-    uint64_t max_seq = 0;
-    for (auto const& o : plan.ops)
-      if (o.seq > max_seq) max_seq = o.seq;
-    if (max_seq > 0 || !plan.ops.empty())
-      seq_base = g_seq.fetch_add(max_seq + 1, std::memory_order_relaxed);
-  }
+  Schedule schedule = schedule_ops(tiled.ops);
+  run.num_streams = schedule.num_streams;
+  run.stream_ops = std::move(schedule.stream_ops);
+
+  uint64_t seq_base =
+      tiled.ops.empty() ? 0
+                       : g_seq.fetch_add(static_cast<uint64_t>(tiled.ops.size()),
+                                         std::memory_order_relaxed);
   run.signal_seq_base = seq_base;
 
   if (run.total_ops == 0) return;
@@ -444,8 +389,7 @@ void Executor::run_plan(CollectivePlan const& plan,
 
   while (run.status == CollectiveOpStatus::Running) {
     advance_run(run);
-    if (run.status == CollectiveOpStatus::Running)
-      std::this_thread::yield();
+    if (run.status == CollectiveOpStatus::Running) std::this_thread::yield();
   }
   if (run.status == CollectiveOpStatus::Failed)
     throw std::runtime_error(run.error_message);

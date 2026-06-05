@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../collective_memory.h"
-#include "../plan.h"
+#include "../coll_mem.h"
+#include "../coll_types.h"
+#include "../scheduler.h"
 #include <cstdint>
 #include <vector>
 
@@ -24,6 +25,7 @@ struct OpBindings {
   int src_device = -1;
   int dst_device = -1;
   uint64_t signal_seq = 0;
+  uint32_t stream_index = 0;
 };
 
 inline CollectiveBufferRole buf_role(OpKind kind, bool is_src,
@@ -31,15 +33,20 @@ inline CollectiveBufferRole buf_role(OpKind kind, bool is_src,
   switch (kind) {
     case OpKind::DeviceSend:
     case OpKind::DeviceRecvReduce:
-    case OpKind::DeviceRecv:     return CollectiveBufferRole::Input;
-    case OpKind::DeviceReduce:   return CollectiveBufferRole::Input;
-    case OpKind::DeviceCopy:     return is_src ? (copy_from_staging
-        ? CollectiveBufferRole::Scratch : CollectiveBufferRole::Input)
-        : CollectiveBufferRole::Output;
-    case OpKind::TransportSend:  return is_src ? CollectiveBufferRole::Input
-        : CollectiveBufferRole::Scratch;
-    case OpKind::TransportRecv:  return is_src ? CollectiveBufferRole::Input
-        : CollectiveBufferRole::Scratch;
+    case OpKind::DeviceRecv:
+      return CollectiveBufferRole::Input;
+    case OpKind::DeviceReduce:
+      return CollectiveBufferRole::Input;
+    case OpKind::DeviceCopy:
+      return is_src ? (copy_from_staging ? CollectiveBufferRole::Scratch
+                                         : CollectiveBufferRole::Input)
+                    : CollectiveBufferRole::Output;
+    case OpKind::TransportSend:
+      return is_src ? CollectiveBufferRole::Input
+                    : CollectiveBufferRole::Scratch;
+    case OpKind::TransportRecv:
+      return is_src ? CollectiveBufferRole::Input
+                    : CollectiveBufferRole::Scratch;
   }
   return CollectiveBufferRole::Input;
 }
@@ -54,7 +61,7 @@ class Backend {
   virtual ~Backend() = default;
 
   virtual char const* name() const = 0;
-  virtual void validate(CollectivePlan const& plan,
+  virtual void validate(TiledResult const& plan,
                         CollectiveBinding& binding) = 0;
   virtual bool supports(OpKind kind) const = 0;
   virtual BackendToken submit(Op const& op, OpBindings const& bind,

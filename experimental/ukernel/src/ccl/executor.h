@@ -1,7 +1,8 @@
 #pragma once
 
 #include "backend/backend.h"
-#include "plan.h"
+#include "coll_config.h"
+#include "scheduler.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,16 +43,13 @@ struct ExecutorConfig {
 
 // Per-invocation mutable execution state.
 struct CollectiveRun {
-  CollectiveOpHandle handle = kInvalidHandle;
   CollectiveOpStatus status = CollectiveOpStatus::Queued;
-  CollectivePlan plan;
+  TiledResult tiled;
   CollectiveBinding* binding = nullptr;
   std::string error_message;
 
-  // Per-op tracking
   std::vector<bool> completed;
   std::vector<BackendToken> tokens;
-  std::vector<Backend*> op_backend;
 
   // O(1) drain → op index lookup.  Key combines backend + token value
   // because transport and device backends have independent token spaces.
@@ -71,6 +69,7 @@ struct CollectiveRun {
   std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
 
   std::vector<std::vector<uint32_t>> stream_ops;
+  uint32_t num_streams = 1;
   std::vector<size_t> stream_head;
   std::vector<BackendToken> done_buf;
   std::vector<std::pair<uint32_t, uint32_t>> ready;
@@ -105,7 +104,7 @@ class Executor {
   void release(CollectiveOpHandle handle);
   std::string error_message(CollectiveOpHandle handle) const;
 
-  void run_plan(CollectivePlan const& plan, CollectiveBinding& binding);
+  void run_plan(TiledResult const& tiled, CollectiveBinding& binding);
 
   size_t active_count() const;
   UKernel::Transport::Communicator* communicator();
@@ -129,19 +128,6 @@ class Executor {
   uint64_t validated_sig_ = 0;
 
   std::vector<GpuSignalPeer> gpu_comp_;
-  bool gpu_comp_ready_ = false;
-
-  struct PlanCacheKey {
-    CollectiveKind kind;
-    bool inplace;
-    CollectiveConfig config;
-    bool operator==(PlanCacheKey const& o) const;
-  };
-  struct PlanCacheKeyHash {
-    size_t operator()(PlanCacheKey const& key) const;
-  };
-  std::unordered_map<PlanCacheKey, CollectivePlan, PlanCacheKeyHash>
-      plan_cache_;
 };
 
 }  // namespace CCL

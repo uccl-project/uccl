@@ -27,7 +27,7 @@ class DeviceBackend final : public Backend {
   ~DeviceBackend() override;
 
   char const* name() const override;
-  void validate(CollectivePlan const& plan,
+  void validate(TiledResult const& plan,
                 CollectiveBinding& binding) override;
   bool supports(OpKind kind) const override;
   BackendToken submit(Op const& op, OpBindings const& bind,

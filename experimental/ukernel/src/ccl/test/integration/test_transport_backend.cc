@@ -8,7 +8,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -208,7 +207,6 @@ CollectivePlan make_single_op_plan(int rank, int nranks, Op const& op) {
   CollectivePlan plan;
   plan.rank = rank;
   plan.nranks = nranks;
-  plan.num_streams = 1;
   plan.tile_bytes = op.bytes;
   plan.ops.push_back(op);
   return plan;
@@ -333,8 +331,7 @@ int run_rank(Options const& opts) {
 
   Op op1;
   op1.op_id = 0;
-  op1.kind =
-      (opts.rank == 0) ? OpKind::TransportSend : OpKind::TransportRecv;
+  op1.kind = (opts.rank == 0) ? OpKind::TransportSend : OpKind::TransportRecv;
   op1.stream_index = 0;
   op1.bytes = opts.bytes;
   op1.src = (opts.rank == 0) ? local_buffer_ref(PlanBuffer::Input, 0)
@@ -371,8 +368,7 @@ int run_rank(Options const& opts) {
 
   Op op2;
   op2.op_id = 0;
-  op2.kind =
-      (opts.rank == 1) ? OpKind::TransportSend : OpKind::TransportRecv;
+  op2.kind = (opts.rank == 1) ? OpKind::TransportSend : OpKind::TransportRecv;
   op2.stream_index = 0;
   op2.bytes = opts.bytes;
   op2.src = (opts.rank == 1) ? local_buffer_ref(PlanBuffer::Scratch, 0)

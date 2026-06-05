@@ -1,8 +1,8 @@
-#include "executor.h"
+#include "../include/gpu_rt.h"
+#include "../include/transport.h"
 #include "backend/device_backend.h"
 #include "backend/transport_backend.h"
-#include "../include/transport.h"
-#include "../include/gpu_rt.h"
+#include "executor.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -12,26 +12,24 @@ namespace UKernel {
 namespace CCL {
 
 Executor::Executor(ExecutorConfig const& config) {
-  owned_transport_backend_ =
-      std::make_unique<CommunicatorTransportBackend>(TransportBackendConfig{
-          config.gpu_id, config.rank, config.world_size,
-          config.communicator_config});
-  auto* comm =
-      &static_cast<CommunicatorTransportBackend*>(
-           owned_transport_backend_.get())
-           ->communicator();
+  owned_transport_backend_ = std::make_unique<CommunicatorTransportBackend>(
+      TransportBackendConfig{config.gpu_id, config.rank, config.world_size,
+                             config.communicator_config});
+  auto* comm = &static_cast<CommunicatorTransportBackend*>(
+                    owned_transport_backend_.get())
+                    ->communicator();
   owned_device_backend_ = std::make_unique<DeviceBackend>(DeviceBackendConfig{
       config.device_task_capacity, config.max_device_fifos,
       config.threads_per_block, config.fifo_capacity, config.smem_size});
   backends_.transport = owned_transport_backend_.get();
   backends_.device = owned_device_backend_.get();
-  resolve_ipc_buffer_pointer_ =
-      [comm](int remote_rank, uint32_t remote_buffer_id, size_t offset,
-             size_t bytes, void** out_ptr, int* out_device_idx) {
-        return comm->try_resolve_remote_ipc_pointer(
-            remote_rank, remote_buffer_id, offset, bytes, out_ptr,
-            out_device_idx);
-      };
+  resolve_ipc_buffer_pointer_ = [comm](int remote_rank,
+                                       uint32_t remote_buffer_id, size_t offset,
+                                       size_t bytes, void** out_ptr,
+                                       int* out_device_idx) {
+    return comm->try_resolve_remote_ipc_pointer(
+        remote_rank, remote_buffer_id, offset, bytes, out_ptr, out_device_idx);
+  };
 
   // SM IPC: allocate GPU completion buffers and exchange IPC handles.
   // Each rank registers its buffer with a deterministic ID so the peer can
@@ -54,10 +52,8 @@ Executor::Executor(ExecutorConfig const& config) {
                                std::to_string(peer));
     int remote_dev = -1;
     comm->try_resolve_remote_ipc_pointer(peer, wait_id, 0, 16,
-                                          &gpu_comp_[peer].remote, &remote_dev);
+                                         &gpu_comp_[peer].remote, &remote_dev);
   }
-  gpu_comp_ready_ = true;
-
   static_cast<DeviceBackend*>(owned_device_backend_.get())
       ->set_signal_buffers(gpu_comp_);
 }

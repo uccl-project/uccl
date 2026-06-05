@@ -119,15 +119,15 @@ void drain_all(DeviceBackend& backend, std::vector<BackendToken> const& tokens,
 void submit_and_drain(DeviceBackend& backend, Op const& op,
                       CollectiveBinding& binding,
                       std::chrono::milliseconds timeout) {
-  std::vector<BackendToken> tokens = {backend.submit(op, binding)};
+  OpBindings bind;
+  bind.stream_index = 0;
+  std::vector<BackendToken> tokens = {backend.submit(op, bind, binding)};
   drain_all(backend, tokens, timeout);
 }
 
-Op make_device_op(OpKind kind, uint32_t stream_index,
-                  size_t offset_bytes, size_t size_bytes) {
+Op make_device_op(OpKind kind, size_t offset_bytes, size_t size_bytes) {
   Op op;
   op.kind = kind;
-  op.stream_index = stream_index;
   op.bytes = size_bytes;
   op.src_off = offset_bytes;
   op.dst_off = offset_bytes;
@@ -162,10 +162,8 @@ void verify_sum_reduce(std::vector<float> const& out,
   }
 }
 
-CollectiveBinding make_memory(int rank, void* tensor_ptr,
-                             size_t tensor_bytes,
-                             void* staging_ptr,
-                             size_t staging_bytes) {
+CollectiveBinding make_memory(int rank, void* tensor_ptr, size_t tensor_bytes,
+                              void* staging_ptr, size_t staging_bytes) {
   static auto s_registry = std::make_shared<BufferRegistry>();
   s_registry->local_rank = rank;
   CollectiveBinding binding;
@@ -191,7 +189,6 @@ void validate_backend_for_op(DeviceBackend& backend, Op const& op,
   CollectivePlan plan;
   plan.nranks = 1;
   plan.rank = 0;
-  plan.num_streams = 1;
   plan.tile_bytes = op.bytes;
   plan.ops.push_back(op);
   backend.validate(plan, binding);
@@ -214,8 +211,8 @@ void test_device_copy() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  Op op = make_device_op(OpKind::DeviceCopy, 0, 0, kBytes,
-                             kTestInputBufferId, kTestScratchBufferId);
+  Op op = make_device_op(OpKind::DeviceCopy, 0, 0, kBytes, kTestInputBufferId,
+                         kTestScratchBufferId);
   validate_backend_for_op(backend, op, memory);
   submit_and_drain(backend, op, memory, std::chrono::seconds(5));
   backend.stop(0);
@@ -242,9 +239,9 @@ void test_device_reduce_sum() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  Op op = make_device_op(OpKind::DeviceReduce, 0, 0, kBytes,
-                             kTestScratchBufferId, kTestInputBufferId,
-                             ReductionKind::Sum);
+  Op op =
+      make_device_op(OpKind::DeviceReduce, 0, 0, kBytes, kTestScratchBufferId,
+                     kTestInputBufferId, ReductionKind::Sum);
   validate_backend_for_op(backend, op, memory);
   submit_and_drain(backend, op, memory, std::chrono::seconds(5));
   backend.stop(0);

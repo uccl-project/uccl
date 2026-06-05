@@ -2,19 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace UKernel {
 namespace CCL {
-
-inline void validate_span(char const* what, size_t offset, size_t bytes,
-                          size_t capacity) {
-  if (offset > capacity || bytes > capacity - offset) {
-    throw std::invalid_argument(std::string(what) + " out of range");
-  }
-}
 
 inline void* byte_offset(void* base, size_t offset) {
   return static_cast<void*>(static_cast<char*>(base) + offset);
