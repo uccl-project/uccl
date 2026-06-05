@@ -782,7 +782,7 @@ bool tryExecuteOptimizedGroupedAllToAll(AllToAllCommView const& commView,
   if (commView.handle == nullptr || !commView.hasIB ||
       commView.worldSize != 8 ||
       commView.nRanksPerNode != kOptimizedAllToAllRanksPerNode ||
-      ops.size() != static_cast<size_t>(commView.worldSize * 2)) {
+      ops.size() < static_cast<size_t>(commView.nRanksPerNode * 2)) {
     return false;
   }
 
@@ -808,13 +808,14 @@ bool tryExecuteOptimizedGroupedAllToAll(AllToAllCommView const& commView,
       recvs[op.peer] = &op;
     }
   }
-  for (int peer = 0; peer < commView.worldSize; ++peer) {
-    if (sends[peer] == nullptr || recvs[peer] == nullptr) return false;
-  }
-
   int rank = commView.comm->bootstrap()->getRank();
   int nodeId = rank / commView.nRanksPerNode;
   int remoteBase = (1 - nodeId) * commView.nRanksPerNode;
+  for (int peer = remoteBase; peer < remoteBase + commView.nRanksPerNode;
+       ++peer) {
+    if (sends[peer] == nullptr || recvs[peer] == nullptr) return false;
+  }
+
   auto const* firstRemoteSend = sends[remoteBase];
   char const* remoteSendBase =
       static_cast<char const*>(firstRemoteSend->sendbuff);

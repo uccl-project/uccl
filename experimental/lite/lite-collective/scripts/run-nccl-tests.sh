@@ -8,9 +8,9 @@ EXTERNAL_NCCL_DIR="${EXTERNAL_NCCL_DIR:-/home/yangz/nfs/zhongjie/nccl}"
 MPI_HOME="${MPI_HOME:-/usr/mpi/gcc/openmpi-4.1.7rc1}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
-SDK_DIR="${SDK_DIR:-.tmp/mint-nccl-sdk}"
-BUILD_DIR="${BUILD_DIR:-.tmp/mint-nccl-tests-mpi-build}"
-RUNTIME_ROOT="${RUNTIME_ROOT:-.tmp/mint-nccl-tests-runtime}"
+SDK_DIR="${SDK_DIR:-${ROOT_DIR}/.tmp/mint-nccl-sdk}"
+BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/.tmp/mint-nccl-tests-mpi-build}"
+RUNTIME_ROOT="${RUNTIME_ROOT:-${ROOT_DIR}/.tmp/mint-nccl-tests-runtime}"
 
 BACKEND=""
 GPU_LIST=""
@@ -390,7 +390,9 @@ for env_name in \
   NCCL_NET_GDR_LEVEL NCCL_IB_DISABLE NCCL_P2P_DISABLE NCCL_BUFFSIZE \
   MSCCLPP_DEBUG MSCCLPP_DEBUG_SUBSYS MSCCLPP_SOCKET_IFNAME \
   MSCCLPP_HCA_DEVICES MSCCLPP_LOG_LEVEL MSCCLPP_LOG_SUBSYS \
-  MSCCLPP_NCCL_LIB_PATH MSCCLPP_NCCL_SENDRECV_STAGING_BYTES; do
+  MSCCLPP_NCCL_LIB_PATH MSCCLPP_NCCL_SENDRECV_STAGING_BYTES \
+  MSCCLPP_FORCE_NCCL_FALLBACK_OPERATION MSCCLPP_NCCL_ALLTOALL_OPT \
+  MSCCLPP_NCCL_LOCAL_P2P_FALLBACK MSCCLPP_NCCL_CUDAIPC_EVENT_SYNC; do
   [[ -n "${!env_name:-}" ]] && MPI_ENV_ARGS+=(-x "${env_name}=${!env_name}")
 done
 
