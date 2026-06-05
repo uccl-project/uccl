@@ -129,7 +129,8 @@ size_to_bytes() {
 effective_min_bytes() {
   local collective="$1" topology="$2"
   local min_bytes="$MIN_BYTES"
-  if [[ "$collective" == "alltoall" ]]; then
+  if [[ "$collective" == "alltoall" || "$collective" == "allgather" ||
+        "$collective" == "reducescatter" ]]; then
     local parsed min_nonzero
     parsed="$(size_to_bytes "$MIN_BYTES")"
     min_nonzero="$((TOPOLOGY_RANKS[$topology] * 16))"
@@ -260,9 +261,7 @@ run_case() {
   [[ "$REBUILD_MSCCLPP" -eq 1 ]] && cmd+=(--rebuild-mscclpp)
 
   local -a nccl_test_args=()
-  if [[ "$CHECK_ITERS" != "0" ]]; then
-    nccl_test_args+=(-c "$CHECK_ITERS")
-  fi
+  nccl_test_args+=(-c "$CHECK_ITERS")
   nccl_test_args+=("${EXTRA_ARGS[@]}")
   if [[ "${#nccl_test_args[@]}" -gt 0 ]]; then
     cmd+=(-- "${nccl_test_args[@]}")
