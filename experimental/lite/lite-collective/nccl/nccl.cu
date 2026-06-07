@@ -2227,7 +2227,7 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
     }
   }
 
-  ncclResult_t nativeResult = mscclpp::nccl::runSendRecvAllGather(
+  ncclResult_t nativeResult = mscclpp::nccl::runLiteAllGather(
       sendbuff, recvbuff, sendcount, bytes, datatype, comm, stream, rank, nRank,
       comm->nRanksPerNode, comm->comm, comm->cudaDevice);
   if (nativeResult == ncclSuccess) return nativeResult;

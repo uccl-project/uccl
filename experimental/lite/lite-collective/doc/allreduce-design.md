@@ -27,17 +27,17 @@ back to dlopen NCCL only if native execution is unsupported:
 For two-node layouts with counts divisible by `worldSize`, the fast path writes
 the rank's reduced shard into the correct location in `recvbuff`, then calls
 AllGather on that shard:
-[`native_collectives.cu:L2277-L2309`](../nccl/native_collectives.cu#L2277-L2309) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2277:1)).
+[`native_collectives.cu:L1829-L1866`](../nccl/native_collectives.cu#L1829-L1866) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1829:1)).
 
 For irregular counts or unsupported fast-path cases, the implementation keeps a
 hierarchical fallback.  That fallback reduces across local ranks, exchanges a
 local partial with the same local rank on the remote node, then reduces the two
 partials:
-[`native_collectives.cu:L1472-L1569`](../nccl/native_collectives.cu#L1472-L1569) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1472:1)).
+[`native_collectives.cu:L1191-L1288`](../nccl/native_collectives.cu#L1191-L1288) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1191:1)).
 
 If the call is out-of-place and the generic non-two-node path is used, the code
 copies input to output first and then runs the in-place RS+AG composition:
-[`native_collectives.cu:L2317-L2346`](../nccl/native_collectives.cu#L2317-L2346) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2317:1)).
+[`native_collectives.cu:L1868-L1896`](../nccl/native_collectives.cu#L1868-L1896) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1868:1)).
 
 ## Single-node path
 
@@ -76,4 +76,3 @@ does not yet beat NCCL on 2nx4g, so further AllReduce gains should come from
 the same ReduceScatter bottleneck work.  The fastest path also requires
 `count % worldSize == 0`; otherwise the implementation uses the hierarchical
 fallback.
-

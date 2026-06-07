@@ -33,19 +33,19 @@ The selector uses this algorithm for single-node SUM and MIN:
 The two-node context owns a shared host work slab and control block.  It also
 registers mscclpp IB memory for inter-node partial exchange and a CudaIpc
 scratch registration for local GPU-to-GPU scratch exchange:
-[`native_collectives.cu:L664-L917`](../nccl/native_collectives.cu#L664-L917) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:664:1)).
+[`native_collectives.cu:L383-L636`](../nccl/native_collectives.cu#L383-L636) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:383:1)).
 
 The control block has separate epochs for host-staged block exchange, pairwise
 RDMA exchange, local CudaIpc copy readiness, cross-pair readiness, and final
 local completion:
-[`native_collectives.cu:L70-L95`](../nccl/native_collectives.cu#L70-L95) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:70:1)).
+[`native_collectives.cu:L55-L80`](../nccl/native_collectives.cu#L55-L80) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:55:1)).
 
 ## 2nx4g NUMA-pair fast path
 
 The 2nx4g path is specialized for `ncclFloat32 + ncclSum`.  It chooses the
 NUMA-pair local path when there are four ranks per node and the scratch buffer
 can hold the packed rows:
-[`native_collectives.cu:L1811-L1833`](../nccl/native_collectives.cu#L1811-L1833) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1811:1)).
+[`native_collectives.cu:L1437-L1459`](../nccl/native_collectives.cu#L1437-L1459) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1437:1)).
 
 The local GPU phase does this:
 
@@ -60,7 +60,7 @@ the code emits two partials:
 
 The CUDA kernels for packing, pair reduction, cross-pair final reduction, and
 the dedicated final add are in
-[`native_collectives.cu:L1087-L1413`](../nccl/native_collectives.cu#L1087-L1413) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1087:1)).
+[`native_collectives.cu:L806-L1132`](../nccl/native_collectives.cu#L806-L1132) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:806:1)).
 
 The runtime flow is:
 
@@ -75,9 +75,9 @@ The runtime flow is:
    `recvbuff`.
 
 Steps 1-5 are implemented in
-[`native_collectives.cu:L1859-L1912`](../nccl/native_collectives.cu#L1859-L1912) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1859:1)).
+[`native_collectives.cu:L1485-L1538`](../nccl/native_collectives.cu#L1485-L1538) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1485:1)).
 The pairwise D2H/RDMA/H2D/final-add phase is implemented in
-[`native_collectives.cu:L2032-L2101`](../nccl/native_collectives.cu#L2032-L2101) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2032:1)).
+[`native_collectives.cu:L1658-L1727`](../nccl/native_collectives.cu#L1658-L1727) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1658:1)).
 
 ## Generic two-node fallback
 
@@ -85,11 +85,11 @@ If the GPU-local path is unsupported, the implementation can fall back to a
 host-staged path.  It D2Hs each rank's full input into a host slab, reduces the
 local-node contributions in CPU memory, RDMA-writes the remote partial block,
 adds the incoming remote partial on CPU, and H2Ds the final shard:
-[`native_collectives.cu:L1665-L1790`](../nccl/native_collectives.cu#L1665-L1790) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1665:1)).
+[`native_collectives.cu:L1291-L1416`](../nccl/native_collectives.cu#L1291-L1416) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1291:1)).
 
 For non-two-node or unsupported cases, `runSendRecvReduceScatter` falls back to
 a chunked grouped send/recv plus GPU row reduction:
-[`native_collectives.cu:L2188-L2275`](../nccl/native_collectives.cu#L2188-L2275) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2188:1)).
+[`native_collectives.cu:L1740-L1827`](../nccl/native_collectives.cu#L1740-L1827) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1740:1)).
 
 ## Current performance and gap
 
@@ -109,4 +109,3 @@ The native path is close but still slower.  The likely remaining costs are:
 
 Rejected experiments and their measured costs are listed in the runbook:
 [`l40-l41-p2p-runbook.md:L71-L104`](l40-l41-p2p-runbook.md#L71-L104) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/doc/l40-l41-p2p-runbook.md:71:1)).
-

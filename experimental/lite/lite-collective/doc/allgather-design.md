@@ -24,18 +24,18 @@ overhead, and the CPU repack step.
 
 The public `ncclAllGather` wrapper first gives the single-node algorithm
 collection a chance to run.  If that is not selected or returns unsupported, the
-wrapper calls `runSendRecvAllGather` before NCCL dlopen fallback:
+wrapper calls `runLiteAllGather` before NCCL dlopen fallback:
 [`nccl.cu:L2159-L2235`](../nccl/nccl.cu#L2159-L2235) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/nccl.cu:2159:1)).
 
-For two-node layouts, `runSendRecvAllGather` dispatches to the host-slab fast
+For two-node layouts, `runLiteAllGather` dispatches to the host-slab fast
 path; otherwise it falls back to a chunked grouped send/recv implementation:
-[`native_collectives.cu:L2640-L2712`](../nccl/native_collectives.cu#L2640-L2712) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2640:1)).
+[`lite_allgather.cu:L1208-L1257`](../nccl/lite_allgather.cu#L1208-L1257) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1208:1)).
 
 The host context is owned by each node leader or NUMA-group leader.  It creates
 shared-memory slabs, maps the leader-owned names into all local ranks, NUMA
 places and pins the mappings, registers the slabs with mscclpp, and connects to
 the matching remote leader:
-[`native_collectives.cu:L513-L760`](../nccl/native_collectives.cu#L513-L760) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:513:1)).
+[`lite_allgather.cu:L455-L820`](../nccl/lite_allgather.cu#L455-L820) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:455:1)).
 
 The steady-state data path for `>=128KiB` is:
 
@@ -49,14 +49,14 @@ The steady-state data path for `>=128KiB` is:
    the next chunk reuses the slab.
 
 That fast path is implemented in
-[`native_collectives.cu:L2104-L2226`](../nccl/native_collectives.cu#L2104-L2226) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2104:1)).
+[`lite_allgather.cu:L1080-L1197`](../nccl/lite_allgather.cu#L1080-L1197) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1080:1)).
 Large messages stay on the host-slab path by chunking at the slab capacity:
-[`native_collectives.cu:L1835-L1876`](../nccl/native_collectives.cu#L1835-L1876) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1835:1)).
+[`lite_allgather.cu:L841-L882`](../nccl/lite_allgather.cu#L841-L882) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:841:1)).
 
 ### Small-message ordered direct-QP ring-slot path
 
 The `<128KiB` path is implemented in
-[`native_collectives.cu:L2018-L2102`](../nccl/native_collectives.cu#L2018-L2102) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2018:1)).
+[`lite_allgather.cu:L990-L1078`](../nccl/lite_allgather.cu#L990-L1078) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:990:1)).
 It is algorithmically different from the medium/large NUMA-split path:
 
 1. The per-epoch host slot is laid out in final AllGather output order:
@@ -71,9 +71,9 @@ It is algorithmically different from the medium/large NUMA-split path:
    polling, and a bootstrap barrier.
 
 The direct-QP helpers are in
-[`native_collectives.cu:L529-L587`](../nccl/native_collectives.cu#L529-L587) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:529:1)).
+[`lite_allgather.cu:L398-L453`](../nccl/lite_allgather.cu#L398-L453) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:398:1)).
 The route split between `<128KiB` and `>=128KiB` is in
-[`native_collectives.cu:L2676-L2725`](../nccl/native_collectives.cu#L2676-L2725) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2676:1)).
+[`lite_allgather.cu:L1208-L1257`](../nccl/lite_allgather.cu#L1208-L1257) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1208:1)).
 
 ## Single-node path
 
