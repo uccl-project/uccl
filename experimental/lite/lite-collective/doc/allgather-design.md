@@ -2,11 +2,10 @@
 
 ## Primary design
 
-The multi-node AllGather design has a general grouped-P2P path plus optimized
-two-node host-slab paths.  Because the testbed has no GPUDirect RDMA, every
-inter-node transfer must already pass through CPU memory.  For the optimized
-two-node medium/large path, the implementation splits local ranks into
-contiguous NIC groups based on `nRanksPerNode` and available HCAs:
+The multi-node AllGather design is a host-memory slab exchange.  Because the
+testbed has no GPUDirect RDMA, every inter-node transfer must already pass
+through CPU memory.  For the medium/large path, the implementation splits local
+ranks into contiguous NIC groups based on `nRanksPerNode` and available HCAs:
 
 ```text
 group0 sendbuffs -> group0 host slab -> selected NIC -> remote group0 slab
@@ -17,15 +16,14 @@ each rank H2Ds all local and remote groups into recvbuff
 
 On the L40/L41 2nx4g case this becomes two groups: GPU0/1 and GPU2/3, using
 the two local NICs.  On 2nx2g with GPU0/1, both GPUs are on the same NUMA node,
-so the medium/large path uses one group.  On 2nx1g, messages with
-`bytesPerRank >= 64KiB` use the same grouped P2P path as AllToAll, without the
-old generic path's final stream sync and bootstrap barrier.  Layouts that are
-not matched by the two-node host-slab specializations also use this general P2P
-AllGather path.  Smaller two-node messages use a pipelined single-leader
-host-slab protocol with ring-buffered slots and direct QP writes.  Each slot is
-laid out in global-rank order, so the remote node writes its half directly into
-the missing half of the local output slot.  That removes the per-iteration
-remote ack, most `Connection::write` overhead, and the CPU repack step.
+so the medium/large path uses one group.  For node counts above two, each
+group leader connects to every peer node's matching group leader and writes its
+local host slab into a source-node segment of the peer's receive slab.  Smaller
+two-node messages use a pipelined single-leader host-slab protocol with
+ring-buffered slots and direct QP writes.  Each slot is laid out in global-rank
+order, so the remote node writes its half directly into the missing half of the
+local output slot.  That removes the per-iteration remote ack, most
+`Connection::write` overhead, and the CPU repack step.
 
 ## Implementation details
 
@@ -34,20 +32,17 @@ collection a chance to run.  If that is not selected or returns unsupported, the
 wrapper calls `runLiteAllGather` before NCCL dlopen fallback:
 [`nccl.cu:L2159-L2235`](../nccl/nccl.cu#L2159-L2235) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/nccl.cu:2159:1)).
 
-`runLiteAllGather` first checks the general P2P cutover for non-two-node
-layouts and 2nx1g `>=64KiB`, then dispatches to the two-node host-slab fast
-paths when applicable:
-[`lite_allgather.cu:L1238-L1303`](../nccl/lite_allgather.cu#L1238-L1303) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1238:1)).
-
-The general P2P AllGather path is the AllToAll-style native grouped
-send/recv implementation without the removed generic path's final barrier:
-[`lite_allgather.cu:L642-L676`](../nccl/lite_allgather.cu#L642-L676) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:642:1)).
+`runLiteAllGather` dispatches all multi-node layouts to host-memory native
+paths.  Two-node small messages use the ordered direct-QP slot path; all other
+multi-node layouts use either the dynamic NIC-group slab path or the single-slab
+path:
+[`lite_allgather.cu:L1268-L1329`](../nccl/lite_allgather.cu#L1268-L1329) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1268:1)).
 
 The host context is owned by each node leader or NUMA-group leader.  It creates
 shared-memory slabs, maps the leader-owned names into all local ranks, NUMA
 places and pins the mappings, registers the slabs with mscclpp, and connects to
 the matching remote leader:
-[`lite_allgather.cu:L253-L490`](../nccl/lite_allgather.cu#L253-L490) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:253:1)).
+[`lite_allgather.cu:L279-L539`](../nccl/lite_allgather.cu#L279-L539) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:279:1)).
 
 The steady-state data path for `>=128KiB` is:
 
@@ -61,14 +56,14 @@ The steady-state data path for `>=128KiB` is:
    the next chunk reuses the slab.
 
 That fast path is implemented in
-[`lite_allgather.cu:L1102-L1225`](../nccl/lite_allgather.cu#L1102-L1225) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1102:1)).
+[`lite_allgather.cu:L1124-L1247`](../nccl/lite_allgather.cu#L1124-L1247) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1124:1)).
 Large messages stay on the host-slab path by chunking at the slab capacity:
-[`lite_allgather.cu:L839-L879`](../nccl/lite_allgather.cu#L839-L879) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:839:1)).
+[`lite_allgather.cu:L858-L898`](../nccl/lite_allgather.cu#L858-L898) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:858:1)).
 
 ### Small-message ordered direct-QP ring-slot path
 
 The `<128KiB` path is implemented in
-[`lite_allgather.cu:L988-L1092`](../nccl/lite_allgather.cu#L988-L1092) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:988:1)).
+[`lite_allgather.cu:L1010-L1114`](../nccl/lite_allgather.cu#L1010-L1114) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1010:1)).
 It is algorithmically different from the medium/large NUMA-split path:
 
 1. The per-epoch host slot is laid out in final AllGather output order:
@@ -83,9 +78,9 @@ It is algorithmically different from the medium/large NUMA-split path:
    polling, and a bootstrap barrier.
 
 The direct-QP helpers are in
-[`lite_allgather.cu:L203-L249`](../nccl/lite_allgather.cu#L203-L249) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:203:1)).
+[`lite_allgather.cu:L229-L275`](../nccl/lite_allgather.cu#L229-L275) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:229:1)).
 The route split between `<128KiB` and `>=128KiB` is in
-[`lite_allgather.cu:L1238-L1303`](../nccl/lite_allgather.cu#L1238-L1303) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1238:1)).
+[`lite_allgather.cu:L1268-L1329`](../nccl/lite_allgather.cu#L1268-L1329) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:1268:1)).
 
 ## Single-node path
 
@@ -111,11 +106,10 @@ Current stable 2nx4g performance:
 | NCCL no-GDR, geomean 128B-1GiB | baseline | baseline | Yes |
 | Lite native, geomean 128B-1GiB | `1.167x` speedup | `1.181x` speedup | Yes |
 
-Current 2nx1g status after the AllToAll-style P2P cutover: with
-`--iters 50 --warmup-iters 10`, native wins at `64KiB-1MiB` and the 1MiB row is
-`70.95/68.63 us` versus NCCL no-GDR `95.44/95.30 us`.  Below 64KiB, native
-AllGather is comparable to or faster than the native AllToAll path, but NCCL's
-AllGather-specific 2-rank latency is still lower than both.
+Current 2nx1g status with the host-memory-only implementation: with
+`--iters 50 --warmup-iters 10`, the 1MiB row is `84.63/79.53 us`.  This is
+slower than the prior grouped-send/recv experiment, but keeps AllGather on the
+host-memory slab algorithm family.
 
 ## Limitations
 
@@ -123,11 +117,11 @@ The grouped slab path is specialized for two-node layouts with at least two
 local ranks, at least two IB transports, and GPUs spanning multiple NUMA nodes.
 It supports arbitrary `nRanksPerNode <= 8`; groups are contiguous local-rank
 ranges, split when the actual GPU NUMA node changes and capped by the available
-HCA count.  Other layouts use the general grouped-P2P AllGather path.  The
-host-slab design also depends on reliable local shared memory, NUMA placement,
-and mscclpp IB registration during communicator setup.  The generalized paths
-were smoke-tested on 2nx1g, 2nx2g, and 2nx4g; node counts above two are
-supported by the general P2P path but were not available on this testbed.
+HCA count.  The host-slab design also depends on reliable local shared memory,
+NUMA placement, and mscclpp IB registration during communicator setup.  The
+generalized host-memory paths were smoke-tested on 2nx1g, 2nx2g, and 2nx4g;
+node counts above two are supported by the multi-peer host-slab protocol but
+were not available on this testbed.
 
 On 2nx4g, small messages below 128KiB beat NCCL in the retained sweep.  With
 `--iters 50 --warmup-iters 10`, the native path wins `9/10` out-of-place rows
