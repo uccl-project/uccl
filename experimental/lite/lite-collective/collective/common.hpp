@@ -105,9 +105,10 @@ AllreduceFunc dispatch(ReduceOp op, mscclpp::DataType dtype) {
     } else if (dtype == mscclpp::DataType::FLOAT8_E5M2) {
       return Adapter<SUM, __fp8_e5m2>::call;
 #endif
-    } else if (dtype == mscclpp::DataType::INT32 ||
-               dtype == mscclpp::DataType::UINT32) {
+    } else if (dtype == mscclpp::DataType::INT32) {
       return Adapter<SUM, int>::call;
+    } else if (dtype == mscclpp::DataType::UINT32) {
+      return Adapter<SUM, uint32_t>::call;
     } else if (dtype == mscclpp::DataType::UINT8) {
       return Adapter<SUM, uint8_t>::call;
     } else {
@@ -128,9 +129,10 @@ AllreduceFunc dispatch(ReduceOp op, mscclpp::DataType dtype) {
     } else if (dtype == mscclpp::DataType::FLOAT8_E5M2) {
       return Adapter<MIN, __fp8_e5m2>::call;
 #endif
-    } else if (dtype == mscclpp::DataType::INT32 ||
-               dtype == mscclpp::DataType::UINT32) {
+    } else if (dtype == mscclpp::DataType::INT32) {
       return Adapter<MIN, int>::call;
+    } else if (dtype == mscclpp::DataType::UINT32) {
+      return Adapter<MIN, uint32_t>::call;
     } else if (dtype == mscclpp::DataType::UINT8) {
       return Adapter<MIN, uint8_t>::call;
     } else {

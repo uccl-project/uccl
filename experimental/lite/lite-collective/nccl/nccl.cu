@@ -209,6 +209,16 @@ static mscclpp::Transport selectIBTransportForGpu(int cudaDeviceId) {
 //     (triggers IPC handle re-exchange only on new cudaMalloc, not on offset
 //      changes within the same allocation)
 // ---------------------------------------------------------------------------
+static constexpr int kBusySpinBeforeYieldIters = 20000;
+
+static inline void cpuRelax() {
+#if defined(__x86_64__) || defined(__i386__)
+  asm volatile("pause" ::: "memory");
+#else
+  asm volatile("" ::: "memory");
+#endif
+}
+
 struct ShmBlock {
   alignas(64) std::atomic<uint64_t> counter{0};
   alignas(64) std::atomic<uint64_t> recvbuffAddr{0};
@@ -282,9 +292,14 @@ struct ShmSemaphore {
 
   void waitPeerEventRecorded() {
     ++expectedEventGen;
+    int spinIters = 0;
     while (local->eventGeneration.load(std::memory_order_acquire) <
            expectedEventGen) {
-      std::this_thread::yield();
+      if (spinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
     }
   }
 
@@ -367,6 +382,19 @@ static constexpr size_t kProgressCounterPad = 64;
 // skip the completion queue entirely, dramatically reducing flush() cost.
 static constexpr int kSignalEveryN = 256;
 static constexpr size_t kInlineSmallSendBytes = 0;
+static void waitCudaEventReady(cudaEvent_t event) {
+  int spinIters = 0;
+  while (true) {
+    cudaError_t status = cudaEventQuery(event);
+    if (status == cudaSuccess) return;
+    if (status != cudaErrorNotReady) MSCCLPP_CUDATHROW(status);
+    if (spinIters++ < kBusySpinBeforeYieldIters) {
+      cpuRelax();
+    } else {
+      std::this_thread::yield();
+    }
+  }
+}
 
 struct SendRecvWorkerState {
   struct WorkItem {
@@ -647,10 +675,7 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
 
     try {
       if (item.type == SendRecvWorkerState::WorkItem::SEND) {
-        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
-               cudaErrorNotReady) {
-          std::this_thread::yield();
-        }
+        waitCudaEventReady(ws->completionEvents[item.eventIndex]);
         ctx->ibWrCount = kSignalEveryN - 1;
         stageWrite(0, 0, static_cast<uint32_t>(item.bytes));
         qp->postSend();
@@ -659,10 +684,7 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
       } else {
         // SEND_BATCH: wait for the batch D2H event, then post multiple RDMA
         // writes (one per kSendChunkBytes sub-chunk) for better NIC pipelining.
-        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
-               cudaErrorNotReady) {
-          std::this_thread::yield();
-        }
+        waitCudaEventReady(ws->completionEvents[item.eventIndex]);
         bool signaled = false;
         size_t off = item.batchOffset;
         size_t remaining = item.batchBytes;
@@ -694,6 +716,7 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
       WARN(MSCCLPP_NCCL, "sendRecvWorker failed: ", ex.what());
     }
   }
+  flushCq();
 }
 
 void registerMigratedAppNcclAlgorithms(uintptr_t scratchBuffer,
@@ -1028,10 +1051,7 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
       while (!ws->stopFlag.load(std::memory_order_acquire)) {
         if (!ws->pop(item)) continue;
         // Wait for the D2D copy event to complete.
-        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
-               cudaErrorNotReady) {
-          std::this_thread::yield();
-        }
+        waitCudaEventReady(ws->completionEvents[item.eventIndex]);
         // Signal the peer's shm semaphore — data is in peer's recvbuff.
         ctx.ipcShmSemaphore->signal();
       }
@@ -1566,6 +1586,11 @@ static std::shared_ptr<mscclpp::Algorithm> algoSelector(
     return mscclpp::nccl::selectSingleNodeAllreduce(algoMap, request, config);
   }
 
+  if (request.collective == "reducescatter") {
+    return mscclpp::nccl::selectSingleNodeReduceScatter(algoMap, request,
+                                                        config);
+  }
+
   INFO(MSCCLPP_NCCL,
        "No suitable algorithm found for collective '%s', fallback to nccl/rccl",
        request.collective.c_str());
@@ -1718,6 +1743,7 @@ NCCL_API ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     delete mscclppNcclCommPtr;
   }
   cleanupAllToAllContexts(comm);
+  mscclpp::nccl::cleanupNativeCollectiveContexts(comm);
   delete comm;
   return ncclSuccess;
 }
@@ -1939,6 +1965,7 @@ NCCL_API ncclResult_t ncclBroadcast(void const* sendbuff, void* recvbuff,
                                         .stream = stream,
                                         .collective = "broadcast",
                                         .dtype = dtype,
+                                        .op = mscclpp::ReduceOp::NOP,
                                         .hints = hints};
   auto algo = comm->algorithmCollection.selectAlgorithm(request);
   if (algo != nullptr) {
@@ -1995,32 +2022,46 @@ NCCL_API ncclResult_t ncclAllReduce(void const* sendbuff, void* recvbuff,
         sendbuff, recvbuff, count, datatype, reductionOperation,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
   }
-  mscclpp::DataType dtype = ncclDataTypeToMscclpp(datatype);
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
-  mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
-                                        .nRanksPerNode = comm->nRanksPerNode,
-                                        .rank = rank,
-                                        .inputBuffer = sendbuff,
-                                        .outputBuffer = recvbuff,
-                                        .messageSize = bytes,
-                                        .stream = stream,
-                                        .collective = "allreduce",
-                                        .dtype = dtype,
-                                        .hints = {}};
+  mscclpp::DataType dtype;
+  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
+    mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
+                                          .nRanksPerNode = comm->nRanksPerNode,
+                                          .rank = rank,
+                                          .inputBuffer = sendbuff,
+                                          .outputBuffer = recvbuff,
+                                          .messageSize = bytes,
+                                          .stream = stream,
+                                          .collective = "allreduce",
+                                          .dtype = dtype,
+                                          .op = ncclRedOpToMscclpp(
+                                              reductionOperation),
+                                          .hints = {}};
 
-  auto algo = comm->algorithmCollection.selectAlgorithm(request);
-  if (algo != nullptr) {
-    return static_cast<ncclResult_t>(
-        algo->execute(comm->comm, sendbuff, recvbuff, bytes, bytes, dtype,
-                      ncclRedOpToMscclpp(reductionOperation), stream,
-                      comm->executor, 0, 0, symmetricMemory));
+    auto algo = comm->algorithmCollection.selectAlgorithm(request);
+    if (algo != nullptr) {
+      ncclResult_t algoResult = static_cast<ncclResult_t>(
+          algo->execute(comm->comm, sendbuff, recvbuff, bytes, bytes, dtype,
+                        ncclRedOpToMscclpp(reductionOperation), stream,
+                        comm->executor, 0, 0, symmetricMemory));
+      if (algoResult != ncclInvalidArgument &&
+          algoResult != ncclInvalidUsage) {
+        return algoResult;
+      }
+    }
   }
 
   if (comm->nRanksPerNode != comm->worldSize) {
-    return mscclpp::nccl::runSendRecvAllReduce(
+    ncclResult_t nativeResult = mscclpp::nccl::runSendRecvAllReduce(
         sendbuff, recvbuff, count, datatype, reductionOperation, comm, stream,
         rank, comm->worldSize, comm->scratchBuffer_.get(),
-        comm->scratchBufferSize_, comm->comm);
+        comm->scratchBufferSize_, comm->nRanksPerNode, comm->comm,
+        comm->cudaDevice);
+    if (nativeResult == ncclSuccess) return nativeResult;
+    if (nativeResult != ncclInvalidUsage &&
+        nativeResult != ncclInvalidArgument) {
+      return nativeResult;
+    }
   }
 
   if (mscclppNcclDlopenSharedLib == true) {
@@ -2069,29 +2110,41 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 
   int rank = comm->comm->bootstrap()->getRank();
   int nRank = comm->comm->bootstrap()->getNranks();
-  mscclpp::DataType dtype = ncclDataTypeToMscclpp(datatype);
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
-  mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
-                                        .nRanksPerNode = comm->nRanksPerNode,
-                                        .rank = rank,
-                                        .inputBuffer = sendbuff,
-                                        .outputBuffer = recvbuff,
-                                        .messageSize = bytes * nRank,
-                                        .stream = stream,
-                                        .collective = "reducescatter",
-                                        .dtype = dtype,
-                                        .hints = {}};
-  auto algo = comm->algorithmCollection.selectAlgorithm(request);
-  if (algo != nullptr) {
-    return static_cast<ncclResult_t>(algo->execute(
-        comm->comm, sendbuff, recvbuff, bytes * nRank, bytes, dtype,
-        ncclRedOpToMscclpp(op), stream, comm->executor, 0, 0, symmetricMemory));
+  mscclpp::DataType dtype;
+  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
+    mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
+                                          .nRanksPerNode = comm->nRanksPerNode,
+                                          .rank = rank,
+                                          .inputBuffer = sendbuff,
+                                          .outputBuffer = recvbuff,
+                                          .messageSize = bytes * nRank,
+                                          .stream = stream,
+                                          .collective = "reducescatter",
+                                          .dtype = dtype,
+                                          .op = ncclRedOpToMscclpp(op),
+                                          .hints = {}};
+    auto algo = comm->algorithmCollection.selectAlgorithm(request);
+    if (algo != nullptr) {
+      ncclResult_t algoResult = static_cast<ncclResult_t>(algo->execute(
+          comm->comm, sendbuff, recvbuff, bytes * nRank, bytes, dtype,
+          ncclRedOpToMscclpp(op), stream, comm->executor, 0, 0,
+          symmetricMemory));
+      if (algoResult != ncclInvalidArgument && algoResult != ncclInvalidUsage) {
+        return algoResult;
+      }
+    }
   }
 
   ncclResult_t nativeResult = mscclpp::nccl::runSendRecvReduceScatter(
       sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
-      nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_, comm->comm);
-  if (nativeResult != ncclInvalidUsage) return nativeResult;
+      nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
+      comm->nRanksPerNode, comm->comm, comm->cudaDevice);
+  if (nativeResult == ncclSuccess) return nativeResult;
+  if (nativeResult != ncclInvalidUsage &&
+      nativeResult != ncclInvalidArgument) {
+    return nativeResult;
+  }
 
   if (mscclppNcclDlopenSharedLib == true) {
     return mscclppNcclOps.ReduceScatter(
@@ -2137,30 +2190,41 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
   }
 
-  mscclpp::DataType dtype = ncclDataTypeToMscclpp(datatype);
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
-  mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
-                                        .nRanksPerNode = comm->nRanksPerNode,
-                                        .rank = rank,
-                                        .inputBuffer = sendbuff,
-                                        .outputBuffer = recvbuff,
-                                        .messageSize = bytes,
-                                        .stream = stream,
-                                        .collective = "allgather",
-                                        .dtype = dtype,
-                                        .hints = {}};
+  mscclpp::DataType dtype;
+  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
+    mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
+                                          .nRanksPerNode = comm->nRanksPerNode,
+                                          .rank = rank,
+                                          .inputBuffer = sendbuff,
+                                          .outputBuffer = recvbuff,
+                                          .messageSize = bytes,
+                                          .stream = stream,
+                                          .collective = "allgather",
+                                          .dtype = dtype,
+                                          .op = mscclpp::ReduceOp::NOP,
+                                          .hints = {}};
 
-  auto algo = comm->algorithmCollection.selectAlgorithm(request);
-  if (algo != nullptr) {
-    return static_cast<ncclResult_t>(algo->execute(
-        comm->comm, sendbuff, recvbuff, bytes, bytes * nRank, dtype,
-        mscclpp::ReduceOp::NOP, stream, comm->executor, 0, 0, symmetricMemory));
+    auto algo = comm->algorithmCollection.selectAlgorithm(request);
+    if (algo != nullptr) {
+      ncclResult_t algoResult = static_cast<ncclResult_t>(algo->execute(
+          comm->comm, sendbuff, recvbuff, bytes, bytes * nRank, dtype,
+          mscclpp::ReduceOp::NOP, stream, comm->executor, 0, 0,
+          symmetricMemory));
+      if (algoResult != ncclInvalidArgument &&
+          algoResult != ncclInvalidUsage) {
+        return algoResult;
+      }
+    }
   }
 
-  if (comm->nRanksPerNode != comm->worldSize) {
-    return mscclpp::nccl::runSendRecvAllGather(
-        sendbuff, recvbuff, sendcount, bytes, datatype, comm, stream, rank,
-        nRank, comm->comm);
+  ncclResult_t nativeResult = mscclpp::nccl::runSendRecvAllGather(
+      sendbuff, recvbuff, sendcount, bytes, datatype, comm, stream, rank, nRank,
+      comm->nRanksPerNode, comm->comm, comm->cudaDevice);
+  if (nativeResult == ncclSuccess) return nativeResult;
+  if (nativeResult != ncclInvalidUsage &&
+      nativeResult != ncclInvalidArgument) {
+    return nativeResult;
   }
 
   if (mscclppNcclDlopenSharedLib == true) {

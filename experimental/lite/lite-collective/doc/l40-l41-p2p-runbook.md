@@ -9,6 +9,110 @@ The benchmark exercises `ncclSend`/`ncclRecv` only.  In the `mscclpp` backend,
 `nccl` backend, the same MPI `sendrecv_perf` binary loads the native NCCL
 shared library from `/home/yangz/nfs/zhongjie/nccl`.
 
+## Native collective support status
+
+The NCCL compatibility layer currently exposes native paths for the target
+collectives below.  Native benchmark runs must keep `MSCCLPP_NCCL_LIB_PATH`
+unset, set `MSCCLPP_FORCE_NCCL_FALLBACK_OPERATION=`, and use
+`MSCCLPP_NCCL_LOCAL_P2P_FALLBACK=0` so the table does not hide missing support
+behind NCCL fallback.
+
+| Collective | `1nx2g` native | `2nx1g` native | `2nx4g` native | Current performance gate |
+| --- | --- | --- | --- | --- |
+| `allreduce` | Supported | Supported | Supported | `2nx4g/1MiB` native RS+AG composition beats NCCL no-GDR out-of-place and in-place (`232.54/234.32 us` vs `1281.14/783.76 us`). |
+| `allgather` | Supported | Supported | Supported | `2nx4g/1MiB` host-slab native path beats NCCL no-GDR out-of-place and in-place (`88.33/88.28 us` vs `119.27/116.62 us`). |
+| `reducescatter` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-pair local fan-in + pairwise host-staged RDMA path is correct and improved (`123.29/123.35 us`, down from `143.53/143.06 us`) but still slower than NCCL no-GDR (`107.65/107.59 us`). |
+| `alltoall` | Supported | Supported | Supported | `1nx2g/1MiB` and `2nx1g/1MiB` beat NCCL; `2nx4g/1MiB` remains the blocker (`107.44 us` native vs `96.85 us` NCCL out-of-place; `101.25 us` native vs `95.29 us` NCCL in-place). |
+
+All measurements above are on L40/L41 with `NCCL_SOCKET_IFNAME=ibp55s0f0`,
+`NCCL_IB_HCA=mlx5_0,mlx5_1`, `MSCCLPP_SOCKET_IFNAME=ibp55s0f0`, and
+`MSCCLPP_HCA_DEVICES=mlx5_0,mlx5_1`.
+
+### 1MiB collective comparison snapshot
+
+These rows use either `scripts/benchmark-collectives.sh` or the isolated
+`scripts/run-nccl-tests.sh` commands listed below, with native fallback
+disabled. Times are out-of-place `nccl-tests` latency in microseconds; `#wrong`
+was `0` for every native row listed.
+
+| Collective | Topology | NCCL time (us) | Native time (us) | Speedup | Status |
+| --- | --- | ---: | ---: | ---: | --- |
+| `allgather` | `1nx2g` | 62.60 | 41.26 | 1.52x | Pass |
+| `reducescatter` | `1nx2g` | 60.42 | 46.31 | 1.30x | Pass |
+| `allreduce` | `1nx2g` | 97.81 | 77.56 | 1.26x | Pass |
+| `alltoall` | `1nx2g` | 59.52 | 41.04 | 1.45x | Pass |
+| `alltoall` | `2nx1g` | 74.32 | 73.93 | 1.01x | Pass |
+| `alltoall` | `2nx4g` | 96.85 | 107.44 | 0.90x | Fail; native correct but still slower |
+| `allgather` | `2nx1g` | N/A | 117.07 | N/A | Native correct; NCCL baseline segfaulted |
+| `reducescatter` | `2nx1g` | N/A | 139.13 | N/A | Native correct; NCCL baseline blocked |
+| `allreduce` | `2nx1g` | N/A | 227.28 | N/A | Native correct; NCCL baseline blocked |
+| `allgather` | `2nx4g` | 119.27 | 88.33 | 1.35x | Pass against NCCL no-GDR |
+| `reducescatter` | `2nx4g` | 107.65 | 123.29 | 0.87x | Correct and improved, but still slower than NCCL no-GDR |
+| `allreduce` | `2nx4g` | 1281.14 | 232.54 | 5.51x | Pass against NCCL no-GDR |
+
+The `2nx4g` rows above use isolated native-only runs with
+`--iters 20 --warmup-iters 5 --check-iters 1`. NCCL no-GDR baselines set
+`NCCL_NET_GDR_LEVEL=0`. Raw logs:
+
+| Collective | Native log | NCCL no-GDR log |
+| --- | --- | --- |
+| `allgather` | `.tmp/collective-benchmarks/final-native-current-20260606-071108/all_gather_mscclpp.log` | `.tmp/collective-benchmarks/ag-ar-nccl-nogdr-current-20260606-060420/all_gather_nccl_nogdr.log` |
+| `reducescatter` | `.tmp/collective-benchmarks/rs-final-add-retained-20260606-093009/reduce_scatter_mscclpp.log` | `.tmp/collective-benchmarks/rs-numa-retained-20260606-081603/reduce_scatter_nccl_nogdr.log` |
+| `allreduce` | `.tmp/collective-benchmarks/final-native-current-20260606-071108/all_reduce_mscclpp.log` | `.tmp/collective-benchmarks/ag-ar-nccl-nogdr-current-20260606-060420/all_reduce_nccl_nogdr.log` |
+
+Detailed `2nx4g/1MiB` no-GDR comparison:
+
+| Collective | NCCL out (us) | Native out (us) | Out speedup | NCCL in (us) | Native in (us) | In speedup | `#wrong` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `allgather` | 119.27 | 88.33 | 1.35x | 116.62 | 88.28 | 1.32x | 0 |
+| `reducescatter` | 107.65 | 123.29 | 0.87x | 107.59 | 123.35 | 0.87x | 0 |
+| `allreduce` | 1281.14 | 232.54 | 5.51x | 783.76 | 234.32 | 3.34x | 0 |
+
+### ReduceScatter NCCL algorithm comparison
+
+NCCL `2nx4g/1MiB` ReduceScatter selects `Algo RING proto SIMPLE`
+(`channel{Lo..Hi}={0..1}` in
+`.tmp/collective-benchmarks/nccl-rs-proto-compare-20260606-072914/reduce_scatter_default_debug.log`).
+The benchmark wrapper passes through `NCCL_ALGO`, `NCCL_PROTO`,
+`NCCL_MIN_NCHANNELS`, and `NCCL_MAX_NCHANNELS` for reproducible forced-algorithm
+experiments.
+
+| Backend / algorithm | Out (us) | In (us) | Correct | Notes |
+| --- | ---: | ---: | --- | --- |
+| NCCL default | 108.05 | 106.02 | Yes | Default no-GDR selection. |
+| NCCL forced `RING` | 107.29 | 107.15 | Yes | Same effective path as default. |
+| NCCL forced `RING,SIMPLE` | 112.03 | 107.05 | Yes | Simple ring protocol. |
+| NCCL forced `RING,LL128` | 125.96 | 480.95 | Yes | Out-of-place slower; in-place much slower. |
+| NCCL forced `RING,LL` | 1920.11 | 1020.73 | Yes | Not competitive on this testbed. |
+| NCCL forced `PAT,SIMPLE` | N/A | N/A | No | NCCL returned invalid usage. |
+| Native retained NUMA-pair local fan-in + dedicated final add | 123.29 | 123.35 | Yes | Retained improvement: reduce within GPU pairs 0/1 and 2/3, exchange one cross-NUMA partial, then use pairwise host-staged RDMA and a specialized float-sum final add kernel. Best observed clean run with this code was `118.62/117.91 us`, but the latest retained log is shown here. |
+| Native lite P2P ring experiment | 2241.31 | 1974.25 | Yes | Correct only with per-step receiver-consumed barrier; not retained because it is far slower than the packed local + pairwise RDMA path. |
+
+Rejected ReduceScatter follow-up experiments after the NUMA-pair improvement:
+host-remote partial reduction (`194.22/194.08 us`), direct GPU kernel writes to
+peer IPC scratch (`369.21/375.46 us`), host-mapped final remote partial reads
+(`123.45/124.27 us`; a later mapped-host read with the dedicated final add was
+`131.53/131.50 us`), direct local partial output to `recvbuff`
+(`147.64/141.32 us`), fast-path QP writes replacing `Connection::write`
+(`147.99/136.97 us`), CUDA IPC event local handoff (`132.20/130.83 us`),
+CudaIpc input-pull local fan-in (`973.09/941.72 us`), D2H/previous-ack overlap
+(`126.16/125.08 us`), direct-copy NUMA packing (`140.33/139.65 us`), H2D
+directly to output plus in-place add (`125.40/124.20 us`), single-sync final
+H2D+add (`126.29/125.92 us`), partner-only NUMA packing
+(`145.56/138.94 us`), split-stream own/cross pair reduction
+(`130.21/129.86 us`), and narrower scratch-reuse barriers
+(`120.27/119.58 us`).
+
+The original native NCCL `2nx4g/1MiB` comparison failure was caused by
+`scripts/run-nccl-tests.sh` forcing `NCCL_BUFFSIZE=1073741824`. With NCCL
+2.29.7 this made net transport setup crash before any timing row; the faulting
+offsets symbolize to `sendProxyConnect` and `recvProxyConnect` in
+`/home/yangz/nfs/zhongjie/nccl/src/transport/net.cc`, dereferencing
+`resources->sendMem`/`recvMem` at low unmapped addresses such as `0x530000`.
+Keeping `NCCL_BUFFSIZE` at `4194304` avoids the invalid connect-map state and
+the same runs pass. Fixed NCCL logs are under
+`.tmp/nccl-buff4m-wrapper-2nx4g-20iter/`.
+
 ## Testbed assumptions
 
 Current L40/L41 mapping:

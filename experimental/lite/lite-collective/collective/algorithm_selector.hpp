@@ -32,6 +32,11 @@ std::shared_ptr<Algorithm> selectSingleNodeAllgather(
     std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
     CollectiveRequest const& request, AlgorithmSelectorConfig const& config);
 
+/// Select an algorithm for single-node reducescatter
+std::shared_ptr<Algorithm> selectSingleNodeReduceScatter(
+    std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    CollectiveRequest const& request, AlgorithmSelectorConfig const& config);
+
 /// Select an algorithm for multi-node collective operations
 /// Currently returns nullptr to fallback to NCCL/RCCL
 /// TODO: Implement multi-node NVLS and multi-node IB algorithms

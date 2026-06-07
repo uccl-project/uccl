@@ -13,7 +13,9 @@ ncclResult_t runSendRecvAllGather(void const* sendbuff, void* recvbuff,
                                   size_t sendcount, size_t bytesPerRank,
                                   ncclDataType_t datatype, ncclComm_t comm,
                                   cudaStream_t stream, int rank, int nRanks,
-                                  std::shared_ptr<Communicator> bootstrapComm);
+                                  int nRanksPerNode,
+                                  std::shared_ptr<Communicator> bootstrapComm,
+                                  int cudaDevice);
 
 ncclResult_t runSendRecvReduceScatter(void const* sendbuff, void* recvbuff,
                                       size_t recvcount, size_t bytesPerRank,
@@ -21,7 +23,9 @@ ncclResult_t runSendRecvReduceScatter(void const* sendbuff, void* recvbuff,
                                       ncclComm_t comm, cudaStream_t stream,
                                       int rank, int nRanks, void* scratchBuffer,
                                       size_t scratchBufferSize,
-                                      std::shared_ptr<Communicator> bootstrapComm);
+                                      int nRanksPerNode,
+                                      std::shared_ptr<Communicator> bootstrapComm,
+                                      int cudaDevice);
 
 ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
                                   size_t count, ncclDataType_t datatype,
@@ -29,7 +33,11 @@ ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
                                   cudaStream_t stream, int rank, int nRanks,
                                   void* scratchBuffer,
                                   size_t scratchBufferSize,
-                                  std::shared_ptr<Communicator> bootstrapComm);
+                                  int nRanksPerNode,
+                                  std::shared_ptr<Communicator> bootstrapComm,
+                                  int cudaDevice);
+
+void cleanupNativeCollectiveContexts(ncclComm_t comm);
 
 }  // namespace nccl
 }  // namespace mscclpp

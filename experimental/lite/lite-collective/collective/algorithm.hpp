@@ -251,6 +251,7 @@ struct CollectiveRequest {
   cudaStream_t stream;
   std::string const& collective;
   const DataType dtype;
+  ReduceOp op = ReduceOp::NOP;
   std::unordered_map<std::string, std::vector<uint64_t>> const& hints;
 
   CollectiveBufferMode bufferMode() const;

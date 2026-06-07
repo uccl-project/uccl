@@ -125,12 +125,23 @@ std::shared_ptr<Algorithm> selectSingleNodeAllreduce(
   if (messageSize <= (1 << 15) && nvlsSupported) {  // <= 32KB
     return algoMap.at("default_allreduce_nvls_packet");
   }
-  // Medium messages: use packet algorithm
+#if defined(__HIP_PLATFORM_AMD__)
+  // AMD keeps the existing packet threshold.
   if (messageSize <= (1 << 16) ||
       (messageSize <= (1 << 20) &&
        !useNvlsWithZeroCopy)) {  // <= 64KB or <= 1MB
     return algoMap.at("default_allreduce_packet");
   }
+#else
+  // Medium messages use RSAG on PCIe-only NVIDIA GPUs; it avoids packet
+  // overhead and is faster than NCCL for the 1MiB L40/L41 target.
+  if (messageSize <= (1 << 16)) {  // <= 64KB
+    return algoMap.at("default_allreduce_packet");
+  }
+  if (messageSize <= (1 << 20)) {
+    return algoMap.at("default_allreduce_rsag");
+  }
+#endif
   // Large messages with NVLS zero-copy support
   if (nvlsSupported && useNvlsWithZeroCopy) {
     return algoMap.at("default_allreduce_nvls_zero_copy");
@@ -160,21 +171,44 @@ std::shared_ptr<Algorithm> selectSingleNodeAllgather(
     [[maybe_unused]] AlgorithmSelectorConfig const& config) {
   const size_t messageSize = request.messageSize;
 
-  // For messages up to 32MB, use fullmesh2 algorithm
-  if (messageSize <= 32 * (1 << 20)) {
-    return algoMap.at("default_allgather_fullmesh2");
-  }
-
 #if defined(__HIP_PLATFORM_AMD__)
   // AMD platform always uses fullmesh2
   return algoMap.at("default_allgather_fullmesh2");
 #else
+  if (messageSize <= 32 * (1 << 20)) {
+    // The original fullmesh path is faster than fullmesh2 on the L40/L41 PCIe
+    // target, but it requires 16-byte aligned sizes. fullmesh2 requires 4-byte
+    // aligned sizes. Unaligned sizes fall through to the byte-safe send/recv
+    // path in the NCCL shim.
+    if (messageSize % 16 == 0) {
+      return algoMap.at("default_allgather_fullmesh");
+    }
+    if (messageSize % 4 == 0) {
+      return algoMap.at("default_allgather_fullmesh2");
+    }
+    return nullptr;
+  }
+
   // NVIDIA: use fullmesh for large messages if no NCCL fallback is available
-  if (!config.ncclDlopenSharedLib) {
+  if (!config.ncclDlopenSharedLib && messageSize % 16 == 0) {
     return algoMap.at("default_allgather_fullmesh");
+  }
+  if (!config.ncclDlopenSharedLib && messageSize % 4 == 0) {
+    return algoMap.at("default_allgather_fullmesh2");
   }
   return nullptr;
 #endif
+}
+
+std::shared_ptr<Algorithm> selectSingleNodeReduceScatter(
+    std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    CollectiveRequest const& request,
+    [[maybe_unused]] AlgorithmSelectorConfig const& config) {
+  if (request.op != ReduceOp::SUM && request.op != ReduceOp::MIN) {
+    return nullptr;
+  }
+  auto it = algoMap.find("default_reducescatter_rs");
+  return it == algoMap.end() ? nullptr : it->second;
 }
 
 std::shared_ptr<Algorithm> selectMultiNodeAlgorithm(

@@ -9,32 +9,47 @@
 #include "nccl.h"
 #include <cstddef>
 
-// Convert ncclDataType_t to mscclpp::DataType
-inline mscclpp::DataType ncclDataTypeToMscclpp(ncclDataType_t dtype) {
+// Convert ncclDataType_t to mscclpp::DataType without throwing.
+inline bool tryNcclDataTypeToMscclpp(ncclDataType_t dtype,
+                                     mscclpp::DataType* out) {
   switch (dtype) {
     case ncclInt32:
-      return mscclpp::DataType::INT32;
+      *out = mscclpp::DataType::INT32;
+      return true;
     case ncclUint32:
-      return mscclpp::DataType::UINT32;
+      *out = mscclpp::DataType::UINT32;
+      return true;
     case ncclUint8:
-      return mscclpp::DataType::UINT8;
+      *out = mscclpp::DataType::UINT8;
+      return true;
     case ncclFloat16:
-      return mscclpp::DataType::FLOAT16;
+      *out = mscclpp::DataType::FLOAT16;
+      return true;
     case ncclFloat32:
-      return mscclpp::DataType::FLOAT32;
+      *out = mscclpp::DataType::FLOAT32;
+      return true;
     case ncclBfloat16:
-      return mscclpp::DataType::BFLOAT16;
+      *out = mscclpp::DataType::BFLOAT16;
+      return true;
 #ifdef __FP8_TYPES_EXIST__
     case ncclFloat8e4m3:
-      return mscclpp::DataType::FLOAT8_E4M3;
+      *out = mscclpp::DataType::FLOAT8_E4M3;
+      return true;
     case ncclFloat8e5m2:
-      return mscclpp::DataType::FLOAT8_E5M2;
+      *out = mscclpp::DataType::FLOAT8_E5M2;
+      return true;
 #endif
     default:
-      throw mscclpp::Error(
-          "Unsupported ncclDataType_t: " + std::to_string(dtype),
-          mscclpp::ErrorCode::InvalidUsage);
+      return false;
   }
+}
+
+// Convert ncclDataType_t to mscclpp::DataType
+inline mscclpp::DataType ncclDataTypeToMscclpp(ncclDataType_t dtype) {
+  mscclpp::DataType out;
+  if (tryNcclDataTypeToMscclpp(dtype, &out)) return out;
+  throw mscclpp::Error("Unsupported ncclDataType_t: " + std::to_string(dtype),
+                       mscclpp::ErrorCode::InvalidUsage);
 }
 
 // Get the size in bytes of a data type
