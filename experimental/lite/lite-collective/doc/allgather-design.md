@@ -37,7 +37,7 @@ places and pins the mappings, registers the slabs with mscclpp, and connects to
 the matching remote leader:
 [`native_collectives.cu:L513-L760`](../nccl/native_collectives.cu#L513-L760) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:513:1)).
 
-The steady-state data path is:
+The steady-state data path for `>=128KiB` is:
 
 1. Each local rank copies its input chunk into its NUMA group's `sendSlab`.
 2. Each group leader waits for the two local `d2hReady` flags in its group.
@@ -53,12 +53,27 @@ That fast path is implemented in
 Large messages stay on the host-slab path by chunking at the slab capacity:
 [`native_collectives.cu:L1835-L1876`](../nccl/native_collectives.cu#L1835-L1876) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1835:1)).
 
-The small-message path is implemented in
+### Small-message ordered direct-QP ring-slot path
+
+The `<128KiB` path is implemented in
 [`native_collectives.cu:L2018-L2102`](../nccl/native_collectives.cu#L2018-L2102) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2018:1)).
-It writes local D2H data into the global-rank slot, posts direct-QP RDMA writes
-for the local node block and ready flag, polls the slot flag written by the
-remote node, then performs one H2D of the full output.  The direct-QP helpers are
-in [`native_collectives.cu:L529-L587`](../nccl/native_collectives.cu#L529-L587) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:529:1)).
+It is algorithmically different from the medium/large NUMA-split path:
+
+1. The per-epoch host slot is laid out in final AllGather output order:
+   `[rank0][rank1]...[rank7][ready_flag]`.
+2. Each rank D2Hs its input directly into the slot offset for its global rank.
+3. The node leader waits for local ranks, then posts direct-QP RDMA writes for
+   the local node block and a ready flag into the remote node's matching
+   `sendSlab` slot.
+4. Remote ranks poll the flag in their local `sendSlab`, then each rank performs
+   one H2D copy of the whole output slot to `recvbuff`.
+5. Slot reuse is guarded by a ring-slot wrap barrier: stream sync, QP completion
+   polling, and a bootstrap barrier.
+
+The direct-QP helpers are in
+[`native_collectives.cu:L529-L587`](../nccl/native_collectives.cu#L529-L587) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:529:1)).
+The route split between `<128KiB` and `>=128KiB` is in
+[`native_collectives.cu:L2676-L2725`](../nccl/native_collectives.cu#L2676-L2725) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2676:1)).
 
 ## Single-node path
 
@@ -75,12 +90,14 @@ packing local ranks into NUMA-local slabs converts the inter-node phase into
 two contiguous RDMA writes plus small control updates.  The H2D phase is then
 local to each rank and can use ordinary CUDA copies from pinned host memory.
 
-Current 2nx4g/1MiB performance:
+Current stable 2nx4g performance:
 
 | Backend | Out-of-place | In-place | Correct |
 | --- | ---: | ---: | --- |
-| NCCL no-GDR | `119.07 us` | `117.32 us` | Yes |
-| Lite native | `84.57 us` | `83.64 us` | Yes |
+| NCCL no-GDR, 1MiB | `118.20 us` | `117.53 us` | Yes |
+| Lite native, 1MiB | `85.74 us` | `85.37 us` | Yes |
+| NCCL no-GDR, geomean 128B-1GiB | baseline | baseline | Yes |
+| Lite native, geomean 128B-1GiB | `1.167x` speedup | `1.181x` speedup | Yes |
 
 ## Limitations
 
@@ -90,6 +107,7 @@ host-slab path; other layouts use the generic chunked send/recv path.  The
 design also depends on reliable local shared memory, NUMA placement, and mscclpp
 IB registration during communicator setup.
 
-Small messages below 128KiB now beat NCCL in the retained sweep.  The retained
-small path improves latency from roughly `34-39 us` to about `15-21 us` for
-128B-64KiB.
+Small messages below 128KiB now beat NCCL in the retained sweep.  With
+`--iters 50 --warmup-iters 10`, the native path wins `9/10` out-of-place rows
+and `8/10` in-place rows below 128KiB, with geomean speedups `1.111x` and
+`1.084x`.
