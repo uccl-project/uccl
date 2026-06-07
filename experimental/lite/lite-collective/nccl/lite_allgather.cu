@@ -29,9 +29,10 @@ namespace mscclpp {
 namespace nccl {
 namespace {
 
-// 2-node AllGather has two data paths:
+// Multi-node AllGather has three data paths:
 // - <128KiB: one ordered host slot per epoch, direct-QP data+flag write, one H2D.
 // - >=128KiB: split local ranks into contiguous NIC groups and move host slabs.
+// - General layouts: grouped P2P send/recv without the old fallback barrier.
 
 
 static constexpr int kHostTagBase = 0x560000;
@@ -41,7 +42,7 @@ static constexpr int kMaxRanksPerNode = 8;
 static constexpr int kMaxNicGroups = kMaxRanksPerNode;
 static constexpr size_t kSmallCutoffBytes = 128 * 1024;
 static constexpr size_t kOneRankDirectCopyCutoffBytes = 128 * 1024;
-static constexpr size_t kTwoRankP2PCutoverBytes = 64 * 1024;
+static constexpr size_t kP2PAllGatherCutoverBytes = 64 * 1024;
 static constexpr size_t kSmallMaxSlots = 1024;
 static constexpr int kSmallSignalEvery = 64;
 static constexpr size_t kMaxBytesPerRank = 16 * 1024 * 1024;
@@ -638,11 +639,11 @@ ncclResult_t finishGroup(ncclResult_t enqueueResult) {
   return groupResult;
 }
 
-ncclResult_t runTwoRankP2PAllGather(
+ncclResult_t runP2PAllGather(
     void const* sendbuff, void* recvbuff, size_t sendcount,
     size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
-    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode) {
-  if (nRanks != 2 || nRanksPerNode != 1) return ncclInvalidUsage;
+    cudaStream_t stream, int rank, int nRanks) {
+  if (nRanks <= 1) return ncclInvalidUsage;
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
   if (sendcount > std::numeric_limits<size_t>::max() / typeSize) {
@@ -658,19 +659,26 @@ ncclResult_t runTwoRankP2PAllGather(
     ncclResult_t result =
         cudaResult(cudaMemcpyAsync(recv + selfOffset, send, bytesPerRank,
                                    cudaMemcpyDeviceToDevice, stream),
-                   "2-rank allgather self copy");
+                   "P2P allgather self copy");
     if (result != ncclSuccess) return result;
   }
 
-  int peer = 1 - rank;
   ncclResult_t result = ncclGroupStart();
   if (result != ncclSuccess) return result;
-  ncclResult_t enqueueResult =
-      ncclSend(send, sendcount, datatype, peer, comm, stream);
+  ncclResult_t enqueueResult = ncclSuccess;
+  for (int peer = 0; peer < nRanks; ++peer) {
+    if (peer == rank) continue;
+    enqueueResult = ncclSend(send, sendcount, datatype, peer, comm, stream);
+    if (enqueueResult != ncclSuccess) break;
+  }
   if (enqueueResult == ncclSuccess) {
-    enqueueResult =
-        ncclRecv(recv + static_cast<size_t>(peer) * bytesPerRank, sendcount,
-                 datatype, peer, comm, stream);
+    for (int peer = 0; peer < nRanks; ++peer) {
+      if (peer == rank) continue;
+      enqueueResult =
+          ncclRecv(recv + static_cast<size_t>(peer) * bytesPerRank, sendcount,
+                   datatype, peer, comm, stream);
+      if (enqueueResult != ncclSuccess) break;
+    }
   }
   return finishGroup(enqueueResult);
 }
@@ -1233,20 +1241,24 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
                               cudaStream_t stream, int rank, int nRanks,
                               int nRanksPerNode,
                               std::shared_ptr<Communicator> bootstrapComm,
-                              int cudaDevice) {
+  int cudaDevice) {
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
-  if (nRanks == 2 && nRanksPerNode == 1 &&
-      bytesPerRank >= kTwoRankP2PCutoverBytes) {
-    ncclResult_t result = runTwoRankP2PAllGather(
+  bool twoNodeLayout = isTwoNodeLayout(nRanks, nRanksPerNode);
+  bool useP2PAllGather =
+      !twoNodeLayout ||
+      (nRanks == 2 && nRanksPerNode == 1 &&
+       bytesPerRank >= kP2PAllGatherCutoverBytes);
+  if (useP2PAllGather) {
+    ncclResult_t result = runP2PAllGather(
         sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
-        rank, nRanks, nRanksPerNode);
+        rank, nRanks);
     if (result == ncclSuccess) return result;
     if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
       return result;
     }
   }
-  if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
+  if (twoNodeLayout) {
     if (nRanksPerNode <= 0 || nRanksPerNode > kMaxRanksPerNode) {
       return ncclInvalidUsage;
     }
@@ -1291,60 +1303,7 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
     }
   }
 
-  size_t maxChunkCount = std::max(static_cast<size_t>(1),
-                                  static_cast<size_t>(2 * 1024 * 1024) /
-                                     typeSize);
-  auto const* send = static_cast<char const*>(sendbuff);
-  auto* recv = static_cast<char*>(recvbuff);
-  for (size_t elemOffset = 0; elemOffset < sendcount;
-       elemOffset += maxChunkCount) {
-    size_t chunkCount = std::min(maxChunkCount, sendcount - elemOffset);
-    size_t chunkBytes = chunkCount * typeSize;
-    size_t offsetBytes = elemOffset * typeSize;
-    size_t selfOffset = static_cast<size_t>(rank) * bytesPerRank + offsetBytes;
-    if (send + offsetBytes != recv + selfOffset) {
-      ncclResult_t result =
-          cudaResult(cudaMemcpyAsync(recv + selfOffset, send + offsetBytes,
-                                     chunkBytes, cudaMemcpyDeviceToDevice,
-                                     stream),
-                     "allgather self copy");
-      if (result != ncclSuccess) return result;
-    }
-
-    ncclResult_t result = ncclGroupStart();
-    if (result != ncclSuccess) return result;
-
-    ncclResult_t enqueueResult = ncclSuccess;
-    for (int peer = 0; peer < nRanks; ++peer) {
-      if (peer == rank) continue;
-      enqueueResult =
-          ncclSend(send + offsetBytes, chunkCount, datatype, peer, comm, stream);
-      if (enqueueResult != ncclSuccess) break;
-    }
-    if (enqueueResult == ncclSuccess) {
-      for (int peer = 0; peer < nRanks; ++peer) {
-        if (peer == rank) continue;
-        enqueueResult =
-            ncclRecv(recv + static_cast<size_t>(peer) * bytesPerRank +
-                         offsetBytes,
-                     chunkCount, datatype, peer, comm, stream);
-        if (enqueueResult != ncclSuccess) break;
-      }
-    }
-    result = finishGroup(enqueueResult);
-    if (result != ncclSuccess) return result;
-    if (elemOffset + chunkCount < sendcount) {
-      result =
-          cudaResult(cudaStreamSynchronize(stream), "allgather chunk sync");
-      if (result != ncclSuccess) return result;
-      bootstrapComm->bootstrap()->barrier();
-    }
-  }
-  ncclResult_t result = cudaResult(cudaStreamSynchronize(stream),
-                                   "allgather final synchronization");
-  if (result != ncclSuccess) return result;
-  bootstrapComm->bootstrap()->barrier();
-  return ncclSuccess;
+  return ncclInvalidUsage;
 }
 
 
