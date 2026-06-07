@@ -42,6 +42,7 @@ static constexpr int kNativeAllGatherHostTagStride = 4;
 static constexpr int kNativeAllGatherNumaHostTagBase = 0x565000;
 static constexpr int kNativeAllGatherNumaGroups = 2;
 static constexpr int kNativeAllGatherNumaGroupSize = 2;
+static constexpr size_t kNativeAllGatherSmallTotalBytes = 128 * 1024;
 static constexpr int kNativeReduceScatterHostTagBase = 0x570000;
 static constexpr int kNativeReduceScatterHostTagStride = 8;
 static constexpr int kNativeHostMaxRanksPerNode = 8;
@@ -1818,6 +1819,112 @@ ncclResult_t runHostSlabAllGather2Node(
   }
 }
 
+ncclResult_t copySmallSingleAllGatherToRecv(NativeAllGatherHostContext& ctx,
+                                            void* recvbuff,
+                                            size_t bytesPerRank,
+                                            size_t chunkBytes,
+                                            cudaStream_t stream) {
+  size_t fullBytes = static_cast<size_t>(ctx.worldSize) * bytesPerRank;
+  size_t blockBytes = static_cast<size_t>(ctx.groupSize) * chunkBytes;
+  char* scratch = ctx.sendSlab + blockBytes +
+                  static_cast<size_t>(ctx.localRank) * fullBytes;
+  int localBase = ctx.nodeId * ctx.nRanksPerNode;
+  int remoteBase = (1 - ctx.nodeId) * ctx.nRanksPerNode;
+  std::memcpy(scratch + static_cast<size_t>(localBase) * bytesPerRank,
+              ctx.sendSlab, blockBytes);
+  std::memcpy(scratch + static_cast<size_t>(remoteBase) * bytesPerRank,
+              ctx.recvSlab, blockBytes);
+  MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvbuff, scratch, fullBytes,
+                                    cudaMemcpyHostToDevice, stream));
+  return ncclSuccess;
+}
+
+ncclResult_t runSmallSingleHostSlabAllGather2Node(
+    void const* sendbuff, void* recvbuff, size_t sendcount,
+    size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode)) return ncclInvalidUsage;
+  if (nRanksPerNode <= 0 || nRanksPerNode > kNativeHostMaxRanksPerNode) {
+    return ncclInvalidUsage;
+  }
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) return ncclInvalidArgument;
+  if (sendcount > std::numeric_limits<size_t>::max() / typeSize) {
+    return ncclInvalidArgument;
+  }
+  if (sendcount * typeSize != bytesPerRank) return ncclInvalidUsage;
+  if (bytesPerRank == 0) return ncclSuccess;
+  if (bytesPerRank >
+      std::numeric_limits<size_t>::max() / static_cast<size_t>(nRanks)) {
+    return ncclInvalidUsage;
+  }
+  size_t fullBytes = bytesPerRank * static_cast<size_t>(nRanks);
+  if (fullBytes >= kNativeAllGatherSmallTotalBytes) return ncclInvalidUsage;
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    auto& ctx = getAllGatherHostContext(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    size_t blockBytes = static_cast<size_t>(ctx.groupSize) * bytesPerRank;
+    size_t scratchBytes = static_cast<size_t>(ctx.groupSize) * fullBytes;
+    if (blockBytes + scratchBytes > ctx.slabBytes) return ncclInvalidUsage;
+
+    uint64_t epoch = ++ctx.epoch;
+    auto const* send = static_cast<char const*>(sendbuff);
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        ctx.sendSlab + static_cast<size_t>(ctx.localRank) * bytesPerRank, send,
+        bytesPerRank, cudaMemcpyDeviceToHost, stream));
+    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+    ctx.ctrl->d2hReady[ctx.localRank].store(epoch, std::memory_order_release);
+
+    if (ctx.isLeader) {
+      for (int i = 0; i < ctx.groupSize; ++i) {
+        waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+      }
+      ctx.connection.write(ctx.remoteRecvMemory, 0, ctx.sendMemory, 0,
+                           blockBytes);
+      ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
+      ctx.connection.write(
+          ctx.remoteCtrlMemory, offsetof(NativeAllGatherHostControl, rdmaReady),
+          ctx.ctrlMemory, offsetof(NativeAllGatherHostControl, rdmaSignal),
+          sizeof(uint64_t));
+      ctx.connection.flush();
+    }
+    waitForEpoch(ctx.ctrl->rdmaReady, epoch);
+    for (int i = 0; i < ctx.groupSize; ++i) {
+      waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+    }
+
+    ncclResult_t result = copySmallSingleAllGatherToRecv(
+        ctx, recvbuff, bytesPerRank, bytesPerRank, stream);
+    if (result != ncclSuccess) return result;
+    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+
+    ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
+
+    for (int i = 0; i < ctx.nRanksPerNode; ++i) {
+      waitForEpoch(ctx.ctrl->h2dDone[i], epoch);
+    }
+    if (ctx.isLeader) {
+      ctx.ctrl->ackSignal.store(epoch, std::memory_order_release);
+      ctx.connection.write(
+          ctx.remoteCtrlMemory, offsetof(NativeAllGatherHostControl, ackReady),
+          ctx.ctrlMemory, offsetof(NativeAllGatherHostControl, ackSignal),
+          sizeof(uint64_t));
+      ctx.connection.flush();
+    }
+    waitForEpoch(ctx.ctrl->ackReady, epoch);
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("small single-slab allgather failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("small single-slab allgather failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
 ncclResult_t runNumaSplitHostSlabAllGather2Node(
     void const* sendbuff, void* recvbuff, size_t sendcount,
     size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
@@ -1848,11 +1955,11 @@ ncclResult_t runNumaSplitHostSlabAllGather2Node(
           groupId);
     }
 
-  int localRank = rank % nRanksPerNode;
-  int ownGroupId = localRank / kNativeAllGatherNumaGroupSize;
-  auto const* send = static_cast<char const*>(sendbuff);
+    int localRank = rank % nRanksPerNode;
+    int ownGroupId = localRank / kNativeAllGatherNumaGroupSize;
+    auto const* send = static_cast<char const*>(sendbuff);
 
-  for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
+    for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
       size_t chunkBytes =
           std::min(groups[ownGroupId]->chunkCapacity,
                    bytesPerRank - chunkOffset);
@@ -2400,6 +2507,20 @@ ncclResult_t runSendRecvAllGather(void const* sendbuff, void* recvbuff,
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
+    bool isSmall =
+        bytesPerRank <=
+            std::numeric_limits<size_t>::max() / static_cast<size_t>(nRanks) &&
+        bytesPerRank * static_cast<size_t>(nRanks) <
+            kNativeAllGatherSmallTotalBytes;
+    if (isSmall) {
+      ncclResult_t result = runSmallSingleHostSlabAllGather2Node(
+          sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
+          rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
+      if (result == ncclSuccess) return result;
+      if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
+        return result;
+      }
+    }
     if (nRanksPerNode ==
         kNativeAllGatherNumaGroups * kNativeAllGatherNumaGroupSize) {
       ncclResult_t result = runNumaSplitHostSlabAllGather2Node(

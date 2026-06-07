@@ -13,9 +13,10 @@ GPU2/GPU3 sendbuff -> NUMA1 host slab -> NIC1 RDMA -> remote NUMA1 slab
 each rank H2Ds both NUMA groups into recvbuff
 ```
 
-For 2nx4g, this changes the inter-node shape from one node-leader transfer into
-two NUMA-local transfers, using both NICs.  The fallback host-slab path still
-uses one node leader for non-2nx4g two-node layouts.
+For 2nx4g, messages at or above 128KiB keep this dual-NIC path.  Smaller
+messages use a single-leader host-slab path that coalesces the full output in
+pinned host memory and issues one H2D per rank.  That reduces the small-message
+latency but still does not beat NCCL.
 
 ## Implementation details
 
@@ -46,9 +47,14 @@ The steady-state data path is:
    the next chunk reuses the slab.
 
 That fast path is implemented in
-[`native_collectives.cu:L1821-L1943`](../nccl/native_collectives.cu#L1821-L1943) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1821:1)).
+[`native_collectives.cu:L1928-L2050`](../nccl/native_collectives.cu#L1928-L2050) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1928:1)).
 Large messages stay on the host-slab path by chunking at the slab capacity:
 [`native_collectives.cu:L1778-L1819`](../nccl/native_collectives.cu#L1778-L1819) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1778:1)).
+
+The small-message path is implemented in
+[`native_collectives.cu:L1822-L1926`](../nccl/native_collectives.cu#L1822-L1926) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1822:1)).
+It keeps one node-leader RDMA exchange, waits for all local D2H slots, assembles
+a full host output buffer, and performs one H2D copy to `recvbuff`.
 
 ## Single-node path
 
@@ -79,3 +85,7 @@ least two available IB transports.  Other two-node layouts use the single
 host-slab path; other layouts use the generic chunked send/recv path.  The
 design also depends on reliable local shared memory, NUMA placement, and mscclpp
 IB registration during communicator setup.
+
+Small messages below 128KiB remain slower than NCCL.  The retained small path
+improves latency from roughly `34-39 us` to `23-39 us`, but NCCL is still around
+`17-28 us` on the same sweep.
