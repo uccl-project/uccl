@@ -20,7 +20,7 @@ behind NCCL fallback.
 | Collective | `1nx2g` native | `2nx1g` native | `2nx4g` native | Current performance gate |
 | --- | --- | --- | --- | --- |
 | `allreduce` | Supported | Supported | Supported | `2nx4g/1MiB` native RS+AG composition beats NCCL no-GDR out-of-place and in-place (`232.54/234.32 us` vs `1281.14/783.76 us`). |
-| `allgather` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-split host-slab path uses both NICs and beats NCCL no-GDR out-of-place and in-place (`84.57/83.64 us` vs `119.07/117.32 us`). Full `128B-1GiB` sweep is correct. `<128KiB` now uses a small single-slab path that improves latency but still trails NCCL. |
+| `allgather` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-split host-slab path uses both NICs and beats NCCL no-GDR out-of-place and in-place (`84.57/83.64 us` vs `119.07/117.32 us`). Full `128B-1GiB` sweep is correct. `<128KiB` now uses a direct-QP ring-slot path that is close to NCCL and wins some rows. |
 | `reducescatter` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-pair local fan-in + pairwise host-staged RDMA path is correct and improved (`123.29/123.35 us`, down from `143.53/143.06 us`) but still slower than NCCL no-GDR (`107.65/107.59 us`). |
 | `alltoall` | Supported | Supported | Supported | `1nx2g/1MiB` and `2nx1g/1MiB` beat NCCL; `2nx4g/1MiB` remains the blocker (`107.44 us` native vs `96.85 us` NCCL out-of-place; `101.25 us` native vs `95.29 us` NCCL in-place). |
 

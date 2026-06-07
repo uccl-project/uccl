@@ -14,9 +14,9 @@ each rank H2Ds both NUMA groups into recvbuff
 ```
 
 For 2nx4g, messages at or above 128KiB keep this dual-NIC path.  Smaller
-messages use a single-leader host-slab path that coalesces the full output in
-pinned host memory and issues one H2D per rank.  That reduces the small-message
-latency but still does not beat NCCL.
+messages use a pipelined single-leader host-slab protocol with ring-buffered
+slots and direct QP writes.  That removes the per-iteration remote ack and most
+`Connection::write` overhead, bringing small-message latency close to NCCL.
 
 ## Implementation details
 
@@ -27,7 +27,7 @@ wrapper calls `runSendRecvAllGather` before NCCL dlopen fallback:
 
 For two-node layouts, `runSendRecvAllGather` dispatches to the host-slab fast
 path; otherwise it falls back to a chunked grouped send/recv implementation:
-[`native_collectives.cu:L2393-L2465`](../nccl/native_collectives.cu#L2393-L2465) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2393:1)).
+[`native_collectives.cu:L2640-L2712`](../nccl/native_collectives.cu#L2640-L2712) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2640:1)).
 
 The host context is owned by each node leader or NUMA-group leader.  It creates
 shared-memory slabs, maps the leader-owned names into all local ranks, NUMA
@@ -47,14 +47,16 @@ The steady-state data path is:
    the next chunk reuses the slab.
 
 That fast path is implemented in
-[`native_collectives.cu:L1928-L2050`](../nccl/native_collectives.cu#L1928-L2050) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1928:1)).
+[`native_collectives.cu:L2076-L2198`](../nccl/native_collectives.cu#L2076-L2198) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2076:1)).
 Large messages stay on the host-slab path by chunking at the slab capacity:
-[`native_collectives.cu:L1778-L1819`](../nccl/native_collectives.cu#L1778-L1819) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1778:1)).
+[`native_collectives.cu:L1835-L1876`](../nccl/native_collectives.cu#L1835-L1876) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1835:1)).
 
 The small-message path is implemented in
-[`native_collectives.cu:L1822-L1926`](../nccl/native_collectives.cu#L1822-L1926) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1822:1)).
-It keeps one node-leader RDMA exchange, waits for all local D2H slots, assembles
-a full host output buffer, and performs one H2D copy to `recvbuff`.
+[`native_collectives.cu:L1984-L2074`](../nccl/native_collectives.cu#L1984-L2074) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1984:1)).
+It uses one node-leader RDMA exchange, appends a ready flag to each ring slot,
+polls that flag from the remote host slab, and copies the local and remote node
+blocks into `recvbuff` on the CUDA stream.  The direct-QP helper is in
+[`native_collectives.cu:L522-L568`](../nccl/native_collectives.cu#L522-L568) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:522:1)).
 
 ## Single-node path
 
@@ -86,6 +88,6 @@ host-slab path; other layouts use the generic chunked send/recv path.  The
 design also depends on reliable local shared memory, NUMA placement, and mscclpp
 IB registration during communicator setup.
 
-Small messages below 128KiB remain slower than NCCL.  The retained small path
-improves latency from roughly `34-39 us` to `23-39 us`, but NCCL is still around
-`17-28 us` on the same sweep.
+Small messages below 128KiB are now close to NCCL and beat it on several sizes,
+but not every row.  The retained small path improves latency from roughly
+`34-39 us` to about `18-25 us` for 128B-32KiB and about `20 us` at 64KiB.
