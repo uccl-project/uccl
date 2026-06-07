@@ -5,6 +5,7 @@
 #include "ib.hpp"
 #include "numa.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
@@ -23,9 +24,14 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <numa.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+inline void* operator new(std::size_t, std::align_val_t, void* ptr) noexcept {
+  return ptr;
+}
 
 namespace mscclpp {
 namespace nccl {
@@ -33,6 +39,9 @@ namespace {
 
 static constexpr int kNativeAllGatherHostTagBase = 0x560000;
 static constexpr int kNativeAllGatherHostTagStride = 4;
+static constexpr int kNativeAllGatherNumaHostTagBase = 0x565000;
+static constexpr int kNativeAllGatherNumaGroups = 2;
+static constexpr int kNativeAllGatherNumaGroupSize = 2;
 static constexpr int kNativeReduceScatterHostTagBase = 0x570000;
 static constexpr int kNativeReduceScatterHostTagStride = 8;
 static constexpr int kNativeHostMaxRanksPerNode = 8;
@@ -111,11 +120,18 @@ struct NativeAllGatherHostContext {
   bool isLeader = false;
   int rank = -1;
   int worldSize = -1;
+  int nRanksPerNode = -1;
   int localRank = -1;
   int nodeId = -1;
   int localLeader = -1;
   int remoteLeader = -1;
   int cudaDevice = -1;
+  int transportDevice = -1;
+  int numaNode = -1;
+  int groupId = 0;
+  int groupBase = 0;
+  int groupSize = 0;
+  bool numaSplit = false;
   size_t chunkCapacity = kNativeAllGatherHostMaxBytesPerRank;
   size_t slabBytes = 0;
   uint64_t epoch = 0;
@@ -250,6 +266,11 @@ struct NativeReduceScatterHostContext {
 std::mutex gNativeCollectiveContextMutex;
 std::unordered_map<ncclComm_t, std::unique_ptr<NativeAllGatherHostContext>>
     gAllGatherHostContexts;
+std::unordered_map<
+    ncclComm_t,
+    std::array<std::unique_ptr<NativeAllGatherHostContext>,
+               kNativeAllGatherNumaGroups>>
+    gAllGatherNumaHostContexts;
 std::unordered_map<ncclComm_t,
                    std::unique_ptr<NativeReduceScatterHostContext>>
     gReduceScatterHostContexts;
@@ -297,6 +318,15 @@ int nativeAllGatherHostTag(int rank, int worldSize, int remoteLeader,
   int hi = std::max(rank, remoteLeader);
   int pairIndex = lo * worldSize + hi;
   return kNativeAllGatherHostTagBase +
+         pairIndex * kNativeAllGatherHostTagStride + slot;
+}
+
+int nativeAllGatherNumaHostTag(int rank, int worldSize, int remoteLeader,
+                               int slot) {
+  int lo = std::min(rank, remoteLeader);
+  int hi = std::max(rank, remoteLeader);
+  int pairIndex = lo * worldSize + hi;
+  return kNativeAllGatherNumaHostTagBase +
          pairIndex * kNativeAllGatherHostTagStride + slot;
 }
 
@@ -420,6 +450,17 @@ mscclpp::Transport selectNativeIBTransportForGpu(int cudaDeviceId) {
   return choices[static_cast<size_t>(cudaDeviceId) % choices.size()];
 }
 
+void placeHostMappingOnNuma(void* mapping, size_t size, int numaNode,
+                            char const* name) {
+  if (mapping == nullptr || size == 0 || numaNode < 0) return;
+  if (numa_available() < 0) {
+    WARN("NUMA placement unavailable for %s", name);
+    return;
+  }
+  std::memset(mapping, 0, size);
+  numa_tonode_memory(mapping, size, numaNode);
+}
+
 void createOwnedShm(std::string const& name, size_t size) {
   shm_unlink(name.c_str());
   int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
@@ -469,14 +510,17 @@ void waitForEpoch(std::atomic<uint64_t> const& value, uint64_t epoch) {
   }
 }
 
-NativeAllGatherHostContext& getAllGatherHostContext(
-    ncclComm_t commHandle, std::shared_ptr<Communicator> bootstrapComm,
-    int rank, int nRanks, int nRanksPerNode, int cudaDevice) {
+template <typename SlotGetter>
+NativeAllGatherHostContext& getAllGatherHostContextCommon(
+    SlotGetter&& slotGetter, ncclComm_t commHandle,
+    std::shared_ptr<Communicator> bootstrapComm, int rank, int nRanks,
+    int nRanksPerNode, int cudaDevice, int groupId, int groupBase,
+    int groupSize, int transportDevice, bool numaSplit, char const* opName) {
   NativeAllGatherHostContext* ctx = nullptr;
   bool shouldInitialize = false;
   {
     std::lock_guard<std::mutex> lock(gNativeCollectiveContextMutex);
-    auto& existing = gAllGatherHostContexts[commHandle];
+    auto& existing = slotGetter();
     if (!existing) {
       existing = std::make_unique<NativeAllGatherHostContext>();
       existing->initializing = true;
@@ -500,14 +544,25 @@ NativeAllGatherHostContext& getAllGatherHostContext(
 
   ctx->rank = rank;
   ctx->worldSize = nRanks;
+  ctx->nRanksPerNode = nRanksPerNode;
   ctx->localRank = rank % nRanksPerNode;
   ctx->nodeId = rank / nRanksPerNode;
-  ctx->localLeader = ctx->nodeId * nRanksPerNode;
-  ctx->remoteLeader = (1 - ctx->nodeId) * nRanksPerNode;
+  ctx->localLeader = ctx->nodeId * nRanksPerNode + groupBase;
+  ctx->remoteLeader = (1 - ctx->nodeId) * nRanksPerNode + groupBase;
   ctx->cudaDevice = cudaDevice;
+  ctx->transportDevice = transportDevice;
+  ctx->groupId = groupId;
+  ctx->groupBase = groupBase;
+  ctx->groupSize = groupSize;
+  ctx->numaSplit = numaSplit;
+  try {
+    ctx->numaNode = mscclpp::getDeviceNumaNode(transportDevice);
+  } catch (...) {
+    ctx->numaNode = -1;
+  }
   ctx->isLeader = rank == ctx->localLeader;
   ctx->owner = ctx->isLeader;
-  ctx->slabBytes = static_cast<size_t>(nRanksPerNode) * ctx->chunkCapacity;
+  ctx->slabBytes = static_cast<size_t>(groupSize) * ctx->chunkCapacity;
 
   NativeAllGatherHostNames localNames;
   ncclResult_t shmCreateResult = ncclSuccess;
@@ -517,14 +572,14 @@ NativeAllGatherHostContext& getAllGatherHostContext(
       auto commNonce = static_cast<unsigned long long>(
           reinterpret_cast<uintptr_t>(commHandle));
       std::snprintf(localNames.sendName, sizeof(localNames.sendName),
-                    "/mint_ag_%llx_%d_%d_%d_s", commNonce, getpid(), rank,
-                    nRanks);
+                    "/mint_ag_%llx_%d_%d_%d_g%d_s", commNonce, getpid(), rank,
+                    nRanks, groupId);
       std::snprintf(localNames.recvName, sizeof(localNames.recvName),
-                    "/mint_ag_%llx_%d_%d_%d_r", commNonce, getpid(), rank,
-                    nRanks);
+                    "/mint_ag_%llx_%d_%d_%d_g%d_r", commNonce, getpid(), rank,
+                    nRanks, groupId);
       std::snprintf(localNames.ctrlName, sizeof(localNames.ctrlName),
-                    "/mint_ag_%llx_%d_%d_%d_c", commNonce, getpid(), rank,
-                    nRanks);
+                    "/mint_ag_%llx_%d_%d_%d_g%d_c", commNonce, getpid(), rank,
+                    nRanks, groupId);
       createOwnedShm(localNames.sendName, ctx->slabBytes);
       createOwnedShm(localNames.recvName, ctx->slabBytes);
       createOwnedShm(localNames.ctrlName,
@@ -538,9 +593,9 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     shmCreateMessage = "unknown shared-memory create exception";
   }
   try {
+    std::string stage = std::string(opName) + " shared-memory create";
     publishNativeHostInitStatus(bootstrapComm, rank, nRanks, shmCreateResult,
-                                shmCreateMessage,
-                                "host-slab allgather shared-memory create");
+                                shmCreateMessage, stage.c_str());
   } catch (...) {
     if (ctx->isLeader) unlinkOwnedShm(localNames);
     throw;
@@ -566,6 +621,10 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     ctx->recvSlab = static_cast<char*>(ctx->recvMapping);
     ctx->ctrl = static_cast<NativeAllGatherHostControl*>(ctx->ctrlMapping);
     if (ctx->isLeader) {
+      placeHostMappingOnNuma(ctx->sendMapping, ctx->slabBytes, ctx->numaNode,
+                             "allgather send slab");
+      placeHostMappingOnNuma(ctx->recvMapping, ctx->slabBytes, ctx->numaNode,
+                             "allgather recv slab");
       std::memset(ctx->ctrlMapping, 0, sizeof(NativeAllGatherHostControl));
       new (ctx->ctrl) NativeAllGatherHostControl{};
     }
@@ -576,9 +635,9 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     shmMapResult = ncclInternalError;
     shmMapMessage = "unknown shared-memory map exception";
   }
+  std::string mapStage = std::string(opName) + " shared-memory map";
   publishNativeHostInitStatus(bootstrapComm, rank, nRanks, shmMapResult,
-                              shmMapMessage,
-                              "host-slab allgather shared-memory map");
+                              shmMapMessage, mapStage.c_str());
   bootstrapComm->bootstrap()->barrier();
 
   ncclResult_t setupResult = ncclSuccess;
@@ -596,7 +655,7 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     ctx->ctrlHostRegistered = true;
 
     if (ctx->isLeader) {
-      ctx->transport = selectNativeIBTransportForGpu(cudaDevice);
+      ctx->transport = selectNativeIBTransportForGpu(transportDevice);
       if (ctx->transport == mscclpp::Transport::Unknown) {
         throw mscclpp::Error("host-slab allgather requires IB transport",
                              mscclpp::ErrorCode::InvalidUsage);
@@ -620,8 +679,9 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     setupResult = ncclInternalError;
     setupMessage = "unknown setup exception";
   }
+  std::string setupStage = std::string(opName) + " setup";
   publishNativeHostInitStatus(bootstrapComm, rank, nRanks, setupResult,
-                              setupMessage, "host-slab allgather setup");
+                              setupMessage, setupStage.c_str());
 
   ncclResult_t connectResult = ncclSuccess;
   std::string connectMessage;
@@ -632,9 +692,21 @@ NativeAllGatherHostContext& getAllGatherHostContext(
       mscclpp::EndpointConfig endpointConfig(
           ctx->transport, mscclpp::Device(mscclpp::DeviceType::CPU),
           /*maxWriteQueueSize=*/-1, ibCfg);
-      int tag0 = nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader, 0);
-      int tag1 = nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader, 1);
-      int tag2 = nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader, 2);
+      int tag0 = ctx->numaSplit
+                     ? nativeAllGatherNumaHostTag(rank, nRanks,
+                                                  ctx->remoteLeader, 0)
+                     : nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader,
+                                              0);
+      int tag1 = ctx->numaSplit
+                     ? nativeAllGatherNumaHostTag(rank, nRanks,
+                                                  ctx->remoteLeader, 1)
+                     : nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader,
+                                              1);
+      int tag2 = ctx->numaSplit
+                     ? nativeAllGatherNumaHostTag(rank, nRanks,
+                                                  ctx->remoteLeader, 2)
+                     : nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader,
+                                              2);
       auto connectionFuture =
           bootstrapComm->connect(endpointConfig, ctx->remoteLeader, tag0);
       bootstrapComm->sendMemory(ctx->recvMemory, ctx->remoteLeader, tag1);
@@ -654,11 +726,39 @@ NativeAllGatherHostContext& getAllGatherHostContext(
     connectResult = ncclInternalError;
     connectMessage = "unknown connection exception";
   }
+  std::string connectStage = std::string(opName) + " connect";
   publishNativeHostInitStatus(bootstrapComm, rank, nRanks, connectResult,
-                              connectMessage, "host-slab allgather connect");
+                              connectMessage, connectStage.c_str());
 
   initGuard.commit();
   return *ctx;
+}
+
+NativeAllGatherHostContext& getAllGatherHostContext(
+    ncclComm_t commHandle, std::shared_ptr<Communicator> bootstrapComm,
+    int rank, int nRanks, int nRanksPerNode, int cudaDevice) {
+  return getAllGatherHostContextCommon(
+      [&]() -> std::unique_ptr<NativeAllGatherHostContext>& {
+        return gAllGatherHostContexts[commHandle];
+      },
+      commHandle, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice,
+      /*groupId=*/0, /*groupBase=*/0, /*groupSize=*/nRanksPerNode,
+      /*transportDevice=*/cudaDevice, /*numaSplit=*/false,
+      "host-slab allgather");
+}
+
+NativeAllGatherHostContext& getAllGatherNumaHostContext(
+    ncclComm_t commHandle, std::shared_ptr<Communicator> bootstrapComm,
+    int rank, int nRanks, int nRanksPerNode, int cudaDevice, int groupId) {
+  int groupBase = groupId * kNativeAllGatherNumaGroupSize;
+  return getAllGatherHostContextCommon(
+      [&]() -> std::unique_ptr<NativeAllGatherHostContext>& {
+        return gAllGatherNumaHostContexts[commHandle][groupId];
+      },
+      commHandle, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice,
+      groupId, groupBase, kNativeAllGatherNumaGroupSize,
+      /*transportDevice=*/groupBase, /*numaSplit=*/true,
+      "NUMA-split allgather");
 }
 
 NativeReduceScatterHostContext& getReduceScatterHostContext(
@@ -1568,6 +1668,113 @@ ncclResult_t runHierarchicalAllReduce2Node(
                         "hierarchical allreduce final synchronization");
 }
 
+bool allGatherRankInGroup(NativeAllGatherHostContext const& ctx) {
+  return ctx.localRank >= ctx.groupBase &&
+         ctx.localRank < ctx.groupBase + ctx.groupSize;
+}
+
+ncclResult_t copyAllGatherGroupChunkToRecv(
+    NativeAllGatherHostContext& ctx, void* recvbuff, size_t bytesPerRank,
+    size_t chunkOffset, size_t chunkBytes, cudaStream_t stream) {
+  auto* recv = static_cast<char*>(recvbuff);
+  int localBase = ctx.nodeId * ctx.nRanksPerNode;
+  int remoteBase = (1 - ctx.nodeId) * ctx.nRanksPerNode;
+  bool wholeRankChunk = chunkOffset == 0 && chunkBytes == bytesPerRank;
+
+  if (wholeRankChunk) {
+    size_t blockBytes = static_cast<size_t>(ctx.groupSize) * chunkBytes;
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recv + static_cast<size_t>(localBase + ctx.groupBase) * bytesPerRank,
+        ctx.sendSlab, blockBytes, cudaMemcpyHostToDevice, stream));
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recv + static_cast<size_t>(remoteBase + ctx.groupBase) * bytesPerRank,
+        ctx.recvSlab, blockBytes, cudaMemcpyHostToDevice, stream));
+    return ncclSuccess;
+  }
+
+  for (int i = 0; i < ctx.groupSize; ++i) {
+    int localPeer = localBase + ctx.groupBase + i;
+    int remotePeer = remoteBase + ctx.groupBase + i;
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recv + static_cast<size_t>(localPeer) * bytesPerRank + chunkOffset,
+        ctx.sendSlab + static_cast<size_t>(i) * chunkBytes, chunkBytes,
+        cudaMemcpyHostToDevice, stream));
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recv + static_cast<size_t>(remotePeer) * bytesPerRank + chunkOffset,
+        ctx.recvSlab + static_cast<size_t>(i) * chunkBytes, chunkBytes,
+        cudaMemcpyHostToDevice, stream));
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t runAllGatherGroupChunk(NativeAllGatherHostContext& ctx,
+                                    void const* sendbuff, void* recvbuff,
+                                    size_t bytesPerRank, size_t chunkOffset,
+                                    size_t chunkBytes, cudaStream_t stream,
+                                    bool copyAsSoonAsReady) {
+  uint64_t epoch = ++ctx.epoch;
+  bool inGroup = allGatherRankInGroup(ctx);
+  if (inGroup) {
+    auto const* send = static_cast<char const*>(sendbuff);
+    int slot = ctx.localRank - ctx.groupBase;
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        ctx.sendSlab + static_cast<size_t>(slot) * chunkBytes,
+        send + chunkOffset, chunkBytes, cudaMemcpyDeviceToHost, stream));
+    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+    ctx.ctrl->d2hReady[ctx.localRank].store(epoch,
+                                            std::memory_order_release);
+  }
+
+  if (ctx.isLeader) {
+    for (int i = 0; i < ctx.groupSize; ++i) {
+      waitForEpoch(ctx.ctrl->d2hReady[ctx.groupBase + i], epoch);
+    }
+
+    size_t blockBytes = static_cast<size_t>(ctx.groupSize) * chunkBytes;
+    size_t off = 0;
+    int writesSinceFlush = 0;
+    while (off < blockBytes) {
+      size_t chunk = std::min(kNativeAllGatherRdmaChunkBytes, blockBytes - off);
+      ctx.connection.write(ctx.remoteRecvMemory, off, ctx.sendMemory, off,
+                           chunk);
+      if (++writesSinceFlush == kNativeAllGatherSignalEveryN) {
+        ctx.connection.flush();
+        writesSinceFlush = 0;
+      }
+      off += chunk;
+    }
+    ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
+    ctx.connection.write(
+        ctx.remoteCtrlMemory, offsetof(NativeAllGatherHostControl, rdmaReady),
+        ctx.ctrlMemory, offsetof(NativeAllGatherHostControl, rdmaSignal),
+        sizeof(uint64_t));
+    ctx.connection.flush();
+  }
+  waitForEpoch(ctx.ctrl->rdmaReady, epoch);
+
+  if (copyAsSoonAsReady) {
+    ncclResult_t result = copyAllGatherGroupChunkToRecv(
+        ctx, recvbuff, bytesPerRank, chunkOffset, chunkBytes, stream);
+    if (result != ncclSuccess) return result;
+    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+    ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
+
+    for (int i = 0; i < ctx.nRanksPerNode; ++i) {
+      waitForEpoch(ctx.ctrl->h2dDone[i], epoch);
+    }
+    if (ctx.isLeader) {
+      ctx.ctrl->ackSignal.store(epoch, std::memory_order_release);
+      ctx.connection.write(
+          ctx.remoteCtrlMemory, offsetof(NativeAllGatherHostControl, ackReady),
+          ctx.ctrlMemory, offsetof(NativeAllGatherHostControl, ackSignal),
+          sizeof(uint64_t));
+      ctx.connection.flush();
+    }
+    waitForEpoch(ctx.ctrl->ackReady, epoch);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t runHostSlabAllGather2Node(
     void const* sendbuff, void* recvbuff, size_t sendcount,
     size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
@@ -1582,82 +1789,155 @@ ncclResult_t runHostSlabAllGather2Node(
   if (sendcount > std::numeric_limits<size_t>::max() / typeSize) {
     return ncclInvalidArgument;
   }
-  if (sendcount * typeSize != bytesPerRank ||
-      bytesPerRank > kNativeAllGatherHostMaxBytesPerRank) {
+  if (sendcount * typeSize != bytesPerRank) {
     return ncclInvalidUsage;
   }
+  if (bytesPerRank == 0) return ncclSuccess;
 
   try {
     mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
     auto& ctx = getAllGatherHostContext(
         comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
-    uint64_t epoch = ++ctx.epoch;
-    int localBase = ctx.nodeId * nRanksPerNode;
-    int remoteBase = (1 - ctx.nodeId) * nRanksPerNode;
-    size_t blockBytes = static_cast<size_t>(nRanksPerNode) * bytesPerRank;
-
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        ctx.sendSlab + static_cast<size_t>(ctx.localRank) * bytesPerRank,
-        sendbuff, bytesPerRank, cudaMemcpyDeviceToHost, stream));
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-    ctx.ctrl->d2hReady[ctx.localRank].store(epoch,
-                                            std::memory_order_release);
-
-    if (ctx.isLeader) {
-      for (int i = 0; i < nRanksPerNode; ++i) {
-        waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
-      }
-
-      size_t off = 0;
-      int writesSinceFlush = 0;
-      while (off < blockBytes) {
-        size_t chunk =
-            std::min(kNativeAllGatherRdmaChunkBytes, blockBytes - off);
-        ctx.connection.write(ctx.remoteRecvMemory, off, ctx.sendMemory, off,
-                             chunk);
-        if (++writesSinceFlush == kNativeAllGatherSignalEveryN) {
-          ctx.connection.flush();
-          writesSinceFlush = 0;
-        }
-        off += chunk;
-      }
-      ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
-      ctx.connection.write(
-          ctx.remoteCtrlMemory,
-          offsetof(NativeAllGatherHostControl, rdmaReady), ctx.ctrlMemory,
-          offsetof(NativeAllGatherHostControl, rdmaSignal), sizeof(uint64_t));
-      ctx.connection.flush();
+    for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
+      size_t chunkBytes =
+          std::min(ctx.chunkCapacity, bytesPerRank - chunkOffset);
+      ncclResult_t result =
+          runAllGatherGroupChunk(ctx, sendbuff, recvbuff, bytesPerRank,
+                                 chunkOffset, chunkBytes, stream,
+                                 /*copyAsSoonAsReady=*/true);
+      if (result != ncclSuccess) return result;
+      chunkOffset += chunkBytes;
     }
-    waitForEpoch(ctx.ctrl->rdmaReady, epoch);
-
-    auto* recv = static_cast<char*>(recvbuff);
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + static_cast<size_t>(localBase) * bytesPerRank, ctx.sendSlab,
-        blockBytes, cudaMemcpyHostToDevice, stream));
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + static_cast<size_t>(remoteBase) * bytesPerRank, ctx.recvSlab,
-        blockBytes, cudaMemcpyHostToDevice, stream));
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-    ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
-
-    for (int i = 0; i < nRanksPerNode; ++i) {
-      waitForEpoch(ctx.ctrl->h2dDone[i], epoch);
-    }
-    if (ctx.isLeader) {
-      ctx.ctrl->ackSignal.store(epoch, std::memory_order_release);
-      ctx.connection.write(
-          ctx.remoteCtrlMemory, offsetof(NativeAllGatherHostControl, ackReady),
-          ctx.ctrlMemory, offsetof(NativeAllGatherHostControl, ackSignal),
-          sizeof(uint64_t));
-      ctx.connection.flush();
-    }
-    waitForEpoch(ctx.ctrl->ackReady, epoch);
     return ncclSuccess;
   } catch (std::exception const& ex) {
     WARN("host-slab allgather failed: %s", ex.what());
     return mapNativeException(ex);
   } catch (...) {
     WARN("host-slab allgather failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
+ncclResult_t runNumaSplitHostSlabAllGather2Node(
+    void const* sendbuff, void* recvbuff, size_t sendcount,
+    size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode)) return ncclInvalidUsage;
+  if (nRanksPerNode !=
+      kNativeAllGatherNumaGroups * kNativeAllGatherNumaGroupSize) {
+    return ncclInvalidUsage;
+  }
+  if (getAvailableIBTransports().size() < kNativeAllGatherNumaGroups) {
+    return ncclInvalidUsage;
+  }
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) return ncclInvalidArgument;
+  if (sendcount > std::numeric_limits<size_t>::max() / typeSize) {
+    return ncclInvalidArgument;
+  }
+  if (sendcount * typeSize != bytesPerRank) return ncclInvalidUsage;
+  if (bytesPerRank == 0) return ncclSuccess;
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    std::array<NativeAllGatherHostContext*, kNativeAllGatherNumaGroups> groups{};
+    for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+      groups[groupId] = &getAllGatherNumaHostContext(
+          comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice,
+          groupId);
+    }
+
+    int localRank = rank % nRanksPerNode;
+    int ownGroupId = localRank / kNativeAllGatherNumaGroupSize;
+    auto const* send = static_cast<char const*>(sendbuff);
+
+    for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
+      size_t chunkBytes =
+          std::min(groups[ownGroupId]->chunkCapacity,
+                   bytesPerRank - chunkOffset);
+      std::array<uint64_t, kNativeAllGatherNumaGroups> epochs{};
+      for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+        epochs[groupId] = ++groups[groupId]->epoch;
+      }
+
+      NativeAllGatherHostContext& own = *groups[ownGroupId];
+      int ownSlot = own.localRank - own.groupBase;
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          own.sendSlab + static_cast<size_t>(ownSlot) * chunkBytes,
+          send + chunkOffset, chunkBytes, cudaMemcpyDeviceToHost, stream));
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+      own.ctrl->d2hReady[own.localRank].store(epochs[ownGroupId],
+                                              std::memory_order_release);
+
+      if (own.isLeader) {
+        for (int i = 0; i < own.groupSize; ++i) {
+          waitForEpoch(own.ctrl->d2hReady[own.groupBase + i],
+                       epochs[ownGroupId]);
+        }
+        size_t blockBytes = static_cast<size_t>(own.groupSize) * chunkBytes;
+        size_t off = 0;
+        int writesSinceFlush = 0;
+        while (off < blockBytes) {
+          size_t chunk =
+              std::min(kNativeAllGatherRdmaChunkBytes, blockBytes - off);
+          own.connection.write(own.remoteRecvMemory, off, own.sendMemory, off,
+                               chunk);
+          if (++writesSinceFlush == kNativeAllGatherSignalEveryN) {
+            own.connection.flush();
+            writesSinceFlush = 0;
+          }
+          off += chunk;
+        }
+        own.ctrl->rdmaSignal.store(epochs[ownGroupId],
+                                   std::memory_order_release);
+        own.connection.write(
+            own.remoteCtrlMemory,
+            offsetof(NativeAllGatherHostControl, rdmaReady), own.ctrlMemory,
+            offsetof(NativeAllGatherHostControl, rdmaSignal),
+            sizeof(uint64_t));
+        own.connection.flush();
+      }
+
+      for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+        waitForEpoch(groups[groupId]->ctrl->rdmaReady, epochs[groupId]);
+      }
+      for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+        ncclResult_t result = copyAllGatherGroupChunkToRecv(
+            *groups[groupId], recvbuff, bytesPerRank, chunkOffset, chunkBytes,
+            stream);
+        if (result != ncclSuccess) return result;
+      }
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+      for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+        groups[groupId]->ctrl->h2dDone[localRank].store(
+            epochs[groupId], std::memory_order_release);
+      }
+
+      if (own.isLeader) {
+        for (int i = 0; i < nRanksPerNode; ++i) {
+          waitForEpoch(own.ctrl->h2dDone[i], epochs[ownGroupId]);
+        }
+        own.ctrl->ackSignal.store(epochs[ownGroupId],
+                                  std::memory_order_release);
+        own.connection.write(
+            own.remoteCtrlMemory,
+            offsetof(NativeAllGatherHostControl, ackReady), own.ctrlMemory,
+            offsetof(NativeAllGatherHostControl, ackSignal), sizeof(uint64_t));
+        own.connection.flush();
+      }
+
+      for (int groupId = 0; groupId < kNativeAllGatherNumaGroups; ++groupId) {
+        waitForEpoch(groups[groupId]->ctrl->ackReady, epochs[groupId]);
+      }
+      chunkOffset += chunkBytes;
+    }
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("NUMA-split allgather failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("NUMA-split allgather failed with an unknown exception");
     return ncclInternalError;
   }
 }
@@ -2120,6 +2400,16 @@ ncclResult_t runSendRecvAllGather(void const* sendbuff, void* recvbuff,
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
+    if (nRanksPerNode ==
+        kNativeAllGatherNumaGroups * kNativeAllGatherNumaGroupSize) {
+      ncclResult_t result = runNumaSplitHostSlabAllGather2Node(
+          sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
+          rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
+      if (result == ncclSuccess) return result;
+      if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
+        return result;
+      }
+    }
     ncclResult_t result = runHostSlabAllGather2Node(
         sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
         rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
@@ -2348,6 +2638,7 @@ ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
 void cleanupNativeCollectiveContexts(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(gNativeCollectiveContextMutex);
   gAllGatherHostContexts.erase(comm);
+  gAllGatherNumaHostContexts.erase(comm);
   gReduceScatterHostContexts.erase(comm);
 }
 

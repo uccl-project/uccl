@@ -10,7 +10,7 @@ as a first-class data structure instead of a hidden fallback buffer.
 
 | Collective | Native coverage | Current 2nx4g status | Primary design | Code |
 | --- | --- | --- | --- | --- |
-| AllGather | 1nx2g, 2nx1g, 2nx4g | Beats NCCL no-GDR at 1MiB: `88.33/88.28 us` vs `119.27/116.62 us` | Per-node host slab: local ranks D2H into a shared pinned slab, one node leader RDMA-writes the aggregate slab, then every rank H2Ds local and remote blocks | [`native_collectives.cu:L1571-L1663`](../nccl/native_collectives.cu#L1571-L1663) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1571:1)) |
+| AllGather | 1nx2g, 2nx1g, 2nx4g | Beats NCCL no-GDR at 1MiB: `84.57/83.64 us` vs `119.07/117.32 us`; full `128B-1GiB` sweep is correct | NUMA-split host slabs on 2nx4g: GPU0/1 use NUMA0/NIC0, GPU2/3 use NUMA1/NIC1, then each rank H2Ds both groups | [`native_collectives.cu:L1821-L1943`](../nccl/native_collectives.cu#L1821-L1943) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1821:1)) |
 | ReduceScatter | 1nx2g, 2nx1g, 2nx4g | Correct and improved at 1MiB, but still behind NCCL no-GDR: `123.29/123.35 us` vs `107.65/107.59 us` | Single-node memory-channel RS; 2nx4g float/sum path does NUMA-pair local GPU fan-in, pairwise host-staged RDMA, and final GPU add | [`native_collectives.cu:L1792-L2109`](../nccl/native_collectives.cu#L1792-L2109) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1792:1)) |
 | AllReduce | 1nx2g, 2nx1g, 2nx4g | Beats NCCL no-GDR at 1MiB: `232.54/234.32 us` vs `1281.14/783.76 us` | Compose native ReduceScatter plus native AllGather when the count is divisible by world size; keep a hierarchical fallback for irregular counts | [`native_collectives.cu:L2277-L2346`](../nccl/native_collectives.cu#L2277-L2346) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2277:1)) |
 | AllToAll | 1nx2g, 2nx1g, 2nx4g | Beats NCCL at 1nx2g/2nx1g 1MiB; 2nx4g remains slower: `107.44/101.25 us` vs `96.85/95.29 us` | Intercept grouped send/recv, do self pairs as D2D copies, use unified custom P2P for local CudaIpc and remote host-staged IB; optimized node/per-NUMA remote slabs are opt-in | [`nccl.cu:L2313-L2562`](../nccl/nccl.cu#L2313-L2562) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/nccl.cu:2313:1)) |
@@ -52,12 +52,12 @@ back to NCCL.
 
 ## Why the current winners beat NCCL no-GDR
 
-AllGather wins because the required host staging is made explicit and
-coalesced.  Each node ships one packed host slab to the other node, while NCCL
-no-GDR still pays per-channel/proxy overhead around many smaller staged
-transfers.  The native path also uses RDMA-written host control flags, so the
-remote side does not need another bootstrap round trip on the steady-state fast
-path.
+AllGather wins because the required host staging is made explicit, coalesced,
+and NUMA-aware.  On 2nx4g, each node ships two packed host slabs through the two
+local NICs instead of one node-leader slab through one NIC, while NCCL no-GDR
+still pays per-channel/proxy overhead around staged transfers.  The native path
+also uses RDMA-written host control flags, so the remote side does not need
+another bootstrap round trip on the steady-state fast path.
 
 AllReduce wins because the fast path uses ReduceScatter followed by AllGather.
 For 2nx4g, each rank exchanges a shard instead of repeatedly moving the full
@@ -84,4 +84,3 @@ before local work and have not closed the gap.  Details are in
 2. [ReduceScatter design](reducescatter-design.md)
 3. [AllReduce design](allreduce-design.md)
 4. [AllToAll design](alltoall-design.md)
-

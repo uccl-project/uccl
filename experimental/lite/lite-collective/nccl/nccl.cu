@@ -2159,21 +2159,30 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
                                     size_t sendcount, ncclDataType_t datatype,
                                     ncclComm_t comm, cudaStream_t stream) {
-  size_t bytes = sendcount * ncclTypeSize(datatype);
+  if (comm == nullptr) {
+    WARN(MSCCLPP_NCCL, "ncclAllGather got a null communicator");
+    return ncclInvalidArgument;
+  }
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0 ||
+      sendcount > std::numeric_limits<size_t>::max() / typeSize) {
+    WARN(MSCCLPP_NCCL, "ncclAllGather got an invalid count or datatype");
+    return ncclInvalidArgument;
+  }
+  size_t bytes = sendcount * typeSize;
+  if (bytes == 0) return ncclSuccess;
+  if (sendbuff == nullptr || recvbuff == nullptr) {
+    WARN(MSCCLPP_NCCL,
+         "One or more of the following conditions is met: sendbuff or recvbuff "
+         "pointer is nullptr.");
+    return ncclInvalidArgument;
+  }
   if (comm->worldSize == 1) {
     if (sendbuff != recvbuff) {
       CUDACHECK(cudaMemcpyAsync(recvbuff, sendbuff, bytes,
                                 cudaMemcpyDeviceToDevice, stream));
     }
     return ncclSuccess;
-  }
-  if (sendbuff == nullptr || recvbuff == nullptr || bytes == 0 ||
-      comm == nullptr) {
-    WARN(MSCCLPP_NCCL,
-         "One or more of the following conditions is met: sendbuff or recvbuff "
-         "pointer is nullptr, bytes is 0, "
-         "or comm is nullptr.");
-    return ncclInvalidArgument;
   }
 
   int rank = comm->comm->bootstrap()->getRank();
@@ -2617,9 +2626,13 @@ NCCL_API ncclResult_t ncclCommDeregister(const ncclComm_t, void*) {
 }
 
 ncclResult_t ncclMemAlloc(void** ptr, size_t size) {
-  if (ptr == nullptr || size == 0) {
-    WARN(MSCCLPP_NCCL, "ptr is nullptr or size is 0");
+  if (ptr == nullptr) {
+    WARN(MSCCLPP_NCCL, "ptr is nullptr");
     return ncclInvalidArgument;
+  }
+  if (size == 0) {
+    *ptr = nullptr;
+    return ncclSuccess;
   }
   std::shared_ptr<char> sharedPtr;
   try {
@@ -2654,6 +2667,7 @@ ncclResult_t ncclMemAlloc(void** ptr, size_t size) {
 }
 
 ncclResult_t ncclMemFree(void* ptr) {
+  if (ptr == nullptr) return ncclSuccess;
   auto ptrIt = ptrMap.find(ptr);
   if (ptrIt != ptrMap.end()) {
     ptrMap.erase(ptrIt);

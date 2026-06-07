@@ -20,7 +20,7 @@ behind NCCL fallback.
 | Collective | `1nx2g` native | `2nx1g` native | `2nx4g` native | Current performance gate |
 | --- | --- | --- | --- | --- |
 | `allreduce` | Supported | Supported | Supported | `2nx4g/1MiB` native RS+AG composition beats NCCL no-GDR out-of-place and in-place (`232.54/234.32 us` vs `1281.14/783.76 us`). |
-| `allgather` | Supported | Supported | Supported | `2nx4g/1MiB` host-slab native path beats NCCL no-GDR out-of-place and in-place (`88.33/88.28 us` vs `119.27/116.62 us`). |
+| `allgather` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-split host-slab path uses both NICs and beats NCCL no-GDR out-of-place and in-place (`84.57/83.64 us` vs `119.07/117.32 us`). Full `128B-1GiB` sweep is correct. |
 | `reducescatter` | Supported | Supported | Supported | `2nx4g/1MiB` NUMA-pair local fan-in + pairwise host-staged RDMA path is correct and improved (`123.29/123.35 us`, down from `143.53/143.06 us`) but still slower than NCCL no-GDR (`107.65/107.59 us`). |
 | `alltoall` | Supported | Supported | Supported | `1nx2g/1MiB` and `2nx1g/1MiB` beat NCCL; `2nx4g/1MiB` remains the blocker (`107.44 us` native vs `96.85 us` NCCL out-of-place; `101.25 us` native vs `95.29 us` NCCL in-place). |
 
@@ -46,7 +46,7 @@ was `0` for every native row listed.
 | `allgather` | `2nx1g` | N/A | 117.07 | N/A | Native correct; NCCL baseline segfaulted |
 | `reducescatter` | `2nx1g` | N/A | 139.13 | N/A | Native correct; NCCL baseline blocked |
 | `allreduce` | `2nx1g` | N/A | 227.28 | N/A | Native correct; NCCL baseline blocked |
-| `allgather` | `2nx4g` | 119.27 | 88.33 | 1.35x | Pass against NCCL no-GDR |
+| `allgather` | `2nx4g` | 119.07 | 84.57 | 1.41x | Pass against NCCL no-GDR; full `128B-1GiB` sweep correct |
 | `reducescatter` | `2nx4g` | 107.65 | 123.29 | 0.87x | Correct and improved, but still slower than NCCL no-GDR |
 | `allreduce` | `2nx4g` | 1281.14 | 232.54 | 5.51x | Pass against NCCL no-GDR |
 
@@ -56,7 +56,7 @@ The `2nx4g` rows above use isolated native-only runs with
 
 | Collective | Native log | NCCL no-GDR log |
 | --- | --- | --- |
-| `allgather` | `.tmp/collective-benchmarks/final-native-current-20260606-071108/all_gather_mscclpp.log` | `.tmp/collective-benchmarks/ag-ar-nccl-nogdr-current-20260606-060420/all_gather_nccl_nogdr.log` |
+| `allgather` | `.tmp/collective-benchmarks/allgather-numa-fix-128B-1G-20260607-092852/all_gather_lite_128B_1G.log` | `.tmp/collective-benchmarks/allgather-numa-fix-128B-1G-20260607-092852/all_gather_nccl_nogdr_128B_1G.log` |
 | `reducescatter` | `.tmp/collective-benchmarks/rs-final-add-retained-20260606-093009/reduce_scatter_mscclpp.log` | `.tmp/collective-benchmarks/rs-numa-retained-20260606-081603/reduce_scatter_nccl_nogdr.log` |
 | `allreduce` | `.tmp/collective-benchmarks/final-native-current-20260606-071108/all_reduce_mscclpp.log` | `.tmp/collective-benchmarks/ag-ar-nccl-nogdr-current-20260606-060420/all_reduce_nccl_nogdr.log` |
 
@@ -64,7 +64,7 @@ Detailed `2nx4g/1MiB` no-GDR comparison:
 
 | Collective | NCCL out (us) | Native out (us) | Out speedup | NCCL in (us) | Native in (us) | In speedup | `#wrong` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `allgather` | 119.27 | 88.33 | 1.35x | 116.62 | 88.28 | 1.32x | 0 |
+| `allgather` | 119.07 | 84.57 | 1.41x | 117.32 | 83.64 | 1.40x | 0 |
 | `reducescatter` | 107.65 | 123.29 | 0.87x | 107.59 | 123.35 | 0.87x | 0 |
 | `allreduce` | 1281.14 | 232.54 | 5.51x | 783.76 | 234.32 | 3.34x | 0 |
 

@@ -4,19 +4,18 @@
 
 The multi-node AllGather design is a two-node host-slab exchange.  Because the
 testbed has no GPUDirect RDMA, every inter-node transfer must already pass
-through CPU memory.  The implementation makes that host memory a per-node
-aggregate slab:
+through CPU memory.  On 2nx4g the implementation splits that host memory by
+NUMA domain and NIC:
 
 ```text
-GPU rank i sendbuff
-  -> D2H into local shared host slab slot i
-  -> node leader RDMA-writes the whole local slab to the remote node slab
-  -> each local rank H2Ds both local and remote slabs into recvbuff
+GPU0/GPU1 sendbuff -> NUMA0 host slab -> NIC0 RDMA -> remote NUMA0 slab
+GPU2/GPU3 sendbuff -> NUMA1 host slab -> NIC1 RDMA -> remote NUMA1 slab
+each rank H2Ds both NUMA groups into recvbuff
 ```
 
-For 2nx4g, this changes the inter-node shape from many rank-to-rank transfers
-into one contiguous block per node.  That is the main reason the native path
-beats NCCL no-GDR at 1MiB.
+For 2nx4g, this changes the inter-node shape from one node-leader transfer into
+two NUMA-local transfers, using both NICs.  The fallback host-slab path still
+uses one node leader for non-2nx4g two-node layouts.
 
 ## Implementation details
 
@@ -27,26 +26,29 @@ wrapper calls `runSendRecvAllGather` before NCCL dlopen fallback:
 
 For two-node layouts, `runSendRecvAllGather` dispatches to the host-slab fast
 path; otherwise it falls back to a chunked grouped send/recv implementation:
-[`native_collectives.cu:L2113-L2185`](../nccl/native_collectives.cu#L2113-L2185) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2113:1)).
+[`native_collectives.cu:L2393-L2465`](../nccl/native_collectives.cu#L2393-L2465) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2393:1)).
 
-The host context is owned by each node leader.  It creates shared-memory slabs,
-maps the leader-owned names into all local ranks, pins the mappings, registers
-the slabs with mscclpp, and connects to the remote node leader:
-[`native_collectives.cu:L472-L662`](../nccl/native_collectives.cu#L472-L662) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:472:1)).
+The host context is owned by each node leader or NUMA-group leader.  It creates
+shared-memory slabs, maps the leader-owned names into all local ranks, NUMA
+places and pins the mappings, registers the slabs with mscclpp, and connects to
+the matching remote leader:
+[`native_collectives.cu:L513-L760`](../nccl/native_collectives.cu#L513-L760) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:513:1)).
 
 The steady-state data path is:
 
-1. Each local rank copies its input into its slot in `ctx.sendSlab`.
-2. The leader waits for all local `d2hReady` flags.
-3. The leader writes the whole local block to `ctx.remoteRecvMemory`.
-4. The leader writes a remote control flag so the other node can proceed.
-5. Each rank copies the local block and remote block from host slabs to its
-   output buffer.
-6. Local ranks publish `h2dDone`; the leader sends a remote ack before the next
-   epoch reuses the slab.
+1. Each local rank copies its input chunk into its NUMA group's `sendSlab`.
+2. Each group leader waits for the two local `d2hReady` flags in its group.
+3. Each group leader writes its group slab to the matching remote group slab.
+4. Every local rank waits for both groups' remote-ready flags.
+5. Every local rank copies both local groups and both remote groups into the
+   correct positions in `recvbuff`.
+6. Local ranks publish `h2dDone`; each group leader sends a remote ack before
+   the next chunk reuses the slab.
 
 That fast path is implemented in
-[`native_collectives.cu:L1571-L1663`](../nccl/native_collectives.cu#L1571-L1663) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1571:1)).
+[`native_collectives.cu:L1821-L1943`](../nccl/native_collectives.cu#L1821-L1943) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1821:1)).
+Large messages stay on the host-slab path by chunking at the slab capacity:
+[`native_collectives.cu:L1778-L1819`](../nccl/native_collectives.cu#L1778-L1819) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1778:1)).
 
 ## Single-node path
 
@@ -57,23 +59,23 @@ aligned sizes because it is faster than `fullmesh2` for the 1MiB target:
 
 ## Why it beats NCCL no-GDR
 
-The native path wins because it removes avoidable per-peer network/proxy work.
-On this hardware, host memory is unavoidable; packing local ranks into one
-host slab per node converts the inter-node phase into one contiguous RDMA write
-plus one small control update.  The H2D phase is then local to each rank and can
-use ordinary CUDA copies from pinned host memory.
+The native path wins because it removes avoidable per-peer network/proxy work
+and uses both NICs on 2nx4g.  On this hardware, host memory is unavoidable;
+packing local ranks into NUMA-local slabs converts the inter-node phase into
+two contiguous RDMA writes plus small control updates.  The H2D phase is then
+local to each rank and can use ordinary CUDA copies from pinned host memory.
 
 Current 2nx4g/1MiB performance:
 
 | Backend | Out-of-place | In-place | Correct |
 | --- | ---: | ---: | --- |
-| NCCL no-GDR | `119.27 us` | `116.62 us` | Yes |
-| Lite native | `88.33 us` | `88.28 us` | Yes |
+| NCCL no-GDR | `119.07 us` | `117.32 us` | Yes |
+| Lite native | `84.57 us` | `83.64 us` | Yes |
 
 ## Limitations
 
-The host-slab path is specialized for two-node layouts and bounded by the
-configured maximum bytes per rank.  Other layouts use the generic chunked
-send/recv path.  The design also depends on reliable local shared memory and
-msccclpp IB registration during communicator setup.
-
+The NUMA-split path is specialized for two nodes with four local ranks and at
+least two available IB transports.  Other two-node layouts use the single
+host-slab path; other layouts use the generic chunked send/recv path.  The
+design also depends on reliable local shared memory, NUMA placement, and mscclpp
+IB registration during communicator setup.
