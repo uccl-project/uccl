@@ -156,13 +156,17 @@ struct NativeAllGatherHostContext {
   mscclpp::RegisteredMemory sendMemory;
   mscclpp::RegisteredMemory recvMemory;
   mscclpp::RegisteredMemory ctrlMemory;
+  mscclpp::RegisteredMemory remoteSendMemory;
   mscclpp::RegisteredMemory remoteRecvMemory;
   mscclpp::RegisteredMemory remoteCtrlMemory;
   mscclpp::Connection connection;
   std::shared_ptr<mscclpp::IbQp> smallQp;
   mscclpp::IbMr const* smallSendMr = nullptr;
+  mscclpp::IbMr const* smallCtrlMr = nullptr;
+  mscclpp::IbMrInfo smallRemoteSendMrInfo{};
   mscclpp::IbMrInfo smallRemoteRecvMrInfo{};
   int smallWrCount = 0;
+  cudaEvent_t smallD2hDoneEvent = nullptr;
   std::mutex initMutex;
   std::condition_variable initCv;
   std::exception_ptr initException = nullptr;
@@ -170,9 +174,12 @@ struct NativeAllGatherHostContext {
   ~NativeAllGatherHostContext() {
     smallQp.reset();
     smallSendMr = nullptr;
+    smallCtrlMr = nullptr;
+    if (smallD2hDoneEvent) cudaEventDestroy(smallD2hDoneEvent);
     connection = mscclpp::Connection{};
     remoteCtrlMemory = mscclpp::RegisteredMemory{};
     remoteRecvMemory = mscclpp::RegisteredMemory{};
+    remoteSendMemory = mscclpp::RegisteredMemory{};
     ctrlMemory = mscclpp::RegisteredMemory{};
     recvMemory = mscclpp::RegisteredMemory{};
     sendMemory = mscclpp::RegisteredMemory{};
@@ -526,6 +533,15 @@ void waitForSmallAllGatherFlag(char const* flagPtr, uint64_t epoch) {
   }
 }
 
+void waitForCudaEvent(cudaEvent_t event) {
+  while (true) {
+    cudaError_t result = cudaEventQuery(event);
+    if (result == cudaSuccess) return;
+    if (result != cudaErrorNotReady) MSCCLPP_CUDATHROW(result);
+    std::this_thread::yield();
+  }
+}
+
 void pollSmallAllGatherQp(NativeAllGatherHostContext& ctx) {
   if (!ctx.smallQp) return;
   while (ctx.smallQp->getNumSendCqItems() > 0) {
@@ -544,19 +560,25 @@ void pollSmallAllGatherQp(NativeAllGatherHostContext& ctx) {
   }
 }
 
-void writeSmallAllGatherSlot(NativeAllGatherHostContext& ctx, size_t slotOffset,
-                             size_t bytes) {
-  if (!ctx.smallQp || ctx.smallSendMr == nullptr) {
-    ctx.connection.write(ctx.remoteRecvMemory, slotOffset, ctx.sendMemory,
-                         slotOffset, bytes);
+void writeSmallAllGatherOrdered(NativeAllGatherHostContext& ctx, size_t dataOffset,
+                                size_t flagOffset, size_t dataBytes) {
+  size_t flagSrcOffset = offsetof(NativeAllGatherHostControl, rdmaSignal);
+  if (!ctx.smallQp || ctx.smallSendMr == nullptr || ctx.smallCtrlMr == nullptr) {
+    ctx.connection.write(ctx.remoteSendMemory, dataOffset, ctx.sendMemory,
+                         dataOffset, dataBytes);
+    ctx.connection.write(ctx.remoteSendMemory, flagOffset, ctx.ctrlMemory,
+                         flagSrcOffset, sizeof(uint64_t));
     ctx.connection.flush();
     return;
   }
   bool signaled =
       (++ctx.smallWrCount % kNativeAllGatherSmallSignalEvery) == 0;
-  ctx.smallQp->stageSendWrite(ctx.smallSendMr, ctx.smallRemoteRecvMrInfo,
-                              static_cast<uint32_t>(bytes), /*wrId=*/0,
-                              slotOffset, slotOffset, signaled);
+  ctx.smallQp->stageSendWrite(ctx.smallSendMr, ctx.smallRemoteSendMrInfo,
+                              static_cast<uint32_t>(dataBytes), /*wrId=*/0,
+                              dataOffset, dataOffset, false);
+  ctx.smallQp->stageSendWrite(ctx.smallCtrlMr, ctx.smallRemoteSendMrInfo,
+                              sizeof(uint64_t), /*wrId=*/0, flagSrcOffset,
+                              flagOffset, signaled);
   ctx.smallQp->postSend();
   if (signaled) pollSmallAllGatherQp(ctx);
 }
@@ -758,8 +780,16 @@ NativeAllGatherHostContext& getAllGatherHostContextCommon(
                                                   ctx->remoteLeader, 2)
                      : nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader,
                                               2);
+      int tag3 = ctx->numaSplit
+                     ? nativeAllGatherNumaHostTag(rank, nRanks,
+                                                  ctx->remoteLeader, 3)
+                     : nativeAllGatherHostTag(rank, nRanks, ctx->remoteLeader,
+                                              3);
       auto connectionFuture =
           bootstrapComm->connect(endpointConfig, ctx->remoteLeader, tag0);
+      bootstrapComm->sendMemory(ctx->sendMemory, ctx->remoteLeader, tag3);
+      auto remoteSendFuture =
+          bootstrapComm->recvMemory(ctx->remoteLeader, tag3);
       bootstrapComm->sendMemory(ctx->recvMemory, ctx->remoteLeader, tag1);
       auto remoteRecvFuture =
           bootstrapComm->recvMemory(ctx->remoteLeader, tag1);
@@ -767,11 +797,15 @@ NativeAllGatherHostContext& getAllGatherHostContextCommon(
       auto remoteCtrlFuture =
           bootstrapComm->recvMemory(ctx->remoteLeader, tag2);
       ctx->connection = connectionFuture.get();
+      ctx->remoteSendMemory = remoteSendFuture.get();
       ctx->remoteRecvMemory = remoteRecvFuture.get();
       ctx->remoteCtrlMemory = remoteCtrlFuture.get();
       ctx->smallQp = ctx->connection.getIbQp();
       if (ctx->smallQp) {
         ctx->sendMemory.getIbMrInfo(ctx->transport, &ctx->smallSendMr, nullptr);
+        ctx->ctrlMemory.getIbMrInfo(ctx->transport, &ctx->smallCtrlMr, nullptr);
+        ctx->remoteSendMemory.getIbMrInfo(ctx->transport, nullptr,
+                                          &ctx->smallRemoteSendMrInfo);
         ctx->remoteRecvMemory.getIbMrInfo(ctx->transport, nullptr,
                                           &ctx->smallRemoteRecvMrInfo);
       }
@@ -2010,7 +2044,7 @@ ncclResult_t runSmallPipelinedHostSlabAllGather2Node(
         comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
     size_t blockBytes = static_cast<size_t>(ctx.groupSize) * bytesPerRank;
     if (blockBytes == 0) return ncclSuccess;
-    size_t perSlotBytes = blockBytes + sizeof(uint64_t);
+    size_t perSlotBytes = fullBytes + sizeof(uint64_t);
     size_t slotCount =
         std::min(kNativeAllGatherSmallMaxSlots, ctx.slabBytes / perSlotBytes);
     if (slotCount < 2) return ncclInvalidUsage;
@@ -2023,38 +2057,40 @@ ncclResult_t runSmallPipelinedHostSlabAllGather2Node(
       bootstrapComm->bootstrap()->barrier();
     }
     size_t slotOffset = slot * perSlotBytes;
-    size_t flagOffset = slotOffset + blockBytes;
+    size_t flagOffset = slotOffset + fullBytes;
+    if (ctx.smallD2hDoneEvent == nullptr) {
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.smallD2hDoneEvent,
+                                                 cudaEventDisableTiming));
+    }
 
     auto const* send = static_cast<char const*>(sendbuff);
     MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        ctx.sendSlab + slotOffset +
-            static_cast<size_t>(ctx.localRank) * bytesPerRank,
+        ctx.sendSlab + slotOffset + static_cast<size_t>(rank) * bytesPerRank,
         send, bytesPerRank, cudaMemcpyDeviceToHost, stream));
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.smallD2hDoneEvent, stream));
+    waitForCudaEvent(ctx.smallD2hDoneEvent);
     ctx.ctrl->d2hReady[ctx.localRank].store(epoch, std::memory_order_release);
 
     if (ctx.isLeader) {
       for (int i = 0; i < ctx.groupSize; ++i) {
         waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
       }
-      *reinterpret_cast<uint64_t*>(ctx.sendSlab + flagOffset) = epoch;
+      ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
       std::atomic_thread_fence(std::memory_order_release);
-      writeSmallAllGatherSlot(ctx, slotOffset, perSlotBytes);
+      size_t dataOffset =
+          slotOffset + static_cast<size_t>(ctx.nodeId * ctx.nRanksPerNode) *
+                           bytesPerRank;
+      writeSmallAllGatherOrdered(ctx, dataOffset, flagOffset, blockBytes);
     }
-    waitForSmallAllGatherFlag(ctx.recvSlab + flagOffset, epoch);
+    waitForSmallAllGatherFlag(ctx.sendSlab + flagOffset, epoch);
     for (int i = 0; i < ctx.groupSize; ++i) {
       waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
     }
 
     auto* recv = static_cast<char*>(recvbuff);
-    int localBase = ctx.nodeId * ctx.nRanksPerNode;
-    int remoteBase = (1 - ctx.nodeId) * ctx.nRanksPerNode;
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + static_cast<size_t>(localBase) * bytesPerRank,
-        ctx.sendSlab + slotOffset, blockBytes, cudaMemcpyHostToDevice, stream));
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + static_cast<size_t>(remoteBase) * bytesPerRank,
-        ctx.recvSlab + slotOffset, blockBytes, cudaMemcpyHostToDevice, stream));
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv, ctx.sendSlab + slotOffset,
+                                      fullBytes, cudaMemcpyHostToDevice,
+                                      stream));
     return ncclSuccess;
   } catch (std::exception const& ex) {
     WARN("small pipelined allgather failed: %s", ex.what());

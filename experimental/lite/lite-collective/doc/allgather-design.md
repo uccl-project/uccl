@@ -15,8 +15,10 @@ each rank H2Ds both NUMA groups into recvbuff
 
 For 2nx4g, messages at or above 128KiB keep this dual-NIC path.  Smaller
 messages use a pipelined single-leader host-slab protocol with ring-buffered
-slots and direct QP writes.  That removes the per-iteration remote ack and most
-`Connection::write` overhead, bringing small-message latency close to NCCL.
+slots and direct QP writes.  Each slot is laid out in global-rank order, so the
+remote node writes its half directly into the missing half of the local output
+slot.  That removes the per-iteration remote ack, most `Connection::write`
+overhead, and the CPU repack step.
 
 ## Implementation details
 
@@ -47,16 +49,16 @@ The steady-state data path is:
    the next chunk reuses the slab.
 
 That fast path is implemented in
-[`native_collectives.cu:L2076-L2198`](../nccl/native_collectives.cu#L2076-L2198) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2076:1)).
+[`native_collectives.cu:L2104-L2226`](../nccl/native_collectives.cu#L2104-L2226) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2104:1)).
 Large messages stay on the host-slab path by chunking at the slab capacity:
 [`native_collectives.cu:L1835-L1876`](../nccl/native_collectives.cu#L1835-L1876) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1835:1)).
 
 The small-message path is implemented in
-[`native_collectives.cu:L1984-L2074`](../nccl/native_collectives.cu#L1984-L2074) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1984:1)).
-It uses one node-leader RDMA exchange, appends a ready flag to each ring slot,
-polls that flag from the remote host slab, and copies the local and remote node
-blocks into `recvbuff` on the CUDA stream.  The direct-QP helper is in
-[`native_collectives.cu:L522-L568`](../nccl/native_collectives.cu#L522-L568) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:522:1)).
+[`native_collectives.cu:L2018-L2102`](../nccl/native_collectives.cu#L2018-L2102) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:2018:1)).
+It writes local D2H data into the global-rank slot, posts direct-QP RDMA writes
+for the local node block and ready flag, polls the slot flag written by the
+remote node, then performs one H2D of the full output.  The direct-QP helpers are
+in [`native_collectives.cu:L529-L587`](../nccl/native_collectives.cu#L529-L587) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:529:1)).
 
 ## Single-node path
 
@@ -88,6 +90,6 @@ host-slab path; other layouts use the generic chunked send/recv path.  The
 design also depends on reliable local shared memory, NUMA placement, and mscclpp
 IB registration during communicator setup.
 
-Small messages below 128KiB are now close to NCCL and beat it on several sizes,
-but not every row.  The retained small path improves latency from roughly
-`34-39 us` to about `18-25 us` for 128B-32KiB and about `20 us` at 64KiB.
+Small messages below 128KiB now beat NCCL in the retained sweep.  The retained
+small path improves latency from roughly `34-39 us` to about `15-21 us` for
+128B-64KiB.
