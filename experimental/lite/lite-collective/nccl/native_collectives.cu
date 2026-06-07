@@ -1848,11 +1848,11 @@ ncclResult_t runNumaSplitHostSlabAllGather2Node(
           groupId);
     }
 
-    int localRank = rank % nRanksPerNode;
-    int ownGroupId = localRank / kNativeAllGatherNumaGroupSize;
-    auto const* send = static_cast<char const*>(sendbuff);
+  int localRank = rank % nRanksPerNode;
+  int ownGroupId = localRank / kNativeAllGatherNumaGroupSize;
+  auto const* send = static_cast<char const*>(sendbuff);
 
-    for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
+  for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
       size_t chunkBytes =
           std::min(groups[ownGroupId]->chunkCapacity,
                    bytesPerRank - chunkOffset);
