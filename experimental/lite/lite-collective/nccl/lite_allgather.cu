@@ -696,9 +696,8 @@ bool isRankInGroup(AgContext const& ctx) {
          ctx.localRank < ctx.groupBase + ctx.groupSize;
 }
 
-size_t recvBlockOffset(AgContext const& ctx, int sourceNode,
-                       size_t blockBytes) {
-  return ctx.nodeCount == 2 ? 0 : static_cast<size_t>(sourceNode) * blockBytes;
+size_t recvBlockOffset(int sourceNode, size_t blockBytes) {
+  return static_cast<size_t>(sourceNode) * blockBytes;
 }
 
 bool isOneRankPerNodeInPlace(AgContext const& ctx, void const* sendbuff,
@@ -744,7 +743,7 @@ ncclResult_t copyGroupChunkToOutput(
     char const* src =
         node == ctx.nodeId ? ctx.sendSlab
                            : ctx.recvSlab +
-                                 recvBlockOffset(ctx, node, blockBytes);
+                                 recvBlockOffset(node, blockBytes);
     if (wholeRankChunk) {
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(
           recv + static_cast<size_t>(rankBase) * bytesPerRank, src,
@@ -790,7 +789,7 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
                                            std::memory_order_release);
     for (size_t peer = 0; peer < ctx.peerNodeIds.size(); ++peer) {
       int peerNode = ctx.peerNodeIds[peer];
-      size_t remoteBase = recvBlockOffset(ctx, ctx.nodeId, blockBytes);
+      size_t remoteBase = recvBlockOffset(ctx.nodeId, blockBytes);
       size_t off = 0;
       int writesSinceFlush = 0;
       while (off < blockBytes) {
@@ -827,7 +826,7 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
                   ctx, sendbuff, recvbuff, bytesPerRank, chunkOffset,
                   chunkBytes,
                   ctx.recvSlab +
-                      recvBlockOffset(ctx, 1 - ctx.nodeId, chunkBytes),
+                      recvBlockOffset(1 - ctx.nodeId, chunkBytes),
                   stream)
             : copyGroupChunkToOutput(
                   ctx, recvbuff, bytesPerRank, chunkOffset, chunkBytes,
@@ -913,7 +912,7 @@ ncclResult_t copySmallFallbackOutput(AgContext& ctx,
   std::memcpy(scratch + static_cast<size_t>(localBase) * bytesPerRank,
               ctx.sendSlab, blockBytes);
   std::memcpy(scratch + static_cast<size_t>(remoteBase) * bytesPerRank,
-              ctx.recvSlab + recvBlockOffset(ctx, remoteNode, blockBytes),
+              ctx.recvSlab + recvBlockOffset(remoteNode, blockBytes),
               blockBytes);
   MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvbuff, scratch, fullBytes,
                                     cudaMemcpyHostToDevice, stream));
@@ -964,7 +963,7 @@ ncclResult_t runSmallFallback(
         waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
       }
       ctx.connection.write(ctx.remoteRecvMemory,
-                           recvBlockOffset(ctx, ctx.nodeId, blockBytes),
+                           recvBlockOffset(ctx.nodeId, blockBytes),
                            ctx.sendMemory, 0, blockBytes);
       ctx.ctrl->rdmaSignal[ctx.nodeId].store(epoch, std::memory_order_release);
       ctx.connection.write(
@@ -1185,7 +1184,7 @@ ncclResult_t runNumaSplit(
         own.ctrl->rdmaSignal[own.nodeId].store(epochs[ownGroupId],
                                                std::memory_order_release);
         for (size_t peer = 0; peer < own.peerNodeIds.size(); ++peer) {
-          size_t remoteBase = recvBlockOffset(own, own.nodeId, blockBytes);
+          size_t remoteBase = recvBlockOffset(own.nodeId, blockBytes);
           size_t off = 0;
           int writesSinceFlush = 0;
           while (off < blockBytes) {

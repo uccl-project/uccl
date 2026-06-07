@@ -16,10 +16,10 @@ each rank H2Ds all local and remote groups into recvbuff
 
 On the L40/L41 2nx4g case this becomes two groups: GPU0/1 and GPU2/3, using
 the two local NICs.  On 2nx2g with GPU0/1, both GPUs are on the same NUMA node,
-so the medium/large path uses one group.  For node counts above two, each
-group leader connects to every peer node's matching group leader and writes its
-local host slab into a source-node segment of the peer's receive slab.  Smaller
-two-node messages use a pipelined single-leader host-slab protocol with
+so the medium/large path uses one group.  Each group leader connects to every
+peer node's matching group leader and writes its local host slab into that
+source node's segment of the peer's receive slab.  Smaller two-node messages use
+a pipelined single-leader host-slab protocol with
 ring-buffered slots and direct QP writes.  Each slot is laid out in global-rank
 order, so the remote node writes its half directly into the missing half of the
 local output slot.  That removes the per-iteration remote ack, most
