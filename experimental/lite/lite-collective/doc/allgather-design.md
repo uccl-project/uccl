@@ -105,7 +105,7 @@ Current stable 2nx4g performance:
 
 Current 2nx1g status after enabling the two-node fast path for one rank per
 node: with `--iters 50 --warmup-iters 10`, native wins at `64KiB-1MiB` and the
-1MiB row is `83.63/80.18 us` versus NCCL no-GDR `97.49/97.24 us`.  The
+1MiB row is `82.91/79.96 us` versus NCCL no-GDR `97.72/96.96 us`.  The
 remaining small-message gap is below 64KiB, where NCCL's 2-rank latency is still
 lower.
 

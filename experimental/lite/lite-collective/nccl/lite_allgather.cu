@@ -225,7 +225,7 @@ void pollQp(AgContext& ctx) {
 }
 
 void writeOrderedSlot(AgContext& ctx, size_t dataOffset, size_t flagOffset,
-                      size_t dataBytes) {
+                       size_t dataBytes) {
   size_t flagSrcOffset = offsetof(HostControl, rdmaSignal);
   if (!ctx.smallQp || ctx.smallSendMr == nullptr || ctx.smallCtrlMr == nullptr) {
     ctx.connection.write(ctx.remoteSendMemory, dataOffset, ctx.sendMemory,
@@ -995,11 +995,16 @@ ncclResult_t runSmallOrdered(
         send, bytesPerRank, cudaMemcpyDeviceToHost, stream));
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.smallD2hDoneEvent, stream));
     waitForCudaEvent(ctx.smallD2hDoneEvent);
-    ctx.ctrl->d2hReady[ctx.localRank].store(epoch, std::memory_order_release);
 
     if (ctx.isLeader) {
-      for (int i = 0; i < ctx.groupSize; ++i) {
-        waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+      if (ctx.nRanksPerNode == 1) {
+        std::atomic_thread_fence(std::memory_order_release);
+      } else {
+        ctx.ctrl->d2hReady[ctx.localRank].store(epoch,
+                                                std::memory_order_release);
+        for (int i = 0; i < ctx.groupSize; ++i) {
+          waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+        }
       }
       ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
       std::atomic_thread_fence(std::memory_order_release);
@@ -1009,10 +1014,14 @@ ncclResult_t runSmallOrdered(
                            bytesPerRank;
       // Same-QP ordering makes the flag visible only after the data write.
       writeOrderedSlot(ctx, dataOffset, flagOffset, blockBytes);
+    } else {
+      ctx.ctrl->d2hReady[ctx.localRank].store(epoch, std::memory_order_release);
     }
     waitForSlotReady(ctx.sendSlab + flagOffset, epoch);
-    for (int i = 0; i < ctx.groupSize; ++i) {
-      waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+    if (ctx.nRanksPerNode != 1) {
+      for (int i = 0; i < ctx.groupSize; ++i) {
+        waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+      }
     }
 
     bool oneRankDirectCopy =
