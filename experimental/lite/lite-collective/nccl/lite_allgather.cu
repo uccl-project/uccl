@@ -1,9 +1,5 @@
 #include "native_collectives.hpp"
-#include "debug.h"
-#include "env.hpp"
-#include "gpu_utils.hpp"
-#include "ib.hpp"
-#include "numa.hpp"
+#include "lite_common.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -29,25 +25,20 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-inline void* operator new(std::size_t, std::align_val_t, void* ptr) noexcept {
-  return ptr;
-}
-
 namespace mscclpp {
 namespace nccl {
 namespace {
 
 // 2-node AllGather has two data paths:
 // - <128KiB: one ordered host slot per epoch, direct-QP data+flag write, one H2D.
-// - >=128KiB on 2x4G: split local ranks by NUMA/NIC and move two host slabs.
+// - >=128KiB: split local ranks into contiguous NIC groups and move host slabs.
 
 
 static constexpr int kHostTagBase = 0x560000;
 static constexpr int kHostTagStride = 4;
 static constexpr int kNumaTagBase = 0x565000;
-static constexpr int kNumaGroups = 2;
-static constexpr int kNumaGroupSize = 2;
 static constexpr int kMaxRanksPerNode = 8;
+static constexpr int kMaxNicGroups = kMaxRanksPerNode;
 static constexpr size_t kSmallCutoffBytes = 128 * 1024;
 static constexpr size_t kSmallMaxSlots = 1024;
 static constexpr int kSmallSignalEvery = 64;
@@ -55,12 +46,17 @@ static constexpr size_t kMaxBytesPerRank = 16 * 1024 * 1024;
 static constexpr size_t kRdmaChunkBytes = 256 * 1024;
 static constexpr int kSignalEveryN = 256;
 
-ncclResult_t cudaResult(cudaError_t error, char const* operation) {
-  if (error == cudaSuccess) return ncclSuccess;
-  WARN("%s failed with CUDA error: %s", operation, cudaGetErrorString(error));
-  if (error == cudaErrorInvalidValue) return ncclInvalidArgument;
-  return ncclUnhandledCudaError;
-}
+using lite::createOwnedShm;
+using lite::cudaResult;
+using lite::getAvailableIBTransports;
+using lite::InitGuard;
+using lite::mapException;
+using lite::mapShm;
+using lite::placeOnNuma;
+using lite::publishInitStatus;
+using lite::selectIBTransportForGpu;
+using lite::waitForCudaEvent;
+using lite::waitForEpoch;
 
 struct HostControl {
   alignas(64) std::atomic<uint64_t>
@@ -77,11 +73,6 @@ struct HostNames {
   char sendName[96] = {};
   char recvName[96] = {};
   char ctrlName[96] = {};
-};
-
-struct InitStatus {
-  int result = static_cast<int>(ncclSuccess);
-  char message[160] = {};
 };
 
 struct AgContext {
@@ -165,51 +156,23 @@ struct AgContext {
   }
 };
 
+struct NicGroupLayout {
+  int count = 0;
+  std::array<int, kMaxNicGroups> base = {};
+  std::array<int, kMaxNicGroups> size = {};
+  std::array<int, kMaxNicGroups> transportDevice = {};
+};
+
 std::mutex gAllGatherContextMutex;
 std::unordered_map<ncclComm_t, std::unique_ptr<AgContext>>
     gSingleContexts;
 std::unordered_map<
     ncclComm_t,
     std::array<std::unique_ptr<AgContext>,
-               kNumaGroups>>
+               kMaxNicGroups>>
     gNumaContexts;
-
-template <typename Context>
-class InitGuard {
- public:
-  explicit InitGuard(Context* ctx) : ctx_(ctx) {}
-  ~InitGuard() {
-    if (committed_) return;
-    auto failure = std::current_exception();
-    if (!failure) {
-      failure = std::make_exception_ptr(mscclpp::Error(
-          "native collective context initialization did not complete",
-          mscclpp::ErrorCode::InternalError));
-    }
-    {
-      std::lock_guard<std::mutex> lock(ctx_->initMutex);
-      ctx_->initialized = false;
-      ctx_->initializing = false;
-      ctx_->initException = failure;
-    }
-    ctx_->initCv.notify_all();
-  }
-
-  void commit() {
-    {
-      std::lock_guard<std::mutex> lock(ctx_->initMutex);
-      ctx_->initialized = true;
-      ctx_->initializing = false;
-      ctx_->initException = nullptr;
-    }
-    committed_ = true;
-    ctx_->initCv.notify_all();
-  }
-
- private:
-  Context* ctx_;
-  bool committed_ = false;
-};
+std::unordered_map<ncclComm_t, std::vector<int>> gCudaDevicesByComm;
+std::unordered_map<ncclComm_t, NicGroupLayout> gLayoutByComm;
 
 int hostTag(int rank, int worldSize, int remoteLeader,
                            int slot) {
@@ -229,184 +192,15 @@ int numaTag(int rank, int worldSize, int remoteLeader,
          pairIndex * kHostTagStride + slot;
 }
 
-ncclResult_t mapException(std::exception const& ex) {
-  if (auto const* err = dynamic_cast<mscclpp::Error const*>(&ex)) {
-    switch (err->getErrorCode()) {
-      case mscclpp::ErrorCode::InvalidUsage:
-        return ncclInvalidUsage;
-      case mscclpp::ErrorCode::Timeout:
-      case mscclpp::ErrorCode::SystemError:
-        return ncclSystemError;
-      default:
-        return ncclInternalError;
-    }
-  }
-  if (dynamic_cast<mscclpp::CudaError const*>(&ex) != nullptr ||
-      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr) {
-    return ncclUnhandledCudaError;
-  }
-  return ncclInternalError;
-}
-
-mscclpp::ErrorCode initErrorCode(ncclResult_t result) {
-  switch (result) {
-    case ncclInvalidArgument:
-    case ncclInvalidUsage:
-      return mscclpp::ErrorCode::InvalidUsage;
-    case ncclSystemError:
-      return mscclpp::ErrorCode::SystemError;
-    default:
-      return mscclpp::ErrorCode::InternalError;
-  }
-}
-
-void publishInitStatus(std::shared_ptr<Communicator> bootstrapComm,
-                                 int rank, int nRanks, ncclResult_t result,
-                                 std::string const& message,
-                                 char const* stage) {
-  std::vector<InitStatus> statuses(nRanks);
-  auto& local = statuses[rank];
-  local.result = static_cast<int>(result);
-  if (!message.empty()) {
-    std::snprintf(local.message, sizeof(local.message), "%s", message.c_str());
-  }
-  bootstrapComm->bootstrap()->allGather(statuses.data(),
-                                        sizeof(InitStatus));
-
-  for (int peer = 0; peer < nRanks; ++peer) {
-    auto peerResult = static_cast<ncclResult_t>(statuses[peer].result);
-    if (peerResult != ncclSuccess) {
-      std::string detail(statuses[peer].message);
-      if (detail.empty()) detail = "unknown initialization error";
-      throw mscclpp::Error(std::string(stage) + " failed on rank " +
-                               std::to_string(peer) + ": " + detail,
-                           initErrorCode(peerResult));
-    }
-  }
-}
-
-int getIBDeviceNumaNode(std::string const& ibDevName) {
-  std::string path = "/sys/class/infiniband/" + ibDevName + "/device/numa_node";
-  std::ifstream f(path);
-  int node = -1;
-  if (f.is_open()) f >> node;
-  return node;
-}
-
-std::vector<mscclpp::Transport> getAvailableIBTransports() {
-  static const mscclpp::Transport transports[] = {
-      mscclpp::Transport::IB0, mscclpp::Transport::IB1,
-      mscclpp::Transport::IB2, mscclpp::Transport::IB3,
-      mscclpp::Transport::IB4, mscclpp::Transport::IB5,
-      mscclpp::Transport::IB6, mscclpp::Transport::IB7};
-  int count = 0;
-  std::string hcaEnv = mscclpp::env()->hcaDevices;
-  if (!hcaEnv.empty()) {
-    std::stringstream ss(hcaEnv);
-    std::string tok;
-    while (std::getline(ss, tok, ',')) ++count;
-  } else {
-    count = mscclpp::getIBDeviceCount();
-  }
-  count = std::min(count,
-                   static_cast<int>(sizeof(transports) / sizeof(transports[0])));
-  std::vector<mscclpp::Transport> result;
-  result.reserve(count);
-  for (int i = 0; i < count; ++i) result.push_back(transports[i]);
-  return result;
-}
-
-mscclpp::Transport selectIBTransportForGpu(int cudaDeviceId) {
-  auto available = getAvailableIBTransports();
-  if (available.empty()) return mscclpp::Transport::Unknown;
-
-  int gpuNuma = -1;
-  try {
-    gpuNuma = mscclpp::getDeviceNumaNode(cudaDeviceId);
-  } catch (...) {
-  }
-
-  std::vector<mscclpp::Transport> sameNuma;
-  for (auto transport : available) {
-    try {
-      std::string name = mscclpp::getIBDeviceName(transport);
-      if (gpuNuma >= 0 && getIBDeviceNumaNode(name) == gpuNuma) {
-        sameNuma.push_back(transport);
-      }
-    } catch (...) {
-    }
-  }
-  auto const& choices = sameNuma.empty() ? available : sameNuma;
-  return choices[static_cast<size_t>(cudaDeviceId) % choices.size()];
-}
-
-void placeOnNuma(void* mapping, size_t size, int numaNode,
-                            char const* name) {
-  if (mapping == nullptr || size == 0 || numaNode < 0) return;
-  if (numa_available() < 0) {
-    WARN("NUMA placement unavailable for %s", name);
-    return;
-  }
-  std::memset(mapping, 0, size);
-  numa_tonode_memory(mapping, size, numaNode);
-}
-
-void createOwnedShm(std::string const& name, size_t size) {
-  shm_unlink(name.c_str());
-  int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
-  if (fd < 0) {
-    throw mscclpp::Error("shm_open failed for " + name,
-                         mscclpp::ErrorCode::SystemError);
-  }
-  if (ftruncate(fd, size) < 0) {
-    close(fd);
-    shm_unlink(name.c_str());
-    throw mscclpp::Error("ftruncate failed for " + name,
-                         mscclpp::ErrorCode::SystemError);
-  }
-  close(fd);
-}
-
 void unlinkOwnedShm(HostNames const& names) {
   if (names.sendName[0] != '\0') shm_unlink(names.sendName);
   if (names.recvName[0] != '\0') shm_unlink(names.recvName);
   if (names.ctrlName[0] != '\0') shm_unlink(names.ctrlName);
 }
 
-void* mapShm(std::string const& name, size_t size) {
-  int fd = shm_open(name.c_str(), O_RDWR, 0600);
-  if (fd < 0) {
-    throw mscclpp::Error("shm_open failed for " + name,
-                         mscclpp::ErrorCode::SystemError);
-  }
-  void* mapping =
-      mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-  if (mapping == MAP_FAILED) {
-    throw mscclpp::Error("mmap failed for " + name,
-                         mscclpp::ErrorCode::SystemError);
-  }
-  return mapping;
-}
-
-void waitForEpoch(std::atomic<uint64_t> const& value, uint64_t epoch) {
-  while (value.load(std::memory_order_acquire) < epoch) {
-    std::this_thread::yield();
-  }
-}
-
 void waitForSlotReady(char const* flagPtr, uint64_t epoch) {
   auto const* value = reinterpret_cast<uint64_t const volatile*>(flagPtr);
   while (*value < epoch) {
-    std::this_thread::yield();
-  }
-}
-
-void waitForCudaEvent(cudaEvent_t event) {
-  while (true) {
-    cudaError_t result = cudaEventQuery(event);
-    if (result == cudaSuccess) return;
-    if (result != cudaErrorNotReady) MSCCLPP_CUDATHROW(result);
     std::this_thread::yield();
   }
 }
@@ -707,18 +501,133 @@ AgContext& getSingleContext(
       "AllGather");
 }
 
+std::vector<int> getCudaDevices(ncclComm_t commHandle,
+                                std::shared_ptr<Communicator> bootstrapComm,
+                                int rank, int nRanks, int cudaDevice) {
+  {
+    std::lock_guard<std::mutex> lock(gAllGatherContextMutex);
+    auto it = gCudaDevicesByComm.find(commHandle);
+    if (it != gCudaDevicesByComm.end()) return it->second;
+  }
+
+  std::vector<int> devices(nRanks, -1);
+  devices[rank] = cudaDevice;
+  bootstrapComm->bootstrap()->allGather(devices.data(), sizeof(int));
+
+  {
+    std::lock_guard<std::mutex> lock(gAllGatherContextMutex);
+    return gCudaDevicesByComm.emplace(commHandle, std::move(devices))
+        .first->second;
+  }
+}
+
+NicGroupLayout getNicGroupLayout(ncclComm_t commHandle,
+                                 std::shared_ptr<Communicator> bootstrapComm,
+                                 int rank, int nRanks, int nRanksPerNode,
+                                 int cudaDevice) {
+  {
+    std::lock_guard<std::mutex> lock(gAllGatherContextMutex);
+    auto it = gLayoutByComm.find(commHandle);
+    if (it != gLayoutByComm.end()) return it->second;
+  }
+
+  NicGroupLayout layout;
+  auto cacheLayout = [&](NicGroupLayout const& computedLayout) {
+    std::lock_guard<std::mutex> lock(gAllGatherContextMutex);
+    return gLayoutByComm.emplace(commHandle, computedLayout).first->second;
+  };
+  if (nRanksPerNode <= 0 || nRanksPerNode > kMaxRanksPerNode) {
+    return cacheLayout(layout);
+  }
+
+  auto devices =
+      getCudaDevices(commHandle, bootstrapComm, rank, nRanks, cudaDevice);
+  int hcaCount = static_cast<int>(getAvailableIBTransports().size());
+  if (hcaCount <= 0) return cacheLayout(layout);
+
+  auto buildNodeLayout = [&](int nodeId) {
+    NicGroupLayout nodeLayout;
+    int nodeBase = nodeId * nRanksPerNode;
+    int prevNuma = std::numeric_limits<int>::min();
+    for (int localRank = 0; localRank < nRanksPerNode; ++localRank) {
+      int device = devices[nodeBase + localRank];
+      int gpuNuma = -1;
+      try {
+        gpuNuma = mscclpp::getDeviceNumaNode(device);
+      } catch (...) {
+      }
+      bool startNewGroup =
+          nodeLayout.count == 0 ||
+          (gpuNuma != prevNuma && nodeLayout.count < hcaCount &&
+           nodeLayout.count < kMaxNicGroups);
+      if (startNewGroup) {
+        nodeLayout.base[nodeLayout.count] = localRank;
+        nodeLayout.size[nodeLayout.count] = 1;
+        nodeLayout.transportDevice[nodeLayout.count] = device;
+        ++nodeLayout.count;
+        prevNuma = gpuNuma;
+      } else {
+        ++nodeLayout.size[nodeLayout.count - 1];
+      }
+    }
+    return nodeLayout;
+  };
+
+  int nodeCount = nRanks / nRanksPerNode;
+  int localNodeId = rank / nRanksPerNode;
+  layout = buildNodeLayout(localNodeId);
+
+  // Group IDs pair leaders across nodes, so every node must have the same
+  // contiguous group boundaries. Otherwise use the single-slab fallback.
+  bool symmetricLayout = true;
+  for (int nodeId = 0; nodeId < nodeCount && symmetricLayout; ++nodeId) {
+    auto peerLayout = buildNodeLayout(nodeId);
+    if (peerLayout.count != layout.count) {
+      symmetricLayout = false;
+      break;
+    }
+    for (int groupId = 0; groupId < layout.count; ++groupId) {
+      if (peerLayout.base[groupId] != layout.base[groupId] ||
+          peerLayout.size[groupId] != layout.size[groupId]) {
+        symmetricLayout = false;
+        break;
+      }
+    }
+  }
+  if (!symmetricLayout) {
+    layout.count = 1;
+    layout.base[0] = 0;
+    layout.size[0] = nRanksPerNode;
+    layout.transportDevice[0] = devices[localNodeId * nRanksPerNode];
+  }
+  return cacheLayout(layout);
+}
+
+int groupForLocalRank(NicGroupLayout const& layout, int localRank) {
+  for (int groupId = 0; groupId < layout.count; ++groupId) {
+    if (localRank >= layout.base[groupId] &&
+        localRank < layout.base[groupId] + layout.size[groupId]) {
+      return groupId;
+    }
+  }
+  return layout.count - 1;
+}
+
 AgContext& getNumaContext(
     ncclComm_t commHandle, std::shared_ptr<Communicator> bootstrapComm,
     int rank, int nRanks, int nRanksPerNode, int cudaDevice, int groupId) {
-  int groupBase = groupId * kNumaGroupSize;
+  auto layout = getNicGroupLayout(commHandle, bootstrapComm, rank, nRanks,
+                                  nRanksPerNode, cudaDevice);
+  int groupBase = layout.base[groupId];
+  int groupSize = layout.size[groupId];
+  int transportDevice = layout.transportDevice[groupId];
   return getContext(
       [&]() -> std::unique_ptr<AgContext>& {
         return gNumaContexts[commHandle][groupId];
       },
       commHandle, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice,
-      groupId, groupBase, kNumaGroupSize,
-      /*transportDevice=*/groupBase, /*numaSplit=*/true,
-      "NUMA AllGather");
+      groupId, groupBase, groupSize,
+      transportDevice, /*numaSplit=*/true, "NUMA AllGather");
 }
 
 ncclResult_t finishGroup(ncclResult_t enqueueResult) {
@@ -1083,11 +992,12 @@ ncclResult_t runNumaSplit(
     cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
     std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
   if (!isTwoNodeLayout(nRanks, nRanksPerNode)) return ncclInvalidUsage;
-  if (nRanksPerNode !=
-      kNumaGroups * kNumaGroupSize) {
+  if (nRanksPerNode <= 0 || nRanksPerNode > kMaxRanksPerNode) {
     return ncclInvalidUsage;
   }
-  if (getAvailableIBTransports().size() < kNumaGroups) {
+  auto layout = getNicGroupLayout(comm, bootstrapComm, rank, nRanks,
+                                  nRanksPerNode, cudaDevice);
+  if (layout.count <= 1) {
     return ncclInvalidUsage;
   }
   size_t typeSize = ncclTypeSize(datatype);
@@ -1100,25 +1010,25 @@ ncclResult_t runNumaSplit(
 
   try {
     mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
-    std::array<AgContext*, kNumaGroups> groups{};
-    for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+    std::vector<AgContext*> groups(layout.count);
+    for (int groupId = 0; groupId < layout.count; ++groupId) {
       groups[groupId] = &getNumaContext(
           comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice,
           groupId);
     }
 
     int localRank = rank % nRanksPerNode;
-    int ownGroupId = localRank / kNumaGroupSize;
+    int ownGroupId = groupForLocalRank(layout, localRank);
     auto const* send = static_cast<char const*>(sendbuff);
 
-    // Medium/large messages are bandwidth-bound: use both NICs by splitting
-    // local ranks 0/1 and 2/3 into independent NUMA-local host slabs.
+    // Medium/large messages are bandwidth-bound: split local ranks across the
+    // available NIC groups so each group moves a contiguous host slab.
     for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
       size_t chunkBytes =
           std::min(groups[ownGroupId]->chunkCapacity,
                    bytesPerRank - chunkOffset);
-      std::array<uint64_t, kNumaGroups> epochs{};
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      std::vector<uint64_t> epochs(layout.count);
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         epochs[groupId] = ++groups[groupId]->epoch;
       }
 
@@ -1160,24 +1070,24 @@ ncclResult_t runNumaSplit(
         own.connection.flush();
       }
 
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         waitForEpoch(groups[groupId]->ctrl->rdmaReady, epochs[groupId]);
       }
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         auto& group = *groups[groupId];
         for (int i = 0; i < group.groupSize; ++i) {
           waitForEpoch(group.ctrl->d2hReady[group.groupBase + i],
                        epochs[groupId]);
         }
       }
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         ncclResult_t result = copyGroupChunkToOutput(
             *groups[groupId], recvbuff, bytesPerRank, chunkOffset, chunkBytes,
             stream);
         if (result != ncclSuccess) return result;
       }
       MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         groups[groupId]->ctrl->h2dDone[localRank].store(
             epochs[groupId], std::memory_order_release);
       }
@@ -1195,7 +1105,7 @@ ncclResult_t runNumaSplit(
         own.connection.flush();
       }
 
-      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+      for (int groupId = 0; groupId < layout.count; ++groupId) {
         waitForEpoch(groups[groupId]->ctrl->ackReady, epochs[groupId]);
       }
       chunkOffset += chunkBytes;
@@ -1222,6 +1132,9 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
+    if (nRanksPerNode <= 0 || nRanksPerNode > kMaxRanksPerNode) {
+      return ncclInvalidUsage;
+    }
     bool isSmall =
         bytesPerRank <=
             std::numeric_limits<size_t>::max() / static_cast<size_t>(nRanks) &&
@@ -1243,8 +1156,9 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
         return result;
       }
     }
-    if (nRanksPerNode ==
-        kNumaGroups * kNumaGroupSize) {
+    auto layout = getNicGroupLayout(comm, bootstrapComm, rank, nRanks,
+                                    nRanksPerNode, cudaDevice);
+    if (layout.count > 1) {
       ncclResult_t result = runNumaSplit(
           sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
           rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
@@ -1323,6 +1237,8 @@ void cleanupLiteAllGatherContexts(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(gAllGatherContextMutex);
   gSingleContexts.erase(comm);
   gNumaContexts.erase(comm);
+  gCudaDevicesByComm.erase(comm);
+  gLayoutByComm.erase(comm);
 }
 
 }  // namespace nccl
