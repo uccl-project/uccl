@@ -41,6 +41,7 @@ static constexpr int kMaxRanksPerNode = 8;
 static constexpr int kMaxNicGroups = kMaxRanksPerNode;
 static constexpr size_t kSmallCutoffBytes = 128 * 1024;
 static constexpr size_t kOneRankDirectCopyCutoffBytes = 128 * 1024;
+static constexpr size_t kTwoRankP2PCutoverBytes = 64 * 1024;
 static constexpr size_t kSmallMaxSlots = 1024;
 static constexpr int kSmallSignalEvery = 64;
 static constexpr size_t kMaxBytesPerRank = 16 * 1024 * 1024;
@@ -637,6 +638,43 @@ ncclResult_t finishGroup(ncclResult_t enqueueResult) {
   return groupResult;
 }
 
+ncclResult_t runTwoRankP2PAllGather(
+    void const* sendbuff, void* recvbuff, size_t sendcount,
+    size_t bytesPerRank, ncclDataType_t datatype, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode) {
+  if (nRanks != 2 || nRanksPerNode != 1) return ncclInvalidUsage;
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) return ncclInvalidArgument;
+  if (sendcount > std::numeric_limits<size_t>::max() / typeSize) {
+    return ncclInvalidArgument;
+  }
+  if (sendcount * typeSize != bytesPerRank) return ncclInvalidUsage;
+  if (bytesPerRank == 0) return ncclSuccess;
+
+  auto const* send = static_cast<char const*>(sendbuff);
+  auto* recv = static_cast<char*>(recvbuff);
+  size_t selfOffset = static_cast<size_t>(rank) * bytesPerRank;
+  if (send != recv + selfOffset) {
+    ncclResult_t result =
+        cudaResult(cudaMemcpyAsync(recv + selfOffset, send, bytesPerRank,
+                                   cudaMemcpyDeviceToDevice, stream),
+                   "2-rank allgather self copy");
+    if (result != ncclSuccess) return result;
+  }
+
+  int peer = 1 - rank;
+  ncclResult_t result = ncclGroupStart();
+  if (result != ncclSuccess) return result;
+  ncclResult_t enqueueResult =
+      ncclSend(send, sendcount, datatype, peer, comm, stream);
+  if (enqueueResult == ncclSuccess) {
+    enqueueResult =
+        ncclRecv(recv + static_cast<size_t>(peer) * bytesPerRank, sendcount,
+                 datatype, peer, comm, stream);
+  }
+  return finishGroup(enqueueResult);
+}
+
 bool isTwoNodeLayout(int nRanks, int nRanksPerNode) {
   return nRanksPerNode > 0 && nRanks == 2 * nRanksPerNode;
 }
@@ -1198,6 +1236,16 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
                               int cudaDevice) {
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
+  if (nRanks == 2 && nRanksPerNode == 1 &&
+      bytesPerRank >= kTwoRankP2PCutoverBytes) {
+    ncclResult_t result = runTwoRankP2PAllGather(
+        sendbuff, recvbuff, sendcount, bytesPerRank, datatype, comm, stream,
+        rank, nRanks, nRanksPerNode);
+    if (result == ncclSuccess) return result;
+    if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
+      return result;
+    }
+  }
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
     if (nRanksPerNode <= 0 || nRanksPerNode > kMaxRanksPerNode) {
       return ncclInvalidUsage;
