@@ -40,6 +40,7 @@ static constexpr int kNumaTagBase = 0x565000;
 static constexpr int kMaxRanksPerNode = 8;
 static constexpr int kMaxNicGroups = kMaxRanksPerNode;
 static constexpr size_t kSmallCutoffBytes = 128 * 1024;
+static constexpr size_t kOneRankDirectCopyCutoffBytes = 128 * 1024;
 static constexpr size_t kSmallMaxSlots = 1024;
 static constexpr int kSmallSignalEvery = 64;
 static constexpr size_t kMaxBytesPerRank = 16 * 1024 * 1024;
@@ -637,12 +638,43 @@ ncclResult_t finishGroup(ncclResult_t enqueueResult) {
 }
 
 bool isTwoNodeLayout(int nRanks, int nRanksPerNode) {
-  return nRanksPerNode > 1 && nRanks == 2 * nRanksPerNode;
+  return nRanksPerNode > 0 && nRanks == 2 * nRanksPerNode;
 }
 
 bool isRankInGroup(AgContext const& ctx) {
   return ctx.localRank >= ctx.groupBase &&
          ctx.localRank < ctx.groupBase + ctx.groupSize;
+}
+
+bool isOneRankPerNodeInPlace(AgContext const& ctx, void const* sendbuff,
+                             void* recvbuff, size_t bytesPerRank,
+                             size_t chunkOffset) {
+  auto const* send = static_cast<char const*>(sendbuff);
+  auto* recv = static_cast<char*>(recvbuff);
+  size_t selfOffset = static_cast<size_t>(ctx.rank) * bytesPerRank + chunkOffset;
+  return send + chunkOffset == recv + selfOffset;
+}
+
+ncclResult_t copyOneRankPerNodeChunkToOutput(
+    AgContext const& ctx, void const* sendbuff, void* recvbuff,
+    size_t bytesPerRank, size_t chunkOffset, size_t chunkBytes,
+    char const* remoteChunk, cudaStream_t stream) {
+  auto const* send = static_cast<char const*>(sendbuff);
+  auto* recv = static_cast<char*>(recvbuff);
+  int remoteRank = (1 - ctx.nodeId) * ctx.nRanksPerNode;
+  size_t selfOffset = static_cast<size_t>(ctx.rank) * bytesPerRank + chunkOffset;
+  size_t remoteOffset =
+      static_cast<size_t>(remoteRank) * bytesPerRank + chunkOffset;
+
+  if (send + chunkOffset != recv + selfOffset) {
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recv + selfOffset, send + chunkOffset, chunkBytes,
+        cudaMemcpyDeviceToDevice, stream));
+  }
+  MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv + remoteOffset, remoteChunk,
+                                    chunkBytes, cudaMemcpyHostToDevice,
+                                    stream));
+  return ncclSuccess;
 }
 
 ncclResult_t copyGroupChunkToOutput(
@@ -725,8 +757,19 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
   waitForEpoch(ctx.ctrl->rdmaReady, epoch);
 
   if (copyAsSoonAsReady) {
-    ncclResult_t result = copyGroupChunkToOutput(
-        ctx, recvbuff, bytesPerRank, chunkOffset, chunkBytes, stream);
+    bool oneRankDirectCopy =
+        ctx.nRanksPerNode == 1 &&
+        (isOneRankPerNodeInPlace(ctx, sendbuff, recvbuff, bytesPerRank,
+                                 chunkOffset) ||
+         chunkBytes >= kOneRankDirectCopyCutoffBytes);
+    ncclResult_t result =
+        oneRankDirectCopy
+            ? copyOneRankPerNodeChunkToOutput(
+                  ctx, sendbuff, recvbuff, bytesPerRank, chunkOffset,
+                  chunkBytes, ctx.recvSlab, stream)
+            : copyGroupChunkToOutput(
+                  ctx, recvbuff, bytesPerRank, chunkOffset, chunkBytes,
+                  stream);
     if (result != ncclSuccess) return result;
     MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
     ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
@@ -972,10 +1015,25 @@ ncclResult_t runSmallOrdered(
       waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
     }
 
-    auto* recv = static_cast<char*>(recvbuff);
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv, ctx.sendSlab + slotOffset,
-                                      fullBytes, cudaMemcpyHostToDevice,
-                                      stream));
+    bool oneRankDirectCopy =
+        ctx.nRanksPerNode == 1 &&
+        isOneRankPerNodeInPlace(ctx, sendbuff, recvbuff, bytesPerRank,
+                                /*chunkOffset=*/0);
+    if (oneRankDirectCopy) {
+      int remoteRank = (1 - ctx.nodeId) * ctx.nRanksPerNode;
+      ncclResult_t result = copyOneRankPerNodeChunkToOutput(
+          ctx, sendbuff, recvbuff, bytesPerRank, /*chunkOffset=*/0,
+          bytesPerRank,
+          ctx.sendSlab + slotOffset +
+              static_cast<size_t>(remoteRank) * bytesPerRank,
+          stream);
+      if (result != ncclSuccess) return result;
+    } else {
+      auto* recv = static_cast<char*>(recvbuff);
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv, ctx.sendSlab + slotOffset,
+                                        fullBytes, cudaMemcpyHostToDevice,
+                                        stream));
+    }
     return ncclSuccess;
   } catch (std::exception const& ex) {
     WARN("small ordered AllGather failed: %s", ex.what());
