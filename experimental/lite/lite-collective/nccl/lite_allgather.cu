@@ -1164,6 +1164,13 @@ ncclResult_t runNumaSplit(
         waitForEpoch(groups[groupId]->ctrl->rdmaReady, epochs[groupId]);
       }
       for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
+        auto& group = *groups[groupId];
+        for (int i = 0; i < group.groupSize; ++i) {
+          waitForEpoch(group.ctrl->d2hReady[group.groupBase + i],
+                       epochs[groupId]);
+        }
+      }
+      for (int groupId = 0; groupId < kNumaGroups; ++groupId) {
         ncclResult_t result = copyGroupChunkToOutput(
             *groups[groupId], recvbuff, bytesPerRank, chunkOffset, chunkBytes,
             stream);
