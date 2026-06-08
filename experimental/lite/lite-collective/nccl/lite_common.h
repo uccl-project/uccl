@@ -237,8 +237,13 @@ inline void* mapShm(std::string const& name, size_t size) {
 }
 
 inline void waitForEpoch(std::atomic<uint64_t> const& value, uint64_t epoch) {
+  int spins = 0;
   while (value.load(std::memory_order_acquire) < epoch) {
-    std::this_thread::yield();
+    if (spins++ < 65536) {
+      asm volatile("pause" ::: "memory");
+    } else {
+      std::this_thread::yield();
+    }
   }
 }
 
