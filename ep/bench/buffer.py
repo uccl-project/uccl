@@ -438,10 +438,8 @@ class Buffer:
             packed_recv_x_scales_storage,
             cumulative_local_expert_recv_stats,
         )
-        # When the runtime takes the zero-token early-return path it returns
-        # hook=None. SGLang's caller does `hook() if return_recv_hook` and
-        # crashes on None, so substitute a no-op so idle DP-attention ranks
-        # participate in the collective without raising.
+        # The zero-token early-return path returns hook=None; substitute a
+        # no-op so callers can unconditionally invoke hook().
         if return_recv_hook and hook is None:
             hook = lambda: None
         return (
