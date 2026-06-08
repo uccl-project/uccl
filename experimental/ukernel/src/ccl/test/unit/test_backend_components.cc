@@ -24,13 +24,13 @@ void test_mock_backend_submit_drain_single() {
   printf("[test] mock backend submit + drain single...\n");
 
   Testing::MockBackend backend(0);  // polls_before_ready=0 → immediate
-  CollectiveBinding dummy_binding;
+  void* dummy_ptr = nullptr;
   Op dummy_op;
   dummy_op.kind = OpKind::Send;
   dummy_op.dst_peer = 1;
   dummy_op.bytes = 256;
 
-  BackendToken t0 = backend.submit(dummy_op, OpBindings{}, dummy_binding);
+  BackendToken t0 = backend.submit(dummy_op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr);
   assert(t0.value != 0);
 
   BackendToken out[4];
@@ -47,7 +47,7 @@ void test_mock_backend_submit_drain_many() {
   printf("[test] mock backend submit + drain many...\n");
 
   Testing::MockBackend backend(5);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Send;
   op.dst_peer = 1;
@@ -56,7 +56,7 @@ void test_mock_backend_submit_drain_many() {
   constexpr int kN = 100;
   uint64_t tokens[kN];
   for (int i = 0; i < kN; ++i)
-    tokens[i] = backend.submit(op, OpBindings{}, dummy).value;
+    tokens[i] = backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr).value;
 
   BackendToken out[200];
   size_t total_drained = 0;
@@ -85,13 +85,13 @@ void test_mock_backend_max_count_clamping() {
   printf("[test] mock backend drain max_count clamping...\n");
 
   Testing::MockBackend backend(0);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Copy;
   op.bytes = 256;
 
   for (int i = 0; i < 10; ++i)
-    backend.submit(op, OpBindings{}, dummy);
+    backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr);
 
   // First drain: max_count=3 → only 3 returned
   BackendToken out[10];
@@ -112,18 +112,18 @@ void test_device_mock_submit_drain() {
   printf("[test] device mock backend submit + drain...\n");
 
   Testing::MockDeviceBackend backend(2);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Copy;
   op.bytes = 256;
 
-  BackendToken t = backend.submit(op, OpBindings{}, dummy);
+  BackendToken t = backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr);
   assert(t.value != 0);
 
   // Reject unsupported op kind (use invalid enum value)
   Op bad_op = op;
   bad_op.kind = static_cast<OpKind>(99);
-  assert(throws([&] { backend.submit(bad_op, OpBindings{}, dummy); }));
+  assert(throws([&] { backend.submit(bad_op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr); }));
 
   // 2 polls needed → first drain returns 0, second harvests
   BackendToken out[4];
@@ -139,10 +139,10 @@ void test_throwing_backend_drain_empty() {
   printf("[test] throwing backend drain returns 0...\n");
 
   Testing::ThrowingBackend backend("test error");
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
 
-  assert(throws([&] { backend.submit(op, OpBindings{}, dummy); }));
+  assert(throws([&] { backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr); }));
   BackendToken out[4];
   assert(backend.drain(out, 4) == 0);
 }
@@ -153,7 +153,7 @@ void bench_mock_drain_throughput() {
   printf("[bench] mock drain throughput...\n");
 
   Testing::MockBackend backend(0);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Send;
   op.dst_peer = 1;
@@ -167,7 +167,7 @@ void bench_mock_drain_throughput() {
   // Submit phase
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < kTotal; ++i)
-    backend.submit(op, OpBindings{}, dummy);
+    backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr);
   auto t1 = std::chrono::high_resolution_clock::now();
   double submit_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
 
@@ -192,7 +192,7 @@ void bench_mock_drain_with_delay() {
 
   constexpr int kPolls = 3;
   Testing::MockBackend backend(kPolls);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Copy;
   op.bytes = 256;
@@ -202,7 +202,7 @@ void bench_mock_drain_with_delay() {
   BackendToken out[kBatch];
 
   for (int i = 0; i < kTotal; ++i)
-    backend.submit(op, OpBindings{}, dummy);
+    backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr);
 
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t total = 0;
@@ -227,7 +227,7 @@ void test_drain_no_duplicates_or_loss() {
   printf("[test] drain correctness — no duplicates or loss...\n");
 
   Testing::MockBackend backend(3);
-  CollectiveBinding dummy;
+  void* dummy_ptr = nullptr;
   Op op;
   op.kind = OpKind::Send;
   op.dst_peer = 1;
@@ -237,7 +237,7 @@ void test_drain_no_duplicates_or_loss() {
   std::vector<uint64_t> submitted;
   submitted.reserve(kN);
   for (int i = 0; i < kN; ++i)
-    submitted.push_back(backend.submit(op, OpBindings{}, dummy).value);
+    submitted.push_back(backend.submit(op, OpBindings{}, dummy_ptr, dummy_ptr, dummy_ptr).value);
 
   // Collect all drained tokens across many drain calls
   std::vector<uint64_t> drained;

@@ -1,10 +1,10 @@
 #include "backend_test_utils.h"
 #include "algo/chunk_graph.h"
-#include "coll_config.h"
-#include "coll_types.h"
 #include "scheduler.h"
+#include "backend_test_utils.h"
 #include "test_utils.h"
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -216,8 +216,7 @@ void test_build_coll_algo_alltoall_dma_basic() {
 void test_schedule_ops_empty() {
   printf("[test] schedule_ops empty...\n");
   Schedule s = schedule_ops({});
-  assert(s.num_streams == 1);
-  assert(s.stream_ops.empty());
+  assert(s.layers.empty());
 }
 
 void test_schedule_ops_single() {
@@ -226,10 +225,9 @@ void test_schedule_ops_single() {
   ops[0].kind = OpKind::Copy;
   ops[0].bytes = 128;
   Schedule s = schedule_ops(ops);
-  assert(s.num_streams == 1);
-  assert(s.stream_ops.size() == 1);
-  assert(s.stream_ops[0].size() == 1);
-  assert(s.stream_ops[0][0] == 0);
+  assert(s.layers.size() == 1);
+  assert(s.layers[0].size() == 1);
+  assert(s.layers[0][0] == 0);
 }
 
 void test_schedule_ops_independent() {
@@ -240,10 +238,8 @@ void test_schedule_ops_independent() {
     ops[i].bytes = 128;
   }
   Schedule s = schedule_ops(ops);
-  // All independent → one layer of 5 → width = 5.
-  assert(s.num_streams == 5);
-  // Each stream gets exactly 1 op.
-  for (uint32_t i = 0; i < 5; ++i) assert(s.stream_ops[i].size() == 1);
+  assert(s.layers.size() == 1);
+  assert(s.layers[0].size() == 5);
 }
 
 void test_schedule_ops_chain() {
@@ -253,25 +249,19 @@ void test_schedule_ops_chain() {
     ops[i].kind = OpKind::Copy;
     ops[i].bytes = 128;
   }
-  // op0 → op1 → op2 → op3  (strict sequential chain).
   ops[1].deps = {0};
   ops[2].deps = {1};
   ops[3].deps = {2};
   Schedule s = schedule_ops(ops);
-  // Width = 1 (only one op ready at a time).
-  assert(s.num_streams == 1);
-  assert(s.stream_ops[0].size() == 4);
-  for (int i = 0; i < 4; ++i)
-    assert(s.stream_ops[0][i] == static_cast<uint32_t>(i));
+  assert(s.layers.size() == 4);
+  for (int i = 0; i < 4; ++i) {
+    assert(s.layers[i].size() == 1);
+    assert(s.layers[i][0] == static_cast<uint32_t>(i));
+  }
 }
 
 void test_schedule_ops_diamond() {
   printf("[test] schedule_ops diamond...\n");
-  //  0
-  //  ⇙⇘
-  // 1 2
-  //  ⇘⇙
-  //  3
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
     ops[i].kind = OpKind::Copy;
@@ -281,18 +271,14 @@ void test_schedule_ops_diamond() {
   ops[2].deps = {0};
   ops[3].deps = {1, 2};
   Schedule s = schedule_ops(ops);
-  // Layer 0: {0} → width 1
-  // Layer 1: {1, 2} → width 2
-  // Layer 2: {3} → width 1
-  assert(s.num_streams == 2);
-  assert(s.stream_ops[0].size() >= 2);  // gets at least 2 ops (0 + 3 or 0 + 1)
-  assert(s.stream_ops[1].size() >= 1);  // gets at least 1 op
+  assert(s.layers.size() == 3);
+  assert(s.layers[0].size() == 1);
+  assert(s.layers[1].size() == 2);
+  assert(s.layers[2].size() == 1);
 
-  // Verify topological ordering: for each op, all deps appear before it
-  // in the same or an earlier stream position.
-  // We can only check that all 4 ops are scheduled.
   size_t total = 0;
-  for (auto const& st : s.stream_ops) total += st.size();
+  for (auto const& layer : s.layers) total += layer.size();
+  assert(total == 4);
   assert(total == 4);
 }
 
@@ -304,7 +290,7 @@ void test_tile_and_schedule_ring_basic() {
   assert(tiled.input_bytes > 0);
   assert(tiled.staging_bytes_required == 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.num_streams >= 1);
+  assert(tiled.schedule.layers.size() >= 1);
   // Ring allreduce with 4 ranks, 1024-byte shards, 512-byte tiles:
   // Each abstract op → 2 tiles. 12 abstract ops → 24 tiled ops.
   assert(tiled.ops.size() == 24);
@@ -323,7 +309,7 @@ void test_tile_and_schedule_alltoall_sm_basic() {
   TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
   assert(tiled.staging_bytes_required == 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.num_streams >= 1);
+  assert(tiled.schedule.layers.size() >= 1);
   // 4 ranks, self + 3 peers, 2048-byte slice → 8 tiles per peer.
   // self: DeviceCopy (8 tiles), per-peer: DeviceSend + DeviceRecv (16 tiles
   // each × 3 peers) Total: 8 + 2×8×3 = 56 tiles.
@@ -340,7 +326,7 @@ void test_tile_and_schedule_alltoall_dma_basic() {
   TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
   assert(tiled.staging_bytes_required > 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.num_streams >= 1);
+  assert(tiled.schedule.layers.size() >= 1);
 }
 
 void test_tile_and_schedule_sequential_tile_deps() {
@@ -372,7 +358,7 @@ void test_schedule_ops_schedule_total_covers_all_ops() {
     }
     Schedule s = schedule_ops(ops);
     size_t total = 0;
-    for (auto const& st : s.stream_ops) total += st.size();
+    for (auto const& l_ : s.layers) total += l_.size();
     assert(total == ops.size());
   }
 }
@@ -390,7 +376,7 @@ void test_full_pipeline_ring_allreduce() {
 
   // Verify schedule covers all ops.
   size_t total_scheduled = 0;
-  for (auto const& st : tiled.schedule.stream_ops) total_scheduled += st.size();
+  for (auto const& l : tiled.schedule.layers) total_scheduled += l.size();
   assert(total_scheduled == tiled.ops.size());
 }
 
@@ -414,6 +400,73 @@ void test_full_pipeline_alltoall_dma() {
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
   assert(tiled.staging_bytes_required > 0);
+}
+
+void bench_tile_and_schedule_large_ring() {
+  printf("[bench] tile_and_schedule large ring (8r, 1MB, 64KB tile)...\n");
+  CollectiveConfig cfg;
+  cfg.nranks = 8; cfg.rank = 0;
+  cfg.input_bytes = 1 << 20; cfg.output_bytes = 1 << 20;
+  cfg.tile_bytes = 1 << 16;
+  cfg.dtype = ScalarType::Float32; cfg.reduction = ReductionKind::Sum;
+  cfg.kind = CollKind::AllReduceRing;
+
+  constexpr int kWarmup = 5;
+  constexpr int kIters = 200;
+  for (int i = 0; i < kWarmup; ++i) build_tiled(cfg, false);
+
+  auto t0 = std::chrono::steady_clock::now();
+  size_t total_ops = 0;
+  for (int i = 0; i < kIters; ++i) {
+    TiledResult r = build_tiled(cfg, false);
+    total_ops += r.ops.size();
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  printf("  %zu ops/iter × %d iters in %.1f ms  (%.0f ops/ms)\n",
+         total_ops / kIters, kIters, us / 1000.0,
+         static_cast<double>(total_ops) / (us / 1000.0));
+}
+
+void bench_tile_and_schedule_large_alltoall() {
+  printf("[bench] tile_and_schedule large alltoall dma (8r, 1MB, 64KB tile)...\n");
+  CollectiveConfig cfg;
+  cfg.nranks = 8; cfg.rank = 0;
+  cfg.input_bytes = 1 << 20; cfg.output_bytes = 1 << 20;
+  cfg.tile_bytes = 1 << 16;
+  cfg.dtype = ScalarType::Float32;
+  cfg.kind = CollKind::AllToAllPairwise; cfg.use_sm_ipc = false;
+
+  constexpr int kWarmup = 5;
+  constexpr int kIters = 200;
+  for (int i = 0; i < kWarmup; ++i) build_tiled(cfg, false);
+
+  auto t0 = std::chrono::steady_clock::now();
+  size_t total_ops = 0;
+  for (int i = 0; i < kIters; ++i) {
+    TiledResult r = build_tiled(cfg, false);
+    total_ops += r.ops.size();
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  printf("  %zu ops/iter × %d iters in %.1f ms  (%.0f ops/ms)\n",
+         total_ops / kIters, kIters, us / 1000.0,
+         static_cast<double>(total_ops) / (us / 1000.0));
+}
+
+void bench_schedule_ops_wide_dag() {
+  printf("[bench] schedule_ops wide DAG (1000 independent ops)...\n");
+  std::vector<Op> ops(1000);
+  for (auto& op : ops) { op.kind = OpKind::Copy; op.bytes = 128; }
+  constexpr int kWarmup = 20; constexpr int kIters = 500;
+  for (int i = 0; i < kWarmup; ++i) schedule_ops(ops);
+  auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < kIters; ++i) schedule_ops(ops);
+  auto t1 = std::chrono::steady_clock::now();
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  printf("  1000 ops × %d iters in %.1f ms  (%.0f ops/ms)\n",
+         kIters, us / 1000.0,
+         static_cast<double>(1000 * kIters) / (us / 1000.0));
 }
 
 }  // namespace
@@ -456,6 +509,11 @@ int main() {
   test_full_pipeline_ring_allreduce();
   test_full_pipeline_alltoall_sm();
   test_full_pipeline_alltoall_dma();
+
+  // Benchmarks
+  bench_tile_and_schedule_large_ring();
+  bench_tile_and_schedule_large_alltoall();
+  bench_schedule_ops_wide_dag();
 
   printf("\n=== Module tests PASSED ===\n");
   return 0;

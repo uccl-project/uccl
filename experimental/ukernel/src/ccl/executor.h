@@ -69,8 +69,8 @@ struct CollectiveRun {
   };
   std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
 
-  std::vector<std::vector<uint32_t>> stream_ops;
-  uint32_t num_streams = 1;
+  std::vector<std::vector<uint32_t>> layers;
+  uint32_t first_unfinished = 0;
   std::vector<size_t> stream_head;
   std::vector<BackendToken> done_buf;
   std::vector<std::pair<uint32_t, uint32_t>> ready;

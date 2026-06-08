@@ -22,8 +22,7 @@ struct Op {
 };
 
 struct Schedule {
-  uint32_t num_streams = 1;
-  std::vector<std::vector<uint32_t>> stream_ops;
+  std::vector<std::vector<uint32_t>> layers;
 };
 
 struct TiledResult {

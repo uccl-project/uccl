@@ -153,8 +153,7 @@ CollectiveOpHandle Executor::submit_collective(
   run.scratch_ptr = scratch_ptr;
   run.total_ops = run.tiled.ops.size();
   run.signal_seq_base = seq_base;
-  run.num_streams = run.tiled.schedule.num_streams;
-  run.stream_ops = std::move(run.tiled.schedule.stream_ops);
+  run.layers = run.tiled.schedule.layers;
 
   if (run.total_ops == 0) {
     run.status = CollectiveOpStatus::Completed;
@@ -163,7 +162,6 @@ CollectiveOpHandle Executor::submit_collective(
   }
 
   run.completed.assign(run.total_ops, false);
-  run.stream_head.assign(run.num_streams, 0);
   run.done_buf.resize(run.total_ops);
   runs_.emplace(handle, std::move(run));
   return handle;
@@ -210,40 +208,32 @@ void Executor::advance_run(CollectiveRun& run) {
 // Phase 1: scan every stream, collect ops whose deps are satisfied.
 void Executor::collect_ready(CollectiveRun& run) {
   run.ready.clear();
-  run.ready.reserve(run.num_streams * 2);
-
-  for (uint32_t fid = 0; fid < run.num_streams; ++fid) {
-    while (run.stream_head[fid] < run.stream_ops[fid].size()) {
-      uint32_t op_idx = run.stream_ops[fid][run.stream_head[fid]];
-      if (run.completed[op_idx]) {
-        ++run.stream_head[fid];
-        continue;
-      }
+  for (uint32_t l = run.first_unfinished; l < run.layers.size(); ++l) {
+    bool layer_done = true;
+    for (uint32_t op_idx : run.layers[l]) {
+      if (run.completed[op_idx]) continue;
+      layer_done = false;
       bool deps_ok = true;
       for (uint32_t dep : run.tiled.ops[op_idx].deps) {
-        if (!run.completed[dep]) {
-          deps_ok = false;
-          break;
-        }
+        if (!run.completed[dep]) { deps_ok = false; break; }
       }
-      if (!deps_ok) break;
-      run.ready.push_back({fid, op_idx});
-      ++run.stream_head[fid];
+      if (deps_ok) run.ready.push_back({l, op_idx});
     }
+    if (layer_done) run.first_unfinished = l + 1;
   }
 }
 
 // Phase 2: resolve pointers and submit every ready op to its backend.
 void Executor::submit_ready(CollectiveRun& run) {
   for (auto& r : run.ready) {
-    uint32_t fid = r.first;
+    uint32_t layer_idx = r.first;
     uint32_t op_idx = r.second;
     Op const& op = run.tiled.ops[op_idx];
     Backend* backend = pick_backend(backends_, op.kind);
     if (backend == nullptr) continue;
 
     OpBindings bind;
-    bind.stream_index = fid;
+    bind.stream_index = op_idx;
 
     if (resolve_ipc_buffer_pointer_) {
       try {
@@ -278,7 +268,7 @@ void Executor::submit_ready(CollectiveRun& run) {
     }
 
     if (token.value == 0) {
-      --run.stream_head[fid];  // backpressure — retry next cycle
+      // backpressure handled by layer rescan;  // backpressure — retry next cycle
       continue;
     }
     run.token_to_op_idx[{backend, token.value}] = op_idx;
@@ -398,8 +388,7 @@ void Executor::run_tiled(TiledResult const& tiled, void* input_ptr,
   run.output_ptr = output_ptr;
   run.scratch_ptr = scratch_ptr;
   run.total_ops = tiled.ops.size();
-  run.num_streams = tiled.schedule.num_streams;
-  run.stream_ops = tiled.schedule.stream_ops;
+  run.layers = tiled.schedule.layers;
 
   uint64_t seq_base =
       tiled.ops.empty() ? 0
@@ -410,7 +399,6 @@ void Executor::run_tiled(TiledResult const& tiled, void* input_ptr,
   if (run.total_ops == 0) return;
 
   run.completed.assign(run.total_ops, false);
-  run.stream_head.assign(run.num_streams, 0);
   run.done_buf.resize(run.total_ops);
 
   while (run.status == CollectiveOpStatus::Running) {

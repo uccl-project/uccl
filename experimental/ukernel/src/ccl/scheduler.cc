@@ -121,22 +121,7 @@ size_t compute_staging_bytes(CollAlgo const& algo, size_t tile_bytes) {
 // ── Public: schedule_ops ──────────────────────────────────────────────
 Schedule schedule_ops(std::vector<Op> const& ops) {
   Schedule sched;
-  if (ops.empty()) return sched;
-
-  auto layers = bfs_layers(ops);
-
-  uint32_t max_width = 0;
-  for (auto const& layer : layers)
-    max_width = std::max(max_width, static_cast<uint32_t>(layer.size()));
-  if (max_width == 0) max_width = 1;
-
-  sched.num_streams = max_width;
-  sched.stream_ops.resize(max_width);
-
-  for (auto const& layer : layers)
-    for (size_t k = 0; k < layer.size(); ++k)
-      sched.stream_ops[k % max_width].push_back(layer[k]);
-
+  sched.layers = bfs_layers(ops);
   return sched;
 }
 

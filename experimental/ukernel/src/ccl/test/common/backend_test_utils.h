@@ -28,18 +28,19 @@ inline void* allocate_test_storage(size_t bytes) {
   return pool.back().get();
 }
 
-inline CollectiveMemory make_test_memory(int rank, int nranks, size_t bytes) {
+struct TestMemory {
+  void* input_ptr = nullptr;
+  void* output_ptr = nullptr;
+  void* scratch_ptr = nullptr;
+};
+
+inline TestMemory make_test_memory(int rank, int nranks, size_t bytes) {
   (void)rank;
-  CollectiveMemory mem;
+  (void)nranks;
+  TestMemory mem;
   mem.input_ptr = allocate_test_storage(bytes);
   mem.output_ptr = allocate_test_storage(bytes);
   mem.scratch_ptr = allocate_test_storage(bytes);
-  mem.peers.resize(static_cast<size_t>(nranks));
-  for (int peer = 0; peer < nranks; ++peer) {
-    mem.peers[static_cast<size_t>(peer)].input = static_cast<uint32_t>(peer + 1);
-    mem.peers[static_cast<size_t>(peer)].output = static_cast<uint32_t>(peer + 1);
-    mem.peers[static_cast<size_t>(peer)].scratch = static_cast<uint32_t>(peer + 1);
-  }
   return mem;
 }
 
@@ -111,7 +112,7 @@ class MockBackend final : public Backend {
   }
 
   BackendToken submit(Op const&, OpBindings const&,
-                      CollectiveMemory&) override {
+                      void* input_ptr, void* output_ptr, void* scratch_ptr) override {
     BackendToken t{next_token_++};
     ++submissions_;
     pending_polls_[t.value] = polls_before_ready_;
@@ -158,7 +159,7 @@ class MockDeviceBackend final : public Backend {
   }
 
   BackendToken submit(Op const& op, OpBindings const&,
-                      CollectiveMemory&) override {
+                      void* input_ptr, void* output_ptr, void* scratch_ptr) override {
     if (!supports(op.kind))
       throw std::invalid_argument("device backend does not support this op");
     BackendToken t{next_token_++};
@@ -202,7 +203,7 @@ class ThrowingBackend final : public Backend {
   void validate(TiledResult const&, void*, void*, void*) override {}
   bool supports(OpKind) const override { return true; }
   BackendToken submit(Op const&, OpBindings const&,
-                      CollectiveMemory&) override {
+                      void* input_ptr, void* output_ptr, void* scratch_ptr) override {
     throw std::runtime_error(message_);
   }
   size_t drain(BackendToken*, size_t) override { return 0; }

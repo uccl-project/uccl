@@ -175,10 +175,9 @@ clean:
 		test/unit/*.o test/unit/*.d \
 		test/integration/*.o test/integration/*.d \
 		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
- 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
+	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-
 	test/unit/test_components.d \
 	test/integration/test_device_backend.d \
 	test/integration/test_transport_backend.d \

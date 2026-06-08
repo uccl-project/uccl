@@ -1,5 +1,6 @@
 #include "backend_test_utils.h"
 #include "test_utils.h"
+#include "scheduler.h"
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -18,10 +19,11 @@ namespace {
 
 using TestUtil::throws;
 using TestUtil::wait_until_terminal;
+using Testing::TestMemory;
 
 TiledResult build_test_plan(CollKind kind,
                                 CollectiveConfig const& config) {
-  CollectiveMemory mem = Testing::make_test_memory(
+  TestMemory mem = Testing::make_test_memory(
       config.rank, config.nranks,
       std::max(config.input_bytes, config.output_bytes));
   bool inplace = (mem.input_ptr == mem.output_ptr);
@@ -79,7 +81,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   TiledResult allreduce_tiled =
       build_test_plan(CollKind::AllReduceRing, allreduce_cfg);
   Testing::validate_basic_tiled(allreduce_tiled);
-  assert(allreduce_tiled.schedule.num_streams >= 1);
+  assert(allreduce_tiled.schedule.layers.size() >= 1);
   assert(allreduce_tiled.staging_bytes_required == 0);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256);
@@ -87,7 +89,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   TiledResult alltoall_tiled =
       build_test_plan(CollKind::AllToAllPairwise, alltoall_cfg);
   Testing::validate_basic_tiled(alltoall_tiled);
-  assert(alltoall_tiled.schedule.num_streams >= 1);
+  assert(alltoall_tiled.schedule.layers.size() >= 1);
   assert(alltoall_tiled.staging_bytes_required == 0);
 }
 
@@ -100,12 +102,6 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   cfg.output_bytes = 96;
   cfg.input_split_bytes = {16, 32, 48};
   cfg.output_split_bytes = {24, 32, 40};
-
-  CollectiveBufferRoles roles{};
-  roles.input_buffer_id = 7;
-  roles.output_buffer_id = 9;
-  roles.scratch_buffer_id = 11;
-  roles.validate();
 
   cfg.kind = CollKind::AllToAllPairwise;
   TiledResult tiled = build_tiled(cfg, /*inplace=*/false);
@@ -142,12 +138,7 @@ void test_planner_honors_custom_role_buffer_ids() {
   printf("[test] planner uses plan buffer constants...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  CollectiveBufferRoles roles{};
-  roles.input_buffer_id = 7;
-  roles.scratch_buffer_id = 11;
-  roles.validate();
-
-  bool inplace = roles.input_buffer_id == roles.output_buffer_id;
+  bool inplace = false;
   TiledResult tiled = build_tiled(cfg, inplace);
   Testing::validate_basic_tiled(tiled);
   bool saw_input = false;
@@ -231,13 +222,13 @@ void test_executor_completes_collectives_with_background_progress() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
-  auto memory = std::make_shared<CollectiveBinding>(
+  auto memory = std::make_shared<TestMemory>(
       Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig allreduce_cfg = Testing::make_test_config(4, 1, 4096, 512);
   allreduce_cfg.kind = CollKind::AllReduceRing;
   CollectiveOpHandle ar_handle =
-      executor.submit_allreduce(allreduce_cfg, *memory);
+      executor.submit_allreduce(allreduce_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
   assert(wait_until_terminal(executor, ar_handle, std::chrono::seconds(2)));
   assert(executor.status(ar_handle) == CollectiveOpStatus::Completed);
   executor.release(ar_handle);
@@ -246,7 +237,7 @@ void test_executor_completes_collectives_with_background_progress() {
   alltoall_cfg.kind = CollKind::AllToAllPairwise;
   alltoall_cfg.kind = CollKind::AllToAllPairwise;
   CollectiveOpHandle at_handle =
-      executor.submit_alltoall(alltoall_cfg, *memory);
+      executor.submit_alltoall(alltoall_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
   assert(wait_until_terminal(executor, at_handle, std::chrono::seconds(2)));
   assert(executor.status(at_handle) == CollectiveOpStatus::Completed);
   executor.release(at_handle);
@@ -262,15 +253,15 @@ void test_executor_queues_collectives_serially() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
-  auto memory = std::make_shared<CollectiveBinding>(
+  auto memory = std::make_shared<TestMemory>(
       Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig allreduce_cfg = Testing::make_test_config(4, 1, 2048, 256);
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 2048, 256);
   alltoall_cfg.kind = CollKind::AllToAllPairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, *memory);
-  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, *memory);
+  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
+  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
 
   assert(executor.status(second) == CollectiveOpStatus::Running);
 
@@ -294,15 +285,15 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
-  auto memory = std::make_shared<CollectiveBinding>(
+  auto memory = std::make_shared<TestMemory>(
       Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig first_cfg = Testing::make_test_config(4, 1, 2048, 256);
   CollectiveConfig second_cfg = Testing::make_test_config(4, 1, 2048, 256);
   second_cfg.kind = CollKind::AllToAllPairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(first_cfg, *memory);
-  CollectiveOpHandle second = executor.submit_alltoall(second_cfg, *memory);
+  CollectiveOpHandle first = executor.submit_allreduce(first_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
+  CollectiveOpHandle second = executor.submit_alltoall(second_cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
 
   assert(throws([&] { executor.release(first); }));
   assert(throws([&] { executor.release(second); }));
@@ -323,11 +314,11 @@ void test_executor_uses_transport_only_backend() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
-  auto memory = std::make_shared<CollectiveBinding>(
+  auto memory = std::make_shared<TestMemory>(
       Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg, *memory);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Completed);
   assert(device_backend.submissions() > 0);
@@ -341,11 +332,11 @@ void test_executor_reports_submit_failure() {
   ExecutorBackends backends{};
   backends.device = &throwing_backend;
   Executor executor(backends);
-  auto memory = std::make_shared<CollectiveBinding>(
+  auto memory = std::make_shared<TestMemory>(
       Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg, *memory);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory->input_ptr, memory->output_ptr, memory->scratch_ptr);
 
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Failed);
@@ -354,8 +345,75 @@ void test_executor_reports_submit_failure() {
   executor.release(handle);
 }
 
-}  // namespace
+void bench_executor_pipeline() {
+  printf("[bench] executor advance_run pipeline...\n");
+  Testing::MockBackend transport_backend;
+  Testing::MockDeviceBackend device_backend;
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+  TestMemory mem = Testing::make_test_memory(1, 4, 65536);
 
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 65536, 4096);
+  cfg.kind = CollKind::AllReduceRing;
+
+  constexpr int kWarmup = 5;
+  constexpr int kBenchMs = 200;
+
+  for (int i = 0; i < kWarmup; ++i) {
+    auto h = executor.submit_allreduce(cfg, mem.input_ptr, mem.output_ptr,
+                                       mem.scratch_ptr);
+    while (!executor.poll(h)) {}
+    executor.release(h);
+  }
+
+  auto t0 = std::chrono::steady_clock::now();
+  int iters = 0;
+  auto deadline = t0 + std::chrono::milliseconds(kBenchMs);
+  while (std::chrono::steady_clock::now() < deadline) {
+    auto h = executor.submit_allreduce(cfg, mem.input_ptr, mem.output_ptr,
+                                       mem.scratch_ptr);
+    while (!executor.poll(h)) {}
+    executor.release(h);
+    ++iters;
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  auto ms = std::chrono::duration_cast<
+      std::chrono::milliseconds>(t1 - t0).count();
+  printf("  submit→complete: %d ops in %lld ms  (%.0f ops/s)\n",
+         iters, (long long)ms, iters * 1000.0 / ms);
+}
+
+void bench_executor_latency() {
+  printf("[bench] executor end-to-end latency...\n");
+  Testing::MockBackend transport_backend;
+  Testing::MockDeviceBackend device_backend;
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+  TestMemory mem = Testing::make_test_memory(1, 4, 4096);
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllReduceRing;
+
+  constexpr int kIters = 500;
+  auto t0 = std::chrono::steady_clock::now();
+  for (int i = 0; i < kIters; ++i) {
+    auto h = executor.submit_allreduce(cfg, mem.input_ptr, mem.output_ptr,
+                                       mem.scratch_ptr);
+    while (!executor.poll(h)) {}
+    executor.release(h);
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  auto us = std::chrono::duration_cast<
+      std::chrono::microseconds>(t1 - t0).count();
+  printf("  submit→poll→release: %d in %.1f ms  (%.1f us/op)\n",
+         kIters, us / 1000.0, static_cast<double>(us) / kIters);
+}
+
+}  // namespace
 }  // namespace CCL
 }  // namespace UKernel
 
@@ -376,6 +434,10 @@ int main() {
   test_executor_rejects_releasing_queued_or_running_collectives();
   test_executor_uses_transport_only_backend();
   test_executor_reports_submit_failure();
+
+  bench_executor_pipeline();
+  bench_executor_latency();
+
   printf("\n=== Component tests PASSED ===\n");
   return 0;
 }
