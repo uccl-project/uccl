@@ -169,6 +169,7 @@ struct AgContext {
   mscclpp::IbMrInfo smallRemoteRecvMrInfo{};
   mscclpp::IbMrInfo smallRemoteCtrlMrInfo{};
   int smallWrCount = 0;
+  std::array<uint64_t, kMaxNodes> rdmaReadyAtomicEpoch{};
   void const* gdrSendPtr = nullptr;
   size_t gdrSendBytes = 0;
   mscclpp::RegisteredMemory gdrSendMemory;
@@ -615,6 +616,22 @@ void pollQp(AgContext& ctx) {
   }
 }
 
+void signalRdmaReadyAtomic(AgContext& ctx,
+                           mscclpp::Connection& connection,
+                           mscclpp::RegisteredMemory remoteCtrlMemory,
+                           int peerNode, uint64_t epoch) {
+  uint64_t& publishedEpoch = ctx.rdmaReadyAtomicEpoch[peerNode];
+  connection.updateAndSync(remoteCtrlMemory, rdmaReadyOffset(ctx.nodeId),
+                           &publishedEpoch, epoch);
+  connection.flush();
+}
+
+void signalRdmaReadyAtomic(AgContext& ctx, size_t peer, uint64_t epoch) {
+  signalRdmaReadyAtomic(ctx, ctx.peerConnections[peer],
+                        ctx.peerRemoteCtrlMemory[peer],
+                        ctx.peerNodeIds[peer], epoch);
+}
+
 void writeOrderedSlot(AgContext& ctx, size_t dataOffset, size_t flagOffset,
                        size_t dataBytes) {
   size_t flagSrcOffset = rdmaSignalOffset(ctx.nodeId);
@@ -755,17 +772,13 @@ bool writeGpuDirectOneRank(AgContext& ctx, size_t bytesPerRank,
     return false;
   }
   ctx.ctrl->rdmaSignal[ctx.nodeId].store(epoch, std::memory_order_release);
-  bool signaled = (++ctx.smallWrCount % kSmallSignalEvery) == 0;
   size_t dstOffset = static_cast<size_t>(ctx.rank) * bytesPerRank;
   ctx.smallQp->stageSendWrite(ctx.gdrSendMr, ctx.gdrRemoteRecvMrInfo,
                               static_cast<uint32_t>(bytesPerRank), /*wrId=*/0,
                               /*srcOffset=*/0, dstOffset, false);
-  ctx.smallQp->stageSendWrite(ctx.smallCtrlMr, ctx.smallRemoteCtrlMrInfo,
-                              sizeof(uint64_t), /*wrId=*/0,
-                              rdmaSignalOffset(ctx.nodeId),
-                              rdmaReadyOffset(ctx.nodeId), signaled);
   ctx.smallQp->postSend();
-  if (signaled) pollQp(ctx);
+  signalRdmaReadyAtomic(ctx, ctx.connection, ctx.remoteCtrlMemory,
+                        1 - ctx.nodeId, epoch);
   return true;
 }
 
@@ -1009,6 +1022,7 @@ AgContext& getContext(
     if (ctx->isLeader) {
       mscclpp::EndpointConfig::Ib ibCfg;
       ibCfg.maxCqPollNum = 128;
+      ibCfg.mode = mscclpp::EndpointConfig::Ib::Mode::Host;
       mscclpp::EndpointConfig endpointConfig(
           ctx->transport, mscclpp::Device(mscclpp::DeviceType::CPU),
           /*maxWriteQueueSize=*/-1, ibCfg);
@@ -1491,10 +1505,7 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
           off += chunk;
         }
       }
-      ctx.peerConnections[peer].write(
-          ctx.peerRemoteCtrlMemory[peer], rdmaReadyOffset(ctx.nodeId),
-          ctx.ctrlMemory, rdmaSignalOffset(ctx.nodeId), sizeof(uint64_t));
-      ctx.peerConnections[peer].flush();
+      signalRdmaReadyAtomic(ctx, peer, epoch);
       (void)peerNode;
     }
   }
@@ -1820,11 +1831,8 @@ ncclResult_t runSmallFallback(
                            recvBlockOffset(ctx.nodeId, blockBytes),
                            ctx.sendMemory, 0, blockBytes);
       ctx.ctrl->rdmaSignal[ctx.nodeId].store(epoch, std::memory_order_release);
-      ctx.connection.write(
-          ctx.remoteCtrlMemory, rdmaReadyOffset(ctx.nodeId),
-          ctx.ctrlMemory, rdmaSignalOffset(ctx.nodeId),
-          sizeof(uint64_t));
-      ctx.connection.flush();
+      signalRdmaReadyAtomic(ctx, ctx.connection, ctx.remoteCtrlMemory,
+                            1 - ctx.nodeId, epoch);
     }
     waitForEpoch(ctx.ctrl->rdmaReady[1 - ctx.nodeId], epoch);
     for (int i = 0; i < ctx.groupSize; ++i) {
@@ -2275,10 +2283,7 @@ ncclResult_t runNumaSplit(
             }
             off += chunk;
           }
-          own.peerConnections[peer].write(
-              own.peerRemoteCtrlMemory[peer], rdmaReadyOffset(own.nodeId),
-              own.ctrlMemory, rdmaSignalOffset(own.nodeId), sizeof(uint64_t));
-          own.peerConnections[peer].flush();
+          signalRdmaReadyAtomic(own, peer, epochs[ownGroupId]);
         }
       }
 

@@ -16,6 +16,7 @@ send/recv path.
 | `2nx1g` large messages | Dedicated 512KiB chunk pipeline through 1GiB per-rank input |
 | `2nx2g` large messages | Single host slab, 512KiB chunks |
 | `2nx4g` large messages | NUMA/NIC split host slabs when symmetric NIC groups exist |
+| Remote data-ready signal | RDMA atomic update to the peer `rdmaReady` epoch counter |
 | GDR status | Disabled by default (`kEnableOneRankGpuDirect = false`) |
 
 ## Size terminology
@@ -56,13 +57,14 @@ Code pointers:
 | Area | Code |
 | --- | --- |
 | Constants and thresholds | [`lite_allgather.cu:L45-L69`](../nccl/lite_allgather.cu#L45-L69) |
-| Context setup and 2nx1g slab sizing | [`lite_allgather.cu:L766-L840`](../nccl/lite_allgather.cu#L766-L840) |
-| Small cutoffs and slot counts | [`lite_allgather.cu:L1259-L1290`](../nccl/lite_allgather.cu#L1259-L1290) |
-| `2nx1g` chunk pipeline | [`lite_allgather.cu:L1545-L1648`](../nccl/lite_allgather.cu#L1545-L1648) |
-| Single-slab path | [`lite_allgather.cu:L1650-L1723`](../nccl/lite_allgather.cu#L1650-L1723) |
-| Small ordered path | [`lite_allgather.cu:L1891-L2117`](../nccl/lite_allgather.cu#L1891-L2117) |
-| NUMA split path | [`lite_allgather.cu:L2119-L2325`](../nccl/lite_allgather.cu#L2119-L2325) |
-| Top-level dispatch | [`lite_allgather.cu:L2328-L2398`](../nccl/lite_allgather.cu#L2328-L2398) |
+| Remote data-ready atomic signal | [`lite_allgather.cu:L619-L631`](../nccl/lite_allgather.cu#L619-L631) |
+| Context setup and 2nx1g slab sizing | [`lite_allgather.cu:L786-L852`](../nccl/lite_allgather.cu#L786-L852) |
+| Small cutoffs and slot counts | [`lite_allgather.cu:L1289-L1302`](../nccl/lite_allgather.cu#L1289-L1302) |
+| `2nx1g` chunk pipeline | [`lite_allgather.cu:L1570-L1685`](../nccl/lite_allgather.cu#L1570-L1685) |
+| Single-slab path | [`lite_allgather.cu:L1687-L1766`](../nccl/lite_allgather.cu#L1687-L1766) |
+| Small ordered path | [`lite_allgather.cu:L1928-L2156`](../nccl/lite_allgather.cu#L1928-L2156) |
+| NUMA split path | [`lite_allgather.cu:L2158-L2361`](../nccl/lite_allgather.cu#L2158-L2361) |
+| Top-level dispatch | [`lite_allgather.cu:L2364-L2434`](../nccl/lite_allgather.cu#L2364-L2434) |
 
 ## Protocols
 
@@ -133,7 +135,8 @@ Flow:
 1. Copy the local rank chunk into a group send slab.
 2. Wait for all local ranks in the group.
 3. The group leader writes the contiguous local group block to each peer node's
-   receive slab, then writes a remote-ready control flag.
+   receive slab, then publishes the remote-ready epoch with an RDMA atomic
+   update.
 4. Ranks wait for peer ready flags.
 5. Ranks copy local and remote slab blocks into final `recvbuff` order.
 6. Slot reuse is protected by per-slot H2D events or by explicit remote acks when
@@ -147,6 +150,14 @@ Chunk sizing:
   16MiB ring capacity for the generic fallback, rather than silently expanding
   its reuse window.
 
+The `rdmaReady` control word is intentionally updated with an RDMA atomic, not a
+plain RDMA write.  The atomic is posted after the data writes on the same
+connection and then flushed; this gives the receiver a remote-visible barrier
+before it copies from the host receive slab.  Because not every AllGather epoch
+uses `rdmaReady` (for example, small ordered slots have their own slot flag), the
+sender tracks the last published epoch per peer and atomically adds the delta so
+the remote `rdmaReady[node]` counter reaches the exact epoch being waited on.
+
 ### 4. NUMA/NIC split path
 
 `runNumaSplit` is used when the local GPU/NIC layout exposes multiple symmetric
@@ -159,9 +170,9 @@ local ranks 2,3 -> NUMA1/NIC1 group
 ```
 
 Each group exchanges only its contiguous rank block with the matching remote
-group.  After remote-ready flags arrive, each rank assembles all local and
-remote group blocks into final AllGather order.  This uses both NICs and avoids
-a single node leader pushing all inter-node traffic.
+group.  After the peer group's atomic `rdmaReady` update arrives, each rank
+assembles all local and remote group blocks into final AllGather order.  This
+uses both NICs and avoids a single node leader pushing all inter-node traffic.
 
 ## Why this beats NCCL no-GDR
 
@@ -169,7 +180,8 @@ NCCL no-GDR also stages inter-node traffic through host memory on this hardware.
 Lite wins when it makes that staging cheaper:
 
 - small messages avoid generic grouped-send orchestration;
-- hot paths use direct-QP RDMA writes for data and ready flags;
+- hot paths use direct-QP RDMA writes for data and an RDMA atomic barrier for
+  remote data-ready signaling;
 - `2nx1g` overlaps D2H readiness, RDMA writes, and remote H2D at 512KiB
   granularity;
 - `2nx4g` splits traffic across NUMA/NIC-local slabs.
@@ -187,7 +199,7 @@ Benchmark convention:
 - compare bus bandwidth for `1MiB-1GiB`
 - report one direction when out-of-place and in-place are similar
 
-Environment used for the latest `2nx1g` fix validation:
+Environment used for the latest full sweep:
 
 ```text
 NCCL_SOCKET_IFNAME=ibp55s0f0
@@ -204,27 +216,22 @@ Command shape:
 scripts/run-nccl-tests.sh --test all_gather \
   --backend {mscclpp,nccl} --topology inter \
   --hosts 10.10.55.1,10.10.55.2 \
-  --gpus 0 --min-bytes 32M --max-bytes 1G \
-  --step-factor 2 --iters 50 --warmup-iters 20 -- -c 1
+  --gpus {0|0,1|0,1,2,3} \
+  --min-bytes 128 --max-bytes 1G \
+  --step-factor 2 --iters 50 --warmup-iters 20
 ```
 
-Latest `2nx1g` large-message result, out-of-place bus bandwidth:
+Latest full comparison: [`perf-allgather.md`](perf-allgather.md).  The summary
+below lists out-of-place bus bandwidth at the 1GiB row:
 
-| Size | Fixed Lite GB/s | NCCL GB/s | Lite/NCCL | Old Lite GB/s | Fixed/Old |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 32MiB | 18.77 | 12.32 | 1.524x | 18.16 | 1.034x |
-| 64MiB | 18.18 | 12.38 | 1.468x | 12.85 | 1.415x |
-| 128MiB | 17.83 | 12.43 | 1.434x | 13.04 | 1.367x |
-| 256MiB | 17.67 | 12.44 | 1.420x | 13.13 | 1.346x |
-| 512MiB | 17.59 | 12.45 | 1.413x | 13.17 | 1.336x |
-| 1GiB | 17.55 | 12.45 | 1.410x | 13.20 | 1.330x |
+| Topology | Lite GB/s | NCCL GB/s | Lite/NCCL |
+| --- | ---: | ---: | ---: |
+| `2nx1g` | 17.55 | 12.43 | 1.41x |
+| `2nx2g` | 20.55 | 15.26 | 1.35x |
+| `2nx4g` | 18.83 | 14.88 | 1.27x |
 
-All rows reported `#wrong=0`.  Logs:
-`.tmp/collective-benchmarks/ag-fix-2nx1g-32M-1G-stableflag-20260608-144811/`.
-
-The latest full `2nx1g`/`2nx2g`/`2nx4g` sweep before the 1GiB pipeline fix is in
-`.tmp/collective-benchmarks/ag-rerun-it50-w20-128B-1G-20260608-100509/`; use the
-table above as the superseding `2nx1g` large-message result.
+All rows reported `#wrong=0`.  Raw logs:
+`.tmp/collective-benchmarks/ag-perf-allgather-20260608-164008/`.
 
 ## Operational notes
 
