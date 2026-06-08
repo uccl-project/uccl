@@ -597,6 +597,8 @@ def initialize_uccl(
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
             barrier_local_rank=barrier_local_rank,
+            device_index=local_rank,
+            nic_local_rank=barrier_local_rank,
         )
         proxies.append(proxy)
 

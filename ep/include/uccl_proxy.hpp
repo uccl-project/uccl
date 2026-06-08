@@ -17,7 +17,8 @@ class UcclProxy {
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
             bool is_intranode = false,
             bool gpu_buffer_is_host_allocated = false,
-            int barrier_local_rank = -1);
+            int barrier_local_rank = -1, int device_index = -1,
+            int nic_local_rank = -1);
   ~UcclProxy();
 
   void start_sender();
@@ -95,6 +96,8 @@ class UcclProxy {
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
+  int device_index_;
+  int nic_local_rank_;
   void* atomic_buffer_ptr_;
   bool atomic_buffer_is_host_allocated_ =
       false;  // true => cudaFreeHost, false => cudaFree

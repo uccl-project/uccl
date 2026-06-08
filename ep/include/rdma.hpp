@@ -368,7 +368,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int my_rank, int num_nodes,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank);
+                          int thread_idx, int device_index, int nic_local_rank);
 
 // Returns true if a cudaMalloc'd main RDMA buffer of |bytes| can be registered
 // on this node with the same path used by per_thread_rdma_init(). If false,
