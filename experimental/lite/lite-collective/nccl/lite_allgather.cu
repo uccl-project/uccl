@@ -29,9 +29,16 @@ namespace mscclpp {
 namespace nccl {
 namespace {
 
-// Multi-node AllGather has two host-memory data paths:
-// - <128KiB: one ordered host slot per epoch, direct-QP data+flag write, one H2D.
-// - >=128KiB: split local ranks into contiguous NIC groups and move host slabs.
+// Multi-node AllGather is deliberately host-memory based.  Do not route it
+// through the generic grouped P2P send/recv path: on this no-GDR testbed NCCL
+// also stages through host memory, so the win comes from explicit host slots,
+// contiguous slabs, and topology-specific overlap.
+//
+// Dispatch sketch:
+// - tiny two-node rows: ordered host slots (`runSmallOrdered`);
+// - 2nx1g large rows: one-rank 512KiB chunk pipeline (`runSingleSlab` delegates);
+// - 2nx2g: single host slab with 512KiB chunks;
+// - 2nx4g: NUMA/NIC split slabs when the local GPU layout is symmetric.
 
 
 static constexpr int kHostTagBase = 0x560000;
@@ -813,6 +820,9 @@ AgContext& getContext(
   ctx->groupBase = groupBase;
   ctx->groupSize = groupSize;
   ctx->numaSplit = numaSplit;
+  // 2nx1g uses one full-message slot so it can keep the one-rank chunk
+  // pipeline active through 1GiB instead of falling back to generic slabs.
+  // Other layouts keep the compact 16MiB slab capacity.
   if (!numaSplit && ctx->nodeCount == 2 && nRanksPerNode == 1) {
     ctx->chunkCapacity = kOneRankMaxBytesPerRank;
   }
@@ -1426,6 +1436,10 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
   bool preCopiedSelf =
       oneRankLayout && !oneRankInPlace &&
       chunkBytes >= kOneRankDirectCopyCutoffBytes;
+  // Generic slab exchange is synchronous at each chunk boundary: D2H into the
+  // host slot, leader RDMA write of the contiguous block, then H2D into final
+  // rank order.  The 2nx1g fast path below is separate because it pipelines at
+  // 512KiB granularity instead of paying this full barrier per 2MiB chunk.
   if (inGroup) {
     auto const* send = static_cast<char const*>(sendbuff);
     int localSlot = ctx.localRank - ctx.groupBase;
@@ -1551,6 +1565,9 @@ ncclResult_t runOneRankChunkPipeline(
   bool useAck = slotCount == 1;
   ensureSlotEvents(ctx, slotCount);
 
+  // Reusing a full-message slot is safe only after the remote chunk H2Ds that
+  // read from that slot have completed.  Multi-slot cases use per-slot H2D
+  // events; the single-slot fallback uses an explicit remote ack.
   if (!useAck && epoch > slotCount) {
     waitForCudaEvent(ctx.h2dSlotEvents[slot]);
     ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
@@ -1583,6 +1600,9 @@ ncclResult_t runOneRankChunkPipeline(
       (bytesPerRank + kOneRankPipelineChunkBytes - 1) /
       kOneRankPipelineChunkBytes;
   ensureD2hChunkEvents(ctx, chunkCount);
+  // Stage all D2H copies first, then let the CPU issue RDMA writes as each D2H
+  // event becomes visible.  This overlaps GPU copy readiness, NIC DMA reads,
+  // and the peer's H2D copies without involving CUDA kernels.
   for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
     size_t off = chunk * kOneRankPipelineChunkBytes;
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
@@ -1598,6 +1618,9 @@ ncclResult_t runOneRankChunkPipeline(
     size_t off = chunk * kOneRankPipelineChunkBytes;
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
     uint64_t readyValue = epoch * kPipeValueStride + chunk + 1;
+    // The NIC reads RDMA-write sources asynchronously, so every chunk needs a
+    // stable flag word.  Reusing one host control word can publish a later
+    // ready value before the matching data write has completed.
     size_t flagSrcOffset = ctx.chunkCapacity + chunk * sizeof(readyValue);
     std::memcpy(ctx.sendSlab + flagSrcOffset, &readyValue, sizeof(readyValue));
     std::atomic_thread_fence(std::memory_order_release);
@@ -1618,6 +1641,9 @@ ncclResult_t runOneRankChunkPipeline(
   for (; nextSend < initialWindow; ++nextSend) {
     sendChunk(nextSend);
   }
+  // Window size is intentionally one: after each incoming ready value is
+  // consumed, post one more outgoing RDMA chunk.  This keeps both nodes paced
+  // by receive progress while still overlapping D2H, RDMA, and H2D.
   for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
     size_t off = chunk * kOneRankPipelineChunkBytes;
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
@@ -1691,6 +1717,9 @@ ncclResult_t runSingleSlab(
     if (ctx.nodeCount == 2 && ctx.nRanksPerNode == 1 &&
         bytesPerRank >= 1024 * 1024 &&
         bytesPerRank <= kOneRankPipelineMaxBytes) {
+      // 2nx1g is the only layout where one rank owns the whole node block, so
+      // the chunk pipeline can avoid local gather/scatter and directly stream
+      // the remote rank into final output order.
       ncclResult_t result = runOneRankChunkPipeline(
           ctx, sendbuff, recvbuff, bytesPerRank);
       if (result != ncclSuccess) return result;
@@ -1932,6 +1961,8 @@ ncclResult_t runSmallOrdered(
         ctx.ctrlDeviceSlab != nullptr;
     bool useTwoRankGpuPack =
         useTwoRankTinyPack || useTwoRankRegisterPack;
+    // Small rows are latency-bound.  Keep one ordered host slot per epoch so
+    // the receiver can H2D final AllGather order without a CPU repack step.
     size_t blockBytes = static_cast<size_t>(ctx.groupSize) * bytesPerRank;
     if (blockBytes == 0) return ncclSuccess;
     size_t compactFlagOffset =
@@ -2344,6 +2375,9 @@ ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
             std::numeric_limits<size_t>::max() / static_cast<size_t>(nRanks) &&
         bytesPerRank * static_cast<size_t>(nRanks) <
             smallCutoffBytes(nRanksPerNode);
+    // Keep the top-level dispatch narrow: small ordered slots first, then a
+    // NUMA split only when the GPU/NIC layout exposes multiple symmetric
+    // groups, otherwise the single-slab path handles the remaining cases.
     if (twoNodeLayout && isSmall) {
       ncclResult_t result = ncclInvalidUsage;
       if (nRanksPerNode == 1) {
