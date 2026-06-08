@@ -50,16 +50,22 @@ static constexpr size_t kOneRankMappedOutputCutoffBytes = 64 * 1024;
 static constexpr size_t kSmallMaxSlots = 1024;
 static constexpr int kSmallSignalEvery = 256;
 static constexpr size_t kMaxBytesPerRank = 16 * 1024 * 1024;
+// The 2nx1g pipeline stages a full message per slot, so size its slabs to
+// cover the largest optimized benchmark point instead of falling back at 16MiB.
+static constexpr size_t kOneRankMaxBytesPerRank = 1024ULL * 1024 * 1024;
 static constexpr size_t kDefaultPipelineChunkBytes = 2 * 1024 * 1024;
 static constexpr size_t kTwoGpuPipelineChunkBytes = 512 * 1024;
 static constexpr size_t kOneRankPipelineChunkBytes = 512 * 1024;
+static constexpr size_t kOneRankPipelineMaxBytes = 1024ULL * 1024 * 1024;
 static constexpr size_t kOneRankPipelineSendWindow = 1;
 static constexpr size_t kRdmaChunkBytes = 2 * 1024 * 1024;
 static constexpr size_t kDualRailMinBytes = 2 * 1024 * 1024;
 static constexpr size_t kDirectSelfCopyMinBytes = 512 * 1024;
 static constexpr int kSignalEveryN = 256;
 static constexpr int kPollSpinsBeforeYield = 65536;
-static constexpr uint64_t kPipeValueStride = 1024;
+static constexpr uint64_t kPipeValueStride =
+    (kOneRankPipelineMaxBytes + kOneRankPipelineChunkBytes - 1) /
+    kOneRankPipelineChunkBytes;
 static constexpr bool kEnableOneRankGpuDirect = false;
 
 using lite::createOwnedShm;
@@ -83,7 +89,6 @@ struct HostControl {
   alignas(64) std::atomic<uint64_t> ackReady[kMaxNodes];
   alignas(64) std::atomic<uint64_t> ackSignal[kMaxNodes];
   alignas(64) std::atomic<uint64_t> pipeReady[kMaxNodes];
-  alignas(64) std::atomic<uint64_t> pipeSignal[kMaxNodes];
 };
 
 struct HostNames {
@@ -585,10 +590,6 @@ size_t pipeReadyOffset(int nodeId) {
   return ctrlArrayOffset(offsetof(HostControl, pipeReady), nodeId);
 }
 
-size_t pipeSignalOffset(int nodeId) {
-  return ctrlArrayOffset(offsetof(HostControl, pipeSignal), nodeId);
-}
-
 void pollQp(AgContext& ctx) {
   if (!ctx.smallQp) return;
   while (ctx.smallQp->getNumSendCqItems() > 0) {
@@ -683,20 +684,17 @@ bool writeDataStripedToRemoteRecv(AgContext& ctx, size_t remoteBase,
 
 bool writePipelineChunkDirect(AgContext& ctx, size_t remoteBase,
                               size_t sendBase, size_t bytes,
-                              uint64_t readyValue) {
-  if (!ctx.smallQp || ctx.smallSendMr == nullptr ||
-      ctx.smallCtrlMr == nullptr) {
+                              size_t flagSrcOffset) {
+  if (!ctx.smallQp || ctx.smallSendMr == nullptr) {
     return false;
   }
-  ctx.ctrl->pipeSignal[ctx.nodeId].store(readyValue,
-                                         std::memory_order_release);
   bool signaled = (++ctx.smallWrCount % kSmallSignalEvery) == 0;
   ctx.smallQp->stageSendWrite(ctx.smallSendMr, ctx.smallRemoteRecvMrInfo,
                               static_cast<uint32_t>(bytes), /*wrId=*/0,
                               sendBase, remoteBase, false);
-  ctx.smallQp->stageSendWrite(ctx.smallCtrlMr, ctx.smallRemoteCtrlMrInfo,
+  ctx.smallQp->stageSendWrite(ctx.smallSendMr, ctx.smallRemoteCtrlMrInfo,
                               sizeof(uint64_t), /*wrId=*/0,
-                              pipeSignalOffset(ctx.nodeId),
+                              flagSrcOffset,
                               pipeReadyOffset(ctx.nodeId), signaled);
   ctx.smallQp->postSend();
   if (signaled) pollQp(ctx);
@@ -815,6 +813,9 @@ AgContext& getContext(
   ctx->groupBase = groupBase;
   ctx->groupSize = groupSize;
   ctx->numaSplit = numaSplit;
+  if (!numaSplit && ctx->nodeCount == 2 && nRanksPerNode == 1) {
+    ctx->chunkCapacity = kOneRankMaxBytesPerRank;
+  }
   try {
     ctx->numaNode = mscclpp::getDeviceNumaNode(transportDevice);
   } catch (...) {
@@ -1277,6 +1278,17 @@ size_t slotCountForChunk(AgContext const& ctx, size_t slotBytes) {
   return std::max<size_t>(1, ctx.chunkCapacity / slotBytes);
 }
 
+size_t genericSlotCountForChunk(AgContext const& ctx, size_t bytesPerRank,
+                                size_t slotBytes) {
+  // Messages beyond the one-rank fast path use the old small ring to avoid
+  // expanding the generic fallback's reuse window unintentionally.
+  bool oneRankFallback = !ctx.numaSplit && ctx.nodeCount == 2 &&
+                         ctx.nRanksPerNode == 1 &&
+                         bytesPerRank > kOneRankPipelineMaxBytes;
+  size_t capacity = oneRankFallback ? kMaxBytesPerRank : ctx.chunkCapacity;
+  return std::max<size_t>(1, capacity / slotBytes);
+}
+
 size_t sendSlotOffset(size_t slot, size_t blockBytes) {
   return slot * blockBytes;
 }
@@ -1372,7 +1384,7 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
   size_t blockBytes = static_cast<size_t>(ctx.groupSize) * chunkBytes;
   size_t slotBytes = slotChunkBytes(ctx, bytesPerRank, chunkBytes);
   size_t slotBlockBytes = static_cast<size_t>(ctx.groupSize) * slotBytes;
-  size_t slotCount = slotCountForChunk(ctx, slotBytes);
+  size_t slotCount = genericSlotCountForChunk(ctx, bytesPerRank, slotBytes);
   size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
   bool useAck = slotCount == 1;
   cudaStream_t d2hStream = ctx.d2hStream ? ctx.d2hStream : stream;
@@ -1586,15 +1598,16 @@ ncclResult_t runOneRankChunkPipeline(
     size_t off = chunk * kOneRankPipelineChunkBytes;
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
     uint64_t readyValue = epoch * kPipeValueStride + chunk + 1;
+    size_t flagSrcOffset = ctx.chunkCapacity + chunk * sizeof(readyValue);
+    std::memcpy(ctx.sendSlab + flagSrcOffset, &readyValue, sizeof(readyValue));
+    std::atomic_thread_fence(std::memory_order_release);
     waitForCudaEvent(ctx.d2hChunkEvents[chunk]);
     if (!writePipelineChunkDirect(ctx, peerRemoteBase + off, sendBase + off,
-                                  bytes, readyValue)) {
-      ctx.ctrl->pipeSignal[ctx.nodeId].store(readyValue,
-                                             std::memory_order_release);
+                                  bytes, flagSrcOffset)) {
       ctx.connection.write(ctx.remoteRecvMemory, peerRemoteBase + off,
                            ctx.sendMemory, sendBase + off, bytes);
       ctx.connection.write(ctx.remoteCtrlMemory, pipeReadyOffset(ctx.nodeId),
-                           ctx.ctrlMemory, pipeSignalOffset(ctx.nodeId),
+                           ctx.sendMemory, flagSrcOffset,
                            sizeof(uint64_t));
       ctx.connection.flush();
     }
@@ -1677,7 +1690,7 @@ ncclResult_t runSingleSlab(
     }
     if (ctx.nodeCount == 2 && ctx.nRanksPerNode == 1 &&
         bytesPerRank >= 1024 * 1024 &&
-        bytesPerRank <= 16 * 1024 * 1024) {
+        bytesPerRank <= kOneRankPipelineMaxBytes) {
       ncclResult_t result = runOneRankChunkPipeline(
           ctx, sendbuff, recvbuff, bytesPerRank);
       if (result != ncclSuccess) return result;
