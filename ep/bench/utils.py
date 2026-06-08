@@ -573,15 +573,6 @@ def initialize_uccl(
         num_nodes,
         detected_is_intranode,
     ) = detect_group_topology(group)
-    if os.environ.get("UCCL_DEBUG_RANK_SPLIT") == "1":
-        print(
-            "[UCCL_RANK_SPLIT] "
-            f"rank={rank} local_rank={local_rank} "
-            f"barrier_local_rank={barrier_local_rank} "
-            f"node_idx={node_idx} num_nodes={num_nodes} "
-            f"is_intranode={detected_is_intranode}",
-            flush=True,
-        )
     if is_intranode is None:
         is_intranode = detected_is_intranode
     elif is_intranode and not detected_is_intranode:
