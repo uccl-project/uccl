@@ -331,13 +331,13 @@ int run_rank(Options const& opts) {
 
   Op op1;
   op1.op_id = 0;
-  op1.kind = (opts.rank == 0) ? OpKind::TransportSend : OpKind::TransportRecv;
+  op1.kind = (opts.rank == 0) ? OpKind::Send : OpKind::Recv;
   op1.stream_index = 0;
   op1.bytes = opts.bytes;
-  op1.src = (opts.rank == 0) ? local_buffer_ref(PlanBuffer::Input, 0)
-                             : remote_buffer_ref(PlanBuffer::Scratch, 0, 0);
-  op1.dst = (opts.rank == 0) ? remote_buffer_ref(PlanBuffer::Scratch, 1, 0)
-                             : local_buffer_ref(PlanBuffer::Scratch, 0);
+  op1.src = (opts.rank == 0) ? local_buffer_ref(CollBuffer::Input, 0)
+                             : remote_buffer_ref(CollBuffer::Scratch, 0, 0);
+  op1.dst = (opts.rank == 0) ? remote_buffer_ref(CollBuffer::Scratch, 1, 0)
+                             : local_buffer_ref(CollBuffer::Scratch, 0);
   backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1),
                    memory);
   BackendToken token1 = backend.submit(op1, memory);
@@ -368,13 +368,13 @@ int run_rank(Options const& opts) {
 
   Op op2;
   op2.op_id = 0;
-  op2.kind = (opts.rank == 1) ? OpKind::TransportSend : OpKind::TransportRecv;
+  op2.kind = (opts.rank == 1) ? OpKind::Send : OpKind::Recv;
   op2.stream_index = 0;
   op2.bytes = opts.bytes;
-  op2.src = (opts.rank == 1) ? local_buffer_ref(PlanBuffer::Scratch, 0)
-                             : remote_buffer_ref(PlanBuffer::Input, 1, 0);
-  op2.dst = (opts.rank == 1) ? remote_buffer_ref(PlanBuffer::Input, 0, 0)
-                             : local_buffer_ref(PlanBuffer::Input, 0);
+  op2.src = (opts.rank == 1) ? local_buffer_ref(CollBuffer::Scratch, 0)
+                             : remote_buffer_ref(CollBuffer::Input, 1, 0);
+  op2.dst = (opts.rank == 1) ? remote_buffer_ref(CollBuffer::Input, 0, 0)
+                             : local_buffer_ref(CollBuffer::Input, 0);
   backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2),
                    memory);
   BackendToken token2 = backend.submit(op2, memory);

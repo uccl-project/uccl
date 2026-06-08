@@ -26,7 +26,7 @@ void test_mock_backend_submit_drain_single() {
   Testing::MockBackend backend(0);  // polls_before_ready=0 → immediate
   CollectiveBinding dummy_binding;
   Op dummy_op;
-  dummy_op.kind = OpKind::TransportSend;
+  dummy_op.kind = OpKind::Send;
   dummy_op.dst_peer = 1;
   dummy_op.bytes = 256;
 
@@ -49,7 +49,7 @@ void test_mock_backend_submit_drain_many() {
   Testing::MockBackend backend(5);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::TransportSend;
+  op.kind = OpKind::Send;
   op.dst_peer = 1;
   op.bytes = 256;
 
@@ -87,7 +87,7 @@ void test_mock_backend_max_count_clamping() {
   Testing::MockBackend backend(0);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::DeviceCopy;
+  op.kind = OpKind::Copy;
   op.bytes = 256;
 
   for (int i = 0; i < 10; ++i)
@@ -114,15 +114,15 @@ void test_device_mock_submit_drain() {
   Testing::MockDeviceBackend backend(2);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::DeviceCopy;
+  op.kind = OpKind::Copy;
   op.bytes = 256;
 
   BackendToken t = backend.submit(op, OpBindings{}, dummy);
   assert(t.value != 0);
 
-  // Should reject unsupported op kind
+  // Reject unsupported op kind (use invalid enum value)
   Op bad_op = op;
-  bad_op.kind = OpKind::TransportSend;
+  bad_op.kind = static_cast<OpKind>(99);
   assert(throws([&] { backend.submit(bad_op, OpBindings{}, dummy); }));
 
   // 2 polls needed → first drain returns 0, second harvests
@@ -155,7 +155,7 @@ void bench_mock_drain_throughput() {
   Testing::MockBackend backend(0);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::TransportSend;
+  op.kind = OpKind::Send;
   op.dst_peer = 1;
   op.bytes = 256;
 
@@ -194,7 +194,7 @@ void bench_mock_drain_with_delay() {
   Testing::MockBackend backend(kPolls);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::DeviceCopy;
+  op.kind = OpKind::Copy;
   op.bytes = 256;
 
   constexpr int kTotal = 10000;
@@ -229,7 +229,7 @@ void test_drain_no_duplicates_or_loss() {
   Testing::MockBackend backend(3);
   CollectiveBinding dummy;
   Op op;
-  op.kind = OpKind::TransportSend;
+  op.kind = OpKind::Send;
   op.dst_peer = 1;
   op.bytes = 256;
 

@@ -37,11 +37,11 @@ size_t default_test_bytes_per_rank(int world_size) {
   return base - (base % alignment);
 }
 
-char const* collective_name(CollectiveKind kind) {
+char const* collective_name(CollKind kind) {
   switch (kind) {
-    case CollectiveKind::AllReduce:
+    case CollKind::AllReduceRing:
       return "allreduce";
-    case CollectiveKind::AllToAll:
+    case CollKind::AllToAllPairwise:
       return "alltoall";
   }
   return "unknown";
@@ -214,8 +214,8 @@ std::string get_str_arg(int argc, char** argv, char const* key,
 }
 
 CollectiveKind parse_collective(std::string const& value) {
-  if (value == "allreduce") return CollectiveKind::AllReduce;
-  if (value == "alltoall") return CollectiveKind::AllToAll;
+  if (value == "allreduce") return CollKind::AllReduceRing;
+  if (value == "alltoall") return CollKind::AllToAllPairwise;
   throw std::invalid_argument("unsupported collective: " + value);
 }
 
@@ -390,7 +390,7 @@ struct Options {
   size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
   std::string transport = "auto";
-  CollectiveKind collective = CollectiveKind::AllReduce;
+  CollKind kind = CollKind::AllReduceRing;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -434,7 +434,7 @@ int run_rank(Options const& opts) {
   require(opts.tile_bytes > 0, "tile_bytes must be > 0");
   require(opts.bytes_per_rank % sizeof(float) == 0,
           "bytes_per_rank must be a multiple of sizeof(float)");
-  if (opts.collective == CollectiveKind::AllToAll) {
+  if (opts.collective == CollKind::AllToAllPairwise) {
     require(opts.bytes_per_rank %
                     (static_cast<size_t>(opts.world_size) * sizeof(float)) ==
                 0,
@@ -450,7 +450,7 @@ int run_rank(Options const& opts) {
   GPU_RT_CHECK(gpuMemset(staging.ptr, 0, opts.bytes_per_rank));
 
   std::vector<float> input(opts.bytes_per_rank / sizeof(float), 0.0f);
-  if (opts.collective == CollectiveKind::AllReduce) {
+  if (opts.collective == CollKind::AllReduceRing) {
     init_allreduce_input(input, opts.rank);
   } else {
     init_alltoall_input(input, opts.rank, opts.world_size);
@@ -484,8 +484,8 @@ int run_rank(Options const& opts) {
                                 opts.tile_bytes, opts.num_streams);
   config.dtype = ScalarType::Float32;
   config.reduction = ReductionKind::Sum;
-  if (opts.collective == CollectiveKind::AllToAll) {
-    config.algorithm = AlgorithmKind::Pairwise;
+  if (opts.collective == CollKind::AllToAllPairwise) {
+    config.kind = CollKind::AllToAllPairwise;
   }
   std::string barrier_ip = get_env_str(
       {"MASTER_ADDR"}, opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
@@ -495,7 +495,7 @@ int run_rank(Options const& opts) {
                  opts.world_size, "pre-submit");
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
                collective_name(opts.collective));
-  CollectiveOpHandle handle = (opts.collective == CollectiveKind::AllReduce)
+  CollectiveOpHandle handle = (opts.collective == CollKind::AllReduceRing)
                                   ? executor.submit_allreduce(config, memory)
                                   : executor.submit_alltoall(config, memory);
   wait_for_collective(executor, handle, std::chrono::seconds(60));
@@ -509,7 +509,7 @@ int run_rank(Options const& opts) {
   executor.release(handle);
 
   std::vector<float> output = download_tensor(tensor.ptr, opts.bytes_per_rank);
-  if (opts.collective == CollectiveKind::AllReduce) {
+  if (opts.collective == CollKind::AllReduceRing) {
     verify_allreduce_output(output, opts.world_size);
   } else {
     verify_alltoall_output(output, opts.rank, opts.world_size);

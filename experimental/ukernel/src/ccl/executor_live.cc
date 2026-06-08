@@ -5,7 +5,6 @@
 #include "executor.h"
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 
 namespace UKernel {

@@ -475,7 +475,7 @@ class ProcessGroup {
       binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
     }
 
-    executor_.run_plan(plan, *binding_memory_);
+    executor_.run_tiled(plan, *binding_memory_);
   }
 
   void barrier() {
@@ -667,7 +667,7 @@ class ProcessGroup {
       binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
     }
 
-    executor_.run_plan(plan, *binding_memory_);
+    executor_.run_tiled(plan, *binding_memory_);
   }
 
   int rank_;

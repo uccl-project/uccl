@@ -28,48 +28,19 @@ inline void* allocate_test_storage(size_t bytes) {
   return pool.back().get();
 }
 
-inline void init_registered_buffer(RegisteredBuffer& buffer, size_t bytes,
-                                   int nranks, void* local_ptr) {
-  buffer.bytes = bytes;
-  buffer.layout.sizes = {static_cast<int64_t>(bytes)};
-  buffer.layout.strides = {1};
-  buffer.local_ptr = local_ptr;
-  buffer.local_buffer_id = 1;
-  buffer.peer_views.resize(static_cast<size_t>(nranks));
+inline CollectiveMemory make_test_memory(int rank, int nranks, size_t bytes) {
+  (void)rank;
+  CollectiveMemory mem;
+  mem.input_ptr = allocate_test_storage(bytes);
+  mem.output_ptr = allocate_test_storage(bytes);
+  mem.scratch_ptr = allocate_test_storage(bytes);
+  mem.peers.resize(static_cast<size_t>(nranks));
   for (int peer = 0; peer < nranks; ++peer) {
-    auto& peer_view = buffer.peer_views[static_cast<size_t>(peer)];
-    peer_view.buffer_id = static_cast<uint32_t>(peer + 1);
-    peer_view.same_node = true;
+    mem.peers[static_cast<size_t>(peer)].input = static_cast<uint32_t>(peer + 1);
+    mem.peers[static_cast<size_t>(peer)].output = static_cast<uint32_t>(peer + 1);
+    mem.peers[static_cast<size_t>(peer)].scratch = static_cast<uint32_t>(peer + 1);
   }
-}
-
-inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
-                                          CollectiveBufferRoles roles = {}) {
-  static std::unique_ptr<BufferRegistry> s_registry;
-  if (!s_registry) {
-    s_registry = std::make_unique<BufferRegistry>();
-  }
-  CollectiveBinding binding;
-  binding.registry = s_registry.get();
-  binding.registry->local_rank = rank;
-  binding.roles = roles;
-  binding.roles.validate();
-
-  RegisteredBuffer& input =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
-  init_registered_buffer(input, bytes, nranks, allocate_test_storage(bytes));
-
-  if (binding.buffer_id(CollectiveBufferRole::Output) !=
-      binding.buffer_id(CollectiveBufferRole::Input)) {
-    RegisteredBuffer& output =
-        binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Output));
-    init_registered_buffer(output, bytes, nranks, allocate_test_storage(bytes));
-  }
-
-  RegisteredBuffer& staging =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
-  init_registered_buffer(staging, bytes, nranks, allocate_test_storage(bytes));
-  return binding;
+  return mem;
 }
 
 inline CollectiveConfig make_test_config(int nranks, int rank,
@@ -81,7 +52,7 @@ inline CollectiveConfig make_test_config(int nranks, int rank,
   config.input_bytes = tensor_bytes;
   config.output_bytes = tensor_bytes;
   config.tile_bytes = tile_bytes;
-  config.algorithm = AlgorithmKind::Ring;
+  config.kind = CollKind::AllReduceRing;
   return config;
 }
 
@@ -92,16 +63,16 @@ inline void validate_basic_tiled(TiledResult const& result) {
   for (size_t index = 0; index < result.ops.size(); ++index) {
     auto const& op = result.ops[index];
     assert(op.bytes > 0);
-    if (op.kind == OpKind::TransportSend || op.kind == OpKind::DeviceSend) {
+    if (op.kind == OpKind::Send) {
       assert(op.src_peer == ~0u);
       assert(op.dst_peer != ~0u);
     }
-    if (op.kind == OpKind::TransportRecv ||
-        op.kind == OpKind::DeviceRecvReduce || op.kind == OpKind::DeviceRecv) {
+    if (op.kind == OpKind::Recv ||
+        op.kind == OpKind::RecvReduce) {
       assert(op.src_peer != ~0u);
       assert(op.dst_peer == ~0u);
     }
-    if (op.kind == OpKind::DeviceCopy || op.kind == OpKind::DeviceReduce) {
+    if (op.kind == OpKind::Copy || op.kind == OpKind::Reduce) {
       assert(op.src_peer == ~0u || op.dst_peer == ~0u);
     }
     for (uint32_t dep : op.deps) {
@@ -134,11 +105,13 @@ class MockBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "mock"; }
-  void validate(TiledResult const&, CollectiveBinding&) override {}
-  bool supports(OpKind) const override { return true; }
+  void validate(TiledResult const&, void*, void*, void*) override {}
+  bool supports(OpKind kind) const override {
+    return kind == OpKind::Send || kind == OpKind::Recv;
+  }
 
   BackendToken submit(Op const&, OpBindings const&,
-                      CollectiveBinding&) override {
+                      CollectiveMemory&) override {
     BackendToken t{next_token_++};
     ++submissions_;
     pending_polls_[t.value] = polls_before_ready_;
@@ -177,15 +150,15 @@ class MockDeviceBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "device"; }
-  void validate(TiledResult const&, CollectiveBinding&) override {}
+  void validate(TiledResult const&, void*, void*, void*) override {}
   bool supports(OpKind kind) const override {
-    return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
-           kind == OpKind::DeviceSend || kind == OpKind::DeviceRecvReduce ||
-           kind == OpKind::DeviceRecv;
+    return kind == OpKind::Copy || kind == OpKind::Reduce ||
+           kind == OpKind::Send || kind == OpKind::RecvReduce ||
+           kind == OpKind::Recv;
   }
 
   BackendToken submit(Op const& op, OpBindings const&,
-                      CollectiveBinding&) override {
+                      CollectiveMemory&) override {
     if (!supports(op.kind))
       throw std::invalid_argument("device backend does not support this op");
     BackendToken t{next_token_++};
@@ -226,10 +199,10 @@ class ThrowingBackend final : public Backend {
       : message_(std::move(message)) {}
 
   char const* name() const override { return "throwing"; }
-  void validate(TiledResult const&, CollectiveBinding&) override {}
+  void validate(TiledResult const&, void*, void*, void*) override {}
   bool supports(OpKind) const override { return true; }
   BackendToken submit(Op const&, OpBindings const&,
-                      CollectiveBinding&) override {
+                      CollectiveMemory&) override {
     throw std::runtime_error(message_);
   }
   size_t drain(BackendToken*, size_t) override { return 0; }

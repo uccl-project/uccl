@@ -45,11 +45,12 @@ struct ExecutorConfig {
 struct CollectiveRun {
   CollectiveOpStatus status = CollectiveOpStatus::Queued;
   TiledResult tiled;
-  CollectiveBinding* binding = nullptr;
+  void* input_ptr = nullptr;
+  void* output_ptr = nullptr;
+  void* scratch_ptr = nullptr;
   std::string error_message;
 
   std::vector<bool> completed;
-  std::vector<BackendToken> tokens;
 
   // O(1) drain → op index lookup.  Key combines backend + token value
   // because transport and device backends have independent token spaces.
@@ -92,9 +93,11 @@ class Executor {
   Executor& operator=(Executor const&) = delete;
 
   CollectiveOpHandle submit_allreduce(CollectiveConfig const& config,
-                                      CollectiveBinding& binding);
+                                      void* input_ptr, void* output_ptr,
+                                      void* scratch_ptr);
   CollectiveOpHandle submit_alltoall(CollectiveConfig const& config,
-                                     CollectiveBinding& binding);
+                                     void* input_ptr, void* output_ptr,
+                                     void* scratch_ptr);
 
   CollectiveOpStatus status(CollectiveOpHandle handle) const;
   bool poll(CollectiveOpHandle handle);
@@ -104,7 +107,8 @@ class Executor {
   void release(CollectiveOpHandle handle);
   std::string error_message(CollectiveOpHandle handle) const;
 
-  void run_plan(TiledResult const& tiled, CollectiveBinding& binding);
+  void run_tiled(TiledResult const& tiled, void* input_ptr,
+                 void* output_ptr, void* scratch_ptr);
 
   size_t active_count() const;
   UKernel::Transport::Communicator* communicator();
@@ -113,10 +117,19 @@ class Executor {
  private:
   CollectiveRun* get_run(CollectiveOpHandle handle);
   CollectiveRun const* get_run(CollectiveOpHandle handle) const;
-  CollectiveOpHandle submit_collective(CollectiveKind kind,
+  CollectiveOpHandle submit_collective(CollKind kind,
                                        CollectiveConfig const& config,
-                                       CollectiveBinding& binding);
+                                       void* input_ptr, void* output_ptr,
+                                       void* scratch_ptr);
   void advance_run(CollectiveRun& run);
+  void ensure_validated(TiledResult const& tiled,
+                        void* input_ptr, void* output_ptr,
+                        void* scratch_ptr);
+  void bind_op(Op const& op, OpBindings& bind,
+               void* input_ptr, void* output_ptr, void* scratch_ptr);
+  void collect_ready(CollectiveRun& run);
+  void submit_ready(CollectiveRun& run);
+  void drain_completed(CollectiveRun& run);
 
   ExecutorBackends backends_{};
   std::unique_ptr<Backend> owned_transport_backend_;

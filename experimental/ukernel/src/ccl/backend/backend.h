@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../coll_mem.h"
 #include "../coll_types.h"
 #include "../scheduler.h"
 #include <cstdint>
@@ -31,22 +30,15 @@ struct OpBindings {
 inline CollectiveBufferRole buf_role(OpKind kind, bool is_src,
                                      bool copy_from_staging) {
   switch (kind) {
-    case OpKind::DeviceSend:
-    case OpKind::DeviceRecvReduce:
-    case OpKind::DeviceRecv:
+    case OpKind::Send:
+    case OpKind::Recv:
+    case OpKind::RecvReduce:
+    case OpKind::Reduce:
       return CollectiveBufferRole::Input;
-    case OpKind::DeviceReduce:
-      return CollectiveBufferRole::Input;
-    case OpKind::DeviceCopy:
+    case OpKind::Copy:
       return is_src ? (copy_from_staging ? CollectiveBufferRole::Scratch
                                          : CollectiveBufferRole::Input)
                     : CollectiveBufferRole::Output;
-    case OpKind::TransportSend:
-      return is_src ? CollectiveBufferRole::Input
-                    : CollectiveBufferRole::Scratch;
-    case OpKind::TransportRecv:
-      return is_src ? CollectiveBufferRole::Input
-                    : CollectiveBufferRole::Scratch;
   }
   return CollectiveBufferRole::Input;
 }
@@ -61,11 +53,13 @@ class Backend {
   virtual ~Backend() = default;
 
   virtual char const* name() const = 0;
-  virtual void validate(TiledResult const& plan,
-                        CollectiveBinding& binding) = 0;
+  virtual void validate(TiledResult const& tiled,
+                         void* input_ptr, void* output_ptr,
+                         void* scratch_ptr) = 0;
   virtual bool supports(OpKind kind) const = 0;
   virtual BackendToken submit(Op const& op, OpBindings const& bind,
-                              CollectiveBinding& binding) = 0;
+                               void* input_ptr, void* output_ptr,
+                               void* scratch_ptr) = 0;
   virtual size_t drain(BackendToken* out, size_t max_count) = 0;
   virtual void stop(uint32_t stream_id) { (void)stream_id; }
 };

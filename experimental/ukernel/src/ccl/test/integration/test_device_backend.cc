@@ -117,7 +117,7 @@ void drain_all(DeviceBackend& backend, std::vector<BackendToken> const& tokens,
 }
 
 void submit_and_drain(DeviceBackend& backend, Op const& op,
-                      CollectiveBinding& binding,
+                      CollectiveMemory& mem,
                       std::chrono::milliseconds timeout) {
   OpBindings bind;
   bind.stream_index = 0;
@@ -185,7 +185,7 @@ CollectiveBinding make_memory(int rank, void* tensor_ptr, size_t tensor_bytes,
 }
 
 void validate_backend_for_op(DeviceBackend& backend, Op const& op,
-                             CollectiveBinding& binding) {
+                             CollectiveMemory& mem) {
   CollectivePlan plan;
   plan.nranks = 1;
   plan.rank = 0;
@@ -211,7 +211,7 @@ void test_device_copy() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend;
 
-  Op op = make_device_op(OpKind::DeviceCopy, 0, 0, kBytes, kTestInputBufferId,
+  Op op = make_device_op(OpKind::Copy, 0, 0, kBytes, kTestInputBufferId,
                          kTestScratchBufferId);
   validate_backend_for_op(backend, op, memory);
   submit_and_drain(backend, op, memory, std::chrono::seconds(5));
@@ -240,7 +240,7 @@ void test_device_reduce_sum() {
   DeviceBackend backend;
 
   Op op =
-      make_device_op(OpKind::DeviceReduce, 0, 0, kBytes, kTestScratchBufferId,
+      make_device_op(OpKind::Reduce, 0, 0, kBytes, kTestScratchBufferId,
                      kTestInputBufferId, ReductionKind::Sum);
   validate_backend_for_op(backend, op, memory);
   submit_and_drain(backend, op, memory, std::chrono::seconds(5));
@@ -277,7 +277,7 @@ void test_device_reduce_pipeline_same_flow() {
   for (size_t tile = 0; tile < kTiles; ++tile) {
     size_t offset = tile * kTileElems * sizeof(float);
     Op op =
-        make_device_op(static_cast<uint32_t>(tile), OpKind::DeviceReduce, 0,
+        make_device_op(static_cast<uint32_t>(tile), OpKind::Reduce, 0,
                        offset, kTileElems * sizeof(float), kTestScratchBufferId,
                        kTestInputBufferId, ReductionKind::Sum);
     if (!validated) {

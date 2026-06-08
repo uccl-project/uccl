@@ -5,7 +5,6 @@
 #include "../utils.h"
 #include <algorithm>
 #include <stdexcept>
-#include <string>
 
 namespace UKernel {
 namespace CCL {
@@ -90,25 +89,20 @@ char const* DeviceBackend::name() const { return "device"; }
 
 // ── validate — one-time init ──────────────────────────────────────────
 
-void DeviceBackend::validate(TiledResult const& plan,
-                             CollectiveBinding& binding) {
+void DeviceBackend::validate(TiledResult const& tiled,
+                             void* input_ptr, void* output_ptr,
+                             void* scratch_ptr) {
+  (void)input_ptr;
+  (void)output_ptr;
   int current_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&current_device));
   if (current_device != local_device_idx_)
     GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
 
-  if (plan.staging_bytes_required != 0 &&
-      binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr)
+  if (tiled.staging_bytes_required != 0 && scratch_ptr == nullptr)
     throw std::invalid_argument("device backend staging buffer is missing");
-  if (plan.staging_bytes_required >
-      binding.role_buffer(CollectiveBufferRole::Scratch).bytes)
-    throw std::invalid_argument("device backend staging capacity insufficient");
 
-  // Remember reduction dtype from binding (for DeviceRecvReduce kernel
-  // dispatch).
-  reduction_dtype_ =
-      binding.role_buffer(CollectiveBufferRole::Input).layout.dtype;
-  reduction_kind_ = plan.reduction;
+  reduction_kind_ = tiled.reduction;
 
   // Pre-warm runtime & workers.
   ensure_runtime();
@@ -121,35 +115,41 @@ void DeviceBackend::set_signal_buffers(std::vector<GpuSignalPeer> const& bufs) {
 }
 
 bool DeviceBackend::supports(OpKind kind) const {
-  return kind == OpKind::DeviceCopy || kind == OpKind::DeviceReduce ||
-         kind == OpKind::DeviceSend || kind == OpKind::DeviceRecvReduce ||
-         kind == OpKind::DeviceRecv;
+  return kind == OpKind::Copy || kind == OpKind::Reduce ||
+         kind == OpKind::Send || kind == OpKind::RecvReduce ||
+         kind == OpKind::Recv;
 }
 
 BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
-                                   CollectiveBinding& binding) {
+                                    void* input_ptr, void* output_ptr,
+                                    void* scratch_ptr) {
+  (void)output_ptr;
   if (!supports(op.kind))
     throw std::invalid_argument("unsupported op kind for device backend");
   if (worker_pool_ == nullptr)
     throw std::runtime_error(
         "device backend not initialized — call validate() first");
 
+  auto role_src = buf_role(op.kind, true, op.copy_from_staging);
+  auto role_dst = buf_role(op.kind, false, op.copy_from_staging);
+
+  auto ptr_for = [&](CollectiveBufferRole role) -> void* {
+    switch (role) {
+      case CollectiveBufferRole::Input:  return input_ptr;
+      case CollectiveBufferRole::Output: return output_ptr;
+      case CollectiveBufferRole::Scratch: return scratch_ptr;
+    }
+    return nullptr;
+  };
+
   void const* src =
       bind.resolved_src
           ? bind.resolved_src
-          : byte_offset(
-                binding
-                    .role_buffer(buf_role(op.kind, true, op.copy_from_staging))
-                    .local_ptr,
-                op.src_off);
+          : byte_offset(ptr_for(role_src), op.src_off);
   void* dst =
       bind.resolved_dst
           ? bind.resolved_dst
-          : byte_offset(
-                binding
-                    .role_buffer(buf_role(op.kind, false, op.copy_from_staging))
-                    .local_ptr,
-                op.dst_off);
+          : byte_offset(ptr_for(role_dst), op.dst_off);
 
   Device::TaskArgs args{};
   args.src = const_cast<void*>(src);
@@ -157,46 +157,46 @@ BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
   args.dst = dst;
   args.bytes = op.bytes;
   args.src_rank =
-      op.src_peer != ~0u ? static_cast<int>(op.src_peer) : binding.local_rank();
+      op.src_peer != ~0u ? static_cast<int>(op.src_peer) : -1;
   args.dst_rank =
-      op.dst_peer != ~0u ? static_cast<int>(op.dst_peer) : binding.local_rank();
+      op.dst_peer != ~0u ? static_cast<int>(op.dst_peer) : -1;
   args.src_device = bind.src_device >= 0 ? bind.src_device : local_device_idx_;
   args.dst_device = bind.dst_device >= 0 ? bind.dst_device : local_device_idx_;
   args.set_red_type(to_reduce_type(
-      (op.kind == OpKind::DeviceReduce || op.kind == OpKind::DeviceRecvReduce)
+      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
           ? reduction_kind_
           : ReductionKind::None));
 
   // SM IPC: resolve signal buffer from gpu_signal_bufs_.
-  if (op.kind == OpKind::DeviceSend && op.dst_peer != ~0u &&
+  if (op.kind == OpKind::Send && op.dst_peer != ~0u &&
       static_cast<size_t>(op.dst_peer) < gpu_signal_bufs_.size()) {
     args.src2 = gpu_signal_bufs_[op.dst_peer].remote;
-  } else if ((op.kind == OpKind::DeviceRecvReduce ||
-              op.kind == OpKind::DeviceRecv) &&
+  } else if ((op.kind == OpKind::RecvReduce ||
+              op.kind == OpKind::Recv) &&
              op.src_peer != ~0u &&
              static_cast<size_t>(op.src_peer) < gpu_signal_bufs_.size()) {
     args.src2 = gpu_signal_bufs_[op.src_peer].local;
   }
-  if (op.kind == OpKind::DeviceSend || op.kind == OpKind::DeviceRecvReduce ||
-      op.kind == OpKind::DeviceRecv) {
+  if (op.kind == OpKind::Send || op.kind == OpKind::RecvReduce ||
+      op.kind == OpKind::Recv) {
     uint8_t red = static_cast<uint8_t>(to_reduce_type(
-        op.kind == OpKind::DeviceRecvReduce ? reduction_kind_
-                                            : ReductionKind::None));
+        op.kind == OpKind::RecvReduce ? reduction_kind_
+                                      : ReductionKind::None));
     args.redTypeRaw = (bind.signal_seq << 8) | red;
   }
 
   Device::TaskType task_type;
   switch (op.kind) {
-    case OpKind::DeviceReduce:
+    case OpKind::Reduce:
       task_type = Device::TaskType::CollReduce;
       break;
-    case OpKind::DeviceRecvReduce:
+    case OpKind::RecvReduce:
       task_type = Device::TaskType::CollRecvReduce;
       break;
-    case OpKind::DeviceSend:
+    case OpKind::Send:
       task_type = Device::TaskType::CollSend;
       break;
-    case OpKind::DeviceRecv:
+    case OpKind::Recv:
       task_type = Device::TaskType::CollRecv;
       break;
     default:
@@ -205,8 +205,8 @@ BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
   }
 
   ScalarType op_dtype =
-      (op.kind == OpKind::DeviceReduce || op.kind == OpKind::DeviceRecvReduce)
-          ? reduction_dtype_
+      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
+          ? ScalarType::Float32
           : ScalarType::Int8;
 
   uint32_t stream_id = bind.stream_index;
@@ -339,11 +339,11 @@ uint32_t DeviceBackend::acquire_fifo(uint32_t stream_id, uint32_t num_blocks) {
 
 uint32_t DeviceBackend::suggested_num_blocks(Op const& op) const {
   size_t elem_bytes =
-      (op.kind == OpKind::DeviceReduce || op.kind == OpKind::DeviceRecvReduce)
+      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
           ? scalar_type_size(reduction_dtype_)
           : 1;
   size_t bytes_per_block =
-      (op.kind == OpKind::DeviceReduce) ? (128u << 10) : (1u << 20);
+      (op.kind == OpKind::Reduce) ? (128u << 10) : (1u << 20);
   if (elem_bytes > 1) bytes_per_block *= elem_bytes;
   uint32_t blocks = static_cast<uint32_t>(
       std::max<size_t>(1, (op.bytes + bytes_per_block - 1) / bytes_per_block));

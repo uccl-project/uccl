@@ -28,22 +28,24 @@ class CommunicatorTransportBackend final : public Backend {
   ~CommunicatorTransportBackend() override;
 
   char const* name() const override;
-  void validate(TiledResult const& plan,
-                CollectiveBinding& binding) override;
+  void validate(TiledResult const& tiled,
+                void* input_ptr, void* output_ptr,
+                void* scratch_ptr) override;
   bool supports(OpKind kind) const override;
   BackendToken submit(Op const& op, OpBindings const& bind,
-                      CollectiveBinding& binding) override;
+                      void* input_ptr, void* output_ptr,
+                      void* scratch_ptr) override;
   size_t drain(BackendToken* out, size_t max_count) override;
 
   UKernel::Transport::Communicator& communicator();
   UKernel::Transport::Communicator const& communicator() const;
 
  private:
-  void initialize_memory_bindings(CollectiveBinding& binding);
+  void initialize_memory_bindings(void* input_ptr, void* output_ptr,
+                                  void* scratch_ptr);
   void ensure_peer_path(int peer_rank, bool need_put, bool need_wait);
 
   int resolve_peer_rank(Op const& op) const;
-  bool is_transport_fresh(CollectiveBinding const& binding) const;
 
   std::unique_ptr<UKernel::Transport::Communicator> communicator_;
   uint64_t next_token_ = 1;

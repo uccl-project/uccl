@@ -27,11 +27,13 @@ class DeviceBackend final : public Backend {
   ~DeviceBackend() override;
 
   char const* name() const override;
-  void validate(TiledResult const& plan,
-                CollectiveBinding& binding) override;
+  void validate(TiledResult const& tiled,
+                void* input_ptr, void* output_ptr,
+                void* scratch_ptr) override;
   bool supports(OpKind kind) const override;
   BackendToken submit(Op const& op, OpBindings const& bind,
-                      CollectiveBinding& binding) override;
+                      void* input_ptr, void* output_ptr,
+                      void* scratch_ptr) override;
   size_t drain(BackendToken* out, size_t max_count) override;
   void stop(uint32_t stream_id) override;
 
@@ -61,7 +63,6 @@ class DeviceBackend final : public Backend {
   int sm_count_ = 1;
   std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
   uint64_t next_token_ = 1;
-  ScalarType reduction_dtype_ = ScalarType::UInt8;
   ReductionKind reduction_kind_ = ReductionKind::None;
   std::unordered_map<uint32_t, StreamRec> active_streams_;
   std::vector<uint32_t> free_fifos_;

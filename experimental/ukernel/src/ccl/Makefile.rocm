@@ -35,7 +35,7 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(HIP_LIB) \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := -lnuma
 
-CCL_CORE_SRC := topology.cc plan.cc executor.cc
+CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc scheduler.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)

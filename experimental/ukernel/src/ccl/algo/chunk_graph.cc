@@ -1,8 +1,7 @@
-#include "coll_algo.h"
+#include "chunk_graph.h"
 #include "topology.h"
 #include "utils.h"
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -13,9 +12,7 @@ namespace CCL {
 
 namespace {
 
-constexpr uint32_t kNoOp = std::numeric_limits<uint32_t>::max();
 
-size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
 size_t balanced_shard_offset_bytes(size_t bytes, size_t elem_bytes, int nranks,
                                    int owner_rank) {
@@ -86,33 +83,33 @@ void validate_alltoall_splits(std::vector<size_t> const& splits, int nranks,
 void require_collective_config(CollectiveConfig const& config, bool inplace) {
   (void)inplace;
   if (config.nranks < 2) {
-    throw std::invalid_argument("collective plan requires at least two ranks");
+    throw std::invalid_argument("collective requires at least two ranks");
   }
   if (config.rank < 0 || config.rank >= config.nranks) {
     throw std::invalid_argument("collective rank out of range");
   }
   if (config.tile_bytes == 0) {
-    throw std::invalid_argument("collective plan tile_bytes must be positive");
+    throw std::invalid_argument("collective tile_bytes must be positive");
   }
 
   size_t elem_bytes = scalar_type_size(config.dtype);
   if (elem_bytes == 0) {
     throw std::invalid_argument(
-        "collective plan dtype has invalid element size");
+        "collective dtype has invalid element size");
   }
   if (config.tile_bytes % elem_bytes != 0) {
     throw std::invalid_argument(
-        "collective plan tile_bytes must be aligned to dtype size");
+        "collective tile_bytes must be aligned to dtype size");
   }
 
-  if (config.collective == CollectiveKind::AllReduce) {
+  if (config.kind == CollKind::AllReduceRing) {
     if (config.input_bytes == 0) {
       throw std::invalid_argument(
-          "collective plan input_bytes must be positive");
+          "collective input_bytes must be positive");
     }
     if (config.input_bytes % elem_bytes != 0) {
       throw std::invalid_argument(
-          "collective plan input_bytes must be aligned to dtype size");
+          "collective input_bytes must be aligned to dtype size");
     }
     return;
   }
@@ -153,7 +150,7 @@ void require_collective_config(CollectiveConfig const& config, bool inplace) {
 
 CollAlgo make_empty_algo(CollectiveConfig const& config) {
   CollAlgo algo;
-  algo.collective = config.collective;
+  algo.kind = CollKind::AllReduceRing;
   algo.nranks = config.nranks;
   algo.rank = config.rank;
   algo.input_bytes = config.input_bytes;
@@ -162,25 +159,24 @@ CollAlgo make_empty_algo(CollectiveConfig const& config) {
   return algo;
 }
 
-struct AlgoBuilder {
-  explicit AlgoBuilder(CollAlgo algo_in) : algo(std::move(algo_in)) {}
+struct ChunkBuilder {
+  explicit ChunkBuilder(CollAlgo algo_in) : algo(std::move(algo_in)) {}
 
   uint32_t add_op(OpKind kind, size_t bytes, size_t src_off, size_t dst_off,
-                  uint32_t src_peer, uint32_t dst_peer,
-                  std::vector<uint32_t> deps, bool copy_from_staging = false,
-                  TileOrder tile_order = TileOrder::Independent) {
-    AlgoOp op;
-    op.kind = kind;
-    op.bytes = bytes;
-    op.src_off = src_off;
-    op.dst_off = dst_off;
-    op.src_peer = src_peer;
-    op.dst_peer = dst_peer;
-    op.deps = std::move(deps);
-    op.copy_from_staging = copy_from_staging;
-    op.tile_order = tile_order;
-    uint32_t idx = static_cast<uint32_t>(algo.ops.size());
-    algo.ops.push_back(std::move(op));
+                  int src_rank, int dst_rank,
+                  std::vector<uint32_t> deps,
+                  bool sequential_tiles = false) {
+    Chunk chunk;
+    chunk.op = kind;
+    chunk.bytes = bytes;
+    chunk.src_off = src_off;
+    chunk.dst_off = dst_off;
+    chunk.src_rank = src_rank;
+    chunk.dst_rank = dst_rank;
+    chunk.deps = std::move(deps);
+    chunk.sequential_tiles = sequential_tiles;
+    uint32_t idx = static_cast<uint32_t>(algo.chunks.size());
+    algo.chunks.push_back(std::move(chunk));
     return idx;
   }
 
@@ -189,11 +185,11 @@ struct AlgoBuilder {
 
 CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
   RingTopology ring{config.nranks};
-  CollAlgo plan = make_empty_algo(config);
-  plan.collective = CollectiveKind::AllReduce;
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllReduceRing;
   size_t elem_bytes = scalar_type_size(config.dtype);
 
-  AlgoBuilder builder(std::move(plan));
+  ChunkBuilder builder(std::move(algo));
 
   std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
 
@@ -212,15 +208,15 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::DeviceSend, send_bytes, offset, offset, ~0u,
+      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1,
                      send_peer, std::move(deps));
     }
 
     if (recv_bytes > 0) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t reduce_op = builder.add_op(OpKind::DeviceRecvReduce, recv_bytes,
-                                          offset, offset, recv_peer, ~0u, {});
+      uint32_t reduce_op = builder.add_op(OpKind::RecvReduce, recv_bytes,
+                                          offset, offset, recv_peer, -1, {});
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
     }
   }
@@ -240,15 +236,15 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::DeviceSend, send_bytes, offset, offset, ~0u,
+      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1,
                      send_peer, std::move(deps));
     }
 
     if (recv_bytes > 0) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t recv_op = builder.add_op(OpKind::DeviceRecv, recv_bytes, offset,
-                                        offset, recv_peer, ~0u, {});
+      uint32_t recv_op = builder.add_op(OpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {});
       ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
     }
   }
@@ -258,10 +254,10 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
 
 CollAlgo build_alltoall_pairwise_algo_dma(
     CollectiveConfig const& config, bool inplace) {
-  CollAlgo plan = make_empty_algo(config);
-  plan.collective = CollectiveKind::AllToAll;
-  plan.input_bytes = alltoall_input_bytes(config);
-  plan.output_bytes = alltoall_output_bytes(config);
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllToAllPairwise;
+  algo.input_bytes = alltoall_input_bytes(config);
+  algo.output_bytes = alltoall_output_bytes(config);
 
   size_t input_bytes = alltoall_input_bytes(config);
   size_t output_bytes = alltoall_output_bytes(config);
@@ -277,7 +273,7 @@ CollAlgo build_alltoall_pairwise_algo_dma(
   std::vector<size_t> input_prefix = prefix_bytes(input_splits);
   std::vector<size_t> output_prefix = prefix_bytes(output_splits);
 
-  AlgoBuilder builder(std::move(plan));
+  ChunkBuilder builder(std::move(algo));
 
   size_t self_input_offset = input_prefix[static_cast<size_t>(config.rank)];
   size_t self_output_offset = output_prefix[static_cast<size_t>(config.rank)];
@@ -287,8 +283,8 @@ CollAlgo build_alltoall_pairwise_algo_dma(
         "alltoall self split size must match between input and output");
   }
   if (self_slice_bytes != 0 && !inplace) {
-    builder.add_op(OpKind::DeviceCopy, self_slice_bytes, self_input_offset,
-                   self_output_offset, ~0u, ~0u, {});
+    builder.add_op(OpKind::Copy, self_slice_bytes, self_input_offset,
+                   self_output_offset, -1, -1, {});
   }
 
   size_t peer_slot = 0;
@@ -304,22 +300,22 @@ CollAlgo build_alltoall_pairwise_algo_dma(
     uint32_t send_op = kNoOp;
     if (send_bytes > 0) {
       send_op = builder.add_op(
-          OpKind::TransportSend, send_bytes, send_offset, staging_offset, 0,
-          peer, {}, /*copy_from_staging=*/false, TileOrder::Sequential);
+          OpKind::Send, send_bytes, send_offset, staging_offset, 0,
+          peer, {}, /*sequential_tiles=*/true);
     }
 
     if (recv_bytes > 0) {
       uint32_t recv_op =
-          builder.add_op(OpKind::TransportRecv, recv_bytes, recv_offset,
+          builder.add_op(OpKind::Recv, recv_bytes, recv_offset,
                          staging_offset, peer, 0, {},
-                         /*copy_from_staging=*/false, TileOrder::Sequential);
+                         /*sequential_tiles=*/true);
 
       std::vector<uint32_t> copy_deps;
       add_dep(copy_deps, send_op);
       add_dep(copy_deps, recv_op);
-      builder.add_op(OpKind::DeviceCopy, recv_bytes, staging_offset,
-                     recv_offset, ~0u, ~0u, std::move(copy_deps),
-                     /*copy_from_staging=*/true, TileOrder::Sequential);
+      builder.add_op(OpKind::Copy, recv_bytes, staging_offset,
+                     recv_offset, -1, -1, std::move(copy_deps),
+                     /*sequential_tiles=*/true);
     }
 
     ++peer_slot;
@@ -330,10 +326,10 @@ CollAlgo build_alltoall_pairwise_algo_dma(
 
 CollAlgo build_alltoall_pairwise_algo_sm(
     CollectiveConfig const& config, bool inplace) {
-  CollAlgo plan = make_empty_algo(config);
-  plan.collective = CollectiveKind::AllToAll;
-  plan.input_bytes = alltoall_input_bytes(config);
-  plan.output_bytes = alltoall_output_bytes(config);
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllToAllPairwise;
+  algo.input_bytes = alltoall_input_bytes(config);
+  algo.output_bytes = alltoall_output_bytes(config);
 
   size_t input_bytes = alltoall_input_bytes(config);
   size_t output_bytes = alltoall_output_bytes(config);
@@ -349,7 +345,7 @@ CollAlgo build_alltoall_pairwise_algo_sm(
   std::vector<size_t> input_prefix = prefix_bytes(input_splits);
   std::vector<size_t> output_prefix = prefix_bytes(output_splits);
 
-  AlgoBuilder builder(std::move(plan));
+  ChunkBuilder builder(std::move(algo));
 
   size_t self_input_offset = input_prefix[static_cast<size_t>(config.rank)];
   size_t self_output_offset = output_prefix[static_cast<size_t>(config.rank)];
@@ -359,8 +355,8 @@ CollAlgo build_alltoall_pairwise_algo_sm(
         "alltoall self split size must match between input and output");
 
   if (self_slice_bytes != 0 && !inplace) {
-    builder.add_op(OpKind::DeviceCopy, self_slice_bytes, self_input_offset,
-                   self_output_offset, ~0u, ~0u, {});
+    builder.add_op(OpKind::Copy, self_slice_bytes, self_input_offset,
+                   self_output_offset, -1, -1, {});
   }
 
   for (int peer = 0; peer < config.nranks; ++peer) {
@@ -372,12 +368,12 @@ CollAlgo build_alltoall_pairwise_algo_sm(
     size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
 
     if (send_bytes > 0) {
-      builder.add_op(OpKind::DeviceSend, send_bytes, send_offset, send_offset,
-                     ~0u, peer, {});
+      builder.add_op(OpKind::Send, send_bytes, send_offset, send_offset,
+                     -1, peer, {});
     }
     if (recv_bytes > 0) {
-      builder.add_op(OpKind::DeviceRecv, recv_bytes, recv_offset, recv_offset,
-                     peer, ~0u, {});
+      builder.add_op(OpKind::Recv, recv_bytes, recv_offset, recv_offset,
+                     peer, -1, {});
     }
   }
 
@@ -389,18 +385,10 @@ CollAlgo build_alltoall_pairwise_algo_sm(
 CollAlgo build_coll_algo(CollectiveConfig const& config,
                                            bool inplace) {
   require_collective_config(config, inplace);
-  switch (config.collective) {
-    case CollectiveKind::AllReduce:
-      if (config.algorithm != AlgorithmKind::Ring) {
-        throw std::invalid_argument(
-            "allreduce currently supports only ring algorithm");
-      }
+  switch (config.kind) {
+    case CollKind::AllReduceRing:
       return build_allreduce_ring_algo(config);
-    case CollectiveKind::AllToAll:
-      if (config.algorithm != AlgorithmKind::Pairwise) {
-        throw std::invalid_argument(
-            "alltoall currently supports only pairwise algorithm");
-      }
+    case CollKind::AllToAllPairwise:
       if (config.use_sm_ipc)
         return build_alltoall_pairwise_algo_sm(config, inplace);
       return build_alltoall_pairwise_algo_dma(config, inplace);

@@ -1,5 +1,5 @@
 #include "backend_test_utils.h"
-#include "coll_algo.h"
+#include "algo/chunk_graph.h"
 #include "coll_config.h"
 #include "coll_types.h"
 #include "scheduler.h"
@@ -31,16 +31,16 @@ void test_scalar_type_sizes() {
 
 void test_enum_distinct_values() {
   printf("[test] enum distinct values...\n");
-  assert(static_cast<uint32_t>(CollectiveKind::AllReduce) !=
-         static_cast<uint32_t>(CollectiveKind::AllToAll));
-  assert(static_cast<uint32_t>(AlgorithmKind::Ring) !=
-         static_cast<uint32_t>(AlgorithmKind::Pairwise));
-  assert(static_cast<uint32_t>(OpKind::TransportSend) !=
-         static_cast<uint32_t>(OpKind::DeviceCopy));
-  assert(static_cast<uint32_t>(OpKind::DeviceSend) !=
-         static_cast<uint32_t>(OpKind::DeviceRecv));
-  assert(static_cast<uint32_t>(OpKind::DeviceRecv) !=
-         static_cast<uint32_t>(OpKind::DeviceRecvReduce));
+  assert(static_cast<uint32_t>(CollKind::AllReduceRing) !=
+         static_cast<uint32_t>(CollKind::AllToAllPairwise));
+  assert(static_cast<uint32_t>(CollKind::AllReduceRing) !=
+         static_cast<uint32_t>(CollKind::AllToAllPairwise));
+  assert(static_cast<uint32_t>(OpKind::Send) !=
+         static_cast<uint32_t>(OpKind::Copy));
+  assert(static_cast<uint32_t>(OpKind::Send) !=
+         static_cast<uint32_t>(OpKind::Recv));
+  assert(static_cast<uint32_t>(OpKind::Recv) !=
+         static_cast<uint32_t>(OpKind::RecvReduce));
   assert(static_cast<uint32_t>(ReductionKind::None) !=
          static_cast<uint32_t>(ReductionKind::Sum));
 }
@@ -50,7 +50,7 @@ void test_enum_distinct_values() {
 void test_collective_config_defaults() {
   printf("[test] collective config defaults...\n");
   CollectiveConfig cfg;
-  assert(cfg.collective == CollectiveKind::AllReduce);
+  assert(cfg.kind == CollKind::AllReduceRing);
   assert(cfg.nranks == 1);
   assert(cfg.rank == 0);
   assert(cfg.input_bytes == 0);
@@ -58,7 +58,7 @@ void test_collective_config_defaults() {
   assert(cfg.tile_bytes == 0);
   assert(cfg.input_split_bytes.empty());
   assert(cfg.output_split_bytes.empty());
-  assert(cfg.algorithm == AlgorithmKind::Ring);
+  assert(cfg.kind == CollKind::AllReduceRing);
   assert(cfg.dtype == ScalarType::Float32);
   assert(cfg.reduction == ReductionKind::Sum);
   assert(cfg.use_sm_ipc == true);
@@ -67,26 +67,26 @@ void test_collective_config_defaults() {
 void test_collective_config_field_assignment() {
   printf("[test] collective config field assignment...\n");
   CollectiveConfig cfg;
-  cfg.collective = CollectiveKind::AllToAll;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.nranks = 8;
   cfg.rank = 3;
   cfg.input_bytes = 65536;
   cfg.output_bytes = 65536;
   cfg.tile_bytes = 512;
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.dtype = ScalarType::Float16;
   cfg.reduction = ReductionKind::Prod;
   cfg.use_sm_ipc = false;
   cfg.input_split_bytes = {16, 32};
   cfg.output_split_bytes = {16, 32};
-  assert(cfg.collective == CollectiveKind::AllToAll);
+  assert(cfg.kind == CollKind::AllToAllPairwise);
   assert(cfg.nranks == 8);
   assert(cfg.rank == 3);
   assert(cfg.input_bytes == 65536);
   assert(cfg.output_bytes == 65536);
   assert(cfg.tile_bytes == 512);
-  assert(cfg.algorithm == AlgorithmKind::Pairwise);
+  assert(cfg.kind == CollKind::AllToAllPairwise);
   assert(cfg.dtype == ScalarType::Float16);
   assert(cfg.reduction == ReductionKind::Prod);
   assert(cfg.use_sm_ipc == false);
@@ -96,36 +96,35 @@ void test_collective_config_field_assignment() {
 
 // ── Layer 3: coll_algo ──────────────────────────────────────────────────
 
-void test_algo_op_defaults() {
-  printf("[test] AlgoOp defaults...\n");
-  AlgoOp op;
-  assert(op.kind == OpKind::DeviceCopy);
-  assert(op.bytes == 0);
-  assert(op.src_off == 0);
-  assert(op.dst_off == 0);
-  assert(op.src_peer == 0);
-  assert(op.dst_peer == 0);
-  assert(op.copy_from_staging == false);
-  assert(op.tile_order == TileOrder::Independent);
-  assert(op.deps.empty());
+void test_chunk_defaults() {
+  printf("[test] Chunk defaults...\n");
+  Chunk chunk;
+  assert(chunk.op == OpKind::Copy);
+  assert(chunk.bytes == 0);
+  assert(chunk.src_off == 0);
+  assert(chunk.dst_off == 0);
+  assert(chunk.src_rank == -1);
+  assert(chunk.dst_rank == -1);
+  assert(chunk.sequential_tiles == false);
+  assert(chunk.deps.empty());
 }
 
-void test_tile_order_values() {
-  printf("[test] TileOrder values...\n");
-  assert(static_cast<uint8_t>(TileOrder::Independent) !=
-         static_cast<uint8_t>(TileOrder::Sequential));
+void test_sequential_tiles_values() {
+  printf("[test] SequentialTiles values...\n");
+  assert(static_cast<uint8_t>(false) !=
+         static_cast<uint8_t>(true));
 }
 
 void test_coll_algo_defaults() {
   printf("[test] CollAlgo defaults...\n");
   CollAlgo algo;
-  assert(algo.collective == CollectiveKind::AllReduce);
+  assert(algo.kind == CollKind::AllReduceRing);
   assert(algo.nranks == 1);
   assert(algo.rank == 0);
   assert(algo.input_bytes == 0);
   assert(algo.output_bytes == 0);
   assert(algo.reduction == ReductionKind::None);
-  assert(algo.ops.empty());
+  assert(algo.chunks.empty());
 }
 
 void test_build_coll_algo_empty_ops_for_zero_data() {
@@ -152,7 +151,7 @@ void test_build_coll_algo_ring_allreduce_basic() {
   cfg.dtype = ScalarType::Float32;
   cfg.reduction = ReductionKind::Sum;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  assert(algo.collective == CollectiveKind::AllReduce);
+  assert(algo.kind == CollKind::AllReduceRing);
   assert(algo.nranks == 4);
   assert(algo.rank == 1);
   assert(algo.input_bytes == 4096);
@@ -160,54 +159,54 @@ void test_build_coll_algo_ring_allreduce_basic() {
 
   // 4 ranks ring allreduce: 2 phases × 3 ring_steps, 2 ops per step
   // = 2 × 3 × 2 = 12 abstract ops.
-  assert(!algo.ops.empty());
-  assert(algo.ops.size() == 12);
+  assert(!algo.chunks.empty());
+  assert(algo.chunks.size() == 12);
 
   // Phase 1 (reduce-scatter) should have DeviceRecvReduce ops.
   bool saw_recv_reduce = false;
   bool saw_send = false;
-  for (auto const& op : algo.ops) {
-    if (op.kind == OpKind::DeviceRecvReduce) saw_recv_reduce = true;
-    if (op.kind == OpKind::DeviceSend) saw_send = true;
-    assert(op.tile_order == TileOrder::Independent);
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == OpKind::RecvReduce) saw_recv_reduce = true;
+    if (chunk.op == OpKind::Send) saw_send = true;
+    assert(chunk.sequential_tiles == false);
   }
   assert(saw_recv_reduce);
   assert(saw_send);
 
   // Dependencies should form a chain across ring steps.
   bool saw_dep = false;
-  for (auto const& op : algo.ops)
-    if (!op.deps.empty()) saw_dep = true;
+  for (auto const& chunk : algo.chunks)
+    if (!chunk.deps.empty()) saw_dep = true;
   assert(saw_dep);
 }
 
 void test_build_coll_algo_alltoall_sm_basic() {
   printf("[test] build_coll_algo alltoall sm basic...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = true;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  assert(algo.collective == CollectiveKind::AllToAll);
-  assert(!algo.ops.empty());
+  assert(algo.kind == CollKind::AllToAllPairwise);
+  assert(!algo.chunks.empty());
   // All SM IPC ops should have Independent tile order.
-  for (auto const& op : algo.ops)
-    assert(op.tile_order == TileOrder::Independent);
+  for (auto const& chunk : algo.chunks)
+    assert(chunk.sequential_tiles == false);
 }
 
 void test_build_coll_algo_alltoall_dma_basic() {
   printf("[test] build_coll_algo alltoall dma basic...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  assert(algo.collective == CollectiveKind::AllToAll);
-  assert(!algo.ops.empty());
-  // DMA ops should have some Sequential tile_order.
+  assert(algo.kind == CollKind::AllToAllPairwise);
+  assert(!algo.chunks.empty());
+  // DMA ops should have some Sequential sequential_tiles.
   bool saw_sequential = false;
-  for (auto const& op : algo.ops) {
-    if (op.tile_order == TileOrder::Sequential) saw_sequential = true;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.sequential_tiles == true) saw_sequential = true;
   }
   assert(saw_sequential);
 }
@@ -224,7 +223,7 @@ void test_schedule_ops_empty() {
 void test_schedule_ops_single() {
   printf("[test] schedule_ops single...\n");
   std::vector<Op> ops(1);
-  ops[0].kind = OpKind::DeviceCopy;
+  ops[0].kind = OpKind::Copy;
   ops[0].bytes = 128;
   Schedule s = schedule_ops(ops);
   assert(s.num_streams == 1);
@@ -237,7 +236,7 @@ void test_schedule_ops_independent() {
   printf("[test] schedule_ops independent ops...\n");
   std::vector<Op> ops(5);
   for (int i = 0; i < 5; ++i) {
-    ops[i].kind = OpKind::DeviceCopy;
+    ops[i].kind = OpKind::Copy;
     ops[i].bytes = 128;
   }
   Schedule s = schedule_ops(ops);
@@ -251,7 +250,7 @@ void test_schedule_ops_chain() {
   printf("[test] schedule_ops chain...\n");
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
-    ops[i].kind = OpKind::DeviceCopy;
+    ops[i].kind = OpKind::Copy;
     ops[i].bytes = 128;
   }
   // op0 → op1 → op2 → op3  (strict sequential chain).
@@ -275,7 +274,7 @@ void test_schedule_ops_diamond() {
   //  3
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
-    ops[i].kind = OpKind::DeviceCopy;
+    ops[i].kind = OpKind::Copy;
     ops[i].bytes = 128;
   }
   ops[1].deps = {0};
@@ -317,8 +316,8 @@ void test_tile_and_schedule_ring_basic() {
 void test_tile_and_schedule_alltoall_sm_basic() {
   printf("[test] tile_and_schedule alltoall sm...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = true;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
@@ -334,8 +333,8 @@ void test_tile_and_schedule_alltoall_sm_basic() {
 void test_tile_and_schedule_alltoall_dma_basic() {
   printf("[test] tile_and_schedule alltoall dma...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
@@ -347,8 +346,8 @@ void test_tile_and_schedule_alltoall_dma_basic() {
 void test_tile_and_schedule_sequential_tile_deps() {
   printf("[test] tile_and_schedule sequential tile deps...\n");
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 1024, 256);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
@@ -368,7 +367,7 @@ void test_schedule_ops_schedule_total_covers_all_ops() {
   for (int test_num = 0; test_num < 20; ++test_num) {
     std::vector<Op> ops(static_cast<size_t>(test_num + 1));
     for (auto& op : ops) {
-      op.kind = OpKind::DeviceCopy;
+      op.kind = OpKind::Copy;
       op.bytes = 128;
     }
     Schedule s = schedule_ops(ops);
@@ -398,8 +397,8 @@ void test_full_pipeline_ring_allreduce() {
 void test_full_pipeline_alltoall_sm() {
   printf("[test] full pipeline alltoall sm...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 2, 8192, 512);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = true;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
@@ -409,8 +408,8 @@ void test_full_pipeline_alltoall_sm() {
 void test_full_pipeline_alltoall_dma() {
   printf("[test] full pipeline alltoall dma...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 0, 4096, 1024);
-  cfg.collective = CollectiveKind::AllToAll;
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
@@ -433,8 +432,8 @@ int main() {
   test_collective_config_field_assignment();
 
   // Layer 3
-  test_algo_op_defaults();
-  test_tile_order_values();
+  test_chunk_defaults();
+  test_sequential_tiles_values();
   test_coll_algo_defaults();
   test_build_coll_algo_empty_ops_for_zero_data();
   test_build_coll_algo_ring_allreduce_basic();

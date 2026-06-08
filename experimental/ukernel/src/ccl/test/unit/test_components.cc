@@ -19,30 +19,30 @@ namespace {
 using TestUtil::throws;
 using TestUtil::wait_until_terminal;
 
-TiledResult build_test_plan(CollectiveKind kind,
-                               CollectiveConfig const& config) {
-  CollectiveBinding binding = Testing::make_test_memory(
+TiledResult build_test_plan(CollKind kind,
+                                CollectiveConfig const& config) {
+  CollectiveMemory mem = Testing::make_test_memory(
       config.rank, config.nranks,
       std::max(config.input_bytes, config.output_bytes));
-  bool inplace =
-      binding.roles.input_buffer_id == binding.roles.output_buffer_id;
+  bool inplace = (mem.input_ptr == mem.output_ptr);
+  (void)mem;
   CollectiveConfig cfg = config;
-  cfg.collective = kind;
-  return build_plan(cfg, inplace);
+  cfg.kind = kind;
+  return build_tiled(cfg, inplace);
 }
 
 
 void test_lowering_routes_ops_to_execution_kinds() {
   printf("[test] lowering routes ops...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  TiledResult tiled = build_test_plan(CollectiveKind::AllReduce, cfg);
+  TiledResult tiled = build_test_plan(CollKind::AllReduceRing, cfg);
 
   Testing::validate_basic_exec_tiled(tiled);
-  assert(Testing::count_exec_ops(tiled, OpKind::DeviceSend) > 0);
-  assert(Testing::count_exec_ops(tiled, OpKind::TransportRecv) > 0 ||
-         Testing::count_exec_ops(tiled, OpKind::DeviceRecvReduce) > 0);
-  assert(Testing::count_exec_ops(tiled, OpKind::DeviceReduce) > 0 ||
-         Testing::count_exec_ops(tiled, OpKind::DeviceRecvReduce) > 0);
+  assert(Testing::count_exec_ops(tiled, OpKind::Send) > 0);
+  assert(Testing::count_exec_ops(tiled, OpKind::Recv) > 0 ||
+         Testing::count_exec_ops(tiled, OpKind::RecvReduce) > 0);
+  assert(Testing::count_exec_ops(tiled, OpKind::Reduce) > 0 ||
+         Testing::count_exec_ops(tiled, OpKind::RecvReduce) > 0);
 }
 
 void test_planner_emits_valid_collective_dags() {
@@ -50,22 +50,22 @@ void test_planner_emits_valid_collective_dags() {
 
   CollectiveConfig allreduce_cfg = Testing::make_test_config(4, 2, 4096, 512);
   TiledResult allreduce_tiled =
-      build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
+      build_test_plan(CollKind::AllReduceRing, allreduce_cfg);
   Testing::validate_basic_tiled(allreduce_tiled);
   assert(allreduce_tiled.input_bytes > 0);
-  assert(Testing::count_ops(allreduce_tiled, OpKind::DeviceSend) > 0);
-  assert(Testing::count_ops(allreduce_tiled, OpKind::DeviceRecvReduce) > 0 ||
-         Testing::count_ops(allreduce_tiled, OpKind::DeviceReduce) > 0);
+  assert(Testing::count_ops(allreduce_tiled, OpKind::Send) > 0);
+  assert(Testing::count_ops(allreduce_tiled, OpKind::RecvReduce) > 0 ||
+         Testing::count_ops(allreduce_tiled, OpKind::Reduce) > 0);
   assert(allreduce_tiled.staging_bytes_required == 0);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256);
-  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
+  alltoall_cfg.kind = CollKind::AllToAllPairwise;
   TiledResult alltoall_tiled =
-      build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
+      build_test_plan(CollKind::AllToAllPairwise, alltoall_cfg);
   Testing::validate_basic_tiled(alltoall_tiled);
   assert(alltoall_tiled.input_bytes > 0);
-  assert(Testing::count_ops(alltoall_tiled, OpKind::DeviceSend) > 0);
-  assert(Testing::count_ops(alltoall_tiled, OpKind::DeviceRecv) > 0);
+  assert(Testing::count_ops(alltoall_tiled, OpKind::Send) > 0);
+  assert(Testing::count_ops(alltoall_tiled, OpKind::Recv) > 0);
   assert(alltoall_tiled.staging_bytes_required == 0);
 }
 
@@ -77,15 +77,15 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   allreduce_cfg.dtype = ScalarType::Float32;
   allreduce_cfg.reduction = ReductionKind::Sum;
   TiledResult allreduce_tiled =
-      build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
+      build_test_plan(CollKind::AllReduceRing, allreduce_cfg);
   Testing::validate_basic_tiled(allreduce_tiled);
   assert(allreduce_tiled.schedule.num_streams >= 1);
   assert(allreduce_tiled.staging_bytes_required == 0);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256);
-  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
+  alltoall_cfg.kind = CollKind::AllToAllPairwise;
   TiledResult alltoall_tiled =
-      build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
+      build_test_plan(CollKind::AllToAllPairwise, alltoall_cfg);
   Testing::validate_basic_tiled(alltoall_tiled);
   assert(alltoall_tiled.schedule.num_streams >= 1);
   assert(alltoall_tiled.staging_bytes_required == 0);
@@ -95,7 +95,7 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   printf("[test] planner builds variable-split alltoall out-of-place...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(3, 1, 96, 16);
-  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.kind = CollKind::AllToAllPairwise;
   cfg.input_bytes = 96;
   cfg.output_bytes = 96;
   cfg.input_split_bytes = {16, 32, 48};
@@ -107,21 +107,21 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
   roles.scratch_buffer_id = 11;
   roles.validate();
 
-  cfg.collective = CollectiveKind::AllToAll;
-  TiledResult tiled = build_plan(cfg, /*inplace=*/false);
+  cfg.kind = CollKind::AllToAllPairwise;
+  TiledResult tiled = build_tiled(cfg, /*inplace=*/false);
   Testing::validate_basic_tiled(tiled);
 
   std::vector<size_t> sent_bytes(3, 0);
   std::vector<size_t> recv_bytes(3, 0);
   size_t self_copy_bytes = 0;
   for (auto const& op : tiled.ops) {
-    if (op.kind == OpKind::DeviceSend) {
+    if (op.kind == OpKind::Send) {
       assert(op.dst_peer >= 0 && op.dst_peer < 3);
       sent_bytes[static_cast<size_t>(op.dst_peer)] += op.bytes;
-    } else if (op.kind == OpKind::DeviceRecv) {
+    } else if (op.kind == OpKind::Recv) {
       assert(op.src_peer >= 0 && op.src_peer < 3);
       recv_bytes[static_cast<size_t>(op.src_peer)] += op.bytes;
-    } else if (op.kind == OpKind::DeviceCopy && op.src_peer == ~0u &&
+    } else if (op.kind == OpKind::Copy && op.src_peer == ~0u &&
                op.dst_peer == ~0u) {
       self_copy_bytes += op.bytes;
     }
@@ -148,7 +148,7 @@ void test_planner_honors_custom_role_buffer_ids() {
   roles.validate();
 
   bool inplace = roles.input_buffer_id == roles.output_buffer_id;
-  TiledResult tiled = build_plan(cfg, inplace);
+  TiledResult tiled = build_tiled(cfg, inplace);
   Testing::validate_basic_tiled(tiled);
   bool saw_input = false;
   bool saw_scratch = false;
@@ -170,7 +170,7 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   printf("[test] two-rank ring allreduce rotates reduced shard...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 512);
-  TiledResult tiled = build_test_plan(CollectiveKind::AllReduce, cfg);
+  TiledResult tiled = build_test_plan(CollKind::AllReduceRing, cfg);
   Testing::validate_basic_tiled(tiled);
 
   assert(tiled.ops.size() > 0);
@@ -180,13 +180,13 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   Op const& ag_send = tiled.ops[2];
   Op const& ag_recv = tiled.ops[3];
 
-  assert(rs_send.kind == OpKind::DeviceSend);
-  assert(rs_reduce.kind == OpKind::DeviceRecvReduce);
+  assert(rs_send.kind == OpKind::Send);
+  assert(rs_reduce.kind == OpKind::RecvReduce);
 
   // The first allgather send must forward the fully reduced shard produced by
   // the reduce-scatter phase, which for rank 0 in a two-rank ring is shard 1.
-  assert(ag_send.kind == OpKind::DeviceSend);
-  assert(ag_recv.kind == OpKind::DeviceRecv);
+  assert(ag_send.kind == OpKind::Send);
+  assert(ag_recv.kind == OpKind::Recv);
 }
 
 void test_three_rank_ring_allreduce_plans_tail_elements() {
@@ -194,7 +194,7 @@ void test_three_rank_ring_allreduce_plans_tail_elements() {
   CollectiveConfig cfg = Testing::make_test_config(3, 1, 4100, 512);
   cfg.dtype = ScalarType::Float32;
   cfg.reduction = ReductionKind::Sum;
-  TiledResult tiled = build_test_plan(CollectiveKind::AllReduce, cfg);
+  TiledResult tiled = build_test_plan(CollKind::AllReduceRing, cfg);
   Testing::validate_basic_tiled(tiled);
   bool saw_short_tail = false;
   for (auto const& op : tiled.ops) {
@@ -208,7 +208,7 @@ void test_lowering_preserves_dependency_dag() {
   printf("[test] plan dependency DAG invariants...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
-  TiledResult tiled = build_test_plan(CollectiveKind::AllReduce, cfg);
+  TiledResult tiled = build_test_plan(CollKind::AllReduceRing, cfg);
 
   Testing::validate_basic_exec_tiled(tiled);
 
@@ -235,7 +235,7 @@ void test_executor_completes_collectives_with_background_progress() {
       Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig allreduce_cfg = Testing::make_test_config(4, 1, 4096, 512);
-  allreduce_cfg.collective = CollectiveKind::AllReduce;
+  allreduce_cfg.kind = CollKind::AllReduceRing;
   CollectiveOpHandle ar_handle =
       executor.submit_allreduce(allreduce_cfg, *memory);
   assert(wait_until_terminal(executor, ar_handle, std::chrono::seconds(2)));
@@ -243,8 +243,8 @@ void test_executor_completes_collectives_with_background_progress() {
   executor.release(ar_handle);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256);
-  alltoall_cfg.collective = CollectiveKind::AllToAll;
-  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
+  alltoall_cfg.kind = CollKind::AllToAllPairwise;
+  alltoall_cfg.kind = CollKind::AllToAllPairwise;
   CollectiveOpHandle at_handle =
       executor.submit_alltoall(alltoall_cfg, *memory);
   assert(wait_until_terminal(executor, at_handle, std::chrono::seconds(2)));
@@ -267,7 +267,7 @@ void test_executor_queues_collectives_serially() {
 
   CollectiveConfig allreduce_cfg = Testing::make_test_config(4, 1, 2048, 256);
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 2048, 256);
-  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
+  alltoall_cfg.kind = CollKind::AllToAllPairwise;
 
   CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, *memory);
   CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, *memory);
@@ -299,7 +299,7 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
 
   CollectiveConfig first_cfg = Testing::make_test_config(4, 1, 2048, 256);
   CollectiveConfig second_cfg = Testing::make_test_config(4, 1, 2048, 256);
-  second_cfg.algorithm = AlgorithmKind::Pairwise;
+  second_cfg.kind = CollKind::AllToAllPairwise;
 
   CollectiveOpHandle first = executor.submit_allreduce(first_cfg, *memory);
   CollectiveOpHandle second = executor.submit_alltoall(second_cfg, *memory);

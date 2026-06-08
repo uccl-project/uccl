@@ -41,7 +41,7 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := topology.cc coll_algo.cc scheduler.cc executor.cc
+CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc scheduler.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
@@ -175,10 +175,10 @@ clean:
 		test/unit/*.o test/unit/*.d \
 		test/integration/*.o test/integration/*.d \
 		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
-	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
+ 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
+
 	test/unit/test_components.d \
 	test/integration/test_device_backend.d \
 	test/integration/test_transport_backend.d \
