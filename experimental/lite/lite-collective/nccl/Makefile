@@ -23,7 +23,7 @@ INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/third
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
 OUT_DIR   := build
-CU_SRCS   := $(wildcard *.cu) lite-allgather/ag_inter.cu
+CU_SRCS   := $(wildcard *.cu) Allgather/multi-node.cu
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
 
 LIB_MINT      := $(BUILD_DIR)/libmint.so

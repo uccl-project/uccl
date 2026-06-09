@@ -1315,7 +1315,7 @@ static NcclSendRecvPeerContext& getSendRecvPeerContext(ncclComm_t comm,
   return it->second;
 }
 
-#include "lite-allgather/ag_intra.cu"
+#include "Allgather/single-node.cu"
 
 static ncclResult_t executeGroupedCudaIpcRecvEventImpl(
     void* recvbuff, size_t count, ncclDataType_t datatype, int peer,

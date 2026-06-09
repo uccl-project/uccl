@@ -10,7 +10,7 @@ send/recv path.
 
 | Topic | Summary |
 | --- | --- |
-| Entry points | `ncclAllGather` first tries single-node native paths in [`nccl.cu`](../nccl/nccl.cu#L3624), then `runLiteAllGather` in [`ag_inter.cu`](../nccl/lite-allgather/ag_inter.cu#L2328) handles multi-node host-slab layouts |
+| Entry points | `ncclAllGather` first tries single-node native paths in [`nccl.cu`](../nccl/nccl.cu#L3624), then `runLiteAllGather` in [`multi-node.cu`](../nccl/Allgather/multi-node.cu#L2328) handles multi-node host-slab layouts |
 | Target layouts | `1nx4g` default CudaIpc ring; opt-in `1nx4g` no-CudaIpc host-memory path; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
 | `1nx4g` default large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
 | `1nx4g` no-CudaIpc host mode | Set `MSCCLPP_NCCL_HOST_ALLGATHER=1`; payload stages through POSIX shared pinned host memory and does not use CudaIpc payload writes |
@@ -75,20 +75,20 @@ Code pointers:
 
 | Area | Code |
 | --- | --- |
-| Single-node host-memory kernels | [`ag_intra.cu:L103-L283`](../nccl/lite-allgather/ag_intra.cu#L103-L283) |
-| Single-node host-memory implementation | [`ag_intra.cu:L842-L1163`](../nccl/lite-allgather/ag_intra.cu#L842-L1163) |
-| Single-node CudaIpc ring threshold | [`ag_intra.cu:L6-L7`](../nccl/lite-allgather/ag_intra.cu#L6-L7) |
-| Single-node CudaIpc ring implementation | [`ag_intra.cu:L1175-L1362`](../nccl/lite-allgather/ag_intra.cu#L1175-L1362) |
+| Single-node host-memory kernels | [`single-node.cu:L103-L283`](../nccl/Allgather/single-node.cu#L103-L283) |
+| Single-node host-memory implementation | [`single-node.cu:L842-L1163`](../nccl/Allgather/single-node.cu#L842-L1163) |
+| Single-node CudaIpc ring threshold | [`single-node.cu:L6-L7`](../nccl/Allgather/single-node.cu#L6-L7) |
+| Single-node CudaIpc ring implementation | [`single-node.cu:L1175-L1362`](../nccl/Allgather/single-node.cu#L1175-L1362) |
 | `ncclAllGather` dispatch and fallback order | [`nccl.cu:L2358-L2421`](../nccl/nccl.cu#L2358-L2421) |
-| Constants and thresholds | [`ag_inter.cu:L44-L69`](../nccl/lite-allgather/ag_inter.cu#L44-L69) |
-| Remote data-ready atomic signal | [`ag_inter.cu:L619-L631`](../nccl/lite-allgather/ag_inter.cu#L619-L631) |
-| Context setup and 2nx1g slab sizing | [`ag_inter.cu:L786-L852`](../nccl/lite-allgather/ag_inter.cu#L786-L852) |
-| Small cutoffs and slot counts | [`ag_inter.cu:L1289-L1302`](../nccl/lite-allgather/ag_inter.cu#L1289-L1302) |
-| `2nx1g` chunk pipeline | [`ag_inter.cu:L1570-L1685`](../nccl/lite-allgather/ag_inter.cu#L1570-L1685) |
-| Single-slab path | [`ag_inter.cu:L1687-L1766`](../nccl/lite-allgather/ag_inter.cu#L1687-L1766) |
-| Small ordered path | [`ag_inter.cu:L1928-L2156`](../nccl/lite-allgather/ag_inter.cu#L1928-L2156) |
-| NUMA split path | [`ag_inter.cu:L2158-L2361`](../nccl/lite-allgather/ag_inter.cu#L2158-L2361) |
-| Top-level dispatch | [`ag_inter.cu:L2365-L2435`](../nccl/lite-allgather/ag_inter.cu#L2365-L2435) |
+| Constants and thresholds | [`multi-node.cu:L44-L69`](../nccl/Allgather/multi-node.cu#L44-L69) |
+| Remote data-ready atomic signal | [`multi-node.cu:L619-L631`](../nccl/Allgather/multi-node.cu#L619-L631) |
+| Context setup and 2nx1g slab sizing | [`multi-node.cu:L786-L852`](../nccl/Allgather/multi-node.cu#L786-L852) |
+| Small cutoffs and slot counts | [`multi-node.cu:L1289-L1302`](../nccl/Allgather/multi-node.cu#L1289-L1302) |
+| `2nx1g` chunk pipeline | [`multi-node.cu:L1570-L1685`](../nccl/Allgather/multi-node.cu#L1570-L1685) |
+| Single-slab path | [`multi-node.cu:L1687-L1766`](../nccl/Allgather/multi-node.cu#L1687-L1766) |
+| Small ordered path | [`multi-node.cu:L1928-L2156`](../nccl/Allgather/multi-node.cu#L1928-L2156) |
+| NUMA split path | [`multi-node.cu:L2158-L2361`](../nccl/Allgather/multi-node.cu#L2158-L2361) |
+| Top-level dispatch | [`multi-node.cu:L2365-L2435`](../nccl/Allgather/multi-node.cu#L2365-L2435) |
 
 ## Protocols
 
