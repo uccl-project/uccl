@@ -458,12 +458,21 @@ void Proxy::init_common() {
     }
     ctx_.num_local_ranks = (int)local_ranks.size();
     ctx_.node_leader_rank = leader_rank;
-    ctx_.local_rank = cfg_.local_rank;
+    ctx_.local_rank = cfg_.barrier_local_rank >= 0 ? cfg_.barrier_local_rank
+                                                   : cfg_.local_rank;
     ctx_.thread_idx = cfg_.thread_idx;
 
     if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
       fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
               ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
+      std::abort();
+    }
+    if (ctx_.local_rank < 0 || ctx_.local_rank >= ctx_.num_local_ranks) {
+      fprintf(stderr,
+              "barrier_local_rank=%d invalid for num_local_ranks=%d "
+              "(rank=%d, local_rank=%d)\n",
+              ctx_.local_rank, ctx_.num_local_ranks, cfg_.rank,
+              cfg_.local_rank);
       std::abort();
     }
 #ifndef USE_SUBSET_BARRIER

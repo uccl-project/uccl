@@ -16,7 +16,8 @@ class UcclProxy {
             int rank, int node_idx, int local_rank, int num_experts = 0,
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
             bool is_intranode = false,
-            bool gpu_buffer_is_host_allocated = false);
+            bool gpu_buffer_is_host_allocated = false,
+            int barrier_local_rank = -1);
   ~UcclProxy();
 
   void start_sender();
