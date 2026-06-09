@@ -44,12 +44,11 @@ class Proxy {
     size_t total_size = 0;
     int rank = 0;
     int node_idx = -1;
-    // Legacy local rank. Historically this was used for CUDA device ordinal,
-    // NIC/NUMA selection, and HT local-barrier slot. Those can differ when
-    // each process sees a single GPU, e.g. vLLM's Ray worker actors.
+    // Base local rank. The role-specific ranks below fall back to it when
+    // unset (-1).
     int local_rank = -1;
-    int device_index = -1;
-    int nic_local_rank = -1;
+    int device_index = -1;    // CUDA device ordinal
+    int nic_local_rank = -1;  // physical GPU rank for NIC/NUMA affinity
     int barrier_local_rank = -1;
     bool pin_thread = true;
     int num_experts = 0;

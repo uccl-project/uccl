@@ -413,8 +413,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   int gpu_idx = nic_local_rank;
   cudaSetDevice(device_index);  // Needed.
 
-  // Physical GPU rank used for NIC/NUMA affinity. This may differ from the
-  // CUDA-visible device index when each process sees a single GPU.
+  // Map the physical GPU rank (gpu_idx) to its PCI BDF for NIC/NUMA affinity.
   auto all_gpu_bdfs = uccl::enumerate_all_gpu_bdfs();
   std::filesystem::path gpu_device_path;
   std::string gpu_bdf;
@@ -422,8 +421,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     gpu_bdf = all_gpu_bdfs[gpu_idx];
     gpu_device_path = std::filesystem::path("/sys/bus/pci/devices") / gpu_bdf;
   } else {
-    // Backward-compatible fallback for environments where the physical GPU
-    // scan is unavailable.
+    // Fallback when the physical GPU scan is unavailable.
     auto gpu_cards = uccl::get_gpu_cards();
     if (device_index < 0 ||
         device_index >= static_cast<int>(gpu_cards.size())) {

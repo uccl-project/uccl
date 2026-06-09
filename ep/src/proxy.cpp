@@ -86,9 +86,7 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 #endif
 
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
-  // Resolve the optional device/NIC ranks once. Callers that build a Config
-  // directly (FifoProxy, bench make_cfg) leave these at -1, meaning "fall back
-  // to local_rank". Downstream code then reads the resolved fields.
+  // Unset (-1) device/NIC ranks fall back to local_rank.
   if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
   if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
   // Initialize state tracking for each ring buffer
