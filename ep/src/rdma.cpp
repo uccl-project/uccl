@@ -434,6 +434,11 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
     gpu_idx = device_index;
     gpu_device_path = gpu_cards[gpu_idx];
+    fprintf(stderr,
+            "[RDMA] physical GPU scan unavailable (%zu entries); falling back "
+            "to CUDA-visible indexing by device_index=%d. NIC/NUMA affinity "
+            "may be wrong if this process sees more than one GPU.\n",
+            all_gpu_bdfs.size(), device_index);
   }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
