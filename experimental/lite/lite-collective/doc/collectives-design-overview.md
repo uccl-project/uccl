@@ -8,9 +8,9 @@ as a first-class data structure instead of a hidden fallback buffer.
 
 ## Current support and performance snapshot
 
-| Collective | Native coverage | Current 2nx4g status | Primary design | Code |
+| Collective | Native coverage | Current status | Primary design | Code |
 | --- | --- | --- | --- | --- |
-| AllGather | 1nx2g, 2nx1g, 2nx2g, 2nx4g, general multi-node host memory | Beats NCCL no-GDR at 2nx4g 1MiB: `85.74/85.37 us` vs `118.20/117.53 us`; 2nx1g host-memory-only 1MiB is `84.63/79.53 us` | Host-memory slab exchange for all multi-node layouts; 2-node optimized paths use `<128KiB` ordered ring-slot direct-QP and `>=128KiB` dynamic NIC-group host slabs; no P2P AllGather path | [`lite_allgather.cu:L858-L1329`](../nccl/lite_allgather.cu#L858-L1329) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/lite_allgather.cu:858:1)) |
+| AllGather | 1nx4g large-message CudaIpc ring, 2nx1g, 2nx2g, 2nx4g, general multi-node host memory | 1nx4g `>=8MiB` beats NCCL by ~1.2x busbw at 32MiB-1GiB; 2nx4g beats NCCL no-GDR at 1MiB: `85.74/85.37 us` vs `118.20/117.53 us`; 2nx1g host-memory-only 1MiB is `84.63/79.53 us` | Single-node large messages use a CudaIpc ring and real NCCL fallback below 8MiB; multi-node layouts use host-memory slab exchange; 2-node optimized paths use `<128KiB` ordered ring-slot direct-QP and `>=128KiB` dynamic NIC-group host slabs; no multi-node P2P AllGather path | [`nccl.cu:L1312-L1500`](../nccl/nccl.cu#L1312-L1500), [`lite_allgather.cu:L858-L1329`](../nccl/lite_allgather.cu#L858-L1329) |
 | ReduceScatter | 1nx2g, 2nx1g, 2nx4g | Correct and improved at 1MiB, but still behind NCCL no-GDR: `123.29/123.35 us` vs `107.65/107.59 us` | Single-node memory-channel RS; 2nx4g float/sum path does NUMA-pair local GPU fan-in, pairwise host-staged RDMA, and final GPU add | [`native_collectives.cu:L1418-L1728`](../nccl/native_collectives.cu#L1418-L1728) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1418:1)) |
 | AllReduce | 1nx2g, 2nx1g, 2nx4g | Beats NCCL no-GDR at 1MiB: `232.54/234.32 us` vs `1281.14/783.76 us` | Compose native ReduceScatter plus native AllGather when the count is divisible by world size; keep a hierarchical fallback for irregular counts | [`native_collectives.cu:L1829-L1908`](../nccl/native_collectives.cu#L1829-L1908) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1829:1)) |
 | AllToAll | 1nx2g, 2nx1g, 2nx4g | Beats NCCL at 1nx2g/2nx1g 1MiB; 2nx4g remains slower: `107.44/101.25 us` vs `96.85/95.29 us` | Intercept grouped send/recv, do self pairs as D2D copies, use unified custom P2P for local CudaIpc and remote host-staged IB; optimized node/per-NUMA remote slabs are opt-in | [`nccl.cu:L2313-L2562`](../nccl/nccl.cu#L2313-L2562) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/nccl.cu:2313:1)) |
@@ -25,8 +25,8 @@ The support and benchmark source of truth is the L40/L41 runbook:
    mscclpp `Connection::write` rather than routed through NCCL fallback.
 2. Aggregate inter-node work at node granularity where possible.  On a no-GDR
    system, small per-rank network transactions pay extra CPU/proxy overhead; a
-   node leader writing one contiguous slab is cheaper for AllGather and parts of
-   AllToAll.
+   node leader writing one contiguous slab is cheaper for multi-node AllGather
+   and parts of AllToAll.
 3. Keep intra-node movement on GPU paths.  Single-node collectives use existing
    mscclpp memory-channel algorithms when available, and multi-node
    ReduceScatter uses CudaIpc scratch exchange before crossing the network.
@@ -35,10 +35,12 @@ The support and benchmark source of truth is the L40/L41 runbook:
 
 ## How native collectives enter the NCCL shim
 
-The public NCCL APIs first try registered single-node mscclpp algorithms, then
-the custom native send/recv based implementations, and only then dlopen NCCL
-fallback.  AllReduce, ReduceScatter, and AllGather are wired in
-[`nccl.cu:L1990-L2235`](../nccl/nccl.cu#L1990-L2235) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/nccl.cu:1990:1)).
+The public NCCL APIs try native paths before dlopen NCCL fallback, but the
+precise order is wrapper-specific.  AllGather first tries the single-node
+CudaIpc ring for large intra-node calls, then the registered selector and
+multi-node host-slab helpers; AllReduce and ReduceScatter use the registered
+selector/native helpers before fallback.  The AllGather wrapper is in
+[`nccl.cu:L2499-L2601`](../nccl/nccl.cu#L2499-L2601).
 
 The single-node selector registers and chooses existing mscclpp algorithms for
 AllReduce, AllGather, and ReduceScatter.  Relevant selector/registration code:
@@ -47,15 +49,17 @@ AllReduce, AllGather, and ReduceScatter.  Relevant selector/registration code:
 
 Multi-node selection is intentionally not in the generic algorithm selector yet:
 [`algorithm_selector.cc:L214-L229`](../collective/algorithm_selector.cc#L214-L229) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/collective/algorithm_selector.cc:214:1)).
-Instead, the NCCL shim calls native two-node helpers directly before falling
+Instead, the NCCL shim calls native topology helpers directly before falling
 back to NCCL.
 
 ## Why the current winners beat NCCL no-GDR
 
-AllGather wins because the required host staging is made explicit, coalesced,
-and NUMA-aware.  On 2nx4g, each node ships two packed host slabs through the two
-local NICs instead of one node-leader slab through one NIC, while NCCL no-GDR
-still pays per-channel/proxy overhead around staged transfers.  The native path
+AllGather wins for two different reasons depending on topology.  On 1nx4g large
+messages, the native path uses a direct CudaIpc ring and writes each block into
+the final peer receive slot, avoiding NCCL's large-message protocol overhead.
+On 2nx4g, each node ships two packed host slabs through the two local NICs
+instead of one node-leader slab through one NIC, while NCCL no-GDR still pays
+per-channel/proxy overhead around staged transfers.  The multi-node native path
 also uses RDMA-written host control flags, so the remote side does not need
 another bootstrap round trip on the steady-state fast path.
 

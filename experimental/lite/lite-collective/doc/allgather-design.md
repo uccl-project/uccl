@@ -10,8 +10,9 @@ send/recv path.
 
 | Topic | Summary |
 | --- | --- |
-| Entry point | `runLiteAllGather` in [`lite_allgather.cu`](../nccl/lite_allgather.cu#L2328) |
-| Target layouts | `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
+| Entry points | `ncclAllGather` first tries the single-node CudaIpc ring in [`nccl.cu`](../nccl/nccl.cu#L2499), then `runLiteAllGather` in [`lite_allgather.cu`](../nccl/lite_allgather.cu#L2328) handles multi-node host-slab layouts |
+| Target layouts | `1nx4g` large-message single-node CudaIpc ring; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
+| `1nx4g` large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
 | Small messages | Two-node ordered host slots with RDMA-written ready flags |
 | `2nx1g` large messages | Dedicated 512KiB chunk pipeline through 1GiB per-rank input |
 | `2nx2g` large messages | Single host slab, 512KiB chunks |
@@ -33,8 +34,21 @@ This distinction matters because the `2nx1g` fast path is capped by
 
 ## Dispatch model
 
-`runLiteAllGather` handles multi-node layouts before the NCCL fallback.  The
-top-level order is intentionally short:
+The NCCL shim has a single-node fast path before the multi-node
+`runLiteAllGather` path:
+
+1. `ncclAllGather` handles trivial `worldSize == 1` and forced NCCL fallback.
+2. If all ranks are on one node (`nRank == nRanksPerNode`), try
+   `runIntraNodeCudaIpcAllGather`.
+3. The single-node path only accepts large messages (`fullBytes >= 8MiB`),
+   CUDA IPC event synchronization, non-capturing streams, and a valid
+   CudaIpc-mappable `recvbuff` allocation.  Unsupported cases return
+   `ncclInvalidUsage`, so the wrapper falls back to real NCCL when the dlopen
+   fallback is configured.
+4. Multi-node layouts continue through `runLiteAllGather`.
+
+`runLiteAllGather` handles multi-node layouts before the final NCCL fallback.
+The multi-node order is intentionally short:
 
 1. Reject unsupported or invalid multi-node layouts.
 2. For two-node messages below the topology-specific small cutoff, try
@@ -47,6 +61,7 @@ top-level order is intentionally short:
 
 | Topology | Small cutoff, total output bytes | Medium/large path |
 | --- | ---: | --- |
+| `1nx4g` | `<8MiB` uses real NCCL fallback | `runIntraNodeCudaIpcAllGather` CudaIpc ring |
 | `2nx1g` | `<2MiB` | `runOneRankChunkPipeline` for per-rank `1MiB-1GiB`; then generic single slab |
 | `2nx2g` | `<128KiB` | `runSingleSlab` with 512KiB chunks |
 | `2nx4g` | `<128KiB` | `runNumaSplit` across NUMA/NIC-local groups when available |
@@ -56,6 +71,9 @@ Code pointers:
 
 | Area | Code |
 | --- | --- |
+| Single-node CudaIpc ring threshold | [`nccl.cu:L62`](../nccl/nccl.cu#L62) |
+| Single-node CudaIpc ring implementation | [`nccl.cu:L1312-L1500`](../nccl/nccl.cu#L1312-L1500) |
+| `ncclAllGather` dispatch and fallback order | [`nccl.cu:L2499-L2601`](../nccl/nccl.cu#L2499-L2601) |
 | Constants and thresholds | [`lite_allgather.cu:L45-L69`](../nccl/lite_allgather.cu#L45-L69) |
 | Remote data-ready atomic signal | [`lite_allgather.cu:L619-L631`](../nccl/lite_allgather.cu#L619-L631) |
 | Context setup and 2nx1g slab sizing | [`lite_allgather.cu:L786-L852`](../nccl/lite_allgather.cu#L786-L852) |
@@ -68,7 +86,76 @@ Code pointers:
 
 ## Protocols
 
-### 1. Small ordered host slots
+### 1. Single-node CudaIpc ring (`1nx4g` large messages)
+
+The retained `1nx4g` path is a single-node ring over CudaIpc mapped receive
+buffers.  It is tuned for large messages and is intentionally not used below
+`8MiB` total output, where real NCCL is already competitive and has lower setup
+risk.
+
+Preconditions:
+
+- all ranks are local (`nRank == nRanksPerNode`);
+- total AllGather output is at least `8MiB`;
+- CUDA IPC event synchronization is enabled;
+- the caller stream is not under CUDA graph capture;
+- every rank's `recvbuff` is in a single CUDA allocation that can be mapped by
+  peer ranks.
+
+Logical layout:
+
+```text
+recvbuff on every rank:
+[rank0 bytes][rank1 bytes][rank2 bytes][rank3 bytes]
+
+ring direction:
+rank0 -> rank1 -> rank2 -> rank3 -> rank0
+```
+
+For rank `r`, `next = (r + 1) % nRanks` and
+`prev = (r + nRanks - 1) % nRanks`.
+
+Flow:
+
+1. Each rank publishes its `recvbuff` address and, when the allocation changes,
+   exchanges a CudaIpc memory handle for the whole receive allocation.  The cache
+   is keyed by CUDA allocation base, size, and `CU_POINTER_ATTRIBUTE_BUFFER_ID`
+   so address reuse after `cudaFree`/`cudaMalloc` cannot reuse a stale mapping.
+2. Each receiver records a CudaIpc ready event on the caller stream.  The writer
+   waits on the next rank's ready event before writing into that rank's mapped
+   receive buffer, so remote writes cannot race earlier work on the receiver's
+   stream.
+3. If `sendbuff` is not already the local slot in `recvbuff`, the rank copies its
+   own input into `recvbuff[rank]`.
+4. The ring runs for `nRanks - 1` steps.  At step `s`, rank `r` sends block
+   `(r - s + nRanks) % nRanks` to `next` with one `cudaMemcpyAsync` on the
+   per-peer IPC stream:
+
+   ```text
+   step 0: send own block
+   step 1: forward the block just received from prev
+   step 2: forward the next received block
+   ...
+   ```
+
+   The destination address is the peer's mapped `recvbuff[sendBlock]` slot, so
+   no receiver-side unpacking is needed.
+5. After each outbound copy, the writer records a dedicated AllGather done event
+   and signals a shared-memory generation counter.  The receiver waits on the
+   predecessor's done event before it forwards that block or returns to the
+   caller.
+6. Ready/done generation acknowledgements prevent re-recording shared IPC events
+   before the peer has enqueued its wait.  This is required because the same
+   per-peer interprocess events are reused across AllGather calls.
+7. Before returning, the caller stream waits for the outbound IPC stream, keeping
+   normal NCCL stream-ordering semantics.
+
+The path is not chunk-pipelined inside a single rank block: each ring step moves
+one `bytesPerRank` block.  Pipelining happens at ring-step granularity: all ranks
+copy to their `next` peer concurrently, then each rank forwards the block it just
+received from `prev`.
+
+### 2. Small ordered host slots
 
 Small two-node messages use `runSmallOrdered`.  Each epoch gets a ring-buffered
 host slot laid out in final AllGather order:
@@ -96,7 +183,7 @@ Topology-specific small-message shortcuts:
 - `2nx4g` uses ordered host slots to avoid per-peer P2P scheduling and CPU
   repacking.
 
-### 2. `2nx1g` one-rank chunk pipeline
+### 3. `2nx1g` one-rank chunk pipeline
 
 For `2nx1g`, per-rank `1MiB-1GiB` uses `runOneRankChunkPipeline`.  In nccl-tests
 output-size terms this covers up to `2GiB`; the retained validation below covers
@@ -125,7 +212,7 @@ This path fixes the previous `2nx1g` large-message cliff where messages above
 the old 16MiB per-rank fast-path limit fell into the slower generic single-slab
 steady state.
 
-### 3. Generic single-slab path
+### 4. Generic single-slab path
 
 `runSingleSlab` is the default host-slab algorithm when all local ranks share one
 NIC group, or when no better topology-specific path applies.
@@ -158,7 +245,7 @@ uses `rdmaReady` (for example, small ordered slots have their own slot flag), th
 sender tracks the last published epoch per peer and atomically adds the delta so
 the remote `rdmaReady[node]` counter reaches the exact epoch being waited on.
 
-### 4. NUMA/NIC split path
+### 5. NUMA/NIC split path
 
 `runNumaSplit` is used when the local GPU/NIC layout exposes multiple symmetric
 contiguous groups and `nRanksPerNode != 2`.  On the L40/L41 `2nx4g` setup, that
@@ -179,6 +266,9 @@ uses both NICs and avoids a single node leader pushing all inter-node traffic.
 NCCL no-GDR also stages inter-node traffic through host memory on this hardware.
 Lite wins when it makes that staging cheaper:
 
+- `1nx4g` large messages bypass host staging entirely and use a direct CudaIpc
+  ring; each rank writes directly into final peer receive slots, with only
+  ready/done event synchronization around the peer copies;
 - small messages avoid generic grouped-send orchestration;
 - hot paths use direct-QP RDMA writes for data and an RDMA atomic barrier for
   remote data-ready signaling;
@@ -221,8 +311,8 @@ scripts/run-nccl-tests.sh --test all_gather \
   --step-factor 2 --iters 50 --warmup-iters 20
 ```
 
-Latest full comparison: [`perf-allgather.md`](perf-allgather.md).  The summary
-below lists out-of-place bus bandwidth at the 1GiB row:
+Latest multi-node full comparison: [`perf-allgather.md`](perf-allgather.md).
+The summary below lists out-of-place bus bandwidth at the 1GiB row:
 
 | Topology | Lite GB/s | NCCL GB/s | Lite/NCCL |
 | --- | ---: | ---: | ---: |
@@ -233,6 +323,20 @@ below lists out-of-place bus bandwidth at the 1GiB row:
 All rows reported `#wrong=0`.  Raw logs:
 `.tmp/collective-benchmarks/ag-perf-allgather-20260608-164008/`.
 
+Latest single-node `1nx4g` sweep, using the same iteration convention and
+`--topology intra --gpus 0,1,2,3`, also reported `#wrong=0`.  The native path is
+active from `8MiB` upward; smaller rows use the real NCCL fallback.  Out-of-place
+bus bandwidth highlights:
+
+| Size | Lite GB/s | NCCL GB/s | Lite/NCCL |
+| ---: | ---: | ---: | ---: |
+| `8MiB` | 17.78 | 15.71 | 1.13x |
+| `32MiB` | 19.72 | 16.29 | 1.21x |
+| `1GiB` | 19.95 | 16.46 | 1.21x |
+
+Raw logs:
+`.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/`.
+
 ## Operational notes
 
 - The `2nx1g` 1GiB fast path increases pinned/shared host memory for that
@@ -240,6 +344,9 @@ All rows reported `#wrong=0`.  Raw logs:
   slab and a 2GiB receive slab.
 - Do not reintroduce the generic grouped P2P AllGather branch for multi-node
   AllGather.  The retained design is host-memory AllGather.
+- Keep `MSCCLPP_NCCL_LIB_PATH` configured for `mscclpp` benchmark runs.  The
+  `1nx4g` path deliberately falls back to real NCCL below `8MiB`, and the
+  fallback is also the safety net for unsupported single-node cases.
 - Avoid ad-hoc optimizations for one exact message size.  New branches should be
   justified by a topology class or a reusable protocol improvement.
 - `>2` node correctness follows the host-slab protocol structure, but the

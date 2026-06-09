@@ -347,6 +347,8 @@ mkdir -p "$RUNTIME_DIR"
 
 if [[ "$BACKEND" == "mscclpp" ]]; then
   ACTIVE_LIB="$(ensure_mscclpp_nccl_lib)"
+  : "${MSCCLPP_NCCL_LIB_PATH:=$(pick_real_nccl_lib)}"
+  export MSCCLPP_NCCL_LIB_PATH
   EXTRA_LD_PATH="${ROOT_DIR}/build:${ROOT_DIR}/nccl/build"
 else
   ACTIVE_LIB="$(pick_real_nccl_lib)"

@@ -59,6 +59,7 @@ static constexpr int kNcclSendRecvInitTagStride = 8;
 // Runtime tag base for per-call recvbuff IPC handle exchange (GroupEnd).
 // Uses a distinct range to avoid collisions with init-time tags.
 static constexpr int kNcclRecvbuffExchangeTagBase = 0x540000;
+static constexpr size_t kIntraAllGatherRingMinTotalBytes = 8 * 1024 * 1024;
 
 static const mscclpp::Transport kIBTransports[] = {
     mscclpp::Transport::IB0, mscclpp::Transport::IB1, mscclpp::Transport::IB2,
@@ -226,6 +227,10 @@ struct ShmBlock {
   alignas(64) std::atomic<uint64_t> allocBase{0};
   alignas(64) std::atomic<uint64_t> allocGeneration{0};
   alignas(64) std::atomic<uint64_t> eventGeneration{0};
+  alignas(64) std::atomic<uint64_t> allGatherReadyGeneration{0};
+  alignas(64) std::atomic<uint64_t> allGatherReadyAckGeneration{0};
+  alignas(64) std::atomic<uint64_t> allGatherEventGeneration{0};
+  alignas(64) std::atomic<uint64_t> allGatherEventAckGeneration{0};
 };
 
 struct ShmSemaphore {
@@ -241,6 +246,10 @@ struct ShmSemaphore {
   uint64_t expectedAddrGen = 0;
   uint64_t outboundEventGen = 0;
   uint64_t expectedEventGen = 0;
+  uint64_t outboundAllGatherReadyGen = 0;
+  uint64_t expectedAllGatherReadyGen = 0;
+  uint64_t outboundAllGatherEventGen = 0;
+  uint64_t expectedAllGatherEventGen = 0;
 
   void signal() {
     ++outbound;
@@ -295,6 +304,76 @@ struct ShmSemaphore {
     int spinIters = 0;
     while (local->eventGeneration.load(std::memory_order_acquire) <
            expectedEventGen) {
+      if (spinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  }
+
+  void signalAllGatherEventRecorded() {
+    remote->allGatherEventGeneration.store(++outboundAllGatherEventGen,
+                                           std::memory_order_release);
+  }
+
+  void signalAllGatherReadyRecorded() {
+    remote->allGatherReadyGeneration.store(++outboundAllGatherReadyGen,
+                                           std::memory_order_release);
+  }
+
+  void waitPeerAllGatherReadyRecorded() {
+    ++expectedAllGatherReadyGen;
+    int spinIters = 0;
+    while (local->allGatherReadyGeneration.load(std::memory_order_acquire) <
+           expectedAllGatherReadyGen) {
+      if (spinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  }
+
+  void ackPeerAllGatherReadyWaitEnqueued() {
+    remote->allGatherReadyAckGeneration.store(expectedAllGatherReadyGen,
+                                              std::memory_order_release);
+  }
+
+  void waitPeerAllGatherReadyWaitEnqueued() {
+    int spinIters = 0;
+    while (local->allGatherReadyAckGeneration.load(std::memory_order_acquire) <
+           outboundAllGatherReadyGen) {
+      if (spinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  }
+
+  void waitPeerAllGatherEventRecorded() {
+    ++expectedAllGatherEventGen;
+    int spinIters = 0;
+    while (local->allGatherEventGeneration.load(std::memory_order_acquire) <
+           expectedAllGatherEventGen) {
+      if (spinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  }
+
+  void ackPeerAllGatherEventWaitEnqueued() {
+    remote->allGatherEventAckGeneration.store(expectedAllGatherEventGen,
+                                              std::memory_order_release);
+  }
+
+  void waitPeerAllGatherEventWaitEnqueued() {
+    int spinIters = 0;
+    while (local->allGatherEventAckGeneration.load(std::memory_order_acquire) <
+           outboundAllGatherEventGen) {
       if (spinIters++ < kBusySpinBeforeYieldIters) {
         cpuRelax();
       } else {
@@ -521,6 +600,10 @@ struct NcclSendRecvPeerContext {
   std::unique_ptr<ShmSemaphore> ipcShmSemaphore;
   // Dedicated stream for D2D copies (fire-and-forget from caller perspective).
   cudaStream_t ipcStream = nullptr;
+  cudaEvent_t ipcReadyEvent = nullptr;
+  cudaEvent_t remoteIpcReadyEvent = nullptr;
+  cudaEvent_t ipcAllGatherDoneEvent = nullptr;
+  cudaEvent_t remoteIpcAllGatherDoneEvent = nullptr;
   cudaEvent_t ipcDoneEvent = nullptr;
   cudaEvent_t remoteIpcDoneEvent = nullptr;
 
@@ -534,8 +617,10 @@ struct NcclSendRecvPeerContext {
   uintptr_t mappedAllocBase = 0;     // our IPC-mapped base for that allocation
   uint64_t peerAllocGeneration = 0;  // tracks when to re-exchange IPC handle
   // Local recv allocation tracking (to detect when we need to re-register).
+  mscclpp::RegisteredMemory localRecvbuffMemory;
   uintptr_t localAllocBase = 0;
   size_t localAllocSize = 0;
+  unsigned long long localAllocBufferId = 0;
 
   // Compute the IPC-mapped pointer for any address within the peer's
   // allocation.
@@ -554,6 +639,10 @@ struct NcclSendRecvPeerContext {
     }
     if (h2dStream) cudaStreamDestroy(h2dStream);
     if (d2hStream) cudaStreamDestroy(d2hStream);
+    if (ipcReadyEvent) cudaEventDestroy(ipcReadyEvent);
+    if (remoteIpcReadyEvent) cudaEventDestroy(remoteIpcReadyEvent);
+    if (ipcAllGatherDoneEvent) cudaEventDestroy(ipcAllGatherDoneEvent);
+    if (remoteIpcAllGatherDoneEvent) cudaEventDestroy(remoteIpcAllGatherDoneEvent);
     if (ipcDoneEvent) cudaEventDestroy(ipcDoneEvent);
     if (remoteIpcDoneEvent) cudaEventDestroy(remoteIpcDoneEvent);
     if (ipcStream) cudaStreamDestroy(ipcStream);
@@ -670,8 +759,17 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
   };
 
   SendRecvWorkerState::WorkItem item;
+  int idleSpinIters = 0;
   while (!ws->stopFlag.load(std::memory_order_acquire)) {
-    if (!ws->pop(item)) continue;  // spin
+    if (!ws->pop(item)) {
+      if (idleSpinIters++ < kBusySpinBeforeYieldIters) {
+        cpuRelax();
+      } else {
+        std::this_thread::yield();
+      }
+      continue;
+    }
+    idleSpinIters = 0;
 
     try {
       if (item.type == SendRecvWorkerState::WorkItem::SEND) {
@@ -1012,7 +1110,50 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
         cudaStreamCreateWithFlags(&ctx.ipcStream, cudaStreamNonBlocking));
     if (cudaIpcEventSyncEnabled()) {
       MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.ipcReadyEvent, cudaEventDisableTiming | cudaEventInterprocess));
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
           &ctx.ipcDoneEvent, cudaEventDisableTiming | cudaEventInterprocess));
+      cudaIpcEventHandle_t localReadyEventHandle;
+      MSCCLPP_CUDATHROW(
+          cudaIpcGetEventHandle(&localReadyEventHandle, ctx.ipcReadyEvent));
+      std::vector<char> localReadyEventData(sizeof(localReadyEventHandle));
+      std::memcpy(localReadyEventData.data(), &localReadyEventHandle,
+                  sizeof(localReadyEventHandle));
+      int readyEventTag = sendRecvInitTag(rank, comm->worldSize, peer, 5);
+      comm->comm->bootstrap()->send(localReadyEventData, peer, readyEventTag);
+      std::vector<char> peerReadyEventData;
+      comm->comm->bootstrap()->recv(peerReadyEventData, peer, readyEventTag);
+      cudaIpcEventHandle_t peerReadyEventHandle;
+      std::memcpy(&peerReadyEventHandle, peerReadyEventData.data(),
+                  sizeof(peerReadyEventHandle));
+      MSCCLPP_CUDATHROW(cudaIpcOpenEventHandle(&ctx.remoteIpcReadyEvent,
+                                               peerReadyEventHandle));
+
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.ipcAllGatherDoneEvent,
+          cudaEventDisableTiming | cudaEventInterprocess));
+      cudaIpcEventHandle_t localAllGatherDoneEventHandle;
+      MSCCLPP_CUDATHROW(cudaIpcGetEventHandle(
+          &localAllGatherDoneEventHandle, ctx.ipcAllGatherDoneEvent));
+      std::vector<char> localAllGatherDoneEventData(
+          sizeof(localAllGatherDoneEventHandle));
+      std::memcpy(localAllGatherDoneEventData.data(),
+                  &localAllGatherDoneEventHandle,
+                  sizeof(localAllGatherDoneEventHandle));
+      int allGatherDoneEventTag =
+          sendRecvInitTag(rank, comm->worldSize, peer, 6);
+      comm->comm->bootstrap()->send(localAllGatherDoneEventData, peer,
+                                    allGatherDoneEventTag);
+      std::vector<char> peerAllGatherDoneEventData;
+      comm->comm->bootstrap()->recv(peerAllGatherDoneEventData, peer,
+                                    allGatherDoneEventTag);
+      cudaIpcEventHandle_t peerAllGatherDoneEventHandle;
+      std::memcpy(&peerAllGatherDoneEventHandle,
+                  peerAllGatherDoneEventData.data(),
+                  sizeof(peerAllGatherDoneEventHandle));
+      MSCCLPP_CUDATHROW(cudaIpcOpenEventHandle(
+          &ctx.remoteIpcAllGatherDoneEvent, peerAllGatherDoneEventHandle));
+
       cudaIpcEventHandle_t localEventHandle;
       MSCCLPP_CUDATHROW(
           cudaIpcGetEventHandle(&localEventHandle, ctx.ipcDoneEvent));
@@ -1048,8 +1189,17 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
       if (ctx.localDevice >= 0) cudaSetDevice(ctx.localDevice);
       SendRecvWorkerState::WorkItem item;
       auto* ws = ctx.worker.get();
+      int idleSpinIters = 0;
       while (!ws->stopFlag.load(std::memory_order_acquire)) {
-        if (!ws->pop(item)) continue;
+        if (!ws->pop(item)) {
+          if (idleSpinIters++ < kBusySpinBeforeYieldIters) {
+            cpuRelax();
+          } else {
+            std::this_thread::yield();
+          }
+          continue;
+        }
+        idleSpinIters = 0;
         // Wait for the D2D copy event to complete.
         waitCudaEventReady(ws->completionEvents[item.eventIndex]);
         // Signal the peer's shm semaphore — data is in peer's recvbuff.
@@ -1157,6 +1307,196 @@ static NcclSendRecvPeerContext& getSendRecvPeerContext(ncclComm_t comm,
         mscclpp::ErrorCode::InvalidUsage);
   }
   return it->second;
+}
+
+static ncclResult_t runIntraNodeCudaIpcAllGather(
+    void const* sendbuff, void* recvbuff, size_t bytesPerRank,
+    ncclComm_t comm, cudaStream_t stream, int rank, int nRanks) {
+  if (comm == nullptr || nRanks <= 1 || nRanks != comm->nRanksPerNode ||
+      sendbuff == nullptr || recvbuff == nullptr) {
+    return ncclInvalidUsage;
+  }
+  if (bytesPerRank >
+      std::numeric_limits<size_t>::max() / static_cast<size_t>(nRanks)) {
+    return ncclInvalidUsage;
+  }
+  if (!comm->hasIB || !cudaIpcEventSyncEnabled()) return ncclInvalidUsage;
+  size_t fullBytes = bytesPerRank * static_cast<size_t>(nRanks);
+  if (fullBytes < kIntraAllGatherRingMinTotalBytes) return ncclInvalidUsage;
+  if (fullBytes >
+      std::numeric_limits<uintptr_t>::max() -
+          reinterpret_cast<uintptr_t>(recvbuff)) {
+    return ncclInvalidUsage;
+  }
+  cudaStreamCaptureStatus captureStatus = cudaStreamCaptureStatusNone;
+  cudaError_t captureErr = cudaStreamIsCapturing(stream, &captureStatus);
+  if (captureErr != cudaSuccess) return ncclUnhandledCudaError;
+  if (captureStatus != cudaStreamCaptureStatusNone) return ncclInvalidUsage;
+
+  return runNcclGuarded("intra-node CudaIpc AllGather", [&]() {
+    struct LocalCudaEvents {
+      std::vector<cudaEvent_t> events;
+      cudaEvent_t create() {
+        cudaEvent_t event = nullptr;
+        MSCCLPP_CUDATHROW(
+            cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+        events.push_back(event);
+        return event;
+      }
+      ~LocalCudaEvents() {
+        for (cudaEvent_t event : events) {
+          if (event) cudaEventDestroy(event);
+        }
+      }
+    } localEvents;
+
+    mscclpp::CudaDeviceGuard deviceGuard(comm->cudaDevice);
+    uintptr_t recvAddr = reinterpret_cast<uintptr_t>(recvbuff);
+    CUdeviceptr recvBase = 0;
+    size_t recvAllocSize = 0;
+    CUresult rangeResult =
+        cuMemGetAddressRange(&recvBase, &recvAllocSize,
+                             static_cast<CUdeviceptr>(recvAddr));
+    if (rangeResult != CUDA_SUCCESS) {
+      throw mscclpp::Error("cuMemGetAddressRange failed",
+                           mscclpp::ErrorCode::SystemError);
+    }
+    unsigned long long recvBufferId = 0;
+    CUresult idResult = cuPointerGetAttribute(
+        &recvBufferId, CU_POINTER_ATTRIBUTE_BUFFER_ID,
+        static_cast<CUdeviceptr>(recvAddr));
+    if (idResult != CUDA_SUCCESS) {
+      throw mscclpp::Error("cuPointerGetAttribute BUFFER_ID failed",
+                           mscclpp::ErrorCode::SystemError);
+    }
+    uintptr_t recvBaseAddr = static_cast<uintptr_t>(recvBase);
+    size_t recvOffset =
+        recvAddr >= recvBaseAddr ? static_cast<size_t>(recvAddr - recvBaseAddr)
+                                 : recvAllocSize + 1;
+    if (recvOffset > recvAllocSize || fullBytes > recvAllocSize - recvOffset) {
+      throw mscclpp::Error("AllGather recvbuff does not fit in allocation",
+                           mscclpp::ErrorCode::InvalidUsage);
+    }
+    std::vector<int> peers;
+    peers.reserve(static_cast<size_t>(nRanks - 1));
+    for (int peer = 0; peer < nRanks; ++peer) {
+      if (peer != rank) peers.push_back(peer);
+    }
+
+    int next = (rank + 1) % nRanks;
+    int prev = (rank + nRanks - 1) % nRanks;
+
+    for (int peer : peers) {
+      auto& ctx = getSendRecvPeerContext(comm, peer, comm->cudaDevice);
+      if (!ctx.isCudaIpc || ctx.ipcShmSemaphore == nullptr ||
+          ctx.ipcReadyEvent == nullptr || ctx.remoteIpcReadyEvent == nullptr ||
+          ctx.ipcAllGatherDoneEvent == nullptr ||
+          ctx.remoteIpcAllGatherDoneEvent == nullptr ||
+          ctx.ipcDoneEvent == nullptr || ctx.remoteIpcDoneEvent == nullptr) {
+        throw mscclpp::Error("intra-node AllGather requires CudaIpc context",
+                             mscclpp::ErrorCode::InvalidUsage);
+      }
+
+      bool needExchange = ctx.localAllocBase == 0 ||
+                          ctx.localAllocBase != recvBaseAddr ||
+                          ctx.localAllocSize != recvAllocSize ||
+                          ctx.localAllocBufferId != recvBufferId;
+      if (needExchange) {
+        mscclpp::TransportFlags ipcFlags(mscclpp::Transport::CudaIpc);
+        auto rm = comm->comm->registerMemory(
+            reinterpret_cast<void*>(recvBaseAddr), recvAllocSize,
+            ipcFlags);
+        comm->comm->sendMemory(
+            rm, peer, recvbuffExchangeTag(rank, peer, comm->worldSize));
+        ctx.localRecvbuffMemory = rm;
+        ctx.localAllocBase = recvBaseAddr;
+        ctx.localAllocSize = recvAllocSize;
+        ctx.localAllocBufferId = recvBufferId;
+        ctx.ipcShmSemaphore->publishAllocBase(ctx.localAllocBase);
+      }
+      ctx.ipcShmSemaphore->publishRecvbuff(recvAddr);
+    }
+
+    std::vector<uintptr_t> peerRecvAddrs(static_cast<size_t>(nRanks), 0);
+    for (int peer : peers) {
+      auto& ctx = getSendRecvPeerContext(comm, peer, comm->cudaDevice);
+      peerRecvAddrs[static_cast<size_t>(peer)] =
+          ctx.ipcShmSemaphore->readPeerRecvbuff();
+      uint64_t peerAllocGen = ctx.ipcShmSemaphore->readPeerAllocGeneration();
+      if (peerAllocGen != ctx.peerAllocGeneration) {
+        if (ctx.peerAllocGeneration != 0) {
+          MSCCLPP_CUDATHROW(cudaStreamSynchronize(ctx.ipcStream));
+        }
+        auto rmFuture = comm->comm->recvMemory(
+            peer, recvbuffExchangeTag(peer, rank, comm->worldSize));
+        auto remoteRecvbuffRM = rmFuture.get();
+        uintptr_t mappedAllocBase =
+            reinterpret_cast<uintptr_t>(remoteRecvbuffRM.data());
+        uintptr_t peerAllocBase = ctx.ipcShmSemaphore->readPeerAllocBase();
+        ctx.remoteRecvbuffRM = remoteRecvbuffRM;
+        ctx.mappedAllocBase = mappedAllocBase;
+        ctx.peerAllocBase = peerAllocBase;
+        ctx.peerAllocGeneration = peerAllocGen;
+      }
+    }
+
+    auto* recvBytes = static_cast<char*>(recvbuff);
+    void* selfOutput = recvBytes + static_cast<size_t>(rank) * bytesPerRank;
+    auto& nextCtx = getSendRecvPeerContext(comm, next, comm->cudaDevice);
+    auto& prevCtx = getSendRecvPeerContext(comm, prev, comm->cudaDevice);
+    cudaEvent_t outboundDone = localEvents.create();
+
+    MSCCLPP_CUDATHROW(cudaEventRecord(prevCtx.ipcReadyEvent, stream));
+    prevCtx.ipcShmSemaphore->signalAllGatherReadyRecorded();
+    nextCtx.ipcShmSemaphore->waitPeerAllGatherReadyRecorded();
+    MSCCLPP_CUDATHROW(
+        cudaStreamWaitEvent(nextCtx.ipcStream, nextCtx.remoteIpcReadyEvent, 0));
+    nextCtx.ipcShmSemaphore->ackPeerAllGatherReadyWaitEnqueued();
+    prevCtx.ipcShmSemaphore->waitPeerAllGatherReadyWaitEnqueued();
+
+    cudaEvent_t inputReady = localEvents.create();
+    MSCCLPP_CUDATHROW(cudaEventRecord(inputReady, stream));
+    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(nextCtx.ipcStream, inputReady, 0));
+
+    if (sendbuff != selfOutput) {
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(selfOutput, sendbuff, bytesPerRank,
+                                        cudaMemcpyDeviceToDevice, stream));
+    }
+
+    for (int step = 0; step < nRanks - 1; ++step) {
+      int sendBlock = (rank - step + nRanks) % nRanks;
+      if (step > 0) {
+        cudaEvent_t blockReady = localEvents.create();
+        MSCCLPP_CUDATHROW(cudaEventRecord(blockReady, stream));
+        MSCCLPP_CUDATHROW(
+            cudaStreamWaitEvent(nextCtx.ipcStream, blockReady, 0));
+      }
+      void const* src =
+          step == 0 ? sendbuff
+                    : static_cast<void const*>(
+                          recvBytes +
+                          static_cast<size_t>(sendBlock) * bytesPerRank);
+      uintptr_t peerSlot =
+          peerRecvAddrs[static_cast<size_t>(next)] +
+          static_cast<uintptr_t>(sendBlock) * bytesPerRank;
+      void* remoteDst = nextCtx.mapPeerPtr(peerSlot);
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(remoteDst, src, bytesPerRank,
+                                        cudaMemcpyDeviceToDevice,
+                                        nextCtx.ipcStream));
+      MSCCLPP_CUDATHROW(
+          cudaEventRecord(nextCtx.ipcAllGatherDoneEvent, nextCtx.ipcStream));
+      nextCtx.ipcShmSemaphore->signalAllGatherEventRecorded();
+      cudaStreamQuery(nextCtx.ipcStream);
+
+      prevCtx.ipcShmSemaphore->waitPeerAllGatherEventRecorded();
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(
+          stream, prevCtx.remoteIpcAllGatherDoneEvent, 0));
+      prevCtx.ipcShmSemaphore->ackPeerAllGatherEventWaitEnqueued();
+      nextCtx.ipcShmSemaphore->waitPeerAllGatherEventWaitEnqueued();
+    }
+    MSCCLPP_CUDATHROW(cudaEventRecord(outboundDone, nextCtx.ipcStream));
+    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, outboundDone, 0));
+  });
 }
 
 static ncclResult_t executeGroupedCudaIpcRecvEventImpl(
@@ -2199,6 +2539,21 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
   }
 
+  if (nRank == comm->nRanksPerNode) {
+    ncclResult_t nativeResult = runIntraNodeCudaIpcAllGather(
+        sendbuff, recvbuff, bytes, comm, stream, rank, nRank);
+    if (nativeResult == ncclSuccess) return nativeResult;
+    if (nativeResult != ncclInvalidUsage &&
+        nativeResult != ncclInvalidArgument) {
+      return nativeResult;
+    }
+    if (mscclppNcclDlopenSharedLib == true) {
+      return mscclppNcclOps.AllGather(
+          sendbuff, recvbuff, sendcount, datatype,
+          *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
+    }
+  }
+
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
   mscclpp::DataType dtype;
   if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
@@ -2415,7 +2770,7 @@ NCCL_API ncclResult_t ncclGroupEnd() {
   //               first call or when the underlying cudaMalloc changes.
   //   Send side → reads peer's shm; receives IPC handle only when the peer's
   //               allocation generation has advanced; computes mapped ptr.
-  {
+  try {
     // (a) Recv ops: publish recvbuff address and (if needed) IPC handle.
     for (auto const& op : customOps) {
       auto& ctx = getSendRecvPeerContext(op.comm, op.peer, op.comm->cudaDevice);
@@ -2423,24 +2778,46 @@ NCCL_API ncclResult_t ncclGroupEnd() {
       if (op.kind != GroupedP2POpKind::Recv) continue;
 
       uintptr_t addr = reinterpret_cast<uintptr_t>(op.recvbuff);
-
-      // Check if the allocation changed (or if this is the first call).
-      bool needExchange = false;
-      if (ctx.localAllocBase == 0 || addr < ctx.localAllocBase ||
-          addr >= ctx.localAllocBase + ctx.localAllocSize) {
-        // New allocation — get base + size via CUDA driver API.
-        CUdeviceptr base = 0;
-        size_t allocSize = 0;
-        CUresult res = cuMemGetAddressRange(&base, &allocSize,
-                                            static_cast<CUdeviceptr>(addr));
-        if (res != CUDA_SUCCESS) {
-          throw mscclpp::Error("cuMemGetAddressRange failed",
-                               mscclpp::ErrorCode::SystemError);
-        }
-        ctx.localAllocBase = static_cast<uintptr_t>(base);
-        ctx.localAllocSize = allocSize;
-        needExchange = true;
+      size_t typeSize = ncclTypeSize(op.datatype);
+      if (typeSize == 0 ||
+          op.count > std::numeric_limits<size_t>::max() / typeSize ||
+          op.count * typeSize >
+              std::numeric_limits<uintptr_t>::max() - addr) {
+        throw mscclpp::Error("invalid grouped CudaIpc recv size",
+                             mscclpp::ErrorCode::InvalidUsage);
       }
+      size_t bytes = op.count * typeSize;
+
+      CUdeviceptr base = 0;
+      size_t allocSize = 0;
+      CUresult rangeResult = cuMemGetAddressRange(
+          &base, &allocSize, static_cast<CUdeviceptr>(addr));
+      if (rangeResult != CUDA_SUCCESS) {
+        throw mscclpp::Error("cuMemGetAddressRange failed",
+                             mscclpp::ErrorCode::SystemError);
+      }
+      unsigned long long bufferId = 0;
+      CUresult idResult = cuPointerGetAttribute(
+          &bufferId, CU_POINTER_ATTRIBUTE_BUFFER_ID,
+          static_cast<CUdeviceptr>(addr));
+      if (idResult != CUDA_SUCCESS) {
+        throw mscclpp::Error("cuPointerGetAttribute BUFFER_ID failed",
+                             mscclpp::ErrorCode::SystemError);
+      }
+      uintptr_t baseAddr = static_cast<uintptr_t>(base);
+      size_t offset =
+          addr >= baseAddr ? static_cast<size_t>(addr - baseAddr)
+                           : allocSize + 1;
+      if (offset > allocSize || bytes > allocSize - offset) {
+        throw mscclpp::Error("grouped CudaIpc recvbuff does not fit in "
+                             "allocation",
+                             mscclpp::ErrorCode::InvalidUsage);
+      }
+
+      bool needExchange = ctx.localAllocBase == 0 ||
+                          ctx.localAllocBase != baseAddr ||
+                          ctx.localAllocSize != allocSize ||
+                          ctx.localAllocBufferId != bufferId;
 
       if (needExchange) {
         // Register the FULL allocation (not just the recvbuff slice) so the
@@ -2449,9 +2826,12 @@ NCCL_API ncclResult_t ncclGroupEnd() {
         int tag = recvbuffExchangeTag(rank, op.peer, op.comm->worldSize);
         mscclpp::TransportFlags ipcFlags(mscclpp::Transport::CudaIpc);
         auto rm = op.comm->comm->registerMemory(
-            reinterpret_cast<void*>(ctx.localAllocBase), ctx.localAllocSize,
-            ipcFlags);
+            reinterpret_cast<void*>(baseAddr), allocSize, ipcFlags);
         op.comm->comm->sendMemory(rm, op.peer, tag);
+        ctx.localRecvbuffMemory = rm;
+        ctx.localAllocBase = baseAddr;
+        ctx.localAllocSize = allocSize;
+        ctx.localAllocBufferId = bufferId;
 
         // Publish alloc base to shm (sender reads it for offset computation).
         ctx.ipcShmSemaphore->publishAllocBase(ctx.localAllocBase);
@@ -2477,17 +2857,32 @@ NCCL_API ncclResult_t ncclGroupEnd() {
       // Check if the peer's allocation changed.
       uint64_t peerAllocGen = sem->readPeerAllocGeneration();
       if (peerAllocGen != ctx.peerAllocGeneration) {
-        ctx.peerAllocGeneration = peerAllocGen;
+        if (ctx.peerAllocGeneration != 0 && ctx.ipcStream != nullptr) {
+          MSCCLPP_CUDATHROW(cudaStreamSynchronize(ctx.ipcStream));
+        }
         // Peer registered a new allocation — receive IPC handle.
         int rank = op.comm->comm->bootstrap()->getRank();
         int tag = recvbuffExchangeTag(op.peer, rank, op.comm->worldSize);
         auto rmFuture = op.comm->comm->recvMemory(op.peer, tag);
-        ctx.remoteRecvbuffRM = rmFuture.get();
-        ctx.mappedAllocBase =
-            reinterpret_cast<uintptr_t>(ctx.remoteRecvbuffRM.data());
-        ctx.peerAllocBase = sem->readPeerAllocBase();
+        auto remoteRecvbuffRM = rmFuture.get();
+        uintptr_t mappedAllocBase =
+            reinterpret_cast<uintptr_t>(remoteRecvbuffRM.data());
+        uintptr_t peerAllocBase = sem->readPeerAllocBase();
+        ctx.remoteRecvbuffRM = remoteRecvbuffRM;
+        ctx.mappedAllocBase = mappedAllocBase;
+        ctx.peerAllocBase = peerAllocBase;
+        ctx.peerAllocGeneration = peerAllocGen;
       }
     }
+  } catch (std::exception const& ex) {
+    WARN(MSCCLPP_NCCL, "ncclGroupEnd CudaIpc recvbuff exchange failed: ",
+         std::string(ex.what()));
+    return mapMscclppException(ex);
+  } catch (...) {
+    WARN(MSCCLPP_NCCL,
+         "ncclGroupEnd CudaIpc recvbuff exchange failed with an unknown "
+         "exception");
+    return ncclInternalError;
   }
 
   // Phase 3: Execute custom operations.
