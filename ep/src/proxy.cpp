@@ -86,6 +86,11 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 #endif
 
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
+  // Resolve the optional device/NIC ranks once. Callers that build a Config
+  // directly (FifoProxy, bench make_cfg) leave these at -1, meaning "fall back
+  // to local_rank". Downstream code then reads the resolved fields.
+  if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
+  if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
   // Initialize state tracking for each ring buffer
   listen_port_ = uccl::create_listen_socket(&listen_fd_);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -107,16 +112,6 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
-namespace {
-int proxy_device_index(Proxy::Config const& cfg) {
-  return cfg.device_index >= 0 ? cfg.device_index : cfg.local_rank;
-}
-
-int proxy_nic_local_rank(Proxy::Config const& cfg) {
-  return cfg.nic_local_rank >= 0 ? cfg.nic_local_rank : cfg.local_rank;
-}
-}  // namespace
-
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
@@ -125,7 +120,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
     int const mode_offset =
         cfg_.use_normal_mode ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
-    int const cpu_local_rank = proxy_nic_local_rank(cfg_);
+    int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
                       cpu_local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
@@ -144,7 +139,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
-    int const cpu_local_rank = proxy_nic_local_rank(cfg_);
+    int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_unique(ctx_.numa_node, cpu_local_rank, cfg_.thread_idx,
                       kNumProxyThs);
 
@@ -199,8 +194,7 @@ void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.thread_idx, proxy_device_index(cfg_),
-                       proxy_nic_local_rank(cfg_));
+                       cfg_.thread_idx, cfg_.device_index, cfg_.nic_local_rank);
   pin_thread_to_numa_wrapper();
   if (!get_cq(ctx_)) {
     (void)create_per_thread_comp_channel(ctx_);
