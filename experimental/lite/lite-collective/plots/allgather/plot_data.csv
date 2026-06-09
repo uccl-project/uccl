@@ -1,0 +1,121 @@
+setup,size,size_bytes,lite_time_us,nccl_time_us,lite_busbw,nccl_busbw,nccl_cfg,nccl_log,nccl_label
+1nx4g_host,128B,128,8.36,9.02,0.01,0.01,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,256B,256,8.34,8.89,0.02,0.02,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,512B,512,8.31,9.03,0.05,0.04,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,1KiB,1024,8.39,9.14,0.09,0.08,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,2KiB,2048,9.03,9.21,0.17,0.17,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,4KiB,4096,10.46,9.69,0.29,0.32,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,8KiB,8192,10.86,9.84,0.57,0.62,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,16KiB,16384,11.03,10.75,1.11,1.14,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,32KiB,32768,11.82,11.71,2.08,2.1,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,64KiB,65536,12.99,14.57,3.78,3.37,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,128KiB,131072,15.92,20.82,6.17,4.72,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,256KiB,262144,22.12,34.35,8.89,5.72,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,512KiB,524288,34.83,59.72,11.29,6.58,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,1MiB,1048576,60.34,82.92,13.03,9.48,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,2MiB,2097152,111.48,125.88,14.11,12.5,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-beat-check-20260609-085713/nccl_shm_allgather_1nx4g.log,NCCL SHM-only
+1nx4g_host,4MiB,4194304,214.11,216.64,14.69,14.52,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,8MiB,8388608,395.37,398.85,15.91,15.77,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,16MiB,16777216,732.61,784.49,17.18,16.04,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,32MiB,33554432,1485.29,1547.79,16.94,16.26,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,64MiB,67108864,2905.59,3074.64,17.32,16.37,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,128MiB,134217728,5724.98,6134.58,17.58,16.41,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,256MiB,268435456,11809.4,12250.2,17.05,16.43,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,512MiB,536870912,23502.9,24509.9,17.13,16.43,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_host,1GiB,1073741824,46910.9,49024.8,17.17,16.43,shm_only,.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/nccl_shm_allgather_1nx4g_large.log,NCCL SHM-only
+1nx4g_cudaipc,128B,128,8.68,9.92,0.01,0.01,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,256B,256,8.85,8.89,0.02,0.02,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,512B,512,9.11,8.99,0.04,0.04,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,1KiB,1024,9.15,9.13,0.08,0.08,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,2KiB,2048,9.21,9.19,0.17,0.17,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,4KiB,4096,9.38,9.34,0.33,0.33,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,8KiB,8192,9.79,9.92,0.63,0.62,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,16KiB,16384,10.76,10.67,1.14,1.15,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,32KiB,32768,13.88,11.54,1.77,2.13,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,64KiB,65536,14.58,14.49,3.37,3.39,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,128KiB,131072,20.8,20.7,4.73,4.75,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,256KiB,262144,33.63,34.39,5.85,5.72,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,512KiB,524288,60.08,59.5,6.54,6.61,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,1MiB,1048576,82.88,82.34,9.49,9.55,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,2MiB,2097152,125.61,125.6,12.52,12.52,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,4MiB,4194304,216.23,215.93,14.55,14.57,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,8MiB,8388608,353.95,400.57,17.78,15.71,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,16MiB,16777216,660.21,785.76,19.06,16.01,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,32MiB,33554432,1275.84,1544.54,19.72,16.29,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,64MiB,67108864,2518.42,3077.69,19.99,16.35,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,128MiB,134217728,5053.99,6125.41,19.92,16.43,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,256MiB,268435456,10119.7,12255.7,19.89,16.43,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,512MiB,536870912,20215.2,24471.4,19.92,16.45,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+1nx4g_cudaipc,1GiB,1073741824,40373.2,48938.6,19.95,16.46,default,.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/nccl_allgather_1nx4g.log,NCCL
+2nx1g,128B,128,9.42,8.8,0.01,0.01,ring_ll,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_small_ring_ll.log,NCCL tuned
+2nx1g,256B,256,8.73,8.9,0.01,0.01,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross1.log,NCCL tuned
+2nx1g,512B,512,8.81,9.07,0.03,0.03,buff8m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff8m.log,NCCL tuned
+2nx1g,1KiB,1024,8.5,9.14,0.06,0.06,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross1.log,NCCL tuned
+2nx1g,2KiB,2048,8.53,9.34,0.12,0.11,cross0,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross0.log,NCCL tuned
+2nx1g,4KiB,4096,10.05,9.75,0.2,0.21,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross1.log,NCCL tuned
+2nx1g,8KiB,8192,9.82,10.65,0.42,0.38,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross1.log,NCCL tuned
+2nx1g,16KiB,16384,9.99,12.35,0.82,0.66,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,32KiB,32768,13.98,14.24,1.17,1.15,buff8m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff8m.log,NCCL tuned
+2nx1g,64KiB,65536,17.13,18.41,1.91,1.78,buff8m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff8m.log,NCCL tuned
+2nx1g,128KiB,131072,22.9,26.68,2.86,2.46,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ch4.log,NCCL tuned
+2nx1g,256KiB,262144,36.05,38.02,3.64,3.45,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ring_simple.log,NCCL tuned
+2nx1g,512KiB,524288,46.38,45.51,5.65,5.76,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ch4.log,NCCL tuned
+2nx1g,1MiB,1048576,72.96,67.69,7.19,7.75,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ring_simple.log,NCCL tuned
+2nx1g,2MiB,2097152,94.85,108.06,11.05,9.7,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_cross1.log,NCCL tuned
+2nx1g,4MiB,4194304,149.32,188.63,14.04,11.12,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ring_simple.log,NCCL tuned
+2nx1g,8MiB,8388608,242.82,348.92,17.27,12.02,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_ring_simple.log,NCCL tuned
+2nx1g,16MiB,16777216,448.4,670.88,18.71,12.5,buff8m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff8m.log,NCCL tuned
+2nx1g,32MiB,33554432,893.94,1317.04,18.77,12.74,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,64MiB,67108864,1844.92,2617.5,18.19,12.82,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,128MiB,134217728,3766.19,5217.18,17.82,12.86,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,256MiB,268435456,7588.05,10419.3,17.69,12.88,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,512MiB,536870912,15248.4,20822.2,17.6,12.89,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx1g,1GiB,1073741824,30583.1,41638.1,17.55,12.89,buff16m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx1g_full_buff16m.log,NCCL tuned
+2nx2g,128B,128,11.35,12.07,0.01,0.01,ring_ll,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_small_ring_ll.log,NCCL tuned
+2nx2g,256B,256,11.39,12.19,0.02,0.02,ring_ll,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_small_ring_ll.log,NCCL tuned
+2nx2g,512B,512,11.31,12.36,0.03,0.03,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,1KiB,1024,11.36,12.54,0.07,0.06,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,2KiB,2048,11.21,12.59,0.14,0.12,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_cross1.log,NCCL tuned
+2nx2g,4KiB,4096,11.26,12.96,0.27,0.24,p2p4m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_p2p4m.log,NCCL tuned
+2nx2g,8KiB,8192,15.58,13.55,0.39,0.45,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,16KiB,16384,24.51,14.86,0.5,0.83,ch1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch1.log,NCCL tuned
+2nx2g,32KiB,32768,16.6,16.28,1.48,1.51,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch4.log,NCCL tuned
+2nx2g,64KiB,65536,17.35,20.66,2.83,2.38,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch4.log,NCCL tuned
+2nx2g,128KiB,131072,29.53,29.77,3.33,3.3,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch4.log,NCCL tuned
+2nx2g,256KiB,262144,33.26,45.48,5.91,4.32,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch4.log,NCCL tuned
+2nx2g,512KiB,524288,54.35,64.6,7.24,6.09,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ring_simple.log,NCCL tuned
+2nx2g,1MiB,1048576,84.0,80.82,9.36,9.73,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch4.log,NCCL tuned
+2nx2g,2MiB,2097152,124.71,131.21,12.61,11.99,cross0,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_cross0.log,NCCL tuned
+2nx2g,4MiB,4194304,200.8,223.9,15.67,14.05,p2p4m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_p2p4m.log,NCCL tuned
+2nx2g,8MiB,8388608,346.21,419.05,18.17,15.01,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,16MiB,16777216,639.22,824.63,19.68,15.26,p2p4m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_p2p4m.log,NCCL tuned
+2nx2g,32MiB,33554432,1222.36,1637.07,20.59,15.37,p2p4m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_p2p4m.log,NCCL tuned
+2nx2g,64MiB,67108864,2452.66,3260.45,20.52,15.44,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,128MiB,134217728,4839.53,6490.73,20.8,15.51,p2p4m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_p2p4m.log,NCCL tuned
+2nx2g,256MiB,268435456,9718.25,12999.5,20.72,15.49,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,512MiB,536870912,19485.5,25950.0,20.66,15.52,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx2g,1GiB,1073741824,39045.8,51830.4,20.62,15.54,ch2,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx2g_full_ch2.log,NCCL tuned
+2nx4g,128B,128,15.24,16.99,0.01,0.01,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,256B,256,14.62,16.44,0.02,0.01,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,512B,512,15.28,17.2,0.03,0.03,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,1KiB,1024,15.65,17.39,0.06,0.05,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,2KiB,2048,16.2,17.55,0.11,0.1,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,4KiB,4096,16.54,17.86,0.22,0.2,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,8KiB,8192,17.63,18.46,0.41,0.39,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,16KiB,16384,20.19,19.73,0.71,0.73,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,32KiB,32768,17.1,21.57,1.68,1.33,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,64KiB,65536,18.4,23.55,3.12,2.43,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,128KiB,131072,28.42,31.34,4.04,3.66,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_ch4.log,NCCL tuned
+2nx4g,256KiB,262144,38.6,51.06,5.94,4.49,p2p1m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_p2p1m.log,NCCL tuned
+2nx4g,512KiB,524288,53.35,86.82,8.6,5.28,ring_simple,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_ring_simple.log,NCCL tuned
+2nx4g,1MiB,1048576,79.22,109.42,11.58,8.39,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_ch4.log,NCCL tuned
+2nx4g,2MiB,2097152,135.2,149.99,13.57,12.23,ch4,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_ch4.log,NCCL tuned
+2nx4g,4MiB,4194304,223.34,255.5,16.43,14.36,p2p1m,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_p2p1m.log,NCCL tuned
+2nx4g,8MiB,8388608,418.69,457.69,17.53,16.04,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,16MiB,16777216,812.76,901.91,18.06,16.28,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,32MiB,33554432,1623.89,1870.6,18.08,15.7,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,64MiB,67108864,3261.81,3736.71,18.0,15.71,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,128MiB,134217728,6283.47,7446.51,18.69,15.77,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,256MiB,268435456,12611.4,14868.8,18.62,15.8,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,512MiB,536870912,25266.9,29752.6,18.59,15.79,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
+2nx4g,1GiB,1073741824,50415.1,59741.9,18.64,15.73,cross1,.tmp/collective-benchmarks/ag-nccl-tune-20260609-022425/nccl_2nx4g_full_cross1.log,NCCL tuned
