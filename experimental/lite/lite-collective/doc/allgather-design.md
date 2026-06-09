@@ -10,9 +10,10 @@ send/recv path.
 
 | Topic | Summary |
 | --- | --- |
-| Entry points | `ncclAllGather` first tries the single-node CudaIpc ring in [`nccl.cu`](../nccl/nccl.cu#L2499), then `runLiteAllGather` in [`lite_allgather.cu`](../nccl/lite_allgather.cu#L2328) handles multi-node host-slab layouts |
-| Target layouts | `1nx4g` large-message single-node CudaIpc ring; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
-| `1nx4g` large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
+| Entry points | `ncclAllGather` first tries single-node native paths in [`nccl.cu`](../nccl/nccl.cu#L3624), then `runLiteAllGather` in [`ag_inter.cu`](../nccl/lite-allgather/ag_inter.cu#L2328) handles multi-node host-slab layouts |
+| Target layouts | `1nx4g` default CudaIpc ring; opt-in `1nx4g` no-CudaIpc host-memory path; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
+| `1nx4g` default large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
+| `1nx4g` no-CudaIpc host mode | Set `MSCCLPP_NCCL_HOST_ALLGATHER=1`; payload stages through POSIX shared pinned host memory and does not use CudaIpc payload writes |
 | Small messages | Two-node ordered host slots with RDMA-written ready flags |
 | `2nx1g` large messages | Dedicated 512KiB chunk pipeline through 1GiB per-rank input |
 | `2nx2g` large messages | Single host slab, 512KiB chunks |
@@ -38,13 +39,15 @@ The NCCL shim has a single-node fast path before the multi-node
 `runLiteAllGather` path:
 
 1. `ncclAllGather` handles trivial `worldSize == 1` and forced NCCL fallback.
-2. If all ranks are on one node (`nRank == nRanksPerNode`), try
-   `runIntraNodeCudaIpcAllGather`.
-3. The single-node path only accepts large messages (`fullBytes >= 8MiB`),
+2. If all ranks are on one node (`nRank == nRanksPerNode`), try a native
+   single-node path.  By default this is `runIntraNodeCudaIpcAllGather`; with
+   `MSCCLPP_NCCL_HOST_ALLGATHER=1`, it is `runIntraNodeHostAllGather`.
+3. The default CudaIpc path only accepts large messages (`fullBytes >= 8MiB`),
    CUDA IPC event synchronization, non-capturing streams, and a valid
-   CudaIpc-mappable `recvbuff` allocation.  Unsupported cases return
-   `ncclInvalidUsage`, so the wrapper falls back to real NCCL when the dlopen
-   fallback is configured.
+   CudaIpc-mappable `recvbuff` allocation.  The host-memory path is opt-in and
+   covers the full `1nx4g` range without using CudaIpc payload writes.
+   Unsupported cases return `ncclInvalidUsage`, so the wrapper falls back to
+   real NCCL when the dlopen fallback is configured.
 4. Multi-node layouts continue through `runLiteAllGather`.
 
 `runLiteAllGather` handles multi-node layouts before the final NCCL fallback.
@@ -61,7 +64,8 @@ The multi-node order is intentionally short:
 
 | Topology | Small cutoff, total output bytes | Medium/large path |
 | --- | ---: | --- |
-| `1nx4g` | `<8MiB` uses real NCCL fallback | `runIntraNodeCudaIpcAllGather` CudaIpc ring |
+| `1nx4g` default | `<8MiB` uses real NCCL fallback | `runIntraNodeCudaIpcAllGather` CudaIpc ring |
+| `1nx4g` host mode | no fallback by size | `runIntraNodeHostAllGather` shared-host-slab path |
 | `2nx1g` | `<2MiB` | `runOneRankChunkPipeline` for per-rank `1MiB-1GiB`; then generic single slab |
 | `2nx2g` | `<128KiB` | `runSingleSlab` with 512KiB chunks |
 | `2nx4g` | `<128KiB` | `runNumaSplit` across NUMA/NIC-local groups when available |
@@ -71,18 +75,20 @@ Code pointers:
 
 | Area | Code |
 | --- | --- |
-| Single-node CudaIpc ring threshold | [`nccl.cu:L62`](../nccl/nccl.cu#L62) |
-| Single-node CudaIpc ring implementation | [`nccl.cu:L1312-L1500`](../nccl/nccl.cu#L1312-L1500) |
-| `ncclAllGather` dispatch and fallback order | [`nccl.cu:L2499-L2601`](../nccl/nccl.cu#L2499-L2601) |
-| Constants and thresholds | [`lite_allgather.cu:L45-L69`](../nccl/lite_allgather.cu#L45-L69) |
-| Remote data-ready atomic signal | [`lite_allgather.cu:L619-L631`](../nccl/lite_allgather.cu#L619-L631) |
-| Context setup and 2nx1g slab sizing | [`lite_allgather.cu:L786-L852`](../nccl/lite_allgather.cu#L786-L852) |
-| Small cutoffs and slot counts | [`lite_allgather.cu:L1289-L1302`](../nccl/lite_allgather.cu#L1289-L1302) |
-| `2nx1g` chunk pipeline | [`lite_allgather.cu:L1570-L1685`](../nccl/lite_allgather.cu#L1570-L1685) |
-| Single-slab path | [`lite_allgather.cu:L1687-L1766`](../nccl/lite_allgather.cu#L1687-L1766) |
-| Small ordered path | [`lite_allgather.cu:L1928-L2156`](../nccl/lite_allgather.cu#L1928-L2156) |
-| NUMA split path | [`lite_allgather.cu:L2158-L2361`](../nccl/lite_allgather.cu#L2158-L2361) |
-| Top-level dispatch | [`lite_allgather.cu:L2364-L2434`](../nccl/lite_allgather.cu#L2364-L2434) |
+| Single-node host-memory kernels | [`ag_intra.cu:L103-L283`](../nccl/lite-allgather/ag_intra.cu#L103-L283) |
+| Single-node host-memory implementation | [`ag_intra.cu:L842-L1163`](../nccl/lite-allgather/ag_intra.cu#L842-L1163) |
+| Single-node CudaIpc ring threshold | [`ag_intra.cu:L6-L7`](../nccl/lite-allgather/ag_intra.cu#L6-L7) |
+| Single-node CudaIpc ring implementation | [`ag_intra.cu:L1175-L1362`](../nccl/lite-allgather/ag_intra.cu#L1175-L1362) |
+| `ncclAllGather` dispatch and fallback order | [`nccl.cu:L2358-L2421`](../nccl/nccl.cu#L2358-L2421) |
+| Constants and thresholds | [`ag_inter.cu:L44-L69`](../nccl/lite-allgather/ag_inter.cu#L44-L69) |
+| Remote data-ready atomic signal | [`ag_inter.cu:L619-L631`](../nccl/lite-allgather/ag_inter.cu#L619-L631) |
+| Context setup and 2nx1g slab sizing | [`ag_inter.cu:L786-L852`](../nccl/lite-allgather/ag_inter.cu#L786-L852) |
+| Small cutoffs and slot counts | [`ag_inter.cu:L1289-L1302`](../nccl/lite-allgather/ag_inter.cu#L1289-L1302) |
+| `2nx1g` chunk pipeline | [`ag_inter.cu:L1570-L1685`](../nccl/lite-allgather/ag_inter.cu#L1570-L1685) |
+| Single-slab path | [`ag_inter.cu:L1687-L1766`](../nccl/lite-allgather/ag_inter.cu#L1687-L1766) |
+| Small ordered path | [`ag_inter.cu:L1928-L2156`](../nccl/lite-allgather/ag_inter.cu#L1928-L2156) |
+| NUMA split path | [`ag_inter.cu:L2158-L2361`](../nccl/lite-allgather/ag_inter.cu#L2158-L2361) |
+| Top-level dispatch | [`ag_inter.cu:L2365-L2435`](../nccl/lite-allgather/ag_inter.cu#L2365-L2435) |
 
 ## Protocols
 
@@ -155,7 +161,48 @@ one `bytesPerRank` block.  Pipelining happens at ring-step granularity: all rank
 copy to their `next` peer concurrently, then each rank forwards the block it just
 received from `prev`.
 
-### 2. Small ordered host slots
+### 2. Single-node no-CudaIpc host-memory mode (`1nx4g`)
+
+`MSCCLPP_NCCL_HOST_ALLGATHER=1` selects an opt-in `1nx4g` path for systems where
+GPU peer access/CudaIpc payload writes are unavailable or should be excluded from
+the comparison.  It still uses the NCCL API wrapper, but all payload movement
+goes through a POSIX shared-memory host slab registered with CUDA as pinned host
+memory.
+
+The path keeps two host slots per communicator to protect reuse across pipelined
+nccl-tests iterations.  Each rank writes its contribution into the slot at final
+AllGather order:
+
+```text
+host slot:
+[rank0 bytes][rank1 bytes][rank2 bytes][rank3 bytes]
+```
+
+There are three execution bands:
+
+1. **Tiny messages (`<=4KiB`)** use a single mapped-host GPU kernel.  The kernel
+   copies the rank's input into the mapped host slot, spins on per-rank host
+   ready counters, and copies the completed slot back to `recvbuff`.  This
+   minimizes CUDA runtime launch/callback overhead for latency-bound rows.
+2. **Small/medium messages (`<=4MiB`)** use a cooperative mapped-host GPU
+   kernel.  Multiple blocks copy the rank contribution into mapped host memory,
+   grid-synchronize, wait for all ranks to publish readiness, then assemble the
+   final output.  The default max cooperative block count is tuned for the 4MiB
+   boundary.
+3. **Large messages (`>4MiB`)** use copy engines.  Each rank D2Hs its input into
+   the shared host slot, publishes a host ready counter using event/callback
+   signaling, waits for all ranks, then H2Ds the remote blocks into final output
+   order.  Large rows intentionally do **not** first-touch each rank's segment on
+   the GPU-local NUMA node; on this 1nx4g host, neutral shared placement is
+   faster than rank-local placement because every rank must read most blocks
+   written by other sockets.
+
+A NUMA-replicated host-slab experiment remains behind
+`MSCCLPP_NCCL_HOST_ALLGATHER_REPLICATED_MIN_BYTES`, but it is disabled by
+default.  Both CPU-copy and double-D2H replica variants were slower than the
+single shared slab.
+
+### 3. Small ordered host slots
 
 Small two-node messages use `runSmallOrdered`.  Each epoch gets a ring-buffered
 host slot laid out in final AllGather order:
@@ -183,7 +230,7 @@ Topology-specific small-message shortcuts:
 - `2nx4g` uses ordered host slots to avoid per-peer P2P scheduling and CPU
   repacking.
 
-### 3. `2nx1g` one-rank chunk pipeline
+### 4. `2nx1g` one-rank chunk pipeline
 
 For `2nx1g`, per-rank `1MiB-1GiB` uses `runOneRankChunkPipeline`.  In nccl-tests
 output-size terms this covers up to `2GiB`; the retained validation below covers
@@ -212,7 +259,7 @@ This path fixes the previous `2nx1g` large-message cliff where messages above
 the old 16MiB per-rank fast-path limit fell into the slower generic single-slab
 steady state.
 
-### 4. Generic single-slab path
+### 5. Generic single-slab path
 
 `runSingleSlab` is the default host-slab algorithm when all local ranks share one
 NIC group, or when no better topology-specific path applies.
@@ -245,7 +292,7 @@ uses `rdmaReady` (for example, small ordered slots have their own slot flag), th
 sender tracks the last published epoch per peer and atomically adds the delta so
 the remote `rdmaReady[node]` counter reaches the exact epoch being waited on.
 
-### 5. NUMA/NIC split path
+### 6. NUMA/NIC split path
 
 `runNumaSplit` is used when the local GPU/NIC layout exposes multiple symmetric
 contiguous groups and `nRanksPerNode != 2`.  On the L40/L41 `2nx4g` setup, that
@@ -337,6 +384,22 @@ bus bandwidth highlights:
 Raw logs:
 `.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/`.
 
+Latest `1nx4g` no-CudaIpc host-memory sweep compares the opt-in Lite host path
+against SHM-only NCCL (`NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
+NCCL_SHM_DISABLE=0`).  Both runs reported `#wrong=0`.  Out-of-place large-message
+bus bandwidth:
+
+| Size | Lite host GB/s | NCCL SHM GB/s | Lite/NCCL |
+| ---: | ---: | ---: | ---: |
+| `4MiB` | 14.69 | 14.52 | 1.01x |
+| `8MiB` | 15.91 | 15.77 | 1.01x |
+| `16MiB` | 17.18 | 16.04 | 1.07x |
+| `64MiB` | 17.32 | 16.37 | 1.06x |
+| `1GiB` | 17.17 | 16.43 | 1.05x |
+
+Raw logs:
+`.tmp/collective-benchmarks/ag-1nx4g-host-refactor-final-20260609-101051/`.
+
 ## Operational notes
 
 - The `2nx1g` 1GiB fast path increases pinned/shared host memory for that
@@ -347,6 +410,13 @@ Raw logs:
 - Keep `MSCCLPP_NCCL_LIB_PATH` configured for `mscclpp` benchmark runs.  The
   `1nx4g` path deliberately falls back to real NCCL below `8MiB`, and the
   fallback is also the safety net for unsupported single-node cases.
+- Use `MSCCLPP_NCCL_HOST_ALLGATHER=1` only when benchmarking or running the
+  no-CudaIpc single-node host-memory path.  The default single-node path remains
+  the faster CudaIpc ring when CudaIpc payload access is available.
+- For the no-CudaIpc host path, keep `MSCCLPP_NCCL_HOST_ALLGATHER_NUMA_PLACE`
+  unset/disabled unless re-benchmarking placement.  Rank-local first-touch was
+  slower on the 1nx4g L4 host because most H2D reads consume blocks written by
+  other ranks.
 - Avoid ad-hoc optimizations for one exact message size.  New branches should be
   justified by a topology class or a reusable protocol improvement.
 - `>2` node correctness follows the host-slab protocol structure, but the

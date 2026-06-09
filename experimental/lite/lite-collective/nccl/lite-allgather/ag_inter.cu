@@ -2361,6 +2361,7 @@ ncclResult_t runNumaSplit(
 
 }  // namespace
 
+
 ncclResult_t runLiteAllGather(void const* sendbuff, void* recvbuff,
                               size_t sendcount, size_t bytesPerRank,
                               ncclDataType_t datatype, ncclComm_t comm,
