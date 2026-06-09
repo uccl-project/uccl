@@ -2,7 +2,7 @@
 
 #include "backend/backend.h"
 #include "coll_config.h"
-#include "scheduler.h"
+#include "lower.h"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +39,7 @@ struct ExecutorConfig {
   uint32_t threads_per_block = 256;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
+  bool enable_rdma_copy = true;
 };
 
 // Per-invocation mutable execution state.
@@ -134,6 +135,7 @@ class Executor {
   ExecutorBackends backends_{};
   std::unique_ptr<Backend> owned_transport_backend_;
   std::unique_ptr<Backend> owned_device_backend_;
+  std::unique_ptr<Backend> owned_rdma_copy_backend_;
   std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
       resolve_ipc_buffer_pointer_;
   std::unordered_map<CollectiveOpHandle, CollectiveRun> runs_;

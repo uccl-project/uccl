@@ -1,6 +1,6 @@
 #include "backend_test_utils.h"
 #include "test_utils.h"
-#include "scheduler.h"
+#include "lower.h"
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -81,7 +81,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   TiledResult allreduce_tiled =
       build_test_plan(CollKind::AllReduceRing, allreduce_cfg);
   Testing::validate_basic_tiled(allreduce_tiled);
-  assert(allreduce_tiled.schedule.layers.size() >= 1);
+  assert(allreduce_tiled.layers.size() >= 1);
   assert(allreduce_tiled.staging_bytes_required == 0);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256);
@@ -89,7 +89,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   TiledResult alltoall_tiled =
       build_test_plan(CollKind::AllToAllPairwise, alltoall_cfg);
   Testing::validate_basic_tiled(alltoall_tiled);
-  assert(alltoall_tiled.schedule.layers.size() >= 1);
+  assert(alltoall_tiled.layers.size() >= 1);
   assert(alltoall_tiled.staging_bytes_required == 0);
 }
 
@@ -413,6 +413,128 @@ void bench_executor_latency() {
          kIters, us / 1000.0, static_cast<double>(us) / kIters);
 }
 
+void test_alltoall_sm_execution() {
+  printf("[test] alltoall SM execution...\n");
+  Testing::MockDeviceBackend device_backend;
+  Testing::MockBackend transport_backend;
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+  TestMemory mem = Testing::make_test_memory(1, 4, 8192);
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 2, 8192, 512);
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.use_sm_ipc = true;
+  cfg.reduction = ReductionKind::None;
+
+  auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                     mem.scratch_ptr);
+  assert(executor.status(h) == CollectiveOpStatus::Running);
+  assert(wait_until_terminal(executor, h, std::chrono::seconds(2)));
+  assert(executor.status(h) == CollectiveOpStatus::Completed);
+  assert(device_backend.submissions() > 0);
+  executor.release(h);
+  printf("  ok: %zu device ops completed\n", device_backend.submissions());
+}
+
+void test_alltoall_dma_execution() {
+  printf("[test] alltoall DMA execution...\n");
+  Testing::MockBackend transport_backend;
+  Testing::MockDeviceBackend device_backend;
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+  TestMemory mem = Testing::make_test_memory(1, 4, 8192);
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 0, 8192, 1024);
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.use_sm_ipc = false;
+
+  auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                     mem.scratch_ptr);
+  assert(wait_until_terminal(executor, h, std::chrono::seconds(2)));
+  assert(executor.status(h) == CollectiveOpStatus::Completed);
+  assert(transport_backend.submissions() > 0);
+  executor.release(h);
+  printf("  ok: %zu transport ops completed\n",
+         transport_backend.submissions());
+}
+
+void bench_alltoall_pipeline() {
+  printf("[bench] alltoall pipeline throughput (SM + DMA)...\n");
+  Testing::MockDeviceBackend device_backend;
+  Testing::MockBackend transport_backend;
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+  TestMemory mem = Testing::make_test_memory(1, 4, 65536);
+
+  // SM
+  {
+    CollectiveConfig cfg = Testing::make_test_config(4, 1, 65536, 4096);
+    cfg.kind = CollKind::AllToAllPairwise;
+    cfg.use_sm_ipc = true;
+
+    for (int i = 0; i < 3; ++i) {
+      auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                         mem.scratch_ptr);
+      while (!executor.poll(h)) {}
+      executor.release(h);
+    }
+
+    constexpr int kBenchMs = 100;
+    auto t0 = std::chrono::steady_clock::now();
+    int iters = 0;
+    auto deadline = t0 + std::chrono::milliseconds(kBenchMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+      auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                         mem.scratch_ptr);
+      while (!executor.poll(h)) {}
+      executor.release(h);
+      ++iters;
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(t1 - t0).count();
+    printf("  alltoall SM:  %d ops in %lld ms  (%.0f ops/s)\n",
+           iters, (long long)ms, iters * 1000.0 / ms);
+  }
+
+  // DMA
+  {
+    CollectiveConfig cfg = Testing::make_test_config(4, 0, 65536, 4096);
+    cfg.kind = CollKind::AllToAllPairwise;
+    cfg.use_sm_ipc = false;
+
+    for (int i = 0; i < 3; ++i) {
+      auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                         mem.scratch_ptr);
+      while (!executor.poll(h)) {}
+      executor.release(h);
+    }
+
+    constexpr int kBenchMs = 100;
+    auto t0 = std::chrono::steady_clock::now();
+    int iters = 0;
+    auto deadline = t0 + std::chrono::milliseconds(kBenchMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+      auto h = executor.submit_alltoall(cfg, mem.input_ptr, mem.output_ptr,
+                                         mem.scratch_ptr);
+      while (!executor.poll(h)) {}
+      executor.release(h);
+      ++iters;
+    }
+    auto t1 = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(t1 - t0).count();
+    printf("  alltoall DMA: %d ops in %lld ms  (%.0f ops/s)\n",
+           iters, (long long)ms, iters * 1000.0 / ms);
+  }
+}
+
 }  // namespace
 }  // namespace CCL
 }  // namespace UKernel
@@ -435,8 +557,12 @@ int main() {
   test_executor_uses_transport_only_backend();
   test_executor_reports_submit_failure();
 
+  test_alltoall_sm_execution();
+  test_alltoall_dma_execution();
+
   bench_executor_pipeline();
   bench_executor_latency();
+  bench_alltoall_pipeline();
 
   printf("\n=== Component tests PASSED ===\n");
   return 0;

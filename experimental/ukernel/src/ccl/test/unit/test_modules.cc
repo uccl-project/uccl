@@ -1,6 +1,6 @@
 #include "backend_test_utils.h"
 #include "algo/chunk_graph.h"
-#include "scheduler.h"
+#include "lower.h"
 #include "backend_test_utils.h"
 #include "test_utils.h"
 #include <cassert>
@@ -213,36 +213,36 @@ void test_build_coll_algo_alltoall_dma_basic() {
 
 // ── Layer 4: scheduler ──────────────────────────────────────────────────
 
-void test_schedule_ops_empty() {
+void test_bfs_layers_empty() {
   printf("[test] schedule_ops empty...\n");
-  Schedule s = schedule_ops({});
-  assert(s.layers.empty());
+  auto s = bfs_layers({});
+  assert(s.empty());
 }
 
-void test_schedule_ops_single() {
+void test_bfs_layers_single() {
   printf("[test] schedule_ops single...\n");
   std::vector<Op> ops(1);
   ops[0].kind = OpKind::Copy;
   ops[0].bytes = 128;
-  Schedule s = schedule_ops(ops);
-  assert(s.layers.size() == 1);
-  assert(s.layers[0].size() == 1);
-  assert(s.layers[0][0] == 0);
+  auto s = bfs_layers(ops);
+  assert(s.size() == 1);
+  assert(s[0].size() == 1);
+  assert(s[0][0] == 0);
 }
 
-void test_schedule_ops_independent() {
+void test_bfs_layers_independent() {
   printf("[test] schedule_ops independent ops...\n");
   std::vector<Op> ops(5);
   for (int i = 0; i < 5; ++i) {
     ops[i].kind = OpKind::Copy;
     ops[i].bytes = 128;
   }
-  Schedule s = schedule_ops(ops);
-  assert(s.layers.size() == 1);
-  assert(s.layers[0].size() == 5);
+  auto s = bfs_layers(ops);
+  assert(s.size() == 1);
+  assert(s[0].size() == 5);
 }
 
-void test_schedule_ops_chain() {
+void test_bfs_layers_chain() {
   printf("[test] schedule_ops chain...\n");
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
@@ -252,15 +252,15 @@ void test_schedule_ops_chain() {
   ops[1].deps = {0};
   ops[2].deps = {1};
   ops[3].deps = {2};
-  Schedule s = schedule_ops(ops);
-  assert(s.layers.size() == 4);
+  auto s = bfs_layers(ops);
+  assert(s.size() == 4);
   for (int i = 0; i < 4; ++i) {
-    assert(s.layers[i].size() == 1);
-    assert(s.layers[i][0] == static_cast<uint32_t>(i));
+    assert(s[i].size() == 1);
+    assert(s[i][0] == static_cast<uint32_t>(i));
   }
 }
 
-void test_schedule_ops_diamond() {
+void test_bfs_layers_diamond() {
   printf("[test] schedule_ops diamond...\n");
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
@@ -270,27 +270,27 @@ void test_schedule_ops_diamond() {
   ops[1].deps = {0};
   ops[2].deps = {0};
   ops[3].deps = {1, 2};
-  Schedule s = schedule_ops(ops);
-  assert(s.layers.size() == 3);
-  assert(s.layers[0].size() == 1);
-  assert(s.layers[1].size() == 2);
-  assert(s.layers[2].size() == 1);
+  auto s = bfs_layers(ops);
+  assert(s.size() == 3);
+  assert(s[0].size() == 1);
+  assert(s[1].size() == 2);
+  assert(s[2].size() == 1);
 
   size_t total = 0;
-  for (auto const& layer : s.layers) total += layer.size();
+  for (auto const& layer : s) total += layer.size();
   assert(total == 4);
   assert(total == 4);
 }
 
-void test_tile_and_schedule_ring_basic() {
+void test_lower_algo_ring_basic() {
   printf("[test] tile_and_schedule ring basic...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/512);
+  TiledResult tiled = lower_algo(algo, /*tile_bytes=*/512);
   assert(tiled.input_bytes > 0);
   assert(tiled.staging_bytes_required == 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.layers.size() >= 1);
+  assert(tiled.layers.size() >= 1);
   // Ring allreduce with 4 ranks, 1024-byte shards, 512-byte tiles:
   // Each abstract op → 2 tiles. 12 abstract ops → 24 tiled ops.
   assert(tiled.ops.size() == 24);
@@ -299,44 +299,44 @@ void test_tile_and_schedule_ring_basic() {
   for (auto const& op : tiled.ops) assert(op.bytes <= 512);
 }
 
-void test_tile_and_schedule_alltoall_sm_basic() {
+void test_lower_algo_alltoall_sm_basic() {
   printf("[test] tile_and_schedule alltoall sm...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = true;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
+  TiledResult tiled = lower_algo(algo, /*tile_bytes=*/256);
   assert(tiled.staging_bytes_required == 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.layers.size() >= 1);
+  assert(tiled.layers.size() >= 1);
   // 4 ranks, self + 3 peers, 2048-byte slice → 8 tiles per peer.
   // self: DeviceCopy (8 tiles), per-peer: DeviceSend + DeviceRecv (16 tiles
   // each × 3 peers) Total: 8 + 2×8×3 = 56 tiles.
   assert(tiled.ops.size() == 14);
 }
 
-void test_tile_and_schedule_alltoall_dma_basic() {
+void test_lower_algo_alltoall_dma_basic() {
   printf("[test] tile_and_schedule alltoall dma...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
+  TiledResult tiled = lower_algo(algo, /*tile_bytes=*/256);
   assert(tiled.staging_bytes_required > 0);
   assert(!tiled.ops.empty());
-  assert(tiled.schedule.layers.size() >= 1);
+  assert(tiled.layers.size() >= 1);
 }
 
-void test_tile_and_schedule_sequential_tile_deps() {
+void test_lower_algo_sequential_tile_deps() {
   printf("[test] tile_and_schedule sequential tile deps...\n");
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 1024, 256);
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, /*tile_bytes=*/256);
+  TiledResult tiled = lower_algo(algo, /*tile_bytes=*/256);
   // DMA staging: TransportSend, TransportRecv, DeviceCopy should have
   // sequential tile ordering.
   bool saw_sequential_chain = false;
@@ -348,7 +348,7 @@ void test_tile_and_schedule_sequential_tile_deps() {
   assert(saw_sequential_chain);
 }
 
-void test_schedule_ops_schedule_total_covers_all_ops() {
+void test_bfs_layers_total_covers_all_ops() {
   printf("[test] schedule_ops total covers all ops...\n");
   for (int test_num = 0; test_num < 20; ++test_num) {
     std::vector<Op> ops(static_cast<size_t>(test_num + 1));
@@ -356,9 +356,9 @@ void test_schedule_ops_schedule_total_covers_all_ops() {
       op.kind = OpKind::Copy;
       op.bytes = 128;
     }
-    Schedule s = schedule_ops(ops);
+    auto s = bfs_layers(ops);
     size_t total = 0;
-    for (auto const& l_ : s.layers) total += l_.size();
+    for (auto const& l_ : s) total += l_.size();
     assert(total == ops.size());
   }
 }
@@ -369,14 +369,14 @@ void test_full_pipeline_ring_allreduce() {
   printf("[test] full pipeline ring allreduce...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
+  TiledResult tiled = lower_algo(algo, cfg.tile_bytes);
 
   // Verify all ops are valid.
   for (auto const& op : tiled.ops) assert(op.bytes > 0);
 
   // Verify schedule covers all ops.
   size_t total_scheduled = 0;
-  for (auto const& l : tiled.schedule.layers) total_scheduled += l.size();
+  for (auto const& l : tiled.layers) total_scheduled += l.size();
   assert(total_scheduled == tiled.ops.size());
 }
 
@@ -387,7 +387,7 @@ void test_full_pipeline_alltoall_sm() {
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = true;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
+  TiledResult tiled = lower_algo(algo, cfg.tile_bytes);
   assert(tiled.staging_bytes_required == 0);
 }
 
@@ -398,11 +398,11 @@ void test_full_pipeline_alltoall_dma() {
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
-  TiledResult tiled = tile_and_schedule(algo, cfg.tile_bytes);
+  TiledResult tiled = lower_algo(algo, cfg.tile_bytes);
   assert(tiled.staging_bytes_required > 0);
 }
 
-void bench_tile_and_schedule_large_ring() {
+void bench_lower_algo_large_ring() {
   printf("[bench] tile_and_schedule large ring (8r, 1MB, 64KB tile)...\n");
   CollectiveConfig cfg;
   cfg.nranks = 8; cfg.rank = 0;
@@ -428,7 +428,7 @@ void bench_tile_and_schedule_large_ring() {
          static_cast<double>(total_ops) / (us / 1000.0));
 }
 
-void bench_tile_and_schedule_large_alltoall() {
+void bench_lower_algo_large_alltoall() {
   printf("[bench] tile_and_schedule large alltoall dma (8r, 1MB, 64KB tile)...\n");
   CollectiveConfig cfg;
   cfg.nranks = 8; cfg.rank = 0;
@@ -454,14 +454,14 @@ void bench_tile_and_schedule_large_alltoall() {
          static_cast<double>(total_ops) / (us / 1000.0));
 }
 
-void bench_schedule_ops_wide_dag() {
+void bench_bfs_layers_wide_dag() {
   printf("[bench] schedule_ops wide DAG (1000 independent ops)...\n");
   std::vector<Op> ops(1000);
   for (auto& op : ops) { op.kind = OpKind::Copy; op.bytes = 128; }
   constexpr int kWarmup = 20; constexpr int kIters = 500;
-  for (int i = 0; i < kWarmup; ++i) schedule_ops(ops);
+  for (int i = 0; i < kWarmup; ++i) bfs_layers(ops);
   auto t0 = std::chrono::steady_clock::now();
-  for (int i = 0; i < kIters; ++i) schedule_ops(ops);
+  for (int i = 0; i < kIters; ++i) bfs_layers(ops);
   auto t1 = std::chrono::steady_clock::now();
   auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
   printf("  1000 ops × %d iters in %.1f ms  (%.0f ops/ms)\n",
@@ -494,16 +494,16 @@ int main() {
   test_build_coll_algo_alltoall_dma_basic();
 
   // Layer 4
-  test_schedule_ops_empty();
-  test_schedule_ops_single();
-  test_schedule_ops_independent();
-  test_schedule_ops_chain();
-  test_schedule_ops_diamond();
-  test_tile_and_schedule_ring_basic();
-  test_tile_and_schedule_alltoall_sm_basic();
-  test_tile_and_schedule_alltoall_dma_basic();
-  test_tile_and_schedule_sequential_tile_deps();
-  test_schedule_ops_schedule_total_covers_all_ops();
+  test_bfs_layers_empty();
+  test_bfs_layers_single();
+  test_bfs_layers_independent();
+  test_bfs_layers_chain();
+  test_bfs_layers_diamond();
+  test_lower_algo_ring_basic();
+  test_lower_algo_alltoall_sm_basic();
+  test_lower_algo_alltoall_dma_basic();
+  test_lower_algo_sequential_tile_deps();
+  test_bfs_layers_total_covers_all_ops();
 
   // Integration
   test_full_pipeline_ring_allreduce();
@@ -511,9 +511,9 @@ int main() {
   test_full_pipeline_alltoall_dma();
 
   // Benchmarks
-  bench_tile_and_schedule_large_ring();
-  bench_tile_and_schedule_large_alltoall();
-  bench_schedule_ops_wide_dag();
+  bench_lower_algo_large_ring();
+  bench_lower_algo_large_alltoall();
+  bench_bfs_layers_wide_dag();
 
   printf("\n=== Module tests PASSED ===\n");
   return 0;

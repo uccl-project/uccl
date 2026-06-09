@@ -113,7 +113,11 @@ __device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
   for (int spin = 0; spin < 16; ++spin)
     if (cmp->last[dir] >= target) return;
   while (cmp->last[dir] < target)
+#ifdef __HIP_PLATFORM_AMD__
+    __builtin_amdgcn_s_sleep(2);
+#else
     __nanosleep(200);
+#endif
 }
 
 // ── SM IPC kernel functions ──────────────────────────────────────────
@@ -209,15 +213,6 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
       break;
     case TaskType::CollRecv:
       sm_wait_seq(args);
-      break;
-    default:
-      break;
-  }
-}
-
-#undef RUN_COPY_BODY
-#undef RUN_REDUCE_BODY
-      run_recv_remote(args);
       break;
     default:
       break;

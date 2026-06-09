@@ -156,8 +156,8 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
 #define gpuDriverSuccess hipSuccess
-#define gpuMemRangeHandleType hipMemRangeHandleType
-#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define gpuMemRangeHandleType unsigned long long
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 1
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice

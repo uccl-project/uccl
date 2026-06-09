@@ -41,6 +41,8 @@ uint32_t remote_buffer_id_for_role(CollectiveBufferRole role) {
 }
 
 Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
+  if (kind == OpKind::Copy && backends.rdma_copy)
+    return backends.rdma_copy;
   if (backends.transport && backends.transport->supports(kind))
     return backends.transport;
   return backends.device;
@@ -85,6 +87,9 @@ void Executor::ensure_validated(TiledResult const& tiled,
     backends_.transport->validate(tiled, input_ptr, output_ptr, scratch_ptr);
   if (backends_.device && backends_.device != backends_.transport)
     backends_.device->validate(tiled, input_ptr, output_ptr, scratch_ptr);
+  if (backends_.rdma_copy && backends_.rdma_copy != backends_.transport &&
+      backends_.rdma_copy != backends_.device)
+    backends_.rdma_copy->validate(tiled, input_ptr, output_ptr, scratch_ptr);
   validated_sig_ = sig;
 }
 
@@ -153,7 +158,7 @@ CollectiveOpHandle Executor::submit_collective(
   run.scratch_ptr = scratch_ptr;
   run.total_ops = run.tiled.ops.size();
   run.signal_seq_base = seq_base;
-  run.layers = run.tiled.schedule.layers;
+  run.layers = run.tiled.layers;
 
   if (run.total_ops == 0) {
     run.status = CollectiveOpStatus::Completed;
@@ -278,7 +283,7 @@ void Executor::submit_ready(CollectiveRun& run) {
 // Phase 3: drain completed ops from all backends.
 void Executor::drain_completed(CollectiveRun& run) {
   std::string failure_msg;
-  for (Backend* backend : {backends_.transport, backends_.device}) {
+  for (Backend* backend : {backends_.transport, backends_.device, backends_.rdma_copy}) {
     if (backend == nullptr) continue;
     size_t n = backend->drain(run.done_buf.data(), run.total_ops);
     for (size_t i = 0; i < n; ++i) {
@@ -388,7 +393,7 @@ void Executor::run_tiled(TiledResult const& tiled, void* input_ptr,
   run.output_ptr = output_ptr;
   run.scratch_ptr = scratch_ptr;
   run.total_ops = tiled.ops.size();
-  run.layers = tiled.schedule.layers;
+  run.layers = tiled.layers;
 
   uint64_t seq_base =
       tiled.ops.empty() ? 0

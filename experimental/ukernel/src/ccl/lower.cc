@@ -1,4 +1,4 @@
-#include "scheduler.h"
+#include "lower.h"
 #include "utils.h"
 #include <algorithm>
 #include <queue>
@@ -8,8 +8,76 @@ namespace CCL {
 
 namespace {
 
-// ── BFS layer extraction (shared by schedule_ops) ──────────────────────
-// Returns ops grouped by topological layer.  Layer 0 = all ops with indegree 0.
+struct TileResult {
+  std::vector<Op> ops;
+  std::vector<size_t> first_tile;
+  std::vector<uint32_t> chunk_of;
+};
+
+TileResult tile_chunks(CollAlgo const& algo, size_t tile_bytes) {
+  TileResult r;
+  size_t n = algo.chunks.size();
+  r.first_tile.resize(n);
+
+  for (size_t i = 0; i < n; ++i) {
+    auto const& c = algo.chunks[i];
+    r.first_tile[i] = r.ops.size();
+    size_t num_tiles = ceil_div(c.bytes, tile_bytes);
+    for (size_t t = 0; t < num_tiles; ++t) {
+      Op tile;
+      tile.kind = c.op;
+      tile.bytes = std::min(tile_bytes, c.bytes - t * tile_bytes);
+      tile.src_off = c.src_off + t * tile_bytes;
+      tile.dst_off = c.dst_off + t * tile_bytes;
+      tile.src_peer = (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
+      tile.dst_peer = (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
+      tile.copy_from_staging =
+          (c.op == OpKind::Copy && c.sequential_tiles);
+      r.ops.push_back(tile);
+      r.chunk_of.push_back(static_cast<uint32_t>(i));
+    }
+  }
+  return r;
+}
+
+void propagate_deps(std::vector<Chunk> const& chunks,
+                    std::vector<size_t> const& first_tile,
+                    std::vector<Op>& ops) {
+  size_t n = chunks.size();
+  for (size_t i = 0; i < n; ++i) {
+    auto const& c = chunks[i];
+    size_t num_i =
+        (i + 1 < n) ? first_tile[i + 1] - first_tile[i]
+                    : ops.size() - first_tile[i];
+
+    if (c.sequential_tiles)
+      for (size_t t = 1; t < num_i; ++t)
+        ops[first_tile[i] + t].deps.push_back(
+            static_cast<uint32_t>(first_tile[i] + t - 1));
+
+    for (uint32_t dep_idx : c.deps) {
+      if (dep_idx >= n) continue;
+      size_t num_d =
+          (dep_idx + 1 < n)
+              ? first_tile[dep_idx + 1] - first_tile[dep_idx]
+              : ops.size() - first_tile[dep_idx];
+      size_t common = std::min(num_i, num_d);
+      for (size_t t = 0; t < common; ++t)
+        ops[first_tile[i] + t].deps.push_back(
+            static_cast<uint32_t>(first_tile[dep_idx] + t));
+    }
+  }
+}
+
+size_t compute_staging_bytes(CollAlgo const& algo, size_t tile_bytes) {
+  for (auto const& c : algo.chunks)
+    if (c.sequential_tiles)
+      return static_cast<size_t>(algo.nranks - 1) * tile_bytes;
+  return 0;
+}
+
+}  // namespace
+
 std::vector<std::vector<uint32_t>> bfs_layers(std::vector<Op> const& ops) {
   size_t n = ops.size();
   std::vector<uint32_t> indegree(n, 0);
@@ -43,90 +111,7 @@ std::vector<std::vector<uint32_t>> bfs_layers(std::vector<Op> const& ops) {
   return layers;
 }
 
-// ── Tile expansion ─────────────────────────────────────────────────────
-struct TileResult {
-  std::vector<Op> ops;
-  std::vector<size_t> first_tile;
-  std::vector<uint32_t> chunk_of;
-};
-
-TileResult tile_chunks(CollAlgo const& algo, size_t tile_bytes) {
-  TileResult r;
-  size_t n = algo.chunks.size();
-  r.first_tile.resize(n);
-
-  for (size_t i = 0; i < n; ++i) {
-    auto const& c = algo.chunks[i];
-    r.first_tile[i] = r.ops.size();
-    size_t num_tiles = ceil_div(c.bytes, tile_bytes);
-    for (size_t t = 0; t < num_tiles; ++t) {
-      Op tile;
-      tile.kind = c.op;
-      tile.bytes = std::min(tile_bytes, c.bytes - t * tile_bytes);
-      tile.src_off = c.src_off + t * tile_bytes;
-      tile.dst_off = c.dst_off + t * tile_bytes;
-      tile.src_peer = (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
-      tile.dst_peer = (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
-      tile.copy_from_staging =
-          (c.op == OpKind::Copy && c.sequential_tiles);
-      r.ops.push_back(tile);
-      r.chunk_of.push_back(static_cast<uint32_t>(i));
-    }
-  }
-  return r;
-}
-
-// ── Dependency propagation ─────────────────────────────────────────────
-void propagate_deps(std::vector<Chunk> const& chunks,
-                    std::vector<size_t> const& first_tile,
-                    std::vector<Op>& ops) {
-  size_t n = chunks.size();
-  for (size_t i = 0; i < n; ++i) {
-    auto const& c = chunks[i];
-    size_t num_i =
-        (i + 1 < n) ? first_tile[i + 1] - first_tile[i]
-                    : ops.size() - first_tile[i];
-
-    // Sequential tiles: tile k+1 depends on tile k.
-    if (c.sequential_tiles)
-      for (size_t t = 1; t < num_i; ++t)
-        ops[first_tile[i] + t].deps.push_back(
-            static_cast<uint32_t>(first_tile[i] + t - 1));
-
-    // Cross-chunk deps: tile k of this depends on tile k of dep.
-    for (uint32_t dep_idx : c.deps) {
-      if (dep_idx >= n) continue;
-      size_t num_d =
-          (dep_idx + 1 < n)
-              ? first_tile[dep_idx + 1] - first_tile[dep_idx]
-              : ops.size() - first_tile[dep_idx];
-      size_t common = std::min(num_i, num_d);
-      for (size_t t = 0; t < common; ++t)
-        ops[first_tile[i] + t].deps.push_back(
-            static_cast<uint32_t>(first_tile[dep_idx] + t));
-    }
-  }
-}
-
-// ── Staging requirement ────────────────────────────────────────────────
-size_t compute_staging_bytes(CollAlgo const& algo, size_t tile_bytes) {
-  for (auto const& c : algo.chunks)
-    if (c.sequential_tiles)
-      return static_cast<size_t>(algo.nranks - 1) * tile_bytes;
-  return 0;
-}
-
-}  // namespace
-
-// ── Public: schedule_ops ──────────────────────────────────────────────
-Schedule schedule_ops(std::vector<Op> const& ops) {
-  Schedule sched;
-  sched.layers = bfs_layers(ops);
-  return sched;
-}
-
-// ── Public: tile_and_schedule ──────────────────────────────────────────
-TiledResult tile_and_schedule(CollAlgo const& algo, size_t tile_bytes) {
+TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes) {
   TiledResult result;
   result.input_bytes = algo.input_bytes;
   result.output_bytes = algo.output_bytes;
@@ -141,14 +126,13 @@ TiledResult tile_and_schedule(CollAlgo const& algo, size_t tile_bytes) {
   result.ops = std::move(tiled.ops);
   result.chunk_of = std::move(tiled.chunk_of);
   result.staging_bytes_required = compute_staging_bytes(algo, tile_bytes);
-  result.schedule = schedule_ops(result.ops);
+  result.layers = bfs_layers(result.ops);
   return result;
 }
 
-// ── Public: build_tiled ────────────────────────────────────────────────
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
   CollAlgo algo = build_coll_algo(config, inplace);
-  return tile_and_schedule(algo, config.tile_bytes);
+  return lower_algo(algo, config.tile_bytes);
 }
 
 }  // namespace CCL

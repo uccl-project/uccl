@@ -25,134 +25,6 @@ namespace CCL {
 
 namespace {
 
-constexpr BufferId kTestInputBufferId = 7;
-constexpr BufferId kTestScratchBufferId = 11;
-constexpr CollectiveBufferRoles kTestRoles{
-    kTestInputBufferId, kTestInputBufferId, kTestScratchBufferId};
-
-size_t default_test_bytes_per_rank(int world_size) {
-  size_t base = 1u << 20;
-  size_t alignment =
-      static_cast<size_t>(std::max(1, world_size)) * sizeof(float);
-  return base - (base % alignment);
-}
-
-char const* collective_name(CollKind kind) {
-  switch (kind) {
-    case CollKind::AllReduceRing:
-      return "allreduce";
-    case CollKind::AllToAllPairwise:
-      return "alltoall";
-  }
-  return "unknown";
-}
-
-[[noreturn]] void fail(std::string const& msg) {
-  throw std::runtime_error(msg);
-}
-
-void require(bool cond, std::string const& msg) {
-  if (!cond) fail(msg);
-}
-
-std::string preview_window(std::vector<float> const& host, size_t index,
-                           size_t radius = 2) {
-  if (host.empty()) return "[]";
-  size_t begin = index > radius ? index - radius : 0;
-  size_t end = std::min(host.size(), index + radius + 1);
-  std::string out = "[";
-  for (size_t i = begin; i < end; ++i) {
-    if (i != begin) out += ", ";
-    out += std::to_string(host[i]);
-    if (i == index) out += "*";
-  }
-  out += "]";
-  return out;
-}
-
-int create_tcp_server(int port) {
-  int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-  require(fd >= 0, "failed to create barrier server socket");
-  int opt = 1;
-  require(::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == 0,
-          "failed to set SO_REUSEADDR on barrier socket");
-
-  sockaddr_in addr{};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(static_cast<uint16_t>(port));
-  require(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0,
-          "failed to bind barrier socket on port " + std::to_string(port));
-  require(::listen(fd, 16) == 0, "failed to listen on barrier socket");
-  return fd;
-}
-
-int connect_tcp_client(std::string const& ip, int port,
-                       std::chrono::milliseconds timeout) {
-  auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (true) {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    require(fd >= 0, "failed to create barrier client socket");
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    require(::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) == 1,
-            "invalid barrier server ip: " + ip);
-
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
-      return fd;
-    }
-    ::close(fd);
-    if (std::chrono::steady_clock::now() >= deadline) {
-      fail("timed out connecting to barrier server " + ip + ":" +
-           std::to_string(port));
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-}
-
-void write_barrier_byte(int fd) {
-  char byte = 1;
-  ssize_t rc = ::send(fd, &byte, sizeof(byte), 0);
-  require(rc == static_cast<ssize_t>(sizeof(byte)),
-          "failed to send barrier byte");
-}
-
-void read_barrier_byte(int fd) {
-  char byte = 0;
-  ssize_t rc = ::recv(fd, &byte, sizeof(byte), MSG_WAITALL);
-  require(rc == static_cast<ssize_t>(sizeof(byte)),
-          "failed to receive barrier byte");
-}
-
-void socket_barrier(std::string const& server_ip, int port, int rank,
-                    int world_size, char const* label) {
-  if (rank == 0) {
-    int server_fd = create_tcp_server(port);
-    std::vector<int> client_fds;
-    client_fds.reserve(static_cast<size_t>(world_size - 1));
-    for (int i = 1; i < world_size; ++i) {
-      int client_fd = ::accept(server_fd, nullptr, nullptr);
-      require(client_fd >= 0,
-              std::string("barrier accept failed for ") + label);
-      read_barrier_byte(client_fd);
-      client_fds.push_back(client_fd);
-    }
-    for (int client_fd : client_fds) {
-      write_barrier_byte(client_fd);
-      ::close(client_fd);
-    }
-    ::close(server_fd);
-    return;
-  }
-
-  int client_fd = connect_tcp_client(server_ip, port, std::chrono::seconds(30));
-  write_barrier_byte(client_fd);
-  read_barrier_byte(client_fd);
-  ::close(client_fd);
-}
-
 int get_int_arg(int argc, char** argv, char const* key, int def) {
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == key && i + 1 < argc) {
@@ -213,7 +85,7 @@ std::string get_str_arg(int argc, char** argv, char const* key,
   return def;
 }
 
-CollectiveKind parse_collective(std::string const& value) {
+CollKind parse_collective(std::string const& value) {
   if (value == "allreduce") return CollKind::AllReduceRing;
   if (value == "alltoall") return CollKind::AllToAllPairwise;
   throw std::invalid_argument("unsupported collective: " + value);
@@ -269,39 +141,18 @@ struct DeviceBuffer {
   DeviceBuffer& operator=(DeviceBuffer const&) = delete;
 };
 
-CollectiveBinding build_collective_memory(int rank, int world_size,
-                                          void* tensor_ptr, size_t tensor_bytes,
-                                          void* staging_ptr,
-                                          size_t staging_bytes) {
-  CollectiveBinding binding;
-  static auto s_registry = std::make_shared<BufferRegistry>();
-  binding.registry = s_registry.get();
-  binding.registry->local_rank = rank;
-  binding.roles = kTestRoles;
-  RegisteredBuffer& tensor =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
-  tensor.local_ptr = tensor_ptr;
-  tensor.bytes = tensor_bytes;
-  tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
-  tensor.layout.strides = {1};
-  tensor.layout.dtype = ScalarType::Float32;
-  tensor.peer_views.resize(static_cast<size_t>(world_size));
-  RegisteredBuffer& staging =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
-  staging.local_ptr = staging_ptr;
-  staging.local_buffer_id = 0;
-  staging.bytes = staging_bytes;
-  staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
-  staging.layout.strides = {1};
-  staging.layout.dtype = ScalarType::Float32;
-  staging.peer_views.resize(static_cast<size_t>(world_size));
+struct TestMemory {
+  void* input_ptr;
+  void* output_ptr;
+  void* scratch_ptr;
+};
 
-  for (int peer = 0; peer < world_size; ++peer) {
-    tensor.peer_views[static_cast<size_t>(peer)].same_node = true;
-    staging.peer_views[static_cast<size_t>(peer)].same_node = true;
-  }
-
-  return binding;
+TestMemory build_test_memory(void* tensor_ptr, void* staging_ptr) {
+  TestMemory mem;
+  mem.input_ptr = tensor_ptr;
+  mem.output_ptr = tensor_ptr;  // in-place
+  mem.scratch_ptr = staging_ptr;
+  return mem;
 }
 
 void init_allreduce_input(std::vector<float>& host, int rank) {
@@ -385,7 +236,6 @@ struct Options {
   int world_size = 2;
   int gpu = 0;
   int exchanger_port = 6979;
-  uint32_t num_streams = 2;
   size_t bytes_per_rank = default_test_bytes_per_rank(2);
   size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
@@ -405,7 +255,7 @@ Options parse_options(int argc, char** argv) {
   opts.exchanger_port = get_int_arg(
       argc, argv, "--exchanger-port",
       get_env_int({"MASTER_PORT", "UHM_EXCHANGER_SERVER_PORT"}, 29500));
-  opts.num_streams = static_cast<uint32_t>(get_int_arg(
+  8 = static_cast<uint32_t>(get_int_arg(
        argc, argv, "--num-streams", get_env_int({"CCL_NUM_STREAMS"}, 2)));
   opts.bytes_per_rank =
       get_size_arg(argc, argv, "--bytes-per-rank",
@@ -421,7 +271,7 @@ Options parse_options(int argc, char** argv) {
   opts.exchanger_ip = get_str_arg(argc, argv, "--exchanger-ip", default_ip);
   opts.transport = get_str_arg(argc, argv, "--transport",
                                get_env_str({"TRANSPORT"}, "auto"));
-  opts.collective = parse_collective(
+  opts.kind = parse_collective(
       get_str_arg(argc, argv, "--collective",
                   get_env_str({"COLLECTIVE", "CCL_COLLECTIVE"}, "allreduce")));
   return opts;
@@ -434,7 +284,7 @@ int run_rank(Options const& opts) {
   require(opts.tile_bytes > 0, "tile_bytes must be > 0");
   require(opts.bytes_per_rank % sizeof(float) == 0,
           "bytes_per_rank must be a multiple of sizeof(float)");
-  if (opts.collective == CollKind::AllToAllPairwise) {
+  if (opts.kind == CollKind::AllToAllPairwise) {
     require(opts.bytes_per_rank %
                     (static_cast<size_t>(opts.world_size) * sizeof(float)) ==
                 0,
@@ -450,16 +300,14 @@ int run_rank(Options const& opts) {
   GPU_RT_CHECK(gpuMemset(staging.ptr, 0, opts.bytes_per_rank));
 
   std::vector<float> input(opts.bytes_per_rank / sizeof(float), 0.0f);
-  if (opts.collective == CollKind::AllReduceRing) {
+  if (opts.kind == CollKind::AllReduceRing) {
     init_allreduce_input(input, opts.rank);
   } else {
     init_alltoall_input(input, opts.rank, opts.world_size);
   }
   upload_tensor(tensor.ptr, input);
 
-  CollectiveBinding memory = build_collective_memory(
-      opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank, staging.ptr,
-      opts.bytes_per_rank);
+  TestMemory mem = build_test_memory(tensor.ptr, staging.ptr);
 
   ExecutorConfig executor_cfg{};
   executor_cfg.gpu_id = opts.gpu;
@@ -472,7 +320,7 @@ int run_rank(Options const& opts) {
   executor_cfg.communicator_config->local_id = opts.rank;
   executor_cfg.communicator_config->preferred_transport =
       parse_transport(opts.transport);
-  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_streams, 1);
+  executor_cfg.max_device_fifos = std::max<uint32_t>(8, 1);
   executor_cfg.device_task_capacity = 4096;
   executor_cfg.threads_per_block = 256;
   executor_cfg.fifo_capacity = 64;
@@ -481,10 +329,10 @@ int run_rank(Options const& opts) {
 
   CollectiveConfig config =
       Testing::make_test_config(opts.world_size, opts.rank, opts.bytes_per_rank,
-                                opts.tile_bytes, opts.num_streams);
+                                opts.tile_bytes);
   config.dtype = ScalarType::Float32;
   config.reduction = ReductionKind::Sum;
-  if (opts.collective == CollKind::AllToAllPairwise) {
+  if (opts.kind == CollKind::AllToAllPairwise) {
     config.kind = CollKind::AllToAllPairwise;
   }
   std::string barrier_ip = get_env_str(
@@ -494,10 +342,10 @@ int run_rank(Options const& opts) {
   socket_barrier(barrier_ip, opts.exchanger_port + 1, opts.rank,
                  opts.world_size, "pre-submit");
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
-               collective_name(opts.collective));
-  CollectiveOpHandle handle = (opts.collective == CollKind::AllReduceRing)
-                                  ? executor.submit_allreduce(config, memory)
-                                  : executor.submit_alltoall(config, memory);
+               collective_name(opts.kind));
+  CollectiveOpHandle handle = (opts.kind == CollKind::AllReduceRing)
+                                  ? executor.submit_allreduce(config, mem.input_ptr, mem.output_ptr, mem.scratch_ptr)
+                                  : executor.submit_alltoall(config, mem.input_ptr, mem.output_ptr, mem.scratch_ptr);
   wait_for_collective(executor, handle, std::chrono::seconds(60));
   if (executor.status(handle) != CollectiveOpStatus::Completed) {
     std::string error = executor.error_message(handle);
@@ -509,22 +357,17 @@ int run_rank(Options const& opts) {
   executor.release(handle);
 
   std::vector<float> output = download_tensor(tensor.ptr, opts.bytes_per_rank);
-  if (opts.collective == CollKind::AllReduceRing) {
+  if (opts.kind == CollKind::AllReduceRing) {
     verify_allreduce_output(output, opts.world_size);
   } else {
     verify_alltoall_output(output, opts.rank, opts.world_size);
   }
 
   std::printf(
-      "[rank %d] %s verified, bytes_per_rank=%zu, tile_bytes=%zu, "
-      "num_streams=%u\n",
-      opts.rank, collective_name(opts.collective), opts.bytes_per_rank,
-      opts.tile_bytes, opts.num_streams);
-  return 0;
-}
-
-}  // namespace
-
+      "[rank %d] %s verified, bytes_per_rank=%zu, tile_bytes=%zu\n",
+      opts.rank, collective_name(opts.kind), opts.bytes_per_rank,
+      opts.tile_bytes);
+  std::printf(
 }  // namespace CCL
 }  // namespace UKernel
 

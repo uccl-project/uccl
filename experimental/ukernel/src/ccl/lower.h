@@ -21,25 +21,21 @@ struct Op {
   std::vector<uint32_t> deps;
 };
 
-struct Schedule {
-  std::vector<std::vector<uint32_t>> layers;
-};
-
 struct TiledResult {
   std::vector<Op> ops;
-  std::vector<uint32_t> chunk_of;  // chunk_of[tile_idx] = chunk index
+  std::vector<uint32_t> chunk_of;
+  std::vector<std::vector<uint32_t>> layers;
   size_t staging_bytes_required = 0;
   size_t input_bytes = 0;
   size_t output_bytes = 0;
   int rank = 0;
   int nranks = 1;
   ReductionKind reduction = ReductionKind::None;
-  Schedule schedule;
 };
 
-TiledResult tile_and_schedule(CollAlgo const& algo, size_t tile_bytes);
+TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes);
 
-Schedule schedule_ops(std::vector<Op> const& ops);
+std::vector<std::vector<uint32_t>> bfs_layers(std::vector<Op> const& ops);
 
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace);
 
