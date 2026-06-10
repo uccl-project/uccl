@@ -14,6 +14,7 @@ Primary tables and plots use out-of-place nccl-tests results. Ratios greater tha
 | Multi-node hosts | `10.10.55.1,10.10.55.2` |
 | NCCL multi-node baseline | `NCCL_NET_GDR_LEVEL=0` no-GDR where explicitly re-run |
 | Clean-run idle checks | `.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/idle_checks.log` |
+| Repeated clean rows | If multiple clean logs cover the same setup/size, use the median out-of-place time row |
 | Generated plots | `plots/allreduce/` |
 
 All plotted source rows reported `#wrong=0`.
@@ -25,7 +26,7 @@ All plotted source rows reported `#wrong=0`.
 | `1nx4g` | 0.44x | 0.81x | 17.54 | 17.54 | 1.00x |
 | `2nx1g` | 0.09x | 0.63x | 16.23 | 14.55 | 1.12x |
 | `2nx2g` | 1.15x | 0.91x | 14.71 | 15.34 | 0.96x |
-| `2nx4g` | 1.58x | 1.02x | 16.28 | 14.82 | 1.10x |
+| `2nx4g` | 1.58x | 1.13x | 16.28 | 14.82 | 1.10x |
 
 ## 1nx4g
 
@@ -174,9 +175,9 @@ Plots: [`2nx2g_latency_128B_1MiB.png`](2nx2g_latency_128B_1MiB.png), [`2nx2g_bus
 | 4MiB | 13.42 | 14.69 | 0.91x |
 | 8MiB | 14.47 | 15.90 | 0.91x |
 | 16MiB | 15.07 | 15.68 | 0.96x |
-| 32MiB | 7.57 | 14.51 | 0.52x |
-| 64MiB | 10.09 | 14.65 | 0.69x |
-| 128MiB | 16.28 | 14.74 | 1.10x |
+| 32MiB | 15.71 | 14.51 | 1.08x |
+| 64MiB | 15.61 | 14.65 | 1.07x |
+| 128MiB | 16.24 | 14.74 | 1.10x |
 | 256MiB | 16.28 | 14.81 | 1.10x |
 | 512MiB | 16.27 | 14.80 | 1.10x |
 | 1GiB | 16.28 | 14.82 | 1.10x |
@@ -199,4 +200,13 @@ Plots: [`2nx4g_latency_128B_1MiB.png`](2nx4g_latency_128B_1MiB.png), [`2nx4g_bus
 
 ### 2nx4g
 - lite: `.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/lite_2nx4g_128B_1G.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-cliff-repro-20260610-163537/lite_2nx4g_16M_128M_rep1.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-cliff-repro-20260610-163537/lite_2nx4g_16M_128M_rep2.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-cliff-repro-20260610-163537/lite_2nx4g_16M_128M_rep3.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-32m-repeat-20260610-163818/lite_2nx4g_32M_rep1.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-32m-repeat-20260610-163818/lite_2nx4g_32M_rep2.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-32m-repeat-20260610-163818/lite_2nx4g_32M_rep3.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-32m-repeat-20260610-163818/lite_2nx4g_32M_rep4.log`
+- lite: `.tmp/collective-benchmarks/ar-2nx4g-32m-repeat-20260610-163818/lite_2nx4g_32M_rep5.log`
 - nccl: `.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/nccl_2nx4g_128B_1G.log`
+- nccl: `.tmp/collective-benchmarks/ar-2nx4g-cliff-repro-20260610-163537/nccl_2nx4g_16M_128M.log`

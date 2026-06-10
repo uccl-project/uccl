@@ -116,15 +116,19 @@ def parse_nccl_tests_log(path: Path) -> tuple[dict[int, Metrics], int]:
 
 
 def merge_logs(paths: Iterable[Path]) -> dict[int, Metrics]:
-    merged: dict[int, Metrics] = {}
+    by_size: dict[int, list[Metrics]] = {}
     total_wrong = 0
     for path in paths:
         rows, wrong = parse_nccl_tests_log(path)
         total_wrong += wrong
-        merged.update(rows)
+        for size, metrics in rows.items():
+            by_size.setdefault(size, []).append(metrics)
     if total_wrong:
         joined = ", ".join(repo_relative(p) for p in paths)
         raise RuntimeError(f"#wrong is non-zero in {joined}: {total_wrong}")
+    merged: dict[int, Metrics] = {}
+    for size, candidates in by_size.items():
+        merged[size] = sorted(candidates, key=lambda m: m.out_time_us)[len(candidates) // 2]
     return merged
 
 
@@ -164,9 +168,18 @@ SOURCES = {
         "display": "2nx4g",
         "lite": [
             log("ar-clean-plots-20260610-161719", "lite_2nx4g_128B_1G.log"),
+            log("ar-2nx4g-cliff-repro-20260610-163537", "lite_2nx4g_16M_128M_rep1.log"),
+            log("ar-2nx4g-cliff-repro-20260610-163537", "lite_2nx4g_16M_128M_rep2.log"),
+            log("ar-2nx4g-cliff-repro-20260610-163537", "lite_2nx4g_16M_128M_rep3.log"),
+            log("ar-2nx4g-32m-repeat-20260610-163818", "lite_2nx4g_32M_rep1.log"),
+            log("ar-2nx4g-32m-repeat-20260610-163818", "lite_2nx4g_32M_rep2.log"),
+            log("ar-2nx4g-32m-repeat-20260610-163818", "lite_2nx4g_32M_rep3.log"),
+            log("ar-2nx4g-32m-repeat-20260610-163818", "lite_2nx4g_32M_rep4.log"),
+            log("ar-2nx4g-32m-repeat-20260610-163818", "lite_2nx4g_32M_rep5.log"),
         ],
         "nccl": [
             log("ar-clean-plots-20260610-161719", "nccl_2nx4g_128B_1G.log"),
+            log("ar-2nx4g-cliff-repro-20260610-163537", "nccl_2nx4g_16M_128M.log"),
         ],
     },
 }
@@ -304,6 +317,7 @@ def markdown_content(rows: list[Row], plot_files: dict[str, list[str]], plot_pre
         "| Multi-node hosts | `10.10.55.1,10.10.55.2` |",
         "| NCCL multi-node baseline | `NCCL_NET_GDR_LEVEL=0` no-GDR where explicitly re-run |",
         "| Clean-run idle checks | `.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/idle_checks.log` |",
+        "| Repeated clean rows | If multiple clean logs cover the same setup/size, use the median out-of-place time row |",
         "| Generated plots | `plots/allreduce/` |",
         "",
         "All plotted source rows reported `#wrong=0`.",

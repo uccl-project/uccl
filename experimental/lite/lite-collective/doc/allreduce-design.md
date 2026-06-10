@@ -119,20 +119,24 @@ The generated AllReduce plots mirror the AllGather plot layout:
 
 Current out-of-place summary from the generated clean rerun
 (`.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/`; each sweep
-waited for zero GPU utilization and no compute processes before starting):
+waited for zero GPU utilization and no compute processes before starting).
+For 2nx4g 16-128MiB, repeated clean focused logs are also included and the plot
+generator uses the median out-of-place-time row when multiple clean rows cover
+the same size:
 
 | Setup | Latency geomean Lite speedup | BusBW geomean Lite/NCCL | 1GiB Lite GB/s | 1GiB NCCL GB/s | 1GiB ratio |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `1nx4g` | 0.44x | 0.81x | 17.54 | 17.54 | 1.00x |
 | `2nx1g` | 0.09x | 0.63x | 16.23 | 14.55 | 1.12x |
 | `2nx2g` | 1.15x | 0.91x | 14.71 | 15.34 | 0.96x |
-| `2nx4g` | 1.58x | 1.02x | 16.28 | 14.82 | 1.10x |
+| `2nx4g` | 1.58x | 1.13x | 16.28 | 14.82 | 1.10x |
 
 Interpretation:
 
 - 2nx4g is the most complete AllReduce win: small messages are mostly faster,
-  and large messages beat NCCL after 128MiB. The 64MiB large-row source log has
-  a known outlier and should not be over-interpreted.
+  and large messages beat NCCL after 32MiB when repeated clean rows are reduced
+  by median out-of-place time. Single clean runs can still show occasional
+  32MiB/64MiB outliers, so focused repeat data is included for those sizes.
 - 2nx1g now has a large-message path that is competitive with, and sometimes
   faster than, NCCL from 64MiB upward. The sub-64MiB path remains blocked by
   proxy/handshake latency.
