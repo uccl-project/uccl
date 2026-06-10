@@ -24,6 +24,7 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <numa.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -39,7 +40,11 @@ namespace {
 static constexpr int kNativeReduceScatterHostTagBase = 0x570000;
 static constexpr int kNativeReduceScatterHostTagStride = 8;
 static constexpr int kNativeHostMaxRanksPerNode = 8;
+static constexpr int kNativeReduceScatterHostSlots = 2;
+static constexpr int kNativeSmallAllReduceMaxBlocks = 8;
 static constexpr size_t kNativeReduceScatterHostMaxShardBytes = 2 * 1024 * 1024;
+static constexpr size_t kNativeSmallAllReduceMaxBytes = 128 * 1024;
+static constexpr size_t kNativeMappedSmallAllReduceMaxBytes = 64 * 1024;
 static constexpr size_t kNativeReduceScatterRdmaChunkBytes = 4 * 1024 * 1024;
 static constexpr int kNativeReduceScatterSignalEveryN = 256;
 static constexpr int kNativeReduceScatterNumaPairScratchRows = 21;
@@ -68,6 +73,9 @@ struct NativeReduceScatterHostControl {
   alignas(64) std::atomic<uint64_t>
       pairRdmaSignal[kNativeHostMaxRanksPerNode];
   alignas(64) std::atomic<uint64_t>
+      pairRdmaSignalSlot[kNativeReduceScatterHostSlots]
+                        [kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
       pairAckReady[kNativeHostMaxRanksPerNode];
   alignas(64) std::atomic<uint64_t>
       pairAckSignal[kNativeHostMaxRanksPerNode];
@@ -77,6 +85,20 @@ struct NativeReduceScatterHostControl {
       localCrossReady[kNativeHostMaxRanksPerNode];
   alignas(64) std::atomic<uint64_t>
       localDoneReady[kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
+      smallInputReady[kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
+      smallBlockReady[kNativeHostMaxRanksPerNode]
+                     [kNativeSmallAllReduceMaxBlocks];
+  alignas(64) std::atomic<uint64_t> smallRdmaReady{0};
+  alignas(64) std::atomic<uint64_t> smallRdmaSignal{0};
+  alignas(64) std::atomic<uint64_t> smallFinalReady{0};
+  alignas(64) std::atomic<uint64_t>
+      smallPairRdmaReady[kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
+      smallPairRdmaSignal[kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
+      smallPartReady[kNativeHostMaxRanksPerNode];
 };
 
 struct NativeReduceScatterHostNames {
@@ -97,6 +119,7 @@ struct NativeReduceScatterHostContext {
   bool isLeader = false;
   int rank = -1;
   int worldSize = -1;
+  int nRanksPerNode = -1;
   int localRank = -1;
   int nodeId = -1;
   int localLeader = -1;
@@ -112,13 +135,16 @@ struct NativeReduceScatterHostContext {
   size_t workBytes = 0;
   uint64_t blockEpoch = 0;
   uint64_t pairEpoch = 0;
+  uint64_t smallEpoch = 0;
 
   std::string workName;
   std::string ctrlName;
   void* workMapping = nullptr;
   void* ctrlMapping = nullptr;
   char* workSlab = nullptr;
+  char* workDeviceSlab = nullptr;
   NativeReduceScatterHostControl* ctrl = nullptr;
+  char* ctrlDeviceSlab = nullptr;
   bool workHostRegistered = false;
   bool ctrlHostRegistered = false;
 
@@ -146,6 +172,13 @@ struct NativeReduceScatterHostContext {
   char* localPartialSlab() { return workSlab + localPartialOffset; }
   char* sendPartialSlab() { return workSlab + sendPartialOffset; }
   char* recvPartialSlab() { return workSlab + recvPartialOffset; }
+  size_t partialSlotOffset(uint64_t epoch, int local) const {
+    size_t slot = static_cast<size_t>(epoch) %
+                  static_cast<size_t>(kNativeReduceScatterHostSlots);
+    return (slot * static_cast<size_t>(nRanksPerNode) +
+            static_cast<size_t>(local)) *
+           maxShardBytes;
+  }
 
   ~NativeReduceScatterHostContext() {
     pairConnection = mscclpp::Connection{};
@@ -373,9 +406,42 @@ void* mapShm(std::string const& name, size_t size) {
   return mapping;
 }
 
+void placeReduceScatterPartialSlotsOnNuma(NativeReduceScatterHostContext& ctx) {
+  int gpuNuma = -1;
+  try {
+    gpuNuma = mscclpp::getDeviceNumaNode(ctx.cudaDevice);
+  } catch (...) {
+    return;
+  }
+  if (gpuNuma < 0 || numa_available() < 0) return;
+
+  auto place = [&](char* ptr, size_t bytes) {
+    if (ptr == nullptr || bytes == 0) return;
+    std::memset(ptr, 0, bytes);
+    numa_tonode_memory(ptr, bytes, gpuNuma);
+  };
+
+  place(ctx.sendSlab() + static_cast<size_t>(ctx.localRank) * ctx.inputCapacity,
+        ctx.inputCapacity);
+  for (int slot = 0; slot < kNativeReduceScatterHostSlots; ++slot) {
+    uint64_t epoch = static_cast<uint64_t>(slot);
+    size_t slotOffset = ctx.partialSlotOffset(epoch, ctx.localRank);
+    place(ctx.localPartialSlab() + slotOffset, ctx.maxShardBytes);
+    place(ctx.sendPartialSlab() + slotOffset, ctx.maxShardBytes);
+    place(ctx.recvPartialSlab() + slotOffset, ctx.maxShardBytes);
+  }
+}
+
 void waitForEpoch(std::atomic<uint64_t> const& value, uint64_t epoch) {
+  int spins = 0;
   while (value.load(std::memory_order_acquire) < epoch) {
-    std::this_thread::yield();
+    if (spins++ < 65536) {
+#if defined(__x86_64__) || defined(__i386__)
+      asm volatile("pause" ::: "memory");
+#endif
+    } else {
+      std::this_thread::yield();
+    }
   }
 }
 
@@ -411,6 +477,7 @@ NativeReduceScatterHostContext& getReduceScatterHostContext(
 
   ctx->rank = rank;
   ctx->worldSize = nRanks;
+  ctx->nRanksPerNode = nRanksPerNode;
   ctx->localRank = rank % nRanksPerNode;
   ctx->nodeId = rank / nRanksPerNode;
   ctx->localLeader = ctx->nodeId * nRanksPerNode;
@@ -420,6 +487,7 @@ NativeReduceScatterHostContext& getReduceScatterHostContext(
   ctx->owner = ctx->isLeader;
   ctx->inputCapacity = static_cast<size_t>(nRanks) * ctx->maxShardBytes;
   ctx->partialBlockCapacity =
+      static_cast<size_t>(kNativeReduceScatterHostSlots) *
       static_cast<size_t>(nRanksPerNode) * ctx->maxShardBytes;
   ctx->sendSlabOffset = 0;
   ctx->localPartialOffset =
@@ -495,17 +563,28 @@ NativeReduceScatterHostContext& getReduceScatterHostContext(
                               shmMapMessage,
                               "host-staged reducescatter shared-memory map");
   bootstrapComm->bootstrap()->barrier();
+  placeReduceScatterPartialSlotsOnNuma(*ctx);
+  bootstrapComm->bootstrap()->barrier();
 
   ncclResult_t setupResult = ncclSuccess;
   std::string setupMessage;
   try {
-    MSCCLPP_CUDATHROW(cudaHostRegister(ctx->workMapping, ctx->workBytes,
-                                       cudaHostRegisterPortable));
+    MSCCLPP_CUDATHROW(cudaHostRegister(
+        ctx->workMapping, ctx->workBytes,
+        cudaHostRegisterPortable | cudaHostRegisterMapped));
     ctx->workHostRegistered = true;
-    MSCCLPP_CUDATHROW(cudaHostRegister(ctx->ctrlMapping,
-                                       sizeof(NativeReduceScatterHostControl),
-                                       cudaHostRegisterPortable));
+    void* workDevice = nullptr;
+    MSCCLPP_CUDATHROW(
+        cudaHostGetDevicePointer(&workDevice, ctx->workMapping, 0));
+    ctx->workDeviceSlab = static_cast<char*>(workDevice);
+    MSCCLPP_CUDATHROW(cudaHostRegister(
+        ctx->ctrlMapping, sizeof(NativeReduceScatterHostControl),
+        cudaHostRegisterPortable | cudaHostRegisterMapped));
     ctx->ctrlHostRegistered = true;
+    void* ctrlDevice = nullptr;
+    MSCCLPP_CUDATHROW(
+        cudaHostGetDevicePointer(&ctrlDevice, ctx->ctrlMapping, 0));
+    ctx->ctrlDeviceSlab = static_cast<char*>(ctrlDevice);
     ctx->transport = selectNativeIBTransportForGpu(cudaDevice);
     if (ctx->transport == mscclpp::Transport::Unknown) {
       throw mscclpp::Error("host-staged reducescatter requires IB transport",
@@ -700,22 +779,163 @@ __forceinline__ __device__ int4 addFloat4Vec(int4 a, int4 b) {
   return out;
 }
 
+__device__ unsigned long long volatile* nativeCtrlU64(char* ctrl,
+                                                     size_t offset) {
+  return reinterpret_cast<unsigned long long volatile*>(ctrl + offset);
+}
+
+__global__ void smallAllReduceMappedFloatKernel(
+    float const* send, float* recv, char* work, char* ctrl, size_t bytes,
+    int localRank, unsigned long long epoch, size_t inputOffset,
+    size_t finalOffset, size_t inputReadyOffset, size_t finalReadyOffset,
+    size_t blockReadyOffset, size_t counterStride, size_t blockCounterStride) {
+  using Vec = uint4;
+  char* input = work + inputOffset;
+  char* final = work + finalOffset;
+  size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  auto const* sendBytes = reinterpret_cast<char const*>(send);
+  bool aligned =
+      ((reinterpret_cast<uintptr_t>(send) | reinterpret_cast<uintptr_t>(recv) |
+        reinterpret_cast<uintptr_t>(input) | reinterpret_cast<uintptr_t>(final)) %
+       alignof(Vec)) == 0;
+  size_t vecBytes = aligned ? (bytes / sizeof(Vec)) * sizeof(Vec) : 0;
+  size_t vecCount = vecBytes / sizeof(Vec);
+  if (aligned) {
+    auto const* sendVec = reinterpret_cast<Vec const*>(send);
+    auto* inputVec = reinterpret_cast<Vec*>(input);
+    for (size_t i = tid; i < vecCount; i += stride) inputVec[i] = sendVec[i];
+  }
+  for (size_t i = vecBytes + tid; i < bytes; i += stride) {
+    input[i] = sendBytes[i];
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    __threadfence_system();
+    *nativeCtrlU64(ctrl,
+                   blockReadyOffset +
+                       (static_cast<size_t>(localRank) *
+                            static_cast<size_t>(kNativeSmallAllReduceMaxBlocks) +
+                        static_cast<size_t>(blockIdx.x)) *
+                           blockCounterStride) = epoch;
+  }
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    for (int block = 0; block < gridDim.x; ++block) {
+      while (*nativeCtrlU64(
+                 ctrl,
+                 blockReadyOffset +
+                     (static_cast<size_t>(localRank) *
+                          static_cast<size_t>(kNativeSmallAllReduceMaxBlocks) +
+                      static_cast<size_t>(block)) *
+                         blockCounterStride) < epoch) {
+      }
+    }
+    *nativeCtrlU64(ctrl, inputReadyOffset +
+                             static_cast<size_t>(localRank) * counterStride) =
+        epoch;
+  }
+  if (threadIdx.x == 0) {
+    while (*nativeCtrlU64(ctrl, finalReadyOffset) < epoch) {
+    }
+    __threadfence_system();
+  }
+  __syncthreads();
+  auto* recvBytes = reinterpret_cast<char*>(recv);
+  if (aligned) {
+    auto const* finalVec = reinterpret_cast<Vec const*>(final);
+    auto* recvVec = reinterpret_cast<Vec*>(recv);
+    for (size_t i = tid; i < vecCount; i += stride) recvVec[i] = finalVec[i];
+  }
+  for (size_t i = vecBytes + tid; i < bytes; i += stride) {
+    recvBytes[i] = final[i];
+  }
+}
+
+__attribute__((target("avx512f")))
+void reduce4SmallFloatRowsAvx512Range(char const* inputBase, size_t inputStride,
+                                      float* output, size_t vecBegin,
+                                      size_t vecEnd) {
+  using Vec = float __attribute__((vector_size(64)));
+  auto const* row0 = reinterpret_cast<float const*>(inputBase);
+  auto const* row1 =
+      reinterpret_cast<float const*>(inputBase + inputStride);
+  auto const* row2 =
+      reinterpret_cast<float const*>(inputBase + 2 * inputStride);
+  auto const* row3 =
+      reinterpret_cast<float const*>(inputBase + 3 * inputStride);
+  for (size_t vec = vecBegin; vec < vecEnd; ++vec) {
+    size_t i = vec * 16;
+    Vec v0, v1, v2, v3;
+    __builtin_memcpy(&v0, row0 + i, sizeof(Vec));
+    __builtin_memcpy(&v1, row1 + i, sizeof(Vec));
+    __builtin_memcpy(&v2, row2 + i, sizeof(Vec));
+    __builtin_memcpy(&v3, row3 + i, sizeof(Vec));
+    Vec sum = (v0 + v1) + (v2 + v3);
+    __builtin_memcpy(output + i, &sum, sizeof(Vec));
+  }
+}
+
+void reduce4SmallFloatRowsAvx512(char const* inputBase, size_t inputStride,
+                                 size_t count, float* output) {
+  size_t nVec = count / 16;
+  reduce4SmallFloatRowsAvx512Range(inputBase, inputStride, output, 0, nVec);
+  auto const* row0 = reinterpret_cast<float const*>(inputBase);
+  auto const* row1 =
+      reinterpret_cast<float const*>(inputBase + inputStride);
+  auto const* row2 =
+      reinterpret_cast<float const*>(inputBase + 2 * inputStride);
+  auto const* row3 =
+      reinterpret_cast<float const*>(inputBase + 3 * inputStride);
+  for (size_t i = nVec * 16; i < count; ++i) {
+    output[i] = row0[i] + row1[i] + row2[i] + row3[i];
+  }
+}
+
+__attribute__((target("avx512f")))
+void addSmallFloatAvx512Range(float const* a, float const* b, float* output,
+                              size_t vecBegin, size_t vecEnd) {
+  using Vec = float __attribute__((vector_size(64)));
+  for (size_t vec = vecBegin; vec < vecEnd; ++vec) {
+    size_t i = vec * 16;
+    Vec va, vb;
+    __builtin_memcpy(&va, a + i, sizeof(Vec));
+    __builtin_memcpy(&vb, b + i, sizeof(Vec));
+    Vec sum = va + vb;
+    __builtin_memcpy(output + i, &sum, sizeof(Vec));
+  }
+}
+
+void addSmallFloatAvx512(float const* a, float const* b, float* output,
+                         size_t count) {
+  size_t nVec = count / 16;
+  addSmallFloatAvx512Range(a, b, output, 0, nVec);
+  for (size_t i = nVec * 16; i < count; ++i) output[i] = a[i] + b[i];
+}
+
+bool isAlignedForInt4(void const* ptr) {
+  return (reinterpret_cast<uintptr_t>(ptr) % alignof(int4)) == 0;
+}
+
 __global__ void packReduceScatterPairFloat4Kernel(
     float const* send, char* selfRows, char* packRows, size_t nVec,
-    size_t rowBytes, int localRank, int nRanksPerNode, int localBase,
-    int remoteBase) {
+    size_t rowBytes, size_t inputRankStride, size_t shardElemOffset,
+    int localRank, int nRanksPerNode, int localBase, int remoteBase) {
   size_t vecIdx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (vecIdx >= nVec) return;
 
   size_t rowVecs = rowBytes / sizeof(int4);
+  size_t inputVecStride = inputRankStride / 4;
+  size_t shardVecOffset = shardElemOffset / 4;
   auto const* send4 = reinterpret_cast<int4 const*>(send);
   auto* self4 = reinterpret_cast<int4*>(selfRows);
   auto* pack4 = reinterpret_cast<int4*>(packRows);
   for (int targetLocal = 0; targetLocal < nRanksPerNode; ++targetLocal) {
     int4 localValue =
-        send4[(static_cast<size_t>(localBase + targetLocal) * nVec) + vecIdx];
+        send4[(static_cast<size_t>(localBase + targetLocal) * inputVecStride) +
+              shardVecOffset + vecIdx];
     int4 remoteValue =
-        send4[(static_cast<size_t>(remoteBase + targetLocal) * nVec) + vecIdx];
+        send4[(static_cast<size_t>(remoteBase + targetLocal) * inputVecStride) +
+              shardVecOffset + vecIdx];
     if (targetLocal == localRank) {
       self4[vecIdx] = localValue;
       self4[rowVecs + vecIdx] = remoteValue;
@@ -754,8 +974,8 @@ __global__ void reducePackedReduceScatterPairFloat4Kernel(
 
 __global__ void packReduceScatterPairFloatKernel(
     float const* send, char* selfRows, char* packRows, size_t recvcount,
-    size_t rowBytes, int localRank, int nRanksPerNode, int localBase,
-    int remoteBase) {
+    size_t rowBytes, size_t inputRankStride, size_t shardElemOffset,
+    int localRank, int nRanksPerNode, int localBase, int remoteBase) {
   size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= recvcount) return;
 
@@ -764,9 +984,11 @@ __global__ void packReduceScatterPairFloatKernel(
   auto* pack = reinterpret_cast<float*>(packRows);
   for (int targetLocal = 0; targetLocal < nRanksPerNode; ++targetLocal) {
     float localValue =
-        send[(static_cast<size_t>(localBase + targetLocal) * recvcount) + idx];
+        send[(static_cast<size_t>(localBase + targetLocal) * inputRankStride) +
+             shardElemOffset + idx];
     float remoteValue =
-        send[(static_cast<size_t>(remoteBase + targetLocal) * recvcount) + idx];
+        send[(static_cast<size_t>(remoteBase + targetLocal) * inputRankStride) +
+             shardElemOffset + idx];
     if (targetLocal == localRank) {
       self[idx] = localValue;
       self[rowStride + idx] = remoteValue;
@@ -805,7 +1027,8 @@ __global__ void reducePackedReduceScatterPairFloatKernel(
 
 __global__ void packReduceScatterNumaPairFloat4Kernel(
     float const* send, char* selfRows, char* partnerSendRows, size_t nVec,
-    size_t rowBytes, int localRank, int localBase, int remoteBase) {
+    size_t rowBytes, size_t inputRankStride, size_t shardElemOffset,
+    int localRank, int localBase, int remoteBase) {
   size_t vecIdx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (vecIdx >= nVec) return;
 
@@ -814,31 +1037,43 @@ __global__ void packReduceScatterNumaPairFloat4Kernel(
   int crossAssigned = crossPairBase + (localRank & 1);
   int partnerCrossAssigned = crossPairBase + (partnerLocal & 1);
   size_t rowVecs = rowBytes / sizeof(int4);
+  size_t inputVecStride = inputRankStride / 4;
+  size_t shardVecOffset = shardElemOffset / 4;
   auto const* send4 = reinterpret_cast<int4 const*>(send);
   auto* self4 = reinterpret_cast<int4*>(selfRows);
   auto* partner4 = reinterpret_cast<int4*>(partnerSendRows);
 
   int4 ownLocal =
-      send4[(static_cast<size_t>(localBase + localRank) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(localBase + localRank) * inputVecStride) +
+            shardVecOffset + vecIdx];
   int4 ownRemote =
-      send4[(static_cast<size_t>(remoteBase + localRank) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(remoteBase + localRank) * inputVecStride) +
+            shardVecOffset + vecIdx];
   int4 crossLocal =
-      send4[(static_cast<size_t>(localBase + crossAssigned) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(localBase + crossAssigned) * inputVecStride) +
+            shardVecOffset + vecIdx];
   int4 crossRemote =
-      send4[(static_cast<size_t>(remoteBase + crossAssigned) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(remoteBase + crossAssigned) * inputVecStride) +
+            shardVecOffset + vecIdx];
   self4[vecIdx] = ownLocal;
   self4[rowVecs + vecIdx] = ownRemote;
   self4[2 * rowVecs + vecIdx] = crossLocal;
   self4[3 * rowVecs + vecIdx] = crossRemote;
 
   int4 partnerLocalValue =
-      send4[(static_cast<size_t>(localBase + partnerLocal) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(localBase + partnerLocal) * inputVecStride) +
+            shardVecOffset + vecIdx];
   int4 partnerRemoteValue =
-      send4[(static_cast<size_t>(remoteBase + partnerLocal) * nVec) + vecIdx];
-  int4 partnerCrossLocal = send4[
-      (static_cast<size_t>(localBase + partnerCrossAssigned) * nVec) + vecIdx];
-  int4 partnerCrossRemote = send4[
-      (static_cast<size_t>(remoteBase + partnerCrossAssigned) * nVec) + vecIdx];
+      send4[(static_cast<size_t>(remoteBase + partnerLocal) * inputVecStride) +
+            shardVecOffset + vecIdx];
+  int4 partnerCrossLocal =
+      send4[(static_cast<size_t>(localBase + partnerCrossAssigned) *
+             inputVecStride) +
+            shardVecOffset + vecIdx];
+  int4 partnerCrossRemote =
+      send4[(static_cast<size_t>(remoteBase + partnerCrossAssigned) *
+             inputVecStride) +
+            shardVecOffset + vecIdx];
   partner4[vecIdx] = partnerLocalValue;
   partner4[rowVecs + vecIdx] = partnerRemoteValue;
   partner4[2 * rowVecs + vecIdx] = partnerCrossLocal;
@@ -882,7 +1117,8 @@ __global__ void finalNumaPairReduceFloat4Kernel(
 
 __global__ void packReduceScatterNumaPairFloatKernel(
     float const* send, char* selfRows, char* partnerSendRows, size_t recvcount,
-    size_t rowBytes, int localRank, int localBase, int remoteBase) {
+    size_t rowBytes, size_t inputRankStride, size_t shardElemOffset,
+    int localRank, int localBase, int remoteBase) {
   size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= recvcount) return;
 
@@ -895,24 +1131,32 @@ __global__ void packReduceScatterNumaPairFloatKernel(
   auto* partner = reinterpret_cast<float*>(partnerSendRows);
 
   self[idx] =
-      send[(static_cast<size_t>(localBase + localRank) * recvcount) + idx];
+      send[(static_cast<size_t>(localBase + localRank) * inputRankStride) +
+           shardElemOffset + idx];
   self[rowStride + idx] =
-      send[(static_cast<size_t>(remoteBase + localRank) * recvcount) + idx];
+      send[(static_cast<size_t>(remoteBase + localRank) * inputRankStride) +
+           shardElemOffset + idx];
   self[2 * rowStride + idx] =
-      send[(static_cast<size_t>(localBase + crossAssigned) * recvcount) + idx];
+      send[(static_cast<size_t>(localBase + crossAssigned) * inputRankStride) +
+           shardElemOffset + idx];
   self[3 * rowStride + idx] =
-      send[(static_cast<size_t>(remoteBase + crossAssigned) * recvcount) + idx];
+      send[(static_cast<size_t>(remoteBase + crossAssigned) * inputRankStride) +
+           shardElemOffset + idx];
 
   partner[idx] =
-      send[(static_cast<size_t>(localBase + partnerLocal) * recvcount) + idx];
+      send[(static_cast<size_t>(localBase + partnerLocal) * inputRankStride) +
+           shardElemOffset + idx];
   partner[rowStride + idx] =
-      send[(static_cast<size_t>(remoteBase + partnerLocal) * recvcount) + idx];
+      send[(static_cast<size_t>(remoteBase + partnerLocal) * inputRankStride) +
+           shardElemOffset + idx];
   partner[2 * rowStride + idx] =
-      send[(static_cast<size_t>(localBase + partnerCrossAssigned) * recvcount) +
-           idx];
+      send[(static_cast<size_t>(localBase + partnerCrossAssigned) *
+            inputRankStride) +
+           shardElemOffset + idx];
   partner[3 * rowStride + idx] =
-      send[(static_cast<size_t>(remoteBase + partnerCrossAssigned) * recvcount) +
-           idx];
+      send[(static_cast<size_t>(remoteBase + partnerCrossAssigned) *
+            inputRankStride) +
+           shardElemOffset + idx];
 }
 
 __global__ void reduceNumaPairPartialsFloatKernel(
@@ -1010,16 +1254,21 @@ ncclResult_t launchReduceRows(void* rows, void* output, size_t elemOffset,
 ncclResult_t launchPackReduceScatterPairFloat(
     void const* sendbuff, void* selfRows, void* packRows, size_t recvcount,
     size_t rowBytes, int localRank, int nRanksPerNode, int localBase,
-    int remoteBase, cudaStream_t stream) {
+    int remoteBase, cudaStream_t stream, size_t inputRankStride = 0,
+    size_t shardElemOffset = 0) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0) {
+  if (inputRankStride == 0) inputRankStride = recvcount;
+  if (recvcount % 4 == 0 && inputRankStride % 4 == 0 &&
+      shardElemOffset % 4 == 0 && rowBytes % sizeof(int4) == 0 &&
+      isAlignedForInt4(sendbuff) && isAlignedForInt4(selfRows) &&
+      isAlignedForInt4(packRows)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
     packReduceScatterPairFloat4Kernel<<<blocks, threads, 0, stream>>>(
         static_cast<float const*>(sendbuff), static_cast<char*>(selfRows),
-        static_cast<char*>(packRows), nVec, rowBytes, localRank, nRanksPerNode,
-        localBase, remoteBase);
+        static_cast<char*>(packRows), nVec, rowBytes, inputRankStride,
+        shardElemOffset, localRank, nRanksPerNode, localBase, remoteBase);
     return cudaResult(cudaGetLastError(),
                       "packed reduce-scatter local vector pack kernel launch");
   }
@@ -1027,8 +1276,8 @@ ncclResult_t launchPackReduceScatterPairFloat(
   if (blocks == 0) return ncclSuccess;
   packReduceScatterPairFloatKernel<<<blocks, threads, 0, stream>>>(
       static_cast<float const*>(sendbuff), static_cast<char*>(selfRows),
-      static_cast<char*>(packRows), recvcount, rowBytes, localRank,
-      nRanksPerNode, localBase, remoteBase);
+      static_cast<char*>(packRows), recvcount, rowBytes, inputRankStride,
+      shardElemOffset, localRank, nRanksPerNode, localBase, remoteBase);
   return cudaResult(cudaGetLastError(),
                     "packed reduce-scatter local pack kernel launch");
 }
@@ -1036,16 +1285,21 @@ ncclResult_t launchPackReduceScatterPairFloat(
 ncclResult_t launchPackReduceScatterNumaPairFloat(
     void const* sendbuff, void* selfRows, void* partnerSendRows,
     size_t recvcount, size_t rowBytes, int localRank, int localBase,
-    int remoteBase, cudaStream_t stream) {
+    int remoteBase, cudaStream_t stream, size_t inputRankStride = 0,
+    size_t shardElemOffset = 0) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0) {
+  if (inputRankStride == 0) inputRankStride = recvcount;
+  if (recvcount % 4 == 0 && inputRankStride % 4 == 0 &&
+      shardElemOffset % 4 == 0 && rowBytes % sizeof(int4) == 0 &&
+      isAlignedForInt4(sendbuff) && isAlignedForInt4(selfRows) &&
+      isAlignedForInt4(partnerSendRows)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
     packReduceScatterNumaPairFloat4Kernel<<<blocks, threads, 0, stream>>>(
         static_cast<float const*>(sendbuff), static_cast<char*>(selfRows),
-        static_cast<char*>(partnerSendRows), nVec, rowBytes, localRank,
-        localBase, remoteBase);
+        static_cast<char*>(partnerSendRows), nVec, rowBytes, inputRankStride,
+        shardElemOffset, localRank, localBase, remoteBase);
     return cudaResult(cudaGetLastError(),
                       "numa-pair reduce-scatter pack kernel launch");
   }
@@ -1053,8 +1307,8 @@ ncclResult_t launchPackReduceScatterNumaPairFloat(
   if (blocks == 0) return ncclSuccess;
   packReduceScatterNumaPairFloatKernel<<<blocks, threads, 0, stream>>>(
       static_cast<float const*>(sendbuff), static_cast<char*>(selfRows),
-      static_cast<char*>(partnerSendRows), recvcount, rowBytes, localRank,
-      localBase, remoteBase);
+      static_cast<char*>(partnerSendRows), recvcount, rowBytes, inputRankStride,
+      shardElemOffset, localRank, localBase, remoteBase);
   return cudaResult(cudaGetLastError(),
                     "numa-pair reduce-scatter scalar pack kernel launch");
 }
@@ -1064,7 +1318,9 @@ ncclResult_t launchReduceNumaPairPartialsFloat(
     void* crossSendRows, size_t recvcount, size_t rowBytes,
     cudaStream_t stream) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0) {
+  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0 &&
+      isAlignedForInt4(selfRows) && isAlignedForInt4(partnerRecvRows) &&
+      isAlignedForInt4(ownPartialRows) && isAlignedForInt4(crossSendRows)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
@@ -1092,7 +1348,9 @@ ncclResult_t launchFinalNumaPairReduceFloat(
     void* remoteOutput, size_t recvcount, size_t rowBytes,
     cudaStream_t stream) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0) {
+  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0 &&
+      isAlignedForInt4(ownPartialRows) && isAlignedForInt4(crossRecvRows) &&
+      isAlignedForInt4(localOutput) && isAlignedForInt4(remoteOutput)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
@@ -1116,7 +1374,8 @@ ncclResult_t launchFinalNumaPairReduceFloat(
 ncclResult_t launchAddFloat(void const* lhs, void const* rhs, void* output,
                             size_t recvcount, cudaStream_t stream) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0) {
+  if (recvcount % 4 == 0 && isAlignedForInt4(lhs) &&
+      isAlignedForInt4(rhs) && isAlignedForInt4(output)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
@@ -1138,7 +1397,9 @@ ncclResult_t launchReducePackedReduceScatterPairFloat(
     size_t recvcount, size_t rowBytes, int localRank, int nRanksPerNode,
     cudaStream_t stream) {
   constexpr int threads = 256;
-  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0) {
+  if (recvcount % 4 == 0 && rowBytes % sizeof(int4) == 0 &&
+      isAlignedForInt4(selfRows) && isAlignedForInt4(packedRecvRows) &&
+      isAlignedForInt4(localOutput) && isAlignedForInt4(remoteOutput)) {
     size_t nVec = recvcount / 4;
     int blocks = static_cast<int>((nVec + threads - 1) / threads);
     if (blocks == 0) return ncclSuccess;
@@ -1165,7 +1426,7 @@ ncclResult_t launchReducePackedReduceScatterPairFloat(
 size_t maxChunkBytes(size_t scratchBufferSize, int nRows, size_t typeSize) {
   if (nRows <= 0 || typeSize == 0) return 0;
   size_t rowBytes = scratchBufferSize / static_cast<size_t>(nRows);
-  rowBytes = std::min(rowBytes, static_cast<size_t>(2 * 1024 * 1024));
+  rowBytes = std::min(rowBytes, kNativeReduceScatterHostMaxShardBytes);
   return rowBytes / typeSize * typeSize;
 }
 
@@ -1420,7 +1681,8 @@ ncclResult_t runGpuLocalReduceScatter2Node(
     size_t bytesPerRank, ncclDataType_t datatype, ncclRedOp_t op,
     ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
     void* scratchBuffer, size_t scratchBufferSize, int nRanksPerNode,
-    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice,
+    size_t inputRankStride = 0, size_t shardElemOffset = 0) {
   if (!isTwoNodeLayout(nRanks, nRanksPerNode)) return ncclInvalidUsage;
   if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
   if (nRanksPerNode <= 0 || nRanksPerNode > kNativeHostMaxRanksPerNode) {
@@ -1432,6 +1694,11 @@ ncclResult_t runGpuLocalReduceScatter2Node(
   if (recvcount * sizeof(float) != bytesPerRank ||
       bytesPerRank > kNativeReduceScatterHostMaxShardBytes) {
     return ncclInvalidUsage;
+  }
+  if (inputRankStride == 0) inputRankStride = recvcount;
+  if (inputRankStride < recvcount ||
+      shardElemOffset > inputRankStride - recvcount) {
+    return ncclInvalidArgument;
   }
 
   int localRank = rank % nRanksPerNode;
@@ -1495,7 +1762,8 @@ ncclResult_t runGpuLocalReduceScatter2Node(
 
         result = launchPackReduceScatterNumaPairFloat(
             sendbuff, numaSelfRows, partnerSendRows, recvcount, rowBytes,
-            localRank, localBase, remoteBase, stream);
+            localRank, localBase, remoteBase, stream, inputRankStride,
+            shardElemOffset);
         if (result != ncclSuccess) return result;
 
         ensureReduceScatterLocalScratchIpc(ctx, bootstrapComm, rank, nRanks,
@@ -1539,7 +1807,8 @@ ncclResult_t runGpuLocalReduceScatter2Node(
       } else {
         result = launchPackReduceScatterPairFloat(
             sendbuff, selfRows, packSendRows, recvcount, rowBytes, localRank,
-            nRanksPerNode, localBase, remoteBase, stream);
+            nRanksPerNode, localBase, remoteBase, stream, inputRankStride,
+            shardElemOffset);
         if (result != ncclSuccess) return result;
 
         ensureReduceScatterLocalScratchIpc(ctx, bootstrapComm, rank, nRanks,
@@ -1583,9 +1852,13 @@ ncclResult_t runGpuLocalReduceScatter2Node(
       remoteIncomingGpu = localPartialGpu + rowBytes;
       remotePartialGpu = remoteIncomingGpu + rowBytes;
 
-      size_t localTargetOffset = static_cast<size_t>(rank) * bytesPerRank;
+      size_t localTargetOffset =
+          (static_cast<size_t>(rank) * inputRankStride + shardElemOffset) *
+          typeSize;
       size_t remoteTargetOffset =
-          static_cast<size_t>(remoteBase + localRank) * bytesPerRank;
+          (static_cast<size_t>(remoteBase + localRank) * inputRankStride +
+           shardElemOffset) *
+          typeSize;
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(
           localRows + static_cast<size_t>(localRank) * rowBytes,
           send + localTargetOffset, bytesPerRank, cudaMemcpyDeviceToDevice,
@@ -1601,10 +1874,11 @@ ncclResult_t runGpuLocalReduceScatter2Node(
       for (int i = 0; i < nRanksPerNode; ++i) {
         int peer = localBase + i;
         if (peer == rank) continue;
-        size_t peerLocalOffset = static_cast<size_t>(peer) * bytesPerRank;
-        enqueueResult =
-            ncclSend(send + peerLocalOffset, recvcount, datatype, peer, comm,
-                     stream);
+        size_t peerLocalOffset =
+            (static_cast<size_t>(peer) * inputRankStride + shardElemOffset) *
+            typeSize;
+        enqueueResult = ncclSend(send + peerLocalOffset, recvcount, datatype,
+                                 peer, comm, stream);
         if (enqueueResult != ncclSuccess) break;
       }
       if (enqueueResult == ncclSuccess) {
@@ -1631,7 +1905,9 @@ ncclResult_t runGpuLocalReduceScatter2Node(
         int peer = localBase + i;
         if (peer == rank) continue;
         size_t peerRemoteOffset =
-            static_cast<size_t>(remoteBase + i) * bytesPerRank;
+            (static_cast<size_t>(remoteBase + i) * inputRankStride +
+             shardElemOffset) *
+            typeSize;
         enqueueResult =
             ncclSend(send + peerRemoteOffset, recvcount, datatype, peer, comm,
                      stream);
@@ -1655,19 +1931,21 @@ ncclResult_t runGpuLocalReduceScatter2Node(
       if (result != ncclSuccess) return result;
     }
 
+    size_t hostPartialOffset = ctx.partialSlotOffset(epoch, localRank);
     MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        ctx.sendPartialSlab() + static_cast<size_t>(localRank) * bytesPerRank,
-        remotePartialGpu, bytesPerRank, cudaMemcpyDeviceToHost, stream));
+        ctx.sendPartialSlab() + hostPartialOffset, remotePartialGpu,
+        bytesPerRank, cudaMemcpyDeviceToHost, stream));
     MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
 
-    if (epoch > 1) {
-      waitForEpoch(ctx.ctrl->pairAckReady[localRank], epoch - 1);
+    if (epoch > kNativeReduceScatterHostSlots) {
+      waitForEpoch(ctx.ctrl->pairAckReady[localRank],
+                   epoch - kNativeReduceScatterHostSlots);
     }
     if (ctx.blockEpoch > 0) {
       waitForEpoch(ctx.ctrl->ackReady, ctx.blockEpoch);
     }
 
-    size_t pairSlotOffset = static_cast<size_t>(localRank) * bytesPerRank;
+    size_t pairSlotOffset = hostPartialOffset;
     size_t pairRdmaReadyOffset =
         offsetof(NativeReduceScatterHostControl, pairRdmaReady) +
         static_cast<size_t>(localRank) * sizeof(ctx.ctrl->pairRdmaReady[0]);
@@ -1689,13 +1967,11 @@ ncclResult_t runGpuLocalReduceScatter2Node(
     ctx.pairConnection.write(ctx.pairRemoteCtrlMemory, pairRdmaReadyOffset,
                              ctx.ctrlMemory, pairRdmaSignalOffset,
                              sizeof(uint64_t));
-    ctx.pairConnection.flush();
 
     waitForEpoch(ctx.ctrl->pairRdmaReady[localRank], epoch);
 
     MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        remoteIncomingGpu,
-        ctx.recvPartialSlab() + static_cast<size_t>(localRank) * bytesPerRank,
+        remoteIncomingGpu, ctx.recvPartialSlab() + hostPartialOffset,
         bytesPerRank, cudaMemcpyHostToDevice, stream));
     MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
     result = launchAddFloat(localPartialGpu, remoteIncomingGpu, recvbuff,
@@ -1734,6 +2010,454 @@ ncclResult_t runGpuLocalReduceScatter2Node(
   }
 }
 
+ncclResult_t runPipelinedNumaPairReduceScatter2Node(
+    void const* sendbuff, void* recvbuff, size_t recvcount,
+    size_t bytesPerRank, ncclDataType_t datatype, ncclRedOp_t op,
+    ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
+    void* scratchBuffer, size_t scratchBufferSize, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  (void)comm;
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode) || nRanksPerNode != 4) {
+    return ncclInvalidUsage;
+  }
+  if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0 || recvcount * typeSize != bytesPerRank) {
+    return ncclInvalidArgument;
+  }
+  size_t rowBytesLimit = maxChunkBytes(
+      scratchBufferSize / 2, kNativeReduceScatterNumaPairScratchRows, typeSize);
+  rowBytesLimit = std::min(rowBytesLimit, kNativeReduceScatterHostMaxShardBytes);
+  rowBytesLimit = (rowBytesLimit / typeSize) * typeSize;
+  if (rowBytesLimit == 0) return ncclInvalidUsage;
+  size_t chunkCountLimit = rowBytesLimit / typeSize;
+  size_t slotStride =
+      static_cast<size_t>(kNativeReduceScatterNumaPairScratchRows) *
+      rowBytesLimit;
+  if (2 * slotStride > scratchBufferSize) return ncclInvalidUsage;
+
+  struct ChunkState {
+    uint64_t epoch = 0;
+    size_t elemOffset = 0;
+    size_t chunkCount = 0;
+    size_t chunkBytes = 0;
+    size_t rowBytes = 0;
+    size_t hostOffset = 0;
+    char* localPartialGpu = nullptr;
+    char* remoteIncomingGpu = nullptr;
+  };
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    auto& ctx = getReduceScatterHostContext(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    ensureReduceScatterLocalScratchIpc(ctx, bootstrapComm, rank, nRanks,
+                                       nRanksPerNode, scratchBuffer,
+                                       scratchBufferSize);
+    int localRank = rank % nRanksPerNode;
+    int nodeId = rank / nRanksPerNode;
+    int localBase = nodeId * nRanksPerNode;
+    int remoteBase = (1 - nodeId) * nRanksPerNode;
+    auto* scratch = static_cast<char*>(scratchBuffer);
+    auto* recv = static_cast<char*>(recvbuff);
+    size_t totalChunks = (recvcount + chunkCountLimit - 1) / chunkCountLimit;
+    std::array<ChunkState, kNativeReduceScatterHostSlots> states;
+
+    size_t pairRdmaReadyOffset =
+        offsetof(NativeReduceScatterHostControl, pairRdmaReady) +
+        static_cast<size_t>(localRank) * sizeof(ctx.ctrl->pairRdmaReady[0]);
+    size_t pairAckReadyOffset =
+        offsetof(NativeReduceScatterHostControl, pairAckReady) +
+        static_cast<size_t>(localRank) * sizeof(ctx.ctrl->pairAckReady[0]);
+    size_t pairAckSignalOffset =
+        offsetof(NativeReduceScatterHostControl, pairAckSignal) +
+        static_cast<size_t>(localRank) * sizeof(ctx.ctrl->pairAckSignal[0]);
+
+    auto prepareChunk = [&](size_t chunkIdx) -> ncclResult_t {
+      int slot = static_cast<int>(chunkIdx %
+                                  kNativeReduceScatterHostSlots);
+      auto& state = states[static_cast<size_t>(slot)];
+      state.elemOffset = chunkIdx * chunkCountLimit;
+      state.chunkCount = std::min(chunkCountLimit,
+                                  recvcount - state.elemOffset);
+      state.chunkBytes = state.chunkCount * typeSize;
+      state.rowBytes = state.chunkBytes;
+      state.epoch = ++ctx.pairEpoch;
+      state.hostOffset = ctx.partialSlotOffset(state.epoch, localRank);
+
+      char* slotScratch =
+          scratch + static_cast<size_t>(slot) * slotStride;
+      char* numaSelfRows = slotScratch;
+      char* partnerSendRows = numaSelfRows + 4 * state.rowBytes;
+      char* partnerRecvRows = partnerSendRows + 4 * state.rowBytes;
+      char* ownPartialRows = partnerRecvRows + 4 * state.rowBytes;
+      char* crossSendRows = ownPartialRows + 2 * state.rowBytes;
+      char* crossRecvRows = crossSendRows + 2 * state.rowBytes;
+      state.localPartialGpu = crossRecvRows + 2 * state.rowBytes;
+      state.remoteIncomingGpu = state.localPartialGpu + state.rowBytes;
+      char* remotePartialGpu = state.remoteIncomingGpu + state.rowBytes;
+
+      ncclResult_t result = launchPackReduceScatterNumaPairFloat(
+          sendbuff, numaSelfRows, partnerSendRows, state.chunkCount,
+          state.rowBytes, localRank, localBase, remoteBase, stream, recvcount,
+          state.elemOffset);
+      if (result != ncclSuccess) return result;
+
+      int partnerLocal = localRank ^ 1;
+      int partnerPeerIdx =
+          partnerLocal < localRank ? partnerLocal : partnerLocal - 1;
+      size_t partnerRecvOffset =
+          static_cast<size_t>(slot) * slotStride +
+          static_cast<size_t>(8) * state.rowBytes;
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          ctx.remoteScratchPtrs[partnerPeerIdx] + partnerRecvOffset,
+          partnerSendRows, 4 * state.chunkBytes, cudaMemcpyDeviceToDevice,
+          stream));
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+      ctx.ctrl->localCopyReady[localRank].store(state.epoch,
+                                                std::memory_order_release);
+      waitForEpoch(ctx.ctrl->localCopyReady[partnerLocal], state.epoch);
+
+      result = launchReduceNumaPairPartialsFloat(
+          numaSelfRows, partnerRecvRows, ownPartialRows, crossSendRows,
+          state.chunkCount, state.rowBytes, stream);
+      if (result != ncclSuccess) return result;
+
+      int crossTargetLocal = localRank < 2 ? localRank + 2 : localRank - 2;
+      int crossPeerIdx =
+          crossTargetLocal < localRank ? crossTargetLocal : crossTargetLocal - 1;
+      size_t crossRecvOffset =
+          static_cast<size_t>(slot) * slotStride +
+          static_cast<size_t>(16) * state.rowBytes;
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          ctx.remoteScratchPtrs[crossPeerIdx] + crossRecvOffset,
+          crossSendRows, 2 * state.chunkBytes, cudaMemcpyDeviceToDevice,
+          stream));
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+      ctx.ctrl->localCrossReady[localRank].store(state.epoch,
+                                                 std::memory_order_release);
+      waitForEpoch(ctx.ctrl->localCrossReady[crossTargetLocal], state.epoch);
+
+      result = launchFinalNumaPairReduceFloat(
+          ownPartialRows, crossRecvRows, state.localPartialGpu,
+          remotePartialGpu, state.chunkCount, state.rowBytes, stream);
+      if (result != ncclSuccess) return result;
+
+      if (state.epoch > kNativeReduceScatterHostSlots) {
+        waitForEpoch(ctx.ctrl->pairAckReady[localRank],
+                     state.epoch - kNativeReduceScatterHostSlots);
+      }
+      if (ctx.blockEpoch > 0) {
+        waitForEpoch(ctx.ctrl->ackReady, ctx.blockEpoch);
+      }
+
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          ctx.sendPartialSlab() + state.hostOffset, remotePartialGpu,
+          state.chunkBytes, cudaMemcpyDeviceToHost, stream));
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+
+      ctx.pairConnection.write(ctx.pairRemoteRecvPartialMemory,
+                               state.hostOffset, ctx.sendPartialMemory,
+                               state.hostOffset, state.chunkBytes);
+      ctx.ctrl->pairRdmaSignalSlot[slot][localRank].store(
+          state.epoch, std::memory_order_release);
+      size_t pairRdmaSignalOffset =
+          offsetof(NativeReduceScatterHostControl, pairRdmaSignalSlot) +
+          (static_cast<size_t>(slot) *
+               static_cast<size_t>(kNativeHostMaxRanksPerNode) +
+           static_cast<size_t>(localRank)) *
+              sizeof(ctx.ctrl->pairRdmaSignalSlot[0][0]);
+      ctx.pairConnection.write(ctx.pairRemoteCtrlMemory, pairRdmaReadyOffset,
+                               ctx.ctrlMemory, pairRdmaSignalOffset,
+                               sizeof(uint64_t));
+      return ncclSuccess;
+    };
+
+    auto completeChunk = [&](ChunkState& state) -> ncclResult_t {
+      waitForEpoch(ctx.ctrl->pairRdmaReady[localRank], state.epoch);
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          state.remoteIncomingGpu, ctx.recvPartialSlab() + state.hostOffset,
+          state.chunkBytes, cudaMemcpyHostToDevice, stream));
+      MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+      ncclResult_t result = launchAddFloat(
+          state.localPartialGpu, state.remoteIncomingGpu,
+          recv + state.elemOffset * typeSize, state.chunkCount, stream);
+      bool localDonePublished = false;
+      auto publishLocalDone = [&] {
+        if (localDonePublished) return;
+        ctx.ctrl->localDoneReady[localRank].store(state.epoch,
+                                                  std::memory_order_release);
+        localDonePublished = true;
+      };
+      if (result != ncclSuccess) {
+        publishLocalDone();
+        return result;
+      }
+      result = cudaResult(cudaStreamSynchronize(stream),
+                          "pipelined gpu-local reducescatter final reduction");
+      publishLocalDone();
+      if (result != ncclSuccess) return result;
+
+      ctx.ctrl->pairAckSignal[localRank].store(state.epoch,
+                                               std::memory_order_release);
+      ctx.pairConnection.write(ctx.pairRemoteCtrlMemory, pairAckReadyOffset,
+                               ctx.ctrlMemory, pairAckSignalOffset,
+                               sizeof(uint64_t));
+      ctx.pairConnection.flush();
+      for (int i = 0; i < nRanksPerNode; ++i) {
+        waitForEpoch(ctx.ctrl->localDoneReady[i], state.epoch);
+      }
+      return ncclSuccess;
+    };
+
+    size_t prepared = 0;
+    while (prepared < std::min<size_t>(totalChunks,
+                                       kNativeReduceScatterHostSlots)) {
+      ncclResult_t result = prepareChunk(prepared++);
+      if (result != ncclSuccess) return result;
+    }
+    for (size_t done = 0; done < totalChunks; ++done) {
+      auto& state = states[done % kNativeReduceScatterHostSlots];
+      ncclResult_t result = completeChunk(state);
+      if (result != ncclSuccess) return result;
+      if (prepared < totalChunks) {
+        result = prepareChunk(prepared++);
+        if (result != ncclSuccess) return result;
+      }
+    }
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("pipelined numa-pair reducescatter failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("pipelined numa-pair reducescatter failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
+ncclResult_t runSmallMappedAllReduce2Node(
+    void const* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode) || nRanksPerNode != 4) {
+    return ncclInvalidUsage;
+  }
+  if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
+  if (count > kNativeMappedSmallAllReduceMaxBytes / sizeof(float)) {
+    return ncclInvalidUsage;
+  }
+  size_t bytes = count * sizeof(float);
+  if (bytes == 0 || bytes > kNativeMappedSmallAllReduceMaxBytes) {
+    return ncclInvalidUsage;
+  }
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    auto& ctx = getReduceScatterHostContext(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    int localRank = rank % nRanksPerNode;
+    uint64_t epoch = ++ctx.smallEpoch;
+    size_t inputStride = kNativeSmallAllReduceMaxBytes;
+    size_t inputOffset = static_cast<size_t>(localRank) * inputStride;
+    size_t partialOffset = ctx.partialSlotOffset(epoch, 0);
+    char* localPartial = ctx.sendPartialSlab() + partialOffset;
+    char* remotePartial = ctx.recvPartialSlab() + partialOffset;
+    char* final = ctx.localPartialSlab() + partialOffset;
+
+    constexpr int threads = 256;
+    int blocks = 1;
+    smallAllReduceMappedFloatKernel<<<blocks, threads, 0, stream>>>(
+        static_cast<float const*>(sendbuff), static_cast<float*>(recvbuff),
+        ctx.workDeviceSlab, ctx.ctrlDeviceSlab, bytes, localRank, epoch,
+        ctx.sendSlabOffset + inputOffset, ctx.localPartialOffset + partialOffset,
+        offsetof(NativeReduceScatterHostControl, smallInputReady),
+        offsetof(NativeReduceScatterHostControl, smallFinalReady),
+        offsetof(NativeReduceScatterHostControl, smallBlockReady),
+        sizeof(ctx.ctrl->smallInputReady[0]),
+        sizeof(ctx.ctrl->smallBlockReady[0][0]));
+    ncclResult_t launchResult =
+        cudaResult(cudaGetLastError(), "small mapped allreduce kernel launch");
+    if (launchResult != ncclSuccess) return launchResult;
+
+    if (!ctx.isLeader) return ncclSuccess;
+
+    for (int i = 0; i < nRanksPerNode; ++i) {
+      waitForEpoch(ctx.ctrl->smallInputReady[i], epoch);
+    }
+    reduce4SmallFloatRowsAvx512(ctx.sendSlab(), inputStride, count,
+                                reinterpret_cast<float*>(localPartial));
+
+    size_t smallRdmaReadyOffset =
+        offsetof(NativeReduceScatterHostControl, smallRdmaReady);
+    size_t smallRdmaSignalOffset =
+        offsetof(NativeReduceScatterHostControl, smallRdmaSignal);
+    ctx.pairConnection.write(ctx.pairRemoteRecvPartialMemory, partialOffset,
+                             ctx.sendPartialMemory, partialOffset, bytes);
+    ctx.ctrl->smallRdmaSignal.store(epoch, std::memory_order_release);
+    ctx.pairConnection.write(ctx.pairRemoteCtrlMemory, smallRdmaReadyOffset,
+                             ctx.ctrlMemory, smallRdmaSignalOffset,
+                             sizeof(uint64_t));
+    ctx.pairConnection.flush();
+    waitForEpoch(ctx.ctrl->smallRdmaReady, epoch);
+
+    auto* local = reinterpret_cast<float*>(localPartial);
+    auto const* remote = reinterpret_cast<float const*>(remotePartial);
+    auto* out = reinterpret_cast<float*>(final);
+    addSmallFloatAvx512(local, remote, out, count);
+    ctx.ctrl->smallFinalReady.store(epoch, std::memory_order_release);
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("small mapped allreduce failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("small mapped allreduce failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
+ncclResult_t runSmallTwoLeaderAllReduce2Node(
+    void const* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode) || nRanksPerNode != 4) {
+    return ncclInvalidUsage;
+  }
+  if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
+  if (count > kNativeSmallAllReduceMaxBytes / sizeof(float)) {
+    return ncclInvalidUsage;
+  }
+  size_t bytes = count * sizeof(float);
+  if (bytes <= kNativeMappedSmallAllReduceMaxBytes ||
+      bytes > kNativeSmallAllReduceMaxBytes || (count % 2) != 0) {
+    return ncclInvalidUsage;
+  }
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    auto& ctx = getReduceScatterHostContext(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    int localRank = rank % nRanksPerNode;
+    uint64_t epoch = ++ctx.smallEpoch;
+    size_t inputStride = kNativeSmallAllReduceMaxBytes;
+    size_t inputOffset = static_cast<size_t>(localRank) * inputStride;
+    size_t halfCount = count / 2;
+    size_t halfBytes = bytes / 2;
+
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(ctx.sendSlab() + inputOffset, sendbuff,
+                                      bytes, cudaMemcpyDeviceToHost, stream));
+    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
+    ctx.ctrl->smallInputReady[localRank].store(epoch,
+                                               std::memory_order_release);
+
+    bool isPartLeader = localRank == 0 || localRank == 2;
+    if (isPartLeader) {
+      int part = localRank == 0 ? 0 : 1;
+      size_t elemOffset = static_cast<size_t>(part) * halfCount;
+      size_t byteOffset = elemOffset * sizeof(float);
+      size_t partialOffset = ctx.partialSlotOffset(epoch, localRank);
+      char* localPartial = ctx.sendPartialSlab() + partialOffset;
+      char* remotePartial = ctx.recvPartialSlab() + partialOffset;
+      char* final = ctx.localPartialSlab() + partialOffset;
+
+      for (int i = 0; i < nRanksPerNode; ++i) {
+        waitForEpoch(ctx.ctrl->smallInputReady[i], epoch);
+      }
+      reduce4SmallFloatRowsAvx512(ctx.sendSlab() + byteOffset, inputStride,
+                                  halfCount,
+                                  reinterpret_cast<float*>(localPartial));
+
+      size_t rdmaReadyOffset =
+          offsetof(NativeReduceScatterHostControl, smallPairRdmaReady) +
+          static_cast<size_t>(localRank) *
+              sizeof(ctx.ctrl->smallPairRdmaReady[0]);
+      size_t rdmaSignalOffset =
+          offsetof(NativeReduceScatterHostControl, smallPairRdmaSignal) +
+          static_cast<size_t>(localRank) *
+              sizeof(ctx.ctrl->smallPairRdmaSignal[0]);
+      ctx.pairConnection.write(ctx.pairRemoteRecvPartialMemory, partialOffset,
+                               ctx.sendPartialMemory, partialOffset, halfBytes);
+      ctx.ctrl->smallPairRdmaSignal[localRank].store(
+          epoch, std::memory_order_release);
+      ctx.pairConnection.write(ctx.pairRemoteCtrlMemory, rdmaReadyOffset,
+                               ctx.ctrlMemory, rdmaSignalOffset,
+                               sizeof(uint64_t));
+      ctx.pairConnection.flush();
+      waitForEpoch(ctx.ctrl->smallPairRdmaReady[localRank], epoch);
+      addSmallFloatAvx512(reinterpret_cast<float*>(localPartial),
+                          reinterpret_cast<float const*>(remotePartial),
+                          reinterpret_cast<float*>(final), halfCount);
+      ctx.ctrl->smallPartReady[localRank].store(epoch,
+                                                std::memory_order_release);
+    }
+
+    waitForEpoch(ctx.ctrl->smallPartReady[0], epoch);
+    waitForEpoch(ctx.ctrl->smallPartReady[2], epoch);
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        recvbuff, ctx.localPartialSlab() + ctx.partialSlotOffset(epoch, 0),
+        halfBytes, cudaMemcpyHostToDevice, stream));
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        static_cast<char*>(recvbuff) + halfBytes,
+        ctx.localPartialSlab() + ctx.partialSlotOffset(epoch, 2), halfBytes,
+        cudaMemcpyHostToDevice, stream));
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("small two-leader allreduce failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("small two-leader allreduce failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
+ncclResult_t runChunkedGpuLocalReduceScatter2Node(
+    void const* sendbuff, void* recvbuff, size_t recvcount,
+    size_t bytesPerRank, ncclDataType_t datatype, ncclRedOp_t op,
+    ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
+    void* scratchBuffer, size_t scratchBufferSize, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (!isTwoNodeLayout(nRanks, nRanksPerNode)) return ncclInvalidUsage;
+  if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) return ncclInvalidArgument;
+  if (recvcount * typeSize != bytesPerRank ||
+      bytesPerRank <= kNativeReduceScatterHostMaxShardBytes) {
+    return ncclInvalidUsage;
+  }
+
+  ncclResult_t pipelinedResult = runPipelinedNumaPairReduceScatter2Node(
+      sendbuff, recvbuff, recvcount, bytesPerRank, datatype, op, comm, stream,
+      rank, nRanks, scratchBuffer, scratchBufferSize, nRanksPerNode,
+      bootstrapComm, cudaDevice);
+  if (pipelinedResult == ncclSuccess) return pipelinedResult;
+  if (pipelinedResult != ncclInvalidUsage &&
+      pipelinedResult != ncclInvalidArgument) {
+    return pipelinedResult;
+  }
+
+  size_t chunkBytes = std::min(
+      kNativeReduceScatterHostMaxShardBytes,
+      maxChunkBytes(scratchBufferSize, kNativeReduceScatterNumaPairScratchRows,
+                    typeSize));
+  chunkBytes = (chunkBytes / typeSize) * typeSize;
+  if (chunkBytes == 0) return ncclInvalidUsage;
+  size_t chunkCountLimit = chunkBytes / typeSize;
+  auto* recv = static_cast<char*>(recvbuff);
+  for (size_t elemOffset = 0; elemOffset < recvcount;
+       elemOffset += chunkCountLimit) {
+    size_t chunkCount = std::min(chunkCountLimit, recvcount - elemOffset);
+    size_t thisChunkBytes = chunkCount * typeSize;
+    ncclResult_t result = runGpuLocalReduceScatter2Node(
+        sendbuff, recv + elemOffset * typeSize, chunkCount, thisChunkBytes,
+        datatype, op, comm, stream, rank, nRanks, scratchBuffer,
+        scratchBufferSize, nRanksPerNode, bootstrapComm, cudaDevice,
+        recvcount, elemOffset);
+    if (result != ncclSuccess) return result;
+  }
+  return ncclSuccess;
+}
+
 }  // namespace
 
 
@@ -1758,8 +2482,17 @@ ncclResult_t runSendRecvReduceScatter(void const* sendbuff, void* recvbuff,
       return result;
     }
 
-    result = runHostStagedReduceScatter2Node(
+                                        result = runChunkedGpuLocalReduceScatter2Node(
         sendbuff, recvbuff, recvcount, bytesPerRank, datatype, op, comm, stream,
+                                            rank, nRanks, scratchBuffer, scratchBufferSize, nRanksPerNode,
+                                            bootstrapComm, cudaDevice);
+                                        if (result == ncclSuccess) return result;
+                                        if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
+                                          return result;
+                                        }
+
+                                        result = runHostStagedReduceScatter2Node(
+                                            sendbuff, recvbuff, recvcount, bytesPerRank, datatype, op, comm, stream,
         rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
     if (result == ncclSuccess) return result;
     if (result != ncclInvalidUsage && result != ncclInvalidArgument) {
@@ -1839,6 +2572,24 @@ ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
   if (typeSize == 0) return ncclInvalidArgument;
 
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
+    ncclResult_t smallResult = runSmallMappedAllReduce2Node(
+        sendbuff, recvbuff, count, datatype, op, comm, stream, rank, nRanks,
+        nRanksPerNode, bootstrapComm, cudaDevice);
+    if (smallResult == ncclSuccess) return smallResult;
+    if (smallResult != ncclInvalidUsage &&
+        smallResult != ncclInvalidArgument) {
+      return smallResult;
+    }
+
+    smallResult = runSmallTwoLeaderAllReduce2Node(
+        sendbuff, recvbuff, count, datatype, op, comm, stream, rank, nRanks,
+        nRanksPerNode, bootstrapComm, cudaDevice);
+    if (smallResult == ncclSuccess) return smallResult;
+    if (smallResult != ncclInvalidUsage &&
+        smallResult != ncclInvalidArgument) {
+      return smallResult;
+    }
+
     if (count % static_cast<size_t>(nRanks) == 0) {
       size_t shardCount = count / static_cast<size_t>(nRanks);
       size_t shardBytes = shardCount * typeSize;

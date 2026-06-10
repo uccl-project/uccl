@@ -2182,6 +2182,19 @@ NCCL_API ncclResult_t ncclAllReduce(void const* sendbuff, void* recvbuff,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
   }
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
+  if (comm->nRanksPerNode == 4 && comm->worldSize == 8) {
+    ncclResult_t nativeResult = mscclpp::nccl::runSendRecvAllReduce(
+        sendbuff, recvbuff, count, datatype, reductionOperation, comm, stream,
+        rank, comm->worldSize, comm->scratchBuffer_.get(),
+        comm->scratchBufferSize_, comm->nRanksPerNode, comm->comm,
+        comm->cudaDevice);
+    if (nativeResult == ncclSuccess) return nativeResult;
+    if (nativeResult != ncclInvalidUsage &&
+        nativeResult != ncclInvalidArgument) {
+      return nativeResult;
+    }
+  }
+
   mscclpp::DataType dtype;
   if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
     mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
