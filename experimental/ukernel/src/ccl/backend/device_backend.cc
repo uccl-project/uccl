@@ -368,8 +368,12 @@ uint32_t DeviceBackend::suggested_num_blocks(Op const& op) const {
       (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
           ? scalar_type_size(reduction_dtype_)
           : 1;
-  size_t bytes_per_block =
-      (op.kind == OpKind::Reduce) ? (128u << 10) : (1u << 20);
+  size_t bytes_per_block;
+  if (config_.bytes_per_block > 0)
+    bytes_per_block = config_.bytes_per_block;
+  else
+    bytes_per_block =
+        (op.kind == OpKind::Reduce) ? (128u << 10) : (1u << 20);
   if (elem_bytes > 1) bytes_per_block *= elem_bytes;
   uint32_t blocks = static_cast<uint32_t>(
       std::max<size_t>(1, (op.bytes + bytes_per_block - 1) / bytes_per_block));

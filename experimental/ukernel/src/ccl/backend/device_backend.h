@@ -19,6 +19,7 @@ struct DeviceBackendConfig {
   uint32_t threads_per_block = 256;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
+  uint32_t bytes_per_block = 0;
 };
 
 class DeviceBackend final : public Backend {

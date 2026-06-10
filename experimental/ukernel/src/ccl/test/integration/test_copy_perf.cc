@@ -130,7 +130,8 @@ double bench_cuda_peer_throughput(size_t bytes, int iters, void* src, void* dst,
 // ── DeviceBackend P2P via IPC (GPU 1) ──────────────────────────────────
 
 double bench_device_latency(size_t bytes, int iters, void* ipc_src,
-                            void* dst, int src_dev, int dst_dev) {
+                            void* dst, int src_dev, int dst_dev,
+                            uint32_t bytes_per_block = 0) {
   TiledResult tiled;
   tiled.input_bytes = bytes; tiled.output_bytes = bytes;
   tiled.rank = 0; tiled.nranks = 1;
@@ -141,6 +142,7 @@ double bench_device_latency(size_t bytes, int iters, void* ipc_src,
   DeviceBackendConfig db_cfg;
   db_cfg.task_capacity = 20000;
   db_cfg.max_fifos = 64;
+  db_cfg.bytes_per_block = bytes_per_block;
   DeviceBackend backend(db_cfg);
   backend.validate(tiled, ipc_src, dst, nullptr);
 
@@ -181,7 +183,8 @@ double bench_device_latency(size_t bytes, int iters, void* ipc_src,
 }
 
 double bench_device_throughput(size_t bytes, int iters, void* ipc_src,
-                               void* dst, int src_dev, int dst_dev) {
+                               void* dst, int src_dev, int dst_dev,
+                               uint32_t bytes_per_block = 0) {
   TiledResult tiled;
   tiled.input_bytes = bytes; tiled.output_bytes = bytes;
   tiled.rank = 0; tiled.nranks = 1;
@@ -192,6 +195,7 @@ double bench_device_throughput(size_t bytes, int iters, void* ipc_src,
   DeviceBackendConfig db_cfg;
   db_cfg.task_capacity = 20000;
   db_cfg.max_fifos = 64;
+  db_cfg.bytes_per_block = bytes_per_block;
   DeviceBackend backend(db_cfg);
   backend.validate(tiled, ipc_src, dst, nullptr);
 
@@ -518,19 +522,20 @@ void run_server(int gpu0, int gpu1) {
   fprintf(stderr, "[server] waiting for client benchmarks...\n");
   wait_done();
 
-  // Read client results
+  // Read client results (dev1_lat/dev1_tp stored in rdma slots)
   double cm_lat[kNumSizes], cm_tp[kNumSizes];
   double dev_lat[kNumSizes], dev_tp[kNumSizes];
-  double rdma_lat[kNumSizes], rdma_tp[kNumSizes];
+  double dev1_lat[kNumSizes], dev1_tp[kNumSizes];
   { std::ifstream rf(kResultsFile);
     for (size_t i = 0; i < kNumSizes; ++i)
-      rf >> cm_lat[i] >> cm_tp[i] >> dev_lat[i] >> dev_tp[i] >> rdma_lat[i] >> rdma_tp[i]; }
+      rf >> cm_lat[i] >> cm_tp[i] >> dev_lat[i] >> dev_tp[i] >> dev1_lat[i] >> dev1_tp[i]; }
 
   // Run RdmaLocalCopy benchmarks
+  double rdma_lat[kNumSizes], rdma_tp[kNumSizes];
+  for (size_t i = 0; i < kNumSizes; ++i) rdma_lat[i] = rdma_tp[i] = -1;
   if (strcmp(rdma_backend.name(), "degraded") != 0) {
     for (size_t i = 0; i < kNumSizes; ++i) {
       auto& bs = kBenchSizes[i];
-      // DST pointer is not local — pass nullptr, backend uses remote MR
       rdma_lat[i] = bench_rdma_latency(bs.bytes, bs.lat_iters, src,
                                         nullptr, &rdma_backend);
       rdma_tp[i] = bench_rdma_throughput(bs.bytes, bs.tp_iters, src,
@@ -539,15 +544,16 @@ void run_server(int gpu0, int gpu1) {
   }
 
   printf("\n=== P2P Copy Benchmark  GPU %d -> GPU %d ===\n\n", gpu0, gpu1);
-  printf("%-9s | %8s  %8s  %8s | %8s  %8s  %8s\n",
-         "Size", "cudaP2P us", "device us", "rdma us",
-         "cudaP2P GB/s", "device GB/s", "rdma GB/s");
-  printf("----------|----------------------------------|-------------------------------\n");
+  printf("%-9s | %8s  %8s  %8s  %8s | %8s  %8s  %8s  %8s\n",
+         "Size", "cuda us", "dev-auto us", "dev-1blk us", "rdma us",
+         "cuda GB/s", "dev-auto GB/s", "dev-1blk GB/s", "rdma GB/s");
+  printf("----------|----------------------------------------|----------------------------------------\n");
   for (size_t i = 0; i < kNumSizes; ++i) {
-    printf("%-9s | %8.2f  %8.2f  ", fmt_size(kBenchSizes[i].bytes), cm_lat[i], dev_lat[i]);
+    printf("%-9s | %8.2f  %8.2f  %8.2f  ",
+           fmt_size(kBenchSizes[i].bytes), cm_lat[i], dev_lat[i], dev1_lat[i]);
     if (rdma_lat[i] < 0) printf(" degraded | ");
     else printf("%8.2f | ", rdma_lat[i]);
-    printf("%8.2f  %8.2f  ", cm_tp[i], dev_tp[i]);
+    printf("%8.2f  %8.2f  %8.2f  ", cm_tp[i], dev_tp[i], dev1_tp[i]);
     if (rdma_tp[i] < 0) printf(" degraded\n");
     else printf("%8.2f\n", rdma_tp[i]);
   }
@@ -664,7 +670,11 @@ void run_client(int gpu0, int gpu1) {
     cm_tp[i] = bench_cuda_tp();
     dev_lat[i] = bench_device_latency(bs.bytes, bs.lat_iters, ipc_src, dst, gpu0, gpu1);
     dev_tp[i]  = bench_device_throughput(bs.bytes, bs.tp_iters, ipc_src, dst, gpu0, gpu1);
-    rdma_lat[i] = -1; rdma_tp[i] = -1;
+    // 1-block variant for comparison
+    double     dev1_lat = bench_device_latency(bs.bytes, bs.lat_iters, ipc_src, dst, gpu0, gpu1, UINT32_MAX);
+    double dev1_tp  = bench_device_throughput(bs.bytes, bs.tp_iters, ipc_src, dst, gpu0, gpu1, UINT32_MAX);
+    rdma_lat[i] = dev1_lat;  // reuse rdma slot for 1-blk dev latency
+    rdma_tp[i] = dev1_tp;
   }
 
   { std::ofstream rf(kResultsFile);
