@@ -138,7 +138,10 @@ double bench_device_latency(size_t bytes, int iters, void* ipc_src,
   tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
 
   GPU_RT_CHECK(gpuSetDevice(dst_dev));
-  DeviceBackend backend;
+  DeviceBackendConfig db_cfg;
+  db_cfg.task_capacity = 20000;
+  db_cfg.max_fifos = 64;
+  DeviceBackend backend(db_cfg);
   backend.validate(tiled, ipc_src, dst, nullptr);
 
   int wu = std::max(1, iters / kWarmupFactor);
@@ -186,7 +189,10 @@ double bench_device_throughput(size_t bytes, int iters, void* ipc_src,
   tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
 
   GPU_RT_CHECK(gpuSetDevice(dst_dev));
-  DeviceBackend backend;
+  DeviceBackendConfig db_cfg;
+  db_cfg.task_capacity = 20000;
+  db_cfg.max_fifos = 64;
+  DeviceBackend backend(db_cfg);
   backend.validate(tiled, ipc_src, dst, nullptr);
 
   int wu = std::max(1, iters / kWarmupFactor);
