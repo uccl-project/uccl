@@ -577,6 +577,7 @@ void run_client(int gpu0, int gpu1) {
   static ibv_pd* g_ibv_pd = nullptr;
   {
     int ndev = 0; ibv_device** devs = ibv_get_device_list(&ndev);
+    fprintf(stderr, "[client] ibv devices: %d\n", ndev);
     if (devs && ndev > 0) {
       g_ibv_ctx = ibv_open_device(devs[0]);
       if (g_ibv_ctx) {
@@ -588,10 +589,18 @@ void run_client(int gpu0, int gpu1) {
             std::ofstream mf(kMrFile);
             mf << (uint64_t)dst << " " << mr->rkey; mf.close();
             fprintf(stderr, "[client] dst MR: addr=%p rkey=%u\n", dst, mr->rkey);
+          } else {
+            fprintf(stderr, "[client] ibv_reg_mr FAILED: %s (errno=%d)\n", strerror(errno), errno);
           }
+        } else {
+          fprintf(stderr, "[client] ibv_alloc_pd FAILED\n");
         }
+      } else {
+        fprintf(stderr, "[client] ibv_open_device FAILED\n");
       }
       ibv_free_device_list(devs);
+    } else {
+      fprintf(stderr, "[client] no ibv devices found\n");
     }
   }
 
