@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <cstddef>
@@ -48,6 +49,10 @@ static constexpr size_t kNativeMappedSmallAllReduceMaxBytes = 64 * 1024;
 static constexpr size_t kNativeReduceScatterRdmaChunkBytes = 4 * 1024 * 1024;
 static constexpr int kNativeReduceScatterSignalEveryN = 256;
 static constexpr int kNativeReduceScatterNumaPairScratchRows = 21;
+static constexpr int kNativeTwoRankRingChannels = 2;
+static constexpr int kNativeTwoRankRingStages = 2;
+static constexpr size_t kNativeTwoRankRingChunkBytes = 4 * 1024 * 1024;
+static constexpr size_t kNativeTwoRankRingAutoMinBytes = 64 * 1024 * 1024;
 
 ncclResult_t cudaResult(cudaError_t error, char const* operation) {
   if (error == cudaSuccess) return ncclSuccess;
@@ -99,6 +104,12 @@ struct NativeReduceScatterHostControl {
       smallPairRdmaSignal[kNativeHostMaxRanksPerNode];
   alignas(64) std::atomic<uint64_t>
       smallPartReady[kNativeHostMaxRanksPerNode];
+  alignas(64) std::atomic<uint64_t>
+      twoRankRingReady[kNativeTwoRankRingChannels]
+                      [kNativeTwoRankRingStages];
+  alignas(64) std::atomic<uint64_t>
+      twoRankRingSignal[kNativeTwoRankRingChannels]
+                       [kNativeTwoRankRingStages];
 };
 
 struct NativeReduceScatterHostNames {
@@ -136,6 +147,7 @@ struct NativeReduceScatterHostContext {
   uint64_t blockEpoch = 0;
   uint64_t pairEpoch = 0;
   uint64_t smallEpoch = 0;
+  uint64_t twoRankRingEpoch = 0;
 
   std::string workName;
   std::string ctrlName;
@@ -158,6 +170,8 @@ struct NativeReduceScatterHostContext {
   mscclpp::RegisteredMemory pairRemoteRecvPartialMemory;
   mscclpp::RegisteredMemory pairRemoteCtrlMemory;
   mscclpp::Connection pairConnection;
+  cudaStream_t twoRankRingStreams[kNativeTwoRankRingChannels] = {};
+  bool twoRankRingStreamsReady = false;
   bool localScratchIpcReady = false;
   void* localScratchBuffer = nullptr;
   size_t localScratchBufferSize = 0;
@@ -181,6 +195,9 @@ struct NativeReduceScatterHostContext {
   }
 
   ~NativeReduceScatterHostContext() {
+    for (int i = 0; i < kNativeTwoRankRingChannels; ++i) {
+      if (twoRankRingStreams[i]) cudaStreamDestroy(twoRankRingStreams[i]);
+    }
     pairConnection = mscclpp::Connection{};
     connection = mscclpp::Connection{};
     remoteScratchPtrs.clear();
@@ -445,6 +462,8 @@ void waitForEpoch(std::atomic<uint64_t> const& value, uint64_t epoch) {
   }
 }
 
+bool isTwoRankRingAllReduceEnabled();
+size_t twoRankRingChunkBytes();
 
 NativeReduceScatterHostContext& getReduceScatterHostContext(
     ncclComm_t commHandle, std::shared_ptr<Communicator> bootstrapComm,
@@ -485,6 +504,13 @@ NativeReduceScatterHostContext& getReduceScatterHostContext(
   ctx->cudaDevice = cudaDevice;
   ctx->isLeader = rank == ctx->localLeader;
   ctx->owner = ctx->isLeader;
+  if (nRanks == 2 && nRanksPerNode == 1) {
+    ctx->maxShardBytes = std::max(
+        ctx->maxShardBytes,
+        static_cast<size_t>(kNativeTwoRankRingChannels) *
+            static_cast<size_t>(kNativeTwoRankRingStages) *
+            twoRankRingChunkBytes());
+  }
   ctx->inputCapacity = static_cast<size_t>(nRanks) * ctx->maxShardBytes;
   ctx->partialBlockCapacity =
       static_cast<size_t>(kNativeReduceScatterHostSlots) *
@@ -1225,6 +1251,65 @@ __global__ void addFloatKernel(float const* lhs, float const* rhs, float* out,
   size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= count) return;
   out[idx] = lhs[idx] + rhs[idx];
+}
+
+bool isTwoRankRingAllReduceEnabled() {
+  char const* env = std::getenv("MSCCLPP_NCCL_2RANK_RING_ALLREDUCE");
+  return env != nullptr && std::strcmp(env, "0") != 0 &&
+         std::strcmp(env, "false") != 0 &&
+         std::strcmp(env, "FALSE") != 0;
+}
+
+size_t twoRankRingChunkBytes() {
+  char const* env = std::getenv("MSCCLPP_NCCL_2RANK_RING_CHUNK_BYTES");
+  if (env == nullptr || env[0] == '\0') return kNativeTwoRankRingChunkBytes;
+  char* end = nullptr;
+  unsigned long long value = std::strtoull(env, &end, 10);
+  if (end == env || value < sizeof(float)) return kNativeTwoRankRingChunkBytes;
+  return (static_cast<size_t>(value) / sizeof(float)) * sizeof(float);
+}
+
+ncclResult_t pollSignaledSend(std::shared_ptr<IbQp> const& qp,
+                              char const* operation) {
+  int spins = 0;
+  while (true) {
+    int completed = qp->pollSendCq();
+    if (completed < 0) {
+      WARN("%s failed while polling send CQ", operation);
+      return ncclInternalError;
+    }
+    for (int i = 0; i < completed; ++i) {
+      if (qp->getSendWcStatus(i) != 0) {
+        WARN("%s send completion failed: %s", operation,
+             qp->getSendWcStatusString(i).c_str());
+        return ncclInternalError;
+      }
+    }
+    if (completed > 0) return ncclSuccess;
+    if (spins++ < 65536) {
+#if defined(__x86_64__) || defined(__i386__)
+      asm volatile("pause" ::: "memory");
+#endif
+    } else {
+      std::this_thread::yield();
+    }
+  }
+}
+
+ncclResult_t postRingDataAndSignal(
+    std::shared_ptr<IbQp> const& qp, IbMr const* dataMr,
+    IbMrInfo const& remoteDataInfo, IbMr const* ctrlMr,
+    IbMrInfo const& remoteCtrlInfo, size_t dataOffset, size_t bytes,
+    size_t localSignalOffset, size_t remoteReadyOffset, uint64_t wrId) {
+  if (!qp || !dataMr || !ctrlMr) return ncclInvalidUsage;
+  if (bytes > 0) {
+    qp->stageSendWrite(dataMr, remoteDataInfo, static_cast<uint32_t>(bytes),
+                       wrId, dataOffset, dataOffset, false);
+  }
+  qp->stageSendWrite(ctrlMr, remoteCtrlInfo, sizeof(uint64_t), wrId + 1,
+                     localSignalOffset, remoteReadyOffset, true);
+  qp->postSend();
+  return pollSignaledSend(qp, "2-rank ring allreduce RDMA write");
 }
 
 ncclResult_t launchReduceRows(void* rows, void* output, size_t elemOffset,
@@ -2483,6 +2568,258 @@ ncclResult_t runChunkedGpuLocalReduceScatter2Node(
   return ncclSuccess;
 }
 
+ncclResult_t runTwoRankRingSimpleAllReduce2Node(
+    void const* sendbuff, void* recvbuff, size_t count,
+    ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
+    cudaStream_t stream, int rank, int nRanks, void* scratchBuffer,
+    size_t scratchBufferSize, int nRanksPerNode,
+    std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
+  if (nRanks != 2 || nRanksPerNode != 1) return ncclInvalidUsage;
+  if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
+  if (scratchBuffer == nullptr) return ncclInvalidUsage;
+
+  size_t const typeSize = sizeof(float);
+  size_t bytes = count * typeSize;
+  if (!isTwoRankRingAllReduceEnabled() &&
+      bytes < kNativeTwoRankRingAutoMinBytes) {
+    return ncclInvalidUsage;
+  }
+  size_t const chunkBytes = twoRankRingChunkBytes();
+  size_t const chunkCount = chunkBytes / typeSize;
+  if (chunkCount == 0 || scratchBufferSize <
+                             kNativeTwoRankRingChannels *
+                                 kNativeTwoRankRingStages *
+                                 chunkBytes) {
+    return ncclInvalidUsage;
+  }
+  if (bytes == 0) return ncclInvalidUsage;
+
+  try {
+    mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
+    auto& ctx = getReduceScatterHostContext(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    if (ctx.maxShardBytes <
+        kNativeTwoRankRingChannels * kNativeTwoRankRingStages *
+            chunkBytes) {
+      return ncclInvalidUsage;
+    }
+    if (!ctx.twoRankRingStreamsReady) {
+      std::lock_guard<std::mutex> lock(ctx.initMutex);
+      if (!ctx.twoRankRingStreamsReady) {
+        for (int i = 0; i < kNativeTwoRankRingChannels; ++i) {
+          MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(
+              &ctx.twoRankRingStreams[i], cudaStreamNonBlocking));
+        }
+        ctx.twoRankRingStreamsReady = true;
+      }
+    }
+
+    struct RingChannel {
+      mscclpp::Connection* conn;
+      mscclpp::RegisteredMemory* remoteRecv;
+      mscclpp::RegisteredMemory* remoteCtrl;
+      size_t start;
+      size_t count;
+      ncclResult_t result = ncclSuccess;
+    };
+
+    size_t channel0Count = (count + 1) / 2;
+    RingChannel channels[kNativeTwoRankRingChannels] = {
+        {&ctx.connection, &ctx.remoteRecvPartialMemory, &ctx.remoteCtrlMemory,
+         0, channel0Count, ncclSuccess},
+        {&ctx.pairConnection, &ctx.pairRemoteRecvPartialMemory,
+         &ctx.pairRemoteCtrlMemory, channel0Count, count - channel0Count,
+         ncclSuccess}};
+
+    size_t maxChannelCount = std::max(channels[0].count, channels[1].count);
+    size_t maxLoops =
+        (maxChannelCount + 2 * chunkCount - 1) / (2 * chunkCount);
+    uint64_t baseEpoch = ctx.twoRankRingEpoch + 1;
+    ctx.twoRankRingEpoch += static_cast<uint64_t>(2 * maxLoops + 2);
+
+    std::thread workers[kNativeTwoRankRingChannels];
+    auto* scratch = static_cast<char*>(scratchBuffer);
+    auto const* send = static_cast<char const*>(sendbuff);
+    auto* recv = static_cast<char*>(recvbuff);
+    cudaEvent_t startEvent = nullptr;
+    cudaEvent_t doneEvents[kNativeTwoRankRingChannels] = {};
+    MSCCLPP_CUDATHROW(
+        cudaEventCreateWithFlags(&startEvent, cudaEventDisableTiming));
+    for (int i = 0; i < kNativeTwoRankRingChannels; ++i) {
+      MSCCLPP_CUDATHROW(
+          cudaEventCreateWithFlags(&doneEvents[i], cudaEventDisableTiming));
+    }
+    MSCCLPP_CUDATHROW(cudaEventRecord(startEvent, stream));
+
+    for (int channel = 0; channel < kNativeTwoRankRingChannels; ++channel) {
+      workers[channel] = std::thread([&, channel] {
+        try {
+          mscclpp::CudaDeviceGuard threadDeviceGuard(cudaDevice);
+          auto& ch = channels[channel];
+          cudaStream_t localStream = ctx.twoRankRingStreams[channel];
+          MSCCLPP_CUDATHROW(cudaStreamWaitEvent(localStream, startEvent, 0));
+          if (ch.count == 0) {
+            MSCCLPP_CUDATHROW(cudaEventRecord(doneEvents[channel],
+                                              localStream));
+            return;
+          }
+
+          auto qp = ch.conn->getIbQp();
+          if (!qp) {
+            ch.result = ncclInvalidUsage;
+            return;
+          }
+          IbMr const* dataMr = nullptr;
+          IbMr const* ctrlMr = nullptr;
+          IbMrInfo localInfo{};
+          IbMrInfo remoteDataInfo{};
+          IbMrInfo remoteCtrlInfo{};
+          ctx.sendPartialMemory.getIbMrInfo(ctx.transport, &dataMr,
+                                            &localInfo);
+          ctx.ctrlMemory.getIbMrInfo(ctx.transport, &ctrlMr, &localInfo);
+          ch.remoteRecv->getIbMrInfo(ctx.transport, nullptr, &remoteDataInfo);
+          ch.remoteCtrl->getIbMrInfo(ctx.transport, nullptr, &remoteCtrlInfo);
+          if (!dataMr || !ctrlMr) {
+            ch.result = ncclInvalidUsage;
+            return;
+          }
+
+          char* remoteGpu =
+              scratch + static_cast<size_t>(channel) *
+                            static_cast<size_t>(kNativeTwoRankRingStages) *
+                            chunkBytes;
+
+          auto stageOffset = [&](int stage) {
+            return static_cast<size_t>(channel) *
+                       static_cast<size_t>(kNativeTwoRankRingStages) *
+                       chunkBytes +
+                   static_cast<size_t>(stage) * chunkBytes;
+          };
+          auto readyOffset = [&](int stage) {
+            return offsetof(NativeReduceScatterHostControl, twoRankRingReady) +
+                   (static_cast<size_t>(channel) *
+                        static_cast<size_t>(kNativeTwoRankRingStages) +
+                    static_cast<size_t>(stage)) *
+                       sizeof(ctx.ctrl->twoRankRingReady[0][0]);
+          };
+          auto signalOffset = [&](int stage) {
+            return offsetof(NativeReduceScatterHostControl, twoRankRingSignal) +
+                   (static_cast<size_t>(channel) *
+                        static_cast<size_t>(kNativeTwoRankRingStages) +
+                    static_cast<size_t>(stage)) *
+                       sizeof(ctx.ctrl->twoRankRingSignal[0][0]);
+          };
+
+          for (size_t elem = 0, loop = 0; elem < ch.count;
+               elem += 2 * chunkCount, ++loop) {
+            size_t loopCount =
+                std::min(2 * chunkCount, ch.count - elem);
+            size_t firstCount = std::min(chunkCount, (loopCount + 1) / 2);
+            size_t secondCount = loopCount - firstCount;
+            size_t partCount[2] = {firstCount, secondCount};
+            size_t partStart[2] = {ch.start + elem,
+                                   ch.start + elem + firstCount};
+            int ownPart = rank;
+            int peerPart = rank ^ 1;
+            size_t ownCount = partCount[ownPart];
+            size_t peerCount = partCount[peerPart];
+            size_t ownOffset = partStart[ownPart] * typeSize;
+            size_t peerOffset = partStart[peerPart] * typeSize;
+            uint64_t sendEpoch = baseEpoch + static_cast<uint64_t>(2 * loop);
+            uint64_t finalEpoch = sendEpoch + 1;
+
+            size_t sendStageOffset = stageOffset(0);
+            if (peerCount > 0) {
+              MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+                  ctx.sendPartialSlab() + sendStageOffset, send + peerOffset,
+                  peerCount * typeSize, cudaMemcpyDeviceToHost, localStream));
+              MSCCLPP_CUDATHROW(cudaStreamSynchronize(localStream));
+            }
+            ctx.ctrl->twoRankRingSignal[channel][0].store(
+                sendEpoch, std::memory_order_release);
+            ch.result = postRingDataAndSignal(
+                qp, dataMr, remoteDataInfo, ctrlMr, remoteCtrlInfo,
+                sendStageOffset, peerCount * typeSize, signalOffset(0),
+                readyOffset(0), (sendEpoch << 2));
+            if (ch.result != ncclSuccess) break;
+
+            waitForEpoch(ctx.ctrl->twoRankRingReady[channel][0], sendEpoch);
+            if (ownCount > 0) {
+              MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+                  remoteGpu, ctx.recvPartialSlab() + sendStageOffset,
+                  ownCount * typeSize, cudaMemcpyHostToDevice, localStream));
+              ch.result = launchAddFloat(
+                  send + ownOffset, remoteGpu, recv + ownOffset, ownCount,
+                  localStream);
+              if (ch.result != ncclSuccess) break;
+              MSCCLPP_CUDATHROW(cudaStreamSynchronize(localStream));
+            }
+
+            size_t finalStageOffset = stageOffset(1);
+            if (ownCount > 0) {
+              MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+                  ctx.sendPartialSlab() + finalStageOffset, recv + ownOffset,
+                  ownCount * typeSize, cudaMemcpyDeviceToHost, localStream));
+              MSCCLPP_CUDATHROW(cudaStreamSynchronize(localStream));
+            }
+            ctx.ctrl->twoRankRingSignal[channel][1].store(
+                finalEpoch, std::memory_order_release);
+            ch.result = postRingDataAndSignal(
+                qp, dataMr, remoteDataInfo, ctrlMr, remoteCtrlInfo,
+                finalStageOffset, ownCount * typeSize, signalOffset(1),
+                readyOffset(1), (finalEpoch << 2));
+            if (ch.result != ncclSuccess) break;
+
+            waitForEpoch(ctx.ctrl->twoRankRingReady[channel][1], finalEpoch);
+            if (peerCount > 0) {
+              MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+                  recv + peerOffset, ctx.recvPartialSlab() + finalStageOffset,
+                  peerCount * typeSize, cudaMemcpyHostToDevice, localStream));
+              MSCCLPP_CUDATHROW(cudaStreamSynchronize(localStream));
+            }
+          }
+          MSCCLPP_CUDATHROW(cudaEventRecord(doneEvents[channel], localStream));
+        } catch (std::exception const& ex) {
+          WARN("2-rank ring channel %d failed: %s", channel, ex.what());
+          channels[channel].result = mapNativeException(ex);
+        } catch (...) {
+          WARN("2-rank ring channel %d failed with an unknown exception",
+               channel);
+          channels[channel].result = ncclInternalError;
+        }
+      });
+    }
+
+    for (auto& worker : workers) {
+      if (worker.joinable()) worker.join();
+    }
+    ncclResult_t workerResult = ncclSuccess;
+    for (auto const& channel : channels) {
+      if (workerResult == ncclSuccess && channel.result != ncclSuccess) {
+        workerResult = channel.result;
+      }
+    }
+    if (workerResult == ncclSuccess) {
+      for (int channel = 0; channel < kNativeTwoRankRingChannels; ++channel) {
+        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, doneEvents[channel], 0));
+      }
+    }
+    for (int channel = 0; channel < kNativeTwoRankRingChannels; ++channel) {
+      cudaEventDestroy(doneEvents[channel]);
+    }
+    cudaEventDestroy(startEvent);
+    if (workerResult != ncclSuccess) return workerResult;
+    bootstrapComm->bootstrap()->barrier();
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN("2-rank ring allreduce failed: %s", ex.what());
+    return mapNativeException(ex);
+  } catch (...) {
+    WARN("2-rank ring allreduce failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
 }  // namespace
 
 
@@ -2595,6 +2932,17 @@ ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
                                   int cudaDevice) {
   size_t typeSize = ncclTypeSize(datatype);
   if (typeSize == 0) return ncclInvalidArgument;
+
+  if (nRanks == 2 && nRanksPerNode == 1) {
+    ncclResult_t ringResult = runTwoRankRingSimpleAllReduce2Node(
+        sendbuff, recvbuff, count, datatype, op, comm, stream, rank, nRanks,
+        scratchBuffer, scratchBufferSize, nRanksPerNode, bootstrapComm,
+        cudaDevice);
+    if (ringResult == ncclSuccess) return ringResult;
+    if (ringResult != ncclInvalidUsage && ringResult != ncclInvalidArgument) {
+      return ringResult;
+    }
+  }
 
   if (isTwoNodeLayout(nRanks, nRanksPerNode)) {
     ncclResult_t smallResult = runSmallMappedAllReduce2Node(
