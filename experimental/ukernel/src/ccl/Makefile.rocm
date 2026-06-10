@@ -120,8 +120,9 @@ test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
 		$(TRANSPORT_LIBS)
 
 test_copy_perf: backend/rdma_local_copy_backend.o backend/device_backend.o \
+		transport_adapter_rdma_adapter.o \
 		$(DEVICE_OBJ) \
-		test/integration/test_copy_perf.o
+		test/integration/test_copy_perf.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(HIP_LIB) -lamdhip64 -libverbs $(DEVICE_LIBS) -lpthread
 
