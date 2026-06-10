@@ -47,6 +47,7 @@
 #define gpuMemcpy cudaMemcpy
 #define gpuMemcpyAsync cudaMemcpyAsync
 #define gpuMemcpyPeerAsync cudaMemcpyPeerAsync
+#define gpuMemcpyPeer cudaMemcpyPeer
 #define gpuMemcpyDeviceToDevice cudaMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuMemset cudaMemset
@@ -164,6 +165,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuMemcpy hipMemcpy
 #define gpuMemcpyAsync hipMemcpyAsync
 #define gpuMemcpyPeerAsync hipMemcpyPeerAsync
+#define gpuMemcpyPeer hipMemcpyPeer
 #define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
 #define gpuMemset hipMemset

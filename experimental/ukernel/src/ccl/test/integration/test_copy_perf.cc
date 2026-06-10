@@ -2,18 +2,23 @@
 #include "../backend/backend.h"
 #include "../backend/device_backend.h"
 #include "../backend/rdma_local_copy_backend.h"
+#include "../../transport/adapter/transport_adapter.h"
+#include "../../transport/adapter/rdma_adapter.h"
 #include "../coll_types.h"
 #include "../lower.h"
 #include "../utils.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <infiniband/verbs.h>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 
 namespace UKernel {
 namespace CCL {
@@ -21,262 +26,669 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-void fail(std::string const& msg) { throw std::runtime_error(msg); }
-
-struct DeviceBuffer {
-  void* ptr = nullptr;
-  size_t bytes = 0;
-  explicit DeviceBuffer(size_t nbytes) : bytes(nbytes) {
-    GPU_RT_CHECK(gpuMalloc(&ptr, bytes));
-  }
-  ~DeviceBuffer() {
-    if (ptr != nullptr) gpuFree(ptr);
-  }
-  DeviceBuffer(DeviceBuffer const&) = delete;
-  DeviceBuffer& operator=(DeviceBuffer const&) = delete;
-  DeviceBuffer(DeviceBuffer&& other) noexcept
-      : ptr(other.ptr), bytes(other.bytes) {
-    other.ptr = nullptr;
-    other.bytes = 0;
-  }
-  DeviceBuffer& operator=(DeviceBuffer&& other) noexcept {
-    if (this == &other) return *this;
-    if (ptr != nullptr) gpuFree(ptr);
-    ptr = other.ptr;
-    bytes = other.bytes;
-    other.ptr = nullptr;
-    other.bytes = 0;
-    return *this;
-  }
-};
-
 struct BenchSize {
   size_t bytes;
-  int iters;
+  int lat_iters;
+  int tp_iters;
 };
 
 static constexpr BenchSize kBenchSizes[] = {
-    {4, 100000},        {16, 50000},       {64, 50000},
-    {256, 20000},       {1024, 10000},     {4096, 5000},
-    {16384, 2000},      {65536, 500},      {262144, 200},
-    {1048576, 100},     {4194304, 50},     {16777216, 20},
-    {67108864, 5},      {134217728, 3},
+    {4, 10000, 10000},          {16, 5000, 5000},
+    {64, 5000, 5000},           {256, 2000, 2000},
+    {1024, 1000, 1000},         {4096, 500, 500},
+    {16384, 200, 200},          {65536, 100, 100},
+    {262144, 50, 50},           {1048576, 50, 50},
+    {4194304, 20, 20},          {16777216, 10, 10},
+    {67108864, 5, 3},           {134217728, 3, 2},
 };
 
-static constexpr size_t kMaxBuf = 512ULL * 1024 * 1024;
+static constexpr size_t kNumSizes = sizeof(kBenchSizes) / sizeof(kBenchSizes[0]);
 static constexpr int kWarmupFactor = 10;
+static constexpr size_t kMaxBuf = 256ULL * 1024 * 1024;
 
-DeviceBuffer g_src_buf(0);
-DeviceBuffer g_dst_buf(0);
+static const char* kHandleFile = "/tmp/p2p_bench_handle.bin";
+static const char* kReadyFile  = "/tmp/p2p_bench_ready";
+static const char* kDoneFile   = "/tmp/p2p_bench_done";
+static const char* kSrvDoneFile = "/tmp/p2p_bench_srv_done";
+static const char* kResultsFile = "/tmp/p2p_bench_results.txt";
+static const char* kMrFile     = "/tmp/p2p_bench_mr.txt";
+static const char* kSrvSpecFile = "/tmp/p2p_bench_srv_spec.bin";
+static const char* kCliSpecFile = "/tmp/p2p_bench_cli_spec.bin";
 
-double bench_cuda_memcpy_d2d(size_t bytes, int iters) {
-  int warmup = std::max(1, iters / kWarmupFactor);
-  for (int i = 0; i < warmup; ++i) {
-    GPU_RT_CHECK(gpuMemcpy(g_dst_buf.ptr, g_src_buf.ptr, bytes,
-                           gpuMemcpyDeviceToDevice));
+void write_spec(UKernel::Transport::RdmaPeerConnectSpec const& s,
+                char const* path) {
+  std::ofstream of(path, std::ios::binary);
+  of.write((char*)&s, sizeof(s));
+}
+
+UKernel::Transport::RdmaPeerConnectSpec read_spec(char const* path) {
+  UKernel::Transport::RdmaPeerConnectSpec s{};
+  std::ifstream inf(path, std::ios::binary);
+  inf.read((char*)&s, sizeof(s));
+  return s;
+}
+
+void write_handle(gpuIpcMemHandle_t const& h) {
+  std::ofstream of(kHandleFile, std::ios::binary);
+  of.write((char*)&h, sizeof(h));
+}
+
+gpuIpcMemHandle_t read_handle() {
+  gpuIpcMemHandle_t h{};
+  std::ifstream inf(kHandleFile, std::ios::binary);
+  inf.read((char*)&h, sizeof(h));
+  return h;
+}
+
+void signal_ready() { std::ofstream(kReadyFile).close(); }
+void wait_ready() { while (!std::ifstream(kReadyFile).good()) { usleep(100000); } }
+void signal_done() { std::ofstream(kDoneFile).close(); }
+void wait_done() { while (!std::ifstream(kDoneFile).good()) { usleep(100000); } }
+void signal_server_done() { std::ofstream(kSrvDoneFile).close(); }
+void wait_server_done() { while (!std::ifstream(kSrvDoneFile).good()) { usleep(100000); } }
+void wait_file(char const* path) {
+  while (!std::ifstream(path).good()) { usleep(100000); }
+}
+
+// ── cudaMemcpyPeer (GPU 0 → GPU 1) ────────────────────────────────────
+
+double bench_cuda_peer_latency(size_t bytes, int iters, void* src, void* dst,
+                               int src_dev, int dst_dev) {
+  int wu = std::max(1, iters / kWarmupFactor);
+  GPU_RT_CHECK(gpuSetDevice(src_dev));
+  for (int i = 0; i < wu; ++i) {
+    GPU_RT_CHECK(gpuMemcpyPeer(dst, dst_dev, src, src_dev, bytes));
+    GPU_RT_CHECK(gpuDeviceSynchronize());
   }
-  GPU_RT_CHECK(gpuDeviceSynchronize());
-
   auto t0 = Clock::now();
   for (int i = 0; i < iters; ++i) {
-    GPU_RT_CHECK(gpuMemcpy(g_dst_buf.ptr, g_src_buf.ptr, bytes,
-                           gpuMemcpyDeviceToDevice));
+    GPU_RT_CHECK(gpuMemcpyPeer(dst, dst_dev, src, src_dev, bytes));
+    GPU_RT_CHECK(gpuDeviceSynchronize());
   }
-  GPU_RT_CHECK(gpuDeviceSynchronize());
   auto t1 = Clock::now();
-
   return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
 }
 
-double bench_device_backend_copy(size_t bytes, int iters) {
+double bench_cuda_peer_throughput(size_t bytes, int iters, void* src, void* dst,
+                                  int src_dev, int dst_dev) {
+  int wu = std::max(1, iters / kWarmupFactor);
+  GPU_RT_CHECK(gpuSetDevice(src_dev));
+  for (int i = 0; i < wu; ++i) {
+    GPU_RT_CHECK(gpuMemcpyPeer(dst, dst_dev, src, src_dev, bytes));
+  }
+  GPU_RT_CHECK(gpuDeviceSynchronize());
+  auto t0 = Clock::now();
+  for (int i = 0; i < iters; ++i) {
+    GPU_RT_CHECK(gpuMemcpyPeer(dst, dst_dev, src, src_dev, bytes));
+  }
+  GPU_RT_CHECK(gpuDeviceSynchronize());
+  auto t1 = Clock::now();
+  double total_s = std::chrono::duration<double>(t1 - t0).count();
+  return (bytes * iters * 1e-9) / total_s;
+}
+
+// ── DeviceBackend P2P via IPC (GPU 1) ──────────────────────────────────
+
+double bench_device_latency(size_t bytes, int iters, void* ipc_src,
+                            void* dst, int src_dev, int dst_dev) {
   TiledResult tiled;
-  tiled.input_bytes = bytes;
-  tiled.output_bytes = bytes;
-  tiled.rank = 0;
-  tiled.nranks = 1;
-  Op op;
-  op.kind = OpKind::Copy;
-  op.bytes = bytes;
-  op.src_off = 0;
-  op.dst_off = 0;
-  tiled.ops.push_back(op);
-  tiled.chunk_of.push_back(0);
-  tiled.layers = {{0}};
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
 
+  GPU_RT_CHECK(gpuSetDevice(dst_dev));
   DeviceBackend backend;
-  backend.validate(tiled, g_src_buf.ptr, g_dst_buf.ptr, nullptr);
+  backend.validate(tiled, ipc_src, dst, nullptr);
 
-  int warmup = std::max(1, iters / kWarmupFactor);
-  for (int i = 0; i < warmup; ++i) {
-    OpBindings bind;
-    bind.stream_index = 0;
-    bind.resolved_src = g_src_buf.ptr;
-    bind.resolved_dst = g_dst_buf.ptr;
+  int wu = std::max(1, iters / kWarmupFactor);
+  for (int i = 0; i < wu; ++i) {
+    OpBindings bnd;
+    bnd.stream_index = 0;
+    bnd.resolved_src = ipc_src; bnd.src_device = src_dev;
+    bnd.resolved_dst = dst;    bnd.dst_device = dst_dev;
     BackendToken tok;
     while (true) {
-      tok = backend.submit(tiled.ops[0], bind, g_src_buf.ptr, g_dst_buf.ptr,
-                           nullptr);
+      tok = backend.submit(tiled.ops[0], bnd, ipc_src, dst, nullptr);
       if (tok.value != 0) break;
-      BackendToken tmp;
-      backend.drain(&tmp, 1);
+      BackendToken tmp; backend.drain(&tmp, 1);
     }
     BackendToken out;
-    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {
-    }
+    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {}
   }
-  backend.stop(0);
-
-  backend.validate(tiled, g_src_buf.ptr, g_dst_buf.ptr, nullptr);
 
   auto t0 = Clock::now();
   for (int i = 0; i < iters; ++i) {
-    OpBindings bind;
-    bind.stream_index = 0;
-    bind.resolved_src = g_src_buf.ptr;
-    bind.resolved_dst = g_dst_buf.ptr;
+    OpBindings bnd;
+    bnd.stream_index = 0;
+    bnd.resolved_src = ipc_src; bnd.src_device = src_dev;
+    bnd.resolved_dst = dst;    bnd.dst_device = dst_dev;
     BackendToken tok;
     while (true) {
-      tok = backend.submit(tiled.ops[0], bind, g_src_buf.ptr, g_dst_buf.ptr,
-                           nullptr);
+      tok = backend.submit(tiled.ops[0], bnd, ipc_src, dst, nullptr);
       if (tok.value != 0) break;
-      BackendToken tmp;
-      backend.drain(&tmp, 1);
+      BackendToken tmp; backend.drain(&tmp, 1);
     }
     BackendToken out;
-    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {
-    }
+    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {}
   }
   auto t1 = Clock::now();
-
   backend.stop(0);
   return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
 }
 
-double bench_rdma_local_copy(size_t bytes, int iters) {
-  RdmaLocalCopyBackendConfig cfg;
-  cfg.gpu_id = 0;
+double bench_device_throughput(size_t bytes, int iters, void* ipc_src,
+                               void* dst, int src_dev, int dst_dev) {
+  TiledResult tiled;
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
+
+  GPU_RT_CHECK(gpuSetDevice(dst_dev));
+  DeviceBackend backend;
+  backend.validate(tiled, ipc_src, dst, nullptr);
+
+  int wu = std::max(1, iters / kWarmupFactor);
+  {
+    int sub = 0, comp = 0;
+    std::vector<BackendToken> tokens(wu);
+    while (comp < wu) {
+      while (sub < wu) {
+        OpBindings bnd; bnd.stream_index = 0;
+        bnd.resolved_src = ipc_src; bnd.src_device = src_dev;
+        bnd.resolved_dst = dst;    bnd.dst_device = dst_dev;
+        auto tok = backend.submit(tiled.ops[0], bnd, ipc_src, dst, nullptr);
+        if (tok.value == 0) break;
+        tokens[sub++] = tok;
+      }
+      BackendToken out[64];
+      size_t n = backend.drain(out, 64);
+      for (size_t j = 0; j < n; ++j)
+        for (int k = 0; k < sub; ++k)
+          if (tokens[k].value == out[j].value) { ++comp; break; }
+      if (sub == wu && comp < sub) std::this_thread::yield();
+    }
+  }
+  backend.stop(0);
+  backend.validate(tiled, ipc_src, dst, nullptr);
+
+  auto t0 = Clock::now();
+  int submitted = 0, completed = 0;
+  std::vector<BackendToken> tokens(iters);
+  while (completed < iters) {
+    while (submitted < iters) {
+      OpBindings bnd; bnd.stream_index = 0;
+      bnd.resolved_src = ipc_src; bnd.src_device = src_dev;
+      bnd.resolved_dst = dst;    bnd.dst_device = dst_dev;
+      auto tok = backend.submit(tiled.ops[0], bnd, ipc_src, dst, nullptr);
+      if (tok.value == 0) break;
+      tokens[submitted++] = tok;
+    }
+    BackendToken out[64];
+    size_t n = backend.drain(out, 64);
+    for (size_t j = 0; j < n; ++j)
+      for (int k = 0; k < submitted; ++k)
+        if (tokens[k].value == out[j].value) { ++completed; break; }
+    if (submitted == iters && completed < submitted) std::this_thread::yield();
+  }
+  auto t1 = Clock::now();
+  backend.stop(0);
+  double total_s = std::chrono::duration<double>(t1 - t0).count();
+  return (bytes * iters * 1e-9) / total_s;
+}
+
+// ── RdmaLocalCopy P2P ──────────────────────────────────────────────────
+
+double bench_rdma_latency(size_t bytes, int iters, void* src, void* dst) {
+  RdmaLocalCopyBackendConfig cfg; cfg.gpu_id = 0;
   RdmaLocalCopyBackend backend(cfg);
   if (strcmp(backend.name(), "degraded") == 0) return -1.0;
 
   TiledResult tiled;
-  tiled.input_bytes = bytes;
-  tiled.output_bytes = bytes;
-  tiled.rank = 0;
-  tiled.nranks = 1;
-  Op op;
-  op.kind = OpKind::Copy;
-  op.bytes = bytes;
-  op.src_off = 0;
-  op.dst_off = 0;
-  tiled.ops.push_back(op);
-  tiled.chunk_of.push_back(0);
-  tiled.layers = {{0}};
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
 
-  backend.validate(tiled, g_src_buf.ptr, g_dst_buf.ptr, nullptr);
+  backend.validate(tiled, src, dst, nullptr);
   if (strcmp(backend.name(), "degraded") == 0) return -1.0;
 
-  int warmup = std::max(1, iters / kWarmupFactor);
-  for (int i = 0; i < warmup; ++i) {
-    OpBindings bind;
-    bind.stream_index = 0;
-    bind.resolved_src = g_src_buf.ptr;
-    bind.resolved_dst = g_dst_buf.ptr;
+  int wu = std::max(1, iters / kWarmupFactor);
+  for (int i = 0; i < wu; ++i) {
+    OpBindings bnd;
+    bnd.stream_index = 0; bnd.resolved_src = src; bnd.resolved_dst = dst;
     BackendToken tok;
     while (true) {
-      tok = backend.submit(tiled.ops[0], bind, g_src_buf.ptr, g_dst_buf.ptr,
-                           nullptr);
+      tok = backend.submit(tiled.ops[0], bnd, src, dst, nullptr);
       if (tok.value != 0) break;
       if (strcmp(backend.name(), "degraded") == 0) return -1.0;
-      BackendToken tmp;
-      backend.drain(&tmp, 1);
+      BackendToken tmp; backend.drain(&tmp, 1);
     }
     BackendToken out;
-    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {
-    }
+    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {}
   }
-
-  backend.validate(tiled, g_src_buf.ptr, g_dst_buf.ptr, nullptr);
-  if (strcmp(backend.name(), "degraded") == 0) return -1.0;
 
   auto t0 = Clock::now();
   for (int i = 0; i < iters; ++i) {
-    OpBindings bind;
-    bind.stream_index = 0;
-    bind.resolved_src = g_src_buf.ptr;
-    bind.resolved_dst = g_dst_buf.ptr;
+    OpBindings bnd;
+    bnd.stream_index = 0; bnd.resolved_src = src; bnd.resolved_dst = dst;
     BackendToken tok;
     while (true) {
-      tok = backend.submit(tiled.ops[0], bind, g_src_buf.ptr, g_dst_buf.ptr,
-                           nullptr);
+      tok = backend.submit(tiled.ops[0], bnd, src, dst, nullptr);
       if (tok.value != 0) break;
       if (strcmp(backend.name(), "degraded") == 0) return -1.0;
-      BackendToken tmp;
-      backend.drain(&tmp, 1);
+      BackendToken tmp; backend.drain(&tmp, 1);
     }
     BackendToken out;
-    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {
-    }
+    while (backend.drain(&out, 1) != 1 || out.value != tok.value) {}
   }
   auto t1 = Clock::now();
-
   return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
+}
+
+double bench_rdma_throughput(size_t bytes, int iters, void* src, void* dst) {
+  RdmaLocalCopyBackendConfig cfg; cfg.gpu_id = 0;
+  RdmaLocalCopyBackend backend(cfg);
+  if (strcmp(backend.name(), "degraded") == 0) return -1.0;
+
+  TiledResult tiled;
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
+
+  backend.validate(tiled, src, dst, nullptr);
+  if (strcmp(backend.name(), "degraded") == 0) return -1.0;
+
+  int wu = std::max(1, iters / kWarmupFactor);
+  {
+    int sub = 0, comp = 0;
+    std::vector<BackendToken> tokens(wu);
+    while (comp < wu) {
+      while (sub < wu) {
+        OpBindings bnd; bnd.stream_index = 0;
+        bnd.resolved_src = src; bnd.resolved_dst = dst;
+        auto tok = backend.submit(tiled.ops[0], bnd, src, dst, nullptr);
+        if (tok.value == 0) break;
+        tokens[sub++] = tok;
+      }
+      BackendToken out[64];
+      size_t n = backend.drain(out, 64);
+      for (size_t j = 0; j < n; ++j)
+        for (int k = 0; k < sub; ++k)
+          if (tokens[k].value == out[j].value) { ++comp; break; }
+      if (sub == wu && comp < sub) std::this_thread::yield();
+    }
+  }
+
+  auto t0 = Clock::now();
+  int submitted = 0, completed = 0;
+  std::vector<BackendToken> tokens(iters);
+  while (completed < iters) {
+    while (submitted < iters) {
+      OpBindings bnd; bnd.stream_index = 0;
+      bnd.resolved_src = src; bnd.resolved_dst = dst;
+      auto tok = backend.submit(tiled.ops[0], bnd, src, dst, nullptr);
+      if (tok.value == 0) break;
+      tokens[submitted++] = tok;
+    }
+    BackendToken out[64];
+    size_t n = backend.drain(out, 64);
+    for (size_t j = 0; j < n; ++j)
+      for (int k = 0; k < submitted; ++k)
+        if (tokens[k].value == out[j].value) { ++completed; break; }
+    if (submitted == iters && completed < submitted)
+      std::this_thread::yield();
+  }
+  auto t1 = Clock::now();
+  double total_s = std::chrono::duration<double>(t1 - t0).count();
+  return (bytes * iters * 1e-9) / total_s;
+}
+
+// Overloads that accept pre-configured backend (for P2P with remote MR)
+double bench_rdma_latency(size_t bytes, int iters, void* src, void* dst,
+                          RdmaLocalCopyBackend* backend) {
+  if (strcmp(backend->name(), "degraded") == 0) return -1.0;
+  TiledResult tiled;
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
+  backend->validate(tiled, src, dst, nullptr);
+  if (strcmp(backend->name(), "degraded") == 0) return -1.0;
+  int wu = std::max(1, iters / kWarmupFactor);
+  int errs = 0;
+  for (int i = 0; i < wu; ++i) {
+    OpBindings bnd; bnd.stream_index = 0;
+    bnd.resolved_src = src; bnd.resolved_dst = dst;
+    BackendToken tok;
+    while (true) {
+      tok = backend->submit(tiled.ops[0], bnd, src, dst, nullptr);
+      if (tok.value != 0) break;
+      BackendToken tmp; backend->drain(&tmp, 1);
+    }
+    BackendToken out;
+    while (backend->drain(&out, 1) != 1 || out.value != tok.value) {}
+    if (out.failed) ++errs;
+  }
+  if (errs > wu / 2) { std::fprintf(stderr, "[rdma] LAT %zuB: %d/%d FAILED, degrading\n", bytes, errs, wu); return -1.0; }
+  auto t0 = Clock::now();
+  for (int i = 0; i < iters; ++i) {
+    OpBindings bnd; bnd.stream_index = 0;
+    bnd.resolved_src = src; bnd.resolved_dst = dst;
+    BackendToken tok;
+    while (true) {
+      tok = backend->submit(tiled.ops[0], bnd, src, dst, nullptr);
+      if (tok.value != 0) break;
+      BackendToken tmp; backend->drain(&tmp, 1);
+    }
+    BackendToken out;
+    while (backend->drain(&out, 1) != 1 || out.value != tok.value) {}
+    if (out.failed) ++errs;
+  }
+  if (errs > iters / 2) { std::fprintf(stderr, "[rdma] LAT %zuB: %d/%d FAILED, degrading\n", bytes, errs, iters); return -1.0; }
+  auto t1 = Clock::now();
+  return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
+}
+
+double bench_rdma_throughput(size_t bytes, int iters, void* src, void* dst,
+                             RdmaLocalCopyBackend* backend) {
+  if (strcmp(backend->name(), "degraded") == 0) return -1.0;
+  TiledResult tiled;
+  tiled.input_bytes = bytes; tiled.output_bytes = bytes;
+  tiled.rank = 0; tiled.nranks = 1;
+  Op op; op.kind = OpKind::Copy; op.bytes = bytes;
+  tiled.ops.push_back(op); tiled.chunk_of.push_back(0); tiled.layers = {{0}};
+  backend->validate(tiled, src, dst, nullptr);
+  if (strcmp(backend->name(), "degraded") == 0) return -1.0;
+  int wu = std::max(1, iters / kWarmupFactor);
+  int errs = 0;
+  {
+    int sub = 0, comp = 0;
+    std::vector<BackendToken> tokens(wu);
+    while (comp < wu) {
+      while (sub < wu) {
+        OpBindings bnd; bnd.stream_index = 0;
+        bnd.resolved_src = src; bnd.resolved_dst = dst;
+        auto tok = backend->submit(tiled.ops[0], bnd, src, dst, nullptr);
+        if (tok.value == 0) break;
+        tokens[sub++] = tok;
+      }
+      BackendToken out[64];
+      size_t n = backend->drain(out, 64);
+      for (size_t j = 0; j < n; ++j) {
+        if (out[j].failed) ++errs;
+        for (int k = 0; k < sub; ++k)
+          if (tokens[k].value == out[j].value) { ++comp; break; }
+      }
+      if (sub == wu && comp < sub) std::this_thread::yield();
+    }
+  }
+  if (errs > wu / 2) { std::fprintf(stderr, "[rdma] TP %zuB: %d/%d FAILED, degrading\n", bytes, errs, wu); return -1.0; }
+  auto t0 = Clock::now();
+  int submitted = 0, completed = 0;
+  errs = 0;
+  std::vector<BackendToken> tokens(iters);
+  while (completed < iters) {
+    while (submitted < iters) {
+      OpBindings bnd; bnd.stream_index = 0;
+      bnd.resolved_src = src; bnd.resolved_dst = dst;
+      auto tok = backend->submit(tiled.ops[0], bnd, src, dst, nullptr);
+      if (tok.value == 0) break;
+      tokens[submitted++] = tok;
+    }
+    BackendToken out[64];
+    size_t n = backend->drain(out, 64);
+    for (size_t j = 0; j < n; ++j) {
+      if (out[j].failed) ++errs;
+      for (int k = 0; k < submitted; ++k)
+        if (tokens[k].value == out[j].value) { ++completed; break; }
+    }
+    if (submitted == iters && completed < submitted)
+      std::this_thread::yield();
+  }
+  if (errs > iters / 2) { std::fprintf(stderr, "[rdma] TP %zuB: %d/%d FAILED, degrading\n", bytes, errs, iters); return -1.0; }
+  auto t1 = Clock::now();
+  double total_s = std::chrono::duration<double>(t1 - t0).count();
+  return (bytes * iters * 1e-9) / total_s;
 }
 
 const char* fmt_size(size_t bytes) {
   static char buf[32];
-  if (bytes < 1024)
-    snprintf(buf, sizeof(buf), "%6zu B", bytes);
-  else if (bytes < 1024 * 1024)
-    snprintf(buf, sizeof(buf), " %5.1f KB", bytes / 1024.0);
-  else if (bytes < 1024ULL * 1024 * 1024)
-    snprintf(buf, sizeof(buf), " %5.1f MB", bytes / (1024.0 * 1024.0));
-  else
-    snprintf(buf, sizeof(buf), " %5.1f GB",
-             bytes / (1024.0 * 1024.0 * 1024.0));
+  if (bytes < 1024)       snprintf(buf, sizeof(buf), "%6zu B", bytes);
+  else if (bytes < 1048576) snprintf(buf, sizeof(buf), " %5.1f KB", bytes/1024.0);
+  else                     snprintf(buf, sizeof(buf), " %5.1f MB", bytes/(1024.0*1024.0));
   return buf;
 }
 
-void print_results() {
-  std::printf("\n=== G2G Copy Performance Benchmark ===\n\n");
-  std::printf("%-9s | %8s  %7s | %8s  %7s | %8s  %7s\n",
-              "Size", "cudaMemcpy", "", "DeviceBackend", "", "RdmaLocal", "");
-  std::printf("%-9s | %8s  %7s | %8s  %7s | %8s  %7s\n",
-              "", "lat(us)", "GB/s", "lat(us)", "GB/s", "lat(us)", "GB/s");
-  std::printf("----------|--------------------|---------------------|---------------------\n");
+// ── Roles ──────────────────────────────────────────────────────────────
 
-  g_src_buf = DeviceBuffer(kMaxBuf);
-  g_dst_buf = DeviceBuffer(kMaxBuf);
+void run_server(int gpu0, int gpu1) {
+  unlink(kHandleFile); unlink(kReadyFile); unlink(kDoneFile);
+  unlink(kResultsFile); unlink(kSrvDoneFile);
+  unlink(kMrFile); unlink(kSrvSpecFile); unlink(kCliSpecFile);
 
-  for (auto& bs : kBenchSizes) {
-    double cm_us = bench_cuda_memcpy_d2d(bs.bytes, bs.iters);
-    double cm_gbs = (bs.bytes * 1e-9) / (cm_us * 1e-6);
-    double dev_us = bench_device_backend_copy(bs.bytes, bs.iters);
-    double dev_gbs = (bs.bytes * 1e-9) / (dev_us * 1e-6);
-    double rdma_us = bench_rdma_local_copy(bs.bytes, bs.iters);
+  void* src = nullptr;
+  GPU_RT_CHECK(gpuSetDevice(gpu0));
+  GPU_RT_CHECK(gpuMalloc(&src, kMaxBuf));
 
-    std::printf("%-9s | %8.2f  %7.2f | %8.2f  %7.2f | ",
-                fmt_size(bs.bytes), cm_us, cm_gbs, dev_us, dev_gbs);
-    if (rdma_us < 0)
-      std::printf("          degraded\n");
-    else {
-      double rdma_gbs = (bs.bytes * 1e-9) / (rdma_us * 1e-6);
-      std::printf("%8.2f  %7.2f\n", rdma_us, rdma_gbs);
+  // IPC export for client's cudaMemcpy + DeviceBackend
+  gpuIpcMemHandle_t h;
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&h, src));
+  write_handle(h);
+  signal_ready();
+
+  // Create real RDMA peer (not self-peer)
+  RdmaLocalCopyBackendConfig cfg; cfg.gpu_id = gpu0;
+  RdmaLocalCopyBackend rdma_backend(cfg);
+
+  if (strcmp(rdma_backend.name(), "degraded") != 0) {
+    auto srv_spec = rdma_backend.get_connect_spec();
+    write_spec(srv_spec, kSrvSpecFile);
+    signal_ready();
+    fprintf(stderr, "[server] QP spec written, waiting for client spec...\n");
+
+    wait_file(kCliSpecFile);
+    auto cli_spec = read_spec(kCliSpecFile);
+    fprintf(stderr, "[server] client QP spec received\n");
+
+    // Read MR info
+    uint64_t remote_addr = 0;
+    uint32_t remote_rkey = 0;
+    { std::ifstream mf(kMrFile);
+      if (mf.good()) mf >> remote_addr >> remote_rkey; }
+    fprintf(stderr, "[server] remote dst MR: addr=0x%lx rkey=%u\n",
+            remote_addr, remote_rkey);
+
+    if (remote_rkey != 0) {
+      rdma_backend.register_remote_buffer(2, (void const*)remote_addr, remote_rkey);
+      rdma_backend.setup_external_peer(cli_spec);
+    } else {
+      fprintf(stderr, "[server] no MR info, rdma degraded\n");
     }
   }
+
+  fprintf(stderr, "[server] waiting for client benchmarks...\n");
+  wait_done();
+
+  // Read client results
+  double cm_lat[kNumSizes], cm_tp[kNumSizes];
+  double dev_lat[kNumSizes], dev_tp[kNumSizes];
+  double rdma_lat[kNumSizes], rdma_tp[kNumSizes];
+  { std::ifstream rf(kResultsFile);
+    for (size_t i = 0; i < kNumSizes; ++i)
+      rf >> cm_lat[i] >> cm_tp[i] >> dev_lat[i] >> dev_tp[i] >> rdma_lat[i] >> rdma_tp[i]; }
+
+  // Run RdmaLocalCopy benchmarks
+  if (strcmp(rdma_backend.name(), "degraded") != 0) {
+    for (size_t i = 0; i < kNumSizes; ++i) {
+      auto& bs = kBenchSizes[i];
+      // DST pointer is not local — pass nullptr, backend uses remote MR
+      rdma_lat[i] = bench_rdma_latency(bs.bytes, bs.lat_iters, src,
+                                        nullptr, &rdma_backend);
+      rdma_tp[i] = bench_rdma_throughput(bs.bytes, bs.tp_iters, src,
+                                          nullptr, &rdma_backend);
+    }
+  }
+
+  printf("\n=== P2P Copy Benchmark  GPU %d -> GPU %d ===\n\n", gpu0, gpu1);
+  printf("%-9s | %8s  %8s  %8s | %8s  %8s  %8s\n",
+         "Size", "cudaP2P us", "device us", "rdma us",
+         "cudaP2P GB/s", "device GB/s", "rdma GB/s");
+  printf("----------|----------------------------------|-------------------------------\n");
+  for (size_t i = 0; i < kNumSizes; ++i) {
+    printf("%-9s | %8.2f  %8.2f  ", fmt_size(kBenchSizes[i].bytes), cm_lat[i], dev_lat[i]);
+    if (rdma_lat[i] < 0) printf(" degraded | ");
+    else printf("%8.2f | ", rdma_lat[i]);
+    printf("%8.2f  %8.2f  ", cm_tp[i], dev_tp[i]);
+    if (rdma_tp[i] < 0) printf(" degraded\n");
+    else printf("%8.2f\n", rdma_tp[i]);
+  }
+
+  GPU_RT_CHECK(gpuFree(src));
+  signal_server_done();
+}
+
+void run_client(int gpu0, int gpu1) {
+  wait_ready();
+  auto h = read_handle();
+
+  // GPU 1: src via IPC, dst local
+  GPU_RT_CHECK(gpuSetDevice(gpu1));
+  GPU_RT_CHECK(gpuFree(nullptr));
+  void* ipc_src = nullptr;
+  gpuError_t e = gpuIpcOpenMemHandle(&ipc_src, h, gpuIpcMemLazyEnablePeerAccess);
+  if (e != gpuSuccess) e = gpuIpcOpenMemHandle(&ipc_src, h, 0);
+  GPU_RT_CHECK(e);
+  fprintf(stderr, "[client] IPC src opened: %p\n", ipc_src);
+
+  void* dst = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&dst, kMaxBuf));
+
+  // Register dst for RDMA peer
+  static ibv_context* g_ibv_ctx = nullptr;
+  static ibv_pd* g_ibv_pd = nullptr;
+  {
+    int ndev = 0; ibv_device** devs = ibv_get_device_list(&ndev);
+    if (devs && ndev > 0) {
+      g_ibv_ctx = ibv_open_device(devs[0]);
+      if (g_ibv_ctx) {
+        g_ibv_pd = ibv_alloc_pd(g_ibv_ctx);
+        if (g_ibv_pd) {
+          ibv_mr* mr = ibv_reg_mr(g_ibv_pd, dst, kMaxBuf,
+              IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+          if (mr) {
+            std::ofstream mf(kMrFile);
+            mf << (uint64_t)dst << " " << mr->rkey; mf.close();
+            fprintf(stderr, "[client] dst MR: addr=%p rkey=%u\n", dst, mr->rkey);
+          }
+        }
+      }
+      ibv_free_device_list(devs);
+    }
+  }
+
+  // Create RDMA adapter, send QP spec to server
+  RdmaLocalCopyBackendConfig cfg; cfg.gpu_id = gpu1;
+  RdmaLocalCopyBackend rdma_backend(cfg);
+
+  wait_file(kSrvSpecFile);
+  auto srv_spec = read_spec(kSrvSpecFile);
+  fprintf(stderr, "[client] server QP spec received\n");
+
+  if (strcmp(rdma_backend.name(), "degraded") != 0) {
+    auto cli_spec = rdma_backend.get_connect_spec();
+    write_spec(cli_spec, kCliSpecFile);
+    signal_ready();
+
+    // Client: wait path (receiver side)
+    UKernel::Transport::PeerConnectSpec pcs;
+    pcs.peer_rank = 0;
+    pcs.type = UKernel::Transport::PeerConnectType::Accept;
+    pcs.detail = srv_spec;
+    rdma_backend.setup_external_peer_for_client(pcs);
+  }
+
+  // Run cudaMemcpy + DeviceBackend (via IPC)
+  double cm_lat[kNumSizes], cm_tp[kNumSizes];
+  double dev_lat[kNumSizes], dev_tp[kNumSizes];
+  double rdma_lat[kNumSizes], rdma_tp[kNumSizes];
+  for (size_t i = 0; i < kNumSizes; ++i) {
+    auto& bs = kBenchSizes[i];
+    // cudaMemcpy inline
+    auto bench_cuda_lat = [&]() {
+      int wu = std::max(1, bs.lat_iters / kWarmupFactor);
+      GPU_RT_CHECK(gpuSetDevice(gpu1));
+      for (int j = 0; j < wu; ++j) {
+        GPU_RT_CHECK(gpuMemcpy(dst, ipc_src, bs.bytes, gpuMemcpyDeviceToDevice));
+        GPU_RT_CHECK(gpuDeviceSynchronize());
+      }
+      auto t0 = Clock::now();
+      for (int j = 0; j < bs.lat_iters; ++j) {
+        GPU_RT_CHECK(gpuMemcpy(dst, ipc_src, bs.bytes, gpuMemcpyDeviceToDevice));
+        GPU_RT_CHECK(gpuDeviceSynchronize());
+      }
+      auto t1 = Clock::now();
+      return std::chrono::duration<double, std::micro>(t1 - t0).count() / bs.lat_iters;
+    };
+    auto bench_cuda_tp = [&]() {
+      int wu = std::max(1, bs.tp_iters / kWarmupFactor);
+      GPU_RT_CHECK(gpuSetDevice(gpu1));
+      for (int j = 0; j < wu; ++j)
+        GPU_RT_CHECK(gpuMemcpy(dst, ipc_src, bs.bytes, gpuMemcpyDeviceToDevice));
+      GPU_RT_CHECK(gpuDeviceSynchronize());
+      auto t0 = Clock::now();
+      for (int j = 0; j < bs.tp_iters; ++j)
+        GPU_RT_CHECK(gpuMemcpy(dst, ipc_src, bs.bytes, gpuMemcpyDeviceToDevice));
+      GPU_RT_CHECK(gpuDeviceSynchronize());
+      auto t1 = Clock::now();
+      return (bs.bytes * bs.tp_iters * 1e-9) / std::chrono::duration<double>(t1 - t0).count();
+    };
+    cm_lat[i] = bench_cuda_lat();
+    cm_tp[i] = bench_cuda_tp();
+    dev_lat[i] = bench_device_latency(bs.bytes, bs.lat_iters, ipc_src, dst, gpu0, gpu1);
+    dev_tp[i]  = bench_device_throughput(bs.bytes, bs.tp_iters, ipc_src, dst, gpu0, gpu1);
+    rdma_lat[i] = -1; rdma_tp[i] = -1;
+  }
+
+  { std::ofstream rf(kResultsFile);
+    for (size_t i = 0; i < kNumSizes; ++i)
+      rf << cm_lat[i] << " " << cm_tp[i] << " " << dev_lat[i] << " " << dev_tp[i]
+         << " " << rdma_lat[i] << " " << rdma_tp[i] << "\n"; }
+
+  GPU_RT_CHECK(gpuIpcCloseMemHandle(ipc_src));
+  GPU_RT_CHECK(gpuFree(dst));
+  signal_done();
+  fprintf(stderr, "[client] benchmarks done, waiting for server RDMA...\n");
+  wait_server_done();
+  fprintf(stderr, "[client] server done, exiting\n");
 }
 
 }  // namespace
 }  // namespace CCL
 }  // namespace UKernel
 
-int main() {
+int main(int argc, char** argv) {
+  using namespace UKernel::CCL;
   try {
-    GPU_RT_CHECK(gpuSetDevice(0));
-    UKernel::CCL::print_results();
-    std::printf("\n=== Copy perf benchmark DONE ===\n");
+    if (argc < 2 || (strcmp(argv[1], "server") != 0 && strcmp(argv[1], "client") != 0)) {
+      fprintf(stderr, "Usage: %s server|client\n", argv[0]);
+      fprintf(stderr, "  server: GPU 0, cudaMemcpyPeer + RdmaLocalCopy\n");
+      fprintf(stderr, "  client: GPU 1, DeviceBackend via IPC\n");
+      fprintf(stderr, "  Example:\n");
+      fprintf(stderr, "    CUDA_VISIBLE_DEVICES=6,7 %s server &\n", argv[0]);
+      fprintf(stderr, "    CUDA_VISIBLE_DEVICES=6,7 %s client\n", argv[0]);
+      return 1;
+    }
+    if (strcmp(argv[1], "server") == 0)
+      run_server(0, 1);
+    else
+      run_client(0, 1);
+    printf("\n=== P2P benchmark DONE ===\n");
     return 0;
   } catch (std::exception const& ex) {
-    std::fprintf(stderr, "[copy perf] fatal: %s\n", ex.what());
+    fprintf(stderr, "[p2p-perf] fatal: %s\n", ex.what());
     return 2;
   }
 }

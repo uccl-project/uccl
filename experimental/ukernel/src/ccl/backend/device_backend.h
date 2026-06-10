@@ -65,6 +65,7 @@ class DeviceBackend final : public Backend {
   uint64_t next_token_ = 1;
   ReductionKind reduction_kind_ = ReductionKind::None;
   ScalarType reduction_dtype_ = ScalarType::Float32;
+  int current_device_ = -1;
   std::unordered_map<uint32_t, StreamRec> active_streams_;
   std::vector<uint32_t> free_fifos_;
   // Per-FIFO submitted task map.  Indexed by fifo_id; empty when no worker.

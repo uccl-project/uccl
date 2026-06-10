@@ -354,6 +354,10 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         }
 
         if (cached_tail >= cached_head) {
+          cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+              fifo.head, mscclpp::memoryOrderAcquire);
+        }
+        if (cached_tail >= cached_head) {
           cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
               fifo.head, mscclpp::memoryOrderAcquire);
         }

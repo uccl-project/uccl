@@ -1,18 +1,19 @@
 #pragma once
 
 #include "backend.h"
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
-#include <infiniband/verbs.h>
-
 namespace UKernel {
+namespace Transport {
+class RdmaTransportAdapter;
+struct RdmaPeerConnectSpec;
+struct PeerConnectSpec;
+}
 namespace CCL {
 
 struct RdmaLocalCopyBackendConfig {
@@ -34,53 +35,41 @@ class RdmaLocalCopyBackend final : public Backend {
                       void* scratch_ptr) override;
   size_t drain(BackendToken* out, size_t max_count) override;
 
- private:
-  struct BufInfo {
-    uint32_t buffer_id;
-    void* ptr;
-  };
+  void register_remote_buffer(uint32_t buf_id, void const* addr, uint32_t rkey);
 
+  UKernel::Transport::RdmaPeerConnectSpec get_connect_spec();
+  void setup_external_peer(
+      UKernel::Transport::RdmaPeerConnectSpec const& remote);
+  void setup_external_peer_for_client(
+      UKernel::Transport::PeerConnectSpec const& spec);
+
+ private:
   struct OpBufInfo {
     uint32_t src_buf_id;
     uint32_t dst_buf_id;
   };
 
-  struct Request {
-    uint64_t token;
-    uint64_t wr_id;
-    std::atomic<bool> done{true};
-    std::atomic<bool> failed{false};
+  struct RemoteBufInfo {
+    uint32_t rkey;
+    uint64_t addr;
   };
 
   bool is_degraded() const;
-  bool init_device();
-  bool init_qps();
-  void poll_loop();
+  bool ensure_self_peer();
 
   RdmaLocalCopyBackendConfig config_;
   bool degraded_ = false;
   bool validated_ = false;
+  bool self_peer_ready_ = false;
 
-  ibv_context* ctx_ = nullptr;
-  ibv_pd* pd_ = nullptr;
-  ibv_device_attr dev_attr_ = {};
-  uint8_t gid_index_ = 0;
-  union ibv_gid gid_ = {};
+  static constexpr int kSelfPeer = 0x40000000;
+  static constexpr int kSelfPeerRecv = 0x40000001;
+  int active_peer_ = kSelfPeer;
+  bool external_peer_ = false;
 
-  ibv_cq* cq_send_ = nullptr;
-  ibv_qp* qp_send_ = nullptr;
-  ibv_cq* cq_recv_ = nullptr;
-  ibv_qp* qp_recv_ = nullptr;
+  std::unique_ptr<UKernel::Transport::RdmaTransportAdapter> adapter_;
 
-  std::unordered_map<uint32_t, ibv_mr*> mr_map_;
-
-  static constexpr int kMaxReq = 4096;
-  Request reqs_[kMaxReq];
-  std::atomic<uint32_t> req_head_{0};
-  std::atomic<uint32_t> req_tail_{0};
-
-  std::atomic<bool> poll_stop_{false};
-  std::unique_ptr<std::thread> poll_thread_;
+  std::unordered_map<uint32_t, RemoteBufInfo> remote_bufs_;
 
   uint64_t next_token_ = 1;
   std::mutex mu_;
@@ -88,9 +77,6 @@ class RdmaLocalCopyBackend final : public Backend {
   std::unordered_map<unsigned, uint64_t> req_to_token_;
 
   std::vector<OpBufInfo> buf_id_cache_;
-
-  BufInfo registered_bufs_[3] = {};
-  int buf_count_ = 0;
 };
 
 }  // namespace CCL

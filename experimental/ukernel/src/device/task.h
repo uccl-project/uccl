@@ -8,6 +8,11 @@
 #include <mutex>
 #include <type_traits>
 #include <vector>
+#ifndef __CUDA_ARCH__
+#include "fifo/fifo_gdrcopy.hpp"
+#include <emmintrin.h>
+namespace Gdr = mscclpp::detail;
+#endif
 
 namespace UKernel {
 namespace Device {
@@ -183,7 +188,13 @@ class TaskManager {
 
     cap_task_ = Cap;
 
+#ifndef __CUDA_ARCH__
+    gdr_task_ = Gdr::gpuCallocGdrUnique<TaskArgs>(Cap);
+    d_task_ = gdr_task_.get();
+    host_task_ = Gdr::getGdrHostPtr(gdr_task_);
+#else
     GPU_RT_CHECK(gpuMalloc(&d_task_, sizeof(TaskArgs) * cap_task_));
+#endif
 
     free_task_.clear();
     free_task_.reserve(cap_task_);
@@ -227,18 +238,14 @@ class TaskManager {
     }
 
     TaskArgs staged = h;
-    staged.reserved0 = 0;
-    uint64_t const unpublished = 0;
-    uint64_t const published = TaskArgs::kPublishedMagic;
-
-    // Publish task args in two phases so worker kernels never observe a newly
-    // enqueued task before its metadata is fully initialized on device memory.
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
-                           sizeof(unpublished), gpuMemcpyHostToDevice));
+    staged.reserved0 = TaskArgs::kPublishedMagic;
+#ifndef __CUDA_ARCH__
+    host_task_[idx] = staged;
+    _mm_sfence();
+#else
     GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
-                           gpuMemcpyHostToDevice));
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &published,
-                           sizeof(published), gpuMemcpyHostToDevice));
+                            gpuMemcpyHostToDevice));
+#endif
 
     return Task(tt, dt, blockId, idx);
   }
@@ -248,9 +255,6 @@ class TaskManager {
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_task_ && "free_task_args idx out of range");
     assert(task_in_use_[idx] == 1 && "double free on task args slot");
-    uint64_t const unpublished = 0;
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
-                           sizeof(unpublished), gpuMemcpyHostToDevice));
     task_in_use_[idx] = 0;
     free_task_.push_back(idx);
   }
@@ -266,8 +270,14 @@ class TaskManager {
   TaskManager() = default;
 
   void release_nolock_() {
+#ifndef __CUDA_ARCH__
+    gdr_task_.reset();
+    d_task_ = nullptr;
+    host_task_ = nullptr;
+#else
     if (d_task_) gpuFree(d_task_);
     d_task_ = nullptr;
+#endif
 
     free_task_.clear();
     task_in_use_.clear();
@@ -277,6 +287,10 @@ class TaskManager {
   }
 
   TaskArgs* d_task_{nullptr};
+#ifndef __CUDA_ARCH__
+  Gdr::UniqueGdrGpuPtr<TaskArgs> gdr_task_;
+  TaskArgs* host_task_{nullptr};
+#endif
 
   uint32_t cap_task_{0};
 

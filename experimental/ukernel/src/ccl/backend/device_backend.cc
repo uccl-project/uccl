@@ -98,6 +98,7 @@ void DeviceBackend::validate(TiledResult const& tiled,
   GPU_RT_CHECK(gpuGetDevice(&current_device));
   if (current_device != local_device_idx_)
     GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+  current_device_ = local_device_idx_;
 
   if (tiled.staging_bytes_required != 0 && scratch_ptr == nullptr)
     throw std::invalid_argument("device backend staging buffer is missing");
@@ -123,13 +124,56 @@ bool DeviceBackend::supports(OpKind kind) const {
 BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
                                     void* input_ptr, void* output_ptr,
                                     void* scratch_ptr) {
-  (void)output_ptr;
+  (void)scratch_ptr;
   if (!supports(op.kind))
     throw std::invalid_argument("unsupported op kind for device backend");
   if (worker_pool_ == nullptr)
     throw std::runtime_error(
         "device backend not initialized — call validate() first");
 
+  // Fast path: Copy ops need minimal TaskArgs.
+  if (op.kind == OpKind::Copy) {
+    void const* src = bind.resolved_src
+                          ? bind.resolved_src
+                          : byte_offset(input_ptr, op.src_off);
+    void* dst = bind.resolved_dst
+                    ? bind.resolved_dst
+                    : byte_offset(output_ptr, op.dst_off);
+
+    Device::TaskArgs args{};
+    args.src = const_cast<void*>(src);
+    args.src2 = nullptr;
+    args.dst = dst;
+    args.bytes = op.bytes;
+    args.src_rank = -1;
+    args.dst_rank = -1;
+    args.src_device = local_device_idx_;
+    args.dst_device = local_device_idx_;
+    args.set_red_type(Device::ReduceType::None);
+
+    uint32_t stream_id = bind.stream_index;
+    auto fit = active_streams_.find(stream_id);
+    uint32_t fifo_id = (fit != active_streams_.end())
+                           ? fit->second.fifo_id
+                           : acquire_fifo(stream_id, suggested_num_blocks(op));
+
+    Device::Task task = Device::TaskManager::instance().create_task(
+        args, Device::TaskType::CollCopy, Device::DataType::Int8, 0);
+
+    uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
+    if (task_id == Device::WorkerPool::kInvalidTaskId) {
+      Device::TaskManager::instance().free_task_args(task.args_index());
+      return BackendToken{0};
+    }
+
+    BackendToken token{next_token_++};
+    submitted_per_fifo_[fifo_id][token.value] =
+        TaskRec{task_id, stream_id, task.args_index()};
+    active_streams_[stream_id].pending++;
+    return token;
+  }
+
+  // General path for Reduce / Send / RecvReduce / Recv.
   auto role_src = buf_role(op.kind, true, op.copy_from_staging);
   auto role_dst = buf_role(op.kind, false, op.copy_from_staging);
 
@@ -167,7 +211,6 @@ BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
           ? reduction_kind_
           : ReductionKind::None));
 
-  // SM IPC: resolve signal buffer from gpu_signal_bufs_.
   if (op.kind == OpKind::Send && op.dst_peer != ~0u &&
       static_cast<size_t>(op.dst_peer) < gpu_signal_bufs_.size()) {
     args.src2 = gpu_signal_bufs_[op.dst_peer].remote;
@@ -181,36 +224,24 @@ BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
       op.kind == OpKind::Recv) {
     uint8_t red = static_cast<uint8_t>(to_reduce_type(
         op.kind == OpKind::RecvReduce ? reduction_kind_
-                                      : ReductionKind::None));
+                                       : ReductionKind::None));
     args.redTypeRaw = (bind.signal_seq << 8) | red;
   }
 
   Device::TaskType task_type;
   switch (op.kind) {
-    case OpKind::Reduce:
-      task_type = Device::TaskType::CollReduce;
-      break;
-    case OpKind::RecvReduce:
-      task_type = Device::TaskType::CollRecvReduce;
-      break;
-    case OpKind::Send:
-      task_type = Device::TaskType::CollSend;
-      break;
-    case OpKind::Recv:
-      task_type = Device::TaskType::CollRecv;
-      break;
-    default:
-      task_type = Device::TaskType::CollCopy;
-      break;
+    case OpKind::Reduce:     task_type = Device::TaskType::CollReduce; break;
+    case OpKind::RecvReduce: task_type = Device::TaskType::CollRecvReduce; break;
+    case OpKind::Send:       task_type = Device::TaskType::CollSend; break;
+    case OpKind::Recv:       task_type = Device::TaskType::CollRecv; break;
+    default:                 task_type = Device::TaskType::CollCopy; break;
   }
 
   ScalarType op_dtype =
       (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-          ? ScalarType::Float32
-          : ScalarType::Int8;
+          ? ScalarType::Float32 : ScalarType::Int8;
 
   uint32_t stream_id = bind.stream_index;
-
   auto fit = active_streams_.find(stream_id);
   uint32_t fifo_id = (fit != active_streams_.end())
                          ? fit->second.fifo_id
@@ -231,17 +262,17 @@ BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
   active_streams_[stream_id].pending++;
   return token;
 }
-
 // ── drain ──────────────────────────────────────────────────────────────
 
 size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
-  int current_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&current_device));
-  if (current_device != local_device_idx_)
-    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+  if (current_device_ < 0) {
+    GPU_RT_CHECK(gpuGetDevice(&current_device_));
+    if (current_device_ != local_device_idx_)
+      GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+  }
 
   size_t count = 0;
-  streams_to_stop_.clear();
+
   for (uint32_t fid = 0; fid < submitted_per_fifo_.size() && count < max_count;
        ++fid) {
     auto& fifo_map = submitted_per_fifo_[fid];
@@ -264,21 +295,16 @@ size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
       auto fi = active_streams_.find(stream_id);
       if (fi != active_streams_.end() && fi->second.pending > 0) {
         --fi->second.pending;
-        if (fi->second.pending == 0) streams_to_stop_.push_back(stream_id);
       }
     }
   }
-  for (uint32_t stream_id : streams_to_stop_) stop_stream(stream_id);
+
   return count;
 }
 
 // ── stop ───────────────────────────────────────────────────────────────
 
 void DeviceBackend::stop(uint32_t stream_id) {
-  int current_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&current_device));
-  if (current_device != local_device_idx_)
-    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
   stop_stream(stream_id);
 }
 
