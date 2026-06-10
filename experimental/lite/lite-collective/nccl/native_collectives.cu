@@ -912,6 +912,26 @@ void addSmallFloatAvx512(float const* a, float const* b, float* output,
   for (size_t i = nVec * 16; i < count; ++i) output[i] = a[i] + b[i];
 }
 
+__attribute__((target("avx512f")))
+void reduce2SmallFloatRowsAvx512(char const* inputBase, size_t inputStride,
+                                 size_t count, float* output) {
+  auto const* row0 = reinterpret_cast<float const*>(inputBase);
+  auto const* row1 =
+      reinterpret_cast<float const*>(inputBase + inputStride);
+  addSmallFloatAvx512(row0, row1, output, count);
+}
+
+void reduceSmallLocalRows(char const* inputBase, size_t inputStride, int nRows,
+                          size_t count, float* output) {
+  if (nRows == 1) {
+    std::memcpy(output, inputBase, count * sizeof(float));
+  } else if (nRows == 2) {
+    reduce2SmallFloatRowsAvx512(inputBase, inputStride, count, output);
+  } else if (nRows == 4) {
+    reduce4SmallFloatRowsAvx512(inputBase, inputStride, count, output);
+  }
+}
+
 bool isAlignedForInt4(void const* ptr) {
   return (reinterpret_cast<uintptr_t>(ptr) % alignof(int4)) == 0;
 }
@@ -1438,6 +1458,10 @@ ncclResult_t finishGroup(ncclResult_t enqueueResult) {
 
 bool isTwoNodeLayout(int nRanks, int nRanksPerNode) {
   return nRanksPerNode > 1 && nRanks == 2 * nRanksPerNode;
+}
+
+bool isAnyTwoNodeLayout(int nRanks, int nRanksPerNode) {
+  return nRanksPerNode > 0 && nRanks == 2 * nRanksPerNode;
 }
 
 ncclResult_t syncAndBarrier(cudaStream_t stream,
@@ -2240,7 +2264,8 @@ ncclResult_t runSmallMappedAllReduce2Node(
     ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm,
     cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
     std::shared_ptr<Communicator> bootstrapComm, int cudaDevice) {
-  if (!isTwoNodeLayout(nRanks, nRanksPerNode) || nRanksPerNode != 4) {
+  if (!isAnyTwoNodeLayout(nRanks, nRanksPerNode) ||
+      (nRanksPerNode != 2 && nRanksPerNode != 4)) {
     return ncclInvalidUsage;
   }
   if (datatype != ncclFloat32 || op != ncclSum) return ncclInvalidUsage;
@@ -2285,8 +2310,8 @@ ncclResult_t runSmallMappedAllReduce2Node(
     for (int i = 0; i < nRanksPerNode; ++i) {
       waitForEpoch(ctx.ctrl->smallInputReady[i], epoch);
     }
-    reduce4SmallFloatRowsAvx512(ctx.sendSlab(), inputStride, count,
-                                reinterpret_cast<float*>(localPartial));
+    reduceSmallLocalRows(ctx.sendSlab(), inputStride, nRanksPerNode, count,
+                         reinterpret_cast<float*>(localPartial));
 
     size_t smallRdmaReadyOffset =
         offsetof(NativeReduceScatterHostControl, smallRdmaReady);

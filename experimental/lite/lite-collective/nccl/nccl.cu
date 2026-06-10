@@ -2182,7 +2182,11 @@ NCCL_API ncclResult_t ncclAllReduce(void const* sendbuff, void* recvbuff,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
   }
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
-  if (comm->nRanksPerNode == 4 && comm->worldSize == 8) {
+  bool nativeFirstAllReduce =
+      (comm->nRanksPerNode == 4 && comm->worldSize == 8) ||
+      (comm->worldSize == 2 * comm->nRanksPerNode &&
+       comm->nRanksPerNode == 2 && bytes <= 64 * 1024);
+  if (nativeFirstAllReduce) {
     ncclResult_t nativeResult = mscclpp::nccl::runSendRecvAllReduce(
         sendbuff, recvbuff, count, datatype, reductionOperation, comm, stream,
         rank, comm->worldSize, comm->scratchBuffer_.get(),
