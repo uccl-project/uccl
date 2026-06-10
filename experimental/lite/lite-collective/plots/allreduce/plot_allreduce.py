@@ -136,49 +136,37 @@ SOURCES = {
     "1nx4g": {
         "display": "1nx4g",
         "lite": [
-            log("ar-topologies-20260610-064813", "allreduce_1nx4g_mscclpp_128B_1G.log"),
+            log("ar-clean-plots-20260610-161719", "lite_1nx4g_128B_1G.log"),
         ],
         "nccl": [
-            log("ar-topologies-20260610-064813", "allreduce_1nx4g_nccl_128B_1G.log"),
+            log("ar-clean-plots-20260610-161719", "nccl_1nx4g_128B_1G.log"),
         ],
     },
     "2nx1g": {
         "display": "2nx1g",
         "lite": [
-            log("ar-topologies-20260610-064813", "allreduce_2nx1g_mscclpp_128B_1G.log"),
-            log("ar-2nx1g-lite-current-20260610-143936", "lite_current_2nx1g_1M_64M.log"),
-            log("ar-2nx1g-small-final-20260610-160846", "lite_2nx1g_128B_1M.log"),
-            log("ar-2nx1g-large-seq-20260610-145943", "lite_2nx1g_64M_512M.log"),
-            log("ar-2nx1g-large-repeat-20260610-150034", "lite_2nx1g_128M_512M_repeat.log"),
-            log("ar-2nx1g-1g-final-20260610-155839", "lite_2nx1g_1G.log"),
+            log("ar-clean-plots-20260610-161719", "lite_2nx1g_128B_1G.log"),
         ],
         "nccl": [
-            log("ar-topologies-20260610-064813", "allreduce_2nx1g_nccl_128B_1G.log"),
-            log("ar-2nx1g-nccl-fresh-20260610-140134", "nccl_2nx1g_1M_64M.log"),
-            log("ar-2nx1g-small-final-20260610-160846", "nccl_2nx1g_128B_1M.log"),
-            log("ar-2nx1g-large-seq-20260610-145943", "nccl_2nx1g_64M_512M.log"),
-            log("ar-2nx1g-1g-final-20260610-155839", "nccl_2nx1g_1G.log"),
+            log("ar-clean-plots-20260610-161719", "nccl_2nx1g_128B_1G.log"),
         ],
     },
     "2nx2g": {
         "display": "2nx2g",
         "lite": [
-            log("ar-topologies-20260610-064813", "allreduce_2nx2g_mscclpp_128B_1G.log"),
-            log("ar-topologies-20260610-064813", "allreduce_2nx2g_mscclpp_small_final_guardfix.log"),
+            log("ar-clean-plots-20260610-161719", "lite_2nx2g_128B_1G.log"),
         ],
         "nccl": [
-            log("ar-topologies-20260610-064813", "allreduce_2nx2g_nccl_128B_1G.log"),
+            log("ar-clean-plots-20260610-161719", "nccl_2nx2g_128B_1G.log"),
         ],
     },
     "2nx4g": {
         "display": "2nx4g",
         "lite": [
-            log("ar-small-opt-20260610-020910", "allreduce_lite_small_final_reviewfix_128B_1M.log"),
-            log("ar-final-1M-1G-20260610-055550", "allreduce_mscclpp_1M_1G.log"),
+            log("ar-clean-plots-20260610-161719", "lite_2nx4g_128B_1G.log"),
         ],
         "nccl": [
-            log("ar-small-opt-20260610-020910", "allreduce_nccl_fresh_128B_1M.log"),
-            log("ar-final-1M-1G-20260610-055550", "allreduce_nccl_1M_1G.log"),
+            log("ar-clean-plots-20260610-161719", "nccl_2nx4g_128B_1G.log"),
         ],
     },
 }
@@ -315,6 +303,7 @@ def markdown_content(rows: list[Row], plot_files: dict[str, list[str]], plot_pre
         "| Size convention | latency: `128B-1MiB`; bus bandwidth: `1MiB-1GiB` |",
         "| Multi-node hosts | `10.10.55.1,10.10.55.2` |",
         "| NCCL multi-node baseline | `NCCL_NET_GDR_LEVEL=0` no-GDR where explicitly re-run |",
+        "| Clean-run idle checks | `.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/idle_checks.log` |",
         "| Generated plots | `plots/allreduce/` |",
         "",
         "All plotted source rows reported `#wrong=0`.",

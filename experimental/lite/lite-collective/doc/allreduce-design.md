@@ -117,14 +117,16 @@ The generated AllReduce plots mirror the AllGather plot layout:
   - `*_latency_128B_1MiB.png`
   - `*_busbw_1MiB_1GiB.png`
 
-Current out-of-place summary from the generated data:
+Current out-of-place summary from the generated clean rerun
+(`.tmp/collective-benchmarks/ar-clean-plots-20260610-161719/`; each sweep
+waited for zero GPU utilization and no compute processes before starting):
 
 | Setup | Latency geomean Lite speedup | BusBW geomean Lite/NCCL | 1GiB Lite GB/s | 1GiB NCCL GB/s | 1GiB ratio |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `1nx4g` | 0.44x | 0.82x | 17.59 | 17.55 | 1.00x |
-| `2nx1g` | 0.12x | 0.63x | 15.32 | 15.37 | 1.00x |
-| `2nx2g` | 0.57x | 0.89x | 14.75 | 15.84 | 0.93x |
-| `2nx4g` | 1.84x | 1.01x | 16.24 | 15.08 | 1.08x |
+| `1nx4g` | 0.44x | 0.81x | 17.54 | 17.54 | 1.00x |
+| `2nx1g` | 0.09x | 0.63x | 16.23 | 14.55 | 1.12x |
+| `2nx2g` | 1.15x | 0.91x | 14.71 | 15.34 | 0.96x |
+| `2nx4g` | 1.58x | 1.02x | 16.28 | 14.82 | 1.10x |
 
 Interpretation:
 
