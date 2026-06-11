@@ -105,9 +105,6 @@ class AtomicsImm {
   constexpr static int kREORDERABLE = 28;
   constexpr static int kBUFFER_IDX = 29;
   constexpr static int kIS_COMBINE = 30;
-  // PackAtomicWithSeq reuses this legacy phase bit as seq[3]. Ordered
-  // UCCL-GIN atomics therefore must stay on the normal-mode receiver path,
-  // which decodes GetSeq() and never interprets this bit as IsCombine().
   constexpr static int kIS_ATOMICS = 31;
 
   constexpr static uint32_t kOFF_MASK = 0x1FFF;  // 13 bits

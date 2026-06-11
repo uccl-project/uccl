@@ -1,7 +1,5 @@
 #include "uccl_proxy.hpp"
 #include "common.hpp"
-#include "d2h_queue_device.cuh"
-#include "ep_util.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
@@ -16,13 +14,11 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated, int barrier_local_rank,
-                     bool owns_gpu_buffer)
+                     bool gpu_buffer_is_host_allocated, int barrier_local_rank)
     : thread_{},
       mode_{Mode::None},
       running_{false},
-      is_intranode_{is_intranode},
-      owns_gpu_buffer_{owns_gpu_buffer} {
+      is_intranode_{is_intranode} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
@@ -43,52 +39,6 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     cfg.d2h_queues.push_back(d2h_queues[i]);
     d2h_channel_addrs_.push_back(addr);
   }
-
-  // Materialize one device-resident d2hq::D2HHandle per channel so a kernel that
-  // holds a UCCLGinResources can push commands into the rings directly.
-  CUDA_CHECK(cudaMallocManaged(&d2h_device_handle_objs_,
-                               kChannelPerProxy * sizeof(d2hq::D2HHandle)));
-  auto* d2h_device_handles =
-      reinterpret_cast<d2hq::D2HHandle*>(d2h_device_handle_objs_);
-  d2h_device_handle_addrs_.reserve(kChannelPerProxy);
-  for (size_t i = 0; i < kChannelPerProxy; ++i) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    d2h_device_handles[i].init_from_host_value(fifos[i]->deviceHandle());
-#else
-    void* host_ptr = reinterpret_cast<void*>(d2h_channel_addrs_[i]);
-    void* dev_ptr = nullptr;
-#ifndef USE_GRACE_HOPPER
-    CUDA_CHECK(cudaHostGetDevicePointer(reinterpret_cast<void**>(&dev_ptr),
-                                        host_ptr, 0));
-#else
-    dev_ptr = host_ptr;
-#endif
-    d2h_device_handles[i].init_from_dev_ptr(dev_ptr);
-#endif
-    d2h_device_handle_addrs_.push_back(
-        reinterpret_cast<uint64_t>(d2h_device_handles + i));
-  }
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && CUDA_VERSION >= 12000
-  {
-    int device = 0;
-    CUDA_CHECK(cudaGetDevice(&device));
-    cudaMemLocation loc;
-    loc.type = cudaMemLocationTypeDevice;
-    loc.id = device;
-    CUDA_CHECK(cudaMemPrefetchAsync(
-        d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle), loc,
-        0));
-  }
-#else
-  {
-    int device = 0;
-    CUDA_CHECK(cudaGetDevice(&device));
-    CUDA_CHECK(cudaMemPrefetchAsync(
-        d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle),
-        device, 0));
-  }
-#endif
-  CUDA_CHECK(cudaDeviceSynchronize());
 
   cfg.thread_idx = thread_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
@@ -165,11 +115,6 @@ UcclProxy::~UcclProxy() {
     free_cmd_ring(d2h_channel_addr);
   }
 #endif
-  if (d2h_device_handle_objs_) {
-    cudaFree(d2h_device_handle_objs_);
-    d2h_device_handle_objs_ = nullptr;
-  }
-  d2h_device_handle_addrs_.clear();
   d2h_channel_addrs_.clear();
 }
 
@@ -180,26 +125,6 @@ std::vector<uint64_t> UcclProxy::get_d2h_channel_addrs() const {
     addrs.push_back(static_cast<uint64_t>(addr));
   }
   return addrs;
-}
-
-std::vector<uint64_t> UcclProxy::get_d2h_channel_device_addrs() const {
-  std::vector<uint64_t> addrs;
-  addrs.reserve(d2h_channel_addrs_.size());
-  for (auto addr : d2h_channel_addrs_) {
-#ifdef USE_GRACE_HOPPER
-    void* dev_ptr = reinterpret_cast<void*>(addr);
-#else
-    void* dev_ptr = nullptr;
-    CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&dev_ptr), reinterpret_cast<void*>(addr), 0));
-#endif
-    addrs.push_back(reinterpret_cast<uint64_t>(dev_ptr));
-  }
-  return addrs;
-}
-
-std::vector<uint64_t> UcclProxy::get_d2h_channel_handle_addrs() const {
-  return d2h_device_handle_addrs_;
 }
 
 void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
@@ -219,10 +144,9 @@ void UcclProxy::stop() {
   proxy_->set_progress_run(false);
   if (thread_.joinable()) thread_.join();
   running_.store(false, std::memory_order_release);
-  // Because proxies share the gpu_buffer, only the first proxy may own it. A
-  // caller that passes a buffer it owns elsewhere (e.g. an externally allocated
-  // symmetric window) sets owns_gpu_buffer_=false and keeps the lifetime.
-  proxy_->destroy(owns_gpu_buffer_ && thread_idx_ == 0);
+  // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
+  // proxy.
+  proxy_->destroy(thread_idx_ == 0);
 }
 
 void UcclProxy::start(Mode m) {

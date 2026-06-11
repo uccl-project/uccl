@@ -17,7 +17,7 @@ class UcclProxy {
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
             bool is_intranode = false,
             bool gpu_buffer_is_host_allocated = false,
-            int barrier_local_rank = -1, bool owns_gpu_buffer = true);
+            int barrier_local_rank = -1);
   ~UcclProxy();
 
   void start_sender();
@@ -40,20 +40,10 @@ class UcclProxy {
     return atomic_buffer_ptr_;
   }
 
-  uintptr_t get_atomic_buffer_addr() {
-    return reinterpret_cast<uintptr_t>(get_atomic_buffer_ptr());
-  }
-
-  size_t get_atomic_buffer_bytes() const { return kAtomicBufferSize; }
-
   void set_atomic_buffer_ptr(void* ptr) {
     // printf("Set atomic_buffer_ptr_ to %p\n", ptr);
     atomic_buffer_ptr_ = ptr;
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
-  }
-
-  void set_atomic_buffer_addr(uintptr_t addr) {
-    set_atomic_buffer_ptr(reinterpret_cast<void*>(addr));
   }
 
   // Calculate and set dispatch_recv_data_offset automatically based on layout
@@ -79,8 +69,6 @@ class UcclProxy {
   }
 
   std::vector<uint64_t> get_d2h_channel_addrs() const;
-  std::vector<uint64_t> get_d2h_channel_device_addrs() const;
-  std::vector<uint64_t> get_d2h_channel_handle_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
   bool use_normal_mode() const noexcept { return proxy_->cfg_.use_normal_mode; }
@@ -112,13 +100,8 @@ class UcclProxy {
       false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;
   bool is_intranode_;
-  bool owns_gpu_buffer_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
-  // Device-resident D2HHandle objects (one per channel) so a kernel holding a
-  // UCCLGinResources can push commands straight into the rings.
-  void* d2h_device_handle_objs_{nullptr};
-  std::vector<uint64_t> d2h_device_handle_addrs_;
 };
 
 // ============================================================================
