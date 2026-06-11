@@ -192,6 +192,21 @@ __global__ void uccl_gin_paired_kernel(uccl_gin::UCCLGinResources res, int peer,
                                      /*delta=*/1, peer, /*lane_hint=*/L);
 }
 
+// Exercises the other two rail primitives on a single lane: put_tail_add (one
+// WRITE that also piggybacks a +1 onto a receiver tail slot) repeated `iters`
+// times, then quiet() to drain the lane. The piggyback count rides with its
+// payload WRITE, so the peer's tail == iters implies all payloads landed.
+__global__ void uccl_gin_tailadd_kernel(uccl_gin::UCCLGinResources res, int peer,
+                                        void* send_ptr, void* recv_ptr, uint32_t bytes,
+                                        int iters, uint32_t tail_off, int lane) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) return;
+  uccl_gin::UCCLGin gin(res);
+  for (int it = 0; it < iters; ++it)
+    gin.put_tail_add<ncclTeamTagRail>(recv_ptr, send_ptr, (int)bytes, peer,
+                                      /*count_delta=*/1, tail_off, /*lane_hint=*/lane);
+  gin.quiet(lane);  // must return once the proxy has consumed all of lane's cmds
+}
+
 struct UcclCtx {
   std::vector<UcclProxy*> proxies;
   void* d_window = nullptr;            // registered MR buffer (send|recv)
@@ -410,6 +425,49 @@ static bool verify_uccl(UcclCtx& c, size_t bytes, int peer, int rank,
       }
     }
   bool ok = verify_recv(recv, bytes, peer);  // checked AFTER completion => ordering
+  MPI_Barrier(MPI_COMM_WORLD);
+  return ok;
+}
+
+// Correctness for the remaining two rail primitives: put_tail_add (piggyback
+// WRITE+count) and quiet (drain). Single lane, single tail slot. After the
+// kernel returns (proves quiet() did not deadlock), wait for the peer tail slot
+// to reach `iters`, then check recv == peer pattern (data read only after the
+// tail count => payload-before-tail ordering) and tail == iters exactly.
+static bool verify_uccl_tailadd(UcclCtx& c, size_t bytes, int peer, int rank,
+                                cudaStream_t stream, size_t max_bytes) {
+  int* send = (int*)c.d_window;
+  int* recv = (int*)((char*)c.d_window + max_bytes);
+  size_t n = bytes / sizeof(int);
+  fill_pattern_kernel<<<(unsigned)((n + 255) / 256), 256, 0, stream>>>(send, n, rank);
+  CUDA_OK(cudaMemset(recv, 0xFF, bytes));
+  CUDA_OK(cudaStreamSynchronize(stream));
+  // Tail slot 1 (1-based; slot 0 is reserved so the piggyback fires under the
+  // V1 atomic_offset>0 trigger).
+  const uint32_t tail_off = 8;
+  auto* counter = reinterpret_cast<std::atomic<int64_t>*>(
+      (char*)c.res.atomic_tail_base + tail_off);
+  counter->store(0, std::memory_order_release);
+  const int iters = 8;
+  MPI_Barrier(MPI_COMM_WORLD);
+  uccl_gin_tailadd_kernel<<<1, 32, 0, stream>>>(c.res, peer, send, recv,
+                                                (uint32_t)bytes, iters, tail_off, /*lane=*/0);
+  CUDA_OK(cudaStreamSynchronize(stream));  // returns only if quiet() drained, no deadlock
+  using clock = std::chrono::steady_clock;
+  auto t0 = clock::now();
+  while (counter->load(std::memory_order_acquire) < iters) {
+    if (clock::now() - t0 > std::chrono::seconds(30)) {
+      fprintf(stderr, "[verify] put_tail_add tail timeout (got %ld want %d)\n",
+              (long)counter->load(std::memory_order_relaxed), iters);
+      return false;
+    }
+  }
+  bool ok = verify_recv(recv, bytes, peer);  // data after tail => ordering
+  long got = (long)counter->load(std::memory_order_acquire);
+  if (got != iters) {
+    fprintf(stderr, "[verify] put_tail_add tail count %ld != %d\n", got, iters);
+    ok = false;
+  }
   MPI_Barrier(MPI_COMM_WORLD);
   return ok;
 }
