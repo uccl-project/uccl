@@ -1,12 +1,10 @@
 #include "../include/gpu_rt.h"
 #include "../include/transport.h"
 #include "backend/device_backend.h"
-#include "backend/rdma_local_copy_backend.h"
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 
 namespace UKernel {
@@ -25,11 +23,6 @@ Executor::Executor(ExecutorConfig const& config) {
   backends_.transport = owned_transport_backend_.get();
   backends_.device = owned_device_backend_.get();
 
-  if (config.enable_rdma_copy) {
-    owned_rdma_copy_backend_ = std::make_unique<RdmaLocalCopyBackend>(
-        RdmaLocalCopyBackendConfig{config.gpu_id});
-    backends_.rdma_copy = owned_rdma_copy_backend_.get();
-  }
   resolve_ipc_buffer_pointer_ = [comm](int remote_rank,
                                        uint32_t remote_buffer_id, size_t offset,
                                        size_t bytes, void** out_ptr,

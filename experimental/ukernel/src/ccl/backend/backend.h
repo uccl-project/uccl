@@ -67,7 +67,6 @@ class Backend {
 struct ExecutorBackends {
   Backend* transport = nullptr;
   Backend* device = nullptr;
-  Backend* rdma_copy = nullptr;
 };
 
 }  // namespace CCL

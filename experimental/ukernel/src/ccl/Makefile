@@ -43,7 +43,7 @@ DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/rdma_local_copy_backend.cc executor_live.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -79,8 +79,7 @@ DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_components test_backend_components test_modules
 INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_multiprocess_collective
-PERF_BINS := test_copy_perf
-TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS) $(PERF_BINS)
+TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
 
@@ -118,7 +117,7 @@ $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
 test_multiprocess_collective: $(CCL_CORE_OBJ) executor_live.o backend/transport_backend.o \
-		backend/device_backend.o backend/rdma_local_copy_backend.o $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
+		backend/device_backend.o $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
 		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
@@ -131,18 +130,7 @@ test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
 test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
 		test/integration/test_transport_backend.o $(UCCL_RDMA_STATIC)
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS)
-
-test_backend_quick: backend/rdma_local_copy_backend.o $(TRANSPORT_OBJ) \
-		test/integration/test_backend_quick.o $(UCCL_RDMA_STATIC)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS) -lpthread
-
-test_copy_perf: backend/rdma_local_copy_backend.o backend/device_backend.o \
-		$(TRANSPORT_OBJ) $(DEVICE_OBJ) \
-		test/integration/test_copy_perf.o $(UCCL_RDMA_STATIC)
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+ 	$(TRANSPORT_LIBS)
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -193,5 +181,4 @@ clean:
 	test/unit/test_components.d \
 	test/integration/test_device_backend.d \
 	test/integration/test_transport_backend.d \
-	test/integration/test_multiprocess_collective.d \
-	test/integration/test_copy_perf.d
+	test/integration/test_multiprocess_collective.d

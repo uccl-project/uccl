@@ -41,8 +41,6 @@ uint32_t remote_buffer_id_for_role(CollectiveBufferRole role) {
 }
 
 Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
-  if (kind == OpKind::Copy && backends.rdma_copy)
-    return backends.rdma_copy;
   if (backends.transport && backends.transport->supports(kind))
     return backends.transport;
   return backends.device;
@@ -87,9 +85,6 @@ void Executor::ensure_validated(TiledResult const& tiled,
     backends_.transport->validate(tiled, input_ptr, output_ptr, scratch_ptr);
   if (backends_.device && backends_.device != backends_.transport)
     backends_.device->validate(tiled, input_ptr, output_ptr, scratch_ptr);
-  if (backends_.rdma_copy && backends_.rdma_copy != backends_.transport &&
-      backends_.rdma_copy != backends_.device)
-    backends_.rdma_copy->validate(tiled, input_ptr, output_ptr, scratch_ptr);
   validated_sig_ = sig;
 }
 
@@ -283,7 +278,7 @@ void Executor::submit_ready(CollectiveRun& run) {
 // Phase 3: drain completed ops from all backends.
 void Executor::drain_completed(CollectiveRun& run) {
   std::string failure_msg;
-  for (Backend* backend : {backends_.transport, backends_.device, backends_.rdma_copy}) {
+  for (Backend* backend : {backends_.transport, backends_.device}) {
     if (backend == nullptr) continue;
     size_t n = backend->drain(run.done_buf.data(), run.total_ops);
     for (size_t i = 0; i < n; ++i) {
