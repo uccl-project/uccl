@@ -200,7 +200,7 @@ BenchPoint run_device(size_t bytes, int lat_n, int tp_n,
       b.resolved_src=src; b.resolved_dst=dst; b.src_device=src_dev; b.dst_device=dst_dev;
       BackendToken tok;
       while(true){tok=backend.submit(t.ops[0],b,src,dst,nullptr); if(tok.value!=0)break;
-        BackendToken tmp; backend.drain(&tmp,1);}
+        BackendToken tmp; if(backend.drain(&tmp,1)==0) std::this_thread::yield();}
     },
     [&](int n) {
       int done=0;
@@ -240,7 +240,7 @@ BenchPoint run_rdma(size_t bytes, int lat_n, int tp_n,
     OpBindings b; b.stream_index=0; b.resolved_src=src; b.resolved_dst=dst;
     BackendToken tok;
     while(true){tok=be->submit(t.ops[0],b,src,dst,nullptr); if(tok.value!=0)break;
-      BackendToken tmp; be->drain(&tmp,1);}
+      BackendToken tmp; if(be->drain(&tmp,1)==0) std::this_thread::yield();}
   };
   double tp = measure_tp(sub_tp,
     [&](int n) {
