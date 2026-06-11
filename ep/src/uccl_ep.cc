@@ -57,6 +57,106 @@ static std::atomic<long> g_next{1};
 static std::mutex g_mu;
 static std::unordered_map<long, Ctx> g_ctx;
 
+// Host-side packager that turns a set of UcclProxy threads into the device
+// resource bundle (UCCLGinResources) a UCCL-GIN kernel consumes: a device array
+// of D2HHandle pointers, the registered-window base, and the shared ordered
+// software-atomic buffer base. DeepEP-free; exposed to Python so the same bundle
+// can be built without C++.
+class UCCLGinResourceHandle {
+ public:
+  UCCLGinResourceHandle(nb::iterable proxies, uintptr_t window_base,
+                        int num_scaleout_ranks, int num_scaleup_ranks,
+                        int scaleout_rank, int scaleup_rank, int num_lanes) {
+    std::vector<UcclProxy*> proxy_ptrs;
+    for (nb::handle h : proxies) {
+      proxy_ptrs.push_back(&nb::cast<UcclProxy&>(h));
+    }
+    if (proxy_ptrs.empty()) {
+      throw std::invalid_argument(
+          "UCCL-GIN resources require at least one proxy");
+    }
+
+    // Match the microbench and legacy UCCL/EP setup: all proxy threads share
+    // proxy 0's ordered software-atomic buffer.
+    const auto atomic_tail_host_base =
+        proxy_ptrs.front()->get_atomic_buffer_addr();
+    for (auto* proxy : proxy_ptrs) {
+      proxy->set_atomic_buffer_addr(atomic_tail_host_base);
+    }
+    void* atomic_tail_device_ptr = nullptr;
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        &atomic_tail_device_ptr,
+        reinterpret_cast<void*>(atomic_tail_host_base), 0));
+    atomic_tail_base_ = reinterpret_cast<uint64_t>(atomic_tail_device_ptr);
+
+    std::vector<uint64_t> device_handle_addrs;
+    for (auto* proxy : proxy_ptrs) {
+      auto addrs = proxy->get_d2h_channel_handle_addrs();
+      device_handle_addrs.insert(device_handle_addrs.end(), addrs.begin(),
+                                 addrs.end());
+    }
+    if (device_handle_addrs.empty()) {
+      throw std::runtime_error("UCCL-GIN resources found no D2H queue handles");
+    }
+
+    std::vector<d2hq::D2HHandle*> host_ptrs;
+    host_ptrs.reserve(device_handle_addrs.size());
+    for (auto addr : device_handle_addrs) {
+      host_ptrs.push_back(reinterpret_cast<d2hq::D2HHandle*>(addr));
+    }
+    CUDA_CHECK(cudaMalloc(&d2h_queues_device_,
+                          host_ptrs.size() * sizeof(d2hq::D2HHandle*)));
+    CUDA_CHECK(cudaMemcpy(d2h_queues_device_, host_ptrs.data(),
+                          host_ptrs.size() * sizeof(d2hq::D2HHandle*),
+                          cudaMemcpyHostToDevice));
+
+    num_queues_ = static_cast<uint32_t>(host_ptrs.size());
+    window_base_ = static_cast<uint64_t>(window_base);
+    num_scaleout_ranks_ = num_scaleout_ranks;
+    num_scaleup_ranks_ = num_scaleup_ranks;
+    scaleout_rank_ = scaleout_rank;
+    scaleup_rank_ = scaleup_rank;
+    num_lanes_ =
+        static_cast<uint32_t>(num_lanes <= 0 ? proxy_ptrs.size() : num_lanes);
+  }
+
+  ~UCCLGinResourceHandle() {
+    if (d2h_queues_device_ != nullptr) {
+      cudaFree(d2h_queues_device_);
+      d2h_queues_device_ = nullptr;
+    }
+  }
+
+  UCCLGinResourceHandle(const UCCLGinResourceHandle&) = delete;
+  UCCLGinResourceHandle& operator=(const UCCLGinResourceHandle&) = delete;
+
+  nb::dict as_dict() const {
+    nb::dict d;
+    d["d2h_queues_ptr"] = static_cast<unsigned long long>(
+        reinterpret_cast<uintptr_t>(d2h_queues_device_));
+    d["num_queues"] = num_queues_;
+    d["window_base"] = static_cast<unsigned long long>(window_base_);
+    d["atomic_tail_base"] = static_cast<unsigned long long>(atomic_tail_base_);
+    d["num_scaleout_ranks"] = num_scaleout_ranks_;
+    d["num_scaleup_ranks"] = num_scaleup_ranks_;
+    d["scaleout_rank"] = scaleout_rank_;
+    d["scaleup_rank"] = scaleup_rank_;
+    d["num_lanes"] = num_lanes_;
+    return d;
+  }
+
+ private:
+  d2hq::D2HHandle** d2h_queues_device_ = nullptr;
+  uint32_t num_queues_ = 0;
+  uint64_t window_base_ = 0;
+  uint64_t atomic_tail_base_ = 0;
+  int num_scaleout_ranks_ = 1;
+  int num_scaleup_ranks_ = 1;
+  int scaleout_rank_ = 0;
+  int scaleup_rank_ = 0;
+  uint32_t num_lanes_ = 1;
+};
+
 enum DTypeCode : int {
   kUInt8 = 0,
   kInt8 = 1,
@@ -1951,6 +2051,27 @@ NB_MODULE(ep, m) {
   m.def("connect_atomic_buffer", [](UcclProxy& p, Buffer& b) {
     b.set_atomic_buffer_ptr(p.get_atomic_buffer_ptr());
   });
+
+  nb::class_<UCCLGinResourceHandle>(m, "UCCLGinResourceHandle")
+      .def(nb::init<nb::iterable, uintptr_t, int, int, int, int, int>(),
+           nb::arg("proxies"), nb::arg("window_base"),
+           nb::arg("num_scaleout_ranks"), nb::arg("num_scaleup_ranks"),
+           nb::arg("scaleout_rank"), nb::arg("scaleup_rank"),
+           nb::arg("num_lanes"))
+      .def("as_dict", &UCCLGinResourceHandle::as_dict);
+  m.def(
+      "build_uccl_gin_resources",
+      [](nb::iterable proxies, uintptr_t window_base, int num_scaleout_ranks,
+         int num_scaleup_ranks, int scaleout_rank, int scaleup_rank,
+         int num_lanes) {
+        return new UCCLGinResourceHandle(proxies, window_base,
+                                         num_scaleout_ranks, num_scaleup_ranks,
+                                         scaleout_rank, scaleup_rank, num_lanes);
+      },
+      nb::rv_policy::take_ownership, nb::arg("proxies"), nb::arg("window_base"),
+      nb::arg("num_scaleout_ranks"), nb::arg("num_scaleup_ranks"),
+      nb::arg("scaleout_rank"), nb::arg("scaleup_rank"),
+      nb::arg("num_lanes") = 0);
 
   nb::class_<EventOverlap>(m, "EventOverlap").def(nb::init<>());
   nb::class_<Buffer>(m, "Buffer")
