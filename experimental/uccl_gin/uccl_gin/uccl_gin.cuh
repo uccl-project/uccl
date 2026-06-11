@@ -168,11 +168,26 @@ struct UCCLGin {
     }
   }
 
-  // ---- surface declared for parity, not yet implemented ----------------
+  // ---- put_value --------------------------------------------------------
+  // Mirrors handle::NCCLGin::putValue: writes a single word to a remote
+  // window slot. Used for notify counts and small metadata. The value is
+  // first staged into a per-lane GPU buffer since TransferCmd cannot carry
+  // inline data; rail_put then transfers it to the remote window.
   template <typename team_t>
-  __device__ __forceinline__ void put_value(void* /*sym_ptr*/, int /*value*/,
-                                            int /*dst_rank*/, int /*lane_hint*/ = 0) const {
-    __trap();
+  __device__ __forceinline__ void put_value(void* sym_ptr, int value,
+                                            int dst_rank, int lane_hint = 0) const {
+    if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
+      if (res.value_staging == 0) __trap();
+      auto* q = lane(lane_hint);
+      uint32_t stag_off = static_cast<uint32_t>(lane_hint) * static_cast<uint32_t>(sizeof(int));
+      // Stage value into GPU memory.
+      *reinterpret_cast<int*>(res.value_staging + stag_off) = value;
+      const uint32_t roff = window_off(reinterpret_cast<uint64_t>(sym_ptr), res.window_base);
+      const uint32_t soff = window_off(res.value_staging + stag_off, res.window_base);
+      rail_put(q, dst_rank, static_cast<uint32_t>(sizeof(int)), soff, roff);
+    } else {
+      __trap();  // Lsa
+    }
   }
   __device__ __forceinline__ void flush() const { quiet(); }
 };

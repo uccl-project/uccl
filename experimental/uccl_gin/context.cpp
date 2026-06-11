@@ -159,6 +159,17 @@ void Context::setup(ContextConfig cfg) {
   resources_.scaleout_rank = node_idx;
   resources_.scaleup_rank = local_rank;
   resources_.num_lanes = static_cast<uint32_t>(kNumProxyThs);
+
+  // Allocate per-lane staging for put_value (one int per lane).
+  {
+    uint64_t d_staging = 0;
+    UCCL_GIN_CUDA_OK(
+        cudaMalloc(reinterpret_cast<void**>(&d_staging),
+                   resources_.num_lanes * sizeof(int)));
+    UCCL_GIN_CUDA_OK(cudaMemset(reinterpret_cast<void*>(d_staging), 0,
+                                resources_.num_lanes * sizeof(int)));
+    resources_.value_staging = d_staging;
+  }
 }
 
 void Context::teardown() {
@@ -170,6 +181,10 @@ void Context::teardown() {
   if (d_handles_) {
     cudaFree(d_handles_);
     d_handles_ = nullptr;
+  }
+  if (resources_.value_staging) {
+    cudaFree(reinterpret_cast<void*>(resources_.value_staging));
+    resources_.value_staging = 0;
   }
   if (d_window_) {
     cudaFree(d_window_);

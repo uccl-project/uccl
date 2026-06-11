@@ -21,6 +21,7 @@ struct UCCLGinResources {
   // Offset origins (single registered symmetric window + atomic buffer).
   uint64_t window_base = 0;        // `put` payload offsets are relative to this
   uint64_t atomic_tail_base = 0;   // `red_add_rel` counter offsets are relative to this
+  uint64_t value_staging = 0;      // per-lane staging for put_value (one uint64 per lane)
 
   // Topology / lane mapping (mirrors NCCLGin's rank info).
   int num_scaleout_ranks = 1;
