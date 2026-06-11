@@ -406,27 +406,24 @@ void run_p2p_client(int gpu0, int gpu1) {
     }
   }
   write_rdma_info(ri);
-
-  // Setup wait path (receiver side) using server's spec
-  if (strcmp(rdma_backend.name(), "degraded") != 0) {
-    PeerConnectSpec pcs; pcs.peer_rank=0;
-    pcs.type = UKernel::Transport::PeerConnectType::Accept;
-    pcs.detail = srv_spec;
-    rdma_backend.setup_external_peer_for_client(pcs);
-  }
+  fprintf(stderr, "[client] rdma info written, running benchmarks...\n");
 
   // Run cudaMemcpy + DeviceBackend
   BenchPoint cm[kNumSizes], dev[kNumSizes];
   for (size_t i = 0; i < kNumSizes; ++i) {
     auto& bs = kSizes[i];
+    fprintf(stderr, "[client] size=%zu...\n", bs.bytes);
     cm[i] = run_cuda(bs.bytes, bs.lat_n, bs.tp_n, ipc_src, dst.ptr);
+    fprintf(stderr, "[client]   cuda done\n");
     dev[i] = run_device(bs.bytes, bs.lat_n, bs.tp_n, ipc_src, dst.ptr, gpu0, gpu1);
+    fprintf(stderr, "[client]   device done\n");
   }
 
   { std::ofstream rf(kDoneFile);
     for (size_t i = 0; i < kNumSizes; ++i)
       rf << cm[i].lat_us << " " << cm[i].tp_gbs << " "
          << dev[i].lat_us << " " << dev[i].tp_gbs << "\n"; }
+  fprintf(stderr, "[client] results written, done\n");
   sig(kDoneFile);
 
   fprintf(stderr, "[client] done, waiting server...\n");
