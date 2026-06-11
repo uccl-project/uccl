@@ -67,11 +67,6 @@ class Proxy {
     ctx_.progress_run.store(run, std::memory_order_release);
   }
 
-  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
-  void set_dispatch_recv_data_offset(uintptr_t offset) {
-    ctx_.dispatch_recv_data_offset = offset;
-  }
-
   void set_atomic_buffer_ptr(void* ptr) { atomic_buffer_ptr_ = ptr; }
 
   void run_sender();

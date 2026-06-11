@@ -170,10 +170,6 @@ struct ProxyCtx {
   uint64_t remote_atomic_buffer_len = 0;    // Remote atomic_buffer_ptr length
   uint32_t remote_atomic_buffer_rkey = 0;   // Remote atomic_buffer_ptr rkey
 
-  // Buffer offset within rdma_buffer for address translation
-  uintptr_t dispatch_recv_data_offset =
-      0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
-
   // Local scratch buffer for native RDMA atomics (e.g.,
   // IBV_WR_ATOMIC_FETCH_AND_ADD). The NIC writes the "old value" into this
   // local buffer; it must be registered and 8-byte aligned because verbs
