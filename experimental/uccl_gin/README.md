@@ -66,9 +66,9 @@ experimental/uccl_gin/
 | `put<Rail>` | ✅ | RDMA write from symmetric window to remote window |
 | `put_tail_add<Rail>` | ✅ | RDMA write + piggyback tail counter advance (UCCL-specific) |
 | `red_add_rel<Rail>` | ✅ | Ordered remote atomic via empty write-with-imm + CPU proxy |
-| `put_value<Rail>` | ✅ | Single-word write to remote window slot |
-| `quiet` | ✅ | Drain a D2H lane (proxy has consumed all prior commands) |
-| `flush` | ✅ | Alias for `quiet()` |
+| `put_value<Rail>` | ✅ | Inline single-word write to remote window slot |
+| `quiet` | ✅ | Drain one D2H lane/proxy thread through prior WRITE CQEs |
+| `flush` | ✅ | Drain all D2H queues in this UCCLGin context |
 | `put<Lsa>` | — | Intra-node NVLink (compose NCCLGin, not in standalone) |
 | `signal` | — | Future |
 
@@ -123,6 +123,7 @@ Selected primitive, correctness-only:
 Expected output:
 ```
 UCCL-red_add counter: PASS
+UCCL-put_value: PASS
 bytes        NCCL     UCCL-put/add   UCCL-tail/q    UCCL-put+q
 65536        -        PASS           PASS           PASS
 all correctness PASS
@@ -163,6 +164,8 @@ ctx.close()
 3. **`put_tail_add` is UCCL-GIN specific** — fuses payload and counter into one
    `WRITE_WITH_IMM` to close the EFA ordering gap that NCCL solves with FORCE_SO.
 4. **16-byte TransferCmd ABI unchanged** from UCCL EP V1.
+5. **Rail topology is paired remote only** in this standalone backend:
+   `dst_rank` must be the same local rank on a different node.
 
 ## See also
 

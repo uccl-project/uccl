@@ -139,6 +139,7 @@ PyObject* PyUcclGinContext_resources(PyUcclGinContext* self, PyObject*) {
   };
   if (set_u64("num_queues", r.num_queues) != 0 ||
       set_u64("window_base", r.window_base) != 0 ||
+      set_u64("window_bytes", r.window_bytes) != 0 ||
       set_u64("atomic_tail_base", r.atomic_tail_base) != 0 ||
       set_i64("num_scaleout_ranks", r.num_scaleout_ranks) != 0 ||
       set_i64("num_scaleup_ranks", r.num_scaleup_ranks) != 0 ||

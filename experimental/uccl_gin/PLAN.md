@@ -30,12 +30,13 @@ standalone UCCL-GIN，而不是继续把代码写进 `ep/`。
 |---|---|---|
 | `put<Rail>(dst, src, bytes, peer, options)` | symmetric window 到 symmetric window 的 RDMA WRITE | D2H `TransferCmd` WRITE + CPU proxy post EFA WRITE |
 | `red_add_rel<Rail>(ptr, value, peer)` | 远端 counter release add | WRITE_WITH_IMM + receiver software atomic + seq reorder |
-| `quiet/flush<Rail>()` | 保证本 lane 之前的命令完成到指定语义点 | D2H QUIET/BARRIER + proxy CQ drain/ack |
+| `put_value<Rail>(ptr, value, peer)` | 单 word remote WRITE | D2H `WRITE_VALUE` + proxy host bounce MR |
+| `quiet<Rail>(lane)` | 保证本 lane/proxy thread 之前的 WRITE CQE 已完成 | D2H QUIET + proxy CQ drain/ack |
+| `flush<Rail>()` | drain 当前 context 的所有 D2H queue | 对所有 queue 逐个发 QUIET |
 
 扩展但不作为最小 correctness gate：
 
 - `put_tail_add<Rail>`：payload WRITE piggyback atomic add，主要用于减少独立 tail WR。
-- `put_value<Rail>`：单 word WRITE，可由 `put` 的小 payload path 表达，后续再决定是否单独暴露。
 - `get_sym_ptr<Rail>`：EFA 不能直接 device dereference 远端 VA，standalone 层只返回本地 offset/metadata，不伪装成可直访指针。
 
 ## 目录结构

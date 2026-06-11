@@ -3,6 +3,7 @@
 #include "uccl_gin/resources.cuh"
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 class UcclProxy;
@@ -44,7 +45,7 @@ class Context {
   void setup(ContextConfig cfg);
   void teardown();
 
-  std::vector<UcclProxy*> proxies_;
+  std::vector<std::unique_ptr<UcclProxy>> proxies_;
   void* d_window_ = nullptr;
   std::size_t max_message_bytes_ = 0;
   std::size_t window_bytes_ = 0;

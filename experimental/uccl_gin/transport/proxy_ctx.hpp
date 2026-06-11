@@ -179,6 +179,13 @@ struct ProxyCtx {
   static constexpr size_t kMaxAtomicOps =
       1024;  // Maximum concurrent atomic operations
 
+  // Host-side bounce slots for WRITE_VALUE. Indexed by (D2H ring, ring slot),
+  // so a slot cannot be reused until its corresponding WR completes and the
+  // GPU-visible ring tail advances.
+  int* write_value_bounce_buf = nullptr;
+  size_t write_value_bounce_count = 0;
+  ibv_mr* write_value_bounce_mr = nullptr;
+
   // Progress/accounting
   std::atomic<uint64_t> completed{0};
   std::atomic<bool> progress_run{true};

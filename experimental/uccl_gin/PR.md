@@ -53,6 +53,7 @@ experimental/uccl_gin/
 
 ```
 UCCL-red_add counter: PASS
+UCCL-put_value: PASS
 UCCL-put/add (put+tail):   PASS
 UCCL-tail/q (piggyback):   PASS
 UCCL-put+q (put+quiet):    PASS
@@ -61,9 +62,6 @@ all correctness PASS
 
 ## What's intentionally not in this PR
 
-- `put_value` test — has a GPU-store-to-NIC-DMA visibility race in the staging
-  path. The primitive is implemented but the test kernel needs a fence before
-  D2H commit. DeepEP doesn't use `put_value` on the hot path (notify counts only).
 - Lsa/NVLink — `__trap()`. Standalone doesn't include NCCLGin composition.
 - EP semantics — no layout, no token counters, no expert metadata. These belong
   in the library integration layer.

@@ -25,6 +25,11 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
+  // stop() throws if the proxy is not running; callers tearing down a
+  // partially constructed set of proxies must check this first.
+  bool is_running() const noexcept {
+    return running_.load(std::memory_order_acquire);
+  }
   int get_listen_port() const { return proxy_->get_listen_port(); }
 
   void* get_atomic_buffer_ptr() {

@@ -28,6 +28,7 @@ enum class CmdType : uint8_t {
   ATOMIC = 2,   // 010
   QUIET = 3,    // 011
   BARRIER = 4,  // 100
+  WRITE_VALUE = 5,  // 101, inline 32-bit value carried in TransferCmd::value
   // Bits layout:
   // [7]     = low_latency_buffer_idx
   // [6]     = is_combine

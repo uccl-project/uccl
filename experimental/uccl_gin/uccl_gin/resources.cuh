@@ -20,8 +20,8 @@ struct UCCLGinResources {
 
   // Offset origins (single registered symmetric window + atomic buffer).
   uint64_t window_base = 0;        // `put` payload offsets are relative to this
+  uint64_t window_bytes = 0;       // registered payload window size
   uint64_t atomic_tail_base = 0;   // `red_add_rel` counter offsets are relative to this
-  uint64_t value_staging_off = 0;  // window offset of per-lane put_value staging (one int per lane)
 
   // Topology / lane mapping (mirrors NCCLGin's rank info).
   int num_scaleout_ranks = 1;
@@ -49,6 +49,18 @@ __device__ __forceinline__ uint32_t queue_index_from_hint(
   const auto proxy_idx = logical_idx % resources.num_lanes;
   const auto queue_in_proxy = logical_idx / resources.num_lanes;
   return proxy_idx * queues_per_proxy + queue_in_proxy;
+}
+
+__device__ __forceinline__ void validate_rail_dst(
+    const UCCLGinResources& resources, int dst_rank) {
+  if (dst_rank < 0 || dst_rank >=
+                          resources.num_scaleout_ranks *
+                              resources.num_scaleup_ranks ||
+      dst_rank == resources.scaleout_rank * resources.num_scaleup_ranks +
+                      resources.scaleup_rank ||
+      (dst_rank % resources.num_scaleup_ranks) != resources.scaleup_rank) {
+    __trap();
+  }
 }
 #endif
 

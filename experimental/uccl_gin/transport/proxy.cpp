@@ -5,6 +5,7 @@
 #include "rdma.hpp"
 #include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -264,6 +265,30 @@ void Proxy::init_common() {
                    IBV_ACCESS_LOCAL_WRITE);
     if (!ctx_.atomic_old_values_mr) {
       perror("Failed to register atomic_old_values_buf MR");
+      std::abort();
+    }
+  }
+
+  if (!ctx_.write_value_bounce_buf || !ctx_.write_value_bounce_mr) {
+    const size_t bounce_count =
+        std::max<size_t>(cfg_.d2h_queues.size(), 1) * kQueueSize;
+    const size_t bounce_bytes = bounce_count * sizeof(int);
+    void* p = nullptr;
+    int rc = posix_memalign(&p, /*alignment=*/64, bounce_bytes);
+    if (rc != 0 || !p) {
+      fprintf(stderr,
+              "posix_memalign failed for write_value_bounce_buf (rc=%d)\n",
+              rc);
+      std::abort();
+    }
+    std::memset(p, 0, bounce_bytes);
+    ctx_.write_value_bounce_buf = static_cast<int*>(p);
+    ctx_.write_value_bounce_count = bounce_count;
+    ctx_.write_value_bounce_mr =
+        ibv_reg_mr(ctx_.pd, ctx_.write_value_bounce_buf, bounce_bytes,
+                   IBV_ACCESS_LOCAL_WRITE);
+    if (!ctx_.write_value_bounce_mr) {
+      perror("Failed to register write_value_bounce_buf MR");
       std::abort();
     }
   }
@@ -743,20 +768,21 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
+      const auto base_cmd = get_base_cmd(cmd.cmd_type);
       fifo_pending_[rb_idx].push_back(
           std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
-      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
+      if ((base_cmd == CmdType::WRITE || base_cmd == CmdType::WRITE_VALUE) &&
+          cmd.bytes > 0) {
         current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
                                          std::memory_order_release);
       }
 
-      if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
-          get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
-        if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER) {
+      if (base_cmd == CmdType::BARRIER || base_cmd == CmdType::QUIET) {
+        if (base_cmd == CmdType::BARRIER) {
           assert(!ctx_.barrier_inflight);
           assert(ctx_.barrier_wr == -1);
           ctx_.barrier_inflight = true;
-        } else if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
+        } else if (base_cmd == CmdType::QUIET) {
           assert(!ctx_.quiet_inflight);
           assert(ctx_.quiet_wr == -1);
           ctx_.quiet_inflight = true;
@@ -797,6 +823,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
+          get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE_VALUE ||
           get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
         if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
           fprintf(stderr,
@@ -1155,6 +1182,17 @@ void Proxy::post_gpu_commands_mixed(
   auto flush_writes = [&]() {
     if (rdma_wrs.empty()) return;
     assert(rdma_wrs.size() == rdma_cmds.size());
+    if (atomic_dependency_wrs_.size() > 4096 &&
+        atomic_dependency_wrs_.size() > inflight_write_wrs_.size() * 2) {
+      atomic_dependency_wrs_.erase(
+          std::remove_if(atomic_dependency_wrs_.begin(),
+                         atomic_dependency_wrs_.end(),
+                         [&](uint64_t wr) {
+                           return inflight_write_wrs_.find(wr) ==
+                                  inflight_write_wrs_.end();
+                         }),
+          atomic_dependency_wrs_.end());
+    }
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
                             cfg_.thread_idx, cfg_.use_normal_mode,
@@ -1166,7 +1204,8 @@ void Proxy::post_gpu_commands_mixed(
     // WRITE completion. Only plain WRITEs lack that ordering and must remain
     // sender-side completion dependencies.
     for (size_t i = 0; i < rdma_wrs.size(); ++i) {
-      if (rdma_cmds[i].atomic_val == 0) {
+      if (get_base_cmd(rdma_cmds[i].cmd_type) == CmdType::WRITE_VALUE ||
+          rdma_cmds[i].atomic_val == 0) {
         atomic_dependency_wrs_.push_back(rdma_wrs[i]);
       }
     }
@@ -1247,7 +1286,8 @@ void Proxy::post_gpu_commands_mixed(
 #endif
         break;
       }
-      case (CmdType::WRITE): {
+      case (CmdType::WRITE):
+      case (CmdType::WRITE_VALUE): {
         enqueue_atomics_ordered();
         rdma_wrs.push_back(wrs_to_post[i]);
         rdma_cmds.push_back(cmds_to_post[i]);
@@ -1494,6 +1534,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
 #endif
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
+  dereg(ctx_.write_value_bounce_mr);
   dereg(ctx_.atomic_buffer_mr);
 
 #ifdef USE_DMABUF
@@ -1519,6 +1560,11 @@ void Proxy::destroy(bool free_gpu_buffer) {
   if (ctx_.atomic_old_values_buf) {
     free(ctx_.atomic_old_values_buf);
     ctx_.atomic_old_values_buf = nullptr;
+  }
+  if (ctx_.write_value_bounce_buf) {
+    free(ctx_.write_value_bounce_buf);
+    ctx_.write_value_bounce_buf = nullptr;
+    ctx_.write_value_bounce_count = 0;
   }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {

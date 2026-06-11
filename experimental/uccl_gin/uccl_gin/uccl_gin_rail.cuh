@@ -48,8 +48,14 @@ __device__ __forceinline__ uint32_t add_window_off(uint32_t base_shifted,
 }
 
 // Window offset (4-byte shifted) for a payload pointer relative to window base.
-__device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_base) {
-  if (addr < window_base || ((addr - window_base) & ((1u << kWriteAddrShiftNormal) - 1u))) {
+__device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_base,
+                                               uint64_t window_bytes,
+                                               uint32_t bytes = 0) {
+  if (addr < window_base ||
+      (window_bytes != 0 &&
+       (addr - window_base > window_bytes ||
+        static_cast<uint64_t>(bytes) > window_bytes - (addr - window_base))) ||
+      ((addr - window_base) & ((1u << kWriteAddrShiftNormal) - 1u))) {
     __trap();
   }
   const uint64_t shifted = (addr - window_base) >> kWriteAddrShiftNormal;
@@ -76,6 +82,21 @@ __device__ __forceinline__ uint64_t rail_put(d2hq::D2HHandle* q, int dst_rank,
   cmd.bytes = bytes;
   cmd.req_lptr = local_off_shifted;
   cmd.req_rptr = remote_off_shifted;
+  uint64_t slot = 0;
+  q->atomic_set_and_commit(cmd, &slot, kUCCLGinMaxInflightNormal);
+  return slot;
+}
+
+__device__ __forceinline__ uint64_t rail_write_value(
+    d2hq::D2HHandle* q, int dst_rank, int value,
+    uint32_t remote_off_shifted) {
+  TransferCmd cmd{};
+  cmd.cmd_type = make_cmd_type(CmdType::WRITE_VALUE, /*is_combine=*/false,
+                               /*low_latency=*/false);
+  cmd.dst_rank = static_cast<uint8_t>(dst_rank);
+  cmd.bytes = static_cast<uint32_t>(sizeof(int));
+  cmd.req_rptr = remote_off_shifted;
+  cmd.value = value;
   uint64_t slot = 0;
   q->atomic_set_and_commit(cmd, &slot, kUCCLGinMaxInflightNormal);
   return slot;

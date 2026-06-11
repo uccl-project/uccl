@@ -487,8 +487,8 @@ static bool verify_uccl_red_add(uccl_gin::Context& c, int peer, int rank,
 
 // Tests put_value: writes `iters` distinct values to consecutive 4-byte slots
 // on the peer's recv window, using a single lane. Then verifies each slot holds
-// exactly the expected value. put_value stages data through a per-lane GPU buffer
-// internally, so this also validates the staging path.
+// exactly the expected value. put_value carries the word inline in TransferCmd;
+// the proxy sends it from a per-WR host bounce slot.
 __global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res, int peer,
                                           uint64_t recv_base, int iters, int lane) {
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
@@ -498,7 +498,7 @@ __global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res, int pe
     gin.put_value<ncclTeamTagRail>(dst, 0xDEAD0000 + it, peer, lane);
   }
   // Signal completion: a red_add to the peer's counter proves all prior
-  // plain WRITEs on this lane have landed (sender-side dependency).
+  // WRITE_VALUE commands on this lane have landed (sender-side dependency).
   gin.red_add_rel<ncclTeamTagRail>(reinterpret_cast<char*>(res.atomic_tail_base) + (size_t)lane * 8,
                                     1, peer, lane);
 }
@@ -509,22 +509,25 @@ static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
   int* recv = (int*)c.recv_ptr();
   const int iters = 8;
   const int lane = 0;
-  uint32_t recv_off = static_cast<uint32_t>(rank * iters * sizeof(int));
-  CUDA_OK(cudaMemset(reinterpret_cast<char*>(recv) + recv_off, 0, iters * sizeof(int)));
+  const uint32_t local_recv_off =
+      static_cast<uint32_t>(peer * iters * sizeof(int));
+  const uint32_t remote_recv_off =
+      static_cast<uint32_t>(rank * iters * sizeof(int));
+  CUDA_OK(cudaMemset(reinterpret_cast<char*>(recv) + local_recv_off, 0,
+                     iters * sizeof(int)));
   CUDA_OK(cudaStreamSynchronize(stream));
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  // Each rank writes to a distinct region so pairs don't overwrite each other.
-  uint64_t recv_base = reinterpret_cast<uint64_t>(reinterpret_cast<char*>(recv) + recv_off);
-  uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
-      c.resources(), peer, recv_base, iters, lane);
-  CUDA_OK(cudaStreamSynchronize(stream));
-  // Wait for the completion signal (red_add) on the peer's counter.
   auto* counter = reinterpret_cast<std::atomic<int64_t>*>(
       (char*)c.counter_ptr() + (size_t)lane * 8);
   counter->store(0, std::memory_order_release);
   MPI_Barrier(MPI_COMM_WORLD);
 
+  // Each rank writes to a distinct region so pairs don't overwrite each other.
+  uint64_t recv_base =
+      reinterpret_cast<uint64_t>(reinterpret_cast<char*>(recv) + remote_recv_off);
+  uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
+      c.resources(), peer, recv_base, iters, lane);
+  CUDA_OK(cudaStreamSynchronize(stream));
+  // Wait for the completion signal (red_add) on the peer's counter.
   using clock = std::chrono::steady_clock;
   auto t0 = clock::now();
   while (counter->load(std::memory_order_acquire) < 1) {
@@ -534,13 +537,17 @@ static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
     }
   }
 
-  int* rank_recv = reinterpret_cast<int*>(reinterpret_cast<char*>(recv) + recv_off);
+  int* rank_recv =
+      reinterpret_cast<int*>(reinterpret_cast<char*>(recv) + local_recv_off);
   std::vector<int> h(iters);
   CUDA_OK(cudaMemcpy(h.data(), rank_recv, iters * sizeof(int), cudaMemcpyDeviceToHost));
   for (int i = 0; i < iters; ++i) {
-    if (h[i] != 0xDEAD0000 + i) {
+    const int expected =
+        static_cast<int>(0xDEAD0000u + static_cast<uint32_t>(i));
+    if (h[i] != expected) {
       fprintf(stderr, "[verify] put_value slot %d: got 0x%x want 0x%x\n",
-              i, h[i], 0xDEAD0000 + i);
+              i, static_cast<unsigned int>(h[i]),
+              static_cast<unsigned int>(expected));
       return false;
     }
   }
@@ -628,11 +635,7 @@ int main(int argc, char** argv) {
                selected(args, "red-add") ? (ga ? "PASS" : "FAIL") : "-");
       }
     }
-    // put_value test (size-independent)
-    // NOTE: currently skipped by default — the staging-buffer-to-NIC DMA path
-    // has a GPU write visibility race that needs a fence before the D2H commit.
-    // The primitive itself is functional (used by DeepEP for low-frequency notify
-    // counts where the race window is absorbed by D2H ring latency).
+    // put_value test (size-independent).
     if (selected(args, "put-value")) {
       int v_ok = 1;
       if (args.run_uccl)
@@ -641,8 +644,7 @@ int main(int argc, char** argv) {
       MPI_Allreduce(&v_ok, &gv, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       all_ok = all_ok && gv;
       if (rank == 0) {
-        printf("UCCL-put_value: %s (staging race — known issue)\n",
-               gv ? "PASS" : "FAIL");
+        printf("UCCL-put_value: %s\n", gv ? "PASS" : "FAIL");
       }
     }
     if (rank == 0) {

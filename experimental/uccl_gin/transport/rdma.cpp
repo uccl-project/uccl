@@ -1470,6 +1470,10 @@ static void post_rdma_async_batched_normal_mode(
       for (size_t j = 0; j < idxs.size(); ++j) {
         size_t i = idxs[j];
         auto const& cmd = cmds_to_post[i];
+        const bool is_write_value =
+            get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE;
+        const uint32_t write_bytes =
+            is_write_value ? static_cast<uint32_t>(sizeof(int)) : cmd.bytes;
 
         qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
@@ -1480,11 +1484,11 @@ static void post_rdma_async_batched_normal_mode(
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
-            remote_addr + cmd.bytes > remote_end) {
+            remote_addr + write_bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), offset: 0x%llx\n",
-                  (unsigned long long)remote_addr, cmd.bytes,
+                  (unsigned long long)remote_addr, write_bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                   (unsigned long long)decode_write_offset(cmd.req_rptr, false));
           cudaError_t err = cudaDeviceSynchronize();
@@ -1525,11 +1529,30 @@ static void post_rdma_async_batched_normal_mode(
           ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
         }
 
-        uintptr_t laddr = decode_write_offset(cmd.req_lptr, false) +
-                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = 0;
+        uint32_t lkey = 0;
+        if (is_write_value) {
+          const size_t ring_idx =
+              static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
+          const size_t slot_idx =
+              static_cast<size_t>(wrs_to_post[i] & kQueueMask);
+          const size_t bounce_idx = ring_idx * kQueueSize + slot_idx;
+          if (!S.write_value_bounce_buf || !S.write_value_bounce_mr ||
+              bounce_idx >= S.write_value_bounce_count) {
+            fprintf(stderr, "[ERROR] WRITE_VALUE bounce buffer missing/OOB\n");
+            std::abort();
+          }
+          S.write_value_bounce_buf[bounce_idx] = cmd.value;
+          laddr = reinterpret_cast<uintptr_t>(
+              &S.write_value_bounce_buf[bounce_idx]);
+          lkey = S.write_value_bounce_mr->lkey;
+        } else {
+          laddr = decode_write_offset(cmd.req_lptr, false) +
+                  reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          lkey = ctx->mr->lkey;
+        }
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
-        ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
-                       static_cast<uint32_t>(cmd.bytes));
+        ibv_wr_set_sge(qpx, lkey, laddr, write_bytes);
 
         ring_wrids.push_back(wrs_to_post[i]);
       }
@@ -1558,6 +1581,15 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE) {
+            // WRITE_VALUE's inline payload unions with req_lptr; this branch
+            // would decode it as a local offset. Only the EFA branch
+            // implements the host bounce slot.
+            fprintf(stderr,
+                    "[ERROR] WRITE_VALUE is only supported on the EFA "
+                    "normal-mode path\n");
+            std::abort();
+          }
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1697,6 +1729,15 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE) {
+            // WRITE_VALUE's inline payload unions with req_lptr; this branch
+            // would decode it as a local offset. Only the EFA branch
+            // implements the host bounce slot.
+            fprintf(stderr,
+                    "[ERROR] WRITE_VALUE is only supported on the EFA "
+                    "normal-mode path\n");
+            std::abort();
+          }
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1834,6 +1875,13 @@ static void post_rdma_async_batched_fast_mode(
 
   std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
   for (size_t i = 0; i < num_wrs; ++i) {
+    if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE_VALUE) {
+      // WRITE_VALUE's inline payload unions with req_lptr; this path would
+      // decode it as a local offset. Only the normal-mode EFA path implements
+      // the host bounce slot.
+      fprintf(stderr, "[ERROR] WRITE_VALUE is not supported in fast mode\n");
+      std::abort();
+    }
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to itself\n");
