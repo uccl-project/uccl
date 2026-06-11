@@ -50,9 +50,26 @@ struct UCCLGin {
                                       int num_bytes, int dst_rank,
                                       int lane_hint = 0) const {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
+      if (num_bytes < 0) {
+        __trap();
+      }
+      if (num_bytes == 0) {
+        return;
+      }
       const uint32_t loff = window_off(reinterpret_cast<uint64_t>(send_sym_ptr), res.window_base);
       const uint32_t roff = window_off(reinterpret_cast<uint64_t>(recv_sym_ptr), res.window_base);
-      rail_put(lane(lane_hint), dst_rank, static_cast<uint32_t>(num_bytes), loff, roff);
+      auto* q = lane(lane_hint);
+      uint32_t remaining = static_cast<uint32_t>(num_bytes);
+      uint32_t byte_offset = 0;
+      while (remaining != 0) {
+        const uint32_t chunk =
+            remaining > kTransferCmdMaxBytes ? kTransferCmdMaxAlignedBytes
+                                             : remaining;
+        rail_put(q, dst_rank, chunk, add_window_off(loff, byte_offset),
+                 add_window_off(roff, byte_offset));
+        remaining -= chunk;
+        byte_offset += chunk;
+      }
     } else {
       // Lsa (NVLink) — forward to NCCLGin / NVLink ptx. Not in standalone.
       __trap();
@@ -71,13 +88,37 @@ struct UCCLGin {
                                                uint32_t atomic_byte_off,
                                                int lane_hint = 0) const {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
-      if (atomic_byte_off == 0) {
+      if (num_bytes < 0 || count_delta <= 0 || count_delta > 0xFF ||
+          atomic_byte_off == 0) {
         __trap();  // tail slots are 1-based; slot 0 is reserved (see header).
       }
       const uint32_t loff = window_off(reinterpret_cast<uint64_t>(send_sym_ptr), res.window_base);
       const uint32_t roff = window_off(reinterpret_cast<uint64_t>(recv_sym_ptr), res.window_base);
-      rail_put_tail_add(lane(lane_hint), dst_rank, static_cast<uint32_t>(num_bytes),
-                        loff, roff, static_cast<uint32_t>(count_delta), atomic_byte_off);
+      auto* q = lane(lane_hint);
+      const uint32_t bytes = static_cast<uint32_t>(num_bytes);
+      if (bytes <= kTransferCmdMaxBytes) {
+        rail_put_tail_add(q, dst_rank, bytes, loff, roff,
+                          static_cast<uint32_t>(count_delta), atomic_byte_off);
+        return;
+      }
+
+      // A final-chunk piggyback is not sufficient here: EFA SRD does not
+      // guarantee arrival order across the payload WRs. Reuse the proxy's
+      // existing plain-WRITE dependency tracking plus ordered ATOMIC so the
+      // logical tail becomes visible only after every chunk completes. This
+      // multi-command path is needed only above the 24-bit TransferCmd limit.
+      uint32_t remaining = bytes;
+      uint32_t byte_offset = 0;
+      while (remaining != 0) {
+        const uint32_t chunk =
+            remaining > kTransferCmdMaxBytes ? kTransferCmdMaxAlignedBytes
+                                             : remaining;
+        rail_put(q, dst_rank, chunk, add_window_off(loff, byte_offset),
+                 add_window_off(roff, byte_offset));
+        remaining -= chunk;
+        byte_offset += chunk;
+      }
+      rail_red_add(q, dst_rank, count_delta, atomic_byte_off);
     } else {
       __trap();
     }
@@ -100,9 +141,9 @@ struct UCCLGin {
   }
 
   // ---- quiet -----------------------------------------------------------
-  // Drain: enqueue a QUIET marker on the lane and spin until the proxy has
-  // consumed it (tail passes the marker slot), i.e. all prior D2H commands on
-  // this lane have been posted.
+  // Drain: enqueue a QUIET marker and wait for its proxy acknowledgement.
+  // Matching NCCL-GIN flush semantics, this makes prior source buffers safe to
+  // reuse; it does not promise remote visibility.
   __device__ __forceinline__ void quiet(int lane_hint = 0) const {
     auto* q = lane(lane_hint);
     uint64_t slot = 0;
@@ -133,7 +174,7 @@ struct UCCLGin {
                                             int /*dst_rank*/, int /*lane_hint*/ = 0) const {
     __trap();
   }
-  __device__ __forceinline__ void flush() const { /* quiet via proxy completion */ }
+  __device__ __forceinline__ void flush() const { quiet(); }
 };
 
 }  // namespace uccl_gin

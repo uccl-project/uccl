@@ -1400,7 +1400,8 @@ static void post_rdma_async_batched_normal_mode(
     ProxyCtx& S, void* buf, size_t num_wrs,
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
-    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx) {
+    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx,
+    int ranks_per_node) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
@@ -1415,9 +1416,10 @@ static void post_rdma_async_batched_normal_mode(
       printf("Posting rdma to itself\n");
       std::abort();
       continue;
-    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
-               0) {
+    } else if (ranks_per_node <= 0 ||
+               std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
+                       ranks_per_node !=
+                   0) {
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to a different rank\n");
       std::abort();
@@ -2074,10 +2076,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx,
-                             bool use_normal_mode) {
+                             bool use_normal_mode, int ranks_per_node) {
   if (use_normal_mode) {
     post_rdma_async_batched_normal_mode(
-        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx);
+        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx,
+        ranks_per_node);
   } else {
     post_rdma_async_batched_fast_mode(S, buf, num_wrs, wrs_to_post,
                                       cmds_to_post, ctxs, my_rank, thread_idx);
@@ -2353,7 +2356,7 @@ void remote_process_completions_normal_mode(
       // First node.
       // TODO(MaoZiming): pass node_idx instead.
 #ifdef USE_SUBSET_BARRIER
-      if (my_rank < MAX_NUM_GPUS) {
+      if (my_rank < num_ranks / num_nodes) {
 #else
       if (my_rank == 0) {
 #endif

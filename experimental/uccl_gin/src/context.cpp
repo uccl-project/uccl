@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -59,6 +61,18 @@ Context::Context(ContextConfig cfg) { setup(cfg); }
 Context::~Context() { teardown(); }
 
 void Context::setup(ContextConfig cfg) {
+  if (cfg.world_size <= 0 || cfg.local_world_size <= 0 ||
+      cfg.world_size % cfg.local_world_size != 0 || cfg.rank < 0 ||
+      cfg.rank >= cfg.world_size) {
+    throw std::invalid_argument(
+        "invalid rank topology: world_size must be divisible by "
+        "local_world_size and rank must be in range");
+  }
+  if (cfg.max_message_bytes == 0 ||
+      cfg.max_message_bytes > std::numeric_limits<size_t>::max() / 2) {
+    throw std::invalid_argument("max_message_bytes must fit a non-empty 2x window");
+  }
+
   const int local_rank = cfg.rank % cfg.local_world_size;
   const int node_idx = cfg.rank / cfg.local_world_size;
   const int num_nodes = cfg.world_size / cfg.local_world_size;

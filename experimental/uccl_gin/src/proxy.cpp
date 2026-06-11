@@ -85,6 +85,21 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 }
 #endif
 
+static int ranks_per_node(Proxy::Config const& cfg) {
+  if (cfg.num_nodes <= 0 || cfg.num_ranks <= 0 ||
+      cfg.num_ranks % cfg.num_nodes != 0) {
+    fprintf(stderr, "Invalid topology: num_ranks=%d num_nodes=%d\n",
+            cfg.num_ranks, cfg.num_nodes);
+    std::abort();
+  }
+  return cfg.num_ranks / cfg.num_nodes;
+}
+
+static bool skip_normal_mode_peer(Proxy::Config const& cfg, int peer) {
+  return cfg.use_normal_mode &&
+         std::abs(peer - cfg.rank) % ranks_per_node(cfg) != 0;
+}
+
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
   // Initialize state tracking for each ring buffer
   listen_port_ = uccl::create_listen_socket(&listen_fd_);
@@ -270,8 +285,7 @@ void Proxy::init_common() {
     for (int p = 0; p < num_ranks; ++p) {
       if (p == my_rank) continue;
       if (peers_[p].ip == peers_[my_rank].ip) continue;
-      if (cfg_.use_normal_mode && std::abs(p - my_rank) % MAX_NUM_GPUS != 0)
-        continue;
+      if (skip_normal_mode_peer(cfg_, p)) continue;
       ++num_active_peers;
     }
     int const ack_depth =
@@ -311,8 +325,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
 #ifdef EFA
     // Alias the shared SRD QPs from ctx_; dst_ah/dst_qpn (set later in
     // modify_qp_to_rtr) routes per WR via ibv_wr_set_ud_addr.
@@ -339,8 +352,7 @@ void Proxy::init_common() {
     for (int peer = 0; peer < num_ranks; ++peer) {
       // Skip rdma connection for intra-node.
       if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          (cfg_.use_normal_mode &&
-           std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+          skip_normal_mode_peer(cfg_, peer))
         continue;
       int actual_peer;
       recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
@@ -351,7 +363,7 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        skip_normal_mode_peer(cfg_, peer))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
@@ -365,7 +377,7 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        skip_normal_mode_peer(cfg_, peer))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
@@ -382,8 +394,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -567,8 +578,7 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
 #ifndef EFA
@@ -1147,7 +1157,8 @@ void Proxy::post_gpu_commands_mixed(
     assert(rdma_wrs.size() == rdma_cmds.size());
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, cfg_.use_normal_mode);
+                            cfg_.thread_idx, cfg_.use_normal_mode,
+                            ranks_per_node(cfg_));
     inflight_write_wrs_.insert(rdma_wrs.begin(), rdma_wrs.end());
     // A WRITE_WITH_IMM piggyback count and a later ordered finish ATOMIC use
     // the same per-(dst, tail word) sequence. The receiver applies the finish
@@ -1651,12 +1662,13 @@ void Proxy::barrier_check() {
         ++ctx_.barrier_arrival_count;
       }
     } else {
-      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
-      if (rank < 0 || rank >= MAX_NUM_GPUS) {
+      const int local_world = ranks_per_node(cfg_);
+      int rank = cfg_.rank - cfg_.node_idx * local_world;
+      if (rank < 0 || rank >= local_world) {
         printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
                cfg_.node_idx);
       }
-      assert(rank >= 0 && rank < MAX_NUM_GPUS);
+      assert(rank >= 0 && rank < local_world);
       post_barrier_msg(/*dst=*/rank,
                        /*ack=*/false, seq);
     }
@@ -1666,7 +1678,8 @@ void Proxy::barrier_check() {
     if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
       std::unordered_map<std::string, int> leader_for_ip;
       for (int r = 0; r < (int)peers_.size(); ++r) {
-        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+        const int local_world = ranks_per_node(cfg_);
+        if (r >= local_world && (r - cfg_.rank) % local_world == 0) {
           leader_for_ip[peers_[r].ip] = r;
         }
       }
@@ -1746,7 +1759,7 @@ void Proxy::barrier_check() {
           for (int r = 0; r < (int)peers_.size(); ++r) {
             auto it = leader_for_ip.find(peers_[r].ip);
             if (it == leader_for_ip.end() || r < it->second) {
-              assert(r % MAX_NUM_GPUS == 0);
+              assert(r % ranks_per_node(cfg_) == 0);
               leader_for_ip[peers_[r].ip] = r;
             }
           }

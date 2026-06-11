@@ -63,8 +63,9 @@ def test_put_red_add_correctness() -> None:
     size = os.environ.get("UCCL_GIN_TEST_PUT_SIZE", "65536")
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", size, "--iters", "4", "--warmup", "1", "--no-nccl",
+        "--only", "put-add", "--correctness-only",
     ])
-    assert "UCCL-put/add PASS" in out or "PASS" in out, out
+    assert f"UCCL-put/add bytes={size}: PASS" in out, out
     print(out)
 
 
@@ -75,8 +76,9 @@ def test_tail_add_correctness() -> None:
     size = os.environ.get("UCCL_GIN_TEST_TAIL_SIZE", "65536")
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", size, "--iters", "4", "--warmup", "1", "--no-nccl",
+        "--only", "tail-add", "--correctness-only",
     ])
-    assert "UCCL-tail/q PASS" in out or "PASS" in out, out
+    assert f"UCCL-tail/q bytes={size}: PASS" in out, out
     print(out)
 
 
@@ -87,8 +89,9 @@ def test_put_quiet_correctness() -> None:
     size = os.environ.get("UCCL_GIN_TEST_QUIET_SIZE", "65536")
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", size, "--iters", "4", "--warmup", "1", "--no-nccl",
+        "--only", "quiet", "--correctness-only",
     ])
-    assert "UCCL-put+q PASS" in out or "PASS" in out, out
+    assert f"UCCL-put+q source-reuse bytes={size}: PASS" in out, out
     print(out)
 
 
@@ -98,6 +101,7 @@ def test_red_add_counter() -> None:
     root = Path(os.environ["UCCL_GIN_ROOT"]).resolve()
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", "1024", "--iters", "2", "--warmup", "1", "--no-nccl",
+        "--only", "red-add", "--correctness-only",
     ])
     assert "UCCL-red_add counter: PASS" in out, out
     print(out)
@@ -109,6 +113,7 @@ def test_size_sweep() -> None:
     root = Path(os.environ["UCCL_GIN_ROOT"]).resolve()
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", _default_sizes(), "--iters", "10", "--warmup", "2", "--no-nccl",
+        "--correctness-only",
     ])
     assert "all correctness PASS" in out, out
     print(out)
@@ -122,12 +127,13 @@ def test_all_primitives_comprehensive() -> None:
     sizes = os.environ.get("UCCL_GIN_TEST_SIZES", "1024,4096,65536,262144,1048576,16777216")
     out = _run(root, "uccl_gin_microbench", [
         "--sizes", sizes, "--iters", "4", "--warmup", "1", "--no-nccl",
+        "--correctness-only",
     ])
     required = (
         "UCCL-red_add counter: PASS",
         "UCCL-put/add",
         "UCCL-tail/q",
-        "UCCL-put+q",
+        "UCCL-put+q source-reuse",
         "all correctness PASS",
     )
     for r in required:

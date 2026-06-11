@@ -72,7 +72,9 @@ struct Args {
   int   warmup      = 5;
   bool  run_nccl    = UCCL_GIN_WITH_NCCL_GIN;
   bool  run_uccl    = true;
+  bool  correctness_only = false;
   const char* ifname = "enp71s0";       // NCCL_SOCKET_IFNAME on p5en
+  std::string only = "all";
   std::vector<size_t> sizes = {4096, 16384, 65536, 262144, 1048576, 16777216};
 };
 
@@ -86,9 +88,15 @@ static Args parse_args(int argc, char** argv) {
     else if (s == "--ifname") a.ifname = next();
     else if (s == "--no-nccl") a.run_nccl = false;
     else if (s == "--no-uccl") a.run_uccl = false;
+    else if (s == "--correctness-only") a.correctness_only = true;
+    else if (s == "--only") a.only = next();
     else if (s == "--sizes") { a.sizes.clear(); char* t=strtok(next(),","); while(t){a.sizes.push_back(strtoull(t,0,10)); t=strtok(0,",");} }
   }
   return a;
+}
+
+static bool selected(Args const& args, const char* primitive) {
+  return args.only == "all" || args.only == primitive;
 }
 
 // ===========================================================================
@@ -370,18 +378,19 @@ static bool verify_uccl_tailadd(uccl_gin::Context& c, size_t bytes, int peer, in
   return ok;
 }
 
-// Tests put + quiet: data is sent on a single lane then quiet() drains all prior
-// D2H commands on that lane. After quiet() returns, the peer's recv MUST contain
-// our send pattern — if quiet() drained before the payload WRITE landed, the
-// peer's recv would still be poison and the test fails. This validates the
-// happens-before semantics of quiet() without any tail/counter mechanism.
+// Tests NCCL-GIN-compatible quiet semantics: after quiet returns, the source
+// buffer is safe to reuse. A piggyback tail attached to the original payload is
+// used only to observe eventual remote completion; quiet itself does not
+// promise remote visibility.
 __global__ void uccl_gin_put_quiet_kernel(uccl_gin::UCCLGinResources res, int peer,
                                           void* send_ptr, void* recv_ptr, uint32_t bytes,
-                                          int iters, int lane) {
+                                          int iters, uint32_t tail_off, int lane) {
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
   uccl_gin::UCCLGin gin(res);
   for (int it = 0; it < iters; ++it)
-    gin.put<ncclTeamTagRail>(recv_ptr, send_ptr, (int)bytes, peer, /*lane_hint=*/lane);
+    gin.put_tail_add<ncclTeamTagRail>(recv_ptr, send_ptr, (int)bytes, peer,
+                                      /*count_delta=*/1, tail_off,
+                                      /*lane_hint=*/lane);
   gin.quiet(lane);
 }
 
@@ -394,28 +403,40 @@ static bool verify_uccl_put_quiet(uccl_gin::Context& c, size_t bytes, int peer, 
   fill_pattern_kernel<<<(unsigned)((n + 255) / 256), 256, 0, stream>>>(send, n, rank);
   CUDA_OK(cudaMemset(recv, 0xFF, bytes));
   CUDA_OK(cudaStreamSynchronize(stream));
-  MPI_Barrier(MPI_COMM_WORLD);
   const int lane = 0;
-  uccl_gin_put_quiet_kernel<<<1, 32, 0, stream>>>(c.resources(), peer, send, recv,
-                                                   (uint32_t)bytes, /*iters=*/4, lane);
-  CUDA_OK(cudaStreamSynchronize(stream));
-  // quiet() returned => lane 0's D2H commands (including our WRITEs) have been
-  // consumed by the proxy and posted to EFA. quiet() does NOT wait for EFA
-  // delivery to remote HBM to complete. For small payloads (< ~4 MB at 400 Gbps)
-  // an MPI_Barrier provides enough settle time. For large payloads this test may
-  // flake — use put+red_add_rel or put_tail_add for guaranteed ordering.
-  // NOTE: keep test sizes below 4 MB to avoid false negatives.
-  if (bytes > 4 * 1024 * 1024) {
-    if (rank == 0)
-      fprintf(stderr, "[verify] put+quiet SKIP (bytes=%zu > 4MB)\n", bytes);
-    MPI_Barrier(MPI_COMM_WORLD);
-    return true;  // skip, not a correctness failure
-  }
+  const int iters = 4;
+  const uint32_t tail_off = 64;
+  auto* completion = reinterpret_cast<std::atomic<int64_t>*>(
+      static_cast<char*>(c.counter_ptr()) + tail_off);
+  completion->store(0, std::memory_order_release);
   MPI_Barrier(MPI_COMM_WORLD);
+  uccl_gin_put_quiet_kernel<<<1, 32, 0, stream>>>(c.resources(), peer, send, recv,
+                                                   (uint32_t)bytes, iters,
+                                                   tail_off, lane);
+  CUDA_OK(cudaStreamSynchronize(stream));
+
+  // Reuse the source immediately after quiet. If quiet acknowledged before the
+  // transport consumed the source, the remote payload can be corrupted.
+  CUDA_OK(cudaMemsetAsync(send, 0xA5, bytes, stream));
+  CUDA_OK(cudaStreamSynchronize(stream));
+
+  using clock = std::chrono::steady_clock;
+  auto t0 = clock::now();
+  while (completion->load(std::memory_order_acquire) < iters) {
+    if (clock::now() - t0 > std::chrono::seconds(30)) {
+      fprintf(stderr, "[verify] put+quiet completion timeout (bytes=%zu)\n",
+              bytes);
+      return false;
+    }
+  }
+
   bool ok = verify_recv(recv, bytes, peer);
   MPI_Barrier(MPI_COMM_WORLD);
   if (!ok && rank == 0)
-    fprintf(stderr, "[verify] put+quiet FAIL: recv data mismatch (bytes=%zu)\n", bytes);
+    fprintf(stderr,
+            "[verify] put+quiet source-reuse FAIL: recv data mismatch "
+            "(bytes=%zu)\n",
+            bytes);
   return ok;
 }
 
@@ -541,11 +562,15 @@ int main(int argc, char** argv) {
     // red_add counter-only test (no payload, size-independent)
     {
       int a_ok = 1;
-      if (args.run_uccl) a_ok = verify_uccl_red_add(*uctx, peer, rank, 16, stream) ? 1 : 0;
+      if (args.run_uccl && selected(args, "red-add"))
+        a_ok = verify_uccl_red_add(*uctx, peer, rank, 16, stream) ? 1 : 0;
       int ga = 1;
       MPI_Allreduce(&a_ok, &ga, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       all_ok = all_ok && ga;
-      if (rank == 0) printf("UCCL-red_add counter: %s\n", ga ? "PASS" : "FAIL");
+      if (rank == 0) {
+        printf("UCCL-red_add counter: %s\n",
+               selected(args, "red-add") ? (ga ? "PASS" : "FAIL") : "-");
+      }
     }
     if (rank == 0) {
       printf("%-12s %-8s %-14s %-14s %-14s\n",
@@ -553,11 +578,15 @@ int main(int argc, char** argv) {
     }
     for (size_t bytes : args.sizes) {
       int n_ok = 1, u_ok = 1, t_ok = 1, q_ok = 1;
-      if (args.run_nccl) n_ok = verify_nccl(comm, devComm, sendwin, recvwin, d_send, d_recv,
-                                            bytes, peer, rank, stream) ? 1 : 0;
-      if (args.run_uccl) u_ok = verify_uccl(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
-      if (args.run_uccl) t_ok = verify_uccl_tailadd(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
-      if (args.run_uccl) q_ok = verify_uccl_put_quiet(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
+      if (args.run_nccl && selected(args, "put-add"))
+        n_ok = verify_nccl(comm, devComm, sendwin, recvwin, d_send, d_recv,
+                           bytes, peer, rank, stream) ? 1 : 0;
+      if (args.run_uccl && selected(args, "put-add"))
+        u_ok = verify_uccl(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
+      if (args.run_uccl && selected(args, "tail-add"))
+        t_ok = verify_uccl_tailadd(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
+      if (args.run_uccl && selected(args, "quiet"))
+        q_ok = verify_uccl_put_quiet(*uctx, bytes, peer, rank, stream, max_bytes) ? 1 : 0;
       int gn = 1, gu = 1, gt = 1, gq = 1;
       MPI_Allreduce(&n_ok, &gn, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       MPI_Allreduce(&u_ok, &gu, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
@@ -565,10 +594,23 @@ int main(int argc, char** argv) {
       MPI_Allreduce(&q_ok, &gq, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       if (rank == 0) {
         printf("%-12zu %-8s %-14s %-14s %-14s\n", bytes,
-               args.run_nccl ? (gn ? "PASS" : "FAIL") : "-",
-               args.run_uccl ? (gu ? "PASS" : "FAIL") : "-",
-               args.run_uccl ? (gt ? "PASS" : "FAIL") : "-",
-               args.run_uccl ? (gq ? "PASS" : "FAIL") : "-");
+               args.run_nccl && selected(args, "put-add")
+                   ? (gn ? "PASS" : "FAIL") : "-",
+               args.run_uccl && selected(args, "put-add")
+                   ? (gu ? "PASS" : "FAIL") : "-",
+               args.run_uccl && selected(args, "tail-add")
+                   ? (gt ? "PASS" : "FAIL") : "-",
+               args.run_uccl && selected(args, "quiet")
+                   ? (gq ? "PASS" : "FAIL") : "-");
+        if (args.run_uccl && selected(args, "put-add"))
+          printf("UCCL-put/add bytes=%zu: %s\n", bytes,
+                 gu ? "PASS" : "FAIL");
+        if (args.run_uccl && selected(args, "tail-add"))
+          printf("UCCL-tail/q bytes=%zu: %s\n", bytes,
+                 gt ? "PASS" : "FAIL");
+        if (args.run_uccl && selected(args, "quiet"))
+          printf("UCCL-put+q source-reuse bytes=%zu: %s\n", bytes,
+                 gq ? "PASS" : "FAIL");
       }
       all_ok = all_ok && gn && gu && gt && gq;
     }
@@ -579,6 +621,22 @@ int main(int argc, char** argv) {
       return 2;
     }
     if (rank == 0) printf("all correctness PASS\n\n");
+  }
+
+  if (args.correctness_only) {
+    uctx.reset();
+    if (args.run_nccl) {
+#if UCCL_GIN_WITH_NCCL_GIN
+      NCCL_OK(ncclDevCommDestroy(comm, &devComm));
+      NCCL_OK(ncclCommWindowDeregister(comm, sendwin));
+      NCCL_OK(ncclCommWindowDeregister(comm, recvwin));
+      ncclMemFree(d_send); ncclMemFree(d_recv);
+      NCCL_OK(ncclCommFinalize(comm)); NCCL_OK(ncclCommDestroy(comm));
+#endif
+    }
+    CUDA_OK(cudaStreamDestroy(stream));
+    MPI_Finalize();
+    return 0;
   }
 
   // -------- sweep --------

@@ -168,9 +168,10 @@ Python tests 必须覆盖：
    - 验证最终 counter 精确等于期望
    - 验证 seq reorder 不丢、不重、不倒退
 3. `quiet/flush` ordering：
-   - payload 写 poison buffer
-   - `quiet` 后读取远端完成信号
-   - 如果 tail 先于 payload 可见，测试必须失败
+   - payload 发出后调用 `quiet`
+   - `quiet` 返回后立即复用/覆盖 source buffer
+   - 用独立 completion signal 等待远端最终完成，再验证远端收到覆盖前的数据
+   - 不把 `quiet` 错测成 remote visibility；NCCL-GIN 只承诺 source 可安全复用
 4. multi-lane：
    - 1/2/4/8/16 lane sweep
    - 校验 lane mapping 不把所有流压到单 NIC
@@ -252,3 +253,17 @@ python -m pytest experimental/uccl_gin/tests/python -q -k efa
 - 现在先把 GIN primitive 独立化，并用 Python tests 把 correctness/order 站稳。
 - 后续 DeepEP 集成时，只允许依赖 `experimental/uccl_gin` 的 public API；如果需要额外
   primitive，先在 standalone 层加测试，再接 DeepEP。
+
+## 当前验证进度（2026-06-11）
+
+- standalone build 保持 `UCCL_GIN_WITH_NCCL_GIN=1`，NCCL-GIN reference path 未被绕开。
+- 修复 normal-mode topology 对 `MAX_NUM_GPUS=8` 的硬编码后，`2-node x 1-rank`
+  GIN-only 不再在 proxy/QP 初始化或 RDMA destination validation 处失败。
+- `TransferCmd.bytes` 是 24-bit；public `put` 现在自动分片超过 wire limit 的 payload。
+  大 `put_tail_add` 使用 plain-WRITE dependency tracking + ordered ATOMIC，不能只把
+  tail piggyback 到最后一个 chunk，因为 EFA SRD 不保证跨 WR 到达顺序。
+- 2-rank UCCL-only、2-rank NCCL-GIN reference + UCCL-GIN、2-node x 8-rank GIN-only
+  均通过 `1 KiB / 4 MiB(or 1 MiB) / 16 MiB` correctness。
+- Python primitive gates 已拆开验证 `put+red_add`、`put_tail_add`、`quiet source-reuse`、
+  `red_add counter` 和综合 size sweep；服务器结果 `6 passed`。
+- 新增 context create/destroy stress gate；2-rank 默认完整验收 100 次已通过。

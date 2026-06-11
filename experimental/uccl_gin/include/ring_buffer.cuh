@@ -131,6 +131,13 @@ __host__ __device__ inline uint32_t unpack_ll_num_tokens(uint16_t slot,
 // while preserving the alignment each mode already guarantees.
 static constexpr int kWriteAddrShiftNormal = 2;
 static constexpr int kWriteAddrShiftLowLatency = 4;
+static constexpr uint32_t kTransferCmdBytesBits = 24;
+static constexpr uint32_t kTransferCmdMaxBytes =
+    (1u << kTransferCmdBytesBits) - 1u;
+// Chunk boundaries must preserve the 4-byte-shifted local/remote offsets used
+// by normal-mode WRITE commands.
+static constexpr uint32_t kTransferCmdMaxAlignedBytes =
+    kTransferCmdMaxBytes & ~((1u << kWriteAddrShiftNormal) - 1u);
 
 __host__ __device__ inline int get_write_addr_shift(bool low_latency) {
   return low_latency ? kWriteAddrShiftLowLatency : kWriteAddrShiftNormal;

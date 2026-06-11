@@ -59,6 +59,8 @@ The Python package has two test-facing entries:
 
 - `python -m uccl_gin.context_smoke` creates and destroys a real C++ `Context`
   through the `_uccl_gin` extension.
+- `python -m uccl_gin.context_stress` repeats context create/destroy; use
+  `UCCL_GIN_CONTEXT_STRESS_ITERS` to override the default 100 iterations.
 - `python -m uccl_gin.microbench` drives the standalone binary and checks
   correctness markers.
 

@@ -34,6 +34,19 @@ static constexpr uint32_t kAtomicOffMask = 0x1FFFu;
 static constexpr int kAtomicValueMin = -(1 << 14);
 static constexpr int kAtomicValueMax = (1 << 14) - 1;
 
+__device__ __forceinline__ uint32_t add_window_off(uint32_t base_shifted,
+                                                   uint32_t byte_offset) {
+  if (byte_offset & ((1u << kWriteAddrShiftNormal) - 1u)) {
+    __trap();
+  }
+  const uint64_t shifted = static_cast<uint64_t>(base_shifted) +
+                           (byte_offset >> kWriteAddrShiftNormal);
+  if (shifted > 0xFFFFFFFFull) {
+    __trap();
+  }
+  return static_cast<uint32_t>(shifted);
+}
+
 // Window offset (4-byte shifted) for a payload pointer relative to window base.
 __device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_base) {
   if (addr < window_base || ((addr - window_base) & ((1u << kWriteAddrShiftNormal) - 1u))) {
@@ -53,6 +66,9 @@ __device__ __forceinline__ uint64_t rail_put(d2hq::D2HHandle* q, int dst_rank,
                                              uint32_t bytes,
                                              uint32_t local_off_shifted,
                                              uint32_t remote_off_shifted) {
+  if (bytes == 0 || bytes > kTransferCmdMaxBytes) {
+    __trap();
+  }
   TransferCmd cmd{};
   cmd.cmd_type = make_cmd_type(CmdType::WRITE, /*is_combine=*/false,
                                /*low_latency=*/false);
@@ -77,7 +93,8 @@ __device__ __forceinline__ uint64_t rail_put_tail_add(
     d2hq::D2HHandle* q, int dst_rank, uint32_t bytes,
     uint32_t local_off_shifted, uint32_t remote_off_shifted, uint32_t count_delta,
     uint32_t atomic_byte_off) {
-  if (count_delta == 0 || count_delta > 0xFFu || atomic_byte_off > kAtomicOffMask ||
+  if (bytes == 0 || bytes > kTransferCmdMaxBytes || count_delta == 0 ||
+      count_delta > 0xFFu || atomic_byte_off > kAtomicOffMask ||
       (atomic_byte_off & 0x7u)) {
     __trap();
   }
