@@ -1899,6 +1899,7 @@ void cleanupNativeCollectiveContexts(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(gNativeCollectiveContextMutex);
   gReduceScatterHostContexts.erase(comm);
   cleanupLiteAllGatherContexts(comm);
+  cleanupLiteReduceScatterContexts(comm);
 }
 
 }  // namespace nccl

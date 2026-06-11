@@ -157,6 +157,7 @@ IbQp::IbQp(ibv_context* ctx, ibv_pd* pd, int portNum, int gidIndex,
       numStagedRecv_(0),
       numPostedSignaledSend_(0),
       numStagedSignaledSend_(0),
+      maxInlineData_(0),
       maxSendCqPollNum_(maxSendCqPollNum),
       maxSendWr_(maxSendWr),
       maxWrPerSend_(maxWrPerSend),
@@ -184,12 +185,13 @@ IbQp::IbQp(ibv_context* ctx, ibv_pd* pd, int portNum, int gidIndex,
   qpInitAttr.cap.max_recv_wr = maxRecvWr;
   qpInitAttr.cap.max_send_sge = 1;
   qpInitAttr.cap.max_recv_sge = 1;
-  qpInitAttr.cap.max_inline_data = 0;
+  qpInitAttr.cap.max_inline_data = 16;
 
   struct ibv_qp* qp = IBVerbs::ibv_create_qp(pd, &qpInitAttr);
   if (qp == nullptr) {
     THROW(NET, IbError, errno, "ibv_create_qp failed (errno ", errno, ")");
   }
+  maxInlineData_ = qpInitAttr.cap.max_inline_data;
 
   struct ibv_port_attr portAttr;
   if (IBVerbs::ibv_query_port(ctx, portNum_, &portAttr) != 0) {
@@ -320,6 +322,7 @@ void IbQp::stageSendWrite(IbMr const* mr, IbMrInfo const& info, uint32_t size,
   wrInfo.wr->wr_id = wrId;
   wrInfo.wr->opcode = IBV_WR_RDMA_WRITE;
   wrInfo.wr->send_flags = signaled ? IBV_SEND_SIGNALED : 0;
+  if (size <= maxInlineData_) wrInfo.wr->send_flags |= IBV_SEND_INLINE;
   wrInfo.wr->wr.rdma.remote_addr = (uint64_t)(info.addr) + dstOffset;
   wrInfo.wr->wr.rdma.rkey = info.rkey;
   wrInfo.sge->addr = (uint64_t)(mr->getBuff()) + srcOffset;

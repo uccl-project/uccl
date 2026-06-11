@@ -23,7 +23,7 @@ INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/third
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
 OUT_DIR   := build
-CU_SRCS   := $(wildcard *.cu)
+CU_SRCS   := $(wildcard *.cu) $(wildcard ReduceScatter/*.cu)
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
 
 LIB_MINT      := $(BUILD_DIR)/libmint.so
@@ -49,6 +49,7 @@ $(OUT_DIR):
 	mkdir -p $@
 
 $(OUT_DIR)/%.cu.o: %.cu | $(OUT_DIR)
+	mkdir -p $(@D)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) $(DEFINES) -c $< -o $@
 
 $(LIB_NCCL_SO): $(CU_OBJS) $(LIB_MINT_COLL) $(LIB_MINT)

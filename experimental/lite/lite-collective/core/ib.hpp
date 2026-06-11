@@ -128,6 +128,7 @@ class IbQp {
   int numStagedRecv_;
   int numPostedSignaledSend_;
   int numStagedSignaledSend_;
+  uint32_t maxInlineData_;
 
   int const maxSendCqPollNum_;
   int const maxSendWr_;

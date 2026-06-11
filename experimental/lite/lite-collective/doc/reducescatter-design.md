@@ -1,111 +1,186 @@
 # Lite-collective ReduceScatter design
 
-## Primary design
+## At a glance
 
-ReduceScatter has two native designs:
+Inter-node ReduceScatter is now implemented in
+[`nccl/ReduceScatter/multi-node.cu`](../nccl/ReduceScatter/multi-node.cu).
+The normal `2nx1g` and `2nx4g`, `ncclFloat32`, `ncclSum` paths are native-only
+across the benchmark size range; they do not fall back to real NCCL for small or
+large rows.  Forced NCCL fallback via the environment remains a debugging escape
+hatch.
 
-1. Single-node ReduceScatter uses mscclpp memory-channel writes into peer
-   scratch buffers, then each rank reduces the shard it owns.
-2. Two-node 2nx4g float/sum ReduceScatter uses a GPU-local NUMA-pair fan-in
-   before doing pairwise host-staged RDMA between matching local ranks across
-   nodes.
+The current 2nx4g implementation is correct across 128B-1GiB, but it is not yet
+a full performance win over a fair tuned NCCL baseline where both libraries may
+use local PCIe P2P and neither may use GDR (`NCCL_P2P_DISABLE=0`,
+`NCCL_P2P_LEVEL=SYS`, `NCCL_NET_GDR_LEVEL=0`).  It uses a native host-slot path
+for tiny rows and a GPU NUMA-pair path with chunk pipelining for larger rows.
+The latest 1MiB-64MiB retune added mapped-host finalization and split-final
+reduce for the small/mid GPU path; this improves lite versus the previous path
+but still trails tuned NCCL across the full mid/large sweep.
+The 2nx1g path is simpler and now wins from 64KiB through 1MiB in the latency
+table and almost all of the 1MiB-1GiB bus-bandwidth table.  The remaining 2nx1g
+gaps are 128B-32KiB latency and the 2MiB bus-bandwidth row.
 
-The second path is the current optimization focus.  It is correct and much
-faster than the initial native implementation, but it does not yet beat NCCL
-no-GDR on 2nx4g.
+## Dispatch
 
-## Single-node path
+For inter-node communicators, `ncclReduceScatter` first tries
+`runLiteInterReduceScatter`.  For multi-node ReduceScatter, a native rejection is
+returned to the caller instead of silently falling back to NCCL; this keeps
+benchmark results honest while the native algorithm is being optimized.
+The inter-node implementation accepts only:
 
-The single-node kernel writes the target shard data for every peer into that
-peer's scratch memory via mscclpp memory-channel operations, signals/waits on
-the memory channels, then reduces local plus remote scratch rows into the
-output:
-[`reducescatter_rs.cu:L68-L132`](../collective/reducescatter_rs.cu#L68-L132) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/collective/reducescatter_rs.cu:68:1)).
+- `nRanks == 8` and `nRanksPerNode == 4`;
+- `nRanks == 2` and `nRanksPerNode == 1`;
+- `datatype == ncclFloat32`;
+- `op == ncclSum`.
 
-The algorithm is registered as `default_reducescatter_rs`:
-[`algorithm_collection_builder.cc:L135-L139`](../collective/algorithm_collection_builder.cc#L135-L139) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/collective/algorithm_collection_builder.cc:135:1)).
+Unsupported cases return `ncclInvalidUsage`/`ncclInvalidArgument`.
 
-The selector uses this algorithm for single-node SUM and MIN:
-[`algorithm_selector.cc:L203-L212`](../collective/algorithm_selector.cc#L203-L212) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/collective/algorithm_selector.cc:203:1)).
+## Native 2nx1g flow
 
-## Two-node host and IPC context
-
-The two-node context owns a shared host work slab and control block.  It also
-registers mscclpp IB memory for inter-node partial exchange and a CudaIpc
-scratch registration for local GPU-to-GPU scratch exchange:
-[`native_collectives.cu:L383-L636`](../nccl/native_collectives.cu#L383-L636) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:383:1)).
-
-The control block has separate epochs for host-staged block exchange, pairwise
-RDMA exchange, local CudaIpc copy readiness, cross-pair readiness, and final
-local completion:
-[`native_collectives.cu:L55-L80`](../nccl/native_collectives.cu#L55-L80) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:55:1)).
-
-## 2nx4g NUMA-pair fast path
-
-The 2nx4g path is specialized for `ncclFloat32 + ncclSum`.  It chooses the
-NUMA-pair local path when there are four ranks per node and the scratch buffer
-can hold the packed rows:
-[`native_collectives.cu:L1437-L1459`](../nccl/native_collectives.cu#L1437-L1459) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1437:1)).
-
-The local GPU phase does this:
+For two ranks total, each rank owns one output shard and has only one remote
+peer:
 
 ```text
-local ranks 0/1 reduce within one NUMA pair
-local ranks 2/3 reduce within one NUMA pair
-one cross-pair partial exchange completes the local-node reduction
-the code emits two partials:
-  - this rank's final local-node partial
-  - the remote-node shard partial that must be sent to the matching remote rank
+local shard       = sendbuff[this rank's shard]
+remote-owned send = sendbuff[peer rank's shard]
 ```
 
-The CUDA kernels for packing, pair reduction, cross-pair final reduction, and
-the dedicated final add are in
-[`native_collectives.cu:L806-L1132`](../nccl/native_collectives.cu#L806-L1132) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:806:1)).
+Through 1MiB per rank, the native path uses a mapped-host fast path when host
+mapping succeeds: a GPU kernel writes only the peer-owned shard into a mapped
+host slot, RDMA writes that slot to the peer, and a GPU kernel reads the incoming
+mapped-host shard and adds it to the local shard in `sendbuff`.  This is safe
+for in-place ReduceScatter because the incoming contribution is never copied over
+the local shard before the add kernel reads it.  Larger rows use the general
+D2H/RDMA/H2D GPU-add pipeline.
 
-The runtime flow is:
+## Native 2nx4g flow
 
-1. Pack local pair data and partner data.
-2. Copy partner rows into the peer GPU's registered scratch over CudaIpc.
-3. Reduce pair partials and prepare a cross-pair partial.
-4. Copy the cross-pair partial into the target GPU's scratch.
-5. Produce the local partial and the remote partial.
-6. D2H the remote partial into a pinned host slot.
-7. RDMA-write that slot to the matching local rank on the remote node.
-8. H2D the incoming remote partial and run the dedicated float add into
-   `recvbuff`.
+For each local rank, the native path computes two local-node partials on GPU:
 
-Steps 1-5 are implemented in
-[`native_collectives.cu:L1485-L1538`](../nccl/native_collectives.cu#L1485-L1538) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1485:1)).
-The pairwise D2H/RDMA/H2D/final-add phase is implemented in
-[`native_collectives.cu:L1658-L1727`](../nccl/native_collectives.cu#L1658-L1727) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1658:1)).
+```text
+localPartial  = sum(local node ranks' shard for this global rank)
+remotePartial = sum(local node ranks' shard for matching remote global rank)
+```
 
-## Generic two-node fallback
+The local GPU phase uses the same NUMA-pair shape as the previous prototype:
 
-If the GPU-local path is unsupported, the implementation can fall back to a
-host-staged path.  It D2Hs each rank's full input into a host slab, reduces the
-local-node contributions in CPU memory, RDMA-writes the remote partial block,
-adds the incoming remote partial on CPU, and H2Ds the final shard:
-[`native_collectives.cu:L1291-L1416`](../nccl/native_collectives.cu#L1291-L1416) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1291:1)).
+1. Pack only the rows needed by the NUMA-pair partner.
+2. CudaIpc-copy partner rows into the partner GPU's scratch.
+3. Reduce within the NUMA pair, reading this rank's own rows directly from
+   `sendbuff` instead of first staging them through scratch.
+4. CudaIpc-copy one cross-pair partial.
+5. Produce `localPartial` and `remotePartial`.
+6. D2H `remotePartial` into a pinned host slot.
+7. RDMA-write that slot to the matching rank on the remote node.
+8. H2D the incoming remote partial directly into `recvbuff` and add the local
+   partial in place.
 
-For non-two-node or unsupported cases, `runSendRecvReduceScatter` falls back to
-a chunked grouped send/recv plus GPU row reduction:
-[`native_collectives.cu:L1740-L1827`](../nccl/native_collectives.cu#L1740-L1827) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/nccl/native_collectives.cu:1740:1)).
+The implementation uses a per-node shared control block for local CudaIpc
+readiness and per-rank RDMA ready/ack epochs for host-slot reuse.
 
-## Current performance and gap
+## Size policy
 
-Current 2nx4g/1MiB performance:
+The 2nx1g path uses the mapped-host GPU path through 1MiB per rank.  This beats
+the older tiny CPU-final path across the retained small and mid rows, but the
+2MiB total-size row still trails NCCL.  Lowering the cutoff to send that row
+through the general path improves the isolated row but exposes a size-transition
+hang in mixed-size runs, so the stable cutoff remains 1MiB per rank.  Larger
+rows use a five-slot host/scratch pipeline with deferred H2D ack; 2MiB chunks
+are the best stable setting across 4MiB-1GiB on L40/L41.
 
-| Backend | Out-of-place | In-place | Correct |
-| --- | ---: | ---: | --- |
-| NCCL no-GDR | `107.65 us` | `107.59 us` | Yes |
-| Lite native | `123.29 us` | `123.35 us` | Yes |
+The current native-only implementation has two internal regimes on `2nx4g`:
 
-The native path is close but still slower.  The likely remaining costs are:
+| Regime | Policy |
+| --- | --- |
+| `<512KiB` total size | Shared host-slot path: each rank D2Hs its input into a per-node shm slab, computes two local partials on CPU, RDMA-writes the remote-owned partial, and H2Ds the final result. Each rank's shm slice is placed on the GPU's NUMA node, final CPU output stays in the recv slab rather than overwriting the input slab, the local/final CPU reductions use a runtime AVX-512F fast path with scalar fallback, and the H2D ack is deferred to the next safe stream-completion point. |
+| `>=512KiB` total size | GPU-local NUMA-pair path: compute local/remote partials in GPU scratch, D2H or mapped-host-write the remote partial, exchange it with the matching remote rank, H2D or mapped-host-read the incoming remote partial, and add the local partial in place. Single-chunk rows avoid the async side-stream pipeline; multi-chunk rows use four compact scratch slots, deferred H2D ack, tiered chunk sizes, and a deeper local lead for long rows. |
 
-- Multiple local CudaIpc scratch copies and synchronization points.
-- D2H of the remote partial before pairwise RDMA.
-- H2D of the incoming partial before final add.
-- The final stream synchronization needed before the shard can be consumed.
+The previous implementation produced correct wins only around 512KiB by falling
+back elsewhere.  The current code removes that fallback, so performance gaps are
+visible instead of hidden.
 
-Rejected experiments and their measured costs are listed in the runbook:
-[`l40-l41-p2p-runbook.md:L71-L104`](l40-l41-p2p-runbook.md#L71-L104) ([VS Code](vscode://file/home/yangz/nfs/zhongjie/uccl.worktrees/copilot-collectives-support-table-implementation/experimental/lite/lite-collective/doc/l40-l41-p2p-runbook.md:71:1)).
+## RDMA control-write optimization
+
+The main GPU path bypasses `Connection::write` for the data+ready pair on each
+chunk.  It stages the data RDMA write unsignaled, stages the 8-byte ready flag
+as an inline write, posts both WRs with one doorbell, and polls only
+periodically.  The same inline signal helper is used for the ack path.  This
+removes one signaled CQE and one doorbell from the steady chunk path and is most
+visible around 1MiB-16MiB.
+
+## Mapped-host finalization and split-final reduce
+
+For 2nx4g rows up to 1MiB per rank, the GPU-local path can write the
+remote-node partial directly into the mapped, RDMA-registered host send slot
+instead of first writing GPU scratch and then launching a D2H copy.  Single-chunk
+final add can also read the incoming RDMA slot through the mapped host pointer
+instead of launching an H2D copy.  The policy is controlled by
+`MSCCLPP_NCCL_RS_MAPPED_SEND_FINAL_REDUCE=0/1` and
+`MSCCLPP_NCCL_RS_HOST_READ_FINAL_ADD=0/1`.
+
+For async rows up to 1MiB per rank, split-final reduce launches a remote-only
+final-reduce kernel first, starts host/RDMA progress from that remote partial,
+then launches a local-only final-reduce kernel.  Scratch-slot reuse is delayed
+until the final add finishes because the host-read variant keeps the incoming
+host slot live until the add kernel has consumed it.  This is controlled by
+`MSCCLPP_NCCL_RS_SPLIT_FINAL_REDUCE=0/1`.
+
+## Local IPC event synchronization
+
+The 2nx4g GPU-local path records CUDA interprocess events after the partner and
+cross-pair CudaIpc copies, then makes the consumer stream wait on the peer's
+event.  A CPU epoch handshake is published immediately after each event record
+is enqueued and before the peer waits on the event; this avoids reusing an event
+record before the peer has observed the right epoch.
+`MSCCLPP_NCCL_RS_IPC_EVENT_SYNC=0/1` can still force the mode off or on.  Event
+sync avoids host-side stream drains, but it does not by itself close the
+mid/large bus-bandwidth gap.
+
+## Large-message final-add overlap
+
+For 2nx4g rows with `bytesPerRank >= 32MiB` (256MiB total size), the final H2D
+of the remote-node partial and the GPU add now stay on the H2D side stream.
+The main user stream waits only on the last in-flight slot events before the
+collective returns.  This keeps local pack/reduce work on the main stream from
+being blocked by each chunk's final add while still protecting scratch-slot
+reuse with `slotDoneEvents`.  `MSCCLPP_NCCL_RS_ASYNC_FINAL_ADD=0/1` can force
+the mode off or on.  On L40/L41 this is neutral below the threshold and improves
+the 256MiB-1GiB steady-state rows slightly.
+
+## Rejected experiment: direct peer-input kernel loads
+
+One attempted redesign registered each local rank's `sendbuff` with CudaIpc and
+used a single kernel to read all four local ranks' inputs directly, avoiding
+the staged NUMA-pair copies.  It was correct but much slower on L4 PCIe:
+roughly `0.2-0.8GB/s` bus bandwidth at 4MiB-16MiB total sizes.  Do not revive
+that path without fresh hardware evidence.
+
+## Rejected experiment: full host-reduce for mid-size rows
+
+The CPU host-reduce idea was tested for 2nx4g:
+
+1. D2H each GPU's input to pinned host memory local to the GPU NUMA node.
+2. CPU-reduce the local node's four partials.
+3. RDMA-write only the local reduced partial.
+4. CPU-final-reduce with the remote partial.
+5. H2D only the final shard.
+
+This is the current tiny-row strategy, but extending it through 64KiB-256KiB
+did not beat NCCL.  A two-stage NUMA-pair CPU reduce variant was also tested;
+after fixing a cross-partial/RDMA slot aliasing bug it was correct but much
+slower.  For 64KiB and above, the GPU NUMA-pair path remains the better native
+choice on the L40/L41 PCIe testbed.
+
+The same host strategy was also spot-tested at 2MiB/4MiB total sizes after the
+AVX-512 path was added.  It completed correctly but was much slower
+(approximately 265us/506us), so it is not used to cover the 4MiB/8MiB gap.
+
+## CPU SIMD note
+
+The L40/L41 hosts are Intel Xeon Silver 4410Y CPUs with AVX-512F.  The tiny
+host path uses GCC vector extensions in an `avx512f`-targeted helper so the
+native binary does not need global AVX-512 compiler flags and still keeps a
+scalar fallback for hosts without AVX-512F.  This improves the CPU-reduce-heavy
+64KiB-256KiB total-size rows, but it does not address the large-message GPU /
+host-staging pipeline bottleneck.
