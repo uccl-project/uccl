@@ -48,15 +48,35 @@ all correctness PASS
 | UCCL-red_add | `red-add` | `red_add_rel` | Multi-lane counter exact value |
 | UCCL-put_value | `put-value` | `put_value` + `red_add_rel` | Inline value staging + WRITE_VALUE path |
 
-## Comparison with direct NCCL GIN on EFA
+## Performance comparison: UCCL-GIN vs NCCL-GIN on EFA
 
-| | Direct NCCL GIN (aws-ofi-nccl) | UCCL-GIN |
-|---|---|---|
-| dispatch (per-token) | ~5 GB/s SO | N/A (standalone, no EP semantics) |
-| combine (per-token) | ~15 GB/s SO | N/A |
-| paired put 1K | 0.07 GB/s | N/A (correctness-only, not BW-optimized) |
-| paired put 64K | 4.18 GB/s | N/A |
-| Correctness (all primitives) | Depends on FORCE_SO MR | ✅ Verified — ordering rebuilt in software |
+### 8-pair P2P (16 GPUs, each → 1 peer)
+
+2 × p5en.48xlarge (16×H200), 2 EFA rails per GPU, paired-remote model.
+8 concurrent pairs: rank r on node 0 ↔ rank r+8 on node 1, all running
+simultaneously. Per-rank BW = bytes × iters / time for one GPU.
+Aggregate unidirectional = 8 pairs × per-rank BW (one direction).
+
+| bytes | NCCL per-rank | UCCL per-rank | NCCL aggregate | UCCL aggregate | UCCL/NCCL |
+|-------|-------------|-------------|---------------|---------------|-----------|
+| 4K | 0.24 GB/s | 1.40 GB/s | 1.9 GB/s | 11.2 GB/s | **5.8×** |
+| 16K | 0.96 | 5.62 | 7.7 | 45.0 | **5.9×** |
+| 64K | 3.75 | 22.42 | 30.0 | 179.4 | **6.0×** |
+| 256K | 13.81 | 40.79 | 110.5 | 326.3 | **3.0×** |
+| 512K | 25.99 | 43.39 | 207.9 | 347.1 | **1.7×** |
+| 1M | 33.47 | 45.41 | 267.8 | 363.3 | **1.4×** |
+| 4M | 39.39 | 46.42 | 315.1 | 371.4 | **1.2×** |
+| 16M | 44.46 | 46.72 | 355.7 | 373.8 | **1.05×** |
+| **64M** | **45.31** | **46.82** | **362.5** | **374.6** | **1.03×** |
+
+Per-rank BW: both converge to ~46 GB/s — 92% of 2-rail EFA limit (2 × 200 Gbps
+= 50 GB/s). Aggregate across 8 pairs (unidirectional): ~370 GB/s — 92% of
+per-node 16 × 200 Gbps = 400 GB/s theoretical.
+
+UCCL-GIN is 3-6× faster at small messages (< 64K) because it batches completion
+(one `red_add_rel` after all payload WRITEs) vs NCCL GIN's per-put `SignalInc`
+which adds proxy overhead on EFA. The gap closes at large sizes as per-message
+overhead is amortized.
 
 UCCL-GIN is **not a drop-in replacement for NCCL GIN** — it requires the
 integration layer to use `put_tail_add` for piggyback tail and accept the
