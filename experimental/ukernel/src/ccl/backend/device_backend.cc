@@ -55,14 +55,14 @@ void DeviceBackend::init(BufSpec bufs[3]) {
   inited_ = true;
 }
 
-size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n) {
+size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
+                             uint32_t* out_indices) {
   if (!inited_) return 0;
 
   size_t accepted = 0;
   while (accepted < n && pending_.size() < capacity()) {
     Cmd const& c = cmds[accepted];
 
-    // Build TaskArgs
     Device::TaskArgs args{};
     args.bytes = c.bytes;
     args.src_rank = (c.src_peer != ~0u) ? (int)c.src_peer : -1;
@@ -70,7 +70,6 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n) {
     args.src_device = device_idx_;
     args.dst_device = device_idx_;
 
-    // Resolve src/dst pointers from registered buffers
     if (c.src_buf > 0 && c.src_buf <= 3 && bufs_[c.src_buf - 1].ptr) {
       args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
     }
@@ -83,7 +82,6 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n) {
                                 ? Device::ReduceType::Sum
                                 : Device::ReduceType::Sum);
 
-    // Map OpKind → TaskType
     Device::TaskType tt;
     switch (c.kind) {
       case OpKind::Copy:       tt = Device::TaskType::CollCopy; break;
@@ -94,18 +92,20 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n) {
       default: ++accepted; continue;
     }
 
-    // Create task and enqueue
     uint32_t cmd_idx = cmd_next_++;
     auto task = Device::TaskManager::instance().create_task(
         args, tt, Device::DataType::Fp32, 0);
 
-    // Round-robin FIFO assignment
     uint32_t fid = next_fifo_ % cfg_.max_fifos;
     next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
 
     uint64_t tid = worker_pool_->enqueue(task, fid);
-    if (tid == Device::WorkerPool::kInvalidTaskId) break; // backpressure
+    if (tid == Device::WorkerPool::kInvalidTaskId) {
+      --cmd_next_;
+      break;
+    }
 
+    if (out_indices) out_indices[accepted] = cmd_idx;
     pending_.push_back({fid, tid, task.args_index(), cmd_idx});
     ++accepted;
   }

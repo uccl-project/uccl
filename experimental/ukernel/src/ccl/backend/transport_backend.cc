@@ -29,7 +29,8 @@ void TransportBackend::init(BufSpec bufs[3]) {
   }
 }
 
-size_t TransportBackend::enqueue(Cmd const* cmds, size_t n) {
+size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
+                                 uint32_t* out_indices) {
   size_t accepted = 0;
   while (accepted < n && pending_.size() < capacity()) {
     Cmd const& c = cmds[accepted];
@@ -46,8 +47,10 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n) {
       ++accepted; continue;
     }
 
-    if (req == 0) break;  // backpressure from communicator
-    pending_.push_back({req, cmd_next_++});
+    if (req == 0) break;
+    uint32_t idx = cmd_next_++;
+    if (out_indices) out_indices[accepted] = idx;
+    pending_.push_back({req, idx});
     ++accepted;
   }
   return accepted;

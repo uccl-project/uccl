@@ -23,6 +23,13 @@ struct Cmd {
 
 static_assert(sizeof(Cmd) <= 64, "Cmd too large");
 
+// ── Command with caller-assigned global index (for async rings) ────────
+
+struct CmdWithId {
+  Cmd cmd;
+  uint32_t caller_id;
+};
+
 // ── Buffer descriptor ───────────────────────────────────────────────────
 
 struct BufSpec {
@@ -48,7 +55,9 @@ class BatchBackend {
 
   // Returns the number of commands actually enqueued (<= n).
   // Returns 0 if the backend is completely full (backpressure).
-  virtual size_t enqueue(Cmd const* cmds, size_t n) = 0;
+  // If out_indices is non-null, fills backend-assigned cmd_idx per accepted Cmd.
+  virtual size_t enqueue(Cmd const* cmds, size_t n,
+                         uint32_t* out_indices = nullptr) = 0;
 
   // Returns the number of completed commands harvested.
   // out[i] = the index of the completed command in its original

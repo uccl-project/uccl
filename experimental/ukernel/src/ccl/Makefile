@@ -43,7 +43,7 @@ DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \

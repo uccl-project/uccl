@@ -29,7 +29,8 @@ class DeviceBackend final : public BatchBackend {
   bool supports(OpKind kind) const override;
 
   void init(BufSpec bufs[3]) override;
-  size_t enqueue(Cmd const* cmds, size_t n) override;
+  size_t enqueue(Cmd const* cmds, size_t n,
+                 uint32_t* out_indices = nullptr) override;
   size_t drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
 
