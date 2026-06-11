@@ -72,7 +72,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := 
-INTEGRATION_TEST_BINS := test_copy_perf
+INTEGRATION_TEST_BINS :=
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -85,8 +85,8 @@ test: test-unit test-integration
 test-unit: $(UNIT_TEST_BINS)
 	@echo "No unit tests configured"
 
-test-integration: $(INTEGRATION_TEST_BINS)
-	@echo "Integration tests (GPU required) built: $(INTEGRATION_TEST_BINS)"
+test-integration:
+	@echo "No integration tests configured (GPU/network required)"
 
 unit: test-unit
 
@@ -96,11 +96,6 @@ real_backends: $(REAL_BACKEND_OBJ)
 
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
-
-test_copy_perf: backend/device_backend.o $(DEVICE_OBJ) \
-		test/integration/test_copy_perf.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		-L$(HIP_LIB) -lamdhip64 $(DEVICE_LIBS) -lpthread
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)

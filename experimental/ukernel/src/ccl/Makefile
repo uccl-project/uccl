@@ -78,7 +78,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_copy_perf
+INTEGRATION_TEST_BINS :=
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -92,8 +92,8 @@ test-unit: $(UNIT_TEST_BINS)
 	./test_modules
 	./test_async
 
-test-integration: $(INTEGRATION_TEST_BINS)
-	@echo "Integration tests (GPU required) built: $(INTEGRATION_TEST_BINS)"
+test-integration:
+	@echo "No integration tests configured (GPU/network required)"
 
 unit: test-unit
 
@@ -109,11 +109,6 @@ test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_as
 
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
-
-test_copy_perf: backend/device_backend.o $(DEVICE_OBJ) \
-		test/integration/test_copy_perf.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
