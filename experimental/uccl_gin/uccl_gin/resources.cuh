@@ -8,7 +8,7 @@
 // (offset origin for `put`), and the atomic buffer base (offset origin for the
 // ordered `red_add_rel`). See ep/docs/uccl_gin_plan.md (UCCLGinResources).
 
-#include "../d2h_queue_device.cuh"  // d2hq::D2HHandle
+#include "../transport/d2h_queue_device.cuh"
 #include <cstdint>
 
 namespace uccl_gin {

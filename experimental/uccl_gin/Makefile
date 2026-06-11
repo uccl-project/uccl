@@ -34,25 +34,23 @@ PYTHON_INC := $(shell $(PYTHON) -c "import sysconfig;print(sysconfig.get_paths()
 PY_EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig;print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')")
 
 BUILD_DIR := build
-SRC_DIR   := src
-TEST_DIR  := tests/cpp
-PY_PKG_DIR := python/uccl_gin
+TEST_DIR  := tests
 
 TRANSPORT_SRCS := \
-  $(SRC_DIR)/proxy.cpp \
-  $(SRC_DIR)/rdma.cpp \
-  $(SRC_DIR)/common.cpp \
-  $(SRC_DIR)/uccl_proxy.cpp \
-  $(SRC_DIR)/context.cpp \
-  $(SRC_DIR)/fifo.cpp \
-  $(SRC_DIR)/adaptive_sleeper.cc
+  transport/proxy.cpp \
+  transport/rdma.cpp \
+  transport/common.cpp \
+  transport/uccl_proxy.cpp \
+  transport/fifo.cpp \
+  transport/adaptive_sleeper.cc
 
-TRANSPORT_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(filter %.cpp,$(TRANSPORT_SRCS))) \
-                  $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(filter %.cc,$(TRANSPORT_SRCS)))
+TRANSPORT_OBJS := $(patsubst transport/%.cpp,$(BUILD_DIR)/transport/%.o,$(filter %.cpp,$(TRANSPORT_SRCS))) \
+                  $(patsubst transport/%.cc,$(BUILD_DIR)/transport/%.o,$(filter %.cc,$(TRANSPORT_SRCS)))
+ROOT_OBJS := $(BUILD_DIR)/context.o $(BUILD_DIR)/bindings.o
 
 DEFS := -DEFA -DNCCL_CHECK_CUDACC=1 -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
         -DUCCL_GIN_WITH_NCCL_GIN=$(UCCL_GIN_WITH_NCCL_GIN)
-INCLUDES := -I$(NCCL_INC) -Iinclude -I../../include -I$(CUDA_HOME)/include -I$(PYTHON_INC) \
+INCLUDES := -I. -Itransport -I$(NCCL_INC) -I../../include -I$(CUDA_HOME)/include -I$(PYTHON_INC) \
             -I$(EFA_HOME)/include $(MPI_INC)
 
 CXXFLAGS := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden $(DEFS) $(INCLUDES)
@@ -68,26 +66,28 @@ LDFLAGS := -L$(CUDA_HOME)/lib64 $(NVCC_RPATH) \
            -L$(MPI_PREFIX)/lib -lmpi -l:$(NCCL_SO) -lefa -libverbs -lnl-3 -lnl-route-3 \
            -lnuma -lcudart -lcuda -lpthread
 
+PY_PKG_DIR := python/uccl_gin
 PY_EXT := $(PY_PKG_DIR)/_uccl_gin$(PY_EXT_SUFFIX)
 
 all: $(BUILD_DIR)/uccl_gin_microbench $(PY_EXT)
 
 $(BUILD_DIR):
 	mkdir -p $@
+	mkdir -p $(BUILD_DIR)/transport
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+$(BUILD_DIR)/transport/%.o: transport/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc | $(BUILD_DIR)
+$(BUILD_DIR)/transport/%.o: transport/%.cc | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/uccl_gin_microbench: $(TEST_DIR)/microbench.cu $(TRANSPORT_OBJS)
-	$(NVCC) $(NVCCFLAGS) $< $(TRANSPORT_OBJS) -o $@ $(LDFLAGS)
-
-$(BUILD_DIR)/bindings.o: $(SRC_DIR)/bindings.cpp | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(PY_EXT): $(BUILD_DIR)/bindings.o $(TRANSPORT_OBJS) | $(BUILD_DIR)
+$(BUILD_DIR)/uccl_gin_microbench: $(TEST_DIR)/microbench.cu $(TRANSPORT_OBJS) $(BUILD_DIR)/context.o
+	$(NVCC) $(NVCCFLAGS) $< $(TRANSPORT_OBJS) $(BUILD_DIR)/context.o -o $@ $(LDFLAGS)
+
+$(PY_EXT): $(BUILD_DIR)/bindings.o $(BUILD_DIR)/context.o $(TRANSPORT_OBJS) | $(BUILD_DIR)
 	$(CXX) -shared $^ -o $@ $(LDFLAGS)
 
 clean:
@@ -95,4 +95,4 @@ clean:
 
 .PHONY: all clean
 
--include $(TRANSPORT_OBJS:.o=.d) $(BUILD_DIR)/bindings.d
+-include $(TRANSPORT_OBJS:.o=.d) $(BUILD_DIR)/bindings.d $(BUILD_DIR)/context.d

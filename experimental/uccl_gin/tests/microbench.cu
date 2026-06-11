@@ -46,11 +46,11 @@
 #include <thread>
 #include <vector>
 
-#include "ring_buffer.cuh"        // TransferCmd, DeviceToHostCmdBuffer
-#include "d2h_queue_device.cuh"   // d2hq::D2HHandle
-#include "uccl_proxy.hpp"         // UcclProxy, PeerMeta
-#include "uccl_gin/context.hpp"   // uccl_gin::Context
-#include "uccl_gin/uccl_gin.cuh"  // uccl_gin::UCCLGin handle (mirrors handle::NCCLGin)
+#include "../transport/ring_buffer.cuh"
+#include "../transport/d2h_queue_device.cuh"
+#include "../transport/uccl_proxy.hpp"
+#include "../context.hpp"
+#include "../uccl_gin/uccl_gin.cuh"
 
 #define CUDA_OK(x) do { cudaError_t e=(x); if(e!=cudaSuccess){ \
   fprintf(stderr,"[CUDA] %s:%d %s\n",__FILE__,__LINE__,cudaGetErrorString(e)); MPI_Abort(MPI_COMM_WORLD,1);} } while(0)

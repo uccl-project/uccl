@@ -1,6 +1,6 @@
-#include "uccl_gin/context.hpp"
+#include "context.hpp"
 
-#include "uccl_proxy.hpp"
+#include "transport/uccl_proxy.hpp"
 #include <cuda_runtime.h>
 #include <mpi.h>
 

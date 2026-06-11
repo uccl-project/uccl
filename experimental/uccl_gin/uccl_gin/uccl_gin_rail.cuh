@@ -24,8 +24,8 @@
 //     as an ordered WRITE_WITH_IMM only when atomic_offset > 0, so tail slots
 //     are 1-based (slot 0 reserved) to stay compatible with the V1 trigger.
 
-#include "../ring_buffer.cuh"        // TransferCmd, CmdType, make_cmd_type, kWriteAddrShiftNormal
-#include "../d2h_queue_device.cuh"   // d2hq::D2HHandle
+#include "../transport/ring_buffer.cuh"
+#include "../transport/d2h_queue_device.cuh"
 #include <cstdint>
 
 namespace uccl_gin {

@@ -1,7 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-#include "uccl_gin/context.hpp"
+#include "context.hpp"
 
 #include <mpi.h>
 
