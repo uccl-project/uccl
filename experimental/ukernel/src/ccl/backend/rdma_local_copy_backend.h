@@ -49,8 +49,6 @@ class RdmaLocalCopyBackend final : public Backend {
   };
 
   bool is_degraded() const;
-  bool init_oob();
-  bool exchange_mr_and_qp();
 
   RdmaLocalCopyBackendConfig config_;
   bool degraded_ = false;
@@ -70,8 +68,6 @@ class RdmaLocalCopyBackend final : public Backend {
   std::unordered_map<unsigned, uint64_t> req_to_token_;
 
   std::vector<OpBufInfo> buf_id_cache_;
-
-  static bool oob_pid_leader_;
 };
 
 }  // namespace CCL
