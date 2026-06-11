@@ -55,6 +55,7 @@ static const char* kHandleFile = "/tmp/p2p_handle";
 static const char* kReadyFile  = "/tmp/p2p_ready";
 static const char* kDoneFile   = "/tmp/p2p_done";
 static const char* kRdmaFile   = "/tmp/p2p_rdma";
+static const char* kSrvRdmaFile = "/tmp/p2p_srv_rdma";
 
 // ── Results struct for P2P exchange ─────────────────────────────────────
 
@@ -305,23 +306,32 @@ void print_block_sweep(int gpu_id) {
 // ── P2P Server ──────────────────────────────────────────────────────────
 
 void run_p2p_server(int gpu0, int gpu1) {
-  unlink(kHandleFile); unlink(kReadyFile); unlink(kDoneFile); unlink(kRdmaFile);
+  unlink(kHandleFile); unlink(kReadyFile); unlink(kDoneFile);
+  unlink(kRdmaFile); unlink(kSrvRdmaFile);
 
   DevBuf src(kMaxBuf);
   GPU_RT_CHECK(gpuSetDevice(gpu0));
 
   gpuIpcMemHandle_t h;
   GPU_RT_CHECK(gpuIpcGetMemHandle(&h, src.ptr));
-  write_handle(h); sig(kReadyFile);
-  fprintf(stderr, "[server] IPC exported, waiting for client...\n");
+  write_handle(h);
 
-  // Read RDMA info
-  wait(kRdmaFile);
-  RdmaInfo ri = read_rdma_info();
-  fprintf(stderr, "[server] rdma info: addr=0x%lx rkey=%u\n", ri.dst_addr, ri.dst_rkey);
-
+  // Write our QP spec for client
   RdmaLocalCopyBackendConfig rcfg; rcfg.gpu_id = gpu0;
   RdmaLocalCopyBackend rdma_backend(rcfg);
+  if (strcmp(rdma_backend.name(), "degraded") != 0) {
+    auto srv_spec = rdma_backend.get_connect_spec();
+    std::ofstream sf(kSrvRdmaFile, std::ios::binary);
+    sf.write((char*)&srv_spec, sizeof(srv_spec));
+  }
+  sig(kReadyFile);
+  fprintf(stderr, "[server] IPC + QP spec exported, waiting for client...\n");
+
+  // Read client's RDMA info
+  wait(kRdmaFile);
+  RdmaInfo ri = read_rdma_info();
+  fprintf(stderr, "[server] client info: addr=0x%lx rkey=%u\n", ri.dst_addr, ri.dst_rkey);
+
   if (strcmp(rdma_backend.name(), "degraded") != 0 && ri.dst_rkey != 0) {
     rdma_backend.register_remote_buffer(2, (void const*)ri.dst_addr, ri.dst_rkey);
     rdma_backend.setup_external_peer(ri.spec);
@@ -353,6 +363,13 @@ void run_p2p_server(int gpu0, int gpu1) {
 void run_p2p_client(int gpu0, int gpu1) {
   wait(kReadyFile);
   auto h = read_handle();
+
+  // Read server's QP spec
+  RdmaPeerConnectSpec srv_spec{};
+  {
+    std::ifstream sf(kSrvRdmaFile, std::ios::binary);
+    sf.read((char*)&srv_spec, sizeof(srv_spec));
+  }
 
   GPU_RT_CHECK(gpuSetDevice(gpu1));
   GPU_RT_CHECK(gpuFree(nullptr));
@@ -387,14 +404,16 @@ void run_p2p_client(int gpu0, int gpu1) {
       }
       ibv_free_device_list(devs);
     }
-
-    // Setup wait path (receiver side) for server's RDMA write
-    PeerConnectSpec pcs; pcs.peer_rank=0;
-    pcs.type = UKernel::Transport::PeerConnectType::Accept;
-    pcs.detail = ri.spec;
-    rdma_backend.setup_external_peer_for_client(pcs);
   }
   write_rdma_info(ri);
+
+  // Setup wait path (receiver side) using server's spec
+  if (strcmp(rdma_backend.name(), "degraded") != 0) {
+    PeerConnectSpec pcs; pcs.peer_rank=0;
+    pcs.type = UKernel::Transport::PeerConnectType::Accept;
+    pcs.detail = srv_spec;
+    rdma_backend.setup_external_peer_for_client(pcs);
+  }
 
   // Run cudaMemcpy + DeviceBackend
   BenchPoint cm[kNumSizes], dev[kNumSizes];
