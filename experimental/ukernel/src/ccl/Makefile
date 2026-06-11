@@ -133,6 +133,11 @@ test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS)
 
+test_backend_quick: backend/rdma_local_copy_backend.o $(TRANSPORT_OBJ) \
+		test/integration/test_backend_quick.o $(UCCL_RDMA_STATIC)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		$(TRANSPORT_LIBS) -lpthread
+
 test_copy_perf: backend/rdma_local_copy_backend.o backend/device_backend.o \
 		$(TRANSPORT_OBJ) $(DEVICE_OBJ) \
 		test/integration/test_copy_perf.o $(UCCL_RDMA_STATIC)
