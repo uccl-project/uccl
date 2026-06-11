@@ -1,10 +1,8 @@
 #pragma once
 
 #include "backend.h"
-#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -19,61 +17,51 @@ struct DeviceBackendConfig {
   uint32_t threads_per_block = 256;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
-  uint32_t bytes_per_block = 0;
-  bool no_gdr = false;
+  uint32_t bytes_per_block = 0;   // 0=auto, >0=override
 };
 
-class DeviceBackend final : public Backend {
+class DeviceBackend final : public BatchBackend {
  public:
-  explicit DeviceBackend(DeviceBackendConfig const& config = {});
+  explicit DeviceBackend(DeviceBackendConfig const& cfg = {});
   ~DeviceBackend() override;
 
-  char const* name() const override;
-  void validate(TiledResult const& tiled,
-                void* input_ptr, void* output_ptr,
-                void* scratch_ptr) override;
+  char const* name() const override { return "device"; }
   bool supports(OpKind kind) const override;
-  BackendToken submit(Op const& op, OpBindings const& bind,
-                      void* input_ptr, void* output_ptr,
-                      void* scratch_ptr) override;
-  size_t drain(BackendToken* out, size_t max_count) override;
-  void stop(uint32_t stream_id) override;
 
-  void set_signal_buffers(std::vector<GpuSignalPeer> const& bufs);
+  void init(BufSpec bufs[3]) override;
+  size_t enqueue(Cmd const* cmds, size_t n) override;
+  size_t drain(uint32_t* completed, size_t max) override;
+  size_t capacity() const override;
+
+  void set_signal_buffers(std::vector<GpuSignalPeer> const& peers);
 
  private:
-  struct TaskRec {
-    uint64_t task_id;
-    uint32_t stream_id;
-    uint32_t args_id;
-  };
-
-  struct StreamRec {
-    uint32_t fifo_id = 0;
-    uint32_t pending = 0;
-  };
-
   void ensure_runtime();
-  uint32_t acquire_fifo(uint32_t stream_id, uint32_t num_blocks);
-  void release_task_args(uint32_t args_id);
-  void stop_stream(uint32_t stream_id);
-  uint32_t suggested_num_blocks(Op const& op) const;
 
-  DeviceBackendConfig config_{};
-  bool owns_task_manager_ = false;
-  int local_device_idx_ = 0;
+  DeviceBackendConfig cfg_;
   int sm_count_ = 1;
+  int device_idx_ = 0;
+
+  BufSpec bufs_[3] = {};
+  bool inited_ = false;
+  bool owns_task_manager_ = false;
+
   std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
-  uint64_t next_token_ = 1;
-  ReductionKind reduction_kind_ = ReductionKind::None;
-  ScalarType reduction_dtype_ = ScalarType::Float32;
-  int current_device_ = -1;
-  std::unordered_map<uint32_t, StreamRec> active_streams_;
-  std::vector<uint32_t> free_fifos_;
-  // Per-FIFO submitted task map.  Indexed by fifo_id; empty when no worker.
-  std::vector<std::unordered_map<uint64_t, TaskRec>> submitted_per_fifo_;
-  std::vector<uint32_t> streams_to_stop_;
+
+  // FIFO management
+  uint32_t next_fifo_ = 0;
+  struct CmdRec {
+    uint32_t fifo_id;
+    uint64_t task_id;
+    uint32_t args_id;
+    uint32_t cmd_idx;
+  };
+  std::vector<CmdRec> pending_;  // indexed by internal seq
+
   std::vector<GpuSignalPeer> gpu_signal_bufs_;
+
+  uint32_t cmd_next_ = 0;        // global command sequence counter
+  uint32_t cmd_done_ = 0;        // completed up to this point
 };
 
 }  // namespace CCL

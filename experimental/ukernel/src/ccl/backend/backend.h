@@ -1,72 +1,77 @@
 #pragma once
 
 #include "../coll_types.h"
-#include "../lower.h"
+#include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
-struct BackendToken {
-  uint64_t value = 0;
-  bool failed = false;
+// ── Command descriptor ──────────────────────────────────────────────────
+
+struct Cmd {
+  OpKind kind;
+  uint32_t src_buf;   // 1=input, 2=output, 3=scratch
+  uint32_t dst_buf;
+  uint32_t src_off;
+  uint32_t dst_off;
+  uint32_t bytes;
+  uint32_t src_peer;  // ~0u = local
+  uint32_t dst_peer;  // ~0u = local
+  ReductionKind redop; // Reduce / RecvReduce
+};
+
+static_assert(sizeof(Cmd) <= 64, "Cmd too large");
+
+// ── Buffer descriptor ───────────────────────────────────────────────────
+
+struct BufSpec {
+  void* ptr;
+  size_t bytes;
+};
+
+// ── Batch-capable backend interface ─────────────────────────────────────
+//
+//   init()     — register input/output/scratch buffers once
+//   enqueue()  — batch-submit N commands; returns # accepted (0 = full)
+//   drain()    — harvest completed commands; returns their enqueue indices
+//   capacity() — max concurrent commands the backend can absorb
+
+class BatchBackend {
+ public:
+  virtual ~BatchBackend() = default;
+
+  virtual char const* name() const = 0;
+  virtual bool supports(OpKind kind) const = 0;
+
+  virtual void init(BufSpec bufs[3]) = 0;
+
+  // Returns the number of commands actually enqueued (<= n).
+  // Returns 0 if the backend is completely full (backpressure).
+  virtual size_t enqueue(Cmd const* cmds, size_t n) = 0;
+
+  // Returns the number of completed commands harvested.
+  // out[i] = the index of the completed command in its original
+  //          enqueue batch (0-based, monotonically increasing).
+  virtual size_t drain(uint32_t* completed, size_t max) = 0;
+
+  // Maximum number of commands that can be in-flight concurrently.
+  virtual size_t capacity() const = 0;
+
+  // Cleanup a specific command index (release resources).
+  virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
 };
 
 struct GpuSignalPeer {
-  void* local = nullptr;
-  void* remote = nullptr;
+  constexpr static uint32_t kPending = 0;
+  constexpr static uint32_t kDone = 1;
+  uint32_t* local = nullptr;
+  uint32_t* remote = nullptr;
 };
 
-struct OpBindings {
-  void const* resolved_src = nullptr;
-  void* resolved_dst = nullptr;
-  int src_device = -1;
-  int dst_device = -1;
-  uint64_t signal_seq = 0;
-  uint32_t stream_index = 0;
-};
-
-inline CollectiveBufferRole buf_role(OpKind kind, bool is_src,
-                                     bool copy_from_staging) {
-  switch (kind) {
-    case OpKind::Send:
-    case OpKind::Recv:
-    case OpKind::RecvReduce:
-    case OpKind::Reduce:
-      return CollectiveBufferRole::Input;
-    case OpKind::Copy:
-      return is_src ? (copy_from_staging ? CollectiveBufferRole::Scratch
-                                         : CollectiveBufferRole::Input)
-                    : CollectiveBufferRole::Output;
-  }
-  return CollectiveBufferRole::Input;
-}
-
-// Minimal backend interface:
-//   validate  — one-time init (memory bindings, peer paths, worker warmup)
-//   submit    — enqueue one op, returns opaque token (value==0 = backpressure)
-//   drain     — harvest all completed ops; backend cleans its own resources
-//   stop      — end-of-stream cleanup (optional)
-class Backend {
- public:
-  virtual ~Backend() = default;
-
-  virtual char const* name() const = 0;
-  virtual void validate(TiledResult const& tiled,
-                         void* input_ptr, void* output_ptr,
-                         void* scratch_ptr) = 0;
-  virtual bool supports(OpKind kind) const = 0;
-  virtual BackendToken submit(Op const& op, OpBindings const& bind,
-                               void* input_ptr, void* output_ptr,
-                               void* scratch_ptr) = 0;
-  virtual size_t drain(BackendToken* out, size_t max_count) = 0;
-  virtual void stop(uint32_t stream_id) { (void)stream_id; }
-};
-
-struct ExecutorBackends {
-  Backend* transport = nullptr;
-  Backend* device = nullptr;
+struct BatchExecutorBackends {
+  BatchBackend* transport = nullptr;
+  BatchBackend* device = nullptr;
 };
 
 }  // namespace CCL

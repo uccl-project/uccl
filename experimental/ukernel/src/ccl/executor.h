@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -16,131 +15,83 @@ namespace UKernel {
 namespace Transport {
 struct CommunicatorConfig;
 class Communicator;
-}  // namespace Transport
+}
 namespace CCL {
 
 enum class CollectiveOpStatus : uint32_t {
-  Queued,
-  Running,
-  Completed,
-  Failed,
+  Queued, Running, Completed, Failed,
 };
 
 using CollectiveOpHandle = uint64_t;
 inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 
-struct ExecutorConfig {
-  int gpu_id = 0;
-  int rank = 0;
-  int world_size = 1;
-  std::shared_ptr<UKernel::Transport::CommunicatorConfig> communicator_config;
-  uint32_t device_task_capacity = 4096;
-  uint32_t max_device_fifos = 8;
-  uint32_t threads_per_block = 256;
-  uint32_t fifo_capacity = 64;
-  uint32_t smem_size = 0;
-};
+// ── Op sprayer (new executor) ───────────────────────────────────────────
 
-// Per-invocation mutable execution state.
-struct CollectiveRun {
+// Per-collective mutable state.
+struct SprayRun {
   CollectiveOpStatus status = CollectiveOpStatus::Queued;
   TiledResult tiled;
-  void* input_ptr = nullptr;
-  void* output_ptr = nullptr;
-  void* scratch_ptr = nullptr;
-  std::string error_message;
+  void* input = nullptr;
+  void* output = nullptr;
+  void* scratch = nullptr;
+  std::string error;
 
-  std::vector<bool> completed;
+  std::vector<bool> done;
+  std::vector<uint32_t> ready;    // op indices ready to submit
+  size_t done_count = 0;
+  uint32_t next_layer = 0;
 
-  // O(1) drain → op index lookup.  Key combines backend + token value
-  // because transport and device backends have independent token spaces.
-  struct TokenKey {
-    Backend* backend;
-    uint64_t value;
-    bool operator==(TokenKey const& o) const {
-      return backend == o.backend && value == o.value;
-    }
-  };
-  struct TokenKeyHash {
-    size_t operator()(TokenKey const& k) const {
-      return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.backend)) ^
-             std::hash<uint64_t>()(k.value);
-    }
-  };
-  std::unordered_map<TokenKey, size_t, TokenKeyHash> token_to_op_idx;
-
-  std::vector<std::vector<uint32_t>> layers;
-  uint32_t first_unfinished = 0;
-  std::vector<size_t> stream_head;
-  std::vector<BackendToken> done_buf;
-  std::vector<std::pair<uint32_t, uint32_t>> ready;
-  size_t completed_count = 0;
-  size_t total_ops = 0;
-  uint64_t signal_seq_base = 0;
+  // Command buffers — reused across cycles
+  std::vector<uint32_t> dev_map;   // cmd index → op index
+  std::vector<uint32_t> tpt_map;
 };
 
-class Executor {
+struct SprayExecutorConfig {
+  int gpu_id;
+  int rank;
+  int world_size;
+  size_t device_task_capacity = 256;
+  size_t max_device_fifos = 8;
+  int threads_per_block = 64;
+  size_t fifo_capacity = 256;
+  size_t smem_size = 48 * 1024;
+  std::shared_ptr<struct UKernel::Transport::CommunicatorConfig> communicator_config;
+};
+
+class SprayExecutor {
  public:
-  explicit Executor(
-      ExecutorBackends backends,
-      std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
-          resolve_ipc_buffer_pointer = {});
+  static std::unique_ptr<SprayExecutor> create(SprayExecutorConfig const& config);
+  SprayExecutor(BatchExecutorBackends backends);
+  ~SprayExecutor() = default;
 
-  explicit Executor(ExecutorConfig const& config = {});
-  ~Executor();
+  CollectiveOpHandle submit_allreduce(CollectiveConfig const& cfg,
+                                      void* input, void* output, void* scratch);
+  CollectiveOpHandle submit_alltoall(CollectiveConfig const& cfg,
+                                     void* input, void* output, void* scratch);
 
-  Executor(Executor const&) = delete;
-  Executor& operator=(Executor const&) = delete;
-
-  CollectiveOpHandle submit_allreduce(CollectiveConfig const& config,
-                                      void* input_ptr, void* output_ptr,
-                                      void* scratch_ptr);
-  CollectiveOpHandle submit_alltoall(CollectiveConfig const& config,
-                                     void* input_ptr, void* output_ptr,
-                                     void* scratch_ptr);
-
-  CollectiveOpStatus status(CollectiveOpHandle handle) const;
-  bool poll(CollectiveOpHandle handle);
+  CollectiveOpStatus status(CollectiveOpHandle h) const;
+  bool poll(CollectiveOpHandle h);
   void progress();
-  bool wait(CollectiveOpHandle handle,
-            std::chrono::milliseconds timeout = std::chrono::milliseconds(0));
-  void release(CollectiveOpHandle handle);
-  std::string error_message(CollectiveOpHandle handle) const;
-
-  void run_tiled(TiledResult const& tiled, void* input_ptr,
-                 void* output_ptr, void* scratch_ptr);
+  bool wait(CollectiveOpHandle h, std::chrono::milliseconds to = std::chrono::milliseconds(0));
+  void release(CollectiveOpHandle h);
+  std::string error_message(CollectiveOpHandle h) const;
 
   size_t active_count() const;
-  UKernel::Transport::Communicator* communicator();
-  UKernel::Transport::Communicator const* communicator() const;
+  void run_tiled(TiledResult const& tiled, void* input, void* output, void* scratch);
 
  private:
-  CollectiveRun* get_run(CollectiveOpHandle handle);
-  CollectiveRun const* get_run(CollectiveOpHandle handle) const;
-  CollectiveOpHandle submit_collective(CollKind kind,
-                                       CollectiveConfig const& config,
-                                       void* input_ptr, void* output_ptr,
-                                       void* scratch_ptr);
-  void advance_run(CollectiveRun& run);
-  void ensure_validated(TiledResult const& tiled,
-                        void* input_ptr, void* output_ptr,
-                        void* scratch_ptr);
-  void bind_op(Op const& op, OpBindings& bind,
-               void* input_ptr, void* output_ptr, void* scratch_ptr);
-  void collect_ready(CollectiveRun& run);
-  void submit_ready(CollectiveRun& run);
-  void drain_completed(CollectiveRun& run);
+  SprayRun* get(CollectiveOpHandle h);
+  void advance(SprayRun& run);
+  void collect_ready(SprayRun& run);
+  void enqueue_ready(SprayRun& run);
+  void drain_done(SprayRun& run);
 
-  ExecutorBackends backends_{};
-  std::unique_ptr<Backend> owned_transport_backend_;
-  std::unique_ptr<Backend> owned_device_backend_;
-  std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
-      resolve_ipc_buffer_pointer_;
-  std::unordered_map<CollectiveOpHandle, CollectiveRun> runs_;
+  BatchExecutorBackends be_;
+  std::unique_ptr<BatchBackend> owned_device_;
+  std::unique_ptr<BatchBackend> owned_transport_;
+  std::unique_ptr<Transport::Communicator> owned_comm_;
+  std::unordered_map<CollectiveOpHandle, SprayRun> runs_;
   uint64_t next_handle_ = 1;
-  uint64_t validated_sig_ = 0;
-
-  std::vector<GpuSignalPeer> gpu_comp_;
 };
 
 }  // namespace CCL

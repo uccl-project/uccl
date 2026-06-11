@@ -1,118 +1,27 @@
 #include "device_backend.h"
 #include "../../device/task.h"
 #include "../../device/worker.h"
-#include "../../include/gpu_rt.h"
-#include "../utils.h"
+#include "../../../include/gpu_rt.h"
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
+#include <thread>
 
 namespace UKernel {
 namespace CCL {
 
-namespace {
-
-Device::DataType to_device_dtype(ScalarType dtype) {
-  switch (dtype) {
-    case ScalarType::Int8:
-      return Device::DataType::Int8;
-    case ScalarType::Int32:
-      return Device::DataType::Int32;
-    case ScalarType::Int64:
-      return Device::DataType::Int64;
-    case ScalarType::Float16:
-      return Device::DataType::Fp16;
-    case ScalarType::Float32:
-      return Device::DataType::Fp32;
-    case ScalarType::Float64:
-      return Device::DataType::Fp64;
-    case ScalarType::BFloat16:
-      return Device::DataType::Bf16;
-    default:
-      break;
-  }
-  throw std::invalid_argument("device backend does not support this dtype");
-}
-
-Device::ReduceType to_reduce_type(ReductionKind reduction) {
-  switch (reduction) {
-    case ReductionKind::None:
-      return Device::ReduceType::None;
-    case ReductionKind::Sum:
-      return Device::ReduceType::Sum;
-    case ReductionKind::Prod:
-      return Device::ReduceType::Prod;
-    case ReductionKind::Max:
-      return Device::ReduceType::Max;
-    case ReductionKind::Min:
-      return Device::ReduceType::Min;
-    case ReductionKind::BitwiseAnd:
-      return Device::ReduceType::BitwiseAnd;
-  }
-  return Device::ReduceType::None;
-}
-
-}  // namespace
-
-DeviceBackend::DeviceBackend(DeviceBackendConfig const& config)
-    : config_(config) {
-  if (config_.task_capacity == 0)
-    throw std::invalid_argument(
-        "device backend task_capacity must be positive");
-  if (config_.max_fifos == 0)
-    throw std::invalid_argument("device backend max_fifos must be positive");
-  if (config_.threads_per_block == 0)
-    throw std::invalid_argument(
-        "device backend threads_per_block must be positive");
-  if (config_.fifo_capacity == 0)
-    throw std::invalid_argument(
-        "device backend fifo_capacity must be positive");
-
-  int device = 0;
-  GPU_RT_CHECK(gpuGetDevice(&device));
-  local_device_idx_ = device;
-  GPU_RT_CHECK(
-      gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount, device));
-  submitted_per_fifo_.resize(config_.max_fifos);
+DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
+  GPU_RT_CHECK(gpuGetDevice(&device_idx_));
+  GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_,
+              gpuDevAttrMultiProcessorCount, device_idx_));
 }
 
 DeviceBackend::~DeviceBackend() {
-  for (auto& m : submitted_per_fifo_) m.clear();
-  active_streams_.clear();
   worker_pool_.reset();
   if (owns_task_manager_) {
     Device::TaskManager::instance().release();
     owns_task_manager_ = false;
   }
-}
-
-char const* DeviceBackend::name() const { return "device"; }
-
-// ── validate — one-time init ──────────────────────────────────────────
-
-void DeviceBackend::validate(TiledResult const& tiled,
-                             void* input_ptr, void* output_ptr,
-                             void* scratch_ptr) {
-  (void)input_ptr;
-  (void)output_ptr;
-  int current_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&current_device));
-  if (current_device != local_device_idx_)
-    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
-  current_device_ = local_device_idx_;
-
-  if (tiled.staging_bytes_required != 0 && scratch_ptr == nullptr)
-    throw std::invalid_argument("device backend staging buffer is missing");
-
-  reduction_kind_ = tiled.reduction;
-
-  // Pre-warm runtime & workers.
-  ensure_runtime();
-}
-
-// ── submit ─────────────────────────────────────────────────────────────
-
-void DeviceBackend::set_signal_buffers(std::vector<GpuSignalPeer> const& bufs) {
-  gpu_signal_bufs_ = bufs;
 }
 
 bool DeviceBackend::supports(OpKind kind) const {
@@ -121,268 +30,111 @@ bool DeviceBackend::supports(OpKind kind) const {
          kind == OpKind::Recv;
 }
 
-BackendToken DeviceBackend::submit(Op const& op, OpBindings const& bind,
-                                    void* input_ptr, void* output_ptr,
-                                    void* scratch_ptr) {
-  (void)scratch_ptr;
-  if (!supports(op.kind))
-    throw std::invalid_argument("unsupported op kind for device backend");
-  if (worker_pool_ == nullptr)
-    throw std::runtime_error(
-        "device backend not initialized — call validate() first");
-
-  // Fast path: Copy ops need minimal TaskArgs.
-  if (op.kind == OpKind::Copy) {
-    void const* src = bind.resolved_src
-                          ? bind.resolved_src
-                          : byte_offset(input_ptr, op.src_off);
-    void* dst = bind.resolved_dst
-                    ? bind.resolved_dst
-                    : byte_offset(output_ptr, op.dst_off);
-
-    Device::TaskArgs args{};
-    args.src = const_cast<void*>(src);
-    args.src2 = nullptr;
-    args.dst = dst;
-    args.bytes = op.bytes;
-    args.src_rank = -1;
-    args.dst_rank = -1;
-    args.src_device = local_device_idx_;
-    args.dst_device = local_device_idx_;
-    args.set_red_type(Device::ReduceType::None);
-
-    uint32_t stream_id = bind.stream_index;
-    auto fit = active_streams_.find(stream_id);
-    uint32_t fifo_id = (fit != active_streams_.end())
-                           ? fit->second.fifo_id
-                           : acquire_fifo(stream_id, suggested_num_blocks(op));
-
-    Device::Task task = Device::TaskManager::instance().create_task(
-        args, Device::TaskType::CollCopy, Device::DataType::Int8, 0);
-
-    uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
-    if (task_id == Device::WorkerPool::kInvalidTaskId) {
-      Device::TaskManager::instance().free_task_args(task.args_index());
-      return BackendToken{0};
-    }
-
-    BackendToken token{next_token_++};
-    submitted_per_fifo_[fifo_id][token.value] =
-        TaskRec{task_id, stream_id, task.args_index()};
-    active_streams_[stream_id].pending++;
-    return token;
+void DeviceBackend::ensure_runtime() {
+  if (!Device::TaskManager::instance().inited()) {
+    Device::TaskManager::instance().init(cfg_.task_capacity);
+    owns_task_manager_ = true;
   }
-
-  // General path for Reduce / Send / RecvReduce / Recv.
-  auto role_src = buf_role(op.kind, true, op.copy_from_staging);
-  auto role_dst = buf_role(op.kind, false, op.copy_from_staging);
-
-  auto ptr_for = [&](CollectiveBufferRole role) -> void* {
-    switch (role) {
-      case CollectiveBufferRole::Input:  return input_ptr;
-      case CollectiveBufferRole::Output: return output_ptr;
-      case CollectiveBufferRole::Scratch: return scratch_ptr;
-    }
-    return nullptr;
-  };
-
-  void const* src =
-      bind.resolved_src
-          ? bind.resolved_src
-          : byte_offset(ptr_for(role_src), op.src_off);
-  void* dst =
-      bind.resolved_dst
-          ? bind.resolved_dst
-          : byte_offset(ptr_for(role_dst), op.dst_off);
-
-  Device::TaskArgs args{};
-  args.src = const_cast<void*>(src);
-  args.src2 = nullptr;
-  args.dst = dst;
-  args.bytes = op.bytes;
-  args.src_rank =
-      op.src_peer != ~0u ? static_cast<int>(op.src_peer) : -1;
-  args.dst_rank =
-      op.dst_peer != ~0u ? static_cast<int>(op.dst_peer) : -1;
-  args.src_device = bind.src_device >= 0 ? bind.src_device : local_device_idx_;
-  args.dst_device = bind.dst_device >= 0 ? bind.dst_device : local_device_idx_;
-  args.set_red_type(to_reduce_type(
-      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-          ? reduction_kind_
-          : ReductionKind::None));
-
-  if (op.kind == OpKind::Send && op.dst_peer != ~0u &&
-      static_cast<size_t>(op.dst_peer) < gpu_signal_bufs_.size()) {
-    args.src2 = gpu_signal_bufs_[op.dst_peer].remote;
-  } else if ((op.kind == OpKind::RecvReduce ||
-              op.kind == OpKind::Recv) &&
-             op.src_peer != ~0u &&
-             static_cast<size_t>(op.src_peer) < gpu_signal_bufs_.size()) {
-    args.src2 = gpu_signal_bufs_[op.src_peer].local;
+  if (worker_pool_) return;
+  Device::WorkerPool::Config wc;
+  wc.numMaxWorkers = cfg_.max_fifos;
+  wc.threadsPerBlock = cfg_.threads_per_block;
+  wc.fifoCapacity = cfg_.fifo_capacity;
+  wc.smemSize = cfg_.smem_size;
+  worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
+  // Pre-create all workers
+  for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
+    worker_pool_->createWorker(i, 1);
+    worker_pool_->waitWorker(i);
   }
-  if (op.kind == OpKind::Send || op.kind == OpKind::RecvReduce ||
-      op.kind == OpKind::Recv) {
-    uint8_t red = static_cast<uint8_t>(to_reduce_type(
-        op.kind == OpKind::RecvReduce ? reduction_kind_
-                                       : ReductionKind::None));
-    args.redTypeRaw = (bind.signal_seq << 8) | red;
-  }
-
-  Device::TaskType task_type;
-  switch (op.kind) {
-    case OpKind::Reduce:     task_type = Device::TaskType::CollReduce; break;
-    case OpKind::RecvReduce: task_type = Device::TaskType::CollRecvReduce; break;
-    case OpKind::Send:       task_type = Device::TaskType::CollSend; break;
-    case OpKind::Recv:       task_type = Device::TaskType::CollRecv; break;
-    default:                 task_type = Device::TaskType::CollCopy; break;
-  }
-
-  ScalarType op_dtype =
-      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-          ? ScalarType::Float32 : ScalarType::Int8;
-
-  uint32_t stream_id = bind.stream_index;
-  auto fit = active_streams_.find(stream_id);
-  uint32_t fifo_id = (fit != active_streams_.end())
-                         ? fit->second.fifo_id
-                         : acquire_fifo(stream_id, suggested_num_blocks(op));
-
-  Device::Task task = Device::TaskManager::instance().create_task(
-      args, task_type, to_device_dtype(op_dtype), 0);
-
-  uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
-  if (task_id == Device::WorkerPool::kInvalidTaskId) {
-    Device::TaskManager::instance().free_task_args(task.args_index());
-    return BackendToken{0};
-  }
-
-  BackendToken token{next_token_++};
-  submitted_per_fifo_[fifo_id][token.value] =
-      TaskRec{task_id, stream_id, task.args_index()};
-  active_streams_[stream_id].pending++;
-  return token;
 }
-// ── drain ──────────────────────────────────────────────────────────────
 
-size_t DeviceBackend::drain(BackendToken* out, size_t max_count) {
-  if (current_device_ < 0) {
-    GPU_RT_CHECK(gpuGetDevice(&current_device_));
-    if (current_device_ != local_device_idx_)
-      GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+void DeviceBackend::init(BufSpec bufs[3]) {
+  for (int i = 0; i < 3; ++i) bufs_[i] = bufs[i];
+  ensure_runtime();
+  inited_ = true;
+}
+
+size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n) {
+  if (!inited_) return 0;
+
+  size_t accepted = 0;
+  while (accepted < n && pending_.size() < capacity()) {
+    Cmd const& c = cmds[accepted];
+
+    // Build TaskArgs
+    Device::TaskArgs args{};
+    args.bytes = c.bytes;
+    args.src_rank = (c.src_peer != ~0u) ? (int)c.src_peer : -1;
+    args.dst_rank = (c.dst_peer != ~0u) ? (int)c.dst_peer : -1;
+    args.src_device = device_idx_;
+    args.dst_device = device_idx_;
+
+    // Resolve src/dst pointers from registered buffers
+    if (c.src_buf > 0 && c.src_buf <= 3 && bufs_[c.src_buf - 1].ptr) {
+      args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
+    }
+    if (c.dst_buf > 0 && c.dst_buf <= 3 && bufs_[c.dst_buf - 1].ptr) {
+      args.dst = (char*)bufs_[c.dst_buf - 1].ptr + c.dst_off;
+    }
+    args.set_red_type(c.redop == ReductionKind::None
+                          ? Device::ReduceType::None
+                          : c.redop == ReductionKind::Sum
+                                ? Device::ReduceType::Sum
+                                : Device::ReduceType::Sum);
+
+    // Map OpKind → TaskType
+    Device::TaskType tt;
+    switch (c.kind) {
+      case OpKind::Copy:       tt = Device::TaskType::CollCopy; break;
+      case OpKind::Reduce:     tt = Device::TaskType::CollReduce; break;
+      case OpKind::Send:       tt = Device::TaskType::CollSend; break;
+      case OpKind::Recv:       tt = Device::TaskType::CollRecv; break;
+      case OpKind::RecvReduce: tt = Device::TaskType::CollRecvReduce; break;
+      default: ++accepted; continue;
+    }
+
+    // Create task and enqueue
+    uint32_t cmd_idx = cmd_next_++;
+    auto task = Device::TaskManager::instance().create_task(
+        args, tt, Device::DataType::Fp32, 0);
+
+    // Round-robin FIFO assignment
+    uint32_t fid = next_fifo_ % cfg_.max_fifos;
+    next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
+
+    uint64_t tid = worker_pool_->enqueue(task, fid);
+    if (tid == Device::WorkerPool::kInvalidTaskId) break; // backpressure
+
+    pending_.push_back({fid, tid, task.args_index(), cmd_idx});
+    ++accepted;
   }
+  return accepted;
+}
 
+size_t DeviceBackend::drain(uint32_t* completed, size_t max) {
   size_t count = 0;
-
-  for (uint32_t fid = 0; fid < submitted_per_fifo_.size() && count < max_count;
-       ++fid) {
-    auto& fifo_map = submitted_per_fifo_[fid];
-    if (fifo_map.empty()) continue;
-    auto it = fifo_map.begin();
-    while (it != fifo_map.end() && count < max_count) {
-      TaskRec& rec = it->second;
-      if (!worker_pool_->is_done(rec.task_id, fid)) {
-        ++it;
-        continue;
-      }
-      release_task_args(rec.args_id);
-      out[count].value = it->first;
-      out[count].failed = false;
-      ++count;
-
-      uint32_t stream_id = rec.stream_id;
-      it = fifo_map.erase(it);
-
-      auto fi = active_streams_.find(stream_id);
-      if (fi != active_streams_.end() && fi->second.pending > 0) {
-        --fi->second.pending;
-      }
+  for (size_t i = 0; i < pending_.size() && count < max; ) {
+    auto& rec = pending_[i];
+    if (worker_pool_->is_done(rec.task_id, rec.fifo_id)) {
+      Device::TaskManager::instance().free_task_args(rec.args_id);
+      completed[count++] = rec.cmd_idx;
+      if (i != pending_.size() - 1)
+        rec = pending_.back();
+      pending_.pop_back();
+    } else {
+      ++i;
     }
   }
-
   return count;
 }
 
-// ── stop ───────────────────────────────────────────────────────────────
-
-void DeviceBackend::stop(uint32_t stream_id) {
-  stop_stream(stream_id);
+size_t DeviceBackend::capacity() const {
+  return (size_t)cfg_.max_fifos * cfg_.fifo_capacity;
 }
 
-void DeviceBackend::stop_stream(uint32_t stream_id) {
-  if (worker_pool_ == nullptr) return;
-  auto it = active_streams_.find(stream_id);
-  if (it == active_streams_.end() || it->second.pending != 0) return;
-  uint32_t fifo_id = it->second.fifo_id;
-  worker_pool_->destroyWorker(fifo_id);
-  // Release any remaining task args for this stream.
-  for (auto& [token_val, rec] : submitted_per_fifo_[fifo_id])
-    release_task_args(rec.args_id);
-  submitted_per_fifo_[fifo_id].clear();
-  free_fifos_.push_back(fifo_id);
-  active_streams_.erase(it);
-}
-
-// ── internal ───────────────────────────────────────────────────────────
-
-void DeviceBackend::release_task_args(uint32_t args_id) {
-  Device::TaskManager::instance().free_task_args(args_id);
-}
-
-void DeviceBackend::ensure_runtime() {
-  if (!Device::TaskManager::instance().inited()) {
-    if (config_.no_gdr) {
-      Device::TaskManager::instance().init_no_gdr(config_.task_capacity);
-    } else {
-      Device::TaskManager::instance().init(config_.task_capacity);
-    }
-    owns_task_manager_ = true;
-  }
-  if (worker_pool_ != nullptr) return;
-  Device::WorkerPool::Config cfg;
-  cfg.numMaxWorkers = config_.max_fifos;
-  cfg.threadsPerBlock = config_.threads_per_block;
-  cfg.fifoCapacity = config_.fifo_capacity;
-  cfg.smemSize = config_.smem_size;
-  worker_pool_ = std::make_unique<Device::WorkerPool>(cfg);
-  free_fifos_.clear();
-  for (uint32_t fid = 0; fid < cfg.numMaxWorkers; ++fid)
-    free_fifos_.push_back(fid);
-}
-
-uint32_t DeviceBackend::acquire_fifo(uint32_t stream_id, uint32_t num_blocks) {
-  auto it = active_streams_.find(stream_id);
-  if (it != active_streams_.end()) return it->second.fifo_id;
-  if (worker_pool_ == nullptr)
-    throw std::runtime_error("device runtime not initialized");
-  if (free_fifos_.empty()) throw std::runtime_error("no available FIFO slots");
-
-  uint32_t fifo_id = free_fifos_.back();
-  free_fifos_.pop_back();
-  if (!worker_pool_->createWorker(fifo_id, num_blocks)) {
-    free_fifos_.push_back(fifo_id);
-    throw std::runtime_error("failed to create worker");
-  }
-  worker_pool_->waitWorker(fifo_id);
-  active_streams_.emplace(stream_id, StreamRec{fifo_id, 0});
-  return fifo_id;
-}
-
-uint32_t DeviceBackend::suggested_num_blocks(Op const& op) const {
-  size_t elem_bytes =
-      (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-          ? scalar_type_size(reduction_dtype_)
-          : 1;
-  size_t bytes_per_block;
-  if (config_.bytes_per_block > 0)
-    bytes_per_block = config_.bytes_per_block;
-  else
-    bytes_per_block =
-        (op.kind == OpKind::Reduce) ? (128u << 10) : (1u << 20);
-  if (elem_bytes > 1) bytes_per_block *= elem_bytes;
-  uint32_t blocks = static_cast<uint32_t>(
-      std::max<size_t>(1, (op.bytes + bytes_per_block - 1) / bytes_per_block));
-  return std::min<uint32_t>(std::max<uint32_t>(1, blocks),
-                            static_cast<uint32_t>(std::max(1, sm_count_)));
+void DeviceBackend::set_signal_buffers(std::vector<GpuSignalPeer> const& peers) {
+  gpu_signal_bufs_ = peers;
 }
 
 }  // namespace CCL

@@ -1,412 +1,326 @@
 #include "executor.h"
+#include "../../include/gpu_rt.h"
+#include "../../include/transport.h"
+#include "algo/chunk_graph.h"
+#include "backend/backend.h"
+#include "backend/device_backend.h"
+#include "backend/transport_backend.h"
+#include "coll_config.h"
 #include "utils.h"
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <functional>
+#include <algorithm>
+#include <memory>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
-namespace {
+// ── SprayExecutor factory (creates backends + communicator) ──────────────
 
-void* local_ptr(CollectiveBufferRole role, size_t offset,
-                void* input_ptr, void* output_ptr, void* scratch_ptr) {
-  switch (role) {
-    case CollectiveBufferRole::Input:
-      return byte_offset(input_ptr, offset);
-    case CollectiveBufferRole::Output:
-      return byte_offset(output_ptr, offset);
-    case CollectiveBufferRole::Scratch:
-      return byte_offset(scratch_ptr, offset);
+static constexpr uint32_t kCompIdBase = 0x40000000u;
+
+std::unique_ptr<SprayExecutor> SprayExecutor::create(
+    SprayExecutorConfig const& config) {
+  auto comm = std::make_unique<UKernel::Transport::Communicator>(
+      config.gpu_id, config.rank, config.world_size,
+      config.communicator_config);
+
+  auto dev_be = std::make_unique<DeviceBackend>(DeviceBackendConfig{
+      .task_capacity = static_cast<uint32_t>(config.device_task_capacity),
+      .max_fifos = static_cast<uint32_t>(config.max_device_fifos),
+      .threads_per_block = static_cast<uint32_t>(config.threads_per_block),
+      .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
+      .smem_size = static_cast<uint32_t>(config.smem_size),
+  });
+  auto tpt_be = std::make_unique<TransportBackend>(comm.get());
+
+  int n = comm->world_size();
+  std::vector<GpuSignalPeer> gpu_comp(n);
+  for (int peer = 0; peer < n; ++peer) {
+    if (peer == config.rank) continue;
+    GPU_RT_CHECK(gpuMalloc(&gpu_comp[peer].local, 16));
+    GPU_RT_CHECK(gpuMemset(gpu_comp[peer].local, 0, 16));
+    comm->reg_ipc(kCompIdBase + peer, gpu_comp[peer].local, 16, true);
   }
-  return nullptr;
-}
-
-uint32_t remote_buffer_id_for_role(CollectiveBufferRole role) {
-  switch (role) {
-    case CollectiveBufferRole::Input:
-      return 1;
-    case CollectiveBufferRole::Output:
-      return 2;
-    case CollectiveBufferRole::Scratch:
-      return 3;
+  for (int peer = 0; peer < n; ++peer) {
+    if (peer == config.rank) continue;
+    if (!comm->wait_ipc(peer, kCompIdBase + config.rank, 30000))
+      throw std::runtime_error("GPU comp buffer IPC exchange failed for peer " +
+                               std::to_string(peer));
+    int remote_dev = -1;
+    comm->try_resolve_remote_ipc_pointer(peer, kCompIdBase + config.rank,
+                                         0, 16, reinterpret_cast<void**>(&gpu_comp[peer].remote),
+                                         &remote_dev);
   }
-  return 0;
+  dev_be->set_signal_buffers(gpu_comp);
+
+  auto ex = std::make_unique<SprayExecutor>(BatchExecutorBackends{
+      .transport = tpt_be.get(),
+      .device = dev_be.get(),
+  });
+  ex->owned_device_ = std::move(dev_be);
+  ex->owned_transport_ = std::move(tpt_be);
+  ex->owned_comm_ = std::move(comm);
+  return ex;
 }
 
-Backend* pick_backend(ExecutorBackends const& backends, OpKind kind) {
-  if (backends.transport && backends.transport->supports(kind))
-    return backends.transport;
-  return backends.device;
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+static CollectiveBufferRole buf_role(OpKind kind, bool is_src,
+                                     bool copy_from_staging) {
+  switch (kind) {
+    case OpKind::Copy:
+      return is_src ? (copy_from_staging ? CollectiveBufferRole::Scratch
+                                         : CollectiveBufferRole::Input)
+                    : CollectiveBufferRole::Output;
+    case OpKind::Reduce:
+      return is_src ? CollectiveBufferRole::Input : CollectiveBufferRole::Output;
+    case OpKind::Send:
+      return is_src ? CollectiveBufferRole::Input : CollectiveBufferRole::Output;
+    case OpKind::Recv:
+    case OpKind::RecvReduce:
+      return CollectiveBufferRole::Output;
+    default:
+      return CollectiveBufferRole::Input;
+  }
 }
 
-}  // namespace
+static uint32_t buf_of(Op const& op, bool is_src) {
+  auto r = buf_role(op.kind, is_src, op.copy_from_staging);
+  return static_cast<uint32_t>(r) + 1;  // Input=1, Output=2, Scratch=3
+}
 
-static std::atomic<uint64_t> g_seq{1};
+static Cmd make_cmd(Op const& op, ReductionKind redop) {
+  Cmd c;
+  c.kind = op.kind;
+  c.bytes = static_cast<uint32_t>(op.bytes);
+  c.src_off = static_cast<uint32_t>(op.src_off);
+  c.dst_off = static_cast<uint32_t>(op.dst_off);
+  c.src_peer = op.src_peer;
+  c.dst_peer = op.dst_peer;
+  c.src_buf = buf_of(op, true);
+  c.dst_buf = buf_of(op, false);
+  c.redop = (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
+                ? redop : ReductionKind::None;
+  return c;
+}
 
-// ── Executor ────────────────────────────────────────────────────────────
+// ── SprayExecutor ───────────────────────────────────────────────────────
 
-Executor::Executor(
-    ExecutorBackends backends,
-    std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
-        resolve_ipc_buffer_pointer)
-    : backends_(backends),
-      resolve_ipc_buffer_pointer_(std::move(resolve_ipc_buffer_pointer)) {}
+SprayExecutor::SprayExecutor(BatchExecutorBackends backends) : be_(backends) {}
 
-Executor::~Executor() = default;
-
-CollectiveRun* Executor::get_run(CollectiveOpHandle handle) {
-  auto it = runs_.find(handle);
+SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
+  auto it = runs_.find(h);
   return it != runs_.end() ? &it->second : nullptr;
 }
 
-CollectiveRun const* Executor::get_run(CollectiveOpHandle handle) const {
-  auto it = runs_.find(handle);
-  return it != runs_.end() ? &it->second : nullptr;
+CollectiveOpStatus SprayExecutor::status(CollectiveOpHandle h) const {
+  auto it = runs_.find(h);
+  return it != runs_.end() ? it->second.status : CollectiveOpStatus::Completed;
 }
 
-// ── validate guard ─────────────────────────────────────────────────────
-
-void Executor::ensure_validated(TiledResult const& tiled,
-                                void* input_ptr, void* output_ptr,
-                                void* scratch_ptr) {
-  uint64_t sig =
-      reinterpret_cast<uintptr_t>(input_ptr) ^
-      (static_cast<uint64_t>(tiled.ops.size()) << 32) ^
-      static_cast<uint64_t>(std::max(tiled.input_bytes, tiled.output_bytes));
-  if (sig == validated_sig_) return;
-  if (backends_.transport)
-    backends_.transport->validate(tiled, input_ptr, output_ptr, scratch_ptr);
-  if (backends_.device && backends_.device != backends_.transport)
-    backends_.device->validate(tiled, input_ptr, output_ptr, scratch_ptr);
-  validated_sig_ = sig;
+size_t SprayExecutor::active_count() const {
+  size_t n = 0;
+  for (auto& [h, r] : runs_)
+    if (r.status == CollectiveOpStatus::Running) ++n;
+  return n;
 }
 
-// ── IPC resolution ─────────────────────────────────────────────────────
+std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
+  auto it = runs_.find(h);
+  return it != runs_.end() ? it->second.error : std::string{};
+}
 
-void Executor::bind_op(Op const& op, OpBindings& bind,
-                       void* input_ptr, void* output_ptr, void* scratch_ptr) {
-  auto role_src = buf_role(op.kind, true, op.copy_from_staging);
-  auto role_dst = buf_role(op.kind, false, op.copy_from_staging);
+// ── submit ──────────────────────────────────────────────────────────────
 
-  if (op.src_peer != ~0u) {
-    uint32_t remote_id = remote_buffer_id_for_role(role_src);
-    void* ptr = nullptr;
-    int dev = -1;
-    if (!resolve_ipc_buffer_pointer_ ||
-        !resolve_ipc_buffer_pointer_(op.src_peer, remote_id, op.src_off,
-                                     op.bytes, &ptr, &dev))
-      throw std::runtime_error("failed to resolve remote source pointer");
-    bind.resolved_src = ptr;
-    bind.src_device = dev;
-  } else {
-    bind.resolved_src =
-        local_ptr(role_src, op.src_off, input_ptr, output_ptr, scratch_ptr);
+CollectiveOpHandle SprayExecutor::submit_allreduce(
+    CollectiveConfig const& cfg, void* input, void* output, void* scratch) {
+  CollectiveConfig c = cfg;
+  c.kind = CollKind::AllReduceRing;
+  TiledResult tiled = build_tiled(c, input == output);
+  if (tiled.ops.empty()) {
+    auto h = next_handle_++;
+    runs_[h] = {.status = CollectiveOpStatus::Completed};
+    return h;
   }
 
-  if (op.dst_peer != ~0u) {
-    uint32_t remote_id = remote_buffer_id_for_role(role_dst);
-    void* ptr = nullptr;
-    int dev = -1;
-    if (!resolve_ipc_buffer_pointer_ ||
-        !resolve_ipc_buffer_pointer_(op.dst_peer, remote_id, op.dst_off,
-                                     op.bytes, &ptr, &dev))
-      throw std::runtime_error("failed to resolve remote destination pointer");
-    bind.resolved_dst = ptr;
-    bind.dst_device = dev;
-  } else {
-    bind.resolved_dst =
-        local_ptr(role_dst, op.dst_off, input_ptr, output_ptr, scratch_ptr);
-  }
-}
+  // Init backends with buffer specs
+  BufSpec bufs[3] = {
+      {input, tiled.input_bytes},
+      {output, tiled.output_bytes},
+      {scratch, tiled.staging_bytes_required},
+  };
+  if (be_.transport) be_.transport->init(bufs);
+  if (be_.device) be_.device->init(bufs);
 
-// ── submit_collective ──────────────────────────────────────────────────
-
-CollectiveOpHandle Executor::submit_collective(
-    CollKind kind, CollectiveConfig const& config, void* input_ptr,
-    void* output_ptr, void* scratch_ptr) {
-  bool inplace = (input_ptr == output_ptr);
-
-  CollectiveConfig cfg = config;
-  cfg.kind = kind;
-  TiledResult tiled = build_tiled(cfg, inplace);
-
-  uint64_t seq_base =
-      tiled.ops.empty() ? 0
-                        : g_seq.fetch_add(static_cast<uint64_t>(tiled.ops.size()),
-                                          std::memory_order_relaxed);
-
-  ensure_validated(tiled, input_ptr, output_ptr, scratch_ptr);
-
-  CollectiveOpHandle handle = next_handle_++;
-  CollectiveRun run;
+  auto h = next_handle_++;
+  SprayRun run;
   run.status = CollectiveOpStatus::Running;
   run.tiled = std::move(tiled);
-  run.input_ptr = input_ptr;
-  run.output_ptr = output_ptr;
-  run.scratch_ptr = scratch_ptr;
-  run.total_ops = run.tiled.ops.size();
-  run.signal_seq_base = seq_base;
-  run.layers = run.tiled.layers;
-
-  if (run.total_ops == 0) {
-    run.status = CollectiveOpStatus::Completed;
-    runs_.emplace(handle, std::move(run));
-    return handle;
-  }
-
-  run.completed.assign(run.total_ops, false);
-  run.done_buf.resize(run.total_ops);
-  runs_.emplace(handle, std::move(run));
-  return handle;
+  run.input = input; run.output = output; run.scratch = scratch;
+  run.done.resize(run.tiled.ops.size(), false);
+  runs_[h] = std::move(run);
+  return h;
 }
 
-CollectiveOpHandle Executor::submit_allreduce(CollectiveConfig const& config,
-                                              void* input_ptr,
-                                              void* output_ptr,
-                                              void* scratch_ptr) {
-  return submit_collective(CollKind::AllReduceRing, config, input_ptr,
-                           output_ptr, scratch_ptr);
+CollectiveOpHandle SprayExecutor::submit_alltoall(
+    CollectiveConfig const& cfg, void* input, void* output, void* scratch) {
+  CollectiveConfig c = cfg;
+  c.kind = CollKind::AllToAllPairwise;
+  return submit_allreduce(c, input, output, scratch);
 }
 
-CollectiveOpHandle Executor::submit_alltoall(CollectiveConfig const& config,
-                                             void* input_ptr,
-                                             void* output_ptr,
-                                             void* scratch_ptr) {
-  return submit_collective(CollKind::AllToAllPairwise, config, input_ptr,
-                           output_ptr, scratch_ptr);
-}
+// ── poll / progress / wait ──────────────────────────────────────────────
 
-CollectiveOpStatus Executor::status(CollectiveOpHandle handle) const {
-  auto* run = get_run(handle);
-  return run ? run->status : CollectiveOpStatus::Completed;
-}
-
-// ── advance_run: 3-phase pipeline ──────────────────────────────────────
-
-void Executor::advance_run(CollectiveRun& run) {
+void SprayExecutor::advance(SprayRun& run) {
   if (run.status != CollectiveOpStatus::Running) return;
-  if (run.completed_count == run.total_ops) {
+  if (run.done_count >= run.tiled.ops.size()) {
     run.status = CollectiveOpStatus::Completed;
     return;
   }
-
   collect_ready(run);
-  submit_ready(run);
-  drain_completed(run);
-
-  if (run.completed_count == run.total_ops)
+  enqueue_ready(run);
+  drain_done(run);
+  if (run.done_count >= run.tiled.ops.size())
     run.status = CollectiveOpStatus::Completed;
 }
 
-// Phase 1: scan every stream, collect ops whose deps are satisfied.
-void Executor::collect_ready(CollectiveRun& run) {
-  run.ready.clear();
-  for (uint32_t l = run.first_unfinished; l < run.layers.size(); ++l) {
-    bool layer_done = true;
-    for (uint32_t op_idx : run.layers[l]) {
-      if (run.completed[op_idx]) continue;
-      layer_done = false;
-      bool deps_ok = true;
-      for (uint32_t dep : run.tiled.ops[op_idx].deps) {
-        if (!run.completed[dep]) { deps_ok = false; break; }
-      }
-      if (deps_ok) run.ready.push_back({l, op_idx});
-    }
-    if (layer_done) run.first_unfinished = l + 1;
-  }
+bool SprayExecutor::poll(CollectiveOpHandle h) {
+  auto* r = get(h);
+  if (!r) return true;
+  if (r->status != CollectiveOpStatus::Running) return true;
+  advance(*r);
+  return r->status == CollectiveOpStatus::Completed ||
+         r->status == CollectiveOpStatus::Failed;
 }
 
-// Phase 2: resolve pointers and submit every ready op to its backend.
-void Executor::submit_ready(CollectiveRun& run) {
-  for (auto& r : run.ready) {
-    uint32_t layer_idx = r.first;
-    uint32_t op_idx = r.second;
-    Op const& op = run.tiled.ops[op_idx];
-    Backend* backend = pick_backend(backends_, op.kind);
-    if (backend == nullptr) continue;
-
-    OpBindings bind;
-    bind.stream_index = op_idx;
-
-    if (resolve_ipc_buffer_pointer_) {
-      try {
-        bind_op(op, bind, run.input_ptr, run.output_ptr, run.scratch_ptr);
-      } catch (std::exception const& e) {
-        run.status = CollectiveOpStatus::Failed;
-        run.error_message =
-            std::string("IPC resolution failed for op ") +
-            std::to_string(op_idx) + ": " + e.what();
-        return;
-      }
-    } else {
-      if (op.src_peer == ~0u)
-        bind.resolved_src = local_ptr(
-            buf_role(op.kind, true, op.copy_from_staging), op.src_off,
-            run.input_ptr, run.output_ptr, run.scratch_ptr);
-      if (op.dst_peer == ~0u)
-        bind.resolved_dst = local_ptr(
-            buf_role(op.kind, false, op.copy_from_staging), op.dst_off,
-            run.input_ptr, run.output_ptr, run.scratch_ptr);
-    }
-    bind.signal_seq = op_idx + run.signal_seq_base;
-
-    BackendToken token;
-    try {
-      token = backend->submit(op, bind, run.input_ptr, run.output_ptr,
-                              run.scratch_ptr);
-    } catch (std::exception const& e) {
-      run.status = CollectiveOpStatus::Failed;
-      run.error_message = e.what();
-      return;
-    }
-
-    if (token.value == 0) {
-      // backpressure handled by layer rescan;  // backpressure — retry next cycle
-      continue;
-    }
-    run.token_to_op_idx[{backend, token.value}] = op_idx;
-  }
+void SprayExecutor::progress() {
+  for (auto& [h, run] : runs_) advance(run);
 }
 
-// Phase 3: drain completed ops from all backends.
-void Executor::drain_completed(CollectiveRun& run) {
-  std::string failure_msg;
-  for (Backend* backend : {backends_.transport, backends_.device}) {
-    if (backend == nullptr) continue;
-    size_t n = backend->drain(run.done_buf.data(), run.total_ops);
-    for (size_t i = 0; i < n; ++i) {
-      auto it = run.token_to_op_idx.find({backend, run.done_buf[i].value});
-      if (it == run.token_to_op_idx.end()) continue;
-      size_t op_idx = it->second;
-      if (run.completed[op_idx]) {
-        run.token_to_op_idx.erase(it);
-        continue;
-      }
-
-      if (run.done_buf[i].failed && failure_msg.empty())
-        failure_msg = std::string("backend '") + backend->name() +
-                      "' reported failure for op " + std::to_string(op_idx);
-
-      run.completed[op_idx] = true;
-      ++run.completed_count;
-      run.token_to_op_idx.erase(it);
-    }
-  }
-  if (!failure_msg.empty()) {
-    run.status = CollectiveOpStatus::Failed;
-    run.error_message = std::move(failure_msg);
-  }
-}
-
-// ── public API ──────────────────────────────────────────────────────────
-
-bool Executor::poll(CollectiveOpHandle handle) {
-  auto* run = get_run(handle);
-  if (run == nullptr) return true;
-  if (run->status != CollectiveOpStatus::Running) return true;
-  advance_run(*run);
-  return run->status == CollectiveOpStatus::Completed ||
-         run->status == CollectiveOpStatus::Failed;
-}
-
-void Executor::progress() {
-  for (auto& [handle, run] : runs_) advance_run(run);
-}
-
-bool Executor::wait(CollectiveOpHandle handle,
-                    std::chrono::milliseconds timeout) {
-  constexpr int kSpinIters = 1000;
-  constexpr int kBackoffBaseUs = 10;
-  constexpr int kBackoffMaxUs = 200;
-  int spin_count = 0;
-  int backoff_us = kBackoffBaseUs;
-
-  if (timeout.count() == 0) {
-    while (!poll(handle)) {
-      if (spin_count < kSpinIters) {
-        ++spin_count;
-        std::this_thread::yield();
-      } else {
-        std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
-        backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
-      }
+bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
+  constexpr int kSpin = 1000;
+  int spin = 0;
+  if (to.count() == 0) {
+    while (!poll(h)) {
+      if (spin < kSpin) { ++spin; std::this_thread::yield(); }
+      else std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     return true;
   }
-  auto deadline = std::chrono::steady_clock::now() + timeout;
+  auto dl = std::chrono::steady_clock::now() + to;
   do {
-    if (poll(handle)) return true;
-    if (spin_count < kSpinIters) {
-      ++spin_count;
-      std::this_thread::yield();
-    } else {
-      std::this_thread::sleep_for(std::chrono::microseconds(backoff_us));
-      backoff_us = std::min(backoff_us * 2, kBackoffMaxUs);
-    }
-  } while (std::chrono::steady_clock::now() < deadline);
-  return poll(handle);
+    if (poll(h)) return true;
+    std::this_thread::yield();
+  } while (std::chrono::steady_clock::now() < dl);
+  return poll(h);
 }
 
-void Executor::release(CollectiveOpHandle handle) {
-  auto it = runs_.find(handle);
+void SprayExecutor::release(CollectiveOpHandle h) {
+  auto it = runs_.find(h);
   if (it == runs_.end()) return;
   if (it->second.status == CollectiveOpStatus::Queued ||
       it->second.status == CollectiveOpStatus::Running)
-    throw std::logic_error("cannot release a queued or running collective");
+    throw std::logic_error("cannot release running collective");
   runs_.erase(it);
 }
 
-std::string Executor::error_message(CollectiveOpHandle handle) const {
-  auto* run = get_run(handle);
-  return run ? run->error_message : std::string{};
+// ── Three-phase advance ─────────────────────────────────────────────────
+
+void SprayExecutor::collect_ready(SprayRun& run) {
+  run.ready.clear();
+  auto& ops = run.tiled.ops;
+  auto& layer = run.tiled.layers;
+
+  for (uint32_t l = run.next_layer; l < layer.size(); ++l) {
+    bool ld = true;
+    for (uint32_t op : layer[l]) {
+      if (run.done[op]) continue;
+      ld = false;
+      bool ok = true;
+      for (uint32_t d : ops[op].deps)
+        if (!run.done[d]) { ok = false; break; }
+      if (ok) run.ready.push_back(op);
+    }
+    if (ld) run.next_layer = l + 1;
+  }
 }
 
-size_t Executor::active_count() const {
-  size_t count = 0;
-  for (auto const& [h, run] : runs_)
-    if (run.status == CollectiveOpStatus::Running) ++count;
-  return count;
+void SprayExecutor::enqueue_ready(SprayRun& run) {
+  // Build command lists grouped by backend
+  std::vector<Cmd> d_cmds, t_cmds;
+  std::vector<uint32_t> d_map, t_map;
+
+  for (uint32_t idx : run.ready) {
+    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction);
+    if (be_.transport && be_.transport->supports(c.kind)) {
+      t_cmds.push_back(c); t_map.push_back(idx);
+    } else if (be_.device) {
+      d_cmds.push_back(c); d_map.push_back(idx);
+    }
+  }
+
+  // Spray to device backend — respect capacity
+  if (be_.device && !d_cmds.empty()) {
+    size_t cap = be_.device->capacity();
+    size_t n = be_.device->enqueue(d_cmds.data(), std::min(d_cmds.size(), cap));
+    run.dev_map.assign(d_map.begin(), d_map.begin() + n);
+  }
+
+  // Spray to transport backend
+  if (be_.transport && !t_cmds.empty()) {
+    size_t cap = be_.transport->capacity();
+    size_t n = be_.transport->enqueue(t_cmds.data(), std::min(t_cmds.size(), cap));
+    run.tpt_map.assign(t_map.begin(), t_map.begin() + n);
+  }
 }
 
-// ── run_tiled (synchronous, for debugging / tests) ─────────────────────
+void SprayExecutor::drain_done(SprayRun& run) {
+  uint32_t comp[256];
+  if (be_.device) {
+    size_t n = be_.device->drain(comp, 256);
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t op = run.dev_map[comp[i]];
+      if (!run.done[op]) { run.done[op] = true; ++run.done_count; }
+    }
+  }
+  if (be_.transport) {
+    size_t n = be_.transport->drain(comp, 256);
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t op = run.tpt_map[comp[i]];
+      if (!run.done[op]) { run.done[op] = true; ++run.done_count; }
+    }
+  }
+  // Yield if stalled
+  if (run.done_count < run.tiled.ops.size())
+    std::this_thread::yield();
+}
 
-void Executor::run_tiled(TiledResult const& tiled, void* input_ptr,
-                         void* output_ptr, void* scratch_ptr) {
-  ensure_validated(tiled, input_ptr, output_ptr, scratch_ptr);
+// ── run_tiled (sync, for tests) ─────────────────────────────────────────
 
-  CollectiveRun run;
+void SprayExecutor::run_tiled(TiledResult const& tiled,
+                               void* input, void* output, void* scratch) {
+  BufSpec bufs[3] = {
+      {input, tiled.input_bytes},
+      {output, tiled.output_bytes},
+      {scratch, tiled.staging_bytes_required},
+  };
+  if (be_.transport) be_.transport->init(bufs);
+  if (be_.device) be_.device->init(bufs);
+
+  SprayRun run;
   run.status = CollectiveOpStatus::Running;
   run.tiled = tiled;
-  run.input_ptr = input_ptr;
-  run.output_ptr = output_ptr;
-  run.scratch_ptr = scratch_ptr;
-  run.total_ops = tiled.ops.size();
-  run.layers = tiled.layers;
-
-  uint64_t seq_base =
-      tiled.ops.empty() ? 0
-                        : g_seq.fetch_add(static_cast<uint64_t>(tiled.ops.size()),
-                                          std::memory_order_relaxed);
-  run.signal_seq_base = seq_base;
-
-  if (run.total_ops == 0) return;
-
-  run.completed.assign(run.total_ops, false);
-  run.done_buf.resize(run.total_ops);
+  run.input = input; run.output = output; run.scratch = scratch;
+  run.done.resize(tiled.ops.size(), false);
 
   while (run.status == CollectiveOpStatus::Running) {
-    advance_run(run);
-    if (run.status == CollectiveOpStatus::Running) std::this_thread::yield();
+    advance(run);
+    if (run.status == CollectiveOpStatus::Running)
+      std::this_thread::yield();
   }
   if (run.status == CollectiveOpStatus::Failed)
-    throw std::runtime_error(run.error_message);
+    throw std::runtime_error(run.error);
 }
 
 }  // namespace CCL
