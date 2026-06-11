@@ -490,13 +490,14 @@ static bool verify_uccl_red_add(uccl_gin::Context& c, int peer, int rank,
 // exactly the expected value. put_value stages data through a per-lane GPU buffer
 // internally, so this also validates the staging path.
 __global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res, int peer,
-                                          uint32_t recv_off_0, int iters, int lane) {
+                                          uint64_t recv_base, int iters, int lane) {
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
   uccl_gin::UCCLGin gin(res);
   for (int it = 0; it < iters; ++it) {
-    char* dst = reinterpret_cast<char*>(res.window_base + recv_off_0) + (size_t)it * 4;
+    char* dst = reinterpret_cast<char*>(recv_base) + (size_t)it * 4;
     gin.put_value<ncclTeamTagRail>(dst, 0xDEAD0000 + it, peer, lane);
   }
+  gin.quiet(lane);  // drain the lane so all plain WRITEs are posted
 }
 
 static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
@@ -511,8 +512,9 @@ static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Each rank writes to a distinct region so pairs don't overwrite each other.
+  uint64_t recv_base = reinterpret_cast<uint64_t>(reinterpret_cast<char*>(recv) + recv_off);
   uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
-      c.resources(), peer, recv_off, iters, lane);
+      c.resources(), peer, recv_base, iters, lane);
   CUDA_OK(cudaStreamSynchronize(stream));
   MPI_Barrier(MPI_COMM_WORLD);
 
