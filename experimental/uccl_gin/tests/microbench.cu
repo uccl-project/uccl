@@ -114,20 +114,17 @@ __global__ void nccl_gin_paired_kernel(ncclWindow_t sendwin, ncclWindow_t recvwi
   ncclGinBarrierSession<ncclCoopCta> bar{ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x};
   bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 
-  // One put per iter from this CTA (CTA 0 only, to keep it a single stream that
-  // is comparable to one UCCL D2H lane; multi-CTA fan-out is a later sweep).
-  if (blockIdx.x == 0) {
-    if (threadIdx.x == 0) {
-      for (int it = 0; it < iters; ++it) {
-        gin.put(ncclTeamWorld(devComm), peer,
-                recvwin, /*recvoff=*/0, sendwin, /*sendoff=*/0,
-                bytes, ncclGin_SignalInc{sig});
-      }
+  // Fan puts across all CTAs — same multi-lane approach as the UCCL kernel.
+  if (threadIdx.x == 0) {
+    for (int it = 0; it < iters; ++it) {
+      gin.put(ncclTeamWorld(devComm), peer,
+              recvwin, /*recvoff=*/0, sendwin, /*sendoff=*/0,
+              bytes, ncclGin_SignalInc{sig});
     }
-    __syncthreads();
-    gin.waitSignal(ncclCoopCta(), sig, base + iters);  // wait inbound from our pair
-    gin.flush(ncclCoopCta());
   }
+  __syncthreads();
+  gin.waitSignal(ncclCoopCta(), sig, base + iters);  // wait inbound from our pair
+  gin.flush(ncclCoopCta());
   bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 }
 
