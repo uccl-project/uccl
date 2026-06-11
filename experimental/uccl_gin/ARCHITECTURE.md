@@ -20,7 +20,7 @@ UCCLGin 还是 NCCLGin。
 | UCCL EP (V1) | UCCL-GIN (V2) |
 |---|---|
 | transport 嵌入 kernel，一个 kernel 一个 fork | `handle::UCCLGin` 独立 API，多 kernel 复用 |
-| coordinator warp 攒 chunk + 发 RDMA | `put<Rail>` 内部分片，调用方不用管 chunk 大小 |
+| coordinator warp 攒 chunk + 发 RDMA | compact channel staging + `put_tail_add` 显式 chunk |
 | tail counter 在 GPU window 内 | `atomic_tail_base` 独立 compact buffer，用 compact-index API |
 | 无 inflight cap | `kUCCLGinMaxInflightNormal` 背压 |
 | 无 sender-side dependency | `PendingAtomicBatch` + `retire_inflight_write` |
@@ -122,10 +122,16 @@ void put(void* recv_sym_ptr, void* send_sym_ptr, int num_bytes,
 
 内部逻辑：
 1. 两个对称指针 `send_sym_ptr` / `recv_sym_ptr` 通过 `window_off()` 转换成 4-byte 移位 offset
-2. 大 payload 自动分片：`kTransferCmdMaxBytes` (~256KB) 对齐切割，循环发多条 rail_put
+2. 如果 `num_bytes > kTransferCmdMaxBytes` (~256KB, TransferCmd 字段宽度硬限制)，
+   **在 handle 内用 while 循环拆成多个 chunk**，每个 chunk 一条 `rail_put`
 3. 每条 `rail_put` 写一条 `TransferCmd{WRITE, atomic_val=0}` 到 D2H ring
 4. Proxy 读到 `atomic_val == 0` → 发普通 `IBV_WR_RDMA_WRITE`
-5. 这条 WRITE 进入 sender-side dependency tracking
+
+> **与 NCCL GIN 的差异**：NCCL `put` 是一条 NIC WR，硬件在 DMA 层做分片——一条 WR
+> 一个 completion、逻辑上不可分割。UCCL-GIN 的 `put` 在 TransferCmd 层面拆成多 WR，
+> 每条独立 RDMA WRITE。大 put 的多个 chunk 在 EFA 上可能乱序到达（写不同 offset，
+> 数据正确性不受影响，但 caller 不能假定“put 返回时整段已作为单次操作发出”）。
+> 这是 TransferCmd 16B ABI 的硬约束，要消除需要扩展 wire format。
 
 对应 NCCL GIN: `gin.put<Rail>(recv, send, bytes, dst, AggregateRequests)`
 
@@ -377,5 +383,9 @@ Gateway env var `UCCL_GIN_RUN_PRIMITIVES=1` 控制是否真正启动 MPI。
    receiver tail counter，receiver seq ordering 保证 count 在 finish 之前。只有不带 count
    的 plain WRITE 才需要 sender 等 CQE。这使 dependency_max 从 72 降到 2。
 
-6. **没有实现 Lsa**。Standalone 不接 DeepEP，不需要 NVLink 路径。集成时组合一个 NCCLGin
-   实例委托所有 Lsa 调用即可。
+6. **Lsa 未实现**。Standalone 不接 DeepEP，不需要 NVLink 路径。集成时组合 NCCLGin 委托即可。
+
+7. **`put<Rail>` 的大 payload 分片**。TransferCmd 的 `bytes` 字段只有 ~256KB 可用范围，
+   超过的 put 在 handle 内拆成多个独立 RDMA WRITE。这和 NCCL `put` 不同——NCCL 一条 WR
+   由 NIC DMA 硬件分片，单 completion。UCCL 的分片在软件层发生，多个 chunk 可能在 EFA
+   上乱序到达。当前 DeepEP dispatch 的 token 粒度（~14KB FP8）远小于此上限，实际不触发。
