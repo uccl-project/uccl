@@ -677,6 +677,37 @@ void run_client(int gpu0, int gpu1) {
     rdma_tp[i] = dev1_tp;
   }
 
+  // ── Block count sweep ────────────────────────────────────────────
+  {
+    size_t sweep_sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 134217728};
+    uint32_t block_counts[] = {1, 4, 8, 16, 32, 64, 128};
+    int n_sizes = sizeof(sweep_sizes)/sizeof(sweep_sizes[0]);
+    int n_blocks = sizeof(block_counts)/sizeof(block_counts[0]);
+
+    printf("\n=== DeviceBackend Block Count Sweep (latency us) ===\n\n");
+    printf("%-9s |", "Size");
+    for (int b = 0; b < n_blocks; ++b) printf(" %4u-blk", block_counts[b]);
+    printf("\n");
+    printf("----------|");
+    for (int b = 0; b < n_blocks; ++b) printf("-------");
+    printf("\n");
+
+    for (int s = 0; s < n_sizes; ++s) {
+      size_t sz = sweep_sizes[s];
+      int lat_iters = (sz < 1048576) ? 100 : ((sz < 16777216) ? 20 : 5);
+      printf("%-9s |", fmt_size(sz));
+      for (int b = 0; b < n_blocks; ++b) {
+        uint32_t bp = block_counts[b];
+        uint32_t bpb = 0;
+        if (bp > 1) bpb = (uint32_t)((sz + bp - 1) / bp);
+        else if (bp == 1) bpb = UINT32_MAX;
+        double lat = bench_device_latency(sz, lat_iters, ipc_src, dst, gpu0, gpu1, bpb);
+        printf(" %7.1f", lat);
+      }
+      printf("\n");
+    }
+  }
+
   { std::ofstream rf(kResultsFile);
     for (size_t i = 0; i < kNumSizes; ++i)
       rf << cm_lat[i] << " " << cm_tp[i] << " " << dev_lat[i] << " " << dev_tp[i]
