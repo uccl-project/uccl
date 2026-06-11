@@ -1092,8 +1092,20 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
             (size_t)local_info->atomic_buffer_len,
             local_info->atomic_buffer_rkey);
   } else {
-    // TODO(MaoZiming): Only for non-EFA case.
+#ifdef EFA
+    // UCCL-GIN normal mode applies ordered atomics on the CPU proxy into a
+    // host-mapped buffer rather than via NIC RDMA atomics, so there is no
+    // atomic MR to register/advertise on EFA. Advertise an empty atomic region.
+    if (use_normal_mode) {
+      local_info->atomic_buffer_rkey = 0;
+      local_info->atomic_buffer_addr = 0;
+      local_info->atomic_buffer_len = 0;
+    } else {
+      assert(false && "Atomic buffer is not registered");
+    }
+#else
     assert(false && "Atomic buffer is not registered");
+#endif
   }
 
   fill_local_gid(S, local_info);
@@ -1489,15 +1501,7 @@ static void post_rdma_async_batched_normal_mode(
           }
           size_t index =
               static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-          // Initialize missing entries lazily
-          auto key = ctx->seq_key(dst_rank, index);
-          if (ctx->next_seq_per_index.find(key) ==
-              ctx->next_seq_per_index.end())
-            ctx->next_seq_per_index[key] = 0;
-
-          uint8_t seq = ctx->next_seq_per_index[key];
-          ctx->next_seq_per_index[key] =
-              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
+          uint8_t seq = ctx->take_next_atomic_seq(index);
           uint32_t imm =
               AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
@@ -1635,15 +1639,7 @@ static void post_rdma_async_batched_normal_mode(
             }
             size_t index =
                 static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-            // Initialize missing entries lazily
-            auto key = ctx->seq_key(dst_rank, index);
-            if (ctx->next_seq_per_index.find(key) ==
-                ctx->next_seq_per_index.end())
-              ctx->next_seq_per_index[key] = 0;
-
-            uint8_t seq = ctx->next_seq_per_index[key];
-            ctx->next_seq_per_index[key] =
-                (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
+            uint8_t seq = ctx->take_next_atomic_seq(index);
             uint32_t imm =
                 AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                     .GetImmData();
@@ -2295,15 +2291,15 @@ void remote_process_completions_normal_mode(
         assert(false &&
                "Reorderable atomic operations should not be triggered");
 #endif
-        struct SeqBuf {
-          uint8_t expected = 0;       // next seq expected
-          uint16_t present_mask = 0;  // bitmask of buffered seqs
-          int vals[kReorderingBufferSize] = {0};
-        };
-
-        // Thread-local map to maintain per-index state
-        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
-        auto& sb = seqbufs[index];
+        // Per-(int64 tail slot) reorder state. ProxyCtx is single-peer, so the
+        // tail-slot index alone keys the buffer; the directly indexed array
+        // replaces the prior thread-local map.
+        if (index >= S.ordered_atomic_seqbufs.size()) {
+          fprintf(stderr, "Error: ordered atomic index %zu out of range\n",
+                  index);
+          std::abort();
+        }
+        auto& sb = S.ordered_atomic_seqbufs[index];
 
         auto commit = [&](int delta) {
           addr64->fetch_add(delta, std::memory_order_release);
