@@ -59,7 +59,8 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
     : device_be_(device_be), tpt_be_(tpt_be),
-      owned_device_(), owned_transport_(), owned_comm_() {
+      owned_device_(), owned_transport_(), owned_comm_(),
+      stop_(false) {
   std::memset(cmd_to_run_, 0, sizeof(cmd_to_run_));
 
   if (device_be_) {
@@ -351,6 +352,13 @@ void SprayExecutor::run_tiled(TiledResult const& tiled,
     if (run.status == CollectiveOpStatus::Running)
       std::this_thread::yield();
   }
+
+  // Clear cmd_to_run_ entries pointing to the now-destroyed stack SprayRun
+  for (auto& cwi : run.dev_cmds)
+    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = CmdRunMapping{};
+  for (auto& cwi : run.tpt_cmds)
+    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = CmdRunMapping{};
+
   if (run.status == CollectiveOpStatus::Failed)
     throw std::runtime_error(run.error);
 }

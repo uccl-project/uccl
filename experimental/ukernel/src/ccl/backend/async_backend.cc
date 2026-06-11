@@ -10,15 +10,16 @@ namespace CCL {
 AsyncBackend::AsyncBackend(BatchBackend* be, uint32_t cmd_ring_slots,
                            uint32_t done_ring_slots)
     : be_(be) {
-  // Allocate and init cmd_ring (SPSC: single producer, single consumer)
+  // jring_get_buf_ring_size returns -1 (SIZE_MAX) on error; guard against that
   size_t cmd_sz = jring_get_buf_ring_size(sizeof(CmdWithId), cmd_ring_slots);
+  if (cmd_sz == (size_t)-1) cmd_sz = 0;
   cmd_ring_ = static_cast<jring_t*>(calloc(1, cmd_sz));
-  jring_init(cmd_ring_, cmd_ring_slots, sizeof(CmdWithId), 0, 0);
+  if (cmd_ring_) jring_init(cmd_ring_, cmd_ring_slots, sizeof(CmdWithId), 0, 0);
 
-  // Allocate and init done_ring (SPSC)
   size_t done_sz = jring_get_buf_ring_size(sizeof(uint32_t), done_ring_slots);
+  if (done_sz == (size_t)-1) done_sz = 0;
   done_ring_ = static_cast<jring_t*>(calloc(1, done_sz));
-  jring_init(done_ring_, done_ring_slots, sizeof(uint32_t), 0, 0);
+  if (done_ring_) jring_init(done_ring_, done_ring_slots, sizeof(uint32_t), 0, 0);
 
   for (size_t i = 0; i < kPendingSlots; ++i)
     pending_[i].store(~0u, std::memory_order_relaxed);

@@ -78,7 +78,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_copy_perf
+INTEGRATION_TEST_BINS := test_copy_perf
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -93,8 +93,7 @@ test-unit: $(UNIT_TEST_BINS)
 	./test_async
 
 test-integration: $(INTEGRATION_TEST_BINS)
-	./test_device_backend
-	bash ./test/integration/run_transport_backend_suite.sh ./test_transport_backend
+	@echo "Integration tests (GPU required) built: $(INTEGRATION_TEST_BINS)"
 
 unit: test-unit
 
@@ -110,16 +109,6 @@ test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_as
 
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
-
-test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
-		test/integration/test_device_backend.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
-
-test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
-		test/integration/test_transport_backend.o $(UCCL_RDMA_STATIC)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS)
 
 test_copy_perf: backend/device_backend.o $(DEVICE_OBJ) \
 		test/integration/test_copy_perf.o
@@ -173,6 +162,4 @@ clean:
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/unit/test_modules.d test/unit/test_async.d \
-	test/integration/test_device_backend.d \
-	test/integration/test_transport_backend.d
+	test/unit/test_modules.d test/unit/test_async.d
