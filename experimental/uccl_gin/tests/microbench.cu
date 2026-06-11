@@ -114,16 +114,17 @@ __global__ void nccl_gin_paired_kernel(ncclWindow_t sendwin, ncclWindow_t recvwi
   ncclGinBarrierSession<ncclCoopCta> bar{ncclCoopCta(), gin, ncclTeamTagWorld(), blockIdx.x};
   bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
 
-  // Fan puts across all CTAs — same multi-lane approach as the UCCL kernel.
+  // Distribute puts across CTAs evenly (same total work as UCCL's iters puts).
+  int my_iters = iters / (int)gridDim.x + (blockIdx.x < iters % (int)gridDim.x ? 1 : 0);
   if (threadIdx.x == 0) {
-    for (int it = 0; it < iters; ++it) {
+    for (int it = 0; it < my_iters; ++it) {
       gin.put(ncclTeamWorld(devComm), peer,
               recvwin, /*recvoff=*/0, sendwin, /*sendoff=*/0,
               bytes, ncclGin_SignalInc{sig});
     }
   }
   __syncthreads();
-  gin.waitSignal(ncclCoopCta(), sig, base + iters);  // wait inbound from our pair
+  gin.waitSignal(ncclCoopCta(), sig, base + (uint64_t)my_iters);
   gin.flush(ncclCoopCta());
   bar.sync(ncclCoopCta(), cuda::memory_order_release, ncclGinFenceLevel::Relaxed);
 }
