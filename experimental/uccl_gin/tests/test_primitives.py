@@ -131,6 +131,7 @@ def test_all_primitives_comprehensive() -> None:
     ])
     required = (
         "UCCL-red_add counter: PASS",
+        "UCCL-put_value: PASS",
         "UCCL-put/add",
         "UCCL-tail/q",
         "UCCL-put+q source-reuse",

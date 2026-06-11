@@ -485,6 +485,52 @@ static bool verify_uccl_red_add(uccl_gin::Context& c, int peer, int rank,
   return true;
 }
 
+// Tests put_value: writes `iters` distinct values to consecutive 4-byte slots
+// on the peer's recv window, using a single lane. Then verifies each slot holds
+// exactly the expected value. put_value stages data through a per-lane GPU buffer
+// internally, so this also validates the staging path.
+__global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res, int peer,
+                                          uint32_t recv_off_0, int iters, int lane) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) return;
+  uccl_gin::UCCLGin gin(res);
+  for (int it = 0; it < iters; ++it) {
+    char* dst = reinterpret_cast<char*>(res.window_base + recv_off_0) + (size_t)it * 4;
+    gin.put_value<ncclTeamTagRail>(dst, 0xDEAD0000 + it, peer, lane);
+  }
+}
+
+static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
+                                  cudaStream_t stream, size_t max_bytes) {
+  (void)max_bytes;
+  int* recv = (int*)c.recv_ptr();
+  const int iters = 8;
+  const int lane = 0;
+  CUDA_OK(cudaMemset(recv, 0, iters * sizeof(int)));
+  CUDA_OK(cudaStreamSynchronize(stream));
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
+      c.resources(), peer, /*recv_off_0=*/static_cast<uint32_t>(max_bytes), iters, lane);
+  CUDA_OK(cudaStreamSynchronize(stream));
+
+  // put_value uses plain WRITEs — wait for proxy to drain the lane.
+  // The peer's recv values land asynchronously; a small settle + MPI barrier
+  // suffices for small data sizes.
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  std::vector<int> h(iters);
+  CUDA_OK(cudaMemcpy(h.data(), recv, iters * sizeof(int), cudaMemcpyDeviceToHost));
+  for (int i = 0; i < iters; ++i) {
+    if (h[i] != 0xDEAD0000 + i) {
+      fprintf(stderr, "[verify] put_value slot %d: got 0x%x want 0x%x\n",
+              i, h[i], 0xDEAD0000 + i);
+      return false;
+    }
+  }
+  MPI_Barrier(MPI_COMM_WORLD);
+  return true;
+}
+
 // ===========================================================================
 // main
 // ===========================================================================
@@ -563,6 +609,19 @@ int main(int argc, char** argv) {
       if (rank == 0) {
         printf("UCCL-red_add counter: %s\n",
                selected(args, "red-add") ? (ga ? "PASS" : "FAIL") : "-");
+      }
+    }
+    // put_value test (size-independent)
+    {
+      int v_ok = 1;
+      if (args.run_uccl && selected(args, "put-value"))
+        v_ok = verify_uccl_put_value(*uctx, peer, rank, stream, max_bytes) ? 1 : 0;
+      int gv = 1;
+      MPI_Allreduce(&v_ok, &gv, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+      all_ok = all_ok && gv;
+      if (rank == 0) {
+        printf("UCCL-put_value: %s\n",
+               selected(args, "put-value") ? (gv ? "PASS" : "FAIL") : "-");
       }
     }
     if (rank == 0) {

@@ -1,90 +1,172 @@
-# UCCL-GIN Standalone
+# UCCL-GIN
 
-This directory is the clean standalone home for UCCL-GIN rail primitives.
-It is intentionally outside `ep/` so the original UCCL EP path can keep running
-unchanged.
+A standalone GPU-initiated networking backend that mirrors the
+[NCCL GIN](https://github.com/NVIDIA/nccl) device API on
+[AWS EFA](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html). It provides
+the same `put` / `put_value` / `red_add_rel` / `quiet` surface as NCCL's
+`ncclGin` so that communication libraries (DeepEP V2, NCCL-EP, etc.) can run on
+EFA without per-kernel source changes.
 
-Current scope:
+Under the hood, cross-node traffic is routed through UCCL's D2H ring → CPU proxy
+→ EFA verbs transport substrate. Intra-node (NVLink) traffic is delegated to
+NCCL unchanged.
 
-- `put<Rail>`
-- `red_add_rel<Rail>`
-- `put_tail_add<Rail>`
-- `quiet`
-- C++/MPI microbench with correctness and payload-before-tail checks
-- Minimal Python/C++ `Context` binding for host setup/teardown smoke
-- Python pytest wrappers for context smoke and standalone microbench
+```
+DeepEP V2 / NCCL-EP kernel
+  │  gin.put<Rail>(recv, send, bytes, dst)
+  │  gin.red_add_rel<Rail>(ptr, val, dst)
+  │  gin.put_tail_add<Rail>(recv, send, bytes, dst, count, tail_off)
+  ▼
+uccl_gin::UCCLGin            ←  this project
+  │  Rail → TransferCmd → D2H ring → CPU proxy → EFA RDMA write / write-with-imm
+  │  Lsa  → delegate to NCCL (NVLink, not yet in standalone)
+  ▼
+UCCL CPU proxy + raw EFA ibverbs
+```
 
-Not in scope yet:
+## Why
 
-- DeepEP integration
-- `Lsa`/NVLink forwarding
+EFA has no RDMA atomics, no ordering guarantees between WRs, and poor small-message
+throughput (4 KiB → ~2.8 GB/s per NIC). CX7 IB can do per-token RDMA writes at
+line rate; EFA requires coalescing.
+
+UCCL-GIN addresses this with:
+- **Piggyback tail** — payload and counter delta in one `WRITE_WITH_IMM` (no ordering gap)
+- **Sender-side completion dependency** — finish atomics wait for payload WR CQEs
+- **Per-slot metadata check** — receiver validates payload visibility before consuming
+- **Compact channel staging** — batched multi-token writes (when integrated with DeepEP)
+
+## Architecture
+
+```
+experimental/uccl_gin/
+├── uccl_gin/                  # Public device API (what kernels include)
+│   ├── uccl_gin.cuh           # handle::UCCLGin
+│   ├── uccl_gin_rail.cuh      # rail_put / rail_put_tail_add / rail_red_add
+│   └── resources.cuh          # UCCLGinResources POD + profiling counters
+├── transport/                 # Internal D2H + proxy + EFA layer (copied from ep/)
+├── context.hpp / context.cpp  # Host setup: EFA QP/CQ/MR, peer exchange, resources
+├── bindings.cpp               # CPython extension (_uccl_gin)
+├── tests/
+│   ├── microbench.cu          # C++/MPI standalone microbench
+│   ├── test_context.py        # Context lifecycle smoke test
+│   ├── test_microbench.py     # Microbench wrapper
+│   └── test_primitives.py     # Per-primitive correctness tests
+├── python/uccl_gin/           # Python helpers + context smoke/stress scripts
+├── ARCHITECTURE.md            # Full design doc
+├── PLAN.md                    # Phased plan
+├── Makefile
+└── README.md                  # This file
+```
+
+## Primitives
+
+| Primitive | Status | Description |
+|-----------|--------|-------------|
+| `put<Rail>` | ✅ | RDMA write from symmetric window to remote window |
+| `put_tail_add<Rail>` | ✅ | RDMA write + piggyback tail counter advance (UCCL-specific) |
+| `red_add_rel<Rail>` | ✅ | Ordered remote atomic via empty write-with-imm + CPU proxy |
+| `put_value<Rail>` | ✅ | Single-word write to remote window slot |
+| `quiet` | ✅ | Drain a D2H lane (proxy has consumed all prior commands) |
+| `flush` | ✅ | Alias for `quiet()` |
+| `put<Lsa>` | — | Intra-node NVLink (compose NCCLGin, not in standalone) |
+| `signal` | — | Future |
+
+## Prerequisites
+
+- **Hardware**: AWS p5 / p5en / p6 instances with EFA
+- **GPU**: NVIDIA H100 / H200 (SM 90+)
+- **CUDA**: 13.0+
+- **NCCL**: 2.30+ (`nvidia-nccl-cu13` wheel)
+- **MPI**: OpenMPI 5
+- **Python**: 3.12 with venv
 
 ## Build
 
 ```bash
-cd experimental/uccl_gin
-make CUDA_HOME=/usr/local/cuda-13.0 PYTHON=$VIRTUAL_ENV/bin/python SM=90 -j
+source /path/to/venv/bin/activate
+make -C experimental/uccl_gin \
+    CUDA_HOME=/usr/local/cuda-13.0 \
+    PYTHON=$VIRTUAL_ENV/bin/python \
+    SM=90 \
+    -j
 ```
 
-The build compiles copied transport sources from `experimental/uccl_gin/src`.
-It must not link `ep/src/*.o`.
+Options:
+- `CUDA_HOME` — CUDA toolkit path (default `/usr/local/cuda-13.0`)
+- `SM` — GPU architecture (90 for H100/H200)
+- `NUM_PROXY_THS` — proxy threads per GPU (default 4)
+- `UCCL_GIN_WITH_NCCL_GIN` — build NCCL-GIN reference path (default 1)
 
-## Two-node smoke
+## Test
 
-Use the OpenMPI launcher that matches the linked MPI library. On AWS DLAMI this
-has been `/opt/amazon/openmpi/bin/mpirun`.
+### C++ microbench (all primitives at once)
 
 ```bash
-export LD_LIBRARY_PATH=/home/ubuntu/efs/yzhou/playground/daniel/aws-ofi-nccl-master/lib:/opt/amazon/efa/lib:$VIRTUAL_ENV/lib/python3.12/site-packages/nvidia/nccl/lib:$LD_LIBRARY_PATH
-export NCCL_NET_PLUGIN=ofi
-export FI_PROVIDER=efa
-export FI_EFA_USE_DEVICE_RDMA=1
-export OFI_NCCL_FORCE_NUM_RAILS=2
-export NCCL_SOCKET_IFNAME=enp71s0
-export LOCAL_WORLD_SIZE=8
-
-/opt/amazon/openmpi/bin/mpirun \
-  --host <node0>,<node1> -np 16 -npernode 8 \
-  -x LD_LIBRARY_PATH -x NCCL_NET_PLUGIN -x FI_PROVIDER \
-  -x FI_EFA_USE_DEVICE_RDMA -x OFI_NCCL_FORCE_NUM_RAILS \
-  -x NCCL_SOCKET_IFNAME -x LOCAL_WORLD_SIZE \
-  ./build/uccl_gin_microbench --sizes 1024,4096,65536,1048576 --iters 20
+mpirun --oversubscribe \
+  --host $NODE0:8,$NODE1:8 -np 16 -npernode 8 \
+  -x LD_LIBRARY_PATH -x NCCL_NET_PLUGIN=ofi -x FI_PROVIDER=efa \
+  -x FI_EFA_USE_DEVICE_RDMA=1 -x LOCAL_WORLD_SIZE=8 \
+  build/uccl_gin_microbench \
+    --sizes 1024,4096,65536,262144,1048576 \
+    --iters 10 --warmup 2
 ```
 
-The microbench reports bandwidth only after correctness passes.
+Selected primitive, correctness-only:
+```bash
+  --only put-add --correctness-only    # put + red_add_rel
+  --only tail-add --correctness-only   # put_tail_add + quiet
+  --only quiet --correctness-only      # put + quiet
+  --only red-add --correctness-only    # red_add_rel counter
+```
 
-## Python Package Entries
+Expected output:
+```
+UCCL-red_add counter: PASS
+bytes        NCCL     UCCL-put/add   UCCL-tail/q    UCCL-put+q
+65536        -        PASS           PASS           PASS
+all correctness PASS
+```
 
-The Python package has two test-facing entries:
-
-- `python -m uccl_gin.context_smoke` creates and destroys a real C++ `Context`
-  through the `_uccl_gin` extension.
-- `python -m uccl_gin.context_stress` repeats context create/destroy; use
-  `UCCL_GIN_CONTEXT_STRESS_ITERS` to override the default 100 iterations.
-- `python -m uccl_gin.microbench` drives the standalone binary and checks
-  correctness markers.
+### Python
 
 ```bash
-export PYTHONPATH=$PWD/experimental/uccl_gin/python
-export UCCL_GIN_ROOT=$PWD/experimental/uccl_gin
-export UCCL_GIN_MPI_HOSTS=<node0>:8,<node1>:8
-export LOCAL_WORLD_SIZE=8
-
-python -m uccl_gin.microbench
+UCCL_GIN_ROOT=$PWD UCCL_GIN_MPI_HOSTS=$NODE0:8,$NODE1:8 \
+UCCL_GIN_RUN_PRIMITIVES=1 \
+python -m pytest tests/test_primitives.py -v
 ```
 
-Context smoke:
+### Context stress
 
 ```bash
-/opt/amazon/openmpi/bin/mpirun \
-  --host <node0>:8,<node1>:8 -np 16 -npernode 8 \
-  -x LD_LIBRARY_PATH -x PYTHONPATH -x NCCL_SOCKET_IFNAME -x LOCAL_WORLD_SIZE \
-  /usr/bin/python3 -m uccl_gin.context_smoke
+UCCL_GIN_CONTEXT_STRESS_ITERS=100 \
+mpirun ... python -m uccl_gin.context_stress
 ```
 
-The test files use the same package APIs:
+## Python API
 
-```bash
-UCCL_GIN_RUN_MICROBENCH=1 python experimental/uccl_gin/tests/python/test_microbench.py
-UCCL_GIN_RUN_CONTEXT_SMOKE=1 python experimental/uccl_gin/tests/python/test_context.py
+```python
+from uccl_gin import Context, mpi_rank
+
+ctx = Context(max_message_bytes=1 << 20, local_world_size=8, ifname="enp71s0")
+resources = ctx.resources()  # dict: window_base, atomic_tail_base, ...
+ctx.close()
 ```
+
+## Key design decisions
+
+1. **Not a subclass of NCCLGin** — independent struct with `if constexpr` dispatch.
+   Lsa/World delegation is composition, not inheritance.
+2. **Tail storage separate from GPU window** — `PackAtomicWithSeq` offset is 13-bit
+   (≤8191 bytes). Tails live in a compact `atomic_tail_base` indexed by
+   `(channel, src_rank)`.
+3. **`put_tail_add` is UCCL-GIN specific** — fuses payload and counter into one
+   `WRITE_WITH_IMM` to close the EFA ordering gap that NCCL solves with FORCE_SO.
+4. **16-byte TransferCmd ABI unchanged** from UCCL EP V1.
+
+## See also
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full design doc
+- [UCCL EFA Programming Guide](https://uccl-project.github.io/posts/efa-programming/)
+- [NCCL Device API](https://github.com/NVIDIA/nccl)
+- [DeepEP V2](https://github.com/deepseek-ai/DeepEP)
