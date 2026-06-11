@@ -59,14 +59,34 @@ static constexpr int kMaxMRChunks = 128;
 #endif
 
 #define kAtomicBufferSize 81960
-#define kQueueSize 2048
+#ifndef UCCL_QUEUE_SIZE
+#define UCCL_QUEUE_SIZE 2048
+#endif
+#define kQueueSize UCCL_QUEUE_SIZE
 #define kQueueMask (kQueueSize - 1)
+static_assert((kQueueSize & kQueueMask) == 0, "UCCL_QUEUE_SIZE must be a power of two");
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
 #define kMaxInflightLowLatency 32
 #define kMaxInflightNormal 8
-#define kChannelPerProxy 8
-#define kNumProxyThs 4
+// UCCL-GIN per-D2H-queue inflight cap (0 => no cap, i.e. ring capacity). Kept
+// separate from kMaxInflightNormal so the GIN rail path can backpressure
+// independently without touching the V1 kernels.
+#ifndef UCCL_GIN_MAX_INFLIGHT_NORMAL
+#define UCCL_GIN_MAX_INFLIGHT_NORMAL 8
+#endif
+#define kUCCLGinMaxInflightNormal UCCL_GIN_MAX_INFLIGHT_NORMAL
+static_assert(kUCCLGinMaxInflightNormal == 0 ||
+                  kUCCLGinMaxInflightNormal <= kQueueSize,
+              "UCCL_GIN_MAX_INFLIGHT_NORMAL must be 0 or <= UCCL_QUEUE_SIZE");
+#ifndef UCCL_CHANNEL_PER_PROXY
+#define UCCL_CHANNEL_PER_PROXY 8
+#endif
+#ifndef UCCL_NUM_PROXY_THS
+#define UCCL_NUM_PROXY_THS 4
+#endif
+#define kChannelPerProxy UCCL_CHANNEL_PER_PROXY
+#define kNumProxyThs UCCL_NUM_PROXY_THS
 // NCCL EFA plugin default: 8 MB mimicing (512KB*16)
 // NCCL IB net.cc default: 2 MB (128KB*16)
 #define kMaxInflightBytes SIZE_MAX
