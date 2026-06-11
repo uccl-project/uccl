@@ -261,20 +261,22 @@ const char* fmt(size_t b) {
   return buf;
 }
 
-void print_table(const char* title, int g0, int g1,
-                 BenchPoint cm[], BenchPoint dev[], BenchPoint rdma[]) {
+void print_header(const char* title, int g0, int g1) {
   printf("\n=== %s  GPU %d -> GPU %d ===\n\n", title, g0, g1);
   printf("%-9s | %8s  %8s  %8s | %8s  %8s  %8s\n",
          "Size","cuda us","device us","rdma us","cuda GB/s","device GB/s","rdma GB/s");
   printf("----------|----------------------------------|-------------------------------\n");
-  for (size_t i = 0; i < kNumSizes; ++i) {
-    printf("%-9s | %8.2f  %8.2f  ", fmt(kSizes[i].bytes), cm[i].lat_us, dev[i].lat_us);
-    if (rdma[i].lat_us < 0) printf(" degraded | ");
-    else printf("%8.2f | ", rdma[i].lat_us);
-    printf("%8.2f  %8.2f  ", cm[i].tp_gbs, dev[i].tp_gbs);
-    if (rdma[i].tp_gbs < 0) printf(" degraded\n");
-    else printf("%8.2f\n", rdma[i].tp_gbs);
-  }
+  fflush(stdout);
+}
+
+void print_row(size_t bytes, BenchPoint cm, BenchPoint dev, BenchPoint rdma) {
+  printf("%-9s | %8.2f  %8.2f  ", fmt(bytes), cm.lat_us, dev.lat_us);
+  if (rdma.lat_us < 0) printf(" degraded | ");
+  else printf("%8.2f | ", rdma.lat_us);
+  printf("%8.2f  %8.2f  ", cm.tp_gbs, dev.tp_gbs);
+  if (rdma.tp_gbs < 0) printf(" degraded\n");
+  else printf("%8.2f\n", rdma.tp_gbs);
+  fflush(stdout);
 }
 
 void print_block_sweep(int gpu_id) {
@@ -327,20 +329,22 @@ void run_p2p_server(int gpu0, int gpu1) {
 
   // Wait for client benchmarks
   wait(kDoneFile);
-  BenchPoint cm[kNumSizes], dev[kNumSizes], rdma[kNumSizes];
+  BenchPoint cm[kNumSizes], dev[kNumSizes];
   {
     std::ifstream rf(kDoneFile);
     for (size_t i = 0; i < kNumSizes; ++i)
       rf >> cm[i].lat_us >> cm[i].tp_gbs >> dev[i].lat_us >> dev[i].tp_gbs;
   }
 
-  // Run RdmaLocalCopy
+  print_header("P2P Copy Benchmark", gpu0, gpu1);
+
+  // Run RdmaLocalCopy + print row by row
   for (size_t i = 0; i < kNumSizes; ++i) {
     auto& bs = kSizes[i];
-    rdma[i] = run_rdma(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, (void*)ri.dst_addr, &rdma_backend);
+    BenchPoint rdma = run_rdma(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, (void*)ri.dst_addr, &rdma_backend);
+    print_row(bs.bytes, cm[i], dev[i], rdma);
   }
 
-  print_table("P2P Copy Benchmark", gpu0, gpu1, cm, dev, rdma);
   if (g_block_sweep) print_block_sweep(gpu1);
 }
 
@@ -419,14 +423,15 @@ void run_single_gpu(int gpu) {
   RdmaLocalCopyBackendConfig rcfg; rcfg.gpu_id = gpu;
   RdmaLocalCopyBackend rdma_backend(rcfg);
 
-  BenchPoint cm[kNumSizes], dev[kNumSizes], rdma[kNumSizes];
+  print_header("Single-GPU G2G", gpu, gpu);
+
   for (size_t i = 0; i < kNumSizes; ++i) {
     auto& bs = kSizes[i];
-    cm[i]   = run_cuda(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr);
-    dev[i]  = run_device(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr, 0, 0);
-    rdma[i] = run_rdma(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr, &rdma_backend);
+    BenchPoint cm  = run_cuda(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr);
+    BenchPoint dev = run_device(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr, 0, 0);
+    BenchPoint rdma= run_rdma(bs.bytes, bs.lat_n, bs.tp_n, src.ptr, dst.ptr, &rdma_backend);
+    print_row(bs.bytes, cm, dev, rdma);
   }
-  print_table("Single-GPU G2G", gpu, gpu, cm, dev, rdma);
   if (g_block_sweep) print_block_sweep(gpu);
 }
 
