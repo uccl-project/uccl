@@ -1,12 +1,11 @@
-#include "backend_test_utils.h"
 #include "algo/chunk_graph.h"
 #include "lower.h"
-#include "backend_test_utils.h"
-#include "test_utils.h"
+#include "test_config.h"
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 namespace UKernel {

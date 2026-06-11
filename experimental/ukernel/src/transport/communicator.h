@@ -5,6 +5,7 @@
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
 #include "request_tracker.h"
+#include "util/jring.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -136,6 +138,40 @@ class Communicator {
 
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;
+
+  // Async task submission via jring + proxy threads (mirrors p2p Endpoint).
+  struct CommSendTask {
+    int rank;
+    uint32_t src_buf_id;
+    size_t src_off;
+    size_t src_bytes;
+    uint32_t dst_buf_id;
+    size_t dst_off;
+    unsigned request_id;
+  };
+
+  struct CommRecvTask {
+    int rank;
+    uint32_t dst_buf_id;
+    size_t dst_off;
+    size_t dst_bytes;
+    unsigned request_id;
+  };
+
+  void send_proxy_loop();
+  void recv_proxy_loop();
+  void drain_send_tasks();
+  void drain_recv_tasks();
+  void mark_slot_failed(unsigned request_id);
+  void run_isend_body(CommSendTask const& task);
+  void run_irecv_body(CommRecvTask const& task);
+
+  static constexpr size_t kTaskRingSize = 1024;
+  jring_t* send_task_ring_ = nullptr;
+  jring_t* recv_task_ring_ = nullptr;
+  std::atomic<bool> stop_{false};
+  std::thread send_proxy_thread_;
+  std::thread recv_proxy_thread_;
 
   int local_gpu_idx_;
   int global_rank_;

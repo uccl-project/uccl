@@ -41,9 +41,9 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
+CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -77,7 +77,7 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_modules
+UNIT_TEST_BINS := test_modules test_async
 INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_copy_perf
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
@@ -90,6 +90,7 @@ test: test-unit test-integration
 
 test-unit: $(UNIT_TEST_BINS)
 	./test_modules
+	./test_async
 
 test-integration: $(INTEGRATION_TEST_BINS)
 	./test_device_backend
@@ -102,6 +103,9 @@ integration: test-integration
 real_backends: $(REAL_BACKEND_OBJ)
 
 test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+
+test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_async.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 $(UCCL_RDMA_STATIC):
@@ -169,6 +173,6 @@ clean:
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/unit/test_modules.d \
+	test/unit/test_modules.d test/unit/test_async.d \
 	test/integration/test_device_backend.d \
 	test/integration/test_transport_backend.d

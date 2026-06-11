@@ -1,7 +1,7 @@
 #include "async_backend.h"
 
+#include <atomic>
 #include <cstdlib>
-#include <cstring>
 #include <thread>
 
 namespace UKernel {
@@ -20,7 +20,8 @@ AsyncBackend::AsyncBackend(BatchBackend* be, uint32_t cmd_ring_slots,
   done_ring_ = static_cast<jring_t*>(calloc(1, done_sz));
   jring_init(done_ring_, done_ring_slots, sizeof(uint32_t), 0, 0);
 
-  std::memset(pending_, 0, sizeof(pending_));
+  for (size_t i = 0; i < kPendingSlots; ++i)
+    pending_[i].store(~0u, std::memory_order_relaxed);
 }
 
 AsyncBackend::~AsyncBackend() {
@@ -75,7 +76,8 @@ void AsyncBackend::submit_loop() {
     while (be_->enqueue(&cwi.cmd, 1, &be_idx) == 0)
       std::this_thread::yield();
 
-    pending_[be_idx & (kPendingSlots - 1)] = cwi.caller_id;
+    pending_[be_idx & (kPendingSlots - 1)].store(
+        cwi.caller_id + 1, std::memory_order_release);
   }
 }
 
@@ -89,8 +91,13 @@ void AsyncBackend::drain_loop() {
       continue;
     }
 
-    for (size_t i = 0; i < n; ++i)
-      out_buf[i] = pending_[done_buf[i] & (kPendingSlots - 1)];
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t val;
+      while ((val = pending_[done_buf[i] & (kPendingSlots - 1)].load(
+                  std::memory_order_acquire)) == ~0u)
+        std::this_thread::yield();
+      out_buf[i] = val - 1;
+    }
 
     size_t written = 0;
     while (written < n) {

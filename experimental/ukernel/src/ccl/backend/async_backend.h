@@ -44,7 +44,7 @@ class AsyncBackend {
   jring_t* done_ring_;
 
   static constexpr size_t kPendingSlots = 65536;
-  uint32_t pending_[kPendingSlots];
+  std::atomic<uint32_t> pending_[kPendingSlots];
 
   std::thread submit_th_;
   std::thread drain_th_;

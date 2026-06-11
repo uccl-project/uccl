@@ -41,6 +41,7 @@ struct SprayRun {
   std::string error;
 
   std::vector<bool> done;
+  std::vector<bool> submitted;  // op already enqueued to cmd_ring
   std::vector<uint32_t> ready;
   std::atomic<size_t> done_count{0};
   uint32_t next_layer = 0;
@@ -73,7 +74,7 @@ struct CmdRunMapping {
 class SprayExecutor {
  public:
   static std::unique_ptr<SprayExecutor> create(SprayExecutorConfig const& config);
-  SprayExecutor(BatchExecutorBackends backends);
+  SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be);
   ~SprayExecutor();
 
   SprayExecutor(SprayExecutor const&) = delete;
@@ -105,11 +106,13 @@ class SprayExecutor {
   void enqueue_to_ring(SprayRun& run, AsyncBackend* async_be);
 
   // ── Owned resources ──
+  BatchBackend* device_be_;
+  BatchBackend* tpt_be_;
   std::unique_ptr<AsyncBackend> async_dev_;
   std::unique_ptr<AsyncBackend> async_tpt_;
   std::unique_ptr<BatchBackend> owned_device_;
   std::unique_ptr<BatchBackend> owned_transport_;
-  std::unique_ptr<Transport::Communicator> owned_comm_;
+  std::shared_ptr<Transport::Communicator> owned_comm_;
 
   // ── Threads ──
   std::thread enqueue_th_;

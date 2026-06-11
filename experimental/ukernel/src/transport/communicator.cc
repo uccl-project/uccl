@@ -221,6 +221,16 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       },
       [this](TrackedRequest& t) { cleanup_tracked_request(t); });
 
+  // Create jring-based async task submission queues + proxy threads.
+  send_task_ring_ =
+      create_ring(sizeof(CommSendTask), kTaskRingSize);
+  recv_task_ring_ =
+      create_ring(sizeof(CommRecvTask), kTaskRingSize);
+  if (send_task_ring_ && recv_task_ring_) {
+    send_proxy_thread_ = std::thread(&Communicator::send_proxy_loop, this);
+    recv_proxy_thread_ = std::thread(&Communicator::recv_proxy_loop, this);
+  }
+
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_
             << " initialized: peer meta exchange success" << std::endl;
@@ -313,6 +323,23 @@ void Communicator::exchange_peer_metas() {
 }
 
 Communicator::~Communicator() {
+  stop_.store(true, std::memory_order_release);
+
+  if (send_proxy_thread_.joinable()) send_proxy_thread_.join();
+  if (recv_proxy_thread_.joinable()) recv_proxy_thread_.join();
+
+  drain_send_tasks();
+  drain_recv_tasks();
+
+  if (send_task_ring_) {
+    free(send_task_ring_);
+    send_task_ring_ = nullptr;
+  }
+  if (recv_task_ring_) {
+    free(recv_task_ring_);
+    recv_task_ring_ = nullptr;
+  }
+
   tracker_.reset();
 
   if (ipc_adapter_) {
@@ -926,132 +953,24 @@ unsigned Communicator::isend(int rank, uint32_t src_buf_id, size_t src_off,
   if (src_buf_id == 0 || src_bytes == 0) {
     throw std::invalid_argument("isend requires non-empty source");
   }
-  auto peer_kind = get_put_transport_kind(rank);
-  MR local_mr = get_mr(src_buf_id);
-  if (src_off > static_cast<size_t>(local_mr.length) ||
-      src_bytes > static_cast<size_t>(local_mr.length) - src_off) {
-    throw std::invalid_argument("isend local slice out of range");
-  }
-
-  auto* adapter = get_adapter(peer_kind);
-  if (!adapter) throw std::runtime_error("failed to get adapter for peer");
-
-  void* local_ptr = reinterpret_cast<void*>(
-      static_cast<uintptr_t>(local_mr.address) + src_off);
 
   unsigned rid = 0;
   TrackedRequest* slot = tracker_->allocate(&rid);
   if (slot == nullptr) return 0;
 
-  if (peer_kind == PeerTransportKind::Tcp) {
-    void* host_buf;
-    GPU_RT_CHECK(gpuHostMalloc(&host_buf, src_bytes));
-    GPU_RT_CHECK(
-        gpuMemcpy(host_buf, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
-    slot->bounce_ptr = host_buf;
-    unsigned result =
-        adapter->put_async(rank, host_buf, 0, nullptr, 0, src_bytes);
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
+  CommSendTask task{};
+  task.rank = rank;
+  task.src_buf_id = src_buf_id;
+  task.src_off = src_off;
+  task.src_bytes = src_bytes;
+  task.dst_buf_id = dst_buf_id;
+  task.dst_off = dst_off;
+  task.request_id = rid;
+
+  while (jring_mp_enqueue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
+    std::this_thread::yield();
   }
 
-  if (peer_kind == PeerTransportKind::Uccl) {
-    if (!ensure_uccl_memory_registered(src_buf_id, local_ptr, src_bytes)) {
-      std::cerr << "[ERROR] UCCL MR not registered for buffer " << src_buf_id
-                << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    unsigned result =
-        adapter->put_async(rank, local_ptr, src_buf_id, nullptr, 0, src_bytes);
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
-  }
-
-  if (peer_kind == PeerTransportKind::Rdma) {
-    if (!ensure_rdma_memory_registered(src_buf_id, local_ptr, src_bytes)) {
-      std::cerr << "[ERROR] RDMA MR not registered for buffer " << src_buf_id
-                << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    uint32_t remote_id = dst_buf_id != 0 ? dst_buf_id : src_buf_id;
-    MR remote_mr = get_mr(rank, remote_id);
-    void* remote_ptr_val = reinterpret_cast<void*>(
-        static_cast<uint64_t>(remote_mr.address) + dst_off);
-    rdma_adapter_->register_remote_buffer(rank, remote_id, remote_mr.address,
-                                          remote_mr.key);
-
-    // Phase 1: post data WRs (pure RDMA_WRITE, multi-QP spray)
-    unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
-                                         remote_ptr_val, remote_id, src_bytes);
-    if (result == 0) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    // Wait for data CQEs before signalling (no QP-ordering assumption)
-    adapter->wait_completion(result);
-    bool data_failed = adapter->request_failed(result);
-    adapter->release_request(result);
-
-    if (data_failed) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-
-    // Phase 2: signal the receiver that data is ready
-    unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
-    if (sig_result == 0 ||
-        !tracker_->activate(rid, sig_result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
-  }
-
-  // IPC: direct GPU peer copy.
-  (void)dst_off;
-  if (dst_buf_id == 0) {
-    std::cerr << "[ERROR] IPC isend requires non-zero dst_buf_id" << std::endl;
-    slot->state.store(TrackedRequest::SlotState::Free,
-                      std::memory_order_release);
-    return 0;
-  }
-  void* remote_ptr = nullptr;
-  int remote_gpu = -1;
-  if (!try_resolve_remote_ipc_pointer(rank, dst_buf_id, dst_off, src_bytes,
-                                      &remote_ptr, &remote_gpu)) {
-    std::cerr << "[ERROR] IPC failed to resolve remote pointer" << std::endl;
-    slot->state.store(TrackedRequest::SlotState::Free,
-                      std::memory_order_release);
-    return 0;
-  }
-  unsigned result = adapter->put_async(rank, local_ptr, src_buf_id, remote_ptr,
-                                       dst_buf_id, src_bytes);
-  if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-    cleanup_tracked_request(*slot);
-    slot->state.store(TrackedRequest::SlotState::Free,
-                      std::memory_order_release);
-    return 0;
-  }
   return rid;
 }
 
@@ -1060,104 +979,23 @@ unsigned Communicator::irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
   if (dst_buf_id == 0 || dst_bytes == 0) {
     throw std::invalid_argument("irecv requires non-empty destination");
   }
-  auto peer_kind = get_wait_transport_kind(rank);
-  MR local_mr = get_mr(dst_buf_id);
-  if (dst_off > static_cast<size_t>(local_mr.length) ||
-      dst_bytes > static_cast<size_t>(local_mr.length) - dst_off) {
-    throw std::invalid_argument("irecv local slice out of range");
-  }
-
-  auto* adapter = get_adapter(peer_kind);
-  if (!adapter) throw std::runtime_error("failed to get adapter for peer");
-
-  void* local_ptr = reinterpret_cast<void*>(
-      static_cast<uintptr_t>(local_mr.address) + dst_off);
 
   unsigned rid = 0;
   TrackedRequest* slot = tracker_->allocate(&rid);
   if (slot == nullptr) return 0;
 
-  if (peer_kind == PeerTransportKind::Tcp) {
-    void* host_buf;
-    GPU_RT_CHECK(gpuHostMalloc(&host_buf, dst_bytes));
-    slot->bounce_ptr = host_buf;
-    slot->needs_host_to_device_copy = true;
-    slot->completion_buffer = local_ptr;
-    slot->completion_bytes = dst_bytes;
+  CommRecvTask task{};
+  task.rank = rank;
+  task.dst_buf_id = dst_buf_id;
+  task.dst_off = dst_off;
+  task.dst_bytes = dst_bytes;
+  task.request_id = rid;
 
-    TransportAdapter::WaitTarget wt;
-    wt.local_ptr = host_buf;
-    wt.len = dst_bytes;
-    wt.local_buffer_id = 0;
-    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
+  while (jring_mp_enqueue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
+    std::this_thread::yield();
   }
 
-  if (peer_kind == PeerTransportKind::Uccl) {
-    if (!ensure_uccl_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
-      std::cerr << "[ERROR] UCCL MR not registered for buffer " << dst_buf_id
-                << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    TransportAdapter::WaitTarget wt;
-    wt.local_ptr = local_ptr;
-    wt.len = dst_bytes;
-    wt.local_buffer_id = dst_buf_id;
-    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
-  }
-
-  if (peer_kind == PeerTransportKind::Rdma) {
-    if (!ensure_rdma_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
-      std::cerr << "[ERROR] RDMA MR not registered for buffer " << dst_buf_id
-                << std::endl;
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    TransportAdapter::WaitTarget wt;
-    wt.local_ptr = local_ptr;
-    wt.len = dst_bytes;
-    wt.local_buffer_id = dst_buf_id;
-    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
-  }
-
-  // IPC: SignalWait only. Applications publish/wait IPC buffer metadata
-  // explicitly with reg_ipc()/wait_ipc(), mirroring the MR API.
-  {
-    slot->completion_buffer = local_ptr;
-    slot->completion_bytes = dst_bytes;
-    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(rank);
-    unsigned result = ipc_adapter_->wait_async(rank, match_seq, std::nullopt);
-    if (result == 0 || !tracker_->activate(rid, result, rank, peer_kind)) {
-      cleanup_tracked_request(*slot);
-      slot->state.store(TrackedRequest::SlotState::Free,
-                        std::memory_order_release);
-      return 0;
-    }
-    return rid;
-  }
+  return rid;
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
@@ -1672,6 +1510,363 @@ void Communicator::release_event(gpuEvent_t event) {
   if (event == nullptr) return;
   std::lock_guard<std::mutex> lk(event_pool_mu_);
   event_pool_.push_back(event);
+}
+
+void Communicator::mark_slot_failed(unsigned request_id) {
+  auto* slot = tracker_->resolve(request_id);
+  if (slot) {
+    auto state = slot->state.load(std::memory_order_acquire);
+    if (state == TrackedRequest::SlotState::Reserved ||
+        state == TrackedRequest::SlotState::InFlight) {
+      slot->state.store(TrackedRequest::SlotState::Failed,
+                        std::memory_order_release);
+    }
+  }
+}
+
+void Communicator::run_isend_body(CommSendTask const& task) {
+  auto* slot = tracker_->resolve(task.request_id);
+  if (!slot) return;
+
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state != TrackedRequest::SlotState::Reserved) return;
+
+  int rank = task.rank;
+  uint32_t src_buf_id = task.src_buf_id;
+  size_t src_off = task.src_off;
+  size_t src_bytes = task.src_bytes;
+  uint32_t dst_buf_id = task.dst_buf_id;
+  size_t dst_off = task.dst_off;
+
+  // Ensure path is established (may do OOB exchange, adapter creation).
+  if (!ensure_path(rank, /*is_put=*/true)) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  PeerTransportKind peer_kind;
+  try {
+    peer_kind = get_put_transport_kind(rank);
+  } catch (std::exception const&) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  auto* adapter = get_adapter(peer_kind);
+  if (!adapter) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  MR local_mr;
+  try {
+    local_mr = get_mr(src_buf_id);
+  } catch (std::exception const& ex) {
+    std::cerr << "[ERROR] isend get_mr failed: " << ex.what() << std::endl;
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  if (src_off > static_cast<size_t>(local_mr.length) ||
+      src_bytes > static_cast<size_t>(local_mr.length) - src_off) {
+    std::cerr << "[ERROR] isend local slice out of range" << std::endl;
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  void* local_ptr = reinterpret_cast<void*>(
+      static_cast<uintptr_t>(local_mr.address) + src_off);
+
+  if (peer_kind == PeerTransportKind::Tcp) {
+    void* host_buf;
+    GPU_RT_CHECK(gpuHostMalloc(&host_buf, src_bytes));
+    GPU_RT_CHECK(
+        gpuMemcpy(host_buf, local_ptr, src_bytes, gpuMemcpyDeviceToHost));
+    slot->bounce_ptr = host_buf;
+    unsigned result =
+        adapter->put_async(rank, host_buf, 0, nullptr, 0, src_bytes);
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  if (peer_kind == PeerTransportKind::Uccl) {
+    if (!ensure_uccl_memory_registered(src_buf_id, local_ptr, src_bytes)) {
+      std::cerr << "[ERROR] UCCL MR not registered for buffer " << src_buf_id
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    unsigned result =
+        adapter->put_async(rank, local_ptr, src_buf_id, nullptr, 0, src_bytes);
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  if (peer_kind == PeerTransportKind::Rdma) {
+    if (!ensure_rdma_memory_registered(src_buf_id, local_ptr, src_bytes)) {
+      std::cerr << "[ERROR] RDMA MR not registered for buffer " << src_buf_id
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    uint32_t remote_id = dst_buf_id != 0 ? dst_buf_id : src_buf_id;
+    MR remote_mr;
+    try {
+      remote_mr = get_mr(rank, remote_id);
+    } catch (std::exception const& ex) {
+      std::cerr << "[ERROR] isend RDMA remote get_mr failed: " << ex.what()
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    void* remote_ptr_val = reinterpret_cast<void*>(
+        static_cast<uint64_t>(remote_mr.address) + dst_off);
+    rdma_adapter_->register_remote_buffer(rank, remote_id, remote_mr.address,
+                                          remote_mr.key);
+
+    unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
+                                         remote_ptr_val, remote_id, src_bytes);
+    if (result == 0) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    adapter->wait_completion(result);
+    bool data_failed = adapter->request_failed(result);
+    adapter->release_request(result);
+
+    if (data_failed) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+      return;
+    }
+
+    unsigned sig_result = adapter->signal_async(rank, /*tag=*/0);
+    if (sig_result == 0 ||
+        !tracker_->activate(task.request_id, sig_result, rank, peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  // IPC: direct GPU peer copy.
+  if (peer_kind == PeerTransportKind::Ipc) {
+    if (dst_buf_id == 0) {
+      std::cerr << "[ERROR] IPC isend requires non-zero dst_buf_id"
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    void* remote_ptr = nullptr;
+    int remote_gpu = -1;
+    if (!try_resolve_remote_ipc_pointer(rank, dst_buf_id, dst_off, src_bytes,
+                                        &remote_ptr, &remote_gpu)) {
+      std::cerr << "[ERROR] IPC failed to resolve remote pointer" << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    unsigned result = adapter->put_async(rank, local_ptr, src_buf_id,
+                                         remote_ptr, dst_buf_id, src_bytes);
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+}
+
+void Communicator::run_irecv_body(CommRecvTask const& task) {
+  auto* slot = tracker_->resolve(task.request_id);
+  if (!slot) return;
+
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state != TrackedRequest::SlotState::Reserved) return;
+
+  int rank = task.rank;
+  uint32_t dst_buf_id = task.dst_buf_id;
+  size_t dst_off = task.dst_off;
+  size_t dst_bytes = task.dst_bytes;
+
+  if (!ensure_path(rank, /*is_put=*/false)) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  PeerTransportKind peer_kind;
+  try {
+    peer_kind = get_wait_transport_kind(rank);
+  } catch (std::exception const&) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  auto* adapter = get_adapter(peer_kind);
+  if (!adapter) {
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  MR local_mr;
+  try {
+    local_mr = get_mr(dst_buf_id);
+  } catch (std::exception const& ex) {
+    std::cerr << "[ERROR] irecv get_mr failed: " << ex.what() << std::endl;
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  if (dst_off > static_cast<size_t>(local_mr.length) ||
+      dst_bytes > static_cast<size_t>(local_mr.length) - dst_off) {
+    std::cerr << "[ERROR] irecv local slice out of range" << std::endl;
+    mark_slot_failed(task.request_id);
+    return;
+  }
+
+  void* local_ptr = reinterpret_cast<void*>(
+      static_cast<uintptr_t>(local_mr.address) + dst_off);
+
+  if (peer_kind == PeerTransportKind::Tcp) {
+    void* host_buf;
+    GPU_RT_CHECK(gpuHostMalloc(&host_buf, dst_bytes));
+    slot->bounce_ptr = host_buf;
+    slot->needs_host_to_device_copy = true;
+    slot->completion_buffer = local_ptr;
+    slot->completion_bytes = dst_bytes;
+
+    TransportAdapter::WaitTarget wt;
+    wt.local_ptr = host_buf;
+    wt.len = dst_bytes;
+    wt.local_buffer_id = 0;
+    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  if (peer_kind == PeerTransportKind::Uccl) {
+    if (!ensure_uccl_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
+      std::cerr << "[ERROR] UCCL MR not registered for buffer " << dst_buf_id
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    TransportAdapter::WaitTarget wt;
+    wt.local_ptr = local_ptr;
+    wt.len = dst_bytes;
+    wt.local_buffer_id = dst_buf_id;
+    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  if (peer_kind == PeerTransportKind::Rdma) {
+    if (!ensure_rdma_memory_registered(dst_buf_id, local_ptr, dst_bytes)) {
+      std::cerr << "[ERROR] RDMA MR not registered for buffer " << dst_buf_id
+                << std::endl;
+      mark_slot_failed(task.request_id);
+      return;
+    }
+    TransportAdapter::WaitTarget wt;
+    wt.local_ptr = local_ptr;
+    wt.len = dst_bytes;
+    wt.local_buffer_id = dst_buf_id;
+    unsigned result = adapter->wait_async(rank, 0, std::move(wt));
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+
+  // IPC: SignalWait only.
+  if (peer_kind == PeerTransportKind::Ipc) {
+    slot->completion_buffer = local_ptr;
+    slot->completion_bytes = dst_bytes;
+    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(rank);
+    unsigned result = ipc_adapter_->wait_async(rank, match_seq, std::nullopt);
+    if (result == 0 || !tracker_->activate(task.request_id, result, rank,
+                                           peer_kind)) {
+      cleanup_tracked_request(*slot);
+      mark_slot_failed(task.request_id);
+    }
+    return;
+  }
+}
+
+void Communicator::send_proxy_loop() {
+  alignas(64) CommSendTask task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
+
+    try {
+      run_isend_body(task);
+    } catch (std::exception const& ex) {
+      std::cerr << "[ERROR] send_proxy_loop exception: " << ex.what()
+                << std::endl;
+      mark_slot_failed(task.request_id);
+    } catch (...) {
+      std::cerr << "[ERROR] send_proxy_loop unknown exception" << std::endl;
+      mark_slot_failed(task.request_id);
+    }
+  }
+}
+
+void Communicator::recv_proxy_loop() {
+  alignas(64) CommRecvTask task;
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
+
+    try {
+      run_irecv_body(task);
+    } catch (std::exception const& ex) {
+      std::cerr << "[ERROR] recv_proxy_loop exception: " << ex.what()
+                << std::endl;
+      mark_slot_failed(task.request_id);
+    } catch (...) {
+      std::cerr << "[ERROR] recv_proxy_loop unknown exception" << std::endl;
+      mark_slot_failed(task.request_id);
+    }
+  }
+}
+
+void Communicator::drain_send_tasks() {
+  CommSendTask task;
+  while (jring_mc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) == 1) {
+    mark_slot_failed(task.request_id);
+  }
+}
+
+void Communicator::drain_recv_tasks() {
+  CommRecvTask task;
+  while (jring_mc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) == 1) {
+    mark_slot_failed(task.request_id);
+  }
 }
 
 }  // namespace Transport
