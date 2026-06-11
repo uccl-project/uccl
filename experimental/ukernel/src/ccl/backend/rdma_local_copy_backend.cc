@@ -140,7 +140,7 @@ void RdmaLocalCopyBackend::validate(TiledResult const& tiled,
 
     // Export QP spec
     UKernel::Transport::RdmaPeerConnectSpec my_qp =
-        adapter_->get_connect_init(kOobPort);
+        adapter_->get_connect_init(0);
     if (!oob_->put("qp:" + std::to_string(config_.rank), my_qp)) {
       degraded_ = true; return;
     }
