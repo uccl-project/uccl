@@ -78,10 +78,5 @@ struct GpuSignalPeer {
   uint32_t* remote = nullptr;
 };
 
-struct BatchExecutorBackends {
-  BatchBackend* transport = nullptr;
-  BatchBackend* device = nullptr;
-};
-
 }  // namespace CCL
 }  // namespace UKernel
