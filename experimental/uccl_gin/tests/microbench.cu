@@ -497,7 +497,10 @@ __global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res, int pe
     char* dst = reinterpret_cast<char*>(recv_base) + (size_t)it * 4;
     gin.put_value<ncclTeamTagRail>(dst, 0xDEAD0000 + it, peer, lane);
   }
-  gin.quiet(lane);  // drain the lane so all plain WRITEs are posted
+  // Signal completion: a red_add to the peer's counter proves all prior
+  // plain WRITEs on this lane have landed (sender-side dependency).
+  gin.red_add_rel<ncclTeamTagRail>(reinterpret_cast<char*>(res.atomic_tail_base) + (size_t)lane * 8,
+                                    1, peer, lane);
 }
 
 static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
@@ -516,7 +519,20 @@ static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
   uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
       c.resources(), peer, recv_base, iters, lane);
   CUDA_OK(cudaStreamSynchronize(stream));
+  // Wait for the completion signal (red_add) on the peer's counter.
+  auto* counter = reinterpret_cast<std::atomic<int64_t>*>(
+      (char*)c.counter_ptr() + (size_t)lane * 8);
+  counter->store(0, std::memory_order_release);
   MPI_Barrier(MPI_COMM_WORLD);
+
+  using clock = std::chrono::steady_clock;
+  auto t0 = clock::now();
+  while (counter->load(std::memory_order_acquire) < 1) {
+    if (clock::now() - t0 > std::chrono::seconds(30)) {
+      fprintf(stderr, "[verify] put_value timeout\n");
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+  }
 
   int* rank_recv = reinterpret_cast<int*>(reinterpret_cast<char*>(recv) + recv_off);
   std::vector<int> h(iters);
