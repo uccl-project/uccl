@@ -429,13 +429,16 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ inline bool atomic_set_and_commit(
-      T const& item, uint64_t* out_slot = nullptr) {
+      T const& item, uint64_t* out_slot = nullptr,
+      uint64_t max_inflight = Capacity) {
+    const uint64_t inflight_limit =
+        (max_inflight == 0 || max_inflight > Capacity) ? Capacity : max_inflight;
     uint64_t slot;
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
       uint64_t h = ld_volatile(&head);
       uint64_t t = ld_volatile(&tail);
-      if (h - t == Capacity) {
+      if (h - t >= inflight_limit) {
         __nanosleep(64);
         continue;
       }
@@ -449,7 +452,7 @@ struct alignas(128) RingBuffer {
 #else
       uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
       uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
-      if (h - t == Capacity) {
+      if (h - t >= inflight_limit) {
         cpu_relax();
         continue;
       }
