@@ -44,7 +44,6 @@ TRANSPORT_SRCS := \
   $(SRC_DIR)/common.cpp \
   $(SRC_DIR)/uccl_proxy.cpp \
   $(SRC_DIR)/context.cpp \
-
   $(SRC_DIR)/adaptive_sleeper.cc
 
 TRANSPORT_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(filter %.cpp,$(TRANSPORT_SRCS))) \
