@@ -19,14 +19,7 @@
 //               (reference, modeled on nccl/docs/examples/06_device_api/02_alltoall_gin)
 //   [UCCL-GIN]  UcclProxy (EFA) + D2H ring + handle::UCCLGin (gin.put<Rail> / red_add_rel<Rail>)
 //
-// !!! STATUS: first version, written without a local GPU/CUDA toolchain.
-//     Expect to compile-iterate on p5en. The API calls follow the verified
-//     headers (uccl_proxy.hpp, d2h_queue_device.cuh, ring_buffer.cuh, nccl_device.h),
-//     but signatures/semantics should be double-checked on the server.
-//     See README.md.
-//
-// Build: see Makefile (needs mpicxx/nvcc, NCCL device runtime, EFA verbs, and the
-//        UCCL ep objects). Launch with mpirun across the 2 nodes.
+// Build: see Makefile. Launch with mpirun across 2 nodes (paired-remote workload).
 // ===========================================================================
 
 #include <mpi.h>
