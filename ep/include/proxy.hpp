@@ -12,6 +12,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <assert.h>
 #include <stdio.h>
@@ -97,6 +98,17 @@ class Proxy {
 
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
+  // A batch of ordered atomics (UCCL-GIN tail/finish) held back until the plain
+  // payload WRITEs they depend on have completed (payload-before-tail, the EFA
+  // equivalent of NCCL's FORCE_SO). dep_wrs is the set of in-flight write WRs
+  // that must retire before the atomics in this batch may be posted.
+  struct PendingAtomicBatch {
+    std::vector<uint64_t> wrs;
+    std::vector<TransferCmd> cmds;
+    std::vector<uint64_t> dep_wrs;
+    size_t pending_writes = 0;
+  };
+
   ProxyCtx ctx_;
   EPAdaptiveSleeper adaptive_sleeper_;
   void init_common();
@@ -110,8 +122,19 @@ class Proxy {
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
   void send_barrier(uint64_t wr);
   void barrier_check();
-  void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
-  void quiet_cq();
+  void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds,
+             std::vector<uint64_t> release_wrs);
+  void quiet_cq(std::vector<uint64_t> release_wrs);
+  void wait_for_cq(std::vector<uint64_t> release_wrs, bool include_all_writes);
+  void retire_inflight_write(uint64_t wr_id);
+  void clear_atomic_batch_deps(PendingAtomicBatch& batch);
+  void enqueue_pending_atomics(std::vector<uint64_t>& wrs,
+                               std::vector<TransferCmd>& cmds,
+                               std::vector<uint64_t>& deps);
+  void coalesce_atomic_batch(PendingAtomicBatch& batch);
+  void expand_atomic_completion_aliases();
+  void progress_pending_atomics(bool force = false);
+  void drain_pending_atomics();
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Reuse across multiple calls to avoid reallocations
@@ -122,6 +145,7 @@ class Proxy {
 
   // Completion tracking
   std::unordered_set<uint64_t> acked_wrs_;
+  std::unordered_set<uint64_t> inflight_write_wrs_;
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
       wr_id_to_start_time_;
   uint64_t completion_count_ = 0;
@@ -142,6 +166,14 @@ class Proxy {
   void* atomic_buffer_ptr_;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
+
+  // UCCL-GIN payload-before-tail dependency tracking.
+  std::deque<PendingAtomicBatch> pending_atomic_batches_;
+  std::unordered_map<uint64_t, PendingAtomicBatch*> atomic_dep_by_wr_;
+  std::unordered_map<uint64_t, std::vector<uint64_t>> atomic_completion_aliases_;
+  std::vector<uint64_t> atomic_dependency_wrs_;
+  std::vector<uint64_t> coalesced_atomic_wrs_;
+  std::vector<TransferCmd> coalesced_atomic_cmds_;
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;
