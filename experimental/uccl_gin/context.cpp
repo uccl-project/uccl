@@ -160,15 +160,16 @@ void Context::setup(ContextConfig cfg) {
   resources_.scaleup_rank = local_rank;
   resources_.num_lanes = static_cast<uint32_t>(kNumProxyThs);
 
-  // Allocate per-lane staging for put_value (one int per lane).
+  // Reserve a small per-lane staging area at the tail of the send window
+  // for put_value (one int per lane). Must be inside the registered window
+  // so window_off() works; max_message_bytes is never fully utilized in
+  // paired-remote microbench workloads.
   {
-    uint64_t d_staging = 0;
-    UCCL_GIN_CUDA_OK(
-        cudaMalloc(reinterpret_cast<void**>(&d_staging),
-                   resources_.num_lanes * sizeof(int)));
-    UCCL_GIN_CUDA_OK(cudaMemset(reinterpret_cast<void*>(d_staging), 0,
-                                resources_.num_lanes * sizeof(int)));
-    resources_.value_staging = d_staging;
+    const uint64_t staging_bytes = resources_.num_lanes * sizeof(int);
+    if (staging_bytes < max_message_bytes_) {
+      resources_.value_staging_off = max_message_bytes_ - staging_bytes;
+    }
+    // else: value_staging_off stays 0; put_value will __trap().
   }
 }
 
@@ -181,10 +182,6 @@ void Context::teardown() {
   if (d_handles_) {
     cudaFree(d_handles_);
     d_handles_ = nullptr;
-  }
-  if (resources_.value_staging) {
-    cudaFree(reinterpret_cast<void*>(resources_.value_staging));
-    resources_.value_staging = 0;
   }
   if (d_window_) {
     cudaFree(d_window_);
