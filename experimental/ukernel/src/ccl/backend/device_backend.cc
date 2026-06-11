@@ -330,7 +330,11 @@ void DeviceBackend::release_task_args(uint32_t args_id) {
 
 void DeviceBackend::ensure_runtime() {
   if (!Device::TaskManager::instance().inited()) {
-    Device::TaskManager::instance().init(config_.task_capacity);
+    if (config_.no_gdr) {
+      Device::TaskManager::instance().init_no_gdr(config_.task_capacity);
+    } else {
+      Device::TaskManager::instance().init(config_.task_capacity);
+    }
     owns_task_manager_ = true;
   }
   if (worker_pool_ != nullptr) return;

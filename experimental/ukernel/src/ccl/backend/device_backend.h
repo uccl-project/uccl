@@ -20,6 +20,7 @@ struct DeviceBackendConfig {
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
   uint32_t bytes_per_block = 0;
+  bool no_gdr = false;
 };
 
 class DeviceBackend final : public Backend {

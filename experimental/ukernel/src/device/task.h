@@ -183,15 +183,27 @@ class TaskManager {
   ~TaskManager() { release(); }
 
   void init(uint32_t Cap) {
+    init_impl(Cap, false);
+  }
+  void init_no_gdr(uint32_t Cap) {
+    init_impl(Cap, true);
+  }
+
+ private:
+  void init_impl(uint32_t Cap, bool no_gdr) {
     std::lock_guard<std::mutex> gc(task_mu_);
     release_nolock_();
 
     cap_task_ = Cap;
 
 #ifndef __CUDA_ARCH__
-    gdr_task_ = Gdr::gpuCallocGdrUnique<TaskArgs>(Cap);
-    d_task_ = gdr_task_.get();
-    host_task_ = Gdr::getGdrHostPtr(gdr_task_);
+    if (no_gdr) {
+      GPU_RT_CHECK(gpuMalloc(&d_task_, sizeof(TaskArgs) * cap_task_));
+    } else {
+      gdr_task_ = Gdr::gpuCallocGdrUnique<TaskArgs>(Cap);
+      d_task_ = gdr_task_.get();
+      host_task_ = Gdr::getGdrHostPtr(gdr_task_);
+    }
 #else
     GPU_RT_CHECK(gpuMalloc(&d_task_, sizeof(TaskArgs) * cap_task_));
 #endif
@@ -204,6 +216,8 @@ class TaskManager {
 
     inited_ = true;
   }
+
+ public:
 
   void release() {
     std::lock_guard<std::mutex> gc(task_mu_);
@@ -240,8 +254,13 @@ class TaskManager {
     TaskArgs staged = h;
     staged.reserved0 = TaskArgs::kPublishedMagic;
 #ifndef __CUDA_ARCH__
-    host_task_[idx] = staged;
-    _mm_sfence();
+    if (host_task_) {
+      host_task_[idx] = staged;
+      _mm_sfence();
+    } else {
+      GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
+                              gpuMemcpyHostToDevice));
+    }
 #else
     GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
                             gpuMemcpyHostToDevice));
@@ -272,6 +291,7 @@ class TaskManager {
   void release_nolock_() {
 #ifndef __CUDA_ARCH__
     gdr_task_.reset();
+    if (d_task_ && !host_task_) gpuFree(d_task_);
     d_task_ = nullptr;
     host_task_ = nullptr;
 #else

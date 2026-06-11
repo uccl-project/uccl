@@ -48,6 +48,7 @@ static constexpr int kNumSweepSizes = sizeof(kSweepSizes)/sizeof(kSweepSizes[0])
 static constexpr int kNumBlockCounts = sizeof(kBlockCounts)/sizeof(kBlockCounts[0]);
 
 static bool g_block_sweep = false;
+static bool g_no_gdr = false;
 
 // ── Temp files for P2P coordination ─────────────────────────────────────
 
@@ -170,6 +171,7 @@ BenchPoint run_device(size_t bytes, int lat_n, int tp_n,
 
   DeviceBackendConfig cfg;
   cfg.task_capacity = 20000; cfg.max_fifos = 64; cfg.bytes_per_block = bytes_per_block;
+  cfg.no_gdr = g_no_gdr;
   DeviceBackend backend(cfg);
   backend.validate(t, src, dst, nullptr);
 
@@ -461,6 +463,7 @@ int main(int argc, char** argv) {
     const char* mode = (argc >= 2) ? argv[1] : "server";
     for (int i = 2; i < argc; ++i) {
       if (strcmp(argv[i], "--block-sweep") == 0) g_block_sweep = true;
+      if (strcmp(argv[i], "--no-gdr") == 0) g_no_gdr = true;
     }
 
     if (strcmp(mode, "server") == 0) {
