@@ -505,21 +505,20 @@ static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
   int* recv = (int*)c.recv_ptr();
   const int iters = 8;
   const int lane = 0;
-  CUDA_OK(cudaMemset(recv, 0, iters * sizeof(int)));
+  uint32_t recv_off = static_cast<uint32_t>(rank * iters * sizeof(int));
+  CUDA_OK(cudaMemset(reinterpret_cast<char*>(recv) + recv_off, 0, iters * sizeof(int)));
   CUDA_OK(cudaStreamSynchronize(stream));
   MPI_Barrier(MPI_COMM_WORLD);
 
+  // Each rank writes to a distinct region so pairs don't overwrite each other.
   uccl_gin_put_value_kernel<<<1, 32, 0, stream>>>(
-      c.resources(), peer, /*recv_off_0=*/static_cast<uint32_t>(max_bytes), iters, lane);
+      c.resources(), peer, recv_off, iters, lane);
   CUDA_OK(cudaStreamSynchronize(stream));
-
-  // put_value uses plain WRITEs — wait for proxy to drain the lane.
-  // The peer's recv values land asynchronously; a small settle + MPI barrier
-  // suffices for small data sizes.
   MPI_Barrier(MPI_COMM_WORLD);
 
+  int* rank_recv = reinterpret_cast<int*>(reinterpret_cast<char*>(recv) + recv_off);
   std::vector<int> h(iters);
-  CUDA_OK(cudaMemcpy(h.data(), recv, iters * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_OK(cudaMemcpy(h.data(), rank_recv, iters * sizeof(int), cudaMemcpyDeviceToHost));
   for (int i = 0; i < iters; ++i) {
     if (h[i] != 0xDEAD0000 + i) {
       fprintf(stderr, "[verify] put_value slot %d: got 0x%x want 0x%x\n",
