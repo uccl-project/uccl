@@ -259,5 +259,24 @@ PASS。** 走的是非 EFA 标准 RC `ibv_post_send` WRITE 路径，与 ep 的 A
   在非 EFA 仍不可用（EFA-shaped software-seq atomic）。要全源语需写 RC native
   atomic（FETCH_AND_ADD）后端 flavor。这是 DeepEP/NCCL-EP 真正要用的形态。
 - 性能（带宽 sweep）未测；当前只验 correctness。
-- 多 rank/节点（>1 rank/node）未测；当前 1 rank/node。
 - 清理 transport 的冗长 stderr（"Remote atomic buffer info" 等）。
+
+## 2026-06-12（续）：多 rank（EP16）put/quiet PASS ✅
+
+### 关键坑：mpirun rank 放置必须是块状（block），不能 round-robin
+- standalone 拓扑假设 **块状连续 rank**：`node_idx = rank / local_world`，
+  rail peer = `rank ± local_world`（同 local rank、邻节点）。
+- `--map-by node` 是**跨节点 round-robin**（rank0→node0, rank1→node1, ...），
+  与块状假设错位 → 多 rank 全部 `Destination ctx missing fields`（连 GPU0 的
+  rank0 也错）。1 rank/node 时 round-robin 恰好 == 块状，所以之前能通。
+- 修复：用 `--map-by ppr:8:node`（块状：rank0-7→node0, rank8-15→node1）。
+  （排查靠对比 ep + 检查"块状放置"这个隐含假设。）
+- 结果：
+```
+--map-by ppr:8:node, LOCAL_WORLD_SIZE=8, -np 16
+put/quiet      1024 B: PASS
+put/quiet     65536 B: PASS
+put/quiet   1048576 B: PASS
+uccl_gin put/quiet smoke PASS world=16 local_world=8 peer_of_0=8   EXIT=0
+```
+**EP16（2×8）put/quiet 在 RoCE 上全 PASS。**

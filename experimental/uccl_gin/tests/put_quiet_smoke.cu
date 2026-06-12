@@ -46,6 +46,21 @@ __global__ void smoke_put_quiet(UCCLGinResources res, int peer, void* send_ptr,
   gin.quiet(lane);
 }
 
+// Bandwidth: stream `iters` puts to the peer, fanned round-robin across all D2H
+// lanes, then quiet every lane so the timed region ends when all WRITE CQEs have
+// drained. per-rank BW = bytes*iters / elapsed.
+__global__ void smoke_put_bench(UCCLGinResources res, int peer, void* send_ptr,
+                                void* recv_ptr, uint32_t bytes, int iters,
+                                int num_lanes) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) return;
+  UCCLGin gin(res);
+  for (int it = 0; it < iters; ++it) {
+    gin.put<ncclTeamTagRail>(recv_ptr, send_ptr, static_cast<int>(bytes), peer,
+                             it % num_lanes);
+  }
+  for (int l = 0; l < num_lanes; ++l) gin.quiet(l);
+}
+
 }  // namespace
 
 // Returns true if recv == peer's pattern after put/quiet/barrier. `bytes` must
@@ -95,6 +110,35 @@ bool run_put_quiet_smoke(Context& ctx, int peer, int bytes) {
   }
   MPI_Barrier(MPI_COMM_WORLD);
   return true;
+}
+
+// Timed put bandwidth to the paired-remote peer. Returns per-rank GB/s
+// (bytes*iters / elapsed), or -1.0 on error. `warmup` puts are run untimed.
+double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup) {
+  if (bytes <= 0 || (bytes & 3) ||
+      static_cast<size_t>(bytes) > ctx.max_message_bytes() || iters <= 0) {
+    return -1.0;
+  }
+  void* send = ctx.send_ptr();
+  void* recv = ctx.recv_ptr();
+  const int num_lanes = ctx.num_queues();
+
+  smoke_put_bench<<<1, 32>>>(ctx.resources(), peer, send, recv,
+                             static_cast<uint32_t>(bytes), warmup, num_lanes);
+  if (cudaDeviceSynchronize() != cudaSuccess) return -1.0;
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  const double t0 = MPI_Wtime();
+  smoke_put_bench<<<1, 32>>>(ctx.resources(), peer, send, recv,
+                             static_cast<uint32_t>(bytes), iters, num_lanes);
+  if (cudaDeviceSynchronize() != cudaSuccess) return -1.0;
+  const double t1 = MPI_Wtime();
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  const double secs = t1 - t0;
+  if (secs <= 0.0) return -1.0;
+  return (static_cast<double>(bytes) * iters) / secs / 1e9;
 }
 
 }  // namespace uccl_gin

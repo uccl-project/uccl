@@ -13,6 +13,7 @@
 namespace uccl_gin {
 // Defined in tests/put_quiet_smoke.cu (compiled into this extension).
 bool run_put_quiet_smoke(Context& ctx, int peer, int bytes);
+double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup);
 }  // namespace uccl_gin
 
 namespace {
@@ -113,6 +114,24 @@ PyObject* PyUcclGinContext_put_quiet_smoke(PyUcclGinContext* self,
   Py_RETURN_FALSE;
 }
 
+PyObject* PyUcclGinContext_put_bench(PyUcclGinContext* self, PyObject* args) {
+  if (self->ctx == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError, "Context is closed");
+    return nullptr;
+  }
+  int peer = 0;
+  int bytes = 0;
+  int iters = 0;
+  int warmup = 0;
+  if (!PyArg_ParseTuple(args, "iii|i", &peer, &bytes, &iters, &warmup))
+    return nullptr;
+  double gbps;
+  Py_BEGIN_ALLOW_THREADS
+  gbps = uccl_gin::run_put_bench(*self->ctx, peer, bytes, iters, warmup);
+  Py_END_ALLOW_THREADS
+  return PyFloat_FromDouble(gbps);
+}
+
 PyObject* PyUcclGinContext_num_queues(PyUcclGinContext* self, void*) {
   if (self->ctx == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "Context is closed");
@@ -185,6 +204,10 @@ PyMethodDef PyUcclGinContext_methods[] = {
      reinterpret_cast<PyCFunction>(PyUcclGinContext_put_quiet_smoke), METH_VARARGS,
      "run_put_quiet_smoke(peer, bytes) -> bool. put+quiet correctness across the "
      "paired-remote peer; returns True if recv matches the peer's pattern."},
+    {"put_bench", reinterpret_cast<PyCFunction>(PyUcclGinContext_put_bench),
+     METH_VARARGS,
+     "put_bench(peer, bytes, iters, warmup=0) -> float. Per-rank put bandwidth "
+     "(GB/s) to the paired-remote peer."},
     {nullptr, nullptr, 0, nullptr},
 };
 

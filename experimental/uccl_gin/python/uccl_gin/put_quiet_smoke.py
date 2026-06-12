@@ -64,6 +64,25 @@ def main() -> int:
         if rank == 0:
             print(f"  put/quiet {nbytes:>9} B: {'PASS' if ok else 'FAIL'}", flush=True)
 
+    # Optional bandwidth sweep (UCCL_GIN_BENCH=1). per-rank GB/s plus a crude
+    # aggregate (per-rank * world) printed by rank 0; all ranks run in lockstep.
+    if os.environ.get("UCCL_GIN_BENCH") == "1" and not failures:
+        iters = int(os.environ.get("UCCL_GIN_BENCH_ITERS", "50"))
+        warmup = int(os.environ.get("UCCL_GIN_BENCH_WARMUP", "10"))
+        if rank == 0:
+            print(f"  -- bandwidth (iters={iters}, warmup={warmup}) --", flush=True)
+        for nbytes in sizes:
+            if nbytes > max_message_bytes:
+                continue
+            gbps = ctx.put_bench(peer, nbytes, iters, warmup)
+            if rank == 0:
+                agg = gbps * world if gbps > 0 else 0.0
+                print(
+                    f"  bench {nbytes:>9} B: per-rank {gbps:8.2f} GB/s  "
+                    f"aggregate {agg:9.2f} GB/s",
+                    flush=True,
+                )
+
     ctx.close()
 
     # Reduce pass/fail across ranks via a tiny allreduce-by-min over a sentinel:
