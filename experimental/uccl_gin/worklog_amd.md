@@ -280,3 +280,34 @@ put/quiet   1048576 B: PASS
 uccl_gin put/quiet smoke PASS world=16 local_world=8 peer_of_0=8   EXIT=0
 ```
 **EP16（2×8）put/quiet 在 RoCE 上全 PASS。**
+
+## 2026-06-12（续）：性能 —— EP16 单 lane put 带宽基线
+
+新增 `smoke_put_bench` kernel + `Context.put_bench(peer,bytes,iters,warmup,lanes)`
++ driver 的 `UCCL_GIN_BENCH=1` sweep。
+
+### ⚠️ 多 lane fan-out 在 quiet 处挂死（已知问题）
+- bench 跨多 lane 发 put 后，`quiet(lane)` 在 `queue=4` 一直自旋等不到 proxy ack。
+  `Proxy::quiet` 会 drain 整个 proxy 线程的所有 inflight write，多 lane 并发下某条
+  WRITE 的 CQE 没被 retire → quiet 死等。单 lane 的 put/quiet smoke 没踩到。
+- 暂以 `bench_lanes` 参数化，默认单 lane 取可靠基线；多 lane 留作待修。
+  （要打满带宽必须修——多 lane = 多 NIC/QP 并行。）
+
+### EP16 单 lane 带宽（iters=50, warmup=10, lanes=1, 块状放置）
+```
+bytes        per-rank GB/s   aggregate(×16) GB/s
+4096           1.48            23.76
+16384          6.14            98.17
+65536         18.68           298.83
+262144        28.28           452.52
+1048576       31.16           498.51
+4194304       31.58           505.28
+```
+- 大包单 lane per-rank ~31.6 GB/s（≈253 Gbps，约一条 RoCE NIC/单 QP 的量级；
+  单 lane 不会打满多 NIC）。EP16 aggregate ~505 GB/s。
+- 小包（4 KB）1.48 GB/s——典型 proxy 小消息瓶颈（和 EFA 上同病）。
+- 这是 correctness-true 的真实测量（bench 复用同一 put 路径），非假数据。
+
+### 性能下一步
+- 修多 lane quiet 挂死 → 单 rank 用满多 NIC，per-rank 应远超 31 GB/s。
+- 小消息优化（coalescing / inflight 调参），和 EFA 侧 roadmap 同源。
