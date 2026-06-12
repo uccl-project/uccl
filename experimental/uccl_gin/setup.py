@@ -31,7 +31,20 @@ NUM_PROXY_THS = int(os.getenv("UCCL_GIN_NUM_PROXY_THS", "4"))
 
 
 def _mpi_flags():
-    """Return (include_dirs, library_dirs, libraries) for MPI via mpicxx."""
+    """Return (include_dirs, library_dirs, libraries) for MPI.
+
+    Prefer an explicit UCCL_GIN_MPI_HOME (a self-contained MPI install with
+    headers + libs, e.g. /opt/cluster-test on boxes lacking libopenmpi-dev),
+    then fall back to `mpicxx --showme`. Validate that mpi.h actually exists at
+    the resolved include dir, since some boxes ship the mpicxx wrapper but not
+    the dev headers.
+    """
+    mpi_home = os.getenv("UCCL_GIN_MPI_HOME")
+    if mpi_home:
+        inc = str(Path(mpi_home) / "include")
+        libdir = str(Path(mpi_home) / "lib")
+        return [inc], [libdir], ["mpi"]
+
     mpicxx = os.getenv("MPICXX", "mpicxx")
     inc, libdirs, libs = [], [], []
     try:
@@ -47,6 +60,10 @@ def _mpi_flags():
             libdirs.append(tok[2:])
         elif tok.startswith("-l"):
             libs.append(tok[2:])
+    if inc and not any(Path(d, "mpi.h").exists() for d in inc):
+        raise RuntimeError(
+            "mpicxx reports include dirs %s but none contain mpi.h. Install MPI "
+            "dev headers or set UCCL_GIN_MPI_HOME to a self-contained MPI." % inc)
     return inc, libdirs, libs
 
 
