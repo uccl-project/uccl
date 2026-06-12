@@ -22,7 +22,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <regex>
@@ -388,15 +387,6 @@ bool is_cuda_host_pointer(void* ptr) {
 #endif
 }
 
-int get_gpu_numa_node_from_bdf(std::string const& bdf) {
-  std::ifstream file(
-      uccl::Format("/sys/bus/pci/devices/%s/numa_node", bdf.c_str()));
-  if (!file.is_open()) return -1;
-  std::string line;
-  if (!std::getline(file, line)) return -1;
-  return std::stoi(line);
-}
-
 }  // namespace
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
@@ -423,8 +413,26 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   } else {
     // Fallback when the physical GPU scan is unavailable.
     auto gpu_cards = uccl::get_gpu_cards();
-    if (device_index < 0 ||
-        device_index >= static_cast<int>(gpu_cards.size())) {
+    int gpu_card_idx = -1;
+    char const* gpu_idx_source = nullptr;
+    char const* gpu_card_source = nullptr;
+    if (nic_local_rank >= 0 &&
+        nic_local_rank < static_cast<int>(gpu_cards.size())) {
+      gpu_idx = nic_local_rank;
+      gpu_card_idx = nic_local_rank;
+      gpu_idx_source = "nic_local_rank";
+      gpu_card_source = "nic_local_rank";
+    } else if (device_index >= 0 &&
+               device_index < static_cast<int>(gpu_cards.size())) {
+      // The visible CUDA device still identifies the correct sysfs GPU path in
+      // restricted-visibility processes. Keep nic_local_rank for NIC tie-breaks
+      // when it carries a physical local rank.
+      gpu_idx = nic_local_rank >= 0 ? nic_local_rank : device_index;
+      gpu_card_idx = device_index;
+      gpu_idx_source = nic_local_rank >= 0 ? "nic_local_rank" : "device_index";
+      gpu_card_source = "device_index";
+    }
+    if (gpu_card_idx < 0) {
       fprintf(stderr,
               "[RDMA] invalid device_index=%d nic_local_rank=%d "
               "(visible GPUs=%zu, physical GPUs=%zu)\n",
@@ -432,13 +440,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
               all_gpu_bdfs.size());
       std::abort();
     }
-    gpu_idx = device_index;
-    gpu_device_path = gpu_cards[gpu_idx];
-    fprintf(stderr,
-            "[RDMA] physical GPU scan unavailable (%zu entries); falling back "
-            "to CUDA-visible indexing by device_index=%d. NIC/NUMA affinity "
-            "may be wrong if this process sees more than one GPU.\n",
-            all_gpu_bdfs.size(), device_index);
+    gpu_device_path = gpu_cards[gpu_card_idx];
+    gpu_bdf = gpu_device_path.filename().string();
+    fprintf(
+        stderr,
+        "[RDMA] physical GPU scan unavailable (%zu entries); falling back "
+        "to %s=%d for NIC/NUMA affinity and %s=%d for the GPU sysfs path.\n",
+        all_gpu_bdfs.size(), gpu_idx_source, gpu_idx, gpu_card_source,
+        gpu_card_idx);
   }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
@@ -504,7 +513,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       // NUMA-aware tie-breaker: prefer NICs on same NUMA node as GPU
       int gpu_numa_node = gpu_bdf.empty()
                               ? uccl::get_gpu_numa_node(device_index)
-                              : get_gpu_numa_node_from_bdf(gpu_bdf);
+                              : uccl::get_gpu_numa_node_from_bdf(gpu_bdf);
       std::vector<std::string> numa_candidates;
       for (auto const& nic_name : candidates) {
         int nic_numa = uccl::get_dev_numa_node(nic_name.c_str());
