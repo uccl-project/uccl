@@ -2,7 +2,9 @@
 
 ## At a glance
 
-Inter-node ReduceScatter is now implemented in
+ReduceScatter is split by topology: the `1nx4g` implementation lives in
+[`nccl/ReduceScatter/single-node.cu`](../nccl/ReduceScatter/single-node.cu),
+while inter-node paths live in
 [`nccl/ReduceScatter/multi-node.cu`](../nccl/ReduceScatter/multi-node.cu).
 The normal `1nx4g`, `2nx1g`, `2nx2g`, and `2nx4g`, `ncclFloat32`, `ncclSum`
 paths are native-only across the benchmark size range; they do not fall back to
