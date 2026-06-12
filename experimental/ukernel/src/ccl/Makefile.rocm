@@ -30,14 +30,13 @@ INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
 CXX_RPATH_FLAGS := -Wl,-rpath,$(HIP_LIB)
 NVCC_RPATH_FLAGS := -Wl,-rpath,$(HIP_LIB)
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(HIP_LIB) \
-                  -lamdhip64 -lgflags -lz -libverbs \
-                  -lnl-3 -lnl-route-3 -lpthread \
-                  $(UCCL_RDMA_STATIC)
+                  -lamdhip64 -lz -libverbs \
+                  -lnl-3 -lnl-route-3 -lpthread
 DEVICE_LIBS := -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc executor_live.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -48,11 +47,9 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/shmring_exchanger.cc \
-                  ../transport/adapter/tcp_adapter.cc \
-                  ../transport/adapter/uccl_adapter.cc \
-                  ../transport/adapter/ipc_adapter.cc \
-                  ../transport/adapter/rdma_adapter.cc \
-                  ../transport/util/utils.cc
+                 ../transport/adapter/tcp_adapter.cc \
+                 ../transport/adapter/ipc_adapter.cc \
+                 ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
                  transport_request_tracker.o \
                  transport_bounce_buffer_pool.o \
@@ -61,18 +58,16 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
                  transport_adapter_shmring_exchanger.o \
-                  transport_adapter_tcp_adapter.o \
-                  transport_adapter_uccl_adapter.o \
-                  transport_adapter_ipc_adapter.o \
-                  transport_adapter_rdma_adapter.o \
-                  transport_util_utils.o
+                 transport_adapter_tcp_adapter.o \
+                 transport_adapter_ipc_adapter.o \
+                 transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
                   device_worker.o
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := 
-INTEGRATION_TEST_BINS :=
+INTEGRATION_TEST_BINS := test_perf_p2p_copy
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -93,9 +88,6 @@ unit: test-unit
 integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
-
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -133,14 +125,23 @@ backend/device_backend.o: backend/device_backend.cc
 device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
+test_perf_p2p_copy: $(CCL_CORE_OBJ) $(REAL_BACKEND_OBJ) \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(HIP_LIB) -lamdhip64 $(DEVICE_LIBS) $(TRANSPORT_LIBS) -lpthread
+
+test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
 clean:
 	rm -f *.o *.d backend/*.o backend/*.d \
 		test/*.o test/*.d \
 		test/common/*.o test/common/*.d \
 		test/unit/*.o test/unit/*.d \
 		test/integration/*.o test/integration/*.d \
-		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
+		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS) test_perf_p2p_copy
 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d)
+	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
+	test/integration/test_perf_p2p_copy.d
