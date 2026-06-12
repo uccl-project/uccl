@@ -55,7 +55,9 @@ MPI_INC    := $(shell $(MPICXX) --showme:compile 2>/dev/null)
 MPI_LIB    := $(shell $(MPICXX) --showme:link 2>/dev/null)
 
 # No EFA, no SOFTWARE_ORDERING => the plain RC ibv_post_send WRITE path.
-DEFS := -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
+# -D__HIP_PLATFORM_AMD__ must be set explicitly so headers that branch on it
+# (util/gpu_rt.h) pick the HIP path even before any <hip/...> include is seen.
+DEFS := -D__HIP_PLATFORM_AMD__ -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
         -DUCCL_GIN_WITH_NCCL_GIN=$(UCCL_GIN_WITH_NCCL_GIN)
 INCLUDES := -I. -Itransport -I../../include -I$(ROCM_HOME)/include -I$(PYTHON_INC) \
             $(MPI_INC)

@@ -4,7 +4,11 @@
 #include <chrono>
 #include <string>
 #include <thread>
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#else
 #include <cuda_runtime.h>
+#endif
 
 #ifndef CUDA_CHECK
 #define CUDA_CHECK(cmd)                                                     \
