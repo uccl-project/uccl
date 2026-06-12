@@ -172,6 +172,7 @@ class Communicator {
 
   std::unique_ptr<RequestTracker> tracker_;
   jring_t* completion_ring_ = nullptr;
+  std::atomic<uint32_t> next_rid_{1};
 
   mutable std::mutex event_pool_mu_;
   std::vector<gpuEvent_t> event_pool_;

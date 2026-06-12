@@ -45,31 +45,19 @@ class IpcAdapter final : public TransportAdapter {
   unsigned wait_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                       unsigned comm_rid) override;
 
+  void close_comp(int peer_rank);
+
  private:
-  enum class ReqState : uint8_t { Free, Queued, Completed, Failed };
   enum class ReqType : uint8_t { DataPut, DataWait, Signal, SignalWait };
 
-  struct Slot {
-    std::atomic<ReqState> state{ReqState::Free};
-    std::atomic<uint32_t> gen{1};
-    unsigned id = 0;
-    unsigned comm_rid = 0;
-    int peer = -1;
-    uint64_t seq = 0;
-    ReqType type = ReqType::DataPut;
-    void* local_ptr = nullptr;
-    void* remote_ptr = nullptr;
-    size_t bytes = 0;
-
-    void mark_queued() { state.store(ReqState::Queued, std::memory_order_release); }
-    void mark_completed(bool ok) {
-      state.store(ok ? ReqState::Completed : ReqState::Failed,
-                  std::memory_order_release);
-    }
-    bool is_done() const {
-      auto s = state.load(std::memory_order_acquire);
-      return s == ReqState::Completed || s == ReqState::Failed;
-    }
+  struct RingElem {
+    unsigned comm_rid;
+    int peer;
+    ReqType type;
+    uint64_t seq;
+    void* local_ptr;
+    void* remote_ptr;
+    size_t bytes;
   };
 
   struct PeerComp {
@@ -80,28 +68,17 @@ class IpcAdapter final : public TransportAdapter {
     std::string shm_name;
   };
 
-  static constexpr uint32_t kSlotBits = 13;
-  static constexpr uint32_t kSlotCnt = (1u << kSlotBits);
-  static constexpr uint32_t kSlotMask = kSlotCnt - 1u;
-  static unsigned make_rid(uint32_t idx, uint32_t gen) {
-    return static_cast<unsigned>((gen << kSlotBits) | idx);
-  }
-  static uint32_t slot_idx(unsigned rid) { return rid & kSlotMask; }
-  static uint32_t slot_gen(unsigned rid) { return rid >> kSlotBits; }
-
-  Slot* acquire_slot(unsigned* out);
-  Slot* resolve_slot(unsigned id);
-  void release_slot(unsigned id);
-  bool enqueue(unsigned id, ReqType type);
-
   void send_worker();
   void recv_worker();
-  void done(Slot* s, bool ok);
+  bool send_one(RingElem* e);
+  bool recv_one(RingElem* e);
+
+  bool connect_to(int rank);
+  bool accept_from(int rank);
 
   std::string comp_shm_name(int peer) const;
   bool ensure_local_comp(int peer);
   bool ensure_remote_comp(int peer);
-  void close_comp(int peer);
 
   jring_t* send_ring_ = nullptr;
   jring_t* recv_ring_ = nullptr;
@@ -112,8 +89,6 @@ class IpcAdapter final : public TransportAdapter {
 
   std::mutex seq_mu_;
   std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
-  std::unique_ptr<Slot[]> slots_;
-  std::atomic<uint32_t> alloc_cursor_{0};
 
   std::string ns_;
   mutable std::mutex dir_mu_;

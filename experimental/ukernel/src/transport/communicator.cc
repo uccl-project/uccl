@@ -657,7 +657,7 @@ bool Communicator::ensure_path(int rank, bool is_put) {
                  : ipc_adapter_->ensure_wait_path(spec))) {
       std::cerr << "[ERROR] Communicator " << global_rank_ << " IPC "
                 << dir_label << " failed to rank " << rank << std::endl;
-      if (is_put) ipc_adapter_->close_peer(rank);
+      if (is_put) ipc_adapter_->close_comp(rank);
       return false;
     }
     is_put ? mark_put_path_ready(rank, PeerTransportKind::Ipc)
@@ -936,48 +936,31 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
   void* local_ptr =
       reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address) + src_off);
 
-  unsigned rid;
-  TrackedRequest* slot = tracker_->allocate(&rid);
-  if (!slot) return 0;
-  slot->kind = kind;
+  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
   // TCP: adapter's send worker handles GPU→host bounce internally
   if (kind == PeerTransportKind::Tcp) {
-    unsigned aid = adapter->put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid);
-    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
-    }
+    if (!adapter->put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid)) return 0;
     return rid;
   }
 
   // UCCL RDMA
   if (kind == PeerTransportKind::Uccl) {
-    if (!ensure_uccl_memory_registered(src_buf, local_ptr, bytes)) {
-      mark_slot_failed(rid); return 0;
-    }
-    unsigned aid = adapter->put_async(peer, local_ptr, src_buf, nullptr, 0, bytes, rid);
-    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
-    }
+    if (!ensure_uccl_memory_registered(src_buf, local_ptr, bytes)) return 0;
+    if (!adapter->put_async(peer, local_ptr, src_buf, nullptr, 0, bytes, rid)) return 0;
     return rid;
   }
 
   // RDMA
   if (kind == PeerTransportKind::Rdma) {
-    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) {
-      mark_slot_failed(rid); return 0;
-    }
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return 0;
     uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
     MR remote_mr = get_mr(peer, remote_id);
     void* remote_ptr = reinterpret_cast<void*>(
         static_cast<uint64_t>(remote_mr.address) + dst_off);
     rdma_adapter_->register_remote_buffer(peer, remote_id, remote_mr.address,
                                           remote_mr.key);
-    unsigned aid =
-        adapter->put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes, rid);
-    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
-    }
+    if (!adapter->put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes, rid)) return 0;
     return rid;
   }
 
@@ -986,15 +969,9 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
   int remote_gpu = -1;
   if (dst_buf != 0) {
     if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
-                                        &remote_ptr, &remote_gpu)) {
-      mark_slot_failed(rid); return 0;
-    }
+                                        &remote_ptr, &remote_gpu)) return 0;
   }
-  unsigned aid =
-      adapter->put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf, bytes, rid);
-  if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
-  }
+  if (!adapter->put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf, bytes, rid)) return 0;
   return rid;
 }
 
@@ -1060,13 +1037,15 @@ bool Communicator::put(int peer, uint32_t src_buf, size_t src_off,
   if (!rid) return false;
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (!tracker_->poll(rid)) {
-    if (timeout_ms >= 0 &&
-        std::chrono::steady_clock::now() >= deadline)
+  while (true) {
+    unsigned rids[16];
+    size_t n = try_complete(rids, 16);
+    for (size_t i = 0; i < n; ++i)
+      if (rids[i] == rid) return true;
+    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
       return false;
     std::this_thread::yield();
   }
-  return true;
 }
 
 bool Communicator::wait(int peer, uint64_t tag, int timeout_ms) {
@@ -1074,13 +1053,15 @@ bool Communicator::wait(int peer, uint64_t tag, int timeout_ms) {
   if (!rid) return false;
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (!tracker_->poll(rid)) {
-    if (timeout_ms >= 0 &&
-        std::chrono::steady_clock::now() >= deadline)
+  while (true) {
+    unsigned rids[16];
+    size_t n = try_complete(rids, 16);
+    for (size_t i = 0; i < n; ++i)
+      if (rids[i] == rid) return true;
+    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
       return false;
     std::this_thread::yield();
   }
-  return true;
 }
 
 bool Communicator::signal(int peer, uint64_t tag, int timeout_ms) {
@@ -1088,13 +1069,15 @@ bool Communicator::signal(int peer, uint64_t tag, int timeout_ms) {
   if (!rid) return false;
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (!tracker_->poll(rid)) {
-    if (timeout_ms >= 0 &&
-        std::chrono::steady_clock::now() >= deadline)
+  while (true) {
+    unsigned rids[16];
+    size_t n = try_complete(rids, 16);
+    for (size_t i = 0; i < n; ++i)
+      if (rids[i] == rid) return true;
+    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
       return false;
     std::this_thread::yield();
   }
-  return true;
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
@@ -1541,16 +1524,12 @@ bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
 void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   unsigned adapter_id = tracked.adapter_request_id;
   if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
-    uccl_adapter_->release(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
-    tcp_adapter_->release(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Rdma && rdma_adapter_) {
-    rdma_adapter_->release(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Ipc && ipc_adapter_) {
-    ipc_adapter_->release(adapter_id);
   }
   if (tracked.host_copy_event != nullptr) {
     release_event(tracked.host_copy_event);

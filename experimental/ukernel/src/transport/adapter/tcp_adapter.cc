@@ -254,152 +254,25 @@ void TcpTransportAdapter::recv_worker_loop() {
     publish_completion(drain.comm_rid, true);
 }
 
-bool TcpTransportAdapter::accept_from_peer(int rank, std::string const&) {
-  // Handled by Communicator via get_listen_port() — accept happens at a higher level
-  (void)rank;
+// ── Peer connection ─────────────────────────────────────────────────────
+
+bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t port) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (peer_contexts_.count(rank) && peer_contexts_[rank] &&
+      peer_contexts_[rank]->send_fd >= 0)
+    return true;
+  auto ctx = std::make_shared<PeerContext>();
+  if (!connect_socket(ctx->send_fd, ip, port, kDefaultConnectTimeout)) return false;
+  ctx->recv_fd = ctx->send_fd;
+  handshake(ctx->send_fd, local_rank_, true);
+  peer_contexts_[rank] = ctx;
   return true;
 }
 
-// ── Slot management ─────────────────────────────────────────────────────
-
-TcpTransportAdapter::RequestSlot* TcpTransportAdapter::acquire_slot(unsigned* out) {
-  uint32_t start = alloc_cursor_.fetch_add(1) & (kSlotCount - 1u);
-  for (uint32_t i = 0; i < kSlotCount; ++i) {
-    uint32_t idx = (start + i) & (kSlotCount - 1u);
-    RequestSlot* s = &slots_[idx];
-    auto expected = RequestState::Free;
-    if (!s->state.compare_exchange_strong(expected, RequestState::Queued,
-                                          std::memory_order_acq_rel, std::memory_order_acquire))
-      continue;
-    uint32_t gen = (s->generation.fetch_add(1) + 1u) & ((1u << (32u - kSlotBits)) - 1u);
-    if (gen == 0) { gen = 1; s->generation.store(gen); }
-    unsigned rid = make_rid(idx, gen);
-    s->comm_rid = 0;
-    s->peer_rank = -1;
-    s->host_ptr = nullptr;
-    s->len = 0;
-    *out = rid;
-    return s;
-  }
-  return nullptr;
-}
-
-TcpTransportAdapter::RequestSlot* TcpTransportAdapter::resolve_slot(unsigned rid) {
-  uint32_t idx = slot_index(rid);
-  if (idx >= kSlotCount) return nullptr;
-  RequestSlot* s = &slots_[idx];
-  uint32_t gen = s->generation.load() & ((1u << (32u - kSlotBits)) - 1u);
-  if (gen == 0 || gen != slot_gen(rid)) return nullptr;
-  return s;
-}
-
-void TcpTransportAdapter::release_slot(unsigned rid) {
-  RequestSlot* s = resolve_slot(rid);
-  if (!s) return;
-  s->state.store(RequestState::Free, std::memory_order_release);
-}
-
-bool TcpTransportAdapter::enqueue_send(unsigned rid) {
-  return enqueue_elem(send_task_ring_, rid, stop_);
-}
-
-bool TcpTransportAdapter::enqueue_recv(unsigned rid) {
-  return enqueue_elem(recv_task_ring_, rid, stop_);
-}
-
-// ── Workers ─────────────────────────────────────────────────────────────
-
-void TcpTransportAdapter::send_worker_loop() {
-  while (!stop_.load(std::memory_order_acquire)) {
-    unsigned rid = 0;
-    if (jring_sc_dequeue_bulk(send_task_ring_, &rid, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
-    RequestSlot* s = resolve_slot(rid);
-    if (!s) continue;
-    bool ok = false;
-    std::shared_ptr<PeerContext> ctx;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = peer_contexts_.find(s->peer_rank);
-      if (it != peer_contexts_.end() && it->second && it->second->send_fd >= 0)
-        ctx = it->second;
-    }
-    if (ctx) {
-      std::lock_guard<std::mutex> lk(ctx->send_mu);
-      // GPU→host bounce
-      void* ptr = s->host_ptr;
-      void* bounce = nullptr;
-      if (s->len > 0 && ptr) {
-        gpuPointerAttributes attr{};
-        if (gpuPointerGetAttributes(&attr, ptr) == gpuSuccess &&
-            attr.type == gpuMemoryTypeDevice) {
-          GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-          GPU_RT_CHECK(gpuMallocHost(&bounce, s->len));
-          GPU_RT_CHECK(gpuMemcpyAsync(bounce, ptr, s->len,
-                                       gpuMemcpyDeviceToHost, gpu_stream_));
-          GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
-          ptr = bounce;
-        }
-      }
-      WireHeader hdr{};
-      hdr.type = static_cast<uint32_t>(s->kind == RequestSlot::Kind::Signal
-                                           ? FrameType::Signal : FrameType::Data);
-      hdr.payload_len = s->len;
-      ok = send_all(ctx->send_fd, &hdr, sizeof(hdr));
-      if (ok && s->len > 0)
-        ok = send_all(ctx->send_fd, ptr, s->len);
-      if (bounce) GPU_RT_CHECK(gpuFreeHost(bounce));
-    }
-    s->mark_completed(ok);
-    publish_completion(s->comm_rid, !ok);
-  }
-  // Drain remaining
-  unsigned rid;
-  while (jring_mc_dequeue_bulk(send_task_ring_, &rid, 1, nullptr) == 1)
-    if (RequestSlot* s = resolve_slot(rid))
-      s->mark_completed(false);
-}
-
-void TcpTransportAdapter::recv_worker_loop() {
-  while (!stop_.load(std::memory_order_acquire)) {
-    unsigned rid = 0;
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &rid, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
-    RequestSlot* s = resolve_slot(rid);
-    if (!s) continue;
-    bool ok = false;
-    std::shared_ptr<PeerContext> ctx;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = peer_contexts_.find(s->peer_rank);
-      if (it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0)
-        ctx = it->second;
-    }
-    if (ctx) {
-      std::lock_guard<std::mutex> lk(ctx->recv_mu);
-      WireHeader hdr{};
-      ok = recv_all(ctx->recv_fd, &hdr, sizeof(hdr));
-      if (ok && hdr.payload_len > 0) {
-        if (s->kind == RequestSlot::Kind::SignalWait) {
-          ok = recv_all(ctx->recv_fd, &s->signal_payload, sizeof(uint64_t));
-        } else if (s->kind == RequestSlot::Kind::DataWait && s->host_ptr) {
-          ok = recv_all(ctx->recv_fd, s->host_ptr, s->len);
-        } else {
-          ok = recv_discard(ctx->recv_fd, hdr.payload_len);
-        }
-      }
-    }
-    s->mark_completed(ok);
-    publish_completion(s->comm_rid, !ok);
-  }
-  unsigned rid;
-  while (jring_mc_dequeue_bulk(recv_task_ring_, &rid, 1, nullptr) == 1)
-    if (RequestSlot* s = resolve_slot(rid))
-      s->mark_completed(false);
+bool TcpTransportAdapter::accept_from_peer(int rank, std::string const&) {
+  // Handled by Communicator via get_listen_port() - accept happens at higher level
+  (void)rank;
+  return true;
 }
 
 // ── Socket helpers ──────────────────────────────────────────────────────
