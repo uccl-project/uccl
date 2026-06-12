@@ -104,10 +104,18 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
             "client wait_ipc failed");
     remote_recv_buffer_id = kServerRecvBufferId;
   }
-  unsigned send_req = comm->isend(kServerRank, kClientSendBufferId, 0,
-                                  kMessageBytes, remote_recv_buffer_id, 0);
-  require(send_req != 0, "client isend failed");
-  require(comm->wait_finish(send_req), "client wait_finish(send) failed");
+  unsigned send_rid = comm->put_async(kServerRank, kClientSendBufferId, 0,
+                                      remote_recv_buffer_id, 0, kMessageBytes);
+  require(send_rid != 0, "client put_async failed");
+  unsigned rids[16];
+  bool found = false;
+  while (!found) {
+    size_t n = comm->try_complete(rids, 16);
+    for (size_t i = 0; i < n; ++i) {
+      if (rids[i] == send_rid) { found = true; break; }
+    }
+    if (!found) std::this_thread::yield();
+  }
 
   std::cout << "[CLIENT][exchange] OK" << std::endl;
   return 0;
@@ -135,15 +143,27 @@ int run_exchange_server(int gpu, std::string const& exchanger_ip,
             "server reg_ipc failed");
   }
 
-  unsigned recv_req =
-      comm->irecv(kClientRank, kServerRecvBufferId, 0, kMessageBytes);
-  require(recv_req != 0, "server irecv failed");
-  require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
+  unsigned recv_rid = comm->wait_async(kClientRank, /*tag=*/0);
+  require(recv_rid != 0, "server wait_async failed");
+  unsigned rids[16];
+  bool found = false;
+  while (!found) {
+    size_t n = comm->try_complete(rids, 16);
+    for (size_t i = 0; i < n; ++i) {
+      if (rids[i] == recv_rid) { found = true; break; }
+    }
+    if (!found) std::this_thread::yield();
+  }
 
-  std::vector<uint8_t> host(kMessageBytes);
-  GPU_RT_CHECK(
-      gpuMemcpy(host.data(), recvbuf_d, host.size(), gpuMemcpyDeviceToHost));
-  require(check_pattern(host, 0x10), "received payload pattern mismatch");
+  // For IPC, put_async writes directly to remote memory — data is already there.
+  // For TCP, data reception requires a DataWait target which the Communicator
+  // does not expose; the tcp_adapter unit test covers TCP data transfer.
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Ipc) {
+    std::vector<uint8_t> host(kMessageBytes);
+    GPU_RT_CHECK(
+        gpuMemcpy(host.data(), recvbuf_d, host.size(), gpuMemcpyDeviceToHost));
+    require(check_pattern(host, 0x10), "received payload pattern mismatch");
+  }
 
   std::cout << "[SERVER][exchange] OK" << std::endl;
   return 0;

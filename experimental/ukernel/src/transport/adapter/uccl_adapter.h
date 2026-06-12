@@ -41,7 +41,7 @@ class UcclTransportAdapter final : public TransportAdapter {
   bool ensure_wait_path(PeerConnectSpec const& spec) override;
   bool has_put_path(int peer) const override;
   bool has_wait_path(int peer) const override;
-  bool is_initialized() const { return false; }
+  bool is_initialized() const { return endpoint_ != nullptr; }
 
   unsigned put_async(int peer, void* local_ptr, uint32_t local_buf,
                      void* remote_ptr, uint32_t remote_buf, size_t len,
@@ -59,17 +59,31 @@ class UcclTransportAdapter final : public TransportAdapter {
     Kind kind;
     void* ptr;
     size_t len;
+    uint32_t buffer_id;
+    uint64_t tag;
   };
 
   struct PeerCtx {
     ::uccl::UcclFlow* send_flow = nullptr;
     ::uccl::UcclFlow* recv_flow = nullptr;
+    ::uccl::Mhandle* control_mhandle = nullptr;
+    uint64_t control_tag = 0;
   };
 
   void send_worker();
   void recv_worker();
 
+  bool connect_to_peer(int peer_rank, std::string const& remote_ip,
+                       uint16_t remote_port, int local_dev_idx,
+                       int local_gpu_idx, int remote_dev_idx,
+                       int remote_gpu_idx);
+  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
+                        int expected_remote_dev_idx,
+                        int expected_remote_gpu_idx,
+                        uint16_t expected_remote_port = 0);
+
   int gpu_id_;
+  std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
   jring_t* send_ring_ = nullptr;
   jring_t* recv_ring_ = nullptr;
   std::atomic<bool> stop_{false};

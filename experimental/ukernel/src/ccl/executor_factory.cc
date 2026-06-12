@@ -11,6 +11,8 @@
 namespace UKernel {
 namespace CCL {
 
+constexpr uint32_t kCompIdBase = 10000;
+
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
   auto comm = std::make_shared<UKernel::Transport::Communicator>(

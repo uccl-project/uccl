@@ -350,7 +350,20 @@ int main(int argc, char** argv) {
     std::vector<double> latencies;
     for (int iter = 0; iter < kLatencyIters; ++iter) {
       auto t0 = std::chrono::steady_clock::now();
-      comm->put(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      unsigned rid = comm->put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      if (!rid) {
+        std::fprintf(stderr, "[p2p-perf] put_async failed for latency iter\n");
+        std::abort();
+      }
+      while (true) {
+        unsigned rids[16];
+        size_t n = comm->try_complete(rids, 16);
+        bool found = false;
+        for (size_t i = 0; i < n; ++i)
+          if (rids[i] == rid) { found = true; break; }
+        if (found) break;
+        std::this_thread::yield();
+      }
       auto t1 = std::chrono::steady_clock::now();
       latencies.push_back(elapsed_us(t0, t1));
     }

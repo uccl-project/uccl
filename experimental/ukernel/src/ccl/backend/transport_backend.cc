@@ -72,7 +72,6 @@ size_t TransportBackend::drain(uint32_t* completed, size_t max) {
 void TransportBackend::release(uint32_t cmd_idx) {
   for (auto it = rid_to_cmd_.begin(); it != rid_to_cmd_.end(); ++it) {
     if (it->second == cmd_idx) {
-      comm_->release(it->first);
       rid_to_cmd_.erase(it);
       return;
     }

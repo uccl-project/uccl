@@ -62,6 +62,23 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
   static constexpr int kMaxInflightWrs = 128;
 
+  enum class Kind : uint8_t { DataPut, Signal, SignalWait };
+
+  struct RingElem {
+    unsigned comm_rid;
+    int peer_rank;
+    Kind kind;
+    void* local_ptr;
+    void* remote_ptr;
+    uint32_t local_buf_id;
+    uint32_t remote_buf_id;
+    size_t len;
+    uint64_t tag;          // for signal / signal wait
+    uint64_t remote_addr;  // resolved RDMA remote address
+    uint32_t remote_rkey;  // resolved RDMA remote rkey
+    uint32_t local_lkey;   // local MR lkey for RDMA WR posting
+  };
+
   struct RemoteBufInfo {
     uint64_t addr = 0;
     uint32_t rkey = 0;
@@ -88,7 +105,17 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   struct ChunkTracker {
     std::atomic<bool> completed{false};
-    std::atomic<unsigned> wait_slot{0};
+    std::atomic<unsigned> wait_comm_rid{0};
+  };
+
+  struct PendingSend {
+    unsigned comm_rid;
+    uint32_t total_chunks;
+    std::atomic<uint32_t> completed_chunks{0};
+
+    PendingSend() = default;
+    PendingSend(unsigned rid, uint32_t tc)
+        : comm_rid(rid), total_chunks(tc), completed_chunks(0) {}
   };
 
   struct RdmaPeer {
@@ -125,32 +152,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
     uint32_t dispatch_cursor = 0;
   };
 
-  struct RequestSlot {
-    std::atomic<uint8_t> state{0};
-    std::atomic<uint32_t> generation{1};
-    int peer_rank = -1;
-    std::atomic<bool> completed{false};
-    std::atomic<bool> failed{false};
-    uint32_t total_chunks = 0;
-    std::atomic<uint32_t> completed_chunks{0};
-  };
-
-  static constexpr uint32_t kSlotBits = 13;
-  static constexpr uint32_t kSlotCount = 1u << kSlotBits;
-  static constexpr uint32_t kSlotMask = kSlotCount - 1u;
-
-  static unsigned make_request_id(uint32_t idx, uint32_t gen) {
-    return ((gen << kSlotBits) | idx);
-  }
-  static uint32_t slot_index(unsigned id) { return id & kSlotMask; }
-  static uint32_t slot_generation(unsigned id) { return id >> kSlotBits; }
-
   static uint64_t now_ns();
-
-  RequestSlot* acquire_slot(unsigned* out_id);
-  RequestSlot* resolve_slot(unsigned id);
-  RequestSlot const* resolve_const(unsigned id) const;
-  void free_slot(unsigned id);
 
   int select_qp(RdmaPeer& p, uint32_t msize);
   int find_qp_idx(ibv_qp* const* qps, int count, uint32_t qp_num);
@@ -171,6 +173,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   ChunkResult chunk_split(size_t len) const;
 
+  void send_worker();
+  void recv_worker();
   void poll_loop();
   bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq, ibv_qp* const* qps,
                    int qp_count);
@@ -193,11 +197,22 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::unordered_map<int, std::unique_ptr<RdmaPeer>> peers_;
   std::unordered_map<uint32_t, ibv_mr*> mr_map_;
 
-  std::unique_ptr<RequestSlot[]> slots_;
-  std::atomic<uint32_t> cursor_{0};
+  // Jring-based task queues
+  jring_t* send_ring_ = nullptr;
+  jring_t* recv_ring_ = nullptr;
 
+  // Worker threads
   std::atomic<bool> stop_{false};
+  std::thread send_worker_;
+  std::thread recv_worker_;
   std::thread poll_thread_;
+
+  // send_id → PendingSend mapping (for CQ completion lookup)
+  std::atomic<uint64_t> next_send_id_{0};
+  std::mutex pending_mu_;
+  std::unordered_map<uint32_t, PendingSend> pending_sends_;
+
+  // Condition variable for back-pressure
   std::mutex cv_mu_;
   std::condition_variable cv_;
 };

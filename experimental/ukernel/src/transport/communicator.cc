@@ -195,8 +195,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   ipc_adapter_ = std::make_shared<IpcAdapter>(
       this, generate_host_id() + "_p" + std::to_string(config_->exchanger_port),
       local_gpu_idx_);
-  GPU_RT_CHECK(
-      gpuStreamCreateWithFlags(&host_copy_stream_, gpuStreamNonBlocking));
 
   bool is_server = (global_rank_ == 0);
   if (!is_server && config_->exchanger_ip == "0.0.0.0")
@@ -213,12 +211,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     return;
   }
 
-  tracker_ = std::make_unique<RequestTracker>(
-      [this](TrackedRequest& t, bool blocking) {
-        return complete_host_bounce_recv(t, blocking);
-      },
-      [this](TrackedRequest& t) { cleanup_tracked_request(t); });
-
   // Completion ring: adapters push CompletionEvent when ops finish.
   size_t ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
   if (ring_sz != (size_t)-1) {
@@ -226,6 +218,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     if (completion_ring_)
       jring_init(completion_ring_, 2048, sizeof(CompletionEvent), 0, 0);
   }
+  if (completion_ring_) ipc_adapter_->set_completion_ring(completion_ring_);
 
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_
@@ -319,19 +312,8 @@ void Communicator::exchange_peer_metas() {
 }
 
 Communicator::~Communicator() {
-  tracker_.reset();
-
   if (ipc_adapter_) {
     ipc_adapter_->shutdown();
-  }
-
-  if (host_copy_stream_ != nullptr) {
-    int orig_device = -1;
-    GPU_RT_CHECK(gpuGetDevice(&orig_device));
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    GPU_RT_CHECK(gpuStreamDestroy(host_copy_stream_));
-    GPU_RT_CHECK(gpuSetDevice(orig_device));
-    host_copy_stream_ = nullptr;
   }
 
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
@@ -379,11 +361,6 @@ Communicator::~Communicator() {
   rdma_adapter_.reset();
   ipc_adapter_.reset();
 
-  for (gpuEvent_t e : event_pool_) {
-    if (e != nullptr) GPU_RT_CHECK(gpuEventDestroy(e));
-  }
-  event_pool_.clear();
-
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
 }
@@ -395,6 +372,7 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
     UcclTransportConfig uccl_cfg;
     uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
         local_gpu_idx_, world_size_, std::move(uccl_cfg));
+    if (completion_ring_) uccl_adapter_->set_completion_ring(completion_ring_);
   }
   return *uccl_adapter_;
 }
@@ -449,7 +427,8 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
   if (!rdma_adapter_) {
     RdmaTransportConfig rdma_cfg;
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
-                                                           std::move(rdma_cfg));
+                                                            std::move(rdma_cfg));
+    if (completion_ring_) rdma_adapter_->set_completion_ring(completion_ring_);
   }
   return *rdma_adapter_;
 }
@@ -492,6 +471,7 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
   if (!tcp_adapter_) {
     tcp_adapter_ =
         std::make_unique<TcpTransportAdapter>(local_meta.ip, global_rank_, local_gpu_idx_);
+    if (completion_ring_) tcp_adapter_->set_completion_ring(completion_ring_);
   }
   return *tcp_adapter_;
 }
@@ -981,25 +961,15 @@ unsigned Communicator::wait_async(int peer, uint64_t tag) {
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
-  unsigned rid;
-  TrackedRequest* slot = tracker_->allocate(&rid);
-  if (!slot) return 0;
-  slot->kind = kind;
+  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
-  // ── IPC: signal wait only ──
   if (kind == PeerTransportKind::Ipc) {
     uint64_t match_seq = ipc_adapter_->next_recv_match_seq(peer);
-    unsigned aid = adapter->wait_async(peer, match_seq, std::nullopt, rid);
-    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-      mark_slot_failed(rid); return 0;
-    }
+    if (!adapter->wait_async(peer, match_seq, std::nullopt, rid)) return 0;
     return rid;
   }
 
-  unsigned aid = adapter->wait_async(peer, tag, std::nullopt, rid);
-  if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    mark_slot_failed(rid); return 0;
-  }
+  if (!adapter->wait_async(peer, tag, std::nullopt, rid)) return 0;
   return rid;
 }
 
@@ -1009,15 +979,8 @@ unsigned Communicator::signal_async(int peer, uint64_t tag) {
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
-  unsigned rid;
-  TrackedRequest* slot = tracker_->allocate(&rid);
-  if (!slot) return 0;
-  slot->kind = kind;
-
-  unsigned aid = adapter->signal_async(peer, tag, rid);
-  if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    mark_slot_failed(rid); return 0;
-  }
+  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
+  if (!adapter->signal_async(peer, tag, rid)) return 0;
   return rid;
 }
 
@@ -1028,56 +991,6 @@ size_t Communicator::try_complete(unsigned* rids, size_t max) {
   while (count < max && jring_mc_dequeue_bulk(completion_ring_, &ev, 1, nullptr) == 1)
     rids[count++] = ev.rid;
   return count;
-}
-
-bool Communicator::put(int peer, uint32_t src_buf, size_t src_off,
-                        uint32_t dst_buf, size_t dst_off, size_t bytes,
-                        int timeout_ms) {
-  unsigned rid = put_async(peer, src_buf, src_off, dst_buf, dst_off, bytes);
-  if (!rid) return false;
-  auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (true) {
-    unsigned rids[16];
-    size_t n = try_complete(rids, 16);
-    for (size_t i = 0; i < n; ++i)
-      if (rids[i] == rid) return true;
-    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
-      return false;
-    std::this_thread::yield();
-  }
-}
-
-bool Communicator::wait(int peer, uint64_t tag, int timeout_ms) {
-  unsigned rid = wait_async(peer, tag);
-  if (!rid) return false;
-  auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (true) {
-    unsigned rids[16];
-    size_t n = try_complete(rids, 16);
-    for (size_t i = 0; i < n; ++i)
-      if (rids[i] == rid) return true;
-    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
-      return false;
-    std::this_thread::yield();
-  }
-}
-
-bool Communicator::signal(int peer, uint64_t tag, int timeout_ms) {
-  unsigned rid = signal_async(peer, tag);
-  if (!rid) return false;
-  auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (true) {
-    unsigned rids[16];
-    size_t n = try_complete(rids, 16);
-    for (size_t i = 0; i < n; ++i)
-      if (rids[i] == rid) return true;
-    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline)
-      return false;
-    std::this_thread::yield();
-  }
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
@@ -1519,97 +1432,6 @@ bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
   return wait_mr(peer_rank, buffer_id, timeout_ms) &&
          wait_ipc(peer_rank, buffer_id, timeout_ms);
-}
-
-void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
-  unsigned adapter_id = tracked.adapter_request_id;
-  if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
-  }
-  if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
-  }
-  if (tracked.kind == PeerTransportKind::Rdma && rdma_adapter_) {
-  }
-  if (tracked.kind == PeerTransportKind::Ipc && ipc_adapter_) {
-  }
-  if (tracked.host_copy_event != nullptr) {
-    release_event(tracked.host_copy_event);
-    tracked.host_copy_event = nullptr;
-  }
-  tracked.host_copy_submitted = false;
-  tracked.needs_host_to_device_copy = false;
-
-  // TCP uses per-transfer host buffer.
-  if (tracked.bounce_ptr != nullptr) {
-    GPU_RT_CHECK(gpuFreeHost(tracked.bounce_ptr));
-    tracked.bounce_ptr = nullptr;
-  }
-}
-
-bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
-                                             bool blocking) {
-  if (!tracked.needs_host_to_device_copy) return true;
-  if (!tracked.bounce_ptr || !tracked.completion_buffer) return false;
-
-  int orig_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset = finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-
-  if (!tracked.host_copy_submitted) {
-    if (tracked.host_copy_event == nullptr) {
-      tracked.host_copy_event = acquire_event();
-    }
-    GPU_RT_CHECK(gpuMemcpyAsync(static_cast<char*>(tracked.completion_buffer) +
-                                    tracked.completion_offset,
-                                tracked.bounce_ptr, tracked.completion_bytes,
-                                gpuMemcpyHostToDevice, host_copy_stream_));
-    GPU_RT_CHECK(gpuEventRecord(tracked.host_copy_event, host_copy_stream_));
-    tracked.host_copy_submitted = true;
-    if (!blocking) return false;
-  }
-
-  if (blocking) {
-    GPU_RT_CHECK(gpuEventSynchronize(tracked.host_copy_event));
-  } else {
-    gpuError_t query = gpuEventQuery(tracked.host_copy_event);
-    if (query == gpuErrorNotReady) return false;
-    if (query != gpuSuccess) GPU_RT_CHECK(query);
-  }
-  release_event(tracked.host_copy_event);
-  tracked.host_copy_event = nullptr;
-  tracked.host_copy_submitted = false;
-  tracked.needs_host_to_device_copy = false;
-  return true;
-}
-
-gpuEvent_t Communicator::acquire_event() {
-  std::lock_guard<std::mutex> lk(event_pool_mu_);
-  if (!event_pool_.empty()) {
-    gpuEvent_t e = event_pool_.back();
-    event_pool_.pop_back();
-    return e;
-  }
-  gpuEvent_t e = nullptr;
-  GPU_RT_CHECK(gpuEventCreateWithFlags(&e, gpuEventDisableTiming));
-  return e;
-}
-
-void Communicator::release_event(gpuEvent_t event) {
-  if (event == nullptr) return;
-  std::lock_guard<std::mutex> lk(event_pool_mu_);
-  event_pool_.push_back(event);
-}
-
-void Communicator::mark_slot_failed(unsigned request_id) {
-  auto* slot = tracker_->resolve(request_id);
-  if (slot) {
-    auto state = slot->state.load(std::memory_order_acquire);
-    if (state == TrackedRequest::SlotState::Reserved ||
-        state == TrackedRequest::SlotState::InFlight) {
-      slot->state.store(TrackedRequest::SlotState::Failed,
-                        std::memory_order_release);
-    }
-  }
 }
 
 }  // namespace Transport

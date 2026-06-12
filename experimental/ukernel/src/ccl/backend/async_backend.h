@@ -6,7 +6,7 @@
 #include <thread>
 
 extern "C" {
-#include "util/jring.h"
+#include "../../transport/util/jring.h"
 }
 
 namespace UKernel {

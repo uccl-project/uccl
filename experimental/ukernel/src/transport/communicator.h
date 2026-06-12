@@ -4,7 +4,6 @@
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
-#include "request_tracker.h"
 #include "adapter/transport_adapter.h"
 #include <atomic>
 #include <cstddef>
@@ -56,20 +55,7 @@ class Communicator {
                      uint32_t dst_buf, size_t dst_off, size_t bytes);
   unsigned signal_async(int peer, uint64_t tag);
   unsigned wait_async(int peer, uint64_t tag);
-
-  // ── Non-blocking completion ──
   size_t try_complete(unsigned* rids, size_t max);
-
-  // ── Blocking convenience ──
-  bool put(int peer, uint32_t src_buf, size_t src_off,
-           uint32_t dst_buf, size_t dst_off, size_t bytes,
-           int timeout_ms = -1);
-  bool signal(int peer, uint64_t tag, int timeout_ms = -1);
-  bool wait(int peer, uint64_t tag, int timeout_ms = -1);
-
-  // ── Backward compat (legacy, prefer try_complete) ──
-  bool poll(unsigned rid) { return tracker_->poll(rid); }
-  void release(unsigned rid) { tracker_->release(rid); }
 
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;
@@ -139,23 +125,16 @@ class Communicator {
 
   TransportAdapter* get_adapter(PeerTransportKind kind);
 
-  bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
-  void cleanup_tracked_request(TrackedRequest& tracked);
-
   void register_existing_local_mrs_with_uccl();
   void register_existing_local_mrs_with_rdma();
   bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
   bool ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
-  gpuEvent_t acquire_event();
-  void release_event(gpuEvent_t event);
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
                                      IPCItem const& item, gpuError_t err) const;
 
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;
-
-  void mark_slot_failed(unsigned request_id);
 
   int local_gpu_idx_;
   int global_rank_;
@@ -168,14 +147,8 @@ class Communicator {
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
-  gpuStream_t host_copy_stream_ = nullptr;
-
-  std::unique_ptr<RequestTracker> tracker_;
   jring_t* completion_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
-
-  mutable std::mutex event_pool_mu_;
-  std::vector<gpuEvent_t> event_pool_;
 
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;

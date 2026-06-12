@@ -60,6 +60,14 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
   }
 
   stop_.store(false, std::memory_order_release);
+
+  // Clean up any stale IPC completion SHM from previous crashed runs
+  for (int r = 0; r < comm_->world_size(); ++r) {
+    if (r == comm_->rank()) continue;
+    std::string name = comp_shm_name(r);
+    shm_unlink(name.c_str());
+  }
+
   send_th_ = std::thread([this] { send_worker(); });
   recv_th_ = std::thread([this] { recv_worker(); });
 }
@@ -108,6 +116,7 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   if (pc.local != nullptr) return true;
 
   pc.shm_name = comp_shm_name(peer_rank);
+  shm_unlink(pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
   size_t sz = sizeof(IpcDataCompletion);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
@@ -265,10 +274,22 @@ void IpcAdapter::send_worker() {
       std::this_thread::yield();
       continue;
     }
-    bool ok = (e.type == ReqType::DataPut) ? send_one(&e)
-              : (e.type == ReqType::Signal) ? send_one(&e)
-              : false;
-    publish_completion(e.comm_rid, !ok);
+    if (e.type == ReqType::DataPut) {
+      bool ok = send_one(&e);
+      if (ok) {
+        size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
+        comps_[e.peer].remote->last_completed[dir].store(
+            e.seq, std::memory_order_release);
+      }
+      publish_completion(e.comm_rid, !ok);
+    } else if (e.type == ReqType::Signal) {
+      size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
+      comps_[e.peer].remote->last_completed[dir].store(
+          e.seq, std::memory_order_release);
+      publish_completion(e.comm_rid, false);
+    } else {
+      publish_completion(e.comm_rid, true);
+    }
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
@@ -295,23 +316,63 @@ bool IpcAdapter::send_one(RingElem* e) {
   if (!e || e->type != ReqType::DataPut) return false;
   void* src = e->local_ptr;
   void* dst = e->remote_ptr;
-  if (!dst) { std::cerr << "[ERROR] IPC put_async no remote_ptr\n"; return false; }
+  if (!dst) {
+    std::cerr << "[ERROR] IPC put_async no remote_ptr\n";
+    return false;
+  }
 
   int remote_gpu = comm_->peer_gpu_idx(e->peer);
   if (remote_gpu < 0) remote_gpu = gpu_id_;
-  gpuStream_t stream = ipc_ctx_.empty() ? nullptr : ipc_ctx_[0].first;
-  if (remote_gpu == gpu_id_)
-    GPU_RT_CHECK(gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice, stream));
-  else
-    GPU_RT_CHECK(gpuMemcpyPeerAsync(dst, remote_gpu, src, gpu_id_, e->bytes, stream));
-  GPU_RT_CHECK(gpuStreamSynchronize(stream));
+
+  size_t bytes = e->bytes;
+  size_t n_total = ipc_ctx_.size();
+  size_t needed = (bytes + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
+  if (needed > n_total) needed = n_total;
+  if (needed == 0) needed = 1;
+
+  for (size_t i = 0; i < needed; ++i) {
+    size_t offset = i * kIpcSizePerEngine;
+    size_t chunk = std::min(kIpcSizePerEngine, bytes - offset);
+    if (chunk == 0) break;
+    char* src_chunk = static_cast<char*>(src) + offset;
+    char* dst_chunk = static_cast<char*>(dst) + offset;
+    gpuStream_t stream = ipc_ctx_[i].first;
+    if (remote_gpu == gpu_id_)
+      GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, chunk,
+                                  gpuMemcpyDeviceToDevice, stream));
+    else
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
+                                      gpu_id_, chunk, stream));
+    GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
+  }
+
+  for (size_t i = 0; i < needed; ++i)
+    GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
+
   return true;
 }
 
 bool IpcAdapter::recv_one(RingElem* e) {
-  // Signal/Data wait completion mark — data arrives via shared memory signal
-  (void)e;
-  return true;
+  if (!e) return false;
+  if (e->type != ReqType::DataWait && e->type != ReqType::SignalWait)
+    return false;
+
+  size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
+  uint64_t expected = e->seq;
+  auto* counter = &comps_[e->peer].local->last_completed[dir];
+
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(kIpcControlTimeoutMs);
+  while (!stop_.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    if (counter->load(std::memory_order_acquire) >= expected) return true;
+    std::this_thread::yield();
+  }
+  if (!stop_.load(std::memory_order_acquire)) {
+    std::cerr << "[ERROR] IPC recv timed out, peer " << e->peer
+              << " match_seq " << e->seq << std::endl;
+  }
+  return false;
 }
 
 }  // namespace Transport

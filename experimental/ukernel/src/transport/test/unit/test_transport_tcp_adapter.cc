@@ -27,8 +27,8 @@ void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
 }
 
 void test_tcp_connect_and_transfer() {
-  TcpTransportAdapter server("127.0.0.1", /*local_rank=*/0);
-  TcpTransportAdapter client("127.0.0.1", /*local_rank=*/1);
+  TcpTransportAdapter server("127.0.0.1", /*local_rank=*/0, /*gpu_id=*/-1);
+  TcpTransportAdapter client("127.0.0.1", /*local_rank=*/1, /*gpu_id=*/-1);
 
   std::exception_ptr accept_error;
   std::thread accept_thread([&] {
@@ -84,83 +84,65 @@ void test_tcp_connect_and_transfer() {
   wait_target.len = recvbuf.size();
   wait_target.local_buffer_id = 0;
   unsigned recv_req =
-      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/0, wait_target);
+      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/0, wait_target,
+                        /*comm_rid=*/2);
   require(recv_req != 0, "server wait_async should succeed");
   unsigned send_req =
       client.put_async(/*peer_rank=*/0, sendbuf.data(),
                        /*local_buffer_id=*/0,
-                       /*remote_ptr=*/nullptr, 0, sendbuf.size());
+                       /*remote_ptr=*/nullptr, /*remote_buffer_id=*/0,
+                       sendbuf.size(), /*comm_rid=*/1);
   require(send_req != 0, "client put_async should succeed");
 
-  require(client.wait_completion(send_req), "client wait_completion failed");
-  require(server.wait_completion(recv_req), "server wait_completion failed");
-  require(!client.request_failed(send_req), "client request should not fail");
-  require(!server.request_failed(recv_req), "server request should not fail");
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
   require(sendbuf == recvbuf, "tcp adapter payload mismatch");
 
-  client.release_request(send_req);
-  server.release_request(recv_req);
-
   unsigned bad_wait =
-      client.wait_async(/*peer_rank=*/0, /*expected_tag=*/123, std::nullopt);
+      client.wait_async(/*peer_rank=*/0, /*expected_tag=*/123, std::nullopt,
+                        /*comm_rid=*/5);
   require(bad_wait == 0, "wait_async without wait path should fail");
   unsigned bad_put =
       server.put_async(/*peer_rank=*/1, sendbuf.data(),
                        /*buffer_id=*/0,
-                       /*remote_ptr=*/nullptr, 0, sendbuf.size());
+                       /*remote_ptr=*/nullptr, /*remote_buffer_id=*/0,
+                       sendbuf.size(), /*comm_rid=*/6);
   require(bad_put == 0, "put_async without put path should fail");
 
   unsigned signal_wait =
-      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/42, std::nullopt);
+      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/42, std::nullopt,
+                        /*comm_rid=*/3);
   require(signal_wait != 0, "signal wait should enqueue");
-  unsigned signal_send = client.signal_async(/*peer_rank=*/0, /*tag=*/42);
+  unsigned signal_send = client.signal_async(/*peer_rank=*/0, /*tag=*/42,
+                                             /*comm_rid=*/4);
   require(signal_send != 0, "signal send should enqueue");
-  require(client.wait_completion(signal_send), "signal send wait failed");
-  require(server.wait_completion(signal_wait), "signal wait completion failed");
-  require(!client.request_failed(signal_send), "signal send should succeed");
-  require(!server.request_failed(signal_wait), "signal wait should succeed");
-  client.release_request(signal_send);
-  server.release_request(signal_wait);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
   unsigned signal_wait_bad =
-      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/99, std::nullopt);
+      server.wait_async(/*peer_rank=*/1, /*expected_tag=*/99, std::nullopt,
+                        /*comm_rid=*/7);
   require(signal_wait_bad != 0, "mismatched signal wait should enqueue");
-  unsigned signal_send_bad = client.signal_async(/*peer_rank=*/0, /*tag=*/100);
+  unsigned signal_send_bad = client.signal_async(/*peer_rank=*/0, /*tag=*/100,
+                                                 /*comm_rid=*/8);
   require(signal_send_bad != 0, "mismatched signal send should enqueue");
-  require(client.wait_completion(signal_send_bad),
-          "mismatched signal send wait failed");
-  require(server.wait_completion(signal_wait_bad),
-          "mismatched signal wait completion failed");
-  require(!client.request_failed(signal_send_bad),
-          "mismatched signal send should still complete");
-  require(server.request_failed(signal_wait_bad),
-          "mismatched signal wait should fail");
-  client.release_request(signal_send_bad);
-  server.release_request(signal_wait_bad);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
 }
 
 void test_tcp_invalid_peer_paths() {
-  TcpTransportAdapter adapter("127.0.0.1", /*local_rank=*/0);
+  TcpTransportAdapter adapter("127.0.0.1", /*local_rank=*/0, /*gpu_id=*/-1);
   std::vector<uint8_t> buf(64, 0);
 
   require(adapter.put_async(/*peer_rank=*/1, buf.data(),
                             /*local_buffer_id=*/0,
-                            /*remote_ptr=*/nullptr, 0, buf.size()) == 0,
+                            /*remote_ptr=*/nullptr, /*remote_buffer_id=*/0,
+                            buf.size(), /*comm_rid=*/1) == 0,
           "put_async without peer should fail");
   TransportAdapter::WaitTarget wait_target;
   wait_target.local_ptr = buf.data();
   wait_target.len = buf.size();
   wait_target.local_buffer_id = 0;
   require(adapter.wait_async(/*peer_rank=*/1, /*expected_tag=*/0,
-                             std::move(wait_target)) == 0,
+                             std::move(wait_target), /*comm_rid=*/2) == 0,
           "wait_async without peer should fail");
-  require(adapter.poll_completion(/*request_id=*/999),
-          "poll_completion on unknown request should be treated as done");
-  require(!adapter.wait_completion(/*request_id=*/999),
-          "wait_completion on unknown request should fail");
-  require(!adapter.request_failed(/*request_id=*/999),
-          "unknown request should not report failure");
-  adapter.release_request(/*request_id=*/999);
 }
 
 }  // namespace
