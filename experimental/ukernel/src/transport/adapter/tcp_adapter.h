@@ -5,7 +5,6 @@
 #include "../../../include/gpu_rt.h"
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -23,11 +22,9 @@ class TcpTransportAdapter final : public TransportAdapter {
   TcpTransportAdapter(std::string local_ip, int local_rank, int gpu_id);
   ~TcpTransportAdapter() override;
 
-  // Endpoint discovery metadata.
   uint16_t get_listen_port() const;
   std::string const& get_listen_ip() const { return local_ip_; }
 
-  // TransportAdapter common capabilities.
   bool ensure_put_path(PeerConnectSpec const& spec) override;
   bool ensure_wait_path(PeerConnectSpec const& spec) override;
   bool has_put_path(int peer_rank) const override;
@@ -45,15 +42,6 @@ class TcpTransportAdapter final : public TransportAdapter {
   void release(unsigned id) override;
 
  private:
-  // Handshake wire structs.
-  struct Handshake {
-    uint32_t src_rank = 0;
-  };
-
-  struct HandshakeAck {
-    uint32_t accepted = 1;
-  };
-
   struct PeerContext {
     int send_fd = -1;
     int recv_fd = -1;
@@ -62,19 +50,12 @@ class TcpTransportAdapter final : public TransportAdapter {
   };
 
   enum class RequestState : uint8_t {
-    Free = 0,
-    Queued = 1,
-    Running = 2,
-    Completed = 3,
-    Failed = 4,
+    Free = 0, Queued = 1, Completed = 2, Failed = 3
   };
 
   struct RequestSlot {
     enum class Kind : uint8_t {
-      DataPut = 0,
-      DataWait = 1,
-      Signal = 2,
-      SignalWait = 3
+      DataPut = 0, DataWait = 1, Signal = 2, SignalWait = 3
     };
     std::atomic<RequestState> state{RequestState::Free};
     std::atomic<uint32_t> generation{1};
@@ -85,66 +66,46 @@ class TcpTransportAdapter final : public TransportAdapter {
     size_t len = 0;
     uint64_t expected_tag = 0;
     uint64_t signal_payload = 0;
-    std::atomic<bool> completed{false};
-    std::atomic<bool> failed{false};
 
     void mark_queued() {
       state.store(RequestState::Queued, std::memory_order_release);
-      completed.store(false, std::memory_order_release);
-      failed.store(false, std::memory_order_release);
-    }
-    void mark_running() {
-      state.store(RequestState::Running, std::memory_order_release);
     }
     void mark_completed(bool ok) {
       state.store(ok ? RequestState::Completed : RequestState::Failed,
                   std::memory_order_release);
-      completed.store(true, std::memory_order_release);
-      failed.store(!ok, std::memory_order_release);
     }
-    bool is_completed() const {
-      return completed.load(std::memory_order_acquire);
+    bool is_done() const {
+      auto s = state.load(std::memory_order_acquire);
+      return s == RequestState::Completed || s == RequestState::Failed;
     }
-    bool is_failed() const { return failed.load(std::memory_order_acquire); }
   };
 
-  // Peer establishment helpers.
-  bool connect_to_peer(int peer_rank, std::string remote_ip,
-                       uint16_t remote_port);
+  bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port);
   bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip);
 
-  // Request execution workers.
   void send_worker_loop();
   void recv_worker_loop();
 
-  // Request slot lifecycle.
-  static constexpr uint32_t kRequestSlotBits = 13;
-  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
-  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
-  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
-    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
+  static constexpr uint32_t kSlotBits = 13;
+  static constexpr uint32_t kSlotCount = (1u << kSlotBits);
+  static constexpr uint32_t kSlotMask = kSlotCount - 1u;
+  static unsigned make_rid(uint32_t idx, uint32_t gen) {
+    return static_cast<unsigned>((gen << kSlotBits) | idx);
   }
-  static uint32_t request_slot_index(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
-  }
-  static uint32_t request_generation(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
-  }
-  RequestSlot* try_acquire_request_slot(unsigned* out_request_id);
-  RequestSlot* resolve_request_slot(unsigned request_id);
-  RequestSlot* resolve_request_slot_const(unsigned request_id) const;
-  void release_request_slot(unsigned request_id);
-  bool enqueue_request(unsigned request_id, bool is_send);
+  static uint32_t slot_index(unsigned rid) { return rid & kSlotMask; }
+  static uint32_t slot_gen(unsigned rid) { return rid >> kSlotBits; }
 
-  // Socket helpers.
+  RequestSlot* acquire_slot(unsigned* out_rid);
+  RequestSlot* resolve_slot(unsigned rid);
+  void release_slot(unsigned rid);
+  bool enqueue_send(unsigned rid);
+  bool enqueue_recv(unsigned rid);
+
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
-                             uint16_t remote_port,
-                             std::chrono::milliseconds timeout);
-  static bool send_handshake(int fd, Handshake const& hs);
-  static bool recv_handshake(int fd, Handshake& hs);
-  static bool send_handshake_ack(int fd, HandshakeAck const& ack);
-  static bool recv_handshake_ack(int fd, HandshakeAck& ack);
+                             uint16_t remote_port, std::chrono::milliseconds timeout);
+  static bool handshake(int fd, uint32_t rank, bool is_send);
+  static bool recv_handshake(int fd, uint32_t& rank);
   static bool send_all(int fd, void const* buf, size_t len);
   static bool recv_all(int fd, void* buf, size_t len);
 
@@ -162,13 +123,8 @@ class TcpTransportAdapter final : public TransportAdapter {
   std::atomic<bool> stop_{false};
   std::thread send_worker_;
   std::thread recv_worker_;
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
-  std::atomic<int> pending_send_{0};
-  std::atomic<int> pending_recv_{0};
-  std::unique_ptr<RequestSlot[]> request_slots_;
-  std::atomic<uint32_t> request_alloc_cursor_{0};
+  std::unique_ptr<RequestSlot[]> slots_;
+  std::atomic<uint32_t> alloc_cursor_{0};
 };
-
 }  // namespace Transport
 }  // namespace UKernel

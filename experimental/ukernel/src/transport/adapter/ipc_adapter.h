@@ -13,7 +13,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -21,169 +20,108 @@ namespace Transport {
 
 class Communicator;
 
-// Shared-memory data completion mailbox: resides in a dedicated tiny SHM
-// region so that the sender can signal "GPU copy done" directly to the
-// receiver without going through the ShmRingExchanger control ring.
 struct IpcDataCompletion {
   std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
 };
 
 class IpcAdapter final : public TransportAdapter {
  public:
-  IpcAdapter(Communicator* comm, std::string ring_namespace, int local_gpu_idx);
+  IpcAdapter(Communicator* comm, std::string ring_namespace, int gpu_id);
   ~IpcAdapter() override;
   void shutdown();
 
-  void close_peer(int peer_rank);
+  uint64_t next_send_match_seq(int peer);
+  uint64_t next_recv_match_seq(int peer);
 
-  uint64_t next_send_match_seq(int peer_rank);
-  uint64_t next_recv_match_seq(int peer_rank);
+  bool ensure_put_path(PeerConnectSpec const&) override;
+  bool ensure_wait_path(PeerConnectSpec const&) override;
+  bool has_put_path(int peer) const override;
+  bool has_wait_path(int peer) const override;
 
-  bool ensure_put_path(PeerConnectSpec const& spec) override;
-  bool ensure_wait_path(PeerConnectSpec const& spec) override;
-  bool has_put_path(int peer_rank) const override;
-  bool has_wait_path(int peer_rank) const override;
-
-  unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-                     void* remote_ptr, uint32_t remote_buffer_id,
-                     size_t len, unsigned comm_rid) override;
-  unsigned signal_async(int peer_rank, uint64_t tag,
-                        unsigned comm_rid) override;
-  unsigned wait_async(int peer_rank, uint64_t expected_tag,
-                      std::optional<WaitTarget> target,
+  unsigned put_async(int peer, void* local_ptr, uint32_t local_buf,
+                     void* remote_ptr, uint32_t remote_buf, size_t len,
+                     unsigned comm_rid) override;
+  unsigned signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
+  unsigned wait_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                       unsigned comm_rid) override;
-
   void release(unsigned id) override;
 
  private:
-  bool connect_to(int rank);
-  bool accept_from(int rank);
+  enum class ReqState : uint8_t { Free, Queued, Completed, Failed };
+  enum class ReqType : uint8_t { DataPut, DataWait, Signal, SignalWait };
 
-  enum class RequestState : uint8_t {
-    Free = 0,
-    Queued = 1,
-    Running = 2,
-    Completed = 3,
-    Failed = 4,
-  };
-  enum class IpcReqType : uint8_t {
-    DataPut = 0,
-    DataWait = 1,
-    Signal = 2,
-    SignalWait = 3
-  };
-
-  struct IpcRequestSlot {
-    std::atomic<RequestState> state{RequestState::Free};
-    std::atomic<uint32_t> generation{1};
+  struct Slot {
+    std::atomic<ReqState> state{ReqState::Free};
+    std::atomic<uint32_t> gen{1};
     unsigned id = 0;
     unsigned comm_rid = 0;
-    int peer_rank = -1;
-    uint64_t match_seq = 0;
-    IpcReqType req_type = IpcReqType::DataPut;
+    int peer = -1;
+    uint64_t seq = 0;
+    ReqType type = ReqType::DataPut;
     void* local_ptr = nullptr;
     void* remote_ptr = nullptr;
-    size_t size_bytes = 0;
-    std::atomic<uint32_t> remaining{0};
-    std::atomic<bool> failed{false};
-    std::atomic<bool> finished{false};
+    size_t bytes = 0;
 
-    void mark_queued(uint32_t completion_count = 1) {
-      state.store(RequestState::Queued, std::memory_order_release);
-      remaining.store(completion_count, std::memory_order_release);
-      failed.store(false, std::memory_order_release);
-      finished.store(false, std::memory_order_release);
+    void mark_queued() { state.store(ReqState::Queued, std::memory_order_release); }
+    void mark_completed(bool ok) {
+      state.store(ok ? ReqState::Completed : ReqState::Failed,
+                  std::memory_order_release);
     }
-    void mark_failed() {
-      state.store(RequestState::Failed, std::memory_order_release);
-      failed.store(true, std::memory_order_release);
-      finished.store(true, std::memory_order_release);
-      remaining.store(0, std::memory_order_release);
+    bool is_done() const {
+      auto s = state.load(std::memory_order_acquire);
+      return s == ReqState::Completed || s == ReqState::Failed;
     }
-    void mark_running() {
-      state.store(RequestState::Running, std::memory_order_release);
-    }
-    void complete_one() {
-      uint32_t prev = remaining.load(std::memory_order_acquire);
-      while (prev != 0 && !remaining.compare_exchange_weak(
-                              prev, prev - 1, std::memory_order_acq_rel,
-                              std::memory_order_acquire)) {
-      }
-      if (prev <= 1) {
-        state.store(RequestState::Completed, std::memory_order_release);
-        finished.store(true, std::memory_order_release);
-      }
-    }
-    bool is_finished() const {
-      return finished.load(std::memory_order_acquire);
-    }
-    bool has_failed() const { return failed.load(std::memory_order_acquire); }
   };
 
-  static constexpr uint32_t kRequestSlotBits = 13;
-  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
-  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
-  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
-    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
-  }
-  static uint32_t request_slot_index(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
-  }
-  static uint32_t request_generation(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
-  }
-
-  IpcRequestSlot* try_acquire_request_slot(unsigned* out_request_id);
-  IpcRequestSlot* resolve_request_slot(unsigned request_id);
-  IpcRequestSlot* resolve_request_slot_const(unsigned request_id) const;
-  void release_request_slot(unsigned request_id);
-
-  bool enqueue_request(unsigned request_id, IpcReqType type);
-  bool send_one(IpcRequestSlot* creq);
-  bool recv_one(IpcRequestSlot* creq);
-  void send_thread_func();
-  void recv_thread_func();
-  void complete_task(IpcRequestSlot* req, bool ok);
-
-  // Data-completion shared memory (fast path: replaces send_ack/recv_ack
-  // for IPC GPU data transfers).
-  struct PeerCompletion {
-    IpcDataCompletion* local = nullptr;   // my side (receiver polls this)
-    IpcDataCompletion* remote = nullptr;  // peer's side (sender writes to this)
+  struct PeerComp {
+    IpcDataCompletion* local = nullptr;
+    IpcDataCompletion* remote = nullptr;
     int shm_fd = -1;
     size_t shm_size = 0;
     std::string shm_name;
   };
-  std::string completion_shm_name(int peer_rank) const;
-  bool ensure_local_completion(int peer_rank);
-  bool ensure_remote_completion(int peer_rank);
-  void close_completion(int peer_rank);
 
-  jring_t* send_task_ring_ = nullptr;
-  jring_t* recv_task_ring_ = nullptr;
+  static constexpr uint32_t kSlotBits = 13;
+  static constexpr uint32_t kSlotCnt = (1u << kSlotBits);
+  static constexpr uint32_t kSlotMask = kSlotCnt - 1u;
+  static unsigned make_rid(uint32_t idx, uint32_t gen) {
+    return static_cast<unsigned>((gen << kSlotBits) | idx);
+  }
+  static uint32_t slot_idx(unsigned rid) { return rid & kSlotMask; }
+  static uint32_t slot_gen(unsigned rid) { return rid >> kSlotBits; }
+
+  Slot* acquire_slot(unsigned* out);
+  Slot* resolve_slot(unsigned id);
+  void release_slot(unsigned id);
+  bool enqueue(unsigned id, ReqType type);
+
+  void send_worker();
+  void recv_worker();
+  void done(Slot* s, bool ok);
+
+  std::string comp_shm_name(int peer) const;
+  bool ensure_local_comp(int peer);
+  bool ensure_remote_comp(int peer);
+  void close_comp(int peer);
+
+  jring_t* send_ring_ = nullptr;
+  jring_t* recv_ring_ = nullptr;
   std::atomic<bool> stop_{false};
-  std::atomic<bool> shutdown_started_{false};
-  std::thread send_thread_;
-  std::thread recv_thread_;
-  std::vector<gpuStream_t> ipc_streams_;
-  std::vector<gpuEvent_t> ipc_events_;
+  std::thread send_th_;
+  std::thread recv_th_;
+  std::vector<std::pair<gpuStream_t, gpuEvent_t>> ipc_ctx_;
 
-  std::mutex match_seq_mu_;
-  std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
-  std::unique_ptr<IpcRequestSlot[]> request_slots_;
-  std::atomic<uint32_t> request_alloc_cursor_{0};
+  std::mutex seq_mu_;
+  std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
+  std::unique_ptr<Slot[]> slots_;
+  std::atomic<uint32_t> alloc_cursor_{0};
 
-  std::string ring_namespace_;
-  mutable std::mutex peer_dir_mu_;
-  struct DirState {
-    bool put_ready = false;
-    bool wait_ready = false;
-  };
-  std::vector<DirState> peer_dir_state_;
-  std::vector<PeerCompletion> peer_completions_;
+  std::string ns_;
+  mutable std::mutex dir_mu_;
+  std::vector<std::pair<bool, bool>> dir_state_;  // {put_ready, wait_ready}
+  std::vector<PeerComp> comps_;
   Communicator* comm_;
-  int local_gpu_idx_ = -1;
+  int gpu_id_ = -1;
 };
-
 }  // namespace Transport
 }  // namespace UKernel

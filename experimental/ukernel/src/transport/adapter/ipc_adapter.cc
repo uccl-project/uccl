@@ -30,91 +30,87 @@ bool enqueue_one_request_id(jring_t* ring, unsigned elem,
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
                        int local_gpu_idx)
-    : next_match_seq_per_peer_(comm->world_size(),
+    : seqs_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
-      ring_namespace_(std::move(ring_namespace)),
-      peer_dir_state_(comm->world_size()),
-      peer_completions_(comm->world_size()),
+      ns_(std::move(ring_namespace)),
+      dir_state_(comm->world_size()),
+      comps_(comm->world_size()),
       comm_(comm),
-      local_gpu_idx_(local_gpu_idx) {
-  send_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
-  recv_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
-  if (send_task_ring_ == nullptr || recv_task_ring_ == nullptr) {
-    if (send_task_ring_ != nullptr) {
-      free(send_task_ring_);
-      send_task_ring_ = nullptr;
+      gpu_id_(local_gpu_idx) {
+  send_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
+  recv_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
+  if (send_ring_ == nullptr || recv_ring_ == nullptr) {
+    if (send_ring_ != nullptr) {
+      free(send_ring_);
+      send_ring_ = nullptr;
     }
-    if (recv_task_ring_ != nullptr) {
-      free(recv_task_ring_);
-      recv_task_ring_ = nullptr;
+    if (recv_ring_ != nullptr) {
+      free(recv_ring_);
+      recv_ring_ = nullptr;
     }
     throw std::runtime_error("IpcAdapter failed to allocate task rings");
   }
-  request_slots_ = std::make_unique<IpcRequestSlot[]>(kRequestSlotCount);
+  slots_ = std::make_unique<Slot[]>(kSlotCnt);
 
   int n_streams = 2;
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  ipc_streams_.resize(n_streams);
-  ipc_events_.resize(n_streams);
+  GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+  ipc_ctx_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(
-        gpuStreamCreateWithFlags(&ipc_streams_[i], gpuStreamNonBlocking));
+        gpuStreamCreateWithFlags(&ipc_ctx_[i].first, gpuStreamNonBlocking));
     GPU_RT_CHECK(
-        gpuEventCreateWithFlags(&ipc_events_[i], gpuEventDisableTiming));
+        gpuEventCreateWithFlags(&ipc_ctx_[i].second, gpuEventDisableTiming));
   }
 
   stop_.store(false, std::memory_order_release);
-  send_thread_ = std::thread([this] { send_thread_func(); });
-  recv_thread_ = std::thread([this] { recv_thread_func(); });
+  send_th_ = std::thread([this] { send_worker(); });
+  recv_th_ = std::thread([this] { recv_worker(); });
 }
 
 IpcAdapter::~IpcAdapter() { shutdown(); }
 
 void IpcAdapter::shutdown() {
   bool expected = false;
-  if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+  if (!stop_.compare_exchange_strong(expected, true)) return;
 
   stop_.store(true, std::memory_order_release);
-  if (send_thread_.joinable()) send_thread_.join();
-  if (recv_thread_.joinable()) recv_thread_.join();
+  if (send_th_.joinable()) send_th_.join();
+  if (recv_th_.joinable()) recv_th_.join();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  for (auto& stream : ipc_streams_) {
-    if (stream != nullptr) GPU_RT_CHECK(gpuStreamDestroy(stream));
+  GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+  for (auto& ctx : ipc_ctx_) {
+    if (ctx.first != nullptr) GPU_RT_CHECK(gpuStreamDestroy(ctx.first));
+    if (ctx.second != nullptr) GPU_RT_CHECK(gpuEventDestroy(ctx.second));
   }
-  ipc_streams_.clear();
-  for (auto& event : ipc_events_) {
-    if (event != nullptr) GPU_RT_CHECK(gpuEventDestroy(event));
-  }
-  ipc_events_.clear();
+  ipc_ctx_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
-  if (send_task_ring_) {
-    free(send_task_ring_);
-    send_task_ring_ = nullptr;
+  if (send_ring_) {
+    free(send_ring_);
+    send_ring_ = nullptr;
   }
-  if (recv_task_ring_) {
-    free(recv_task_ring_);
-    recv_task_ring_ = nullptr;
+  if (recv_ring_) {
+    free(recv_ring_);
+    recv_ring_ = nullptr;
   }
-  for (size_t r = 0; r < peer_completions_.size(); ++r)
-    close_completion(static_cast<int>(r));
+  for (size_t r = 0; r < comps_.size(); ++r)
+    close_comp(static_cast<int>(r));
 }
 
 // ── Data-completion SHM (fast path for IPC GPU data transfers) ───────────
 
-std::string IpcAdapter::completion_shm_name(int peer_rank) const {
-  return Format("/uk_cmpl_%s_p%d_p%d", ring_namespace_.c_str(), peer_rank,
+std::string IpcAdapter::comp_shm_name(int peer_rank) const {
+  return Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), peer_rank,
                 comm_->rank());
 }
 
-bool IpcAdapter::ensure_local_completion(int peer_rank) {
-  auto& pc = peer_completions_[static_cast<size_t>(peer_rank)];
+bool IpcAdapter::ensure_local_comp(int peer_rank) {
+  auto& pc = comps_[static_cast<size_t>(peer_rank)];
   if (pc.local != nullptr) return true;
 
-  pc.shm_name = completion_shm_name(peer_rank);
+  pc.shm_name = comp_shm_name(peer_rank);
   size_t sz = sizeof(IpcDataCompletion);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
@@ -133,14 +129,14 @@ bool IpcAdapter::ensure_local_completion(int peer_rank) {
   return true;
 }
 
-bool IpcAdapter::ensure_remote_completion(int peer_rank) {
-  auto& pc = peer_completions_[static_cast<size_t>(peer_rank)];
+bool IpcAdapter::ensure_remote_comp(int peer_rank) {
+  auto& pc = comps_[static_cast<size_t>(peer_rank)];
   if (pc.remote != nullptr) return true;
 
   // The remote completion SHM is the peer's *local* completion — the
   // peer created it with itself as receiver.
   std::string remote_name = Format(
-      "/uk_cmpl_%s_p%d_p%d", ring_namespace_.c_str(), comm_->rank(), peer_rank);
+      "/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   size_t sz = sizeof(IpcDataCompletion);
   while (true) {
@@ -158,8 +154,8 @@ bool IpcAdapter::ensure_remote_completion(int peer_rank) {
   }
 }
 
-void IpcAdapter::close_completion(int peer_rank) {
-  auto& pc = peer_completions_[static_cast<size_t>(peer_rank)];
+void IpcAdapter::close_comp(int peer_rank) {
+  auto& pc = comps_[static_cast<size_t>(peer_rank)];
   if (pc.local != nullptr) {
     munmap(pc.local, pc.shm_size);
     pc.local = nullptr;
@@ -181,9 +177,9 @@ void IpcAdapter::close_completion(int peer_rank) {
 
 // ── Connection / path state ────────────────────────────────────────────────
 
-bool IpcAdapter::connect_to(int rank) { return ensure_remote_completion(rank); }
+bool IpcAdapter::connect_to(int rank) { return ensure_remote_comp(rank); }
 
-bool IpcAdapter::accept_from(int rank) { return ensure_local_completion(rank); }
+bool IpcAdapter::accept_from(int rank) { return ensure_local_comp(rank); }
 
 bool IpcAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   if (spec.peer_rank < 0) return false;
@@ -193,8 +189,8 @@ bool IpcAdapter::ensure_put_path(PeerConnectSpec const& spec) {
         std::holds_alternative<std::monostate>(spec.detail)))
     return false;
   if (!connect_to(spec.peer_rank)) return false;
-  std::lock_guard<std::mutex> lk(peer_dir_mu_);
-  peer_dir_state_[static_cast<size_t>(spec.peer_rank)].put_ready = true;
+  std::lock_guard<std::mutex> lk(dir_mu_);
+  dir_state_[static_cast<size_t>(spec.peer_rank)].put_ready = true;
   return true;
 }
 
@@ -206,61 +202,61 @@ bool IpcAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
         std::holds_alternative<std::monostate>(spec.detail)))
     return false;
   if (!accept_from(spec.peer_rank)) return false;
-  std::lock_guard<std::mutex> lk(peer_dir_mu_);
-  peer_dir_state_[static_cast<size_t>(spec.peer_rank)].wait_ready = true;
+  std::lock_guard<std::mutex> lk(dir_mu_);
+  dir_state_[static_cast<size_t>(spec.peer_rank)].wait_ready = true;
   return true;
 }
 
-void IpcAdapter::close_peer(int peer_rank) {
-  close_completion(peer_rank);
+void IpcAdapter::close_comp(int peer_rank) {
+  close_comp(peer_rank);
   if (peer_rank >= 0 && peer_rank < comm_->world_size()) {
-    std::lock_guard<std::mutex> lk(peer_dir_mu_);
-    peer_dir_state_[static_cast<size_t>(peer_rank)] = {};
+    std::lock_guard<std::mutex> lk(dir_mu_);
+    dir_state_[static_cast<size_t>(peer_rank)] = {};
   }
 }
 
 uint64_t IpcAdapter::next_send_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(match_seq_mu_);
+  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = comm_->rank();
   int dst = rank;
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = next_match_seq_per_peer_[rank][dir]++;
+  uint64_t counter = seqs_[rank][dir]++;
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
 uint64_t IpcAdapter::next_recv_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(match_seq_mu_);
+  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = rank;
   int dst = comm_->rank();
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = next_match_seq_per_peer_[rank][dir]++;
+  uint64_t counter = seqs_[rank][dir]++;
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
 bool IpcAdapter::has_put_path(int peer_rank) const {
   if (peer_rank < 0 || peer_rank >= comm_->world_size()) return false;
-  std::lock_guard<std::mutex> lk(peer_dir_mu_);
-  return peer_dir_state_[static_cast<size_t>(peer_rank)].put_ready;
+  std::lock_guard<std::mutex> lk(dir_mu_);
+  return dir_state_[static_cast<size_t>(peer_rank)].put_ready;
 }
 
 bool IpcAdapter::has_wait_path(int peer_rank) const {
   if (peer_rank < 0 || peer_rank >= comm_->world_size()) return false;
-  std::lock_guard<std::mutex> lk(peer_dir_mu_);
-  return peer_dir_state_[static_cast<size_t>(peer_rank)].wait_ready;
+  std::lock_guard<std::mutex> lk(dir_mu_);
+  return dir_state_[static_cast<size_t>(peer_rank)].wait_ready;
 }
 
 // ── Slot management ────────────────────────────────────────────────────────
 
-IpcAdapter::IpcRequestSlot* IpcAdapter::try_acquire_request_slot(
+IpcAdapter::Slot* IpcAdapter::acquire_slot(
     unsigned* out_request_id) {
-  if (out_request_id == nullptr || !request_slots_) return nullptr;
-  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
+  if (out_request_id == nullptr || !slots_) return nullptr;
+  for (uint32_t n = 0; n < kSlotCnt; ++n) {
     uint32_t idx =
-        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
-        kRequestSlotMask;
-    auto& slot = request_slots_[idx];
-    RequestState expected = RequestState::Free;
-    if (!slot.state.compare_exchange_strong(expected, RequestState::Running,
+        alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+        kSlotMask;
+    auto& slot = slots_[idx];
+    ReqState expected = ReqState::Free;
+    if (!slot.state.compare_exchange_strong(expected, ReqState::Running,
                                             std::memory_order_acq_rel,
                                             std::memory_order_acquire))
       continue;
@@ -269,10 +265,10 @@ IpcAdapter::IpcRequestSlot* IpcAdapter::try_acquire_request_slot(
       slot.generation.store(1, std::memory_order_release);
       gen = 1;
     }
-    slot.id = make_request_id(idx, gen);
+    slot.id = make_rid(idx, gen);
     slot.peer_rank = -1;
     slot.match_seq = 0;
-    slot.req_type = IpcReqType::DataPut;
+    slot.req_type = ReqType::DataPut;
     slot.local_ptr = nullptr;
     slot.remote_ptr = nullptr;
     slot.size_bytes = 0;
@@ -282,43 +278,43 @@ IpcAdapter::IpcRequestSlot* IpcAdapter::try_acquire_request_slot(
   return nullptr;
 }
 
-IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot(unsigned id) {
-  if (id == 0 || !request_slots_) return nullptr;
-  uint32_t generation = request_generation(id);
+IpcAdapter::Slot* IpcAdapter::resolve_slot(unsigned id) {
+  if (id == 0 || !slots_) return nullptr;
+  uint32_t generation = slot_gen(id);
   if (generation == 0) return nullptr;
-  uint32_t idx = request_slot_index(id);
-  auto& slot = request_slots_[idx];
+  uint32_t idx = slot_idx(id);
+  auto& slot = slots_[idx];
   if (slot.generation.load(std::memory_order_acquire) != generation)
     return nullptr;
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free)
+  if (slot.state.load(std::memory_order_acquire) == ReqState::Free)
     return nullptr;
   return &slot;
 }
 
-IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot_const(
+IpcAdapter::Slot* IpcAdapter::resolve_slot(
     unsigned request_id) const {
-  if (request_id == 0 || !request_slots_) return nullptr;
-  uint32_t generation = request_generation(request_id);
+  if (request_id == 0 || !slots_) return nullptr;
+  uint32_t generation = slot_gen(request_id);
   if (generation == 0) return nullptr;
-  uint32_t idx = request_slot_index(request_id);
-  auto const& slot = request_slots_[idx];
+  uint32_t idx = slot_idx(request_id);
+  auto const& slot = slots_[idx];
   if (slot.generation.load(std::memory_order_acquire) != generation)
     return nullptr;
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free)
+  if (slot.state.load(std::memory_order_acquire) == ReqState::Free)
     return nullptr;
-  return const_cast<IpcRequestSlot*>(&slot);
+  return const_cast<Slot*>(&slot);
 }
 
-void IpcAdapter::release_request_slot(unsigned id) {
-  if (id == 0 || !request_slots_) return;
-  uint32_t generation = request_generation(id);
+void IpcAdapter::release_slot(unsigned id) {
+  if (id == 0 || !slots_) return;
+  uint32_t generation = slot_gen(id);
   if (generation == 0) return;
-  uint32_t idx = request_slot_index(id);
-  auto& slot = request_slots_[idx];
+  uint32_t idx = slot_idx(id);
+  auto& slot = slots_[idx];
   if (slot.generation.load(std::memory_order_acquire) != generation) return;
   auto st = slot.state.load(std::memory_order_acquire);
-  if (st == RequestState::Running || st == RequestState::Queued) return;
-  slot.state.store(RequestState::Free, std::memory_order_release);
+  if (st == ReqState::Running || st == ReqState::Queued) return;
+  slot.state.store(ReqState::Free, std::memory_order_release);
   slot.failed.store(false, std::memory_order_release);
   slot.finished.store(false, std::memory_order_release);
   slot.remaining.store(0, std::memory_order_release);
@@ -333,15 +329,15 @@ void IpcAdapter::release_request_slot(unsigned id) {
   }
 }
 
-bool IpcAdapter::enqueue_request(unsigned id, IpcReqType type) {
+bool IpcAdapter::enqueue(unsigned id, ReqType type) {
   if (stop_.load(std::memory_order_acquire)) return false;
-  if (type == IpcReqType::DataPut || type == IpcReqType::Signal) {
-    if (send_task_ring_ == nullptr ||
-        !enqueue_one_request_id(send_task_ring_, id, stop_))
+  if (type == ReqType::DataPut || type == ReqType::Signal) {
+    if (send_ring_ == nullptr ||
+        !enqueue_one_request_id(send_ring_, id, stop_))
       return false;
   } else {
-    if (recv_task_ring_ == nullptr ||
-        !enqueue_one_request_id(recv_task_ring_, id, stop_))
+    if (recv_ring_ == nullptr ||
+        !enqueue_one_request_id(recv_ring_, id, stop_))
       return false;
   }
   return true;
@@ -359,19 +355,19 @@ unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
 
   uint64_t match_seq = next_send_match_seq(peer_rank);
   unsigned rid = 0;
-  IpcRequestSlot* req = try_acquire_request_slot(&rid);
+  Slot* req = acquire_slot(&rid);
   if (!req) return 0;
   req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = match_seq;
-  req->req_type = IpcReqType::DataPut;
+  req->req_type = ReqType::DataPut;
   req->local_ptr = local_ptr;
   req->remote_ptr = remote_ptr;
   req->size_bytes = len;
   req->mark_queued(1);
-  if (!enqueue_request(rid, IpcReqType::DataPut)) {
+  if (!enqueue(rid, ReqType::DataPut)) {
     req->mark_failed();
-    release_request_slot(rid);
+    release_slot(rid);
     return 0;
   }
   return rid;
@@ -381,19 +377,19 @@ unsigned IpcAdapter::signal_async(int peer_rank, uint64_t tag,
                                   unsigned comm_rid) {
   if (!has_put_path(peer_rank)) return 0;
   unsigned rid = 0;
-  IpcRequestSlot* req = try_acquire_request_slot(&rid);
+  Slot* req = acquire_slot(&rid);
   if (!req) return 0;
   req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = tag;
-  req->req_type = IpcReqType::Signal;
+  req->req_type = ReqType::Signal;
   req->local_ptr = nullptr;
   req->remote_ptr = nullptr;
   req->size_bytes = 0;
   req->mark_queued(1);
-  if (!enqueue_request(rid, IpcReqType::Signal)) {
+  if (!enqueue(rid, ReqType::Signal)) {
     req->mark_failed();
-    release_request_slot(rid);
+    release_slot(rid);
     return 0;
   }
   return rid;
@@ -407,27 +403,27 @@ unsigned IpcAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   uint64_t match_seq =
       target.has_value() ? next_recv_match_seq(peer_rank) : expected_tag;
   unsigned rid = 0;
-  IpcRequestSlot* req = try_acquire_request_slot(&rid);
+  Slot* req = acquire_slot(&rid);
   if (!req) return 0;
   req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = match_seq;
   req->req_type =
-      target.has_value() ? IpcReqType::DataWait : IpcReqType::SignalWait;
+      target.has_value() ? ReqType::DataWait : ReqType::SignalWait;
   req->local_ptr = target.has_value() ? target->local_ptr : nullptr;
   req->size_bytes = target.has_value() ? target->len : 0;
   req->mark_queued(1);
-  if (!enqueue_request(rid, req->req_type)) {
+  if (!enqueue(rid, req->req_type)) {
     req->mark_failed();
-    release_request_slot(rid);
+    release_slot(rid);
     return 0;
   }
   return rid;
 }
 
-void IpcAdapter::release(unsigned id) { release_request_slot(id); }
+void IpcAdapter::release(unsigned id) { release_slot(id); }
 
-void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
+void IpcAdapter::done(Slot* req, bool ok) {
   if (!req) return;
   if (!ok)
     req->mark_failed();
@@ -436,46 +432,46 @@ void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
   publish_completion(req->comm_rid, !ok);
 }
 
-void IpcAdapter::send_thread_func() {
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+void IpcAdapter::send_worker() {
+  GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   while (!stop_.load(std::memory_order_relaxed)) {
     unsigned id = 0;
-    if (jring_sc_dequeue_bulk(send_task_ring_, &id, 1, nullptr) != 1) {
+    if (jring_sc_dequeue_bulk(send_ring_, &id, 1, nullptr) != 1) {
       std::this_thread::yield();
       continue;
     }
-    auto* req = resolve_request_slot(id);
+    auto* req = resolve_slot(id);
     if (!req) continue;
-    complete_task(req, send_one(req));
+    done(req, send_one(req));
   }
 
   while (true) {
     unsigned id = 0;
-    if (jring_mc_dequeue_bulk(send_task_ring_, &id, 1, nullptr) != 1) break;
-    auto* req = resolve_request_slot(id);
+    if (jring_mc_dequeue_bulk(send_ring_, &id, 1, nullptr) != 1) break;
+    auto* req = resolve_slot(id);
     if (!req) continue;
-    complete_task(req, false);
+    done(req, false);
   }
 }
 
-void IpcAdapter::recv_thread_func() {
+void IpcAdapter::recv_worker() {
   while (!stop_.load(std::memory_order_relaxed)) {
     unsigned id = 0;
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &id, 1, nullptr) != 1) {
+    if (jring_sc_dequeue_bulk(recv_ring_, &id, 1, nullptr) != 1) {
       std::this_thread::yield();
       continue;
     }
-    auto* req = resolve_request_slot(id);
+    auto* req = resolve_slot(id);
     if (!req) continue;
-    complete_task(req, recv_one(req));
+    done(req, recv_one(req));
   }
 
   while (true) {
     unsigned id = 0;
-    if (jring_mc_dequeue_bulk(recv_task_ring_, &id, 1, nullptr) != 1) break;
-    auto* req = resolve_request_slot(id);
+    if (jring_mc_dequeue_bulk(recv_ring_, &id, 1, nullptr) != 1) break;
+    auto* req = resolve_slot(id);
     if (!req) continue;
-    complete_task(req, false);
+    done(req, false);
   }
 }
 
