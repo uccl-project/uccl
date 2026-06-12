@@ -13,7 +13,8 @@
 namespace uccl_gin {
 // Defined in tests/put_quiet_smoke.cu (compiled into this extension).
 bool run_put_quiet_smoke(Context& ctx, int peer, int bytes);
-double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup);
+double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup,
+                     int bench_lanes);
 }  // namespace uccl_gin
 
 namespace {
@@ -123,11 +124,14 @@ PyObject* PyUcclGinContext_put_bench(PyUcclGinContext* self, PyObject* args) {
   int bytes = 0;
   int iters = 0;
   int warmup = 0;
-  if (!PyArg_ParseTuple(args, "iii|i", &peer, &bytes, &iters, &warmup))
+  int bench_lanes = 1;
+  if (!PyArg_ParseTuple(args, "iii|ii", &peer, &bytes, &iters, &warmup,
+                        &bench_lanes))
     return nullptr;
   double gbps;
   Py_BEGIN_ALLOW_THREADS
-  gbps = uccl_gin::run_put_bench(*self->ctx, peer, bytes, iters, warmup);
+  gbps = uccl_gin::run_put_bench(*self->ctx, peer, bytes, iters, warmup,
+                                 bench_lanes);
   Py_END_ALLOW_THREADS
   return PyFloat_FromDouble(gbps);
 }

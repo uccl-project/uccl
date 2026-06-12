@@ -69,12 +69,17 @@ def main() -> int:
     if os.environ.get("UCCL_GIN_BENCH") == "1" and not failures:
         iters = int(os.environ.get("UCCL_GIN_BENCH_ITERS", "50"))
         warmup = int(os.environ.get("UCCL_GIN_BENCH_WARMUP", "10"))
+        # Multi-lane fan-out currently hangs in quiet; default single-lane.
+        lanes = int(os.environ.get("UCCL_GIN_BENCH_LANES", "1"))
         if rank == 0:
-            print(f"  -- bandwidth (iters={iters}, warmup={warmup}) --", flush=True)
+            print(
+                f"  -- bandwidth (iters={iters}, warmup={warmup}, lanes={lanes}) --",
+                flush=True,
+            )
         for nbytes in sizes:
             if nbytes > max_message_bytes:
                 continue
-            gbps = ctx.put_bench(peer, nbytes, iters, warmup)
+            gbps = ctx.put_bench(peer, nbytes, iters, warmup, lanes)
             if rank == 0:
                 agg = gbps * world if gbps > 0 else 0.0
                 print(
