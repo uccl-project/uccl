@@ -88,6 +88,7 @@ class TransportAdapter {
   virtual bool has_wait_path(int peer_rank) const = 0;
 
   // Async submission. comm_rid is pushed to completion_ring on completion.
+  // Returns non-zero on success (the comm_rid itself is the identifier).
   virtual unsigned put_async(int peer_rank, void* local_ptr,
                              uint32_t local_buffer_id, void* remote_ptr,
                              uint32_t remote_buffer_id, size_t len,
@@ -97,9 +98,6 @@ class TransportAdapter {
   virtual unsigned wait_async(int peer_rank, uint64_t expected_tag,
                               std::optional<WaitTarget> target,
                               unsigned comm_rid) = 0;
-
-  // Resource release (adapter-internal slot ID).
-  virtual void release(unsigned id) = 0;
 
   void set_completion_ring(jring_t* ring) { completion_ring_ = ring; }
 

@@ -44,7 +44,6 @@ class IpcAdapter final : public TransportAdapter {
   unsigned signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
   unsigned wait_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                       unsigned comm_rid) override;
-  void release(unsigned id) override;
 
  private:
   enum class ReqState : uint8_t { Free, Queued, Completed, Failed };

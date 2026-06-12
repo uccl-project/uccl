@@ -58,7 +58,6 @@ class UcclTransportAdapter final : public TransportAdapter {
                       std::optional<WaitTarget> target,
                       unsigned comm_rid) override;
 
-  void release(unsigned id) override;
 
  private:
   enum class RequestState : uint8_t {

@@ -43,7 +43,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
                       std::optional<WaitTarget> target,
                       unsigned comm_rid) override;
 
-  void release(unsigned id) override;
 
   bool register_memory(uint32_t buffer_id, void* ptr, size_t len);
   void deregister_memory(uint32_t buffer_id);
