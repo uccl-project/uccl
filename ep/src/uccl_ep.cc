@@ -261,7 +261,7 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
   CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
 #else
   bool const use_host_alloc =
-      num_rdma_bytes > 0 &&
+      num_rdma_bytes > 0 && has_any_nic() &&
       !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
   if (!use_host_alloc) {
     CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
@@ -1892,6 +1892,7 @@ NB_MODULE(ep, m) {
         return true;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return true;
         return can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
@@ -1908,6 +1909,7 @@ NB_MODULE(ep, m) {
         return false;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return false;
         return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
