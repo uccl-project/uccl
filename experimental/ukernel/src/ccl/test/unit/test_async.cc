@@ -305,17 +305,18 @@ void test_executor_run_tiled_sync() {
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 128);
-  TiledResult tiled = build_tiled(cfg, false);
 
-  std::vector<uint8_t> in(tiled.input_bytes, 0xDD);
-  std::vector<uint8_t> out(tiled.output_bytes, 0);
-  std::vector<uint8_t> scratch(tiled.staging_bytes_required, 0);
+  std::vector<uint8_t> in(cfg.input_bytes, 0xDD);
+  std::vector<uint8_t> out(cfg.output_bytes, 0);
+  std::vector<uint8_t> scratch(1024, 0);
 
-  ex->run_tiled(tiled, in.data(), out.data(), scratch.data());
+  auto h = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
+  bool done = ex->wait(h, std::chrono::milliseconds(5000));
+  assert(done);
 
   size_t total = dev_mock.enqueued_count() + tpt_mock.enqueued_count();
   assert(total > 0);
-  fprintf(stderr, "  run_tiled processed %zu commands\n", total);
+  fprintf(stderr, "  submit_allreduce processed %zu commands\n", total);
 }
 
 void test_executor_error_message() {

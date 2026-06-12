@@ -133,28 +133,6 @@ CollectiveOpHandle SprayExecutor::submit_allreduce(
       {scratch, tiled.staging_bytes_required},
   };
 
-  // Register changed buffers with Comm, sync with peers
-  if (owned_comm_) {
-    dirty_bufs_.clear();
-    for (int i = 0; i < 3; ++i) {
-      if (bufs[i].ptr == nullptr) continue;
-      if (last_bufs_[i].ptr != bufs[i].ptr ||
-          last_bufs_[i].bytes != bufs[i].bytes) {
-        owned_comm_->register_buffer(i + 1, bufs[i].ptr, bufs[i].bytes);
-        dirty_bufs_.push_back(i + 1);
-        last_bufs_[i] = {bufs[i].ptr, bufs[i].bytes};
-      }
-    }
-    if (!dirty_bufs_.empty()) {
-      owned_comm_->barrier("buf_sync");
-      for (int peer = 0; peer < owned_comm_->world_size(); ++peer) {
-        if (peer == owned_comm_->rank()) continue;
-        for (auto id : dirty_bufs_)
-          owned_comm_->resolve_remote_buffer(peer, id);
-      }
-    }
-  }
-
   if (device_be_) device_be_->init(bufs);
   if (tpt_be_) tpt_be_->init(bufs);
 
@@ -326,86 +304,6 @@ void SprayExecutor::drain_loop(AsyncBackend* async_be) {
         run->status = CollectiveOpStatus::Completed;
     }
   }
-}
-
-// ── run_tiled (sync, for tests) ─────────────────────────────────────────
-
-void SprayExecutor::run_tiled(TiledResult const& tiled,
-                               void* input, void* output, void* scratch) {
-  BufSpec bufs[3] = {
-      {input, tiled.input_bytes},
-      {output, tiled.output_bytes},
-      {scratch, tiled.staging_bytes_required},
-  };
-
-  if (owned_comm_) {
-    dirty_bufs_.clear();
-    for (int i = 0; i < 3; ++i) {
-      if (bufs[i].ptr == nullptr) continue;
-      if (last_bufs_[i].ptr != bufs[i].ptr ||
-          last_bufs_[i].bytes != bufs[i].bytes) {
-        owned_comm_->register_buffer(i + 1, bufs[i].ptr, bufs[i].bytes);
-        dirty_bufs_.push_back(i + 1);
-        last_bufs_[i] = {bufs[i].ptr, bufs[i].bytes};
-      }
-    }
-    if (!dirty_bufs_.empty()) {
-      owned_comm_->barrier("buf_sync");
-      for (int peer = 0; peer < owned_comm_->world_size(); ++peer) {
-        if (peer == owned_comm_->rank()) continue;
-        for (auto id : dirty_bufs_)
-          owned_comm_->resolve_remote_buffer(peer, id);
-      }
-    }
-  }
-
-  if (device_be_) device_be_->init(bufs);
-  if (tpt_be_) tpt_be_->init(bufs);
-
-  SprayRun run;
-  run.status = CollectiveOpStatus::Running;
-  run.tiled = tiled;
-  run.input = input; run.output = output; run.scratch = scratch;
-  run.done.resize(tiled.ops.size(), false);
-  run.submitted.resize(tiled.ops.size(), false);
-
-  while (run.status == CollectiveOpStatus::Running) {
-    {
-      std::lock_guard lock(run.mtx);
-      collect_ready(run);
-      enqueue_to_ring(run, nullptr);
-    }
-    uint32_t done_buf[256];
-    size_t nd = async_dev_->try_drain(done_buf, 256);
-    for (size_t i = 0; i < nd; ++i) {
-      auto& m = cmd_to_run_[done_buf[i] & (kMaxCmdIdx - 1)];
-      if (m.run && !m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = true;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-      }
-    }
-    size_t nt = async_tpt_->try_drain(done_buf, 256);
-    for (size_t i = 0; i < nt; ++i) {
-      auto& m = cmd_to_run_[done_buf[i] & (kMaxCmdIdx - 1)];
-      if (m.run && !m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = true;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-      }
-    }
-    if (run.done_count.load() >= tiled.ops.size())
-      run.status = CollectiveOpStatus::Completed;
-    if (run.status == CollectiveOpStatus::Running)
-      std::this_thread::yield();
-  }
-
-  // Clear cmd_to_run_ entries pointing to the now-destroyed stack SprayRun
-  for (auto& cwi : run.dev_cmds)
-    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = CmdRunMapping{};
-  for (auto& cwi : run.tpt_cmds)
-    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = CmdRunMapping{};
-
-  if (run.status == CollectiveOpStatus::Failed)
-    throw std::runtime_error(run.error);
 }
 
 }  // namespace CCL

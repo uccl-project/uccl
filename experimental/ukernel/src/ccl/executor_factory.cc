@@ -11,8 +11,6 @@
 namespace UKernel {
 namespace CCL {
 
-static constexpr uint32_t kCompIdBase = 0x40000000u;
-
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
   auto comm = std::make_shared<UKernel::Transport::Communicator>(
@@ -39,8 +37,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   for (int peer = 0; peer < n; ++peer) {
     if (peer == config.rank) continue;
     if (!comm->wait_ipc(peer, kCompIdBase + config.rank, 30000))
-      throw std::runtime_error("GPU comp buffer IPC exchange failed for peer " +
-                               std::to_string(peer));
+      throw std::runtime_error("GPU comp buffer IPC exchange failed");
     int remote_dev = -1;
     comm->try_resolve_remote_ipc_pointer(peer, kCompIdBase + config.rank,
                                          0, 16, reinterpret_cast<void**>(&gpu_comp[peer].remote),

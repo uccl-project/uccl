@@ -92,12 +92,10 @@ class SprayExecutor {
   std::string error_message(CollectiveOpHandle h) const;
 
   size_t active_count() const;
-  void run_tiled(TiledResult const& tiled, void* input, void* output, void* scratch);
 
  private:
   SprayRun* get(CollectiveOpHandle h);
 
-  // ── Thread loops ──
   void enqueue_loop();
   void drain_loop(AsyncBackend* async_be);
 
@@ -129,10 +127,6 @@ class SprayExecutor {
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
   std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
-
-  // ── Buffer tracking for incremental Comm registration ──
-  struct { void* ptr = nullptr; size_t bytes = 0; } last_bufs_[3];
-  std::vector<uint32_t> dirty_bufs_;
 };
 
 }  // namespace CCL
