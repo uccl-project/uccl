@@ -17,6 +17,17 @@
 #define UCCL_GIN_TRAP() __trap()
 #endif
 
+// ---- __nanosleep host-pass stub (AMD) -------------------------------------
+// HIP parses __device__ function bodies in the host pass too. __nanosleep is a
+// CUDA-only intrinsic; transport/amd_nanosleep.cuh only defines it in the
+// device pass (#if __HIP_DEVICE_COMPILE__). Provide a host-pass no-op so device
+// code that calls __nanosleep (e.g. quiet()'s spin) still parses on AMD.
+#if defined(__HIP_PLATFORM_AMD__) && !defined(__HIP_DEVICE_COMPILE__)
+#ifndef __nanosleep
+#define __nanosleep(ns) ((void)0)
+#endif
+#endif
+
 // ---- NCCL-GIN reference path toggle ---------------------------------------
 // The build system defines this (1 on NVIDIA, 0 on AMD). Default to 1 so a
 // stray NVIDIA include that forgets the flag still gets the real NCCL tags.
