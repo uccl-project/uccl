@@ -38,13 +38,14 @@ static constexpr size_t kDefaultTwoRankChunkBytes = 2 * 1024 * 1024;
 static constexpr size_t kMaxNativeBytesPerRank = 1024ULL * 1024 * 1024;
 static constexpr size_t kRdmaChunkBytes = 4 * 1024 * 1024;
 static constexpr size_t kSmallHostFullBytes = 512 * 1024;
-static constexpr size_t kTwoRankSmallHostBytes = 1024 * 1024;
+static constexpr size_t kDefaultTwoRankSmallHostBytes = 512 * 1024;
 static constexpr int kSmallSignalEveryN = 256;
 static constexpr int kPairSignalEveryN = 1024;
 static constexpr int kIpcDeviceFlagPhases = 2;
 
 using lite::cudaResult;
 using lite::createOwnedShm;
+using lite::getAvailableIBTransports;
 using lite::InitGuard;
 using lite::mapException;
 using lite::mapShm;
@@ -77,10 +78,12 @@ struct RsContext {
   int numaNode = -1;
   bool owner = false;
   uint64_t epoch = 0;
+  uint64_t smallOpCount = 0;
   int pipelineSlots = kPipelineSlots;
   size_t chunkCapacity = 0;
   size_t partialBlockCapacity = 0;
   size_t smallSlotBytes = 0;
+  std::vector<uint64_t> smallSlotEpochs;
 
   std::string smallSendName;
   std::string smallRecvName;
@@ -218,7 +221,51 @@ struct RsControlName {
 };
 
 std::mutex gReduceScatterMutex;
-std::unordered_map<ncclComm_t, std::unique_ptr<RsContext>> gReduceScatterContexts;
+enum RsTransportPolicy {
+  kRsTransportLocality = 0,
+  kRsTransportRoundRobinHca = 1,
+};
+
+struct RsContextKey {
+  ncclComm_t comm = nullptr;
+  int transportPolicy = kRsTransportLocality;
+
+  bool operator==(RsContextKey const& other) const {
+    return comm == other.comm && transportPolicy == other.transportPolicy;
+  }
+};
+
+struct RsContextKeyHash {
+  size_t operator()(RsContextKey const& key) const {
+    auto commValue = reinterpret_cast<uintptr_t>(key.comm);
+    return std::hash<uintptr_t>{}(commValue) ^
+           (std::hash<int>{}(key.transportPolicy) + 0x9e3779b9 +
+            (commValue << 6) + (commValue >> 2));
+  }
+};
+
+struct RsPolicyCacheKey {
+  ncclComm_t comm = nullptr;
+  int policyClass = 0;
+
+  bool operator==(RsPolicyCacheKey const& other) const {
+    return comm == other.comm && policyClass == other.policyClass;
+  }
+};
+
+struct RsPolicyCacheKeyHash {
+  size_t operator()(RsPolicyCacheKey const& key) const {
+    auto commValue = reinterpret_cast<uintptr_t>(key.comm);
+    return std::hash<uintptr_t>{}(commValue) ^
+           (std::hash<int>{}(key.policyClass) + 0x9e3779b9 +
+            (commValue << 6) + (commValue >> 2));
+  }
+};
+
+std::unordered_map<RsContextKey, std::unique_ptr<RsContext>, RsContextKeyHash>
+    gReduceScatterContexts;
+std::unordered_map<RsPolicyCacheKey, int, RsPolicyCacheKeyHash>
+    gReduceScatterTransportPolicies;
 
 int rsTag(int rank, int worldSize, int peer, int slot) {
   int lo = std::min(rank, peer);
@@ -299,6 +346,32 @@ size_t configuredTwoRankChunkBytes() {
   return value;
 }
 
+size_t configuredLayoutChunkBytesOverride() {
+  static size_t value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_LAYOUT_CHUNK_BYTES");
+    if (env == nullptr || env[0] == '\0') return static_cast<size_t>(0);
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 0);
+    if (end == env) return static_cast<size_t>(0);
+    size_t bytes = static_cast<size_t>(parsed);
+    bytes = bytes / sizeof(float) * sizeof(float);
+    return bytes;
+  }();
+  return value;
+}
+
+size_t configuredTwoRankSmallHostBytes() {
+  static size_t value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_TWO_RANK_SMALL_HOST_BYTES");
+    if (env == nullptr || env[0] == '\0') return kDefaultTwoRankSmallHostBytes;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 0);
+    if (end == env) return kDefaultTwoRankSmallHostBytes;
+    return static_cast<size_t>(parsed);
+  }();
+  return value;
+}
+
 int configuredIpcEventSyncMode() {
   static int value = [] {
     char const* env = std::getenv("MSCCLPP_NCCL_RS_IPC_EVENT_SYNC");
@@ -336,10 +409,12 @@ bool useAsyncFinalAddFor(size_t bytesPerRank) {
   return bytesPerRank >= 32 * 1024 * 1024;
 }
 
-bool useTwoNodeTwoGpuAsyncFinalAddFor(size_t bytesPerRank) {
+bool usePipelinedAsyncFinalAddFor(RsContext const& ctx,
+                                  size_t messageBytes) {
   int mode = configuredAsyncFinalAddMode();
   if (mode >= 0) return mode != 0;
-  (void)bytesPerRank;
+  (void)messageBytes;
+  if (ctx.worldSize == 4 && ctx.nRanksPerNode == 2) return false;
   return true;
 }
 
@@ -561,6 +636,15 @@ bool usePairConnectionWrite() {
   return value;
 }
 
+bool useTwoRankMappedHost() {
+  static bool value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_TWO_RANK_MAPPED_HOST");
+    if (env == nullptr || env[0] == '\0') return true;
+    return env[0] != '0';
+  }();
+  return value;
+}
+
 bool useCpuFinalAdd() {
   static bool value = [] {
     char const* env = std::getenv("MSCCLPP_NCCL_RS_CPU_FINAL_ADD");
@@ -609,6 +693,105 @@ bool useSplitFinalReduceFor(size_t bytesPerRank, size_t messageBytes,
   if (mode >= 0) return mode != 0;
   if (messageBytes >= 16 * 1024 * 1024) return true;
   return recordAsyncD2h && bytesPerRank <= 1024 * 1024;
+}
+
+bool useParallelSplitFinalReduce() {
+  static bool value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_PARALLEL_SPLIT_FINAL");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
+bool useEagerRdmaPost() {
+  static bool value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_EAGER_RDMA_POST");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
+bool useParallelSplitFinalReduceFor(RsContext const& ctx,
+                                    size_t messageBytes) {
+  return useParallelSplitFinalReduce() ||
+         (ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
+          messageBytes >= 8 * 1024 * 1024);
+}
+
+bool useEagerRdmaPostFor(RsContext const& ctx, size_t messageBytes) {
+  return useEagerRdmaPost() ||
+         (ctx.worldSize == 4 && ctx.nRanksPerNode == 2 &&
+          messageBytes >= 4 * 1024 * 1024) ||
+         (ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
+          messageBytes >= 8 * 1024 * 1024);
+}
+
+int configuredRoundRobinHcaMode() {
+  static int value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_ROUND_ROBIN_HCA");
+    if (env == nullptr || env[0] == '\0') return -1;
+    return env[0] == '0' ? 0 : 1;
+  }();
+  return value;
+}
+
+mscclpp::Transport selectReduceScatterTransport(int cudaDeviceId,
+                                                int localRank,
+                                                int transportPolicy) {
+  if (transportPolicy == kRsTransportRoundRobinHca) {
+    auto available = getAvailableIBTransports();
+    if (!available.empty()) {
+      return available[static_cast<size_t>(localRank) % available.size()];
+    }
+  }
+  return selectIBTransportForGpu(cudaDeviceId);
+}
+
+int transportPolicyForLayout(ncclComm_t comm,
+                             std::shared_ptr<Communicator> bootstrapComm,
+                             int rank, int nRanks, int nRanksPerNode,
+                             size_t bytesPerRank) {
+  int forced = configuredRoundRobinHcaMode();
+  int policyClass = forced >= 0 ? 2 : 0;
+  int proposed = forced > 0 ? kRsTransportRoundRobinHca : kRsTransportLocality;
+  size_t messageBytes = bytesPerRank * static_cast<size_t>(nRanks);
+  if (forced < 0 && isTwoNodeTwoGpuLayout(nRanks, nRanksPerNode) &&
+      messageBytes <= 2 * 1024 * 1024) {
+    policyClass = 1;
+    proposed = getAvailableIBTransports().size() > 1
+                   ? kRsTransportRoundRobinHca
+                   : kRsTransportLocality;
+  }
+  if (policyClass == 0) return kRsTransportLocality;
+
+  RsPolicyCacheKey key{comm, policyClass};
+  {
+    std::lock_guard<std::mutex> lock(gReduceScatterMutex);
+    auto it = gReduceScatterTransportPolicies.find(key);
+    if (it != gReduceScatterTransportPolicies.end()) return it->second;
+  }
+
+  std::vector<int> policies(static_cast<size_t>(nRanks),
+                            kRsTransportLocality);
+  policies[static_cast<size_t>(rank)] = proposed;
+  bootstrapComm->bootstrap()->allGather(policies.data(), sizeof(int));
+
+  int agreed = policies[0];
+  for (int policy : policies) {
+    if (policy != agreed) {
+      agreed = kRsTransportLocality;
+      break;
+    }
+  }
+  if (policyClass == 1 && agreed != kRsTransportRoundRobinHca) {
+    agreed = kRsTransportLocality;
+  }
+  {
+    std::lock_guard<std::mutex> lock(gReduceScatterMutex);
+    auto [it, inserted] = gReduceScatterTransportPolicies.emplace(key, agreed);
+    (void)inserted;
+    return it->second;
+  }
 }
 
 size_t configuredSmallHostFullBytes() {
@@ -662,6 +845,20 @@ size_t effectiveChunkBytes(size_t bytesPerRank, size_t chunkCapacity) {
     return std::min(chunkCapacity, static_cast<size_t>(512 * 1024));
   }
   return std::min(chunkCapacity, static_cast<size_t>(1024 * 1024));
+}
+
+size_t effectiveChunkBytesForLayout(int nRanks, int nRanksPerNode,
+                                    size_t bytesPerRank,
+                                    size_t chunkCapacity) {
+  size_t overrideBytes = configuredLayoutChunkBytesOverride();
+  if (overrideBytes != 0) {
+    return std::min(chunkCapacity, overrideBytes);
+  }
+  if (nRanks == 8 && nRanksPerNode == 4 &&
+      bytesPerRank >= 2 * 1024 * 1024) {
+    return std::min(chunkCapacity, static_cast<size_t>(1024 * 1024));
+  }
+  return effectiveChunkBytes(bytesPerRank, chunkCapacity);
 }
 
 __device__ __forceinline__ int4 addFloat4Vec(int4 a, int4 b) {
@@ -2135,12 +2332,14 @@ ncclResult_t launchLocalFourRankDeviceFlagReduce(
 RsContext& getContext(ncclComm_t commHandle,
                       std::shared_ptr<Communicator> bootstrapComm, int rank,
                       int nRanks, int nRanksPerNode, int cudaDevice,
-                      size_t chunkCapacity, int pipelineSlots) {
+                      size_t chunkCapacity, int pipelineSlots,
+                      int transportPolicy) {
   RsContext* ctx = nullptr;
   bool shouldInitialize = false;
   {
     std::lock_guard<std::mutex> lock(gReduceScatterMutex);
-    auto& existing = gReduceScatterContexts[commHandle];
+    RsContextKey key{commHandle, transportPolicy};
+    auto& existing = gReduceScatterContexts[key];
     if (!existing) {
       existing = std::make_unique<RsContext>();
       existing->initializing = true;
@@ -2189,14 +2388,14 @@ RsContext& getContext(ncclComm_t commHandle,
       auto commNonce = static_cast<unsigned long long>(
           reinterpret_cast<uintptr_t>(commHandle));
       std::snprintf(localName.smallSendName, sizeof(localName.smallSendName),
-                    "/mint_rs_multi_%llx_%d_%d_%d_s", commNonce, getpid(),
-                    rank, nRanks);
+                    "/mint_rs_multi_%llx_%d_%d_%d_p%d_s", commNonce, getpid(),
+                    rank, nRanks, transportPolicy);
       std::snprintf(localName.smallRecvName, sizeof(localName.smallRecvName),
-                    "/mint_rs_multi_%llx_%d_%d_%d_r", commNonce, getpid(),
-                    rank, nRanks);
+                    "/mint_rs_multi_%llx_%d_%d_%d_p%d_r", commNonce, getpid(),
+                    rank, nRanks, transportPolicy);
       std::snprintf(localName.ctrlName, sizeof(localName.ctrlName),
-                    "/mint_rs_multi_%llx_%d_%d_%d_c", commNonce, getpid(),
-                    rank, nRanks);
+                    "/mint_rs_multi_%llx_%d_%d_%d_p%d_c", commNonce, getpid(),
+                    rank, nRanks, transportPolicy);
       createOwnedShm(localName.smallSendName, ctx->partialBlockCapacity);
       createOwnedShm(localName.smallRecvName, ctx->partialBlockCapacity);
       createOwnedShm(localName.ctrlName, sizeof(RsControl));
@@ -2324,7 +2523,9 @@ RsContext& getContext(ncclComm_t commHandle,
     ctx->ctrlHostRegistered = true;
 
     if (!singleNode) {
-      ctx->transport = selectIBTransportForGpu(cudaDevice);
+      ctx->transport =
+          selectReduceScatterTransport(cudaDevice, ctx->localRank,
+                                       transportPolicy);
       if (ctx->transport == mscclpp::Transport::Unknown) {
         throw mscclpp::Error("ReduceScatter requires IB transport",
                              mscclpp::ErrorCode::InvalidUsage);
@@ -2364,10 +2565,11 @@ RsContext& getContext(ncclComm_t commHandle,
       mscclpp::EndpointConfig endpointConfig(
           ctx->transport, mscclpp::Device(mscclpp::DeviceType::CPU),
           /*maxWriteQueueSize=*/-1, ibCfg);
-      int tag0 = rsTag(rank, nRanks, remotePeer, 0);
-      int tag1 = rsTag(rank, nRanks, remotePeer, 1);
-      int tag2 = rsTag(rank, nRanks, remotePeer, 2);
-      int tag3 = rsTag(rank, nRanks, remotePeer, 3);
+      int tagBase = transportPolicy * 4;
+      int tag0 = rsTag(rank, nRanks, remotePeer, tagBase + 0);
+      int tag1 = rsTag(rank, nRanks, remotePeer, tagBase + 1);
+      int tag2 = rsTag(rank, nRanks, remotePeer, tagBase + 2);
+      int tag3 = rsTag(rank, nRanks, remotePeer, tagBase + 3);
       auto connectionFuture =
           bootstrapComm->connect(endpointConfig, remotePeer, tag0);
       bootstrapComm->sendMemory(ctx->recvMemory, remotePeer, tag1);
@@ -3199,26 +3401,39 @@ ncclResult_t runSmallHostReduceScatter(RsContext& ctx, void const* sendbuff,
   }
   size_t slotBytes = std::max(fullBytes, 3 * bytesPerRank);
   size_t slotCount = smallRankStride / slotBytes;
-  if (slotCount < 2) return ncclInvalidUsage;
+  if (slotCount < 1) return ncclInvalidUsage;
   slotCount = std::min<size_t>(slotCount, 1024);
   if (ctx.smallSlotBytes != 0 && ctx.smallSlotBytes != slotBytes) {
     waitForCudaStream(stream);
     flushSmallPendingAck(ctx);
     pollSmallQp(ctx);
     bootstrapComm->bootstrap()->barrier();
+    ctx.smallOpCount = 0;
+    ctx.smallSlotEpochs.assign(slotCount, 0);
   }
   ctx.smallSlotBytes = slotBytes;
+  if (ctx.smallSlotEpochs.size() != slotCount) {
+    ctx.smallOpCount = 0;
+    ctx.smallSlotEpochs.assign(slotCount, 0);
+  }
 
   uint64_t epoch = ++ctx.epoch;
-  size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
-  if (epoch > slotCount) {
-    uint64_t reuseEpoch = epoch - slotCount;
+  uint64_t smallSeq = ++ctx.smallOpCount;
+  size_t slot = static_cast<size_t>((smallSeq - 1) % slotCount);
+  uint64_t reuseEpoch = ctx.smallSlotEpochs[slot];
+  if (reuseEpoch != 0) {
+    if (slotCount == 1 && ctx.smallPendingAckEpoch > ctx.smallAckPostedEpoch) {
+      waitForCudaStream(stream);
+      flushSmallPendingAck(ctx);
+      pollSmallQp(ctx);
+    }
     for (int i = 0; i < ctx.nRanksPerNode; ++i) {
       waitForEpoch(ctx.ctrl->smallLocalDone[i], reuseEpoch);
     }
     waitForEpoch(ctx.ctrl->pairAckReady[ctx.localRank], reuseEpoch);
     pollSmallQp(ctx);
   }
+  ctx.smallSlotEpochs[slot] = epoch;
 
   size_t slotOffset = slot * slotBytes;
   size_t inputOffset =
@@ -3314,29 +3529,43 @@ ncclResult_t runTwoRankSmallHostReduceScatter(RsContext& ctx,
   size_t smallRankStride =
       ctx.chunkCapacity * static_cast<size_t>(ctx.pipelineSlots);
   size_t slotBytes = std::max(fullBytes, 3 * bytesPerRank);
-  if (bytesPerRank == 0 || bytesPerRank > kTwoRankSmallHostBytes ||
+  if (bytesPerRank == 0 ||
+      bytesPerRank > configuredTwoRankSmallHostBytes() ||
       slotBytes > smallRankStride) {
     return ncclInvalidUsage;
   }
   size_t slotCount = smallRankStride / slotBytes;
-  if (slotCount < 2) return ncclInvalidUsage;
+  if (slotCount < 1) return ncclInvalidUsage;
   slotCount = std::min<size_t>(slotCount, 1024);
   if (ctx.smallSlotBytes != 0 && ctx.smallSlotBytes != slotBytes) {
     waitForCudaStream(stream);
     flushSmallPendingAck(ctx);
     pollSmallQp(ctx);
     bootstrapComm->bootstrap()->barrier();
+    ctx.smallOpCount = 0;
+    ctx.smallSlotEpochs.assign(slotCount, 0);
   }
   ctx.smallSlotBytes = slotBytes;
+  if (ctx.smallSlotEpochs.size() != slotCount) {
+    ctx.smallOpCount = 0;
+    ctx.smallSlotEpochs.assign(slotCount, 0);
+  }
 
   uint64_t epoch = ++ctx.epoch;
-  size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
-  if (epoch > slotCount) {
-    uint64_t reuseEpoch = epoch - slotCount;
+  uint64_t smallSeq = ++ctx.smallOpCount;
+  size_t slot = static_cast<size_t>((smallSeq - 1) % slotCount);
+  uint64_t reuseEpoch = ctx.smallSlotEpochs[slot];
+  if (reuseEpoch != 0) {
+    if (slotCount == 1 && ctx.smallPendingAckEpoch > ctx.smallAckPostedEpoch) {
+      waitForCudaStream(stream);
+      flushSmallPendingAck(ctx);
+      pollSmallQp(ctx);
+    }
     waitForEpoch(ctx.ctrl->smallLocalDone[ctx.localRank], reuseEpoch);
     waitForEpoch(ctx.ctrl->pairAckReady[ctx.localRank], reuseEpoch);
     pollSmallQp(ctx);
   }
+  ctx.smallSlotEpochs[slot] = epoch;
 
   size_t slotOffset = slot * slotBytes;
   size_t localOffset = static_cast<size_t>(ctx.rank) * bytesPerRank;
@@ -3346,7 +3575,7 @@ ncclResult_t runTwoRankSmallHostReduceScatter(RsContext& ctx,
   size_t signalOffset =
       ctrlArrayOffset(offsetof(RsControl, pairRdmaSignal), ctx.localRank);
   size_t remoteIncomingOffset = slotOffset + 2 * bytesPerRank;
-  if (ctx.smallRecvDeviceSlab != nullptr) {
+  if (useTwoRankMappedHost() && ctx.smallRecvDeviceSlab != nullptr) {
     char* recvSlotDevice = ctx.smallRecvDeviceSlab + slotOffset;
     ncclResult_t result = launchTwoRankStoreRemoteShard(
         sendbuff, recvSlotDevice, recvcount, recvcount, 1 - ctx.rank,
@@ -3439,6 +3668,8 @@ struct RsChunkWork {
   bool ackAfterSlotDone = false;
   bool localScratchDoneAfterSlotDone = false;
   bool ackSent = false;
+  bool rdmaPosted = false;
+  bool remoteCompleted = false;
 };
 
 ncclResult_t finishScheduledChunkLocal(RsContext& ctx, uint64_t epoch,
@@ -3734,20 +3965,34 @@ ncclResult_t scheduleChunkLocal(RsContext& ctx, void const* sendbuff,
 
   bool splitFinalReduce =
       !deviceFlagSync && !ipcDeviceFlagSync &&
+      !(ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
+        bytesPerRank <= 512 * 1024) &&
       useSplitFinalReduceFor(bytesPerRank, messageBytesForPolicy,
                              recordAsyncD2h);
   if (splitFinalReduce) {
     ensurePipelineResources(ctx);
-    result = launchFinalRemoteOnlyReduce(ownPartialRows, crossRecvRows,
-                                         remotePartialOutput, chunkElems,
-                                         rowBytes, stream);
-    if (result != ncclSuccess) return result;
-    if (remotePartialInSendSlab) {
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.d2hDoneEvents[slot], stream));
-    } else {
+    bool parallelSplit =
+        useParallelSplitFinalReduceFor(ctx, messageBytesForPolicy);
+    cudaStream_t remoteStream = stream;
+    if (parallelSplit) {
       MSCCLPP_CUDATHROW(cudaEventRecord(ctx.reduceDoneEvents[slot], stream));
       MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.d2hStream,
+                                          ctx.reduceDoneEvents[slot], 0));
+      remoteStream = ctx.d2hStream;
+    }
+    result = launchFinalRemoteOnlyReduce(ownPartialRows, crossRecvRows,
+                                        remotePartialOutput, chunkElems,
+                                        rowBytes, remoteStream);
+    if (result != ncclSuccess) return result;
+    if (remotePartialInSendSlab) {
+      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.d2hDoneEvents[slot],
+                                        remoteStream));
+    } else {
+      if (!parallelSplit) {
+        MSCCLPP_CUDATHROW(cudaEventRecord(ctx.reduceDoneEvents[slot], stream));
+        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.d2hStream,
                                             ctx.reduceDoneEvents[slot], 0));
+      }
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(ctx.sendSlab + pairSlotOffset,
                                         remotePartialOutput,
                                         chunkElems * sizeof(float),
@@ -3815,11 +4060,9 @@ void sendChunkAck(RsContext& ctx, RsChunkWork& work) {
   work.ackSent = true;
 }
 
-ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
-                                 RsChunkWork& work, cudaStream_t stream,
-                                 bool asyncCopy, bool deferAck,
-                                 size_t asyncAckDistance,
-                                 bool asyncFinalAdd = false) {
+ncclResult_t postChunkRdma(RsContext& ctx, RsChunkWork& work, bool asyncCopy,
+                           bool deferAck, size_t asyncAckDistance) {
+  if (work.rdmaPosted) return ncclSuccess;
   if (asyncCopy || work.localScratchDoneAfterSlotDone) {
     waitForCudaEvent(ctx.d2hDoneEvents[work.slot]);
   }
@@ -3836,10 +4079,6 @@ ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
       ctrlArrayOffset(offsetof(RsControl, pairRdmaReady), ctx.localRank);
   size_t signalOffset =
       ctrlArrayOffset(offsetof(RsControl, pairRdmaSignal), ctx.localRank);
-  size_t ackReadyOffset =
-      ctrlArrayOffset(offsetof(RsControl, pairAckReady), ctx.localRank);
-  size_t ackSignalOffset =
-      ctrlArrayOffset(offsetof(RsControl, pairAckSignal), ctx.localRank);
 
   ctx.ctrl->pairRdmaSignal[ctx.localRank].store(work.epoch,
                                                 std::memory_order_release);
@@ -3858,6 +4097,24 @@ ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
     }
     off += bytes;
   }
+  work.rdmaPosted = true;
+  return ncclSuccess;
+}
+
+ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
+                                 RsChunkWork& work, cudaStream_t stream,
+                                 bool asyncCopy, bool deferAck,
+                                 size_t asyncAckDistance,
+                                 bool asyncFinalAdd = false) {
+  ncclResult_t postResult =
+      postChunkRdma(ctx, work, asyncCopy, deferAck, asyncAckDistance);
+  if (postResult != ncclSuccess) return postResult;
+  if (work.remoteCompleted) return ncclSuccess;
+
+  size_t ackReadyOffset =
+      ctrlArrayOffset(offsetof(RsControl, pairAckReady), ctx.localRank);
+  size_t ackSignalOffset =
+      ctrlArrayOffset(offsetof(RsControl, pairAckSignal), ctx.localRank);
 
   waitForEpoch(ctx.ctrl->pairRdmaReady[ctx.localRank], work.epoch);
 
@@ -3879,6 +4136,7 @@ ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
       postSmallSignal(ctx, ackReadyOffset, ackSignalOffset);
       work.ackSent = true;
     }
+    work.remoteCompleted = true;
     return ncclSuccess;
   }
   int hostReadMode = configuredHostReadFinalAddMode();
@@ -3913,6 +4171,7 @@ ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
       postSmallSignal(ctx, ackReadyOffset, ackSignalOffset);
       work.ackSent = true;
     }
+    work.remoteCompleted = true;
     return ncclSuccess;
   }
   MSCCLPP_CUDATHROW(cudaMemcpyAsync(
@@ -3953,6 +4212,7 @@ ncclResult_t completeChunkRemote(RsContext& ctx, void* recvbuff,
   if (asyncCopy) {
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.slotDoneEvents[work.slot], addStream));
   }
+  work.remoteCompleted = true;
   return ncclSuccess;
 }
 
@@ -4027,17 +4287,32 @@ ncclResult_t runPipelinedChunks(RsContext& ctx, void const* sendbuff,
   size_t totalChunks = (recvcount * sizeof(float) + runChunkBytes - 1) /
                        runChunkBytes;
   size_t localLead = configuredTwoNodeTwoGpuLeadChunks(totalChunks);
-  bool asyncFinalAdd =
-      useTwoNodeTwoGpuAsyncFinalAddFor(recvcount * sizeof(float));
+  size_t messageBytes = recvcount * sizeof(float) *
+                        static_cast<size_t>(ctx.worldSize);
+  if (useParallelSplitFinalReduceFor(ctx, messageBytes) &&
+      localLead >= pipelineSlots) {
+    localLead = pipelineSlots - 1;
+  }
+  bool asyncFinalAdd = usePipelinedAsyncFinalAddFor(ctx, messageBytes);
+  bool eagerRdmaPost = useEagerRdmaPostFor(ctx, messageBytes);
   std::vector<RsChunkWork> works;
   works.reserve(totalChunks);
 
+  size_t nextPost = 0;
   size_t nextRemote = 0;
   size_t chunkIndex = 0;
   for (size_t elemOffset = 0; elemOffset < recvcount;) {
     size_t slot = chunkIndex % pipelineSlots;
     if (chunkIndex >= pipelineSlots) {
       auto& reuseWork = works[chunkIndex - pipelineSlots];
+      if (eagerRdmaPost && !reuseWork.remoteCompleted) {
+        ncclResult_t result =
+            completeChunkRemote(ctx, recvbuff, reuseWork, stream,
+                                /*asyncCopy=*/true, /*deferAck=*/true,
+                                ctx.pipelineSlots, asyncFinalAdd);
+        if (result != ncclSuccess) return result;
+        nextRemote = std::max(nextRemote, chunkIndex - pipelineSlots + 1);
+      }
       sendChunkAck(ctx, reuseWork);
       uint64_t reuseEpoch = reuseWork.epoch;
       waitForScratchReuse(ctx, reuseEpoch);
@@ -4055,25 +4330,52 @@ ncclResult_t runPipelinedChunks(RsContext& ctx, void const* sendbuff,
     if (result != ncclSuccess) return result;
     works.push_back(work);
 
-    while (works.size() > nextRemote + localLead) {
-      result = completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
-                                   /*asyncCopy=*/true, /*deferAck=*/true,
-                                   ctx.pipelineSlots, asyncFinalAdd);
-      if (result != ncclSuccess) return result;
-      ++nextRemote;
+    if (eagerRdmaPost) {
+      while (works.size() > nextPost + localLead) {
+        result = postChunkRdma(ctx, works[nextPost], /*asyncCopy=*/true,
+                               /*deferAck=*/true, ctx.pipelineSlots);
+        if (result != ncclSuccess) return result;
+        ++nextPost;
+      }
+    } else {
+      while (works.size() > nextRemote + localLead) {
+        result = completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                                     /*asyncCopy=*/true, /*deferAck=*/true,
+                                     ctx.pipelineSlots, asyncFinalAdd);
+        if (result != ncclSuccess) return result;
+        ++nextRemote;
+      }
     }
 
     elemOffset += chunkElems;
     ++chunkIndex;
   }
 
-  while (nextRemote < works.size()) {
-    ncclResult_t result =
-        completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
-                            /*asyncCopy=*/true, /*deferAck=*/true,
-                            ctx.pipelineSlots, asyncFinalAdd);
-    if (result != ncclSuccess) return result;
-    ++nextRemote;
+  if (eagerRdmaPost) {
+    while (nextPost < works.size()) {
+      ncclResult_t result =
+          postChunkRdma(ctx, works[nextPost], /*asyncCopy=*/true,
+                        /*deferAck=*/true, ctx.pipelineSlots);
+      if (result != ncclSuccess) return result;
+      ++nextPost;
+    }
+    while (nextRemote < works.size()) {
+      ncclResult_t result =
+          completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                              /*asyncCopy=*/true, /*deferAck=*/true,
+                              ctx.pipelineSlots, asyncFinalAdd);
+      if (result != ncclSuccess) return result;
+      ++nextRemote;
+    }
+  } else {
+    while (nextRemote < works.size()) {
+      ncclResult_t result =
+          completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                              /*asyncCopy=*/true, /*deferAck=*/true,
+                              ctx.pipelineSlots, asyncFinalAdd);
+      if (result != ncclSuccess) return result;
+      ++nextRemote;
+    }
   }
   for (auto& work : works) {
     sendChunkAck(ctx, work);
@@ -4187,12 +4489,22 @@ ncclResult_t scheduleTwoNodeTwoGpuChunk(
                              fullRowBytes * static_cast<size_t>(nRanks),
                              recordAsyncD2h);
   if (splitLocalReduce) {
+    ensurePipelineResources(ctx);
+    bool parallelSplit = useParallelSplitFinalReduceFor(
+        ctx, fullRowBytes * static_cast<size_t>(nRanks));
+    cudaStream_t remoteStream = stream;
+    if (parallelSplit) {
+      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.reduceDoneEvents[slot], stream));
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.d2hStream,
+                                            ctx.reduceDoneEvents[slot], 0));
+      remoteStream = ctx.d2hStream;
+    }
     result = launchTwoNodeTwoGpuRemoteOnlyReduce(
         sendbuff, partnerRecvRows, remotePartialOutput, chunkElems, fullElems,
         elemOffset, rowBytes, partnerRowsReversed, ctx.localRank, remoteBase,
-        stream);
+        remoteStream);
     if (result != ncclSuccess) return result;
-    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.d2hDoneEvents[slot], stream));
+    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.d2hDoneEvents[slot], remoteStream));
     result = launchTwoNodeTwoGpuLocalOnlyReduce(
         sendbuff, partnerRecvRows, localPartialGpu, chunkElems, fullElems,
         elemOffset, rowBytes, partnerRowsReversed, ctx.localRank, localBase,
@@ -4245,17 +4557,32 @@ ncclResult_t runTwoNodeTwoGpuPipelinedChunks(
                          ? configuredShortLocalLeadChunks()
                          : (totalChunks >= 8 ? configuredLongLocalLeadChunks()
                                              : configuredLocalLeadChunks());
-  bool asyncFinalAdd =
-      useTwoNodeTwoGpuAsyncFinalAddFor(recvcount * sizeof(float));
+  size_t messageBytes = recvcount * sizeof(float) *
+                        static_cast<size_t>(ctx.worldSize);
+  if (useParallelSplitFinalReduceFor(ctx, messageBytes) &&
+      localLead >= pipelineSlots) {
+    localLead = pipelineSlots - 1;
+  }
+  bool asyncFinalAdd = usePipelinedAsyncFinalAddFor(ctx, messageBytes);
+  bool eagerRdmaPost = useEagerRdmaPostFor(ctx, messageBytes);
   std::vector<RsChunkWork> works;
   works.reserve(totalChunks);
 
+  size_t nextPost = 0;
   size_t nextRemote = 0;
   size_t chunkIndex = 0;
   for (size_t elemOffset = 0; elemOffset < recvcount;) {
     size_t slot = chunkIndex % pipelineSlots;
     if (chunkIndex >= pipelineSlots) {
       auto& reuseWork = works[chunkIndex - pipelineSlots];
+      if (eagerRdmaPost && !reuseWork.remoteCompleted) {
+        ncclResult_t result =
+            completeChunkRemote(ctx, recvbuff, reuseWork, stream,
+                                /*asyncCopy=*/true, /*deferAck=*/true,
+                                ctx.pipelineSlots, asyncFinalAdd);
+        if (result != ncclSuccess) return result;
+        nextRemote = std::max(nextRemote, chunkIndex - pipelineSlots + 1);
+      }
       sendChunkAck(ctx, reuseWork);
       waitForLocalPairScratchReuse(ctx, reuseWork.epoch);
       waitForCudaEvent(ctx.slotDoneEvents[slot]);
@@ -4272,25 +4599,52 @@ ncclResult_t runTwoNodeTwoGpuPipelinedChunks(
     if (result != ncclSuccess) return result;
     works.push_back(work);
 
-    while (works.size() > nextRemote + localLead) {
-      result = completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
-                                   /*asyncCopy=*/true, /*deferAck=*/true,
-                                   ctx.pipelineSlots, asyncFinalAdd);
-      if (result != ncclSuccess) return result;
-      ++nextRemote;
+    if (eagerRdmaPost) {
+      while (works.size() > nextPost + localLead) {
+        result = postChunkRdma(ctx, works[nextPost], /*asyncCopy=*/true,
+                               /*deferAck=*/true, ctx.pipelineSlots);
+        if (result != ncclSuccess) return result;
+        ++nextPost;
+      }
+    } else {
+      while (works.size() > nextRemote + localLead) {
+        result = completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                                     /*asyncCopy=*/true, /*deferAck=*/true,
+                                     ctx.pipelineSlots, asyncFinalAdd);
+        if (result != ncclSuccess) return result;
+        ++nextRemote;
+      }
     }
 
     elemOffset += chunkElems;
     ++chunkIndex;
   }
 
-  while (nextRemote < works.size()) {
-    ncclResult_t result =
-        completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
-                            /*asyncCopy=*/true, /*deferAck=*/true,
-                            ctx.pipelineSlots, asyncFinalAdd);
-    if (result != ncclSuccess) return result;
-    ++nextRemote;
+  if (eagerRdmaPost) {
+    while (nextPost < works.size()) {
+      ncclResult_t result =
+          postChunkRdma(ctx, works[nextPost], /*asyncCopy=*/true,
+                        /*deferAck=*/true, ctx.pipelineSlots);
+      if (result != ncclSuccess) return result;
+      ++nextPost;
+    }
+    while (nextRemote < works.size()) {
+      ncclResult_t result =
+          completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                              /*asyncCopy=*/true, /*deferAck=*/true,
+                              ctx.pipelineSlots, asyncFinalAdd);
+      if (result != ncclSuccess) return result;
+      ++nextRemote;
+    }
+  } else {
+    while (nextRemote < works.size()) {
+      ncclResult_t result =
+          completeChunkRemote(ctx, recvbuff, works[nextRemote], stream,
+                              /*asyncCopy=*/true, /*deferAck=*/true,
+                              ctx.pipelineSlots, asyncFinalAdd);
+      if (result != ncclSuccess) return result;
+      ++nextRemote;
+    }
   }
   for (auto& work : works) {
     sendChunkAck(ctx, work);
@@ -4553,10 +4907,15 @@ ncclResult_t runTwoRankReduceScatter(RsContext& ctx, void const* sendbuff,
                                      void* scratchBuffer,
                                      std::shared_ptr<Communicator>
                                          bootstrapComm) {
-  if (bytesPerRank <= kTwoRankSmallHostBytes) {
-    return runTwoRankSmallHostReduceScatter(ctx, sendbuff, recvbuff, recvcount,
-                                            bytesPerRank, stream,
-                                            bootstrapComm);
+  if (bytesPerRank <= configuredTwoRankSmallHostBytes()) {
+    size_t smallRankStride =
+        ctx.chunkCapacity * static_cast<size_t>(ctx.pipelineSlots);
+    size_t slotBytes = std::max(2 * bytesPerRank, 3 * bytesPerRank);
+    if (slotBytes <= smallRankStride) {
+      return runTwoRankSmallHostReduceScatter(ctx, sendbuff, recvbuff, recvcount,
+                                              bytesPerRank, stream,
+                                              bootstrapComm);
+    }
   }
   if (ctx.smallPendingAckEpoch > ctx.smallAckPostedEpoch) {
     waitForCudaStream(stream);
@@ -4624,13 +4983,17 @@ ncclResult_t runLiteInterReduceScatter(void const* sendbuff, void* recvbuff,
     size_t chunkCapacity =
         chunkCapacityBytes(scratchBufferSize, twoRankLayout, pipelineSlots);
     if (chunkCapacity == 0) return ncclInvalidUsage;
+    int transportPolicy = transportPolicyForLayout(
+        comm, bootstrapComm, rank, nRanks, nRanksPerNode, bytesPerRank);
     auto& ctx = getContext(comm, bootstrapComm, rank, nRanks, nRanksPerNode,
-                           cudaDevice, chunkCapacity, pipelineSlots);
+                           cudaDevice, chunkCapacity, pipelineSlots,
+                           transportPolicy);
     if (ctx.chunkCapacity != chunkCapacity ||
         ctx.pipelineSlots != pipelineSlots) {
       return ncclInvalidUsage;
     }
-    size_t runChunkBytes = effectiveChunkBytes(bytesPerRank, chunkCapacity);
+    size_t runChunkBytes = effectiveChunkBytesForLayout(
+        nRanks, nRanksPerNode, bytesPerRank, chunkCapacity);
 
     if (isIntraFourRankLayout(nRanks, nRanksPerNode) &&
         useP2pRingForLocalFour(bytesPerRank)) {
@@ -4655,9 +5018,12 @@ ncclResult_t runLiteInterReduceScatter(void const* sendbuff, void* recvbuff,
     if (isTwoNodeTwoGpuLayout(nRanks, nRanksPerNode)) {
       if (useTwoNodeTwoGpuHier()) {
         size_t twoNodeTwoGpuChunkBytes =
-            fullBytes < 8 * 1024 * 1024
+            configuredLayoutChunkBytesOverride() != 0
                 ? runChunkBytes
-                : std::min(chunkCapacity, static_cast<size_t>(1024 * 1024));
+                : (fullBytes < 8 * 1024 * 1024
+                       ? runChunkBytes
+                       : std::min(chunkCapacity,
+                                  static_cast<size_t>(1024 * 1024)));
         return runTwoNodeTwoGpuHierReduceScatter(
             ctx, sendbuff, recvbuff, recvcount, bytesPerRank,
             twoNodeTwoGpuChunkBytes, stream, bootstrapComm, nRanks,
@@ -4669,8 +5035,15 @@ ncclResult_t runLiteInterReduceScatter(void const* sendbuff, void* recvbuff,
           nRanksPerNode, bootstrapComm, cudaDevice);
     }
     if (fullBytes < configuredSmallHostFullBytes()) {
-      return runSmallHostReduceScatter(ctx, sendbuff, recvbuff, recvcount,
-                                       bytesPerRank, stream, bootstrapComm);
+      size_t smallRankStride =
+          ctx.chunkCapacity * static_cast<size_t>(ctx.pipelineSlots);
+      size_t slotBytes = std::max(fullBytes, 3 * bytesPerRank);
+      if (fullBytes <= smallRankStride &&
+          3 * bytesPerRank <= smallRankStride &&
+          slotBytes <= smallRankStride) {
+        return runSmallHostReduceScatter(ctx, sendbuff, recvbuff, recvcount,
+                                         bytesPerRank, stream, bootstrapComm);
+      }
     }
     if (ctx.smallPendingAckEpoch > ctx.smallAckPostedEpoch) {
       waitForCudaStream(stream);
@@ -4705,7 +5078,22 @@ ncclResult_t runLiteInterReduceScatter(void const* sendbuff, void* recvbuff,
 
 void cleanupLiteReduceScatterContexts(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(gReduceScatterMutex);
-  gReduceScatterContexts.erase(comm);
+  for (auto it = gReduceScatterContexts.begin();
+       it != gReduceScatterContexts.end();) {
+    if (it->first.comm == comm) {
+      it = gReduceScatterContexts.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = gReduceScatterTransportPolicies.begin();
+       it != gReduceScatterTransportPolicies.end();) {
+    if (it->first.comm == comm) {
+      it = gReduceScatterTransportPolicies.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 }  // namespace nccl
