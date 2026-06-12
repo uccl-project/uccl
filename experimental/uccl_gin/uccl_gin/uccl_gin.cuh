@@ -18,10 +18,21 @@
 // quiet is implemented. The Lsa branch and the remaining NCCLGin surface trap so
 // gaps are loud, not silent.
 
+#include "platform.cuh"   // UCCL_GIN_TRAP, UCCL_GIN_HAVE_NCCL_DEVICE
 #include "resources.cuh"
 #include "uccl_gin_rail.cuh"
-#include <nccl_device.h>   // ncclTeamTagRail, ncclTeamTagLsa
 #include <type_traits>
+
+// Team-tag types. On NVIDIA they come from NCCL's device header. RCCL has no
+// device GIN API, so on AMD (or when the NCCL-GIN reference path is disabled)
+// provide stand-in tags with the same names so the same
+// gin.put<ncclTeamTagRail>(...) call sites compile unchanged.
+#if UCCL_GIN_HAVE_NCCL_DEVICE
+#include <nccl_device.h>  // ncclTeamTagRail, ncclTeamTagLsa
+#else
+struct ncclTeamTagRail {};
+struct ncclTeamTagLsa {};
+#endif
 
 namespace uccl_gin {
 
@@ -37,7 +48,7 @@ struct UCCLGin {
   // pass a hint (e.g. channel idx); default round-robins on the hint.
   __device__ __forceinline__ d2hq::D2HHandle* lane(int hint) const {
     if (res.d2h_queues == nullptr || res.num_queues == 0) {
-      __trap();
+      UCCL_GIN_TRAP();
     }
     return res.d2h_queues[uccl_gin::queue_index_from_hint(res, hint)];
   }
@@ -78,7 +89,7 @@ struct UCCLGin {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
       validate_rail_dst(res, dst_rank);
       if (num_bytes < 0) {
-        __trap();
+        UCCL_GIN_TRAP();
       }
       if (num_bytes == 0) {
         return;
@@ -103,7 +114,7 @@ struct UCCLGin {
       }
     } else {
       // Lsa (NVLink) — forward to NCCLGin / NVLink ptx. Not in standalone.
-      __trap();
+      UCCL_GIN_TRAP();
     }
   }
 
@@ -122,7 +133,7 @@ struct UCCLGin {
       validate_rail_dst(res, dst_rank);
       if (num_bytes < 0 || count_delta <= 0 || count_delta > 0xFF ||
           atomic_byte_off == 0) {
-        __trap();  // tail slots are 1-based; slot 0 is reserved (see header).
+        UCCL_GIN_TRAP();  // tail slots are 1-based; slot 0 is reserved (see header).
       }
       const uint32_t loff = window_off(reinterpret_cast<uint64_t>(send_sym_ptr),
                                        res.window_base, res.window_bytes,
@@ -156,7 +167,7 @@ struct UCCLGin {
       }
       rail_red_add(q, dst_rank, count_delta, atomic_byte_off);
     } else {
-      __trap();
+      UCCL_GIN_TRAP();
     }
   }
 
@@ -177,7 +188,7 @@ struct UCCLGin {
           reinterpret_cast<uint64_t>(sym_ptr) - res.atomic_tail_base);
       rail_red_add(lane(lane_hint), dst_rank, value, off);
     } else {
-      __trap();  // Lsa: ptx::red_add_rel_sys
+      UCCL_GIN_TRAP();  // Lsa: ptx::red_add_rel_sys
     }
   }
 
@@ -205,7 +216,7 @@ struct UCCLGin {
                                        static_cast<uint32_t>(sizeof(int)));
       rail_write_value(lane(lane_hint), dst_rank, value, roff);
     } else {
-      __trap();  // Lsa
+      UCCL_GIN_TRAP();  // Lsa
     }
   }
   __device__ __forceinline__ void flush() const {

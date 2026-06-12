@@ -8,6 +8,7 @@
 // (offset origin for `put`), and the atomic buffer base (offset origin for the
 // ordered `red_add_rel`). See ep/docs/uccl_gin_plan.md (UCCLGinResources).
 
+#include "platform.cuh"  // UCCL_GIN_TRAP() — CUDA/HIP device trap shim
 #include "../transport/d2h_queue_device.cuh"
 #include <cstdint>
 
@@ -36,7 +37,7 @@ __device__ __forceinline__ uint32_t queue_index_from_hint(
     const UCCLGinResources& resources, int hint) {
   if (resources.num_queues == 0 || resources.num_lanes == 0 ||
       resources.num_queues % resources.num_lanes != 0) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
 
   // Preserve the original UCCL/EP mapping: logical channels first round-robin
@@ -59,7 +60,7 @@ __device__ __forceinline__ void validate_rail_dst(
       dst_rank == resources.scaleout_rank * resources.num_scaleup_ranks +
                       resources.scaleup_rank ||
       (dst_rank % resources.num_scaleup_ranks) != resources.scaleup_rank) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
 }
 #endif

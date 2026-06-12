@@ -1,7 +1,7 @@
 #include "context.hpp"
 
 #include "transport/uccl_proxy.hpp"
-#include <cuda_runtime.h>
+#include "util/gpu_rt.h"  // gpu* runtime shim (CUDA on NV, HIP on AMD)
 #include <mpi.h>
 
 #include <arpa/inet.h>
@@ -20,11 +20,11 @@ namespace {
 
 #define UCCL_GIN_CUDA_OK(x)                                                \
   do {                                                                     \
-    cudaError_t e = (x);                                                   \
-    if (e != cudaSuccess) {                                                \
+    gpuError_t e = (x);                                                   \
+    if (e != gpuSuccess) {                                                \
       throw std::runtime_error(std::string("[UCCL-GIN CUDA] ") + __FILE__ + \
                                ":" + std::to_string(__LINE__) + " " +     \
-                               cudaGetErrorString(e));                     \
+                               gpuGetErrorString(e));                     \
     }                                                                      \
   } while (0)
 
@@ -79,11 +79,16 @@ void Context::setup(ContextConfig cfg) {
     const int node_idx = cfg.rank / cfg.local_world_size;
     const int num_nodes = cfg.world_size / cfg.local_world_size;
 
-    UCCL_GIN_CUDA_OK(cudaSetDevice(local_rank));
+    UCCL_GIN_CUDA_OK(gpuSetDevice(local_rank));
     max_message_bytes_ = cfg.max_message_bytes;
     window_bytes_ = 2 * max_message_bytes_;
-    UCCL_GIN_CUDA_OK(cudaMalloc(&d_window_, window_bytes_));
+    UCCL_GIN_CUDA_OK(gpuMalloc(&d_window_, window_bytes_));
+    // gpu_rt.h has no gpuMemset shim; both APIs share the same signature.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    UCCL_GIN_CUDA_OK(hipMemset(d_window_, 0, window_bytes_));
+#else
     UCCL_GIN_CUDA_OK(cudaMemset(d_window_, 0, window_bytes_));
+#endif
 
     for (int t = 0; t < kNumProxyThs; ++t) {
       auto p = std::make_unique<UcclProxy>(
@@ -148,10 +153,10 @@ void Context::setup(ContextConfig cfg) {
       h_handles[i] = reinterpret_cast<d2hq::D2HHandle*>(dev_ring_addrs[i]);
     }
     UCCL_GIN_CUDA_OK(
-        cudaMalloc(&d_handles_, num_queues_ * sizeof(d2hq::D2HHandle*)));
-    UCCL_GIN_CUDA_OK(cudaMemcpy(d_handles_, h_handles.data(),
+        gpuMalloc(&d_handles_, num_queues_ * sizeof(d2hq::D2HHandle*)));
+    UCCL_GIN_CUDA_OK(gpuMemcpy(d_handles_, h_handles.data(),
                                 num_queues_ * sizeof(d2hq::D2HHandle*),
-                                cudaMemcpyHostToDevice));
+                                gpuMemcpyHostToDevice));
 
     uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
     for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
@@ -180,11 +185,11 @@ void Context::teardown() {
   }
   proxies_.clear();
   if (d_handles_) {
-    cudaFree(d_handles_);
+    gpuFree(d_handles_);
     d_handles_ = nullptr;
   }
   if (d_window_) {
-    cudaFree(d_window_);
+    gpuFree(d_window_);
     d_window_ = nullptr;
   }
 }

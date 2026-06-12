@@ -24,6 +24,7 @@
 //     as an ordered WRITE_WITH_IMM only when atomic_offset > 0, so tail slots
 //     are 1-based (slot 0 reserved) to stay compatible with the V1 trigger.
 
+#include "platform.cuh"  // UCCL_GIN_TRAP() — CUDA/HIP device trap shim
 #include "../transport/ring_buffer.cuh"
 #include "../transport/d2h_queue_device.cuh"
 #include <cstdint>
@@ -37,12 +38,12 @@ static constexpr int kAtomicValueMax = (1 << 14) - 1;
 __device__ __forceinline__ uint32_t add_window_off(uint32_t base_shifted,
                                                    uint32_t byte_offset) {
   if (byte_offset & ((1u << kWriteAddrShiftNormal) - 1u)) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   const uint64_t shifted = static_cast<uint64_t>(base_shifted) +
                            (byte_offset >> kWriteAddrShiftNormal);
   if (shifted > 0xFFFFFFFFull) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   return static_cast<uint32_t>(shifted);
 }
@@ -56,11 +57,11 @@ __device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_ba
        (addr - window_base > window_bytes ||
         static_cast<uint64_t>(bytes) > window_bytes - (addr - window_base))) ||
       ((addr - window_base) & ((1u << kWriteAddrShiftNormal) - 1u))) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   const uint64_t shifted = (addr - window_base) >> kWriteAddrShiftNormal;
   if (shifted > 0xFFFFFFFFull) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   return static_cast<uint32_t>(shifted);
 }
@@ -73,7 +74,7 @@ __device__ __forceinline__ uint64_t rail_put(d2hq::D2HHandle* q, int dst_rank,
                                              uint32_t local_off_shifted,
                                              uint32_t remote_off_shifted) {
   if (bytes == 0 || bytes > kTransferCmdMaxBytes) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   TransferCmd cmd{};
   cmd.cmd_type = make_cmd_type(CmdType::WRITE, /*is_combine=*/false,
@@ -117,7 +118,7 @@ __device__ __forceinline__ uint64_t rail_put_tail_add(
   if (bytes == 0 || bytes > kTransferCmdMaxBytes || count_delta == 0 ||
       count_delta > 0xFFu || atomic_byte_off > kAtomicOffMask ||
       (atomic_byte_off & 0x7u)) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   TransferCmd cmd{};
   cmd.cmd_type = make_cmd_type(CmdType::WRITE, /*is_combine=*/false,
@@ -142,7 +143,7 @@ __device__ __forceinline__ uint64_t rail_red_add(d2hq::D2HHandle* q, int dst_ran
                                                  uint32_t atomic_byte_off) {
   if (delta < kAtomicValueMin || delta > kAtomicValueMax ||
       atomic_byte_off > kAtomicOffMask || (atomic_byte_off & 0x7u)) {
-    __trap();
+    UCCL_GIN_TRAP();
   }
   TransferCmd cmd{};
   // UCCL-GIN Rail ordered atomics run only in normal mode. PackAtomicWithSeq
