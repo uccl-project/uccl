@@ -923,37 +923,85 @@ bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
 unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
                                   uint32_t dst_buf, size_t dst_off,
                                   size_t bytes) {
-  // Ensure path
   if (!ensure_path(peer, /*is_put=*/true)) return 0;
   PeerTransportKind kind = get_put_transport_kind(peer);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
-  // Local MR
   MR local_mr = get_mr(src_buf);
   if (src_off > local_mr.length || bytes > local_mr.length - src_off) return 0;
   void* local_ptr =
       reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address) + src_off);
-
-  // Remote pointer (IPC)
-  void* remote_ptr = nullptr;
-  int remote_gpu = -1;
-  if (kind == PeerTransportKind::Ipc && dst_buf != 0) {
-    if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
-                                        &remote_ptr, &remote_gpu))
-      return 0;
-  }
 
   unsigned rid;
   TrackedRequest* slot = tracker_->allocate(&rid);
   if (!slot) return 0;
   slot->kind = kind;
 
+  // ── TCP: bounce through host ──
+  if (kind == PeerTransportKind::Tcp) {
+    void* host_buf;
+    GPU_RT_CHECK(gpuHostMalloc(&host_buf, bytes));
+    GPU_RT_CHECK(gpuMemcpy(host_buf, local_ptr, bytes, gpuMemcpyDeviceToHost));
+    slot->bounce_ptr = host_buf;
+    unsigned aid = adapter->put_async(peer, host_buf, 0, nullptr, 0, bytes);
+    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
+      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
+    }
+    return rid;
+  }
+
+  // ── UCCL: ensure MR, then put ──
+  if (kind == PeerTransportKind::Uccl) {
+    if (!ensure_uccl_memory_registered(src_buf, local_ptr, bytes)) {
+      mark_slot_failed(rid); return 0;
+    }
+    unsigned aid = adapter->put_async(peer, local_ptr, src_buf, nullptr, 0, bytes);
+    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
+      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
+    }
+    return rid;
+  }
+
+  // ── RDMA: ensure MR, put + wait + signal ──
+  if (kind == PeerTransportKind::Rdma) {
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) {
+      mark_slot_failed(rid); return 0;
+    }
+    uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
+    MR remote_mr = get_mr(peer, remote_id);
+    void* remote_ptr = reinterpret_cast<void*>(
+        static_cast<uint64_t>(remote_mr.address) + dst_off);
+    rdma_adapter_->register_remote_buffer(peer, remote_id, remote_mr.address,
+                                          remote_mr.key);
+    unsigned aid =
+        adapter->put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes);
+    if (aid == 0) { cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0; }
+    adapter->wait_completion(aid);
+    if (adapter->request_failed(aid)) {
+      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
+    }
+    adapter->release_request(aid);
+    unsigned sig_aid = adapter->signal_async(peer, /*tag=*/0);
+    if (sig_aid == 0 || !tracker_->activate(rid, sig_aid, peer, kind)) {
+      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
+    }
+    return rid;
+  }
+
+  // ── IPC: resolve remote pointer, then put ──
+  void* remote_ptr = nullptr;
+  int remote_gpu = -1;
+  if (dst_buf != 0) {
+    if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
+                                        &remote_ptr, &remote_gpu)) {
+      mark_slot_failed(rid); return 0;
+    }
+  }
   unsigned aid =
       adapter->put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf, bytes);
   if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    mark_slot_failed(rid);
-    return 0;
+    cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
   }
   return rid;
 }
@@ -969,10 +1017,19 @@ unsigned Communicator::wait_async(int peer, uint64_t tag) {
   if (!slot) return 0;
   slot->kind = kind;
 
+  // ── IPC: signal wait only ──
+  if (kind == PeerTransportKind::Ipc) {
+    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(peer);
+    unsigned aid = adapter->wait_async(peer, match_seq, std::nullopt);
+    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
+      mark_slot_failed(rid); return 0;
+    }
+    return rid;
+  }
+
   unsigned aid = adapter->wait_async(peer, tag, std::nullopt);
   if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    mark_slot_failed(rid);
-    return 0;
+    mark_slot_failed(rid); return 0;
   }
   return rid;
 }
@@ -990,8 +1047,7 @@ unsigned Communicator::signal_async(int peer, uint64_t tag) {
 
   unsigned aid = adapter->signal_async(peer, tag);
   if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
-    mark_slot_failed(rid);
-    return 0;
+    mark_slot_failed(rid); return 0;
   }
   return rid;
 }

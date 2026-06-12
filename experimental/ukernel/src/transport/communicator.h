@@ -5,16 +5,13 @@
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
 #include "request_tracker.h"
-#include "util/jring.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -149,12 +146,6 @@ class Communicator {
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;
 
-  void run_put_body(int peer, uint32_t src_buf, size_t src_off,
-                    uint32_t dst_buf, size_t dst_off, size_t bytes,
-                    unsigned request_id);
-  void run_wait_body(int peer, uint32_t dst_buf, size_t dst_off,
-                     size_t dst_bytes, unsigned request_id);
-  void run_signal_body(int peer, uint64_t tag, unsigned request_id);
   void mark_slot_failed(unsigned request_id);
 
   int local_gpu_idx_;
