@@ -7,6 +7,18 @@
 
 namespace UKernel {
 namespace Device {
+namespace {
+
+// ── Vector type: 32B on SM80+, 16B otherwise ──────────────────────────
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  using Vec = ulonglong4;
+  static constexpr int kVEC_BYTES = 32;
+#else
+  using Vec = uint4;
+  static constexpr int kVEC_BYTES = 16;
+#endif
+
+}  // anonymous namespace
 
 template <typename T>
 __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
@@ -28,17 +40,15 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
     return;
   }
 
-  // ── Vectorized 128-bit copy with grid-stride loop ──
-  constexpr int VEC_BYTES = 16;
-  constexpr int NELTS_PER_VEC = VEC_BYTES / (int)sizeof(T);
+  // ── Vectorized copy (kVEC_BYTES-byte loads through read-only cache) ──
+  constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
   size_t nvec = count / NELTS_PER_VEC;
 
-  using Vec = uint4;
   Vec const* src_v = reinterpret_cast<Vec const*>(src);
   Vec*       dst_v = reinterpret_cast<Vec*>(dst);
 
   for (size_t vi = tid; vi < nvec; vi += nthread)
-    dst_v[vi] = src_v[vi];  // 128-bit load + store
+    dst_v[vi] = src_v[vi];
 
   // Scalar tail
   if constexpr (NELTS_PER_VEC > 1) {
