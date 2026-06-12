@@ -48,35 +48,15 @@ class TcpTransportAdapter final : public TransportAdapter {
     std::mutex recv_mu;
   };
 
-  enum class RequestState : uint8_t {
-    Free = 0, Queued = 1, Completed = 2, Failed = 3
-  };
+  enum class Kind : uint8_t { DataPut, DataWait, Signal, SignalWait };
 
-  struct RequestSlot {
-    enum class Kind : uint8_t {
-      DataPut = 0, DataWait = 1, Signal = 2, SignalWait = 3
-    };
-    std::atomic<RequestState> state{RequestState::Free};
-    std::atomic<uint32_t> generation{1};
-    Kind kind = Kind::DataPut;
-    unsigned comm_rid = 0;
-    int peer_rank = -1;
-    void* host_ptr = nullptr;
-    size_t len = 0;
-    uint64_t expected_tag = 0;
-    uint64_t signal_payload = 0;
-
-    void mark_queued() {
-      state.store(RequestState::Queued, std::memory_order_release);
-    }
-    void mark_completed(bool ok) {
-      state.store(ok ? RequestState::Completed : RequestState::Failed,
-                  std::memory_order_release);
-    }
-    bool is_done() const {
-      auto s = state.load(std::memory_order_acquire);
-      return s == RequestState::Completed || s == RequestState::Failed;
-    }
+  struct RingElem {
+    unsigned comm_rid;
+    int peer;
+    Kind kind;
+    void* ptr;
+    size_t len;
+    uint64_t tag;
   };
 
   bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port);
@@ -84,21 +64,6 @@ class TcpTransportAdapter final : public TransportAdapter {
 
   void send_worker_loop();
   void recv_worker_loop();
-
-  static constexpr uint32_t kSlotBits = 13;
-  static constexpr uint32_t kSlotCount = (1u << kSlotBits);
-  static constexpr uint32_t kSlotMask = kSlotCount - 1u;
-  static unsigned make_rid(uint32_t idx, uint32_t gen) {
-    return static_cast<unsigned>((gen << kSlotBits) | idx);
-  }
-  static uint32_t slot_index(unsigned rid) { return rid & kSlotMask; }
-  static uint32_t slot_gen(unsigned rid) { return rid >> kSlotBits; }
-
-  RequestSlot* acquire_slot(unsigned* out_rid);
-  RequestSlot* resolve_slot(unsigned rid);
-  void release_slot(unsigned rid);
-  bool enqueue_send(unsigned rid);
-  bool enqueue_recv(unsigned rid);
 
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
@@ -122,8 +87,6 @@ class TcpTransportAdapter final : public TransportAdapter {
   std::atomic<bool> stop_{false};
   std::thread send_worker_;
   std::thread recv_worker_;
-  std::unique_ptr<RequestSlot[]> slots_;
-  std::atomic<uint32_t> alloc_cursor_{0};
 };
 }  // namespace Transport
 }  // namespace UKernel

@@ -31,9 +31,10 @@ struct WireHeader {
 
 bool is_retryable(int e) { return e == EINTR || e == EAGAIN || e == EWOULDBLOCK; }
 
-bool enqueue_rid(jring_t* ring, unsigned rid, std::atomic<bool> const& stop) {
+template<typename T>
+bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
   while (!stop.load(std::memory_order_acquire) &&
-         jring_mp_enqueue_bulk(ring, &rid, 1, nullptr) != 1)
+         jring_mp_enqueue_bulk(ring, &elem, 1, nullptr) != 1)
     std::this_thread::yield();
   return !stop.load(std::memory_order_acquire);
 }
@@ -68,10 +69,9 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
   if (listen_fd_ < 0)
     throw std::runtime_error("failed to create tcp listen socket");
 
-  send_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
-  recv_task_ring_ = create_ring(sizeof(unsigned), kTaskRingSize);
-  slots_ = std::make_unique<RequestSlot[]>(kSlotCount);
-  if (!send_task_ring_ || !recv_task_ring_ || !slots_) {
+  send_task_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
+  recv_task_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
+  if (!send_task_ring_ || !recv_task_ring_) {
     free(send_task_ring_); send_task_ring_ = nullptr;
     free(recv_task_ring_); recv_task_ring_ = nullptr;
     ::shutdown(listen_fd_, SHUT_RDWR); ::close(listen_fd_); listen_fd_ = -1;
@@ -143,67 +143,115 @@ unsigned TcpTransportAdapter::put_async(int peer, void* local_ptr, uint32_t,
                                         void*, uint32_t, size_t len,
                                         unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  unsigned rid = 0;
-  RequestSlot* s = acquire_slot(&rid);
-  if (!s) return 0;
-  s->comm_rid = comm_rid;
-  s->peer_rank = peer;
-  s->kind = RequestSlot::Kind::DataPut;
-  s->host_ptr = local_ptr;
-  s->len = len;
-  s->mark_queued();
-  if (!enqueue_send(rid)) { s->mark_completed(false); release_slot(rid); return 0; }
-  return rid;
+  RingElem e{comm_rid, peer, Kind::DataPut, local_ptr, len, 0};
+  if (!enqueue_elem(send_task_ring_, e, stop_)) return 0;
+  return 1;
 }
 
 unsigned TcpTransportAdapter::signal_async(int peer, uint64_t tag,
                                            unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  unsigned rid = 0;
-  RequestSlot* s = acquire_slot(&rid);
-  if (!s) return 0;
-  s->comm_rid = comm_rid;
-  s->peer_rank = peer;
-  s->kind = RequestSlot::Kind::Signal;
-  s->signal_payload = tag;
-  s->mark_queued();
-  if (!enqueue_send(rid)) { s->mark_completed(false); release_slot(rid); return 0; }
-  return rid;
+  RingElem e{comm_rid, peer, Kind::Signal, nullptr, 0, tag};
+  if (!enqueue_elem(send_task_ring_, e, stop_)) return 0;
+  return 1;
 }
 
 unsigned TcpTransportAdapter::wait_async(int peer, uint64_t tag,
                                          std::optional<WaitTarget> target,
                                          unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
-  unsigned rid = 0;
-  RequestSlot* s = acquire_slot(&rid);
-  if (!s) return 0;
-  s->comm_rid = comm_rid;
-  s->peer_rank = peer;
-  s->kind = target ? RequestSlot::Kind::DataWait : RequestSlot::Kind::SignalWait;
-  s->host_ptr = target ? target->local_ptr : nullptr;
-  s->len = target ? target->len : 0;
-  s->expected_tag = tag;
-  s->mark_queued();
-  if (!enqueue_recv(rid)) { s->mark_completed(false); release_slot(rid); return 0; }
-  return rid;
+  void* ptr = target ? target->local_ptr : nullptr;
+  size_t len = target ? target->len : 0;
+  Kind k = target ? Kind::DataWait : Kind::SignalWait;
+  RingElem e{comm_rid, peer, k, ptr, len, tag};
+  if (!enqueue_elem(recv_task_ring_, e, stop_)) return 0;
+  return 1;
 }
 
-void TcpTransportAdapter::release(unsigned id) { release_slot(id); }
+// ── Workers ─────────────────────────────────────────────────────────────
 
-// ── Peer connection ─────────────────────────────────────────────────────
+void TcpTransportAdapter::send_worker_loop() {
+  RingElem e;
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(send_task_ring_, &e, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
+    bool ok = false;
+    std::shared_ptr<PeerContext> ctx;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = peer_contexts_.find(e.peer);
+      if (it != peer_contexts_.end() && it->second && it->second->send_fd >= 0)
+        ctx = it->second;
+    }
+    if (ctx) {
+      std::lock_guard<std::mutex> lk(ctx->send_mu);
+      void* ptr = e.ptr;
+      void* bounce = nullptr;
+      if (e.len > 0 && ptr) {
+        gpuPointerAttributes attr{};
+        if (gpuPointerGetAttributes(&attr, ptr) == gpuSuccess &&
+            attr.type == gpuMemoryTypeDevice) {
+          GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+          GPU_RT_CHECK(gpuMallocHost(&bounce, e.len));
+          GPU_RT_CHECK(gpuMemcpyAsync(bounce, ptr, e.len,
+                                       gpuMemcpyDeviceToHost, gpu_stream_));
+          GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
+          ptr = bounce;
+        }
+      }
+      WireHeader hdr{};
+      hdr.type = static_cast<uint32_t>(e.kind == Kind::Signal ? FrameType::Signal
+                                                               : FrameType::Data);
+      hdr.payload_len = e.len;
+      ok = send_all(ctx->send_fd, &hdr, sizeof(hdr));
+      if (ok && e.len > 0) ok = send_all(ctx->send_fd, ptr, e.len);
+      if (bounce) GPU_RT_CHECK(gpuFreeHost(bounce));
+    }
+    publish_completion(e.comm_rid, !ok);
+  }
+  // Drain remaining
+  RingElem drain;
+  while (jring_mc_dequeue_bulk(send_task_ring_, &drain, 1, nullptr) == 1)
+    publish_completion(drain.comm_rid, true);
+}
 
-bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t port) {
-  std::lock_guard<std::mutex> lk(mu_);
-  if (peer_contexts_.count(rank) && peer_contexts_[rank] &&
-      peer_contexts_[rank]->send_fd >= 0)
-    return true;
-  auto ctx = std::make_shared<PeerContext>();
-  if (!connect_socket(ctx->send_fd, ip, port, kDefaultConnectTimeout)) return false;
-  ctx->recv_fd = ctx->send_fd;
-  handshake(ctx->send_fd, local_rank_, true);
-  peer_contexts_[rank] = ctx;
-  return true;
+void TcpTransportAdapter::recv_worker_loop() {
+  RingElem e;
+  while (!stop_.load(std::memory_order_acquire)) {
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &e, 1, nullptr) != 1) {
+      std::this_thread::yield();
+      continue;
+    }
+    bool ok = false;
+    std::shared_ptr<PeerContext> ctx;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = peer_contexts_.find(e.peer);
+      if (it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0)
+        ctx = it->second;
+    }
+    if (ctx) {
+      std::lock_guard<std::mutex> lk(ctx->recv_mu);
+      WireHeader hdr{};
+      ok = recv_all(ctx->recv_fd, &hdr, sizeof(hdr));
+      uint64_t tag = 0;
+      if (ok && hdr.payload_len > 0) {
+        if (e.kind == Kind::SignalWait) {
+          ok = recv_all(ctx->recv_fd, &tag, sizeof(uint64_t));
+        } else if (e.kind == Kind::DataWait && e.ptr) {
+          ok = recv_all(ctx->recv_fd, e.ptr, e.len);
+        } else {
+          ok = recv_discard(ctx->recv_fd, hdr.payload_len);
+        }
+      }
+    }
+    publish_completion(e.comm_rid, !ok);
+  }
+  RingElem drain;
+  while (jring_mc_dequeue_bulk(recv_task_ring_, &drain, 1, nullptr) == 1)
+    publish_completion(drain.comm_rid, true);
 }
 
 bool TcpTransportAdapter::accept_from_peer(int rank, std::string const&) {
@@ -252,11 +300,11 @@ void TcpTransportAdapter::release_slot(unsigned rid) {
 }
 
 bool TcpTransportAdapter::enqueue_send(unsigned rid) {
-  return enqueue_rid(send_task_ring_, rid, stop_);
+  return enqueue_elem(send_task_ring_, rid, stop_);
 }
 
 bool TcpTransportAdapter::enqueue_recv(unsigned rid) {
-  return enqueue_rid(recv_task_ring_, rid, stop_);
+  return enqueue_elem(recv_task_ring_, rid, stop_);
 }
 
 // ── Workers ─────────────────────────────────────────────────────────────
