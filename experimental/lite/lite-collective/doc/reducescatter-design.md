@@ -14,9 +14,10 @@ a full performance win over a fair tuned NCCL baseline where both libraries may
 use local PCIe P2P and neither may use GDR (`NCCL_P2P_DISABLE=0`,
 `NCCL_P2P_LEVEL=SYS`, `NCCL_NET_GDR_LEVEL=0`).  It uses a native host-slot path
 for tiny rows and a GPU NUMA-pair path with chunk pipelining for larger rows.
-The latest 1MiB-64MiB retune added mapped-host finalization and split-final
-reduce for the small/mid GPU path; this improves lite versus the previous path
-but still trails tuned NCCL across the full mid/large sweep.
+The latest 1MiB-16MiB retune disables local IPC event synchronization on the
+small single-chunk rows and extends direct partner-row CudaIpc copies through the
+mid-size rows.  It makes 2nx4g win at 1MiB, 2MiB, 8MiB, and 16MiB in the current
+no-GDR benchmark; 4MiB remains a small tuned-NCCL win.
 The 1nx4g large-message path uses a native CudaIpc ring.  Rows whose output
 shard no longer fits the fixed communicator scratch are split into 32MiB chunks,
 so the 256MiB-1GiB total-size rows stay on the native path instead of falling
@@ -114,7 +115,7 @@ The current native-only implementation has two internal regimes on `2nx4g`:
 | Regime | Policy |
 | --- | --- |
 | `<512KiB` total size | Shared host-slot path: each rank D2Hs its input into a per-node shm slab, computes two local partials on CPU, RDMA-writes the remote-owned partial, and H2Ds the final result. Each rank's shm slice is placed on the GPU's NUMA node, final CPU output stays in the recv slab rather than overwriting the input slab, the local/final CPU reductions use a runtime AVX-512F fast path with scalar fallback, and the H2D ack is deferred to the next safe stream-completion point. |
-| `>=512KiB` total size | GPU-local NUMA-pair path: compute local/remote partials in GPU scratch, D2H or mapped-host-write the remote partial, exchange it with the matching remote rank, H2D or mapped-host-read the incoming remote partial, and add the local partial in place. Single-chunk rows avoid the async side-stream pipeline; multi-chunk rows use four compact scratch slots, deferred H2D ack, tiered chunk sizes, and a deeper local lead for long rows. |
+| `>=512KiB` total size | GPU-local NUMA-pair path: compute local/remote partials in GPU scratch, D2H or mapped-host-write the remote partial, exchange it with the matching remote rank, H2D or mapped-host-read the incoming remote partial, and add the local partial in place. Single-chunk rows avoid the async side-stream pipeline; multi-chunk rows use four compact scratch slots, deferred H2D ack, tiered chunk sizes, and a deeper local lead for long rows.  On 2nx4g, 1MiB and larger rows use direct partner-row CudaIpc copies instead of pack-then-copy. |
 
 The previous implementation produced correct wins only around 512KiB by falling
 back elsewhere.  The current code removes that fallback, so performance gaps are
@@ -154,8 +155,8 @@ event.  A CPU epoch handshake is published immediately after each event record
 is enqueued and before the peer waits on the event; this avoids reusing an event
 record before the peer has observed the right epoch.
 `MSCCLPP_NCCL_RS_IPC_EVENT_SYNC=0/1` can still force the mode off or on.  Event
-sync avoids host-side stream drains, but it does not by itself close the
-mid/large bus-bandwidth gap.
+sync avoids host-side stream drains, but the 2nx4g 1MiB-4MiB single-chunk rows
+are faster with CPU epoch synchronization on the L40/L41 no-GDR testbed.
 
 ## Large-message final-add overlap
 

@@ -387,7 +387,7 @@ bool useIpcEventSyncForLayout(RsContext const& ctx, size_t bytesPerRank,
   int mode = configuredIpcEventSyncMode();
   if (mode >= 0) return mode != 0;
   if (ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
-      messageBytes == 4 * 1024 * 1024) {
+      messageBytes >= 1024 * 1024 && messageBytes <= 4 * 1024 * 1024) {
     return false;
   }
   (void)bytesPerRank;
@@ -583,8 +583,7 @@ int configuredDirectPartnerCopyMode() {
 bool useDirectPartnerCopyFor(size_t messageBytes) {
   int mode = configuredDirectPartnerCopyMode();
   if (mode >= 0) return mode != 0;
-  return messageBytes == 4 * 1024 * 1024 ||
-         messageBytes >= 32 * 1024 * 1024;
+  return messageBytes >= 1024 * 1024;
 }
 
 int configuredDirectPartnerCopy2DMode() {
