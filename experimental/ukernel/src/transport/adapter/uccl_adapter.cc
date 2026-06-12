@@ -296,7 +296,7 @@ unsigned UcclTransportAdapter::put_async(int peer_rank, void* local_ptr,
                                          uint32_t local_buffer_id,
                                          void* remote_ptr,
                                          uint32_t remote_buffer_id,
-                                         size_t len) {
+size_t len, unsigned comm_rid) {
   if (!has_put_path(peer_rank)) return 0;
 
   unsigned request_id = 0;
@@ -314,7 +314,7 @@ unsigned UcclTransportAdapter::put_async(int peer_rank, void* local_ptr,
   return request_id;
 }
 
-unsigned UcclTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
+unsigned UcclTransportAdapter::signal_async(int peer_rank, uint64_t tag, unsigned comm_rid) {
   if (!has_put_path(peer_rank)) return 0;
   if (!endpoint_) return 0;
 
@@ -365,7 +365,7 @@ unsigned UcclTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
 }
 
 unsigned UcclTransportAdapter::wait_async(int peer_rank, uint64_t expected_tag,
-                                          std::optional<WaitTarget> target) {
+                                          std::optional<WaitTarget> target, unsigned comm_rid) {
   if (!has_wait_path(peer_rank)) return 0;
   if (!endpoint_) return 0;
 
@@ -430,11 +430,6 @@ unsigned UcclTransportAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   return request_id;
 }
 
-bool UcclTransportAdapter::request_failed(unsigned id) {
-  std::lock_guard<std::mutex> lk(mu_);
-  PendingRequestSlot* slot = resolve_request_slot_locked(id);
-  return slot != nullptr && slot->failed;
-}
 
 int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
                                           size_t len, uint32_t local_buffer_id,
@@ -589,56 +584,9 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
   return 0;
 }
 
-bool UcclTransportAdapter::poll_completion(unsigned request_id) {
-  ::uccl::ucclRequest* req = nullptr;
-  PendingRequestSlot::Kind kind = PendingRequestSlot::Kind::DataPut;
-  uint64_t expected_signal_tag = 0;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot == nullptr) return true;
-    if (slot->state == RequestState::Completed ||
-        slot->state == RequestState::Failed) {
-      return true;
-    }
-    if (slot->state != RequestState::InFlight) return false;
-    if (!endpoint_ || !slot->request || !slot->request->context) {
-      slot->failed = true;
-      slot->state = RequestState::Failed;
-      return true;
-    }
-    kind = slot->kind;
-    expected_signal_tag = slot->expected_signal_tag;
-    req = slot->request.get();
-  }
 
-  if (!endpoint_->uccl_poll_ureq_once(req)) return false;
 
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot == nullptr) return true;
-    if (slot->state == RequestState::InFlight) {
-      bool ok = true;
-      if (kind == PendingRequestSlot::Kind::SignalWait) {
-        ok = (slot->control_tag == expected_signal_tag);
-      }
-      slot->failed = !ok;
-      slot->state = ok ? RequestState::Completed : RequestState::Failed;
-    }
-  }
-  return true;
-}
-
-bool UcclTransportAdapter::wait_completion(unsigned request_id) {
-  uint32_t retries = 0;
-  while (true) {
-    if (poll_completion(request_id)) return true;
-    backoff_retry(retries++);
-  }
-}
-
-void UcclTransportAdapter::release_request(unsigned request_id) {
+void UcclTransportAdapter::release(unsigned request_id) {
   std::lock_guard<std::mutex> lk(mu_);
   release_request_slot_locked(request_id);
 }

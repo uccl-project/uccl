@@ -307,7 +307,8 @@ bool TcpTransportAdapter::has_wait_path(int peer_rank) const {
 unsigned TcpTransportAdapter::put_async(int peer_rank, void* local_ptr,
                                         uint32_t local_buffer_id,
                                         void* remote_ptr,
-                                        uint32_t remote_buffer_id, size_t len) {
+                                        uint32_t remote_buffer_id, size_t len,
+                                        unsigned comm_rid) {
   (void)local_buffer_id;
   (void)remote_ptr;
   (void)remote_buffer_id;
@@ -316,6 +317,7 @@ unsigned TcpTransportAdapter::put_async(int peer_rank, void* local_ptr,
   unsigned request_id = 0;
   RequestSlot* slot = try_acquire_request_slot(&request_id);
   if (!slot) return 0;
+  slot->comm_rid = comm_rid;
   slot->peer_rank = peer_rank;
   slot->kind = RequestSlot::Kind::DataPut;
   slot->host_ptr = local_ptr;
@@ -329,11 +331,14 @@ unsigned TcpTransportAdapter::put_async(int peer_rank, void* local_ptr,
   return request_id;
 }
 
-unsigned TcpTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
+unsigned TcpTransportAdapter::signal_async(int peer_rank, uint64_t tag,
+                                           unsigned comm_rid) {
   if (!has_put_path(peer_rank)) return 0;
+
   unsigned request_id = 0;
   RequestSlot* slot = try_acquire_request_slot(&request_id);
   if (!slot) return 0;
+  slot->comm_rid = comm_rid;
   slot->peer_rank = peer_rank;
   slot->kind = RequestSlot::Kind::Signal;
   slot->signal_payload = tag;
@@ -352,11 +357,14 @@ unsigned TcpTransportAdapter::signal_async(int peer_rank, uint64_t tag) {
 }
 
 unsigned TcpTransportAdapter::wait_async(int peer_rank, uint64_t expected_tag,
-                                         std::optional<WaitTarget> target) {
+                                         std::optional<WaitTarget> target,
+                                         unsigned comm_rid) {
   if (!has_wait_path(peer_rank)) return 0;
+
   unsigned request_id = 0;
   RequestSlot* slot = try_acquire_request_slot(&request_id);
   if (!slot) return 0;
+  slot->comm_rid = comm_rid;
   slot->peer_rank = peer_rank;
   if (!target.has_value()) {
     slot->kind = RequestSlot::Kind::SignalWait;
@@ -378,132 +386,8 @@ unsigned TcpTransportAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   return request_id;
 }
 
-bool TcpTransportAdapter::request_failed(unsigned id) {
-  RequestSlot* slot = resolve_request_slot_const(id);
-  if (!slot) return false;
-  return slot->is_failed();
-}
-
-bool TcpTransportAdapter::poll_completion(unsigned request_id) {
-  RequestSlot* slot = resolve_request_slot_const(request_id);
-  if (!slot) return true;
-  return slot->is_completed();
-}
-
-bool TcpTransportAdapter::wait_completion(unsigned request_id) {
-  for (;;) {
-    RequestSlot* slot = resolve_request_slot_const(request_id);
-    if (!slot) return false;
-    if (slot->is_completed()) return true;
-    std::unique_lock<std::mutex> lk(cv_mu_);
-    cv_.wait(lk, [&] {
-      RequestSlot* cur = resolve_request_slot_const(request_id);
-      return stop_.load(std::memory_order_acquire) || cur == nullptr ||
-             cur->is_completed();
-    });
-  }
-}
-
-void TcpTransportAdapter::release_request(unsigned request_id) {
+void TcpTransportAdapter::release(unsigned request_id) {
   release_request_slot(request_id);
-}
-
-TcpTransportAdapter::RequestSlot* TcpTransportAdapter::try_acquire_request_slot(
-    unsigned* out_request_id) {
-  if (out_request_id == nullptr || !request_slots_) return nullptr;
-  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
-    uint32_t idx =
-        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
-        kRequestSlotMask;
-    auto& slot = request_slots_[idx];
-    RequestState expected = RequestState::Free;
-    if (!slot.state.compare_exchange_strong(expected, RequestState::Running,
-                                            std::memory_order_acq_rel,
-                                            std::memory_order_acquire)) {
-      continue;
-    }
-    uint32_t gen = slot.generation.load(std::memory_order_acquire);
-    if (gen == 0) {
-      gen = 1;
-      slot.generation.store(gen, std::memory_order_release);
-    }
-    slot.peer_rank = -1;
-    slot.kind = RequestSlot::Kind::DataPut;
-    slot.host_ptr = nullptr;
-    slot.len = 0;
-    slot.expected_tag = 0;
-    slot.signal_payload = 0;
-    slot.completed.store(false, std::memory_order_release);
-    slot.failed.store(false, std::memory_order_release);
-    *out_request_id = make_request_id(idx, gen);
-    return &slot;
-  }
-  return nullptr;
-}
-
-TcpTransportAdapter::RequestSlot* TcpTransportAdapter::resolve_request_slot(
-    unsigned request_id) {
-  if (request_id == 0 || !request_slots_) return nullptr;
-  uint32_t generation = request_generation(request_id);
-  if (generation == 0) return nullptr;
-  uint32_t idx = request_slot_index(request_id);
-  auto& slot = request_slots_[idx];
-  if (slot.generation.load(std::memory_order_acquire) != generation) {
-    return nullptr;
-  }
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
-    return nullptr;
-  }
-  return &slot;
-}
-
-TcpTransportAdapter::RequestSlot*
-TcpTransportAdapter::resolve_request_slot_const(unsigned request_id) const {
-  if (request_id == 0 || !request_slots_) return nullptr;
-  uint32_t generation = request_generation(request_id);
-  if (generation == 0) return nullptr;
-  uint32_t idx = request_slot_index(request_id);
-  auto const& slot = request_slots_[idx];
-  if (slot.generation.load(std::memory_order_acquire) != generation) {
-    return nullptr;
-  }
-  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
-    return nullptr;
-  }
-  return const_cast<RequestSlot*>(&slot);
-}
-
-void TcpTransportAdapter::release_request_slot(unsigned request_id) {
-  if (request_id == 0 || !request_slots_) return;
-  uint32_t generation = request_generation(request_id);
-  if (generation == 0) return;
-  uint32_t idx = request_slot_index(request_id);
-  auto& slot = request_slots_[idx];
-  if (slot.generation.load(std::memory_order_acquire) != generation) return;
-  auto st = slot.state.load(std::memory_order_acquire);
-  if (st == RequestState::Queued || st == RequestState::Running) return;
-  // Hold slot in a non-Free state while rolling generation to avoid ABA reuse.
-  slot.state.store(RequestState::Running, std::memory_order_release);
-  slot.completed.store(false, std::memory_order_release);
-  slot.failed.store(false, std::memory_order_release);
-  slot.peer_rank = -1;
-  slot.kind = RequestSlot::Kind::DataPut;
-  slot.host_ptr = nullptr;
-  slot.len = 0;
-  slot.expected_tag = 0;
-  slot.signal_payload = 0;
-  uint32_t old_gen = slot.generation.load(std::memory_order_acquire);
-  while (true) {
-    uint32_t next_gen = old_gen + 1;
-    if (next_gen == 0) next_gen = 1;
-    if (slot.generation.compare_exchange_weak(old_gen, next_gen,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_acquire)) {
-      break;
-    }
-  }
-  slot.state.store(RequestState::Free, std::memory_order_release);
-  cv_.notify_all();
 }
 
 bool TcpTransportAdapter::enqueue_request(unsigned request_id, bool is_send) {
@@ -585,6 +469,7 @@ void TcpTransportAdapter::send_worker_loop() {
       }
     }
     slot->mark_completed(ok);
+    publish_completion(slot->comm_rid, !ok);
     cv_.notify_all();
   }
 
@@ -656,6 +541,7 @@ void TcpTransportAdapter::recv_worker_loop() {
       }
     }
     slot->mark_completed(ok);
+    publish_completion(slot->comm_rid, !ok);
     cv_.notify_all();
   }
 

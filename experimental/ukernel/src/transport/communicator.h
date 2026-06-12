@@ -5,6 +5,7 @@
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
 #include "request_tracker.h"
+#include "adapter/transport_adapter.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -170,6 +171,7 @@ class Communicator {
   gpuStream_t host_copy_stream_ = nullptr;
 
   std::unique_ptr<RequestTracker> tracker_;
+  jring_t* completion_ring_ = nullptr;
 
   mutable std::mutex event_pool_mu_;
   std::vector<gpuEvent_t> event_pool_;

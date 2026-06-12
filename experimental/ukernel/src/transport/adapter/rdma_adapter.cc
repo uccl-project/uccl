@@ -578,7 +578,7 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
 unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
                                          uint32_t local_buf_id,
                                          void* remote_ptr,
-                                         uint32_t remote_buf_id, size_t len) {
+                                         uint32_t remote_buf_id, size_t len, unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   RdmaPeer* p = nullptr;
@@ -684,7 +684,7 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   return rid;
 }
 
-unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
+unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag, unsigned comm_rid) {
   if (!has_put_path(rank)) return 0;
 
   RdmaPeer* p = nullptr;
@@ -733,7 +733,7 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag) {
 // ── recv path ────────────────────────────────────────────────────────────────
 
 unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
-                                          std::optional<WaitTarget> target) {
+                                          std::optional<WaitTarget> target, unsigned comm_rid) {
   if (!has_wait_path(rank)) return 0;
 
   unsigned rid = 0;
@@ -759,29 +759,10 @@ unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
 
 // ── completion ──────────────────────────────────────────────────────────────
 
-bool RdmaTransportAdapter::poll_completion(unsigned id) {
-  auto* slot = resolve_const(id);
-  if (!slot) return true;
-  return slot->completed.load(std::memory_order_acquire);
-}
 
-bool RdmaTransportAdapter::wait_completion(unsigned id) {
-  for (int spin = 0; spin < 1000; ++spin) {
-    if (poll_completion(id)) return true;
-  }
-  while (!poll_completion(id)) {
-    std::this_thread::yield();
-  }
-  return true;
-}
 
-bool RdmaTransportAdapter::request_failed(unsigned id) {
-  auto* slot = resolve_const(id);
-  if (!slot) return false;
-  return slot->failed.load(std::memory_order_acquire);
-}
 
-void RdmaTransportAdapter::release_request(unsigned id) { free_slot(id); }
+void RdmaTransportAdapter::release(unsigned id) { free_slot(id); }
 
 // ── memory registration ─────────────────────────────────────────────────────
 

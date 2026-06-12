@@ -351,7 +351,8 @@ bool IpcAdapter::enqueue_request(unsigned id, IpcReqType type) {
 
 unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
                                uint32_t local_buffer_id, void* remote_ptr,
-                               uint32_t remote_buffer_id, size_t len) {
+                               uint32_t remote_buffer_id, size_t len,
+                               unsigned comm_rid) {
   (void)local_buffer_id;
   (void)remote_buffer_id;
   if (!has_put_path(peer_rank)) return 0;
@@ -360,6 +361,7 @@ unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
   unsigned rid = 0;
   IpcRequestSlot* req = try_acquire_request_slot(&rid);
   if (!req) return 0;
+  req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = match_seq;
   req->req_type = IpcReqType::DataPut;
@@ -375,11 +377,13 @@ unsigned IpcAdapter::put_async(int peer_rank, void* local_ptr,
   return rid;
 }
 
-unsigned IpcAdapter::signal_async(int peer_rank, uint64_t tag) {
+unsigned IpcAdapter::signal_async(int peer_rank, uint64_t tag,
+                                  unsigned comm_rid) {
   if (!has_put_path(peer_rank)) return 0;
   unsigned rid = 0;
   IpcRequestSlot* req = try_acquire_request_slot(&rid);
   if (!req) return 0;
+  req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = tag;
   req->req_type = IpcReqType::Signal;
@@ -396,7 +400,8 @@ unsigned IpcAdapter::signal_async(int peer_rank, uint64_t tag) {
 }
 
 unsigned IpcAdapter::wait_async(int peer_rank, uint64_t expected_tag,
-                                std::optional<WaitTarget> target) {
+                                std::optional<WaitTarget> target,
+                                unsigned comm_rid) {
   if (!has_wait_path(peer_rank)) return 0;
 
   uint64_t match_seq =
@@ -404,6 +409,7 @@ unsigned IpcAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   unsigned rid = 0;
   IpcRequestSlot* req = try_acquire_request_slot(&rid);
   if (!req) return 0;
+  req->comm_rid = comm_rid;
   req->peer_rank = peer_rank;
   req->match_seq = match_seq;
   req->req_type =
@@ -419,120 +425,7 @@ unsigned IpcAdapter::wait_async(int peer_rank, uint64_t expected_tag,
   return rid;
 }
 
-bool IpcAdapter::poll_completion(unsigned id) {
-  auto* req = resolve_request_slot_const(id);
-  return !req || req->is_finished();
-}
-
-bool IpcAdapter::wait_completion(unsigned id) {
-  auto* req = resolve_request_slot_const(id);
-  if (!req) return true;
-  while (!req->is_finished()) std::this_thread::yield();
-  return true;
-}
-
-bool IpcAdapter::request_failed(unsigned id) {
-  auto* req = resolve_request_slot_const(id);
-  return req && req->has_failed();
-}
-
-void IpcAdapter::release_request(unsigned id) { release_request_slot(id); }
-
-// ── send_one ───────────────────────────────────────────────────────────────
-// All request types (Signal, DataPut) publish completion via the shared-
-// memory completion channel.  DataPut additionally performs the GPU copy.
-
-bool IpcAdapter::send_one(IpcRequestSlot* creq) {
-  if (!creq) return false;
-  int to_rank = creq->peer_rank;
-  creq->mark_running();
-
-  // DataPut: GPU peer copy.
-  if (creq->req_type == IpcReqType::DataPut) {
-    void* src = creq->local_ptr;
-    void* dst = creq->remote_ptr;
-    if (dst == nullptr) {
-      std::cerr << "[ERROR] IPC put_async required remote_ptr, req " << creq->id
-                << std::endl;
-      return false;
-    }
-
-    int remote_gpu = comm_->peer_gpu_idx(to_rank);
-    if (remote_gpu < 0) remote_gpu = local_gpu_idx_;
-
-    size_t n_streams =
-        std::min(ipc_streams_.size(),
-                 creq->size_bytes < kIpcSizePerEngine
-                     ? size_t{1}
-                     : std::max<size_t>(size_t{1},
-                                        creq->size_bytes / kIpcSizePerEngine));
-    size_t chunk = creq->size_bytes / n_streams;
-    for (size_t i = 0; i < n_streams; ++i) {
-      void* cs =
-          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + i * chunk);
-      void* cd =
-          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + i * chunk);
-      size_t sz = (i == n_streams - 1) ? creq->size_bytes - i * chunk : chunk;
-      if (remote_gpu == local_gpu_idx_) {
-        GPU_RT_CHECK(gpuMemcpyAsync(cd, cs, sz, gpuMemcpyDeviceToDevice,
-                                    ipc_streams_[i]));
-      } else {
-        GPU_RT_CHECK(gpuMemcpyPeerAsync(cd, remote_gpu, cs, local_gpu_idx_, sz,
-                                        ipc_streams_[i]));
-      }
-      GPU_RT_CHECK(gpuEventRecord(ipc_events_[i], ipc_streams_[i]));
-    }
-    for (size_t i = 0; i < n_streams; ++i)
-      GPU_RT_CHECK(gpuEventSynchronize(ipc_events_[i]));
-  }
-
-  // Publish completion to the peer's data-completion SHM counter.
-  {
-    int src = comm_->rank();
-    int dst = to_rank;
-    size_t dir = (src < dst) ? 0u : 1u;
-    auto* remote = peer_completions_[static_cast<size_t>(to_rank)].remote;
-    if (remote) {
-      remote->last_completed[dir].store(creq->match_seq,
-                                        std::memory_order_release);
-    }
-  }
-  return true;
-}
-
-// ── recv_one ───────────────────────────────────────────────────────────────
-// SignalWait: spin on the shared-memory completion counter until the sender
-// publishes the expected match_seq.
-
-bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
-  if (!creq) return false;
-  int from_rank = creq->peer_rank;
-  creq->mark_running();
-
-  int src = from_rank;
-  int dst = comm_->rank();
-  size_t dir = (src < dst) ? 0u : 1u;
-  auto* local = peer_completions_[static_cast<size_t>(from_rank)].local;
-
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(kIpcControlTimeoutMs);
-
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (local) {
-      uint64_t seq = local->last_completed[dir].load(std::memory_order_acquire);
-      if (seq >= creq->match_seq) return true;
-    }
-    if (std::chrono::steady_clock::now() >= deadline) {
-      std::cerr << "[ERROR] IPC recv timed out, req " << creq->id
-                << " match_seq " << creq->match_seq << std::endl;
-      return false;
-    }
-    std::this_thread::yield();
-  }
-  return false;
-}
-
-// ── Worker threads ─────────────────────────────────────────────────────────
+void IpcAdapter::release(unsigned id) { release_request_slot(id); }
 
 void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
   if (!req) return;
@@ -540,6 +433,7 @@ void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
     req->mark_failed();
   else
     req->complete_one();
+  publish_completion(req->comm_rid, !ok);
 }
 
 void IpcAdapter::send_thread_func() {

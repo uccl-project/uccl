@@ -46,15 +46,14 @@ class IpcAdapter final : public TransportAdapter {
 
   unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
                      void* remote_ptr, uint32_t remote_buffer_id,
-                     size_t len) override;
-  unsigned signal_async(int peer_rank, uint64_t tag) override;
+                     size_t len, unsigned comm_rid) override;
+  unsigned signal_async(int peer_rank, uint64_t tag,
+                        unsigned comm_rid) override;
   unsigned wait_async(int peer_rank, uint64_t expected_tag,
-                      std::optional<WaitTarget> target = std::nullopt) override;
+                      std::optional<WaitTarget> target,
+                      unsigned comm_rid) override;
 
-  bool poll_completion(unsigned id) override;
-  bool wait_completion(unsigned id) override;
-  bool request_failed(unsigned id) override;
-  void release_request(unsigned id) override;
+  void release(unsigned id) override;
 
  private:
   bool connect_to(int rank);
@@ -78,6 +77,7 @@ class IpcAdapter final : public TransportAdapter {
     std::atomic<RequestState> state{RequestState::Free};
     std::atomic<uint32_t> generation{1};
     unsigned id = 0;
+    unsigned comm_rid = 0;
     int peer_rank = -1;
     uint64_t match_seq = 0;
     IpcReqType req_type = IpcReqType::DataPut;

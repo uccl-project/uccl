@@ -5,9 +5,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
+
+extern "C" {
+#include "../util/jring.h"
+}
 
 namespace UKernel {
 namespace Transport {
@@ -60,6 +65,12 @@ struct PeerConnectSpec {
       detail{};
 };
 
+// Pushed to completion ring by adapter worker threads on operation completion.
+struct CompletionEvent {
+  unsigned rid;       // Communicator-level request ID
+  unsigned failed;    // 0 = success, 1 = failed
+};
+
 class TransportAdapter {
  public:
   struct WaitTarget {
@@ -76,22 +87,31 @@ class TransportAdapter {
   virtual bool has_put_path(int peer_rank) const = 0;
   virtual bool has_wait_path(int peer_rank) const = 0;
 
-  // Async data path.
-  // local_ptr / local_buffer_id: source data (may be host bounce buffer).
-  // remote_ptr / remote_buffer_id: resolved destination on peer, or nullptr/0
-  //   (for send/recv model where peer posts its own recv buffer).
+  // Async submission. comm_rid is pushed to completion_ring on completion.
   virtual unsigned put_async(int peer_rank, void* local_ptr,
                              uint32_t local_buffer_id, void* remote_ptr,
-                             uint32_t remote_buffer_id, size_t len) = 0;
-  virtual unsigned signal_async(int peer_rank, uint64_t tag) = 0;
-  virtual unsigned wait_async(
-      int peer_rank, uint64_t expected_tag,
-      std::optional<WaitTarget> target = std::nullopt) = 0;
+                             uint32_t remote_buffer_id, size_t len,
+                             unsigned comm_rid) = 0;
+  virtual unsigned signal_async(int peer_rank, uint64_t tag,
+                                unsigned comm_rid) = 0;
+  virtual unsigned wait_async(int peer_rank, uint64_t expected_tag,
+                              std::optional<WaitTarget> target,
+                              unsigned comm_rid) = 0;
 
-  virtual bool poll_completion(unsigned id) = 0;
-  virtual bool wait_completion(unsigned id) = 0;
-  virtual bool request_failed(unsigned id) = 0;
-  virtual void release_request(unsigned id) = 0;
+  // Resource release (adapter-internal slot ID).
+  virtual void release(unsigned id) = 0;
+
+  void set_completion_ring(jring_t* ring) { completion_ring_ = ring; }
+
+ protected:
+  jring_t* completion_ring_ = nullptr;
+
+  void publish_completion(unsigned rid, bool failed) {
+    if (!completion_ring_) return;
+    CompletionEvent ev{rid, failed ? 1u : 0u};
+    while (jring_mp_enqueue_bulk(completion_ring_, &ev, 1, nullptr) != 1)
+      std::this_thread::yield();
+  }
 };
 
 }  // namespace Transport
