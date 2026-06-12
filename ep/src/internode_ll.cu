@@ -49,10 +49,10 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
 
   SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
 
-#define CLEAN_LL_LAUNCH_CASE(ranks)                                          \
-  LAUNCH_KERNEL(&cfg, (clean_low_latency_buffer<kNumThreads, ranks>),        \
-                clean_0, num_clean_int_0, clean_1, num_clean_int_1,          \
-                barrier_signal_ptrs, rank);                                  \
+#define CLEAN_LL_LAUNCH_CASE(ranks)                                            \
+  LAUNCH_KERNEL(&cfg, (clean_low_latency_buffer<kNumThreads, ranks>), clean_0, \
+                num_clean_int_0, clean_1, num_clean_int_1,                     \
+                barrier_signal_ptrs, rank);                                    \
   break
   SWITCH_RANKS(CLEAN_LL_LAUNCH_CASE);
 #undef CLEAN_LL_LAUNCH_CASE

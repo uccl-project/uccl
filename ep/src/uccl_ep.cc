@@ -1391,8 +1391,7 @@ class Buffer {
       int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
     EP_HOST_ASSERT(topk_rows == 0 ||
-                   (x_ptr != 0 && topk_idx_ptr != 0 &&
-                    topk_weights_ptr != 0));
+                   (x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0));
     EP_HOST_ASSERT(topk_rows == 0 ||
                    (src_info_ptr != 0 && layout_range_ptr != 0));
     EP_HOST_ASSERT(topk_rows == 0 || out_ptr != 0);
