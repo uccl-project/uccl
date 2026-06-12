@@ -172,9 +172,14 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
-// Function pointer type for DMA-BUF handle export (loaded via dlsym)
+// Function pointer type for DMA-BUF handle export (loaded via dlsym).
+// gpuMemRangeHandleType maps to hipMemRangeHandleType, which only exists on
+// newer ROCm; this typedef (and its only callers in rdma.cpp) are DMA-BUF-only,
+// so gate it on USE_DMABUF to keep non-DMA-BUF builds portable to older ROCm.
+#ifdef USE_DMABUF
 typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
     void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
+#endif
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \
