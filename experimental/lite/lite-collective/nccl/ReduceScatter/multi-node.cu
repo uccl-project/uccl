@@ -381,9 +381,14 @@ int configuredIpcEventSyncMode() {
   return value;
 }
 
-bool useIpcEventSyncFor(size_t bytesPerRank) {
+bool useIpcEventSyncForLayout(RsContext const& ctx, size_t bytesPerRank,
+                              size_t messageBytes) {
   int mode = configuredIpcEventSyncMode();
   if (mode >= 0) return mode != 0;
+  if (ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
+      messageBytes == 4 * 1024 * 1024) {
+    return false;
+  }
   (void)bytesPerRank;
   return true;
 }
@@ -391,7 +396,8 @@ bool useIpcEventSyncFor(size_t bytesPerRank) {
 bool useTwoNodeTwoGpuIpcEventSyncForPath(bool pipelined, size_t fullBytes) {
   int mode = configuredIpcEventSyncMode();
   if (mode >= 0) return mode != 0;
-  return pipelined && fullBytes >= 8 * 1024 * 1024;
+  return pipelined &&
+         (fullBytes <= 2 * 1024 * 1024 || fullBytes >= 8 * 1024 * 1024);
 }
 
 int configuredAsyncFinalAddMode() {
@@ -714,6 +720,8 @@ bool useEagerRdmaPost() {
 bool useParallelSplitFinalReduceFor(RsContext const& ctx,
                                     size_t messageBytes) {
   return useParallelSplitFinalReduce() ||
+         (ctx.worldSize == 4 && ctx.nRanksPerNode == 2 &&
+          messageBytes <= 2 * 1024 * 1024) ||
          (ctx.worldSize == 8 && ctx.nRanksPerNode == 4 &&
           messageBytes >= 8 * 1024 * 1024);
 }
@@ -926,7 +934,8 @@ __global__ void packPartnerRowsFloatKernel(
 __global__ void reduceNumaPairFromInputFloat4Kernel(
     float const* send, char const* partnerRecvRows, char* ownPartialRows,
     char* crossSendRows, size_t nVec, size_t fullVecs, size_t elemOffsetVec,
-    size_t rowBytes, int localRank, int localBase, int remoteBase) {
+    size_t rowBytes, bool partnerRowsReversed, int localRank, int localBase,
+    int remoteBase) {
   size_t vecIdx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (vecIdx >= nVec) return;
 
@@ -938,6 +947,10 @@ __global__ void reduceNumaPairFromInputFloat4Kernel(
   auto* own4 = reinterpret_cast<int4*>(ownPartialRows);
   auto* cross4 = reinterpret_cast<int4*>(crossSendRows);
   size_t idx = elemOffsetVec + vecIdx;
+  size_t partner0 = (partnerRowsReversed ? rowVecs : 0) + vecIdx;
+  size_t partner1 = (partnerRowsReversed ? 0 : rowVecs) + vecIdx;
+  size_t partner2 = (partnerRowsReversed ? 3 * rowVecs : 2 * rowVecs) + vecIdx;
+  size_t partner3 = (partnerRowsReversed ? 2 * rowVecs : 3 * rowVecs) + vecIdx;
   int4 self0 =
       send4[(static_cast<size_t>(localBase + localRank) * fullVecs) + idx];
   int4 self1 =
@@ -946,19 +959,19 @@ __global__ void reduceNumaPairFromInputFloat4Kernel(
       send4[(static_cast<size_t>(localBase + crossAssigned) * fullVecs) + idx];
   int4 self3 =
       send4[(static_cast<size_t>(remoteBase + crossAssigned) * fullVecs) + idx];
-  own4[vecIdx] = addFloat4Vec(self0, partner4[vecIdx]);
-  own4[rowVecs + vecIdx] =
-      addFloat4Vec(self1, partner4[rowVecs + vecIdx]);
+  own4[vecIdx] = addFloat4Vec(self0, partner4[partner0]);
+  own4[rowVecs + vecIdx] = addFloat4Vec(self1, partner4[partner1]);
   cross4[vecIdx] =
-      addFloat4Vec(self2, partner4[2 * rowVecs + vecIdx]);
+      addFloat4Vec(self2, partner4[partner2]);
   cross4[rowVecs + vecIdx] =
-      addFloat4Vec(self3, partner4[3 * rowVecs + vecIdx]);
+      addFloat4Vec(self3, partner4[partner3]);
 }
 
 __global__ void reduceNumaPairFromInputFloatKernel(
     float const* send, char const* partnerRecvRows, char* ownPartialRows,
     char* crossSendRows, size_t count, size_t fullElems, size_t elemOffset,
-    size_t rowBytes, int localRank, int localBase, int remoteBase) {
+    size_t rowBytes, bool partnerRowsReversed, int localRank, int localBase,
+    int remoteBase) {
   size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= count) return;
 
@@ -969,18 +982,24 @@ __global__ void reduceNumaPairFromInputFloatKernel(
   auto* own = reinterpret_cast<float*>(ownPartialRows);
   auto* cross = reinterpret_cast<float*>(crossSendRows);
   size_t elem = elemOffset + idx;
+  size_t partner0 = (partnerRowsReversed ? rowStride : 0) + idx;
+  size_t partner1 = (partnerRowsReversed ? 0 : rowStride) + idx;
+  size_t partner2 =
+      (partnerRowsReversed ? 3 * rowStride : 2 * rowStride) + idx;
+  size_t partner3 =
+      (partnerRowsReversed ? 2 * rowStride : 3 * rowStride) + idx;
   own[idx] =
       send[(static_cast<size_t>(localBase + localRank) * fullElems) + elem] +
-      partner[idx];
+      partner[partner0];
   own[rowStride + idx] =
       send[(static_cast<size_t>(remoteBase + localRank) * fullElems) + elem] +
-      partner[rowStride + idx];
+      partner[partner1];
   cross[idx] =
       send[(static_cast<size_t>(localBase + crossAssigned) * fullElems) + elem] +
-      partner[2 * rowStride + idx];
+      partner[partner2];
   cross[rowStride + idx] =
       send[(static_cast<size_t>(remoteBase + crossAssigned) * fullElems) + elem] +
-      partner[3 * rowStride + idx];
+      partner[partner3];
 }
 
 __global__ void reduceNumaPairFromInputWaitFloat4Kernel(
@@ -988,7 +1007,7 @@ __global__ void reduceNumaPairFromInputWaitFloat4Kernel(
     unsigned long long epoch, float const* send, char const* partnerRecvRows,
     char* ownPartialRows, char* crossSendRows, size_t nVec, size_t fullVecs,
     size_t elemOffsetVec, size_t rowBytes, int localRank, int localBase,
-    int remoteBase) {
+    int remoteBase, bool partnerRowsReversed) {
   waitForRsFlag(ctrl, readyOffset, readyLocalRank, epoch);
   size_t vecIdx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (vecIdx >= nVec) return;
@@ -1001,6 +1020,10 @@ __global__ void reduceNumaPairFromInputWaitFloat4Kernel(
   auto* own4 = reinterpret_cast<int4*>(ownPartialRows);
   auto* cross4 = reinterpret_cast<int4*>(crossSendRows);
   size_t idx = elemOffsetVec + vecIdx;
+  size_t partner0 = (partnerRowsReversed ? rowVecs : 0) + vecIdx;
+  size_t partner1 = (partnerRowsReversed ? 0 : rowVecs) + vecIdx;
+  size_t partner2 = (partnerRowsReversed ? 3 * rowVecs : 2 * rowVecs) + vecIdx;
+  size_t partner3 = (partnerRowsReversed ? 2 * rowVecs : 3 * rowVecs) + vecIdx;
   int4 self0 =
       send4[(static_cast<size_t>(localBase + localRank) * fullVecs) + idx];
   int4 self1 =
@@ -1009,13 +1032,12 @@ __global__ void reduceNumaPairFromInputWaitFloat4Kernel(
       send4[(static_cast<size_t>(localBase + crossAssigned) * fullVecs) + idx];
   int4 self3 =
       send4[(static_cast<size_t>(remoteBase + crossAssigned) * fullVecs) + idx];
-  own4[vecIdx] = addFloat4Vec(self0, partner4[vecIdx]);
-  own4[rowVecs + vecIdx] =
-      addFloat4Vec(self1, partner4[rowVecs + vecIdx]);
+  own4[vecIdx] = addFloat4Vec(self0, partner4[partner0]);
+  own4[rowVecs + vecIdx] = addFloat4Vec(self1, partner4[partner1]);
   cross4[vecIdx] =
-      addFloat4Vec(self2, partner4[2 * rowVecs + vecIdx]);
+      addFloat4Vec(self2, partner4[partner2]);
   cross4[rowVecs + vecIdx] =
-      addFloat4Vec(self3, partner4[3 * rowVecs + vecIdx]);
+      addFloat4Vec(self3, partner4[partner3]);
 }
 
 __global__ void reduceNumaPairFromInputWaitFloatKernel(
@@ -1023,7 +1045,7 @@ __global__ void reduceNumaPairFromInputWaitFloatKernel(
     unsigned long long epoch, float const* send, char const* partnerRecvRows,
     char* ownPartialRows, char* crossSendRows, size_t count, size_t fullElems,
     size_t elemOffset, size_t rowBytes, int localRank, int localBase,
-    int remoteBase) {
+    int remoteBase, bool partnerRowsReversed) {
   waitForRsFlag(ctrl, readyOffset, readyLocalRank, epoch);
   size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= count) return;
@@ -1035,18 +1057,24 @@ __global__ void reduceNumaPairFromInputWaitFloatKernel(
   auto* own = reinterpret_cast<float*>(ownPartialRows);
   auto* cross = reinterpret_cast<float*>(crossSendRows);
   size_t elem = elemOffset + idx;
+  size_t partner0 = (partnerRowsReversed ? rowStride : 0) + idx;
+  size_t partner1 = (partnerRowsReversed ? 0 : rowStride) + idx;
+  size_t partner2 =
+      (partnerRowsReversed ? 3 * rowStride : 2 * rowStride) + idx;
+  size_t partner3 =
+      (partnerRowsReversed ? 2 * rowStride : 3 * rowStride) + idx;
   own[idx] =
       send[(static_cast<size_t>(localBase + localRank) * fullElems) + elem] +
-      partner[idx];
+      partner[partner0];
   own[rowStride + idx] =
       send[(static_cast<size_t>(remoteBase + localRank) * fullElems) + elem] +
-      partner[rowStride + idx];
+      partner[partner1];
   cross[idx] =
       send[(static_cast<size_t>(localBase + crossAssigned) * fullElems) + elem] +
-      partner[2 * rowStride + idx];
+      partner[partner2];
   cross[rowStride + idx] =
       send[(static_cast<size_t>(remoteBase + crossAssigned) * fullElems) + elem] +
-      partner[3 * rowStride + idx];
+      partner[partner3];
 }
 
 __global__ void finalNumaPairReduceFloat4Kernel(
@@ -1720,7 +1748,9 @@ ncclResult_t copyPartnerRowsDirect(void const* sendbuff, char* partnerRecvRows,
                                    size_t elemOffset, size_t rowBytes,
                                    int localRank, int localBase,
                                    int remoteBase, bool use2D,
-                                   cudaStream_t stream) {
+                                   cudaStream_t stream,
+                                   bool* partnerRowsReversed) {
+  if (partnerRowsReversed != nullptr) *partnerRowsReversed = false;
   auto const* sendBytes = static_cast<char const*>(sendbuff);
   int partnerLocal = localRank ^ 1;
   int crossPairBase = localRank < 2 ? 2 : 0;
@@ -1744,6 +1774,20 @@ ncclResult_t copyPartnerRowsDirect(void const* sendbuff, char* partnerRecvRows,
         srcPitch, copyBytes, 2, cudaMemcpyDeviceToDevice, stream));
     return ncclSuccess;
   }
+  if (use2D && localBase > remoteBase) {
+    size_t srcPitch =
+        static_cast<size_t>(kMaxRanksPerNode / 2) * fullRowBytes;
+    MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
+        partnerRecvRows, rowBytes,
+        sendBytes + static_cast<size_t>(rows[1]) * fullRowBytes + rowOffset,
+        srcPitch, copyBytes, 2, cudaMemcpyDeviceToDevice, stream));
+    MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
+        partnerRecvRows + static_cast<size_t>(2) * rowBytes, rowBytes,
+        sendBytes + static_cast<size_t>(rows[3]) * fullRowBytes + rowOffset,
+        srcPitch, copyBytes, 2, cudaMemcpyDeviceToDevice, stream));
+    if (partnerRowsReversed != nullptr) *partnerRowsReversed = true;
+    return ncclSuccess;
+  }
   for (int i = 0; i < 4; ++i) {
     MSCCLPP_CUDATHROW(cudaMemcpyAsync(
         partnerRecvRows + static_cast<size_t>(i) * rowBytes,
@@ -1756,8 +1800,8 @@ ncclResult_t copyPartnerRowsDirect(void const* sendbuff, char* partnerRecvRows,
 ncclResult_t launchPairReduceFromInput(
     void const* sendbuff, void* partnerRecvRows, void* ownPartialRows,
     void* crossSendRows, size_t count, size_t fullElems, size_t elemOffset,
-    size_t rowBytes, int localRank, int localBase, int remoteBase,
-    cudaStream_t stream) {
+    size_t rowBytes, bool partnerRowsReversed, int localRank, int localBase,
+    int remoteBase, cudaStream_t stream) {
   constexpr int threads = 256;
   if (count % 4 == 0 && fullElems % 4 == 0 && elemOffset % 4 == 0 &&
       rowBytes % sizeof(int4) == 0) {
@@ -1768,8 +1812,8 @@ ncclResult_t launchPairReduceFromInput(
         static_cast<float const*>(sendbuff),
         static_cast<char const*>(partnerRecvRows),
         static_cast<char*>(ownPartialRows), static_cast<char*>(crossSendRows),
-        nVec, fullElems / 4, elemOffset / 4, rowBytes, localRank, localBase,
-        remoteBase);
+        nVec, fullElems / 4, elemOffset / 4, rowBytes, partnerRowsReversed,
+        localRank, localBase, remoteBase);
     return cudaResult(cudaGetLastError(),
                       "ReduceScatter input pair-reduce vector kernel");
   }
@@ -1779,7 +1823,8 @@ ncclResult_t launchPairReduceFromInput(
       static_cast<float const*>(sendbuff),
       static_cast<char const*>(partnerRecvRows),
       static_cast<char*>(ownPartialRows), static_cast<char*>(crossSendRows),
-      count, fullElems, elemOffset, rowBytes, localRank, localBase, remoteBase);
+      count, fullElems, elemOffset, rowBytes, partnerRowsReversed, localRank,
+      localBase, remoteBase);
   return cudaResult(cudaGetLastError(),
                     "ReduceScatter input pair-reduce kernel");
 }
@@ -1822,8 +1867,8 @@ ncclResult_t launchPairReduceFromInputWait(
     RsContext& ctx, size_t readyOffset, int readyLocalRank, uint64_t epoch,
     void const* sendbuff, void* partnerRecvRows, void* ownPartialRows,
     void* crossSendRows, size_t count, size_t fullElems, size_t elemOffset,
-    size_t rowBytes, int localRank, int localBase, int remoteBase,
-    cudaStream_t stream) {
+    size_t rowBytes, bool partnerRowsReversed, int localRank, int localBase,
+    int remoteBase, cudaStream_t stream) {
   if (ctx.ctrlDeviceSlab == nullptr) return ncclInvalidUsage;
   constexpr int threads = 256;
   if (count % 4 == 0 && fullElems % 4 == 0 && elemOffset % 4 == 0 &&
@@ -1838,7 +1883,7 @@ ncclResult_t launchPairReduceFromInputWait(
         static_cast<char const*>(partnerRecvRows),
         static_cast<char*>(ownPartialRows), static_cast<char*>(crossSendRows),
         nVec, fullElems / 4, elemOffset / 4, rowBytes, localRank, localBase,
-        remoteBase);
+        remoteBase, partnerRowsReversed);
     return cudaResult(cudaGetLastError(),
                       "ReduceScatter device-wait pair-reduce vector kernel");
   }
@@ -1850,7 +1895,8 @@ ncclResult_t launchPairReduceFromInputWait(
       static_cast<float const*>(sendbuff),
       static_cast<char const*>(partnerRecvRows),
       static_cast<char*>(ownPartialRows), static_cast<char*>(crossSendRows),
-      count, fullElems, elemOffset, rowBytes, localRank, localBase, remoteBase);
+      count, fullElems, elemOffset, rowBytes, localRank, localBase, remoteBase,
+      partnerRowsReversed);
   return cudaResult(cudaGetLastError(),
                     "ReduceScatter device-wait pair-reduce kernel");
 }
@@ -3763,8 +3809,13 @@ ncclResult_t scheduleChunkLocal(RsContext& ctx, void const* sendbuff,
       !useDirectTargetReduce() && ctx.localDeviceFlags != nullptr &&
       ctx.remoteDeviceFlagPtrs.size() ==
           static_cast<size_t>(ctx.nRanksPerNode - 1);
+  size_t bytesPerRankForPolicy = fullElems * sizeof(float);
+  size_t messageBytesForPolicy =
+      bytesPerRankForPolicy * static_cast<size_t>(nRanks);
   bool useIpcEvents =
-      !ipcDeviceFlagSync && useIpcEventSyncFor(fullElems * sizeof(float));
+      !ipcDeviceFlagSync &&
+      useIpcEventSyncForLayout(ctx, bytesPerRankForPolicy,
+                               messageBytesForPolicy);
   if (useIpcEvents) {
     ensureLocalScratchEvents(ctx, bootstrapComm, ctx.rank, nRanks,
                              ctx.nRanksPerNode);
@@ -3853,15 +3904,14 @@ ncclResult_t scheduleChunkLocal(RsContext& ctx, void const* sendbuff,
   int partnerLocal = ctx.localRank ^ 1;
   int partnerPeerIdx = localPeerIndex(ctx.localRank, partnerLocal);
   size_t partnerRecvOffset = slotBase + static_cast<size_t>(8) * rowBytes;
-  size_t bytesPerRankForPolicy = fullElems * sizeof(float);
-  size_t messageBytesForPolicy =
-      bytesPerRankForPolicy * static_cast<size_t>(nRanks);
   bool directPartnerCopy = useDirectPartnerCopyFor(messageBytesForPolicy);
+  bool partnerRowsReversed = false;
   if (directPartnerCopy) {
     result = copyPartnerRowsDirect(
         sendbuff, ctx.remoteScratchPtrs[partnerPeerIdx] + partnerRecvOffset,
         chunkElems, fullElems, elemOffset, rowBytes, ctx.localRank, localBase,
-        remoteBase, useDirectPartnerCopy2DFor(messageBytesForPolicy), stream);
+        remoteBase, useDirectPartnerCopy2DFor(messageBytesForPolicy), stream,
+        &partnerRowsReversed);
     if (result != ncclSuccess) return result;
   } else {
     result = launchPackPartnerRows(
@@ -3905,19 +3955,19 @@ ncclResult_t scheduleChunkLocal(RsContext& ctx, void const* sendbuff,
     if (result != ncclSuccess) return result;
     result = launchPairReduceFromInput(
         sendbuff, partnerRecvRows, ownPartialRows, crossOutputRows, chunkElems,
-        fullElems, elemOffset, rowBytes, ctx.localRank, localBase, remoteBase,
-        stream);
+        fullElems, elemOffset, rowBytes, partnerRowsReversed, ctx.localRank,
+        localBase, remoteBase, stream);
   } else if (deviceFlagSync) {
     result = launchPairReduceFromInputWait(
         ctx, offsetof(RsControl, localCopyReady), partnerLocal, epoch,
         sendbuff, partnerRecvRows, ownPartialRows, crossOutputRows, chunkElems,
-        fullElems, elemOffset, rowBytes, ctx.localRank, localBase, remoteBase,
-        stream);
+        fullElems, elemOffset, rowBytes, partnerRowsReversed, ctx.localRank,
+        localBase, remoteBase, stream);
   } else {
     result = launchPairReduceFromInput(
         sendbuff, partnerRecvRows, ownPartialRows, crossOutputRows, chunkElems,
-        fullElems, elemOffset, rowBytes, ctx.localRank, localBase, remoteBase,
-        stream);
+        fullElems, elemOffset, rowBytes, partnerRowsReversed, ctx.localRank,
+        localBase, remoteBase, stream);
   }
   if (result != ncclSuccess) return result;
 
