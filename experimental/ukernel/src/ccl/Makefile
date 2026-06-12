@@ -78,7 +78,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_perf_async
+INTEGRATION_TEST_BINS := test_perf_async test_perf_p2p_copy
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -112,6 +112,14 @@ test_perf_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/devi
 		$(DEVICE_OBJ) test/integration/test_perf_async.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
+
+test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
@@ -164,4 +172,5 @@ clean:
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
 	test/unit/test_modules.d test/unit/test_async.d \
-	test/integration/test_perf_async.d
+	test/integration/test_perf_async.d \
+	test/integration/test_perf_p2p_copy.d

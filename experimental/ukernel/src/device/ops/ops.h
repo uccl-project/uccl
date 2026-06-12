@@ -15,6 +15,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
+  // ── TMA path for small messages (hardware async copy, up to 4KB) ──
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
     if (tid == 0) {
       TmaSemaphore sem;
@@ -24,16 +25,28 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
       tma_store<T>(dst, smem_buf, bytes);
     }
     __syncthreads();
-  } else {
-    size_t chunk = (count + nthread - 1) / nthread;
-    size_t start = tid * chunk;
-    if (start >= count) {
-      return;
-    }
-    size_t end = (start + chunk < count) ? (start + chunk) : count;
-    for (size_t i = start; i < end; ++i) {
-      static_cast<T*>(dst)[i] = static_cast<const T*>(src)[i];
-    }
+    return;
+  }
+
+  // ── Vectorized 128-bit copy with grid-stride loop ──
+  constexpr int VEC_BYTES = 16;
+  constexpr int NELTS_PER_VEC = VEC_BYTES / (int)sizeof(T);
+  size_t nvec = count / NELTS_PER_VEC;
+
+  using Vec = uint4;
+  Vec const* src_v = reinterpret_cast<Vec const*>(src);
+  Vec*       dst_v = reinterpret_cast<Vec*>(dst);
+
+  for (size_t vi = tid; vi < nvec; vi += nthread)
+    dst_v[vi] = src_v[vi];  // 128-bit load + store
+
+  // Scalar tail
+  if constexpr (NELTS_PER_VEC > 1) {
+    size_t base = nvec * NELTS_PER_VEC;
+    T*       dst_t = static_cast<T*>(dst);
+    T const* src_t = static_cast<T const*>(src);
+    for (size_t i = base + tid; i < count; i += nthread)
+      dst_t[i] = src_t[i];
   }
 }
 

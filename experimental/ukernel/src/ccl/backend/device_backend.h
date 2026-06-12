@@ -3,6 +3,7 @@
 #include "backend.h"
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace UKernel {
@@ -13,8 +14,9 @@ namespace CCL {
 
 struct DeviceBackendConfig {
   uint32_t task_capacity = 4096;
-  uint32_t max_fifos = 8;
+  uint32_t max_fifos = 2;
   uint32_t threads_per_block = 256;
+  uint32_t blocks_per_worker = 1;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
   uint32_t bytes_per_block = 0;   // 0=auto, >0=override
@@ -58,6 +60,7 @@ class DeviceBackend final : public BatchBackend {
     uint32_t cmd_idx;
   };
   std::vector<CmdRec> pending_;  // indexed by internal seq
+  std::mutex pending_mu_;
 
   std::vector<GpuSignalPeer> gpu_signal_bufs_;
 

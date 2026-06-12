@@ -44,7 +44,7 @@ void DeviceBackend::ensure_runtime() {
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
   // Pre-create all workers
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
-    worker_pool_->createWorker(i, 1);
+    worker_pool_->createWorker(i, cfg_.blocks_per_worker);
     worker_pool_->waitWorker(i);
   }
 }
@@ -60,7 +60,7 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
   if (!inited_) return 0;
 
   size_t accepted = 0;
-  while (accepted < n && pending_.size() < capacity()) {
+  while (accepted < n) {
     Cmd const& c = cmds[accepted];
 
     Device::TaskArgs args{};
@@ -92,27 +92,40 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
       default: ++accepted; continue;
     }
 
-    uint32_t cmd_idx = cmd_next_++;
+    // Reserve slot + fid under lock (cheap), heavy ops outside
+    uint32_t cmd_idx;
+    uint32_t fid;
+    {
+      std::lock_guard<std::mutex> lk(pending_mu_);
+      if (pending_.size() >= capacity()) break;
+      cmd_idx = cmd_next_++;
+      fid = next_fifo_ % cfg_.max_fifos;
+      next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
+    }
+
     auto task = Device::TaskManager::instance().create_task(
         args, tt, Device::DataType::Fp32, 0);
 
-    uint32_t fid = next_fifo_ % cfg_.max_fifos;
-    next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
-
     uint64_t tid = worker_pool_->enqueue(task, fid);
     if (tid == Device::WorkerPool::kInvalidTaskId) {
+      std::lock_guard<std::mutex> lk(pending_mu_);
       --cmd_next_;
       break;
     }
 
-    if (out_indices) out_indices[accepted] = cmd_idx;
-    pending_.push_back({fid, tid, task.args_index(), cmd_idx});
+    // Commit to pending_ under lock
+    {
+      std::lock_guard<std::mutex> lk(pending_mu_);
+      if (out_indices) out_indices[accepted] = cmd_idx;
+      pending_.push_back({fid, tid, task.args_index(), cmd_idx});
+    }
     ++accepted;
   }
   return accepted;
 }
 
 size_t DeviceBackend::drain(uint32_t* completed, size_t max) {
+  std::lock_guard<std::mutex> lk(pending_mu_);
   size_t count = 0;
   for (size_t i = 0; i < pending_.size() && count < max; ) {
     auto& rec = pending_[i];

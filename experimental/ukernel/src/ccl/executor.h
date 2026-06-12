@@ -59,7 +59,7 @@ struct SprayExecutorConfig {
   int rank;
   int world_size;
   size_t device_task_capacity = 256;
-  size_t max_device_fifos = 8;
+  size_t max_device_fifos = 2;
   int threads_per_block = 64;
   size_t fifo_capacity = 256;
   size_t smem_size = 48 * 1024;
