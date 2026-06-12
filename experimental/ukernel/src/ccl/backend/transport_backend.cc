@@ -2,6 +2,7 @@
 #include "../../../include/transport.h"
 #include <cstdio>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace UKernel {
 namespace CCL {
@@ -30,59 +31,49 @@ void TransportBackend::init(BufSpec bufs[3]) {
 }
 
 size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
-                                 uint32_t* out_indices) {
+                                  uint32_t* out_indices) {
   size_t accepted = 0;
-  while (accepted < n && pending_.size() < capacity()) {
-    Cmd const& c = cmds[accepted];
+  for (size_t i = 0; i < n; ++i) {
+    Cmd const& c = cmds[i];
 
-    unsigned req = 0;
+    unsigned rid = 0;
     if (c.kind == OpKind::Send) {
-      req = comm_->isend(static_cast<int>(c.dst_peer),
-                         c.src_buf, c.src_off, c.bytes,
-                         c.dst_buf, c.dst_off);
+      rid = comm_->put_async(static_cast<int>(c.dst_peer),
+                             c.src_buf, c.src_off,
+                             c.dst_buf, c.dst_off, c.bytes);
     } else if (c.kind == OpKind::Recv) {
-      req = comm_->irecv(static_cast<int>(c.src_peer),
-                         c.dst_buf, c.dst_off, c.bytes);
+      rid = comm_->wait_async(static_cast<int>(c.src_peer), 0);
     } else {
       ++accepted; continue;
     }
 
-    if (req == 0) break;
+    if (rid == 0) break;
     uint32_t idx = cmd_next_++;
     if (out_indices) out_indices[accepted] = idx;
-    pending_.push_back({req, idx});
+    rid_to_cmd_[rid] = idx;
     ++accepted;
   }
   return accepted;
 }
 
 size_t TransportBackend::drain(uint32_t* completed, size_t max) {
-  auto done = comm_->progress();
-  size_t count = 0;
-  for (auto& [req_id, failed] : done) {
-    for (size_t i = 0; i < pending_.size(); ++i) {
-      if (pending_[i].req_id == req_id) {
-        if (!failed) {
-          completed[count++] = pending_[i].cmd_idx;
-          if (count >= max) goto finish;
-        }
-        comm_->release(req_id);
-        pending_[i] = pending_.back();
-        pending_.pop_back();
-        --i;
-      }
+  unsigned rids[256];
+  size_t n = comm_->try_complete(rids, std::min(max, (size_t)256));
+  for (size_t i = 0; i < n; ++i) {
+    auto it = rid_to_cmd_.find(rids[i]);
+    if (it != rid_to_cmd_.end()) {
+      completed[i] = it->second;
+      rid_to_cmd_.erase(it);
     }
   }
-finish:
-  return count;
+  return n;
 }
 
 void TransportBackend::release(uint32_t cmd_idx) {
-  for (size_t i = 0; i < pending_.size(); ++i) {
-    if (pending_[i].cmd_idx == cmd_idx) {
-      comm_->release(pending_[i].req_id);
-      pending_[i] = pending_.back();
-      pending_.pop_back();
+  for (auto it = rid_to_cmd_.begin(); it != rid_to_cmd_.end(); ++it) {
+    if (it->second == cmd_idx) {
+      comm_->release(it->first);
+      rid_to_cmd_.erase(it);
       return;
     }
   }

@@ -45,22 +45,25 @@ class Communicator {
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
-  unsigned isend(int rank, uint32_t src_buf_id, size_t src_off,
-                 size_t src_bytes, uint32_t dst_buf_id = 0, size_t dst_off = 0);
-  unsigned irecv(int rank, uint32_t dst_buf_id, size_t dst_off,
-                 size_t dst_bytes);
-  bool poll(unsigned const req) { return tracker_->poll(req); }
-  void release(unsigned const req) { return tracker_->release(req); }
-  bool wait_finish(unsigned const req) { return tracker_->wait_finish(req); }
-  bool wait_finish(std::vector<unsigned> const& reqs) {
-    return tracker_->wait_finish(reqs);
-  }
+  // ── Async data / signal / wait (thin wrappers over adapter) ──
+  unsigned put_async(int peer, uint32_t src_buf, size_t src_off,
+                     uint32_t dst_buf, size_t dst_off, size_t bytes);
+  unsigned signal_async(int peer, uint64_t tag);
+  unsigned wait_async(int peer, uint64_t tag);
 
-  // Caller-driven progress: polls all inflight requests (one non-blocking
-  // pass). Returns completed (request_id, failed) pairs.
-  std::vector<std::pair<unsigned, bool>> progress() {
-    return tracker_->progress_all();
-  }
+  // ── Non-blocking completion ──
+  size_t try_complete(unsigned* rids, size_t max);
+
+  // ── Blocking convenience ──
+  bool put(int peer, uint32_t src_buf, size_t src_off,
+           uint32_t dst_buf, size_t dst_off, size_t bytes,
+           int timeout_ms = -1);
+  bool signal(int peer, uint64_t tag, int timeout_ms = -1);
+  bool wait(int peer, uint64_t tag, int timeout_ms = -1);
+
+  // ── Backward compat (legacy, prefer try_complete) ──
+  bool poll(unsigned rid) { return tracker_->poll(rid); }
+  void release(unsigned rid) { tracker_->release(rid); }
 
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;
@@ -146,39 +149,13 @@ class Communicator {
   PeerTransportKind get_put_transport_kind(int rank) const;
   PeerTransportKind get_wait_transport_kind(int rank) const;
 
-  // Async task submission via jring + proxy threads (mirrors p2p Endpoint).
-  struct CommSendTask {
-    int rank;
-    uint32_t src_buf_id;
-    size_t src_off;
-    size_t src_bytes;
-    uint32_t dst_buf_id;
-    size_t dst_off;
-    unsigned request_id;
-  };
-
-  struct CommRecvTask {
-    int rank;
-    uint32_t dst_buf_id;
-    size_t dst_off;
-    size_t dst_bytes;
-    unsigned request_id;
-  };
-
-  void send_proxy_loop();
-  void recv_proxy_loop();
-  void drain_send_tasks();
-  void drain_recv_tasks();
+  void run_put_body(int peer, uint32_t src_buf, size_t src_off,
+                    uint32_t dst_buf, size_t dst_off, size_t bytes,
+                    unsigned request_id);
+  void run_wait_body(int peer, uint32_t dst_buf, size_t dst_off,
+                     size_t dst_bytes, unsigned request_id);
+  void run_signal_body(int peer, uint64_t tag, unsigned request_id);
   void mark_slot_failed(unsigned request_id);
-  void run_isend_body(CommSendTask const& task);
-  void run_irecv_body(CommRecvTask const& task);
-
-  static constexpr size_t kTaskRingSize = 1024;
-  jring_t* send_task_ring_ = nullptr;
-  jring_t* recv_task_ring_ = nullptr;
-  std::atomic<bool> stop_{false};
-  std::thread send_proxy_thread_;
-  std::thread recv_proxy_thread_;
 
   int local_gpu_idx_;
   int global_rank_;
