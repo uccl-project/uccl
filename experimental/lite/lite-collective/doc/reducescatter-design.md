@@ -102,6 +102,26 @@ The local GPU phase uses the same NUMA-pair shape as the previous prototype:
 The implementation uses a per-node shared control block for local CudaIpc
 readiness and per-rank RDMA ready/ack epochs for host-slot reuse.
 
+## No-CudaIPC mode
+
+`MSCCLPP_NCCL_RS_NO_CUDAIPC=1` forces ReduceScatter through a host/RDMA path for
+layouts with more than one local rank.  This mode does not call the local
+CudaIpc scratch setup and does not open peer GPU pointers or IPC events.  Each
+rank copies the needed rows from its own GPU to a per-rank pinned host slab,
+waits for local ranks through the shared CPU control block, reduces local
+partials on CPU, exchanges the remote-owned partial over RDMA for multi-node
+layouts, and copies the final shard back to GPU.
+
+The chunk size defaults to 256KiB and can be changed with
+`MSCCLPP_NCCL_RS_NO_CUDAIPC_CHUNK_BYTES`.  The CPU reduction uses an AVX-512F
+helper when available, with scalar fallback; `MSCCLPP_NCCL_RS_DISABLE_AVX512=1`
+forces the scalar path for debugging.
+
+Use `NCCL_P2P_DISABLE=1` for the matching NCCL baseline so NCCL also cannot use
+direct local GPU P2P.  On the current L40/L41 testbed this native no-CudaIPC
+path is a functional/reference path rather than the fastest path; the normal
+CudaIpc path remains the performance path.
+
 ## Size policy
 
 The 2nx1g path uses the mapped-host GPU path through 1MiB per rank.  This beats

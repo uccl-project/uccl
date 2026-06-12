@@ -194,20 +194,31 @@ ncclResult_t runLocalFourRankReduceScatter(
   size_t slotCount = scratchBufferSize / slotBytes;
   slotCount = std::min<size_t>(slotCount, 1024);
   if (slotCount == 0) return ncclInvalidUsage;
-  bool rowStrideChanged = ctx.localFourRowStrideBytes != 0 &&
+  bool rowStrideInitialized = ctx.localFourRowStrideBytes != 0;
+  bool rowStrideChanged = rowStrideInitialized &&
                           ctx.localFourRowStrideBytes != rowStrideBytes;
   if (rowStrideChanged) {
+    uint64_t prevEpoch = ctx.epoch;
     MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-    bootstrapComm->bootstrap()->barrier();
+    ctx.ctrl->localScratchDone[ctx.localRank].store(
+        prevEpoch, std::memory_order_release);
+    for (int i = 0; i < ctx.nRanksPerNode; ++i) {
+      waitForEpoch(ctx.ctrl->localScratchDone[i], prevEpoch);
+    }
+  }
+  if (!rowStrideInitialized || rowStrideChanged) {
+    ctx.localFourLayoutStartEpoch = ctx.epoch;
   }
   ctx.localFourRowStrideBytes = rowStrideBytes;
 
   uint64_t epoch = ++ctx.epoch;
-  size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
+  uint64_t layoutEpoch = epoch - ctx.localFourLayoutStartEpoch;
+  size_t slot = static_cast<size_t>((layoutEpoch - 1) % slotCount);
   int eventSlot = static_cast<int>(slot);
   bool useGpuFlags = ctx.ctrlDeviceSlab != nullptr && useLocalFourGpuFlags();
   bool useDeviceFlagScatter =
-      !useGpuFlags && slotCount >= 16 && bytesPerRank <= 32 * 1024;
+      !useGpuFlags && slotCount >= 16 &&
+      bytesPerRank <= configuredLocalFourDeviceFlagMaxBytes();
   bool useDeviceFlags = useDeviceFlagScatter;
   bool skipSelfCopy = !useDeviceFlags && !useGpuFlags &&
                       bytesPerRank <= 32 * 1024;
@@ -215,7 +226,7 @@ ncclResult_t runLocalFourRankReduceScatter(
                            bytesPerRank >= 64 * 1024 &&
                            useLocalFourParallelCopies();
   if (useParallelCopies) ensureLocalParallelCopyResources(ctx);
-  if (epoch > slotCount && !rowStrideChanged) {
+  if (layoutEpoch > slotCount && !rowStrideChanged) {
     uint64_t reuseEpoch = epoch - slotCount;
     if (useDeviceFlags) {
       MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
