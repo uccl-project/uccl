@@ -159,3 +159,59 @@
 ### venv
 按你说的会建独立 venv 跑后续 python 测试。注意 hipcc 的 C++ smoke 本身不需要
 torch；venv 主要给 `_uccl_gin.so` import 和 python gate。
+
+## 2026-06-12（续）：改走 torch + 自动 hipify —— 构建里程碑达成 ✅
+
+用户拍板"既然 ep 引入了 torch，为什么不引入"。重新评估后采纳：之前唯一反对理由
+（torch 建不了可执行 smoke）可通过"把 put/quiet smoke 做成扩展里的 kernel-launch
+函数 + Python 驱动"绕开。改走 ep 的方式。
+
+### 独立 venv（用户要求）
+- `~/.local/bin/uv venv --python 3.12 ~/nfs/danyang/.venv-uccl-gin`
+- `uv pip install ninja nanobind pytest numpy` +
+  `uv pip install torch --index-url https://download.pytorch.org/whl/rocm6.4`
+- 得 **torch 2.9.1+rocm6.4，`torch.version.hip`=6.4.43484，与系统 ROCm 6.4.2
+  完全匹配**（不像 yzhou 那个 rocm7.0 venv 会错配）。安装日志
+  `/tmp/uccl_gin_venv_install.log`。
+
+### 新增 `experimental/uccl_gin/setup.py`（镜像 ep）
+- `torch.utils.cpp_extension.CUDAExtension`，`torch.version.hip` 分支。
+- ROCm：`--offload-arch=gfx942`、`-DUCCL_GIN_WITH_NCCL_GIN=0`、
+  `-D__HIP_PLATFORM_AMD__`、非 EFA RC 路径、链 amdhip64+ibverbs+numa+MPI。
+- sources = transport/*.{cpp,cc} + context.cpp + bindings.cpp（**不含**
+  microbench.cu，那是 NV Makefile 的可执行测试）。
+- MPI：本机无 libopenmpi-dev（系统全无 mpi.h），加 `UCCL_GIN_MPI_HOME` 覆盖，
+  指向自带头文件的 `/opt/cluster-test`（OpenMPI 5.0，libmpi.so.40 同 ABI 主版本）。
+
+### 构建结果 ✅
+```
+ROCM_HOME=/opt/rocm UCCL_GIN_MPI_HOME=/opt/cluster-test \
+  python setup.py build_ext --inplace
+→ EXIT=0，零 error
+```
+- torch hipify 把所有源码翻成 `*_hip.cpp`/`*_hip.o`：
+  `fifo_hip.o`/`proxy_hip.o`/`rdma_hip.o`/`uccl_proxy_hip.o`/`context_hip.o`/
+  `bindings_hip.o` —— **之前手工 hipcc 卡死的 mscclpp FIFO 层（fifo_util cuda*）
+  被 hipify 自动翻译解决**。
+- 链出 `python/uccl_gin/_uccl_gin.cpython-312-x86_64-linux-gnu.so`。
+- import 验证：
+  `LD_LIBRARY_PATH=/opt/cluster-test/lib:/opt/rocm/lib PYTHONPATH=python
+   /opt/cluster-test/bin/mpirun -np 1 python -c "import torch; import uccl_gin"`
+  → 打印 `IMPORT_OK`。（退出码非 0 只是测试命令没调 mpi_finalize 的 cosmetic
+  警告；另有 UCX "does not support MPI_THREAD_MULTIPLE" 警告，2 节点实通信时要处理。）
+
+### 关于手工 shim 的去留
+之前手工做的 shim（platform.cuh trap、context.cpp 的 gpu_rt 用法、2 个 transport
+include guard、gpu_rt dma-buf gate、Makefile rocm 分支）与 torch hipify 不冲突，
+保留无害；其中 gpu_rt.h 的 USE_DMABUF gate 仍是必要的（hipify 不修这个缺失符号）。
+Makefile 的 `PLATFORM=rocm` 分支现在是次要/备用路径，主 AMD 构建走 setup.py。
+
+### 下一步（Phase 2：put/quiet 正确性）
+1. 写 `tests/put_quiet_smoke.cu`：__global__ put/quiet kernel + host launcher。
+2. `bindings.cpp` 暴露 `run_put_quiet_smoke(...)`（或独立 test 入口），加进
+   setup.py sources。
+3. Python 测试：2 进程/2 节点，sender put(data)→quiet→barrier→receiver 校验
+   （不依赖 atomic）。bootstrap 用 MPI（/opt/cluster-test mpirun）或 torch.dist。
+4. 处理 MPI_THREAD_MULTIPLE/UCX（binding 用 MPI_THREAD_MULTIPLE；UCX PML 不支持，
+   可能要 `-mca pml ob1` 或换 thread level）。
+5. RC 连接建链在 RoCE 上的实测（GID/RTR/RTS，非 EFA 路径，与 ep AMD 同源）。
