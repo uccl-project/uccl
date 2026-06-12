@@ -2,6 +2,7 @@
 
 #include "../util/jring.h"
 #include "transport_adapter.h"
+#include "../../../include/gpu_rt.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -19,8 +20,7 @@ namespace Transport {
 
 class TcpTransportAdapter final : public TransportAdapter {
  public:
-  // Lifecycle.
-  TcpTransportAdapter(std::string local_ip, int local_rank);
+  TcpTransportAdapter(std::string local_ip, int local_rank, int gpu_id);
   ~TcpTransportAdapter() override;
 
   // Endpoint discovery metadata.
@@ -150,6 +150,8 @@ class TcpTransportAdapter final : public TransportAdapter {
 
   std::string local_ip_;
   int local_rank_ = -1;
+  int gpu_id_ = -1;
+  gpuStream_t gpu_stream_ = nullptr;
   int listen_fd_ = -1;
   uint16_t listen_port_ = 0;
 

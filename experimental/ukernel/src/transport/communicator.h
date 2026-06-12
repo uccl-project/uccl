@@ -43,6 +43,14 @@ class Communicator {
   bool same_host(int rank) const;
 
   // ── Async data / signal / wait (thin wrappers over adapter) ──
+  //
+  // One-sided transports (IPC, RDMA, UCCL):
+  //   put_async() writes directly into remote memory. No matching wait needed.
+  //   signal_async(peer, tag) notifies the peer; peer calls wait(peer, tag).
+  //
+  // Two-sided transport (TCP):
+  //   Every put_async() MUST have a matching wait_async() on the peer.
+  //   TCP has no remote address space — data flows as a byte stream.
   unsigned put_async(int peer, uint32_t src_buf, size_t src_off,
                      uint32_t dst_buf, size_t dst_off, size_t bytes);
   unsigned signal_async(int peer, uint64_t tag);

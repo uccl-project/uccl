@@ -487,7 +487,7 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
     CommunicatorMeta const& local_meta) {
   if (!tcp_adapter_) {
     tcp_adapter_ =
-        std::make_unique<TcpTransportAdapter>(local_meta.ip, global_rank_);
+        std::make_unique<TcpTransportAdapter>(local_meta.ip, global_rank_, local_gpu_idx_);
     tracker_->set_tcp(tcp_adapter_.get());
   }
   return *tcp_adapter_;
@@ -938,20 +938,16 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
   if (!slot) return 0;
   slot->kind = kind;
 
-  // ── TCP: bounce through host ──
+  // TCP: adapter's send worker handles GPU→host bounce internally
   if (kind == PeerTransportKind::Tcp) {
-    void* host_buf;
-    GPU_RT_CHECK(gpuHostMalloc(&host_buf, bytes));
-    GPU_RT_CHECK(gpuMemcpy(host_buf, local_ptr, bytes, gpuMemcpyDeviceToHost));
-    slot->bounce_ptr = host_buf;
-    unsigned aid = adapter->put_async(peer, host_buf, 0, nullptr, 0, bytes);
+    unsigned aid = adapter->put_async(peer, local_ptr, 0, nullptr, 0, bytes);
     if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
       cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
     }
     return rid;
   }
 
-  // ── UCCL: ensure MR, then put ──
+  // UCCL RDMA
   if (kind == PeerTransportKind::Uccl) {
     if (!ensure_uccl_memory_registered(src_buf, local_ptr, bytes)) {
       mark_slot_failed(rid); return 0;
@@ -963,7 +959,7 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
     return rid;
   }
 
-  // ── RDMA: ensure MR, put + wait + signal ──
+  // RDMA
   if (kind == PeerTransportKind::Rdma) {
     if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) {
       mark_slot_failed(rid); return 0;
@@ -976,20 +972,13 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
                                           remote_mr.key);
     unsigned aid =
         adapter->put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes);
-    if (aid == 0) { cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0; }
-    adapter->wait_completion(aid);
-    if (adapter->request_failed(aid)) {
-      cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
-    }
-    adapter->release_request(aid);
-    unsigned sig_aid = adapter->signal_async(peer, /*tag=*/0);
-    if (sig_aid == 0 || !tracker_->activate(rid, sig_aid, peer, kind)) {
+    if (aid == 0 || !tracker_->activate(rid, aid, peer, kind)) {
       cleanup_tracked_request(*slot); mark_slot_failed(rid); return 0;
     }
     return rid;
   }
 
-  // ── IPC: resolve remote pointer, then put ──
+  // IPC: resolve remote pointer, then put
   void* remote_ptr = nullptr;
   int remote_gpu = -1;
   if (dst_buf != 0) {

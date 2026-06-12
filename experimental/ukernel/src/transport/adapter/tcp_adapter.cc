@@ -72,8 +72,12 @@ bool recv_discard_all(int fd, uint64_t len) {
 
 }  // namespace
 
-TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank)
-    : local_ip_(std::move(local_ip)), local_rank_(local_rank) {
+TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
+                                         int gpu_id)
+    : local_ip_(std::move(local_ip)), local_rank_(local_rank), gpu_id_(gpu_id) {
+  if (gpu_id_ >= 0) {
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&gpu_stream_, gpuStreamNonBlocking));
+  }
   listen_fd_ = create_listen_socket(listen_port_);
   if (listen_fd_ < 0) {
     throw std::runtime_error("failed to create tcp transport listen socket");
@@ -159,6 +163,10 @@ TcpTransportAdapter::~TcpTransportAdapter() {
   if (recv_task_ring_ != nullptr) {
     free(recv_task_ring_);
     recv_task_ring_ = nullptr;
+  }
+  if (gpu_stream_ != nullptr) {
+    gpuStreamDestroy(gpu_stream_);
+    gpu_stream_ = nullptr;
   }
 }
 
@@ -548,15 +556,32 @@ void TcpTransportAdapter::send_worker_loop() {
     }
     if (ctx) {
       std::lock_guard<std::mutex> send_lk(ctx->send_mu);
+      // Detect GPU pointer and bounce to host if needed
+      void* send_ptr = slot->host_ptr;
+      void* bounce_ptr = nullptr;
+      if (slot->len > 0 && send_ptr != nullptr) {
+        gpuPointerAttributes attr{};
+        if (gpuPointerGetAttributes(&attr, send_ptr) == gpuSuccess &&
+            attr.type == gpuMemoryTypeDevice) {
+          GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+          GPU_RT_CHECK(gpuMallocHost(&bounce_ptr, slot->len));
+          GPU_RT_CHECK(gpuMemcpyAsync(bounce_ptr, send_ptr, slot->len,
+                                       gpuMemcpyDeviceToHost, gpu_stream_));
+          GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
+          send_ptr = bounce_ptr;
+        }
+      }
       WireHeader header{};
       header.type = static_cast<uint32_t>(
           (slot->kind == RequestSlot::Kind::Signal) ? FrameType::Signal
-                                                    : FrameType::Data);
+                                                     : FrameType::Data);
       header.payload_len = static_cast<uint64_t>(slot->len);
       ok = TcpTransportAdapter::send_all(ctx->send_fd, &header, sizeof(header));
       if (ok && slot->len > 0) {
-        ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr,
-                                           slot->len);
+        ok = TcpTransportAdapter::send_all(ctx->send_fd, send_ptr, slot->len);
+      }
+      if (bounce_ptr) {
+        GPU_RT_CHECK(gpuFreeHost(bounce_ptr));
       }
     }
     slot->mark_completed(ok);
