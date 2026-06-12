@@ -336,7 +336,59 @@ int main(int argc, char** argv) {
 
   gpuStreamDestroy(stream);
 
-  // ── 9. Output tables ─────────────────────────────────────────────────
+  // ── 9. Benchmark comm->put (IPC adapter direct path) ──────────────────
+  comm->reg_mr(local_buf_id, d_local, kMaxBytes, true);
+  comm->reg_mr(remote_buf_id, d_local, kMaxBytes, true);
+  // Re-resolve remote buffer to ensure MR is fresh
+  comm->resolve_remote_buffer(peer, remote_buf_id);
+
+  std::printf("[p2p-perf] Starting comm->put benchmarks...\n");
+
+  for (size_t bytes : sizes) {
+    // Latency: blocking put
+    constexpr int kLatencyIters = 5;
+    std::vector<double> latencies;
+    for (int iter = 0; iter < kLatencyIters; ++iter) {
+      auto t0 = std::chrono::steady_clock::now();
+      comm->put(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      auto t1 = std::chrono::steady_clock::now();
+      latencies.push_back(elapsed_us(t0, t1));
+    }
+    double avg_lat = 0;
+    for (double l : latencies) avg_lat += l;
+    avg_lat /= latencies.size();
+
+    // Throughput: async put_async + try_complete
+    constexpr int kBatchSize = 16;
+    constexpr int kThroughputIters = 3;
+    std::vector<double> throughputs;
+    for (int iter = 0; iter < kThroughputIters; ++iter) {
+      auto t0 = std::chrono::steady_clock::now();
+      unsigned rids[kBatchSize];
+      for (int b = 0; b < kBatchSize; ++b)
+        rids[b] = comm->put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      size_t drained = 0;
+      while (drained < kBatchSize) {
+        unsigned done[16];
+        size_t n = comm->try_complete(done, 16);
+        drained += n;
+        if (drained < kBatchSize) std::this_thread::yield();
+      }
+      auto t1 = std::chrono::steady_clock::now();
+      double total_bytes = static_cast<double>(bytes) * kBatchSize;
+      double time_s = elapsed_us(t0, t1) / 1e6;
+      double gbps = (total_bytes / time_s) / 1e9;
+      throughputs.push_back(gbps);
+    }
+    double avg_tp = 0;
+    for (double t : throughputs) avg_tp += t;
+    avg_tp /= throughputs.size();
+
+    results.push_back({"comm_put", 0, bytes, avg_lat, avg_tp});
+  }
+  std::printf("[p2p-perf] comm->put benchmarks done.\n");
+
+  // ── 10. Output tables ─────────────────────────────────────────────────
   comm->barrier("results_barrier", 30000);
   if (rank != 0) {
     // Cleanup and exit, only rank 0 prints
@@ -365,7 +417,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> names;
   for (auto b : blocks_seen) names.push_back("b" + std::to_string(b));
   names.push_back("gpuMemcpyPeer");
+  names.push_back("comm_put");
   std::vector<uint32_t> tb_values = blocks_seen;
+  tb_values.push_back(0);
   tb_values.push_back(0);
 
   // Build lookup: (size, method_idx) -> latency, throughput
@@ -377,10 +431,12 @@ int main(int argc, char** argv) {
   for (auto& r : results) {
     size_t mi = 0;
     if (r.method == "device_backend") {
-      for (size_t i = 0; i < tb_values.size() - 1; ++i)
-        if (r.threads_per_block == tb_values[i]) { mi = i; break; }
+      for (size_t i = 0; i < blocks_seen.size(); ++i)
+        if (r.threads_per_block == blocks_seen[i]) { mi = i; break; }
+    } else if (r.method == "gpuMemcpyPeerAsync") {
+      mi = blocks_seen.size();
     } else {
-      mi = tb_values.size() - 1;
+      mi = blocks_seen.size() + 1;  // comm_put
     }
     map[{r.bytes, mi}] = {r.latency_us, r.throughput_gbps};
   }
