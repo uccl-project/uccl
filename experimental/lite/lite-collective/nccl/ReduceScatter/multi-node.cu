@@ -33,6 +33,7 @@ static constexpr int kTwoRankPipelineSlots = 5;
 static constexpr int kLocalFourPipelineSlots = 1024;
 static constexpr size_t kLocalLeadChunks = 3;
 static constexpr size_t kLongLocalLeadChunks = 3;
+static constexpr size_t kLocalFourRingChunkBytes = 32 * 1024 * 1024;
 static constexpr size_t kDefaultChunkBytes = 2 * 1024 * 1024;
 static constexpr size_t kDefaultTwoRankChunkBytes = 2 * 1024 * 1024;
 static constexpr size_t kMaxNativeBytesPerRank = 1024ULL * 1024 * 1024;
@@ -486,6 +487,40 @@ int configuredLocalFourRingMode() {
   return value;
 }
 
+size_t configuredLocalFourRingChunkBytes() {
+  static size_t value = [] {
+    char const* env = std::getenv("MSCCLPP_NCCL_RS_LOCAL_RING_CHUNK_BYTES");
+    if (env == nullptr || env[0] == '\0') return kLocalFourRingChunkBytes;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 0);
+    if (end == env || parsed == 0) return kLocalFourRingChunkBytes;
+    if (*end != '\0') {
+      auto scale = [&](unsigned long long factor) -> bool {
+        if (parsed > std::numeric_limits<unsigned long long>::max() / factor) {
+          return false;
+        }
+        parsed *= factor;
+        return true;
+      };
+      if ((end[0] == 'K' || end[0] == 'k') && end[1] == '\0') {
+        if (!scale(1024ULL)) return kLocalFourRingChunkBytes;
+      } else if ((end[0] == 'M' || end[0] == 'm') && end[1] == '\0') {
+        if (!scale(1024ULL * 1024ULL)) return kLocalFourRingChunkBytes;
+      } else if ((end[0] == 'G' || end[0] == 'g') && end[1] == '\0') {
+        if (!scale(1024ULL * 1024ULL * 1024ULL)) {
+          return kLocalFourRingChunkBytes;
+        }
+      } else {
+        return kLocalFourRingChunkBytes;
+      }
+    }
+    size_t bytes = static_cast<size_t>(parsed);
+    bytes = bytes / sizeof(float) * sizeof(float);
+    return bytes == 0 ? kLocalFourRingChunkBytes : bytes;
+  }();
+  return value;
+}
+
 bool useLocalFourRingEvents() {
   static bool value = [] {
     char const* env = std::getenv("MSCCLPP_NCCL_RS_LOCAL_RING_EVENTS");
@@ -498,8 +533,7 @@ bool useLocalFourRingFor(size_t bytesPerRank) {
   if (bytesPerRank < 1024 * 1024) return false;
   int mode = configuredLocalFourRingMode();
   if (mode >= 0) return mode != 0;
-  return bytesPerRank >= 2 * 1024 * 1024 &&
-         bytesPerRank <= 32ULL * 1024 * 1024;
+  return bytesPerRank >= 2 * 1024 * 1024;
 }
 
 bool useP2pRing() {
@@ -2853,6 +2887,7 @@ ncclResult_t runLocalFourRankRingReduceScatter(
     size_t bytesPerRank, cudaStream_t stream,
     std::shared_ptr<Communicator> bootstrapComm, void* scratchBuffer,
     size_t scratchBufferSize) {
+  (void)recvcount;
   ensureLocalScratchIpc(ctx, bootstrapComm, ctx.rank, ctx.worldSize,
                         ctx.nRanksPerNode, scratchBuffer, scratchBufferSize);
   bool ringEvents = useLocalFourRingEvents();
@@ -2860,8 +2895,11 @@ ncclResult_t runLocalFourRankRingReduceScatter(
     ensureLocalScratchEvents(ctx, bootstrapComm, ctx.rank, ctx.worldSize,
                              ctx.nRanksPerNode);
   }
-  size_t rowStrideBytes = (bytesPerRank + sizeof(float) - 1) / sizeof(float) *
-                          sizeof(float);
+  size_t ringChunkBytes =
+      std::min(bytesPerRank, configuredLocalFourRingChunkBytes());
+  ringChunkBytes = ringChunkBytes / sizeof(float) * sizeof(float);
+  if (ringChunkBytes == 0) return ncclInvalidUsage;
+  size_t rowStrideBytes = ringChunkBytes;
   size_t slotBytes = 2 * rowStrideBytes;
   if (slotBytes == 0 || slotBytes > scratchBufferSize) {
     return ncclInvalidUsage;
@@ -2874,80 +2912,88 @@ ncclResult_t runLocalFourRankRingReduceScatter(
   }
   if (slotCount == 0) return ncclInvalidUsage;
 
-  uint64_t epoch = ++ctx.epoch;
-  size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
-  if (epoch > slotCount) {
-    uint64_t reuseEpoch = epoch - slotCount;
-    for (int i = 0; i < ctx.nRanksPerNode; ++i) {
-      waitForEpoch(ctx.ctrl->localCrossReady[i], reuseEpoch);
-    }
-    if (ringEvents) {
-      for (int peerLocal = 0; peerLocal < ctx.nRanksPerNode; ++peerLocal) {
-        if (peerLocal == ctx.localRank) continue;
-        int peerIdx = localPeerIndex(ctx.localRank, peerLocal);
-        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(
-            stream, ctx.remoteCrossEvents[peerIdx][slot], 0));
-      }
-    }
-  }
-
   int const n = ctx.nRanksPerNode;
   int const nextLocal = (ctx.localRank + 1) % n;
   int const prevLocal = (ctx.localRank + n - 1) % n;
   int const nextIdx = localPeerIndex(ctx.localRank, nextLocal);
   int const prevIdx = localPeerIndex(ctx.localRank, prevLocal);
   char const* send = static_cast<char const*>(sendbuff);
+  char* recv = static_cast<char*>(recvbuff);
   char* scratch = static_cast<char*>(scratchBuffer);
-  size_t slotBase = slot * slotBytes;
-  uint64_t signalBase = epoch * 8;
 
-  for (int step = 0; step < n - 1; ++step) {
-    int sendChunk = step == 0 ? (ctx.localRank + n - 1) % n
-                              : (ctx.localRank - step - 1 + n) % n;
-    char const* src =
-        step == 0 ? send + static_cast<size_t>(sendChunk) * bytesPerRank
-                  : scratch + slotBase + static_cast<size_t>((step - 1) & 1) *
-                                        rowStrideBytes;
-    char* dst = ctx.remoteScratchPtrs[nextIdx] + slotBase +
-                static_cast<size_t>(step & 1) * rowStrideBytes;
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, src, bytesPerRank,
-                                      cudaMemcpyDeviceToDevice, stream));
-    size_t eventIndex = 0;
+  for (size_t chunkOffset = 0; chunkOffset < bytesPerRank;) {
+    size_t chunkBytes = std::min(ringChunkBytes, bytesPerRank - chunkOffset);
+    size_t chunkElems = chunkBytes / sizeof(float);
+    uint64_t epoch = ++ctx.epoch;
+    size_t slot = static_cast<size_t>((epoch - 1) % slotCount);
+    if (epoch > slotCount) {
+      uint64_t reuseEpoch = epoch - slotCount;
+      for (int i = 0; i < ctx.nRanksPerNode; ++i) {
+        waitForEpoch(ctx.ctrl->localCrossReady[i], reuseEpoch);
+      }
+      if (ringEvents) {
+        for (int peerLocal = 0; peerLocal < ctx.nRanksPerNode; ++peerLocal) {
+          if (peerLocal == ctx.localRank) continue;
+          int peerIdx = localPeerIndex(ctx.localRank, peerLocal);
+          MSCCLPP_CUDATHROW(cudaStreamWaitEvent(
+              stream, ctx.remoteCrossEvents[peerIdx][slot], 0));
+        }
+      }
+    }
+
+    size_t slotBase = slot * slotBytes;
+    uint64_t signalBase = epoch * 8;
+
+    for (int step = 0; step < n - 1; ++step) {
+      int sendChunk = step == 0 ? (ctx.localRank + n - 1) % n
+                                : (ctx.localRank - step - 1 + n) % n;
+      char const* src =
+          step == 0 ? send + static_cast<size_t>(sendChunk) * bytesPerRank +
+                          chunkOffset
+                    : scratch + slotBase +
+                          static_cast<size_t>((step - 1) & 1) * rowStrideBytes;
+      char* dst = ctx.remoteScratchPtrs[nextIdx] + slotBase +
+                  static_cast<size_t>(step & 1) * rowStrideBytes;
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, src, chunkBytes,
+                                        cudaMemcpyDeviceToDevice, stream));
+      size_t eventIndex = 0;
+      if (ringEvents) {
+        eventIndex = slot * static_cast<size_t>(n - 1) +
+                     static_cast<size_t>(step);
+        MSCCLPP_CUDATHROW(cudaEventRecord(ctx.localCopyEvents[eventIndex],
+                                          stream));
+      } else {
+        waitForCudaStream(stream);
+      }
+
+      uint64_t signal = signalBase + static_cast<uint64_t>(step + 1);
+      ctx.ctrl->localCopyReady[ctx.localRank].store(
+          signal, std::memory_order_release);
+      waitForEpoch(ctx.ctrl->localCopyReady[prevLocal], signal);
+      if (ringEvents) {
+        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(
+            stream, ctx.remoteCopyEvents[prevIdx][eventIndex], 0));
+      }
+
+      int recvChunk = (ctx.localRank - step - 2 + n) % n;
+      char* incoming = scratch + slotBase +
+                       static_cast<size_t>(step & 1) * rowStrideBytes;
+      char const* local =
+          send + static_cast<size_t>(recvChunk) * bytesPerRank + chunkOffset;
+      void* out = step == n - 2 ? recv + chunkOffset : incoming;
+      ncclResult_t result = launchAdd(local, incoming, out, chunkElems, stream);
+      if (result != ncclSuccess) return result;
+    }
+
     if (ringEvents) {
-      eventIndex = slot * static_cast<size_t>(n - 1) +
-                   static_cast<size_t>(step);
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.localCopyEvents[eventIndex],
-                                        stream));
+      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.localCrossEvents[slot], stream));
     } else {
       waitForCudaStream(stream);
     }
-
-    uint64_t signal = signalBase + static_cast<uint64_t>(step + 1);
-    ctx.ctrl->localCopyReady[ctx.localRank].store(
-        signal, std::memory_order_release);
-    waitForEpoch(ctx.ctrl->localCopyReady[prevLocal], signal);
-    if (ringEvents) {
-      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(
-          stream, ctx.remoteCopyEvents[prevIdx][eventIndex], 0));
-    }
-
-    int recvChunk = (ctx.localRank - step - 2 + n) % n;
-    char* incoming = scratch + slotBase +
-                     static_cast<size_t>(step & 1) * rowStrideBytes;
-    char const* local =
-        send + static_cast<size_t>(recvChunk) * bytesPerRank;
-    void* out = step == n - 2 ? recvbuff : incoming;
-    ncclResult_t result = launchAdd(local, incoming, out, recvcount, stream);
-    if (result != ncclSuccess) return result;
+    ctx.ctrl->localCrossReady[ctx.localRank].store(epoch,
+                                                   std::memory_order_release);
+    chunkOffset += chunkBytes;
   }
-
-  if (ringEvents) {
-    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.localCrossEvents[slot], stream));
-  } else {
-    waitForCudaStream(stream);
-  }
-  ctx.ctrl->localCrossReady[ctx.localRank].store(epoch,
-                                                 std::memory_order_release);
   return ncclSuccess;
 }
 

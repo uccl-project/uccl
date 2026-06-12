@@ -4,10 +4,10 @@
 
 Inter-node ReduceScatter is now implemented in
 [`nccl/ReduceScatter/multi-node.cu`](../nccl/ReduceScatter/multi-node.cu).
-The normal `2nx1g` and `2nx4g`, `ncclFloat32`, `ncclSum` paths are native-only
-across the benchmark size range; they do not fall back to real NCCL for small or
-large rows.  Forced NCCL fallback via the environment remains a debugging escape
-hatch.
+The normal `1nx4g`, `2nx1g`, `2nx2g`, and `2nx4g`, `ncclFloat32`, `ncclSum`
+paths are native-only across the benchmark size range; they do not fall back to
+real NCCL for small or large rows.  Forced NCCL fallback via the environment
+remains a debugging escape hatch.
 
 The current 2nx4g implementation is correct across 128B-1GiB, but it is not yet
 a full performance win over a fair tuned NCCL baseline where both libraries may
@@ -17,24 +17,44 @@ for tiny rows and a GPU NUMA-pair path with chunk pipelining for larger rows.
 The latest 1MiB-64MiB retune added mapped-host finalization and split-final
 reduce for the small/mid GPU path; this improves lite versus the previous path
 but still trails tuned NCCL across the full mid/large sweep.
+The 1nx4g large-message path uses a native CudaIpc ring.  Rows whose output
+shard no longer fits the fixed communicator scratch are split into 32MiB chunks,
+so the 256MiB-1GiB total-size rows stay on the native path instead of falling
+through to real NCCL.
+
 The 2nx1g path is simpler and now wins from 64KiB through 1MiB in the latency
 table and almost all of the 1MiB-1GiB bus-bandwidth table.  The remaining 2nx1g
 gaps are 128B-32KiB latency and the 2MiB bus-bandwidth row.
 
 ## Dispatch
 
-For inter-node communicators, `ncclReduceScatter` first tries
-`runLiteInterReduceScatter`.  For multi-node ReduceScatter, a native rejection is
+For supported single-node and inter-node communicators, `ncclReduceScatter` first
+tries `runLiteInterReduceScatter`.  For multi-node ReduceScatter, a native rejection is
 returned to the caller instead of silently falling back to NCCL; this keeps
 benchmark results honest while the native algorithm is being optimized.
-The inter-node implementation accepts only:
+The implementation accepts only:
 
-- `nRanks == 8` and `nRanksPerNode == 4`;
 - `nRanks == 2` and `nRanksPerNode == 1`;
+- `nRanks == 4` and `nRanksPerNode == 4`;
+- `nRanks == 4` and `nRanksPerNode == 2`;
+- `nRanks == 8` and `nRanksPerNode == 4`;
 - `datatype == ncclFloat32`;
 - `op == ncclSum`.
 
 Unsupported cases return `ncclInvalidUsage`/`ncclInvalidArgument`.
+
+## Native 1nx4g flow
+
+For four ranks on one node, large rows use the same reduce-scatter ring shape as
+NCCL: each rank sends one shard to its next local peer, receives one shard from
+its previous local peer, adds the matching local shard, and forwards the partial
+for three ring steps.  The ring uses CudaIpc scratch, not host staging or real
+NCCL.
+
+The communicator scratch is fixed-size, so rows above the old one-shot scratch
+limit are processed as 32MiB output-shard chunks.  The chunk size can be tuned
+with `MSCCLPP_NCCL_RS_LOCAL_RING_CHUNK_BYTES`; the parser accepts raw bytes or
+`K`/`M`/`G` suffixes.
 
 ## Native 2nx1g flow
 
