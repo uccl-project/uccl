@@ -30,8 +30,9 @@ INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
 CXX_RPATH_FLAGS := -Wl,-rpath,$(HIP_LIB)
 NVCC_RPATH_FLAGS := -Wl,-rpath,$(HIP_LIB)
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(HIP_LIB) \
-                  -lamdhip64 -lz -libverbs \
-                  -lnl-3 -lnl-route-3 -lpthread
+                  -lamdhip64 -lgflags -lz -libverbs \
+                  -lnl-3 -lnl-route-3 -lpthread \
+                  $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
@@ -48,7 +49,9 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/shmring_exchanger.cc \
                  ../transport/adapter/tcp_adapter.cc \
+                 ../transport/adapter/uccl_adapter.cc \
                  ../transport/adapter/ipc_adapter.cc \
+                 ../transport/adapter/rdma_adapter.cc \
                  ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
                  transport_request_tracker.o \
@@ -59,7 +62,9 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
                  transport_adapter_shmring_exchanger.o \
                  transport_adapter_tcp_adapter.o \
+                 transport_adapter_uccl_adapter.o \
                  transport_adapter_ipc_adapter.o \
+                 transport_adapter_rdma_adapter.o \
                  transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
                   device_worker.o
@@ -88,6 +93,9 @@ unit: test-unit
 integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
+
+$(UCCL_RDMA_STATIC):
+	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)

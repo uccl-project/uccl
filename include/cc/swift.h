@@ -31,6 +31,14 @@ struct swift_record_t {
 };
 /// Implementation of the Swift congestion control protocol from SIGCOMM 20
 /// TODO: Implement pacing when cwnd < CHUNK_SIZE
+
+// constexpr sqrt via Newton's method (C++17 std::sqrt is not constexpr)
+constexpr double csqrt(double x) {
+  double r = x;
+  for (int i = 0; i < 20; ++i) r = (r + x / r) * 0.5;
+  return r;
+}
+
 class SwiftCC {
  public:
   // Debugging
@@ -52,9 +60,9 @@ class SwiftCC {
   static constexpr double kFSRange = 5 * kBaseDelay;
   static constexpr double kFSMinCwnd = 32;   // in MTU-sized packets
   static constexpr double kFSMaxCwnd = 100;  // in MTU-sized packets
-  static constexpr double kFSAlpha = kFSRange / ((1.0 / std::sqrt(kFSMinCwnd)) -
-                                                 (1.0 / std::sqrt(kFSMaxCwnd)));
-  static constexpr double kFSBeta = -kFSAlpha / std::sqrt(kFSMaxCwnd);
+  static constexpr double kFSAlpha = kFSRange / ((1.0 / csqrt(kFSMinCwnd)) -
+                                                 (1.0 / csqrt(kFSMaxCwnd)));
+  static constexpr double kFSBeta = -kFSAlpha / csqrt(kFSMaxCwnd);
 
   double rate_ = 0.0;  ///< The current sending rate
   size_t last_decrease_tsc_ = 0;
