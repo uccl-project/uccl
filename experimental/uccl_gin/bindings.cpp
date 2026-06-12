@@ -10,6 +10,11 @@
 #include <exception>
 #include <new>
 
+namespace uccl_gin {
+// Defined in tests/put_quiet_smoke.cu (compiled into this extension).
+bool run_put_quiet_smoke(Context& ctx, int peer, int bytes);
+}  // namespace uccl_gin
+
 namespace {
 
 void ensure_mpi_initialized() {
@@ -89,6 +94,25 @@ PyObject* PyUcclGinContext_close(PyUcclGinContext* self, PyObject*) {
   Py_RETURN_NONE;
 }
 
+PyObject* PyUcclGinContext_put_quiet_smoke(PyUcclGinContext* self,
+                                           PyObject* args) {
+  if (self->ctx == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError, "Context is closed");
+    return nullptr;
+  }
+  int peer = 0;
+  int bytes = 0;
+  if (!PyArg_ParseTuple(args, "ii", &peer, &bytes)) return nullptr;
+  bool ok;
+  Py_BEGIN_ALLOW_THREADS
+  ok = uccl_gin::run_put_quiet_smoke(*self->ctx, peer, bytes);
+  Py_END_ALLOW_THREADS
+  if (ok) {
+    Py_RETURN_TRUE;
+  }
+  Py_RETURN_FALSE;
+}
+
 PyObject* PyUcclGinContext_num_queues(PyUcclGinContext* self, void*) {
   if (self->ctx == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "Context is closed");
@@ -157,6 +181,10 @@ PyMethodDef PyUcclGinContext_methods[] = {
      "Stop proxy threads and release registered resources."},
     {"resources", reinterpret_cast<PyCFunction>(PyUcclGinContext_resources),
      METH_NOARGS, "Return a debug dict for the device resource bundle."},
+    {"put_quiet_smoke",
+     reinterpret_cast<PyCFunction>(PyUcclGinContext_put_quiet_smoke), METH_VARARGS,
+     "run_put_quiet_smoke(peer, bytes) -> bool. put+quiet correctness across the "
+     "paired-remote peer; returns True if recv matches the peer's pattern."},
     {nullptr, nullptr, 0, nullptr},
 };
 

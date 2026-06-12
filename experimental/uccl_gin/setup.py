@@ -69,12 +69,11 @@ def _mpi_flags():
 
 def main():
     # NOTE: tests/microbench.cu is the NVIDIA Makefile executable (NCCL-coupled),
-    # NOT part of this extension. The put/quiet smoke kernel is added explicitly
-    # once written (tests/put_quiet_smoke.cu).
+    # NOT part of this extension. Only the put/quiet smoke kernel is.
     sources = (
         glob("transport/*.cpp")
         + glob("transport/*.cc")
-        + ["context.cpp", "bindings.cpp"]
+        + ["context.cpp", "bindings.cpp", "tests/put_quiet_smoke.cu"]
     )
 
     mpi_inc, mpi_libdirs, mpi_libs = _mpi_flags()
