@@ -129,6 +129,10 @@ class SprayExecutor {
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
   std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
+
+  // ── Buffer tracking for incremental Comm registration ──
+  struct { void* ptr = nullptr; size_t bytes = 0; } last_bufs_[3];
+  std::vector<uint32_t> dirty_bufs_;
 };
 
 }  // namespace CCL

@@ -53,6 +53,9 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->owned_transport_ = std::move(tpt_be);
   ex->owned_comm_ = std::move(comm);
 
+  ex->device_be_->set_comm(ex->owned_comm_.get());
+  ex->tpt_be_->set_comm(ex->owned_comm_.get());
+
   return ex;
 }
 

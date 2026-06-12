@@ -2,6 +2,7 @@
 #include "../../device/task.h"
 #include "../../device/worker.h"
 #include "../../../include/gpu_rt.h"
+#include "../../../include/transport.h"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -70,11 +71,28 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
     args.src_device = device_idx_;
     args.dst_device = device_idx_;
 
-    if (c.src_buf > 0 && c.src_buf <= 3 && bufs_[c.src_buf - 1].ptr) {
-      args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
+    if (c.src_buf > 0 && c.src_buf <= 3) {
+      if (c.src_peer != ~0u && comm_) {
+        void* remote = nullptr;
+        if (comm_->try_resolve_remote_ipc_pointer(
+                (int)c.src_peer, c.src_buf, c.src_off, c.bytes,
+                &remote, &args.src_device))
+          args.src = remote;
+      } else if (bufs_[c.src_buf - 1].ptr) {
+        args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
+      }
     }
-    if (c.dst_buf > 0 && c.dst_buf <= 3 && bufs_[c.dst_buf - 1].ptr) {
-      args.dst = (char*)bufs_[c.dst_buf - 1].ptr + c.dst_off;
+    if (c.dst_buf > 0 && c.dst_buf <= 3) {
+      if (c.dst_peer != ~0u && comm_) {
+        void* remote = nullptr;
+        int remote_dev = device_idx_;
+        if (comm_->try_resolve_remote_ipc_pointer(
+                (int)c.dst_peer, c.dst_buf, c.dst_off, c.bytes,
+                &remote, &remote_dev))
+          args.dst = remote;
+      } else if (bufs_[c.dst_buf - 1].ptr) {
+        args.dst = (char*)bufs_[c.dst_buf - 1].ptr + c.dst_off;
+      }
     }
     args.set_red_type(c.redop == ReductionKind::None
                           ? Device::ReduceType::None

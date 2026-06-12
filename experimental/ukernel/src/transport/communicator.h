@@ -85,6 +85,13 @@ class Communicator {
                                       size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
+  // ── Convenience: register local buffer (MR + IPC) ──
+  bool register_buffer(uint32_t buffer_id, void* ptr, size_t len);
+
+  // ── Convenience: resolve remote buffer (wait MR + wait IPC) ──
+  bool resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
+                             int timeout_ms = 30000);
+
   int peer_gpu_idx(int rank) const;
 
  private:

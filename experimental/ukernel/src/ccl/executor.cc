@@ -132,6 +132,29 @@ CollectiveOpHandle SprayExecutor::submit_allreduce(
       {output, tiled.output_bytes},
       {scratch, tiled.staging_bytes_required},
   };
+
+  // Register changed buffers with Comm, sync with peers
+  if (owned_comm_) {
+    dirty_bufs_.clear();
+    for (int i = 0; i < 3; ++i) {
+      if (bufs[i].ptr == nullptr) continue;
+      if (last_bufs_[i].ptr != bufs[i].ptr ||
+          last_bufs_[i].bytes != bufs[i].bytes) {
+        owned_comm_->register_buffer(i + 1, bufs[i].ptr, bufs[i].bytes);
+        dirty_bufs_.push_back(i + 1);
+        last_bufs_[i] = {bufs[i].ptr, bufs[i].bytes};
+      }
+    }
+    if (!dirty_bufs_.empty()) {
+      owned_comm_->barrier("buf_sync");
+      for (int peer = 0; peer < owned_comm_->world_size(); ++peer) {
+        if (peer == owned_comm_->rank()) continue;
+        for (auto id : dirty_bufs_)
+          owned_comm_->resolve_remote_buffer(peer, id);
+      }
+    }
+  }
+
   if (device_be_) device_be_->init(bufs);
   if (tpt_be_) tpt_be_->init(bufs);
 
@@ -314,6 +337,28 @@ void SprayExecutor::run_tiled(TiledResult const& tiled,
       {output, tiled.output_bytes},
       {scratch, tiled.staging_bytes_required},
   };
+
+  if (owned_comm_) {
+    dirty_bufs_.clear();
+    for (int i = 0; i < 3; ++i) {
+      if (bufs[i].ptr == nullptr) continue;
+      if (last_bufs_[i].ptr != bufs[i].ptr ||
+          last_bufs_[i].bytes != bufs[i].bytes) {
+        owned_comm_->register_buffer(i + 1, bufs[i].ptr, bufs[i].bytes);
+        dirty_bufs_.push_back(i + 1);
+        last_bufs_[i] = {bufs[i].ptr, bufs[i].bytes};
+      }
+    }
+    if (!dirty_bufs_.empty()) {
+      owned_comm_->barrier("buf_sync");
+      for (int peer = 0; peer < owned_comm_->world_size(); ++peer) {
+        if (peer == owned_comm_->rank()) continue;
+        for (auto id : dirty_bufs_)
+          owned_comm_->resolve_remote_buffer(peer, id);
+      }
+    }
+  }
+
   if (device_be_) device_be_->init(bufs);
   if (tpt_be_) tpt_be_->init(bufs);
 

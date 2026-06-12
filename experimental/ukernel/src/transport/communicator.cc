@@ -1429,6 +1429,16 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
   return true;
 }
 
+bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
+  return reg_mr(buffer_id, ptr, len, true) && reg_ipc(buffer_id, ptr, len, true);
+}
+
+bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
+                                         int timeout_ms) {
+  return wait_mr(peer_rank, buffer_id, timeout_ms) &&
+         wait_ipc(peer_rank, buffer_id, timeout_ms);
+}
+
 void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   unsigned adapter_id = tracked.adapter_request_id;
   if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
