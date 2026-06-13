@@ -26,6 +26,11 @@ class TcpTransportAdapter;
 class UcclTransportAdapter;
 class RdmaTransportAdapter;
 
+struct CompletionResult {
+  unsigned rid;
+  bool failed;
+};
+
 class Communicator {
  public:
   Communicator(
@@ -55,7 +60,8 @@ class Communicator {
                      uint32_t dst_buf, size_t dst_off, size_t bytes);
   unsigned signal_async(int peer, uint64_t tag);
   unsigned wait_async(int peer, uint64_t tag);
-  size_t try_complete(unsigned* rids, size_t max);
+  unsigned wait_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len);
+  size_t try_complete(CompletionResult* results, size_t max);
 
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;

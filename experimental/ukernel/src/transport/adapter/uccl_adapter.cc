@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 namespace UKernel {
 namespace Transport {
@@ -18,7 +19,7 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 }
 
 constexpr auto kUcclAsyncRetryTimeout = std::chrono::seconds(30);
-constexpr uint32_t kUcclRetryYieldThreshold = 64;
+constexpr uint32_t kUcclRetryYieldThreshold = 4;
 constexpr uint32_t kUcclRetrySleepThreshold = 256;
 constexpr auto kUcclRetryBackoff = std::chrono::microseconds(2);
 
@@ -54,13 +55,13 @@ UcclTransportAdapter::UcclTransportAdapter(int gpu_id, int world_size,
     endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(num_engines);
     endpoint_->initialize_resources(num_engines * world_size);
 
-    int dev_idx = endpoint_->get_best_dev_idx(gpu_id_);
-    if (dev_idx < 0) {
+    local_dev_idx_ = endpoint_->get_best_dev_idx(gpu_id_);
+    if (local_dev_idx_ < 0) {
       std::cerr << "[ERROR] UCCL get_best_dev_idx failed for gpu " << gpu_id_
                 << std::endl;
       endpoint_.reset();
     } else {
-      endpoint_->initialize_engine_by_dev(dev_idx, true);
+      endpoint_->initialize_engine_by_dev(local_dev_idx_, true);
     }
   }
 
@@ -111,7 +112,7 @@ bool UcclTransportAdapter::register_memory(uint32_t id, void* ptr, size_t len) {
     if (buffer_id_to_mhandle_.count(id)) return true;
   }
 
-  int dev_idx = endpoint_->get_best_dev_idx(gpu_id_);
+  int dev_idx = local_dev_idx_;
   if (dev_idx < 0) return false;
 
   ::uccl::Mhandle* mhandle = nullptr;
@@ -160,7 +161,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank,
 
   // Register control memory for signal tag exchange.
   if (!ctx.control_mhandle) {
-    int dev_idx = endpoint_->get_best_dev_idx(gpu_id_);
+    int dev_idx = local_dev_idx_;
     if (dev_idx >= 0) {
       ::uccl::Mhandle* ctrl_mh = nullptr;
       endpoint_->uccl_regmr(dev_idx, &ctx.control_tag,
@@ -180,7 +181,7 @@ bool UcclTransportAdapter::accept_from_peer(
   (void)expected_remote_port;
   if (!endpoint_) return false;
 
-  int dev_idx = endpoint_->get_best_dev_idx(gpu_id_);
+  int dev_idx = local_dev_idx_;
   if (dev_idx < 0) {
     std::cerr << "[ERROR] UCCL accept: invalid local dev for gpu " << gpu_id_
               << std::endl;
@@ -300,165 +301,261 @@ unsigned UcclTransportAdapter::wait_async(int peer, uint64_t tag,
 void UcclTransportAdapter::send_worker() {
   RingElem e;
   ::uccl::ucclRequest ureq;
+
+  struct Pending {
+    unsigned comm_rid;
+    ::uccl::ucclRequest request;
+  };
+  std::vector<Pending> pending;
+
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
+    bool did_work = false;
 
-    // Fallback: no UCCL endpoint — just publish completion immediately.
-    if (!endpoint_) {
-      publish_completion(e.comm_rid, false);
-      continue;
-    }
+    // ── Step 1: try to dequeue a new task (non-blocking) ──
+    if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) == 1) {
+      did_work = true;
 
-    bool failed = false;
-    ::uccl::UcclFlow* flow = nullptr;
-    ::uccl::Mhandle* mh = nullptr;
-    void* data_ptr = nullptr;
-    size_t data_len = 0;
-
-    // Resolve flow and memory handle under the lock.
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = peers_.find(e.peer);
-      if (it == peers_.end() || !it->second.send_flow) {
-        failed = true;
+      // Fallback: no UCCL endpoint — just publish completion immediately.
+      if (!endpoint_) {
+        publish_completion(e.comm_rid, false);
       } else {
-        flow = it->second.send_flow;
-        switch (e.kind) {
-          case Kind::DataPut: {
-            auto mh_it = buffer_id_to_mhandle_.find(e.buffer_id);
-            if (mh_it != buffer_id_to_mhandle_.end()) {
-              mh = mh_it->second;
-              data_ptr = e.ptr;
-              data_len = e.len;
-            } else {
-              failed = true;
-            }
-            break;
-          }
-          case Kind::Signal: {
-            if (it->second.control_mhandle) {
-              it->second.control_tag = e.tag;
-              mh = it->second.control_mhandle;
-              data_ptr = &it->second.control_tag;
-              data_len = sizeof(uint64_t);
-            } else {
-              failed = true;
-            }
-            break;
-          }
-          default:
+        bool failed = false;
+        ::uccl::UcclFlow* flow = nullptr;
+        ::uccl::Mhandle* mh = nullptr;
+        void* data_ptr = nullptr;
+        size_t data_len = 0;
+
+        // Resolve flow and memory handle under the lock.
+        {
+          std::lock_guard<std::mutex> lk(mu_);
+          auto it = peers_.find(e.peer);
+          if (it == peers_.end() || !it->second.send_flow) {
             failed = true;
-            break;
+          } else {
+            flow = it->second.send_flow;
+            switch (e.kind) {
+              case Kind::DataPut: {
+                auto mh_it = buffer_id_to_mhandle_.find(e.buffer_id);
+                if (mh_it != buffer_id_to_mhandle_.end()) {
+                  mh = mh_it->second;
+                  data_ptr = e.ptr;
+                  data_len = e.len;
+                } else {
+                  failed = true;
+                }
+                break;
+              }
+              case Kind::Signal: {
+                if (it->second.control_mhandle) {
+                  it->second.control_tag = e.tag;
+                  mh = it->second.control_mhandle;
+                  data_ptr = &it->second.control_tag;
+                  data_len = sizeof(uint64_t);
+                } else {
+                  failed = true;
+                }
+                break;
+              }
+              default:
+                failed = true;
+                break;
+            }
+          }
+        }
+
+        if (!failed && flow && mh && data_ptr && data_len > 0) {
+          int ret = -1;
+          auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
+          uint32_t retries = 0;
+          while (std::chrono::steady_clock::now() < deadline) {
+            std::memset(&ureq, 0, sizeof(ureq));
+            ret = endpoint_->uccl_send_async(flow, mh, data_ptr, data_len, &ureq);
+            if (ret == 0) break;
+
+            // Every 16 retries, poll pending to help UCCL engine drain completions
+            if ((retries & 15) == 0) {
+              for (auto it = pending.begin(); it != pending.end(); ) {
+                if (endpoint_->uccl_poll_ureq_once(&it->request)) {
+                  did_work = true;
+                  publish_completion(it->comm_rid, false);
+                  it = pending.erase(it);
+                } else {
+                  ++it;
+                }
+              }
+            }
+
+            backoff_retry(retries++);
+          }
+          if (ret == 0) {
+            pending.push_back({e.comm_rid, ureq});
+          } else {
+            failed = true;
+          }
+        }
+
+        if (failed) {
+          publish_completion(e.comm_rid, true);
         }
       }
     }
 
-    if (!failed && flow && mh && data_ptr && data_len > 0) {
-      int ret = -1;
-      auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
-      uint32_t retries = 0;
-      while (std::chrono::steady_clock::now() < deadline) {
-        std::memset(&ureq, 0, sizeof(ureq));
-        ret = endpoint_->uccl_send_async(flow, mh, data_ptr, data_len, &ureq);
-        if (ret == 0) break;
-        backoff_retry(retries++);
-      }
-      if (ret == 0) {
-        endpoint_->uccl_poll_ureq(&ureq);
+    // ── Step 2: poll all pending sends (non-blocking) ──
+    for (auto it = pending.begin(); it != pending.end(); ) {
+      if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
+        did_work = true;
+        publish_completion(it->comm_rid, false);
+        it = pending.erase(it);
       } else {
-        failed = true;
+        ++it;
       }
     }
 
-    publish_completion(e.comm_rid, failed);
+    // ── Step 3: yield if idle ──
+    if (!did_work) {
+      std::this_thread::yield();
+    }
   }
+
+  // Drain on shutdown: publish failure for any remaining pending.
+  for (auto& p : pending) {
+    publish_completion(p.comm_rid, true);
+  }
+  RingElem drain;
+  while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
+    publish_completion(drain.comm_rid, true);
 }
 
 void UcclTransportAdapter::recv_worker() {
   RingElem e;
   ::uccl::ucclRequest ureq;
+
+  struct Pending {
+    unsigned comm_rid;
+    ::uccl::ucclRequest request;
+  };
+  std::vector<Pending> pending;
+
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
+    bool did_work = false;
 
-    // Fallback: no UCCL endpoint — just publish completion immediately.
-    if (!endpoint_) {
-      publish_completion(e.comm_rid, false);
-      continue;
-    }
+    // ── Step 1: try to dequeue a new task (non-blocking) ──
+    if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) == 1) {
+      did_work = true;
 
-    bool failed = false;
-    ::uccl::UcclFlow* flow = nullptr;
-    ::uccl::Mhandle* mh = nullptr;
-    void* data_ptr = nullptr;
-    size_t data_len = 0;
-
-    // Resolve flow and memory handle under the lock.
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = peers_.find(e.peer);
-      if (it == peers_.end() || !it->second.recv_flow) {
-        failed = true;
+      // Fallback: no UCCL endpoint — just publish completion immediately.
+      if (!endpoint_) {
+        publish_completion(e.comm_rid, false);
       } else {
-        flow = it->second.recv_flow;
-        switch (e.kind) {
-          case Kind::DataWait: {
-            auto mh_it = buffer_id_to_mhandle_.find(e.buffer_id);
-            if (mh_it != buffer_id_to_mhandle_.end()) {
-              mh = mh_it->second;
-              data_ptr = e.ptr;
-              data_len = e.len;
-            } else {
-              failed = true;
-            }
-            break;
-          }
-          case Kind::SignalWait: {
-            if (it->second.control_mhandle) {
-              mh = it->second.control_mhandle;
-              data_ptr = &it->second.control_tag;
-              data_len = sizeof(uint64_t);
-            } else {
-              failed = true;
-            }
-            break;
-          }
-          default:
+        bool failed = false;
+        ::uccl::UcclFlow* flow = nullptr;
+        ::uccl::Mhandle* mh = nullptr;
+        void* data_ptr = nullptr;
+        size_t data_len = 0;
+
+        // Resolve flow and memory handle under the lock.
+        {
+          std::lock_guard<std::mutex> lk(mu_);
+          auto it = peers_.find(e.peer);
+          if (it == peers_.end() || !it->second.recv_flow) {
             failed = true;
-            break;
+          } else {
+            flow = it->second.recv_flow;
+            switch (e.kind) {
+              case Kind::DataWait: {
+                auto mh_it = buffer_id_to_mhandle_.find(e.buffer_id);
+                if (mh_it != buffer_id_to_mhandle_.end()) {
+                  mh = mh_it->second;
+                  data_ptr = e.ptr;
+                  data_len = e.len;
+                } else {
+                  failed = true;
+                }
+                break;
+              }
+              case Kind::SignalWait: {
+                if (it->second.control_mhandle) {
+                  mh = it->second.control_mhandle;
+                  data_ptr = &it->second.control_tag;
+                  data_len = sizeof(uint64_t);
+                } else {
+                  failed = true;
+                }
+                break;
+              }
+              default:
+                failed = true;
+                break;
+            }
+          }
+        }
+
+        if (!failed && flow && mh && data_ptr && data_len > 0) {
+          std::memset(&ureq, 0, sizeof(ureq));
+          ::uccl::Mhandle* mh_array[1] = {mh};
+          void* data_array[1] = {data_ptr};
+          int size_array[1] = {static_cast<int>(data_len)};
+          int ret = -1;
+          auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
+          uint32_t retries = 0;
+          while (std::chrono::steady_clock::now() < deadline) {
+            std::memset(&ureq, 0, sizeof(ureq));
+            ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
+                                             &ureq);
+            if (ret == 0) break;
+
+            // Every 16 retries, poll pending to help UCCL engine drain completions
+            if ((retries & 15) == 0) {
+              for (auto it = pending.begin(); it != pending.end(); ) {
+                if (endpoint_->uccl_poll_ureq_once(&it->request)) {
+                  did_work = true;
+                  publish_completion(it->comm_rid, false);
+                  it = pending.erase(it);
+                } else {
+                  ++it;
+                }
+              }
+            }
+
+            backoff_retry(retries++);
+          }
+          if (ret == 0) {
+            pending.push_back({e.comm_rid, ureq});
+          } else {
+            failed = true;
+          }
+        }
+
+        if (failed) {
+          publish_completion(e.comm_rid, true);
         }
       }
     }
 
-    if (!failed && flow && mh && data_ptr && data_len > 0) {
-      std::memset(&ureq, 0, sizeof(ureq));
-      ::uccl::Mhandle* mh_array[1] = {mh};
-      void* data_array[1] = {data_ptr};
-      int size_array[1] = {static_cast<int>(data_len)};
-      int ret = -1;
-      auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
-      uint32_t retries = 0;
-      while (std::chrono::steady_clock::now() < deadline) {
-        std::memset(&ureq, 0, sizeof(ureq));
-        ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
-                                         &ureq);
-        if (ret == 0) break;
-        backoff_retry(retries++);
-      }
-      if (ret == 0) {
-        endpoint_->uccl_poll_ureq(&ureq);
+    // ── Step 2: poll all pending recvs (non-blocking) ──
+    for (auto it = pending.begin(); it != pending.end(); ) {
+      if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
+        did_work = true;
+        publish_completion(it->comm_rid, false);
+        it = pending.erase(it);
       } else {
-        failed = true;
+        ++it;
       }
     }
 
-    publish_completion(e.comm_rid, failed);
+    // ── Step 3: yield if idle ──
+    if (!did_work) {
+      std::this_thread::yield();
+    }
   }
+
+  // Drain on shutdown: publish failure for any remaining pending.
+  for (auto& p : pending) {
+    publish_completion(p.comm_rid, true);
+  }
+  RingElem drain;
+  while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
+    publish_completion(drain.comm_rid, true);
 }
 
 }  // namespace Transport

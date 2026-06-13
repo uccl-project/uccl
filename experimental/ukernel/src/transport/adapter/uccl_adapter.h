@@ -83,6 +83,7 @@ class UcclTransportAdapter final : public TransportAdapter {
                         uint16_t expected_remote_port = 0);
 
   int gpu_id_;
+  int local_dev_idx_ = -1;
   std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
   jring_t* send_ring_ = nullptr;
   jring_t* recv_ring_ = nullptr;

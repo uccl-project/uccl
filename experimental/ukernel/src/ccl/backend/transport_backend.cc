@@ -57,10 +57,10 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
 }
 
 size_t TransportBackend::drain(uint32_t* completed, size_t max) {
-  unsigned rids[256];
-  size_t n = comm_->try_complete(rids, std::min(max, (size_t)256));
+  UKernel::Transport::CompletionResult results[256];
+  size_t n = comm_->try_complete(results, std::min(max, (size_t)256));
   for (size_t i = 0; i < n; ++i) {
-    auto it = rid_to_cmd_.find(rids[i]);
+    auto it = rid_to_cmd_.find(results[i].rid);
     if (it != rid_to_cmd_.end()) {
       completed[i] = it->second;
       rid_to_cmd_.erase(it);

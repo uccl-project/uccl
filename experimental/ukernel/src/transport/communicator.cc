@@ -973,6 +973,37 @@ unsigned Communicator::wait_async(int peer, uint64_t tag) {
   return rid;
 }
 
+unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
+                                  size_t off, size_t len) {
+  if (!ensure_path(peer, /*is_put=*/false)) return 0;
+  PeerTransportKind kind = get_wait_transport_kind(peer);
+  auto* adapter = get_adapter(kind);
+  if (!adapter) return 0;
+
+  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
+
+  // IPC: still uses match_seq pattern
+  if (kind == PeerTransportKind::Ipc) {
+    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(peer);
+    if (!adapter->wait_async(peer, match_seq, std::nullopt, rid)) return 0;
+    return rid;
+  }
+
+  // Resolve recv buffer to get local GPU pointer
+  MR local_mr = get_mr(recv_buf);
+  if (off > local_mr.length || len > local_mr.length - off) return 0;
+  void* local_ptr = reinterpret_cast<void*>(
+      static_cast<uintptr_t>(local_mr.address) + off);
+
+  TransportAdapter::WaitTarget target;
+  target.local_ptr = local_ptr;
+  target.len = len;
+  target.local_buffer_id = recv_buf;
+
+  if (!adapter->wait_async(peer, tag, std::move(target), rid)) return 0;
+  return rid;
+}
+
 unsigned Communicator::signal_async(int peer, uint64_t tag) {
   if (!ensure_path(peer, /*is_put=*/true)) return 0;
   PeerTransportKind kind = get_put_transport_kind(peer);
@@ -984,12 +1015,15 @@ unsigned Communicator::signal_async(int peer, uint64_t tag) {
   return rid;
 }
 
-size_t Communicator::try_complete(unsigned* rids, size_t max) {
+size_t Communicator::try_complete(CompletionResult* results, size_t max) {
   if (!completion_ring_) return 0;
   CompletionEvent ev;
   size_t count = 0;
-  while (count < max && jring_mc_dequeue_bulk(completion_ring_, &ev, 1, nullptr) == 1)
-    rids[count++] = ev.rid;
+  while (count < max && jring_mc_dequeue_bulk(completion_ring_, &ev, 1, nullptr) == 1) {
+    results[count].rid = ev.rid;
+    results[count].failed = (ev.failed != 0);
+    count++;
+  }
   return count;
 }
 
@@ -1012,6 +1046,10 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
       std::lock_guard<std::mutex> lk(resource_mu_);
       local_buffer_to_mr_[buffer_id].key = rkey;
     }
+  }
+
+  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
+    (void)ensure_uccl_memory_registered(buffer_id, local_buf, len);
   }
 
   if (!publish || !exchanger_client_ || !exchanger_client_->valid()) {
@@ -1273,23 +1311,12 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
       continue;
     }
 
-    if (!info.valid) {
-      if (timeout_ms >= 0) {
-        elapsed += kPollMs;
-        if (elapsed >= timeout_ms) return false;
-      }
-      continue;
-    }
+    // New generation — always accept regardless of valid flag.
+    // The valid flag only matters for get_ipc() later (throws for invalid IPCs).
+    if (info.generation != last_gen) break;
 
-    if (info.generation != last_gen) break;  // new data — accept
-
-    // Same generation, check if already cached (CCL repeat calls)
-    if (ipc_manager_.get_ipc(owner_rank, buffer_id).valid) return true;
-
-    if (timeout_ms >= 0) {
-      elapsed += kPollMs;
-      if (elapsed >= timeout_ms) return false;
-    }
+    // Same generation — already processed and registered (even if valid=false).
+    return true;
   }
 
   IPCItem state{};

@@ -356,11 +356,11 @@ int main(int argc, char** argv) {
         std::abort();
       }
       while (true) {
-        unsigned rids[16];
-        size_t n = comm->try_complete(rids, 16);
+        CompletionResult results[16];
+        size_t n = comm->try_complete(results, 16);
         bool found = false;
         for (size_t i = 0; i < n; ++i)
-          if (rids[i] == rid) { found = true; break; }
+          if (results[i].rid == rid) { found = true; break; }
         if (found) break;
         std::this_thread::yield();
       }
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
         rids[b] = comm->put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
       size_t drained = 0;
       while (drained < kBatchSize) {
-        unsigned done[16];
+        CompletionResult done[16];
         size_t n = comm->try_complete(done, 16);
         drained += n;
         if (drained < kBatchSize) std::this_thread::yield();
