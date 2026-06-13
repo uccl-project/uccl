@@ -5,7 +5,7 @@
 #include "ep_util.hpp"
 #include "ep_utils.cuh"
 #include "internode_ll.cuh"
-#include "uccl_ibgda.cuh"
+#include "uccl_transfer_device.cuh"
 #include <iostream>
 #include <vector>
 #include <cooperative_groups.h>
@@ -278,7 +278,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #else
           // Legacy path: directly issue one RDMA send per token.
           __threadfence_system();
-          uccl::nvshmemi_ibgda_put_nbi_warp(
+          uccl::put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               num_bytes_per_msg, dst_rank,
@@ -397,7 +397,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
         __threadfence_system();
 
-        uccl::nvshmemi_ibgda_put_nbi_warp(
+        uccl::put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), total_bytes,
             dst_rank,
@@ -443,7 +443,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
-      uccl::nvshmemi_ibgda_amo_nonfetch_add(
+      uccl::atomic_nonfetch_add(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
           /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
@@ -1033,7 +1033,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // buffer
       if (dst_p2p_ptr == 0) {
         __threadfence_system();
-        nvshmemi_ibgda_put_nbi_warp(
+        put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             hidden * sizeof(nv_bfloat16), dst_rank,
@@ -1078,7 +1078,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
-        uccl::nvshmemi_ibgda_amo_nonfetch_add(
+        uccl::atomic_nonfetch_add(
             dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
             num_tokens_to_send /* Will be changed to 1 in the proxy */,
             dst_rank,

@@ -24,7 +24,7 @@ namespace uccl {
 // to use. The total concurrent warps can be say 64 (= number of experts), while
 // the number of ring buffers is small (say 6).
 template <bool use_normal_mode = false>
-__device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
+__device__ __forceinline__ void put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx,
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
@@ -129,7 +129,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.bytes = bytes_val;
       cmd.dst_rank = dst_rank;
       if (bytes_val >> 24) {
-        printf("[nvshmemi_ibgda_put_nbi_warp] bytes too large: %llu\n",
+        printf("[put_nbi_warp] bytes too large: %llu\n",
                (unsigned long long)bytes_val);
         trap();
       }
@@ -137,12 +137,12 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       if constexpr (use_normal_mode) {
         if (atomic_offset >> 16) {
           printf(
-              "[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
+              "[put_nbi_warp] atomic_offset too large: %llu\n",
               (unsigned long long)atomic_offset);
           trap();
         }
         if (atomic_val >> 8) {
-          printf("[nvshmemi_ibgda_put_nbi_warp] atomic_val too large: %llu\n",
+          printf("[put_nbi_warp] atomic_val too large: %llu\n",
                  (unsigned long long)atomic_val);
           trap();
         }
@@ -176,7 +176,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
 template <bool use_normal_mode = false>
-__device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
+__device__ __forceinline__ void atomic_nonfetch_add(
     uint64_t rptr, uint64_t atomic_base_addr, int const& value, int dst_rank,
     int warp_id, bool is_local_copy = false,
     uint64_t const* d2h_channel_addrs = nullptr, int num_d2h_channel_addrs = 0,
@@ -242,7 +242,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         auto now = clock64();
         if (now - last_print > kPrintCycleInterval) {
           printf(
-              "[nvshmemi_ibgda_amo_nonfetch_add] %p waiting d2h_channel_idx: "
+              "[atomic_nonfetch_add] %p waiting d2h_channel_idx: "
               "%d, "
               "cur_head: "
               "%llu, cur_tail: %llu, inflight: %llu\n",
@@ -319,7 +319,7 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
   }
 }
 
-__device__ static __forceinline__ void nvshmemi_ibgda_quiet(
+__device__ static __forceinline__ void quiet(
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int nvl_rank = -1, int label = -1) {
   EP_DEVICE_ASSERT(
@@ -371,7 +371,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   }
 }
 
-__forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
+__forceinline__ __device__ void sync_with_same_gpu_idx(
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int nvl_rank = -1, int label = -1) {
   EP_DEVICE_ASSERT(
