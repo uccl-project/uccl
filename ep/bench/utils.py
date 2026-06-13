@@ -101,11 +101,11 @@ def _gather_peer_ips(group):
 
 def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int, bool]:
     """
-    Infer CUDA-local rank, barrier-local rank, and node topology.
+    Infer CUDA-local rank, node-local rank, and node topology.
 
     Returns:
         local_rank: CUDA-visible device index for the current process.
-        barrier_local_rank: rank slot within the current node.
+        node_local_rank: rank slot within the current node.
         node_idx: compact node index within the given group.
         num_nodes: number of distinct nodes spanned by the group.
         is_intranode: whether all ranks in the group are on the same node.
@@ -121,8 +121,8 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int,
     node_tokens = [None] * world
     dist.all_gather_object(node_tokens, node_token, group=group)
     rank = dist.get_rank(group)
-    local_ranks = [idx for idx, token in enumerate(node_tokens) if token == node_token]
-    barrier_local_rank = local_ranks.index(rank)
+    node_ranks = [idx for idx, token in enumerate(node_tokens) if token == node_token]
+    node_local_rank = node_ranks.index(rank)
 
     token_to_idx = {}
     for token in node_tokens:
@@ -132,7 +132,7 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int,
     node_idx = token_to_idx[node_token]
     num_nodes = len(token_to_idx)
     is_intranode = num_nodes == 1
-    return local_rank, barrier_local_rank, node_idx, num_nodes, is_intranode
+    return local_rank, node_local_rank, node_idx, num_nodes, is_intranode
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -568,7 +568,7 @@ def initialize_uccl(
 
     (
         local_rank,
-        barrier_local_rank,
+        node_local_rank,
         node_idx,
         num_nodes,
         detected_is_intranode,
@@ -581,7 +581,6 @@ def initialize_uccl(
         )
 
     proxies = []
-    nic_affinity_rank = barrier_local_rank
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -597,9 +596,9 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
-            barrier_local_rank=barrier_local_rank,
+            barrier_local_rank=node_local_rank,
             device_index=local_rank,
-            nic_local_rank=nic_affinity_rank,
+            nic_local_rank=node_local_rank,
         )
         proxies.append(proxy)
 
