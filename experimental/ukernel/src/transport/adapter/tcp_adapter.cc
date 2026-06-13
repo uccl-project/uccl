@@ -115,6 +115,7 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
                                          int gpu_id)
     : local_ip_(std::move(local_ip)), local_rank_(local_rank), gpu_id_(gpu_id) {
   if (gpu_id_ >= 0) {
+    GPU_RT_CHECK(gpuSetDevice(gpu_id_));
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&gpu_stream_, gpuStreamNonBlocking));
     bounce_pool_ = std::make_unique<CpuBouncePool>();
   }
@@ -292,7 +293,22 @@ void TcpTransportAdapter::recv_worker_loop() {
         if (e.kind == Kind::SignalWait) {
           ok = recv_all(ctx->recv_fd, &tag, sizeof(uint64_t));
         } else if (e.kind == Kind::DataWait && e.ptr) {
-          ok = recv_all(ctx->recv_fd, e.ptr, e.len);
+          gpuPointerAttributes attr{};
+          bool is_gpu = (gpuPointerGetAttributes(&attr, e.ptr) == gpuSuccess &&
+                         attr.type == gpuMemoryTypeDevice);
+          if (is_gpu) {
+            GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+            void* bounce = bounce_pool_->acquire(e.len);
+            ok = recv_all(ctx->recv_fd, bounce, e.len);
+            if (ok) {
+              GPU_RT_CHECK(gpuMemcpyAsync(e.ptr, bounce, e.len,
+                                           gpuMemcpyHostToDevice, gpu_stream_));
+              GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
+            }
+            bounce_pool_->release(bounce);
+          } else {
+            ok = recv_all(ctx->recv_fd, e.ptr, e.len);
+          }
         } else {
           ok = recv_discard(ctx->recv_fd, hdr.payload_len);
         }
@@ -323,9 +339,9 @@ bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t por
     return false;
   }
 
-  auto ctx = std::make_shared<PeerContext>();
+  auto& ctx = peer_contexts_[rank];
+  if (!ctx) ctx = std::make_shared<PeerContext>();
   ctx->send_fd = fd;
-  peer_contexts_[rank] = ctx;
   return true;
 }
 

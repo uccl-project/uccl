@@ -80,10 +80,11 @@ static bool setup_bidirectional_peer(Communicator& comm, int rank,
 static bool wait_all(Communicator& comm, std::vector<unsigned>& reqs) {
   if (reqs.empty()) return true;
   std::unordered_set<unsigned> pending(reqs.begin(), reqs.end());
-  pending.erase(0);  // rid 0 is "already done", nothing to complete
+  pending.erase(0);
   while (!pending.empty()) {
     CompletionResult results[64];
     size_t n = comm.try_complete(results, 64);
+    if (n == 0) std::this_thread::yield();
     for (size_t i = 0; i < n; ++i) {
       if (results[i].failed) {
         reqs.clear();
@@ -101,9 +102,10 @@ static bool wait_one(Communicator& comm, unsigned rid) {
   while (true) {
     CompletionResult results[16];
     size_t n = comm.try_complete(results, 16);
+    if (n == 0) std::this_thread::yield();
     for (size_t i = 0; i < n; ++i)
       if (results[i].rid == rid)
-        return !results[i].failed;  // return false on failure
+        return !results[i].failed;
   }
 }
 
@@ -302,7 +304,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                 size_t msg_size, int num_iterations, int num_warmup,
                 std::string const& local_ip, uint16_t listen_port,
                 PreferredTransport preferred_transport) {
-  printf("[Sender %d] Initializing...\n", rank);
+  fprintf(stderr, "[Sender %d] Initializing...\n", rank);
 
   // Create configuration
   auto config = std::make_shared<CommunicatorConfig>();
@@ -314,19 +316,12 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   // Create communicator
   Communicator comm(gpu_id, rank, world_size, config);
 
-  // Establish homogeneous full-duplex transport path with peer.
-  printf("[Sender %d] Establishing bidirectional peer flows with %d...\n", rank,
-         peer_rank);
+  fprintf(stderr, "[Sender %d] Establishing bidirectional peer flows with %d...\n", rank, peer_rank);
   if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
-    fprintf(
-        stderr,
-        "[Sender %d] Failed to establish bidirectional flows with peer %d\n",
-        rank, peer_rank);
+    fprintf(stderr, "[Sender %d] Failed to establish bidirectional flows with peer %d\n", rank, peer_rank);
     return;
   }
-
-  printf("[Sender %d] Bidirectional flows ready with peer %d\n", rank,
-         peer_rank);
+  fprintf(stderr, "[Sender %d] Bidirectional flows ready with peer %d\n", rank, peer_rank);
   PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
   int throughput_window = throughput_window_for(transport_kind);
   printf("[Sender %d] Active transport to peer %d: %s (throughput window=%d)\n",
@@ -534,21 +529,14 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
          num_iterations);
 
   t0 = now_ns();
-  send_reqs.clear();
-  std::vector<unsigned> recv_reqs;
-  send_reqs.reserve(throughput_window);
-  if (transport_kind == PeerTransportKind::Tcp) {
-    recv_reqs.reserve(throughput_window);
-  }
   std::vector<char> bidi_touched(static_cast<size_t>(throughput_window), 0);
 
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
     bidi_touched[static_cast<size_t>(slot)] = 1;
 
-    unsigned send_req =
-        submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
-                    transport_kind, remote_recv_buffer_ids, slot);
+    unsigned send_req = submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
+                                    transport_kind, remote_recv_buffer_ids, slot);
     if (send_req == 0) {
       fprintf(stderr,
               "[Sender %d] request submission failed during bidirectional "
@@ -557,7 +545,14 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
       cleanup();
       return;
     }
-    send_reqs.push_back(send_req);
+    if (!wait_one(comm, send_req)) {
+      fprintf(stderr,
+              "[Sender %d] completion failed during bidirectional "
+              "throughput at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
+    }
 
     if (transport_kind == PeerTransportKind::Tcp) {
       unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
@@ -570,43 +565,17 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
         cleanup();
         return;
       }
-      recv_reqs.push_back(recv_req);
-    }
-
-    if (static_cast<int>(send_reqs.size()) == throughput_window) {
-      if (!wait_all(comm, send_reqs)) {
-        fprintf(
-            stderr,
-            "[Sender %d] completion failed during bidirectional throughput\n",
-            rank);
-        cleanup();
-        return;
-      }
-      if (transport_kind == PeerTransportKind::Tcp && !wait_all(comm, recv_reqs)) {
-        fprintf(
-            stderr,
-            "[Sender %d] completion failed during bidirectional throughput\n",
-            rank);
+      if (!wait_one(comm, recv_req)) {
+        fprintf(stderr,
+                "[Sender %d] recv completion failed during bidirectional "
+                "throughput at iter %d\n",
+                rank, i);
         cleanup();
         return;
       }
     }
   }
 
-  if (!wait_all(comm, send_reqs)) {
-    fprintf(stderr,
-            "[Sender %d] completion failed during bidirectional throughput\n",
-            rank);
-    cleanup();
-    return;
-  }
-  if (transport_kind == PeerTransportKind::Tcp && !wait_all(comm, recv_reqs)) {
-    fprintf(stderr,
-            "[Sender %d] completion failed during bidirectional throughput\n",
-            rank);
-    cleanup();
-    return;
-  }
   if (!validate_recv_slots("Sender", rank, recv_slots, bidi_touched,
                            expected_recv)) {
     cleanup();
@@ -626,6 +595,17 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec,
          throughput_gbps);
 
+  // Final sync: prevent peer from exiting before we finish (for RDMA one-sided)
+  if (transport_kind == PeerTransportKind::Rdma) {
+    if (rank < peer_rank) {
+      unsigned s = comm.signal_async(peer_rank, 11);
+      if (s && wait_one(comm, s)) { unsigned w = comm.wait_async(peer_rank, 12); wait_one(comm, w); }
+    } else {
+      unsigned w = comm.wait_async(peer_rank, 11);
+      if (w && wait_one(comm, w)) { unsigned s = comm.signal_async(peer_rank, 12); wait_one(comm, s); }
+    }
+  }
+
   cleanup();
 
   printf("[Sender %d] Done.\n", rank);
@@ -635,7 +615,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
                   size_t msg_size, int num_iterations, int num_warmup,
                   std::string const& local_ip, uint16_t listen_port,
                   PreferredTransport preferred_transport) {
-  printf("[Receiver %d] Initializing...\n", rank);
+  fprintf(stderr, "[Receiver %d] Initializing...\n", rank);
 
   // Create configuration
   auto config = std::make_shared<CommunicatorConfig>();
@@ -648,7 +628,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   Communicator comm(gpu_id, rank, world_size, config);
 
   // Establish homogeneous full-duplex transport path with peer.
-  printf("[Receiver %d] Establishing bidirectional peer flows with %d...\n",
+  fprintf(stderr, "[Receiver %d] Establishing bidirectional peer flows with %d...\n",
          rank, peer_rank);
   if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
     fprintf(
@@ -658,7 +638,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     return;
   }
 
-  printf("[Receiver %d] Bidirectional flows ready with peer %d\n", rank,
+  fprintf(stderr, "[Receiver %d] Bidirectional flows ready with peer %d\n", rank,
          peer_rank);
   PeerTransportKind transport_kind = comm.peer_transport_kind(peer_rank);
   int throughput_window = throughput_window_for(transport_kind);
@@ -718,7 +698,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     return;
   }
 
-  printf("[Receiver %d] Memory registered: send_buffer_id=%u, recv_slots=%d\n",
+  fprintf(stderr, "[Receiver %d] Memory registered: send_buffer_id=%u, recv_slots=%d\n",
          rank, kBenchSendBufferId, throughput_window);
 
   std::vector<uint32_t> remote_recv_buffer_ids;
@@ -731,10 +711,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     return;
   }
 
-  printf("[Receiver %d] Remote memory info received\n", rank);
+  fprintf(stderr, "[Receiver %d] Remote memory info received\n", rank);
 
   // Warmup phase
-  printf("[Receiver %d] Warmup (%d iterations)...\n", rank, num_warmup);
+  fprintf(stderr, "[Receiver %d] Warmup (%d iterations)...\n", rank, num_warmup);
   std::vector<char> warmup_touched(static_cast<size_t>(throughput_window), 0);
   for (int i = 0; i < num_warmup; ++i) {
     int slot = i % throughput_window;
@@ -757,10 +737,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     cleanup();
     return;
   }
-  printf("[Receiver %d] Warmup complete\n", rank);
+  fprintf(stderr, "[Receiver %d] Warmup complete\n", rank);
 
   // Latency test (ping-pong) - receiver side
-  printf("[Receiver %d] Latency test (%d iterations)...\n", rank,
+  fprintf(stderr, "[Receiver %d] Latency test (%d iterations)...\n", rank,
          num_iterations);
   std::vector<char> latency_touched(static_cast<size_t>(throughput_window), 0);
   for (int i = 0; i < num_iterations; ++i) {
@@ -784,10 +764,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     cleanup();
     return;
   }
-  printf("[Receiver %d] Latency test complete\n", rank);
+  fprintf(stderr, "[Receiver %d] Latency test complete\n", rank);
 
   // Throughput test - just receive
-  printf("[Receiver %d] Throughput test (%d iterations)...\n", rank,
+  fprintf(stderr, "[Receiver %d] Throughput test (%d iterations)...\n", rank,
          num_iterations);
   std::vector<unsigned> recv_reqs;
   recv_reqs.reserve(throughput_window);
@@ -831,7 +811,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     cleanup();
     return;
   }
-  printf("[Receiver %d] Throughput test complete\n", rank);
+  fprintf(stderr, "[Receiver %d] Throughput test complete\n", rank);
 
   if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
                                  kBenchSendBufferId, local_recv_buffer_ids[0],
@@ -844,14 +824,8 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   }
 
   // Bidirectional throughput test
-  printf("[Receiver %d] Bidirectional throughput test (%d iterations)...\n",
+  fprintf(stderr, "[Receiver %d] Bidirectional throughput test (%d iterations)...\n",
          rank, num_iterations);
-  recv_reqs.clear();
-  std::vector<unsigned> send_reqs;
-  send_reqs.reserve(throughput_window);
-  if (transport_kind == PeerTransportKind::Tcp) {
-    recv_reqs.reserve(throughput_window);
-  }
   std::vector<char> bidi_touched(static_cast<size_t>(throughput_window), 0);
 
   for (int i = 0; i < num_iterations; ++i) {
@@ -869,7 +843,14 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
         cleanup();
         return;
       }
-      recv_reqs.push_back(recv_req);
+      if (!wait_one(comm, recv_req)) {
+        fprintf(stderr,
+                "[Receiver %d] recv completion failed during bidirectional "
+                "throughput at iter %d\n",
+                rank, i);
+        cleanup();
+        return;
+      }
     }
 
     unsigned send_req =
@@ -883,55 +864,36 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
       cleanup();
       return;
     }
-    send_reqs.push_back(send_req);
-
-    if (static_cast<int>(send_reqs.size()) == throughput_window) {
-      if (transport_kind == PeerTransportKind::Tcp &&
-          !wait_all(comm, recv_reqs)) {
-        fprintf(stderr,
-                "[Receiver %d] completion failed during bidirectional "
-                "throughput\n",
-                rank);
-        cleanup();
-        return;
-      }
-      if (!wait_all(comm, send_reqs)) {
-        fprintf(stderr,
-                "[Receiver %d] completion failed during bidirectional "
-                "throughput\n",
-                rank);
-        cleanup();
-        return;
-      }
+    if (!wait_one(comm, send_req)) {
+      fprintf(stderr,
+              "[Receiver %d] completion failed during bidirectional "
+              "throughput at iter %d\n",
+              rank, i);
+      cleanup();
+      return;
     }
-  }
-
-  if (transport_kind == PeerTransportKind::Tcp && !wait_all(comm, recv_reqs)) {
-    fprintf(
-        stderr,
-        "[Receiver %d] completion failed during bidirectional throughput\n",
-        rank);
-    cleanup();
-    return;
-  }
-  if (!wait_all(comm, send_reqs)) {
-    fprintf(
-        stderr,
-        "[Receiver %d] completion failed during bidirectional throughput\n",
-        rank);
-    cleanup();
-    return;
   }
   if (!validate_recv_slots("Receiver", rank, recv_slots, bidi_touched,
                            expected_recv)) {
     cleanup();
     return;
   }
-  printf("[Receiver %d] Bidirectional throughput test complete\n", rank);
+  fprintf(stderr, "[Receiver %d] Bidirectional throughput test complete\n", rank);
+
+  // Final sync: prevent peer from exiting before we finish (for RDMA one-sided)
+  if (transport_kind == PeerTransportKind::Rdma) {
+    if (rank < peer_rank) {
+      unsigned s = comm.signal_async(peer_rank, 11);
+      if (s && wait_one(comm, s)) { unsigned w = comm.wait_async(peer_rank, 12); wait_one(comm, w); }
+    } else {
+      unsigned w = comm.wait_async(peer_rank, 11);
+      if (w && wait_one(comm, w)) { unsigned s = comm.signal_async(peer_rank, 12); wait_one(comm, s); }
+    }
+  }
 
   cleanup();
 
-  printf("[Receiver %d] Done.\n", rank);
+  fprintf(stderr, "[Receiver %d] Done.\n", rank);
 }
 
 void print_usage(char const* prog) {
