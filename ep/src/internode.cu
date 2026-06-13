@@ -6,7 +6,6 @@
 #include "uccl_transfer_device.cuh"
 #include <functional>
 #include <optional>
-// #include "ibgda_device.cuh"
 #include "internode.cuh"
 
 namespace uccl {

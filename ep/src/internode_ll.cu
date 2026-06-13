@@ -236,7 +236,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
       sync_barrier_1(num_threads);
 
-      // Issue IBGDA sends
+      // Issue RDMA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
             lane_id == 0
@@ -302,7 +302,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
     }
   } else if (warp_id == num_warps - 1) {
-    // NOTE(MaoZiming): These checks are ibgda specific.
+    // NOTE(MaoZiming): These checks are RDMA specific.
     EP_DEVICE_ASSERT(num_sms > 1);
     if (sm_id == 0) {
       // The first SM is also responsible for cleaning the next buffer
@@ -356,14 +356,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   cg::this_grid().sync();
 #endif
 
-  // Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
+  // Batch RDMA send phase - send entire expert buffer in ONE RDMA call
   // Each warp group handles one expert (only first sub_warp does the send)
   if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
     auto const dst_rank = responsible_expert_idx / num_local_experts;
     auto const dst_expert_local_idx =
         responsible_expert_idx % num_local_experts;
 
-    // Check if this destination is inter-node (needs IBGDA batch send)
+    // Check if this destination is inter-node (needs RDMA batch send)
     // IPC destinations were already sent in the token loop
     auto const test_dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x);
     auto const dst_p2p_ptr =
@@ -442,7 +442,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                     max_nvl_peers, 0)
             : 0;
     if (dst_p2p_ptr == 0) {
-      // Inter-node or no IPC: use IBGDA atomic
+      // Inter-node or no IPC: use RDMA atomic
       uccl::atomic_nonfetch_add(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
@@ -801,7 +801,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
                                                       num_experts);
   }
 
-  // Issue IBGDA sends
+  // Issue RDMA sends
   if (responsible_expert_idx < num_experts) {
     auto const dst_rank = responsible_expert_idx / num_local_experts;
     auto const local_expert_idx = responsible_expert_idx % num_local_experts;
@@ -866,7 +866,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     };
 #endif
 
-    // Issue IBGDA send
+    // Issue RDMA send
     for (int token_idx = offset + sub_warp_id;
          token_idx < offset + num_tokens_to_send;
          token_idx += num_warps_per_group) {
@@ -1074,8 +1074,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
         st_release_sys_global<kUseAggressiveAtomic>(
             reinterpret_cast<int*>(dst_p2p_ptr), 1);
       } else {
-        // Inter-node or no IPC: use IBGDA atomic
-        // NOTE(MaoZiming): Without ibgda, we can only use atomic add
+        // Inter-node or no IPC: use RDMA atomic
+        // NOTE(MaoZiming): Without GPU-initiated RDMA, we can only use atomic
+        // add
         // Pass offset to CPU proxy for atomic operation (similar to dispatch
         // phase)
         uccl::atomic_nonfetch_add(
