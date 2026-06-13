@@ -273,8 +273,8 @@ void Communicator::exchange_peer_metas() {
     auto& self = peer_states_.at(static_cast<size_t>(global_rank_));
     self.meta = local;
     self.has_meta = true;
-    self.put_ready = true;
-    self.wait_ready = true;
+    self.paths[PeerTransportKind::Ipc].put_ready = true;
+    self.paths[PeerTransportKind::Ipc].wait_ready = true;
     self.gpu_idx = local_gpu_idx_;
   }
 
@@ -476,7 +476,7 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
   return *tcp_adapter_;
 }
 
-Communicator::ResolvedPeer Communicator::resolve_peer(int rank) const {
+Communicator::ResolvedPeer Communicator::resolve_peer(int rank, PeerTransportKind transport) const {
   if (rank == global_rank_) {
     throw std::invalid_argument("transport peer rank cannot be self");
   }
@@ -494,8 +494,28 @@ Communicator::ResolvedPeer Communicator::resolve_peer(int rank) const {
   ResolvedPeer resolved;
   resolved.local_meta = local_peer.meta;
   resolved.remote_meta = remote_peer.meta;
-  resolved.kind = resolve_peer_transport_kind(*config_, resolved.local_meta,
-                                              resolved.remote_meta);
+
+  if (transport != PeerTransportKind::Unknown) {
+    // Explicit transport: validate compatibility
+    if (transport == PeerTransportKind::Ipc || transport == PeerTransportKind::Uccl ||
+        transport == PeerTransportKind::Tcp || transport == PeerTransportKind::Rdma) {
+      bool same_host_val = (resolved.local_meta.host_id == resolved.remote_meta.host_id);
+      bool rdma_capable_val = (resolved.local_meta.rdma_capable && resolved.remote_meta.rdma_capable);
+      if (transport == PeerTransportKind::Ipc && !same_host_val) {
+        throw std::invalid_argument("IPC transport requires same-host peer");
+      }
+      if (transport == PeerTransportKind::Uccl && !rdma_capable_val) {
+        throw std::invalid_argument("Uccl transport requires RDMA-capable peers");
+      }
+      if (transport == PeerTransportKind::Rdma && !rdma_capable_val) {
+        throw std::invalid_argument("Rdma transport requires RDMA-capable peers");
+      }
+    }
+    resolved.kind = transport;
+  } else {
+    resolved.kind = resolve_peer_transport_kind(*config_, resolved.local_meta,
+                                                resolved.remote_meta);
+  }
   return resolved;
 }
 
@@ -543,15 +563,15 @@ bool Communicator::try_fallback_tcp_accept(int rank,
   return true;
 }
 
-bool Communicator::ensure_path(int rank, bool is_put) {
+bool Communicator::ensure_path(int rank, bool is_put, PeerTransportKind transport) {
   if (rank == global_rank_) return true;
   if (rank < 0 || rank >= world_size_) return false;
 
-  if (is_put ? has_put_path(rank) : has_wait_path(rank)) return true;
+  if (is_put ? has_put_path(rank, transport) : has_wait_path(rank, transport)) return true;
 
   ResolvedPeer resolved;
   try {
-    resolved = resolve_peer(rank);
+    resolved = resolve_peer(rank, transport);
   } catch (std::exception const& ex) {
     std::cerr << "[ERROR] Communicator " << global_rank_
               << " failed to resolve transport for rank " << rank << ": "
@@ -676,54 +696,99 @@ bool Communicator::ensure_path(int rank, bool is_put) {
   return false;
 }
 
-bool Communicator::connect(int rank) { return ensure_path(rank, true); }
-
-bool Communicator::accept(int rank) { return ensure_path(rank, false); }
-
-bool Communicator::has_put_path(int rank) const {
-  std::lock_guard<std::mutex> lk(peer_mu_);
-  if (rank < 0 || rank >= world_size_) return false;
-  return peer_states_.at(static_cast<size_t>(rank)).put_ready;
+bool Communicator::connect(int rank, PeerTransportKind transport) {
+  return ensure_path(rank, true, transport);
 }
 
-bool Communicator::has_wait_path(int rank) const {
+bool Communicator::accept(int rank, PeerTransportKind transport) {
+  return ensure_path(rank, false, transport);
+}
+
+bool Communicator::has_put_path(int rank, PeerTransportKind transport) const {
   std::lock_guard<std::mutex> lk(peer_mu_);
   if (rank < 0 || rank >= world_size_) return false;
-  return peer_states_.at(static_cast<size_t>(rank)).wait_ready;
+  auto const& peer = peer_states_.at(static_cast<size_t>(rank));
+  if (transport != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(transport);
+    return it != peer.paths.end() && it->second.put_ready;
+  }
+  // Unknown: check if ANY path has put_ready
+  for (auto const& kv : peer.paths) {
+    if (kv.second.put_ready) return true;
+  }
+  return false;
+}
+
+bool Communicator::has_wait_path(int rank, PeerTransportKind transport) const {
+  std::lock_guard<std::mutex> lk(peer_mu_);
+  if (rank < 0 || rank >= world_size_) return false;
+  auto const& peer = peer_states_.at(static_cast<size_t>(rank));
+  if (transport != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(transport);
+    return it != peer.paths.end() && it->second.wait_ready;
+  }
+  // Unknown: check if ANY path has wait_ready
+  for (auto const& kv : peer.paths) {
+    if (kv.second.wait_ready) return true;
+  }
+  return false;
 }
 
 void Communicator::mark_put_path_ready(int rank, PeerTransportKind kind) {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto& peer = peer_states_.at(static_cast<size_t>(rank));
-  peer.put_kind = kind;
-  peer.put_ready = true;
+  peer.paths[kind].put_ready = true;
+  if (peer.resolved_kind == PeerTransportKind::Unknown) {
+    peer.resolved_kind = kind;
+  }
 }
 
 void Communicator::mark_wait_path_ready(int rank, PeerTransportKind kind) {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto& peer = peer_states_.at(static_cast<size_t>(rank));
-  peer.wait_kind = kind;
-  peer.wait_ready = true;
+  peer.paths[kind].wait_ready = true;
 }
 
-PeerTransportKind Communicator::get_put_transport_kind(int rank) const {
+PeerTransportKind Communicator::get_put_transport_kind(int rank, PeerTransportKind transport) const {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-  if (!peer.has_meta || !peer.put_ready ||
-      peer.put_kind == PeerTransportKind::Unknown) {
-    throw std::runtime_error("transport put path is not established");
+  if (!peer.has_meta) {
+    throw std::runtime_error("transport peer session is not established");
   }
-  return peer.put_kind;
+  if (transport != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(transport);
+    if (it != peer.paths.end() && it->second.put_ready) return transport;
+  }
+  if (peer.resolved_kind != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(peer.resolved_kind);
+    if (it != peer.paths.end() && it->second.put_ready) return peer.resolved_kind;
+  }
+  // Fallback: return first available put path
+  for (auto const& kv : peer.paths) {
+    if (kv.second.put_ready) return kv.first;
+  }
+  throw std::runtime_error("transport put path is not established");
 }
 
-PeerTransportKind Communicator::get_wait_transport_kind(int rank) const {
+PeerTransportKind Communicator::get_wait_transport_kind(int rank, PeerTransportKind transport) const {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-  if (!peer.has_meta || !peer.wait_ready ||
-      peer.wait_kind == PeerTransportKind::Unknown) {
-    throw std::runtime_error("transport wait path is not established");
+  if (!peer.has_meta) {
+    throw std::runtime_error("transport peer session is not established");
   }
-  return peer.wait_kind;
+  if (transport != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(transport);
+    if (it != peer.paths.end() && it->second.wait_ready) return transport;
+  }
+  if (peer.resolved_kind != PeerTransportKind::Unknown) {
+    auto it = peer.paths.find(peer.resolved_kind);
+    if (it != peer.paths.end() && it->second.wait_ready) return peer.resolved_kind;
+  }
+  // Fallback: return first available wait path
+  for (auto const& kv : peer.paths) {
+    if (kv.second.wait_ready) return kv.first;
+  }
+  throw std::runtime_error("transport wait path is not established");
 }
 
 PeerTransportKind Communicator::peer_transport_kind(int rank) const {
@@ -732,11 +797,12 @@ PeerTransportKind Communicator::peer_transport_kind(int rank) const {
   if (!peer.has_meta) {
     throw std::runtime_error("transport peer session is not established");
   }
-  if (!peer.put_ready && !peer.wait_ready) {
-    throw std::runtime_error("transport peer path is not established");
+  if (peer.resolved_kind != PeerTransportKind::Unknown) return peer.resolved_kind;
+  // Fallback: return first available kind from paths
+  for (auto const& kv : peer.paths) {
+    if (kv.second.put_ready || kv.second.wait_ready) return kv.first;
   }
-  if (peer.put_ready) return peer.put_kind;
-  return peer.wait_kind;
+  throw std::runtime_error("transport peer path is not established");
 }
 
 int Communicator::peer_gpu_idx(int rank) const {
@@ -905,9 +971,9 @@ bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
 
 unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
                                   uint32_t dst_buf, size_t dst_off,
-                                  size_t bytes) {
-  if (!ensure_path(peer, /*is_put=*/true)) return 0;
-  PeerTransportKind kind = get_put_transport_kind(peer);
+                                  size_t bytes, PeerTransportKind transport) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
@@ -955,9 +1021,9 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
   return rid;
 }
 
-unsigned Communicator::wait_async(int peer, uint64_t tag) {
-  if (!ensure_path(peer, /*is_put=*/false)) return 0;
-  PeerTransportKind kind = get_wait_transport_kind(peer);
+unsigned Communicator::wait_async(int peer, uint64_t tag, PeerTransportKind transport) {
+  if (!ensure_path(peer, /*is_put=*/false, transport)) return 0;
+  PeerTransportKind kind = get_wait_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
@@ -974,9 +1040,9 @@ unsigned Communicator::wait_async(int peer, uint64_t tag) {
 }
 
 unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
-                                  size_t off, size_t len) {
-  if (!ensure_path(peer, /*is_put=*/false)) return 0;
-  PeerTransportKind kind = get_wait_transport_kind(peer);
+                                  size_t off, size_t len, PeerTransportKind transport) {
+  if (!ensure_path(peer, /*is_put=*/false, transport)) return 0;
+  PeerTransportKind kind = get_wait_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
@@ -1004,9 +1070,9 @@ unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
   return rid;
 }
 
-unsigned Communicator::signal_async(int peer, uint64_t tag) {
-  if (!ensure_path(peer, /*is_put=*/true)) return 0;
-  PeerTransportKind kind = get_put_transport_kind(peer);
+unsigned Communicator::signal_async(int peer, uint64_t tag, PeerTransportKind transport) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 

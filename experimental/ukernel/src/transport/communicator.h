@@ -42,8 +42,8 @@ class Communicator {
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
 
-  bool connect(int rank);
-  bool accept(int rank);
+  bool connect(int rank, PeerTransportKind transport = PeerTransportKind::Unknown);
+  bool accept(int rank, PeerTransportKind transport = PeerTransportKind::Unknown);
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
@@ -57,10 +57,14 @@ class Communicator {
   //   Every put_async() MUST have a matching wait_async() on the peer.
   //   TCP has no remote address space — data flows as a byte stream.
   unsigned put_async(int peer, uint32_t src_buf, size_t src_off,
-                     uint32_t dst_buf, size_t dst_off, size_t bytes);
-  unsigned signal_async(int peer, uint64_t tag);
-  unsigned wait_async(int peer, uint64_t tag);
-  unsigned wait_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len);
+                     uint32_t dst_buf, size_t dst_off, size_t bytes,
+                     PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned signal_async(int peer, uint64_t tag,
+                        PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned wait_async(int peer, uint64_t tag,
+                      PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned wait_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
+                      PeerTransportKind transport = PeerTransportKind::Unknown);
   size_t try_complete(CompletionResult* results, size_t max);
 
   void set_oob_namespace(std::string ns);
@@ -102,14 +106,19 @@ class Communicator {
     PeerTransportKind kind = PeerTransportKind::Unknown;
   };
 
+  struct PeerPathState {
+    bool put_ready = false;
+    bool wait_ready = false;
+  };
+
   struct PeerState {
     bool has_meta = false;
     CommunicatorMeta meta{};
-    PeerTransportKind put_kind = PeerTransportKind::Unknown;
-    PeerTransportKind wait_kind = PeerTransportKind::Unknown;
-    bool put_ready = false;
-    bool wait_ready = false;
     int gpu_idx = -1;
+    // Auto-resolved default kind for this peer (set once, never changes)
+    PeerTransportKind resolved_kind = PeerTransportKind::Unknown;
+    // Per-transport readiness (key = PeerTransportKind)
+    std::unordered_map<PeerTransportKind, PeerPathState> paths;
   };
 
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
@@ -120,13 +129,13 @@ class Communicator {
                                RdmaP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
 
-  bool has_put_path(int rank) const;
-  bool has_wait_path(int rank) const;
+  bool has_put_path(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  bool has_wait_path(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
   void mark_put_path_ready(int rank, PeerTransportKind kind);
   void mark_wait_path_ready(int rank, PeerTransportKind kind);
-  bool ensure_path(int rank, bool is_put);
+  bool ensure_path(int rank, bool is_put, PeerTransportKind transport = PeerTransportKind::Unknown);
   void exchange_peer_metas();
-  ResolvedPeer resolve_peer(int rank) const;
+  ResolvedPeer resolve_peer(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
   bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta);
 
   TransportAdapter* get_adapter(PeerTransportKind kind);
@@ -139,8 +148,8 @@ class Communicator {
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
                                      IPCItem const& item, gpuError_t err) const;
 
-  PeerTransportKind get_put_transport_kind(int rank) const;
-  PeerTransportKind get_wait_transport_kind(int rank) const;
+  PeerTransportKind get_put_transport_kind(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  PeerTransportKind get_wait_transport_kind(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
 
   int local_gpu_idx_;
   int global_rank_;
