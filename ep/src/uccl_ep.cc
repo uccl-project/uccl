@@ -16,6 +16,7 @@
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
+#include "util/util.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
@@ -28,6 +29,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -56,6 +58,33 @@ struct Ctx {
 static std::atomic<long> g_next{1};
 static std::mutex g_mu;
 static std::unordered_map<long, Ctx> g_ctx;
+
+namespace {
+
+std::string get_cuda_device_bdf(int device_index) {
+  int num_devices = 0;
+  cudaError_t st = cudaGetDeviceCount(&num_devices);
+  if (st != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaGetDeviceCount failed: ") +
+                             cudaGetErrorString(st));
+  }
+  if (device_index < 0 || device_index >= num_devices) {
+    throw std::out_of_range("CUDA device index " +
+                            std::to_string(device_index) +
+                            " out of range for " + std::to_string(num_devices) +
+                            " visible devices");
+  }
+
+  char bdf[64];
+  st = cudaDeviceGetPCIBusId(bdf, sizeof(bdf), device_index);
+  if (st != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaDeviceGetPCIBusId failed: ") +
+                             cudaGetErrorString(st));
+  }
+  return uccl::normalize_pci_bus_id(bdf);
+}
+
+}  // namespace
 
 enum DTypeCode : int {
   kUInt8 = 0,
@@ -1893,6 +1922,19 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
+  m.def("get_gpu_bdf", &get_cuda_device_bdf, nb::arg("device_index"),
+        "Return the normalized PCI BDF for a CUDA-visible device index");
+  m.def(
+      "get_physical_gpu_rank",
+      [](int device_index) {
+        std::string const bdf = get_cuda_device_bdf(device_index);
+        auto all_gpu_bdfs = uccl::enumerate_all_gpu_bdfs();
+        auto it = std::find(all_gpu_bdfs.begin(), all_gpu_bdfs.end(), bdf);
+        if (it == all_gpu_bdfs.end()) return -1;
+        return static_cast<int>(std::distance(all_gpu_bdfs.begin(), it));
+      },
+      nb::arg("device_index"),
+      "Return the CUDA device's index in UCCL's physical GPU BDF order");
 
   m.def(
       "get_rdma_buffer",
