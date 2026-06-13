@@ -121,7 +121,6 @@ def detect_group_topology(
         local_rank = torch.cuda.current_device()
 
     node_token = ep.get_oob_ip() or socket.gethostname()
-    gpu_bdf = ep.get_gpu_bdf(local_rank)
     nic_local_rank = ep.get_physical_gpu_rank(local_rank)
 
     world = dist.get_world_size(group)
@@ -131,7 +130,6 @@ def detect_group_topology(
         "node_token": node_token,
         "local_rank": local_rank,
         "nic_local_rank": nic_local_rank,
-        "gpu_bdf": gpu_bdf,
     }
     all_info = [None] * world
     dist.all_gather_object(all_info, local_info, group=group)

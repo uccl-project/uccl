@@ -1922,8 +1922,6 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
-  m.def("get_gpu_bdf", &get_cuda_device_bdf, nb::arg("device_index"),
-        "Return the normalized PCI BDF for a CUDA-visible device index");
   m.def(
       "get_physical_gpu_rank",
       [](int device_index) {

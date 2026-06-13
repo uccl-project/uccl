@@ -414,20 +414,14 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   } else {
     auto gpu_cards = uccl::get_gpu_cards();
     int gpu_card_idx = -1;
-    char const* affinity_source = nullptr;
-    char const* gpu_card_source = nullptr;
     if (nic_local_rank >= 0 &&
         nic_local_rank < static_cast<int>(gpu_cards.size())) {
       nic_affinity_rank = nic_local_rank;
       gpu_card_idx = nic_local_rank;
-      affinity_source = "nic_local_rank";
-      gpu_card_source = "nic_local_rank";
     } else if (device_index >= 0 &&
                device_index < static_cast<int>(gpu_cards.size())) {
       nic_affinity_rank = nic_local_rank >= 0 ? nic_local_rank : device_index;
       gpu_card_idx = device_index;
-      affinity_source = nic_local_rank >= 0 ? "nic_local_rank" : "device_index";
-      gpu_card_source = "device_index";
     }
     if (gpu_card_idx < 0) {
       fprintf(stderr,
@@ -439,12 +433,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     }
     gpu_device_path = gpu_cards[gpu_card_idx];
     gpu_bdf = gpu_device_path.filename().string();
-    fprintf(
-        stderr,
-        "[RDMA] physical GPU scan unavailable (%zu entries); falling back "
-        "to %s=%d for NIC/NUMA affinity and %s=%d for the GPU sysfs path.\n",
-        all_gpu_bdfs.size(), affinity_source, nic_affinity_rank,
-        gpu_card_source, gpu_card_idx);
   }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
