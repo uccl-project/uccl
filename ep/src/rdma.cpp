@@ -400,36 +400,33 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to get IB devices list");
     exit(1);
   }
-  int gpu_idx = nic_local_rank;
+  int nic_affinity_rank = nic_local_rank;
   cudaSetDevice(device_index);  // Needed.
 
-  // Map the physical GPU rank (gpu_idx) to its PCI BDF for NIC/NUMA affinity.
+  // Map the local affinity rank to its PCI BDF for NIC/NUMA selection.
   auto all_gpu_bdfs = uccl::enumerate_all_gpu_bdfs();
   std::filesystem::path gpu_device_path;
   std::string gpu_bdf;
-  if (gpu_idx >= 0 && gpu_idx < static_cast<int>(all_gpu_bdfs.size())) {
-    gpu_bdf = all_gpu_bdfs[gpu_idx];
+  if (nic_affinity_rank >= 0 &&
+      nic_affinity_rank < static_cast<int>(all_gpu_bdfs.size())) {
+    gpu_bdf = all_gpu_bdfs[nic_affinity_rank];
     gpu_device_path = std::filesystem::path("/sys/bus/pci/devices") / gpu_bdf;
   } else {
-    // Fallback when the physical GPU scan is unavailable.
     auto gpu_cards = uccl::get_gpu_cards();
     int gpu_card_idx = -1;
-    char const* gpu_idx_source = nullptr;
+    char const* affinity_source = nullptr;
     char const* gpu_card_source = nullptr;
     if (nic_local_rank >= 0 &&
         nic_local_rank < static_cast<int>(gpu_cards.size())) {
-      gpu_idx = nic_local_rank;
+      nic_affinity_rank = nic_local_rank;
       gpu_card_idx = nic_local_rank;
-      gpu_idx_source = "nic_local_rank";
+      affinity_source = "nic_local_rank";
       gpu_card_source = "nic_local_rank";
     } else if (device_index >= 0 &&
                device_index < static_cast<int>(gpu_cards.size())) {
-      // The visible CUDA device still identifies the correct sysfs GPU path in
-      // restricted-visibility processes. Keep nic_local_rank for NIC tie-breaks
-      // when it carries a physical local rank.
-      gpu_idx = nic_local_rank >= 0 ? nic_local_rank : device_index;
+      nic_affinity_rank = nic_local_rank >= 0 ? nic_local_rank : device_index;
       gpu_card_idx = device_index;
-      gpu_idx_source = nic_local_rank >= 0 ? "nic_local_rank" : "device_index";
+      affinity_source = nic_local_rank >= 0 ? "nic_local_rank" : "device_index";
       gpu_card_source = "device_index";
     }
     if (gpu_card_idx < 0) {
@@ -446,8 +443,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         stderr,
         "[RDMA] physical GPU scan unavailable (%zu entries); falling back "
         "to %s=%d for NIC/NUMA affinity and %s=%d for the GPU sysfs path.\n",
-        all_gpu_bdfs.size(), gpu_idx_source, gpu_idx, gpu_card_source,
-        gpu_card_idx);
+        all_gpu_bdfs.size(), affinity_source, nic_affinity_rank,
+        gpu_card_source, gpu_card_idx);
   }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
@@ -538,7 +535,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
           // On p5e/p5en, there are 4 NICs with the same distance per GPU.
           // We hardcode the first half Proxies to use the first NIC, and the
           // second half to use the second NIC.
-          auto half = (gpu_idx % 2) * 2;
+          auto half = (nic_affinity_rank % 2) * 2;
           // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
           selected_nic_name = candidates[thread_idx % 2 + half];
         } else if (candidates.size() == 2) {
@@ -557,7 +554,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         // On p6-b200, there is 2 NICs with the same distance.
         assert(num_efas == 8);
         assert(candidates.size() == 2);
-        auto half = (gpu_idx % 2) * 1;
+        auto half = (nic_affinity_rank % 2) * 1;
         selected_nic_name = candidates[thread_idx % 1 + half];
         use_ll_sl = true;
       }
@@ -611,8 +608,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       entry.refcount++;
       printf(
           "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
-          "for GPU %d\n",
-          thread_idx, selected_nic_name.c_str(), entry.refcount - 1, gpu_idx);
+          "for affinity rank %d\n",
+          thread_idx, selected_nic_name.c_str(), entry.refcount - 1,
+          nic_affinity_rank);
       ibv_free_device_list(dev_list);
       return;
     }
@@ -644,10 +642,10 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
   printf(
-      "[RDMA] Selected NIC %s (index %d) for GPU %d, CUDA device %d, "
+      "[RDMA] Selected NIC %s (index %d) for affinity rank %d, CUDA device %d, "
       "NUMA node %d\n",
-      selected_nic_name.c_str(), selected_dev_idx, gpu_idx, device_index,
-      S.numa_node);
+      selected_nic_name.c_str(), selected_dev_idx, nic_affinity_rank,
+      device_index, S.numa_node);
   ibv_free_device_list(dev_list);
   S.pd = ibv_alloc_pd(S.context);
   if (!S.pd) {

@@ -581,6 +581,7 @@ def initialize_uccl(
         )
 
     proxies = []
+    nic_affinity_rank = barrier_local_rank
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -598,7 +599,7 @@ def initialize_uccl(
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
             barrier_local_rank=barrier_local_rank,
             device_index=local_rank,
-            nic_local_rank=barrier_local_rank,
+            nic_local_rank=nic_affinity_rank,
         )
         proxies.append(proxy)
 
