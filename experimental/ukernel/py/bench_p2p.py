@@ -44,34 +44,42 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
         if not comm.wait_mr(peer, recv_buffer_id):
             raise RuntimeError("wait_mr(peer recv buffer) failed")
 
-    def do_send():
-        comm.send(peer, send_buffer_id, remote_buffer_id=recv_buffer_id)
-
-    def do_recv():
-        comm.recv(peer, recv_buffer_id)
-
-    rank = comm.rank
-    # print(f"[rank {rank}] warmup loop start", flush=True)
-    # Server (rank 0) recv first, client (rank 1) send first
+    recv_bytes = recv_buf.numel() * recv_buf.element_size()
     if rank == 0:
         for _ in range(warmup):
-            do_recv()
-            do_send()
+            if selected_transport == "tcp":
+                comm.wait_data(peer, 1, recv_buffer_id, 0, recv_bytes)
+            else:
+                comm.wait_signal(peer, 1)
+            comm.send(peer, send_buffer_id, recv_buffer_id)
+            comm.signal(peer, 2)
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            do_recv()
-            do_send()
+            if selected_transport == "tcp":
+                comm.wait_data(peer, 1, recv_buffer_id, 0, recv_bytes)
+            else:
+                comm.wait_signal(peer, 1)
+            comm.send(peer, send_buffer_id, recv_buffer_id)
+            comm.signal(peer, 2)
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
-            do_send()
-            do_recv()
+            comm.send(peer, send_buffer_id, recv_buffer_id)
+            comm.signal(peer, 1)
+            if selected_transport == "tcp":
+                comm.wait_data(peer, 2, recv_buffer_id, 0, recv_bytes)
+            else:
+                comm.wait_signal(peer, 2)
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            do_send()
-            do_recv()
+            comm.send(peer, send_buffer_id, recv_buffer_id)
+            comm.signal(peer, 1)
+            if selected_transport == "tcp":
+                comm.wait_data(peer, 2, recv_buffer_id, 0, recv_bytes)
+            else:
+                comm.wait_signal(peer, 2)
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     if ipc_registered:

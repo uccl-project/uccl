@@ -2,7 +2,7 @@
 #include "../include/transport.h"
 #include "../src/ccl/backend/device_backend.h"
 #include "../src/ccl/backend/transport_backend.h"
-#include "../src/ccl/collective_types.h"
+#include "../src/ccl/coll_types.h"
 #include "../src/ccl/executor.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -41,7 +41,6 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return Transport::PreferredTransport::Auto;
   if (value == "ipc") return Transport::PreferredTransport::Ipc;
-  if (value == "uccl") return Transport::PreferredTransport::Uccl;
   if (value == "tcp") return Transport::PreferredTransport::Tcp;
   if (value == "rdma") return Transport::PreferredTransport::Rdma;
   throw std::invalid_argument("unsupported transport: " + value);
@@ -501,8 +500,6 @@ class ProcessGroup {
         return "unknown";
       case Transport::PeerTransportKind::Ipc:
         return "ipc";
-      case Transport::PeerTransportKind::Uccl:
-        return "uccl";
       case Transport::PeerTransportKind::Tcp:
         return "tcp";
       case Transport::PeerTransportKind::Rdma:
