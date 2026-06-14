@@ -29,9 +29,11 @@ struct WireHeader {
   uint64_t payload_len = 0;
 };
 
-bool is_retryable(int e) { return e == EINTR || e == EAGAIN || e == EWOULDBLOCK; }
+bool is_retryable(int e) {
+  return e == EINTR || e == EAGAIN || e == EWOULDBLOCK;
+}
 
-template<typename T>
+template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
   while (!stop.load(std::memory_order_acquire) &&
          jring_mp_enqueue_bulk(ring, &elem, 1, nullptr) != 1)
@@ -48,7 +50,10 @@ bool recv_discard(int fd, uint64_t len) {
     size_t got = 0;
     while (got < n) {
       ssize_t rc = ::recv(fd, buf + got, n - got, 0);
-      if (rc > 0) { got += rc; continue; }
+      if (rc > 0) {
+        got += rc;
+        continue;
+      }
       if (rc == 0) return false;
       if (is_retryable(errno)) continue;
       return false;
@@ -126,9 +131,13 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
   send_task_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   recv_task_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   if (!send_task_ring_ || !recv_task_ring_) {
-    free(send_task_ring_); send_task_ring_ = nullptr;
-    free(recv_task_ring_); recv_task_ring_ = nullptr;
-    ::shutdown(listen_fd_, SHUT_RDWR); ::close(listen_fd_); listen_fd_ = -1;
+    free(send_task_ring_);
+    send_task_ring_ = nullptr;
+    free(recv_task_ring_);
+    recv_task_ring_ = nullptr;
+    ::shutdown(listen_fd_, SHUT_RDWR);
+    ::close(listen_fd_);
+    listen_fd_ = -1;
     throw std::runtime_error("failed to init tcp request infra");
   }
   send_worker_ = std::thread([this] { send_worker_loop(); });
@@ -137,13 +146,17 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
 
 TcpTransportAdapter::~TcpTransportAdapter() {
   stop_.store(true);
-  if (listen_fd_ >= 0) { ::shutdown(listen_fd_, SHUT_RDWR); ::close(listen_fd_); }
+  if (listen_fd_ >= 0) {
+    ::shutdown(listen_fd_, SHUT_RDWR);
+    ::close(listen_fd_);
+  }
   {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto& [_, ctx] : peer_contexts_) {
       if (!ctx) continue;
       if (ctx->send_fd >= 0) ::shutdown(ctx->send_fd, SHUT_RDWR);
-      if (ctx->recv_fd >= 0 && ctx->recv_fd != ctx->send_fd) ::shutdown(ctx->recv_fd, SHUT_RDWR);
+      if (ctx->recv_fd >= 0 && ctx->recv_fd != ctx->send_fd)
+        ::shutdown(ctx->recv_fd, SHUT_RDWR);
     }
   }
   if (send_worker_.joinable()) send_worker_.join();
@@ -151,12 +164,20 @@ TcpTransportAdapter::~TcpTransportAdapter() {
   {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto& [_, ctx] : peer_contexts_)
-      if (ctx) { if (ctx->send_fd >= 0) ::close(ctx->send_fd);
-                 if (ctx->recv_fd >= 0 && ctx->recv_fd != ctx->send_fd) ::close(ctx->recv_fd); }
+      if (ctx) {
+        if (ctx->send_fd >= 0) ::close(ctx->send_fd);
+        if (ctx->recv_fd >= 0 && ctx->recv_fd != ctx->send_fd)
+          ::close(ctx->recv_fd);
+      }
   }
-  free(send_task_ring_); send_task_ring_ = nullptr;
-  free(recv_task_ring_); recv_task_ring_ = nullptr;
-  if (gpu_stream_) { gpuStreamDestroy(gpu_stream_); gpu_stream_ = nullptr; }
+  free(send_task_ring_);
+  send_task_ring_ = nullptr;
+  free(recv_task_ring_);
+  recv_task_ring_ = nullptr;
+  if (gpu_stream_) {
+    gpuStreamDestroy(gpu_stream_);
+    gpu_stream_ = nullptr;
+  }
 }
 
 uint16_t TcpTransportAdapter::get_listen_port() const { return listen_port_; }
@@ -191,9 +212,9 @@ bool TcpTransportAdapter::has_wait_path(int rank) const {
 
 // ── Submission ──────────────────────────────────────────────────────────
 
-unsigned TcpTransportAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
-                                             void*, uint32_t, size_t len,
-                                             unsigned comm_rid) {
+unsigned TcpTransportAdapter::send_put_async(int peer, void* local_ptr,
+                                             uint32_t, void*, uint32_t,
+                                             size_t len, unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::DataPut, local_ptr, len, 0};
   if (!enqueue_elem(send_task_ring_, e, stop_)) return 0;
@@ -208,9 +229,9 @@ unsigned TcpTransportAdapter::send_signal_async(int peer, uint64_t tag,
   return 1;
 }
 
-unsigned TcpTransportAdapter::wait_signal_async(int peer, uint64_t tag,
-                                              std::optional<WaitTarget> target,
-                                              unsigned comm_rid) {
+unsigned TcpTransportAdapter::wait_signal_async(
+    int peer, uint64_t tag, std::optional<WaitTarget> target,
+    unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
   void* ptr = target ? target->local_ptr : nullptr;
   size_t len = target ? target->len : 0;
@@ -247,15 +268,15 @@ void TcpTransportAdapter::send_worker_loop() {
             attr.type == gpuMemoryTypeDevice) {
           GPU_RT_CHECK(gpuSetDevice(gpu_id_));
           bounce = bounce_pool_->acquire(e.len);
-          GPU_RT_CHECK(gpuMemcpyAsync(bounce, ptr, e.len,
-                                       gpuMemcpyDeviceToHost, gpu_stream_));
+          GPU_RT_CHECK(gpuMemcpyAsync(bounce, ptr, e.len, gpuMemcpyDeviceToHost,
+                                      gpu_stream_));
           GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
           ptr = bounce;
         }
       }
       WireHeader hdr{};
-      hdr.type = static_cast<uint32_t>(e.kind == Kind::Signal ? FrameType::Signal
-                                                               : FrameType::Data);
+      hdr.type = static_cast<uint32_t>(
+          e.kind == Kind::Signal ? FrameType::Signal : FrameType::Data);
       hdr.payload_len = e.len;
       ok = send_all(ctx->send_fd, &hdr, sizeof(hdr));
       if (ok && e.len > 0) ok = send_all(ctx->send_fd, ptr, e.len);
@@ -302,7 +323,7 @@ void TcpTransportAdapter::recv_worker_loop() {
             ok = recv_all(ctx->recv_fd, bounce, e.len);
             if (ok) {
               GPU_RT_CHECK(gpuMemcpyAsync(e.ptr, bounce, e.len,
-                                           gpuMemcpyHostToDevice, gpu_stream_));
+                                          gpuMemcpyHostToDevice, gpu_stream_));
               GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
             }
             bounce_pool_->release(bounce);
@@ -323,7 +344,8 @@ void TcpTransportAdapter::recv_worker_loop() {
 
 // ── Peer connection ─────────────────────────────────────────────────────
 
-bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t port) {
+bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip,
+                                          uint16_t port) {
   std::lock_guard<std::mutex> lk(mu_);
   if (peer_contexts_.count(rank) && peer_contexts_[rank] &&
       peer_contexts_[rank]->send_fd >= 0)
@@ -334,7 +356,8 @@ bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t por
 
   Handshake hs{static_cast<uint32_t>(local_rank_)};
   HandshakeAck ack{};
-  if (!send_handshake(fd, hs) || !recv_handshake_ack(fd, ack) || ack.accepted != 1) {
+  if (!send_handshake(fd, hs) || !recv_handshake_ack(fd, ack) ||
+      ack.accepted != 1) {
     ::close(fd);
     return false;
   }
@@ -345,14 +368,16 @@ bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip, uint16_t por
   return true;
 }
 
-bool TcpTransportAdapter::accept_from_peer(int rank, std::string const& expected_remote_ip) {
+bool TcpTransportAdapter::accept_from_peer(
+    int rank, std::string const& expected_remote_ip) {
   if (has_wait_path(rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   while (std::chrono::steady_clock::now() < deadline) {
     sockaddr_in addr{};
     socklen_t addr_len = sizeof(addr);
-    int fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+    int fd =
+        ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &addr_len);
     if (fd < 0) {
       if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         std::this_thread::sleep_for(kAcceptPollSleep);
@@ -363,22 +388,26 @@ bool TcpTransportAdapter::accept_from_peer(int rank, std::string const& expected
 
     if (!expected_remote_ip.empty()) {
       char remote_ip_buf[INET_ADDRSTRLEN] = {};
-      ::inet_ntop(AF_INET, &addr.sin_addr, remote_ip_buf, sizeof(remote_ip_buf));
+      ::inet_ntop(AF_INET, &addr.sin_addr, remote_ip_buf,
+                  sizeof(remote_ip_buf));
       if (expected_remote_ip != remote_ip_buf) {
-        ::shutdown(fd, SHUT_RDWR); ::close(fd);
+        ::shutdown(fd, SHUT_RDWR);
+        ::close(fd);
         continue;
       }
     }
 
     Handshake hs{};
     if (!recv_handshake(fd, hs) || static_cast<int>(hs.src_rank) != rank) {
-      ::shutdown(fd, SHUT_RDWR); ::close(fd);
+      ::shutdown(fd, SHUT_RDWR);
+      ::close(fd);
       continue;
     }
     HandshakeAck ack{};
     ack.accepted = 1;
     if (!send_handshake_ack(fd, ack)) {
-      ::shutdown(fd, SHUT_RDWR); ::close(fd);
+      ::shutdown(fd, SHUT_RDWR);
+      ::close(fd);
       continue;
     }
 
@@ -386,7 +415,8 @@ bool TcpTransportAdapter::accept_from_peer(int rank, std::string const& expected
     auto& ctx = peer_contexts_[rank];
     if (!ctx) ctx = std::make_shared<PeerContext>();
     if (ctx->recv_fd >= 0) {
-      ::shutdown(fd, SHUT_RDWR); ::close(fd);
+      ::shutdown(fd, SHUT_RDWR);
+      ::close(fd);
       return true;
     }
     ctx->recv_fd = fd;
@@ -405,8 +435,14 @@ int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) { ::close(fd); return -1; }
-  if (::listen(fd, 128) < 0) { ::close(fd); return -1; }
+  if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+    ::close(fd);
+    return -1;
+  }
+  if (::listen(fd, 128) < 0) {
+    ::close(fd);
+    return -1;
+  }
   sockaddr_in bound{};
   socklen_t len = sizeof(bound);
   if (::getsockname(fd, (sockaddr*)&bound, &len) == 0)
@@ -415,7 +451,8 @@ int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
 }
 
 bool TcpTransportAdapter::connect_socket(int& out_fd, std::string const& ip,
-                                         uint16_t port, std::chrono::milliseconds timeout) {
+                                         uint16_t port,
+                                         std::chrono::milliseconds timeout) {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
   sockaddr_in addr{};
@@ -426,9 +463,13 @@ bool TcpTransportAdapter::connect_socket(int& out_fd, std::string const& ip,
   while (::connect(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
     if (errno != EINPROGRESS && errno != EALREADY && errno != EAGAIN &&
         errno != ECONNREFUSED) {
-      ::close(fd); return false;
+      ::close(fd);
+      return false;
     }
-    if (std::chrono::steady_clock::now() >= deadline) { ::close(fd); return false; }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      ::close(fd);
+      return false;
+    }
     std::this_thread::sleep_for(kConnectRetrySleep);
   }
   out_fd = fd;
@@ -455,7 +496,10 @@ bool TcpTransportAdapter::send_all(int fd, void const* buf, size_t len) {
   size_t sent = 0;
   while (sent < len) {
     ssize_t rc = ::send(fd, (char const*)buf + sent, len - sent, MSG_NOSIGNAL);
-    if (rc > 0) { sent += rc; continue; }
+    if (rc > 0) {
+      sent += rc;
+      continue;
+    }
     if (is_retryable(errno)) continue;
     return false;
   }
@@ -466,7 +510,10 @@ bool TcpTransportAdapter::recv_all(int fd, void* buf, size_t len) {
   size_t got = 0;
   while (got < len) {
     ssize_t rc = ::recv(fd, (char*)buf + got, len - got, 0);
-    if (rc > 0) { got += rc; continue; }
+    if (rc > 0) {
+      got += rc;
+      continue;
+    }
     if (rc == 0) return false;
     if (is_retryable(errno)) continue;
     return false;

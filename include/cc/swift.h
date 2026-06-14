@@ -60,8 +60,8 @@ class SwiftCC {
   static constexpr double kFSRange = 5 * kBaseDelay;
   static constexpr double kFSMinCwnd = 32;   // in MTU-sized packets
   static constexpr double kFSMaxCwnd = 100;  // in MTU-sized packets
-  static constexpr double kFSAlpha = kFSRange / ((1.0 / csqrt(kFSMinCwnd)) -
-                                                 (1.0 / csqrt(kFSMaxCwnd)));
+  static constexpr double kFSAlpha =
+      kFSRange / ((1.0 / csqrt(kFSMinCwnd)) - (1.0 / csqrt(kFSMaxCwnd)));
   static constexpr double kFSBeta = -kFSAlpha / csqrt(kFSMaxCwnd);
 
   double rate_ = 0.0;  ///< The current sending rate

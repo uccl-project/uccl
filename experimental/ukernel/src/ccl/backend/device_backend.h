@@ -19,7 +19,7 @@ struct DeviceBackendConfig {
   uint32_t blocks_per_worker = 1;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
-  uint32_t bytes_per_block = 0;   // 0=auto, >0=override
+  uint32_t bytes_per_block = 0;  // 0=auto, >0=override
 };
 
 class DeviceBackend final : public BatchBackend {
@@ -64,8 +64,8 @@ class DeviceBackend final : public BatchBackend {
 
   std::vector<GpuSignalPeer> gpu_signal_bufs_;
 
-  uint32_t cmd_next_ = 0;        // global command sequence counter
-  uint32_t cmd_done_ = 0;        // completed up to this point
+  uint32_t cmd_next_ = 0;  // global command sequence counter
+  uint32_t cmd_done_ = 0;  // completed up to this point
 };
 
 }  // namespace CCL

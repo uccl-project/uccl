@@ -20,11 +20,14 @@ enum class PeerTransportKind;
 struct CommunicatorConfig;
 struct SignalCompletion;
 class Communicator;
-}
+}  // namespace Transport
 namespace CCL {
 
 enum class CollectiveOpStatus : uint32_t {
-  Queued, Running, Completed, Failed,
+  Queued,
+  Running,
+  Completed,
+  Failed,
 };
 
 using CollectiveOpHandle = uint64_t;
@@ -65,7 +68,8 @@ struct SprayExecutorConfig {
   int threads_per_block = 64;
   size_t fifo_capacity = 256;
   size_t smem_size = 48 * 1024;
-  std::shared_ptr<struct UKernel::Transport::CommunicatorConfig> communicator_config;
+  std::shared_ptr<struct UKernel::Transport::CommunicatorConfig>
+      communicator_config;
 };
 
 struct CmdRunMapping {
@@ -86,21 +90,23 @@ struct PeerMetrics {
 
 class SprayExecutor {
  public:
-  static std::unique_ptr<SprayExecutor> create(SprayExecutorConfig const& config);
+  static std::unique_ptr<SprayExecutor> create(
+      SprayExecutorConfig const& config);
   SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be);
   ~SprayExecutor();
 
   SprayExecutor(SprayExecutor const&) = delete;
   SprayExecutor& operator=(SprayExecutor const&) = delete;
 
-  CollectiveOpHandle submit_allreduce(CollectiveConfig const& cfg,
-                                      void* input, void* output, void* scratch);
-  CollectiveOpHandle submit_alltoall(CollectiveConfig const& cfg,
-                                     void* input, void* output, void* scratch);
+  CollectiveOpHandle submit_allreduce(CollectiveConfig const& cfg, void* input,
+                                      void* output, void* scratch);
+  CollectiveOpHandle submit_alltoall(CollectiveConfig const& cfg, void* input,
+                                     void* output, void* scratch);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
-  bool wait(CollectiveOpHandle h, std::chrono::milliseconds to = std::chrono::milliseconds(0));
+  bool wait(CollectiveOpHandle h,
+            std::chrono::milliseconds to = std::chrono::milliseconds(0));
   void release(CollectiveOpHandle h);
   std::string error_message(CollectiveOpHandle h) const;
 

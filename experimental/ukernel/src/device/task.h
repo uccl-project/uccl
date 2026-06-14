@@ -182,12 +182,8 @@ class TaskManager {
 
   ~TaskManager() { release(); }
 
-  void init(uint32_t Cap) {
-    init_impl(Cap, false);
-  }
-  void init_no_gdr(uint32_t Cap) {
-    init_impl(Cap, true);
-  }
+  void init(uint32_t Cap) { init_impl(Cap, false); }
+  void init_no_gdr(uint32_t Cap) { init_impl(Cap, true); }
 
  private:
   void init_impl(uint32_t Cap, bool no_gdr) {
@@ -218,7 +214,6 @@ class TaskManager {
   }
 
  public:
-
   void release() {
     std::lock_guard<std::mutex> gc(task_mu_);
     release_nolock_();
@@ -232,7 +227,8 @@ class TaskManager {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce ||
            tt == TaskType::CollSend || tt == TaskType::CollRecvReduce ||
            tt == TaskType::CollRecv);
-    bool is_reduce = (tt == TaskType::CollReduce || tt == TaskType::CollRecvReduce);
+    bool is_reduce =
+        (tt == TaskType::CollReduce || tt == TaskType::CollRecvReduce);
     assert(!is_reduce || is_supported_reduce_dtype(dt));
     if (is_reduce) {
       uint8_t red = static_cast<uint8_t>(h.redTypeRaw & 0xFF);
@@ -259,11 +255,11 @@ class TaskManager {
       _mm_sfence();
     } else {
       GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
-                              gpuMemcpyHostToDevice));
+                             gpuMemcpyHostToDevice));
     }
 #else
     GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
-                            gpuMemcpyHostToDevice));
+                           gpuMemcpyHostToDevice));
 #endif
 
     return Task(tt, dt, blockId, idx);

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "transport_adapter.h"
 #include "../util/jring.h"
+#include "transport_adapter.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -17,12 +17,14 @@ class RDMAEndpoint;
 class Mhandle;
 class UcclFlow;
 struct ucclRequest;
-}
+}  // namespace uccl
 
 namespace UKernel {
 namespace Transport {
 
-struct UcclTransportConfig { int num_engines = 0; };
+struct UcclTransportConfig {
+  int num_engines = 0;
+};
 
 class UcclTransportAdapter final : public TransportAdapter {
  public:
@@ -46,7 +48,8 @@ class UcclTransportAdapter final : public TransportAdapter {
   unsigned send_put_async(int peer, void* local_ptr, uint32_t local_buf,
                           void* remote_ptr, uint32_t remote_buf, size_t len,
                           unsigned comm_rid) override;
-  unsigned send_signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
+  unsigned send_signal_async(int peer, uint64_t tag,
+                             unsigned comm_rid) override;
   unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                              unsigned comm_rid) override;
 

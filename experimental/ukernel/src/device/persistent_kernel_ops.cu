@@ -123,19 +123,17 @@ __device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
 // ── SM IPC kernel functions ──────────────────────────────────────────
 
 template <typename T>
-__device__ __forceinline__ void run_send(TaskArgs const& a,
-                                         uint32_t block_id,
-                                         uint32_t num_blocks,
-                                         void* smem_buf) {
+__device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
+                                         uint32_t num_blocks, void* smem_buf) {
   run_typed_copy<T>(a, block_id, num_blocks, smem_buf);
   sm_write_seq(a);
 }
 
 template <typename T>
 __device__ __forceinline__ void run_recv_reduce(TaskArgs const& a,
-                                                 uint32_t block_id,
-                                                 uint32_t num_blocks,
-                                                 void* smem_buf) {
+                                                uint32_t block_id,
+                                                uint32_t num_blocks,
+                                                void* smem_buf) {
   sm_wait_seq(a);
   ReduceType red = static_cast<ReduceType>(a.redTypeRaw & 0xFF);
 
@@ -168,24 +166,39 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
 
 // ── dispatch ──────────────────────────────────────────────────────────
 
-#define RUN_COPY_BODY(dtype, fn) \
-  if (dtype == DataType::Int8) fn<int8_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int32) fn<int32_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int64) fn<int64_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp16) fn<__half>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp32) fn<float>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp64) fn<double>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Bf16) fn<nv_bfloat16>(args, block_id, num_blocks, smem_buf); \
-  else run_copy(args, block_id, num_blocks, smem_buf)
+#define RUN_COPY_BODY(dtype, fn)                           \
+  if (dtype == DataType::Int8)                             \
+    fn<int8_t>(args, block_id, num_blocks, smem_buf);      \
+  else if (dtype == DataType::Int32)                       \
+    fn<int32_t>(args, block_id, num_blocks, smem_buf);     \
+  else if (dtype == DataType::Int64)                       \
+    fn<int64_t>(args, block_id, num_blocks, smem_buf);     \
+  else if (dtype == DataType::Fp16)                        \
+    fn<__half>(args, block_id, num_blocks, smem_buf);      \
+  else if (dtype == DataType::Fp32)                        \
+    fn<float>(args, block_id, num_blocks, smem_buf);       \
+  else if (dtype == DataType::Fp64)                        \
+    fn<double>(args, block_id, num_blocks, smem_buf);      \
+  else if (dtype == DataType::Bf16)                        \
+    fn<nv_bfloat16>(args, block_id, num_blocks, smem_buf); \
+  else                                                     \
+    run_copy(args, block_id, num_blocks, smem_buf)
 
-#define RUN_REDUCE_BODY(dtype) \
-  if (dtype == DataType::Fp32) run_reduce<float>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp16) run_reduce<__half>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int8) run_reduce<int8_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int32) run_reduce<int32_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Int64) run_reduce<int64_t>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Fp64) run_reduce<double>(args, block_id, num_blocks, smem_buf); \
-  else if (dtype == DataType::Bf16) run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
+#define RUN_REDUCE_BODY(dtype)                                 \
+  if (dtype == DataType::Fp32)                                 \
+    run_reduce<float>(args, block_id, num_blocks, smem_buf);   \
+  else if (dtype == DataType::Fp16)                            \
+    run_reduce<__half>(args, block_id, num_blocks, smem_buf);  \
+  else if (dtype == DataType::Int8)                            \
+    run_reduce<int8_t>(args, block_id, num_blocks, smem_buf);  \
+  else if (dtype == DataType::Int32)                           \
+    run_reduce<int32_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Int64)                           \
+    run_reduce<int64_t>(args, block_id, num_blocks, smem_buf); \
+  else if (dtype == DataType::Fp64)                            \
+    run_reduce<double>(args, block_id, num_blocks, smem_buf);  \
+  else if (dtype == DataType::Bf16)                            \
+  run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
 
 __device__ __forceinline__ void dispatch_task(Task const& task,
                                               TaskArgs const* ready_args,
@@ -223,10 +236,10 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
 #undef RUN_REDUCE_BODY
 
 __device__ __forceinline__ void process_task(Task const& task,
-                                              TaskArgs* d_task_args,
-                                              uint32_t block_id,
-                                              uint32_t num_blocks,
-                                              void* smem_buf) {
+                                             TaskArgs* d_task_args,
+                                             uint32_t block_id,
+                                             uint32_t num_blocks,
+                                             void* smem_buf) {
   TaskArgs* ready_args = nullptr;
   const TaskType ttype = static_cast<TaskType>(task.type_u8());
   if (task_uses_args(ttype)) {

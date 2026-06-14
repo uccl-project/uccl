@@ -5,7 +5,6 @@
 #include "executor.h"
 #include "lower.h"
 #include "test_config.h"
-
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -63,8 +62,7 @@ class MockBackend final : public BatchBackend {
   void complete_last_n(size_t n) {
     std::lock_guard lock(mtx_);
     uint32_t first = cmd_next_ - n;
-    for (uint32_t i = 0; i < n; ++i)
-      completed_.push_back(first + i);
+    for (uint32_t i = 0; i < n; ++i) completed_.push_back(first + i);
   }
 
   size_t enqueued_count() const {
@@ -124,8 +122,7 @@ void test_async_basic_enqueue_drain() {
   assert(total == 5);
 
   // Verify caller_ids match
-  for (int i = 0; i < 5; ++i)
-    assert(out[i] >= 100 && out[i] <= 104);
+  for (int i = 0; i < 5; ++i) assert(out[i] >= 100 && out[i] <= 104);
 
   assert(mock.enqueued_count() == 5);
 
@@ -144,17 +141,19 @@ void test_async_capacity_backpressure() {
   for (int i = 0; i < 8; ++i) {
     cmds[i].cmd.kind = OpKind::Copy;
     cmds[i].cmd.bytes = 64;
-    cmds[i].cmd.src_buf = 1; cmds[i].cmd.dst_buf = 2;
-    cmds[i].cmd.src_peer = ~0u; cmds[i].cmd.dst_peer = ~0u;
+    cmds[i].cmd.src_buf = 1;
+    cmds[i].cmd.dst_buf = 2;
+    cmds[i].cmd.src_peer = ~0u;
+    cmds[i].cmd.dst_peer = ~0u;
     cmds[i].caller_id = i;
   }
 
   // Before start, cmd_ring is empty, so we can enqueue up to capacity
   size_t nfree = async.cmd_free();
-  assert(nfree == 3); // 4 slots → 3 usable
+  assert(nfree == 3);  // 4 slots → 3 usable
 
   size_t n = async.try_enqueue(cmds, 8);
-  assert(n == 3); // only 3 fit
+  assert(n == 3);  // only 3 fit
 
   async.start();
 
@@ -183,8 +182,10 @@ void test_async_done_ring_multiple_drain() {
   for (int i = 0; i < N; ++i) {
     cmds[i].cmd.kind = OpKind::Copy;
     cmds[i].cmd.bytes = 8;
-    cmds[i].cmd.src_buf = 1; cmds[i].cmd.dst_buf = 2;
-    cmds[i].cmd.src_peer = ~0u; cmds[i].cmd.dst_peer = ~0u;
+    cmds[i].cmd.src_buf = 1;
+    cmds[i].cmd.dst_buf = 2;
+    cmds[i].cmd.src_peer = ~0u;
+    cmds[i].cmd.dst_peer = ~0u;
     cmds[i].caller_id = 1000 + i;
   }
 
@@ -200,15 +201,14 @@ void test_async_done_ring_multiple_drain() {
   uint32_t out[N];
   size_t total = 0;
   for (int retry = 0; retry < 500 && total < N; ++retry) {
-    size_t d = async.try_drain(out + total, 16); // drain in small batches
+    size_t d = async.try_drain(out + total, 16);  // drain in small batches
     total += d;
     if (total < N) std::this_thread::sleep_for(std::chrono::microseconds(200));
   }
   assert(total == N);
 
   // All caller_ids should be in range
-  for (size_t i = 0; i < N; ++i)
-    assert(out[i] >= 1000 && out[i] < 1000 + N);
+  for (size_t i = 0; i < N; ++i) assert(out[i] >= 1000 && out[i] < 1000 + N);
 
   async.stop();
 }
@@ -248,8 +248,10 @@ void test_executor_alltoall_async() {
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
 
   CollectiveConfig cfg;
-  cfg.nranks = 4; cfg.rank = 0;
-  cfg.input_bytes = 512; cfg.output_bytes = 512;
+  cfg.nranks = 4;
+  cfg.rank = 0;
+  cfg.input_bytes = 512;
+  cfg.output_bytes = 512;
   cfg.tile_bytes = 128;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.use_sm_ipc = false;
@@ -266,7 +268,8 @@ void test_executor_alltoall_async() {
 
   size_t dev_cmds = dev_mock.enqueued_count();
   size_t tpt_cmds = tpt_mock.enqueued_count();
-  fprintf(stderr, "  dev enqueued: %zu, tpt enqueued: %zu\n", dev_cmds, tpt_cmds);
+  fprintf(stderr, "  dev enqueued: %zu, tpt enqueued: %zu\n", dev_cmds,
+          tpt_cmds);
   assert(dev_cmds + tpt_cmds > 0);
 
   ex->release(h);
@@ -293,7 +296,9 @@ void test_executor_multiple_submits() {
   bool d3 = ex->wait(h3, std::chrono::milliseconds(5000));
   assert(d1 && d2 && d3);
 
-  ex->release(h1); ex->release(h2); ex->release(h3);
+  ex->release(h1);
+  ex->release(h2);
+  ex->release(h3);
 
   printf("  PASSED\n");
 }
@@ -325,7 +330,7 @@ void test_executor_error_message() {
   MockBackend dev_mock(true), tpt_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
 
-  assert(ex->error_message(999) == ""); // non-existent handle
+  assert(ex->error_message(999) == "");  // non-existent handle
 }
 
 void test_executor_active_count() {

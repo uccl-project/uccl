@@ -31,14 +31,15 @@ inline void backoff_retry(uint32_t retries) {
   }
   std::this_thread::sleep_for(kUcclRetryBackoff);
 }
-}
+}  // namespace
 
 UcclTransportAdapter::UcclTransportAdapter(int gpu_id, int world_size,
                                            UcclTransportConfig config)
     : gpu_id_(gpu_id) {
   send_ring_ = create_ring(sizeof(RingElem), 1024);
   recv_ring_ = create_ring(sizeof(RingElem), 1024);
-  if (!send_ring_ || !recv_ring_) throw std::runtime_error("UCCL ring alloc failed");
+  if (!send_ring_ || !recv_ring_)
+    throw std::runtime_error("UCCL ring alloc failed");
 
   // Try to create real UCCL endpoint. If UCCL is not available, workers
   // will fall back to publish_completion-only behaviour.
@@ -71,8 +72,10 @@ UcclTransportAdapter::UcclTransportAdapter(int gpu_id, int world_size,
 
 UcclTransportAdapter::~UcclTransportAdapter() {
   stop_.store(true);
-  send_th_.join(); recv_th_.join();
-  free(send_ring_); free(recv_ring_);
+  send_th_.join();
+  recv_th_.join();
+  free(send_ring_);
+  free(recv_ring_);
 
   // Deregister all control_mhandle memory.
   if (endpoint_) {
@@ -164,8 +167,8 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank,
     int dev_idx = local_dev_idx_;
     if (dev_idx >= 0) {
       ::uccl::Mhandle* ctrl_mh = nullptr;
-      endpoint_->uccl_regmr(dev_idx, &ctx.control_tag,
-                            sizeof(ctx.control_tag), 0, &ctrl_mh);
+      endpoint_->uccl_regmr(dev_idx, &ctx.control_tag, sizeof(ctx.control_tag),
+                            0, &ctrl_mh);
       ctx.control_mhandle = ctrl_mh;
     }
   }
@@ -197,9 +200,8 @@ bool UcclTransportAdapter::accept_from_peer(
   std::string remote_ip;
   int remote_dev = 0;
   int remote_gpuidx = 0;
-  ::uccl::ConnID conn_id =
-      endpoint_->uccl_accept(dev_idx, listen_fd, gpu_id_, remote_ip,
-                             &remote_dev, &remote_gpuidx);
+  ::uccl::ConnID conn_id = endpoint_->uccl_accept(
+      dev_idx, listen_fd, gpu_id_, remote_ip, &remote_dev, &remote_gpuidx);
   if (conn_id.context == nullptr) {
     std::cerr << "[ERROR] UCCL accept returned null context for peer "
               << peer_rank << std::endl;
@@ -227,8 +229,8 @@ bool UcclTransportAdapter::accept_from_peer(
   if (!ctx.control_mhandle) {
     if (dev_idx >= 0) {
       ::uccl::Mhandle* ctrl_mh = nullptr;
-      endpoint_->uccl_regmr(dev_idx, &ctx.control_tag,
-                            sizeof(ctx.control_tag), 0, &ctrl_mh);
+      endpoint_->uccl_regmr(dev_idx, &ctx.control_tag, sizeof(ctx.control_tag),
+                            0, &ctrl_mh);
       ctx.control_mhandle = ctrl_mh;
     }
   }
@@ -268,8 +270,8 @@ bool UcclTransportAdapter::has_wait_path(int peer) const {
 }
 
 unsigned UcclTransportAdapter::send_put_async(int peer, void* local_ptr,
-                                              uint32_t local_buf,
-                                              void*, uint32_t, size_t bytes,
+                                              uint32_t local_buf, void*,
+                                              uint32_t, size_t bytes,
                                               unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::DataPut, local_ptr, bytes, local_buf, 0};
@@ -283,14 +285,18 @@ unsigned UcclTransportAdapter::send_signal_async(int peer, uint64_t tag,
   return enqueue_elem(send_ring_, e, stop_) ? 1 : 0;
 }
 
-unsigned UcclTransportAdapter::wait_signal_async(int peer, uint64_t tag,
-                                               std::optional<WaitTarget> target,
-                                               unsigned comm_rid) {
+unsigned UcclTransportAdapter::wait_signal_async(
+    int peer, uint64_t tag, std::optional<WaitTarget> target,
+    unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
   if (target.has_value()) {
-    RingElem e{comm_rid, peer, Kind::DataWait,
-               target->local_ptr, target->len,
-               target->local_buffer_id, 0};
+    RingElem e{comm_rid,
+               peer,
+               Kind::DataWait,
+               target->local_ptr,
+               target->len,
+               target->local_buffer_id,
+               0};
     return enqueue_elem(recv_ring_, e, stop_) ? 1 : 0;
   } else {
     RingElem e{comm_rid, peer, Kind::SignalWait, nullptr, 0, 0, tag};
@@ -365,16 +371,19 @@ void UcclTransportAdapter::send_worker() {
 
         if (!failed && flow && mh && data_ptr && data_len > 0) {
           int ret = -1;
-          auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
+          auto deadline =
+              std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
           uint32_t retries = 0;
           while (std::chrono::steady_clock::now() < deadline) {
             std::memset(&ureq, 0, sizeof(ureq));
-            ret = endpoint_->uccl_send_async(flow, mh, data_ptr, data_len, &ureq);
+            ret =
+                endpoint_->uccl_send_async(flow, mh, data_ptr, data_len, &ureq);
             if (ret == 0) break;
 
-            // Every 16 retries, poll pending to help UCCL engine drain completions
+            // Every 16 retries, poll pending to help UCCL engine drain
+            // completions
             if ((retries & 15) == 0) {
-              for (auto it = pending.begin(); it != pending.end(); ) {
+              for (auto it = pending.begin(); it != pending.end();) {
                 if (endpoint_->uccl_poll_ureq_once(&it->request)) {
                   did_work = true;
                   publish_completion(it->comm_rid, false);
@@ -401,7 +410,7 @@ void UcclTransportAdapter::send_worker() {
     }
 
     // ── Step 2: poll all pending sends (non-blocking) ──
-    for (auto it = pending.begin(); it != pending.end(); ) {
+    for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
         publish_completion(it->comm_rid, false);
@@ -496,17 +505,19 @@ void UcclTransportAdapter::recv_worker() {
           void* data_array[1] = {data_ptr};
           int size_array[1] = {static_cast<int>(data_len)};
           int ret = -1;
-          auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
+          auto deadline =
+              std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
           uint32_t retries = 0;
           while (std::chrono::steady_clock::now() < deadline) {
             std::memset(&ureq, 0, sizeof(ureq));
-            ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
-                                             &ureq);
+            ret = endpoint_->uccl_recv_async(flow, mh_array, data_array,
+                                             size_array, 1, &ureq);
             if (ret == 0) break;
 
-            // Every 16 retries, poll pending to help UCCL engine drain completions
+            // Every 16 retries, poll pending to help UCCL engine drain
+            // completions
             if ((retries & 15) == 0) {
-              for (auto it = pending.begin(); it != pending.end(); ) {
+              for (auto it = pending.begin(); it != pending.end();) {
                 if (endpoint_->uccl_poll_ureq_once(&it->request)) {
                   did_work = true;
                   publish_completion(it->comm_rid, false);
@@ -533,7 +544,7 @@ void UcclTransportAdapter::recv_worker() {
     }
 
     // ── Step 2: poll all pending recvs (non-blocking) ──
-    for (auto it = pending.begin(); it != pending.end(); ) {
+    for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
         publish_completion(it->comm_rid, false);

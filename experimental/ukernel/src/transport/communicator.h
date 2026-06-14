@@ -1,10 +1,10 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "adapter/transport_adapter.h"
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
-#include "adapter/transport_adapter.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -50,36 +50,43 @@ class Communicator {
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
 
-  bool connect(int rank, PeerTransportKind transport = PeerTransportKind::Unknown);
-  bool accept(int rank, PeerTransportKind transport = PeerTransportKind::Unknown);
+  bool connect(int rank,
+               PeerTransportKind transport = PeerTransportKind::Unknown);
+  bool accept(int rank,
+              PeerTransportKind transport = PeerTransportKind::Unknown);
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
   // ── Async data / signal / wait (thin wrappers over adapter) ──
   //
   // One-sided transports (IPC, RDMA):
-  //   send_put_async() writes directly into remote memory. No matching wait needed.
-  //   send_signal_async(peer, tag) notifies the peer; peer calls wait_signal_async(peer, tag).
+  //   send_put_async() writes directly into remote memory. No matching wait
+  //   needed. send_signal_async(peer, tag) notifies the peer; peer calls
+  //   wait_signal_async(peer, tag).
   //
   // Two-sided transport (TCP):
-  //   Every send_put_async() MUST have a matching wait_signal_async() on the peer.
-  //   TCP has no remote address space — data flows as a byte stream.
-  unsigned send_put_async(int peer, uint32_t src_buf, size_t src_off,
-                          uint32_t dst_buf, size_t dst_off, size_t bytes,
-                          PeerTransportKind transport = PeerTransportKind::Unknown);
-  unsigned send_signal_async(int peer, uint64_t tag,
-                             PeerTransportKind transport = PeerTransportKind::Unknown);
+  //   Every send_put_async() MUST have a matching wait_signal_async() on the
+  //   peer. TCP has no remote address space — data flows as a byte stream.
+  unsigned send_put_async(
+      int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
+      size_t dst_off, size_t bytes,
+      PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned send_signal_async(
+      int peer, uint64_t tag,
+      PeerTransportKind transport = PeerTransportKind::Unknown);
 
   // ── Async signal wait (tag-based matching via Communicator table) ──
   // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
   // Matching is done in on_signal_received() (called by RdmaTransportAdapter
   // poll_loop and by drain_ipc_signals for IPC).
   // Completions are dequeued via try_complete_signals().
-  unsigned wait_signal_async(int peer, uint64_t tag,
-                             PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned wait_signal_async(
+      int peer, uint64_t tag,
+      PeerTransportKind transport = PeerTransportKind::Unknown);
   // Data wait (TCP DataWait): still blocking on recv completion.
-  unsigned wait_signal_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
-                             PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned wait_signal_async(
+      int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
+      PeerTransportKind transport = PeerTransportKind::Unknown);
 
   // C++ advanced API, not exposed to Python binding.
   size_t try_complete(CompletionResult* results, size_t max);
@@ -153,13 +160,17 @@ class Communicator {
                                RdmaP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
 
-  bool has_put_path(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
-  bool has_wait_path(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  bool has_put_path(
+      int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  bool has_wait_path(
+      int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
   void mark_put_path_ready(int rank, PeerTransportKind kind);
   void mark_wait_path_ready(int rank, PeerTransportKind kind);
-  bool ensure_path(int rank, bool is_put, PeerTransportKind transport = PeerTransportKind::Unknown);
+  bool ensure_path(int rank, bool is_put,
+                   PeerTransportKind transport = PeerTransportKind::Unknown);
   void exchange_peer_metas();
-  ResolvedPeer resolve_peer(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  ResolvedPeer resolve_peer(
+      int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
   bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta);
 
   TransportAdapter* get_adapter(PeerTransportKind kind);
@@ -176,8 +187,10 @@ class Communicator {
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
                                      IPCItem const& item, gpuError_t err) const;
 
-  PeerTransportKind get_put_transport_kind(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
-  PeerTransportKind get_wait_transport_kind(int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  PeerTransportKind get_put_transport_kind(
+      int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
+  PeerTransportKind get_wait_transport_kind(
+      int rank, PeerTransportKind transport = PeerTransportKind::Unknown) const;
 
   int local_gpu_idx_;
   int global_rank_;
@@ -195,11 +208,13 @@ class Communicator {
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → vector<rid>
-  std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>> pending_signal_waits_;
+  std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>>
+      pending_signal_waits_;
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.
   std::unordered_map<int, std::deque<uint64_t>> pending_signals_;
-  // TCP signal completions go through the data ring; this maps rid → {peer, tag}.
+  // TCP signal completions go through the data ring; this maps rid → {peer,
+  // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
   mutable std::mutex signal_waits_mu_;
 

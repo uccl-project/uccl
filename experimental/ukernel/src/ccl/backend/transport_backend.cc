@@ -14,7 +14,8 @@ static_assert(offsetof(CmdWithId, cmd) == 0,
 
 TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm)
     : comm_(comm) {
-  if (!comm_) throw std::invalid_argument("TransportBackend: null communicator");
+  if (!comm_)
+    throw std::invalid_argument("TransportBackend: null communicator");
 }
 
 bool TransportBackend::supports(OpKind kind) const {
@@ -37,7 +38,7 @@ void TransportBackend::init(BufSpec bufs[3]) {
 }
 
 size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
-                                  uint32_t* out_indices) {
+                                 uint32_t* out_indices) {
   size_t accepted = 0;
   for (size_t i = 0; i < n; ++i) {
     Cmd const& c = cmds[i];
@@ -49,9 +50,9 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
     switch (c.kind) {
       case OpKind::Send: {
         auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
-        rid = comm_->send_put_async(static_cast<int>(c.dst_peer),
-                                     c.src_buf, c.src_off,
-                                     c.dst_buf, c.dst_off, c.bytes, tpt);
+        rid = comm_->send_put_async(static_cast<int>(c.dst_peer), c.src_buf,
+                                    c.src_off, c.dst_buf, c.dst_off, c.bytes,
+                                    tpt);
         break;
       }
       case OpKind::Recv: {
@@ -61,7 +62,8 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
       }
       case OpKind::Signal: {
         auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
-        rid = comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag, tpt);
+        rid =
+            comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag, tpt);
         break;
       }
       case OpKind::SignalWait: {
@@ -124,8 +126,8 @@ void TransportBackend::release(uint32_t cmd_idx) {
       break;
     }
   }
-  for (auto it = signal_rid_to_cmd_.begin();
-       it != signal_rid_to_cmd_.end(); ++it) {
+  for (auto it = signal_rid_to_cmd_.begin(); it != signal_rid_to_cmd_.end();
+       ++it) {
     if (it->second == cmd_idx) {
       signal_rid_to_caller_.erase(it->first);
       signal_rid_to_cmd_.erase(it);

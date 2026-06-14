@@ -12,8 +12,6 @@ namespace CCL {
 
 namespace {
 
-
-
 size_t balanced_shard_offset_bytes(size_t bytes, size_t elem_bytes, int nranks,
                                    int owner_rank) {
   size_t total_elems = bytes / elem_bytes;
@@ -94,8 +92,7 @@ void require_collective_config(CollectiveConfig const& config, bool inplace) {
 
   size_t elem_bytes = scalar_type_size(config.dtype);
   if (elem_bytes == 0) {
-    throw std::invalid_argument(
-        "collective dtype has invalid element size");
+    throw std::invalid_argument("collective dtype has invalid element size");
   }
   if (config.tile_bytes % elem_bytes != 0) {
     throw std::invalid_argument(
@@ -104,8 +101,7 @@ void require_collective_config(CollectiveConfig const& config, bool inplace) {
 
   if (config.kind == CollKind::AllReduceRing) {
     if (config.input_bytes == 0) {
-      throw std::invalid_argument(
-          "collective input_bytes must be positive");
+      throw std::invalid_argument("collective input_bytes must be positive");
     }
     if (config.input_bytes % elem_bytes != 0) {
       throw std::invalid_argument(
@@ -163,8 +159,7 @@ struct ChunkBuilder {
   explicit ChunkBuilder(CollAlgo algo_in) : algo(std::move(algo_in)) {}
 
   uint32_t add_op(OpKind kind, size_t bytes, size_t src_off, size_t dst_off,
-                  int src_rank, int dst_rank,
-                  std::vector<uint32_t> deps,
+                  int src_rank, int dst_rank, std::vector<uint32_t> deps,
                   bool sequential_tiles = false) {
     Chunk chunk;
     chunk.op = kind;
@@ -208,8 +203,8 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1,
-                     send_peer, std::move(deps));
+      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1, send_peer,
+                     std::move(deps));
     }
 
     if (recv_bytes > 0) {
@@ -236,8 +231,8 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1,
-                     send_peer, std::move(deps));
+      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1, send_peer,
+                     std::move(deps));
     }
 
     if (recv_bytes > 0) {
@@ -252,8 +247,8 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
   return std::move(builder.algo);
 }
 
-CollAlgo build_alltoall_pairwise_algo_dma(
-    CollectiveConfig const& config, bool inplace) {
+CollAlgo build_alltoall_pairwise_algo_dma(CollectiveConfig const& config,
+                                          bool inplace) {
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllToAllPairwise;
   algo.input_bytes = alltoall_input_bytes(config);
@@ -299,22 +294,21 @@ CollAlgo build_alltoall_pairwise_algo_dma(
 
     uint32_t send_op = kNoOp;
     if (send_bytes > 0) {
-      send_op = builder.add_op(
-          OpKind::Send, send_bytes, send_offset, staging_offset, 0,
-          peer, {}, /*sequential_tiles=*/true);
+      send_op =
+          builder.add_op(OpKind::Send, send_bytes, send_offset, staging_offset,
+                         0, peer, {}, /*sequential_tiles=*/true);
     }
 
     if (recv_bytes > 0) {
-      uint32_t recv_op =
-          builder.add_op(OpKind::Recv, recv_bytes, recv_offset,
-                         staging_offset, peer, 0, {},
-                         /*sequential_tiles=*/true);
+      uint32_t recv_op = builder.add_op(OpKind::Recv, recv_bytes, recv_offset,
+                                        staging_offset, peer, 0, {},
+                                        /*sequential_tiles=*/true);
 
       std::vector<uint32_t> copy_deps;
       add_dep(copy_deps, send_op);
       add_dep(copy_deps, recv_op);
-      builder.add_op(OpKind::Copy, recv_bytes, staging_offset,
-                     recv_offset, -1, -1, std::move(copy_deps),
+      builder.add_op(OpKind::Copy, recv_bytes, staging_offset, recv_offset, -1,
+                     -1, std::move(copy_deps),
                      /*sequential_tiles=*/true);
     }
 
@@ -324,8 +318,8 @@ CollAlgo build_alltoall_pairwise_algo_dma(
   return std::move(builder.algo);
 }
 
-CollAlgo build_alltoall_pairwise_algo_sm(
-    CollectiveConfig const& config, bool inplace) {
+CollAlgo build_alltoall_pairwise_algo_sm(CollectiveConfig const& config,
+                                         bool inplace) {
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllToAllPairwise;
   algo.input_bytes = alltoall_input_bytes(config);
@@ -368,12 +362,12 @@ CollAlgo build_alltoall_pairwise_algo_sm(
     size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
 
     if (send_bytes > 0) {
-      builder.add_op(OpKind::Send, send_bytes, send_offset, send_offset,
-                     -1, peer, {});
+      builder.add_op(OpKind::Send, send_bytes, send_offset, send_offset, -1,
+                     peer, {});
     }
     if (recv_bytes > 0) {
-      builder.add_op(OpKind::Recv, recv_bytes, recv_offset, recv_offset,
-                     peer, -1, {});
+      builder.add_op(OpKind::Recv, recv_bytes, recv_offset, recv_offset, peer,
+                     -1, {});
     }
   }
 
@@ -382,8 +376,7 @@ CollAlgo build_alltoall_pairwise_algo_sm(
 
 }  // namespace
 
-CollAlgo build_coll_algo(CollectiveConfig const& config,
-                                           bool inplace) {
+CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
   require_collective_config(config, inplace);
   switch (config.kind) {
     case CollKind::AllReduceRing:

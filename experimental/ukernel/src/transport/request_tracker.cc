@@ -7,7 +7,8 @@
 namespace UKernel {
 namespace Transport {
 
-unsigned RequestTracker::make_request_id(uint32_t slot_idx, uint32_t generation) {
+unsigned RequestTracker::make_request_id(uint32_t slot_idx,
+                                         uint32_t generation) {
   uint32_t gen = generation & kGenerationMask;
   if (gen == 0) gen = 1;
   return (gen << kSlotBits) | (slot_idx & (kSlotCount - 1u));
@@ -54,9 +55,13 @@ TrackedRequest* RequestTracker::allocate(unsigned* out_req_id) {
             expected, TrackedRequest::SlotState::Reserved,
             std::memory_order_acq_rel, std::memory_order_acquire))
       continue;
-    uint32_t gen = (slot->generation.fetch_add(1, std::memory_order_acq_rel) + 1u) &
-                    kGenerationMask;
-    if (gen == 0) { gen = 1; slot->generation.store(gen, std::memory_order_release); }
+    uint32_t gen =
+        (slot->generation.fetch_add(1, std::memory_order_acq_rel) + 1u) &
+        kGenerationMask;
+    if (gen == 0) {
+      gen = 1;
+      slot->generation.store(gen, std::memory_order_release);
+    }
     unsigned rid = make_request_id(idx, gen);
     slot->request_id = rid;
     slot->adapter_request_id = 0;
@@ -73,9 +78,11 @@ TrackedRequest* RequestTracker::resolve(unsigned req_id) const {
   uint32_t idx = request_slot_index(req_id);
   if (idx >= kSlotCount) return nullptr;
   TrackedRequest* slot = &slots_[idx];
-  uint32_t gen = slot->generation.load(std::memory_order_acquire) & kGenerationMask;
+  uint32_t gen =
+      slot->generation.load(std::memory_order_acquire) & kGenerationMask;
   if (gen == 0 || gen != request_generation(req_id)) return nullptr;
-  if (slot->state.load(std::memory_order_acquire) == TrackedRequest::SlotState::Free)
+  if (slot->state.load(std::memory_order_acquire) ==
+      TrackedRequest::SlotState::Free)
     return nullptr;
   return slot;
 }

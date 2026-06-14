@@ -5,24 +5,26 @@
 #include <cstdint>
 
 namespace UKernel {
-namespace Transport { class Communicator; }
+namespace Transport {
+class Communicator;
+}
 namespace CCL {
 
 // ── Command descriptor ──────────────────────────────────────────────────
 
 struct Cmd {
-  OpKind kind;              // 4
-  uint32_t src_buf;         // 4
-  uint32_t dst_buf;         // 4
-  uint32_t src_off;         // 4
-  uint32_t dst_off;         // 4
-  uint32_t bytes;           // 4
-  uint32_t src_peer;        // 4
-  uint32_t dst_peer;        // 4
-  ReductionKind redop;      // 4
-  uint8_t  transport;       // 1 — 0=auto/device default, 1=IPC, 2=RDMA
-  uint8_t  _pad[3];         // 3 — alignment
-  uint64_t tag;             // 8 — for Signal/SignalWait
+  OpKind kind;          // 4
+  uint32_t src_buf;     // 4
+  uint32_t dst_buf;     // 4
+  uint32_t src_off;     // 4
+  uint32_t dst_off;     // 4
+  uint32_t bytes;       // 4
+  uint32_t src_peer;    // 4
+  uint32_t dst_peer;    // 4
+  ReductionKind redop;  // 4
+  uint8_t transport;    // 1 — 0=auto/device default, 1=IPC, 2=RDMA
+  uint8_t _pad[3];      // 3 — alignment
+  uint64_t tag;         // 8 — for Signal/SignalWait
 };
 // Total: 4*9 + 1 + 3 + 8 = 48 bytes
 

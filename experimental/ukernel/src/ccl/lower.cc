@@ -29,10 +29,11 @@ TileResult tile_chunks(CollAlgo const& algo, size_t tile_bytes) {
       tile.bytes = std::min(tile_bytes, c.bytes - t * tile_bytes);
       tile.src_off = c.src_off + t * tile_bytes;
       tile.dst_off = c.dst_off + t * tile_bytes;
-      tile.src_peer = (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
-      tile.dst_peer = (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
-      tile.copy_from_staging =
-          (c.op == OpKind::Copy && c.sequential_tiles);
+      tile.src_peer =
+          (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
+      tile.dst_peer =
+          (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
+      tile.copy_from_staging = (c.op == OpKind::Copy && c.sequential_tiles);
       r.ops.push_back(tile);
       r.chunk_of.push_back(static_cast<uint32_t>(i));
     }
@@ -46,9 +47,8 @@ void propagate_deps(std::vector<Chunk> const& chunks,
   size_t n = chunks.size();
   for (size_t i = 0; i < n; ++i) {
     auto const& c = chunks[i];
-    size_t num_i =
-        (i + 1 < n) ? first_tile[i + 1] - first_tile[i]
-                    : ops.size() - first_tile[i];
+    size_t num_i = (i + 1 < n) ? first_tile[i + 1] - first_tile[i]
+                               : ops.size() - first_tile[i];
 
     if (c.sequential_tiles)
       for (size_t t = 1; t < num_i; ++t)
@@ -57,10 +57,9 @@ void propagate_deps(std::vector<Chunk> const& chunks,
 
     for (uint32_t dep_idx : c.deps) {
       if (dep_idx >= n) continue;
-      size_t num_d =
-          (dep_idx + 1 < n)
-              ? first_tile[dep_idx + 1] - first_tile[dep_idx]
-              : ops.size() - first_tile[dep_idx];
+      size_t num_d = (dep_idx + 1 < n)
+                         ? first_tile[dep_idx + 1] - first_tile[dep_idx]
+                         : ops.size() - first_tile[dep_idx];
       size_t common = std::min(num_i, num_d);
       for (size_t t = 0; t < common; ++t)
         ops[first_tile[i] + t].deps.push_back(

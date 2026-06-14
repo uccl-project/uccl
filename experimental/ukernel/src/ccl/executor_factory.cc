@@ -1,9 +1,9 @@
-#include "executor.h"
 #include "../../include/gpu_rt.h"
 #include "../../include/transport.h"
 #include "backend/backend.h"
 #include "backend/device_backend.h"
 #include "backend/transport_backend.h"
+#include "executor.h"
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -41,9 +41,9 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     if (!comm->wait_ipc(peer, kCompIdBase + config.rank, 30000))
       throw std::runtime_error("GPU comp buffer IPC exchange failed");
     int remote_dev = -1;
-    comm->try_resolve_remote_ipc_pointer(peer, kCompIdBase + config.rank,
-                                         0, 16, reinterpret_cast<void**>(&gpu_comp[peer].remote),
-                                         &remote_dev);
+    comm->try_resolve_remote_ipc_pointer(
+        peer, kCompIdBase + config.rank, 0, 16,
+        reinterpret_cast<void**>(&gpu_comp[peer].remote), &remote_dev);
   }
   dev_be->set_signal_buffers(gpu_comp);
 

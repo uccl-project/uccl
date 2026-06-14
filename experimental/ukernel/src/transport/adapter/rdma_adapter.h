@@ -38,8 +38,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool has_put_path(int peer_rank) const override;
   bool has_wait_path(int peer_rank) const override;
 
-  unsigned send_put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-                          void* remote_ptr, uint32_t remote_buffer_id, size_t len,
+  unsigned send_put_async(int peer_rank, void* local_ptr,
+                          uint32_t local_buffer_id, void* remote_ptr,
+                          uint32_t remote_buffer_id, size_t len,
                           unsigned comm_rid) override;
   unsigned send_signal_async(int peer_rank, uint64_t tag,
                              unsigned comm_rid) override;

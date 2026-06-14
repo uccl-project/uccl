@@ -1,8 +1,8 @@
 #pragma once
 
+#include "../../../include/gpu_rt.h"
 #include "../util/jring.h"
 #include "transport_adapter.h"
-#include "../../../include/gpu_rt.h"
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -50,19 +50,23 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool has_put_path(int peer_rank) const override;
   bool has_wait_path(int peer_rank) const override;
 
-  unsigned send_put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-                          void* remote_ptr, uint32_t remote_buffer_id,
-                          size_t len, unsigned comm_rid) override;
+  unsigned send_put_async(int peer_rank, void* local_ptr,
+                          uint32_t local_buffer_id, void* remote_ptr,
+                          uint32_t remote_buffer_id, size_t len,
+                          unsigned comm_rid) override;
   unsigned send_signal_async(int peer_rank, uint64_t tag,
                              unsigned comm_rid) override;
   unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
                              std::optional<WaitTarget> target,
                              unsigned comm_rid) override;
 
-
  private:
-  struct Handshake { uint32_t src_rank = 0; };
-  struct HandshakeAck { uint32_t accepted = 1; };
+  struct Handshake {
+    uint32_t src_rank = 0;
+  };
+  struct HandshakeAck {
+    uint32_t accepted = 1;
+  };
 
   struct PeerContext {
     int send_fd = -1;
@@ -82,7 +86,8 @@ class TcpTransportAdapter final : public TransportAdapter {
     uint64_t tag;
   };
 
-  bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port);
+  bool connect_to_peer(int peer_rank, std::string remote_ip,
+                       uint16_t remote_port);
   bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip);
 
   void send_worker_loop();
@@ -90,7 +95,8 @@ class TcpTransportAdapter final : public TransportAdapter {
 
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
-                             uint16_t remote_port, std::chrono::milliseconds timeout);
+                             uint16_t remote_port,
+                             std::chrono::milliseconds timeout);
   static bool send_handshake(int fd, Handshake const& hs);
   static bool recv_handshake(int fd, Handshake& hs);
   static bool send_handshake_ack(int fd, HandshakeAck const& ack);

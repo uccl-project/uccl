@@ -163,7 +163,8 @@ class Communicator {
       auto it = buffer_sizes_.find(local_buf);
       if (it != buffer_sizes_.end()) len = it->second;
     }
-    return comm_->send_put_async(peer, local_buf, off, remote_buf, remote_off, len);
+    return comm_->send_put_async(peer, local_buf, off, remote_buf, remote_off,
+                                 len);
   }
 
   uint64_t send_signal_async(int peer, uint64_t tag) {
@@ -184,17 +185,15 @@ class Communicator {
   // ── Blocking convenience wrappers ──
 
   void send(int peer, uint32_t src_buf, uint32_t dst_buf, size_t dst_off) {
-    uint64_t rid =
-        send_put_async(peer, src_buf, 0, buffer_size(src_buf), dst_buf, dst_off);
-    if (rid == 0)
-      throw std::runtime_error("send_put_async returned 0");
+    uint64_t rid = send_put_async(peer, src_buf, 0, buffer_size(src_buf),
+                                  dst_buf, dst_off);
+    if (rid == 0) throw std::runtime_error("send_put_async returned 0");
     wait_one(static_cast<unsigned>(rid));
   }
 
   void signal(int peer, uint64_t tag) {
     uint64_t rid = send_signal_async(peer, tag);
-    if (rid == 0)
-      throw std::runtime_error("send_signal_async returned 0");
+    if (rid == 0) throw std::runtime_error("send_signal_async returned 0");
     wait_one(static_cast<unsigned>(rid));
   }
 
@@ -284,10 +283,10 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("send_put_async", &Communicator::send_put_async, nb::arg("peer"),
            nb::arg("local_buf"), nb::arg("off") = 0, nb::arg("len") = 0,
            nb::arg("remote_buf") = 0, nb::arg("remote_off") = 0)
-      .def("send_signal_async", &Communicator::send_signal_async, nb::arg("peer"),
-           nb::arg("tag"))
-      .def("wait_signal_async", &Communicator::wait_signal_async, nb::arg("peer"),
-           nb::arg("tag"))
+      .def("send_signal_async", &Communicator::send_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
+      .def("wait_signal_async", &Communicator::wait_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
       .def("poll", &Communicator::poll_py, nb::arg("rids"))
       .def("signal", &Communicator::signal, nb::arg("peer"), nb::arg("tag"))
       .def("wait_data", &Communicator::wait_data, nb::arg("peer"),

@@ -67,8 +67,8 @@ struct PeerConnectSpec {
 
 // Pushed to completion ring by adapter worker threads on operation completion.
 struct CompletionEvent {
-  unsigned rid;       // Communicator-level request ID
-  unsigned failed;    // 0 = success, 1 = failed
+  unsigned rid;     // Communicator-level request ID
+  unsigned failed;  // 0 = success, 1 = failed
 };
 
 class TransportAdapter {

@@ -105,15 +105,19 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
             "client wait_ipc failed");
     remote_recv_buffer_id = kServerRecvBufferId;
   }
-  unsigned send_rid = comm->send_put_async(kServerRank, kClientSendBufferId, 0,
-                                            remote_recv_buffer_id, 0, kMessageBytes);
+  unsigned send_rid =
+      comm->send_put_async(kServerRank, kClientSendBufferId, 0,
+                           remote_recv_buffer_id, 0, kMessageBytes);
   require(send_rid != 0, "client send_put_async failed");
   CompletionResult results[16];
   bool found = false;
   while (!found) {
     size_t n = comm->try_complete(results, 16);
     for (size_t i = 0; i < n; ++i) {
-      if (results[i].rid == send_rid) { found = true; break; }
+      if (results[i].rid == send_rid) {
+        found = true;
+        break;
+      }
     }
     if (!found) std::this_thread::yield();
   }
@@ -151,14 +155,18 @@ int run_exchange_server(int gpu, std::string const& exchanger_ip,
   while (!found) {
     size_t n = comm->try_complete(results, 16);
     for (size_t i = 0; i < n; ++i) {
-      if (results[i].rid == recv_rid) { found = true; break; }
+      if (results[i].rid == recv_rid) {
+        found = true;
+        break;
+      }
     }
     if (!found) std::this_thread::yield();
   }
 
-  // For IPC, send_put_async writes directly to remote memory — data is already there.
-  // For TCP, data reception requires a DataWait target which the Communicator
-  // does not expose; the tcp_adapter unit test covers TCP data transfer.
+  // For IPC, send_put_async writes directly to remote memory — data is already
+  // there. For TCP, data reception requires a DataWait target which the
+  // Communicator does not expose; the tcp_adapter unit test covers TCP data
+  // transfer.
   if (peer_kind == UKernel::Transport::PeerTransportKind::Ipc) {
     std::vector<uint8_t> host(kMessageBytes);
     GPU_RT_CHECK(

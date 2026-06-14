@@ -1,8 +1,8 @@
 #include "device_backend.h"
-#include "../../device/task.h"
-#include "../../device/worker.h"
 #include "../../../include/gpu_rt.h"
 #include "../../../include/transport.h"
+#include "../../device/task.h"
+#include "../../device/worker.h"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -13,8 +13,8 @@ namespace CCL {
 
 DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuGetDevice(&device_idx_));
-  GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_,
-              gpuDevAttrMultiProcessorCount, device_idx_));
+  GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
+                                     device_idx_));
 }
 
 DeviceBackend::~DeviceBackend() {
@@ -57,7 +57,7 @@ void DeviceBackend::init(BufSpec bufs[3]) {
 }
 
 size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
-                             uint32_t* out_indices) {
+                              uint32_t* out_indices) {
   if (!inited_) return 0;
 
   size_t accepted = 0;
@@ -74,9 +74,9 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
     if (c.src_buf > 0 && c.src_buf <= 3) {
       if (c.src_peer != ~0u && comm_) {
         void* remote = nullptr;
-        if (comm_->try_resolve_remote_ipc_pointer(
-                (int)c.src_peer, c.src_buf, c.src_off, c.bytes,
-                &remote, &args.src_device))
+        if (comm_->try_resolve_remote_ipc_pointer((int)c.src_peer, c.src_buf,
+                                                  c.src_off, c.bytes, &remote,
+                                                  &args.src_device))
           args.src = remote;
       } else if (bufs_[c.src_buf - 1].ptr) {
         args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
@@ -86,28 +86,39 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
       if (c.dst_peer != ~0u && comm_) {
         void* remote = nullptr;
         int remote_dev = device_idx_;
-        if (comm_->try_resolve_remote_ipc_pointer(
-                (int)c.dst_peer, c.dst_buf, c.dst_off, c.bytes,
-                &remote, &remote_dev))
+        if (comm_->try_resolve_remote_ipc_pointer((int)c.dst_peer, c.dst_buf,
+                                                  c.dst_off, c.bytes, &remote,
+                                                  &remote_dev))
           args.dst = remote;
       } else if (bufs_[c.dst_buf - 1].ptr) {
         args.dst = (char*)bufs_[c.dst_buf - 1].ptr + c.dst_off;
       }
     }
-    args.set_red_type(c.redop == ReductionKind::None
-                          ? Device::ReduceType::None
-                          : c.redop == ReductionKind::Sum
-                                ? Device::ReduceType::Sum
-                                : Device::ReduceType::Sum);
+    args.set_red_type(c.redop == ReductionKind::None ? Device::ReduceType::None
+                      : c.redop == ReductionKind::Sum
+                          ? Device::ReduceType::Sum
+                          : Device::ReduceType::Sum);
 
     Device::TaskType tt;
     switch (c.kind) {
-      case OpKind::Copy:       tt = Device::TaskType::CollCopy; break;
-      case OpKind::Reduce:     tt = Device::TaskType::CollReduce; break;
-      case OpKind::Send:       tt = Device::TaskType::CollSend; break;
-      case OpKind::Recv:       tt = Device::TaskType::CollRecv; break;
-      case OpKind::RecvReduce: tt = Device::TaskType::CollRecvReduce; break;
-      default: ++accepted; continue;
+      case OpKind::Copy:
+        tt = Device::TaskType::CollCopy;
+        break;
+      case OpKind::Reduce:
+        tt = Device::TaskType::CollReduce;
+        break;
+      case OpKind::Send:
+        tt = Device::TaskType::CollSend;
+        break;
+      case OpKind::Recv:
+        tt = Device::TaskType::CollRecv;
+        break;
+      case OpKind::RecvReduce:
+        tt = Device::TaskType::CollRecvReduce;
+        break;
+      default:
+        ++accepted;
+        continue;
     }
 
     // Reserve slot + fid under lock (cheap), heavy ops outside
@@ -145,13 +156,12 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
 size_t DeviceBackend::drain(uint32_t* completed, size_t max) {
   std::lock_guard<std::mutex> lk(pending_mu_);
   size_t count = 0;
-  for (size_t i = 0; i < pending_.size() && count < max; ) {
+  for (size_t i = 0; i < pending_.size() && count < max;) {
     auto& rec = pending_[i];
     if (worker_pool_->is_done(rec.task_id, rec.fifo_id)) {
       Device::TaskManager::instance().free_task_args(rec.args_id);
       completed[count++] = rec.cmd_idx;
-      if (i != pending_.size() - 1)
-        rec = pending_.back();
+      if (i != pending_.size() - 1) rec = pending_.back();
       pending_.pop_back();
     } else {
       ++i;
@@ -164,7 +174,8 @@ size_t DeviceBackend::capacity() const {
   return (size_t)cfg_.max_fifos * cfg_.fifo_capacity;
 }
 
-void DeviceBackend::set_signal_buffers(std::vector<GpuSignalPeer> const& peers) {
+void DeviceBackend::set_signal_buffers(
+    std::vector<GpuSignalPeer> const& peers) {
   gpu_signal_bufs_ = peers;
 }
 

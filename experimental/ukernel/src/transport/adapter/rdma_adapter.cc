@@ -234,7 +234,10 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   }
   registered_ids_.clear();
 
-  if (send_ring_) { free(send_ring_); send_ring_ = nullptr; }
+  if (send_ring_) {
+    free(send_ring_);
+    send_ring_ = nullptr;
+  }
 
   if (pd_) {
     ibv_dealloc_pd(pd_);
@@ -257,9 +260,8 @@ RdmaTransportAdapter::ensure_peer_slot(int rank) {
   auto new_owners = std::make_unique<std::unique_ptr<RdmaPeer>[]>(new_cap);
 
   for (size_t i = 0; i < peer_capacity_; ++i) {
-    new_table[i].store(
-        peer_table_[i].load(std::memory_order_acquire),
-        std::memory_order_relaxed);
+    new_table[i].store(peer_table_[i].load(std::memory_order_acquire),
+                       std::memory_order_relaxed);
     new_owners[i] = std::move(peer_owners_[i]);
   }
 
@@ -279,9 +281,8 @@ void RdmaTransportAdapter::ensure_mr_slot(uint32_t id) {
   auto new_table = std::make_unique<std::atomic<ibv_mr*>[]>(new_cap);
 
   for (size_t i = 0; i < mr_table_capacity_; ++i) {
-    new_table[i].store(
-        mr_table_[i].load(std::memory_order_acquire),
-        std::memory_order_relaxed);
+    new_table[i].store(mr_table_[i].load(std::memory_order_acquire),
+                       std::memory_order_relaxed);
   }
 
   mr_table_ = std::move(new_table);
@@ -392,8 +393,8 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
 bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   auto pool = std::make_unique<RecvPool>();
   // tag_buf is already zero-initialized, no resize needed
-  pool->mr = ibv_reg_mr(pd_, &pool->tag_buf, sizeof(uint64_t),
-                        IBV_ACCESS_LOCAL_WRITE);
+  pool->mr =
+      ibv_reg_mr(pd_, &pool->tag_buf, sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
   if (!pool->mr) return false;
 
   pool->sges.resize(1);
@@ -513,8 +514,7 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
     } else {
       for (int i = 0; i < p->num_qps; ++i)
         init.remote_data_qpns[i] = p->data_qps[i]->qp_num;
-      init.remote_signal_qpn =
-          p->signal_qp ? p->signal_qp->qp_num : 0;
+      init.remote_signal_qpn = p->signal_qp ? p->signal_qp->qp_num : 0;
     }
   }
   return init;
@@ -540,15 +540,15 @@ bool RdmaTransportAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
 
 bool RdmaTransportAdapter::has_put_path(int rank) const {
   if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return false;
-  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
-      std::memory_order_acquire);
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
   return p != nullptr && p->put_ready;
 }
 
 bool RdmaTransportAdapter::has_wait_path(int rank) const {
   if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return false;
-  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
-      std::memory_order_acquire);
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
   return p != nullptr && p->wait_ready;
 }
 
@@ -682,8 +682,8 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
 unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                                               uint32_t local_buf_id,
                                               void* remote_ptr,
-                                              uint32_t remote_buf_id, size_t len,
-                                              unsigned comm_rid) {
+                                              uint32_t remote_buf_id,
+                                              size_t len, unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
@@ -695,8 +695,8 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
   if (lkey == 0) return 0;
 
   // Lock-free peer + remote buffer lookup (Task 2)
-  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
-      std::memory_order_acquire);
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
   if (!p || !p->put_ready) return 0;
 
   uint64_t raddr = 0;
@@ -714,8 +714,9 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
   }
   if (raddr == 0 || rkey == 0) return 0;
 
-  RingElem e{comm_rid, rank, Kind::DataPut, local_ptr, remote_ptr,
-             local_buf_id, remote_buf_id, len, 0, raddr, rkey, lkey};
+  RingElem e{comm_rid,   rank,         Kind::DataPut, local_ptr,
+             remote_ptr, local_buf_id, remote_buf_id, len,
+             0,          raddr,        rkey,          lkey};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
@@ -724,17 +725,17 @@ unsigned RdmaTransportAdapter::send_signal_async(int rank, uint64_t tag,
                                                  unsigned comm_rid) {
   if (!has_put_path(rank)) return 0;
 
-  RingElem e{comm_rid, rank, Kind::Signal, nullptr, nullptr,
-             0, 0, 0, tag, 0, 0, 0};
+  RingElem e{comm_rid, rank, Kind::Signal, nullptr, nullptr, 0,
+             0,        0,    tag,          0,       0,       0};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
 
 // ── recv path (enqueue to jring) ─────────────────────────────────────────────
 
-unsigned RdmaTransportAdapter::wait_signal_async(int rank, uint64_t /*expected_tag*/,
-                                               std::optional<WaitTarget> /*target*/,
-                                               unsigned comm_rid) {
+unsigned RdmaTransportAdapter::wait_signal_async(
+    int rank, uint64_t /*expected_tag*/, std::optional<WaitTarget> /*target*/,
+    unsigned comm_rid) {
   if (!has_wait_path(rank)) return 0;
   // SignalWait path is handled by poll_loop pushing tags to Communicator.
   publish_completion(comm_rid, true);
@@ -795,19 +796,19 @@ void RdmaTransportAdapter::register_remote_buffer(int rank, uint32_t buf_id,
                                                   uint32_t rkey) {
   if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return;
 
-  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
-      std::memory_order_acquire);
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
   if (!p) return;
 
   // Resize remote buffer table if needed (under peer's internal mutex)
   if (buf_id >= p->remote_buf_capacity_) {
     std::lock_guard<std::mutex> lk(p->remote_buf_mu_);
     if (buf_id >= p->remote_buf_capacity_) {
-      size_t new_cap = std::max<size_t>(buf_id + 1, p->remote_buf_capacity_ * 2);
+      size_t new_cap =
+          std::max<size_t>(buf_id + 1, p->remote_buf_capacity_ * 2);
       if (new_cap < 64) new_cap = 64;
 
-      auto new_table =
-          std::make_unique<std::atomic<RemoteBufInfo*>[]>(new_cap);
+      auto new_table = std::make_unique<std::atomic<RemoteBufInfo*>[]>(new_cap);
       auto new_owners =
           std::make_unique<std::unique_ptr<RemoteBufInfo>[]>(new_cap);
 
@@ -873,7 +874,7 @@ void RdmaTransportAdapter::send_worker() {
       // CAS-acquire the slot: 0 → send_id
       uint32_t expected = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                  std::memory_order_acquire)) {
+                                                 std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_completion(e.comm_rid, true);
           goto next_elem;
@@ -913,7 +914,8 @@ void RdmaTransportAdapter::send_worker() {
                          (static_cast<uint64_t>(q) << 16) | ci;
 
         ibv_sge sge = {};
-        sge.addr = reinterpret_cast<uint64_t>(static_cast<uint8_t*>(e.local_ptr) + off);
+        sge.addr = reinterpret_cast<uint64_t>(
+            static_cast<uint8_t*>(e.local_ptr) + off);
         sge.length = sz;
         sge.lkey = e.local_lkey;
 
@@ -933,7 +935,8 @@ void RdmaTransportAdapter::send_worker() {
           ibv_qp_init_attr iattr;
           ibv_query_qp(p->data_qps[q], &qattr, IBV_QP_STATE, &iattr);
           fprintf(stderr,
-                  "[send_worker] POST_FAILED ci=%u qp=%d qpn=%u state=%d errno=%d\n",
+                  "[send_worker] POST_FAILED ci=%u qp=%d qpn=%u state=%d "
+                  "errno=%d\n",
                   ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
 
           // Mark slot as complete and free (error path)
@@ -942,7 +945,7 @@ void RdmaTransportAdapter::send_worker() {
           // Only free if we still own the slot
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
-                                                std::memory_order_release);
+                                               std::memory_order_release);
           failed = true;
           break;
         }
@@ -975,7 +978,7 @@ void RdmaTransportAdapter::send_worker() {
       // CAS-acquire slot for signal send
       uint32_t expected = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                  std::memory_order_acquire)) {
+                                                 std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_completion(e.comm_rid, true);
           goto next_elem;
@@ -1007,15 +1010,14 @@ void RdmaTransportAdapter::send_worker() {
         slot.completed_chunks.store(1, std::memory_order_release);
         publish_completion(e.comm_rid, true);
         uint32_t exp = send_id;
-        slot.send_id.compare_exchange_strong(exp, 0,
-                                              std::memory_order_release);
+        slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
         continue;
       }
     } else {
       // Unknown kind → fail immediately
       publish_completion(e.comm_rid, true);
     }
-    next_elem:;
+  next_elem:;
   }
 
   // Drain remaining on shutdown
@@ -1067,11 +1069,11 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         // Only process if we own this slot
         if (slot.send_id.load(std::memory_order_acquire) == send_id) {
           slot.completed_chunks.store(slot.total_chunks,
-                                       std::memory_order_release);
+                                      std::memory_order_release);
           publish_completion(slot.comm_rid, true);
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
-                                                std::memory_order_release);
+                                               std::memory_order_release);
         }
         cv_.notify_all();
         continue;
@@ -1101,13 +1103,13 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         continue;
       }
 
-      uint32_t done = slot.completed_chunks.fetch_add(
-          1, std::memory_order_acq_rel) + 1;
+      uint32_t done =
+          slot.completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
       if (done == slot.total_chunks) {
         // Try to claim completion: CAS send_id back to 0
         uint32_t expected = send_id;
         if (slot.send_id.compare_exchange_strong(expected, 0,
-                                                  std::memory_order_release)) {
+                                                 std::memory_order_release)) {
           publish_completion(slot.comm_rid, false);
         }
         // If CAS failed, error path or another thread already handled it
@@ -1132,11 +1134,10 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       PendingSlot& slot = pending_ring_[slot_idx];
       if (slot.send_id.load(std::memory_order_acquire) == send_id) {
         slot.completed_chunks.store(slot.total_chunks,
-                                     std::memory_order_release);
+                                    std::memory_order_release);
         publish_completion(slot.comm_rid, true);
         uint32_t exp = send_id;
-        slot.send_id.compare_exchange_strong(exp, 0,
-                                              std::memory_order_release);
+        slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
       }
       cv_.notify_all();
       continue;
@@ -1149,12 +1150,12 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
         uint32_t slot_idx = send_id % kRingSize;
         PendingSlot& slot = pending_ring_[slot_idx];
         if (slot.send_id.load(std::memory_order_acquire) == send_id) {
-          uint32_t done = slot.completed_chunks.fetch_add(
-              1, std::memory_order_acq_rel) + 1;
+          uint32_t done =
+              slot.completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
           if (done >= slot.total_chunks) {
             uint32_t expected = send_id;
-            if (slot.send_id.compare_exchange_strong(expected, 0,
-                                                      std::memory_order_release)) {
+            if (slot.send_id.compare_exchange_strong(
+                    expected, 0, std::memory_order_release)) {
               publish_completion(slot.comm_rid, false);
             }
           }

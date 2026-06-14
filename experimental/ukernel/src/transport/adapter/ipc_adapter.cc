@@ -27,14 +27,13 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 }  // namespace
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
-                        int local_gpu_idx)
-    : seqs_(comm->world_size(),
-                                 std::array<uint64_t, 2>{1, 1}),
-       ns_(std::move(ring_namespace)),
-       dir_state_(comm->world_size()),
-       comps_(comm->world_size()),
-       comm_(comm),
-       gpu_id_(local_gpu_idx) {
+                       int local_gpu_idx)
+    : seqs_(comm->world_size(), std::array<uint64_t, 2>{1, 1}),
+      ns_(std::move(ring_namespace)),
+      dir_state_(comm->world_size()),
+      comps_(comm->world_size()),
+      comm_(comm),
+      gpu_id_(local_gpu_idx) {
   send_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   if (send_ring_ == nullptr || recv_ring_ == nullptr) {
@@ -100,15 +99,13 @@ void IpcAdapter::shutdown() {
     free(recv_ring_);
     recv_ring_ = nullptr;
   }
-  for (size_t r = 0; r < comps_.size(); ++r)
-    close_comp(static_cast<int>(r));
+  for (size_t r = 0; r < comps_.size(); ++r) close_comp(static_cast<int>(r));
 }
 
 // ── Data-completion SHM (fast path for IPC GPU data transfers) ───────────
 
 std::string IpcAdapter::comp_shm_name(int peer_rank) const {
-  return Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), peer_rank,
-                comm_->rank());
+  return Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), peer_rank, comm_->rank());
 }
 
 bool IpcAdapter::ensure_local_comp(int peer_rank) {
@@ -116,7 +113,8 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   if (pc.local != nullptr) return true;
 
   pc.shm_name = comp_shm_name(peer_rank);
-  shm_unlink(pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
+  shm_unlink(
+      pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
   size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
@@ -132,7 +130,8 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   pc.shm_fd = fd;
   pc.shm_size = sz;
   pc.local = new (ptr) IpcDataCompletion();
-  pc.signal_ring = new (static_cast<char*>(ptr) + sizeof(IpcDataCompletion)) PeerSignalRing();
+  pc.signal_ring = new (static_cast<char*>(ptr) + sizeof(IpcDataCompletion))
+      PeerSignalRing();
   return true;
 }
 
@@ -142,8 +141,8 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
 
   // The remote completion SHM is the peer's *local* completion — the
   // peer created it with itself as receiver.
-  std::string remote_name = Format(
-      "/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
+  std::string remote_name =
+      Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
   while (true) {
@@ -163,10 +162,22 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
 
 void IpcAdapter::close_comp(int peer_rank) {
   auto& pc = comps_[static_cast<size_t>(peer_rank)];
-  if (pc.local) { munmap(pc.local, pc.shm_size); pc.local = nullptr; }
-  if (pc.remote) { munmap(pc.remote, sizeof(IpcDataCompletion)); pc.remote = nullptr; }
-  if (pc.shm_fd >= 0) { close(pc.shm_fd); pc.shm_fd = -1; }
-  if (!pc.shm_name.empty()) { shm_unlink(pc.shm_name.c_str()); pc.shm_name.clear(); }
+  if (pc.local) {
+    munmap(pc.local, pc.shm_size);
+    pc.local = nullptr;
+  }
+  if (pc.remote) {
+    munmap(pc.remote, sizeof(IpcDataCompletion));
+    pc.remote = nullptr;
+  }
+  if (pc.shm_fd >= 0) {
+    close(pc.shm_fd);
+    pc.shm_fd = -1;
+  }
+  if (!pc.shm_name.empty()) {
+    shm_unlink(pc.shm_name.c_str());
+    pc.shm_name.clear();
+  }
   if (peer_rank < static_cast<int>(dir_state_.size())) {
     std::lock_guard<std::mutex> lk(dir_mu_);
     dir_state_[static_cast<size_t>(peer_rank)] = {};
@@ -241,13 +252,15 @@ unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
                                     void* remote_ptr, uint32_t, size_t bytes,
                                     unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  RingElem e{comm_rid, peer, ReqType::DataPut, next_send_match_seq(peer),
-             local_ptr, remote_ptr, bytes};
+  RingElem e{
+      comm_rid,   peer, ReqType::DataPut, next_send_match_seq(peer), local_ptr,
+      remote_ptr, bytes};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
 
-unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag, unsigned comm_rid) {
+unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
+                                       unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
 
   // Inline fast path: write tag to remote peer's signal ring in SHM.
@@ -271,14 +284,14 @@ unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag, unsigned comm_rid
 }
 
 unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
-                                     std::optional<WaitTarget> target,
-                                     unsigned comm_rid) {
+                                       std::optional<WaitTarget> target,
+                                       unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
 
   if (target) {
     // DataWait: GPU-copy completion — through jring + recv_worker.
     uint64_t seq = next_recv_match_seq(peer);
-    RingElem e{comm_rid, peer, ReqType::DataWait, seq,
+    RingElem e{comm_rid,          peer,    ReqType::DataWait, seq,
                target->local_ptr, nullptr, target->len};
     if (!enqueue_elem(recv_ring_, e, stop_)) return 0;
     return 1;
@@ -290,7 +303,8 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
   return 1;
 }
 
-size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags, size_t max) {
+size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
+                                     size_t max) {
   if (!has_wait_path(peer_rank)) return 0;
   auto& pc = comps_[static_cast<size_t>(peer_rank)];
   PeerSignalRing* ring = pc.signal_ring;
@@ -399,8 +413,8 @@ bool IpcAdapter::send_one(RingElem* e) {
       GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, sz,
                                   gpuMemcpyDeviceToDevice, stream));
     else
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
-                                      gpu_id_, sz, stream));
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk, gpu_id_,
+                                      sz, stream));
     GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
     offset += sz;
   }
@@ -427,8 +441,8 @@ bool IpcAdapter::recv_one(RingElem* e) {
     std::this_thread::yield();
   }
   if (!stop_.load(std::memory_order_acquire)) {
-    std::cerr << "[ERROR] IPC recv timed out, peer " << e->peer
-              << " match_seq " << e->seq << std::endl;
+    std::cerr << "[ERROR] IPC recv timed out, peer " << e->peer << " match_seq "
+              << e->seq << std::endl;
   }
   return false;
 }

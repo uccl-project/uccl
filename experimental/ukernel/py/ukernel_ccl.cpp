@@ -240,12 +240,12 @@ struct BindingState {
   }
 };
 
-size_t plan_cache_key(CollectiveKind collective,
-                      CollectiveConfig const& config, bool inplace) {
+size_t plan_cache_key(CollectiveKind collective, CollectiveConfig const& config,
+                      bool inplace) {
   size_t h = 0;
   auto combine = [&h](auto v) {
-    h ^= std::hash<decltype(v)>{}(v) + 0x9e3779b97f4a7c15ULL +
-         (h << 6) + (h >> 2);
+    h ^= std::hash<decltype(v)>{}(v) + 0x9e3779b97f4a7c15ULL + (h << 6) +
+         (h >> 2);
   };
   combine(static_cast<uint32_t>(collective));
   combine(static_cast<uint32_t>(config.algorithm));
@@ -334,8 +334,7 @@ class ProcessGroup {
 
   void allreduce(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
                  uint32_t num_streams = 2) {
-    allreduce(std::move(tensor),
-              static_cast<uint32_t>(ReductionKind::Sum),
+    allreduce(std::move(tensor), static_cast<uint32_t>(ReductionKind::Sum),
               tile_bytes, num_streams);
   }
 
@@ -417,7 +416,8 @@ class ProcessGroup {
     size_t max_bytes = std::max(input_bytes, output_bytes);
     size_t staging_req = std::max(
         tile_bytes * (world_size_ - 1),
-        ((max_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
+        ((max_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) *
+            tile_bytes);
     void* old_staging_ptr =
         staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
     torch::Tensor staging = ensure_staging(staging_req);
@@ -590,8 +590,7 @@ class ProcessGroup {
   }
 
   void allreduce(torch::Tensor tensor, uint32_t reduction,
-                 size_t tile_bytes = 64ull << 10,
-                 uint32_t num_streams = 2) {
+                 size_t tile_bytes = 64ull << 10, uint32_t num_streams = 2) {
     std::lock_guard<std::mutex> lock(mu_);
     GPU_RT_CHECK(gpuSetDevice(gpu_id_));
 
@@ -609,7 +608,8 @@ class ProcessGroup {
     config.tile_bytes = tile_bytes;
     size_t staging_req = std::max(
         tile_bytes * num_streams,
-        ((tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) * tile_bytes);
+        ((tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) *
+            tile_bytes);
     config.algorithm = AlgorithmKind::Ring;
     config.dtype = dtype;
     config.reduction = static_cast<ReductionKind>(reduction);
@@ -629,7 +629,8 @@ class ProcessGroup {
         resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
     CollectiveBufferRoles roles{input_id, input_id, staging_id};
 
-    size_t key = plan_cache_key(CollectiveKind::AllReduce, config, /*inplace=*/true);
+    size_t key =
+        plan_cache_key(CollectiveKind::AllReduce, config, /*inplace=*/true);
     CollectivePlan plan;
     auto cache_it = plan_cache_.find(key);
     if (cache_it != plan_cache_.end()) {

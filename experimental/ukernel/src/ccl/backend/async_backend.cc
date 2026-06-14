@@ -1,5 +1,4 @@
 #include "async_backend.h"
-
 #include <atomic>
 #include <cstdlib>
 #include <thread>
@@ -19,7 +18,8 @@ AsyncBackend::AsyncBackend(BatchBackend* be, uint32_t cmd_ring_slots,
   size_t done_sz = jring_get_buf_ring_size(sizeof(uint32_t), done_ring_slots);
   if (done_sz == (size_t)-1) done_sz = 0;
   done_ring_ = static_cast<jring_t*>(calloc(1, done_sz));
-  if (done_ring_) jring_init(done_ring_, done_ring_slots, sizeof(uint32_t), 0, 0);
+  if (done_ring_)
+    jring_init(done_ring_, done_ring_slots, sizeof(uint32_t), 0, 0);
 
   for (size_t i = 0; i < kPendingSlots; ++i)
     pending_[i].store(~0u, std::memory_order_relaxed);
@@ -45,8 +45,8 @@ void AsyncBackend::stop() {
 // ── Non-blocking API ────────────────────────────────────────────────────
 
 size_t AsyncBackend::try_enqueue(CmdWithId const* cmds, size_t n) {
-  return jring_sp_enqueue_burst(cmd_ring_, cmds,
-                                static_cast<unsigned>(n), nullptr);
+  return jring_sp_enqueue_burst(cmd_ring_, cmds, static_cast<unsigned>(n),
+                                nullptr);
 }
 
 size_t AsyncBackend::try_drain(uint32_t* caller_ids, size_t max) {
@@ -54,13 +54,9 @@ size_t AsyncBackend::try_drain(uint32_t* caller_ids, size_t max) {
                                 static_cast<unsigned>(max), nullptr);
 }
 
-size_t AsyncBackend::cmd_free() const {
-  return jring_free_count(cmd_ring_);
-}
+size_t AsyncBackend::cmd_free() const { return jring_free_count(cmd_ring_); }
 
-size_t AsyncBackend::done_count() const {
-  return jring_count(done_ring_);
-}
+size_t AsyncBackend::done_count() const { return jring_count(done_ring_); }
 
 // ── Internal threads ─────────────────────────────────────────────────────
 
@@ -74,11 +70,10 @@ void AsyncBackend::submit_loop() {
     }
 
     uint32_t be_idx = 0;
-    while (be_->enqueue(&cwi.cmd, 1, &be_idx) == 0)
-      std::this_thread::yield();
+    while (be_->enqueue(&cwi.cmd, 1, &be_idx) == 0) std::this_thread::yield();
 
-    pending_[be_idx & (kPendingSlots - 1)].store(
-        cwi.caller_id + 1, std::memory_order_release);
+    pending_[be_idx & (kPendingSlots - 1)].store(cwi.caller_id + 1,
+                                                 std::memory_order_release);
   }
 }
 
@@ -102,9 +97,9 @@ void AsyncBackend::drain_loop() {
 
     size_t written = 0;
     while (written < n) {
-      written += jring_sp_enqueue_burst(done_ring_, out_buf + written,
-                                        static_cast<unsigned>(n - written),
-                                        nullptr);
+      written +=
+          jring_sp_enqueue_burst(done_ring_, out_buf + written,
+                                 static_cast<unsigned>(n - written), nullptr);
       if (written < n) std::this_thread::yield();
     }
   }

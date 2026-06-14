@@ -110,8 +110,7 @@ void test_chunk_defaults() {
 
 void test_sequential_tiles_values() {
   printf("[test] SequentialTiles values...\n");
-  assert(static_cast<uint8_t>(false) !=
-         static_cast<uint8_t>(true));
+  assert(static_cast<uint8_t>(false) != static_cast<uint8_t>(true));
 }
 
 void test_coll_algo_defaults() {
@@ -189,8 +188,7 @@ void test_build_coll_algo_alltoall_sm_basic() {
   assert(algo.kind == CollKind::AllToAllPairwise);
   assert(!algo.chunks.empty());
   // All SM IPC ops should have Independent tile order.
-  for (auto const& chunk : algo.chunks)
-    assert(chunk.sequential_tiles == false);
+  for (auto const& chunk : algo.chunks) assert(chunk.sequential_tiles == false);
 }
 
 void test_build_coll_algo_alltoall_dma_basic() {
@@ -404,10 +402,13 @@ void test_full_pipeline_alltoall_dma() {
 void bench_lower_algo_large_ring() {
   printf("[bench] tile_and_schedule large ring (8r, 1MB, 64KB tile)...\n");
   CollectiveConfig cfg;
-  cfg.nranks = 8; cfg.rank = 0;
-  cfg.input_bytes = 1 << 20; cfg.output_bytes = 1 << 20;
+  cfg.nranks = 8;
+  cfg.rank = 0;
+  cfg.input_bytes = 1 << 20;
+  cfg.output_bytes = 1 << 20;
   cfg.tile_bytes = 1 << 16;
-  cfg.dtype = ScalarType::Float32; cfg.reduction = ReductionKind::Sum;
+  cfg.dtype = ScalarType::Float32;
+  cfg.reduction = ReductionKind::Sum;
   cfg.kind = CollKind::AllReduceRing;
 
   constexpr int kWarmup = 5;
@@ -421,20 +422,25 @@ void bench_lower_algo_large_ring() {
     total_ops += r.ops.size();
   }
   auto t1 = std::chrono::steady_clock::now();
-  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  auto us =
+      std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
   printf("  %zu ops/iter × %d iters in %.1f ms  (%.0f ops/ms)\n",
          total_ops / kIters, kIters, us / 1000.0,
          static_cast<double>(total_ops) / (us / 1000.0));
 }
 
 void bench_lower_algo_large_alltoall() {
-  printf("[bench] tile_and_schedule large alltoall dma (8r, 1MB, 64KB tile)...\n");
+  printf(
+      "[bench] tile_and_schedule large alltoall dma (8r, 1MB, 64KB tile)...\n");
   CollectiveConfig cfg;
-  cfg.nranks = 8; cfg.rank = 0;
-  cfg.input_bytes = 1 << 20; cfg.output_bytes = 1 << 20;
+  cfg.nranks = 8;
+  cfg.rank = 0;
+  cfg.input_bytes = 1 << 20;
+  cfg.output_bytes = 1 << 20;
   cfg.tile_bytes = 1 << 16;
   cfg.dtype = ScalarType::Float32;
-  cfg.kind = CollKind::AllToAllPairwise; cfg.use_sm_ipc = false;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.use_sm_ipc = false;
 
   constexpr int kWarmup = 5;
   constexpr int kIters = 200;
@@ -447,7 +453,8 @@ void bench_lower_algo_large_alltoall() {
     total_ops += r.ops.size();
   }
   auto t1 = std::chrono::steady_clock::now();
-  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  auto us =
+      std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
   printf("  %zu ops/iter × %d iters in %.1f ms  (%.0f ops/ms)\n",
          total_ops / kIters, kIters, us / 1000.0,
          static_cast<double>(total_ops) / (us / 1000.0));
@@ -456,16 +463,20 @@ void bench_lower_algo_large_alltoall() {
 void bench_bfs_layers_wide_dag() {
   printf("[bench] schedule_ops wide DAG (1000 independent ops)...\n");
   std::vector<Op> ops(1000);
-  for (auto& op : ops) { op.kind = OpKind::Copy; op.bytes = 128; }
-  constexpr int kWarmup = 20; constexpr int kIters = 500;
+  for (auto& op : ops) {
+    op.kind = OpKind::Copy;
+    op.bytes = 128;
+  }
+  constexpr int kWarmup = 20;
+  constexpr int kIters = 500;
   for (int i = 0; i < kWarmup; ++i) bfs_layers(ops);
   auto t0 = std::chrono::steady_clock::now();
   for (int i = 0; i < kIters; ++i) bfs_layers(ops);
   auto t1 = std::chrono::steady_clock::now();
-  auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-  printf("  1000 ops × %d iters in %.1f ms  (%.0f ops/ms)\n",
-         kIters, us / 1000.0,
-         static_cast<double>(1000 * kIters) / (us / 1000.0));
+  auto us =
+      std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  printf("  1000 ops × %d iters in %.1f ms  (%.0f ops/ms)\n", kIters,
+         us / 1000.0, static_cast<double>(1000 * kIters) / (us / 1000.0));
 }
 
 }  // namespace

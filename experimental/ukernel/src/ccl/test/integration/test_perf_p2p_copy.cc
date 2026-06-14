@@ -5,7 +5,6 @@
 #include "coll_types.h"
 #include "gpu_rt.h"
 #include "transport.h"
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -42,12 +41,17 @@ std::string get_arg(int argc, char** argv, std::string const& name,
 
 int get_int_arg(int argc, char** argv, std::string const& name, int def) {
   std::string s = get_arg(argc, argv, name, std::to_string(def));
-  try { return std::stoi(s); } catch (...) { return def; }
+  try {
+    return std::stoi(s);
+  } catch (...) {
+    return def;
+  }
 }
 
-std::shared_ptr<Communicator> make_communicator(
-    int gpu, int rank, std::string const& exchanger_ip, int exchanger_port,
-    PreferredTransport preferred) {
+std::shared_ptr<Communicator> make_communicator(int gpu, int rank,
+                                                std::string const& exchanger_ip,
+                                                int exchanger_port,
+                                                PreferredTransport preferred) {
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = exchanger_ip;
   cfg->exchanger_port = exchanger_port;
@@ -65,8 +69,7 @@ bool setup_bidirectional_peer(std::shared_ptr<Communicator> const& comm,
 
 std::vector<size_t> make_size_scan() {
   std::vector<size_t> sizes;
-  for (size_t b = 1024; b <= 1024ULL * 1024 * 1024; b *= 2)
-    sizes.push_back(b);
+  for (size_t b = 1024; b <= 1024ULL * 1024 * 1024; b *= 2) sizes.push_back(b);
   return sizes;
 }
 
@@ -89,9 +92,10 @@ int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role.empty()) {
-    std::fprintf(stderr, "Usage: test_perf_p2p_copy --role=server|client "
-                         "[--gpu GPU] [--exchanger-ip IP] [--exchanger-port PORT]\n"
-                         "  Both processes must have the same CUDA_VISIBLE_DEVICES.\n");
+    std::fprintf(stderr,
+                 "Usage: test_perf_p2p_copy --role=server|client "
+                 "[--gpu GPU] [--exchanger-ip IP] [--exchanger-port PORT]\n"
+                 "  Both processes must have the same CUDA_VISIBLE_DEVICES.\n");
     return 1;
   }
 
@@ -100,20 +104,25 @@ int main(int argc, char** argv) {
   int default_gpu = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", default_gpu);
   std::string exchanger_ip =
-      (role == "server") ? "0.0.0.0" : get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
+      (role == "server") ? "0.0.0.0"
+                         : get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
   int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 6979);
   std::string transport_str = get_arg(argc, argv, "--transport", "auto");
 
   PreferredTransport preferred = PreferredTransport::Auto;
-  if (transport_str == "ipc")        preferred = PreferredTransport::Ipc;
-  else if (transport_str == "tcp")   preferred = PreferredTransport::Tcp;
-  else if (transport_str == "rdma")  preferred = PreferredTransport::Rdma;
+  if (transport_str == "ipc")
+    preferred = PreferredTransport::Ipc;
+  else if (transport_str == "tcp")
+    preferred = PreferredTransport::Tcp;
+  else if (transport_str == "rdma")
+    preferred = PreferredTransport::Rdma;
 
-  std::printf("[p2p-perf] role=%s rank=%d gpu=%d preferred=%s\n",
-              role.c_str(), rank, gpu, transport_str.c_str());
+  std::printf("[p2p-perf] role=%s rank=%d gpu=%d preferred=%s\n", role.c_str(),
+              rank, gpu, transport_str.c_str());
 
   // ── 1. Create Communicator ──────────────────────────────────────────
-  auto comm = make_communicator(gpu, rank, exchanger_ip, exchanger_port, preferred);
+  auto comm =
+      make_communicator(gpu, rank, exchanger_ip, exchanger_port, preferred);
   if (!setup_bidirectional_peer(comm, rank, peer)) {
     std::fprintf(stderr, "[p2p-perf] peer setup failed\n");
     return 1;
@@ -156,7 +165,8 @@ int main(int argc, char** argv) {
   int can_access = 0;
   GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access, gpu, remote_dev));
   if (!can_access) {
-    std::fprintf(stderr, "[p2p-perf] Peer access NOT supported between GPU %d and %d\n",
+    std::fprintf(stderr,
+                 "[p2p-perf] Peer access NOT supported between GPU %d and %d\n",
                  gpu, remote_dev);
     GPU_RT_CHECK(gpuFree(d_local));
     comm->dereg_ipc(local_buf_id);
@@ -165,13 +175,15 @@ int main(int argc, char** argv) {
   gpuError_t err = gpuDeviceEnablePeerAccess(remote_dev, 0);
   if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
     GPU_RT_CHECK(err);
-  std::printf("[p2p-perf] peer access enabled: GPU %d -> %d\n", gpu, remote_dev);
+  std::printf("[p2p-perf] peer access enabled: GPU %d -> %d\n", gpu,
+              remote_dev);
 
   // ── 5. Warm-up ──────────────────────────────────────────────────────
   gpuStream_t warmup_stream;
   GPU_RT_CHECK(gpuStreamCreate(&warmup_stream));
   for (int i = 0; i < 10; ++i)
-    GPU_RT_CHECK(gpuMemcpyPeerAsync(d_remote, remote_dev, d_local, gpu, 1024, warmup_stream));
+    GPU_RT_CHECK(gpuMemcpyPeerAsync(d_remote, remote_dev, d_local, gpu, 1024,
+                                    warmup_stream));
   GPU_RT_CHECK(gpuStreamSynchronize(warmup_stream));
   gpuStreamDestroy(warmup_stream);
 
@@ -182,18 +194,24 @@ int main(int argc, char** argv) {
   // ── 7. Benchmark DeviceBackend (various blocks_per_worker) ──────────
   std::vector<uint32_t> all_blocks = {1, 2, 4, 8, 16, 32, 64, 128};
   int sm_count = 0;
-  GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount, gpu));
+  GPU_RT_CHECK(
+      gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount, gpu));
   std::vector<uint32_t> blocks_configs;
   for (uint32_t b : all_blocks)
-    if (b <= (uint32_t)sm_count) blocks_configs.push_back(b);
-    else break;
+    if (b <= (uint32_t)sm_count)
+      blocks_configs.push_back(b);
+    else
+      break;
   std::printf("[p2p-perf] SM count=%d, blocks_per_worker capped at %u\n",
               sm_count, blocks_configs.back());
-  std::printf("[p2p-perf] Starting DeviceBackend benchmarks (%zu sizes x %zu blocks, ~1 min)...\n",
-              sizes.size(), blocks_configs.size());
+  std::printf(
+      "[p2p-perf] Starting DeviceBackend benchmarks (%zu sizes x %zu blocks, "
+      "~1 min)...\n",
+      sizes.size(), blocks_configs.size());
 
   for (uint32_t blocks_per_worker : blocks_configs) {
-    std::printf("[p2p-perf]   DeviceBackend blocks_per_worker=%u ...\n", blocks_per_worker);
+    std::printf("[p2p-perf]   DeviceBackend blocks_per_worker=%u ...\n",
+                blocks_per_worker);
     DeviceBackendConfig dev_cfg;
     dev_cfg.task_capacity = 4096;
     dev_cfg.max_fifos = 1;
@@ -202,7 +220,8 @@ int main(int argc, char** argv) {
     dev_cfg.fifo_capacity = 64;  // enough for throughput batch (16)
 
     DeviceBackend dev_be(dev_cfg);
-    BufSpec bufs[3] = {{d_local, kMaxBytes}, {d_remote, kMaxBytes}, {nullptr, 0}};
+    BufSpec bufs[3] = {
+        {d_local, kMaxBytes}, {d_remote, kMaxBytes}, {nullptr, 0}};
     dev_be.init(bufs);
 
     // Wrap with AsyncBackend (same pattern as SprayExecutor)
@@ -219,17 +238,18 @@ int main(int argc, char** argv) {
         CmdWithId cwi;
         cwi.cmd.kind = OpKind::Copy;
         cwi.cmd.bytes = static_cast<uint32_t>(bytes);
-        cwi.cmd.src_buf = 1; cwi.cmd.dst_buf = 2;
-        cwi.cmd.src_off = 0; cwi.cmd.dst_off = 0;
-        cwi.cmd.src_peer = ~0u; cwi.cmd.dst_peer = ~0u;
+        cwi.cmd.src_buf = 1;
+        cwi.cmd.dst_buf = 2;
+        cwi.cmd.src_off = 0;
+        cwi.cmd.dst_off = 0;
+        cwi.cmd.src_peer = ~0u;
+        cwi.cmd.dst_peer = ~0u;
         cwi.caller_id = static_cast<uint32_t>(iter);
 
         auto t0 = std::chrono::steady_clock::now();
-        while (async.try_enqueue(&cwi, 1) == 0)
-          std::this_thread::yield();
+        while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
         uint32_t done = ~0u;
-        while (async.try_drain(&done, 1) == 0)
-          std::this_thread::yield();
+        while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
         auto t1 = std::chrono::steady_clock::now();
         latencies.push_back(elapsed_us(t0, t1));
       }
@@ -248,9 +268,12 @@ int main(int argc, char** argv) {
         for (int b = 0; b < kBatchSize; ++b) {
           cwis[b].cmd.kind = OpKind::Copy;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
-          cwis[b].cmd.src_buf = 1; cwis[b].cmd.dst_buf = 2;
-          cwis[b].cmd.src_off = 0; cwis[b].cmd.dst_off = 0;
-          cwis[b].cmd.src_peer = ~0u; cwis[b].cmd.dst_peer = ~0u;
+          cwis[b].cmd.src_buf = 1;
+          cwis[b].cmd.dst_buf = 2;
+          cwis[b].cmd.src_off = 0;
+          cwis[b].cmd.dst_off = 0;
+          cwis[b].cmd.src_peer = ~0u;
+          cwis[b].cmd.dst_peer = ~0u;
           cwis[b].caller_id = static_cast<uint32_t>(b);
         }
 
@@ -281,10 +304,12 @@ int main(int argc, char** argv) {
       for (double t : throughputs) avg_tp += t;
       avg_tp /= throughputs.size();
 
-      results.push_back({"device_backend", blocks_per_worker, bytes, avg_lat, avg_tp});
+      results.push_back(
+          {"device_backend", blocks_per_worker, bytes, avg_lat, avg_tp});
     }
     async.stop();
-    std::printf("[p2p-perf]   DeviceBackend blocks_per_worker=%u done.\n", blocks_per_worker);
+    std::printf("[p2p-perf]   DeviceBackend blocks_per_worker=%u done.\n",
+                blocks_per_worker);
   }
 
   // ── 8. Benchmark gpuMemcpyPeerAsync ─────────────────────────────────
@@ -298,7 +323,8 @@ int main(int argc, char** argv) {
 
     for (int iter = 0; iter < kLatencyIters; ++iter) {
       auto t0 = std::chrono::steady_clock::now();
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(d_remote, remote_dev, d_local, gpu, bytes, stream));
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(d_remote, remote_dev, d_local, gpu, bytes,
+                                      stream));
       GPU_RT_CHECK(gpuStreamSynchronize(stream));
       auto t1 = std::chrono::steady_clock::now();
       latencies.push_back(elapsed_us(t0, t1));
@@ -314,9 +340,8 @@ int main(int argc, char** argv) {
     for (int iter = 0; iter < kThroughputIters; ++iter) {
       auto t0 = std::chrono::steady_clock::now();
       for (int b = 0; b < kBatchSize; ++b) {
-        GPU_RT_CHECK(gpuMemcpyPeerAsync(
-            d_remote, remote_dev,
-            d_local, gpu, bytes, stream));
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(d_remote, remote_dev, d_local, gpu,
+                                        bytes, stream));
       }
       GPU_RT_CHECK(gpuStreamSynchronize(stream));
       auto t1 = std::chrono::steady_clock::now();
@@ -350,9 +375,11 @@ int main(int argc, char** argv) {
     std::vector<double> latencies;
     for (int iter = 0; iter < kLatencyIters; ++iter) {
       auto t0 = std::chrono::steady_clock::now();
-      unsigned rid = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      unsigned rid =
+          comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
       if (!rid) {
-        std::fprintf(stderr, "[p2p-perf] send_put_async failed for latency iter\n");
+        std::fprintf(stderr,
+                     "[p2p-perf] send_put_async failed for latency iter\n");
         std::abort();
       }
       while (true) {
@@ -360,7 +387,10 @@ int main(int argc, char** argv) {
         size_t n = comm->try_complete(results, 16);
         bool found = false;
         for (size_t i = 0; i < n; ++i)
-          if (results[i].rid == rid) { found = true; break; }
+          if (results[i].rid == rid) {
+            found = true;
+            break;
+          }
         if (found) break;
         std::this_thread::yield();
       }
@@ -379,7 +409,8 @@ int main(int argc, char** argv) {
       auto t0 = std::chrono::steady_clock::now();
       unsigned rids[kBatchSize];
       for (int b = 0; b < kBatchSize; ++b)
-        rids[b] = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+        rids[b] = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0,
+                                       bytes);
       size_t drained = 0;
       while (drained < kBatchSize) {
         CompletionResult done[16];
@@ -422,7 +453,11 @@ int main(int argc, char** argv) {
   for (auto& r : results) {
     if (r.method == "device_backend" && r.threads_per_block > 0) {
       bool found = false;
-      for (auto b : blocks_seen) if (b == r.threads_per_block) { found = true; break; }
+      for (auto b : blocks_seen)
+        if (b == r.threads_per_block) {
+          found = true;
+          break;
+        }
       if (!found) blocks_seen.push_back(r.threads_per_block);
     }
   }
@@ -445,7 +480,10 @@ int main(int argc, char** argv) {
     size_t mi = 0;
     if (r.method == "device_backend") {
       for (size_t i = 0; i < blocks_seen.size(); ++i)
-        if (r.threads_per_block == blocks_seen[i]) { mi = i; break; }
+        if (r.threads_per_block == blocks_seen[i]) {
+          mi = i;
+          break;
+        }
     } else if (r.method == "gpuMemcpyPeerAsync") {
       mi = blocks_seen.size();
     } else {

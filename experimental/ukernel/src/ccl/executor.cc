@@ -25,9 +25,11 @@ static CollectiveBufferRole buf_role(OpKind kind, bool is_src,
                                          : CollectiveBufferRole::Input)
                     : CollectiveBufferRole::Output;
     case OpKind::Reduce:
-      return is_src ? CollectiveBufferRole::Input : CollectiveBufferRole::Output;
+      return is_src ? CollectiveBufferRole::Input
+                    : CollectiveBufferRole::Output;
     case OpKind::Send:
-      return is_src ? CollectiveBufferRole::Input : CollectiveBufferRole::Output;
+      return is_src ? CollectiveBufferRole::Input
+                    : CollectiveBufferRole::Output;
     case OpKind::Recv:
     case OpKind::RecvReduce:
       return CollectiveBufferRole::Output;
@@ -55,7 +57,8 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
   c.src_buf = buf_of(op, true);
   c.dst_buf = buf_of(op, false);
   c.redop = (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-                ? redop : ReductionKind::None;
+                ? redop
+                : ReductionKind::None;
   c.transport = static_cast<uint8_t>(Transport::PeerTransportKind::Unknown);
   c.tag = op.tag;
   return c;
@@ -64,8 +67,11 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
 // ── Constructor ───────────────────────────────────────────────────────
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
-    : device_be_(device_be), tpt_be_(tpt_be),
-      owned_device_(), owned_transport_(), owned_comm_(),
+    : device_be_(device_be),
+      tpt_be_(tpt_be),
+      owned_device_(),
+      owned_transport_(),
+      owned_comm_(),
       stop_(false) {
   std::memset(cmd_to_run_, 0, sizeof(cmd_to_run_));
 
@@ -80,7 +86,8 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
 
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
   if (async_dev_)
-    drain_th_dev_ = std::thread(&SprayExecutor::drain_loop, this, async_dev_.get());
+    drain_th_dev_ =
+        std::thread(&SprayExecutor::drain_loop, this, async_dev_.get());
   if (async_tpt_)
     drain_th_tpt_ = std::thread(&SprayExecutor::drain_tpt_loop, this);
 }
@@ -106,7 +113,8 @@ CollectiveOpStatus SprayExecutor::status(CollectiveOpHandle h) const {
   auto* ex = const_cast<SprayExecutor*>(this);
   std::lock_guard lock(ex->runs_mutex_);
   auto it = ex->runs_.find(h);
-  return it != ex->runs_.end() ? it->second->status : CollectiveOpStatus::Completed;
+  return it != ex->runs_.end() ? it->second->status
+                               : CollectiveOpStatus::Completed;
 }
 
 size_t SprayExecutor::active_count() const {
@@ -127,8 +135,9 @@ std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
 
 // ── Submit ───────────────────────────────────────────────────────────────
 
-CollectiveOpHandle SprayExecutor::submit_allreduce(
-    CollectiveConfig const& cfg, void* input, void* output, void* scratch) {
+CollectiveOpHandle SprayExecutor::submit_allreduce(CollectiveConfig const& cfg,
+                                                   void* input, void* output,
+                                                   void* scratch) {
   CollectiveConfig c = cfg;
   c.kind = CollKind::AllReduceRing;
   TiledResult tiled = build_tiled(c, input == output);
@@ -154,15 +163,18 @@ CollectiveOpHandle SprayExecutor::submit_allreduce(
   auto run = std::make_unique<SprayRun>();
   run->status = CollectiveOpStatus::Running;
   run->tiled = std::move(tiled);
-  run->input = input; run->output = output; run->scratch = scratch;
+  run->input = input;
+  run->output = output;
+  run->scratch = scratch;
   run->done.resize(run->tiled.ops.size(), false);
   run->submitted.resize(run->tiled.ops.size(), false);
   runs_[h] = std::move(run);
   return h;
 }
 
-CollectiveOpHandle SprayExecutor::submit_alltoall(
-    CollectiveConfig const& cfg, void* input, void* output, void* scratch) {
+CollectiveOpHandle SprayExecutor::submit_alltoall(CollectiveConfig const& cfg,
+                                                  void* input, void* output,
+                                                  void* scratch) {
   CollectiveConfig c = cfg;
   c.kind = CollKind::AllToAllPairwise;
   return submit_allreduce(c, input, output, scratch);
@@ -175,8 +187,7 @@ bool SprayExecutor::poll(CollectiveOpHandle h) {
   auto it = runs_.find(h);
   if (it == runs_.end()) return true;
   auto s = it->second->status;
-  return s == CollectiveOpStatus::Completed ||
-         s == CollectiveOpStatus::Failed;
+  return s == CollectiveOpStatus::Completed || s == CollectiveOpStatus::Failed;
 }
 
 bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
@@ -184,8 +195,11 @@ bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
   int spin = 0;
   if (to.count() == 0) {
     while (!poll(h)) {
-      if (spin < kSpin) { ++spin; std::this_thread::yield(); }
-      else std::this_thread::sleep_for(std::chrono::microseconds(100));
+      if (spin < kSpin) {
+        ++spin;
+        std::this_thread::yield();
+      } else
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     return true;
   }
@@ -221,7 +235,10 @@ void SprayExecutor::collect_ready(SprayRun& run) {
       ld = false;
       bool ok = true;
       for (uint32_t d : ops[op].deps)
-        if (!run.done[d]) { ok = false; break; }
+        if (!run.done[d]) {
+          ok = false;
+          break;
+        }
       if (ok) run.ready.push_back(op);
     }
     if (ld) run.next_layer = l + 1;
@@ -255,7 +272,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run, AsyncBackend* async_be) {
     cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
     cmd_transport_[cwi.caller_id] = c.transport;
 
-    // Route: Signal/SignalWait → TransportBackend; Send with explicit transport → TptBE
+    // Route: Signal/SignalWait → TransportBackend; Send with explicit transport
+    // → TptBE
     if (c.kind == OpKind::Signal || c.kind == OpKind::SignalWait ||
         (async_tpt_ && (c.kind == OpKind::Send || c.kind == OpKind::Recv) &&
          c.transport != 0)) {
@@ -331,11 +349,11 @@ void SprayExecutor::drain_loop(AsyncBackend* async_be) {
 
 Transport::PeerTransportKind SprayExecutor::pick_transport(int peer) {
   auto& m = tpt_metrics_[peer];
-  double cost_ipc = static_cast<double>(
-      m.ipc.inflight.load(std::memory_order_relaxed)) *
+  double cost_ipc =
+      static_cast<double>(m.ipc.inflight.load(std::memory_order_relaxed)) *
       m.ipc.latency_us.load(std::memory_order_relaxed);
-  double cost_rdma = static_cast<double>(
-      m.rdma.inflight.load(std::memory_order_relaxed)) *
+  double cost_rdma =
+      static_cast<double>(m.rdma.inflight.load(std::memory_order_relaxed)) *
       m.rdma.latency_us.load(std::memory_order_relaxed);
   return cost_ipc <= cost_rdma ? Transport::PeerTransportKind::Ipc
                                : Transport::PeerTransportKind::Rdma;

@@ -11,11 +11,11 @@ namespace {
 
 // ── Vector type: 32B on SM80+, 16B otherwise ──────────────────────────
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-  using Vec = ulonglong4;
-  static constexpr int kVEC_BYTES = 32;
+using Vec = ulonglong4;
+static constexpr int kVEC_BYTES = 32;
 #else
-  using Vec = uint4;
-  static constexpr int kVEC_BYTES = 16;
+using Vec = uint4;
+static constexpr int kVEC_BYTES = 16;
 #endif
 
 }  // anonymous namespace
@@ -45,18 +45,16 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   size_t nvec = count / NELTS_PER_VEC;
 
   Vec const* src_v = reinterpret_cast<Vec const*>(src);
-  Vec*       dst_v = reinterpret_cast<Vec*>(dst);
+  Vec* dst_v = reinterpret_cast<Vec*>(dst);
 
-  for (size_t vi = tid; vi < nvec; vi += nthread)
-    dst_v[vi] = src_v[vi];
+  for (size_t vi = tid; vi < nvec; vi += nthread) dst_v[vi] = src_v[vi];
 
   // Scalar tail
   if constexpr (NELTS_PER_VEC > 1) {
     size_t base = nvec * NELTS_PER_VEC;
-    T*       dst_t = static_cast<T*>(dst);
+    T* dst_t = static_cast<T*>(dst);
     T const* src_t = static_cast<T const*>(src);
-    for (size_t i = base + tid; i < count; i += nthread)
-      dst_t[i] = src_t[i];
+    for (size_t i = base + tid; i < count; i += nthread) dst_t[i] = src_t[i];
   }
 }
 
