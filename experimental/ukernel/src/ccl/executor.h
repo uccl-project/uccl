@@ -1,18 +1,24 @@
 #pragma once
 
 #include "backend/backend.h"
-#include "plan.h"
-#include "selector.h"
+#include "coll_config.h"
+#include "lower.h"
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
 namespace Transport {
+enum class PeerTransportKind;
 struct CommunicatorConfig;
+struct SignalCompletion;
 class Communicator;
 }  // namespace Transport
 namespace CCL {
@@ -24,87 +30,129 @@ enum class CollectiveOpStatus : uint32_t {
   Failed,
 };
 
-struct CollectiveConfig {
-  int nranks = 1;
-  int rank = 0;
-  uint32_t num_flows = 1;
-  size_t tensor_bytes = 0;
-  // Optional alltoall-specific byte sizes. When unset, tensor_bytes is used.
-  size_t input_bytes = 0;
-  size_t output_bytes = 0;
-  size_t tile_bytes = 0;
-  size_t staging_bytes = 0;
-  // Optional alltoall-specific per-peer split sizes in bytes.
-  std::vector<size_t> input_split_bytes;
-  std::vector<size_t> output_split_bytes;
-  AlgorithmKind algorithm = AlgorithmKind::Ring;
-  ScalarType dtype = ScalarType::Float32;
-  ReductionKind reduction = ReductionKind::Sum;
+using CollectiveOpHandle = uint64_t;
+inline constexpr CollectiveOpHandle kInvalidHandle = 0;
+
+// ── Op sprayer with async jring backends ────────────────────────────────
+
+class AsyncBackend;
+
+struct SprayRun {
+  CollectiveOpStatus status = CollectiveOpStatus::Queued;
+  TiledResult tiled;
+  void* input = nullptr;
+  void* output = nullptr;
+  void* scratch = nullptr;
+  std::string error;
+
+  std::vector<bool> done;
+  std::vector<bool> submitted;  // op already enqueued to cmd_ring
+  std::vector<uint32_t> ready;
+  std::atomic<size_t> done_count{0};
+  uint32_t next_layer = 0;
+
+  // Mutex for done[] / map[] concurrent access between enqueue & drain threads
+  std::mutex mtx;
+
+  // cmd_ring batch bookkeeping — per-cycle
+  std::vector<CmdWithId> dev_cmds;
+  std::vector<CmdWithId> tpt_cmds;
 };
 
-struct ExecutorConfig {
-  int gpu_id = 0;
-  int rank = 0;
-  int world_size = 1;
-  std::shared_ptr<UKernel::Transport::CommunicatorConfig> communicator_config;
-  uint32_t device_task_capacity = 4096;
-  uint32_t max_device_fifos = 8;
-  uint32_t threads_per_block = 256;
-  uint32_t fifo_capacity = 64;
-  uint32_t smem_size = 0;
+struct SprayExecutorConfig {
+  int gpu_id;
+  int rank;
+  int world_size;
+  size_t device_task_capacity = 256;
+  size_t max_device_fifos = 2;
+  int threads_per_block = 64;
+  size_t fifo_capacity = 256;
+  size_t smem_size = 48 * 1024;
+  std::shared_ptr<struct UKernel::Transport::CommunicatorConfig>
+      communicator_config;
 };
 
-PlanRequest make_plan_request(CollectiveKind kind,
-                              CollectiveConfig const& config, bool inplace);
-
-struct CollectiveOpHandle {
-  uint64_t value = 0;
+struct CmdRunMapping {
+  SprayRun* run;
+  uint32_t op_idx;
 };
 
-class Executor {
+// Per-peer transport metrics for dynamic load balancing
+struct PathMetrics {
+  std::atomic<uint32_t> inflight{0};
+  std::atomic<double> latency_us{100.0};
+};
+
+struct PeerMetrics {
+  PathMetrics ipc;
+  PathMetrics rdma;
+};
+
+class SprayExecutor {
  public:
-  // Executor owns runtime scheduling for the primitive DAG emitted by the
-  // planner. submit() enqueues a collective, and a dedicated progress thread
-  // drives one queued collective at a time until completion. Ops become ready
-  // when all dependency counts reach zero, and backend completions unlock
-  // successor ops.
-  explicit Executor(
-      ExecutorBackends backends,
-      // Callback contract: second argument is remote `buffer_id` (not MR id).
-      std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
-          resolve_ipc_buffer_pointer = {});
-  Executor(ExecutorConfig const& config = {});
-  ~Executor();
+  static std::unique_ptr<SprayExecutor> create(
+      SprayExecutorConfig const& config);
+  SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be);
+  ~SprayExecutor();
 
-  Executor(Executor const&) = delete;
-  Executor& operator=(Executor const&) = delete;
+  SprayExecutor(SprayExecutor const&) = delete;
+  SprayExecutor& operator=(SprayExecutor const&) = delete;
 
-  // Each submit binds one concrete registered-buffer snapshot to the logical
-  // collective plan. Executor itself no longer owns mutable global collective
-  // memory state.
-  CollectiveOpHandle submit(CollectivePlan plan,
-                            std::shared_ptr<CollectiveBinding> runtime_binding);
-  CollectiveOpHandle submit_allreduce(
-      CollectiveConfig const& config,
-      std::shared_ptr<CollectiveBinding> runtime_binding);
-  CollectiveOpHandle submit_alltoall(
-      CollectiveConfig const& config,
-      std::shared_ptr<CollectiveBinding> runtime_binding);
-  // poll() is now a non-blocking terminal-state query. Execution progresses on
-  // the internal progress thread rather than on the caller thread.
-  bool poll(CollectiveOpHandle handle);
-  void wait(CollectiveOpHandle handle);
-  void release(CollectiveOpHandle handle);
+  CollectiveOpHandle submit_allreduce(CollectiveConfig const& cfg, void* input,
+                                      void* output, void* scratch);
+  CollectiveOpHandle submit_alltoall(CollectiveConfig const& cfg, void* input,
+                                     void* output, void* scratch);
 
-  CollectiveOpStatus status(CollectiveOpHandle handle) const;
-  std::string error_message(CollectiveOpHandle handle) const;
-  size_t inflight_steps(CollectiveOpHandle handle) const;
-  UKernel::Transport::Communicator* communicator();
-  UKernel::Transport::Communicator const* communicator() const;
+  CollectiveOpStatus status(CollectiveOpHandle h) const;
+  bool poll(CollectiveOpHandle h);
+  bool wait(CollectiveOpHandle h,
+            std::chrono::milliseconds to = std::chrono::milliseconds(0));
+  void release(CollectiveOpHandle h);
+  std::string error_message(CollectiveOpHandle h) const;
+
+  size_t active_count() const;
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  SprayRun* get(CollectiveOpHandle h);
+
+  void enqueue_loop();
+  void drain_loop(AsyncBackend* async_be);
+
+  // ── Phase helpers (under SprayRun::mtx) ──
+  void collect_ready(SprayRun& run);
+  void enqueue_to_ring(SprayRun& run, AsyncBackend* async_be);
+
+  Transport::PeerTransportKind pick_transport(int peer);
+  void drain_tpt_loop();
+
+  // ── Owned resources ──
+  BatchBackend* device_be_;
+  BatchBackend* tpt_be_;
+  std::unique_ptr<AsyncBackend> async_dev_;
+  std::unique_ptr<AsyncBackend> async_tpt_;
+  std::unique_ptr<BatchBackend> owned_device_;
+  std::unique_ptr<BatchBackend> owned_transport_;
+  std::shared_ptr<Transport::Communicator> owned_comm_;
+
+  // ── Threads ──
+  std::thread enqueue_th_;
+  std::thread drain_th_dev_;
+  std::thread drain_th_tpt_;
+  std::atomic<bool> stop_{false};
+
+  // ── cmd_idx → (run, op_idx) mapping ──
+  static constexpr size_t kMaxCmdIdx = 65536;
+  CmdRunMapping cmd_to_run_[kMaxCmdIdx];
+
+  // ── Transport LB state ──
+  std::unordered_map<int, PeerMetrics> tpt_metrics_;
+  std::unordered_map<uint32_t, uint8_t> cmd_transport_;
+
+  // ── Global cmd_idx counter + run map ──
+  uint32_t next_cmd_idx_ = 0;
+  std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
+  std::mutex runs_mutex_;
+  uint64_t next_handle_ = 1;
 };
 
 }  // namespace CCL

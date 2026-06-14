@@ -1,6 +1,6 @@
 #include "../include/config.h"
-#include "../include/gpu_rt.h"
 #include "../src/transport/communicator.h"
+#include "gpu_rt.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -14,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -38,7 +39,6 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return PreferredTransport::Auto;
   if (value == "ipc") return PreferredTransport::Ipc;
-  if (value == "uccl") return PreferredTransport::Uccl;
   if (value == "tcp") return PreferredTransport::Tcp;
   if (value == "rdma") return PreferredTransport::Rdma;
   throw std::invalid_argument("unsupported transport: " + value);
@@ -153,49 +153,65 @@ class Communicator {
     return comm_->wait_mr(peer_rank, buffer_id);
   }
 
-  uint64_t isend(int peer_rank, uint32_t local_buffer_id, size_t offset = 0,
-                 size_t len = 0, uint32_t remote_buffer_id = 0,
-                 size_t remote_offset = 0) {
+  // ── New async API ──
+
+  uint64_t send_put_async(int peer, uint32_t local_buf, size_t off = 0,
+                          size_t len = 0, uint32_t remote_buf = 0,
+                          size_t remote_off = 0) {
     if (len == 0) {
       std::lock_guard<std::mutex> lk(mu_);
-      auto it = buffer_sizes_.find(local_buffer_id);
+      auto it = buffer_sizes_.find(local_buf);
       if (it != buffer_sizes_.end()) len = it->second;
     }
-    return comm_->isend(peer_rank, local_buffer_id, offset, len,
-                        remote_buffer_id, remote_offset);
+    return comm_->send_put_async(peer, local_buf, off, remote_buf, remote_off,
+                                 len);
   }
 
-  uint64_t irecv(int peer_rank, uint32_t local_buffer_id, size_t offset = 0,
+  uint64_t send_signal_async(int peer, uint64_t tag) {
+    return comm_->send_signal_async(peer, tag);
+  }
+
+  uint64_t wait_signal_async(int peer, uint64_t tag) {
+    return comm_->wait_signal_async(peer, tag);
+  }
+
+  std::vector<unsigned> poll_py(std::vector<unsigned> const& rids) {
+    std::vector<unsigned> rids_copy = rids;
+    size_t n = comm_->poll(rids_copy.data(), rids_copy.size());
+    rids_copy.resize(n);
+    return rids_copy;
+  }
+
+  // ── Blocking convenience wrappers ──
+
+  void send(int peer, uint32_t src_buf, uint32_t dst_buf, size_t dst_off) {
+    uint64_t rid = send_put_async(peer, src_buf, 0, buffer_size(src_buf),
+                                  dst_buf, dst_off);
+    if (rid == 0) throw std::runtime_error("send_put_async returned 0");
+    wait_one(static_cast<unsigned>(rid));
+  }
+
+  void signal(int peer, uint64_t tag) {
+    uint64_t rid = send_signal_async(peer, tag);
+    if (rid == 0) throw std::runtime_error("send_signal_async returned 0");
+    wait_one(static_cast<unsigned>(rid));
+  }
+
+  void wait_data(int peer, uint64_t tag, uint32_t recv_buf, size_t off = 0,
                  size_t len = 0) {
-    if (len == 0) {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = buffer_sizes_.find(local_buffer_id);
-      if (it != buffer_sizes_.end()) len = it->second;
-    }
-    return comm_->irecv(peer_rank, local_buffer_id, offset, len);
+    if (len == 0) len = buffer_size(recv_buf);
+    uint64_t rid = comm_->wait_signal_async(peer, tag, recv_buf, off, len);
+    if (rid == 0)
+      throw std::runtime_error("wait_signal_async(data) returned 0");
+    wait_one(static_cast<unsigned>(rid));
   }
 
-  bool poll(uint64_t req) { return comm_->poll(static_cast<unsigned>(req)); }
-  void release(uint64_t req) { comm_->release(static_cast<unsigned>(req)); }
-
-  bool wait_finish(uint64_t req) {
-    return comm_->wait_finish(static_cast<unsigned>(req));
-  }
-
-  bool wait_finish_multi(std::vector<uint64_t> reqs) {
-    std::vector<unsigned> unsigned_reqs(reqs.size());
-    for (size_t i = 0; i < reqs.size(); ++i) {
-      unsigned_reqs[i] = static_cast<unsigned>(reqs[i]);
-    }
-    return comm_->wait_finish(unsigned_reqs);
-  }
+  // ── Inquiry ──
 
   std::string peer_transport(int peer_rank) const {
     switch (comm_->peer_transport_kind(peer_rank)) {
       case PeerTransportKind::Ipc:
         return "ipc";
-      case PeerTransportKind::Uccl:
-        return "uccl";
       case PeerTransportKind::Tcp:
         return "tcp";
       case PeerTransportKind::Rdma:
@@ -212,21 +228,25 @@ class Communicator {
     return comm_->barrier(barrier_namespace, timeout_ms);
   }
 
-  void send(int peer_rank, uint32_t local_buffer_id,
-            uint32_t remote_buffer_id = 0, size_t remote_offset = 0) {
-    uint64_t req = isend(peer_rank, local_buffer_id, 0, 0, remote_buffer_id,
-                         remote_offset);
-    if (req == 0) throw std::runtime_error("isend returned 0");
-    wait_finish(req);
-  }
-
-  void recv(int peer_rank, uint32_t local_buffer_id) {
-    uint64_t req = irecv(peer_rank, local_buffer_id, 0, 0);
-    if (req == 0) throw std::runtime_error("irecv returned 0");
-    wait_finish(req);
-  }
-
  private:
+  void wait_one(unsigned rid) {
+    while (true) {
+      CompletionResult r[1];
+      size_t n = comm_->try_complete(r, 1);
+      if (n == 1 && r[0].rid == rid) return;
+      std::this_thread::yield();
+    }
+  }
+
+  size_t buffer_size(uint32_t buffer_id) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = buffer_sizes_.find(buffer_id);
+    if (it == buffer_sizes_.end())
+      throw std::invalid_argument("buffer_id " + std::to_string(buffer_id) +
+                                  " not registered");
+    return it->second;
+  }
+
   std::shared_ptr<UKernel::Transport::Communicator> comm_;
   std::unordered_map<uint32_t, torch::Tensor> pinned_tensors_;
   std::unordered_map<uint32_t, size_t> buffer_sizes_;
@@ -260,18 +280,18 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("buffer_id"))
       .def("wait_ipc", &Communicator::wait_ipc, nb::arg("peer_rank"),
            nb::arg("buffer_id"))
-      .def("isend", &Communicator::isend, nb::arg("peer_rank"),
-           nb::arg("local_buffer_id"), nb::arg("offset") = 0,
-           nb::arg("len") = 0, nb::arg("remote_buffer_id") = 0,
-           nb::arg("remote_offset") = 0)
-      .def("irecv", &Communicator::irecv, nb::arg("peer_rank"),
-           nb::arg("local_buffer_id"), nb::arg("offset") = 0,
+      .def("send_put_async", &Communicator::send_put_async, nb::arg("peer"),
+           nb::arg("local_buf"), nb::arg("off") = 0, nb::arg("len") = 0,
+           nb::arg("remote_buf") = 0, nb::arg("remote_off") = 0)
+      .def("send_signal_async", &Communicator::send_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
+      .def("wait_signal_async", &Communicator::wait_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
+      .def("poll", &Communicator::poll_py, nb::arg("rids"))
+      .def("signal", &Communicator::signal, nb::arg("peer"), nb::arg("tag"))
+      .def("wait_data", &Communicator::wait_data, nb::arg("peer"),
+           nb::arg("tag"), nb::arg("recv_buf"), nb::arg("off") = 0,
            nb::arg("len") = 0)
-      .def("poll", &Communicator::poll, nb::arg("req"))
-      .def("release", &Communicator::release, nb::arg("req"))
-      .def("wait_finish", &Communicator::wait_finish, nb::arg("req"))
-      .def("wait_finish_multi", &Communicator::wait_finish_multi,
-           nb::arg("reqs"))
       .def("peer_transport", &Communicator::peer_transport,
            nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
@@ -279,7 +299,5 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("barrier_namespace") = "default", nb::arg("timeout_ms") = -1)
       .def("send", &Communicator::send, nb::arg("peer_rank"),
            nb::arg("local_buffer_id"), nb::arg("remote_buffer_id") = 0,
-           nb::arg("remote_offset") = 0)
-      .def("recv", &Communicator::recv, nb::arg("peer_rank"),
-           nb::arg("local_buffer_id"));
+           nb::arg("remote_offset") = 0);
 }

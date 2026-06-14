@@ -41,11 +41,9 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
+CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_EXECUTOR_SRC := executor_real.cc
-REAL_EXECUTOR_OBJ := $(REAL_EXECUTOR_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -79,24 +77,24 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_components
-INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_multiprocess_collective
+UNIT_TEST_BINS := test_modules test_async
+INTEGRATION_TEST_BINS := test_perf_async test_perf_p2p_copy
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
 
-all: $(TEST_BINS) real_backends
+all: real_backends
 
 test: test-unit test-integration
 	@true
 
 test-unit: $(UNIT_TEST_BINS)
-	./test_components
+	./test_modules
+	./test_async
 
 test-integration: $(INTEGRATION_TEST_BINS)
-	./test_device_backend
-	bash ./test/integration/run_transport_backend_suite.sh ./test_transport_backend
-	bash ./test/integration/run_ccl_multiprocess_suite.sh ./test_multiprocess_collective
+	@echo "Running GPU performance test..."
+	CUDA_VISIBLE_DEVICES=6,7 ./test_perf_async
 
 unit: test-unit
 
@@ -104,27 +102,27 @@ integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
 
-test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
+test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
+test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_async.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
-		backend/device_backend.o $(REAL_EXECUTOR_OBJ) $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
-		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
-
-test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
-		test/integration/test_device_backend.o
+test_perf_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o \
+		$(DEVICE_OBJ) test/integration/test_perf_async.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
 
-test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
-		test/integration/test_transport_backend.o $(UCCL_RDMA_STATIC)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
-		$(TRANSPORT_LIBS)
+test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o backend/transport_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+$(UCCL_RDMA_STATIC):
+	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -172,9 +170,7 @@ clean:
 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(REAL_EXECUTOR_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/unit/test_components.d \
-	test/integration/test_device_backend.d \
-	test/integration/test_transport_backend.d \
-	test/integration/test_multiprocess_collective.d
+	test/unit/test_modules.d test/unit/test_async.d \
+	test/integration/test_perf_async.d \
+	test/integration/test_perf_p2p_copy.d

@@ -20,7 +20,7 @@ def run_server() -> None:
         world_size=world,
         exchanger_ip="127.0.0.1",
         exchanger_port=exchanger_port,
-        transport="auto",
+        transport=os.getenv("UK_P2P_TRANSPORT", "auto"),
     )
 
     if not comm.accept_peer(1):
@@ -39,7 +39,14 @@ def run_server() -> None:
             raise RuntimeError("reg_ipc(recv) failed")
         ipc_registered = True
 
-    comm.recv(1, recv_buffer_id)
+    if selected == "tcp":
+        comm.wait_data(1, 42, recv_buffer_id, 0, recv.numel() * 4)
+    else:
+        rid = comm.wait_signal_async(1, 42)
+        if rid == 0:
+            raise RuntimeError("wait_signal_async returned 0")
+        while not comm.poll([rid]):
+            pass
     print(f"[rank {rank}] received: {recv}")
 
     if recv.sum() == 0:
@@ -62,7 +69,7 @@ def run_client() -> None:
         world_size=world,
         exchanger_ip="127.0.0.1",
         exchanger_port=exchanger_port,
-        transport="auto",
+        transport=os.getenv("UK_P2P_TRANSPORT", "auto"),
     )
 
     if not comm.connect_peer(0):
@@ -76,12 +83,15 @@ def run_client() -> None:
     send_buffer_id = 200
     if not comm.reg_rdma(send_buffer_id, send, publish=False):
         raise RuntimeError("reg_rdma(send) failed")
-    if selected == "ipc" and not comm.wait_ipc(0, recv_buffer_id):
-        raise RuntimeError("wait_ipc(server recv buffer) failed")
-    if selected == "uccl" and not comm.wait_mr(0, recv_buffer_id):
-        raise RuntimeError("wait_mr(server recv buffer) failed")
+    if selected == "ipc":
+        if not comm.wait_ipc(0, recv_buffer_id):
+            raise RuntimeError("wait_ipc(server recv buffer) failed")
+    else:
+        if not comm.wait_mr(0, recv_buffer_id):
+            raise RuntimeError("wait_mr(server recv buffer) failed")
 
-    comm.send(0, send_buffer_id, recv_buffer_id, remote_offset=0)
+    comm.send(0, send_buffer_id, recv_buffer_id, 0)
+    comm.signal(0, 42)
     comm.unreg_rdma(send_buffer_id)
     print(f"[rank {rank}] sent: {send}")
     print(f"[rank {rank}] P2P client test passed!")
