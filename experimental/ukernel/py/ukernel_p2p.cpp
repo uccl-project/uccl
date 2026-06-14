@@ -1,6 +1,6 @@
 #include "../include/config.h"
-#include "gpu_rt.h"
 #include "../src/transport/communicator.h"
+#include "gpu_rt.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>

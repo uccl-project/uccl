@@ -1,4 +1,6 @@
 #pragma once
+#include "gpu_rt.h"
+#include <infiniband/verbs.h>
 #include <algorithm>
 #include <climits>
 #include <cstdint>
@@ -11,11 +13,9 @@
 #include <mutex>
 #include <regex>
 #include <string>
-#include <unistd.h>
 #include <unordered_map>
 #include <vector>
-#include <infiniband/verbs.h>
-#include "gpu_rt.h"
+#include <unistd.h>
 
 namespace UKernel {
 namespace Transport {
