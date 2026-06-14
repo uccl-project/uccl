@@ -10,7 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace UKernel {
@@ -62,6 +62,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
   static constexpr int kMaxInflightWrs = 128;
 
+  static constexpr int kRingSize = 65536;
+
   enum class Kind : uint8_t { DataPut, Signal, SignalWait };
 
   struct RingElem {
@@ -108,14 +110,12 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<unsigned> wait_comm_rid{0};
   };
 
-  struct PendingSend {
-    unsigned comm_rid;
-    uint32_t total_chunks;
+  // Lock-free pending send ring slot.  send_id == 0 means free.
+  struct PendingSlot {
+    std::atomic<uint32_t> send_id{0};
+    unsigned comm_rid = 0;
+    uint32_t total_chunks = 0;
     std::atomic<uint32_t> completed_chunks{0};
-
-    PendingSend() = default;
-    PendingSend(unsigned rid, uint32_t tc)
-        : comm_rid(rid), total_chunks(tc), completed_chunks(0) {}
   };
 
   struct RdmaPeer {
@@ -137,7 +137,13 @@ class RdmaTransportAdapter final : public TransportAdapter {
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
 
-    std::unordered_map<uint32_t, RemoteBufInfo> remote_buffers;
+    // Lock-free remote buffer table indexed by buffer_id.
+    // Stable heap-allocated RemoteBufInfo objects; pointer never reused after
+    // registration.
+    std::unique_ptr<std::atomic<RemoteBufInfo*>[]> remote_buffer_table_;
+    std::unique_ptr<std::unique_ptr<RemoteBufInfo>[]> remote_buf_owners_;
+    size_t remote_buf_capacity_ = 0;
+    std::mutex remote_buf_mu_;  // only for resize + id tracking
 
     QpState qp_state[kMaxQPs];
 
@@ -155,7 +161,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static uint64_t now_ns();
 
   int select_qp(RdmaPeer& p, uint32_t msize);
-  int find_qp_idx(ibv_qp* const* qps, int count, uint32_t qp_num);
   void check_dispatch(RdmaPeer& p, int rank);
 
   bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size,
@@ -176,9 +181,15 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void send_worker();
   void recv_worker();
   void poll_loop();
-  bool poll_cq_set(RdmaPeer& peer, int rank, ibv_cq* cq, ibv_qp* const* qps,
-                   int qp_count);
+  bool poll_cq_set(RdmaPeer& peer, int rank);
   bool poll_signal_cq(RdmaPeer& peer, int rank);
+
+  // Ensure peer_table_ / peer_owners_ is large enough for `rank`.
+  // Returns a reference to the (possibly new) peer_table_ slot.
+  std::atomic<RdmaPeer*>& ensure_peer_slot(int rank);
+
+  // Ensure mr_table_ is large enough for `id`.
+  void ensure_mr_slot(uint32_t id);
 
   ibv_context* ctx_ = nullptr;
   ibv_pd* pd_ = nullptr;
@@ -193,9 +204,18 @@ class RdmaTransportAdapter final : public TransportAdapter {
   int local_dev_idx_ = -1;
   RdmaTransportConfig config_;
 
-  mutable std::mutex mu_;
-  std::unordered_map<int, std::unique_ptr<RdmaPeer>> peers_;
-  std::unordered_map<uint32_t, ibv_mr*> mr_map_;
+  // Lock-free MR table: atomic ibv_mr* array indexed by buffer_id.
+  // ABA-safe because ibv_mr* is never reused after dereg.
+  std::unique_ptr<std::atomic<ibv_mr*>[]> mr_table_;
+  size_t mr_table_capacity_ = 0;
+  std::mutex mr_reg_mu_;  // for resize + registration set
+  std::unordered_set<uint32_t> registered_ids_;
+
+  // Atomic peer table: sized on demand.
+  std::unique_ptr<std::atomic<RdmaPeer*>[]> peer_table_;
+  std::unique_ptr<std::unique_ptr<RdmaPeer>[]> peer_owners_;
+  size_t peer_capacity_ = 0;
+  std::mutex peer_resize_mu_;  // only for resize
 
   // Jring-based task queues
   jring_t* send_ring_ = nullptr;
@@ -207,10 +227,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::thread recv_worker_;
   std::thread poll_thread_;
 
-  // send_id → PendingSend mapping (for CQ completion lookup)
+  // send_id → PendingSlot ring buffer (lock-free)
   std::atomic<uint64_t> next_send_id_{0};
-  std::mutex pending_mu_;
-  std::unordered_map<uint32_t, PendingSend> pending_sends_;
+  std::unique_ptr<PendingSlot[]> pending_ring_;
 
   // Condition variable for back-pressure
   std::mutex cv_mu_;

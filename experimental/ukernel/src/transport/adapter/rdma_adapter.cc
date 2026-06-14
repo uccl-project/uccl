@@ -20,6 +20,8 @@ constexpr int kQpRetryCnt = 7;
 constexpr int kQpRnrRetry = 7;
 constexpr double kEwmaAlpha = 0.125;
 constexpr size_t kTaskRingSize = 1024;
+constexpr size_t kInitMrCapacity = 256;
+constexpr size_t kInitPeerCapacity = 8;
 
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
@@ -192,6 +194,18 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
     return;
   }
 
+  // Allocate lock-free MR table
+  mr_table_capacity_ = kInitMrCapacity;
+  mr_table_.reset(new std::atomic<ibv_mr*>[kInitMrCapacity]());
+
+  // Allocate peer table
+  peer_capacity_ = kInitPeerCapacity;
+  peer_table_.reset(new std::atomic<RdmaPeer*>[kInitPeerCapacity]());
+  peer_owners_.reset(new std::unique_ptr<RdmaPeer>[kInitPeerCapacity]());
+
+  // Allocate pending ring
+  pending_ring_.reset(new PendingSlot[kRingSize]());
+
   stop_.store(false, std::memory_order_release);
   send_worker_ = std::thread([this] { send_worker(); });
   recv_worker_ = std::thread([this] { recv_worker(); });
@@ -205,13 +219,24 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   if (recv_worker_.joinable()) recv_worker_.join();
   if (poll_thread_.joinable()) poll_thread_.join();
 
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& [rank, p] : peers_) destroy_peer_qps(*p);
-    peers_.clear();
-    for (auto& [id, mr] : mr_map_) ibv_dereg_mr(mr);
-    mr_map_.clear();
+  // Destroy peers
+  for (size_t r = 0; r < peer_capacity_; ++r) {
+    if (peer_owners_[r]) {
+      peer_table_[r].store(nullptr, std::memory_order_release);
+      destroy_peer_qps(*peer_owners_[r]);
+      peer_owners_[r].reset();
+    }
   }
+
+  // Deregister all MRs
+  for (uint32_t id : registered_ids_) {
+    ibv_mr* mr = mr_table_[id].load(std::memory_order_acquire);
+    if (mr) {
+      mr_table_[id].store(nullptr, std::memory_order_release);
+      ibv_dereg_mr(mr);
+    }
+  }
+  registered_ids_.clear();
 
   if (send_ring_) { free(send_ring_); send_ring_ = nullptr; }
   if (recv_ring_) { free(recv_ring_); recv_ring_ = nullptr; }
@@ -220,6 +245,52 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
     ibv_dealloc_pd(pd_);
     pd_ = nullptr;
   }
+}
+
+// ── table sizing helpers ────────────────────────────────────────────────────
+
+std::atomic<RdmaTransportAdapter::RdmaPeer*>&
+RdmaTransportAdapter::ensure_peer_slot(int rank) {
+  size_t idx = static_cast<size_t>(rank);
+  if (idx < peer_capacity_) return peer_table_[idx];
+
+  std::lock_guard<std::mutex> lk(peer_resize_mu_);
+  if (idx < peer_capacity_) return peer_table_[idx];  // double-check
+
+  size_t new_cap = std::max(idx + 1, peer_capacity_ * 2);
+  auto new_table = std::make_unique<std::atomic<RdmaPeer*>[]>(new_cap);
+  auto new_owners = std::make_unique<std::unique_ptr<RdmaPeer>[]>(new_cap);
+
+  for (size_t i = 0; i < peer_capacity_; ++i) {
+    new_table[i].store(
+        peer_table_[i].load(std::memory_order_acquire),
+        std::memory_order_relaxed);
+    new_owners[i] = std::move(peer_owners_[i]);
+  }
+
+  peer_table_ = std::move(new_table);
+  peer_owners_ = std::move(new_owners);
+  peer_capacity_ = new_cap;
+  return peer_table_[idx];
+}
+
+void RdmaTransportAdapter::ensure_mr_slot(uint32_t id) {
+  if (id < mr_table_capacity_) return;
+
+  std::lock_guard<std::mutex> lk(mr_reg_mu_);
+  if (id < mr_table_capacity_) return;  // double-check
+
+  size_t new_cap = std::max<size_t>(id + 1, mr_table_capacity_ * 2);
+  auto new_table = std::make_unique<std::atomic<ibv_mr*>[]>(new_cap);
+
+  for (size_t i = 0; i < mr_table_capacity_; ++i) {
+    new_table[i].store(
+        mr_table_[i].load(std::memory_order_acquire),
+        std::memory_order_relaxed);
+  }
+
+  mr_table_ = std::move(new_table);
+  mr_table_capacity_ = new_cap;
 }
 
 // ── QP helpers ──────────────────────────────────────────────────────────────
@@ -323,14 +394,6 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
   return true;
 }
 
-int RdmaTransportAdapter::find_qp_idx(ibv_qp* const* qps, int count,
-                                      uint32_t qp_num) {
-  for (int i = 0; i < count; ++i) {
-    if (qps[i] && qps[i]->qp_num == qp_num) return i;
-  }
-  return -1;
-}
-
 bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   auto pool = std::make_unique<RecvPool>();
   pool->buffer.resize(4);
@@ -393,6 +456,12 @@ bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
 }
 
 void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
+  // Clean up remote buffer table heap allocations
+  for (size_t i = 0; i < p.remote_buf_capacity_; ++i) {
+    p.remote_buffer_table_[i].store(nullptr, std::memory_order_release);
+    p.remote_buf_owners_[i].reset();
+  }
+
   for (int q = 0; q < p.num_qps; ++q) {
     if (p.data_qps[q]) {
       ibv_destroy_qp(p.data_qps[q]);
@@ -429,23 +498,28 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
   init.local_gpu_idx = local_gpu_idx_;
 
   if (peer_rank >= 0) {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(peer_rank);
-    if (it == peers_.end()) {
-      auto p = std::make_unique<RdmaPeer>();
-      p->num_qps = static_cast<uint8_t>(config_.num_qps);
-      if (init_peer_qps(*p)) {
-        p->qps_created = true;
-        for (int i = 0; i < p->num_qps; ++i)
-          init.remote_data_qpns[i] = p->data_qps[i]->qp_num;
-        init.remote_signal_qpn = p->signal_qp ? p->signal_qp->qp_num : 0;
-        peers_[peer_rank] = std::move(p);
+    RdmaPeer* p = peer_table_[static_cast<size_t>(peer_rank)].load(
+        std::memory_order_acquire);
+    if (!p || !p->qps_created) {
+      // Create a new peer
+      auto np = std::make_unique<RdmaPeer>();
+      np->num_qps = static_cast<uint8_t>(config_.num_qps);
+      if (init_peer_qps(*np)) {
+        np->qps_created = true;
+        for (int i = 0; i < np->num_qps; ++i)
+          init.remote_data_qpns[i] = np->data_qps[i]->qp_num;
+        init.remote_signal_qpn = np->signal_qp ? np->signal_qp->qp_num : 0;
+
+        auto& slot = ensure_peer_slot(peer_rank);
+        size_t idx = static_cast<size_t>(peer_rank);
+        peer_owners_[idx] = std::move(np);
+        slot.store(peer_owners_[idx].get(), std::memory_order_release);
       }
-    } else if (it->second->qps_created) {
-      for (int i = 0; i < it->second->num_qps; ++i)
-        init.remote_data_qpns[i] = it->second->data_qps[i]->qp_num;
+    } else {
+      for (int i = 0; i < p->num_qps; ++i)
+        init.remote_data_qpns[i] = p->data_qps[i]->qp_num;
       init.remote_signal_qpn =
-          it->second->signal_qp ? it->second->signal_qp->qp_num : 0;
+          p->signal_qp ? p->signal_qp->qp_num : 0;
     }
   }
   return init;
@@ -470,49 +544,53 @@ bool RdmaTransportAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
 }
 
 bool RdmaTransportAdapter::has_put_path(int rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peers_.find(rank);
-  return it != peers_.end() && it->second->put_ready;
+  if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return false;
+  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
+      std::memory_order_acquire);
+  return p != nullptr && p->put_ready;
 }
 
 bool RdmaTransportAdapter::has_wait_path(int rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peers_.find(rank);
-  return it != peers_.end() && it->second->wait_ready;
+  if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return false;
+  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
+      std::memory_order_acquire);
+  return p != nullptr && p->wait_ready;
 }
 
 bool RdmaTransportAdapter::setup_peer_path(int rank,
                                            RdmaPeerConnectSpec const& remote) {
+  // Check if already fully ready
   {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(rank);
-    if (it != peers_.end() && it->second->put_ready && it->second->wait_ready)
-      return true;
-    if (it != peers_.end() && !it->second->qps_created) {
-      peers_.erase(it);
+    if (static_cast<size_t>(rank) < peer_capacity_) {
+      RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
+          std::memory_order_acquire);
+      if (p && p->put_ready && p->wait_ready) return true;
     }
   }
 
-  RdmaPeer* p = nullptr;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(rank);
-    if (it != peers_.end() && it->second->qps_created) {
-      p = it->second.get();
-    }
-  }
+  // Ensure slot exists
+  auto& slot = ensure_peer_slot(rank);
+  size_t idx = static_cast<size_t>(rank);
 
-  if (!p) {
+  RdmaPeer* p = slot.load(std::memory_order_acquire);
+  if (p && p->qps_created && p->put_ready && p->wait_ready) return true;
+
+  if (!p || !p->qps_created) {
+    // Remove stale peer if exists
+    if (peer_owners_[idx]) {
+      slot.store(nullptr, std::memory_order_release);
+      destroy_peer_qps(*peer_owners_[idx]);
+      peer_owners_[idx].reset();
+      p = nullptr;
+    }
+
     auto np = std::make_unique<RdmaPeer>();
     np->num_qps = remote.num_qps > 0 ? remote.num_qps
                                      : static_cast<uint8_t>(config_.num_qps);
     if (!init_peer_qps(*np)) return false;
     np->qps_created = true;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      peers_[rank] = std::move(np);
-      p = peers_[rank].get();
-    }
+    peer_owners_[idx] = std::move(np);
+    p = peer_owners_[idx].get();
   }
 
   p->remote_lid = remote.remote_lid;
@@ -559,6 +637,9 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
 
   p->put_ready = true;
   p->wait_ready = true;
+
+  // Publish peer to lock-free table (after QP setup complete)
+  slot.store(p, std::memory_order_release);
 
   return true;
 }
@@ -610,27 +691,27 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
                                          unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
-  uint64_t raddr = 0;
-  uint32_t rkey = 0;
+  // Lock-free local MR lookup (Task 1)
   uint32_t lkey = 0;
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = mr_map_.find(local_buf_id);
-    if (it != mr_map_.end()) lkey = it->second->lkey;
+  if (local_buf_id < mr_table_capacity_) {
+    ibv_mr* mr = mr_table_[local_buf_id].load(std::memory_order_acquire);
+    if (mr) lkey = mr->lkey;
   }
   if (lkey == 0) return 0;
 
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peers_.find(rank);
-    if (it == peers_.end() || !it->second->put_ready) return 0;
-    if (remote_buf_id != 0) {
-      auto rit = it->second->remote_buffers.find(remote_buf_id);
-      if (rit != it->second->remote_buffers.end()) {
-        raddr = rit->second.addr;
-        rkey = rit->second.rkey;
-      }
+  // Lock-free peer + remote buffer lookup (Task 2)
+  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
+      std::memory_order_acquire);
+  if (!p || !p->put_ready) return 0;
+
+  uint64_t raddr = 0;
+  uint32_t rkey = 0;
+  if (remote_buf_id != 0 && remote_buf_id < p->remote_buf_capacity_) {
+    RemoteBufInfo* info =
+        p->remote_buffer_table_[remote_buf_id].load(std::memory_order_acquire);
+    if (info) {
+      raddr = info->addr;
+      rkey = info->rkey;
     }
   }
   if (remote_ptr && raddr == 0) {
@@ -672,42 +753,90 @@ unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
 bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
                                            size_t len) {
   if (!pd_ || !ptr || len == 0) return false;
-  std::lock_guard<std::mutex> lk(mu_);
-  if (mr_map_.find(buf_id) != mr_map_.end()) return true;
+
+  ensure_mr_slot(buf_id);
+
+  // Check if already registered (fast path)
+  {
+    ibv_mr* existing = mr_table_[buf_id].load(std::memory_order_acquire);
+    if (existing) return true;
+  }
+
   ibv_mr* mr = ibv_reg_mr(pd_, ptr, len,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_REMOTE_READ);
   if (!mr) return false;
-  mr_map_[buf_id] = mr;
+
+  mr_table_[buf_id].store(mr, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lk(mr_reg_mu_);
+    registered_ids_.insert(buf_id);
+  }
   return true;
 }
 
 void RdmaTransportAdapter::deregister_memory(uint32_t buf_id) {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_map_.find(buf_id);
-  if (it != mr_map_.end()) {
-    ibv_dereg_mr(it->second);
-    mr_map_.erase(it);
+  if (buf_id >= mr_table_capacity_) return;
+
+  ibv_mr* mr = mr_table_[buf_id].exchange(nullptr, std::memory_order_acq_rel);
+  if (mr) {
+    ibv_dereg_mr(mr);
+    std::lock_guard<std::mutex> lk(mr_reg_mu_);
+    registered_ids_.erase(buf_id);
   }
 }
 
 bool RdmaTransportAdapter::is_memory_registered(uint32_t buf_id) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  return mr_map_.find(buf_id) != mr_map_.end();
+  if (buf_id >= mr_table_capacity_) return false;
+  return mr_table_[buf_id].load(std::memory_order_acquire) != nullptr;
 }
 
 uint32_t RdmaTransportAdapter::get_memory_rkey(uint32_t buf_id) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_map_.find(buf_id);
-  return (it != mr_map_.end()) ? it->second->rkey : 0;
+  if (buf_id >= mr_table_capacity_) return 0;
+  ibv_mr* mr = mr_table_[buf_id].load(std::memory_order_acquire);
+  return mr ? mr->rkey : 0;
 }
 
 void RdmaTransportAdapter::register_remote_buffer(int rank, uint32_t buf_id,
                                                   uint64_t addr,
                                                   uint32_t rkey) {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peers_.find(rank);
-  if (it != peers_.end()) it->second->remote_buffers[buf_id] = {addr, rkey};
+  if (rank < 0 || static_cast<size_t>(rank) >= peer_capacity_) return;
+
+  RdmaPeer* p = peer_table_[static_cast<size_t>(rank)].load(
+      std::memory_order_acquire);
+  if (!p) return;
+
+  // Resize remote buffer table if needed (under peer's internal mutex)
+  if (buf_id >= p->remote_buf_capacity_) {
+    std::lock_guard<std::mutex> lk(p->remote_buf_mu_);
+    if (buf_id >= p->remote_buf_capacity_) {
+      size_t new_cap = std::max<size_t>(buf_id + 1, p->remote_buf_capacity_ * 2);
+      if (new_cap < 64) new_cap = 64;
+
+      auto new_table =
+          std::make_unique<std::atomic<RemoteBufInfo*>[]>(new_cap);
+      auto new_owners =
+          std::make_unique<std::unique_ptr<RemoteBufInfo>[]>(new_cap);
+
+      for (size_t i = 0; i < p->remote_buf_capacity_; ++i) {
+        new_table[i].store(
+            p->remote_buffer_table_[i].load(std::memory_order_acquire),
+            std::memory_order_relaxed);
+        new_owners[i] = std::move(p->remote_buf_owners_[i]);
+      }
+
+      p->remote_buffer_table_ = std::move(new_table);
+      p->remote_buf_owners_ = std::move(new_owners);
+      p->remote_buf_capacity_ = new_cap;
+    }
+  }
+
+  // Allocate stable RemoteBufInfo (never moved after publication)
+  auto info = std::make_unique<RemoteBufInfo>();
+  info->addr = addr;
+  info->rkey = rkey;
+  p->remote_buffer_table_[buf_id].store(info.get(), std::memory_order_release);
+  p->remote_buf_owners_[buf_id] = std::move(info);
 }
 
 // ── send_worker ──────────────────────────────────────────────────────────────
@@ -721,14 +850,13 @@ void RdmaTransportAdapter::send_worker() {
     }
 
     if (e.kind == Kind::DataPut) {
-      // Look up peer
+      // Lock-free peer lookup (Task 2)
       RdmaPeer* p = nullptr;
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        auto it = peers_.find(e.peer_rank);
-        if (it != peers_.end() && it->second->put_ready) p = it->second.get();
+      if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
+        p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
+            std::memory_order_acquire);
       }
-      if (!p) {
+      if (!p || !p->put_ready) {
         publish_completion(e.comm_rid, true);
         continue;
       }
@@ -743,12 +871,26 @@ void RdmaTransportAdapter::send_worker() {
         ck = chunk_split(e.len);
       }
 
+      // Allocate send_id and acquire ring slot (Task 3)
       uint32_t send_id = static_cast<uint32_t>(
           next_send_id_.fetch_add(1, std::memory_order_relaxed));
-      {
-        std::lock_guard<std::mutex> lk(pending_mu_);
-        pending_sends_.try_emplace(send_id, e.comm_rid, ck.count);
+      uint32_t slot_idx = send_id % kRingSize;
+      PendingSlot& slot = pending_ring_[slot_idx];
+
+      // CAS-acquire the slot: 0 → send_id
+      uint32_t expected = 0;
+      while (!slot.send_id.compare_exchange_weak(expected, send_id,
+                                                  std::memory_order_acquire)) {
+        if (stop_.load(std::memory_order_acquire)) {
+          publish_completion(e.comm_rid, true);
+          goto next_elem;
+        }
+        expected = 0;
+        std::this_thread::yield();
       }
+      slot.comm_rid = e.comm_rid;
+      slot.total_chunks = ck.count;
+      slot.completed_chunks.store(0, std::memory_order_release);
 
       bool failed = false;
       size_t off = 0;
@@ -773,7 +915,9 @@ void RdmaTransportAdapter::send_worker() {
         }
         if (failed) break;
 
-        uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) | ci;
+        // Encode QP index into wr_id (Task 4)
+        uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) |
+                         (static_cast<uint64_t>(q) << 16) | ci;
 
         ibv_sge sge = {};
         sge.addr = reinterpret_cast<uint64_t>(static_cast<uint8_t*>(e.local_ptr) + off);
@@ -798,15 +942,14 @@ void RdmaTransportAdapter::send_worker() {
           fprintf(stderr,
                   "[send_worker] POST_FAILED ci=%u qp=%d qpn=%u state=%d errno=%d\n",
                   ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
-          {
-            std::lock_guard<std::mutex> lk(pending_mu_);
-            auto it = pending_sends_.find(send_id);
-            if (it != pending_sends_.end()) {
-              it->second.completed_chunks.store(
-                  ck.count, std::memory_order_release);
-            }
-          }
+
+          // Mark slot as complete and free (error path)
+          slot.completed_chunks.store(ck.count, std::memory_order_release);
           publish_completion(e.comm_rid, true);
+          // Only free if we still own the slot
+          uint32_t exp = send_id;
+          slot.send_id.compare_exchange_strong(exp, 0,
+                                                std::memory_order_release);
           failed = true;
           break;
         }
@@ -817,28 +960,39 @@ void RdmaTransportAdapter::send_worker() {
       }
 
       if (failed) {
-        // Completion already published above
         continue;
       }
     } else if (e.kind == Kind::Signal) {
-      // Look up peer
+      // Lock-free peer lookup (Task 2)
       RdmaPeer* p = nullptr;
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        auto it = peers_.find(e.peer_rank);
-        if (it != peers_.end() && it->second->put_ready) p = it->second.get();
+      if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
+        p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
+            std::memory_order_acquire);
       }
-      if (!p) {
+      if (!p || !p->put_ready) {
         publish_completion(e.comm_rid, true);
         continue;
       }
 
       uint32_t send_id = static_cast<uint32_t>(
           next_send_id_.fetch_add(1, std::memory_order_relaxed));
-      {
-        std::lock_guard<std::mutex> lk(pending_mu_);
-        pending_sends_.try_emplace(send_id, e.comm_rid, 1);
+      uint32_t slot_idx = send_id % kRingSize;
+      PendingSlot& slot = pending_ring_[slot_idx];
+
+      // CAS-acquire slot for signal send
+      uint32_t expected = 0;
+      while (!slot.send_id.compare_exchange_weak(expected, send_id,
+                                                  std::memory_order_acquire)) {
+        if (stop_.load(std::memory_order_acquire)) {
+          publish_completion(e.comm_rid, true);
+          goto next_elem;
+        }
+        expected = 0;
+        std::this_thread::yield();
       }
+      slot.comm_rid = e.comm_rid;
+      slot.total_chunks = 1;
+      slot.completed_chunks.store(0, std::memory_order_release);
 
       uint8_t msg_id =
           p->next_msg_id.fetch_add(1, std::memory_order_relaxed) & kMsgIdMask;
@@ -849,7 +1003,8 @@ void RdmaTransportAdapter::send_worker() {
       sge.length = sizeof(payload);
 
       ibv_send_wr wr = {};
-      wr.wr_id = static_cast<uint64_t>(send_id) << 32;
+      // Signal QP: encode with reserved qp_idx 0xFF (Task 4)
+      wr.wr_id = (static_cast<uint64_t>(send_id) << 32) | (0xFFULL << 16);
       wr.sg_list = &sge;
       wr.num_sge = 1;
       wr.opcode = IBV_WR_SEND;
@@ -859,17 +1014,18 @@ void RdmaTransportAdapter::send_worker() {
       if (ibv_post_send(p->signal_qp, &wr, &bad) != 0) {
         fprintf(stderr, "[send_worker] SIGNAL_POST_FAILED rank=%d msg_id=%u\n",
                 e.peer_rank, msg_id);
-        {
-          std::lock_guard<std::mutex> lk(pending_mu_);
-          pending_sends_.erase(send_id);
-        }
+        slot.completed_chunks.store(1, std::memory_order_release);
         publish_completion(e.comm_rid, true);
+        uint32_t exp = send_id;
+        slot.send_id.compare_exchange_strong(exp, 0,
+                                              std::memory_order_release);
         continue;
       }
     } else {
       // Unknown kind → fail immediately
       publish_completion(e.comm_rid, true);
     }
+    next_elem:;
   }
 
   // Drain remaining on shutdown
@@ -893,12 +1049,11 @@ void RdmaTransportAdapter::recv_worker() {
       continue;
     }
 
-    // Look up peer
+    // Lock-free peer lookup (Task 2)
     RdmaPeer* p = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = peers_.find(e.peer_rank);
-      if (it != peers_.end()) p = it->second.get();
+    if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
+      p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
+          std::memory_order_acquire);
     }
     if (!p) {
       publish_completion(e.comm_rid, true);
@@ -922,65 +1077,57 @@ void RdmaTransportAdapter::recv_worker() {
 
 void RdmaTransportAdapter::poll_loop() {
   while (!stop_.load(std::memory_order_acquire)) {
-    std::vector<std::pair<int, RdmaPeer*>> active;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      for (auto& [rank, p] : peers_) {
-        if (p->data_cq || p->signal_cq) active.push_back({rank, p.get()});
-      }
-    }
-
     bool any = false;
-    for (auto& [rank, p] : active) {
-      if (p->data_cq &&
-          poll_cq_set(*p, rank, p->data_cq, p->data_qps, p->num_qps))
-        any = true;
+
+    // Iterate peer_table_ directly without lock (Task 5)
+    for (size_t r = 0; r < peer_capacity_; ++r) {
+      RdmaPeer* p = peer_table_[r].load(std::memory_order_acquire);
+      if (!p) continue;
+      int rank = static_cast<int>(r);
+      if (p->data_cq && poll_cq_set(*p, rank)) any = true;
       if (p->signal_cq && poll_signal_cq(*p, rank)) any = true;
       check_dispatch(*p, rank);
     }
+
     if (!any) {
       std::this_thread::yield();
     }
   }
 }
 
-bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
-                                       ibv_qp* const* qps, int qp_count) {
+bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
   ibv_wc wc[16];
   bool any = false;
   int n;
-  while ((n = ibv_poll_cq(cq, 16, wc)) > 0) {
+  while ((n = ibv_poll_cq(p.data_cq, 16, wc)) > 0) {
     for (int i = 0; i < n; ++i) {
       any = true;
       uint32_t send_id = static_cast<uint32_t>(wc[i].wr_id >> 32);
 
+      // Decode QP index directly from wr_id (Task 4)
+      int qp = static_cast<int>((wc[i].wr_id >> 16) & 0xFFFF);
+
       if (wc[i].status != IBV_WC_SUCCESS) {
-        int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
-        if (qp >= 0)
+        if (qp >= 0 && qp < p.num_qps)
           p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
 
-        PendingSend* ps = nullptr;
-        {
-          std::lock_guard<std::mutex> lk(pending_mu_);
-          auto it = pending_sends_.find(send_id);
-          if (it != pending_sends_.end()) ps = &it->second;
-        }
-        if (ps) {
-          // Mark all chunks as completed to force publication
-          ps->completed_chunks.store(ps->total_chunks,
-                                      std::memory_order_release);
-          publish_completion(ps->comm_rid, true);
-          {
-            std::lock_guard<std::mutex> lk(pending_mu_);
-            pending_sends_.erase(send_id);
-          }
+        // Error path: mark slot as complete
+        uint32_t slot_idx = send_id % kRingSize;
+        PendingSlot& slot = pending_ring_[slot_idx];
+        // Only process if we own this slot
+        if (slot.send_id.load(std::memory_order_acquire) == send_id) {
+          slot.completed_chunks.store(slot.total_chunks,
+                                       std::memory_order_release);
+          publish_completion(slot.comm_rid, true);
+          uint32_t exp = send_id;
+          slot.send_id.compare_exchange_strong(exp, 0,
+                                                std::memory_order_release);
         }
         cv_.notify_all();
         continue;
       }
 
-      int qp = find_qp_idx(qps, qp_count, wc[i].qp_num);
-      if (qp >= 0 &&
+      if (qp >= 0 && qp < p.num_qps &&
           (wc[i].opcode == IBV_WC_RDMA_WRITE || wc[i].opcode == IBV_WC_SEND)) {
         uint64_t send_ns =
             p.qp_state[qp].last_send_ns.load(std::memory_order_acquire);
@@ -991,21 +1138,29 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank, ibv_cq* cq,
               (1.0 - kEwmaAlpha) * p.qp_state[qp].ewma_rtt_ns;
         }
       }
-      if (qp >= 0)
+      if (qp >= 0 && qp < p.num_qps)
         p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
 
-      // Look up pending send and track chunk completion
-      {
-        std::lock_guard<std::mutex> lk(pending_mu_);
-        auto it = pending_sends_.find(send_id);
-        if (it != pending_sends_.end()) {
-          uint32_t done = it->second.completed_chunks.fetch_add(
-              1, std::memory_order_acq_rel) + 1;
-          if (done >= it->second.total_chunks) {
-            publish_completion(it->second.comm_rid, false);
-            pending_sends_.erase(it);
-          }
+      // Track chunk completion via lock-free ring buffer (Task 3)
+      uint32_t slot_idx = send_id % kRingSize;
+      PendingSlot& slot = pending_ring_[slot_idx];
+
+      // Verify slot ownership
+      if (slot.send_id.load(std::memory_order_acquire) != send_id) {
+        cv_.notify_all();
+        continue;
+      }
+
+      uint32_t done = slot.completed_chunks.fetch_add(
+          1, std::memory_order_acq_rel) + 1;
+      if (done == slot.total_chunks) {
+        // Try to claim completion: CAS send_id back to 0
+        uint32_t expected = send_id;
+        if (slot.send_id.compare_exchange_strong(expected, 0,
+                                                  std::memory_order_release)) {
+          publish_completion(slot.comm_rid, false);
         }
+        // If CAS failed, error path or another thread already handled it
       }
       cv_.notify_all();
     }
@@ -1023,13 +1178,15 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
         (void)repost_signal_recv(p);
       }
       uint32_t send_id = static_cast<uint32_t>(wc.wr_id >> 32);
-      {
-        std::lock_guard<std::mutex> lk(pending_mu_);
-        auto it = pending_sends_.find(send_id);
-        if (it != pending_sends_.end()) {
-          publish_completion(it->second.comm_rid, true);
-          pending_sends_.erase(it);
-        }
+      uint32_t slot_idx = send_id % kRingSize;
+      PendingSlot& slot = pending_ring_[slot_idx];
+      if (slot.send_id.load(std::memory_order_acquire) == send_id) {
+        slot.completed_chunks.store(slot.total_chunks,
+                                     std::memory_order_release);
+        publish_completion(slot.comm_rid, true);
+        uint32_t exp = send_id;
+        slot.send_id.compare_exchange_strong(exp, 0,
+                                              std::memory_order_release);
       }
       cv_.notify_all();
       continue;
@@ -1039,12 +1196,17 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       case IBV_WC_SEND: {
         // Signal send completed successfully
         uint32_t send_id = static_cast<uint32_t>(wc.wr_id >> 32);
-        {
-          std::lock_guard<std::mutex> lk(pending_mu_);
-          auto it = pending_sends_.find(send_id);
-          if (it != pending_sends_.end()) {
-            publish_completion(it->second.comm_rid, false);
-            pending_sends_.erase(it);
+        uint32_t slot_idx = send_id % kRingSize;
+        PendingSlot& slot = pending_ring_[slot_idx];
+        if (slot.send_id.load(std::memory_order_acquire) == send_id) {
+          uint32_t done = slot.completed_chunks.fetch_add(
+              1, std::memory_order_acq_rel) + 1;
+          if (done >= slot.total_chunks) {
+            uint32_t expected = send_id;
+            if (slot.send_id.compare_exchange_strong(expected, 0,
+                                                      std::memory_order_release)) {
+              publish_completion(slot.comm_rid, false);
+            }
           }
         }
         cv_.notify_all();
