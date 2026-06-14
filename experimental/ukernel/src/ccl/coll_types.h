@@ -17,6 +17,8 @@ enum class OpKind : uint32_t {
   Copy,
   Reduce,
   RecvReduce,
+  Signal,      // send_signal_async(peer, tag) — completes via completion_ring_
+  SignalWait,  // wait_signal_async(peer, tag) — completes via signal_ring_
 };
 
 enum class ScalarType : uint32_t {

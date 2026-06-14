@@ -16,7 +16,9 @@
 
 namespace UKernel {
 namespace Transport {
+enum class PeerTransportKind;
 struct CommunicatorConfig;
+struct SignalCompletion;
 class Communicator;
 }
 namespace CCL {
@@ -71,6 +73,17 @@ struct CmdRunMapping {
   uint32_t op_idx;
 };
 
+// Per-peer transport metrics for dynamic load balancing
+struct PathMetrics {
+  std::atomic<uint32_t> inflight{0};
+  std::atomic<double> latency_us{100.0};
+};
+
+struct PeerMetrics {
+  PathMetrics ipc;
+  PathMetrics rdma;
+};
+
 class SprayExecutor {
  public:
   static std::unique_ptr<SprayExecutor> create(SprayExecutorConfig const& config);
@@ -103,6 +116,9 @@ class SprayExecutor {
   void collect_ready(SprayRun& run);
   void enqueue_to_ring(SprayRun& run, AsyncBackend* async_be);
 
+  Transport::PeerTransportKind pick_transport(int peer);
+  void drain_tpt_loop();
+
   // ── Owned resources ──
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
@@ -121,6 +137,10 @@ class SprayExecutor {
   // ── cmd_idx → (run, op_idx) mapping ──
   static constexpr size_t kMaxCmdIdx = 65536;
   CmdRunMapping cmd_to_run_[kMaxCmdIdx];
+
+  // ── Transport LB state ──
+  std::unordered_map<int, PeerMetrics> tpt_metrics_;
+  std::unordered_map<uint32_t, uint8_t> cmd_transport_;
 
   // ── Global cmd_idx counter + run map ──
   uint32_t next_cmd_idx_ = 0;

@@ -3,6 +3,7 @@
 #include "algo/chunk_graph.h"
 #include "backend/async_backend.h"
 #include "backend/backend.h"
+#include "backend/transport_backend.h"
 #include "coll_config.h"
 #include "utils.h"
 #include <algorithm>
@@ -30,6 +31,9 @@ static CollectiveBufferRole buf_role(OpKind kind, bool is_src,
     case OpKind::Recv:
     case OpKind::RecvReduce:
       return CollectiveBufferRole::Output;
+    case OpKind::Signal:
+    case OpKind::SignalWait:
+      return CollectiveBufferRole::Input;
     default:
       return CollectiveBufferRole::Input;
   }
@@ -41,7 +45,7 @@ static uint32_t buf_of(Op const& op, bool is_src) {
 }
 
 static Cmd make_cmd(Op const& op, ReductionKind redop) {
-  Cmd c;
+  Cmd c{};
   c.kind = op.kind;
   c.bytes = static_cast<uint32_t>(op.bytes);
   c.src_off = static_cast<uint32_t>(op.src_off);
@@ -52,6 +56,8 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
   c.dst_buf = buf_of(op, false);
   c.redop = (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
                 ? redop : ReductionKind::None;
+  c.transport = static_cast<uint8_t>(Transport::PeerTransportKind::Unknown);
+  c.tag = op.tag;
   return c;
 }
 
@@ -76,7 +82,7 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
   if (async_dev_)
     drain_th_dev_ = std::thread(&SprayExecutor::drain_loop, this, async_dev_.get());
   if (async_tpt_)
-    drain_th_tpt_ = std::thread(&SprayExecutor::drain_loop, this, async_tpt_.get());
+    drain_th_tpt_ = std::thread(&SprayExecutor::drain_tpt_loop, this);
 }
 
 SprayExecutor::~SprayExecutor() {
@@ -231,15 +237,32 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run, AsyncBackend* async_be) {
 
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction);
-    CmdWithId cwi{c, 0};
 
-    if (async_tpt_ && tpt_be_->supports(c.kind)) {
-      cwi.caller_id = next_cmd_idx_++;
-      cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
+    // LB decision: for Send ops, pick IPC vs RDMA dynamically
+    if (c.kind == OpKind::Send && c.dst_peer != ~0u) {
+      auto tpt = pick_transport(static_cast<int>(c.dst_peer));
+      c.transport = static_cast<uint8_t>(tpt);
+      // Bump inflight counter for the chosen path
+      auto& pm = tpt_metrics_[static_cast<int>(c.dst_peer)];
+      if (tpt == Transport::PeerTransportKind::Ipc)
+        pm.ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+      else if (tpt == Transport::PeerTransportKind::Rdma)
+        pm.rdma.inflight.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    CmdWithId cwi{c, 0};
+    cwi.caller_id = next_cmd_idx_++;
+    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
+    cmd_transport_[cwi.caller_id] = c.transport;
+
+    // Route: Signal/SignalWait → TransportBackend; Send with explicit transport → TptBE
+    if (c.kind == OpKind::Signal || c.kind == OpKind::SignalWait ||
+        (async_tpt_ && (c.kind == OpKind::Send || c.kind == OpKind::Recv) &&
+         c.transport != 0)) {
+      run.tpt_cmds.push_back(cwi);
+    } else if (async_tpt_ && tpt_be_->supports(c.kind)) {
       run.tpt_cmds.push_back(cwi);
     } else {
-      cwi.caller_id = next_cmd_idx_++;
-      cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
       run.dev_cmds.push_back(cwi);
     }
     run.submitted[idx] = true;
@@ -302,6 +325,82 @@ void SprayExecutor::drain_loop(AsyncBackend* async_be) {
       size_t dc = run->done_count.load(std::memory_order_acquire);
       if (dc >= run->tiled.ops.size())
         run->status = CollectiveOpStatus::Completed;
+    }
+  }
+}
+
+Transport::PeerTransportKind SprayExecutor::pick_transport(int peer) {
+  auto& m = tpt_metrics_[peer];
+  double cost_ipc = static_cast<double>(
+      m.ipc.inflight.load(std::memory_order_relaxed)) *
+      m.ipc.latency_us.load(std::memory_order_relaxed);
+  double cost_rdma = static_cast<double>(
+      m.rdma.inflight.load(std::memory_order_relaxed)) *
+      m.rdma.latency_us.load(std::memory_order_relaxed);
+  return cost_ipc <= cost_rdma ? Transport::PeerTransportKind::Ipc
+                               : Transport::PeerTransportKind::Rdma;
+}
+
+void SprayExecutor::drain_tpt_loop() {
+  uint32_t done_buf[256];
+  while (!stop_) {
+    // Channel 1: data completions via AsyncBackend (Send, Signal ops)
+    size_t nd = async_tpt_->try_drain(done_buf, 256);
+    for (size_t i = 0; i < nd; ++i) {
+      uint32_t caller_id = done_buf[i];
+      auto& m = cmd_to_run_[caller_id & (kMaxCmdIdx - 1)];
+      if (!m.run) continue;
+
+      std::lock_guard rlock(m.run->mtx);
+      if (!m.run->done[m.op_idx]) {
+        m.run->done[m.op_idx] = true;
+        m.run->done_count.fetch_add(1, std::memory_order_release);
+
+        auto it = cmd_transport_.find(caller_id);
+        if (it != cmd_transport_.end()) {
+          auto tpt = static_cast<Transport::PeerTransportKind>(it->second);
+          if (tpt != Transport::PeerTransportKind::Unknown) {
+            int peer = static_cast<int>(m.run->tiled.ops[m.op_idx].dst_peer);
+            auto& pm = tpt_metrics_[peer];
+            if (tpt == Transport::PeerTransportKind::Ipc)
+              pm.ipc.inflight.fetch_sub(1, std::memory_order_relaxed);
+            else if (tpt == Transport::PeerTransportKind::Rdma)
+              pm.rdma.inflight.fetch_sub(1, std::memory_order_relaxed);
+          }
+          cmd_transport_.erase(it);
+        }
+      }
+    }
+
+    // Channel 2: direct signal completions (1-hop, bypasses AsyncBackend)
+    auto* tpt_be = static_cast<TransportBackend*>(tpt_be_);
+    size_t ns = tpt_be->drain_signals(done_buf, 256);
+    for (size_t i = 0; i < ns; ++i) {
+      uint32_t caller_id = done_buf[i];
+      auto& m = cmd_to_run_[caller_id & (kMaxCmdIdx - 1)];
+      if (!m.run) continue;
+
+      std::lock_guard rlock(m.run->mtx);
+      if (!m.run->done[m.op_idx]) {
+        m.run->done[m.op_idx] = true;
+        m.run->done_count.fetch_add(1, std::memory_order_release);
+      }
+    }
+
+    // Mark completed runs
+    {
+      std::lock_guard lock(runs_mutex_);
+      for (auto& [h, run] : runs_) {
+        if (run->status != CollectiveOpStatus::Running) continue;
+        size_t dc = run->done_count.load(std::memory_order_acquire);
+        if (dc >= run->tiled.ops.size())
+          run->status = CollectiveOpStatus::Completed;
+      }
+    }
+
+    if (nd == 0 && ns == 0) {
+      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
+      std::this_thread::yield();
     }
   }
 }

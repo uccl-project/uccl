@@ -18,6 +18,7 @@ struct Op {
   uint32_t src_peer = 0;
   uint32_t dst_peer = 0;
   bool copy_from_staging = false;
+  uint64_t tag = 0;
   std::vector<uint32_t> deps;
 };
 

@@ -11,16 +11,20 @@ namespace CCL {
 // ── Command descriptor ──────────────────────────────────────────────────
 
 struct Cmd {
-  OpKind kind;
-  uint32_t src_buf;   // 1=input, 2=output, 3=scratch
-  uint32_t dst_buf;
-  uint32_t src_off;
-  uint32_t dst_off;
-  uint32_t bytes;
-  uint32_t src_peer;  // ~0u = local
-  uint32_t dst_peer;  // ~0u = local
-  ReductionKind redop; // Reduce / RecvReduce
+  OpKind kind;              // 4
+  uint32_t src_buf;         // 4
+  uint32_t dst_buf;         // 4
+  uint32_t src_off;         // 4
+  uint32_t dst_off;         // 4
+  uint32_t bytes;           // 4
+  uint32_t src_peer;        // 4
+  uint32_t dst_peer;        // 4
+  ReductionKind redop;      // 4
+  uint8_t  transport;       // 1 — 0=auto/device default, 1=IPC, 2=RDMA
+  uint8_t  _pad[3];         // 3 — alignment
+  uint64_t tag;             // 8 — for Signal/SignalWait
 };
+// Total: 4*9 + 1 + 3 + 8 = 48 bytes
 
 static_assert(sizeof(Cmd) <= 64, "Cmd too large");
 
