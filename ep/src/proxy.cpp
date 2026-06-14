@@ -86,6 +86,9 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 #endif
 
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
+  // Unset (-1) device/NIC ranks fall back to local_rank.
+  if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
+  if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
   // Initialize state tracking for each ring buffer
   listen_port_ = uccl::create_listen_socket(&listen_fd_);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -115,8 +118,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
     int const mode_offset =
         cfg_.use_normal_mode ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
+    int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
-                      cfg_.local_rank * kNumProxyThs);
+                      cpu_local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
@@ -124,7 +128,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
       printf(
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d, mode: %s\n",
-          cpu, cfg_.thread_idx, cfg_.local_rank,
+          cpu, cfg_.thread_idx, cpu_local_rank,
           cfg_.use_normal_mode ? "high_throughput" : "low_latency");
     }
   }
@@ -133,7 +137,8 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
-    pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
+    int const cpu_local_rank = cfg_.nic_local_rank;
+    pin_thread_unique(ctx_.numa_node, cpu_local_rank, cfg_.thread_idx,
                       kNumProxyThs);
 
     // Get the actual CPU this thread is running on
@@ -148,7 +153,7 @@ void Proxy::pin_thread_to_numa_wrapper() {
         "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
         "%d, "
         "running on CPU %d.\n",
-        ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
+        ctx_.numa_node, cfg_.thread_idx, cpu_local_rank, cpu);
   }
 }
 
@@ -187,7 +192,7 @@ void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.thread_idx, cfg_.local_rank);
+                       cfg_.thread_idx, cfg_.device_index, cfg_.nic_local_rank);
   pin_thread_to_numa_wrapper();
   if (!get_cq(ctx_)) {
     (void)create_per_thread_comp_channel(ctx_);
