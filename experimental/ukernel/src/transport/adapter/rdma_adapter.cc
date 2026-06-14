@@ -1,7 +1,7 @@
 #include "rdma_adapter.h"
 #include "../communicator.h"
+#include "../util/topology.h"
 #include "../util/utils.h"
-#include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
 #include <cerrno>
@@ -74,10 +74,10 @@ int detect_gid(ibv_context* ctx, ibv_port_attr const* port_attr,
 }
 
 int pick_dev_for_gpu(int gpu_idx) {
-  auto gpu_cards = uccl::get_gpu_cards();
+  auto gpu_cards = get_gpu_cards();
   if (gpu_idx < 0 || static_cast<size_t>(gpu_idx) >= gpu_cards.size()) return 0;
 
-  auto nics = uccl::get_rdma_nics();
+  auto nics = get_rdma_nics();
   if (nics.empty()) return 0;
 
   int best_idx = -1;
@@ -107,7 +107,7 @@ int pick_dev_for_gpu(int gpu_idx) {
       continue;
     }
 
-    uint32_t d = uccl::safe_pcie_distance(gpu_cards[gpu_idx], it->second);
+    uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
       best_dist = d;
       best_idx = j;
