@@ -1133,8 +1133,10 @@ size_t Communicator::try_complete_signals(SignalCompletion* events, size_t max) 
           tcp_signal_rids_.erase(it);
           ++count;
         } else {
-          // Non-signal completion — re-enqueue.
+          // Non-signal completion — re-enqueue and stop.
+          // Data completions are handled by try_complete.
           jring_mp_enqueue_bulk(completion_ring_, &ce, 1, nullptr);
+          break;
         }
       }
     }
