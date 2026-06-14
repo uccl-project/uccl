@@ -14,13 +14,13 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
-def bench_allreduce_ukernel(pg, tensor, tile_bytes, num_flows, warmup, iters):
+def bench_allreduce_ukernel(pg, tensor, tile_bytes, num_streams, warmup, iters):
     for _ in range(warmup):
-        pg.all_reduce(tensor, tile_bytes=tile_bytes, num_flows=num_flows)
+        pg.all_reduce(tensor, tile_bytes=tile_bytes, num_streams=num_streams)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(iters):
-        pg.all_reduce(tensor, tile_bytes=tile_bytes, num_flows=num_flows)
+        pg.all_reduce(tensor, tile_bytes=tile_bytes, num_streams=num_streams)
     torch.cuda.synchronize()
     return time.perf_counter() - t0
 
@@ -36,13 +36,13 @@ def bench_allreduce_nccl(tensor, warmup, iters):
     return time.perf_counter() - t0
 
 
-def bench_alltoall_ukernel(pg, tensor, tile_bytes, num_flows, warmup, iters):
+def bench_alltoall_ukernel(pg, tensor, tile_bytes, num_streams, warmup, iters):
     for _ in range(warmup):
-        pg.all_to_all_single(tensor, tensor, tile_bytes=tile_bytes, num_flows=num_flows)
+        pg.all_to_all_single(tensor, tensor, tile_bytes=tile_bytes, num_streams=num_streams)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(iters):
-        pg.all_to_all_single(tensor, tensor, tile_bytes=tile_bytes, num_flows=num_flows)
+        pg.all_to_all_single(tensor, tensor, tile_bytes=tile_bytes, num_streams=num_streams)
     torch.cuda.synchronize()
     return time.perf_counter() - t0
 
@@ -65,8 +65,8 @@ def main() -> None:
 
     torch.cuda.set_device(local_rank)
 
-    tile_bytes = 64 << 10
-    num_flows = 2
+    tile_bytes = 512 << 10  # 512 KB
+    num_streams = 2
     warmup = 3
     iters = 20
 
@@ -111,8 +111,8 @@ def main() -> None:
         # ukernel_ccl
         t_uk_ar = torch.empty(size, device="cuda", dtype=torch.float32)
         t_uk_a2a = torch.empty(size, device="cuda", dtype=torch.float32)
-        ar_time = bench_allreduce_ukernel(pg, t_uk_ar, tile_bytes, num_flows, warmup, iters)
-        a2a_time = bench_alltoall_ukernel(pg, t_uk_a2a, tile_bytes, num_flows, warmup, iters)
+        ar_time = bench_allreduce_ukernel(pg, t_uk_ar, tile_bytes, num_streams, warmup, iters)
+        a2a_time = bench_alltoall_ukernel(pg, t_uk_a2a, tile_bytes, num_streams, warmup, iters)
 
         # NCCL
         t_nc_ar = torch.empty(size, device="cuda", dtype=torch.float32)
