@@ -35,9 +35,6 @@
 
 #pragma once
 
-#ifndef JRING_H_
-#define JRING_H_
-
 /**
  * @file
  * Buffer Ring with user defined element size.
@@ -510,5 +507,3 @@ static __attribute__((always_inline)) inline int jring_empty(
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* JRING_H_ */
