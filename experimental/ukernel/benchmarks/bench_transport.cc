@@ -417,6 +417,15 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
       wait_one(comm, send_req);
     }
   }
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
+    fprintf(stderr,
+            "[Sender %d] phase sync failed after warmup loop\n",
+            rank);
+    cleanup();
+    return;
+  }
   if (!validate_recv_slots("Sender", rank, recv_slots, warmup_touched,
                             expected_recv)) {
     cleanup();
@@ -450,8 +459,17 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     uint64_t t1 = now_ns();
     latencies.push_back(t1 - t0);
   }
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
+    fprintf(stderr,
+            "[Sender %d] phase sync failed after latency loop\n",
+            rank);
+    cleanup();
+    return;
+  }
   if (!validate_recv_slots("Sender", rank, recv_slots, latency_touched,
-                           expected_recv)) {
+                            expected_recv)) {
     cleanup();
     return;
   }
@@ -728,6 +746,15 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
                     transport_kind, remote_recv_buffer_ids, slot);
     wait_one(comm, send_req);
   }
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
+    fprintf(stderr,
+            "[Receiver %d] phase sync failed after warmup loop\n",
+            rank);
+    cleanup();
+    return;
+  }
   if (!validate_recv_slots("Receiver", rank, recv_slots, warmup_touched,
                             expected_recv)) {
     cleanup();
@@ -754,6 +781,15 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
         submit_send(comm, peer_rank, kBenchSendBufferId, msg_size,
                     transport_kind, remote_recv_buffer_ids, slot);
     wait_one(comm, send_req);
+  }
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind,
+                                 kBenchSendBufferId, local_recv_buffer_ids[0],
+                                 remote_recv_buffer_ids, msg_size)) {
+    fprintf(stderr,
+            "[Receiver %d] phase sync failed after latency loop\n",
+            rank);
+    cleanup();
+    return;
   }
   if (!validate_recv_slots("Receiver", rank, recv_slots, latency_touched,
                             expected_recv)) {
