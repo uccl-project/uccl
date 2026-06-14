@@ -1,9 +1,10 @@
 #pragma once
 
+#include "adaptive_sleeper.h"
 #include "common.h"
-#include "include/transport_type.h"
-#include "nccl/nccl_endpoint.h"
-#include "rdma/rdma_endpoint.h"
+#include "nccl_endpoint.h"
+#include "rdma_endpoint.h"
+#include "transport_type.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -25,16 +26,17 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint: holds either RDMA or NCCL/TCP endpoint.
-using RDMAEndPoint = std::variant<std::shared_ptr<NICEndpoint>,
-                                  std::shared_ptr<tcp::TCPEndpoint>>;
+// Runtime-polymorphic endpoint: holds either RDMA or NCCL endpoint.
+using GenericEndpoint =
+    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
-enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
-struct ucclRequest {
+enum ReqType { ReqRead, ReqWrite };
+
+struct UcclRequest {
   enum ReqType type;
-  uint32_t n;
+  uint32_t peer_id;
   uint32_t engine_idx;
 };
 
@@ -83,7 +85,7 @@ struct IpcTransferInfo {
   gpuIpcMemHandle_t handle;
   uintptr_t offset;
   size_t size;
-  uint32_t operation;         // 0 = send_ipc request, 1 = recv_ipc response
+  uint32_t operation;         // 0 = write_ipc, 1 = read_ipc
   bool is_host;               // true if this side's buffer is CPU memory
   int gpu_idx = -1;           // target GPU local index for direct_addr path
   uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
@@ -107,24 +109,17 @@ struct ShmMsg {
 };
 
 enum class TaskType {
-  SEND_NET,
-  RECV_NET,
-  SEND_IPC,
-  RECV_IPC,
   WRITE_NET,
   READ_NET,
   WRITE_IPC,
   READ_IPC,
-  SENDV,
-  RECVV,
   WRITEV,
   READV,
 };
 
 struct TaskBatch {
-  size_t num_iovs;  // Number of IO vectors
-  std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
-  std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
+  size_t num_iovs;                               // Number of IO vectors
+  std::shared_ptr<std::vector<void*>> data_ptr;  // for READV/WRITEV
   std::shared_ptr<std::vector<size_t>> size_ptr;
   std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
   std::shared_ptr<std::vector<FifoItem>> slot_item_ptr;  // for READV/WRITEV
@@ -136,7 +131,6 @@ struct TaskBatch {
   TaskBatch(TaskBatch const&) = delete;
   TaskBatch& operator=(TaskBatch const&) = delete;
 
-  void const** const_data_v() const;
   void** data_v() const;
   size_t* size_v() const;
   uint64_t* mr_id_v() const;
@@ -178,7 +172,7 @@ struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
   bool poll_net_ureq{false};
-  ucclRequest ureq{};
+  UcclRequest ureq{};
 };
 
 struct alignas(64) UnifiedTask {
@@ -247,7 +241,8 @@ class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
-  static constexpr int kMaxInflightOps = 128;  // Max 8 concurrent Ops
+  static constexpr int kMaxInflightOps =
+      256;  // Max 256 concurrent Ops across all channels
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
   static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
@@ -260,25 +255,34 @@ class Endpoint {
   explicit Endpoint(uint32_t const local_gpu_idx);
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
-   * done during  memory registration. Additionally, open a unified P2P socket
-   * for metadata exchanges. If passive_accept is true, the endpoint will not
-   * call accept() but delegate it to a background thread.
+   * done during memory registration. Additionally, open a unified P2P socket
+   * for metadata exchanges.
    */
   Endpoint();
 
+  /* Add a remote endpoint with metadata - connect only once per remote
+   * endpoint. */
+  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                           uint64_t& conn_id);
+
+  /* Remove a remote endpoint previously added via add_remote_endpoint. */
+  bool remove_remote_endpoint(uint64_t conn_id);
+
+  /* Start a background thread for accepting, and one should not call accept()
+   * afterwards. */
+  bool start_passive_accept();
+
   ~Endpoint();
 
-  /* Stop accepting incoming connections. */
-  void stop_accepting();
+  /* Stop accepting incoming connections, used in ~Endpoint() by setting
+   * passive_accept_stop_=true to stop background accepting threads */
+  void stop_accept();
 
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
 
   std::vector<uint8_t> get_metadata();
-
-  /* Get the unified metadata for all devices. */
-  std::vector<uint8_t> get_unified_metadata();
 
   /* Parse endpoint metadata to extract IP address, port, and GPU index.
    * Returns a tuple of (ip_address, port, gpu_index). */
@@ -290,45 +294,11 @@ class Endpoint {
 
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
-           uccl::FloatType float_type = uccl::FloatType::kFloat32);
+           FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
   bool dereg(uint64_t mr_id);
-
-  /*Send data to the remote server. Blocking. */
-  bool send(uint64_t conn_id, uint64_t mr_id, void const* data, size_t size);
-
-  /*Receive data from the remote server. Blocking.*/
-  bool recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size);
-
-  /* Send data to the remote server asynchronously. */
-  bool send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
-                  size_t size, uint64_t* transfer_id);
-
-  /* Receive data from the remote server asynchronously. */
-  bool recv_async(uint64_t conn_id, uint64_t mr_id, void* data, size_t size,
-                  uint64_t* transfer_id);
-
-  /* Send a vector of data chunks. Blocking. */
-  bool sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void const*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Send a vector of data chunks asynchronously. */
-  bool sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                   std::vector<void const*> data_v, std::vector<size_t> size_v,
-                   size_t num_iovs, uint64_t* transfer_id);
-
-  /* Receive a vector of data chunks. Blocking. */
-  bool recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<void*> data_v, std::vector<size_t> size_v,
-             size_t num_iovs);
-
-  /* Receive a vector of data chunks asynchronously. */
-  bool recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                   std::vector<void*> data_v, std::vector<size_t> size_v,
-                   size_t num_iovs, uint64_t* transfer_id);
 
   /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
@@ -369,21 +339,13 @@ class Endpoint {
                     std::vector<FifoItem> slot_item_v, size_t num_iovs,
                     uint64_t* transfer_id);
 
-  /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
-  bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                 size_t size, void const* meta, size_t meta_len);
-
-  bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
-                 char* out_buf);
-
-  /* Prepare Fifo without requiring a connection (for pre-computing fifo_item).
-   */
-  bool prepare_fifo(uint64_t mr_id, void* addr, size_t len, char* out_buf);
+  /* Advertise a data chunk for remote side to write/read */
+  bool advertise(uint64_t mr_id, void* addr, size_t len, char* out_buf);
 
   /* Advertise a vector of data chunks. */
-  bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                  std::vector<void*> addr_v, std::vector<size_t> len_v,
-                  std::vector<char*> out_buf_v, size_t num_iovs);
+  bool advertisev(std::vector<uint64_t> mr_id_v, std::vector<void*> addr_v,
+                  std::vector<size_t> len_v, std::vector<char*> out_buf_v,
+                  size_t num_iovs);
 
   /*Connect to a local process via shared memory.*/
   bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
@@ -391,19 +353,6 @@ class Endpoint {
 
   /*Accept an incoming local connection via shared memory. */
   bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
-
-  /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
-   * gpuIpcMemHandle_t will be passed via shm-jring from recv_ipc to send_ipc
-   * function. */
-  bool send_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool recv_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                      uint64_t* transfer_id);
-
-  bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                      uint64_t* transfer_id);
 
   /* One-sided write and read via IPC. */
   bool write_ipc(uint64_t conn_id, void const* data, size_t size,
@@ -433,17 +382,6 @@ class Endpoint {
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
 
-  /* Add a remote endpoint with metadata - connect only once per remote
-   * endpoint. */
-  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
-                           uint64_t& conn_id);
-
-  /* Remove a remote endpoint previously added via add_remote_endpoint. */
-  bool remove_remote_endpoint(uint64_t conn_id);
-
-  /* Start a background thread for accepting. */
-  bool start_passive_accept();
-
   /***************************************************/
   /* API for Ray */
   /***************************************************/
@@ -466,7 +404,7 @@ class Endpoint {
 
   Conn* get_conn(uint64_t conn_id) const;
 
-  RDMAEndPoint get_endpoint() const;
+  GenericEndpoint get_endpoint() const;
 
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
@@ -476,7 +414,7 @@ class Endpoint {
   int local_gpu_idx_;       // CUDA device ordinal (within visible set)
   std::string gpu_bus_id_;  // PCI Bus ID string (cross-process identity)
   int numa_node_;
-  RDMAEndPoint ep_;
+  GenericEndpoint ep_;
   bool engine_initialized_ = false;
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
@@ -495,7 +433,7 @@ class Endpoint {
   std::unordered_map<std::string, ShmRingHandle> inbox_rings_;
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
-  /* For both net and ipc send/recv tasks. */
+  /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
   jring_t* recv_unified_task_ring_ = nullptr;
   jring_t* ipc_inflight_ring_ = nullptr;
@@ -510,10 +448,15 @@ class Endpoint {
   std::thread passive_accept_thread_;
   std::thread passive_accept_local_thread_;
 
+  /* adaptive sleeping tracker for the thread funcs */
+  P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
+  P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
+  P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
+
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
 
-  /* Background threads for send/recv/ipc/passive accept. */
+  /* Background threads for read/write, IPC, and passive accept. */
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
@@ -526,14 +469,6 @@ class Endpoint {
   std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id,
                                                  TaskType type,
                                                  TaskBatch&& batch);
-  std::shared_ptr<UnifiedTask> create_sendv_task(
-      uint64_t conn_id,
-      std::shared_ptr<std::vector<void const*>> const_data_ptr,
-      std::shared_ptr<std::vector<size_t>> size_ptr,
-      std::shared_ptr<std::vector<uint64_t>> mr_id_ptr);
-  std::shared_ptr<UnifiedTask> create_recvv_task(
-      uint64_t conn_id, std::vector<void*>&& data_v,
-      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v);
   std::shared_ptr<UnifiedTask> create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
@@ -542,6 +477,13 @@ class Endpoint {
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
       std::vector<FifoItem>&& slot_item_v);
+  bool run_raw_one_sided_pipeline(SendConnection* send_group,
+                                  SendType send_type,
+                                  std::vector<P2PMhandle*> const& mhandle_v,
+                                  std::vector<void*> const& local_addr_v,
+                                  std::vector<size_t> const& size_v,
+                                  std::vector<FifoItem> const& slot_item_v,
+                                  size_t num_iovs);
   std::shared_ptr<UnifiedTask> create_net_task(uint64_t conn_id, uint64_t mr_id,
                                                TaskType type, void* data,
                                                size_t size,

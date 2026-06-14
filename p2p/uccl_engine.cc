@@ -1,8 +1,10 @@
 #include "uccl_engine.h"
 #include "endpoint_wrapper.h"
 #include "engine.h"
-#include "include/transport_type.h"
-#include "rdma/epoll_client.h"
+#include "epoll_client.h"
+#include "transport_type.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
@@ -30,7 +32,7 @@ struct uccl_engine {
   std::thread local_accept_thread;
   std::atomic<bool> local_accept_started{false};
   // Standalone OOB client for cross-process local notifications when the
-  // transport endpoint does not provide one (e.g. NCCL/TCP build).
+  // transport endpoint does not provide one (e.g. NCCL build).
   std::shared_ptr<EpollClient> local_oob_client;
 };
 
@@ -106,7 +108,7 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
 }
 
 // Check UCCL_P2P_DISABLE_IPC=1 to force all transfers through the network
-// transport (RDMA or TCP) even for intra-node peers.  Useful for CI testing.
+// transport (RDMA or NCCL) even for intra-node peers.  Useful for CI testing.
 static bool ipc_disabled() {
   static bool disabled = [] {
     char const* val = std::getenv("UCCL_P2P_DISABLE_IPC");
@@ -170,15 +172,15 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   //   - Cross-process same-GPU same-node: network (shm ring self-skip issue)
   //   - Remote inter-node: network (RDMA)
   //
-  // NCCL/TCP build:
+  // NCCL build:
   //   - Same-process: IPC (direct ring access)
   //   - Cross-process same-node: network (NCCL). Data still uses IPC via
   //     NIXL ipc_bufs since conn->is_local is set true.
-  //     NOTE: same-GPU cross-process is unsupported with NCCL/TCP because
-  //     ncclCommInitRank rejects two ranks on the same physical GPU.
+  //     NOTE: same-GPU cross-process is unsupported with NCCL because
+  //     ncclCommInitPeer rejects two ranks on the same physical GPU.
   //   - Remote inter-node: network (NCCL)
   bool use_ipc;
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     use_ipc = is_local && (same_process ||
                            remote_bdf != engine->endpoint->get_gpu_bus_id());
   } else {
@@ -211,7 +213,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                    conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-      if (!uccl::is_nccl_transport()) {
+      if (!is_nccl_transport()) {
         conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
       }
     }
@@ -233,7 +235,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     engine->endpoint->start_passive_accept();
   }
   uccl_conn_t* conn = new uccl_conn;
@@ -249,7 +251,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-  if (!uccl::is_nccl_transport()) {
+  if (!is_nccl_transport()) {
     conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
   }
   conn->engine = engine;
@@ -322,7 +324,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     // The NIXL UCCL backend always uses the vector API, even for a single iov.
     // For the NCCL path, bypass the generic readv proxy-thread machinery in
     // that case and issue the scalar read directly.
@@ -361,19 +363,31 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
 
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, uint64_t* transfer_id) {
-  if (!conn || !data) return -1;
-  return conn->engine->endpoint->send_async(conn->conn_id, mr, data, size,
-                                            transfer_id)
-             ? 0
-             : -1;
+  (void)conn;
+  (void)mr;
+  (void)data;
+  (void)size;
+  (void)transfer_id;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_send is unsupported: two-sided send/recv path was "
+         "removed; use uccl_engine_write/read instead";
+  return -1;
 }
 
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
-                     size_t data_size) {
-  if (!conn || !data) return -1;
-
-  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size) ? 0
-                                                                          : -1;
+int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void const*> src_v,
+                            std::vector<size_t> size_v, int num_iovs,
+                            uint64_t* transfer_id) {
+  (void)conn;
+  (void)mr_ids;
+  (void)src_v;
+  (void)size_v;
+  (void)num_iovs;
+  (void)transfer_id;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_send_vector is unsupported: two-sided send/recv path "
+         "was removed; use uccl_engine_write_vector/read_vector instead";
+  return -1;
 }
 
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
@@ -412,7 +426,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     // Mirror the single-iov fast path for writes so the merged NCCL endpoint
     // does not force 1-buffer transfers through the vector proxy path.
     if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
@@ -447,6 +461,18 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                                               transfer_id)
              ? 0
              : -1;
+}
+
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
+                     size_t data_size) {
+  (void)conn;
+  (void)mr;
+  (void)data;
+  (void)data_size;
+  UCCL_LOG(ERROR)
+      << "uccl_engine_recv is unsupported: two-sided send/recv path was "
+         "removed; use uccl_engine_write/read instead";
+  return -1;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -509,14 +535,13 @@ bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
 
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
   if (engine && engine->endpoint) {
-    engine->endpoint->stop_accepting();
+    engine->endpoint->stop_accept();
   }
 }
 
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-
     delete conn;
   }
 }
@@ -535,8 +560,8 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
                              void const* data, size_t size, char* fifo_buf) {
   if (!engine || !data || !fifo_buf) return -1;
 
-  return engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
-                                        fifo_buf)
+  return engine->endpoint->advertise(mr, const_cast<void*>(data), size,
+                                     fifo_buf)
              ? 0
              : -1;
 }
@@ -584,7 +609,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   }
 
   // Cross-process local connection: send via OOB client (works for both
-  // RDMA and TCP builds).  The oob_conn_key was set up in uccl_engine_connect.
+  // RDMA and NCCL builds).  The oob_conn_key was set up in uccl_engine_connect.
   if (conn->is_local && !conn->oob_conn_key.empty()) {
     auto oob_client = conn->engine->endpoint->get_oob_client();
     if (!oob_client) {
@@ -601,7 +626,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
                : -1;
   }
 
-  if (uccl::is_nccl_transport()) {
+  if (is_nccl_transport()) {
     return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
   }
 

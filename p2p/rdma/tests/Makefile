@@ -11,8 +11,9 @@ DIETGPU_ROOT := ../../../thirdparty/dietgpu
 DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
 
 # Common flags
-COMMON_FLAGS := -I ../ -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -libverbs -lefa -lpthread \
-	-I ../../../include -I ../../../collective/rdma -I ../../include -I $(DIETGPU_ROOT) -std=c++17 -lgflags
+COMMON_FLAGS := -I ../ -I ../providers -I ../../util -I ../../nccl \
+	-I /opt/amazon/efa/include -L /opt/amazon/efa/lib -libverbs -lefa -lpthread \
+	-I ../../../include -I ../../../collective/rdma -I $(DIETGPU_ROOT) -std=c++17 -lgflags
 
 ifeq ($(USE_HIP),1)
 	# HIP/ROCm flags
@@ -31,10 +32,10 @@ endif
 
 all: test_efa_endpoint test_compression
 
-test_efa_endpoint: test_efa_endpoint.cpp ../define.h ../rdma_device.h ../rdma_context.h ../efa_channel.h ../efa_endpoint.h ../epoll_client.h ../epoll_server.h ../../../collective/rdma/param.cc
+test_efa_endpoint: test_efa_endpoint.cpp ../../util/common.h ../rdma_device.h ../rdma_context.h ../efa_channel.h ../efa_endpoint.h ../../util/epoll_client.h ../../util/epoll_server.h ../../../collective/rdma/param.cc
 	g++ -O3 -g test_efa_endpoint.cpp ../../../collective/rdma/param.cc -o test_efa_endpoint $(CXXFLAGS)
 
-test_compression: test_compression.cpp ../compression.h ../define.h ../memory_allocator.h
+test_compression: test_compression.cpp ../compression.h ../../util/common.h ../../util/memory_allocator.h
 	g++ -O3 -g test_compression.cpp -o test_compression $(CXXFLAGS)
 
 clean:

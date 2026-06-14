@@ -4,7 +4,7 @@
 //
 // These are C functions (extern "C") to match the libibverbs ABI.
 
-#include "../include/ibverbs_wrapper.h"
+#include "ibverbs_dl.h"
 #include <infiniband/verbs.h>
 
 // Undefine macros from verbs.h so we can define our own wrapper functions.
@@ -16,14 +16,10 @@
 // Eagerly load libibverbs.so at library load time with RTLD_GLOBAL so that
 // compat-layer functions in verbs.h (ibv_query_port, ibv_reg_mr, etc.) can
 // resolve their symbols from the dlopen'd library.
-__attribute__((constructor)) static void ibv_dl_init() {
-  uccl::ibv_dl::get_handle();
-}
+__attribute__((constructor)) static void ibv_dl_init() { ibv_dl::get_handle(); }
 
-static void* ibv_handle() { return uccl::ibv_dl::get_handle(); }
-static void* ibv_resolve(char const* name) {
-  return uccl::ibv_dl::resolve(name);
-}
+static void* ibv_handle() { return ibv_dl::get_handle(); }
+static void* ibv_resolve(char const* name) { return ibv_dl::resolve(name); }
 
 extern "C" {
 

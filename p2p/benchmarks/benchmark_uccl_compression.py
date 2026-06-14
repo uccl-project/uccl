@@ -1,9 +1,4 @@
-"""
-Benchmark UCCL Collective API
-
-This benchmark demonstrates the high-level collective API for UCCL P2P engine.
-It provides an interface similar to NCCL but uses UCCL P2P underneath.
-"""
+"""Benchmark UCCL P2P write bandwidth with optional compression."""
 
 from __future__ import annotations
 
@@ -17,7 +12,7 @@ from typing import List, Tuple
 import torch
 import torch.distributed as dist
 
-from uccl import collective
+from uccl import p2p
 
 _DTYPE_ITEM_SIZE = {
     torch.float16: 2,
@@ -33,6 +28,16 @@ _DTYPE_MAP = {
     "float32": torch.float32,
     "float8_e4m3fn": torch.float8_e4m3fn,
     "float8_e5m2": torch.float8_e5m2,
+}
+
+
+_P2P_FLOAT_TYPE = {
+    "float16": p2p.FloatType.kFloat16,
+    "bfloat16": p2p.FloatType.kBFloat16,
+    "float32": p2p.FloatType.kFloat32,
+    # The P2P compression type enum does not expose fp8 today.
+    "float8_e4m3fn": p2p.FloatType.kUndefined,
+    "float8_e5m2": p2p.FloatType.kUndefined,
 }
 
 
@@ -70,300 +75,110 @@ def _pretty_size(num_bytes: int) -> str:
 ################################################################################
 
 
-def _run_server(args) -> List[Tuple]:
+def _exchange_metadata(local_metadata: bytes, rank: int) -> bytes:
+    if rank == 0:
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=1)
+        remote = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote, src=1)
+    else:
+        remote = torch.zeros(len(local_metadata), dtype=torch.uint8)
+        dist.recv(remote, src=0)
+        dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
+    return bytes(remote.tolist())
+
+
+def _send_bytes(payload: bytes, dst: int) -> None:
+    size = torch.tensor([len(payload)], dtype=torch.int64)
+    dist.send(size, dst=dst)
+    if payload:
+        dist.send(torch.ByteTensor(list(payload)), dst=dst)
+
+
+def _recv_bytes(src: int) -> bytes:
+    size = torch.zeros(1, dtype=torch.int64)
+    dist.recv(size, src=src)
+    n = int(size.item())
+    if n == 0:
+        return b""
+    payload = torch.zeros(n, dtype=torch.uint8)
+    dist.recv(payload, src=src)
+    return bytes(payload.tolist())
+
+
+def _run_server(args, ep: "p2p.Endpoint") -> List[Tuple]:
     peer = 0  # client rank
     results = []
+    ok, r_ip, r_gpu, conn_id = ep.accept()
+    assert ok, "[Server] Failed to accept RDMA connection"
+    print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
+
+    ft = _P2P_FLOAT_TYPE[args.dtype]
     for size in args.sizes:
         tensor = _make_buffer(size, args.torch_dtype)
+        ok, mr_id = ep.reg(tensor.data_ptr(), size, ft)
+        assert ok, "[Server] register failed"
 
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
+        ok, fifo_blob = ep.advertise(mr_id, tensor.data_ptr(), size)
+        assert ok, "[Server] advertise failed"
+        _send_bytes(bytes(fifo_blob), dst=peer)
 
-        # Warm-up receive
-        collective.recv(tensor, src=peer)
-
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            collective.recv(tensor, src=peer)
-            total += size
-
-        elapsed = time.perf_counter() - start
-
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        collective.deregister_tensor(tensor)
-        print(
-            f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-        results.append(("Server", size, _pretty_size(size), gbps, gb_sec))
+        # The initiator measures write completion; the target waits at the
+        # barrier before reusing the advertised buffer for the next size.
+        dist.barrier()
+        ep.dereg(mr_id)
+        results.append(("Server", size, _pretty_size(size), 0.0, 0.0))
     print("[Server] Benchmark complete")
     return results
 
 
-def _run_client(args) -> List[Tuple]:
+def _run_client(args, ep: "p2p.Endpoint", remote_metadata: bytes) -> List[Tuple]:
     peer = 1  # server rank
     results = []
+    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
+    ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
+    assert ok, "[Client] Failed to connect to server"
+    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
+
+    ft = _P2P_FLOAT_TYPE[args.dtype]
     for size in args.sizes:
         tensor = _make_buffer(size, args.torch_dtype)
-        # tensor.fill_(size)
+        ok, mr_id = ep.reg(tensor.data_ptr(), size, ft)
+        assert ok, "[Client] register failed"
+        fifo_blob = _recv_bytes(src=peer)
 
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
+        def write_once() -> None:
+            if args.async_api:
+                ok, transfer_id = ep.write_async(
+                    conn_id, mr_id, tensor.data_ptr(), size, fifo_blob
+                )
+                assert ok, "[Client] write_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.write(conn_id, mr_id, tensor.data_ptr(), size, fifo_blob)
+                assert ok, "[Client] write error"
 
-        # Warm-up send
-        collective.send(tensor, dst=peer)
+        write_once()
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            collective.send(tensor, dst=peer)
+            write_once()
             total += size
 
         elapsed = time.perf_counter() - start
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
-        collective.deregister_tensor(tensor)
+        dist.barrier()
+        ep.dereg(mr_id)
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
         results.append(("Client", size, _pretty_size(size), gbps, gb_sec))
     print("[Client] Benchmark complete")
-    return results
-
-
-def _run_async_server(args) -> List[Tuple]:
-    """Demonstrate async API usage."""
-    peer = 0  # client rank
-    results = []
-    for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
-
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
-
-        # Warm-up
-        req = collective.irecv(tensor, src=peer)
-        collective.wait(req)
-
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            req = collective.irecv(tensor, src=peer)
-            collective.wait(req)
-            total += size
-
-        elapsed = time.perf_counter() - start
-
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        print(
-            f"[Server Async] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-        results.append(("Server Async", size, _pretty_size(size), gbps, gb_sec))
-    print("[Server Async] Benchmark complete")
-    return results
-
-
-def _run_async_client(args) -> List[Tuple]:
-    """Demonstrate async API usage."""
-    peer = 1  # server rank
-    results = []
-    for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
-
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
-
-        # Warm-up
-        req = collective.isend(tensor, dst=peer)
-        collective.wait(req)
-
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            req = collective.isend(tensor, dst=peer)
-            collective.wait(req)
-            total += size
-
-        elapsed = time.perf_counter() - start
-
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        print(
-            f"[Client Async] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-        results.append(("Client Async", size, _pretty_size(size), gbps, gb_sec))
-    print("[Client Async] Benchmark complete")
-    return results
-
-
-def _run_dual_benchmark(args) -> List[Tuple]:
-    """Demonstrate dual-direction async communication (both isend and irecv simultaneously)."""
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-    if world_size != 2:
-        raise RuntimeError("Dual benchmark only supports exactly 2 processes")
-
-    peer = 1 - rank  # peer rank (0 <-> 1)
-    results = []
-
-    for size in args.sizes:
-        send_tensor = _make_buffer(size, args.torch_dtype)
-        recv_tensor = _make_buffer(size, args.torch_dtype)
-
-        # Register tensors for efficient memory access
-        collective.register_tensor(send_tensor)
-        collective.register_tensor(recv_tensor)
-
-        # Warm-up: simultaneous send and receive
-        handles = collective.batch_isend_irecv(
-            [
-                collective.P2POp(collective.isend, send_tensor, peer),
-                collective.P2POp(collective.irecv, recv_tensor, peer),
-            ]
-        )
-        collective.wait_all(handles)
-
-        start = time.perf_counter()
-        total_sent = 0
-        total_recv = 0
-
-        for _ in range(args.iters):
-            # Start both operations simultaneously with batching
-            handles = collective.batch_isend_irecv(
-                [
-                    collective.P2POp(collective.isend, send_tensor, peer),
-                    collective.P2POp(collective.irecv, recv_tensor, peer),
-                ]
-            )
-            collective.wait_all(handles)
-
-            total_sent += size
-            total_recv += size
-
-        elapsed = time.perf_counter() - start
-
-        role_name = "Client" if rank == 0 else "Server"
-        send_gbps = (total_sent * 8) / elapsed / 1e9
-        send_gb_sec = total_sent / elapsed / 1e9
-        recv_gbps = (total_recv * 8) / elapsed / 1e9
-        recv_gb_sec = total_recv / elapsed / 1e9
-
-        avg_gbps = (send_gbps + recv_gbps) / 2
-        avg_gb_sec = (send_gb_sec + recv_gb_sec) / 2
-        print(
-            f"[{role_name} Dual Send Recv] {_pretty_size(size):>9} : {avg_gbps:6.2f} Gbps | {avg_gb_sec:5.2f} GB/s"
-        )
-        results.append(
-            (f"{role_name} Dual", size, _pretty_size(size), avg_gbps, avg_gb_sec)
-        )
-
-    role_name = "Client" if rank == 0 else "Server"
-    print(f"[{role_name} Dual] Benchmark complete")
-    return results
-
-
-def _run_ring_benchmark(args) -> List[Tuple]:
-    """Ring communication: each rank sends to next rank in a ring pattern."""
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-    # Ring pattern: rank i sends to rank (i+1) % world_size
-    dst_rank = (rank + 1) % world_size
-    src_rank = (rank - 1 + world_size) % world_size
-
-    print(
-        f"[Rank {rank}] Ring pattern: receiving from rank {src_rank}, sending to rank {dst_rank}"
-    )
-
-    results = []
-    for size in args.sizes:
-        send_tensor = _make_buffer(size, args.torch_dtype)
-        recv_tensor = _make_buffer(size, args.torch_dtype)
-
-        # Fill send tensor with rank-specific data for verification
-        send_tensor.fill_(size)
-
-        # Register tensors for efficient memory access
-        collective.register_tensor(send_tensor)
-        collective.register_tensor(recv_tensor)
-
-        # Warm-up
-        handles = collective.batch_isend_irecv(
-            [
-                collective.P2POp(collective.isend, send_tensor, dst_rank),
-                collective.P2POp(collective.irecv, recv_tensor, src_rank),
-            ]
-        )
-        collective.wait_all(handles)
-
-        # Verify received data
-        expected_value = float(size)
-        received_value = recv_tensor[0].item()
-
-        if abs(received_value - expected_value) > 1e-6:
-            print(f"[Rank {rank}] WARNING: Data verification failed for warm-up")
-            print(f"  Expected: {expected_value}, Received: {received_value}")
-            print(f"  Source rank: {src_rank}, Current rank: {rank}")
-
-        # Fill tensor once before benchmark loop for best performance
-        benchmark_send_value = float(size)
-        send_tensor.fill_(benchmark_send_value)
-
-        start = time.perf_counter()
-        total_bytes = 0
-
-        for iteration in range(args.iters):
-            # Use batched operations for better performance
-            handles = collective.batch_isend_irecv(
-                [
-                    collective.P2POp(collective.isend, send_tensor, dst_rank),
-                    collective.P2POp(collective.irecv, recv_tensor, src_rank),
-                ]
-            )
-            collective.wait_all(handles)
-            total_bytes += size
-
-        elapsed = time.perf_counter() - start
-
-        # Perform final data verification after all iterations complete
-        final_send_value = float(size)
-        send_tensor.fill_(final_send_value)
-
-        # Final verification round
-        handles = collective.batch_isend_irecv(
-            [
-                collective.P2POp(collective.isend, send_tensor, dst_rank),
-                collective.P2POp(collective.irecv, recv_tensor, src_rank),
-            ]
-        )
-        collective.wait_all(handles)
-
-        # Synchronize all ranks before verification
-        dist.barrier()
-
-        # Expected value should be from the source rank's benchmark value
-        expected_value = float(final_send_value)
-        received_value = recv_tensor[0].item()  # Check first element
-
-        if abs(received_value - expected_value) > 1e-6:
-            print(f"[Rank {rank}] WARNING: Final data verification failed")
-            print(f"  Expected: {expected_value}, Received: {received_value}")
-            print(f"  Source rank: {src_rank}, Current rank: {rank}")
-            print(f"  Final send value was: {final_send_value}")
-            print(f"  Benchmark send value was: {benchmark_send_value}")
-
-        gbps = (total_bytes * 8) / elapsed / 1e9
-        gb_sec = total_bytes / elapsed / 1e9
-        print(
-            f"[Rank {rank}] Ring Async {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-        results.append((f"Rank{rank} Ring", size, _pretty_size(size), gbps, gb_sec))
-
-    print(f"[Rank {rank}] Ring async benchmark complete")
     return results
 
 
@@ -375,47 +190,36 @@ def parse_size_list(val: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Benchmark UCCL Collective API bandwidth (GPU only)"
-    )
+    p = argparse.ArgumentParser(description="Benchmark UCCL P2P write bandwidth")
     p.add_argument(
         "--sizes",
         type=parse_size_list,
         default=[
-            256,  # 256 B
-            1024,  # 1 KB
-            4096,  # 4 KB
-            16384,  # 16 KB
-            65536,  # 64 KB
-            262144,  # 256 KB
-            1048576,  # 1 MB
-            1048576 * 4,  # 4 MB
-            1048576 * 8,  # 8 MB
-            16777216,  # 16 MB
-            33554432,  # 32 MB
-            67108864,  # 64 MB
-            134217728,  # 128 MB
-            268435456,  # 256 MB
-            536870912,  # 512 MB
-            1073741824,  # 1 GB
-            # 1073741824*2,     # 2 GB
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192,
+            16384,
+            32768,
+            65536,
+            131072,
+            262144,
+            524288,
+            1048576,
         ],
     )
-    p.add_argument("--iters", type=int, default=10)
+    p.add_argument("--iters", type=int, default=128)
     p.add_argument(
         "--async-api",
         action="store_true",
-        help="Use async API (isend/irecv/wait)",
-    )
-    p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Test bidirectional communication (simultaneous isend and irecv).",
-    )
-    p.add_argument(
-        "--ring",
-        action="store_true",
-        help="Test ring communication pattern (rank i sends to rank (i+1) % world_size).",
+        help="Use asynchronous write transfers",
     )
     p.add_argument(
         "--dtype",
@@ -441,73 +245,35 @@ def main():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    # Check for incompatible options
-    if args.dual and args.ring:
-        print("ERROR: --dual and --ring options are mutually exclusive")
-        sys.exit(1)
-
-    # Validate world size for specific benchmarks
-    if args.dual and world_size != 2:
-        print("ERROR: --dual benchmark requires exactly 2 processes")
-        sys.exit(1)
-
-    if args.ring and world_size < 2:
-        print("ERROR: --ring benchmark requires at least 2 processes")
-        sys.exit(1)
-
-    # Default client-server benchmark still requires exactly 2 processes
-    if not args.dual and not args.ring and world_size != 2:
-        print(
-            "ERROR: Default client-server benchmark requires exactly 2 processes. Use --ring for multi-process scenarios."
-        )
+    if world_size != 2:
+        print("ERROR: Default client-server benchmark requires exactly 2 processes.")
         sys.exit(1)
 
     try:
-        # Initialize UCCL collective context (local_gpu_idx auto-detected from torch.distributed)
-        collective.init_collective()
-
-        # Get the actual GPU index used by the collective
-        ctx = collective.get_collective()
-        local_gpu_idx = ctx.local_gpu_idx
+        local_gpu_idx = int(os.environ.get("LOCAL_RANK", rank))
         torch.cuda.set_device(local_gpu_idx)
+        ep = p2p.Endpoint(local_gpu_idx)
+        remote_metadata = _exchange_metadata(bytes(ep.get_metadata()), rank)
 
-        if args.ring:
-            print(f"[Rank {rank}/{world_size}] UCCL Collective Ring Benchmark")
-        else:
-            print(
-                "UCCL Collective Benchmark — role:",
-                "client" if rank == 0 else "server",
-            )
+        print(
+            "UCCL P2P Compression Write Benchmark — role:",
+            "client" if rank == 0 else "server",
+        )
         print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
         print(
             f"Device: GPU | Local GPU idx: {local_gpu_idx} | Iters: {args.iters} | Dtype: {args.dtype}"
         )
-        if args.ring:
-            print(f"[Rank {rank}] Using async ring communication pattern (isend/irecv)")
-        elif args.dual:
-            print("Using dual-direction mode (simultaneous isend/irecv)")
-        elif args.async_api:
-            print("Using async API (isend/irecv/wait)")
-        else:
-            print("Using synchronous API (send/recv)")
+        print(
+            "Using async write API" if args.async_api else "Using synchronous write API"
+        )
 
         # Synchronize all ranks before starting benchmark
         dist.barrier()
 
-        if args.ring:
-            results = _run_ring_benchmark(args)
-        elif args.dual:
-            results = _run_dual_benchmark(args)
-        elif args.async_api:
-            if rank == 0:
-                results = _run_async_client(args)
-            else:
-                results = _run_async_server(args)
+        if rank == 0:
+            results = _run_client(args, ep, remote_metadata)
         else:
-            if rank == 0:
-                results = _run_client(args)
-            else:
-                results = _run_server(args)
+            results = _run_server(args, ep)
 
         # Write results to CSV if requested
         if args.csv:
@@ -524,12 +290,8 @@ def main():
 
         # Synchronize all ranks before finishing
         dist.barrier()
-        if args.ring:
-            print(f"[Rank {rank}] Ring benchmark completed successfully!")
-        else:
-            print("Benchmark completed successfully!")
+        print("Benchmark completed successfully!")
     finally:
-        collective.finalize_collective()
         dist.destroy_process_group()
 
 

@@ -674,10 +674,16 @@ class Buffer {
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(num_tokens > 0);
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch but must still participate in the collective notification.
+    // PyTorch zero-element tensors have data_ptr() == 0, so only require a
+    // real is_token_in_rank buffer when there are tokens to route.
+    EP_HOST_ASSERT(num_tokens >= 0);
     EP_HOST_ASSERT(num_experts > 0);
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    }
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
     EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
@@ -762,11 +768,21 @@ class Buffer {
       std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch but must still participate in the collective cached_notify
+    // and dispatch so that remote ranks are not left spinning. Send-side
+    // pointers (x, is_token_in_rank, send_head) are sized by num_tokens —
+    // PyTorch zero-element tensors have data_ptr() == 0 — so gate them on
+    // num_tokens > 0. Recv-side allocations are bumped to max(.., 1) by
+    // the Python wrapper, so their pointers stay non-zero.
+    EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0 && num_recv_tokens >= 0);
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
+      EP_HOST_ASSERT(send_head_ptr != 0);
+    }
     EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_x_ptr != 0 && recv_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_src_idx_ptr != 0 && send_head_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens >= 0);
+    EP_HOST_ASSERT(recv_src_idx_ptr != 0);
     EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
                    0);
 
@@ -840,7 +856,13 @@ class Buffer {
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
     EP_HOST_ASSERT(x_ptr != 0 && src_idx_ptr != 0 &&
                    rank_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0 && send_head_ptr != 0);
+    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
+    // send_head is sized by num_recv_tokens (the original dispatch send
+    // count). DP-attention ranks may have num_recv_tokens == 0, which
+    // makes send_head a zero-element tensor with data_ptr() == 0.
+    if (num_recv_tokens > 0) {
+      EP_HOST_ASSERT(send_head_ptr != 0);
+    }
     EP_HOST_ASSERT(recv_x_ptr != 0);
     EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
                    0);
@@ -911,13 +933,17 @@ class Buffer {
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
     EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
     EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
     // Allow num_tokens == 0: DP-attention ranks may have no tokens to
     // dispatch, but must still participate in the collective notification.
+    // Zero-element tensors have data_ptr() == 0 in PyTorch, so only require
+    // a real is_token_in_rank buffer when we actually have tokens to route.
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    }
     EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0 && num_experts > 0);
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&
@@ -2359,13 +2385,14 @@ NB_MODULE(ep, m) {
   nb::class_<Stats>(m, "Stats");
   nb::class_<UcclProxy>(m, "Proxy")
       .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool>(),
+                    bool, bool, int>(),
            nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
            nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
            nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
            nb::arg("num_ranks") = -1, nb::arg("num_nodes") = 0,
            nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
-           nb::arg("gpu_buffer_is_host_allocated") = false)
+           nb::arg("gpu_buffer_is_host_allocated") = false,
+           nb::arg("barrier_local_rank") = -1)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

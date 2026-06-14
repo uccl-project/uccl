@@ -14,7 +14,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated)
+                     bool gpu_buffer_is_host_allocated, int barrier_local_rank)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -46,6 +46,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.rank = rank;
   cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
+  cfg.barrier_local_rank =
+      barrier_local_rank >= 0 ? barrier_local_rank : local_rank;
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;

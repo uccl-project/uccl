@@ -44,7 +44,10 @@ class Proxy {
     size_t total_size = 0;
     int rank = 0;
     int node_idx = -1;
+    // CUDA/NIC local device rank and HT local-barrier slot can differ when
+    // each process sees a single GPU, e.g. vLLM's Ray worker actors.
     int local_rank = -1;
+    int barrier_local_rank = -1;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
@@ -95,7 +98,7 @@ class Proxy {
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
-  AdaptiveSleeper adaptive_sleeper_;
+  EPAdaptiveSleeper adaptive_sleeper_;
   void init_common();
   void init_sender();
   void init_remote();

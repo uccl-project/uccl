@@ -99,12 +99,13 @@ def _gather_peer_ips(group):
     return ips
 
 
-def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, bool]:
+def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int, bool]:
     """
-    Infer local rank and node topology for a process group.
+    Infer CUDA-local rank, barrier-local rank, and node topology.
 
     Returns:
-        local_rank: rank index within the current node.
+        local_rank: CUDA-visible device index for the current process.
+        barrier_local_rank: rank slot within the current node.
         node_idx: compact node index within the given group.
         num_nodes: number of distinct nodes spanned by the group.
         is_intranode: whether all ranks in the group are on the same node.
@@ -114,16 +115,14 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, bool
     else:
         local_rank = torch.cuda.current_device()
 
-    node_token = (
-        os.environ.get("NODE_RANK")
-        or os.environ.get("GROUP_RANK")
-        or os.environ.get("SLURM_NODEID")
-        or socket.gethostname()
-    )
+    node_token = ep.get_oob_ip() or socket.gethostname()
 
     world = dist.get_world_size(group)
     node_tokens = [None] * world
     dist.all_gather_object(node_tokens, node_token, group=group)
+    rank = dist.get_rank(group)
+    local_ranks = [idx for idx, token in enumerate(node_tokens) if token == node_token]
+    barrier_local_rank = local_ranks.index(rank)
 
     token_to_idx = {}
     for token in node_tokens:
@@ -133,7 +132,7 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, bool
     node_idx = token_to_idx[node_token]
     num_nodes = len(token_to_idx)
     is_intranode = num_nodes == 1
-    return local_rank, node_idx, num_nodes, is_intranode
+    return local_rank, barrier_local_rank, node_idx, num_nodes, is_intranode
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -567,9 +566,13 @@ def initialize_uccl(
     except Exception:
         pass
 
-    local_rank, node_idx, num_nodes, detected_is_intranode = detect_group_topology(
-        group
-    )
+    (
+        local_rank,
+        barrier_local_rank,
+        node_idx,
+        num_nodes,
+        detected_is_intranode,
+    ) = detect_group_topology(group)
     if is_intranode is None:
         is_intranode = detected_is_intranode
     elif is_intranode and not detected_is_intranode:
@@ -593,6 +596,7 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            barrier_local_rank=barrier_local_rank,
         )
         proxies.append(proxy)
 

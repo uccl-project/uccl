@@ -74,7 +74,7 @@ def _run_server(args, ep, peer_rank: int, buffer_device: str):
         if args.normal:
             # Normal mode: register memory and send descriptors for each iteration
             for _iter_idx in range(args.iters + 1):  # +1 for warmup
-                size_per_block = sz // args.num_iovs
+                size_per_block = sz
                 buf_v = []
                 for _ in range(args.num_iovs):
                     buf = _make_buffer(
@@ -90,7 +90,7 @@ def _run_server(args, ep, peer_rank: int, buffer_device: str):
                 ep.deregister_memory(remote_descs)
         else:
             # Raw mode (default): register memory and send descriptors only once
-            size_per_block = sz // args.num_iovs
+            size_per_block = sz
             buf_v = []
             for _ in range(args.num_iovs):
                 buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
@@ -120,7 +120,7 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
 
     conn_id = None
     for sz in args.sizes:
-        size_per_block = sz // args.num_iovs
+        size_per_block = sz
 
         if args.normal:
             # Normal mode: setup for each iteration
@@ -174,7 +174,7 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
                 while not is_done:
                     _, is_done = ep.poll_async(transfer_id)
 
-                total += sz
+                total += sz * args.num_iovs
                 dist.barrier()
                 ep.deregister_memory(local_descs)
                 ep.remove_remote_endpoint(conn_id)
@@ -212,7 +212,7 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
                 is_done = False
                 while not is_done:
                     _, is_done = ep.poll_async(transfer_id)
-                total += sz
+                total += sz * args.num_iovs
 
             elapsed = time.perf_counter() - start
             dist.barrier()
@@ -222,7 +222,7 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
             f"[Client/{mode.upper()}] {_pretty(sz):>8} : "
             f"{(total * 8) / elapsed / 1e9:6.2f} Gbps | "
             f"{total / elapsed / 1e9:6.2f} GB/s | "
-            f"{elapsed / args.iters:6.6f} s"
+            f"{(elapsed / args.iters) * 1e6:8.2f} us"
         )
 
     # Clean up connection once after all sizes (raw mode reuses it across sizes)
@@ -318,20 +318,28 @@ def main():
         "--sizes",
         type=parse_sizes,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            67108864,
-            104857600,
         ],
         help="Comma-separated list of message sizes in bytes",
     )
-    p.add_argument("--iters", type=int, default=50, help="Number of iterations")
+    p.add_argument("--iters", type=int, default=128, help="Number of iterations")
     p.add_argument(
         "--num-iovs",
         type=int,

@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule update --init --recursive thirdparty/nccl
-          rsync -az --delete \
+          rsync -az --exclude .venv --exclude .git --delete \
             -e "ssh -o BatchMode=yes" \
             ./ep ./collective/rdma ./p2p \
             ./ l4-sky-test-01:/home/skytestuser/uccl-test/
