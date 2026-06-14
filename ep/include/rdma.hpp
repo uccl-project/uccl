@@ -379,6 +379,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
 
+// Returns true if at least one IB verbs device is visible on this host.
+bool has_any_nic();
+
 #ifdef USE_DMABUF
 // Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
 // Must be called before Proxy::destroy() frees ctx.mr / ctx.pd / ctx.context.

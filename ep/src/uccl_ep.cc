@@ -290,7 +290,7 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
   CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
 #else
   bool const use_host_alloc =
-      num_rdma_bytes > 0 &&
+      num_rdma_bytes > 0 && has_any_nic() &&
       !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
   if (!use_host_alloc) {
     CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
@@ -1285,8 +1285,12 @@ class Buffer {
     check_boundary(ptr1, count1 * sizeof(int));
 
     auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-    uccl::internode_ll::clean_low_latency_buffer(ptr0, count0, ptr1, count1,
-                                                 stream);
+    EP_HOST_ASSERT(barrier_signal_ptrs_gpu != nullptr &&
+                   "clean_low_latency_buffer requires barrier_signal_ptrs_gpu "
+                   "to be initialized via Buffer::sync(...)");
+    uccl::internode_ll::clean_low_latency_buffer(
+        ptr0, count0, ptr1, count1, barrier_signal_ptrs_gpu, nvl_rank,
+        num_nvl_ranks, stream);
   }
 
   std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
@@ -1304,21 +1308,7 @@ class Buffer {
                        bool use_fp8, bool round_scale, bool use_ue8m0,
                        bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
-    // Handle empty token case: when x_rows == 0, this rank has no tokens
-    // to dispatch. PyTorch returns data_ptr() == 0 for zero-element tensors,
-    // so x_ptr and topk_idx_ptr will legitimately be 0.
-    if (x_rows == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else {
-        stream_wait(compute_stream, comm_stream);
-      }
-      std::optional<std::function<void()>> hook;
-      return {event, hook};
-    }
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0);
+    EP_HOST_ASSERT(x_rows == 0 || (x_ptr != 0 && topk_idx_ptr != 0));
     EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
     EP_HOST_ASSERT(packed_recv_src_info_ptr != 0 &&
                    packed_recv_layout_range_ptr != 0);
@@ -1429,22 +1419,11 @@ class Buffer {
       int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
       int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
-    // Handle empty token case: when topk_rows == 0, this rank dispatched
-    // no tokens so there is nothing to combine. Return early.
-    if (topk_rows == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else if (not return_recv_hook) {
-        stream_wait(compute_stream, comm_stream);
-      }
-      std::optional<std::function<void()>> hook;
-      return {event, hook};
-    }
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
-    EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
-    EP_HOST_ASSERT(out_ptr != 0);
+    EP_HOST_ASSERT(topk_rows == 0 ||
+                   (x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0));
+    EP_HOST_ASSERT(topk_rows == 0 ||
+                   (src_info_ptr != 0 && layout_range_ptr != 0));
+    EP_HOST_ASSERT(topk_rows == 0 || out_ptr != 0);
     if (overlap) {
       throw std::runtime_error(
           "low_latency_combine(overlap=true) is not implemented yet. "
@@ -1952,6 +1931,7 @@ NB_MODULE(ep, m) {
         return true;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return true;
         return can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
@@ -1968,6 +1948,7 @@ NB_MODULE(ep, m) {
         return false;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return false;
         return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
