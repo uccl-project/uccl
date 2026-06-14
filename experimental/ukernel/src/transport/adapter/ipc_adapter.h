@@ -20,8 +20,12 @@ namespace Transport {
 
 class Communicator;
 
+// Signal and DataPut share the same SHM region but use independent
+// completion counters to prevent tag reuse or sequence interference
+// across ping-pong iterations where user tags (e.g., 1, 2) alternate.
 struct IpcDataCompletion {
   std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
+  std::atomic<uint64_t> last_signal[2];     // independent signal counter
 };
 
 class IpcAdapter final : public TransportAdapter {
@@ -32,6 +36,8 @@ class IpcAdapter final : public TransportAdapter {
 
   uint64_t next_send_match_seq(int peer);
   uint64_t next_recv_match_seq(int peer);
+  uint64_t next_send_signal_seq(int peer);
+  uint64_t next_recv_signal_seq(int peer);
 
   bool ensure_put_path(PeerConnectSpec const&) override;
   bool ensure_wait_path(PeerConnectSpec const&) override;
@@ -89,6 +95,7 @@ class IpcAdapter final : public TransportAdapter {
 
   std::mutex seq_mu_;
   std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
+  std::vector<std::array<uint64_t, 2>> signal_seqs_;  // [peer][0]=send, [1]=recv
 
   std::string ns_;
   mutable std::mutex dir_mu_;

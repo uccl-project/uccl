@@ -221,8 +221,6 @@ class Communicator {
     switch (comm_->peer_transport_kind(peer_rank)) {
       case PeerTransportKind::Ipc:
         return "ipc";
-      case PeerTransportKind::Uccl:
-        return "uccl";
       case PeerTransportKind::Tcp:
         return "tcp";
       case PeerTransportKind::Rdma:

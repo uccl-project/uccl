@@ -41,9 +41,6 @@ static PreferredTransport parse_transport(char const* value) {
 }
 
 static int throughput_window_for(PeerTransportKind kind) {
-  if (kind == PeerTransportKind::Uccl) {
-    return kUcclThroughputWindow;
-  }
   if (kind == PeerTransportKind::Rdma) {
     return kUcclThroughputWindow;
   }
@@ -212,7 +209,7 @@ static bool wait_remote_recv_buffers(
   for (size_t i = 0; i < recv_slots; ++i) {
     uint32_t const buffer_id =
         kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
-    if ((kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma) &&
+    if (kind == PeerTransportKind::Rdma &&
         !comm.wait_mr(peer_rank, buffer_id)) {
       return false;
     }
@@ -231,8 +228,7 @@ static unsigned submit_send(Communicator& comm, int peer_rank,
                             std::vector<uint32_t> const& recv_buffer_ids,
                             int slot) {
   uint32_t remote_id = 0;
-  if (kind == PeerTransportKind::Ipc || kind == PeerTransportKind::Uccl ||
-      kind == PeerTransportKind::Rdma) {
+  if (kind == PeerTransportKind::Ipc || kind == PeerTransportKind::Rdma) {
     remote_id = recv_buffer_ids.at(static_cast<size_t>(slot));
   }
   return comm.put_async(peer_rank, local_send_mr_id, 0,

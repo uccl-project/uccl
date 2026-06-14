@@ -29,7 +29,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp, Rdma };
+enum class PeerTransportKind { Unknown, Ipc, Tcp, Rdma };
 
 struct CommunicatorMeta;
 

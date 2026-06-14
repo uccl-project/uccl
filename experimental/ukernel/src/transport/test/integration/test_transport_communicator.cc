@@ -95,7 +95,7 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
           "client reg_mr failed");
   uint32_t remote_recv_buffer_id = 0;
   auto peer_kind = comm->peer_transport_kind(kServerRank);
-  if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl) {
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Rdma) {
     require(comm->wait_mr(kServerRank, kServerRecvBufferId),
             "client wait_mr failed");
     (void)comm->get_mr(kServerRank, kServerRecvBufferId);

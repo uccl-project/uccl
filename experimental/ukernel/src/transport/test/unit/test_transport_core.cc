@@ -149,8 +149,8 @@ void test_peer_transport_kind() {
   local.rdma_capable = true;
   remote.rdma_capable = true;
   require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, remote) ==
-              PeerTransportKind::Uccl,
-          "different host_id should resolve to UCCL");
+              PeerTransportKind::Rdma,
+          "different host_id should resolve to RDMA");
 
   cfg.preferred_transport = UKernel::Transport::PreferredTransport::Ipc;
   require(throws([&] {
@@ -169,8 +169,8 @@ void test_peer_transport_kind() {
   same.rdma_capable = true;
   require(
       UKernel::Transport::resolve_peer_transport_kind(cfg, local, same) ==
-          PeerTransportKind::Uccl,
-      "preferred UCCL transport should use UCCL when peers are RDMA-capable");
+          PeerTransportKind::Rdma,
+      "preferred UCCL transport should use RDMA when peers are RDMA-capable");
 }
 
 void test_shm_ack_filtering() {

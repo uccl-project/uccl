@@ -497,15 +497,12 @@ Communicator::ResolvedPeer Communicator::resolve_peer(int rank, PeerTransportKin
 
   if (transport != PeerTransportKind::Unknown) {
     // Explicit transport: validate compatibility
-    if (transport == PeerTransportKind::Ipc || transport == PeerTransportKind::Uccl ||
+    if (transport == PeerTransportKind::Ipc ||
         transport == PeerTransportKind::Tcp || transport == PeerTransportKind::Rdma) {
       bool same_host_val = (resolved.local_meta.host_id == resolved.remote_meta.host_id);
       bool rdma_capable_val = (resolved.local_meta.rdma_capable && resolved.remote_meta.rdma_capable);
       if (transport == PeerTransportKind::Ipc && !same_host_val) {
         throw std::invalid_argument("IPC transport requires same-host peer");
-      }
-      if (transport == PeerTransportKind::Uccl && !rdma_capable_val) {
-        throw std::invalid_argument("Uccl transport requires RDMA-capable peers");
       }
       if (transport == PeerTransportKind::Rdma && !rdma_capable_val) {
         throw std::invalid_argument("Rdma transport requires RDMA-capable peers");
@@ -586,31 +583,7 @@ bool Communicator::ensure_path(int rank, bool is_put, PeerTransportKind transpor
     return try_fallback_tcp_accept(rank, resolved.local_meta);
   };
 
-  if (resolved.kind == PeerTransportKind::Uccl) {
-    auto& uccl = ensure_uccl_adapter(resolved.local_meta);
-    bool ready = is_put ? uccl.has_put_path(rank) : uccl.has_wait_path(rank);
-    if (!ready) {
-      int dev = uccl.get_best_dev_idx(local_gpu_idx_);
-      if (dev < 0) return fallback();
-      UCCLP2PInfo remote;
-      if (!exchange_uccl_peer_info(rank, uccl, &remote)) return fallback();
-      PeerConnectSpec spec{};
-      spec.peer_rank = rank;
-      spec.type = conn_type;
-      spec.detail =
-          UcclPeerConnectSpec{remote.ip,      remote.port,    dev,
-                              local_gpu_idx_, remote.dev_idx, remote.gpu_idx};
-      if (!(is_put ? uccl.ensure_put_path(spec)
-                   : uccl.ensure_wait_path(spec))) {
-        return fallback();
-      }
-    }
-    is_put ? mark_put_path_ready(rank, PeerTransportKind::Uccl)
-           : mark_wait_path_ready(rank, PeerTransportKind::Uccl);
-    register_existing_local_mrs_with_uccl();
-    return true;
-  }
-
+  // UCCL transport removed; fall through to RDMA.
   if (resolved.kind == PeerTransportKind::Rdma) {
     auto& rdma = ensure_rdma_adapter(resolved.local_meta);
     bool ready = is_put ? rdma.has_put_path(rank) : rdma.has_wait_path(rank);
@@ -813,8 +786,6 @@ int Communicator::peer_gpu_idx(int rank) const {
 
 TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
   switch (kind) {
-    case PeerTransportKind::Uccl:
-      return uccl_adapter_.get();
     case PeerTransportKind::Tcp:
       return tcp_adapter_.get();
     case PeerTransportKind::Ipc:
@@ -990,13 +961,6 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
     return rid;
   }
 
-  // UCCL RDMA
-  if (kind == PeerTransportKind::Uccl) {
-    if (!ensure_uccl_memory_registered(src_buf, local_ptr, bytes)) return 0;
-    if (!adapter->put_async(peer, local_ptr, src_buf, nullptr, 0, bytes, rid)) return 0;
-    return rid;
-  }
-
   // RDMA
   if (kind == PeerTransportKind::Rdma) {
     if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return 0;
@@ -1029,12 +993,10 @@ unsigned Communicator::wait_async(int peer, uint64_t tag, PeerTransportKind tran
 
   unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
-  if (kind == PeerTransportKind::Ipc) {
-    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(peer);
-    if (!adapter->wait_async(peer, match_seq, std::nullopt, rid)) return 0;
-    return rid;
-  }
-
+  // IPC signal wait uses its own internal signal sequence counter; the
+  // adapter distinguishes SignalWait from DataWait by the presence of
+  // a WaitTarget, so passing std::nullopt here correctly triggers
+  // SignalWait across all transports.
   if (!adapter->wait_async(peer, tag, std::nullopt, rid)) return 0;
   return rid;
 }
@@ -1048,10 +1010,15 @@ unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
 
   unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
-  // IPC: still uses match_seq pattern
+  // IPC DataWait: pass a non-null target so adapter uses the DataWait
+  // path (next_recv_match_seq + last_completed counter). The
+  // local_ptr/len inside the target are not consumed by the IPC
+  // recv_one; the send_worker already performed the GPU copy.
   if (kind == PeerTransportKind::Ipc) {
-    uint64_t match_seq = ipc_adapter_->next_recv_match_seq(peer);
-    if (!adapter->wait_async(peer, match_seq, std::nullopt, rid)) return 0;
+    TransportAdapter::WaitTarget target;
+    target.local_ptr = nullptr;
+    target.len = 0;
+    if (!adapter->wait_async(peer, tag, std::move(target), rid)) return 0;
     return rid;
   }
 
@@ -1377,12 +1344,25 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
       continue;
     }
 
-    // New generation — always accept regardless of valid flag.
-    // The valid flag only matters for get_ipc() later (throws for invalid IPCs).
-    if (info.generation != last_gen) break;
+    // New generation — update tracking and check validity.
+    // If the entry is invalid (e.g. a dereg_ipc publish that raced
+    // ahead of the next reg_ipc), skip it and keep polling for a
+    // valid one.
+    if (info.generation != last_gen) {
+      std::lock_guard<std::mutex> lk(mr_gen_mu_);
+      last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
+          info.generation;
+      last_gen = info.generation;
+      if (!info.valid) {
+        continue;  // stale deregister entry — wait for next publish
+      }
+      break;
+    }
 
-    // Same generation — already processed and registered (even if valid=false).
-    return true;
+    // Same generation — the remote peer may not have published a
+    // new entry yet (e.g., still running the previous iteration).
+    // Continue polling until a generation change is observed.
+    continue;
   }
 
   IPCItem state{};

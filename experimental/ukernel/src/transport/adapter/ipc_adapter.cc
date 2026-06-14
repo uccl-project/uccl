@@ -29,7 +29,9 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
                        int local_gpu_idx)
     : seqs_(comm->world_size(),
-                               std::array<uint64_t, 2>{1, 1}),
+                                std::array<uint64_t, 2>{1, 1}),
+       signal_seqs_(comm->world_size(),
+                                std::array<uint64_t, 2>{1, 1}),
       ns_(std::move(ring_namespace)),
       dir_state_(comm->world_size()),
       comps_(comm->world_size()),
@@ -222,6 +224,24 @@ uint64_t IpcAdapter::next_recv_match_seq(int rank) {
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
+uint64_t IpcAdapter::next_send_signal_seq(int rank) {
+  std::lock_guard<std::mutex> lk(seq_mu_);
+  int src = comm_->rank();
+  int dst = rank;
+  size_t dir = (src < dst) ? 0u : 1u;
+  uint64_t counter = signal_seqs_[rank][dir]++;
+  return (counter << 1) | static_cast<uint64_t>(dir);
+}
+
+uint64_t IpcAdapter::next_recv_signal_seq(int rank) {
+  std::lock_guard<std::mutex> lk(seq_mu_);
+  int src = rank;
+  int dst = comm_->rank();
+  size_t dir = (src < dst) ? 0u : 1u;
+  uint64_t counter = signal_seqs_[rank][dir]++;
+  return (counter << 1) | static_cast<uint64_t>(dir);
+}
+
 bool IpcAdapter::has_put_path(int peer_rank) const {
   if (peer_rank < 0 || peer_rank >= comm_->world_size()) return false;
   std::lock_guard<std::mutex> lk(dir_mu_);
@@ -246,18 +266,19 @@ unsigned IpcAdapter::put_async(int peer, void* local_ptr, uint32_t,
   return 1;
 }
 
-unsigned IpcAdapter::signal_async(int peer, uint64_t tag, unsigned comm_rid) {
+unsigned IpcAdapter::signal_async(int peer, uint64_t /*tag*/, unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  RingElem e{comm_rid, peer, ReqType::Signal, tag, nullptr, nullptr, 0};
+  RingElem e{comm_rid, peer, ReqType::Signal, next_send_signal_seq(peer),
+             nullptr, nullptr, 0};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
 
-unsigned IpcAdapter::wait_async(int peer, uint64_t tag,
+unsigned IpcAdapter::wait_async(int peer, uint64_t /*tag*/,
                                 std::optional<WaitTarget> target,
                                 unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
-  uint64_t seq = target ? next_recv_match_seq(peer) : tag;
+  uint64_t seq = target ? next_recv_match_seq(peer) : next_recv_signal_seq(peer);
   void* ptr = target ? target->local_ptr : nullptr;
   size_t len = target ? target->len : 0;
   ReqType t = target ? ReqType::DataWait : ReqType::SignalWait;
@@ -284,7 +305,7 @@ void IpcAdapter::send_worker() {
       publish_completion(e.comm_rid, !ok);
     } else if (e.type == ReqType::Signal) {
       size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
-      comps_[e.peer].remote->last_completed[dir].store(
+      comps_[e.peer].remote->last_signal[dir].store(
           e.seq, std::memory_order_release);
       publish_completion(e.comm_rid, false);
     } else {
@@ -359,7 +380,10 @@ bool IpcAdapter::recv_one(RingElem* e) {
 
   size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
   uint64_t expected = e->seq;
-  auto* counter = &comps_[e->peer].local->last_completed[dir];
+  auto& pc = comps_[e->peer];
+  auto* counter = (e->type == ReqType::SignalWait)
+                      ? &pc.local->last_signal[dir]
+                      : &pc.local->last_completed[dir];
 
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(kIpcControlTimeoutMs);
