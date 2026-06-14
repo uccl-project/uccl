@@ -25,7 +25,19 @@ class Communicator;
 // across ping-pong iterations where user tags (e.g., 1, 2) alternate.
 struct IpcDataCompletion {
   std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
-  std::atomic<uint64_t> last_signal[2];     // independent signal counter
+};
+
+static constexpr size_t kSignalRingSize = 4096;  // power of two
+
+struct SignalSlot {
+  std::atomic<bool> ready{false};
+  uint64_t tag{0};
+};
+
+struct PeerSignalRing {
+  SignalSlot slots[kSignalRingSize];
+  std::atomic<uint64_t> write_idx{0};
+  std::atomic<uint64_t> read_idx{0};
 };
 
 class IpcAdapter final : public TransportAdapter {
@@ -36,25 +48,27 @@ class IpcAdapter final : public TransportAdapter {
 
   uint64_t next_send_match_seq(int peer);
   uint64_t next_recv_match_seq(int peer);
-  uint64_t next_send_signal_seq(int peer);
-  uint64_t next_recv_signal_seq(int peer);
 
   bool ensure_put_path(PeerConnectSpec const&) override;
   bool ensure_wait_path(PeerConnectSpec const&) override;
   bool has_put_path(int peer) const override;
   bool has_wait_path(int peer) const override;
 
-  unsigned put_async(int peer, void* local_ptr, uint32_t local_buf,
-                     void* remote_ptr, uint32_t remote_buf, size_t len,
-                     unsigned comm_rid) override;
-  unsigned signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
-  unsigned wait_async(int peer, uint64_t tag, std::optional<WaitTarget>,
-                      unsigned comm_rid) override;
+  unsigned send_put_async(int peer, void* local_ptr, uint32_t local_buf,
+                          void* remote_ptr, uint32_t remote_buf, size_t len,
+                          unsigned comm_rid) override;
+  unsigned send_signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
+  unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
+                             unsigned comm_rid) override;
+
+  // Drain signal tags from the peer's shared-memory signal ring.
+  // Called directly by Communicator::drain_ipc_signals().
+  size_t drain_signal_tags(int peer_rank, uint64_t* tags, size_t max);
 
   void close_comp(int peer_rank);
 
  private:
-  enum class ReqType : uint8_t { DataPut, DataWait, Signal, SignalWait };
+  enum class ReqType : uint8_t { DataPut, DataWait };
 
   struct RingElem {
     unsigned comm_rid;
@@ -69,6 +83,7 @@ class IpcAdapter final : public TransportAdapter {
   struct PeerComp {
     IpcDataCompletion* local = nullptr;
     IpcDataCompletion* remote = nullptr;
+    PeerSignalRing* signal_ring = nullptr;  // in same SHM as local
     int shm_fd = -1;
     size_t shm_size = 0;
     std::string shm_name;
@@ -95,7 +110,6 @@ class IpcAdapter final : public TransportAdapter {
 
   std::mutex seq_mu_;
   std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
-  std::vector<std::array<uint64_t, 2>> signal_seqs_;  // [peer][0]=send, [1]=recv
 
   std::string ns_;
   mutable std::mutex dir_mu_;

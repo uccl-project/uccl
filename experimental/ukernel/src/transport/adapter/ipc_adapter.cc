@@ -27,16 +27,14 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 }  // namespace
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
-                       int local_gpu_idx)
+                        int local_gpu_idx)
     : seqs_(comm->world_size(),
-                                std::array<uint64_t, 2>{1, 1}),
-       signal_seqs_(comm->world_size(),
-                                std::array<uint64_t, 2>{1, 1}),
-      ns_(std::move(ring_namespace)),
-      dir_state_(comm->world_size()),
-      comps_(comm->world_size()),
-      comm_(comm),
-      gpu_id_(local_gpu_idx) {
+                                 std::array<uint64_t, 2>{1, 1}),
+       ns_(std::move(ring_namespace)),
+       dir_state_(comm->world_size()),
+       comps_(comm->world_size()),
+       comm_(comm),
+       gpu_id_(local_gpu_idx) {
   send_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
   if (send_ring_ == nullptr || recv_ring_ == nullptr) {
@@ -119,7 +117,7 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
 
   pc.shm_name = comp_shm_name(peer_rank);
   shm_unlink(pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
-  size_t sz = sizeof(IpcDataCompletion);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
   if (ftruncate(fd, static_cast<off_t>(sz)) != 0) {
@@ -134,6 +132,7 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   pc.shm_fd = fd;
   pc.shm_size = sz;
   pc.local = new (ptr) IpcDataCompletion();
+  pc.signal_ring = new (static_cast<char*>(ptr) + sizeof(IpcDataCompletion)) PeerSignalRing();
   return true;
 }
 
@@ -146,7 +145,7 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
   std::string remote_name = Format(
       "/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  size_t sz = sizeof(IpcDataCompletion);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
   while (true) {
     int fd = shm_open(remote_name.c_str(), O_RDWR, 0666);
     if (fd >= 0) {
@@ -224,24 +223,6 @@ uint64_t IpcAdapter::next_recv_match_seq(int rank) {
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
-uint64_t IpcAdapter::next_send_signal_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
-  int src = comm_->rank();
-  int dst = rank;
-  size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = signal_seqs_[rank][dir]++;
-  return (counter << 1) | static_cast<uint64_t>(dir);
-}
-
-uint64_t IpcAdapter::next_recv_signal_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
-  int src = rank;
-  int dst = comm_->rank();
-  size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = signal_seqs_[rank][dir]++;
-  return (counter << 1) | static_cast<uint64_t>(dir);
-}
-
 bool IpcAdapter::has_put_path(int peer_rank) const {
   if (peer_rank < 0 || peer_rank >= comm_->world_size()) return false;
   std::lock_guard<std::mutex> lk(dir_mu_);
@@ -256,9 +237,9 @@ bool IpcAdapter::has_wait_path(int peer_rank) const {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-unsigned IpcAdapter::put_async(int peer, void* local_ptr, uint32_t,
-                               void* remote_ptr, uint32_t, size_t bytes,
-                               unsigned comm_rid) {
+unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
+                                    void* remote_ptr, uint32_t, size_t bytes,
+                                    unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, ReqType::DataPut, next_send_match_seq(peer),
              local_ptr, remote_ptr, bytes};
@@ -266,26 +247,36 @@ unsigned IpcAdapter::put_async(int peer, void* local_ptr, uint32_t,
   return 1;
 }
 
-unsigned IpcAdapter::signal_async(int peer, uint64_t /*tag*/, unsigned comm_rid) {
+unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag, unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
 
-  // Inline fast path: signal is just an atomic store to shared memory.
-  // Bypassing jring avoids ~10us of enqueue + worker dequeue overhead
-  // that dominates small-message IPC ping-pong latency.
-  size_t dir = (comm_->rank() < peer) ? 0u : 1u;
-  uint64_t seq = next_send_signal_seq(peer);
-  comps_[peer].remote->last_signal[dir].store(seq, std::memory_order_release);
+  // Inline fast path: write tag to remote peer's signal ring in SHM.
+  auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
+      reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
+  uint64_t w = remote_ring->write_idx.load(std::memory_order_relaxed);
+  uint64_t r = remote_ring->read_idx.load(std::memory_order_acquire);
+
+  // Back-pressure: spin until slot is free.
+  while (w - r >= kSignalRingSize) {
+    r = remote_ring->read_idx.load(std::memory_order_acquire);
+    std::this_thread::yield();
+  }
+
+  size_t idx = w & (kSignalRingSize - 1);
+  remote_ring->slots[idx].tag = tag;
+  remote_ring->slots[idx].ready.store(true, std::memory_order_release);
+  remote_ring->write_idx.store(w + 1, std::memory_order_release);
   publish_completion(comm_rid, false);
   return 1;
 }
 
-unsigned IpcAdapter::wait_async(int peer, uint64_t /*tag*/,
-                                std::optional<WaitTarget> target,
-                                unsigned comm_rid) {
+unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
+                                     std::optional<WaitTarget> target,
+                                     unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
 
   if (target) {
-    // DataWait: GPU-copy completion — still through jring + recv_worker.
+    // DataWait: GPU-copy completion — through jring + recv_worker.
     uint64_t seq = next_recv_match_seq(peer);
     RingElem e{comm_rid, peer, ReqType::DataWait, seq,
                target->local_ptr, nullptr, target->len};
@@ -293,29 +284,38 @@ unsigned IpcAdapter::wait_async(int peer, uint64_t /*tag*/,
     return 1;
   }
 
-  // SignalWait inline fast path: poll shared memory counter directly.
-  // Same reason as signal_async — the operation is a single atomic load
-  // and jring overhead dominates small-message latency.
-  size_t dir = (peer < comm_->rank()) ? 0u : 1u;
-  uint64_t expected = next_recv_signal_seq(peer);
-  auto* counter = &comps_[peer].local->last_signal[dir];
-
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(kIpcControlTimeoutMs);
-  while (!stop_.load(std::memory_order_acquire) &&
-         std::chrono::steady_clock::now() < deadline) {
-    if (counter->load(std::memory_order_acquire) >= expected) {
-      publish_completion(comm_rid, false);
-      return 1;
-    }
-    std::this_thread::yield();
-  }
-  if (!stop_.load(std::memory_order_acquire)) {
-    std::cerr << "[ERROR] IPC recv timed out, peer " << peer
-              << " match_seq " << expected << std::endl;
-  }
+  // SignalWait: not handled by the IPC adapter inline; Communicator uses
+  // drain_signal_tags() to drain incoming signal tags.
   publish_completion(comm_rid, true);
   return 1;
+}
+
+size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags, size_t max) {
+  if (!has_wait_path(peer_rank)) return 0;
+  auto& pc = comps_[static_cast<size_t>(peer_rank)];
+  PeerSignalRing* ring = pc.signal_ring;
+  if (!ring) return 0;
+
+  uint64_t r = ring->read_idx.load(std::memory_order_relaxed);
+  size_t count = 0;
+
+  while (count < max) {
+    uint64_t w = ring->write_idx.load(std::memory_order_acquire);
+    if (r >= w) break;
+
+    size_t idx = r & (kSignalRingSize - 1);
+    if (!ring->slots[idx].ready.load(std::memory_order_acquire)) break;
+
+    tags[count] = ring->slots[idx].tag;
+    ring->slots[idx].ready.store(false, std::memory_order_release);
+    r++;
+    count++;
+  }
+
+  if (count > 0) {
+    ring->read_idx.store(r, std::memory_order_release);
+  }
+  return count;
 }
 
 void IpcAdapter::send_worker() {
@@ -350,8 +350,7 @@ void IpcAdapter::recv_worker() {
       std::this_thread::yield();
       continue;
     }
-    bool ok = (e.type == ReqType::DataWait || e.type == ReqType::SignalWait)
-                  ? recv_one(&e) : false;
+    bool ok = (e.type == ReqType::DataWait) ? recv_one(&e) : false;
     publish_completion(e.comm_rid, !ok);
   }
   RingElem drain;
@@ -364,7 +363,7 @@ bool IpcAdapter::send_one(RingElem* e) {
   void* src = e->local_ptr;
   void* dst = e->remote_ptr;
   if (!dst) {
-    std::cerr << "[ERROR] IPC put_async no remote_ptr\n";
+    std::cerr << "[ERROR] IPC send_put_async no remote_ptr\n";
     return false;
   }
 
@@ -413,19 +412,12 @@ bool IpcAdapter::send_one(RingElem* e) {
 }
 
 bool IpcAdapter::recv_one(RingElem* e) {
-  if (!e) return false;
-  if (e->type != ReqType::DataWait && e->type != ReqType::SignalWait)
-    return false;
+  if (!e || e->type != ReqType::DataWait) return false;
 
-  // SignalWait is now handled inline in wait_async. This jring path is
-  // retained as a compatibility fallback in case a SignalWait element
-  // still arrives via the ring (e.g., during path migration).
   size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
   uint64_t expected = e->seq;
   auto& pc = comps_[e->peer];
-  auto* counter = (e->type == ReqType::SignalWait)
-                      ? &pc.local->last_signal[dir]
-                      : &pc.local->last_completed[dir];
+  auto* counter = &pc.local->last_completed[dir];
 
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(kIpcControlTimeoutMs);

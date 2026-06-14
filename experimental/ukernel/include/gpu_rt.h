@@ -52,6 +52,8 @@
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuMemset cudaMemset
 #define gpuMemsetAsync cudaMemsetAsync
+#ifndef GPU_MEM_GET_ADDRESS_RANGE_DEFINED
+#define GPU_MEM_GET_ADDRESS_RANGE_DEFINED
 inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
                                         void* ptr) {
   if (ptr == nullptr) return cudaErrorInvalidValue;
@@ -63,6 +65,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
   }
   return static_cast<gpuError_t>(result);
 }
+#endif
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #define gpuErrorNotReady cudaErrorNotReady

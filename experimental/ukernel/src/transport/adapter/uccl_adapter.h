@@ -43,12 +43,12 @@ class UcclTransportAdapter final : public TransportAdapter {
   bool has_wait_path(int peer) const override;
   bool is_initialized() const { return endpoint_ != nullptr; }
 
-  unsigned put_async(int peer, void* local_ptr, uint32_t local_buf,
-                     void* remote_ptr, uint32_t remote_buf, size_t len,
-                     unsigned comm_rid) override;
-  unsigned signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
-  unsigned wait_async(int peer, uint64_t tag, std::optional<WaitTarget>,
-                      unsigned comm_rid) override;
+  unsigned send_put_async(int peer, void* local_ptr, uint32_t local_buf,
+                          void* remote_ptr, uint32_t remote_buf, size_t len,
+                          unsigned comm_rid) override;
+  unsigned send_signal_async(int peer, uint64_t tag, unsigned comm_rid) override;
+  unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
+                             unsigned comm_rid) override;
 
  private:
   enum class Kind : uint8_t { DataPut, DataWait, Signal, SignalWait };

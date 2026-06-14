@@ -38,11 +38,11 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
 
     unsigned rid = 0;
     if (c.kind == OpKind::Send) {
-      rid = comm_->put_async(static_cast<int>(c.dst_peer),
-                             c.src_buf, c.src_off,
-                             c.dst_buf, c.dst_off, c.bytes);
+      rid = comm_->send_put_async(static_cast<int>(c.dst_peer),
+                                   c.src_buf, c.src_off,
+                                   c.dst_buf, c.dst_off, c.bytes);
     } else if (c.kind == OpKind::Recv) {
-      rid = comm_->wait_async(static_cast<int>(c.src_peer), 0);
+      rid = comm_->wait_signal_async(static_cast<int>(c.src_peer), 0);
     } else {
       ++accepted; continue;
     }

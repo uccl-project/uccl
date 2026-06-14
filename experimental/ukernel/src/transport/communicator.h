@@ -31,6 +31,13 @@ struct CompletionResult {
   bool failed;
 };
 
+struct SignalCompletion {
+  unsigned rid;
+  uint64_t tag;
+  int peer;
+  bool failed;
+};
+
 class Communicator {
  public:
   Communicator(
@@ -49,23 +56,39 @@ class Communicator {
 
   // ── Async data / signal / wait (thin wrappers over adapter) ──
   //
-  // One-sided transports (IPC, RDMA, UCCL):
-  //   put_async() writes directly into remote memory. No matching wait needed.
-  //   signal_async(peer, tag) notifies the peer; peer calls wait(peer, tag).
+  // One-sided transports (IPC, RDMA):
+  //   send_put_async() writes directly into remote memory. No matching wait needed.
+  //   send_signal_async(peer, tag) notifies the peer; peer calls wait_signal_async(peer, tag).
   //
   // Two-sided transport (TCP):
-  //   Every put_async() MUST have a matching wait_async() on the peer.
+  //   Every send_put_async() MUST have a matching wait_signal_async() on the peer.
   //   TCP has no remote address space — data flows as a byte stream.
-  unsigned put_async(int peer, uint32_t src_buf, size_t src_off,
-                     uint32_t dst_buf, size_t dst_off, size_t bytes,
-                     PeerTransportKind transport = PeerTransportKind::Unknown);
-  unsigned signal_async(int peer, uint64_t tag,
-                        PeerTransportKind transport = PeerTransportKind::Unknown);
-  unsigned wait_async(int peer, uint64_t tag,
-                      PeerTransportKind transport = PeerTransportKind::Unknown);
-  unsigned wait_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
-                      PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned send_put_async(int peer, uint32_t src_buf, size_t src_off,
+                          uint32_t dst_buf, size_t dst_off, size_t bytes,
+                          PeerTransportKind transport = PeerTransportKind::Unknown);
+  unsigned send_signal_async(int peer, uint64_t tag,
+                             PeerTransportKind transport = PeerTransportKind::Unknown);
+
+  // ── Async signal wait (tag-based matching via Communicator table) ──
+  // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
+  // Matching is done in on_signal_received() (called by RdmaTransportAdapter
+  // poll_loop and by drain_ipc_signals for IPC).
+  // Completions are dequeued via try_complete_signals().
+  unsigned wait_signal_async(int peer, uint64_t tag,
+                             PeerTransportKind transport = PeerTransportKind::Unknown);
+  // Data wait (TCP DataWait): still blocking on recv completion.
+  unsigned wait_signal_async(int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
+                             PeerTransportKind transport = PeerTransportKind::Unknown);
+
+  // C++ advanced API, not exposed to Python binding.
   size_t try_complete(CompletionResult* results, size_t max);
+  // C++ advanced API, not exposed to Python binding.
+  size_t try_complete_signals(SignalCompletion* events, size_t max);
+
+  // Returns number of completed rids from the input array.
+  // Writes completed rids back into the first N positions of the array.
+  // For each rid: checks both completion_ring_ and signal_ring_.
+  size_t poll(unsigned* rids, size_t count);
 
   void set_oob_namespace(std::string ns);
   std::string oob_namespace() const;
@@ -140,6 +163,10 @@ class Communicator {
 
   TransportAdapter* get_adapter(PeerTransportKind kind);
 
+  friend class RdmaTransportAdapter;
+  void on_signal_received(int peer_rank, uint64_t tag);
+  void drain_ipc_signals();
+
   void register_existing_local_mrs_with_uccl();
   void register_existing_local_mrs_with_rdma();
   bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
@@ -163,7 +190,14 @@ class Communicator {
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
   jring_t* completion_ring_ = nullptr;
+  jring_t* signal_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
+
+  // Signal matching: peer → tag → vector<rid>
+  std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>> pending_signal_waits_;
+  // TCP signal completions go through the data ring; this maps rid → {peer, tag}.
+  std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
+  mutable std::mutex signal_waits_mu_;
 
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;

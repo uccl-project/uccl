@@ -155,63 +155,55 @@ class Communicator {
 
   // ── New async API ──
 
-  uint64_t put_async(int peer, uint32_t local_buf, size_t off = 0,
-                     size_t len = 0, uint32_t remote_buf = 0,
-                     size_t remote_off = 0) {
+  uint64_t send_put_async(int peer, uint32_t local_buf, size_t off = 0,
+                          size_t len = 0, uint32_t remote_buf = 0,
+                          size_t remote_off = 0) {
     if (len == 0) {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = buffer_sizes_.find(local_buf);
       if (it != buffer_sizes_.end()) len = it->second;
     }
-    return comm_->put_async(peer, local_buf, off, remote_buf, remote_off, len);
+    return comm_->send_put_async(peer, local_buf, off, remote_buf, remote_off, len);
   }
 
-  uint64_t signal_async(int peer, uint64_t tag) {
-    return comm_->signal_async(peer, tag);
+  uint64_t send_signal_async(int peer, uint64_t tag) {
+    return comm_->send_signal_async(peer, tag);
   }
 
-  uint64_t wait_async(int peer, uint64_t tag) {
-    return comm_->wait_async(peer, tag);
+  uint64_t wait_signal_async(int peer, uint64_t tag) {
+    return comm_->wait_signal_async(peer, tag);
   }
 
-  unsigned try_complete(unsigned* rids, size_t max) {
-    CompletionResult results[64];
-    size_t cap = max < 64 ? max : 64;
-    size_t n = comm_->try_complete(results, cap);
-    for (size_t i = 0; i < n; ++i) rids[i] = results[i].rid;
-    return static_cast<unsigned>(n);
+  std::vector<unsigned> poll_py(std::vector<unsigned> const& rids) {
+    std::vector<unsigned> rids_copy = rids;
+    size_t n = comm_->poll(rids_copy.data(), rids_copy.size());
+    rids_copy.resize(n);
+    return rids_copy;
   }
 
   // ── Blocking convenience wrappers ──
 
   void send(int peer, uint32_t src_buf, uint32_t dst_buf, size_t dst_off) {
     uint64_t rid =
-        put_async(peer, src_buf, 0, buffer_size(src_buf), dst_buf, dst_off);
+        send_put_async(peer, src_buf, 0, buffer_size(src_buf), dst_buf, dst_off);
     if (rid == 0)
-      throw std::runtime_error("put_async returned 0");
+      throw std::runtime_error("send_put_async returned 0");
     wait_one(static_cast<unsigned>(rid));
   }
 
   void signal(int peer, uint64_t tag) {
-    uint64_t rid = signal_async(peer, tag);
+    uint64_t rid = send_signal_async(peer, tag);
     if (rid == 0)
-      throw std::runtime_error("signal_async returned 0");
-    wait_one(static_cast<unsigned>(rid));
-  }
-
-  void wait_signal(int peer, uint64_t tag) {
-    uint64_t rid = wait_async(peer, tag);
-    if (rid == 0)
-      throw std::runtime_error("wait_async returned 0");
+      throw std::runtime_error("send_signal_async returned 0");
     wait_one(static_cast<unsigned>(rid));
   }
 
   void wait_data(int peer, uint64_t tag, uint32_t recv_buf, size_t off = 0,
                  size_t len = 0) {
     if (len == 0) len = buffer_size(recv_buf);
-    uint64_t rid = comm_->wait_async(peer, tag, recv_buf, off, len);
+    uint64_t rid = comm_->wait_signal_async(peer, tag, recv_buf, off, len);
     if (rid == 0)
-      throw std::runtime_error("wait_async(data) returned 0");
+      throw std::runtime_error("wait_signal_async(data) returned 0");
     wait_one(static_cast<unsigned>(rid));
   }
 
@@ -289,24 +281,15 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("buffer_id"))
       .def("wait_ipc", &Communicator::wait_ipc, nb::arg("peer_rank"),
            nb::arg("buffer_id"))
-      .def("put_async", &Communicator::put_async, nb::arg("peer"),
+      .def("send_put_async", &Communicator::send_put_async, nb::arg("peer"),
            nb::arg("local_buf"), nb::arg("off") = 0, nb::arg("len") = 0,
            nb::arg("remote_buf") = 0, nb::arg("remote_off") = 0)
-      .def("signal_async", &Communicator::signal_async, nb::arg("peer"),
+      .def("send_signal_async", &Communicator::send_signal_async, nb::arg("peer"),
            nb::arg("tag"))
-      .def("wait_async", &Communicator::wait_async, nb::arg("peer"),
+      .def("wait_signal_async", &Communicator::wait_signal_async, nb::arg("peer"),
            nb::arg("tag"))
-      .def("try_complete",
-           [](Communicator& self, size_t max = 64) {
-             std::vector<unsigned> rids(std::min(max, size_t(64)));
-             unsigned n = self.try_complete(rids.data(), rids.size());
-             rids.resize(n);
-             return rids;
-           },
-           nb::arg("max") = 64)
+      .def("poll", &Communicator::poll_py, nb::arg("rids"))
       .def("signal", &Communicator::signal, nb::arg("peer"), nb::arg("tag"))
-      .def("wait_signal", &Communicator::wait_signal, nb::arg("peer"),
-           nb::arg("tag"))
       .def("wait_data", &Communicator::wait_data, nb::arg("peer"),
            nb::arg("tag"), nb::arg("recv_buf"), nb::arg("off") = 0,
            nb::arg("len") = 0)

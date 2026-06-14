@@ -267,25 +267,25 @@ bool UcclTransportAdapter::has_wait_path(int peer) const {
   return peers_.count(peer) && peers_.at(peer).recv_flow;
 }
 
-unsigned UcclTransportAdapter::put_async(int peer, void* local_ptr,
-                                         uint32_t local_buf,
-                                         void*, uint32_t, size_t bytes,
-                                         unsigned comm_rid) {
+unsigned UcclTransportAdapter::send_put_async(int peer, void* local_ptr,
+                                              uint32_t local_buf,
+                                              void*, uint32_t, size_t bytes,
+                                              unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::DataPut, local_ptr, bytes, local_buf, 0};
   return enqueue_elem(send_ring_, e, stop_) ? 1 : 0;
 }
 
-unsigned UcclTransportAdapter::signal_async(int peer, uint64_t tag,
-                                            unsigned comm_rid) {
+unsigned UcclTransportAdapter::send_signal_async(int peer, uint64_t tag,
+                                                 unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::Signal, nullptr, 0, 0, tag};
   return enqueue_elem(send_ring_, e, stop_) ? 1 : 0;
 }
 
-unsigned UcclTransportAdapter::wait_async(int peer, uint64_t tag,
-                                          std::optional<WaitTarget> target,
-                                          unsigned comm_rid) {
+unsigned UcclTransportAdapter::wait_signal_async(int peer, uint64_t tag,
+                                               std::optional<WaitTarget> target,
+                                               unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
   if (target.has_value()) {
     RingElem e{comm_rid, peer, Kind::DataWait,

@@ -99,10 +99,18 @@ static bool wait_one(Communicator& comm, unsigned rid) {
   while (true) {
     CompletionResult results[16];
     size_t n = comm.try_complete(results, 16);
-    if (n == 0) std::this_thread::yield();
     for (size_t i = 0; i < n; ++i)
       if (results[i].rid == rid)
         return !results[i].failed;
+
+    // Also drain signal ring for wait_signal_async completions
+    SignalCompletion events[16];
+    size_t m = comm.try_complete_signals(events, 16);
+    for (size_t i = 0; i < m; ++i)
+      if (events[i].rid == rid)
+        return !events[i].failed;
+
+    if (n == 0 && m == 0) std::this_thread::yield();
   }
 }
 
@@ -231,8 +239,8 @@ static unsigned submit_send(Communicator& comm, int peer_rank,
   if (kind == PeerTransportKind::Ipc || kind == PeerTransportKind::Rdma) {
     remote_id = recv_buffer_ids.at(static_cast<size_t>(slot));
   }
-  return comm.put_async(peer_rank, local_send_mr_id, 0,
-                         remote_id, 0, msg_size);
+  return comm.send_put_async(peer_rank, local_send_mr_id, 0,
+                              remote_id, 0, msg_size);
 }
 
 static unsigned submit_recv(Communicator& comm, int peer_rank,
@@ -241,7 +249,7 @@ static unsigned submit_recv(Communicator& comm, int peer_rank,
   // One-sided transports: data arrives via RDMA write, no recv needed.
   // Return 0 as "nothing to complete" sentinel — wait_one(0) returns
   // true immediately.  TCP callers that need a real recv must call
-  // comm.wait_async() directly.
+  // comm.wait_signal_async() directly.
   return 0;
 }
 
@@ -253,7 +261,7 @@ static bool sync_before_bidirectional(
   // For two-sided transports (TCP), keep the existing send/recv pattern
   if (kind == PeerTransportKind::Tcp) {
     if (rank < peer_rank) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0, local_recv_mr_id, 0, msg_size);
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0, local_recv_mr_id, 0, msg_size);
       if (recv_req == 0) return false;
       if (!wait_one(comm, recv_req)) return false;
 
@@ -267,7 +275,7 @@ static bool sync_before_bidirectional(
       if (send_req == 0) return false;
       if (!wait_one(comm, send_req)) return false;
 
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0, local_recv_mr_id, 0, msg_size);
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0, local_recv_mr_id, 0, msg_size);
       if (recv_req == 0) return false;
       return wait_one(comm, recv_req);
     }
@@ -277,20 +285,20 @@ static bool sync_before_bidirectional(
   // Two-way barrier: lower rank signals first, higher rank waits then signals back
   if (rank < peer_rank) {
     // Sender: signal "I'm done with my phase" then wait for peer's signal
-    unsigned sig_req = comm.signal_async(peer_rank, /*tag=*/1);
+    unsigned sig_req = comm.send_signal_async(peer_rank, /*tag=*/1);
     if (sig_req == 0) return false;
     if (!wait_one(comm, sig_req)) return false;
 
-    unsigned wait_req = comm.wait_async(peer_rank, /*tag=*/2);
+    unsigned wait_req = comm.wait_signal_async(peer_rank, /*tag=*/2);
     if (wait_req == 0) return false;
     return wait_one(comm, wait_req);
   } else {
     // Receiver: wait for sender's signal then signal back
-    unsigned wait_req = comm.wait_async(peer_rank, /*tag=*/1);
+    unsigned wait_req = comm.wait_signal_async(peer_rank, /*tag=*/1);
     if (wait_req == 0) return false;
     if (!wait_one(comm, wait_req)) return false;
 
-    unsigned sig_req = comm.signal_async(peer_rank, /*tag=*/2);
+    unsigned sig_req = comm.send_signal_async(peer_rank, /*tag=*/2);
     if (sig_req == 0) return false;
     return wait_one(comm, sig_req);
   }
@@ -406,7 +414,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
       if (send_req == 0) { cleanup(); return; }
       wait_one(comm, send_req);
 
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) { cleanup(); return; }
       wait_one(comm, recv_req);
@@ -450,7 +458,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     wait_one(comm, send_req);
 
     if (transport_kind == PeerTransportKind::Tcp) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) { cleanup(); return; }
       wait_one(comm, recv_req);
@@ -491,7 +499,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                                transport_kind, remote_recv_buffer_ids, slot);
     if (req == 0) {
       fprintf(stderr,
-              "[Sender %d] put_async failed during throughput test at iter %d\n",
+              "[Sender %d] send_put_async failed during throughput test at iter %d\n",
               rank, i);
       cleanup();
       return;
@@ -569,7 +577,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     }
 
     if (transport_kind == PeerTransportKind::Tcp) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) {
         fprintf(stderr,
@@ -612,11 +620,11 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   // Final sync: prevent peer from exiting before we finish (for RDMA one-sided)
   if (transport_kind == PeerTransportKind::Rdma) {
     if (rank < peer_rank) {
-      unsigned s = comm.signal_async(peer_rank, 11);
-      if (s && wait_one(comm, s)) { unsigned w = comm.wait_async(peer_rank, 12); wait_one(comm, w); }
+      unsigned s = comm.send_signal_async(peer_rank, 11);
+      if (s && wait_one(comm, s)) { unsigned w = comm.wait_signal_async(peer_rank, 12); wait_one(comm, w); }
     } else {
-      unsigned w = comm.wait_async(peer_rank, 11);
-      if (w && wait_one(comm, w)) { unsigned s = comm.signal_async(peer_rank, 12); wait_one(comm, s); }
+      unsigned w = comm.wait_signal_async(peer_rank, 11);
+      if (w && wait_one(comm, w)) { unsigned s = comm.send_signal_async(peer_rank, 12); wait_one(comm, s); }
     }
   }
 
@@ -735,7 +743,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     warmup_touched[static_cast<size_t>(slot)] = 1;
 
     if (transport_kind == PeerTransportKind::Tcp) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) { cleanup(); return; }
       wait_one(comm, recv_req);
@@ -771,7 +779,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     latency_touched[static_cast<size_t>(slot)] = 1;
 
     if (transport_kind == PeerTransportKind::Tcp) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) { cleanup(); return; }
       wait_one(comm, recv_req);
@@ -812,11 +820,11 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
 
     if (transport_kind != PeerTransportKind::Tcp) continue;
 
-    unsigned req = comm.wait_async(peer_rank, /*tag=*/0,
+    unsigned req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                     local_recv_buffer_ids[slot], 0, msg_size);
     if (req == 0) {
       fprintf(stderr,
-              "[Receiver %d] wait_async failed during throughput test at iter %d\n",
+              "[Receiver %d] wait_signal_async failed during throughput test at iter %d\n",
               rank, i);
       cleanup();
       return;
@@ -865,7 +873,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     bidi_touched[static_cast<size_t>(slot)] = 1;
 
     if (transport_kind == PeerTransportKind::Tcp) {
-      unsigned recv_req = comm.wait_async(peer_rank, /*tag=*/0,
+      unsigned recv_req = comm.wait_signal_async(peer_rank, /*tag=*/0,
                                           local_recv_buffer_ids[slot], 0, msg_size);
       if (recv_req == 0) {
         fprintf(stderr,
@@ -915,11 +923,11 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   // Final sync: prevent peer from exiting before we finish (for RDMA one-sided)
   if (transport_kind == PeerTransportKind::Rdma) {
     if (rank < peer_rank) {
-      unsigned s = comm.signal_async(peer_rank, 11);
-      if (s && wait_one(comm, s)) { unsigned w = comm.wait_async(peer_rank, 12); wait_one(comm, w); }
+      unsigned s = comm.send_signal_async(peer_rank, 11);
+      if (s && wait_one(comm, s)) { unsigned w = comm.wait_signal_async(peer_rank, 12); wait_one(comm, w); }
     } else {
-      unsigned w = comm.wait_async(peer_rank, 11);
-      if (w && wait_one(comm, w)) { unsigned s = comm.signal_async(peer_rank, 12); wait_one(comm, s); }
+      unsigned w = comm.wait_signal_async(peer_rank, 11);
+      if (w && wait_one(comm, w)) { unsigned s = comm.send_signal_async(peer_rank, 12); wait_one(comm, s); }
     }
   }
 

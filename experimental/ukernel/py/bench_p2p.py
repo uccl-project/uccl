@@ -18,6 +18,15 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _poll_signal(comm, peer, tag):
+    """Wait for a specific signal tag using async API + polling."""
+    rid = comm.wait_signal_async(peer, tag)
+    if rid == 0:
+        raise RuntimeError(f"wait_signal_async({peer}, {tag}) returned 0")
+    while not comm.poll([rid]):
+        pass
+
+
 def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     """Benchmark ukernel_p2p send/recv bandwidth."""
     rank = comm.rank
@@ -50,7 +59,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             if selected_transport == "tcp":
                 comm.wait_data(peer, 1, recv_buffer_id, 0, recv_bytes)
             else:
-                comm.wait_signal(peer, 1)
+                _poll_signal(comm, peer, 1)
             comm.send(peer, send_buffer_id, recv_buffer_id)
             comm.signal(peer, 2)
         torch.cuda.synchronize()
@@ -59,7 +68,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             if selected_transport == "tcp":
                 comm.wait_data(peer, 1, recv_buffer_id, 0, recv_bytes)
             else:
-                comm.wait_signal(peer, 1)
+                _poll_signal(comm, peer, 1)
             comm.send(peer, send_buffer_id, recv_buffer_id)
             comm.signal(peer, 2)
         torch.cuda.synchronize()
@@ -70,7 +79,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             if selected_transport == "tcp":
                 comm.wait_data(peer, 2, recv_buffer_id, 0, recv_bytes)
             else:
-                comm.wait_signal(peer, 2)
+                _poll_signal(comm, peer, 2)
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
@@ -79,7 +88,7 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             if selected_transport == "tcp":
                 comm.wait_data(peer, 2, recv_buffer_id, 0, recv_bytes)
             else:
-                comm.wait_signal(peer, 2)
+                _poll_signal(comm, peer, 2)
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     if ipc_registered:

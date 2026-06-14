@@ -220,6 +220,15 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   }
   if (completion_ring_) ipc_adapter_->set_completion_ring(completion_ring_);
 
+  // Signal completion ring: on_signal_received pushes here,
+  // try_complete_signals dequeues. MP/MC for thread safety.
+  ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
+  if (ring_sz != (size_t)-1) {
+    signal_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (signal_ring_)
+      jring_init(signal_ring_, 2048, sizeof(SignalCompletion), 1, 1);
+  }
+
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_
             << " initialized: peer meta exchange success" << std::endl;
@@ -361,6 +370,9 @@ Communicator::~Communicator() {
   rdma_adapter_.reset();
   ipc_adapter_.reset();
 
+  if (signal_ring_) { free(signal_ring_); signal_ring_ = nullptr; }
+  if (completion_ring_) { free(completion_ring_); completion_ring_ = nullptr; }
+
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
 }
@@ -429,6 +441,7 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                             std::move(rdma_cfg));
     if (completion_ring_) rdma_adapter_->set_completion_ring(completion_ring_);
+    rdma_adapter_->set_communicator(this);
   }
   return *rdma_adapter_;
 }
@@ -940,9 +953,9 @@ bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
   return true;
 }
 
-unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
-                                  uint32_t dst_buf, size_t dst_off,
-                                  size_t bytes, PeerTransportKind transport) {
+unsigned Communicator::send_put_async(int peer, uint32_t src_buf, size_t src_off,
+                                      uint32_t dst_buf, size_t dst_off,
+                                      size_t bytes, PeerTransportKind transport) {
   if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
@@ -957,7 +970,7 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
 
   // TCP: adapter's send worker handles GPU→host bounce internally
   if (kind == PeerTransportKind::Tcp) {
-    if (!adapter->put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid)) return 0;
+    if (!adapter->send_put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid)) return 0;
     return rid;
   }
 
@@ -970,7 +983,7 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
         static_cast<uint64_t>(remote_mr.address) + dst_off);
     rdma_adapter_->register_remote_buffer(peer, remote_id, remote_mr.address,
                                           remote_mr.key);
-    if (!adapter->put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes, rid)) return 0;
+    if (!adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, remote_id, bytes, rid)) return 0;
     return rid;
   }
 
@@ -981,28 +994,40 @@ unsigned Communicator::put_async(int peer, uint32_t src_buf, size_t src_off,
     if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
                                         &remote_ptr, &remote_gpu)) return 0;
   }
-  if (!adapter->put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf, bytes, rid)) return 0;
+  if (!adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf, bytes, rid)) return 0;
   return rid;
 }
 
-unsigned Communicator::wait_async(int peer, uint64_t tag, PeerTransportKind transport) {
+unsigned Communicator::wait_signal_async(int peer, uint64_t tag, PeerTransportKind transport) {
   if (!ensure_path(peer, /*is_put=*/false, transport)) return 0;
-  PeerTransportKind kind = get_wait_transport_kind(peer, transport);
-  auto* adapter = get_adapter(kind);
-  if (!adapter) return 0;
 
+  PeerTransportKind kind = get_wait_transport_kind(peer, transport);
   unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
-  // IPC signal wait uses its own internal signal sequence counter; the
-  // adapter distinguishes SignalWait from DataWait by the presence of
-  // a WaitTarget, so passing std::nullopt here correctly triggers
-  // SignalWait across all transports.
-  if (!adapter->wait_async(peer, tag, std::nullopt, rid)) return 0;
+  // TCP: delegate to adapter's recv_worker (request/response model).
+  // Completion goes to the data completion ring; try_complete_signals
+  // also checks the data ring for TCP signal completions.
+  if (kind == PeerTransportKind::Tcp) {
+    auto* adapter = get_adapter(kind);
+    if (!adapter || !adapter->wait_signal_async(peer, tag, std::nullopt, rid)) return 0;
+    {
+      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      tcp_signal_rids_[rid] = {peer, tag};
+    }
+    return rid;
+  }
+
+  // IPC / RDMA: async tag-based matching via Communicator table.
+  {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    pending_signal_waits_[peer][tag].push_back(rid);
+  }
+
   return rid;
 }
 
-unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
-                                  size_t off, size_t len, PeerTransportKind transport) {
+unsigned Communicator::wait_signal_async(int peer, uint64_t tag, uint32_t recv_buf,
+                                        size_t off, size_t len, PeerTransportKind transport) {
   if (!ensure_path(peer, /*is_put=*/false, transport)) return 0;
   PeerTransportKind kind = get_wait_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
@@ -1018,7 +1043,7 @@ unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
     TransportAdapter::WaitTarget target;
     target.local_ptr = nullptr;
     target.len = 0;
-    if (!adapter->wait_async(peer, tag, std::move(target), rid)) return 0;
+    if (!adapter->wait_signal_async(peer, tag, std::move(target), rid)) return 0;
     return rid;
   }
 
@@ -1033,18 +1058,18 @@ unsigned Communicator::wait_async(int peer, uint64_t tag, uint32_t recv_buf,
   target.len = len;
   target.local_buffer_id = recv_buf;
 
-  if (!adapter->wait_async(peer, tag, std::move(target), rid)) return 0;
+  if (!adapter->wait_signal_async(peer, tag, std::move(target), rid)) return 0;
   return rid;
 }
 
-unsigned Communicator::signal_async(int peer, uint64_t tag, PeerTransportKind transport) {
+unsigned Communicator::send_signal_async(int peer, uint64_t tag, PeerTransportKind transport) {
   if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
   if (!adapter) return 0;
 
   unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
-  if (!adapter->signal_async(peer, tag, rid)) return 0;
+  if (!adapter->send_signal_async(peer, tag, rid)) return 0;
   return rid;
 }
 
@@ -1058,6 +1083,125 @@ size_t Communicator::try_complete(CompletionResult* results, size_t max) {
     count++;
   }
   return count;
+}
+
+size_t Communicator::try_complete_signals(SignalCompletion* events, size_t max) {
+  drain_ipc_signals();
+
+  size_t count = 0;
+  if (signal_ring_) {
+    while (count < max &&
+           jring_mc_dequeue_bulk(signal_ring_, events + count, 1, nullptr) == 1) {
+      ++count;
+    }
+  }
+
+  // Drain data completion ring for TCP signal completions.
+  if (completion_ring_ && count < max) {
+    CompletionEvent ce;
+    {
+      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      while (count < max && jring_mc_dequeue_bulk(completion_ring_, &ce, 1, nullptr) == 1) {
+        auto it = tcp_signal_rids_.find(ce.rid);
+        if (it != tcp_signal_rids_.end()) {
+          events[count].rid = ce.rid;
+          events[count].tag = it->second.second;
+          events[count].peer = it->second.first;
+          events[count].failed = (ce.failed != 0);
+          tcp_signal_rids_.erase(it);
+          ++count;
+        } else {
+          // Non-signal completion — re-enqueue.
+          jring_mp_enqueue_bulk(completion_ring_, &ce, 1, nullptr);
+        }
+      }
+    }
+  }
+
+  return count;
+}
+
+void Communicator::drain_ipc_signals() {
+  if (!ipc_adapter_) return;
+  for (int peer = 0; peer < world_size_; ++peer) {
+    if (peer == global_rank_) continue;
+    uint64_t tags[64];
+    size_t n = ipc_adapter_->drain_signal_tags(peer, tags, 64);
+    for (size_t i = 0; i < n; ++i) {
+      on_signal_received(peer, tags[i]);
+    }
+  }
+}
+
+size_t Communicator::poll(unsigned* rids, size_t count) {
+  drain_ipc_signals();
+
+  size_t completed = 0;
+
+  // Check data completion ring
+  if (completion_ring_ && completed < count) {
+    CompletionEvent ce;
+    std::vector<CompletionEvent> stash;
+    while (completed < count &&
+           jring_mc_dequeue_bulk(completion_ring_, &ce, 1, nullptr) == 1) {
+      // Check if this rid is in the input array
+      bool found = false;
+      for (size_t i = 0; i < count; ++i) {
+        if (rids[i] == ce.rid) {
+          // Write completed rid to front
+          rids[completed++] = ce.rid;
+          found = true;
+          break;
+        }
+      }
+      if (!found) stash.push_back(ce);
+    }
+    for (auto& ev : stash)
+      jring_mp_enqueue_bulk(completion_ring_, &ev, 1, nullptr);
+  }
+
+  // Check signal completion ring
+  if (signal_ring_ && completed < count) {
+    SignalCompletion sc;
+    std::vector<SignalCompletion> stash;
+    while (completed < count &&
+           jring_mc_dequeue_bulk(signal_ring_, &sc, 1, nullptr) == 1) {
+      bool found = false;
+      for (size_t i = 0; i < count; ++i) {
+        if (rids[i] == sc.rid) {
+          rids[completed++] = sc.rid;
+          found = true;
+          break;
+        }
+      }
+      if (!found) stash.push_back(sc);
+    }
+    for (auto& ev : stash)
+      jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+  }
+
+  return completed;
+}
+
+void Communicator::on_signal_received(int peer, uint64_t tag) {
+  std::lock_guard<std::mutex> lk(signal_waits_mu_);
+
+  auto it = pending_signal_waits_.find(peer);
+  if (it == pending_signal_waits_.end()) return;
+  auto it2 = it->second.find(tag);
+  if (it2 == it->second.end()) return;
+
+  SignalCompletion ev;
+  ev.peer = peer;
+  ev.tag = tag;
+  ev.failed = false;
+
+  for (unsigned rid : it2->second) {
+    ev.rid = rid;
+    jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+  }
+
+  it->second.erase(it2);
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,

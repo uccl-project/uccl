@@ -350,9 +350,9 @@ int main(int argc, char** argv) {
     std::vector<double> latencies;
     for (int iter = 0; iter < kLatencyIters; ++iter) {
       auto t0 = std::chrono::steady_clock::now();
-      unsigned rid = comm->put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+      unsigned rid = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
       if (!rid) {
-        std::fprintf(stderr, "[p2p-perf] put_async failed for latency iter\n");
+        std::fprintf(stderr, "[p2p-perf] send_put_async failed for latency iter\n");
         std::abort();
       }
       while (true) {
@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
     for (double l : latencies) avg_lat += l;
     avg_lat /= latencies.size();
 
-    // Throughput: async put_async + try_complete
+    // Throughput: async send_put_async + try_complete
     constexpr int kBatchSize = 16;
     constexpr int kThroughputIters = 3;
     std::vector<double> throughputs;
@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
       auto t0 = std::chrono::steady_clock::now();
       unsigned rids[kBatchSize];
       for (int b = 0; b < kBatchSize; ++b)
-        rids[b] = comm->put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
+        rids[b] = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
       size_t drained = 0;
       while (drained < kBatchSize) {
         CompletionResult done[16];

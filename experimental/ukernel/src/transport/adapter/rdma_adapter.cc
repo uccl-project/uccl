@@ -1,4 +1,5 @@
 #include "rdma_adapter.h"
+#include "../communicator.h"
 #include "../util/utils.h"
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -183,10 +184,7 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
 
   // Create jring-based task queues
   send_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
-  recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
-  if (!send_ring_ || !recv_ring_) {
-    if (send_ring_) { free(send_ring_); send_ring_ = nullptr; }
-    if (recv_ring_) { free(recv_ring_); recv_ring_ = nullptr; }
+  if (!send_ring_) {
     ibv_dealloc_pd(pd_);
     pd_ = nullptr;
     ctx_handle_.reset();
@@ -208,7 +206,6 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
 
   stop_.store(false, std::memory_order_release);
   send_worker_ = std::thread([this] { send_worker(); });
-  recv_worker_ = std::thread([this] { recv_worker(); });
   poll_thread_ = std::thread([this] { poll_loop(); });
 }
 
@@ -216,7 +213,6 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   stop_.store(true, std::memory_order_release);
   cv_.notify_all();
   if (send_worker_.joinable()) send_worker_.join();
-  if (recv_worker_.joinable()) recv_worker_.join();
   if (poll_thread_.joinable()) poll_thread_.join();
 
   // Destroy peers
@@ -239,7 +235,6 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   registered_ids_.clear();
 
   if (send_ring_) { free(send_ring_); send_ring_ = nullptr; }
-  if (recv_ring_) { free(recv_ring_); recv_ring_ = nullptr; }
 
   if (pd_) {
     ibv_dealloc_pd(pd_);
@@ -396,7 +391,7 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
 
 bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   auto pool = std::make_unique<RecvPool>();
-  pool->buffer.resize(4);
+  pool->buffer.resize(8);
   pool->mr = ibv_reg_mr(pd_, pool->buffer.data(), pool->buffer.size(),
                         IBV_ACCESS_LOCAL_WRITE);
   if (!pool->mr) return false;
@@ -404,7 +399,7 @@ bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   pool->sges.resize(1);
   pool->wrs.resize(1);
   pool->sges[0].addr = reinterpret_cast<uint64_t>(pool->buffer.data());
-  pool->sges[0].length = 4;
+  pool->sges[0].length = 8;
   pool->sges[0].lkey = pool->mr->lkey;
   pool->wrs[0].wr_id = 0;
   pool->wrs[0].sg_list = &pool->sges[0];
@@ -684,11 +679,11 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
 
 // ── send path (enqueue to jring) ─────────────────────────────────────────────
 
-unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
-                                         uint32_t local_buf_id,
-                                         void* remote_ptr,
-                                         uint32_t remote_buf_id, size_t len,
-                                         unsigned comm_rid) {
+unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
+                                              uint32_t local_buf_id,
+                                              void* remote_ptr,
+                                              uint32_t remote_buf_id, size_t len,
+                                              unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
@@ -725,8 +720,8 @@ unsigned RdmaTransportAdapter::put_async(int rank, void* local_ptr,
   return 1;
 }
 
-unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag,
-                                            unsigned comm_rid) {
+unsigned RdmaTransportAdapter::send_signal_async(int rank, uint64_t tag,
+                                                 unsigned comm_rid) {
   if (!has_put_path(rank)) return 0;
 
   RingElem e{comm_rid, rank, Kind::Signal, nullptr, nullptr,
@@ -737,14 +732,12 @@ unsigned RdmaTransportAdapter::signal_async(int rank, uint64_t tag,
 
 // ── recv path (enqueue to jring) ─────────────────────────────────────────────
 
-unsigned RdmaTransportAdapter::wait_async(int rank, uint64_t expected_tag,
-                                          std::optional<WaitTarget> target,
-                                          unsigned comm_rid) {
+unsigned RdmaTransportAdapter::wait_signal_async(int rank, uint64_t /*expected_tag*/,
+                                               std::optional<WaitTarget> /*target*/,
+                                               unsigned comm_rid) {
   if (!has_wait_path(rank)) return 0;
-
-  RingElem e{comm_rid, rank, Kind::SignalWait, nullptr, nullptr,
-             0, 0, 0, expected_tag, 0, 0, 0};
-  if (!enqueue_elem(recv_ring_, e, stop_)) return 0;
+  // SignalWait path is handled by poll_loop pushing tags to Communicator.
+  publish_completion(comm_rid, true);
   return 1;
 }
 
@@ -994,10 +987,7 @@ void RdmaTransportAdapter::send_worker() {
       slot.total_chunks = 1;
       slot.completed_chunks.store(0, std::memory_order_release);
 
-      uint8_t msg_id =
-          p->next_msg_id.fetch_add(1, std::memory_order_relaxed) & kMsgIdMask;
-
-      uint32_t payload = static_cast<uint32_t>(msg_id);
+      uint64_t payload = e.tag;
       ibv_sge sge = {};
       sge.addr = reinterpret_cast<uint64_t>(&payload);
       sge.length = sizeof(payload);
@@ -1012,8 +1002,8 @@ void RdmaTransportAdapter::send_worker() {
 
       ibv_send_wr* bad = nullptr;
       if (ibv_post_send(p->signal_qp, &wr, &bad) != 0) {
-        fprintf(stderr, "[send_worker] SIGNAL_POST_FAILED rank=%d msg_id=%u\n",
-                e.peer_rank, msg_id);
+        fprintf(stderr, "[send_worker] SIGNAL_POST_FAILED rank=%d tag=%lu\n",
+                e.peer_rank, (unsigned long)payload);
         slot.completed_chunks.store(1, std::memory_order_release);
         publish_completion(e.comm_rid, true);
         uint32_t exp = send_id;
@@ -1034,45 +1024,6 @@ void RdmaTransportAdapter::send_worker() {
     publish_completion(drain.comm_rid, true);
 }
 
-// ── recv_worker ──────────────────────────────────────────────────────────────
-
-void RdmaTransportAdapter::recv_worker() {
-  RingElem e;
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
-
-    if (e.kind != Kind::SignalWait) {
-      publish_completion(e.comm_rid, true);
-      continue;
-    }
-
-    // Lock-free peer lookup (Task 2)
-    RdmaPeer* p = nullptr;
-    if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
-      p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
-          std::memory_order_acquire);
-    }
-    if (!p) {
-      publish_completion(e.comm_rid, true);
-      continue;
-    }
-
-    unsigned idx =
-        p->next_expected_dispatch.fetch_add(1, std::memory_order_relaxed) &
-        kMsgIdMask;
-    p->trackers[idx].wait_comm_rid.store(e.comm_rid,
-                                          std::memory_order_release);
-  }
-
-  // Drain remaining on shutdown
-  RingElem drain;
-  while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
-}
-
 // ── polling ──────────────────────────────────────────────────────────────────
 
 void RdmaTransportAdapter::poll_loop() {
@@ -1086,7 +1037,6 @@ void RdmaTransportAdapter::poll_loop() {
       int rank = static_cast<int>(r);
       if (p->data_cq && poll_cq_set(*p, rank)) any = true;
       if (p->signal_cq && poll_signal_cq(*p, rank)) any = true;
-      check_dispatch(*p, rank);
     }
 
     if (!any) {
@@ -1215,11 +1165,11 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
 
       case IBV_WC_RECV: {
         (void)repost_signal_recv(p);
-        uint8_t msg_id =
-            *reinterpret_cast<uint8_t*>(p.signal_pool->buffer.data());
-        auto& t = p.trackers[msg_id];
-        t.completed.store(true, std::memory_order_release);
-        check_dispatch(p, rank);
+        uint64_t tag =
+            *reinterpret_cast<uint64_t*>(p.signal_pool->buffer.data());
+
+        // Push directly to Communicator for tag matching.
+        if (comm_) comm_->on_signal_received(rank, tag);
         break;
       }
 
@@ -1228,27 +1178,6 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
     }
   }
   return any;
-}
-
-void RdmaTransportAdapter::check_dispatch(RdmaPeer& p, int rank) {
-  (void)rank;
-  unsigned expected = p.next_expected_dispatch.load(std::memory_order_acquire);
-  while (p.dispatch_cursor < expected) {
-    unsigned idx = p.dispatch_cursor & kMsgIdMask;
-    auto& t = p.trackers[idx];
-
-    if (!t.completed.load(std::memory_order_acquire)) break;
-    unsigned wait_rid = t.wait_comm_rid.load(std::memory_order_acquire);
-    if (wait_rid == 0) break;
-
-    publish_completion(wait_rid, false);
-
-    t.completed.store(false, std::memory_order_release);
-    t.wait_comm_rid.store(0, std::memory_order_release);
-    p.dispatch_cursor++;
-    cv_.notify_all();
-    expected = p.next_expected_dispatch.load(std::memory_order_acquire);
-  }
 }
 
 // ── chunk splitting ──────────────────────────────────────────────────────────

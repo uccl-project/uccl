@@ -191,26 +191,26 @@ bool TcpTransportAdapter::has_wait_path(int rank) const {
 
 // ── Submission ──────────────────────────────────────────────────────────
 
-unsigned TcpTransportAdapter::put_async(int peer, void* local_ptr, uint32_t,
-                                        void*, uint32_t, size_t len,
-                                        unsigned comm_rid) {
+unsigned TcpTransportAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
+                                             void*, uint32_t, size_t len,
+                                             unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::DataPut, local_ptr, len, 0};
   if (!enqueue_elem(send_task_ring_, e, stop_)) return 0;
   return 1;
 }
 
-unsigned TcpTransportAdapter::signal_async(int peer, uint64_t tag,
-                                           unsigned comm_rid) {
+unsigned TcpTransportAdapter::send_signal_async(int peer, uint64_t tag,
+                                                unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   RingElem e{comm_rid, peer, Kind::Signal, nullptr, 0, tag};
   if (!enqueue_elem(send_task_ring_, e, stop_)) return 0;
   return 1;
 }
 
-unsigned TcpTransportAdapter::wait_async(int peer, uint64_t tag,
-                                         std::optional<WaitTarget> target,
-                                         unsigned comm_rid) {
+unsigned TcpTransportAdapter::wait_signal_async(int peer, uint64_t tag,
+                                              std::optional<WaitTarget> target,
+                                              unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
   void* ptr = target ? target->local_ptr : nullptr;
   size_t len = target ? target->len : 0;

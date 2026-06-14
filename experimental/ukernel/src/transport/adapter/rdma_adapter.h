@@ -16,6 +16,8 @@
 namespace UKernel {
 namespace Transport {
 
+class Communicator;
+
 struct RdmaTransportConfig {
   int num_qps = 4;
   int chunk_size_kb = 512;
@@ -29,20 +31,21 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool is_initialized() const { return ctx_handle_ != nullptr; }
   RdmaPeerConnectSpec get_connect_init(int peer_rank);
 
+  void set_communicator(Communicator* comm) { comm_ = comm; }
+
   bool ensure_put_path(PeerConnectSpec const& spec) override;
   bool ensure_wait_path(PeerConnectSpec const& spec) override;
   bool has_put_path(int peer_rank) const override;
   bool has_wait_path(int peer_rank) const override;
 
-  unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-                     void* remote_ptr, uint32_t remote_buffer_id, size_t len,
-                     unsigned comm_rid) override;
-  unsigned signal_async(int peer_rank, uint64_t tag,
-                        unsigned comm_rid) override;
-  unsigned wait_async(int peer_rank, uint64_t expected_tag,
-                      std::optional<WaitTarget> target,
-                      unsigned comm_rid) override;
-
+  unsigned send_put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
+                          void* remote_ptr, uint32_t remote_buffer_id, size_t len,
+                          unsigned comm_rid) override;
+  unsigned send_signal_async(int peer_rank, uint64_t tag,
+                             unsigned comm_rid) override;
+  unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
+                             std::optional<WaitTarget> target,
+                             unsigned comm_rid) override;
 
   bool register_memory(uint32_t buffer_id, void* ptr, size_t len);
   void deregister_memory(uint32_t buffer_id);
@@ -55,8 +58,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
  private:
   static constexpr int kMaxQPs = 4;
   static constexpr uint32_t kMaxChunks = 128;  // BDP: 64 MB
-  static constexpr int kMaxMsgId = 128;
-  static constexpr int kMsgIdMask = kMaxMsgId - 1;
+  static constexpr size_t kSignalRingSize = 4096;
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
@@ -64,7 +66,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   static constexpr int kRingSize = 65536;
 
-  enum class Kind : uint8_t { DataPut, Signal, SignalWait };
+  enum class Kind : uint8_t { DataPut, Signal };
 
   struct RingElem {
     unsigned comm_rid;
@@ -118,6 +120,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<uint32_t> completed_chunks{0};
   };
 
+  struct SignalSlot {
+    std::atomic<bool> ready{false};
+    uint64_t tag{0};
+  };
+
   struct RdmaPeer {
     ibv_qp* data_qps[kMaxQPs] = {};
     ibv_cq* data_cq = nullptr;
@@ -150,18 +157,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<int> last_qp_{0};
     std::atomic<bool> cached_qp_valid_{false};
     std::atomic<uint32_t> consecutive_cached_bytes_{0};
-
-    std::atomic<unsigned> next_msg_id{0};
-
-    ChunkTracker trackers[kMaxMsgId];
-    std::atomic<uint32_t> next_expected_dispatch{0};
-    uint32_t dispatch_cursor = 0;
   };
 
   static uint64_t now_ns();
 
   int select_qp(RdmaPeer& p, uint32_t msize);
-  void check_dispatch(RdmaPeer& p, int rank);
 
   bool create_qp_set(ibv_qp** qps, ibv_cq** cq, int count, int cq_size,
                      int max_recv_wr = 1);
@@ -179,7 +179,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   ChunkResult chunk_split(size_t len) const;
 
   void send_worker();
-  void recv_worker();
   void poll_loop();
   bool poll_cq_set(RdmaPeer& peer, int rank);
   bool poll_signal_cq(RdmaPeer& peer, int rank);
@@ -219,12 +218,10 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   // Jring-based task queues
   jring_t* send_ring_ = nullptr;
-  jring_t* recv_ring_ = nullptr;
 
   // Worker threads
   std::atomic<bool> stop_{false};
   std::thread send_worker_;
-  std::thread recv_worker_;
   std::thread poll_thread_;
 
   // send_id → PendingSlot ring buffer (lock-free)
@@ -234,6 +231,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   // Condition variable for back-pressure
   std::mutex cv_mu_;
   std::condition_variable cv_;
+
+  Communicator* comm_ = nullptr;
 };
 
 }  // namespace Transport

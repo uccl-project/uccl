@@ -77,6 +77,8 @@
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
   "cuMemGetHandleForAddressRange"
+#ifndef GPU_MEM_GET_ADDRESS_RANGE_DEFINED
+#define GPU_MEM_GET_ADDRESS_RANGE_DEFINED
 inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
                                         void* ptr) {
   CUdeviceptr base;
@@ -87,6 +89,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
   }
   return gpuError_t(result);
 }
+#endif
 #else
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>

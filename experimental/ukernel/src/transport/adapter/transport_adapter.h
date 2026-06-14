@@ -89,15 +89,15 @@ class TransportAdapter {
 
   // Async submission. comm_rid is pushed to completion_ring on completion.
   // Returns non-zero on success (the comm_rid itself is the identifier).
-  virtual unsigned put_async(int peer_rank, void* local_ptr,
-                             uint32_t local_buffer_id, void* remote_ptr,
-                             uint32_t remote_buffer_id, size_t len,
-                             unsigned comm_rid) = 0;
-  virtual unsigned signal_async(int peer_rank, uint64_t tag,
-                                unsigned comm_rid) = 0;
-  virtual unsigned wait_async(int peer_rank, uint64_t expected_tag,
-                              std::optional<WaitTarget> target,
-                              unsigned comm_rid) = 0;
+  virtual unsigned send_put_async(int peer_rank, void* local_ptr,
+                                  uint32_t local_buffer_id, void* remote_ptr,
+                                  uint32_t remote_buffer_id, size_t len,
+                                  unsigned comm_rid) = 0;
+  virtual unsigned send_signal_async(int peer_rank, uint64_t tag,
+                                     unsigned comm_rid) = 0;
+  virtual unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
+                                     std::optional<WaitTarget> target,
+                                     unsigned comm_rid) = 0;
 
   void set_completion_ring(jring_t* ring) { completion_ring_ = ring; }
 

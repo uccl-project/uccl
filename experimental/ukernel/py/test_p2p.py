@@ -42,7 +42,11 @@ def run_server() -> None:
     if selected == "tcp":
         comm.wait_data(1, 42, recv_buffer_id, 0, recv.numel() * 4)
     else:
-        comm.wait_signal(1, 42)
+        rid = comm.wait_signal_async(1, 42)
+        if rid == 0:
+            raise RuntimeError("wait_signal_async returned 0")
+        while not comm.poll([rid]):
+            pass
     print(f"[rank {rank}] received: {recv}")
 
     if recv.sum() == 0:
