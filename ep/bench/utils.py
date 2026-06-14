@@ -99,13 +99,18 @@ def _gather_peer_ips(group):
     return ips
 
 
-def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int, bool]:
+def detect_group_topology(
+    group: dist.ProcessGroup,
+) -> Tuple[int, int, int, int, int, bool]:
     """
-    Infer CUDA-local rank, barrier-local rank, and node topology.
+    Infer CUDA-local rank, node-local rank, and node topology.
 
     Returns:
         local_rank: CUDA-visible device index for the current process.
-        barrier_local_rank: rank slot within the current node.
+        node_local_rank: dense rank slot within the current node, ordered by
+            physical GPU BDF.
+        nic_local_rank: rank of the CUDA device in UCCL's physical GPU BDF
+            order.
         node_idx: compact node index within the given group.
         num_nodes: number of distinct nodes spanned by the group.
         is_intranode: whether all ranks in the group are on the same node.
@@ -116,23 +121,69 @@ def detect_group_topology(group: dist.ProcessGroup) -> Tuple[int, int, int, int,
         local_rank = torch.cuda.current_device()
 
     node_token = ep.get_oob_ip() or socket.gethostname()
+    nic_local_rank = ep.get_physical_gpu_rank(local_rank)
 
     world = dist.get_world_size(group)
-    node_tokens = [None] * world
-    dist.all_gather_object(node_tokens, node_token, group=group)
     rank = dist.get_rank(group)
-    local_ranks = [idx for idx, token in enumerate(node_tokens) if token == node_token]
-    barrier_local_rank = local_ranks.index(rank)
+    local_info = {
+        "rank": rank,
+        "node_token": node_token,
+        "local_rank": local_rank,
+        "nic_local_rank": nic_local_rank,
+    }
+    all_info = [None] * world
+    dist.all_gather_object(all_info, local_info, group=group)
+    same_node = [info for info in all_info if info["node_token"] == node_token]
+
+    if nic_local_rank < 0:
+        raise ValueError(
+            "Could not map CUDA device to UCCL physical GPU rank: "
+            + json.dumps(local_info, sort_keys=True)
+        )
+
+    ranks_by_physical_gpu = {}
+    for info in same_node:
+        mapped_rank = info["nic_local_rank"]
+        if mapped_rank < 0:
+            continue
+        ranks_by_physical_gpu.setdefault(mapped_rank, []).append(info)
+
+    duplicate_physical_ranks = {
+        mapped_rank: infos
+        for mapped_rank, infos in ranks_by_physical_gpu.items()
+        if len(infos) > 1
+    }
+    if duplicate_physical_ranks:
+        raise ValueError(
+            "Duplicate physical GPU rank mapping on node: "
+            + json.dumps(duplicate_physical_ranks, sort_keys=True)
+        )
+
+    node_ranks = [
+        info["rank"]
+        for info in sorted(
+            same_node, key=lambda info: (info["nic_local_rank"], info["rank"])
+        )
+    ]
+    node_local_rank = node_ranks.index(rank)
 
     token_to_idx = {}
-    for token in node_tokens:
+    for info in all_info:
+        token = info["node_token"]
         if token not in token_to_idx:
             token_to_idx[token] = len(token_to_idx)
 
     node_idx = token_to_idx[node_token]
     num_nodes = len(token_to_idx)
     is_intranode = num_nodes == 1
-    return local_rank, barrier_local_rank, node_idx, num_nodes, is_intranode
+    return (
+        local_rank,
+        node_local_rank,
+        nic_local_rank,
+        node_idx,
+        num_nodes,
+        is_intranode,
+    )
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -568,7 +619,8 @@ def initialize_uccl(
 
     (
         local_rank,
-        barrier_local_rank,
+        node_local_rank,
+        nic_local_rank,
         node_idx,
         num_nodes,
         detected_is_intranode,
@@ -596,7 +648,9 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
-            barrier_local_rank=barrier_local_rank,
+            barrier_local_rank=node_local_rank,
+            device_index=local_rank,
+            nic_local_rank=nic_local_rank,
         )
         proxies.append(proxy)
 
