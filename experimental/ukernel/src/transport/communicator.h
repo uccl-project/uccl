@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -195,6 +196,9 @@ class Communicator {
 
   // Signal matching: peer → tag → vector<rid>
   std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>> pending_signal_waits_;
+  // Buffered signals that arrived before the matching wait was registered.
+  // Peer → deque of tag values. Checked first in wait_signal_async.
+  std::unordered_map<int, std::deque<uint64_t>> pending_signals_;
   // TCP signal completions go through the data ring; this maps rid → {peer, tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
   mutable std::mutex signal_waits_mu_;

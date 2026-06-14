@@ -1017,9 +1017,31 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag, PeerTransportKi
     return rid;
   }
 
-  // IPC / RDMA: async tag-based matching via Communicator table.
+  // IPC / RDMA: check buffered signals before registering wait.
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
+
+    // Check if a matching signal already arrived.
+    auto sig_it = pending_signals_.find(peer);
+    if (sig_it != pending_signals_.end()) {
+      auto& sigs = sig_it->second;
+      for (auto sit = sigs.begin(); sit != sigs.end(); ++sit) {
+        if (*sit == tag) {
+          // Signal already arrived — dispatch immediately.
+          SignalCompletion ev;
+          ev.rid = rid;
+          ev.tag = tag;
+          ev.peer = peer;
+          ev.failed = false;
+          jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+          sigs.erase(sit);
+          if (sigs.empty()) pending_signals_.erase(sig_it);
+          return rid;
+        }
+      }
+    }
+
+    // No buffered signal — register the wait.
     pending_signal_waits_[peer][tag].push_back(rid);
   }
 
@@ -1187,21 +1209,25 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
   std::lock_guard<std::mutex> lk(signal_waits_mu_);
 
   auto it = pending_signal_waits_.find(peer);
-  if (it == pending_signal_waits_.end()) return;
-  auto it2 = it->second.find(tag);
-  if (it2 == it->second.end()) return;
-
-  SignalCompletion ev;
-  ev.peer = peer;
-  ev.tag = tag;
-  ev.failed = false;
-
-  for (unsigned rid : it2->second) {
-    ev.rid = rid;
-    jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+  if (it != pending_signal_waits_.end()) {
+    auto it2 = it->second.find(tag);
+    if (it2 != it->second.end()) {
+      // Match found: dispatch to all waiting rids.
+      SignalCompletion ev;
+      ev.peer = peer;
+      ev.tag = tag;
+      ev.failed = false;
+      for (unsigned rid : it2->second) {
+        ev.rid = rid;
+        jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+      }
+      it->second.erase(it2);
+      return;
+    }
   }
 
-  it->second.erase(it2);
+  // No matching wait — buffer the signal for later matching.
+  pending_signals_[peer].push_back(tag);
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
