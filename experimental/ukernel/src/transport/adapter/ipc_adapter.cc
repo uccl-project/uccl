@@ -268,9 +268,14 @@ unsigned IpcAdapter::put_async(int peer, void* local_ptr, uint32_t,
 
 unsigned IpcAdapter::signal_async(int peer, uint64_t /*tag*/, unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  RingElem e{comm_rid, peer, ReqType::Signal, next_send_signal_seq(peer),
-             nullptr, nullptr, 0};
-  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+
+  // Inline fast path: signal is just an atomic store to shared memory.
+  // Bypassing jring avoids ~10us of enqueue + worker dequeue overhead
+  // that dominates small-message IPC ping-pong latency.
+  size_t dir = (comm_->rank() < peer) ? 0u : 1u;
+  uint64_t seq = next_send_signal_seq(peer);
+  comps_[peer].remote->last_signal[dir].store(seq, std::memory_order_release);
+  publish_completion(comm_rid, false);
   return 1;
 }
 
@@ -278,12 +283,38 @@ unsigned IpcAdapter::wait_async(int peer, uint64_t /*tag*/,
                                 std::optional<WaitTarget> target,
                                 unsigned comm_rid) {
   if (!has_wait_path(peer)) return 0;
-  uint64_t seq = target ? next_recv_match_seq(peer) : next_recv_signal_seq(peer);
-  void* ptr = target ? target->local_ptr : nullptr;
-  size_t len = target ? target->len : 0;
-  ReqType t = target ? ReqType::DataWait : ReqType::SignalWait;
-  RingElem e{comm_rid, peer, t, seq, ptr, nullptr, len};
-  if (!enqueue_elem(recv_ring_, e, stop_)) return 0;
+
+  if (target) {
+    // DataWait: GPU-copy completion — still through jring + recv_worker.
+    uint64_t seq = next_recv_match_seq(peer);
+    RingElem e{comm_rid, peer, ReqType::DataWait, seq,
+               target->local_ptr, nullptr, target->len};
+    if (!enqueue_elem(recv_ring_, e, stop_)) return 0;
+    return 1;
+  }
+
+  // SignalWait inline fast path: poll shared memory counter directly.
+  // Same reason as signal_async — the operation is a single atomic load
+  // and jring overhead dominates small-message latency.
+  size_t dir = (peer < comm_->rank()) ? 0u : 1u;
+  uint64_t expected = next_recv_signal_seq(peer);
+  auto* counter = &comps_[peer].local->last_signal[dir];
+
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(kIpcControlTimeoutMs);
+  while (!stop_.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    if (counter->load(std::memory_order_acquire) >= expected) {
+      publish_completion(comm_rid, false);
+      return 1;
+    }
+    std::this_thread::yield();
+  }
+  if (!stop_.load(std::memory_order_acquire)) {
+    std::cerr << "[ERROR] IPC recv timed out, peer " << peer
+              << " match_seq " << expected << std::endl;
+  }
+  publish_completion(comm_rid, true);
   return 1;
 }
 
@@ -303,11 +334,6 @@ void IpcAdapter::send_worker() {
             e.seq, std::memory_order_release);
       }
       publish_completion(e.comm_rid, !ok);
-    } else if (e.type == ReqType::Signal) {
-      size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
-      comps_[e.peer].remote->last_signal[dir].store(
-          e.seq, std::memory_order_release);
-      publish_completion(e.comm_rid, false);
     } else {
       publish_completion(e.comm_rid, true);
     }
@@ -391,6 +417,9 @@ bool IpcAdapter::recv_one(RingElem* e) {
   if (e->type != ReqType::DataWait && e->type != ReqType::SignalWait)
     return false;
 
+  // SignalWait is now handled inline in wait_async. This jring path is
+  // retained as a compatibility fallback in case a SignalWait element
+  // still arrives via the ring (e.g., during path migration).
   size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
   uint64_t expected = e->seq;
   auto& pc = comps_[e->peer];
