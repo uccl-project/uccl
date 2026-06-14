@@ -2,6 +2,10 @@ HIP_HOME      ?= /opt/rocm
 HIP_LIB       := $(HIP_HOME)/lib
 CXX           := /usr/bin/g++
 CONDA_LIB_HOME ?= /usr/lib
+CONDA_PREFIX ?= 
+ifneq ($(CONDA_PREFIX),)
+CONDA_LIB_HOME := $(CONDA_PREFIX)/lib
+endif
 DEBUG         ?= 0
 ENABLE_TMA    := 0
 
@@ -28,7 +32,7 @@ LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/inc
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
 	-I../../include -I$(HIP_HOME)/include
 
-SRC_CPP := communicator.cc request_tracker.cc bounce_buffer_pool.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc adapter/shmring_exchanger.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_socket.cc util/utils.cc
+SRC_CPP := communicator.cc request_tracker.cc bounce_buffer_pool.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc adapter/rdma_adapter.cc adapter/shmring_exchanger.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_socket.cc util/utils.cc
 TEST_UNIT_CPP := test/unit/test_transport_unit_main.cc \
 	test/unit/test_transport_core.cc \
 	test/unit/test_transport_oob_socket.cc \

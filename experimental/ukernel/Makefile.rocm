@@ -4,6 +4,10 @@ HIP_LIB       := $(HIP_HOME)/lib
 override CXX := /usr/bin/g++
 HIPCC         := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME ?= /usr/lib
+CONDA_PREFIX ?= 
+ifneq ($(CONDA_PREFIX),)
+CONDA_LIB_HOME := $(CONDA_PREFIX)/lib
+endif
 DEBUG         ?= 0
 
 # Base compilation flags
@@ -26,8 +30,9 @@ HIPCCFLAGS := $(HIPCC_OPT_FLAGS) -std=c++17 \
               --offload-arch=gfx942
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
+              -Wl,-rpath,$(CONDA_LIB_HOME) \
               -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) \
-              -lamdhip64 -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -ldl
+              -lamdhip64 -lgflags -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -ldl
 
 # Local includes must come first to avoid conflicts with UCCL headers
 LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
@@ -56,27 +61,12 @@ UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs
 CXXFLAGS += $(UCCL_CFLAGS)
 LDFLAGS += $(UCCL_LDFLAGS)
 
-# Source files - mirror the CUDA Makefile source set, excluding benchmarks and tests
-SRC_CPP := src/transport/communicator.cc \
-           src/transport/request_tracker.cc \
-           src/transport/bounce_buffer_pool.cc \
-           src/transport/oob/oob.cc \
-           src/transport/oob/oob_socket.cc \
-           src/transport/util/utils.cc \
-           src/transport/memory/ipc_manager.cc \
-           src/transport/memory/shm_manager.cc \
-           src/transport/memory/mr_manager.cc \
-           src/transport/adapter/ipc_adapter.cc \
-           src/transport/adapter/tcp_adapter.cc \
-           src/transport/adapter/uccl_adapter.cc \
-           src/transport/adapter/shmring_exchanger.cc \
-           src/ccl/topology.cc \
-           src/ccl/plan.cc \
-           src/ccl/selector.cc \
-           src/ccl/executor.cc \
-           src/ccl/executor_real.cc \
-           src/ccl/backend/device_backend.cc \
-           src/ccl/backend/transport_backend.cc
+# Source files - auto-discover all .cc under src/, excluding tests/benchmarks/device
+SRC_CPP := $(shell find src -name '*.cc' \
+             ! -path '*/test/*' \
+             ! -path '*/benchmarks/*' \
+             ! -path 'src/device/*' \
+             | sort)
 SRC_CU  := src/device/persistent_kernel_ops.cu
 
 # Object files
