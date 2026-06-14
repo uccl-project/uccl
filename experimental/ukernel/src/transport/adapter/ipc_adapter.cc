@@ -51,7 +51,7 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
     throw std::runtime_error("IpcAdapter failed to allocate task rings");
   }
 
-  int n_streams = 2;
+  int n_streams = 4;
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   ipc_ctx_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
@@ -347,28 +347,37 @@ bool IpcAdapter::send_one(RingElem* e) {
 
   size_t bytes = e->bytes;
   size_t n_total = ipc_ctx_.size();
-  size_t needed = (bytes + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
-  if (needed > n_total) needed = n_total;
-  if (needed == 0) needed = 1;
+  size_t total_chunks =
+      (bytes + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
+  if (total_chunks == 0) total_chunks = 1;
 
-  for (size_t i = 0; i < needed; ++i) {
-    size_t offset = i * kIpcSizePerEngine;
-    size_t chunk = std::min(kIpcSizePerEngine, bytes - offset);
-    if (chunk == 0) break;
-    char* src_chunk = static_cast<char*>(src) + offset;
-    char* dst_chunk = static_cast<char*>(dst) + offset;
-    gpuStream_t stream = ipc_ctx_[i].first;
-    if (remote_gpu == gpu_id_)
-      GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, chunk,
-                                  gpuMemcpyDeviceToDevice, stream));
-    else
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
-                                      gpu_id_, chunk, stream));
-    GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
+  size_t offset = 0;
+  while (offset < bytes) {
+    size_t chunks_remaining =
+        (bytes - offset + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
+    size_t batch = std::min(n_total, chunks_remaining);
+
+    for (size_t i = 0; i < batch; ++i) {
+      size_t chunk_offset = offset + i * kIpcSizePerEngine;
+      size_t chunk = std::min(kIpcSizePerEngine, bytes - chunk_offset);
+      if (chunk == 0) break;
+      char* src_chunk = static_cast<char*>(src) + chunk_offset;
+      char* dst_chunk = static_cast<char*>(dst) + chunk_offset;
+      gpuStream_t stream = ipc_ctx_[i].first;
+      if (remote_gpu == gpu_id_)
+        GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, chunk,
+                                    gpuMemcpyDeviceToDevice, stream));
+      else
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
+                                        gpu_id_, chunk, stream));
+      GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
+    }
+
+    for (size_t i = 0; i < batch; ++i)
+      GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
+
+    offset += batch * kIpcSizePerEngine;
   }
-
-  for (size_t i = 0; i < needed; ++i)
-    GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
 
   return true;
 }
