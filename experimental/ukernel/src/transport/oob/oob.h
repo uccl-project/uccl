@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../include/config.h"
-#include "../../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>

@@ -1,5 +1,5 @@
 #include "../include/config.h"
-#include "../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include "../src/transport/communicator.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>

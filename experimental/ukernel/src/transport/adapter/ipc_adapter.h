@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include "../memory/ipc_manager.h"
 #include "../util/jring.h"
 #include "transport_adapter.h"

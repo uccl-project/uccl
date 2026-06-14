@@ -1,4 +1,4 @@
-#include "../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include "../include/transport.h"
 #include "../src/ccl/backend/device_backend.h"
 #include "../src/ccl/backend/transport_backend.h"
