@@ -1212,16 +1212,15 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
   if (it != pending_signal_waits_.end()) {
     auto it2 = it->second.find(tag);
     if (it2 != it->second.end()) {
-      // Match found: dispatch to all waiting rids.
+      // Match found: dispatch to the first waiting rid only (1:1 signal->wait).
       SignalCompletion ev;
       ev.peer = peer;
       ev.tag = tag;
       ev.failed = false;
-      for (unsigned rid : it2->second) {
-        ev.rid = rid;
-        jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
-      }
-      it->second.erase(it2);
+      ev.rid = it2->second.front();
+      jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+      it2->second.erase(it2->second.begin());
+      if (it2->second.empty()) it->second.erase(it2);
       return;
     }
   }

@@ -95,7 +95,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct RecvPool {
-    std::vector<uint8_t> buffer;
+    uint64_t tag_buf = 0;  // 8-byte aligned, receives signal tag via RDMA
     ibv_mr* mr = nullptr;
     std::vector<ibv_sge> sges;
     std::vector<ibv_recv_wr> wrs;

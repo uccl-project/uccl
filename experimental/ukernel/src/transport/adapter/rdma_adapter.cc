@@ -391,15 +391,15 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
 
 bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   auto pool = std::make_unique<RecvPool>();
-  pool->buffer.resize(8);
-  pool->mr = ibv_reg_mr(pd_, pool->buffer.data(), pool->buffer.size(),
+  // tag_buf is already zero-initialized, no resize needed
+  pool->mr = ibv_reg_mr(pd_, &pool->tag_buf, sizeof(uint64_t),
                         IBV_ACCESS_LOCAL_WRITE);
   if (!pool->mr) return false;
 
   pool->sges.resize(1);
   pool->wrs.resize(1);
-  pool->sges[0].addr = reinterpret_cast<uint64_t>(pool->buffer.data());
-  pool->sges[0].length = 8;
+  pool->sges[0].addr = reinterpret_cast<uint64_t>(&pool->tag_buf);
+  pool->sges[0].length = sizeof(uint64_t);
   pool->sges[0].lkey = pool->mr->lkey;
   pool->wrs[0].wr_id = 0;
   pool->wrs[0].sg_list = &pool->sges[0];
@@ -1165,8 +1165,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
 
       case IBV_WC_RECV: {
         (void)repost_signal_recv(p);
-        uint64_t tag =
-            *reinterpret_cast<uint64_t*>(p.signal_pool->buffer.data());
+        uint64_t tag = p.signal_pool->tag_buf;
 
         // Push directly to Communicator for tag matching.
         if (comm_) comm_->on_signal_received(rank, tag);
