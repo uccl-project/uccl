@@ -347,37 +347,41 @@ bool IpcAdapter::send_one(RingElem* e) {
 
   size_t bytes = e->bytes;
   size_t n_total = ipc_ctx_.size();
-  size_t total_chunks =
-      (bytes + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
-  if (total_chunks == 0) total_chunks = 1;
+
+  // Adaptive stream count: P2P-style dynamic chunk sizing.
+  // <1MB -> 1 stream; otherwise min(n_total, bytes/1MB).
+  size_t num_streams = n_total;
+  if (bytes < kIpcSizePerEngine) {
+    num_streams = 1;
+  } else {
+    size_t by_size = bytes / kIpcSizePerEngine;
+    if (by_size < num_streams) num_streams = by_size;
+  }
+  if (num_streams == 0) num_streams = 1;
+
+  // Dynamic chunk size: divide bytes evenly, remainder to first chunks.
+  size_t chunk_size = bytes / num_streams;
+  size_t remainder = bytes % num_streams;
 
   size_t offset = 0;
-  while (offset < bytes) {
-    size_t chunks_remaining =
-        (bytes - offset + kIpcSizePerEngine - 1) / kIpcSizePerEngine;
-    size_t batch = std::min(n_total, chunks_remaining);
-
-    for (size_t i = 0; i < batch; ++i) {
-      size_t chunk_offset = offset + i * kIpcSizePerEngine;
-      size_t chunk = std::min(kIpcSizePerEngine, bytes - chunk_offset);
-      if (chunk == 0) break;
-      char* src_chunk = static_cast<char*>(src) + chunk_offset;
-      char* dst_chunk = static_cast<char*>(dst) + chunk_offset;
-      gpuStream_t stream = ipc_ctx_[i].first;
-      if (remote_gpu == gpu_id_)
-        GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, chunk,
-                                    gpuMemcpyDeviceToDevice, stream));
-      else
-        GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
-                                        gpu_id_, chunk, stream));
-      GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
-    }
-
-    for (size_t i = 0; i < batch; ++i)
-      GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
-
-    offset += batch * kIpcSizePerEngine;
+  for (size_t i = 0; i < num_streams; ++i) {
+    size_t sz = chunk_size + (i < remainder ? 1 : 0);
+    if (sz == 0) break;
+    char* src_chunk = static_cast<char*>(src) + offset;
+    char* dst_chunk = static_cast<char*>(dst) + offset;
+    gpuStream_t stream = ipc_ctx_[i].first;
+    if (remote_gpu == gpu_id_)
+      GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, sz,
+                                  gpuMemcpyDeviceToDevice, stream));
+    else
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk,
+                                      gpu_id_, sz, stream));
+    GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
+    offset += sz;
   }
+
+  for (size_t i = 0; i < num_streams; ++i)
+    GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
 
   return true;
 }
