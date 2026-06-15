@@ -97,7 +97,14 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuGetErrorString hipGetErrorString
 #define gpuStream_t hipStream_t
 #define gpuStreamNonBlocking hipStreamNonBlocking
+// hipStreamLegacy is absent in some HIP SDKs (e.g., Hygon DTK 5.4).
+// Fall back to hipStreamDefault which has the same "use current device
+// default stream" semantics for our purposes.
+#ifdef __UCCL_DTK__
+#define gpuStreamLegacy hipStreamDefault
+#else
 #define gpuStreamLegacy hipStreamLegacy
+#endif
 #define gpuStreamPerThread hipStreamPerThread
 #define gpuStreamCreate hipStreamCreate
 #define gpuStreamCreateWithFlags hipStreamCreateWithFlags
@@ -160,15 +167,30 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
 #define gpuDriverSuccess hipSuccess
+// __HAS_HIP_DMABUF__ is set by Makefiles for HIP platforms that provide
+// hipMemGetHandleForAddressRange (AMD ROCm). Hygon DTK lacks this API.
+#ifdef __HAS_HIP_DMABUF__
 #define gpuMemRangeHandleType hipMemRangeHandleType
 #define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "hipMemGetHandleForAddressRange"
+#else
+typedef int gpuMemRangeHandleType;
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 0
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME ""
+#endif
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
+// The pointer-attribute memory type field was renamed in ROCm: DTK/HIP≤5.x
+// exposes it as .memoryType; newer ROCm renamed it to .type.
+#ifdef __UCCL_DTK__
+#define gpuPointerMemoryType(a) ((a).memoryType)
+#else
+#define gpuPointerMemoryType(a) ((a).type)
+#endif
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
-#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
-  "hipMemGetHandleForAddressRange"
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 

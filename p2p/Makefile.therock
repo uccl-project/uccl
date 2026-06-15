@@ -37,7 +37,7 @@ PYTHON_LDFLAGS  := $(shell $(PYTHON_CONFIG) --ldflags)
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
-CXXFLAGS       += -D__HIP_PLATFORM_AMD__
+CXXFLAGS       += -D__HIP_PLATFORM_AMD__ -D__HAS_HIP_DMABUF__
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} \
                   -lz -lelf -libverbs -lpthread

@@ -1196,7 +1196,7 @@ inline int get_dev_idx(void* ptr) {
   hipPointerAttribute_t attributes;
   hipError_t err = hipPointerGetAttributes(&attributes, ptr);
   if (err == hipSuccess) {
-    if (attributes.type == hipMemoryTypeDevice) {
+    if (gpuPointerMemoryType(attributes) == hipMemoryTypeDevice) {
       return attributes.device;
     }
     return -1;
