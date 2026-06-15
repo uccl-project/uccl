@@ -23,7 +23,10 @@ INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/third
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
 OUT_DIR   := build
-CU_SRCS   := $(wildcard *.cu) Allgather/multi-node.cu
+# ReduceScatter/single-node.cu is included by multi-node.cu so both paths can
+# share the file-local helper state without exporting a large internal ABI.
+REDUCESCATTER_CU_SRCS := $(filter-out ReduceScatter/single-node.cu,$(wildcard ReduceScatter/*.cu))
+CU_SRCS   := $(wildcard *.cu) Allgather/multi-node.cu $(REDUCESCATTER_CU_SRCS)
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
 
 LIB_MINT      := $(BUILD_DIR)/libmint.so
@@ -49,8 +52,10 @@ $(OUT_DIR):
 	mkdir -p $@
 
 $(OUT_DIR)/%.cu.o: %.cu | $(OUT_DIR)
-	mkdir -p $(dir $@)
+	mkdir -p $(@D)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) $(DEFINES) -c $< -o $@
+
+$(OUT_DIR)/ReduceScatter/multi-node.cu.o: ReduceScatter/single-node.cu
 
 $(LIB_NCCL_SO): $(CU_OBJS) $(LIB_MINT_COLL) $(LIB_MINT)
 	$(CXX) -shared -o $@ $(CU_OBJS) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN:$(abspath $(BUILD_DIR))' $(LDLIBS)

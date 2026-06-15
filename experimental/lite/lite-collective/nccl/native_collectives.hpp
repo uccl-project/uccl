@@ -27,6 +27,16 @@ ncclResult_t runSendRecvReduceScatter(void const* sendbuff, void* recvbuff,
                                       std::shared_ptr<Communicator> bootstrapComm,
                                       int cudaDevice);
 
+ncclResult_t runLiteInterReduceScatter(void const* sendbuff, void* recvbuff,
+                                      size_t recvcount, size_t bytesPerRank,
+                                      ncclDataType_t datatype, ncclRedOp_t op,
+                                      ncclComm_t comm, cudaStream_t stream,
+                                      int rank, int nRanks, void* scratchBuffer,
+                                      size_t scratchBufferSize,
+                                      int nRanksPerNode,
+                                      std::shared_ptr<Communicator> bootstrapComm,
+                                      int cudaDevice);
+
 ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
                                   size_t count, ncclDataType_t datatype,
                                   ncclRedOp_t op, ncclComm_t comm,
@@ -39,6 +49,7 @@ ncclResult_t runSendRecvAllReduce(void const* sendbuff, void* recvbuff,
 
 void cleanupNativeCollectiveContexts(ncclComm_t comm);
 void cleanupLiteAllGatherContexts(ncclComm_t comm);
+void cleanupLiteReduceScatterContexts(ncclComm_t comm);
 
 }  // namespace nccl
 }  // namespace mscclpp

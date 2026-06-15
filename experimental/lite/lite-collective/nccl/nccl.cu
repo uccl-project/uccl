@@ -1386,6 +1386,7 @@ static ncclResult_t executeGroupedCudaIpcSendEventImpl(
 static void dispatchIBSendRound(NcclSendRecvPeerContext& peerCtx,
                                 char const* src, size_t roundBytes,
                                 bool isLastRound) {
+  (void)isLastRound;
   auto* ws = peerCtx.worker.get();
   cudaStream_t d2h = peerCtx.d2hStream;
   char* staging = peerCtx.sendStagingBuffer.get();
@@ -2286,6 +2287,33 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 
   int rank = comm->comm->bootstrap()->getRank();
   int nRank = comm->comm->bootstrap()->getNranks();
+  if (comm->nRanksPerNode > 0 && nRank != comm->nRanksPerNode) {
+    ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
+        sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
+        nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
+        comm->nRanksPerNode, comm->comm, comm->cudaDevice);
+    if (nativeResult == ncclSuccess) return nativeResult;
+    if (nativeResult != ncclInvalidUsage &&
+        nativeResult != ncclInvalidArgument) {
+      return nativeResult;
+    }
+    WARN(MSCCLPP_NCCL,
+         "native inter-node ReduceScatter rejected this request; NCCL fallback "
+         "is disabled for the native ReduceScatter path");
+    return nativeResult;
+  }
+  if (comm->nRanksPerNode > 0 && nRank == comm->nRanksPerNode) {
+    ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
+        sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
+        nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
+        comm->nRanksPerNode, comm->comm, comm->cudaDevice);
+    if (nativeResult == ncclSuccess) return nativeResult;
+    if (nativeResult != ncclInvalidUsage &&
+        nativeResult != ncclInvalidArgument) {
+      return nativeResult;
+    }
+  }
+
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
   mscclpp::DataType dtype;
   if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
@@ -2312,7 +2340,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
     }
   }
 
-  ncclResult_t nativeResult = mscclpp::nccl::runSendRecvReduceScatter(
+  ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
       sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
       nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
       comm->nRanksPerNode, comm->comm, comm->cudaDevice);
