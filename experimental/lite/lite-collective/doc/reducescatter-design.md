@@ -21,8 +21,8 @@ small single-chunk rows and extends direct partner-row CudaIpc copies through th
 mid-size rows.  It makes 2nx4g win at 1MiB, 2MiB, 8MiB, and 16MiB in the current
 no-GDR benchmark; 4MiB remains a small tuned-NCCL win.
 The 1nx4g large-message path uses a native CudaIpc ring.  Rows whose output
-shard no longer fits the fixed communicator scratch are split into 32MiB chunks,
-so the 256MiB-1GiB total-size rows stay on the native path instead of falling
+shard exceeds the tuned one-shot chunk size are split into 16MiB chunks,
+so the 128MiB-1GiB total-size rows stay on the native path instead of falling
 through to real NCCL.
 
 The 2nx1g path is simpler and now wins from 64KiB through 1MiB in the latency
@@ -54,8 +54,8 @@ its previous local peer, adds the matching local shard, and forwards the partial
 for three ring steps.  The ring uses CudaIpc scratch, not host staging or real
 NCCL.
 
-The communicator scratch is fixed-size, so rows above the old one-shot scratch
-limit are processed as 32MiB output-shard chunks.  The chunk size can be tuned
+The communicator scratch is fixed-size, so rows above the tuned one-shot chunk
+size are processed as 16MiB output-shard chunks.  The chunk size can be tuned
 with `MSCCLPP_NCCL_RS_LOCAL_RING_CHUNK_BYTES`; the parser accepts raw bytes or
 `K`/`M`/`G` suffixes.
 
@@ -104,23 +104,65 @@ readiness and per-rank RDMA ready/ack epochs for host-slot reuse.
 
 ## No-CudaIPC mode
 
-`MSCCLPP_NCCL_RS_NO_CUDAIPC=1` forces ReduceScatter through a host/RDMA path for
+`MSCCLPP_NCCL_RS_NO_CUDAIPC=1` forces ReduceScatter through host SHM/RDMA for
 layouts with more than one local rank.  This mode does not call the local
-CudaIpc scratch setup and does not open peer GPU pointers or IPC events.  Each
-rank copies the needed rows from its own GPU to a per-rank pinned host slab,
-waits for local ranks through the shared CPU control block, reduces local
-partials on CPU, exchanges the remote-owned partial over RDMA for multi-node
-layouts, and copies the final shard back to GPU.
+CudaIpc scratch setup and does not open peer GPU pointers or IPC events.
 
-The chunk size defaults to 256KiB and can be changed with
-`MSCCLPP_NCCL_RS_NO_CUDAIPC_CHUNK_BYTES`.  The CPU reduction uses an AVX-512F
-helper when available, with scalar fallback; `MSCCLPP_NCCL_RS_DISABLE_AVX512=1`
-forces the scalar path for debugging.
+For single-node `1nx4g`, tiny shards use the CPU host path because it has the
+lowest fixed latency: each rank D2Hs its rows into a per-rank pinned host slab,
+waits for local ranks through the shared CPU control block, CPU-reduces the
+target shard, and H2Ds the final shard.  The cutoff defaults to 64KiB per rank
+and can be changed with `MSCCLPP_NCCL_RS_NO_CUDAIPC_HOST_SMALL_BYTES`.
 
-Use `NCCL_P2P_DISABLE=1` for the matching NCCL baseline so NCCL also cannot use
-direct local GPU P2P.  On the current L40/L41 testbed this native no-CudaIPC
-path is a functional/reference path rather than the fastest path; the normal
-CudaIpc path remains the performance path.
+For mid-size `1nx4g` shards, the default host-read bulk path D2Hs only the
+three shards owned by the other local ranks into source-local mapped SHM, waits
+for local availability, then a GPU reduction kernel reads the remote rows from
+mapped host memory and adds the local shard directly from `sendbuff`.  This
+avoids the old CPU reduction bottleneck and the three H2D copies from the first
+bulk-DMA design.  Its chunk size defaults to 2MiB and can be changed with
+`MSCCLPP_NCCL_RS_NO_CUDAIPC_BULK_CHUNK_BYTES`.  Setting
+`MSCCLPP_NCCL_RS_NO_CUDAIPC_HOST_READ=0` falls back to the source-local
+bulk-DMA scratch path.
+
+For larger `1nx4g` shards, the default path switches to a direct mapped-SHM
+ring.  Each rank sends the reduce-scatter ring shards through its mapped SHM
+mailbox with GPU copy/add kernels and GPU-visible control flags.  Stream memory
+operations are used for the ring flag wait/store path by default
+(`MSCCLPP_NCCL_RS_NO_CUDAIPC_DIRECT_RING_STREAM_MEMOPS=0` restores the kernel
+flag path).  This avoids the all-to-all host-read barrier and raises
+large-message bus bandwidth on the L4 testbed from about 12.3GB/s to about
+13.6GB/s, but it still trails NCCL's forced-SHM direct protocol.  NCCL's
+forced-SHM ReduceScatter uses two `RING/SIMPLE` channels; forcing NCCL down to
+one channel drops it to about 13.4GB/s, matching this Lite single-channel ring.
+The switch point defaults to 1MiB per receive rank
+(`MSCCLPP_NCCL_RS_NO_CUDAIPC_DIRECT_RING_MIN_BYTES`) and the ring chunk size
+defaults to 16MiB (`MSCCLPP_NCCL_RS_NO_CUDAIPC_DIRECT_RING_CHUNK_BYTES`).
+`MSCCLPP_NCCL_RS_NO_CUDAIPC_DIRECT_RING=0` disables this large-message ring and
+keeps the host-read path.
+
+Multi-node no-CudaIPC layouts continue to use the host/RDMA CPU-reduce path.
+Its chunk size defaults to 256KiB and can be changed with
+`MSCCLPP_NCCL_RS_NO_CUDAIPC_CHUNK_BYTES`.  CPU reductions use an AVX-512F helper
+when available, with scalar fallback; `MSCCLPP_NCCL_RS_DISABLE_AVX512=1` forces
+the scalar path for debugging.
+
+Use `NCCL_P2P_DISABLE=1 NCCL_NET_DISABLE=1` for the matching single-node NCCL
+baseline so NCCL also cannot use direct local GPU P2P or network transport.  On
+the current L40/L41 testbed this native no-CudaIPC path is a
+functional/reference path rather than the fastest path; the normal CudaIpc path
+remains the performance path.
+
+Rejected no-CudaIPC alternatives include an all-to-all direct mapped-SHM GPU
+kernel, row-parallel D2H streams, copy/add unrolling, chunk-level multistream
+launches, DMA-ring staging, receiver-local mailboxes, same- and
+opposite-direction two-channel direct rings, fused wait+add kernels, a
+cooperative single-kernel ring, and a full host CPU-reduce path for large rows.
+All were correctness-clean but slower than the retained hybrid: the all-to-all
+direct and row-parallel variants stayed near the same ~12.2GB/s mapped-host
+bandwidth ceiling, naive channel splits added launch/control overhead without
+reproducing NCCL's persistent FIFO/proxy structure, fused wait+add over-polls
+mapped control memory from many blocks, the cooperative ring loses too much
+parallel memory bandwidth, and the CPU-reduce variant was substantially slower.
 
 ## Size policy
 
@@ -131,6 +173,15 @@ through the general path improves the isolated row but exposes a size-transition
 hang in mixed-size runs, so the stable cutoff remains 1MiB per rank.  Larger
 rows use a five-slot host/scratch pipeline with deferred H2D ack; 2MiB chunks
 are the best stable setting across 4MiB-1GiB on L40/L41.
+
+The `2nx2g` path uses the shared host-slot path below 128KiB total message size
+before entering the two-node/two-GPU hierarchy.  This keeps the low fixed-latency
+host path for tiny rows while sending 128/256KiB through the hierarchy, which is
+faster there.  The hierarchy still uses the round-robin-HCA policy for small rows
+when multiple IB transports are available, but the available-transport count is
+cached so every timed collective does not pay an IB-device enumeration cost.
+Without that cache, 2nx2g small-message latency was dominated by the policy probe
+rather than the ReduceScatter data path.
 
 The current native-only implementation has two internal regimes on `2nx4g`:
 
