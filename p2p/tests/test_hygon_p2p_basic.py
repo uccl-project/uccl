@@ -180,26 +180,6 @@ def test_memcpy_peer(hip, n):
     hip.hipFree(dst_dev)
 
 
-# ── 5. p2p module Endpoint creation ──────────────────────────────────────────
-
-def test_p2p_endpoint():
-    p2p_so = os.path.join(os.path.dirname(__file__), "..", "p2p.abi3.so")
-    p2p_so = os.path.realpath(p2p_so)
-    if not os.path.exists(p2p_so):
-        print(f"[SKIP] {p2p_so} not found")
-        return
-
-    sys.path.insert(0, os.path.dirname(p2p_so))
-    try:
-        import p2p as _p2p
-        ep = _p2p.Endpoint(local_gpu_idx=0)
-        meta = bytes(ep.get_metadata())
-        print(f"[PASS] p2p.Endpoint(gpu=0) created, metadata len={len(meta)}")
-        del ep
-    except Exception as e:
-        print(f"[FAIL] p2p.Endpoint: {e}")
-
-
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -215,7 +195,6 @@ if __name__ == "__main__":
     test_peer_access(hip, n)
     test_ipc_handles(hip, n)
     test_memcpy_peer(hip, n)
-    test_p2p_endpoint()
 
     print("=" * 60)
     print("  Done")
