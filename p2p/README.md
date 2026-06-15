@@ -64,6 +64,12 @@ To enable AWS EFA support, you can do the same as above, and specify `UCCL_P2P_T
 
 To enable GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md).
 
+To enable HPE Slingshot/CXI support, build with libfabric headers and select the `cxi` transport at runtime:
+```bash
+USE_CXI=1 LIBFABRIC_HOME=/path/to/libfabric make -j install
+UCCL_P2P_TRANSPORT=cxi UCCL_P2P_DISABLE_IPC=1 torchrun ...
+```
+
 To build with DietGPU float compression support, you can:
 ```bash
 USE_DIETGPU=1 make -j install
@@ -92,7 +98,7 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx NCCL_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
-* You can specify `UCCL_P2P_TRANSPORT=ib|efa|nccl|tcp|tcpx` at runtime to choose different network backends. The default is `ib` that works for NVIDIA, Broadcom, AMD, and Intel RDMA NICs. 
+* You can specify `UCCL_P2P_TRANSPORT=ib|efa|nccl|tcp|tcpx|cxi` at runtime to choose different network backends. The default is `ib` that works for NVIDIA, Broadcom, AMD, and Intel RDMA NICs.
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * One-sided network write is the default in `benchmark_uccl.py`; use `--mode read` for RDMA read.
 * To benchmark one-sided IPC write (GPU-to-GPU or CPU-to-GPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc`. Use `--device cpu --pinned` for CPU source buffers.
@@ -107,7 +113,16 @@ Notes:
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
 | UCCL_P2P_RDMA_DEV | RDMA devices forced to use (instead of auto-selecting based on PCIe affinity) | none (eg, `irdma-mkp0,irdma-mkp1`) |
-| UCCL_P2P_TRANSPORT | Network backend to use at runtime | ib (others: efa/nccl/tcp/tcpx) |
+| UCCL_P2P_TRANSPORT | Network backend to use at runtime | ib (others: efa/nccl/tcp/tcpx/cxi) |
+| UCCL_CXI_DOMAIN | CXI/libfabric domain to use when `UCCL_P2P_TRANSPORT=cxi` | auto from GPU index, eg `cxi0` |
+| UCCL_CXI_DEVICE_INDEX | CXI device index used for automatic domain selection | GPU index modulo 4 |
+| UCCL_CXI_THREADING | libfabric threading hint for the CXI domain | endpoint |
+| UCCL_CXI_TX_QUEUE_SIZE | CXI transmit queue size | 4096 |
+| UCCL_CXI_RX_QUEUE_SIZE | CXI receive queue size | 4096 |
+| UCCL_CXI_CQ_SIZE | CXI completion queue size | 8192 |
+| UCCL_CXI_DELIVERY_COMPLETE | Request FI_DELIVERY_COMPLETE for CXI sends when set to `1` | unset |
+| UCCL_P2P_MAX_INFLIGHT_OPS | Maximum one-sided in-flight operations; CXI defaults lower than RDMA | 32 for CXI, otherwise internal maximum |
+| UCCL_LIBFABRIC_SO | Override libfabric shared-library path for the CXI dlsym wrapper | auto-detect `libfabric.so` / `libfabric.so.1` |
 | UCCL_P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
 | UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
 

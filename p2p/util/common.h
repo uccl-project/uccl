@@ -56,6 +56,7 @@ typedef struct AcceptedMeta {
 // Notifications
 static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
 static constexpr size_t NOTIFY_MSG_SIZE = 256;
+static constexpr int UCCL_POST_TRANSIENT = -2;
 
 struct NotifyMsg {
   uint32_t magic;
