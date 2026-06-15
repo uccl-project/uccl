@@ -32,6 +32,7 @@
 #include "gpu_utils.hpp"
 #include "ib.hpp"
 #include "logger.hpp"
+#include "lite_common.h"
 #include "memory_channel.hpp"
 #include "native_collectives.hpp"
 #include "nccl.h"
@@ -823,9 +824,13 @@ void registerMigratedAppNcclAlgorithms(uintptr_t scratchBuffer,
   auto b = mscclpp::collective::AlgorithmCollectionBuilder::getInstance();
   b->addAlgorithmBuilder(
       std::make_shared<BroadcastAlgo6>(scratchBuffer, scratchBufferSize));
-  b->addAlgorithmBuilder(std::make_shared<AllgatherAlgo6>());
   b->addAlgorithmBuilder(
-      std::make_shared<AllgatherAlgo8>(scratchBuffer, scratchBufferSize));
+      std::make_shared<LiteAllgatherAlgo>(
+          "lite_single_node_cudaipc", LiteAllGatherPath::SingleNodeCudaIpc));
+  b->addAlgorithmBuilder(std::make_shared<LiteAllgatherAlgo>(
+      "lite_single_node_shm", LiteAllGatherPath::SingleNodeShm));
+  b->addAlgorithmBuilder(std::make_shared<LiteAllgatherAlgo>(
+      "lite_multi_node", LiteAllGatherPath::MultiNode));
   b->addAlgorithmBuilder(
       std::make_shared<AllreducePacket>(scratchBuffer, scratchBufferSize));
   b->addAlgorithmBuilder(std::make_shared<AllreduceNvls>());
@@ -1692,22 +1697,6 @@ static std::shared_ptr<mscclpp::Algorithm> algoSelector(
                            std::shared_ptr<mscclpp::Algorithm>>> const&
         algoMapByCollective,
     mscclpp::CollectiveRequest const& request) {
-  if (algoMapByCollective.find(request.collective) ==
-      algoMapByCollective.end()) {
-    return nullptr;
-  }
-
-  for (auto const& pair : algoMapByCollective.at(request.collective)) {
-    auto const& algo = pair.second;
-    if (algo->type() == mscclpp::AlgorithmType::DSL) {
-      if (mscclpp::nccl::matchExecutionPlan(
-              std::static_pointer_cast<mscclpp::DslAlgorithm>(algo), request)) {
-        return algo;
-      }
-    }
-  }
-
-  // Prepare algorithm selector configuration
   static bool const isNvlsSupported = mscclpp::isNvlsSupported();
   static const std::pair<int, int> deviceComputeCapability =
       getDeviceComputeCapability();
@@ -1727,33 +1716,11 @@ static std::shared_ptr<mscclpp::Algorithm> algoSelector(
       .isCuMemMapAllocated = isCuMemMapAllocated,
       .inCaptureMode = inCaptureMode,
       .computeCapability = deviceComputeCapability,
-      .ncclDlopenSharedLib = mscclppNcclDlopenSharedLib};
+      .ncclDlopenSharedLib = mscclppNcclDlopenSharedLib,
+      .allGatherP2pMinTotalBytes = kIntraAllGatherRingMinTotalBytes};
 
-  auto const& algoMap = algoMapByCollective.at(request.collective);
-
-  // Check if this is a multi-node scenario
-  if (request.nRanksPerNode != request.worldSize) {
-    return mscclpp::nccl::selectMultiNodeAlgorithm(algoMap, request, config);
-  }
-
-  // Single-node scenarios
-  if (request.collective == "allgather") {
-    return mscclpp::nccl::selectSingleNodeAllgather(algoMap, request, config);
-  }
-
-  if (request.collective == "allreduce") {
-    return mscclpp::nccl::selectSingleNodeAllreduce(algoMap, request, config);
-  }
-
-  if (request.collective == "reducescatter") {
-    return mscclpp::nccl::selectSingleNodeReduceScatter(algoMap, request,
-                                                        config);
-  }
-
-  INFO(MSCCLPP_NCCL,
-       "No suitable algorithm found for collective '%s', fallback to nccl/rccl",
-       request.collective.c_str());
-  return nullptr;
+  return mscclpp::nccl::selectNcclAlgorithm(algoMapByCollective, request,
+                                            config);
 }
 
 NCCL_API ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
@@ -2395,79 +2362,66 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
        "rank %d allgather sendbuff %p recvbuff %p count %ld, dtype %d, comm %p",
        rank, sendbuff, recvbuff, sendcount, datatype, comm);
 
-  char const* fallbackList = mscclpp::env()->forceNcclFallbackOperation.c_str();
-  if (mscclppNcclDlopenSharedLib == true &&
-      mscclppNcclInFallbackList("allgather", fallbackList)) {
-    return mscclppNcclOps.AllGather(
-        sendbuff, recvbuff, sendcount, datatype,
-        *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
-  }
-
-  if (nRank == comm->nRanksPerNode) {
-    ncclResult_t nativeResult =
-        hostAllGatherEnabled()
-            ? runIntraNodeHostAllGather(
-                  sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
-                  comm->nRanksPerNode, comm->comm, comm->cudaDevice)
-            : runIntraNodeCudaIpcAllGather(sendbuff, recvbuff, bytes, comm,
-                                           stream, rank, nRank);
-    if (nativeResult == ncclSuccess) return nativeResult;
-    if (nativeResult != ncclInvalidUsage &&
-        nativeResult != ncclInvalidArgument) {
-      return nativeResult;
-    }
+  auto ncclFallback = [&]() -> ncclResult_t {
     if (mscclppNcclDlopenSharedLib == true) {
       return mscclppNcclOps.AllGather(
           sendbuff, recvbuff, sendcount, datatype,
           *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
     }
+    WARN(MSCCLPP_NCCL, "No FallBack implementation for AllGather");
+    return ncclInvalidUsage;
+  };
+
+  if (mscclpp::lite::forceFallback(
+          mscclppNcclDlopenSharedLib, "allgather",
+          mscclpp::env()->forceNcclFallbackOperation)) {
+    return ncclFallback();
   }
 
-  bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
-  mscclpp::DataType dtype;
-  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
-    mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
-                                          .nRanksPerNode = comm->nRanksPerNode,
-                                          .rank = rank,
-                                          .inputBuffer = sendbuff,
-                                          .outputBuffer = recvbuff,
-                                          .messageSize = bytes,
-                                          .stream = stream,
-                                          .collective = "allgather",
-                                          .dtype = dtype,
-                                          .op = mscclpp::ReduceOp::NOP,
-                                          .hints = {}};
-
-    auto algo = comm->algorithmCollection.selectAlgorithm(request);
-    if (algo != nullptr) {
-      ncclResult_t algoResult = static_cast<ncclResult_t>(algo->execute(
-          comm->comm, sendbuff, recvbuff, bytes, bytes * nRank, dtype,
-          mscclpp::ReduceOp::NOP, stream, comm->executor, 0, 0,
-          symmetricMemory));
-      if (algoResult != ncclInvalidArgument &&
-          algoResult != ncclInvalidUsage) {
-        return algoResult;
-      }
-    }
+  mscclpp::DataType dtype = mscclpp::DataType::UINT8;
+  (void)tryNcclDataTypeToMscclpp(datatype, &dtype);
+  std::unordered_map<std::string, std::vector<uint64_t>> hints{
+      {"host", {hostAllGatherEnabled() ? 1ULL : 0ULL}},
+      {"has_ib", {comm->hasIB ? 1ULL : 0ULL}},
+      {"cuda_ipc_event_sync", {cudaIpcEventSyncEnabled() ? 1ULL : 0ULL}}};
+  mscclpp::CollectiveRequest request = {.worldSize = nRank,
+                                        .nRanksPerNode = comm->nRanksPerNode,
+                                        .rank = rank,
+                                        .inputBuffer = sendbuff,
+                                        .outputBuffer = recvbuff,
+                                        .messageSize = bytes,
+                                        .stream = stream,
+                                        .collective = "allgather",
+                                        .dtype = dtype,
+                                        .op = mscclpp::ReduceOp::NOP,
+                                        .hints = hints};
+  auto algo = comm->algorithmCollection.selectAlgorithm(request);
+  ncclResult_t liteResult = ncclInvalidUsage;
+  if (algo != nullptr) {
+    size_t outputSize =
+        nRank > 0 &&
+                bytes <= std::numeric_limits<size_t>::max() /
+                             static_cast<size_t>(nRank)
+            ? bytes * static_cast<size_t>(nRank)
+            : 0;
+    std::unordered_map<std::string, uintptr_t> extras{
+        {"nccl_comm", reinterpret_cast<uintptr_t>(comm)},
+        {"sendcount", static_cast<uintptr_t>(sendcount)},
+        {"datatype", static_cast<uintptr_t>(datatype)},
+        {"rank", static_cast<uintptr_t>(rank)},
+        {"nranks", static_cast<uintptr_t>(nRank)},
+        {"nranks_per_node", static_cast<uintptr_t>(comm->nRanksPerNode)},
+        {"cuda_device", static_cast<uintptr_t>(comm->cudaDevice)},
+        {"bootstrap_comm", reinterpret_cast<uintptr_t>(&comm->comm)},
+        {"p2p_fn", reinterpret_cast<uintptr_t>(&runIntraNodeCudaIpcAllGather)},
+        {"host_fn", reinterpret_cast<uintptr_t>(&runIntraNodeHostAllGather)}};
+    liteResult = static_cast<ncclResult_t>(algo->execute(
+        comm->comm, sendbuff, recvbuff, bytes, outputSize, dtype,
+        mscclpp::ReduceOp::NOP, stream, comm->executor, 0, 0, false, extras));
   }
+  if (!mscclpp::lite::needsFallback(liteResult)) return liteResult;
 
-  ncclResult_t nativeResult = mscclpp::nccl::runLiteAllGather(
-      sendbuff, recvbuff, sendcount, bytes, datatype, comm, stream, rank, nRank,
-      comm->nRanksPerNode, comm->comm, comm->cudaDevice);
-  if (nativeResult == ncclSuccess) return nativeResult;
-  if (nativeResult != ncclInvalidUsage &&
-      nativeResult != ncclInvalidArgument) {
-    return nativeResult;
-  }
-
-  if (mscclppNcclDlopenSharedLib == true) {
-    return mscclppNcclOps.AllGather(
-        sendbuff, recvbuff, sendcount, datatype,
-        *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
-  }
-
-  WARN(MSCCLPP_NCCL, "No FallBack implementation for AllGather");
-  return ncclInvalidUsage;
+  return ncclFallback();
 }
 
 NCCL_API ncclResult_t ncclSend(void const* sendbuff, size_t count,

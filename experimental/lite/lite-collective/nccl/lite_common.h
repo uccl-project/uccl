@@ -1,7 +1,6 @@
 #ifndef MSCCLPP_NCCL_LITE_COMMON_H_
 #define MSCCLPP_NCCL_LITE_COMMON_H_
 
-#include "debug.h"
 #include "env.hpp"
 #include "gpu_utils.hpp"
 #include "ib.hpp"
@@ -14,6 +13,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <sstream>
@@ -32,7 +32,6 @@ inline void* operator new(std::size_t, std::align_val_t, void* ptr) noexcept {
 }
 
 namespace mscclpp {
-namespace nccl {
 namespace lite {
 
 struct InitStatus {
@@ -79,7 +78,8 @@ class InitGuard {
 
 inline ncclResult_t cudaResult(cudaError_t error, char const* operation) {
   if (error == cudaSuccess) return ncclSuccess;
-  WARN("%s failed with CUDA error: %s", operation, cudaGetErrorString(error));
+  std::fprintf(stderr, "WARN: %s failed with CUDA error: %s\n", operation,
+               cudaGetErrorString(error));
   if (error == cudaErrorInvalidValue) return ncclInvalidArgument;
   return ncclUnhandledCudaError;
 }
@@ -197,7 +197,7 @@ inline void placeOnNuma(void* mapping, size_t size, int numaNode,
                         char const* name) {
   if (mapping == nullptr || size == 0 || numaNode < 0) return;
   if (numa_available() < 0) {
-    WARN("NUMA placement unavailable for %s", name);
+    std::fprintf(stderr, "WARN: NUMA placement unavailable for %s\n", name);
     return;
   }
   std::memset(mapping, 0, size);
@@ -256,8 +256,23 @@ inline void waitForCudaEvent(cudaEvent_t event) {
   }
 }
 
+inline bool needsFallback(ncclResult_t result) {
+  return result == ncclInvalidUsage || result == ncclInvalidArgument;
+}
+
+inline bool forceFallback(bool ncclLoaded, char const* opName,
+                          std::string const& fallbackList) {
+  if (!ncclLoaded) return false;
+  if (fallbackList == "all") return true;
+  std::stringstream ss(fallbackList);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    if (token == opName) return true;
+  }
+  return false;
+}
+
 }  // namespace lite
-}  // namespace nccl
 }  // namespace mscclpp
 
 #endif  // MSCCLPP_NCCL_LITE_COMMON_H_

@@ -53,16 +53,16 @@ static constexpr int kSmallSignalEveryN = 256;
 static constexpr int kPairSignalEveryN = 1024;
 static constexpr int kIpcDeviceFlagPhases = 2;
 
-using lite::cudaResult;
-using lite::createOwnedShm;
-using lite::getAvailableIBTransports;
-using lite::InitGuard;
-using lite::mapException;
-using lite::mapShm;
-using lite::placeOnNuma;
-using lite::publishInitStatus;
-using lite::selectIBTransportForGpu;
-using lite::waitForEpoch;
+using mscclpp::lite::cudaResult;
+using mscclpp::lite::createOwnedShm;
+using mscclpp::lite::getAvailableIBTransports;
+using mscclpp::lite::InitGuard;
+using mscclpp::lite::mapException;
+using mscclpp::lite::mapShm;
+using mscclpp::lite::placeOnNuma;
+using mscclpp::lite::publishInitStatus;
+using mscclpp::lite::selectIBTransportForGpu;
+using mscclpp::lite::waitForEpoch;
 
 struct RsControl {
   alignas(64) std::atomic<uint64_t> localCopyReady[kMaxRanksPerNode];

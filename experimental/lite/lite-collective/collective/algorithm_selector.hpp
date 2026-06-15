@@ -20,6 +20,7 @@ struct AlgorithmSelectorConfig {
   bool inCaptureMode;
   std::pair<int, int> computeCapability;
   bool ncclDlopenSharedLib;
+  size_t allGatherP2pMinTotalBytes = 0;
 };
 
 /// Select an algorithm for single-node allreduce
@@ -30,6 +31,19 @@ std::shared_ptr<Algorithm> selectSingleNodeAllreduce(
 /// Select an algorithm for single-node allgather
 std::shared_ptr<Algorithm> selectSingleNodeAllgather(
     std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    CollectiveRequest const& request, AlgorithmSelectorConfig const& config);
+
+/// Select a Lite native AllGather path
+std::shared_ptr<Algorithm> selectLiteAllGather(
+    std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    CollectiveRequest const& request, AlgorithmSelectorConfig const& config);
+
+/// Select an NCCL-shim algorithm using the standard selector chain
+std::shared_ptr<Algorithm> selectNcclAlgorithm(
+    std::unordered_map<
+        std::string,
+        std::unordered_map<std::string, std::shared_ptr<Algorithm>>> const&
+        algoMapByCollective,
     CollectiveRequest const& request, AlgorithmSelectorConfig const& config);
 
 /// Select an algorithm for single-node reducescatter

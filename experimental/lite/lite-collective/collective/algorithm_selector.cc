@@ -5,9 +5,49 @@
 #include "debug.h"
 #include "env.hpp"
 #include "utils.hpp"
+#include <limits>
 
 namespace mscclpp {
 namespace nccl {
+
+static std::shared_ptr<Algorithm> findAlgorithm(
+    std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    char const* name) {
+  auto it = algoMap.find(name);
+  return it == algoMap.end() ? nullptr : it->second;
+}
+
+static uint64_t hintValue(CollectiveRequest const& request, char const* name) {
+  auto it = request.hints.find(name);
+  if (it == request.hints.end() || it->second.empty()) return 0;
+  return it->second[0];
+}
+
+static bool canUseAllGatherP2p(CollectiveRequest const& request,
+                               AlgorithmSelectorConfig const& config) {
+  bool hostEnabled = hintValue(request, "host") != 0;
+  bool hasIB = hintValue(request, "has_ib") != 0;
+  bool cudaIpcEventSync = hintValue(request, "cuda_ipc_event_sync") != 0;
+  if (hostEnabled || request.worldSize <= 0 ||
+      request.worldSize != request.nRanksPerNode) {
+    return false;
+  }
+  if (request.messageSize >
+      std::numeric_limits<size_t>::max() /
+          static_cast<size_t>(request.worldSize)) {
+    return false;
+  }
+  size_t fullBytes =
+      request.messageSize * static_cast<size_t>(request.worldSize);
+  return hasIB && cudaIpcEventSync &&
+         fullBytes >= config.allGatherP2pMinTotalBytes;
+}
+
+static bool canUseAllGatherHost(CollectiveRequest const& request,
+                                AlgorithmSelectorConfig const&) {
+  return hintValue(request, "host") != 0 &&
+         request.worldSize == request.nRanksPerNode;
+}
 
 static bool isNvlsSupportedForDataType(AlgorithmSelectorConfig const& config,
                                        DataType dtype) {
@@ -198,6 +238,58 @@ std::shared_ptr<Algorithm> selectSingleNodeAllgather(
   }
   return nullptr;
 #endif
+}
+
+std::shared_ptr<Algorithm> selectLiteAllGather(
+    std::unordered_map<std::string, std::shared_ptr<Algorithm>> const& algoMap,
+    CollectiveRequest const& request, AlgorithmSelectorConfig const& config) {
+  if (canUseAllGatherP2p(request, config)) {
+    return findAlgorithm(algoMap, "lite_single_node_cudaipc");
+  }
+  if (canUseAllGatherHost(request, config)) {
+    return findAlgorithm(algoMap, "lite_single_node_shm");
+  }
+  return findAlgorithm(algoMap, "lite_multi_node");
+}
+
+std::shared_ptr<Algorithm> selectNcclAlgorithm(
+    std::unordered_map<
+        std::string,
+        std::unordered_map<std::string, std::shared_ptr<Algorithm>>> const&
+        algoMapByCollective,
+    CollectiveRequest const& request, AlgorithmSelectorConfig const& config) {
+  auto collectiveIt = algoMapByCollective.find(request.collective);
+  if (collectiveIt == algoMapByCollective.end()) return nullptr;
+  auto const& algoMap = collectiveIt->second;
+
+  for (auto const& [_, algo] : algoMap) {
+    if (algo->type() == AlgorithmType::DSL &&
+        matchExecutionPlan(std::static_pointer_cast<DslAlgorithm>(algo),
+                           request)) {
+      return algo;
+    }
+  }
+
+  if (request.collective == "allgather") {
+    return selectLiteAllGather(algoMap, request, config);
+  }
+
+  if (request.nRanksPerNode != request.worldSize) {
+    return selectMultiNodeAlgorithm(algoMap, request, config);
+  }
+
+  if (request.collective == "allreduce") {
+    return selectSingleNodeAllreduce(algoMap, request, config);
+  }
+
+  if (request.collective == "reducescatter") {
+    return selectSingleNodeReduceScatter(algoMap, request, config);
+  }
+
+  INFO(MSCCLPP_NCCL,
+       "No suitable algorithm found for collective '%s', fallback to nccl/rccl",
+       request.collective.c_str());
+  return nullptr;
 }
 
 std::shared_ptr<Algorithm> selectSingleNodeReduceScatter(

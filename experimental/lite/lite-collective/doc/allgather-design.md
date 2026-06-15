@@ -10,7 +10,7 @@ send/recv path.
 
 | Topic | Summary |
 | --- | --- |
-| Entry points | `ncclAllGather` first tries single-node native paths in [`nccl.cu`](../nccl/nccl.cu#L3624), then `runLiteAllGather` in [`multi-node.cu`](../nccl/Allgather/multi-node.cu#L2328) handles multi-node host-slab layouts |
+| Entry points | `ncclAllGather` validates arguments, honors forced NCCL fallback, then calls `algorithmCollection.selectAlgorithm`; Lite AllGather registers three native algorithms (`lite_single_node_cudaipc`, `lite_single_node_shm`, `lite_multi_node`) |
 | Target layouts | `1nx4g` default CudaIpc ring; opt-in `1nx4g` no-CudaIpc host-memory path; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
 | `1nx4g` default large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
 | `1nx4g` no-CudaIpc host mode | Set `MSCCLPP_NCCL_HOST_ALLGATHER=1`; payload stages through POSIX shared pinned host memory and does not use CudaIpc payload writes |
@@ -35,20 +35,20 @@ This distinction matters because the `2nx1g` fast path is capped by
 
 ## Dispatch model
 
-The NCCL shim has a single-node fast path before the multi-node
-`runLiteAllGather` path:
+The NCCL shim keeps `ncclAllGather` itself narrow: argument validation,
+forced NCCL fallback, then `algorithmCollection.selectAlgorithm`.  Lite
+AllGather exposes three native algorithms to the selector:
 
-1. `ncclAllGather` handles trivial `worldSize == 1` and forced NCCL fallback.
-2. If all ranks are on one node (`nRank == nRanksPerNode`), try a native
-   single-node path.  By default this is `runIntraNodeCudaIpcAllGather`; with
-   `MSCCLPP_NCCL_HOST_ALLGATHER=1`, it is `runIntraNodeHostAllGather`.
-3. The default CudaIpc path only accepts large messages (`fullBytes >= 8MiB`),
-   CUDA IPC event synchronization, non-capturing streams, and a valid
-   CudaIpc-mappable `recvbuff` allocation.  The host-memory path is opt-in and
-   covers the full `1nx4g` range without using CudaIpc payload writes.
-   Unsupported cases return `ncclInvalidUsage`, so the wrapper falls back to
-   real NCCL when the dlopen fallback is configured.
-4. Multi-node layouts continue through `runLiteAllGather`.
+1. `ncclAllGather` handles invalid arguments, trivial `worldSize == 1`, and
+   forced NCCL fallback.
+2. `lite_single_node_cudaipc` selects the single-node CudaIpc path
+   (`runIntraNodeCudaIpcAllGather`) when all ranks are local, host mode is
+   off, IB-backed signaling is available, CUDA IPC event sync is enabled, and
+   total output is at least 8MiB.
+3. `lite_single_node_shm` handles opt-in single-node shared-memory staging
+   (`MSCCLPP_NCCL_HOST_ALLGATHER=1`).
+4. `lite_multi_node` handles all multi-node layouts through
+   `runLiteAllGather`.
 
 `runLiteAllGather` handles multi-node layouts before the final NCCL fallback.
 The multi-node order is intentionally short:
@@ -79,7 +79,9 @@ Code pointers:
 | Single-node host-memory implementation | [`single-node.cu:L842-L1163`](../nccl/Allgather/single-node.cu#L842-L1163) |
 | Single-node CudaIpc ring threshold | [`single-node.cu:L6-L7`](../nccl/Allgather/single-node.cu#L6-L7) |
 | Single-node CudaIpc ring implementation | [`single-node.cu:L1175-L1362`](../nccl/Allgather/single-node.cu#L1175-L1362) |
-| `ncclAllGather` dispatch and fallback order | [`nccl.cu:L2358-L2421`](../nccl/nccl.cu#L2358-L2421) |
+| Lite native algorithm wrappers | [`allgather.hpp`](../nccl/allgather.hpp), [`allgather.cu`](../nccl/allgather.cu) |
+| `ncclAllGather` validation and top-level fallback | [`nccl.cu`](../nccl/nccl.cu) |
+| Lite shim dispatch and fallback order | [`algorithm_selector.cc`](../collective/algorithm_selector.cc) |
 | Constants and thresholds | [`multi-node.cu:L44-L69`](../nccl/Allgather/multi-node.cu#L44-L69) |
 | Remote data-ready atomic signal | [`multi-node.cu:L619-L631`](../nccl/Allgather/multi-node.cu#L619-L631) |
 | Context setup and 2nx1g slab sizing | [`multi-node.cu:L786-L852`](../nccl/Allgather/multi-node.cu#L786-L852) |

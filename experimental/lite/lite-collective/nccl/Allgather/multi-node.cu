@@ -1,5 +1,6 @@
 #include "native_collectives.hpp"
 #include "lite_common.h"
+#include "debug.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -75,16 +76,16 @@ static constexpr uint64_t kPipeValueStride =
     kOneRankPipelineChunkBytes;
 static constexpr bool kEnableOneRankGpuDirect = false;
 
-using lite::createOwnedShm;
-using lite::cudaResult;
-using lite::getAvailableIBTransports;
-using lite::InitGuard;
-using lite::mapException;
-using lite::mapShm;
-using lite::placeOnNuma;
-using lite::publishInitStatus;
-using lite::selectIBTransportForGpu;
-using lite::waitForEpoch;
+using mscclpp::lite::createOwnedShm;
+using mscclpp::lite::cudaResult;
+using mscclpp::lite::getAvailableIBTransports;
+using mscclpp::lite::InitGuard;
+using mscclpp::lite::mapException;
+using mscclpp::lite::mapShm;
+using mscclpp::lite::placeOnNuma;
+using mscclpp::lite::publishInitStatus;
+using mscclpp::lite::selectIBTransportForGpu;
+using mscclpp::lite::waitForEpoch;
 
 struct HostControl {
   alignas(64) std::atomic<uint64_t>

@@ -23,8 +23,10 @@ INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/third
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
 OUT_DIR   := build
-# ReduceScatter/single-node.cu is included by multi-node.cu so both paths can
-# share the file-local helper state without exporting a large internal ABI.
+# Allgather/single-node.cu is included by nccl.cu so the NCCL API wrapper can
+# use file-local shim helpers without exporting internal ABI.
+# ReduceScatter/single-node.cu follows the same pattern from
+# ReduceScatter/multi-node.cu.
 REDUCESCATTER_CU_SRCS := $(filter-out ReduceScatter/single-node.cu,$(wildcard ReduceScatter/*.cu))
 CU_SRCS   := $(wildcard *.cu) Allgather/multi-node.cu $(REDUCESCATTER_CU_SRCS)
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
@@ -54,6 +56,10 @@ $(OUT_DIR):
 $(OUT_DIR)/%.cu.o: %.cu | $(OUT_DIR)
 	mkdir -p $(@D)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) $(DEFINES) -c $< -o $@
+
+$(OUT_DIR)/allgather.cu.o: allgather.hpp
+
+$(OUT_DIR)/nccl.cu.o: Allgather/single-node.cu allgather.hpp lite_common.h
 
 $(OUT_DIR)/ReduceScatter/multi-node.cu.o: ReduceScatter/single-node.cu
 
