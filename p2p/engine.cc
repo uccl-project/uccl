@@ -849,7 +849,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         uccl_drive_send(ep_);
         uccl_drive_recv(ep_);
         std::this_thread::yield();
-        continue;
+        return false;
       }
       if (rc == -1) {
         if (num_inflight == 0) {
@@ -1176,7 +1176,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         uccl_drive_send(ep_);
         uccl_drive_recv(ep_);
         std::this_thread::yield();
-        continue;
+        return false;
       }
       if (rc == -1) {
         if (num_inflight == 0) {
