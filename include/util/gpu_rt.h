@@ -181,13 +181,18 @@ typedef int gpuMemRangeHandleType;
 #endif
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
-#define gpuMemoryTypeDevice hipMemoryTypeDevice
 // The pointer-attribute memory type field was renamed in ROCm: DTK/HIP≤5.x
 // exposes it as .memoryType; newer ROCm renamed it to .type.
+// Additionally, the enum VALUES differ: DTK has hipMemoryTypeDevice=1 but
+// ROCm 6.1 runtime uses hipMemoryTypeDevice=2 (hipMemoryTypeHost=1).
+// When compiling with DTK headers but running against ROCm 6.1, use the
+// ROCm 6.1 runtime value (2) to correctly classify device memory.
 #ifdef __UCCL_DTK__
 #define gpuPointerMemoryType(a) ((a).memoryType)
+#define gpuMemoryTypeDevice 2
 #else
 #define gpuPointerMemoryType(a) ((a).type)
+#define gpuMemoryTypeDevice hipMemoryTypeDevice
 #endif
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"

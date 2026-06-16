@@ -33,7 +33,7 @@ def test_register_memory_basic():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create a single tensor
@@ -98,7 +98,7 @@ def test_register_memory_multiple():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create multiple tensors with different sizes
@@ -159,7 +159,7 @@ def test_register_memory_empty_list():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Register empty list
@@ -186,7 +186,7 @@ def test_register_memory_invalid_input():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Try to register a non-tensor object
@@ -215,7 +215,7 @@ def test_register_memory_mixed_valid_invalid():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create valid tensor
@@ -245,7 +245,7 @@ def test_register_memory_different_dtypes():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create tensors with different dtypes
@@ -293,7 +293,7 @@ def test_get_serialized_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create tensors
@@ -329,7 +329,7 @@ def test_deserialize_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create tensors
@@ -392,7 +392,7 @@ def test_serialize_deserialize_roundtrip():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(0)
     print("Created Endpoint on GPU 4")
 
     # Create tensors with different sizes and dtypes
@@ -484,7 +484,7 @@ def test_transfer():
     if rank == 0:
         # Client side
         print("[Client] Creating endpoint...")
-        ep = p2p.Endpoint(4)
+        ep = p2p.Endpoint(0)
 
         # Get local metadata
         local_metadata = ep.get_metadata()
@@ -531,15 +531,16 @@ def test_transfer():
         print(f"[Client] Deserialized {len(remote_descs)} remote descriptor(s)")
 
         # Start transfer (WRITE operation)
-        xfer_handle = ep.transfer(conn_id, "WRITE", local_descs, remote_descs)
-        assert xfer_handle is not None, "Failed to start transfer"
-        print(f"[Client] Started WRITE transfer")
+        success, transfer_id = ep.transfer(conn_id, "write", local_descs, remote_descs)
+        assert success, "Failed to start transfer"
+        print(f"[Client] Started WRITE transfer, transfer_id={transfer_id}")
 
-        # Check transfer state until complete
+        # Poll until transfer completes
         max_wait = 100
         wait_count = 0
+        is_done = False
         while wait_count < max_wait:
-            is_done = ep.check_xfer_state(xfer_handle)
+            _, is_done = ep.poll_async(transfer_id)
             if is_done:
                 print(f"[Client] Transfer completed")
                 break
@@ -554,7 +555,7 @@ def test_transfer():
     elif rank == 1:
         # Server side
         print("[Server] Creating endpoint...")
-        ep = p2p.Endpoint(4)
+        ep = p2p.Endpoint(0)
         ep.start_passive_accept()
 
         # Get local metadata
