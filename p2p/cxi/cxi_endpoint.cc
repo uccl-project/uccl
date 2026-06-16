@@ -89,6 +89,16 @@ bool is_cuda_pointer(void* ptr, int& cuda_device) {
   return false;
 }
 
+void set_fi_context_owner(fi_context2& ctx, void* owner) {
+  ctx = fi_context2{};
+  ctx.internal[0] = owner;
+}
+
+void* get_fi_context_owner(void* context) {
+  auto* fi_ctx = static_cast<fi_context2*>(context);
+  return fi_ctx ? fi_ctx->internal[0] : nullptr;
+}
+
 std::string cq_error_string(fid_cq* cq, fi_cq_err_entry const& err) {
   char buf[256];
   char const* msg =
@@ -523,7 +533,14 @@ int CxiEndpoint::uccl_regmr(void* data, size_t len,
 void CxiEndpoint::uccl_deregmr(
     std::shared_ptr<CxiMemoryRegion> const& region) {
   if (!region || !region->mr) return;
-  fi_close(&region->mr->fid);
+  fid_mr* mr = region->mr;
+  int ret = fi_close(&mr->fid);
+  if (ret != 0) {
+    UCCL_LOG(ERROR) << "fi_close(mr) failed: " << fi_strerror(-ret);
+    return;
+  }
+  region->mr = nullptr;
+  region->key = 0;
 }
 
 int CxiEndpoint::uccl_read_async(
@@ -577,6 +594,7 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
   auto op = std::make_unique<OpContext>();
   op->id = static_cast<uint32_t>(
       next_request_id_.fetch_add(1, std::memory_order_relaxed));
+  set_fi_context_owner(op->ctx, op.get());
   uint64_t const remote_offset = fifo_item.addr - metadata.base;
 
   ssize_t rc;
@@ -637,7 +655,8 @@ void CxiEndpoint::poll_cq_locked() {
     if (rc > 0) {
       std::lock_guard<std::mutex> lock(op_mutex_);
       for (ssize_t i = 0; i < rc; ++i) {
-        auto* ctx = reinterpret_cast<OpContext*>(entries[i].op_context);
+        auto* ctx =
+            static_cast<OpContext*>(get_fi_context_owner(entries[i].op_context));
         if (ctx) ctx->done = true;
       }
       continue;
@@ -652,7 +671,8 @@ void CxiEndpoint::poll_cq_locked() {
                             fi_strerror(-err_rc);
       {
         std::lock_guard<std::mutex> lock(op_mutex_);
-        auto* ctx = reinterpret_cast<OpContext*>(err.op_context);
+        auto* ctx =
+            static_cast<OpContext*>(get_fi_context_owner(err.op_context));
         if (ctx) {
           ctx->done = true;
           ctx->failed = true;
