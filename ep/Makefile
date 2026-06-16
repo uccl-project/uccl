@@ -23,6 +23,21 @@ else
   DMABUF_CFLAGS :=
 endif
 
+# Enable libfabric/CXI transport skeleton with USE_LIBFABRIC_CXI=1.
+USE_LIBFABRIC_CXI ?= 0
+ifeq ($(USE_LIBFABRIC_CXI),1)
+  $(info libfabric CXI transport enabled)
+  CXI_CFLAGS := -DUSE_LIBFABRIC_CXI
+  CXI_LDFLAGS := -lfabric
+  ifdef LIBFABRIC_HOME
+    CXI_CFLAGS += -I$(LIBFABRIC_HOME)/include
+    CXI_LDFLAGS += -L$(LIBFABRIC_HOME)/lib
+  endif
+else
+  CXI_CFLAGS :=
+  CXI_LDFLAGS :=
+endif
+
 ARCH := $(shell uname -m)
 GPU_NAME ?= $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
 CPU_IS_ARM64 := 0
@@ -94,13 +109,18 @@ ifeq ($(PER_EXPERT_BATCHING),1)
   override NVCCFLAGS += -DPER_EXPERT_BATCHING
 endif
 
+ifdef NUM_MAX_NVL_PEERS
+  override CXXFLAGS += -DNUM_MAX_NVL_PEERS=$(NUM_MAX_NVL_PEERS)
+  override NVCCFLAGS += -DNUM_MAX_NVL_PEERS=$(NUM_MAX_NVL_PEERS)
+endif
 
-CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
-NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
-LDFLAGS   += $(EFA_LDFLAGS)
-INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(NORMAL_CFLAGS)
 
-SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp
+CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(CXI_CFLAGS) $(NORMAL_CFLAGS)
+NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(CXI_CFLAGS) $(NORMAL_CFLAGS)
+LDFLAGS   += $(EFA_LDFLAGS) $(CXI_LDFLAGS)
+INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(CXI_CFLAGS) $(NORMAL_CFLAGS)
+
+SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp src/cxi_transport.cpp
 SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
 # Non-binding .cc translation units linked into the shared library.
 SRC_CC_LIB := src/adaptive_sleeper.cc

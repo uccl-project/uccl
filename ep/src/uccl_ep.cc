@@ -42,6 +42,7 @@ std::map<ProxyRegistryKey, std::vector<nb::object>> g_proxies_by_dev;
 std::map<ProxyRegistryKey, std::vector<nb::object>>& proxies_by_dev() {
   return g_proxies_by_dev;
 }
+
 }  // namespace uccl
 
 #define NUM_MAX_LOCAL_EXPERTS 1024
@@ -275,7 +276,8 @@ nb::object make_rdma_buffer_dlpack_capsule(void* ptr, std::size_t bytes,
 }
 
 std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
-    std::size_t num_rdma_bytes, int device_index) {
+    std::size_t num_rdma_bytes, int device_index,
+    bool force_device_alloc = false) {
   std::size_t const alloc_bytes = std::max<std::size_t>(num_rdma_bytes, 1);
   bool is_host_allocated = false;
   void* ptr = nullptr;
@@ -290,7 +292,7 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
   CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
 #else
   bool const use_host_alloc =
-      num_rdma_bytes > 0 && has_any_nic() &&
+      !force_device_alloc && num_rdma_bytes > 0 && has_any_nic() &&
       !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
   if (!use_host_alloc) {
     CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
@@ -1915,10 +1917,13 @@ NB_MODULE(ep, m) {
 
   m.def(
       "get_rdma_buffer",
-      [](std::size_t num_rdma_bytes, int device_index) {
-        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index);
+      [](std::size_t num_rdma_bytes, int device_index,
+         bool force_device_alloc) {
+        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index,
+                                           force_device_alloc);
       },
       nb::arg("num_rdma_bytes"), nb::arg("device_index"),
+      nb::arg("force_device_alloc") = false,
       R"doc(
         Allocate the RDMA scratch buffer outside PyTorch's CUDA allocator and
         return it as a DLPack capsule plus an `is_host_allocated` flag.
