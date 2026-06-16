@@ -7,12 +7,55 @@
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+static bool proxy_trace_enabled() {
+  static int const enabled = [] {
+    char const* env = std::getenv("UCCL_PROXY_TRACE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled != 0;
+}
+
+static char const* cmd_name(CmdType cmd) {
+  switch (get_base_cmd(cmd)) {
+    case CmdType::WRITE:
+      return "WRITE";
+    case CmdType::ATOMIC:
+      return "ATOMIC";
+    case CmdType::QUIET:
+      return "QUIET";
+    case CmdType::BARRIER:
+      return "BARRIER";
+    case CmdType::EMPTY:
+      return "EMPTY";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static int ranks_per_node_for_proxy(Proxy::Config const& cfg) {
+  if (cfg.num_nodes > 0 && cfg.num_ranks > 0) {
+    return std::max(1, cfg.num_ranks / cfg.num_nodes);
+  }
+  return MAX_NUM_GPUS;
+}
+
+static bool is_normal_mode_remote_peer(Proxy::Config const& cfg, int my_rank,
+                                       int peer) {
+  if (!cfg.use_normal_mode) return true;
+  int const ranks_per_node = ranks_per_node_for_proxy(cfg);
+  return std::abs(peer - my_rank) % ranks_per_node == 0;
+}
+
+static constexpr uint64_t kCxiInternalWrId = UINT64_MAX;
 
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip,
@@ -110,6 +153,11 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
+bool Proxy::use_cxi_transport() const {
+  char const* transport = std::getenv("UCCL_EP_TRANSPORT");
+  return transport && std::string(transport) == "cxi";
+}
+
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
@@ -190,6 +238,159 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
 
 void Proxy::init_common() {
   int const my_rank = cfg_.rank;
+  ctx_.local_rank = cfg_.local_rank;
+  ctx_.thread_idx = cfg_.thread_idx;
+
+  if (use_cxi_transport()) {
+    if (ctxs_for_all_ranks_.empty()) {
+      fprintf(stderr,
+              "Error: peers metadata not set before init_common (peers_.size() "
+              "=%zu)\n",
+              peers_.size());
+      std::abort();
+    }
+    if (!atomic_buffer_ptr_) {
+      throw std::runtime_error(
+          "UCCL_EP_TRANSPORT=cxi requires atomic_buffer_ptr to be set");
+    }
+
+    int num_ranks = ctxs_for_all_ranks_.size();
+    local_infos_.assign(num_ranks, RDMAConnectionInfo{});
+    remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
+    cxi_transports_by_rank_.clear();
+    cxi_transports_by_rank_.resize(num_ranks);
+    cxi_transport_ = nullptr;
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
+        continue;
+
+      auto transport = std::make_unique<CxiTransport>();
+      transport->init(ctx_);
+      transport->register_main_buffer(cfg_.gpu_buffer, cfg_.total_size,
+                                      cfg_.local_rank);
+      transport->register_atomic_buffer(atomic_buffer_ptr_, kAtomicBufferSize,
+                                        cfg_.local_rank);
+      local_infos_[peer] = transport->local_info();
+      if (!cxi_transport_) cxi_transport_ = transport.get();
+      cxi_transports_by_rank_[peer] = std::move(transport);
+    }
+
+    std::thread receiver_thread([this, num_ranks, my_rank]() {
+      for (int peer = 0; peer < num_ranks; ++peer) {
+        if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+            !is_normal_mode_remote_peer(cfg_, my_rank, peer))
+          continue;
+        int actual_peer;
+        recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
+                                       remote_infos_.data());
+      }
+    });
+
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
+        continue;
+      char const* peer_ip = peers_[peer].ip.c_str();
+      int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
+      send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
+                                     &local_infos_[peer]);
+    }
+
+    receiver_thread.join();
+
+    ctx_by_tag_.clear();
+    ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      auto& c = *ctxs_for_all_ranks_[peer];
+      c.tag = static_cast<uint32_t>(peer + 1);
+      if (c.tag >= ctx_by_tag_.size()) ctx_by_tag_.resize(c.tag + 1, nullptr);
+      ctx_by_tag_[c.tag] = &c;
+      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
+        continue;
+
+      c.remote_addr = remote_infos_[peer].addr;
+      c.remote_len = remote_infos_[peer].len;
+      c.remote_rkey = remote_infos_[peer].rkey;
+      c.remote_atomic_buffer_addr = remote_infos_[peer].atomic_buffer_addr;
+      c.remote_atomic_buffer_len = remote_infos_[peer].atomic_buffer_len;
+      c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
+      CxiTransport* transport = cxi_transport_for_rank(peer);
+      if (!transport) {
+        throw std::runtime_error("CXI peer transport is not initialized");
+      }
+      transport->connect_peer(peer, remote_infos_[peer]);
+      if (proxy_trace_enabled()) {
+#ifdef USE_LIBFABRIC_CXI
+        fprintf(stderr,
+                "[proxy-trace] rank=%d thread=%d connected CXI peer=%d "
+                "main_key=0x%llx atomic_key=0x%llx\n",
+                cfg_.rank, cfg_.thread_idx, peer,
+                (unsigned long long)remote_infos_[peer].cxi_main_mr_key,
+                (unsigned long long)remote_infos_[peer].cxi_atomic_mr_key);
+#else
+        fprintf(stderr,
+                "[proxy-trace] rank=%d thread=%d connected CXI peer=%d\n",
+                cfg_.rank, cfg_.thread_idx, peer);
+#endif
+      }
+    }
+
+    if (cfg_.use_normal_mode) {
+      std::string const my_ip = peers_[cfg_.rank].ip;
+      std::vector<int> local_ranks;
+      local_ranks.reserve(ctxs_for_all_ranks_.size());
+      int leader_rank = cfg_.rank;
+      for (int r = 0; r < static_cast<int>(peers_.size()); ++r) {
+        if (peers_[r].ip == my_ip) {
+          local_ranks.push_back(r);
+          if (r < leader_rank) leader_rank = r;
+        }
+      }
+      ctx_.num_local_ranks = static_cast<int>(local_ranks.size());
+      ctx_.node_leader_rank = leader_rank;
+      ctx_.local_rank = cfg_.local_rank;
+      ctx_.thread_idx = cfg_.thread_idx;
+
+      if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
+        fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
+                ctx_.num_local_ranks, static_cast<int>(UCCL_MAX_LOCAL_RANKS));
+        std::abort();
+      }
+#ifndef USE_SUBSET_BARRIER
+      std::string const shm_name =
+          shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+      ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
+      if (!ctx_.lb) {
+        fprintf(stderr, "Failed to map local barrier shm: %s\n",
+                shm_name.c_str());
+        std::abort();
+      }
+      if (ctx_.lb_owner) {
+        ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
+                                 ? ~0ULL
+                                 : ((1ULL << ctx_.num_local_ranks) - 1ULL);
+        for (int i = 0; i < ctx_.num_local_ranks; ++i) {
+          ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
+          ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
+        }
+      } else {
+        while (ctx_.lb->full_mask == 0ULL) cpu_relax();
+      }
+#endif
+    }
+
+    fprintf(stderr,
+            "[Proxy] UCCL_EP_TRANSPORT=cxi initialized for rank %d thread %d\n",
+            cfg_.rank, cfg_.thread_idx);
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
+    fifo_pending_.assign(cfg_.d2h_queues.size(),
+                         std::deque<std::pair<uint64_t, size_t>>{});
+#endif
+    return;
+  }
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.thread_idx, cfg_.device_index, cfg_.nic_local_rank);
@@ -275,8 +476,7 @@ void Proxy::init_common() {
     for (int p = 0; p < num_ranks; ++p) {
       if (p == my_rank) continue;
       if (peers_[p].ip == peers_[my_rank].ip) continue;
-      if (cfg_.use_normal_mode && std::abs(p - my_rank) % MAX_NUM_GPUS != 0)
-        continue;
+      if (!is_normal_mode_remote_peer(cfg_, my_rank, p)) continue;
       ++num_active_peers;
     }
     int const ack_depth =
@@ -316,8 +516,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (!is_normal_mode_remote_peer(cfg_, my_rank, peer)) continue;
 #ifdef EFA
     // Alias the shared SRD QPs from ctx_; dst_ah/dst_qpn (set later in
     // modify_qp_to_rtr) routes per WR via ibv_wr_set_ud_addr.
@@ -344,8 +543,7 @@ void Proxy::init_common() {
     for (int peer = 0; peer < num_ranks; ++peer) {
       // Skip rdma connection for intra-node.
       if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          (cfg_.use_normal_mode &&
-           std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
         continue;
       int actual_peer;
       recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
@@ -356,7 +554,7 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        !is_normal_mode_remote_peer(cfg_, my_rank, peer))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
@@ -370,7 +568,7 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        !is_normal_mode_remote_peer(cfg_, my_rank, peer))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
@@ -387,8 +585,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (!is_normal_mode_remote_peer(cfg_, my_rank, peer)) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -537,6 +734,10 @@ void Proxy::init_remote() {
 }
 
 void Proxy::run_sender() {
+  if (use_cxi_transport()) {
+    throw std::runtime_error(
+        "CXI transport currently requires Proxy::run_dual");
+  }
   printf("CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
   size_t seen = 0;
@@ -549,6 +750,10 @@ void Proxy::run_sender() {
 }
 
 void Proxy::run_remote() {
+  if (use_cxi_transport()) {
+    throw std::runtime_error(
+        "CXI transport currently requires Proxy::run_dual");
+  }
   printf("Remote CPU thread %d started\n", cfg_.thread_idx);
   init_remote();
   std::set<PendingUpdate> pending_atomic_updates;
@@ -571,10 +776,10 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (!is_normal_mode_remote_peer(cfg_, cfg_.rank, peer)) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
+    if (use_cxi_transport()) continue;
 #ifndef EFA
     // EFA: posted once on the shared recv_ack_qp in init_common.
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
@@ -592,10 +797,14 @@ void Proxy::run_dual() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     adaptive_sleeper_.maybe_sleep(ctx_);
 
-    poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
-                 atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
-                 pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
-                 adaptive_sleeper_, cfg_.use_normal_mode);
+    if (use_cxi_transport()) {
+      poll_cxi_completions();
+    } else {
+      poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
+                   atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
+                   pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
+                   adaptive_sleeper_, cfg_.use_normal_mode);
+    }
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
@@ -742,10 +951,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           assert(!ctx_.barrier_inflight);
           assert(ctx_.barrier_wr == -1);
           ctx_.barrier_inflight = true;
+          if (use_cxi_transport()) ctx_.barrier_wr = unique_wr_id;
         } else if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
           assert(!ctx_.quiet_inflight);
           assert(ctx_.quiet_wr == -1);
           ctx_.quiet_inflight = true;
+          if (use_cxi_transport()) ctx_.quiet_wr = unique_wr_id;
         }
         break;
       } else {
@@ -820,6 +1031,23 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   // Process all collected commands in batch
   if (!wrs_to_post.empty()) {
+    if (proxy_trace_enabled()) {
+      static std::atomic<uint64_t> trace_batches{0};
+      uint64_t const batch_id =
+          trace_batches.fetch_add(1, std::memory_order_relaxed);
+      if (batch_id < 64 || (batch_id % 1024) == 0) {
+        fprintf(stderr,
+                "[proxy-trace] rank=%d thread=%d batch=%lu cmds=%zu first=%s "
+                "dst=%d bytes=%u req_lptr=0x%lx req_rptr=0x%lx wr=0x%lx\n",
+                cfg_.rank, cfg_.thread_idx, batch_id, cmds_to_post.size(),
+                cmd_name(cmds_to_post[0].cmd_type),
+                static_cast<int>(cmds_to_post[0].dst_rank),
+                cmds_to_post[0].bytes,
+                static_cast<unsigned long>(cmds_to_post[0].req_lptr),
+                static_cast<unsigned long>(cmds_to_post[0].req_rptr),
+                static_cast<unsigned long>(wrs_to_post[0]));
+      }
+    }
 #ifdef MEASURE_PER_OP_LATENCY
     auto start = std::chrono::high_resolution_clock::now();
 #endif
@@ -940,9 +1168,130 @@ void Proxy::run_local() {
          cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
 }
 
+CxiTransport* Proxy::cxi_transport_for_rank(int rank) const {
+  if (rank < 0 || rank >= static_cast<int>(cxi_transports_by_rank_.size())) {
+    return nullptr;
+  }
+  return cxi_transports_by_rank_[rank].get();
+}
+
+uint64_t Proxy::load_cxi_barrier_word_sum(size_t slot) const {
+  uint64_t total = 0;
+  for (auto const& transport : cxi_transports_by_rank_) {
+    if (transport) total += transport->load_barrier_word(slot);
+  }
+  return total;
+}
+
+void Proxy::poll_cxi_completions() {
+  if (cxi_outstanding_ops_ == 0) return;
+  TransportCompletion completions[kMaxOutstandingSends];
+  int const max_poll = static_cast<int>(std::min(
+      cxi_outstanding_ops_, static_cast<size_t>(kMaxOutstandingSends)));
+  int ne = 0;
+  for (auto& transport : cxi_transports_by_rank_) {
+    if (!transport || ne >= max_poll) continue;
+    int const got = transport->poll(completions + ne, max_poll - ne);
+    if (got > 0) ne += got;
+  }
+  for (int i = 0; i < ne; ++i) {
+    if (completions[i].status != 0) {
+      throw std::runtime_error("CXI completion returned non-zero status");
+    }
+#ifdef USE_LIBFABRIC_CXI
+    if (completions[i].wr_id != kCxiInternalWrId) {
+      acked_wrs_.insert(completions[i].wr_id);
+    }
+#else
+    if (completions[i].wr_id != 0) {
+      acked_wrs_.insert(completions[i].wr_id);
+    }
+#endif
+  }
+  if (static_cast<size_t>(ne) > cxi_outstanding_ops_) {
+    throw std::runtime_error("CXI completion count exceeded outstanding ops");
+  }
+  cxi_outstanding_ops_ -= static_cast<size_t>(ne);
+  if (ne > 0) adaptive_sleeper_.update_timer();
+}
+
+void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
+                              std::vector<TransferCmd> const& cmds_to_post) {
+  if (!cxi_transport_) {
+    throw std::runtime_error("CXI transport has not been initialized");
+  }
+  if (wrs_to_post.size() != cmds_to_post.size()) {
+    throw std::runtime_error("CXI command/wr_id size mismatch");
+  }
+
+  for (size_t i = 0; i < cmds_to_post.size(); ++i) {
+    auto const& cmd = cmds_to_post[i];
+    int const dst_rank = static_cast<int>(cmd.dst_rank);
+    CxiTransport* transport = cxi_transport_for_rank(dst_rank);
+    switch (get_base_cmd(cmd.cmd_type)) {
+      case CmdType::WRITE: {
+        if (!transport) {
+          throw std::runtime_error(
+              "CXI destination transport is not initialized");
+        }
+        bool const low_latency = !cfg_.use_normal_mode;
+        uint64_t const local_offset =
+            decode_write_offset(cmd.req_lptr, low_latency);
+        uint64_t const remote_offset =
+            decode_write_offset(cmd.req_rptr, low_latency);
+        bool const has_signaling_atomic =
+            cfg_.use_normal_mode && cmd.atomic_offset > 0 && cmd.atomic_val > 0;
+        transport->post_write(
+            dst_rank, has_signaling_atomic ? kCxiInternalWrId : wrs_to_post[i],
+            local_offset, remote_offset, cmd.bytes, low_latency);
+        ++cxi_outstanding_ops_;
+
+        if (has_signaling_atomic) {
+          transport->post_atomic_add(
+              dst_rank, wrs_to_post[i], cmd.atomic_offset,
+              static_cast<int64_t>(cmd.atomic_val), /*fence=*/true);
+          ++cxi_outstanding_ops_;
+        }
+        break;
+      }
+      case CmdType::ATOMIC: {
+        if (!transport) {
+          throw std::runtime_error(
+              "CXI destination transport is not initialized");
+        }
+        int v = static_cast<int>(cmd.value);
+        if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+        if (get_is_combine(cmd.cmd_type)) v = 1;
+        transport->post_atomic_add(
+            dst_rank, wrs_to_post[i], cmd.req_rptr,
+            static_cast<int64_t>(static_cast<int32_t>(v)), /*fence=*/true);
+        ++cxi_outstanding_ops_;
+        break;
+      }
+      case CmdType::QUIET:
+        while (cxi_outstanding_ops_ > 0) {
+          poll_cxi_completions();
+          if (cxi_outstanding_ops_ > 0) cpu_relax();
+        }
+        acked_wrs_.insert(wrs_to_post[i]);
+        break;
+      case CmdType::BARRIER:
+        send_barrier(wrs_to_post[i]);
+        break;
+      default:
+        throw std::runtime_error("Unknown CXI command type");
+    }
+  }
+}
+
 void Proxy::post_gpu_commands_mixed(
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post) {
+  if (use_cxi_transport()) {
+    post_cxi_commands(wrs_to_post, cmds_to_post);
+    return;
+  }
+
   // Separate atomic operations from regular RDMA writes
   std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
@@ -1035,6 +1384,18 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+  if (proxy_trace_enabled()) {
+    static std::atomic<uint64_t> trace_mixed_batches{0};
+    uint64_t const batch_id =
+        trace_mixed_batches.fetch_add(1, std::memory_order_relaxed);
+    if (batch_id < 64 || (batch_id % 1024) == 0) {
+      fprintf(stderr,
+              "[proxy-trace] rank=%d thread=%d mixed=%lu rdma=%zu atomic=%zu "
+              "quiet=%zu barrier=%zu\n",
+              cfg_.rank, cfg_.thread_idx, batch_id, rdma_wrs.size(),
+              atomic_wrs.size(), quiet_wrs.size(), barrier_wrs.size());
+    }
+  }
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -1119,6 +1480,50 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
+  if (cxi_transport_) {
+    for (auto& transport : cxi_transports_by_rank_) {
+      if (transport) transport->destroy();
+    }
+    cxi_transports_by_rank_.clear();
+    cxi_transport_ = nullptr;
+
+    if (free_gpu_buffer && cfg_.gpu_buffer) {
+      cudaError_t e;
+      if (cfg_.free_buffer_with_cuda_free_host) {
+        e = cudaFreeHost(cfg_.gpu_buffer);
+        if (e != cudaSuccess)
+          fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
+                  cudaGetErrorString(e));
+      } else {
+        e = cudaFree(cfg_.gpu_buffer);
+        if (e != cudaSuccess)
+          fprintf(stderr, "[destroy] cudaFree failed: %s\n",
+                  cudaGetErrorString(e));
+      }
+      if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
+    }
+
+    acked_wrs_.clear();
+    wr_id_to_start_time_.clear();
+    ctxs_for_all_ranks_.clear();
+    ctx_by_tag_.clear();
+    local_infos_.clear();
+    remote_infos_.clear();
+#ifndef USE_SUBSET_BARRIER
+    if (ctx_.lb) {
+      std::string const my_ip = (cfg_.rank < static_cast<int>(peers_.size()))
+                                    ? peers_[cfg_.rank].ip
+                                    : "";
+      std::string const shm_name =
+          shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+      unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
+      ctx_.lb = nullptr;
+      ctx_.lb_owner = false;
+    }
+#endif
+    return;
+  }
+
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     if (ctx_ptr->qps_are_shared) continue;  // owned by ctx_ (EFA)
@@ -1374,8 +1779,11 @@ void Proxy::send_barrier(uint64_t wr) {
   assert(!ctx_.barrier_inflight && "only one barrier at a time");
   ctx_.barrier_inflight = true;
 #endif
-  assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
-  ctx_.barrier_wr = wr;
+  if (ctx_.barrier_wr == -1) {
+    ctx_.barrier_wr = wr;
+  } else {
+    assert(use_cxi_transport() && static_cast<uint64_t>(ctx_.barrier_wr) == wr);
+  }
   ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
 
   if (cfg_.rank == ctx_.node_leader_rank) {
@@ -1471,6 +1879,90 @@ void Proxy::barrier_check() {
 
 void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
+
+  if (use_cxi_transport()) {
+    constexpr size_t kArrivalSlot = 0;
+    constexpr size_t kReleaseSlot = 1;
+    uint64_t const seq = ctx_.barrier_seq;
+    auto* lb = ctx_.lb;
+
+    if (cfg_.rank == ctx_.node_leader_rank) {
+      bool all_local_arrived = true;
+      for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+        uint32_t seen = lb->arrive_seq[lr].load(std::memory_order_acquire);
+        if (seen != static_cast<uint32_t>(seq)) {
+          all_local_arrived = false;
+          break;
+        }
+      }
+      if (!all_local_arrived) return;
+
+      static thread_local uint64_t last_sent_seq = 0;
+      if (last_sent_seq != seq) {
+        last_sent_seq = seq;
+        if (cfg_.rank != 0) {
+          CxiTransport* transport = cxi_transport_for_rank(0);
+          if (!transport) {
+            throw std::runtime_error("CXI barrier transport to rank 0 missing");
+          }
+          transport->post_barrier_atomic_add(
+              /*dst_rank=*/0, kCxiInternalWrId, kArrivalSlot, 1);
+          ++cxi_outstanding_ops_;
+        }
+      }
+
+      if (cfg_.rank == 0) {
+        uint64_t const expected_arrivals =
+            seq * static_cast<uint64_t>(std::max(0, cfg_.num_nodes - 1));
+        if (load_cxi_barrier_word_sum(kArrivalSlot) < expected_arrivals) {
+          return;
+        }
+
+        int const ranks_per_node = ranks_per_node_for_proxy(cfg_);
+        for (int r = ranks_per_node; r < static_cast<int>(peers_.size());
+             r += ranks_per_node) {
+          CxiTransport* transport = cxi_transport_for_rank(r);
+          if (!transport) {
+            throw std::runtime_error("CXI barrier release transport missing");
+          }
+          transport->post_barrier_atomic_add(r, kCxiInternalWrId, kReleaseSlot,
+                                             1);
+          ++cxi_outstanding_ops_;
+        }
+        for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+          lb->release_seq[lr].store(seq, std::memory_order_release);
+        }
+
+        acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+        ctx_.barrier_inflight = false;
+        ctx_.barrier_wr = -1;
+#endif
+        return;
+      }
+
+      if (load_cxi_barrier_word_sum(kReleaseSlot) < seq) return;
+      for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
+        lb->release_seq[lr].store(seq, std::memory_order_release);
+      }
+      acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+      ctx_.barrier_inflight = false;
+      ctx_.barrier_wr = -1;
+#endif
+      return;
+    }
+
+    if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) ==
+        seq) {
+      acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+      ctx_.barrier_inflight = false;
+      ctx_.barrier_wr = -1;
+#endif
+    }
+    return;
+  }
 
   auto* lb = ctx_.lb;
   uint64_t const seq = ctx_.barrier_seq;
