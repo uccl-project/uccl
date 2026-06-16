@@ -26,13 +26,21 @@ RdmaContext::RdmaContext(std::shared_ptr<RdmaDevice> dev, uint64_t context_id)
   pd_.reset(pd, [](ibv_pd* p) { ibv_dealloc_pd(p); });
 }
 
-struct ibv_context* RdmaContext::get_ctx() const { return ctx_.get(); }
+struct ibv_context* RdmaContext::get_ctx() const {
+  return ctx_.get();
+}
 
-struct ibv_context* RdmaContext::ctx() const { return ctx_.get(); }
+struct ibv_context* RdmaContext::ctx() const {
+  return ctx_.get();
+}
 
-struct ibv_pd* RdmaContext::get_pd() const { return pd_.get(); }
+struct ibv_pd* RdmaContext::get_pd() const {
+  return pd_.get();
+}
 
-struct ibv_pd* RdmaContext::pd() const { return pd_.get(); }
+struct ibv_pd* RdmaContext::pd() const {
+  return pd_.get();
+}
 
 uint32_t RdmaContext::get_vendor_id() const { return vendor_id_; }
 
