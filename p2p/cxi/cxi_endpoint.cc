@@ -326,6 +326,10 @@ ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
     std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
     peer_oob_conn_keys_[peer_id] = conn_key;
   }
+  auto erase_oob_conn_key = [this, peer_id] {
+    std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
+    peer_oob_conn_keys_.erase(peer_id);
+  };
 
   EndpointInfo local_info = local_endpoint_info();
   std::string payload = serialize_endpoint_info(local_info);
@@ -339,12 +343,14 @@ ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
       });
   if (!sent) {
     UCCL_LOG(ERROR) << "Failed to send CXI endpoint metadata";
+    erase_oob_conn_key();
     return ConnID{nullptr, -1, -1, UINT64_MAX};
   }
 
   auto const timeout_ms = std::chrono::milliseconds(10000);
   if (future.wait_for(timeout_ms) == std::future_status::timeout) {
     UCCL_LOG(ERROR) << "Timeout waiting for CXI endpoint handshake";
+    erase_oob_conn_key();
     return ConnID{nullptr, -1, -1, UINT64_MAX};
   }
 

@@ -143,10 +143,6 @@ static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
   return max_bytes;
 }
 
-static inline bool retryable_post_rc(int rc) {
-  return rc == -1 || rc == UCCL_POST_TRANSIENT;
-}
-
 size_t Endpoint::max_one_sided_inflight_ops() {
   size_t limit = kMaxInflightOps;
 #ifdef USE_CXI
@@ -708,9 +704,14 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while (retryable_post_rc(uccl_read_async(ep_, conn, mhandle, dst, size,
-                                           curr_slot_item, &ureq)))
-    ;
+  int rc = UCCL_POST_TRANSIENT;
+  while (rc == UCCL_POST_TRANSIENT) {
+    rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
+  }
+  if (rc < 0) {
+    UCCL_LOG(ERROR) << "read failed to post: rc=" << rc;
+    return false;
+  }
 
   bool done = false;
   while (!done) {
@@ -743,8 +744,13 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    while (retryable_post_rc(uccl_read_async(ep_, conn, mhandle, dst, size,
-                                             curr_slot_item, &ureq))) {
+    int rc = UCCL_POST_TRANSIENT;
+    while (rc == UCCL_POST_TRANSIENT) {
+      rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
+    }
+    if (rc < 0) {
+      UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
+      return false;
     }
 
     auto* status = new TransferStatus();
@@ -1019,13 +1025,18 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while (retryable_post_rc(
-      send_group != nullptr
-          ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
-                                      curr_slot_item, &ureq)
-          : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                             &ureq)))
-    ;
+  int rc = UCCL_POST_TRANSIENT;
+  while (rc == UCCL_POST_TRANSIENT) {
+    rc = send_group != nullptr
+             ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
+                                         curr_slot_item, &ureq)
+             : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                                &ureq);
+  }
+  if (rc < 0) {
+    UCCL_LOG(ERROR) << "write failed to post: rc=" << rc;
+    return false;
+  }
 
   bool done = false;
   while (!done) {
@@ -1057,8 +1068,14 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    while (retryable_post_rc(uccl_write_async(ep_, conn, mhandle, src, size,
-                                              curr_slot_item, &ureq))) {
+    int rc = UCCL_POST_TRANSIENT;
+    while (rc == UCCL_POST_TRANSIENT) {
+      rc =
+          uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item, &ureq);
+    }
+    if (rc < 0) {
+      UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
+      return false;
     }
 
     auto* status = new TransferStatus();
