@@ -14,8 +14,23 @@ libamdhip64.so instead of torch tensors -- so torch is NEVER imported. This
 avoids both the dual HIP runtime conflict and torch's ROCm6.1 lib
 incompatibility with the hydcu 6.2.31 driver on node2.
 
-Run:
-    PYTHONPATH=~/uccl LD_LIBRARY_PATH=/opt/dtk/lib \
+REQUIREMENTS (verified on node0 + node2):
+  1. The `uccl.p2p` module MUST be the *native DTK* build (`make -f
+     Makefile.dtk`), which links libgalaxyhip. A `dtk-torch` build links
+     torch's libamdhip64.so.6 with an RUNPATH baked to torch/lib, so
+     `from uccl import p2p` pulls torch's ROCm6.1 HIP + HSA runtime into the
+     process EVEN IF this script never imports torch -- reintroducing the
+     exact dual-runtime conflict this test is meant to avoid (symptom:
+     `undefined symbol: hsa_amd_queue_intercept_register, version ROCR_1`).
+  2. LD_LIBRARY_PATH must cover the full native DTK runtime chain. On node0,
+     /opt/dtk/lib alone is insufficient: DTK's libamdhip64.so.4 depends on
+     libNanoLog.so.1 which lives in /opt/hyhal/lib, and the HSA runtime is in
+     /opt/dtk/hsa/lib. Missing them makes the loader fall back to the system
+     hsa-runtime (no ROCR_1 symbols) and the import fails.
+
+Run (paths below work on both node0 and node2):
+    PYTHONPATH=~/uccl \
+    LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib \
         python3 p2p/tests/test_engine_onesided_ipc_native.py
 """
 import ctypes
