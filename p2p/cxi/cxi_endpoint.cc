@@ -192,11 +192,8 @@ void CxiEndpoint::init_fabric(int gpu_index) {
   try {
     check_fi("fi_getinfo(cxi)", fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr,
                                            0, hints, &info_));
-    char const* dc = std::getenv("UCCL_CXI_DELIVERY_COMPLETE");
-    if (dc && dc[0] == '1') {
-      info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
-      UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
-    }
+    info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
+    UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
 
     check_fi("fi_fabric", fi_fabric(info_->fabric_attr, &fabric_, nullptr));
     check_fi("fi_domain", fi_domain(fabric_, info_, &domain_, nullptr));
