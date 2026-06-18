@@ -7,7 +7,7 @@ static constexpr int kHostAllGatherPollSpinsBeforeYield = 65536;
 static constexpr size_t kIntraAllGatherRingMinTotalBytes = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// Single-node no-CudaIpc host-memory AllGather (1nx4g opt-in).
+// Single-node no-CudaIpc SHM AllGather (1nx4g opt-in).
 // ---------------------------------------------------------------------------
 
 
@@ -57,7 +57,6 @@ static void waitHostAllGatherCudaEvent(cudaEvent_t event) {
 
 static constexpr int kHostAllGatherMaxRanks = 8;
 static constexpr int kHostAllGatherSlots = 2;
-static constexpr int kHostAllGatherReplicaGroups = 2;
 static constexpr size_t kHostAllGatherMaxTotalBytes = 1024ULL * 1024 * 1024;
 static constexpr size_t kHostAllGatherMinChunkBytes = 256 * 1024;
 static constexpr size_t kHostAllGatherMaxRankBytes =
@@ -68,12 +67,8 @@ static constexpr size_t kHostAllGatherDefaultMinTotalBytes = 0;
 static constexpr size_t kHostAllGatherDefaultKernelMaxBytes = 4 * 1024;
 static constexpr int kHostAllGatherDefaultKernelThreads = 256;
 static constexpr size_t kHostAllGatherDefaultCoopMaxBytes = 4 * 1024 * 1024;
-static constexpr size_t kHostAllGatherDefaultTwoKernelMaxBytes = 4 * 1024 * 1024;
-static constexpr size_t kHostAllGatherFullH2DMaxBytes = 128 * 1024 * 1024;
 static constexpr size_t kHostAllGatherDefaultTwoKernelBlockBytes = 1024;
 static constexpr int kHostAllGatherDefaultCoopMaxBlocks = 16;
-static constexpr size_t kHostAllGatherDefaultReplicatedMinBytes =
-    kHostAllGatherMaxTotalBytes + 1;
 static constexpr size_t kHostAllGatherDefaultCallbackReadyMinBytes =
     32 * 1024 * 1024;
 
@@ -86,12 +81,6 @@ struct HostAllGatherControl {
                                [kHostAllGatherMaxChunks]
                                [kHostAllGatherMaxRanks];
   HostAllGatherCounter mappedReadyCount[kHostAllGatherSlots];
-  HostAllGatherCounter replicaReady[kHostAllGatherSlots]
-                                  [kHostAllGatherMaxChunks]
-                                  [kHostAllGatherReplicaGroups];
-  HostAllGatherCounter replicaRankReady[kHostAllGatherSlots]
-                                      [kHostAllGatherMaxChunks]
-                                      [kHostAllGatherMaxRanks];
   HostAllGatherCounter slotDone[kHostAllGatherSlots]
                                [kHostAllGatherMaxRanks];
 };
@@ -153,31 +142,6 @@ __global__ void hostAllGatherMappedKernel(
   }
 }
 
-__global__ void hostAllGatherPackKernel(
-    char const* send, char* slot, char* ctrl, size_t slotOffset,
-    size_t bytesPerRank, int rank, unsigned long long epoch,
-    size_t readyOffset, size_t counterStride) {
-  (void)ctrl;
-  (void)epoch;
-  (void)readyOffset;
-  (void)counterStride;
-  using Vec = unsigned long long;
-  size_t selfOffset = static_cast<size_t>(rank) * bytesPerRank;
-  size_t vecBytes = (bytesPerRank / sizeof(Vec)) * sizeof(Vec);
-  size_t vecCount = vecBytes / sizeof(Vec);
-  size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
-  auto const* sendVec = reinterpret_cast<Vec const*>(send);
-  auto* selfSlot =
-      reinterpret_cast<Vec*>(slot + slotOffset + selfOffset);
-  for (size_t i = tid; i < vecCount; i += stride) {
-    selfSlot[i] = sendVec[i];
-  }
-  for (size_t i = vecBytes + tid; i < bytesPerRank; i += stride) {
-    slot[slotOffset + selfOffset + i] = send[i];
-  }
-}
-
 __global__ void hostAllGatherCoopKernel(
     char const* send, char* recv, char* slot, char* ctrl, size_t slotOffset,
     size_t bytesPerRank, int rank, int nRanks, unsigned long long epoch,
@@ -230,30 +194,6 @@ __global__ void hostAllGatherCoopKernel(
     __threadfence_system();
     *hostAllGatherCtrlU64(
         ctrl, doneOffset + static_cast<size_t>(rank) * counterStride) = epoch;
-  }
-}
-
-__global__ void hostAllGatherRecvKernel(
-    char* recv, char const* slot, char* ctrl, size_t slotOffset,
-    size_t fullBytes, int rank, unsigned long long epoch, size_t doneOffset,
-    size_t counterStride) {
-  (void)ctrl;
-  (void)rank;
-  (void)epoch;
-  (void)doneOffset;
-  (void)counterStride;
-  using Vec = unsigned long long;
-  size_t vecBytes = (fullBytes / sizeof(Vec)) * sizeof(Vec);
-  size_t vecCount = vecBytes / sizeof(Vec);
-  size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
-  auto const* slotVec = reinterpret_cast<Vec const*>(slot + slotOffset);
-  auto* recvVec = reinterpret_cast<Vec*>(recv);
-  for (size_t i = tid; i < vecCount; i += stride) {
-    recvVec[i] = slotVec[i];
-  }
-  for (size_t i = vecBytes + tid; i < fullBytes; i += stride) {
-    recv[i] = slot[slotOffset + i];
   }
 }
 
@@ -315,8 +255,6 @@ struct HostAllGatherContext {
   bool isLeader = false;
   bool mapSlab = true;
   bool cooperativeLaunch = false;
-  size_t replicaStrideBytes = kHostAllGatherMaxTotalBytes;
-  int replicaGroups = 1;
   size_t slotStrideBytes = kHostAllGatherMaxTotalBytes;
   size_t slabBytes = kHostAllGatherSlots * kHostAllGatherMaxTotalBytes;
   uint64_t epoch = 0;
@@ -423,18 +361,6 @@ static size_t hostAllGatherCoopMaxBytes() {
   return static_cast<size_t>(parsed);
 }
 
-static size_t hostAllGatherTwoKernelMaxBytes() {
-  char const* env =
-      std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_TWO_KERNEL_MAX_BYTES");
-  if (env == nullptr || env[0] == '\0') {
-    return kHostAllGatherDefaultTwoKernelMaxBytes;
-  }
-  char* end = nullptr;
-  unsigned long long parsed = std::strtoull(env, &end, 10);
-  if (end == env) return kHostAllGatherDefaultTwoKernelMaxBytes;
-  return static_cast<size_t>(parsed);
-}
-
 static size_t hostAllGatherTwoKernelBlockBytes() {
   char const* env =
       std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_TWO_KERNEL_BLOCK_BYTES");
@@ -460,18 +386,6 @@ static int hostAllGatherCoopMaxBlocks() {
   return static_cast<int>(parsed);
 }
 
-static size_t hostAllGatherReplicatedMinBytes() {
-  char const* env =
-      std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_REPLICATED_MIN_BYTES");
-  if (env == nullptr || env[0] == '\0') {
-    return kHostAllGatherDefaultReplicatedMinBytes;
-  }
-  char* end = nullptr;
-  unsigned long long parsed = std::strtoull(env, &end, 10);
-  if (end == env) return kHostAllGatherDefaultReplicatedMinBytes;
-  return static_cast<size_t>(parsed);
-}
-
 static size_t hostAllGatherCallbackReadyMinBytes() {
   char const* env =
       std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_CALLBACK_READY_MIN_BYTES");
@@ -481,17 +395,6 @@ static size_t hostAllGatherCallbackReadyMinBytes() {
   char* end = nullptr;
   unsigned long long parsed = std::strtoull(env, &end, 10);
   if (end == env) return kHostAllGatherDefaultCallbackReadyMinBytes;
-  return static_cast<size_t>(parsed);
-}
-
-static size_t hostAllGatherFullH2DMaxBytes() {
-  char const* env = std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_FULL_H2D_MAX_BYTES");
-  if (env == nullptr || env[0] == '\0') {
-    return kHostAllGatherFullH2DMaxBytes;
-  }
-  char* end = nullptr;
-  unsigned long long parsed = std::strtoull(env, &end, 10);
-  if (end == env) return kHostAllGatherFullH2DMaxBytes;
   return static_cast<size_t>(parsed);
 }
 
@@ -700,11 +603,6 @@ static void initializeHostAllGatherContext(
   ctx.nRanks = nRanks;
   ctx.cudaDevice = cudaDevice;
   ctx.isLeader = rank == 0;
-  bool replicatedEnabled =
-      hostAllGatherReplicatedMinBytes() <= kHostAllGatherMaxTotalBytes;
-  ctx.replicaGroups = replicatedEnabled ? kHostAllGatherReplicaGroups : 1;
-  ctx.slotStrideBytes =
-      static_cast<size_t>(ctx.replicaGroups) * ctx.replicaStrideBytes;
   ctx.slabBytes = kHostAllGatherSlots * ctx.slotStrideBytes;
 
   HostAllGatherNames localNames;
@@ -759,8 +657,6 @@ static void initializeHostAllGatherContext(
     }
     bootstrap->barrier();
 
-    int ranksPerReplica = nRanks / kHostAllGatherReplicaGroups;
-    int replicaGroup = rank / ranksPerReplica;
     size_t rankStride = kHostAllGatherMaxTotalBytes /
                         static_cast<size_t>(nRanks);
     size_t rankOffset = static_cast<size_t>(rank) * rankStride;
@@ -770,17 +666,7 @@ static void initializeHostAllGatherContext(
             ctx.slab + static_cast<size_t>(slot) * ctx.slotStrideBytes +
                 rankOffset,
             rankStride, hostAllGatherGpuNumaNode(cudaDevice),
-            "single-node host allgather default rank slab");
-      }
-    }
-    if (replicatedEnabled) {
-      for (int slot = 0; slot < kHostAllGatherSlots; ++slot) {
-        char* replicaBase =
-            ctx.slab + static_cast<size_t>(slot) * ctx.slotStrideBytes +
-            static_cast<size_t>(replicaGroup) * ctx.replicaStrideBytes;
-        placeHostAllGatherOnNuma(replicaBase, ctx.replicaStrideBytes,
-                                 hostAllGatherGpuNumaNode(cudaDevice),
-                                 "single-node host allgather replica slab");
+            "single-node SHM allgather default rank slab");
       }
     }
 
@@ -832,21 +718,22 @@ static void initializeHostAllGatherContext(
     setupMessage = ex.what();
   } catch (...) {
     setupResult = ncclInternalError;
-    setupMessage = "unknown host allgather setup exception";
+    setupMessage = "unknown SHM allgather setup exception";
   }
   publishHostAllGatherInitStatus(bootstrapComm, rank, nRanks, setupResult,
-                                 setupMessage, "host allgather setup");
+                                 setupMessage, "SHM allgather setup");
   bootstrap->barrier();
   guard.commit();
 }
 
-ncclResult_t runIntraNodeHostAllGather(
+ncclResult_t runIntraNodeShmAllGather(
     void const* sendbuff, void* recvbuff, size_t bytesPerRank,
     ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
     int nRanksPerNode, std::shared_ptr<mscclpp::Communicator> bootstrapComm,
     int cudaDevice) {
   if (comm == nullptr || sendbuff == nullptr || recvbuff == nullptr ||
-      nRanks != 4 || nRanks != nRanksPerNode) {
+      nRanks < 2 || nRanks > kHostAllGatherMaxRanks ||
+      nRanks != nRanksPerNode) {
     return ncclInvalidUsage;
   }
   size_t fullBytes = bytesPerRank * static_cast<size_t>(nRanks);
@@ -860,11 +747,10 @@ ncclResult_t runIntraNodeHostAllGather(
   if (captureErr != cudaSuccess) return ncclUnhandledCudaError;
   if (captureStatus != cudaStreamCaptureStatusNone) return ncclInvalidUsage;
 
-  return runHostAllGatherGuarded("intra-node host AllGather", [&]() {
+  return runHostAllGatherGuarded("intra-node SHM AllGather", [&]() {
     bool useMappedContext =
         hostAllGatherMapSlabEnabled() &&
-        fullBytes <= std::max(hostAllGatherCoopMaxBytes(),
-                              hostAllGatherTwoKernelMaxBytes());
+        fullBytes <= hostAllGatherCoopMaxBytes();
     HostAllGatherContext& ctx = getHostAllGatherContext(comm, useMappedContext);
     initializeHostAllGatherContext(ctx, comm, rank, nRanks, cudaDevice,
                                    bootstrapComm);
@@ -888,10 +774,7 @@ ncclResult_t runIntraNodeHostAllGather(
     }
     bool useCallbackReady =
         fullBytes >= hostAllGatherCallbackReadyMinBytes();
-    bool useReplicatedPath =
-        fullBytes >= hostAllGatherReplicatedMinBytes() &&
-        nRanks == kHostAllGatherReplicaGroups * 2;
-    if (!useCallbackReady || useReplicatedPath) {
+    if (!useCallbackReady) {
       ensureHostAllGatherD2hEvents(ctx, chunkCount);
     }
     char* slotBase =
@@ -907,7 +790,7 @@ ncclResult_t runIntraNodeHostAllGather(
         ((reinterpret_cast<uintptr_t>(recvbuff) &
           (sizeof(unsigned long long) - 1)) == 0);
 
-    if (useVectorHostKernels && chunkCount == 1 && !useReplicatedPath &&
+    if (useVectorHostKernels && chunkCount == 1 &&
         ctx.slabDevice != nullptr &&
         ctx.ctrlDevice != nullptr &&
         fullBytes <= hostAllGatherKernelMaxBytes()) {
@@ -926,7 +809,7 @@ ncclResult_t runIntraNodeHostAllGather(
       return;
     }
 
-    if (useVectorHostKernels && chunkCount == 1 && !useReplicatedPath &&
+    if (useVectorHostKernels && chunkCount == 1 &&
         ctx.cooperativeLaunch &&
         ctx.slabDevice != nullptr &&
         ctx.ctrlDevice != nullptr &&
@@ -963,107 +846,6 @@ ncclResult_t runIntraNodeHostAllGather(
       MSCCLPP_CUDATHROW(cudaLaunchCooperativeKernel(
           reinterpret_cast<void*>(hostAllGatherCoopKernel), blocks, 256, args,
           0, stream));
-      return;
-    }
-
-    if (useReplicatedPath) {
-      int ranksPerReplica = nRanks / kHostAllGatherReplicaGroups;
-      int replicaGroup = rank / ranksPerReplica;
-      int peerGroup = 1 - replicaGroup;
-      char* slotStart =
-          ctx.slab + static_cast<size_t>(slot) * ctx.slotStrideBytes;
-      char* localReplica =
-          slotStart + static_cast<size_t>(replicaGroup) *
-                          ctx.replicaStrideBytes;
-      char* peerReplica =
-          slotStart + static_cast<size_t>(peerGroup) *
-                          ctx.replicaStrideBytes;
-      char* localSelfHost =
-          localReplica + static_cast<size_t>(rank) * bytesPerRank;
-      char* peerSelfHost =
-          peerReplica + static_cast<size_t>(rank) * bytesPerRank;
-
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
-      MSCCLPP_CUDATHROW(
-          cudaStreamWaitEvent(ctx.d2hStream, ctx.inputReadyEvent, 0));
-      for (size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx) {
-        size_t chunkOffset = chunkIdx * chunkBytes;
-        size_t bytes = std::min(chunkBytes, bytesPerRank - chunkOffset);
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(localSelfHost + chunkOffset,
-                                          sendBytes + chunkOffset, bytes,
-                                          cudaMemcpyDeviceToHost,
-                                          ctx.d2hStream));
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(peerSelfHost + chunkOffset,
-                                          sendBytes + chunkOffset, bytes,
-                                          cudaMemcpyDeviceToHost,
-                                          ctx.d2hStream));
-        MSCCLPP_CUDATHROW(
-            cudaEventRecord(ctx.d2hChunkEvents[chunkIdx], ctx.d2hStream));
-      }
-      for (size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx) {
-        size_t chunkOffset = chunkIdx * chunkBytes;
-        size_t bytes = std::min(chunkBytes, bytesPerRank - chunkOffset);
-        waitHostAllGatherCudaEvent(ctx.d2hChunkEvents[chunkIdx]);
-        ctx.ctrl->d2hReady[slot][chunkIdx][rank].value.store(
-            epoch, std::memory_order_release);
-        for (int r = 0; r < nRanks; ++r) {
-          waitHostAllGatherEpoch(ctx.ctrl->d2hReady[slot][chunkIdx][r].value,
-                                 epoch);
-        }
-
-        if (bytes == bytesPerRank) {
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvBytes, localReplica, fullBytes,
-                                            cudaMemcpyHostToDevice,
-                                            ctx.h2dStream));
-        } else {
-          MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
-              recvBytes + chunkOffset, bytesPerRank, localReplica + chunkOffset,
-              bytesPerRank, bytes, static_cast<size_t>(nRanks),
-              cudaMemcpyHostToDevice, ctx.h2dStream));
-        }
-      }
-      enqueueHostAllGatherSignal(ctx.h2dStream,
-                                 &ctx.ctrl->slotDone[slot][rank].value, epoch);
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent, ctx.h2dStream));
-      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, ctx.h2dDoneEvent, 0));
-      return;
-    }
-
-    if (useVectorHostKernels && chunkCount == 1 && !useReplicatedPath &&
-        ctx.slabDevice != nullptr &&
-        ctx.ctrlDevice != nullptr &&
-        fullBytes <= hostAllGatherTwoKernelMaxBytes()) {
-      size_t slotOffset = static_cast<size_t>(slot) * ctx.slotStrideBytes;
-      size_t readyOffset =
-          reinterpret_cast<char*>(&ctx.ctrl->d2hReady[slot][0][0].value) -
-          reinterpret_cast<char*>(ctx.ctrl);
-      size_t doneOffset =
-          reinterpret_cast<char*>(&ctx.ctrl->slotDone[slot][0].value) -
-          reinterpret_cast<char*>(ctx.ctrl);
-      size_t blockBytes = hostAllGatherTwoKernelBlockBytes();
-      int packBlocks = std::min<int>(
-          hostAllGatherCoopMaxBlocks(),
-          std::max<int>(1, static_cast<int>(
-                               (bytesPerRank + blockBytes - 1) / blockBytes)));
-      int recvBlocks = std::min<int>(
-          2 * hostAllGatherCoopMaxBlocks(),
-          std::max<int>(1, static_cast<int>((fullBytes + blockBytes - 1) /
-                                            blockBytes)));
-      hostAllGatherPackKernel<<<packBlocks, 256, 0, stream>>>(
-          sendBytes, ctx.slabDevice, ctx.ctrlDevice, slotOffset, bytesPerRank,
-          rank, epoch, readyOffset, sizeof(HostAllGatherCounter));
-      MSCCLPP_CUDATHROW(cudaGetLastError());
-      enqueueHostAllGatherSignal(
-          stream, &ctx.ctrl->d2hReady[slot][0][rank].value, epoch);
-      for (int r = 0; r < nRanks; ++r) {
-        waitHostAllGatherEpoch(ctx.ctrl->d2hReady[slot][0][r].value, epoch);
-      }
-      hostAllGatherRecvKernel<<<recvBlocks, 256, 0, stream>>>(
-          recvBytes, ctx.slabDevice, ctx.ctrlDevice, slotOffset, fullBytes,
-          rank, epoch, doneOffset, sizeof(HostAllGatherCounter));
-      MSCCLPP_CUDATHROW(cudaGetLastError());
-      enqueueHostAllGatherSignal(stream, &ctx.ctrl->slotDone[slot][rank].value,
-                                 epoch);
       return;
     }
 
@@ -1114,49 +896,43 @@ ncclResult_t runIntraNodeHostAllGather(
         waitHostAllGatherEpoch(
             ctx.ctrl->d2hReady[slot][chunkIdx][r].value, epoch);
       }
-      if (fullBytes <= hostAllGatherFullH2DMaxBytes() && chunkCount == 1) {
-        if (chunkOffset == 0) {
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvBytes, slotBase, fullBytes,
-                                            cudaMemcpyHostToDevice,
-                                            ctx.h2dStream));
+      // Always use the split H2D path: copy only other ranks' data from SHM,
+      // self-rank data comes from the faster D2D self-copy above.
+      if (bytes == bytesPerRank) {
+        if (rank > 0) {
+          size_t copyBytes = static_cast<size_t>(rank) * bytesPerRank;
+          MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+              recvBytes, slotBase, copyBytes, cudaMemcpyHostToDevice,
+              ctx.h2dStream));
+        }
+        if (rank + 1 < nRanks) {
+          size_t first = static_cast<size_t>(rank + 1);
+          size_t copyBytes =
+              static_cast<size_t>(nRanks - rank - 1) * bytesPerRank;
+          MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+              recvBytes + first * bytesPerRank,
+              slotBase + first * bytesPerRank, copyBytes,
+              cudaMemcpyHostToDevice,
+              rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
+          usedSecondH2dStream = usedSecondH2dStream || rank > 0;
         }
       } else {
-        if (bytes == bytesPerRank) {
-          if (rank > 0) {
-            size_t copyBytes = static_cast<size_t>(rank) * bytesPerRank;
-            MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-                recvBytes, slotBase, copyBytes, cudaMemcpyHostToDevice,
-                ctx.h2dStream));
-          }
-          if (rank + 1 < nRanks) {
-            size_t first = static_cast<size_t>(rank + 1);
-            size_t copyBytes =
-                static_cast<size_t>(nRanks - rank - 1) * bytesPerRank;
-            MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-                recvBytes + first * bytesPerRank,
-                slotBase + first * bytesPerRank, copyBytes,
-                cudaMemcpyHostToDevice,
-                rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
-            usedSecondH2dStream = usedSecondH2dStream || rank > 0;
-          }
-        } else {
-          if (rank > 0) {
-            MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
-                recvBytes + chunkOffset, bytesPerRank,
-                slotBase + chunkOffset, bytesPerRank, bytes,
-                static_cast<size_t>(rank), cudaMemcpyHostToDevice,
-                ctx.h2dStream));
-          }
-          if (rank + 1 < nRanks) {
-            size_t first = static_cast<size_t>(rank + 1);
-            MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
-                recvBytes + first * bytesPerRank + chunkOffset, bytesPerRank,
-                slotBase + first * bytesPerRank + chunkOffset, bytesPerRank,
-                bytes, static_cast<size_t>(nRanks - rank - 1),
-                cudaMemcpyHostToDevice,
-                rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
-            usedSecondH2dStream = usedSecondH2dStream || rank > 0;
-          }
+        if (rank > 0) {
+          MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
+              recvBytes + chunkOffset, bytesPerRank,
+              slotBase + chunkOffset, bytesPerRank, bytes,
+              static_cast<size_t>(rank), cudaMemcpyHostToDevice,
+              ctx.h2dStream));
+        }
+        if (rank + 1 < nRanks) {
+          size_t first = static_cast<size_t>(rank + 1);
+          MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
+              recvBytes + first * bytesPerRank + chunkOffset, bytesPerRank,
+              slotBase + first * bytesPerRank + chunkOffset, bytesPerRank,
+              bytes, static_cast<size_t>(nRanks - rank - 1),
+              cudaMemcpyHostToDevice,
+              rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
+          usedSecondH2dStream = usedSecondH2dStream || rank > 0;
         }
       }
     }

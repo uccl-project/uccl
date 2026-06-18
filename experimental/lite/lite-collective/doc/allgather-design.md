@@ -11,9 +11,9 @@ send/recv path.
 | Topic | Summary |
 | --- | --- |
 | Entry points | `ncclAllGather` validates arguments, honors forced NCCL fallback, then calls `algorithmCollection.selectAlgorithm`; Lite AllGather registers three native algorithms (`lite_single_node_cudaipc`, `lite_single_node_shm`, `lite_multi_node`) |
-| Target layouts | `1nx4g` default CudaIpc ring; opt-in `1nx4g` no-CudaIpc host-memory path; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
+| Target layouts | `1nx4g` default CudaIpc ring; opt-in `1nx4g` no-CudaIpc SHM path; `2nx1g`, `2nx2g`, `2nx4g`, plus a general multi-node host-slab fallback |
 | `1nx4g` default large messages | CudaIpc ring for total output `>=8MiB`; smaller messages fall back to real NCCL |
-| `1nx4g` no-CudaIpc host mode | Set `MSCCLPP_NCCL_HOST_ALLGATHER=1`; payload stages through POSIX shared pinned host memory and does not use CudaIpc payload writes |
+| `1nx4g` no-CudaIpc SHM mode | Set `MSCCLPP_NCCL_HOST_ALLGATHER=1`; payload stages through POSIX shared pinned host memory and does not use CudaIpc payload writes |
 | Small messages | Two-node ordered host slots with RDMA-written ready flags |
 | `2nx1g` large messages | Dedicated 512KiB chunk pipeline through 1GiB per-rank input |
 | `2nx2g` large messages | Single host slab, 512KiB chunks |
@@ -42,7 +42,7 @@ AllGather exposes three native algorithms to the selector:
 1. `ncclAllGather` handles invalid arguments, trivial `worldSize == 1`, and
    forced NCCL fallback.
 2. `lite_single_node_cudaipc` selects the single-node CudaIpc path
-   (`runIntraNodeCudaIpcAllGather`) when all ranks are local, host mode is
+   (`runIntraNodeCudaIpcAllGather`) when all ranks are local, SHM mode is
    off, IB-backed signaling is available, CUDA IPC event sync is enabled, and
    total output is at least 8MiB.
 3. `lite_single_node_shm` handles opt-in single-node shared-memory staging
@@ -65,7 +65,7 @@ The multi-node order is intentionally short:
 | Topology | Small cutoff, total output bytes | Medium/large path |
 | --- | ---: | --- |
 | `1nx4g` default | `<8MiB` uses real NCCL fallback | `runIntraNodeCudaIpcAllGather` CudaIpc ring |
-| `1nx4g` host mode | no fallback by size | `runIntraNodeHostAllGather` shared-host-slab path |
+| `1nx4g` SHM mode | no fallback by size | `runIntraNodeShmAllGather` shared-host-slab path |
 | `2nx1g` | `<2MiB` | `runOneRankChunkPipeline` for per-rank `1MiB-1GiB`; then generic single slab |
 | `2nx2g` | `<128KiB` | `runSingleSlab` with 512KiB chunks |
 | `2nx4g` | `<128KiB` | `runNumaSplit` across NUMA/NIC-local groups when available |
@@ -75,8 +75,8 @@ Code pointers:
 
 | Area | Code |
 | --- | --- |
-| Single-node host-memory kernels | [`single-node.cu:L103-L283`](../nccl/Allgather/single-node.cu#L103-L283) |
-| Single-node host-memory implementation | [`single-node.cu:L842-L1163`](../nccl/Allgather/single-node.cu#L842-L1163) |
+| Single-node SHM kernels | [`single-node.cu:L103-L283`](../nccl/Allgather/single-node.cu#L103-L283) |
+| Single-node SHM implementation | [`single-node.cu:L842-L1163`](../nccl/Allgather/single-node.cu#L842-L1163) |
 | Single-node CudaIpc ring threshold | [`single-node.cu:L6-L7`](../nccl/Allgather/single-node.cu#L6-L7) |
 | Single-node CudaIpc ring implementation | [`single-node.cu:L1175-L1362`](../nccl/Allgather/single-node.cu#L1175-L1362) |
 | Lite native algorithm wrappers | [`allgather.hpp`](../nccl/allgather.hpp), [`allgather.cu`](../nccl/allgather.cu) |
@@ -163,7 +163,7 @@ one `bytesPerRank` block.  Pipelining happens at ring-step granularity: all rank
 copy to their `next` peer concurrently, then each rank forwards the block it just
 received from `prev`.
 
-### 2. Single-node no-CudaIpc host-memory mode (`1nx4g`)
+### 2. Single-node no-CudaIpc SHM mode (`1nx4g`)
 
 `MSCCLPP_NCCL_HOST_ALLGATHER=1` selects an opt-in `1nx4g` path for systems where
 GPU peer access/CudaIpc payload writes are unavailable or should be excluded from
@@ -386,7 +386,7 @@ bus bandwidth highlights:
 Raw logs:
 `.tmp/collective-benchmarks/ag-1nx4g-postfix-20260609-060049/`.
 
-Latest `1nx4g` no-CudaIpc host-memory sweep compares the opt-in Lite host path
+Latest `1nx4g` no-CudaIpc SHM sweep compares the opt-in Lite SHM path
 against SHM-only NCCL (`NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
 NCCL_SHM_DISABLE=0`).  Both runs reported `#wrong=0`.  Out-of-place large-message
 bus bandwidth:
@@ -408,14 +408,14 @@ Raw logs:
   topology.  With two nodes and one local rank, each process maps a 2GiB send
   slab and a 2GiB receive slab.
 - Do not reintroduce the generic grouped P2P AllGather branch for multi-node
-  AllGather.  The retained design is host-memory AllGather.
+  AllGather.  The retained design is SHM AllGather.
 - Keep `MSCCLPP_NCCL_LIB_PATH` configured for `mscclpp` benchmark runs.  The
   `1nx4g` path deliberately falls back to real NCCL below `8MiB`, and the
   fallback is also the safety net for unsupported single-node cases.
 - Use `MSCCLPP_NCCL_HOST_ALLGATHER=1` only when benchmarking or running the
-  no-CudaIpc single-node host-memory path.  The default single-node path remains
+  no-CudaIpc single-node SHM path.  The default single-node path remains
   the faster CudaIpc ring when CudaIpc payload access is available.
-- For the no-CudaIpc host path, keep `MSCCLPP_NCCL_HOST_ALLGATHER_NUMA_PLACE`
+- For the no-CudaIpc SHM path, keep `MSCCLPP_NCCL_HOST_ALLGATHER_NUMA_PLACE`
   unset/disabled unless re-benchmarking placement.  Rank-local first-touch was
   slower on the 1nx4g L4 host because most H2D reads consume blocks written by
   other ranks.

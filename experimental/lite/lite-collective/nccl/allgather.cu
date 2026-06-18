@@ -78,15 +78,15 @@ class LiteAllgatherAlgorithm final : public mscclpp::Algorithm {
 
     switch (path_) {
       case LiteAllGatherPath::SingleNodeCudaIpc: {
-        auto fn =
-            reinterpret_cast<LiteAllgatherP2pFn>(extraValue(extras, "p2p_fn"));
+        auto fn = reinterpret_cast<LiteAllgatherCudaIpcFn>(
+            extraValue(extras, "cudaipc_fn"));
         if (fn == nullptr) return mscclpp::CommResult::CommInvalidArgument;
         return toCommResult(
             fn(input, output, inputSize, ncclComm, stream, rank, nRanks));
       }
       case LiteAllGatherPath::SingleNodeShm: {
-        auto fn = reinterpret_cast<LiteAllgatherHostFn>(
-            extraValue(extras, "host_fn"));
+        auto fn =
+            reinterpret_cast<LiteAllgatherShmFn>(extraValue(extras, "shm_fn"));
         if (fn == nullptr) return mscclpp::CommResult::CommInvalidArgument;
         return toCommResult(fn(input, output, inputSize, ncclComm, stream, rank,
                                nRanks, nRanksPerNode, bootstrapComm,

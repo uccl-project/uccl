@@ -26,13 +26,14 @@ class LiteAllgatherAlgo : public mscclpp::AlgorithmBuilder {
   LiteAllGatherPath path_;
 };
 
-using LiteAllgatherP2pFn = ncclResult_t (*)(void const* input, void* output,
-                                            size_t bytesPerRank,
-                                            ncclComm_t comm,
-                                            cudaStream_t stream, int rank,
-                                            int nRanks);
+using LiteAllgatherCudaIpcFn = ncclResult_t (*)(void const* input,
+                                                void* output,
+                                                size_t bytesPerRank,
+                                                ncclComm_t comm,
+                                                cudaStream_t stream, int rank,
+                                                int nRanks);
 
-using LiteAllgatherHostFn = ncclResult_t (*)(
+using LiteAllgatherShmFn = ncclResult_t (*)(
     void const* input, void* output, size_t bytesPerRank, ncclComm_t comm,
     cudaStream_t stream, int rank, int nRanks, int nRanksPerNode,
     std::shared_ptr<mscclpp::Communicator> bootstrapComm, int cudaDevice);

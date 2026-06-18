@@ -2413,8 +2413,9 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
         {"nranks_per_node", static_cast<uintptr_t>(comm->nRanksPerNode)},
         {"cuda_device", static_cast<uintptr_t>(comm->cudaDevice)},
         {"bootstrap_comm", reinterpret_cast<uintptr_t>(&comm->comm)},
-        {"p2p_fn", reinterpret_cast<uintptr_t>(&runIntraNodeCudaIpcAllGather)},
-        {"host_fn", reinterpret_cast<uintptr_t>(&runIntraNodeHostAllGather)}};
+        {"cudaipc_fn",
+         reinterpret_cast<uintptr_t>(&runIntraNodeCudaIpcAllGather)},
+        {"shm_fn", reinterpret_cast<uintptr_t>(&runIntraNodeShmAllGather)}};
     liteResult = static_cast<ncclResult_t>(algo->execute(
         comm->comm, sendbuff, recvbuff, bytes, outputSize, dtype,
         mscclpp::ReduceOp::NOP, stream, comm->executor, 0, 0, false, extras));
