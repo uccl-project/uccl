@@ -22,6 +22,7 @@ Run on the "initiator" machine, pointing at the acceptor's rendezvous IP:
 from __future__ import annotations
 import argparse
 import ctypes
+import os
 import socket
 import struct
 import sys
@@ -34,7 +35,8 @@ except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     raise
 
-HIP_LIB = "/opt/dtk/lib/libamdhip64.so"
+# Override via UCCL_GPU_RT_LIB to run against another HIP runtime (e.g. ROCm).
+HIP_LIB = os.environ.get("UCCL_GPU_RT_LIB", "/opt/dtk/lib/libamdhip64.so")
 HIP_SUCCESS = 0
 DEFAULT_RENDEZVOUS_PORT = 29500
 NUM_FLOATS = 1024
@@ -56,9 +58,13 @@ def hip_check(err: int, name: str) -> None:
 def hip_alloc_filled(hip, value: float) -> ctypes.c_void_p:
     host_buf = (ctypes.c_float * NUM_FLOATS)(*([value] * NUM_FLOATS))
     dev_ptr = ctypes.c_void_p(0)
-    hip_check(hip.hipMalloc(ctypes.byref(dev_ptr), ctypes.c_size_t(NBYTES)), "hipMalloc")
     hip_check(
-        hip.hipMemcpy(dev_ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(1)),  # H2D
+        hip.hipMalloc(ctypes.byref(dev_ptr), ctypes.c_size_t(NBYTES)), "hipMalloc"
+    )
+    hip_check(
+        hip.hipMemcpy(
+            dev_ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(1)
+        ),  # H2D
         "hipMemcpy H->D",
     )
     return dev_ptr
@@ -67,7 +73,9 @@ def hip_alloc_filled(hip, value: float) -> ctypes.c_void_p:
 def hip_read_first8(hip, dev_ptr: ctypes.c_void_p) -> list:
     host_buf = (ctypes.c_float * 8)()
     hip_check(
-        hip.hipMemcpy(host_buf, dev_ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(2)),  # D2H
+        hip.hipMemcpy(
+            host_buf, dev_ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(2)
+        ),  # D2H
         "hipMemcpy D->H",
     )
     return list(host_buf)
@@ -97,7 +105,9 @@ def recv_blob(sock: socket.socket) -> bytes:
 
 
 def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
-    print(f"[Acceptor] starting, mode={mode}, listening for rendezvous on 0.0.0.0:{rendezvous_port}")
+    print(
+        f"[Acceptor] starting, mode={mode}, listening for rendezvous on 0.0.0.0:{rendezvous_port}"
+    )
     hip = load_hip()
     hip_check(hip.hipSetDevice(gpu_idx), f"hipSetDevice({gpu_idx})")
 
@@ -131,7 +141,9 @@ def run_acceptor(mode: str, rendezvous_port: int, gpu_idx: int) -> None:
         assert all(abs(v - 7.0) < 1e-5 for v in values), values
         print("✓ Acceptor buffer correctly written by remote RDMA-WRITE")
     else:
-        print("✓ Acceptor buffer exposed for remote RDMA-READ (no local mutation expected)")
+        print(
+            "✓ Acceptor buffer exposed for remote RDMA-READ (no local mutation expected)"
+        )
 
     hip.hipFree(dev_ptr)
     conn.close()
@@ -184,7 +196,9 @@ def run_initiator(mode: str, peer_ip: str, rendezvous_port: int, gpu_idx: int) -
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Cross-node UCCL P2P RDMA test (torch-free)")
+    parser = argparse.ArgumentParser(
+        description="Cross-node UCCL P2P RDMA test (torch-free)"
+    )
     parser.add_argument("--role", choices=["acceptor", "initiator"], required=True)
     parser.add_argument("--mode", choices=["write", "read"], required=True)
     parser.add_argument("--peer-ip", default=None, help="Required for --role initiator")

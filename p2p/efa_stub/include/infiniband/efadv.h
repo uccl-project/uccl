@@ -1,7 +1,5 @@
-// Minimal EFA stub header for platforms without the AWS EFA SDK (e.g., Hygon
-// DTK). Provides only the type definitions and constants required for
-// compilation. EFA transport will be unavailable at runtime on non-EFA
-// hardware.
+// Minimal EFA stub for platforms without the AWS EFA SDK (e.g., Hygon DTK):
+// just the types needed to compile. EFA transport is unavailable at runtime.
 #pragma once
 #include <infiniband/verbs.h>
 #include <stdint.h>

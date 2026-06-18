@@ -97,9 +97,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuGetErrorString hipGetErrorString
 #define gpuStream_t hipStream_t
 #define gpuStreamNonBlocking hipStreamNonBlocking
-// hipStreamLegacy is absent in some HIP SDKs (e.g., Hygon DTK 5.4).
-// Fall back to hipStreamDefault which has the same "use current device
-// default stream" semantics for our purposes.
+// Hygon DTK lacks hipStreamLegacy; hipStreamDefault has equivalent semantics.
 #ifdef __UCCL_DTK__
 #define gpuStreamLegacy hipStreamDefault
 #else
@@ -167,9 +165,8 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
 #define gpuDriverSuccess hipSuccess
-// __HAS_HIP_DMABUF__ is set by Makefiles for HIP platforms that provide
-// hipMemGetHandleForAddressRange (AMD ROCm). Hygon DTK lacks this API.
-#ifdef __HAS_HIP_DMABUF__
+// Hygon DTK lacks hipMemGetHandleForAddressRange (DMA-BUF export).
+#ifndef __UCCL_DTK__
 #define gpuMemRangeHandleType hipMemRangeHandleType
 #define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
@@ -181,19 +178,7 @@ typedef int gpuMemRangeHandleType;
 #endif
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
-// The pointer-attribute memory type field was renamed in ROCm: DTK/HIP≤5.x
-// exposes it as .memoryType; newer ROCm renamed it to .type.
-// Additionally, the enum VALUES differ: DTK has hipMemoryTypeDevice=1 but
-// ROCm 6.1 runtime uses hipMemoryTypeDevice=2 (hipMemoryTypeHost=1).
-// When compiling with DTK headers but running against ROCm 6.1, use the
-// ROCm 6.1 runtime value (2) to correctly classify device memory.
-#ifdef __UCCL_DTK__
-#define gpuPointerMemoryType(a) ((a).memoryType)
-#define gpuMemoryTypeDevice 2
-#else
-#define gpuPointerMemoryType(a) ((a).type)
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
-#endif
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define gpuMemGetAddressRange hipMemGetAddressRange

@@ -43,7 +43,7 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I$(HIP_INC) -I$(EFA_HOME)/include \
 	-I${CONDA_LIB_HOME}/../include \
 	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
-	-D__HIP_PLATFORM_AMD__ -D__HAS_HIP_DMABUF__ \
+	-D__HIP_PLATFORM_AMD__ \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME}
 

@@ -46,9 +46,8 @@ endif
 
 # NOTE: -libverbs, -lrccl, -lefa are NOT linked at compile time.
 # Headers are included for type definitions only.
-# __HIP_PLATFORM_AMD__ enables the HIP code path in gpu_rt.h.
-# __HAS_HIP_DMABUF__ is intentionally NOT set: Hygon DTK does not provide
-# hipMemGetHandleForAddressRange, so DMA-BUF GPUDirect RDMA is disabled.
+# __HIP_PLATFORM_AMD__ enables the HIP code path in gpu_rt.h; __UCCL_DTK__
+# selects DTK-specific fallbacks (no DMA-BUF export, no hipStreamLegacy).
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
 	-I$(HIP_INC) -I$(EFA_HOME)/include \

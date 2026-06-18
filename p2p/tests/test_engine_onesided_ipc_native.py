@@ -1,44 +1,30 @@
 #!/usr/bin/env python3
 """
-Torch-free end-to-end test of UCCL one-sided IPC (write_ipc / read_ipc) on
-Hygon DCU, exercising the *native DTK runtime* build of the p2p module.
+Torch-free end-to-end test of UCCL one-sided IPC (write_ipc / read_ipc) across
+two GPUs on one node: rank 0 (DCU 0) advertises buffers, rank 1 (DCU 1) runs
+write_ipc / read_ipc against them. The control plane uses multiprocessing.Pipe
+and buffers are allocated via ctypes, so torch is never imported.
 
-Two processes on the same node:
-  rank 0 = server/owner  -> DCU 0   (advertises GPU buffers via IPC)
-  rank 1 = client        -> DCU 1   (write_ipc / read_ipc against rank 0)
-=> cross-GPU zero-copy IPC.
+Requirements:
+  1. Build uccl.p2p with the native DTK Makefile (`make -f Makefile.dtk`); a
+     dtk-torch build drags torch's ROCm runtime in via RUNPATH even with no
+     `import torch` (symptom: undefined symbol hsa_amd_queue_intercept_register).
+  2. LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib (DTK needs
+     libNanoLog from /opt/hyhal/lib and the HSA runtime from /opt/dtk/hsa/lib).
 
-Rendezvous and the tiny control-plane exchanges use multiprocessing.Pipe
-instead of torch.distributed, and GPU buffers are allocated via ctypes against
-libamdhip64.so instead of torch tensors -- so torch is NEVER imported. This
-avoids both the dual HIP runtime conflict and torch's ROCm6.1 lib
-incompatibility with the hydcu 6.2.31 driver on node2.
-
-REQUIREMENTS (verified on node0 + node2):
-  1. The `uccl.p2p` module MUST be the *native DTK* build (`make -f
-     Makefile.dtk`), which links libgalaxyhip. A `dtk-torch` build links
-     torch's libamdhip64.so.6 with an RUNPATH baked to torch/lib, so
-     `from uccl import p2p` pulls torch's ROCm6.1 HIP + HSA runtime into the
-     process EVEN IF this script never imports torch -- reintroducing the
-     exact dual-runtime conflict this test is meant to avoid (symptom:
-     `undefined symbol: hsa_amd_queue_intercept_register, version ROCR_1`).
-  2. LD_LIBRARY_PATH must cover the full native DTK runtime chain. On node0,
-     /opt/dtk/lib alone is insufficient: DTK's libamdhip64.so.4 depends on
-     libNanoLog.so.1 which lives in /opt/hyhal/lib, and the HSA runtime is in
-     /opt/dtk/hsa/lib. Missing them makes the loader fall back to the system
-     hsa-runtime (no ROCR_1 symbols) and the import fails.
-
-Run (paths below work on both node0 and node2):
-    PYTHONPATH=~/uccl \
-    LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib \
+Run:
+    PYTHONPATH=~/uccl LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib \
         python3 p2p/tests/test_engine_onesided_ipc_native.py
 """
+
 import ctypes
 import multiprocessing
+import os
 import sys
 import traceback
 
-HIP_LIB = "/opt/dtk/lib/libamdhip64.so"
+# Override via UCCL_GPU_RT_LIB to run against another HIP runtime (e.g. ROCm).
+HIP_LIB = os.environ.get("UCCL_GPU_RT_LIB", "/opt/dtk/lib/libamdhip64.so")
 HIP_SUCCESS = 0
 H2D = 1
 D2H = 2
@@ -61,15 +47,21 @@ def alloc_fill(lib, val):
     ptr = ctypes.c_void_p(0)
     _chk(lib, lib.hipMalloc(ctypes.byref(ptr), ctypes.c_size_t(SIZE)), "hipMalloc")
     host = (ctypes.c_float * BUF_ELEMS)(*([val] * BUF_ELEMS))
-    _chk(lib, lib.hipMemcpy(ptr, host, ctypes.c_size_t(SIZE), ctypes.c_int(H2D)),
-         "hipMemcpy H2D")
+    _chk(
+        lib,
+        lib.hipMemcpy(ptr, host, ctypes.c_size_t(SIZE), ctypes.c_int(H2D)),
+        "hipMemcpy H2D",
+    )
     return ptr
 
 
 def read_back(lib, ptr):
     host = (ctypes.c_float * BUF_ELEMS)()
-    _chk(lib, lib.hipMemcpy(host, ptr, ctypes.c_size_t(SIZE), ctypes.c_int(D2H)),
-         "hipMemcpy D2H")
+    _chk(
+        lib,
+        lib.hipMemcpy(host, ptr, ctypes.c_size_t(SIZE), ctypes.c_int(D2H)),
+        "hipMemcpy D2H",
+    )
     return list(host)
 
 
@@ -80,6 +72,7 @@ def all_close(vals, target, tol=1e-5):
 def worker(rank, pipe, result_q):
     try:
         from uccl import p2p
+
         lib = _hip()
         _chk(lib, lib.hipSetDevice(rank), f"hipSetDevice({rank})")
         ep = p2p.Endpoint(local_gpu_idx=rank)
@@ -121,8 +114,7 @@ def worker(rank, pipe, result_q):
             assert ok, "advertise_ipc(read) failed"
             pipe.send(bytes(info))
             pipe.recv()  # wait for client to finish reading
-            print("[rank0] read_ipc PASS  (buffer exposed for remote READ)",
-                  flush=True)
+            print("[rank0] read_ipc PASS  (buffer exposed for remote READ)", flush=True)
         else:
             dst = alloc_fill(lib, 0.0)
             info = pipe.recv()
