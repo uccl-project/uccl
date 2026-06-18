@@ -1,6 +1,5 @@
 #include "cxi_endpoint.h"
 #include "engine.h"
-
 #include <rdma/fi_cm.h>
 #include <rdma/fi_rma.h>
 #include <algorithm>
@@ -80,7 +79,8 @@ bool is_cuda_pointer(void* ptr, int& cuda_device) {
     cudaGetLastError();
     return false;
   }
-  if (attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged) {
+  if (attrs.type == cudaMemoryTypeDevice ||
+      attrs.type == cudaMemoryTypeManaged) {
     cuda_device = attrs.device;
     return true;
   }
@@ -107,8 +107,7 @@ std::string cq_error_string(fid_cq* cq, fi_cq_err_entry const& err) {
 
 }  // namespace
 
-CxiEndpoint::CxiEndpoint(int gpu_index, uint64_t port)
-    : gpu_index_(gpu_index) {
+CxiEndpoint::CxiEndpoint(int gpu_index, uint64_t port) : gpu_index_(gpu_index) {
   if (gpu_index != INVALID_GPU) {
     initialize_rdma_ctx_for_gpu(gpu_index);
   }
@@ -188,8 +187,8 @@ void CxiEndpoint::init_fabric(int gpu_index) {
   hints->rx_attr->msg_order = FI_ORDER_SAS;
 
   try {
-    check_fi("fi_getinfo(cxi)", fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr,
-                                           0, hints, &info_));
+    check_fi("fi_getinfo(cxi)",
+             fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0, hints, &info_));
     info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
     UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
 
@@ -212,9 +211,8 @@ void CxiEndpoint::init_fabric(int gpu_index) {
 #ifdef FI_OPT_CUDA_API_PERMITTED
     bool cuda_api_permitted = false;
     check_fi("fi_setopt(FI_OPT_CUDA_API_PERMITTED)",
-             fi_setopt(&ep_->fid, FI_OPT_ENDPOINT,
-                       FI_OPT_CUDA_API_PERMITTED, &cuda_api_permitted,
-                       sizeof(cuda_api_permitted)));
+             fi_setopt(&ep_->fid, FI_OPT_ENDPOINT, FI_OPT_CUDA_API_PERMITTED,
+                       &cuda_api_permitted, sizeof(cuda_api_permitted)));
 #endif
 
     check_fi("fi_enable", fi_enable(ep_));
@@ -259,7 +257,8 @@ CxiEndpoint::EndpointInfo CxiEndpoint::local_endpoint_info() const {
   return info;
 }
 
-std::string CxiEndpoint::serialize_endpoint_info(EndpointInfo const& info) const {
+std::string CxiEndpoint::serialize_endpoint_info(
+    EndpointInfo const& info) const {
   if (info.ep_name.size() > std::numeric_limits<uint16_t>::max()) {
     throw std::runtime_error("CXI endpoint name too large");
   }
@@ -319,8 +318,7 @@ fi_addr_t CxiEndpoint::insert_peer(EndpointInfo const& info) {
 
 ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
                                  uint16_t remote_port) {
-  int32_t peer_id =
-      next_send_peer_id_.fetch_add(1, std::memory_order_relaxed);
+  int32_t peer_id = next_send_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
   std::string conn_key;
   while (conn_key.empty()) {
@@ -342,8 +340,7 @@ ConnID CxiEndpoint::uccl_connect(int remote_gpuidx, std::string remote_ip,
   auto promise = std::make_shared<std::promise<EndpointInfo>>();
   std::future<EndpointInfo> future = promise->get_future();
   bool sent = oob_client_->send_meta(
-      conn_key, payload,
-      [this, promise](std::string const& response) {
+      conn_key, payload, [this, promise](std::string const& response) {
         promise->set_value(deserialize_endpoint_info(response));
       });
   if (!sent) {
@@ -412,8 +409,7 @@ void CxiEndpoint::stop_accept() {
 }
 
 void CxiEndpoint::process_meta(std::string const& input, std::string& output,
-                               std::string const& client_ip,
-                               int client_port) {
+                               std::string const& client_ip, int client_port) {
   if (input.size() >= sizeof(NotifyMsg)) {
     NotifyMsg const* notify_msg =
         reinterpret_cast<NotifyMsg const*>(input.data());
@@ -427,14 +423,12 @@ void CxiEndpoint::process_meta(std::string const& input, std::string& output,
 
   EndpointInfo peer_info = deserialize_endpoint_info(input);
   fi_addr_t addr = insert_peer(peer_info);
-  uint64_t peer_id =
-      next_recv_peer_id_.fetch_add(1, std::memory_order_relaxed);
+  uint64_t peer_id = next_recv_peer_id_.fetch_add(1, std::memory_order_relaxed);
 
   {
     std::unique_lock<std::shared_mutex> lock(peer_mutex_);
-    peers_[peer_id] =
-        Peer{addr, client_ip, static_cast<uint16_t>(client_port),
-             peer_info.gpu_index};
+    peers_[peer_id] = Peer{addr, client_ip, static_cast<uint16_t>(client_port),
+                           peer_info.gpu_index};
   }
 
   {
@@ -462,7 +456,8 @@ void CxiEndpoint::process_meta(std::string const& input, std::string& output,
 int CxiEndpoint::uccl_regmr(void* data, size_t len,
                             std::shared_ptr<CxiMemoryRegion>& region) {
   if (!fabric_initialized_) {
-    UCCL_LOG(ERROR) << "CXI endpoint not initialized before memory registration";
+    UCCL_LOG(ERROR)
+        << "CXI endpoint not initialized before memory registration";
     return -1;
   }
   if (!data || len == 0) {
@@ -483,15 +478,14 @@ int CxiEndpoint::uccl_regmr(void* data, size_t len,
     fi_mr_attr mr_attr{};
     mr_attr.mr_iov = &iov;
     mr_attr.iov_count = 1;
-    mr_attr.access = FI_SEND | FI_RECV | FI_READ | FI_WRITE |
-                     FI_REMOTE_WRITE | FI_REMOTE_READ;
+    mr_attr.access = FI_SEND | FI_RECV | FI_READ | FI_WRITE | FI_REMOTE_WRITE |
+                     FI_REMOTE_READ;
     mr_attr.iface = FI_HMEM_CUDA;
     mr_attr.device.cuda = cuda_device;
 
     int ret = fi_mr_regattr(domain_, &mr_attr, 0, &out->mr);
     if (ret != 0) {
-      UCCL_LOG(ERROR) << "fi_mr_regattr(cuda) failed: "
-                      << fi_strerror(-ret);
+      UCCL_LOG(ERROR) << "fi_mr_regattr(cuda) failed: " << fi_strerror(-ret);
       return -1;
     }
   } else {
@@ -525,8 +519,7 @@ int CxiEndpoint::uccl_regmr(void* data, size_t len,
   return 0;
 }
 
-void CxiEndpoint::uccl_deregmr(
-    std::shared_ptr<CxiMemoryRegion> const& region) {
+void CxiEndpoint::uccl_deregmr(std::shared_ptr<CxiMemoryRegion> const& region) {
   if (!region || !region->mr) return;
   fid_mr* mr = region->mr;
   int ret = fi_close(&mr->fid);
@@ -552,8 +545,8 @@ int CxiEndpoint::uccl_write_async(
 
 int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
                           std::shared_ptr<CxiMemoryRegion> const& local_mr,
-                          void* local, size_t size,
-                          FifoItem const& fifo_item, UcclRequest* ureq) {
+                          void* local, size_t size, FifoItem const& fifo_item,
+                          UcclRequest* ureq) {
   if (!local_mr || !local_mr->mr || !local || !ureq) return -1;
 
   CxiFifoMetadata metadata;
@@ -611,13 +604,12 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
   }
   if (rc != 0) {
     std::ostringstream os;
-    os << (is_read ? "fi_read" : "fi_write") << " failed: "
-       << fi_strerror(-rc) << " rc=" << rc << " peer_id=" << conn.peer_id
-       << " peer_gpu=" << peer.gpu_index << " size=" << size
-       << " local=0x" << std::hex << local_addr << " local_base=0x"
-       << local_base << " local_len=0x" << local_mr->len
-       << " remote=0x" << fifo_item.addr << " remote_base=0x"
-       << metadata.base << " remote_len=0x" << metadata.len
+    os << (is_read ? "fi_read" : "fi_write") << " failed: " << fi_strerror(-rc)
+       << " rc=" << rc << " peer_id=" << conn.peer_id
+       << " peer_gpu=" << peer.gpu_index << " size=" << size << " local=0x"
+       << std::hex << local_addr << " local_base=0x" << local_base
+       << " local_len=0x" << local_mr->len << " remote=0x" << fifo_item.addr
+       << " remote_base=0x" << metadata.base << " remote_len=0x" << metadata.len
        << " remote_offset=0x" << remote_offset << " key=0x" << metadata.key
        << std::dec;
     UCCL_LOG(ERROR) << os.str();
@@ -650,8 +642,8 @@ void CxiEndpoint::poll_cq_locked() {
     if (rc > 0) {
       std::lock_guard<std::mutex> lock(op_mutex_);
       for (ssize_t i = 0; i < rc; ++i) {
-        auto* ctx =
-            static_cast<OpContext*>(get_fi_context_owner(entries[i].op_context));
+        auto* ctx = static_cast<OpContext*>(
+            get_fi_context_owner(entries[i].op_context));
         if (ctx) ctx->done = true;
       }
       continue;
@@ -661,9 +653,9 @@ void CxiEndpoint::poll_cq_locked() {
       fi_cq_err_entry err{};
       ssize_t err_rc = fi_cq_readerr(cq_, &err, 0);
       std::string error_message =
-          err_rc >= 0 ? cq_error_string(cq_, err)
-                      : std::string("fi_cq_readerr failed: ") +
-                            fi_strerror(-err_rc);
+          err_rc >= 0
+              ? cq_error_string(cq_, err)
+              : std::string("fi_cq_readerr failed: ") + fi_strerror(-err_rc);
       {
         std::lock_guard<std::mutex> lock(op_mutex_);
         auto* ctx =
@@ -728,8 +720,7 @@ void encode_cxi_fifo_metadata(CxiMemoryRegion const& region, FifoItem& item) {
   std::memcpy(item.padding, &metadata, sizeof(metadata));
 }
 
-bool decode_cxi_fifo_metadata(FifoItem const& item,
-                              CxiFifoMetadata& metadata) {
+bool decode_cxi_fifo_metadata(FifoItem const& item, CxiFifoMetadata& metadata) {
   std::memcpy(&metadata, item.padding, sizeof(metadata));
   return metadata.base != 0 && metadata.len != 0;
 }

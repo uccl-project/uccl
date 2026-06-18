@@ -28,9 +28,9 @@
 extern thread_local bool inside_python;
 
 // Runtime-polymorphic endpoint.
-using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>,
-                                     std::shared_ptr<NCCLEndpoint>,
-                                     std::shared_ptr<CxiEndpoint>>;
+using GenericEndpoint =
+    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
+                 std::shared_ptr<CxiEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.

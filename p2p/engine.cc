@@ -737,7 +737,8 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     curr_slot_item.size = size;
     int rc;
     do {
-      rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
+      rc =
+          uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
     } while (is_retryable_post_failure(rc));
     if (is_cxi_transport() && rc < 0) {
       UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
@@ -1060,8 +1061,8 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
     curr_slot_item.size = size;
     int rc;
     do {
-      rc =
-          uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item, &ureq);
+      rc = uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                            &ureq);
     } while (is_retryable_post_failure(rc));
     if (is_cxi_transport() && rc < 0) {
       UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
