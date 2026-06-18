@@ -41,20 +41,6 @@ ncclResult_t runHostAllGatherGuarded(char const* opName, Fn&& fn) {
   }
 }
 
-static void waitHostAllGatherCudaEvent(cudaEvent_t event) {
-  int spinIters = 0;
-  while (true) {
-    cudaError_t status = cudaEventQuery(event);
-    if (status == cudaSuccess) return;
-    if (status != cudaErrorNotReady) MSCCLPP_CUDATHROW(status);
-    if (spinIters++ < kHostAllGatherPollSpinsBeforeYield) {
-      hostAllGatherCpuRelax();
-    } else {
-      std::this_thread::yield();
-    }
-  }
-}
-
 static constexpr int kHostAllGatherMaxRanks = 8;
 static constexpr int kHostAllGatherSlots = 2;
 static constexpr size_t kHostAllGatherMaxTotalBytes = 1024ULL * 1024 * 1024;
@@ -69,8 +55,6 @@ static constexpr int kHostAllGatherDefaultKernelThreads = 256;
 static constexpr size_t kHostAllGatherDefaultCoopMaxBytes = 4 * 1024 * 1024;
 static constexpr size_t kHostAllGatherDefaultTwoKernelBlockBytes = 1024;
 static constexpr int kHostAllGatherDefaultCoopMaxBlocks = 16;
-static constexpr size_t kHostAllGatherDefaultCallbackReadyMinBytes =
-    32 * 1024 * 1024;
 
 struct HostAllGatherCounter {
   alignas(64) std::atomic<uint64_t> value{0};
@@ -219,29 +203,6 @@ struct HostAllGatherNames {
   char ctrlName[128] = {};
 };
 
-struct HostAllGatherSignal {
-  std::atomic<uint64_t>* counter = nullptr;
-  uint64_t value = 0;
-};
-
-static void CUDART_CB signalHostAllGatherCounter(void* data) {
-  std::unique_ptr<HostAllGatherSignal> signal(
-      static_cast<HostAllGatherSignal*>(data));
-  signal->counter->store(signal->value, std::memory_order_release);
-}
-
-static void enqueueHostAllGatherSignal(cudaStream_t stream,
-                                       std::atomic<uint64_t>* counter,
-                                       uint64_t value) {
-  auto* signal = new HostAllGatherSignal{counter, value};
-  cudaError_t result = cudaLaunchHostFunc(stream, signalHostAllGatherCounter,
-                                          signal);
-  if (result != cudaSuccess) {
-    delete signal;
-    MSCCLPP_CUDATHROW(result);
-  }
-}
-
 struct HostAllGatherContext {
   std::mutex initMutex;
   std::condition_variable initCv;
@@ -275,15 +236,11 @@ struct HostAllGatherContext {
   cudaEvent_t inputReadyEvent = nullptr;
   cudaEvent_t h2dDoneEvent = nullptr;
   cudaEvent_t h2dDoneEvent2 = nullptr;
-  std::vector<cudaEvent_t> d2hChunkEvents;
 
   ~HostAllGatherContext() {
     if (h2dDoneEvent) cudaEventDestroy(h2dDoneEvent);
     if (h2dDoneEvent2) cudaEventDestroy(h2dDoneEvent2);
     if (inputReadyEvent) cudaEventDestroy(inputReadyEvent);
-    for (cudaEvent_t event : d2hChunkEvents) {
-      if (event) cudaEventDestroy(event);
-    }
     if (h2dStream) cudaStreamDestroy(h2dStream);
     if (h2dStream2) cudaStreamDestroy(h2dStream2);
     if (d2hStream) cudaStreamDestroy(d2hStream);
@@ -297,6 +254,37 @@ struct HostAllGatherContext {
     }
   }
 };
+
+// Compute device address of a ctrl flag given its host address.
+// Requires ctx.ctrlDevice != nullptr (ctrl is always device-mapped).
+static CUdeviceptr ctrlFlagDevPtr(HostAllGatherContext const& ctx,
+                                   std::atomic<uint64_t> const* flagHost) {
+  ptrdiff_t off = reinterpret_cast<char const*>(flagHost) -
+                  reinterpret_cast<char const*>(ctx.ctrl);
+  return reinterpret_cast<CUdeviceptr>(ctx.ctrlDevice + off);
+}
+
+// Queue a GPU DMA write of a 64-bit epoch to a ctrl flag — no CPU callback.
+static void streamWriteFlag64(cudaStream_t stream, CUdeviceptr addr,
+                               uint64_t value) {
+  CUresult res = cuStreamWriteValue64(reinterpret_cast<CUstream>(stream), addr,
+                                      static_cast<cuuint64_t>(value),
+                                      CU_STREAM_WRITE_VALUE_DEFAULT);
+  if (res != CUDA_SUCCESS)
+    throw mscclpp::Error("cuStreamWriteValue64 failed in SHM allgather",
+                         mscclpp::ErrorCode::SystemError);
+}
+
+// Queue a GPU-side wait on a ctrl flag — no CPU spin, enables D2H/H2D overlap.
+static void streamWaitFlag64(cudaStream_t stream, CUdeviceptr addr,
+                              uint64_t value) {
+  CUresult res = cuStreamWaitValue64(reinterpret_cast<CUstream>(stream), addr,
+                                     static_cast<cuuint64_t>(value),
+                                     CU_STREAM_WAIT_VALUE_GEQ);
+  if (res != CUDA_SUCCESS)
+    throw mscclpp::Error("cuStreamWaitValue64 failed in SHM allgather",
+                         mscclpp::ErrorCode::SystemError);
+}
 
 static std::mutex gHostAllGatherContextMutex;
 static std::unordered_map<ncclComm_t, std::unique_ptr<HostAllGatherContext>>
@@ -386,18 +374,6 @@ static int hostAllGatherCoopMaxBlocks() {
   return static_cast<int>(parsed);
 }
 
-static size_t hostAllGatherCallbackReadyMinBytes() {
-  char const* env =
-      std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_CALLBACK_READY_MIN_BYTES");
-  if (env == nullptr || env[0] == '\0') {
-    return kHostAllGatherDefaultCallbackReadyMinBytes;
-  }
-  char* end = nullptr;
-  unsigned long long parsed = std::strtoull(env, &end, 10);
-  if (end == env) return kHostAllGatherDefaultCallbackReadyMinBytes;
-  return static_cast<size_t>(parsed);
-}
-
 static size_t hostAllGatherChunkBytes(size_t bytesPerRank) {
   char const* env = std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_CHUNK_BYTES");
   if (env == nullptr || env[0] == '\0') {
@@ -436,16 +412,6 @@ static void cleanupHostAllGatherContexts(ncclComm_t comm) {
   std::lock_guard<std::mutex> lock(gHostAllGatherContextMutex);
   gHostAllGatherMappedContexts.erase(comm);
   gHostAllGatherPinnedContexts.erase(comm);
-}
-
-static void ensureHostAllGatherD2hEvents(HostAllGatherContext& ctx,
-                                         size_t count) {
-  while (ctx.d2hChunkEvents.size() < count) {
-    cudaEvent_t event = nullptr;
-    MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&event,
-                                               cudaEventDisableTiming));
-    ctx.d2hChunkEvents.push_back(event);
-  }
 }
 
 struct HostAllGatherInitStatus {
@@ -681,12 +647,13 @@ static void initializeHostAllGatherContext(
           cudaHostGetDevicePointer(&slabDevice, ctx.slabMapping, 0));
       ctx.slabDevice = static_cast<char*>(slabDevice);
     }
+    // ctrl is always device-mapped so GPU streams can read/write flags directly
+    // via cuStreamWriteValue64/cuStreamWaitValue64. Only the slab follows mapSlab.
     MSCCLPP_CUDATHROW(cudaHostRegister(
         ctx.ctrlMapping, sizeof(HostAllGatherControl),
-        ctx.mapSlab ? (cudaHostRegisterPortable | cudaHostRegisterMapped)
-                    : cudaHostRegisterPortable));
+        cudaHostRegisterPortable | cudaHostRegisterMapped));
     ctx.ctrlRegistered = true;
-    if (ctx.mapSlab) {
+    {
       void* ctrlDevice = nullptr;
       MSCCLPP_CUDATHROW(
           cudaHostGetDevicePointer(&ctrlDevice, ctx.ctrlMapping, 0));
@@ -772,11 +739,6 @@ ncclResult_t runIntraNodeShmAllGather(
       throw mscclpp::Error("host allgather chunk count exceeds control slab",
                            mscclpp::ErrorCode::InvalidUsage);
     }
-    bool useCallbackReady =
-        fullBytes >= hostAllGatherCallbackReadyMinBytes();
-    if (!useCallbackReady) {
-      ensureHostAllGatherD2hEvents(ctx, chunkCount);
-    }
     char* slotBase =
         ctx.slab + static_cast<size_t>(slot) * ctx.slotStrideBytes;
     char* selfHost = slotBase + static_cast<size_t>(rank) * bytesPerRank;
@@ -849,6 +811,13 @@ ncclResult_t runIntraNodeShmAllGather(
       return;
     }
 
+    // ── Path E: GPU-signaled H2D overlapping D2H ─────────────────────────────
+    // Phase 1 (d2hStream): D2H of our data, then GPU writes d2hReady flag via
+    //   cuStreamWriteValue64 — no CPU callback latency.
+    // Phase 2 (user stream): D2D self-copy runs concurrently.
+    // Phase 3 (h2dStream/h2dStream2): GPU-side cuStreamWaitValue64 per peer,
+    //   then H2D immediately — no CPU spin, D2H and H2D can overlap on PCIe.
+
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
     MSCCLPP_CUDATHROW(
         cudaStreamWaitEvent(ctx.d2hStream, ctx.inputReadyEvent, 0));
@@ -859,14 +828,9 @@ ncclResult_t runIntraNodeShmAllGather(
                                         sendBytes + chunkOffset, bytes,
                                         cudaMemcpyDeviceToHost,
                                         ctx.d2hStream));
-      if (useCallbackReady) {
-        enqueueHostAllGatherSignal(
-            ctx.d2hStream,
-            &ctx.ctrl->d2hReady[slot][chunkIdx][rank].value, epoch);
-      } else {
-        MSCCLPP_CUDATHROW(
-            cudaEventRecord(ctx.d2hChunkEvents[chunkIdx], ctx.d2hStream));
-      }
+      streamWriteFlag64(ctx.d2hStream,
+                        ctrlFlagDevPtr(ctx, &ctx.ctrl->d2hReady[slot][chunkIdx][rank].value),
+                        epoch);
     }
 
     if (sendbuff != selfOutput) {
@@ -883,21 +847,25 @@ ncclResult_t runIntraNodeShmAllGather(
       }
     }
 
+    // Phase 3: queue GPU-side waits + H2D per chunk.
+    // h2dStream:  left half (ranks < self), h2dStream2: right half (ranks > self).
     bool usedSecondH2dStream = false;
     for (size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx) {
       size_t chunkOffset = chunkIdx * chunkBytes;
       size_t bytes = std::min(chunkBytes, bytesPerRank - chunkOffset);
-      if (!useCallbackReady) {
-        waitHostAllGatherCudaEvent(ctx.d2hChunkEvents[chunkIdx]);
-        ctx.ctrl->d2hReady[slot][chunkIdx][rank].value.store(
-            epoch, std::memory_order_release);
+
+      cudaStream_t rightStream = rank > 0 ? ctx.h2dStream2 : ctx.h2dStream;
+      for (int r = 0; r < rank; ++r) {
+        streamWaitFlag64(ctx.h2dStream,
+                         ctrlFlagDevPtr(ctx, &ctx.ctrl->d2hReady[slot][chunkIdx][r].value),
+                         epoch);
       }
-      for (int r = 0; r < nRanks; ++r) {
-        waitHostAllGatherEpoch(
-            ctx.ctrl->d2hReady[slot][chunkIdx][r].value, epoch);
+      for (int r = rank + 1; r < nRanks; ++r) {
+        streamWaitFlag64(rightStream,
+                         ctrlFlagDevPtr(ctx, &ctx.ctrl->d2hReady[slot][chunkIdx][r].value),
+                         epoch);
       }
-      // Always use the split H2D path: copy only other ranks' data from SHM,
-      // self-rank data comes from the faster D2D self-copy above.
+
       if (bytes == bytesPerRank) {
         if (rank > 0) {
           size_t copyBytes = static_cast<size_t>(rank) * bytesPerRank;
@@ -912,8 +880,7 @@ ncclResult_t runIntraNodeShmAllGather(
           MSCCLPP_CUDATHROW(cudaMemcpyAsync(
               recvBytes + first * bytesPerRank,
               slotBase + first * bytesPerRank, copyBytes,
-              cudaMemcpyHostToDevice,
-              rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
+              cudaMemcpyHostToDevice, rightStream));
           usedSecondH2dStream = usedSecondH2dStream || rank > 0;
         }
       } else {
@@ -930,8 +897,7 @@ ncclResult_t runIntraNodeShmAllGather(
               recvBytes + first * bytesPerRank + chunkOffset, bytesPerRank,
               slotBase + first * bytesPerRank + chunkOffset, bytesPerRank,
               bytes, static_cast<size_t>(nRanks - rank - 1),
-              cudaMemcpyHostToDevice,
-              rank > 0 ? ctx.h2dStream2 : ctx.h2dStream));
+              cudaMemcpyHostToDevice, rightStream));
           usedSecondH2dStream = usedSecondH2dStream || rank > 0;
         }
       }
@@ -941,8 +907,9 @@ ncclResult_t runIntraNodeShmAllGather(
       MSCCLPP_CUDATHROW(
           cudaStreamWaitEvent(ctx.h2dStream, ctx.h2dDoneEvent2, 0));
     }
-    enqueueHostAllGatherSignal(ctx.h2dStream,
-                               &ctx.ctrl->slotDone[slot][rank].value, epoch);
+    streamWriteFlag64(ctx.h2dStream,
+                      ctrlFlagDevPtr(ctx, &ctx.ctrl->slotDone[slot][rank].value),
+                      epoch);
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent, ctx.h2dStream));
     MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, ctx.h2dDoneEvent, 0));
   });
