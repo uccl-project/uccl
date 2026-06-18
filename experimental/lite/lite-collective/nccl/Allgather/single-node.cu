@@ -375,21 +375,19 @@ static int hostAllGatherCoopMaxBlocks() {
 }
 
 static size_t hostAllGatherChunkBytes(size_t bytesPerRank) {
-  static constexpr size_t kMaxChunkBytes = 32 * 1024 * 1024;
   char const* env = std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_CHUNK_BYTES");
   if (env == nullptr || env[0] == '\0') {
-    if (bytesPerRank > 1024 * 1024 && bytesPerRank <= 4 * 1024 * 1024) {
+    // Use 1 MiB chunks for everything up to 32 MiB/rank.
+    // This gives N = bytesPerRank/1MiB overlap stages (4–32 stages for
+    // 4–32 MiB/rank), enabling much better D2H/H2D pipeline overlap than
+    // the old bytesPerRank/2 rule which always gave only 2 stages.
+    if (bytesPerRank > 1024 * 1024 && bytesPerRank <= 32 * 1024 * 1024) {
       return 1024 * 1024;
     }
-    if (bytesPerRank > 4 * 1024 * 1024 &&
-        bytesPerRank <= 32 * 1024 * 1024) {
-      return bytesPerRank / 2;
-    }
-    // Cap at 32 MiB for large messages: cuStreamWaitValue64 enables D2H/H2D
-    // overlap only when chunkCount > 1, so we must break large messages into
-    // chunks even if they don't need it for other reasons.
+    // For larger messages, use 4 MiB chunks: enough stages for good overlap
+    // while keeping per-chunk overhead low (cuStreamWaitValue64 per chunk).
     if (bytesPerRank > 32 * 1024 * 1024) {
-      return kMaxChunkBytes;
+      return 4 * 1024 * 1024;
     }
     return bytesPerRank;
   }
