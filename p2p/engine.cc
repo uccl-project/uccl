@@ -145,9 +145,7 @@ static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
 
 size_t Endpoint::max_one_sided_inflight_ops() {
   size_t limit = kMaxInflightOps;
-#ifdef USE_CXI
   if (is_cxi_transport()) limit = 32;
-#endif
 
   char const* env = std::getenv("UCCL_P2P_MAX_INFLIGHT_OPS");
   if (env && env[0] != '\0') {
@@ -245,15 +243,9 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
-#ifdef USE_CXI
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
-#else
-  } else if (is_cxi_transport()) {
-    throw std::runtime_error(
-        "UCCL_P2P_TRANSPORT=cxi requires building p2p with USE_CXI=1");
-#endif
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
   }
@@ -327,14 +319,8 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
 
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-#ifdef USE_CXI
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
-#else
-  } else if (is_cxi_transport()) {
-    throw std::runtime_error(
-        "UCCL_P2P_TRANSPORT=cxi requires building p2p with USE_CXI=1");
-#endif
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
   }
@@ -2172,13 +2158,11 @@ int Endpoint::send_notification(uint64_t conn_id,
     if (!nccl_ep || !*nccl_ep) return -1;
     return (*nccl_ep)->send_notification(peer_id, notification);
   }
-#ifdef USE_CXI
   if (is_cxi_transport()) {
     auto* cxi_ep = std::get_if<std::shared_ptr<CxiEndpoint>>(&ep_);
     if (!cxi_ep || !*cxi_ep) return -1;
     return (*cxi_ep)->send_notification(peer_id, notification);
   }
-#endif
   return -1;
 }
 
@@ -2216,14 +2200,8 @@ void Endpoint::initialize_engine() {
 
   if (is_nccl_transport()) {
     numa_node_ = get_numa_node_from_iface();
-#ifdef USE_CXI
   } else if (is_cxi_transport()) {
     numa_node_ = get_numa_node_from_iface();
-#else
-  } else if (is_cxi_transport()) {
-    throw std::runtime_error(
-        "UCCL_P2P_TRANSPORT=cxi requires building p2p with USE_CXI=1");
-#endif
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);

@@ -1,6 +1,5 @@
 #pragma once
 // Runtime dlsym wrapper for libfabric.
-// Keeps <rdma/fabric.h> for types while avoiding a hard -lfabric link.
 // Custom library path: set UCCL_LIBFABRIC_SO.
 
 #include <rdma/fabric.h>

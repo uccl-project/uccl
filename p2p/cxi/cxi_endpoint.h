@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef USE_CXI
-
 #include "common.h"
 #include "epoll_client.h"
 #include "epoll_server.h"
@@ -149,5 +147,3 @@ class CxiEndpoint {
 
 void encode_cxi_fifo_metadata(CxiMemoryRegion const& region, FifoItem& item);
 bool decode_cxi_fifo_metadata(FifoItem const& item, CxiFifoMetadata& metadata);
-
-#endif  // USE_CXI

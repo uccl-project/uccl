@@ -64,9 +64,9 @@ To enable AWS EFA support, you can do the same as above, and specify `UCCL_P2P_T
 
 To enable GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md).
 
-To enable HPE Slingshot/CXI support, build with libfabric headers and select the `cxi` transport at runtime:
+To enable HPE Slingshot/CXI support, set `UCCL_P2P_TRANSPORT=cxi` at runtime:
 ```bash
-USE_CXI=1 LIBFABRIC_HOME=/path/to/libfabric make -j install
+make -j install
 UCCL_P2P_TRANSPORT=cxi UCCL_P2P_DISABLE_IPC=1 torchrun ...
 ```
 

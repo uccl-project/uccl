@@ -1,5 +1,3 @@
-#ifdef USE_CXI
-
 #include "cxi_endpoint.h"
 #include "engine.h"
 
@@ -735,5 +733,3 @@ bool decode_cxi_fifo_metadata(FifoItem const& item,
   std::memcpy(&metadata, item.padding, sizeof(metadata));
   return metadata.base != 0 && metadata.len != 0;
 }
-
-#endif  // USE_CXI
