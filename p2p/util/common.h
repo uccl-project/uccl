@@ -56,6 +56,9 @@ typedef struct AcceptedMeta {
 // Notifications
 static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
 static constexpr size_t NOTIFY_MSG_SIZE = 256;
+// Returned when no operation was posted, but retrying may succeed. CXI uses
+// this explicit sentinel; non-CXI paths keep the older -1 retry behavior in
+// engine.cc.
 static constexpr int UCCL_POST_TRANSIENT = -2;
 
 struct NotifyMsg {

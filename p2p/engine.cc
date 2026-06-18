@@ -125,6 +125,11 @@ static inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
+static inline bool is_retryable_post_failure(int rc) {
+  if (is_cxi_transport()) return rc == UCCL_POST_TRANSIENT;
+  return rc == -1;
+}
+
 static inline bool raw_one_sided_batch_eligible(
     std::vector<size_t> const& size_v, size_t num_iovs) {
   for (size_t i = 0; i < num_iovs; ++i) {
@@ -690,11 +695,11 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  int rc = UCCL_POST_TRANSIENT;
-  while (rc == UCCL_POST_TRANSIENT) {
+  int rc;
+  do {
     rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
-  }
-  if (rc < 0) {
+  } while (is_retryable_post_failure(rc));
+  if (is_cxi_transport() && rc < 0) {
     UCCL_LOG(ERROR) << "read failed to post: rc=" << rc;
     return false;
   }
@@ -730,11 +735,11 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    int rc = UCCL_POST_TRANSIENT;
-    while (rc == UCCL_POST_TRANSIENT) {
+    int rc;
+    do {
       rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
-    }
-    if (rc < 0) {
+    } while (is_retryable_post_failure(rc));
+    if (is_cxi_transport() && rc < 0) {
       UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
       return false;
     }
@@ -830,20 +835,19 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
               : uccl_read_async(ep_, conn, mhandle_v[next_iov], dst_v[next_iov],
                                 size_v[next_iov], slot_item_v[next_iov],
                                 &ureq[slot]);
-      if (rc == UCCL_POST_TRANSIENT) {
-        if (num_inflight > 0) break;
-        uccl_drive_send(ep_);
-        uccl_drive_recv(ep_);
-        std::this_thread::yield();
-        return false;
-      }
-      if (rc == -1) {
-        if (num_inflight == 0) {
-          UCCL_LOG(ERROR) << "readv failed to post iov " << next_iov
-                          << " with no in-flight requests";
-          return false;
+      if (is_retryable_post_failure(rc)) {
+        if (is_cxi_transport() && num_inflight == 0) {
+          uccl_drive_send(ep_);
+          uccl_drive_recv(ep_);
+          std::this_thread::yield();
+          continue;
         }
         break;
+      }
+      if (is_cxi_transport() && rc < 0) {
+        UCCL_LOG(ERROR) << "readv failed to post iov " << next_iov
+                        << ": rc=" << rc;
+        return false;
       }
       active[slot] = true;
       next_iov++;
@@ -1011,15 +1015,15 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  int rc = UCCL_POST_TRANSIENT;
-  while (rc == UCCL_POST_TRANSIENT) {
+  int rc;
+  do {
     rc = send_group != nullptr
              ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
                                          curr_slot_item, &ureq)
              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                                 &ureq);
-  }
-  if (rc < 0) {
+  } while (is_retryable_post_failure(rc));
+  if (is_cxi_transport() && rc < 0) {
     UCCL_LOG(ERROR) << "write failed to post: rc=" << rc;
     return false;
   }
@@ -1054,12 +1058,12 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    int rc = UCCL_POST_TRANSIENT;
-    while (rc == UCCL_POST_TRANSIENT) {
+    int rc;
+    do {
       rc =
           uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item, &ureq);
-    }
-    if (rc < 0) {
+    } while (is_retryable_post_failure(rc));
+    if (is_cxi_transport() && rc < 0) {
       UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
       return false;
     }
@@ -1157,20 +1161,19 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
               : uccl_write_async(ep_, conn, mhandle_v[next_iov],
                                  src_v[next_iov], size_v[next_iov],
                                  slot_item_v[next_iov], &ureq[slot]);
-      if (rc == UCCL_POST_TRANSIENT) {
-        if (num_inflight > 0) break;
-        uccl_drive_send(ep_);
-        uccl_drive_recv(ep_);
-        std::this_thread::yield();
-        return false;
-      }
-      if (rc == -1) {
-        if (num_inflight == 0) {
-          UCCL_LOG(ERROR) << "writev failed to post iov " << next_iov
-                          << " with no in-flight requests";
-          return false;
+      if (is_retryable_post_failure(rc)) {
+        if (is_cxi_transport() && num_inflight == 0) {
+          uccl_drive_send(ep_);
+          uccl_drive_recv(ep_);
+          std::this_thread::yield();
+          continue;
         }
         break;
+      }
+      if (is_cxi_transport() && rc < 0) {
+        UCCL_LOG(ERROR) << "writev failed to post iov " << next_iov
+                        << ": rc=" << rc;
+        return false;
       }
       active[slot] = true;
       next_iov++;
