@@ -375,6 +375,7 @@ static int hostAllGatherCoopMaxBlocks() {
 }
 
 static size_t hostAllGatherChunkBytes(size_t bytesPerRank) {
+  static constexpr size_t kMaxChunkBytes = 32 * 1024 * 1024;
   char const* env = std::getenv("MSCCLPP_NCCL_HOST_ALLGATHER_CHUNK_BYTES");
   if (env == nullptr || env[0] == '\0') {
     if (bytesPerRank > 1024 * 1024 && bytesPerRank <= 4 * 1024 * 1024) {
@@ -383,6 +384,12 @@ static size_t hostAllGatherChunkBytes(size_t bytesPerRank) {
     if (bytesPerRank > 4 * 1024 * 1024 &&
         bytesPerRank <= 32 * 1024 * 1024) {
       return bytesPerRank / 2;
+    }
+    // Cap at 32 MiB for large messages: cuStreamWaitValue64 enables D2H/H2D
+    // overlap only when chunkCount > 1, so we must break large messages into
+    // chunks even if they don't need it for other reasons.
+    if (bytesPerRank > 32 * 1024 * 1024) {
+      return kMaxChunkBytes;
     }
     return bytesPerRank;
   }
