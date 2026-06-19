@@ -52,7 +52,7 @@ static constexpr size_t kHostAllGatherMaxChunks =
 static constexpr size_t kHostAllGatherDefaultMinTotalBytes = 0;
 static constexpr size_t kHostAllGatherDefaultKernelMaxBytes = 4 * 1024;
 static constexpr int kHostAllGatherDefaultKernelThreads = 256;
-static constexpr size_t kHostAllGatherDefaultCoopMaxBytes = 4 * 1024 * 1024;
+static constexpr size_t kHostAllGatherDefaultCoopMaxBytes = 512 * 1024;
 static constexpr size_t kHostAllGatherDefaultTwoKernelBlockBytes = 1024;
 static constexpr int kHostAllGatherDefaultCoopMaxBlocks = 16;
 
