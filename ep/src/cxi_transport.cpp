@@ -1,6 +1,10 @@
 #include "cxi_transport.hpp"
 #include "util/gpu_rt.h"
+
+#ifdef USE_LIBFABRIC_CXI
 #include <rdma/fi_atomic.h>
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
