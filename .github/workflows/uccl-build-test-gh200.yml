@@ -124,7 +124,7 @@ jobs:
 
             cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
 
-            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+            export UCCL_SOCKET_IFNAME=enx3c18a0d51943
             /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_SERVER=$!
@@ -146,7 +146,7 @@ jobs:
             conda activate uccl-ci-sandbox
 
             cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
-            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+            export UCCL_SOCKET_IFNAME=enxc8a36290119d
 
             /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
