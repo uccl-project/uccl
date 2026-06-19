@@ -43,20 +43,28 @@ jobs:
     steps:
       - name: Checkout workflow helpers
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Update benchmark comment with run URL
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 .github/workflows/benchmark_comment.py \
             --mode update \
-            --comment-id "${{ inputs.reply_comment_id }}" \
-            --marker "${{ inputs.reply_marker }}" \
-            --pr "${{ inputs.pr }}" \
-            --sha "${{ inputs.sha }}" \
-            --benchmark "${{ inputs.benchmark }}" \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
             --status running \
-            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --workflow-url "$WORKFLOW_URL"
 
   build-on-l4:
     if: >
@@ -144,7 +152,7 @@ jobs:
           path: build.log
 
   write-back-result:
-    needs: [build-on-l4]
+    needs: [mark-running, build-on-l4]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
     runs-on: ubuntu-latest
     permissions:
@@ -153,18 +161,27 @@ jobs:
     steps:
       - name: Checkout workflow helpers
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Update benchmark comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          BENCHMARK_RESULT: ${{ needs.build-on-l4.result }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 .github/workflows/benchmark_comment.py \
             --mode update \
-            --comment-id "${{ inputs.reply_comment_id }}" \
-            --marker "${{ inputs.reply_marker }}" \
-            --pr "${{ inputs.pr }}" \
-            --sha "${{ inputs.sha }}" \
-            --benchmark "${{ inputs.benchmark }}" \
-            --status "${{ needs.build-on-l4.result }}" \
-            --result "${{ needs.build-on-l4.result }}" \
-            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status "$BENCHMARK_RESULT" \
+            --result "$BENCHMARK_RESULT" \
+            --workflow-url "$WORKFLOW_URL"
