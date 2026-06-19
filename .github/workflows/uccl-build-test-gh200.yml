@@ -70,34 +70,34 @@ jobs:
         run: |
           set -euo pipefail
           git submodule update --init --recursive thirdparty/nccl
-          rsync -az --exclude .venv --exclude .git --delete \
-            --rsync-path="mkdir -p /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox && rsync" \
-            ./ep ./ \
-            gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+          for host in gh0 gh1; do
+            rsync -az --exclude .venv --exclude .git --delete \
+              --rsync-path="mkdir -p /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox && rsync" \
+              ./ep ./ \
+              "$host":/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+          done
 
       - name: Build and verify UCCL on gh200
         shell: bash
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes gh1 << 'EOF'
-            set -euo pipefail
+          for host in gh0 gh1; do
+            ssh -o BatchMode=yes "$host" bash -s << 'EOF'
+          set -euo pipefail
 
-            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+          cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+          BOOTSTRAP_PYTHON=3.13 source scripts/bootstrap.sh
 
-            conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13
-            conda activate uccl-ci-sandbox
+          ./build.sh cu13 ep 3.13 --install 2>&1 | tee build.log
 
-            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+          if ! python -c 'import torch; import uccl.ep'; then
+            echo 'Import of torch and uccl.ep failed.'
+            exit 1
+          fi
 
-            ./build.sh cu13 ep 3.13 --install 2>&1 | tee build.log
-
-            if ! python -c 'import torch; import uccl.ep'; then
-              echo 'Import of torch and uccl.ep failed.'
-              exit 1
-            fi
-
-            echo 'Build and Verification Successful!'
+          echo 'Build and Verification Successful!'
           EOF
+          done
 
       - name: Run EP inter-node latency test
         shell: bash
@@ -114,13 +114,11 @@ jobs:
                 exit 1
             fi
 
-            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-ci-sandbox
-
             cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
+            source ../.venv/bin/activate
 
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
-            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+            torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_SERVER=$!
 
@@ -137,13 +135,11 @@ jobs:
                 exit 1
             fi
 
-            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-ci-sandbox
-
             cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
+            source ../.venv/bin/activate
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
 
-            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+            torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_CLIENT=$!
 
@@ -239,7 +235,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build.log || true
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build-gh0.log || true
+          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build-gh1.log || true
           scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gh200-nixlbench.log || true
           scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh0.log ./gh200-nixlbench-internode-gh0.log || true
           scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh1.log ./gh200-nixlbench-internode-gh1.log || true
@@ -260,7 +257,8 @@ jobs:
         with:
           name: build-and-benchmark-logs-gh200
           path: |
-            gh200-build.log
+            gh200-build-gh0.log
+            gh200-build-gh1.log
             gh200-nixlbench.log
             gh200-nixlbench-internode-gh0.log
             gh200-nixlbench-internode-gh1.log
