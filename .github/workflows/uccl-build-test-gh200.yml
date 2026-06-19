@@ -87,8 +87,9 @@ jobs:
 
           source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
 
-          conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13
+          conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13 pip
           conda activate uccl-ci-sandbox
+          python -c 'import torch' 2>/dev/null || python -m pip install torch torchvision torchaudio
 
           cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
 
@@ -108,29 +109,6 @@ jobs:
         run: |
           set -uo pipefail
 
-          ssh -o BatchMode=yes gh1 << 'EOF' &
-            set -euo pipefail
-            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
-
-            # abort if there are active jobs on the cluster
-            if [ -n "$active_jobs" ]; then
-                echo "gh1 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
-
-            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-ci-sandbox
-
-            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
-
-            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
-            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
-          EOF
-          PID_SERVER=$!
-
-          sleep 2
-          echo "Started test on server..."
-
           ssh -o BatchMode=yes gh0 << 'EOF' &
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
@@ -145,9 +123,32 @@ jobs:
             conda activate uccl-ci-sandbox
 
             cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
+
+            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+          EOF
+          PID_SERVER=$!
+
+          sleep 2
+          echo "Started test on server..."
+
+          ssh -o BatchMode=yes gh1 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            # abort if there are active jobs on the cluster
+            if [ -n "$active_jobs" ]; then
+                echo "gh1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
 
-            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_CLIENT=$!
 
