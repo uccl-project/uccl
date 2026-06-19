@@ -1,0 +1,71 @@
+name: Benchmark Command Dispatcher
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  dispatch-benchmark:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/run-benchmark')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch requested benchmark
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commenter = context.payload.comment.user.login;
+            const body = context.payload.comment.body.trim().toLowerCase();
+            const match = body.match(/^\/run-benchmark\s+(l4|amd|amd-zip|gb10|gh200)$/);
+
+            if (!match) {
+              core.setFailed('Usage: /run-benchmark <l4|amd|amd-zip|gb10|gh200>');
+              return;
+            }
+
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: commenter,
+            });
+
+            if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
+              core.setFailed(`${commenter} does not have permission to run benchmarks`);
+              return;
+            }
+
+            const pull_number = context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const workflows = {
+              l4: 'uccl-build-l4.yml',
+              amd: 'uccl-build-test-amd.yml',
+              'amd-zip': 'uccl-build-test-amd-zip.yml',
+              gb10: 'uccl-build-test-gb10.yml',
+              gh200: 'uccl-build-test-gh200.yml',
+            };
+            const target = match[1];
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: workflows[target],
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                pr: String(pull_number),
+                sha: pr.head.sha,
+                head_repo: pr.head.repo.full_name,
+              },
+            });
+
+            core.info(`Dispatched ${target} benchmark for PR #${pull_number} at ${pr.head.sha}`);

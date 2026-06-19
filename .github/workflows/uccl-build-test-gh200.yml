@@ -1,4 +1,4 @@
-name: UCCL Build & Test (GB10)
+name: UCCL Build & Test (GH200)
 
 on:
   pull_request:
@@ -18,11 +18,11 @@ on:
         required: true
 
 concurrency:
-  group: gb10-uccl-build-test
+  group: gh200-uccl-build-test
   cancel-in-progress: false
 
 jobs:
-  build-and-test-on-gb10:
+  build-and-test-on-gh200:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
@@ -40,7 +40,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           persist-credentials: false
 
-      - name: Setup SSH for gb10
+      - name: Setup SSH for gh200
         shell: bash
         run: |
           set -euo pipefail
@@ -67,7 +67,7 @@ jobs:
           ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK0_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
           ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK1_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
 
-      - name: Sync pushed code to gb10
+      - name: Sync pushed code to gh200
         shell: bash
         run: |
           set -euo pipefail
@@ -77,7 +77,7 @@ jobs:
             ./ep ./ \
             spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
 
-      - name: Build and verify UCCL on gb10
+      - name: Build and verify UCCL on gh200
         shell: bash
         run: |
           set -euo pipefail
@@ -241,10 +241,10 @@ jobs:
         shell: bash
         run: |
           set -eu
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gb10-build.log || true
-          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gb10-nixlbench.log || true
-          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log ./gb10-nixlbench-internode-spark0.log || true
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log ./gb10-nixlbench-internode-spark1.log || true
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build.log || true
+          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gh200-nixlbench.log || true
+          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log ./gh200-nixlbench-internode-spark0.log || true
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log ./gh200-nixlbench-internode-spark1.log || true
           ssh -o BatchMode=yes spark1 << 'EOF'
             rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log
           EOF
@@ -260,10 +260,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-and-benchmark-logs-gb10
+          name: build-and-benchmark-logs-gh200
           path: |
-            gb10-build.log
-            gb10-nixlbench.log
-            gb10-nixlbench-internode-spark0.log
-            gb10-nixlbench-internode-spark1.log
+            gh200-build.log
+            gh200-nixlbench.log
+            gh200-nixlbench-internode-spark0.log
+            gh200-nixlbench-internode-spark1.log
           if-no-files-found: warn

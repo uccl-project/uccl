@@ -1,13 +1,21 @@
 name: UCCL Build & Test (AMD, DietGPU)
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
     types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to benchmark
+        required: true
+      sha:
+        description: PR head commit SHA to benchmark
+        required: true
+      head_repo:
+        description: PR head repository, for example owner/repo
+        required: true
 
 # Share the concurrency group with uccl-build-test-amd.yml so only one AMD
 # workflow uses the hosts at a time.
@@ -18,8 +26,9 @@ concurrency:
 jobs:
   build-with-dietgpu-on-amd:
     if: >
-      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
     runs-on: ubuntu-latest
     permissions:
@@ -29,6 +38,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'workflow_dispatch' && inputs.head_repo || github.repository }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+          persist-credentials: false
 
       - name: Initialize submodules for ROCm
         shell: bash
