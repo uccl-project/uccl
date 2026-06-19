@@ -1,10 +1,10 @@
 #pragma once
 
 #include "../util/jring.h"
+#include "gpu_rt.h"
 #include "transport_adapter.h"
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -13,44 +13,57 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace UKernel {
 namespace Transport {
 
+class CpuBouncePool {
+ public:
+  CpuBouncePool(size_t buffer_size = 256 * 1024, size_t num_buffers = 16);
+  ~CpuBouncePool();
+
+  void* acquire(size_t size);
+  void release(void* buf);
+
+  CpuBouncePool(CpuBouncePool const&) = delete;
+  CpuBouncePool& operator=(CpuBouncePool const&) = delete;
+
+ private:
+  size_t buffer_size_;
+  std::vector<void*> free_list_;
+  std::unordered_set<void*> all_bufs_;
+  std::mutex mu_;
+};
+
 class TcpTransportAdapter final : public TransportAdapter {
  public:
-  // Lifecycle.
-  TcpTransportAdapter(std::string local_ip, int local_rank);
+  TcpTransportAdapter(std::string local_ip, int local_rank, int gpu_id);
   ~TcpTransportAdapter() override;
 
-  // Endpoint discovery metadata.
   uint16_t get_listen_port() const;
   std::string const& get_listen_ip() const { return local_ip_; }
 
-  // TransportAdapter common capabilities.
   bool ensure_put_path(PeerConnectSpec const& spec) override;
   bool ensure_wait_path(PeerConnectSpec const& spec) override;
   bool has_put_path(int peer_rank) const override;
   bool has_wait_path(int peer_rank) const override;
 
-  unsigned put_async(int peer_rank, void* local_ptr, uint32_t local_buffer_id,
-                     void* remote_ptr, uint32_t remote_buffer_id,
-                     size_t len) override;
-  unsigned signal_async(int peer_rank, uint64_t tag) override;
-  unsigned wait_async(int peer_rank, uint64_t expected_tag,
-                      std::optional<WaitTarget> target = std::nullopt) override;
-
-  bool poll_completion(unsigned id) override;
-  bool wait_completion(unsigned id) override;
-  bool request_failed(unsigned id) override;
-  void release_request(unsigned id) override;
+  unsigned send_put_async(int peer_rank, void* local_ptr,
+                          uint32_t local_buffer_id, void* remote_ptr,
+                          uint32_t remote_buffer_id, size_t len,
+                          unsigned comm_rid) override;
+  unsigned send_signal_async(int peer_rank, uint64_t tag,
+                             unsigned comm_rid) override;
+  unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
+                             std::optional<WaitTarget> target,
+                             unsigned comm_rid) override;
 
  private:
-  // Handshake wire structs.
   struct Handshake {
     uint32_t src_rank = 0;
   };
-
   struct HandshakeAck {
     uint32_t accepted = 1;
   };
@@ -62,81 +75,24 @@ class TcpTransportAdapter final : public TransportAdapter {
     std::mutex recv_mu;
   };
 
-  enum class RequestState : uint8_t {
-    Free = 0,
-    Queued = 1,
-    Running = 2,
-    Completed = 3,
-    Failed = 4,
+  enum class Kind : uint8_t { DataPut, DataWait, Signal, SignalWait };
+
+  struct RingElem {
+    unsigned comm_rid;
+    int peer;
+    Kind kind;
+    void* ptr;
+    size_t len;
+    uint64_t tag;
   };
 
-  struct RequestSlot {
-    enum class Kind : uint8_t {
-      DataPut = 0,
-      DataWait = 1,
-      Signal = 2,
-      SignalWait = 3
-    };
-    std::atomic<RequestState> state{RequestState::Free};
-    std::atomic<uint32_t> generation{1};
-    Kind kind = Kind::DataPut;
-    int peer_rank = -1;
-    void* host_ptr = nullptr;
-    size_t len = 0;
-    uint64_t expected_tag = 0;
-    uint64_t signal_payload = 0;
-    std::atomic<bool> completed{false};
-    std::atomic<bool> failed{false};
-
-    void mark_queued() {
-      state.store(RequestState::Queued, std::memory_order_release);
-      completed.store(false, std::memory_order_release);
-      failed.store(false, std::memory_order_release);
-    }
-    void mark_running() {
-      state.store(RequestState::Running, std::memory_order_release);
-    }
-    void mark_completed(bool ok) {
-      state.store(ok ? RequestState::Completed : RequestState::Failed,
-                  std::memory_order_release);
-      completed.store(true, std::memory_order_release);
-      failed.store(!ok, std::memory_order_release);
-    }
-    bool is_completed() const {
-      return completed.load(std::memory_order_acquire);
-    }
-    bool is_failed() const { return failed.load(std::memory_order_acquire); }
-  };
-
-  // Peer establishment helpers.
   bool connect_to_peer(int peer_rank, std::string remote_ip,
                        uint16_t remote_port);
   bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip);
 
-  // Request execution workers.
   void send_worker_loop();
   void recv_worker_loop();
 
-  // Request slot lifecycle.
-  static constexpr uint32_t kRequestSlotBits = 13;
-  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
-  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
-  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
-    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
-  }
-  static uint32_t request_slot_index(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
-  }
-  static uint32_t request_generation(unsigned request_id) {
-    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
-  }
-  RequestSlot* try_acquire_request_slot(unsigned* out_request_id);
-  RequestSlot* resolve_request_slot(unsigned request_id);
-  RequestSlot* resolve_request_slot_const(unsigned request_id) const;
-  void release_request_slot(unsigned request_id);
-  bool enqueue_request(unsigned request_id, bool is_send);
-
-  // Socket helpers.
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
                              uint16_t remote_port,
@@ -150,6 +106,8 @@ class TcpTransportAdapter final : public TransportAdapter {
 
   std::string local_ip_;
   int local_rank_ = -1;
+  int gpu_id_ = -1;
+  gpuStream_t gpu_stream_ = nullptr;
   int listen_fd_ = -1;
   uint16_t listen_port_ = 0;
 
@@ -160,13 +118,7 @@ class TcpTransportAdapter final : public TransportAdapter {
   std::atomic<bool> stop_{false};
   std::thread send_worker_;
   std::thread recv_worker_;
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
-  std::atomic<int> pending_send_{0};
-  std::atomic<int> pending_recv_{0};
-  std::unique_ptr<RequestSlot[]> request_slots_;
-  std::atomic<uint32_t> request_alloc_cursor_{0};
+  std::unique_ptr<CpuBouncePool> bounce_pool_;
 };
-
 }  // namespace Transport
 }  // namespace UKernel

@@ -29,12 +29,6 @@ inline bool throws(Fn&& fn) {
   return false;
 }
 
-template <typename Fn>
-inline void run_case(char const* suite, char const* name, Fn&& fn) {
-  std::cout << "[test] " << suite << " " << name << "..." << std::endl;
-  fn();
-}
-
 inline bool wait_until_terminal(Executor& executor, CollectiveOpHandle handle,
                                 std::chrono::milliseconds timeout) {
   auto deadline = std::chrono::steady_clock::now() + timeout;

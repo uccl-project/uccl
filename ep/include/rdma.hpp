@@ -368,7 +368,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int my_rank, int num_nodes,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank);
+                          int thread_idx, int device_index, int nic_local_rank);
 
 // Returns true if a cudaMalloc'd main RDMA buffer of |bytes| can be registered
 // on this node with the same path used by per_thread_rdma_init(). If false,
@@ -378,6 +378,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // Returns true if a cudaMalloc'd buffer can be registered for the atomic
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+// Returns true if at least one IB verbs device is visible on this host.
+bool has_any_nic();
 
 #ifdef USE_DMABUF
 // Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.

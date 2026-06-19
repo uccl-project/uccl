@@ -58,11 +58,12 @@ sources = [
     rel(NANOBIND_ROOT / "src" / "nb_combined.cpp"),
     rel(ROOT / "src" / "ccl" / "backend" / "device_backend.cc"),
     rel(ROOT / "src" / "ccl" / "backend" / "transport_backend.cc"),
+    rel(ROOT / "src" / "ccl" / "backend" / "async_backend.cc"),
     rel(ROOT / "src" / "ccl" / "executor.cc"),
-    rel(ROOT / "src" / "ccl" / "executor_real.cc"),
-    rel(ROOT / "src" / "ccl" / "plan.cc"),
-    rel(ROOT / "src" / "ccl" / "selector.cc"),
-    rel(ROOT / "src" / "ccl" / "topology.cc"),
+    rel(ROOT / "src" / "ccl" / "executor_factory.cc"),
+    rel(ROOT / "src" / "ccl" / "lower.cc"),
+    rel(ROOT / "src" / "ccl" / "algo" / "chunk_graph.cc"),
+    rel(ROOT / "src" / "ccl" / "algo" / "topology.cc"),
     *transport_sources,
     rel(ROOT / "src" / "device" / "fifo" / "c2d_fifo.cc"),
     rel(ROOT / "src" / "device" / "fifo" / "d2c_fifo.cpp"),
@@ -225,7 +226,7 @@ p2p_ext = ExtensionCls(
     **p2p_extension_kwargs,
 )
 
-ext_modules = [ext, p2p_ext]
+ext_modules = [p2p_ext]
 
 
 setup(

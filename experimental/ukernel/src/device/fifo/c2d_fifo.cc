@@ -32,8 +32,8 @@ CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   MSCCLPP_CUDATHROW(gpuFree(0));  // force init context for current GPU
   gpuDeviceProp deviceProp;
   MSCCLPP_CUDATHROW(gpuGetDeviceProperties(&deviceProp, device));
-  std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !"
-            << std::endl;
+  // std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !"
+  //           << std::endl;
   int numaNode = getDeviceNumaNode(device);
   if (numaNode >= 0) {
     unsigned long nodemask = 1UL << numaNode;

@@ -6,7 +6,21 @@
 namespace UKernel {
 namespace CCL {
 
-// Matches the usual torch-style scalar type split at the tensor metadata layer.
+enum class CollKind : uint32_t {
+  AllReduceRing,
+  AllToAllPairwise,
+};
+
+enum class OpKind : uint32_t {
+  Send,
+  Recv,
+  Copy,
+  Reduce,
+  RecvReduce,
+  Signal,  // send_signal_async(peer, tag) — completes via completion_ring_
+  SignalWait,  // wait_signal_async(peer, tag) — completes via signal_ring_
+};
+
 enum class ScalarType : uint32_t {
   UInt8,
   Int8,
@@ -47,6 +61,12 @@ enum class ReductionKind : uint32_t {
   Max,
   Min,
   BitwiseAnd,
+};
+
+enum class CollectiveBufferRole : uint32_t {
+  Input,
+  Output,
+  Scratch,
 };
 
 }  // namespace CCL
