@@ -8,13 +8,13 @@ Benchmark workflows run in three cases:
 
 Supported slash-command targets:
 
-```text
-l4
-amd
-amd-zip
-gb10
-gh200
-```
+| Target | What it runs |
+| --- | --- |
+| `gh200` | Builds UCCL for NV GH200, then runs EP inter-node latency and NIXL P2P tests. |
+| `gb10` | Builds UCCL for NV GB10, then runs EP inter-node latency and NIXL P2P tests. |
+| `amd` | Builds UCCL for AMD MI325x, then runs P2P plus EP high-throughput and low-latency tests. |
+| `amd-zip` | Builds UCCL for AMD MI325x with `USE_DIETGPU=1`, then runs P2P compression benchmarks. |
+| `l4` | Builds and verifies UCCL on NV L4 host. |
 
 Only collaborators with `write`, `maintain`, or `admin` permission can use `/run-benchmark`. External PRs should use this maintainer-approved path because label-triggered benchmark runs are restricted to internal PRs.
 
