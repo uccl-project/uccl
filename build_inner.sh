@@ -359,6 +359,8 @@ else
   fi
 fi
 
+rm -f /io/${WHEEL_DIR}/uccl*.whl
+
 auditwheel repair dist/uccl-*.whl \
   --plat "${AUDIT_PLAT}" \
   --exclude "libtorch*.so" \
@@ -396,9 +398,13 @@ if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
         version="${BASH_REMATCH[2]}"
         python_abi_platform="${BASH_REMATCH[3]}"
         suffix="${BASH_REMATCH[4]}"
-        new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
-        echo "Renaming wheel: $wheel -> $new_wheel"
-        mv "$wheel" "$new_wheel"
+        if [[ "$version" == *"+"* ]]; then
+          echo "Wheel already has local version tag, leaving unchanged: $wheel"
+        else
+          new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
+          echo "Renaming wheel: $wheel -> $new_wheel"
+          mv "$wheel" "$new_wheel"
+        fi
       else
         echo "Warning: Could not parse wheel filename: $wheel"
       fi
@@ -407,4 +413,6 @@ if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
   cd /io
 fi
 
-auditwheel show /io/${WHEEL_DIR}/*.whl
+for wheel in /io/${WHEEL_DIR}/uccl*.whl; do
+  auditwheel show "$wheel"
+done

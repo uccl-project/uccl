@@ -410,7 +410,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   if (nic_affinity_rank >= 0 &&
       nic_affinity_rank < static_cast<int>(all_gpu_bdfs.size())) {
     gpu_bdf = all_gpu_bdfs[nic_affinity_rank];
-    gpu_device_path = std::filesystem::path("/sys/bus/pci/devices") / gpu_bdf;
+    gpu_device_path = uccl::sysfs_pci_path_from_bdf(gpu_bdf);
   } else {
     auto gpu_cards = uccl::get_gpu_cards();
     int gpu_card_idx = -1;
