@@ -757,6 +757,10 @@ ncclResult_t runIntraNodeShmAllGather(
         ((reinterpret_cast<uintptr_t>(recvbuff) &
           (sizeof(unsigned long long) - 1)) == 0);
 
+    // ── Single-CTA kernel (tiny messages, ≤ kernelMaxBytes) ──────────────────
+    // One block reads its own data to mapped SHM, waits for all peers via
+    // __syncthreads() on mapped ctrl flags, then reads peers' data back to GPU.
+    // No DMA engine, no streams — pure GPU kernel on mapped host memory.
     if (useVectorHostKernels && chunkCount == 1 &&
         ctx.slabDevice != nullptr &&
         ctx.ctrlDevice != nullptr &&
@@ -776,6 +780,11 @@ ncclResult_t runIntraNodeShmAllGather(
       return;
     }
 
+    // ── Cooperative-launch kernel (small messages, ≤ coopMaxBytes) ───────────
+    // Up to coopMaxBlocks CTAs cooperate via grid.sync() on mapped host memory:
+    // all blocks write self-data to SHM, sync across CTAs, then each block
+    // reads the assigned range of peer data back to recvbuff.
+    // Requires cooperative launch support (sm_60+, always available on L4/5090).
     if (useVectorHostKernels && chunkCount == 1 &&
         ctx.cooperativeLaunch &&
         ctx.slabDevice != nullptr &&
@@ -816,12 +825,13 @@ ncclResult_t runIntraNodeShmAllGather(
       return;
     }
 
-    // ── Path E: GPU-signaled H2D overlapping D2H ─────────────────────────────
-    // Phase 1 (d2hStream): D2H of our data, then GPU writes d2hReady flag via
-    //   cuStreamWriteValue64 — no CPU callback latency.
-    // Phase 2 (user stream): D2D self-copy runs concurrently.
-    // Phase 3 (h2dStream/h2dStream2): GPU-side cuStreamWaitValue64 per peer,
-    //   then H2D immediately — no CPU spin, D2H and H2D can overlap on PCIe.
+    // ── DMA-pipeline: GPU-signaled H2D overlapping D2H (large messages) ──────
+    // Phase 1 (d2hStream): D2H of own data to SHM; GPU writes d2hReady flag
+    //   via cuStreamWriteValue64 after each chunk — no CPU callback latency.
+    // Phase 2 (user stream): D2D self-copy into recvbuff[rank] concurrently.
+    // Phase 3 (h2dStream/h2dStream2): for each chunk, queue cuStreamWaitValue64
+    //   per peer then immediately issue H2D — CPU never blocks; PCIe DMA engine
+    //   runs D2H and H2D concurrently in both directions for high throughput.
 
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
     MSCCLPP_CUDATHROW(
