@@ -16,6 +16,7 @@ UCCL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MINICONDA_DIR="${HOME}/nfs/miniconda3"
 CONDA_ENV="uccl-ci-sandbox"
+NIXL_DEPS_DIR="${NIXL_DEPS_DIR:-${HOME}/nfs/nixl_deps}"
 
 HOST_ETCD=false
 ETCD_PORT=12379
@@ -64,7 +65,7 @@ ARCH=$(uname -m)
 [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
 
 export PATH="${NIXL_INSTALL_DIR}/bin:${PATH}"
-export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:${NIXL_DEPS_DIR}/lib:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export NIXL_PLUGIN_DIR="${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins"
 export UCCL_SOCKET_IFNAME="${UCCL_SOCKET_IFNAME:-enP2p1s0f0np0}"
 

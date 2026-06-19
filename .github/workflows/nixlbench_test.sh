@@ -17,7 +17,11 @@ CONDA_ENV="uccl-ci-sandbox"
 
 NIXL_SRC_DIR="/tmp/nixl_ci_$$"
 ABSEIL_DIR="/tmp/abseil_ci_$$"
+ETCD_CPP_API_DIR="/tmp/etcd_cpp_api_ci_$$"
 ABSEIL_TAG="20240116.2"
+ETCD_VERSION="3.5.17"
+
+NIXL_DEPS_DIR="${NIXL_DEPS_DIR:-${HOME}/nfs/nixl_deps}"
 
 # TODO : Revert to upstream branch once PR1428 gets merged
 NIXL_REPO="https://github.com/ai-dynamo/nixl.git"
@@ -37,7 +41,7 @@ cleanup() {
         kill "${ETCD_PID}" 2>/dev/null || true
         wait "${ETCD_PID}" 2>/dev/null || true
     fi
-    rm -rf "${NIXL_SRC_DIR}" "${ABSEIL_DIR}"
+    rm -rf "${NIXL_SRC_DIR}" "${ABSEIL_DIR}" "${ETCD_CPP_API_DIR}"
 }
 trap cleanup EXIT
 
@@ -55,6 +59,23 @@ make install PYTHON=python3 LIBDIR="${NIXL_INSTALL_DIR}/lib" PREFIX="${NIXL_INST
 
 export LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${LIBRARY_PATH:-}"
 
+# ── Build dependency prefix for NIXLBench ETCD runtime ─────────────────────────
+echo "=== Ensuring NIXLBench ETCD dependencies ==="
+if [ ! -x "${NIXL_DEPS_DIR}/bin/cmake" ] || [ ! -e "${NIXL_DEPS_DIR}/lib/cmake/grpc/gRPCConfig.cmake" ]; then
+    if [ -d "${NIXL_DEPS_DIR}/conda-meta" ]; then
+        conda install -y -p "${NIXL_DEPS_DIR}" -c conda-forge \
+            cmake pkg-config ninja gflags grpc-cpp libprotobuf protobuf
+    else
+        conda create -y -p "${NIXL_DEPS_DIR}" -c conda-forge \
+            cmake pkg-config ninja gflags grpc-cpp libprotobuf protobuf
+    fi
+fi
+
+export PATH="${NIXL_DEPS_DIR}/bin:${PATH}"
+export CMAKE_PREFIX_PATH="${NIXL_INSTALL_DIR}:${NIXL_DEPS_DIR}:${CMAKE_PREFIX_PATH:-}"
+export PKG_CONFIG_PATH="${NIXL_DEPS_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="${NIXL_DEPS_DIR}/lib:${LD_LIBRARY_PATH:-}"
+
 # ── Build and install Abseil (NIXL needs absl_log; Ubuntu 24.04's Abseil is too old) ─
 echo "=== Building Abseil (required by NIXL) ==="
 git clone --depth 1 --branch "${ABSEIL_TAG}" https://github.com/abseil/abseil-cpp.git "${ABSEIL_DIR}"
@@ -71,6 +92,60 @@ cd "${UCCL_ROOT}"
 
 # Prefer our Abseil over system (Ubuntu's lacks absl_log)
 export PKG_CONFIG_PATH="${NIXL_INSTALL_DIR}/lib/pkgconfig:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+# NIXLBench needs etcd-cpp-api at build time. Build the core-only variant so we
+# do not need cpprestsdk, which is unavailable on linux-aarch64 conda-forge.
+if ! CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" cmake -P /dev/stdin <<'EOF' >/dev/null 2>&1
+find_package(etcd-cpp-api REQUIRED)
+EOF
+then
+    echo "=== Building etcd-cpp-api (core only) ==="
+    git clone --depth 1 https://github.com/etcd-cpp-apiv3/etcd-cpp-apiv3.git "${ETCD_CPP_API_DIR}"
+    cmake -S "${ETCD_CPP_API_DIR}" -B "${ETCD_CPP_API_DIR}/build" -G Ninja \
+        -DBUILD_ETCD_CORE_ONLY=ON \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="${NIXL_INSTALL_DIR}" \
+        -DCMAKE_PREFIX_PATH="${NIXL_DEPS_DIR};${NIXL_INSTALL_DIR}" \
+        -DCMAKE_INSTALL_RPATH="${NIXL_DEPS_DIR}/lib;${NIXL_INSTALL_DIR}/lib"
+    cmake --build "${ETCD_CPP_API_DIR}/build" -j"$(nproc)"
+    cmake --install "${ETCD_CPP_API_DIR}/build"
+fi
+
+# The upstream core-only install still emits a config that requires cpprestsdk.
+ETCD_CMAKE_CONFIG="${NIXL_INSTALL_DIR}/lib/cmake/etcd-cpp-api/etcd-cpp-api-config.cmake"
+if [ -f "${ETCD_CMAKE_CONFIG}" ]; then
+    python3 - "${ETCD_CMAKE_CONFIG}" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = re.sub(
+    r"\nfind_dependency\(cpprestsdk\)\nif\(cpprestsdk_FOUND\)\n"
+    r"    set\(CPPREST_LIB cpprestsdk::cpprest\)\nendif\(\)\n",
+    "\n",
+    text,
+)
+path.write_text(text)
+PY
+fi
+
+# Native etcd/etcdctl binaries are not packaged for linux-aarch64 in conda.
+if [ ! -x "${NIXL_INSTALL_DIR}/bin/etcd" ] || [ ! -x "${NIXL_INSTALL_DIR}/bin/etcdctl" ]; then
+    echo "=== Installing local etcd binaries ==="
+    mkdir -p "${NIXL_INSTALL_DIR}/bin"
+    ETCD_TMP_DIR="$(mktemp -d)"
+    curl -L --fail \
+        -o "${ETCD_TMP_DIR}/etcd.tar.gz" \
+        "https://github.com/etcd-io/etcd/releases/download/v${ETCD_VERSION}/etcd-v${ETCD_VERSION}-linux-arm64.tar.gz"
+    tar -xzf "${ETCD_TMP_DIR}/etcd.tar.gz" -C "${ETCD_TMP_DIR}"
+    cp "${ETCD_TMP_DIR}/etcd-v${ETCD_VERSION}-linux-arm64/etcd" \
+        "${ETCD_TMP_DIR}/etcd-v${ETCD_VERSION}-linux-arm64/etcdctl" \
+        "${NIXL_INSTALL_DIR}/bin/"
+    rm -rf "${ETCD_TMP_DIR}"
+fi
 
 # ── Clone NIXL ────────────────────────────────────────────────────────────────
 echo "=== Cloning latest NIXL ==="
@@ -105,7 +180,7 @@ ninja install
 # ── Runtime environment ───────────────────────────────────────────────────────
 echo "=== Configuring runtime environment ==="
 export PATH="${NIXL_INSTALL_DIR}/bin:${PATH}"
-export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:${NIXL_DEPS_DIR}/lib:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export NIXL_PLUGIN_DIR="${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins"
 export UCCL_SOCKET_IFNAME="${UCCL_SOCKET_IFNAME:-lo}"
 #export UCCL_DEBUG="${UCCL_DEBUG:-WARN}"
