@@ -7,6 +7,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: write
   pull-requests: read
 
 jobs:
@@ -15,7 +16,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Dispatch requested benchmark
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+
+      - name: Resolve benchmark request
+        id: request
         uses: actions/github-script@v7
         with:
           script: |
@@ -56,16 +61,72 @@ jobs:
             };
             const target = match[1];
 
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: workflows[target],
-              ref: context.payload.repository.default_branch,
-              inputs: {
-                pr: String(pull_number),
-                sha: pr.head.sha,
-                head_repo: pr.head.repo.full_name,
-              },
-            });
+            core.setOutput('benchmark', target);
+            core.setOutput('workflow', workflows[target]);
+            core.setOutput('pr', String(pull_number));
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('head_repo', pr.head.repo.full_name);
+            core.setOutput('requester', commenter);
 
-            core.info(`Dispatched ${target} benchmark for PR #${pull_number} at ${pr.head.sha}`);
+      - name: Create queued benchmark comment
+        id: benchmark-comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode create \
+            --pr "${{ steps.request.outputs.pr }}" \
+            --sha "${{ steps.request.outputs.sha }}" \
+            --benchmark "${{ steps.request.outputs.benchmark }}" \
+            --status queued \
+            --requester "${{ steps.request.outputs.requester }}" \
+            --workflow "${{ steps.request.outputs.workflow }}"
+
+      - name: Dispatch requested benchmark
+        id: dispatch
+        uses: actions/github-script@v7
+        continue-on-error: true
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner,
+                repo,
+                workflow_id: '${{ steps.request.outputs.workflow }}',
+                ref: context.payload.repository.default_branch,
+                inputs: {
+                  pr: '${{ steps.request.outputs.pr }}',
+                  sha: '${{ steps.request.outputs.sha }}',
+                  head_repo: '${{ steps.request.outputs.head_repo }}',
+                  benchmark: '${{ steps.request.outputs.benchmark }}',
+                  reply_comment_id: '${{ steps.benchmark-comment.outputs.comment_id }}',
+                  reply_marker: '${{ steps.benchmark-comment.outputs.reply_marker }}',
+                },
+              });
+            } catch (error) {
+              core.setOutput('error', error.message);
+              core.setFailed(error.message);
+            }
+
+            core.info(`Dispatched ${{ steps.request.outputs.benchmark }} benchmark for PR #${{ steps.request.outputs.pr }} at ${{ steps.request.outputs.sha }}; reply comment ${{ steps.benchmark-comment.outputs.comment_id }}`);
+
+      - name: Mark dispatch failed
+        if: steps.dispatch.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "${{ steps.benchmark-comment.outputs.comment_id }}" \
+            --marker "${{ steps.benchmark-comment.outputs.reply_marker }}" \
+            --pr "${{ steps.request.outputs.pr }}" \
+            --sha "${{ steps.request.outputs.sha }}" \
+            --benchmark "${{ steps.request.outputs.benchmark }}" \
+            --status dispatch-failed \
+            --requester "${{ steps.request.outputs.requester }}" \
+            --error "${{ steps.dispatch.outputs.error }}"
+
+      - name: Fail dispatcher after dispatch error
+        if: steps.dispatch.outcome == 'failure'
+        run: exit 1

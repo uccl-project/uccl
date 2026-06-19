@@ -16,6 +16,18 @@ on:
       head_repo:
         description: PR head repository, for example owner/repo
         required: true
+      benchmark:
+        description: Benchmark target name for PR comment write-back
+        required: false
+        default: amd-zip
+      reply_comment_id:
+        description: PR comment ID to update with benchmark result
+        required: false
+        default: ""
+      reply_marker:
+        description: Marker used to identify the benchmark reply comment
+        required: false
+        default: ""
 
 # Share the concurrency group with uccl-build-test-amd.yml so only one AMD
 # workflow uses the hosts at a time.
@@ -24,6 +36,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  mark-running:
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+
+      - name: Update benchmark comment with run URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "${{ inputs.reply_comment_id }}" \
+            --marker "${{ inputs.reply_marker }}" \
+            --pr "${{ inputs.pr }}" \
+            --sha "${{ inputs.sha }}" \
+            --benchmark "${{ inputs.benchmark }}" \
+            --status running \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
   build-with-dietgpu-on-amd:
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -218,3 +254,29 @@ jobs:
             amd0-*.log
             amd1-*.log
           if-no-files-found: warn
+
+  write-back-result:
+    needs: [build-with-dietgpu-on-amd]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+
+      - name: Update benchmark comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "${{ inputs.reply_comment_id }}" \
+            --marker "${{ inputs.reply_marker }}" \
+            --pr "${{ inputs.pr }}" \
+            --sha "${{ inputs.sha }}" \
+            --benchmark "${{ inputs.benchmark }}" \
+            --status "${{ needs.build-with-dietgpu-on-amd.result }}" \
+            --result "${{ needs.build-with-dietgpu-on-amd.result }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
