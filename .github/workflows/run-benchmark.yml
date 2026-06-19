@@ -7,6 +7,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: write
   pull-requests: read
 
 jobs:
@@ -15,7 +16,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Dispatch requested benchmark
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve benchmark request
+        id: request
         uses: actions/github-script@v7
         with:
           script: |
@@ -56,16 +63,92 @@ jobs:
             };
             const target = match[1];
 
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: workflows[target],
-              ref: context.payload.repository.default_branch,
-              inputs: {
-                pr: String(pull_number),
-                sha: pr.head.sha,
-                head_repo: pr.head.repo.full_name,
-              },
-            });
+            core.setOutput('benchmark', target);
+            core.setOutput('workflow', workflows[target]);
+            core.setOutput('pr', String(pull_number));
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('head_repo', pr.head.repo.full_name);
+            core.setOutput('requester', commenter);
 
-            core.info(`Dispatched ${target} benchmark for PR #${pull_number} at ${pr.head.sha}`);
+      - name: Create queued benchmark comment
+        id: benchmark-comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
+          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
+          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
+          BENCHMARK_REQUESTER: ${{ steps.request.outputs.requester }}
+          BENCHMARK_WORKFLOW: ${{ steps.request.outputs.workflow }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode create \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status queued \
+            --requester "$BENCHMARK_REQUESTER" \
+            --workflow "$BENCHMARK_WORKFLOW"
+
+      - name: Dispatch requested benchmark
+        id: dispatch
+        uses: actions/github-script@v7
+        continue-on-error: true
+        env:
+          BENCHMARK_WORKFLOW: ${{ steps.request.outputs.workflow }}
+          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
+          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
+          BENCHMARK_HEAD_REPO: ${{ steps.request.outputs.head_repo }}
+          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
+          REPLY_COMMENT_ID: ${{ steps.benchmark-comment.outputs.comment_id }}
+          REPLY_MARKER: ${{ steps.benchmark-comment.outputs.reply_marker }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner,
+                repo,
+                workflow_id: process.env.BENCHMARK_WORKFLOW,
+                ref: context.payload.repository.default_branch,
+                inputs: {
+                  pr: process.env.BENCHMARK_PR,
+                  sha: process.env.BENCHMARK_SHA,
+                  head_repo: process.env.BENCHMARK_HEAD_REPO,
+                  benchmark: process.env.BENCHMARK_NAME,
+                  reply_comment_id: process.env.REPLY_COMMENT_ID,
+                  reply_marker: process.env.REPLY_MARKER,
+                },
+              });
+            } catch (error) {
+              core.setOutput('error', error.message);
+              core.setFailed(error.message);
+            }
+
+            core.info(`Dispatched ${process.env.BENCHMARK_NAME} benchmark for PR #${process.env.BENCHMARK_PR} at ${process.env.BENCHMARK_SHA}; reply comment ${process.env.REPLY_COMMENT_ID}`);
+
+      - name: Mark dispatch failed
+        if: steps.dispatch.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ steps.benchmark-comment.outputs.comment_id }}
+          REPLY_MARKER: ${{ steps.benchmark-comment.outputs.reply_marker }}
+          BENCHMARK_PR: ${{ steps.request.outputs.pr }}
+          BENCHMARK_SHA: ${{ steps.request.outputs.sha }}
+          BENCHMARK_NAME: ${{ steps.request.outputs.benchmark }}
+          BENCHMARK_REQUESTER: ${{ steps.request.outputs.requester }}
+          DISPATCH_ERROR: ${{ steps.dispatch.outputs.error }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status dispatch-failed \
+            --requester "$BENCHMARK_REQUESTER" \
+            --error "$DISPATCH_ERROR"
+
+      - name: Fail dispatcher after dispatch error
+        if: steps.dispatch.outcome == 'failure'
+        run: exit 1
