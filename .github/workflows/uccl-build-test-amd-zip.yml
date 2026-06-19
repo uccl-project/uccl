@@ -42,6 +42,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Checkout workflow helpers
         uses: actions/checkout@v4
@@ -270,6 +271,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Checkout workflow helpers
         uses: actions/checkout@v4
