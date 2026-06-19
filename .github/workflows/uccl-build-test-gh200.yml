@@ -195,9 +195,7 @@ jobs:
             fi
             export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu/plugins:${CONDA_ENV_DIR}/lib:${NVIDIA_NCCL_LIB}:${LD_LIBRARY_PATH:-}"
             
-            bash .github/workflows/nixlbench_test.sh \
-              "${NIXL_INSTALL_DIR}" \
-              2>&1 | tee nixlbench.log
+            bash .github/workflows/nixlbench_test.sh "${NIXL_INSTALL_DIR}" 2>&1 | tee nixlbench.log
           EOF
 
       - name: Run P2P nixlbench inter-node (RDMA + NCCL)
@@ -232,10 +230,7 @@ jobs:
             export UCCL_SOCKET_IFNAME=enx3c18a0d51943
             export NCCL_SOCKET_IFNAME=enx3c18a0d51943
 
-            bash .github/workflows/nixlbench_test_internode.sh \
-              "${NIXL_INSTALL_DIR}" \
-              --host-etcd \
-              2>&1 | tee nixlbench_internode_gh0.log
+            bash .github/workflows/nixlbench_test_internode.sh "${NIXL_INSTALL_DIR}" --host-etcd 2>&1 | tee nixlbench_internode_gh0.log
           EOF
           PID_GH0=$!
 
@@ -255,6 +250,11 @@ jobs:
             CONDA_ENV_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox
             NVIDIA_NCCL_LIB="${CONDA_ENV_DIR}/lib/python3.13/site-packages/nvidia/nccl/lib"
             mkdir -p "${NIXL_INSTALL_DIR}/lib"
+            if [ -e /lib/aarch64-linux-gnu/libcudart.so.12 ]; then
+              cudart_target="$(readlink -f /lib/aarch64-linux-gnu/libcudart.so.12)"
+              cp -f "${cudart_target}" "${NIXL_INSTALL_DIR}/lib/$(basename "${cudart_target}")"
+              ln -sf "$(basename "${cudart_target}")" "${NIXL_INSTALL_DIR}/lib/libcudart.so.12"
+            fi
             if [ -e "${NVIDIA_NCCL_LIB}/libnccl.so.2" ]; then
               ln -sf "${NVIDIA_NCCL_LIB}/libnccl.so.2" "${NIXL_INSTALL_DIR}/lib/libnccl.so"
             fi
@@ -263,9 +263,7 @@ jobs:
             export UCCL_SOCKET_IFNAME=enxc8a36290119d
             export NCCL_SOCKET_IFNAME=enxc8a36290119d
 
-            bash .github/workflows/nixlbench_test_internode.sh \
-              "${NIXL_INSTALL_DIR}" \
-              2>&1 | tee nixlbench_internode_gh1.log
+            bash .github/workflows/nixlbench_test_internode.sh "${NIXL_INSTALL_DIR}" 2>&1 | tee nixlbench_internode_gh1.log
           EOF
           PID_GH1=$!
 
