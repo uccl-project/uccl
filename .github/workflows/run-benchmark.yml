@@ -8,12 +8,17 @@ permissions:
   actions: write
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   dispatch-benchmark:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/run-benchmark')
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout workflow helpers
