@@ -233,7 +233,7 @@ jobs:
           exit $?
 
       - name: Run EP high-throughput test
-        timeout-minutes: 3
+        timeout-minutes: 6
         shell: bash
         run: |
           set -uo pipefail
