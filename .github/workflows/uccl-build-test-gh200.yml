@@ -45,27 +45,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
-          chmod 600 ~/.ssh/uccl-dev
+          echo "${{secrets.UCCL_GH200_SSH_KEY}}" > ~/.ssh/uccl-gh200
+          chmod 600 ~/.ssh/uccl-gh200
 
           cat >> ~/.ssh/config << 'EOF'
-          Host spark0
-              HostName "${{secrets.UCCL_DEV_HOSTNAME}}"
-              Port "${{secrets.UCCL_DEV_SPARK0_PORT}}"
-              User "${{secrets.UCCL_DEV_USER}}"
-              IdentityFile ~/.ssh/uccl-dev
+          Host gh0
+              HostName "${{secrets.UCCL_GH200_HOST0}}"
+              User "${{secrets.UCCL_GH200_USER}}"
+              IdentityFile ~/.ssh/uccl-gh200
               IdentitiesOnly yes
 
-          Host spark1
-              HostName "${{secrets.UCCL_DEV_HOSTNAME}}"
-              Port "${{secrets.UCCL_DEV_SPARK1_PORT}}"
-              User "${{secrets.UCCL_DEV_USER}}"
-              IdentityFile ~/.ssh/uccl-dev
+          Host gh1
+              HostName "${{secrets.UCCL_GH200_HOST1}}"
+              User "${{secrets.UCCL_GH200_USER}}"
+              IdentityFile ~/.ssh/uccl-gh200
               IdentitiesOnly yes
           EOF
 
-          ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK0_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
-          ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK1_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_GH200_HOST0}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_GH200_HOST1}}" >> ~/.ssh/known_hosts
 
       - name: Sync pushed code to gh200
         shell: bash
@@ -73,23 +71,23 @@ jobs:
           set -euo pipefail
           git submodule update --init --recursive thirdparty/nccl
           rsync -az --exclude .venv --exclude .git --delete \
-            --rsync-path="mkdir -p /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox && rsync" \
+            --rsync-path="mkdir -p /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox && rsync" \
             ./ep ./ \
-            spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
 
       - name: Build and verify UCCL on gh200
         shell: bash
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes spark1 << 'EOF'
+          ssh -o BatchMode=yes gh1 << 'EOF'
             set -euo pipefail
 
-            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
 
             conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
 
             ./build.sh cu13 ep 3.13 --install 2>&1 | tee build.log
 
@@ -106,46 +104,46 @@ jobs:
         run: |
           set -uo pipefail
 
-          ssh -o BatchMode=yes spark1 << 'EOF' &
+          ssh -o BatchMode=yes gh1 << 'EOF' &
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
 
             # abort if there are active jobs on the cluster
             if [ -n "$active_jobs" ]; then
-                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                echo "gh1 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
 
-            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
 
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
-            /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_SERVER=$!
 
           sleep 2
           echo "Started test on server..."
 
-          ssh -o BatchMode=yes spark0 << 'EOF' &
+          ssh -o BatchMode=yes gh0 << 'EOF' &
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
 
             # abort if there are active jobs on the cluster
             if [ -n "$active_jobs" ]; then
-                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
 
-            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
 
-            /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
           EOF
           PID_CLIENT=$!
 
@@ -168,18 +166,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes spark0 << 'EOF'
+          ssh -o BatchMode=yes gh0 << 'EOF'
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
 
             if [ -n "$active_jobs" ]; then
-                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
             export UCCL_P2P_RDMA_GID_INDEX=3
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
             bash .github/workflows/nixlbench_test.sh \
-              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
+              /home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test \
               2>&1 | tee nixlbench.log
           EOF
 
@@ -188,50 +186,50 @@ jobs:
         run: |
           set -euo pipefail
 
-          ssh -o BatchMode=yes spark0 << 'EOF' &
+          ssh -o BatchMode=yes gh0 << 'EOF' &
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
 
             if [ -n "$active_jobs" ]; then
-                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
 
             bash .github/workflows/nixlbench_test_internode.sh \
-              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
+              /home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test \
               --host-etcd \
-              2>&1 | tee nixlbench_internode_spark0.log
+              2>&1 | tee nixlbench_internode_gh0.log
           EOF
-          PID_SPARK0=$!
+          PID_GH0=$!
 
           sleep 5
 
-          ssh -o BatchMode=yes spark1 << 'EOF' &
+          ssh -o BatchMode=yes gh1 << 'EOF' &
             set -euo pipefail
             active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
 
             if [ -n "$active_jobs" ]; then
-                echo "spark1 node is currently used by processes with PID: $active_jobs"
+                echo "gh1 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
 
             bash .github/workflows/nixlbench_test_internode.sh \
-              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
-              2>&1 | tee nixlbench_internode_spark1.log
+              /home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test \
+              2>&1 | tee nixlbench_internode_gh1.log
           EOF
-          PID_SPARK1=$!
+          PID_GH1=$!
 
-          wait $PID_SPARK0; STATUS_SPARK0=$?
-          echo "spark0 exit code: $STATUS_SPARK0"
+          wait $PID_GH0; STATUS_GH0=$?
+          echo "gh0 exit code: $STATUS_GH0"
 
-          wait $PID_SPARK1; STATUS_SPARK1=$?
-          echo "spark1 exit code: $STATUS_SPARK1"
+          wait $PID_GH1; STATUS_GH1=$?
+          echo "gh1 exit code: $STATUS_GH1"
 
-          if [ $STATUS_SPARK0 -ne 0 ] || [ $STATUS_SPARK1 -ne 0 ]; then
+          if [ $STATUS_GH0 -ne 0 ] || [ $STATUS_GH1 -ne 0 ]; then
             echo "Inter-node nixlbench tests FAILED!"
             exit 1
           fi
@@ -241,19 +239,19 @@ jobs:
         shell: bash
         run: |
           set -eu
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build.log || true
-          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gh200-nixlbench.log || true
-          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log ./gh200-nixlbench-internode-spark0.log || true
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log ./gh200-nixlbench-internode-spark1.log || true
-          ssh -o BatchMode=yes spark1 << 'EOF'
-            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log
+          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build.log || true
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gh200-nixlbench.log || true
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh0.log ./gh200-nixlbench-internode-gh0.log || true
+          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh1.log ./gh200-nixlbench-internode-gh1.log || true
+          ssh -o BatchMode=yes gh1 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log
           EOF
-          ssh -o BatchMode=yes spark0 << 'EOF'
-            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log
-            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark0.log
+          ssh -o BatchMode=yes gh0 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench.log
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh0.log
           EOF
-          ssh -o BatchMode=yes spark1 << 'EOF'
-            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_spark1.log
+          ssh -o BatchMode=yes gh1 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh1.log
           EOF
 
       - name: Upload log artifact
@@ -264,6 +262,6 @@ jobs:
           path: |
             gh200-build.log
             gh200-nixlbench.log
-            gh200-nixlbench-internode-spark0.log
-            gh200-nixlbench-internode-spark1.log
+            gh200-nixlbench-internode-gh0.log
+            gh200-nixlbench-internode-gh1.log
           if-no-files-found: warn
