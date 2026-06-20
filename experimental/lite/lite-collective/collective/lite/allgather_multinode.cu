@@ -1,6 +1,7 @@
 #include "native_collectives.hpp"
 #include "lite_common.h"
 #include "debug.h"
+#include "lite/node_exchange_buffer.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -130,19 +131,17 @@ struct AgContext {
   uint64_t epoch = 0;
   size_t smallPerSlotBytes = 0;
 
-  std::string sendName;
-  std::string recvName;
+  // NodeExchangeBuffer owns sendSlab + recvSlab lifecycle.
+  std::unique_ptr<NodeExchangeBuffer> exchBuf;
   std::string ctrlName;
-  void* sendMapping = nullptr;
-  void* recvMapping = nullptr;
   void* ctrlMapping = nullptr;
+  // Raw aliases into exchBuf's slabs (kept for compatibility with GPU-kernel
+  // paths and RDMA registration that reference these pointers directly).
   char* sendSlab = nullptr;
   char* recvSlab = nullptr;
   HostControl* ctrl = nullptr;
   char const* sendDeviceSlab = nullptr;
   char* ctrlDeviceSlab = nullptr;
-  bool sendHostRegistered = false;
-  bool recvHostRegistered = false;
   bool ctrlHostRegistered = false;
 
   mscclpp::Transport transport = mscclpp::Transport::Unknown;
@@ -217,15 +216,11 @@ struct AgContext {
     ctrlMemory = mscclpp::RegisteredMemory{};
     recvMemory = mscclpp::RegisteredMemory{};
     sendMemory = mscclpp::RegisteredMemory{};
-    if (sendHostRegistered) cudaHostUnregister(sendMapping);
-    if (recvHostRegistered) cudaHostUnregister(recvMapping);
+    // exchBuf destructor handles sendSlab + recvSlab cleanup.
+    exchBuf.reset();
     if (ctrlHostRegistered) cudaHostUnregister(ctrlMapping);
-    if (sendMapping) munmap(sendMapping, slabBytes);
-    if (recvMapping) munmap(recvMapping, slabBytes);
     if (ctrlMapping) munmap(ctrlMapping, sizeof(HostControl));
     if (owner) {
-      if (!sendName.empty()) shm_unlink(sendName.c_str());
-      if (!recvName.empty()) shm_unlink(recvName.c_str());
       if (!ctrlName.empty()) shm_unlink(ctrlName.c_str());
     }
   }
@@ -857,6 +852,26 @@ AgContext& getContext(
     ctx->peerLeaders.push_back(peerNode * nRanksPerNode + groupBase);
   }
 
+  // ── Create send/recv slabs via NodeExchangeBuffer ────────────────────────
+  {
+    auto commNonce = static_cast<unsigned long long>(
+        reinterpret_cast<uintptr_t>(commHandle));
+    char nameTag[128];
+    // Use localLeader rank in the name so each node's leader generates a
+    // unique name; remote nodes have their own leaders with different ranks.
+    std::snprintf(nameTag, sizeof(nameTag), "%llx_%d_%d_%d_g%d",
+                  commNonce, getpid(), ctx->localLeader, nRanks, groupId);
+    ctx->exchBuf = std::make_unique<NodeExchangeBuffer>(
+        NodeExchangeBuffer::create(bootstrapComm, rank, nRanks,
+                                   ctx->isLeader, ctx->localLeader,
+                                   ctx->slabBytes,
+                                   ctx->numaNode, cudaDevice, nameTag));
+    ctx->sendSlab       = ctx->exchBuf->sendPtr();
+    ctx->recvSlab       = ctx->exchBuf->recvPtr();
+    ctx->sendDeviceSlab = ctx->exchBuf->sendDevicePtr();
+  }
+
+  // ── Create HostControl (RDMA coordination flags) ──────────────────────────
   HostNames localNames;
   ncclResult_t shmCreateResult = ncclSuccess;
   std::string shmCreateMessage;
@@ -864,19 +879,10 @@ AgContext& getContext(
     if (ctx->isLeader) {
       auto commNonce = static_cast<unsigned long long>(
           reinterpret_cast<uintptr_t>(commHandle));
-      std::snprintf(localNames.sendName, sizeof(localNames.sendName),
-                    "/mint_ag_%llx_%d_%d_%d_g%d_s", commNonce, getpid(), rank,
-                    nRanks, groupId);
-      std::snprintf(localNames.recvName, sizeof(localNames.recvName),
-                    "/mint_ag_%llx_%d_%d_%d_g%d_r", commNonce, getpid(), rank,
-                    nRanks, groupId);
       std::snprintf(localNames.ctrlName, sizeof(localNames.ctrlName),
                     "/mint_ag_%llx_%d_%d_%d_g%d_c", commNonce, getpid(), rank,
                     nRanks, groupId);
-      createOwnedShm(localNames.sendName, ctx->slabBytes);
-      createOwnedShm(localNames.recvName, ctx->slabBytes);
-      createOwnedShm(localNames.ctrlName,
-                     sizeof(HostControl));
+      createOwnedShm(localNames.ctrlName, sizeof(HostControl));
     }
   } catch (std::exception const& ex) {
     shmCreateResult = mapException(ex);
@@ -886,7 +892,7 @@ AgContext& getContext(
     shmCreateMessage = "unknown shared-memory create exception";
   }
   try {
-    std::string stage = std::string(opName) + " shared-memory create";
+    std::string stage = std::string(opName) + " ctrl create";
     publishInitStatus(bootstrapComm, rank, nRanks, shmCreateResult,
                                 shmCreateMessage, stage.c_str());
   } catch (...) {
@@ -896,28 +902,16 @@ AgContext& getContext(
 
   std::vector<HostNames> allNames(nRanks);
   allNames[rank] = localNames;
-  bootstrapComm->bootstrap()->allGather(allNames.data(),
-                                        sizeof(HostNames));
+  bootstrapComm->bootstrap()->allGather(allNames.data(), sizeof(HostNames));
   HostNames const& leaderNames = allNames[ctx->localLeader];
-  ctx->sendName = leaderNames.sendName;
-  ctx->recvName = leaderNames.recvName;
   ctx->ctrlName = leaderNames.ctrlName;
 
   ncclResult_t shmMapResult = ncclSuccess;
   std::string shmMapMessage;
   try {
-    ctx->sendMapping = mapShm(ctx->sendName, ctx->slabBytes);
-    ctx->recvMapping = mapShm(ctx->recvName, ctx->slabBytes);
-    ctx->ctrlMapping =
-        mapShm(ctx->ctrlName, sizeof(HostControl));
-    ctx->sendSlab = static_cast<char*>(ctx->sendMapping);
-    ctx->recvSlab = static_cast<char*>(ctx->recvMapping);
+    ctx->ctrlMapping = mapShm(ctx->ctrlName, sizeof(HostControl));
     ctx->ctrl = static_cast<HostControl*>(ctx->ctrlMapping);
     if (ctx->isLeader) {
-      placeOnNuma(ctx->sendMapping, ctx->slabBytes, ctx->numaNode,
-                             "allgather send slab");
-      placeOnNuma(ctx->recvMapping, ctx->slabBytes, ctx->numaNode,
-                             "allgather recv slab");
       std::memset(ctx->ctrlMapping, 0, sizeof(HostControl));
       new (ctx->ctrl) HostControl{};
     }
@@ -928,7 +922,7 @@ AgContext& getContext(
     shmMapResult = ncclInternalError;
     shmMapMessage = "unknown shared-memory map exception";
   }
-  std::string mapStage = std::string(opName) + " shared-memory map";
+  std::string mapStage = std::string(opName) + " ctrl map";
   publishInitStatus(bootstrapComm, rank, nRanks, shmMapResult,
                               shmMapMessage, mapStage.c_str());
   bootstrapComm->bootstrap()->barrier();
@@ -936,24 +930,6 @@ AgContext& getContext(
   ncclResult_t setupResult = ncclSuccess;
   std::string setupMessage;
   try {
-    cudaError_t sendRegister = cudaHostRegister(
-        ctx->sendMapping, ctx->slabBytes,
-        cudaHostRegisterPortable | cudaHostRegisterMapped);
-    if (sendRegister == cudaSuccess) {
-      void* sendDeviceSlab = nullptr;
-      MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&sendDeviceSlab,
-                                                 ctx->sendMapping, 0));
-      ctx->sendDeviceSlab = static_cast<char const*>(sendDeviceSlab);
-    } else {
-      cudaGetLastError();
-      MSCCLPP_CUDATHROW(cudaHostRegister(ctx->sendMapping, ctx->slabBytes,
-                                         cudaHostRegisterPortable));
-      ctx->sendDeviceSlab = nullptr;
-    }
-    ctx->sendHostRegistered = true;
-    MSCCLPP_CUDATHROW(cudaHostRegister(ctx->recvMapping, ctx->slabBytes,
-                                       cudaHostRegisterPortable));
-    ctx->recvHostRegistered = true;
     cudaError_t ctrlRegister = cudaHostRegister(
         ctx->ctrlMapping, sizeof(HostControl),
         cudaHostRegisterPortable | cudaHostRegisterMapped);
@@ -1451,17 +1427,19 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
   bool preCopiedSelf =
       oneRankLayout && !oneRankInPlace &&
       chunkBytes >= kOneRankDirectCopyCutoffBytes;
-  // Generic slab exchange is synchronous at each chunk boundary: D2H into the
-  // host slot, leader RDMA write of the contiguous block, then H2D into final
-  // rank order.  The 2nx1g fast path below is separate because it pipelines at
-  // 512KiB granularity instead of paying this full barrier per 2MiB chunk.
+  // Generic slab exchange: D2H into the host slot, leader RDMA write of the
+  // contiguous block, then H2D into final rank order.  Unlike the old code
+  // which called waitForCudaStream() to block the CPU until D2H completed,
+  // push() enqueues the D2H + a GPU-side flag write on d2hStream.  Non-leader
+  // ranks proceed immediately to waitForEpoch(rdmaReady) without blocking;
+  // the leader waitCpu()-spins on the GPU-written flags before starting RDMA.
   if (inGroup) {
     auto const* send = static_cast<char const*>(sendbuff);
     int localSlot = ctx.localRank - ctx.groupBase;
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        ctx.sendSlab + sendBase + static_cast<size_t>(localSlot) * chunkBytes,
-        send + chunkOffset, chunkBytes, cudaMemcpyDeviceToHost, d2hStream));
-    waitForCudaStream(d2hStream);
+    ctx.exchBuf->push(d2hStream,
+                      send + chunkOffset,
+                      sendBase + static_cast<size_t>(localSlot) * chunkBytes,
+                      chunkBytes, ctx.localRank, epoch);
     if (preCopiedSelf) {
       auto const* sendBytes = static_cast<char const*>(sendbuff);
       auto* recvBytes = static_cast<char*>(recvbuff);
@@ -1471,13 +1449,11 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
           recvBytes + selfOffset, sendBytes + chunkOffset, chunkBytes,
           cudaMemcpyDeviceToDevice, h2dStream));
     }
-    ctx.ctrl->d2hReady[ctx.localRank].store(epoch,
-                                            std::memory_order_release);
   }
 
   if (ctx.isLeader) {
     for (int i = 0; i < ctx.groupSize; ++i) {
-      waitForEpoch(ctx.ctrl->d2hReady[ctx.groupBase + i], epoch);
+      ctx.exchBuf->waitCpu(ctx.groupBase + i, epoch);
     }
 
     ctx.ctrl->rdmaSignal[ctx.nodeId].store(epoch,

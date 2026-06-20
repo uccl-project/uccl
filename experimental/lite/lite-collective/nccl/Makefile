@@ -61,7 +61,7 @@ $(OUT_DIR)/allgather.cu.o: allgather.hpp
 
 $(OUT_DIR)/nccl.cu.o: $(LITE_COLL_DIR)/allgather_intranode.cu $(LITE_COLL_DIR)/host_staging_buffer.hpp allgather.hpp lite_common.h
 
-$(OUT_DIR)/$(LITE_COLL_DIR)/allgather_multinode.cu.o: $(LITE_COLL_DIR)/allgather_multinode.cu | $(OUT_DIR)
+$(OUT_DIR)/$(LITE_COLL_DIR)/allgather_multinode.cu.o: $(LITE_COLL_DIR)/allgather_multinode.cu $(LITE_COLL_DIR)/node_exchange_buffer.hpp | $(OUT_DIR)
 	mkdir -p $(@D)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) -I. $(DEFINES) -c $< -o $@
 
