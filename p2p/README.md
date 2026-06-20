@@ -66,6 +66,7 @@ To enable GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plug
 
 To enable HPE Slingshot/CXI support, set `UCCL_P2P_TRANSPORT=cxi` at runtime:
 ```bash
+sudo apt install libfabric-dev libhwloc-dev -y
 make -j install
 UCCL_P2P_TRANSPORT=cxi UCCL_P2P_DISABLE_IPC=1 torchrun ...
 ```
