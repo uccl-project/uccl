@@ -1,6 +1,9 @@
 name: UCCL Build & Test (AMD)
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -16,15 +19,61 @@ on:
       head_repo:
         description: PR head repository, for example owner/repo
         required: true
+      benchmark:
+        description: Benchmark target name for PR comment write-back
+        required: false
+        default: amd
+      reply_comment_id:
+        description: PR comment ID to update with benchmark result
+        required: false
+        default: ""
+      reply_marker:
+        description: Marker used to identify the benchmark reply comment
+        required: false
+        default: ""
 
 concurrency:
   group: amd-uccl-build-test
   cancel-in-progress: false
 
 jobs:
+  mark-running:
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment with run URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status running \
+            --workflow-url "$WORKFLOW_URL"
+
   build-and-test-on-amd:
     if: >
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
@@ -184,7 +233,7 @@ jobs:
           exit $?
 
       - name: Run EP high-throughput test
-        timeout-minutes: 3
+        timeout-minutes: 6
         shell: bash
         run: |
           set -uo pipefail
@@ -344,3 +393,39 @@ jobs:
             amd0-*.log
             amd1-*.log
           if-no-files-found: warn
+
+  write-back-result:
+    needs: [mark-running, build-and-test-on-amd]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          BENCHMARK_RESULT: ${{ needs.build-and-test-on-amd.result }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status "$BENCHMARK_RESULT" \
+            --result "$BENCHMARK_RESULT" \
+            --workflow-url "$WORKFLOW_URL"
