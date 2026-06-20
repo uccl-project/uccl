@@ -37,9 +37,22 @@ static inline void hostAllGatherCpuRelax() {
 #endif
 }
 
+// Thrown (silently) when a cached init failure is rethrown — no warning printed.
+struct SilentRethrownError : std::exception {
+  std::exception_ptr original;
+  explicit SilentRethrownError(std::exception_ptr ep) : original(std::move(ep)) {}
+  const char* what() const noexcept override { return "cached init failure"; }
+};
+
 template <typename Fn>
 static ncclResult_t runHostAllGatherGuarded(char const* opName, Fn&& fn) {
   try { fn(); return ncclSuccess; }
+  catch (SilentRethrownError const& e) {
+    // Cached failure rethrown — already warned on first occurrence.
+    try { std::rethrow_exception(e.original); }
+    catch (std::exception const& ex) { return mapMscclppException(ex); }
+    catch (...) { return ncclInternalError; }
+  }
   catch (std::exception const& ex) {
     std::fprintf(stderr, "AllGather WARN %s: %s\n", opName, ex.what()); std::fflush(stderr);
     WARN(MSCCLPP_NCCL, opName, " failed: ", ex.what());
@@ -237,6 +250,7 @@ struct HostAllGatherContext {
   std::condition_variable initCv;
   bool initialized  = false;
   bool initializing = false;
+  bool initFailed   = false;   // set on first failure; suppresses repeated warnings
   std::exception_ptr initException;
 
   bool mapSlab = true;
@@ -294,9 +308,11 @@ static void initializeHostAllGatherContext(
   {
     std::unique_lock<std::mutex> lk(ctx.initMutex);
     if (ctx.initialized) return;
+    // If init failed previously, rethrow without printing warning again.
+    if (ctx.initFailed) throw SilentRethrownError(ctx.initException);
     if (ctx.initializing) {
       ctx.initCv.wait(lk, [&] { return !ctx.initializing; });
-      if (ctx.initException) std::rethrow_exception(ctx.initException);
+      if (ctx.initFailed) throw SilentRethrownError(ctx.initException);
       if (ctx.initialized) return;
     }
     ctx.initializing = true;
@@ -307,6 +323,7 @@ static void initializeHostAllGatherContext(
     std::lock_guard<std::mutex> lk(ctx.initMutex);
     ctx.initialized  = false;
     ctx.initializing = false;
+    ctx.initFailed   = true;
     ctx.initException = ep;
     ctx.initCv.notify_all();
   };
@@ -599,6 +616,7 @@ struct GpuAllGatherContext {
   std::condition_variable initCv;
   bool initialized  = false;
   bool initializing = false;
+  bool initFailed   = false;
   std::exception_ptr initException;
 
   uint64_t epoch = 0;
@@ -685,9 +703,10 @@ static void initializeGpuAllGatherContext(
   {
     std::unique_lock<std::mutex> lk(ctx.initMutex);
     if (ctx.initialized) return;
+    if (ctx.initFailed) throw SilentRethrownError(ctx.initException);
     if (ctx.initializing) {
       ctx.initCv.wait(lk, [&]{ return !ctx.initializing; });
-      if (ctx.initException) std::rethrow_exception(ctx.initException);
+      if (ctx.initFailed) throw SilentRethrownError(ctx.initException);
       if (ctx.initialized) return;
     }
     ctx.initializing = true;
@@ -696,6 +715,7 @@ static void initializeGpuAllGatherContext(
     std::lock_guard<std::mutex> lk(ctx.initMutex);
     ctx.initialized  = false;
     ctx.initializing = false;
+    ctx.initFailed   = true;
     ctx.initException = ep;
     ctx.initCv.notify_all();
   };
@@ -921,7 +941,8 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
       // GpuAllGatherContext provides only a small ring buffer (no second slab).
       // The ring service thread reuses hostCtx.buf (CpuStagingChannel) for D2H.
       HostAllGatherContext& hostCtx = getHostAllGatherContext(comm, /*mapSlab=*/true);
-      // (initializeHostAllGatherContext already called above for the probe)
+      initializeHostAllGatherContext(hostCtx, comm, rank, nRanks, cudaDevice,
+                                     bootstrapComm);
       CpuStagingChannel& csc = *hostCtx.buf;
       HsbDeviceHandle rawH = csc.deviceHandle();
 

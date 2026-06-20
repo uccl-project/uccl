@@ -2401,15 +2401,14 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
 
   // GPU-kernel path: true GPU-driven AllGather (CscDeviceHandle __device__ API).
   // Enabled via MSCCLPP_NCCL_AG_GPU_KERNEL=1. Intra-node only.
+  // Any failure (including init errors in MPI mode) falls through to algo path.
   if (gpuKernelEnabled() && comm->nRanksPerNode == nRank && nRank > 1) {
     liteResult = runIntraNodeGpuKernelAllGather(
         sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
         comm->cudaDevice, comm->comm);
-    if (!mscclpp::lite::needsFallback(liteResult)) return liteResult;
-    liteResult = ncclInvalidUsage;
+    if (liteResult == ncclSuccess) return ncclSuccess;
+    liteResult = ncclInvalidUsage;  // fall through to algo path
   }
-
-  // GPU-staging path (ring-based) removed — use MSCCLPP_NCCL_AG_GPU_KERNEL=1 instead.
 
   if (algo != nullptr) {
     size_t outputSize =
