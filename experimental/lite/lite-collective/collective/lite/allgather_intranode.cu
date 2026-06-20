@@ -798,6 +798,126 @@ static ncclResult_t runIntraNodeGpuStagingAllGather(
 }
 
 
+
+// ── True GPU-kernel AllGather (CscDeviceHandle __device__ API) ────────────────
+// Enabled with MSCCLPP_NCCL_AG_GPU_KERNEL=1.
+//
+// The ENTIRE AllGather runs inside a single GPU kernel per rank:
+//   - put():  SM-copy own data to host-mapped slab + signal d2hReady flag
+//   - wait(): GPU spin on each peer's flag
+//   - get():  SM-copy peer data from slab to recvbuff
+//
+// CPU role: launch kernel on stream + chain events.  No CPU in hot path.
+// This is the true "GPU-driven" path: the channel API (put/wait/get) is called
+// from __device__ code, not from CPU stream-enqueue calls.
+
+static bool gpuKernelEnabled() {
+  char const* e = std::getenv("MSCCLPP_NCCL_AG_GPU_KERNEL");
+  return e != nullptr && std::strcmp(e, "0") != 0;
+}
+
+// Per-rank GPU-kernel AllGather.  Each rank launches this kernel concurrently
+// on its own GPU.  Ranks communicate via the host-mapped slab (h.slabDev) and
+// ctrl flags (h.ctrlDev).
+//
+// Requires: h.slabDev != nullptr (mapSlab=true).
+// Thread assignment: blockDim.x >= nRanks for parallel wait; more threads give
+// faster SM-copy throughput (suggest 256).
+__global__ static void gpuAllGatherKernel(
+    CscDeviceHandle h,
+    char const* send, char* recv,
+    size_t bytesPerRank, int rank, int nRanks,
+    int slot, uint64_t epoch) {
+  // 1. Stage own data to slab + signal all peers.
+  h.put(slot, /*chunkId=*/0, send, /*offset=*/0, bytesPerRank, epoch);
+
+  // 2. Wait for all other ranks in parallel.
+  //    Thread r waits for peer r (r != rank, r < nRanks).
+  if (static_cast<int>(threadIdx.x) < nRanks
+      && static_cast<int>(threadIdx.x) != rank)
+    h.wait(slot, /*chunkId=*/0, static_cast<int>(threadIdx.x), epoch);
+  __syncthreads();
+
+  // 3. SM-copy own data into recvbuff (from send, not from slab).
+  char* selfDst = recv + static_cast<size_t>(rank) * bytesPerRank;
+  for (size_t i = threadIdx.x; i < bytesPerRank; i += blockDim.x)
+    selfDst[i] = send[i];
+
+  // 4. SM-copy peers' data from slab to recvbuff.
+  if (rank > 0)
+    h.get(slot, 0, rank - 1, /*offset=*/0, bytesPerRank, recv);
+  if (rank + 1 < nRanks)
+    h.get(slot, rank + 1, nRanks - 1, /*offset=*/0, bytesPerRank, recv);
+
+  // 5. Signal slot done (for slot reuse guard).
+  h.signalDone(slot, epoch);
+}
+
+static ncclResult_t runIntraNodeGpuKernelAllGather(
+    void const* sendbuff, void* recvbuff, size_t bytesPerRank,
+    ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
+    int cudaDevice,
+    std::shared_ptr<mscclpp::Communicator> bootstrapComm) {
+  if (comm == nullptr || nRanks <= 1 || bytesPerRank == 0) return ncclInvalidUsage;
+  if (bytesPerRank > kHostAllGatherMaxTotalBytes / static_cast<size_t>(nRanks))
+    return ncclInvalidUsage;
+
+  return runHostAllGatherGuarded("GpuKernelAllGather", [&] {
+    // Reuse the CPU-driven context (same CpuStagingChannel slab).
+    HostAllGatherContext& ctx = getHostAllGatherContext(comm, /*mapSlab=*/true);
+    initializeHostAllGatherContext(ctx, comm, rank, nRanks, cudaDevice,
+                                   bootstrapComm);
+
+    if (bytesPerRank == 0) return;
+
+    void* selfOutput = static_cast<char*>(recvbuff)
+                       + static_cast<size_t>(rank) * bytesPerRank;
+    if (sendbuff == selfOutput && nRanks == 1) return;
+
+    CpuStagingChannel& buf = *ctx.buf;
+    HsbDeviceHandle rawH  = buf.deviceHandle();
+
+    // Require device-mapped slab.
+    if (rawH.slabDev == nullptr)
+      throw mscclpp::Error("GpuKernelAllGather: slabDev is null (need mapSlab)",
+                           mscclpp::ErrorCode::InvalidUsage);
+
+    uint64_t epoch = ++ctx.epoch;
+    int slot = static_cast<int>((epoch - 1) % kCscMaxSlots);
+
+    // Slot reuse guard: wait for previous use of this slot to finish.
+    if (epoch > static_cast<uint64_t>(kCscMaxSlots)) {
+      buf.waitDone(slot, (rank + 1) % nRanks, epoch - kCscMaxSlots);
+    }
+
+    CscDeviceHandle h;
+    h.slabDev      = rawH.slabDev;
+    h.ctrlDev      = rawH.ctrlDev;
+    h.rank         = rawH.rank;
+    h.nRanks       = rawH.nRanks;
+    h.bytesPerRank = rawH.bytesPerRank;
+    h.slotStride   = rawH.slotStride;
+    h.counterStride = rawH.counterStride;
+
+    // Chain userStream → kernel stream → userStream.
+    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
+    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.h2dStream, ctx.inputReadyEvent, 0));
+
+    // One block per rank; threads = max(nRanks, 256) for parallel wait + fast copy.
+    int threads = std::max(nRanks, 256);
+    gpuAllGatherKernel<<<1, threads, 0, ctx.h2dStream>>>(
+        h,
+        static_cast<char const*>(sendbuff),
+        static_cast<char*>(recvbuff),
+        bytesPerRank, rank, nRanks, slot, epoch);
+    MSCCLPP_CUDATHROW(cudaGetLastError());
+
+    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent, ctx.h2dStream));
+    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, ctx.h2dDoneEvent, 0));
+  });
+}
+
+
 static ncclResult_t runIntraNodeCudaIpcAllGather(
     void const* sendbuff, void* recvbuff, size_t bytesPerRank,
     ncclComm_t comm, cudaStream_t stream, int rank, int nRanks) {

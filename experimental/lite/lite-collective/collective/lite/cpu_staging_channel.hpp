@@ -70,21 +70,79 @@ struct CscDeviceHandle {
   size_t slotStride;    // bytes between slots: = bytesPerRank * nRanks (padded)
   size_t counterStride; // = sizeof(CscCounter)
 
-  // Byte offset from slab base to slot s.
-  size_t slotOffset(int slot) const {
+  // ── Host/device offset helpers ─────────────────────────────────────────────
+  __host__ __device__ size_t slotOffset(int slot) const {
     return static_cast<size_t>(slot) * slotStride;
   }
-  // Byte offset from ctrlDev to d2hReady[slot][chunk=0][rank=0].value.
-  size_t readyFlagOffset(int slot) const {
-    static_assert(std::is_standard_layout<CscCtrl>::value, "");
-    static_assert(std::is_standard_layout<CscCounter>::value, "");
+  __host__ __device__ size_t readyFlagOffset(int slot) const {
     return sizeof(CscCounter) * (
         static_cast<size_t>(slot) * (kCscMaxChunks * kCscMaxRanks));
   }
-  // Byte offset from ctrlDev to slotDone[slot][rank=0].value.
-  size_t doneFlagOffset(int slot) const {
+  __host__ __device__ size_t doneFlagOffset(int slot) const {
     return sizeof(CscCounter) * (kCscMaxSlots * kCscMaxChunks * kCscMaxRanks
         + static_cast<size_t>(slot) * kCscMaxRanks);
+  }
+
+  // ── GPU kernel API (__device__) ────────────────────────────────────────────
+  // All threads participate.  Call from a single block (uses __syncthreads).
+
+  // SM-copy src[offset..+size] → slab[slot][rank][offset..+size],
+  // then thread 0 writes d2hReady[slot][chunkId][rank] = tag.
+  // After return, all threads see the flag written and __threadfence_system done.
+  __device__ void put(int slot, int chunkId,
+                      char const* src, size_t offset, size_t size,
+                      uint64_t tag) {
+    char* dst = slabDev + slotOffset(slot)
+                + static_cast<size_t>(rank) * bytesPerRank + offset;
+    for (size_t i = threadIdx.x; i < size; i += blockDim.x)
+      dst[i] = src[offset + i];
+    __syncthreads();
+    __threadfence_system();  // ensure slab writes visible to all CPUs/GPUs
+    if (threadIdx.x == 0) {
+      size_t flagOff = readyFlagOffset(slot)
+          + (static_cast<size_t>(chunkId) * kCscMaxRanks
+             + static_cast<size_t>(rank)) * counterStride;
+      *reinterpret_cast<volatile unsigned long long*>(ctrlDev + flagOff) = tag;
+      __threadfence_system();
+    }
+    __syncthreads();
+  }
+
+  // GPU spin-wait until d2hReady[slot][chunkId][peer] >= tag.
+  // Call from ONE thread per peer (e.g. thread peer, if peer < blockDim.x).
+  __device__ void wait(int slot, int chunkId, int peer, uint64_t tag) {
+    size_t flagOff = readyFlagOffset(slot)
+        + (static_cast<size_t>(chunkId) * kCscMaxRanks
+           + static_cast<size_t>(peer)) * counterStride;
+    volatile auto* f =
+        reinterpret_cast<volatile unsigned long long*>(ctrlDev + flagOff);
+    while (*f < tag) { /* GPU spin */ }
+    __threadfence_system();
+  }
+
+  // SM-copy slab[slot][firstRank..lastRank][offset..+size] → dst.
+  // All threads cooperate.  Does NOT include this rank's own data.
+  __device__ void get(int slot, int firstRank, int lastRank,
+                      size_t offset, size_t size, char* dst) {
+    for (int r = firstRank; r <= lastRank; ++r) {
+      char const* src = slabDev + slotOffset(slot)
+                        + static_cast<size_t>(r) * bytesPerRank + offset;
+      char* d = dst + static_cast<size_t>(r) * bytesPerRank + offset;
+      for (size_t i = threadIdx.x; i < size; i += blockDim.x)
+        d[i] = src[i];
+    }
+    __syncthreads();
+  }
+
+  // Write slotDone[slot][rank] = tag (GPU-side slot-reuse guard).
+  __device__ void signalDone(int slot, uint64_t tag) {
+    if (threadIdx.x == 0) {
+      size_t flagOff = doneFlagOffset(slot)
+          + static_cast<size_t>(rank) * counterStride;
+      *reinterpret_cast<volatile unsigned long long*>(ctrlDev + flagOff) = tag;
+      __threadfence_system();
+    }
+    __syncthreads();
   }
 };
 

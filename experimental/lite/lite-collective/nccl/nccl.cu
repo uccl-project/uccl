@@ -2399,7 +2399,17 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
   auto algo = comm->algorithmCollection.selectAlgorithm(request);
   ncclResult_t liteResult = ncclInvalidUsage;
 
-  // GPU-staging path: intra-node only, enabled via MSCCLPP_NCCL_AG_GPU_STAGING=1.
+  // GPU-kernel path: true GPU-driven AllGather (CscDeviceHandle __device__ API).
+  // Enabled via MSCCLPP_NCCL_AG_GPU_KERNEL=1. Intra-node only.
+  if (gpuKernelEnabled() && comm->nRanksPerNode == nRank && nRank > 1) {
+    liteResult = runIntraNodeGpuKernelAllGather(
+        sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
+        comm->cudaDevice, comm->comm);
+    if (!mscclpp::lite::needsFallback(liteResult)) return liteResult;
+    liteResult = ncclInvalidUsage;
+  }
+
+  // GPU-staging path (ring-based): intra-node, enabled via MSCCLPP_NCCL_AG_GPU_STAGING=1.
   if (gpuStagingEnabled() && comm->nRanksPerNode == nRank && nRank > 1) {
     liteResult = runIntraNodeGpuStagingAllGather(
         sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
