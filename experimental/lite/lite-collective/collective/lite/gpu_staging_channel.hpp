@@ -281,8 +281,8 @@ inline GscDeviceHandle GpuStagingChannel::deviceHandle() const {
 inline GpuStagingChannel::~GpuStagingChannel() {
   if (ctrlRegistered_)   cudaHostUnregister(ctrlMapping_);
   if (ringRegistered_)   cudaHostUnregister(ringMapping_);
-  if (ctrlMapping_)      ::free(ctrlMapping_);
-  if (ringMapping_)      ::free(ringMapping_);
+  if (ctrlMapping_)      cudaFreeHost(ctrlMapping_);
+  if (ringMapping_)      cudaFreeHost(ringMapping_);
 }
 
 inline GpuStagingChannel GpuStagingChannel::create(

@@ -212,9 +212,9 @@ inline GpuPortChannel::~GpuPortChannel() {
   if (semRegistered_)   cudaHostUnregister(semMapping_);
   if (ctrlRegistered_)  cudaHostUnregister(ctrlMapping_);
   if (ringRegistered_)  cudaHostUnregister(ringMapping_);
-  if (semMapping_)      ::free(semMapping_);
-  if (ctrlMapping_)     ::free(ctrlMapping_);
-  if (ringMapping_)     ::free(ringMapping_);
+  if (semMapping_)      cudaFreeHost(semMapping_);
+  if (ctrlMapping_)     cudaFreeHost(ctrlMapping_);
+  if (ringMapping_)     cudaFreeHost(ringMapping_);
 }
 
 inline int GpuPortChannel::service(int maxCmds) {

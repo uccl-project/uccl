@@ -122,12 +122,17 @@ struct CscDeviceHandle {
 
   // SM-copy slab[slot][firstRank..lastRank][offset..+size] → dst.
   // All threads cooperate.  Does NOT include this rank's own data.
+  // dstStride: stride between consecutive ranks in dst (= actual msg bytesPerRank).
+  //   When 0, uses h.bytesPerRank (the slab layout stride).
+  //   Always pass the actual message bytesPerRank for the recv buffer.
   __device__ void get(int slot, int firstRank, int lastRank,
-                      size_t offset, size_t size, char* dst) {
+                      size_t offset, size_t size, char* dst,
+                      size_t dstStride = 0) {
+    size_t stride = dstStride ? dstStride : bytesPerRank;
     for (int r = firstRank; r <= lastRank; ++r) {
       char const* src = slabDev + slotOffset(slot)
                         + static_cast<size_t>(r) * bytesPerRank + offset;
-      char* d = dst + static_cast<size_t>(r) * bytesPerRank + offset;
+      char* d = dst + static_cast<size_t>(r) * stride + offset;
       for (size_t i = threadIdx.x; i < size; i += blockDim.x)
         d[i] = src[i];
     }
