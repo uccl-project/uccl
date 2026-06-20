@@ -168,6 +168,10 @@ class GpuStagingChannel {
   int    nRanks()      const { return csc_.nRanks(); }
   size_t bytesPerRank() const { return csc_.bytesPerRank(); }
 
+  // Expose inner CpuStagingChannel for wait()/get()/signalDone() calls that
+  // operate on the same CscCtrl as the GPU-side ring writes to.
+  CpuStagingChannel& csc() { return csc_; }
+
  private:
   // Private constructor: takes an already-created CpuStagingChannel.
   // Used by create() to avoid exposing default construction.

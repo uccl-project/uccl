@@ -1870,6 +1870,7 @@ NCCL_API ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   }
   cleanupAllToAllContexts(comm);
   cleanupHostAllGatherContexts(comm);
+  cleanupGpuAllGatherContexts(comm);
   mscclpp::nccl::cleanupNativeCollectiveContexts(comm);
   delete comm;
   return ncclSuccess;
@@ -2397,6 +2398,16 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
                                         .hints = hints};
   auto algo = comm->algorithmCollection.selectAlgorithm(request);
   ncclResult_t liteResult = ncclInvalidUsage;
+
+  // GPU-staging path: intra-node only, enabled via MSCCLPP_NCCL_AG_GPU_STAGING=1.
+  if (gpuStagingEnabled() && comm->nRanksPerNode == nRank && nRank > 1) {
+    liteResult = runIntraNodeGpuStagingAllGather(
+        sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
+        comm->cudaDevice, comm->comm);
+    if (!mscclpp::lite::needsFallback(liteResult)) return liteResult;
+    liteResult = ncclInvalidUsage;  // fall through to normal path
+  }
+
   if (algo != nullptr) {
     size_t outputSize =
         nRank > 0 &&
