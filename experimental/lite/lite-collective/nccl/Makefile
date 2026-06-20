@@ -23,12 +23,12 @@ INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/third
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
 OUT_DIR   := build
-# Allgather/single-node.cu is included by nccl.cu so the NCCL API wrapper can
-# use file-local shim helpers without exporting internal ABI.
-# ReduceScatter/single-node.cu follows the same pattern from
-# ReduceScatter/multi-node.cu.
+# allgather_intranode.cu is included by nccl.cu (same anonymous namespace).
+# allgather_multinode.cu is compiled as a separate TU.
+# ReduceScatter/single-node.cu is included by ReduceScatter/multi-node.cu.
 REDUCESCATTER_CU_SRCS := $(filter-out ReduceScatter/single-node.cu,$(wildcard ReduceScatter/*.cu))
-CU_SRCS   := $(wildcard *.cu) Allgather/multi-node.cu $(REDUCESCATTER_CU_SRCS)
+LITE_COLL_DIR := $(MINT_DIR)/collective/lite
+CU_SRCS   := $(wildcard *.cu) $(LITE_COLL_DIR)/allgather_multinode.cu $(REDUCESCATTER_CU_SRCS)
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
 
 LIB_MINT      := $(BUILD_DIR)/libmint.so
@@ -59,7 +59,11 @@ $(OUT_DIR)/%.cu.o: %.cu | $(OUT_DIR)
 
 $(OUT_DIR)/allgather.cu.o: allgather.hpp
 
-$(OUT_DIR)/nccl.cu.o: Allgather/single-node.cu allgather.hpp lite_common.h
+$(OUT_DIR)/nccl.cu.o: $(LITE_COLL_DIR)/allgather_intranode.cu allgather.hpp lite_common.h
+
+$(OUT_DIR)/$(LITE_COLL_DIR)/allgather_multinode.cu.o: $(LITE_COLL_DIR)/allgather_multinode.cu | $(OUT_DIR)
+	mkdir -p $(@D)
+	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) -I. $(DEFINES) -c $< -o $@
 
 $(OUT_DIR)/ReduceScatter/multi-node.cu.o: ReduceScatter/single-node.cu
 

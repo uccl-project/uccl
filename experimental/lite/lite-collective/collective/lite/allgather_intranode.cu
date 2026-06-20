@@ -1,5 +1,6 @@
-// Included by nccl.cu inside its anonymous namespace so the intra-node
-// AllGather paths can reuse the NCCL shim send/recv peer context.
+// Intra-node AllGather implementation: host-staged SHM + CudaIPC paths.
+// Included by nccl.cu (collective/lite/ → nccl/) inside its anonymous namespace
+// so the intra-node paths can reuse the NCCL shim's send/recv peer context.
 
 namespace cg = cooperative_groups;
 
