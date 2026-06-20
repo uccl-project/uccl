@@ -41,6 +41,7 @@ template <typename Fn>
 static ncclResult_t runHostAllGatherGuarded(char const* opName, Fn&& fn) {
   try { fn(); return ncclSuccess; }
   catch (std::exception const& ex) {
+    std::fprintf(stderr, "AllGather WARN %s: %s\n", opName, ex.what()); std::fflush(stderr);
     WARN(MSCCLPP_NCCL, opName, " failed: ", ex.what());
     return mapMscclppException(ex);
   } catch (...) {
@@ -121,6 +122,15 @@ static size_t hostAllGatherChunkBytes(size_t bytesPerRank) {
 
 __device__ static unsigned long long volatile* hsbCtrlU64(char* ctrl, size_t off) {
   return reinterpret_cast<unsigned long long volatile*>(ctrl + off);
+}
+
+// Probe kernel: verifies device-mapped pointers are accessible from GPU kernel.
+// Used once during init to decide if GPU-kernel AllGather is viable.
+__global__ static void gpuKernelProbe(char const* slabDev, char* ctrlDev) {
+  // Attempt a volatile read from mapped ctrl; if pointers are invalid the
+  // kernel launch itself will fail (caught by cudaGetLastError).
+  (void)*reinterpret_cast<volatile unsigned long long const*>(ctrlDev);
+  (void)*reinterpret_cast<char const volatile*>(slabDev);
 }
 
 // Single-CTA kernel: one block writes own data to host-mapped slab via GPU SM,
@@ -231,6 +241,7 @@ struct HostAllGatherContext {
 
   bool mapSlab = true;
   bool cooperativeLaunch = false;
+  bool gpuKernelWorks   = false;  // tested during init
   uint64_t epoch = 0;
 
   // Shared staging buffer (initialized on first call).
@@ -332,6 +343,19 @@ static void initializeHostAllGatherContext(
     int coop = 0;
     MSCCLPP_CUDATHROW(cudaDeviceGetAttribute(&coop, cudaDevAttrCooperativeLaunch, cudaDevice));
     ctx.cooperativeLaunch = (coop != 0);
+
+    // Probe test: verify GPU-kernel with device-mapped pointers works in this
+    // CUDA context.  Use cudaStreamSynchronize to catch both launch and execution errors.
+    HsbDeviceHandle rawH = ctx.buf->deviceHandle();
+    ctx.gpuKernelWorks = false;
+    if (rawH.slabDev != nullptr && rawH.ctrlDev != nullptr) {
+      gpuKernelProbe<<<1, 1, 0, ctx.h2dStream>>>(rawH.slabDev, rawH.ctrlDev);
+      if (cudaGetLastError() == cudaSuccess) {
+        cudaError_t execErr = cudaStreamSynchronize(ctx.h2dStream);
+        ctx.gpuKernelWorks = (execErr == cudaSuccess);
+      }
+      cudaGetLastError();  // clear any sticky error from the probe
+    }
   } catch (std::exception const& ex) {
     result = mapMscclppException(ex); errmsg = ex.what();
   } catch (...) {
@@ -548,15 +572,27 @@ static bool gpuStagingEnabled() {
   return e != nullptr && std::strcmp(e, "0") != 0;
 }
 
-// 1-thread kernel: posts one D2H command to the GpuStagingChannel ring.
-__global__ static void gscPostD2HCmd(GscDeviceHandle h,
-                                     int slot, int chunkId,
-                                     char const* src,
-                                     size_t offset, size_t size,
-                                     uint64_t tag) {
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-    h.put(slot, chunkId, src, offset, size, tag);
-}
+// ── Lightweight GPU ring for Path 3 (GPU posts D2H commands, CPU services) ──
+// Owns only the ring buffer (small mmap + cudaHostRegister) and service thread.
+// Reuses the HostAllGatherContext's CpuStagingChannel for actual DMA (no second slab).
+struct GpuRingContext {
+  GscRingEntry* ring     = nullptr;  // host ptr (mmap)
+  GscRingEntry* ringDev  = nullptr;  // device ptr
+  GscRingCtrl*  ctrl     = nullptr;  // host ptr (mmap)
+  GscRingCtrl*  ctrlDev  = nullptr;  // device ptr
+  void* ringMapping = nullptr;
+  void* ctrlMapping = nullptr;
+  volatile bool stopFlag = false;
+  std::thread   serviceThread;
+
+  ~GpuRingContext() {
+    stopFlag = true;
+    if (serviceThread.joinable()) serviceThread.join();
+    size_t ringBytes = kGscRingSize * sizeof(GscRingEntry);
+    if (ringMapping) { cudaHostUnregister(ringMapping); ::munmap(ringMapping, ringBytes); }
+    if (ctrlMapping) { cudaHostUnregister(ctrlMapping); ::munmap(ctrlMapping, sizeof(GscRingCtrl)); }
+  }
+};
 
 struct GpuAllGatherContext {
   std::mutex initMutex;
@@ -568,23 +604,18 @@ struct GpuAllGatherContext {
   uint64_t epoch = 0;
   int cudaDevice  = -1;
 
-  // GpuStagingChannel owns the slab + ring; CpuStagingChannel (inside it) owns
-  // the ctrl.  Use unique_ptr since GpuStagingChannel has no default constructor.
-  std::unique_ptr<GpuStagingChannel> gpuBuf;
+  // Ring for GPU→CPU D2H command posting (small, no second slab).
+  std::unique_ptr<GpuRingContext> ring;
 
-  cudaStream_t d2hStream       = nullptr;  // GPU kernels post ring cmds here
+  cudaStream_t d2hStream       = nullptr;
   cudaStream_t h2dStream       = nullptr;
   cudaStream_t h2dStream2      = nullptr;
   cudaEvent_t  inputReadyEvent = nullptr;
   cudaEvent_t  h2dDoneEvent    = nullptr;
   cudaEvent_t  h2dDoneEvent2   = nullptr;
 
-  // Background service thread: polls ring, issues DMA on its own private stream.
-  std::thread serviceThread;
-
   ~GpuAllGatherContext() {
-    if (gpuBuf) gpuBuf->stop();
-    if (serviceThread.joinable()) serviceThread.join();
+    ring.reset();  // stops service thread before destroying streams
     if (h2dDoneEvent2)   cudaEventDestroy(h2dDoneEvent2);
     if (h2dDoneEvent)    cudaEventDestroy(h2dDoneEvent);
     if (inputReadyEvent) cudaEventDestroy(inputReadyEvent);
@@ -610,21 +641,47 @@ static void cleanupGpuAllGatherContexts(ncclComm_t comm) {
   gGpuAllGatherContexts.erase(comm);
 }
 
-// Service thread function: runs on a separate CPU thread, creates its own CUDA
-// stream, drains the ring until stop() is called.
-static void gscServiceThreadFunc(GpuStagingChannel* ch, int dev) {
+// Service thread: drains GPU ring, calls csc.put() for each D2H command.
+static void gpuRingServiceFunc(GpuRingContext* ring, CpuStagingChannel* csc, int dev) {
   cudaSetDevice(dev);
-  cudaStream_t s = nullptr;
+  cudaStream_t svcStream = nullptr;
   int lp = 0, gp = 0;
   cudaDeviceGetStreamPriorityRange(&lp, &gp); (void)lp;
-  cudaStreamCreateWithPriority(&s, cudaStreamNonBlocking, gp);
-  ch->serviceLoop(s);
-  cudaStreamDestroy(s);
+  cudaStreamCreateWithPriority(&svcStream, cudaStreamNonBlocking, gp);
+  GscRingCtrl* ctrl = ring->ctrl;
+  constexpr int kYield = 65536;
+  int spins = 0;
+  while (!ring->stopFlag) {
+    uint64_t head = ctrl->head;
+    uint64_t tail = ctrl->tail;
+    if (tail < head) {
+      GscRingEntry const& e = ring->ring[tail & kGscRingMask];
+      auto* src = reinterpret_cast<void const*>(e.srcDevPtr);
+      // D2H + flag: reuse CpuStagingChannel.put() (cudaMemcpyAsync + streamWriteValue)
+      try {
+        csc->put(svcStream, e.slot, e.chunkId, src, e.offset, e.size, e.tag);
+      } catch (...) {}
+      ctrl->tail = tail + 1;
+      spins = 0;
+    } else {
+      if (spins++ < kYield) {
+#if defined(__x86_64__) || defined(__i386__)
+        asm volatile("pause" ::: "memory");
+#else
+        asm volatile("" ::: "memory");
+#endif
+      } else {
+        std::this_thread::yield(); spins = 0;
+      }
+    }
+  }
+  cudaStreamDestroy(svcStream);
 }
 
 static void initializeGpuAllGatherContext(
     GpuAllGatherContext& ctx, ncclComm_t comm, int rank, int nRanks,
-    int cudaDevice, std::shared_ptr<mscclpp::Communicator> bootstrapComm) {
+    int cudaDevice, std::shared_ptr<mscclpp::Communicator> bootstrapComm,
+    CpuStagingChannel* csc) {
   {
     std::unique_lock<std::mutex> lk(ctx.initMutex);
     if (ctx.initialized) return;
@@ -649,19 +706,35 @@ static void initializeGpuAllGatherContext(
     mscclpp::CudaDeviceGuard devGuard(cudaDevice);
     ctx.cudaDevice = cudaDevice;
 
-    auto nc = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(comm));
-    char nbuf[64]; std::snprintf(nbuf, 64, "%d_%llx", getpid(), nc);
-    std::string tag = std::string("gsc") + nbuf;
+    // Allocate small ring buffer using mmap (same memory type as POSIX shm,
+    // kernel-accessible after cudaHostRegister in this context).
+    auto mmap_alloc = [](size_t sz) -> void* {
+      void* p = ::mmap(nullptr, sz, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      if (p == MAP_FAILED)
+        throw mscclpp::Error("mmap failed", mscclpp::ErrorCode::SystemError);
+      std::memset(p, 0, sz);
+      return p;
+    };
+    size_t ringBytes = kGscRingSize * sizeof(GscRingEntry);
+    auto gr = std::make_unique<GpuRingContext>();
+    gr->ringMapping = mmap_alloc(ringBytes);
+    gr->ring        = static_cast<GscRingEntry*>(gr->ringMapping);
+    MSCCLPP_CUDATHROW(cudaHostRegister(gr->ringMapping, ringBytes,
+                                       cudaHostRegisterPortable |
+                                       cudaHostRegisterMapped));
+    { void* dp = nullptr;
+      MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, gr->ringMapping, 0));
+      gr->ringDev = static_cast<GscRingEntry*>(dp); }
 
-    ctx.gpuBuf = std::make_unique<GpuStagingChannel>(
-        GpuStagingChannel::create(
-            kHostAllGatherMaxTotalBytes / static_cast<size_t>(nRanks),
-            kCscMaxSlots,
-            bootstrapComm,
-            rank, nRanks, cudaDevice,
-            /*mapSlab=*/true,
-            hostAllGatherNumaPlacementEnabled(),
-            tag));
+    gr->ctrlMapping = mmap_alloc(sizeof(GscRingCtrl));
+    gr->ctrl        = static_cast<GscRingCtrl*>(gr->ctrlMapping);
+    MSCCLPP_CUDATHROW(cudaHostRegister(gr->ctrlMapping, sizeof(GscRingCtrl),
+                                       cudaHostRegisterPortable |
+                                       cudaHostRegisterMapped));
+    { void* dp = nullptr;
+      MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, gr->ctrlMapping, 0));
+      gr->ctrlDev = static_cast<GscRingCtrl*>(dp); }
 
     int lp = 0, gp = 0;
     MSCCLPP_CUDATHROW(cudaDeviceGetStreamPriorityRange(&lp, &gp)); (void)lp;
@@ -672,8 +745,8 @@ static void initializeGpuAllGatherContext(
     MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.h2dDoneEvent,    cudaEventDisableTiming));
     MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.h2dDoneEvent2,   cudaEventDisableTiming));
 
-    // Start background service thread.
-    ctx.serviceThread = std::thread(gscServiceThreadFunc, ctx.gpuBuf.get(), cudaDevice);
+    gr->serviceThread = std::thread(gpuRingServiceFunc, gr.get(), csc, cudaDevice);
+    ctx.ring = std::move(gr);
   } catch (std::exception const& ex) {
     result = mapMscclppException(ex); errmsg = ex.what();
   } catch (...) {
@@ -681,8 +754,7 @@ static void initializeGpuAllGatherContext(
   }
   if (result != ncclSuccess) {
     fail(std::make_exception_ptr(
-        mscclpp::Error("GpuStagingChannel init: " + errmsg,
-                       mscclpp::ErrorCode::InternalError)));
+        mscclpp::Error("GpuRing init: " + errmsg, mscclpp::ErrorCode::InternalError)));
     throw mscclpp::Error(errmsg, mscclpp::ErrorCode::InternalError);
   }
   {
@@ -692,111 +764,6 @@ static void initializeGpuAllGatherContext(
     ctx.initCv.notify_all();
   }
 }
-
-static ncclResult_t runIntraNodeGpuStagingAllGather(
-    void const* sendbuff, void* recvbuff, size_t bytesPerRank,
-    ncclComm_t comm, cudaStream_t stream, int rank, int nRanks,
-    int cudaDevice,
-    std::shared_ptr<mscclpp::Communicator> bootstrapComm) {
-  if (comm == nullptr || nRanks <= 1 || bytesPerRank == 0) return ncclInvalidUsage;
-  if (bytesPerRank > kHostAllGatherMaxTotalBytes / static_cast<size_t>(nRanks))
-    return ncclInvalidUsage;
-
-  return runHostAllGatherGuarded("GpuStagingAllGather", [&] {
-    GpuAllGatherContext& ctx = getGpuAllGatherContext(comm);
-    initializeGpuAllGatherContext(ctx, comm, rank, nRanks, cudaDevice, bootstrapComm);
-
-    // Shortcut: empty / trivial cases.
-    if (bytesPerRank == 0) return;
-    void* selfOutput = static_cast<char*>(recvbuff)
-                       + static_cast<size_t>(rank) * bytesPerRank;
-    if (sendbuff == selfOutput && nRanks == 1) return;
-
-    uint64_t epoch = ++ctx.epoch;
-    int slot = static_cast<int>((epoch - 1) % kCscMaxSlots);
-
-    // Slot reuse guard: wait for all peers to finish with this slot before reuse.
-    if (epoch > static_cast<uint64_t>(kCscMaxSlots)) {
-      // Use CpuStagingChannel (inner) waitDone since it shares CscCtrl.
-      // Access inner csc via gpuBuf's CscDeviceHandle's ctrlDev... but simpler:
-      // just call the inherited waitDone from the embedded CpuStagingChannel.
-      // We expose it via service() by accessing the internal csc_ ... actually
-      // the easiest path: add a small waitDone wrapper to GpuStagingChannel.
-      // For now, do a stream sync as a conservative slot reuse guard.
-      MSCCLPP_CUDATHROW(cudaStreamSynchronize(ctx.h2dStream));
-      MSCCLPP_CUDATHROW(cudaStreamSynchronize(ctx.h2dStream2));
-    }
-
-    size_t chunkBytes = hostAllGatherChunkBytes(bytesPerRank);
-    size_t chunkCount = (bytesPerRank + chunkBytes - 1) / chunkBytes;
-
-    GscDeviceHandle handle = ctx.gpuBuf->deviceHandle();
-    // CpuStagingChannel for wait/get (shares CscCtrl).
-    // We need a CpuStagingChannel reference to call wait/get.
-    // The GpuStagingChannel wraps a CpuStagingChannel; we use the same slab.
-    // Build a lightweight wrapper using rankSlabHost/ctrlDev from handle.
-    // Simplest: use gpuBuf->asCpu() — add an accessor to GpuStagingChannel.
-    // For now: call wait/get via nRanks/bytesPerRank and raw stream writes.
-    // Better: add CpuStagingChannel& csc() accessor to GpuStagingChannel.
-
-    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
-    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.d2hStream, ctx.inputReadyEvent, 0));
-
-    auto const* send = static_cast<char const*>(sendbuff);
-
-    // Phase 1: GPU kernel posts D2H commands to ring (one kernel per chunk).
-    // The service thread (running independently) will drain the ring and issue
-    // cudaMemcpyAsync + cuStreamWriteValue64 on its private stream.
-    for (size_t ci = 0; ci < chunkCount; ++ci) {
-      size_t offset = ci * chunkBytes;
-      size_t bytes  = std::min(chunkBytes, bytesPerRank - offset);
-      gscPostD2HCmd<<<1, 1, 0, ctx.d2hStream>>>(
-          handle, slot, static_cast<int>(ci),
-          send, offset, bytes, epoch);
-      MSCCLPP_CUDATHROW(cudaGetLastError());
-    }
-
-    // Phase 2: self D2D copy (overlaps with ring-servicing on d2hStream).
-    if (sendbuff != selfOutput) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(selfOutput, sendbuff, bytesPerRank,
-                                        cudaMemcpyDeviceToDevice, stream));
-    }
-
-    // Phase 3: GPU-side wait (cuStreamWaitValue64) + batched H2D.
-    // Reuse CpuStagingChannel's wait/get via the inner slab channel.
-    // We call them directly via the CpuStagingChannel& inside GpuStagingChannel.
-    // Since GpuStagingChannel::create() builds a CpuStagingChannel internally
-    // and its wait/get/signalDone are exposed via the inner CpuStagingChannel:
-    // access it via: ctx.gpuBuf->csc() (accessor to be added below).
-    CpuStagingChannel& csc = ctx.gpuBuf->csc();
-
-    bool usedH2dStream2 = false;
-    for (size_t ci = 0; ci < chunkCount; ++ci) {
-      size_t offset = ci * chunkBytes;
-      size_t bytes  = std::min(chunkBytes, bytesPerRank - offset);
-      cudaStream_t rightStream = (rank > 0) ? ctx.h2dStream2 : ctx.h2dStream;
-      for (int r = 0; r < rank; ++r)
-        csc.wait(ctx.h2dStream, slot, static_cast<int>(ci), r, epoch);
-      for (int r = rank + 1; r < nRanks; ++r)
-        csc.wait(rightStream, slot, static_cast<int>(ci), r, epoch);
-      if (rank > 0)
-        csc.get(ctx.h2dStream, slot, 0, rank - 1, offset, bytes, recvbuff);
-      if (rank + 1 < nRanks) {
-        csc.get(rightStream, slot, rank + 1, nRanks - 1, offset, bytes, recvbuff);
-        usedH2dStream2 = usedH2dStream2 || (rank > 0);
-      }
-    }
-
-    if (usedH2dStream2) {
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent2, ctx.h2dStream2));
-      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.h2dStream, ctx.h2dDoneEvent2, 0));
-    }
-    csc.signalDone(ctx.h2dStream, slot, epoch);
-    MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent, ctx.h2dStream));
-    MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, ctx.h2dDoneEvent, 0));
-  });
-}
-
 
 
 
@@ -819,68 +786,77 @@ static bool gpuKernelEnabled() {
 }
 
 // ── Path 1+2: single kernel, SM write/wait/read ───────────────────────────────
-// (unchanged from before)
+// Uses COMPACT slab layout: rank r's data at slab[slot][r * bytesPerRank]
+// (actual message bytesPerRank, not the slab's max capacity).
+// This matches hostAllGatherMappedKernel and avoids demand-page issues in MPI
+// mode where large slab offsets (rank * SLAB_bytesPerRank) may access
+// physically unallocated pages.
 __global__ static void gpuAllGatherSmKernel(
     CscDeviceHandle h,
     char const* send, char* recv,
     size_t bytesPerRank, int rank, int nRanks,
     int slot, uint64_t epoch) {
-  h.put(slot, /*chunkId=*/0, send, /*offset=*/0, bytesPerRank, epoch);
-  if (static_cast<int>(threadIdx.x) < nRanks
-      && static_cast<int>(threadIdx.x) != rank)
-    h.wait(slot, /*chunkId=*/0, static_cast<int>(threadIdx.x), epoch);
+  using Vec = unsigned long long;
+  // COMPACT slab: slot data begins at slotBase; rank r at slotBase + r*bytesPerRank.
+  size_t slotBase = h.slotOffset(slot);  // slot * h.slotStride (based on max capacity)
+
+  // 1. SM-write own data at compact offset (rank * ACTUAL bytesPerRank).
+  size_t selfBase  = slotBase + static_cast<size_t>(rank) * bytesPerRank;
+  size_t vecBytes  = (bytesPerRank / sizeof(Vec)) * sizeof(Vec);
+  auto const* sv   = reinterpret_cast<Vec const*>(send);
+  auto*       ds   = reinterpret_cast<Vec*>(h.slabDev + selfBase);
+  for (size_t i = threadIdx.x; i < vecBytes / sizeof(Vec); i += blockDim.x)
+    ds[i] = sv[i];
+  for (size_t i = vecBytes + threadIdx.x; i < bytesPerRank; i += blockDim.x)
+    h.slabDev[selfBase + i] = send[i];
   __syncthreads();
-  char* selfDst = recv + static_cast<size_t>(rank) * bytesPerRank;
-  for (size_t i = threadIdx.x; i < bytesPerRank; i += blockDim.x)
-    selfDst[i] = send[i];
-  if (rank > 0)
-    h.get(slot, 0, rank - 1, /*offset=*/0, bytesPerRank, recv, bytesPerRank);
-  if (rank + 1 < nRanks)
-    h.get(slot, rank + 1, nRanks - 1, /*offset=*/0, bytesPerRank, recv, bytesPerRank);
+
+  // 2. Thread 0: fence, signal flag, then spin-wait for all peers.
+  if (threadIdx.x == 0) {
+    __threadfence_system();
+    size_t flagOff = h.readyFlagOffset(slot)
+                     + static_cast<size_t>(rank) * h.counterStride;
+    *reinterpret_cast<volatile unsigned long long*>(h.ctrlDev + flagOff) = epoch;
+    __threadfence_system();
+    for (int r = 0; r < nRanks; ++r) {
+      size_t peerFlagOff = h.readyFlagOffset(slot)
+                           + static_cast<size_t>(r) * h.counterStride;
+      while (*reinterpret_cast<volatile unsigned long long*>(
+                 h.ctrlDev + peerFlagOff) < epoch) {}
+    }
+  }
+  __syncthreads();
+
+  // 3. SM-read all ranks' data from compact slab to recv.
+  size_t fullBytes = static_cast<size_t>(nRanks) * bytesPerRank;
+  size_t outVecBytes = (fullBytes / sizeof(Vec)) * sizeof(Vec);
+  auto const* slotVec = reinterpret_cast<Vec const*>(h.slabDev + slotBase);
+  auto*       recvVec = reinterpret_cast<Vec*>(recv);
+  for (size_t i = threadIdx.x; i < outVecBytes / sizeof(Vec); i += blockDim.x)
+    recvVec[i] = slotVec[i];
+  for (size_t i = outVecBytes + threadIdx.x; i < fullBytes; i += blockDim.x)
+    recv[i] = h.slabDev[slotBase + i];
+
+  // 4. Signal slot done.
   h.signalDone(slot, epoch);
 }
 
-// ── Path 3: chunked DMA pipeline kernel ───────────────────────────────────────
-// For each chunk ci:
-//   1. GPU calls GscDeviceHandle::put() to post D2H ring command.
-//      Service thread reads ring, issues cudaMemcpyAsync(D2H, svcStream) +
-//      cuStreamWriteValue64(svcStream, d2hReady[slot][ci][rank], epoch).
-//   2. GPU spin-waits on each peer's d2hReady flag (CscDeviceHandle::wait).
-//   3. GPU SM-reads slab[slot][peers][offset] → recv (CscDeviceHandle::get).
-// Phase 2 (self D2D) runs concurrently on the host stream.
-__global__ static void gpuAllGatherDmaKernel(
-    CscDeviceHandle h,   // for wait/get (shared CscCtrl)
-    GscDeviceHandle g,   // for put (posts DMA ring commands)
-    char const* send, char* recv,
-    size_t bytesPerRank, int rank, int nRanks,
+// ── Path 3: GPU posts D2H ring commands; CPU drives wait + H2D ───────────────
+// GPU kernel: only posts D2H ring commands (one per chunk).
+// CPU: cuStreamWaitValue64 for each peer's flag + cudaMemcpyAsync H2D.
+// This avoids GPU SM reads from POSIX shm (unreliable cross-process in MPI).
+__global__ static void gpuAllGatherPostCmdsKernel(
+    GscDeviceHandle g,
+    char const* send, size_t bytesPerRank, int rank,
     int slot, size_t chunkBytes, int nChunks, uint64_t epochBase) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) return;
   for (int ci = 0; ci < nChunks; ++ci) {
     size_t offset = static_cast<size_t>(ci) * chunkBytes;
     size_t bytes  = (offset + chunkBytes <= bytesPerRank)
                         ? chunkBytes : bytesPerRank - offset;
     uint64_t epoch = epochBase + static_cast<uint64_t>(ci);
-
-    // 1. Post D2H ring command.  Service thread will call cudaMemcpyAsync(D2H)
-    //    then write d2hReady[slot][ci][rank] = epoch.
-    if (threadIdx.x == 0 && blockIdx.x == 0)
-      g.put(slot, ci, send + offset, /*offset=*/0, bytes, epoch);
-    __threadfence_system();  // ensure ring write visible to CPU before barrier
-    __syncthreads();
-
-    // 2. Each thread waits for one peer (parallel wait).
-    if (static_cast<int>(threadIdx.x) < nRanks
-        && static_cast<int>(threadIdx.x) != rank)
-      h.wait(slot, ci, static_cast<int>(threadIdx.x), epoch);
-    __syncthreads();
-
-    // 3. SM-read peer data from slab to recv (use actual bytesPerRank as dstStride).
-    if (rank > 0)
-      h.get(slot, 0, rank - 1, offset, bytes, recv, bytesPerRank);
-    if (rank + 1 < nRanks)
-      h.get(slot, rank + 1, nRanks - 1, offset, bytes, recv, bytesPerRank);
+    g.put(slot, ci, send + offset, /*offset=*/0, bytes, epoch);
   }
-  // Signal slot done after all chunks.
-  h.signalDone(slot, epochBase);
 }
 
 static ncclResult_t runIntraNodeGpuKernelAllGather(
@@ -893,6 +869,8 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
     return ncclInvalidUsage;
 
   return runHostAllGatherGuarded("GpuKernelAllGather", [&] {
+    // Set the correct CUDA device for all kernel launches and CUDA ops.
+    mscclpp::CudaDeviceGuard devGuard(cudaDevice);
     size_t fullBytes = bytesPerRank * static_cast<size_t>(nRanks);
 
     // Path 1+2 use CPU-driven context (CpuStagingChannel with SM slab).
@@ -905,15 +883,14 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
       initializeHostAllGatherContext(ctx, comm, rank, nRanks, cudaDevice,
                                      bootstrapComm);
 
-      CpuStagingChannel& buf = *ctx.buf;
-      HsbDeviceHandle rawH  = buf.deviceHandle();
-      // Both slabDev and ctrlDev must be device-mapped for the SM kernel.
-      // If either is NULL (cudaHostRegisterMapped failed — common in some MPI
-      // configurations), fall through to the CPU-driven SHM path instead.
-      if (rawH.slabDev == nullptr || rawH.ctrlDev == nullptr)
+      // gpuKernelWorks is probed once during init: fall back if unavailable.
+      if (!ctx.gpuKernelWorks)
         return runIntraNodeShmAllGather(sendbuff, recvbuff, bytesPerRank,
                                         comm, stream, rank, nRanks,
                                         nRanks, bootstrapComm, cudaDevice);
+
+      CpuStagingChannel& buf = *ctx.buf;
+      HsbDeviceHandle rawH  = buf.deviceHandle();
 
       uint64_t epoch = ++ctx.epoch;
       int slot = static_cast<int>((epoch - 1) % kCscMaxSlots);
@@ -940,40 +917,30 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
 
     } else {
       // ── Path 3: chunked DMA pipeline ─────────────────────────────────────
-      // GPU posts ring commands (GscDeviceHandle::put) → service thread calls
-      // cudaMemcpyAsync(D2H) → writes d2hReady flags → GPU spin-waits
-      // (CscDeviceHandle::wait) → GPU SM-reads slab (CscDeviceHandle::get).
-      GpuAllGatherContext& ctx = getGpuAllGatherContext(comm);
-      initializeGpuAllGatherContext(ctx, comm, rank, nRanks, cudaDevice,
-                                    bootstrapComm);
+      // HostAllGatherContext (already init for Path 1+2 probe) provides slab/ctrl.
+      // GpuAllGatherContext provides only a small ring buffer (no second slab).
+      // The ring service thread reuses hostCtx.buf (CpuStagingChannel) for D2H.
+      HostAllGatherContext& hostCtx = getHostAllGatherContext(comm, /*mapSlab=*/true);
+      // (initializeHostAllGatherContext already called above for the probe)
+      CpuStagingChannel& csc = *hostCtx.buf;
+      HsbDeviceHandle rawH = csc.deviceHandle();
 
-      uint64_t epochBase = ++ctx.epoch;
+      GpuAllGatherContext& gpuCtx = getGpuAllGatherContext(comm);
+      initializeGpuAllGatherContext(gpuCtx, comm, rank, nRanks, cudaDevice,
+                                    bootstrapComm, &csc);
+
+      uint64_t epochBase = ++hostCtx.epoch;
       int slot = static_cast<int>((epochBase - 1) % kCscMaxSlots);
-      if (epochBase > static_cast<uint64_t>(kCscMaxSlots)) {
-        MSCCLPP_CUDATHROW(cudaStreamSynchronize(ctx.h2dStream));
-      }
+      if (epochBase > static_cast<uint64_t>(kCscMaxSlots))
+        csc.waitDone(slot, (rank + 1) % nRanks, epochBase - kCscMaxSlots);
 
       size_t chunkBytes = hostAllGatherChunkBytes(bytesPerRank);
       int    nChunks    = static_cast<int>(
           (bytesPerRank + chunkBytes - 1) / chunkBytes);
 
-      GscDeviceHandle g = ctx.gpuBuf->deviceHandle();
-      CscDeviceHandle h;
-      {
-        HsbDeviceHandle rawH = ctx.gpuBuf->csc().deviceHandle();
-        h.slabDev = rawH.slabDev; h.ctrlDev = rawH.ctrlDev;
-        h.rank = rawH.rank; h.nRanks = rawH.nRanks;
-        h.bytesPerRank = rawH.bytesPerRank; h.slotStride = rawH.slotStride;
-        h.counterStride = rawH.counterStride;
-      }
-      if (h.slabDev == nullptr)
-        throw mscclpp::Error("GpuKernelAllGather DMA: need slabDev",
-                             mscclpp::ErrorCode::InvalidUsage);
+      MSCCLPP_CUDATHROW(cudaEventRecord(gpuCtx.inputReadyEvent, stream));
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(gpuCtx.h2dStream, gpuCtx.inputReadyEvent, 0));
 
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.inputReadyEvent, stream));
-      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(ctx.h2dStream, ctx.inputReadyEvent, 0));
-
-      // Self D2D copy (concurrent with DMA pipeline on h2dStream).
       void* selfOutput = static_cast<char*>(recvbuff)
                          + static_cast<size_t>(rank) * bytesPerRank;
       if (sendbuff != selfOutput) {
@@ -981,16 +948,61 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
                                           cudaMemcpyDeviceToDevice, stream));
       }
 
-      int threads = std::max(nRanks, 256);
-      gpuAllGatherDmaKernel<<<1, threads, 0, ctx.h2dStream>>>(
-          h, g,
-          static_cast<char const*>(sendbuff), static_cast<char*>(recvbuff),
-          bytesPerRank, rank, nRanks, slot, chunkBytes, nChunks, epochBase);
-      MSCCLPP_CUDATHROW(cudaGetLastError());
+      // Phase 1: GPU posts D2H ring commands (or CPU fallback if ring unavailable).
+      // Build a GscDeviceHandle using the ring from GpuRingContext.
+      GscDeviceHandle g{};
+      g.ring      = gpuCtx.ring->ringDev;
+      g.ringCtrl  = gpuCtx.ring->ctrlDev;
+      g.ringMask  = kGscRingMask;
+      g.rank      = rank;
+      // slabDev/ctrlDev not needed for put() — ring-only handle.
 
-      MSCCLPP_CUDATHROW(cudaEventRecord(ctx.h2dDoneEvent, ctx.h2dStream));
-      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, ctx.h2dDoneEvent, 0));
+      bool ringOk = (g.ring != static_cast<GscRingEntry*>(
+                                    static_cast<void*>(gpuCtx.ring->ring)));
+      if (ringOk) {
+        gpuAllGatherPostCmdsKernel<<<1, 1, 0, gpuCtx.h2dStream>>>(
+            g, static_cast<char const*>(sendbuff),
+            bytesPerRank, rank, slot, chunkBytes, nChunks, epochBase);
+        cudaError_t kErr = cudaGetLastError();
+        if (kErr != cudaSuccess) { ringOk = false; cudaGetLastError(); }
+      }
+      if (!ringOk) {
+        // CPU fallback: post D2H commands directly.
+        for (int ci = 0; ci < nChunks; ++ci) {
+          size_t off2 = static_cast<size_t>(ci) * chunkBytes;
+          size_t byt2 = std::min(chunkBytes, bytesPerRank - off2);
+          csc.put(gpuCtx.d2hStream, slot, ci, sendbuff, off2, byt2,
+                  epochBase + static_cast<uint64_t>(ci));
+        }
+      }
+
+      // Phase 3: CPU-driven wait + H2D (cuStreamWaitValue64 + cudaMemcpyAsync).
+      bool usedH2dStream2 = false;
+      for (int ci = 0; ci < nChunks; ++ci) {
+        size_t offset = static_cast<size_t>(ci) * chunkBytes;
+        size_t bytes  = std::min(chunkBytes, bytesPerRank - offset);
+        uint64_t epoch = epochBase + static_cast<uint64_t>(ci);
+        cudaStream_t rightStream = (rank > 0) ? gpuCtx.h2dStream2 : gpuCtx.h2dStream;
+        for (int r = 0; r < rank; ++r)
+          csc.wait(gpuCtx.h2dStream, slot, ci, r, epoch);
+        for (int r = rank + 1; r < nRanks; ++r)
+          csc.wait(rightStream, slot, ci, r, epoch);
+        if (rank > 0)
+          csc.get(gpuCtx.h2dStream, slot, 0, rank - 1, offset, bytes, recvbuff);
+        if (rank + 1 < nRanks) {
+          csc.get(rightStream, slot, rank + 1, nRanks - 1, offset, bytes, recvbuff);
+          usedH2dStream2 = usedH2dStream2 || (rank > 0);
+        }
+      }
+      if (usedH2dStream2) {
+        MSCCLPP_CUDATHROW(cudaEventRecord(gpuCtx.h2dDoneEvent2, gpuCtx.h2dStream2));
+        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(gpuCtx.h2dStream, gpuCtx.h2dDoneEvent2, 0));
+      }
+      csc.signalDone(gpuCtx.h2dStream, slot, epochBase);
+      MSCCLPP_CUDATHROW(cudaEventRecord(gpuCtx.h2dDoneEvent, gpuCtx.h2dStream));
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, gpuCtx.h2dDoneEvent, 0));
     }
+    return ncclSuccess;
   });
 }
 

@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstring>
 #include <thread>
+#include <sys/mman.h>
 #include <cuda_runtime.h>
 #include <cuda.h>
 
@@ -79,12 +80,14 @@ struct GscDeviceHandle {
   size_t counterStride;
 
   // Post a D2H command.  The CPU service thread will issue the DMA.
+  // Single-writer assumption: only one GPU thread calls put() at a time.
+  // Entry is written BEFORE head is incremented so the CPU never reads
+  // a partially-initialised slot.
   __device__ void put(int slot, int chunkId,
                       void const* src, size_t offset, size_t size,
                       uint64_t tag) {
-    uint64_t idx = atomicAdd(
-        reinterpret_cast<unsigned long long*>(&ringCtrl->head), 1ULL)
-        & ringMask;
+    uint64_t myHead = ringCtrl->head;        // read current head (single writer)
+    uint64_t idx    = myHead & ringMask;
     GscRingEntry e;
     e.type      = 0;
     e.slot      = slot;
@@ -94,21 +97,23 @@ struct GscDeviceHandle {
     e.offset    = static_cast<uint64_t>(offset);
     e.size      = static_cast<uint64_t>(size);
     e.tag       = tag;
-    // Write entry fields then make head visible to CPU.
-    ring[idx] = e;
-    __threadfence_system();
+    ring[idx] = e;                           // write entry first
+    __threadfence_system();                  // flush to CPU before head update
+    ringCtrl->head = myHead + 1;             // signal CPU entry is ready
+    __threadfence_system();                  // flush head write
   }
 
   // Post a slotDone signal command.
   __device__ void signalDone(int slot, uint64_t tag) {
-    uint64_t idx = atomicAdd(
-        reinterpret_cast<unsigned long long*>(&ringCtrl->head), 1ULL)
-        & ringMask;
+    uint64_t myHead = ringCtrl->head;
+    uint64_t idx    = myHead & ringMask;
     GscRingEntry e{};
     e.type = 1;
     e.slot = slot;
     e.tag  = tag;
     ring[idx] = e;
+    __threadfence_system();
+    ringCtrl->head = myHead + 1;
     __threadfence_system();
   }
 
@@ -171,6 +176,9 @@ class GpuStagingChannel {
   // Expose inner CpuStagingChannel for wait()/get()/signalDone() calls that
   // operate on the same CscCtrl as the GPU-side ring writes to.
   CpuStagingChannel& csc() { return csc_; }
+
+  // Expose host ring pointer so callers can detect UVA equality with ringDev_.
+  GscRingEntry* ring_host() const { return ring_; }
 
  private:
   // Private constructor: takes an already-created CpuStagingChannel.
@@ -279,10 +287,10 @@ inline GscDeviceHandle GpuStagingChannel::deviceHandle() const {
 }
 
 inline GpuStagingChannel::~GpuStagingChannel() {
-  if (ctrlRegistered_)   cudaHostUnregister(ctrlMapping_);
-  if (ringRegistered_)   cudaHostUnregister(ringMapping_);
-  if (ctrlMapping_)      cudaFreeHost(ctrlMapping_);
-  if (ringMapping_)      cudaFreeHost(ringMapping_);
+  // mmap + cudaHostRegister: unregister then munmap.
+  size_t ringBytes = kGscRingSize * sizeof(GscRingEntry);
+  if (ctrlMapping_) { cudaHostUnregister(ctrlMapping_); ::munmap(ctrlMapping_, sizeof(GscRingCtrl)); }
+  if (ringMapping_) { cudaHostUnregister(ringMapping_); ::munmap(ringMapping_, ringBytes); }
 }
 
 inline GpuStagingChannel GpuStagingChannel::create(
@@ -300,33 +308,40 @@ inline GpuStagingChannel GpuStagingChannel::create(
 
   mscclpp::CudaDeviceGuard devGuard(cudaDevice);
 
-  // Allocate ring buffer in pinned host memory (device-mapped).
+  // Allocate ring buffer and ctrl using anonymous mmap.  On Linux, mmap
+  // (MAP_SHARED|MAP_ANONYMOUS) gives tmpfs-backed pages — the same memory
+  // type as POSIX shm — which is required for cudaHostGetDevicePointer to
+  // return a kernel-accessible device pointer.  posix_memalign() and
+  // cudaHostAlloc() do NOT reliably produce kernel-accessible pointers in
+  // all MPI configurations on PCIe platforms.
+  auto mmap_alloc = [](size_t sz) -> void* {
+    void* p = ::mmap(nullptr, sz, PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+      throw mscclpp::Error("mmap for ring failed", mscclpp::ErrorCode::SystemError);
+    std::memset(p, 0, sz);
+    return p;
+  };
+
   size_t ringBytes = kGscRingSize * sizeof(GscRingEntry);
-  void* rmem = nullptr;
-  MSCCLPP_CUDATHROW(cudaMallocHost(&rmem, ringBytes));
-  std::memset(rmem, 0, ringBytes);
-  ch.ringMapping_    = rmem;
-  ch.ring_           = static_cast<GscRingEntry*>(rmem);
+  void* rmem = mmap_alloc(ringBytes);
+  ch.ringMapping_ = rmem;
+  ch.ring_        = static_cast<GscRingEntry*>(rmem);
   MSCCLPP_CUDATHROW(cudaHostRegister(rmem, ringBytes,
                                      cudaHostRegisterPortable |
                                      cudaHostRegisterMapped));
-  ch.ringRegistered_ = true;
   {
     void* dp = nullptr;
     MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, rmem, 0));
     ch.ringDev_ = static_cast<GscRingEntry*>(dp);
   }
 
-  // Allocate ring control struct (head/tail) in pinned host memory.
-  void* cmem = nullptr;
-  MSCCLPP_CUDATHROW(cudaMallocHost(&cmem, sizeof(GscRingCtrl)));
-  std::memset(cmem, 0, sizeof(GscRingCtrl));
-  ch.ctrlMapping_    = cmem;
-  ch.ringCtrl_       = static_cast<GscRingCtrl*>(cmem);
+  void* cmem = mmap_alloc(sizeof(GscRingCtrl));
+  ch.ctrlMapping_ = cmem;
+  ch.ringCtrl_    = static_cast<GscRingCtrl*>(cmem);
   MSCCLPP_CUDATHROW(cudaHostRegister(cmem, sizeof(GscRingCtrl),
                                      cudaHostRegisterPortable |
                                      cudaHostRegisterMapped));
-  ch.ctrlRegistered_ = true;
   {
     void* dp = nullptr;
     MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, cmem, 0));

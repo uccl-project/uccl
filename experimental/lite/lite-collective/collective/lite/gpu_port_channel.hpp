@@ -66,11 +66,10 @@ struct GpcDeviceHandle {
   // IB-registered memory, which may not be device-mappable.
   volatile uint64_t* gpuSem;
 
-  // Post an RDMA write command to the ring.
+  // Post an RDMA write command to the ring (single-writer: entry before head).
   __device__ void write(uint64_t localOff, uint64_t remoteOff, uint64_t bytes) {
-    uint64_t idx = atomicAdd(
-        reinterpret_cast<unsigned long long*>(&ringCtrl->head), 1ULL)
-        & ringMask;
+    uint64_t myHead = ringCtrl->head;
+    uint64_t idx    = myHead & ringMask;
     GpcRingEntry e{};
     e.type      = 0;
     e.localOff  = localOff;
@@ -78,18 +77,20 @@ struct GpcDeviceHandle {
     e.bytes     = bytes;
     ring[idx] = e;
     __threadfence_system();
+    ringCtrl->head = myHead + 1;
+    __threadfence_system();
   }
 
   // Post a semaphore signal command to the ring.
-  // The CPU proxy will execute cpu_.signal(epoch) and then write gpuSem=epoch.
   __device__ void signal(uint64_t epoch) {
-    uint64_t idx = atomicAdd(
-        reinterpret_cast<unsigned long long*>(&ringCtrl->head), 1ULL)
-        & ringMask;
+    uint64_t myHead = ringCtrl->head;
+    uint64_t idx    = myHead & ringMask;
     GpcRingEntry e{};
     e.type  = 1;
     e.epoch = epoch;
     ring[idx] = e;
+    __threadfence_system();
+    ringCtrl->head = myHead + 1;
     __threadfence_system();
   }
 
@@ -170,51 +171,44 @@ inline GpuPortChannel::GpuPortChannel(CpuPortChannel&& cpu, int cudaDevice)
     : cpu_(std::move(cpu)) {
   mscclpp::CudaDeviceGuard devGuard(cudaDevice);
 
+  auto alloc_mapped = [](size_t sz) -> void* {
+    void* p = nullptr;
+    if (posix_memalign(&p, 4096, sz) != 0)
+      throw mscclpp::Error("posix_memalign failed", mscclpp::ErrorCode::SystemError);
+    std::memset(p, 0, sz);
+    MSCCLPP_CUDATHROW(cudaHostRegister(p, sz,
+                                       cudaHostRegisterPortable |
+                                       cudaHostRegisterMapped));
+    return p;
+  };
+
   // Ring entries.
   size_t ringBytes = kGpcRingSize * sizeof(GpcRingEntry);
-  MSCCLPP_CUDATHROW(cudaMallocHost(&ringMapping_, ringBytes));
-  std::memset(ringMapping_, 0, ringBytes);
+  ringMapping_ = alloc_mapped(ringBytes);
   ring_ = static_cast<GpcRingEntry*>(ringMapping_);
-  MSCCLPP_CUDATHROW(cudaHostRegister(ringMapping_, ringBytes,
-                                     cudaHostRegisterPortable |
-                                     cudaHostRegisterMapped));
-  ringRegistered_ = true;
   { void* dp = nullptr;
     MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, ringMapping_, 0));
     ringDev_ = static_cast<GpcRingEntry*>(dp); }
 
   // Ring control.
-  MSCCLPP_CUDATHROW(cudaMallocHost(&ctrlMapping_, sizeof(GpcRingCtrl)));
-  std::memset(ctrlMapping_, 0, sizeof(GpcRingCtrl));
+  ctrlMapping_ = alloc_mapped(sizeof(GpcRingCtrl));
   ringCtrl_ = static_cast<GpcRingCtrl*>(ctrlMapping_);
-  MSCCLPP_CUDATHROW(cudaHostRegister(ctrlMapping_, sizeof(GpcRingCtrl),
-                                     cudaHostRegisterPortable |
-                                     cudaHostRegisterMapped));
-  ctrlRegistered_ = true;
   { void* dp = nullptr;
     MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, ctrlMapping_, 0));
     ringCtrlDev_ = static_cast<GpcRingCtrl*>(dp); }
 
-  // GPU-wait semaphore: written by service() after executing a signal cmd.
-  MSCCLPP_CUDATHROW(cudaMallocHost(&semMapping_, sizeof(uint64_t)));
-  std::memset(semMapping_, 0, sizeof(uint64_t));
+  // GPU-wait semaphore.
+  semMapping_ = alloc_mapped(sizeof(uint64_t));
   gpuSem_ = static_cast<uint64_t*>(semMapping_);
-  MSCCLPP_CUDATHROW(cudaHostRegister(semMapping_, sizeof(uint64_t),
-                                     cudaHostRegisterPortable |
-                                     cudaHostRegisterMapped));
-  semRegistered_ = true;
   { void* dp = nullptr;
     MSCCLPP_CUDATHROW(cudaHostGetDevicePointer(&dp, semMapping_, 0));
     gpuSemDev_ = static_cast<volatile uint64_t*>(dp); }
 }
 
 inline GpuPortChannel::~GpuPortChannel() {
-  if (semRegistered_)   cudaHostUnregister(semMapping_);
-  if (ctrlRegistered_)  cudaHostUnregister(ctrlMapping_);
-  if (ringRegistered_)  cudaHostUnregister(ringMapping_);
-  if (semMapping_)      cudaFreeHost(semMapping_);
-  if (ctrlMapping_)     cudaFreeHost(ctrlMapping_);
-  if (ringMapping_)     cudaFreeHost(ringMapping_);
+  if (semMapping_)  { cudaHostUnregister(semMapping_);  ::free(semMapping_); }
+  if (ctrlMapping_) { cudaHostUnregister(ctrlMapping_); ::free(ctrlMapping_); }
+  if (ringMapping_) { cudaHostUnregister(ringMapping_); ::free(ringMapping_); }
 }
 
 inline int GpuPortChannel::service(int maxCmds) {

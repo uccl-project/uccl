@@ -2409,14 +2409,7 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
     liteResult = ncclInvalidUsage;
   }
 
-  // GPU-staging path (ring-based): intra-node, enabled via MSCCLPP_NCCL_AG_GPU_STAGING=1.
-  if (gpuStagingEnabled() && comm->nRanksPerNode == nRank && nRank > 1) {
-    liteResult = runIntraNodeGpuStagingAllGather(
-        sendbuff, recvbuff, bytes, comm, stream, rank, nRank,
-        comm->cudaDevice, comm->comm);
-    if (!mscclpp::lite::needsFallback(liteResult)) return liteResult;
-    liteResult = ncclInvalidUsage;  // fall through to normal path
-  }
+  // GPU-staging path (ring-based) removed — use MSCCLPP_NCCL_AG_GPU_KERNEL=1 instead.
 
   if (algo != nullptr) {
     size_t outputSize =
