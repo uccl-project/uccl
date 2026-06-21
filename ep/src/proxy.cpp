@@ -16,31 +16,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static bool proxy_trace_enabled() {
-  static int const enabled = [] {
-    char const* env = std::getenv("UCCL_PROXY_TRACE");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
-  return enabled != 0;
-}
-
-static char const* cmd_name(CmdType cmd) {
-  switch (get_base_cmd(cmd)) {
-    case CmdType::WRITE:
-      return "WRITE";
-    case CmdType::ATOMIC:
-      return "ATOMIC";
-    case CmdType::QUIET:
-      return "QUIET";
-    case CmdType::BARRIER:
-      return "BARRIER";
-    case CmdType::EMPTY:
-      return "EMPTY";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 static int ranks_per_node_for_proxy(Proxy::Config const& cfg) {
   if (cfg.num_nodes > 0 && cfg.num_ranks > 0) {
     return std::max(1, cfg.num_ranks / cfg.num_nodes);
@@ -321,20 +296,6 @@ void Proxy::init_common() {
         throw std::runtime_error("CXI peer transport is not initialized");
       }
       transport->connect_peer(peer, remote_infos_[peer]);
-      if (proxy_trace_enabled()) {
-#ifdef USE_LIBFABRIC_CXI
-        fprintf(stderr,
-                "[proxy-trace] rank=%d thread=%d connected CXI peer=%d "
-                "main_key=0x%llx atomic_key=0x%llx\n",
-                cfg_.rank, cfg_.thread_idx, peer,
-                (unsigned long long)remote_infos_[peer].cxi_main_mr_key,
-                (unsigned long long)remote_infos_[peer].cxi_atomic_mr_key);
-#else
-        fprintf(stderr,
-                "[proxy-trace] rank=%d thread=%d connected CXI peer=%d\n",
-                cfg_.rank, cfg_.thread_idx, peer);
-#endif
-      }
     }
 
     if (cfg_.use_normal_mode) {
@@ -1031,23 +992,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
   // Process all collected commands in batch
   if (!wrs_to_post.empty()) {
-    if (proxy_trace_enabled()) {
-      static std::atomic<uint64_t> trace_batches{0};
-      uint64_t const batch_id =
-          trace_batches.fetch_add(1, std::memory_order_relaxed);
-      if (batch_id < 64 || (batch_id % 1024) == 0) {
-        fprintf(stderr,
-                "[proxy-trace] rank=%d thread=%d batch=%lu cmds=%zu first=%s "
-                "dst=%d bytes=%u req_lptr=0x%lx req_rptr=0x%lx wr=0x%lx\n",
-                cfg_.rank, cfg_.thread_idx, batch_id, cmds_to_post.size(),
-                cmd_name(cmds_to_post[0].cmd_type),
-                static_cast<int>(cmds_to_post[0].dst_rank),
-                cmds_to_post[0].bytes,
-                static_cast<unsigned long>(cmds_to_post[0].req_lptr),
-                static_cast<unsigned long>(cmds_to_post[0].req_rptr),
-                static_cast<unsigned long>(wrs_to_post[0]));
-      }
-    }
 #ifdef MEASURE_PER_OP_LATENCY
     auto start = std::chrono::high_resolution_clock::now();
 #endif
@@ -1383,18 +1327,6 @@ void Proxy::post_gpu_commands_mixed(
           quiet_cmds.size() ==
       0) {
     return;
-  }
-  if (proxy_trace_enabled()) {
-    static std::atomic<uint64_t> trace_mixed_batches{0};
-    uint64_t const batch_id =
-        trace_mixed_batches.fetch_add(1, std::memory_order_relaxed);
-    if (batch_id < 64 || (batch_id % 1024) == 0) {
-      fprintf(stderr,
-              "[proxy-trace] rank=%d thread=%d mixed=%lu rdma=%zu atomic=%zu "
-              "quiet=%zu barrier=%zu\n",
-              cfg_.rank, cfg_.thread_idx, batch_id, rdma_wrs.size(),
-              atomic_wrs.size(), quiet_wrs.size(), barrier_wrs.size());
-    }
   }
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
