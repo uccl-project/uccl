@@ -153,6 +153,14 @@ if __name__ == "__main__":
         cxx_flags.extend(abi_flags)
         nvcc_flags.extend(abi_flags)
 
+    max_num_gpus = os.getenv("MAX_NUM_GPUS")
+    if max_num_gpus:
+        max_num_gpus = int(max_num_gpus)
+        max_num_gpus_flag = f"-DMAX_NUM_GPUS={max_num_gpus}"
+        print(f"Building with MAX_NUM_GPUS={max_num_gpus}")
+        cxx_flags.append(max_num_gpus_flag)
+        nvcc_flags.append(max_num_gpus_flag)
+
     # Collect header files for dependency tracking
     header_files = []
     for inc_dir in include_dirs:
