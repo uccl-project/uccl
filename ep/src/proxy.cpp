@@ -104,6 +104,9 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 #endif
 
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
+  char const* transport = std::getenv("UCCL_EP_TRANSPORT");
+  use_cxi_transport_ = transport && std::string(transport) == "cxi";
+
   // Unset (-1) device/NIC ranks fall back to local_rank.
   if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
   if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
@@ -128,10 +131,7 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
-bool Proxy::use_cxi_transport() const {
-  char const* transport = std::getenv("UCCL_EP_TRANSPORT");
-  return transport && std::string(transport) == "cxi";
-}
+bool Proxy::use_cxi_transport() const { return use_cxi_transport_; }
 
 bool Proxy::should_connect_peer(int peer) const {
   return peer != cfg_.rank && peers_[peer].ip != peers_[cfg_.rank].ip &&

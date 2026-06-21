@@ -152,6 +152,7 @@ class Proxy {
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
   void* atomic_buffer_ptr_ = nullptr;
+  bool use_cxi_transport_ = false;
   CxiTransport* cxi_transport_ = nullptr;
   std::vector<std::unique_ptr<CxiTransport>> cxi_transports_by_rank_;
   size_t cxi_outstanding_ops_ = 0;
