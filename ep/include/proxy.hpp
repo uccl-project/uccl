@@ -107,6 +107,8 @@ class Proxy {
   void init_sender();
   void init_remote();
   bool use_cxi_transport() const;
+  bool should_connect_peer(int peer) const;
+  void exchange_peer_connection_info(int num_ranks);
 
   void notify_gpu_completion(uint64_t& my_tail);
   void post_gpu_command(uint64_t& my_tail, size_t& seen);

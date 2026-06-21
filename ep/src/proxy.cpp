@@ -133,6 +133,33 @@ bool Proxy::use_cxi_transport() const {
   return transport && std::string(transport) == "cxi";
 }
 
+bool Proxy::should_connect_peer(int peer) const {
+  return peer != cfg_.rank && peers_[peer].ip != peers_[cfg_.rank].ip &&
+         is_normal_mode_remote_peer(cfg_, cfg_.rank, peer);
+}
+
+void Proxy::exchange_peer_connection_info(int num_ranks) {
+  int const my_rank = cfg_.rank;
+  std::thread receiver_thread([this, num_ranks, my_rank]() {
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      if (!should_connect_peer(peer)) continue;
+      int actual_peer;
+      recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
+                                     remote_infos_.data());
+    }
+  });
+
+  for (int peer = 0; peer < num_ranks; ++peer) {
+    if (!should_connect_peer(peer)) continue;
+    char const* peer_ip = peers_[peer].ip.c_str();
+    int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
+    send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
+                                   &local_infos_[peer]);
+  }
+
+  receiver_thread.join();
+}
+
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
@@ -236,9 +263,7 @@ void Proxy::init_common() {
     cxi_transports_by_rank_.resize(num_ranks);
     cxi_transport_ = nullptr;
     for (int peer = 0; peer < num_ranks; ++peer) {
-      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-        continue;
+      if (!should_connect_peer(peer)) continue;
 
       auto transport = std::make_unique<CxiTransport>();
       transport->init(ctx_);
@@ -251,28 +276,7 @@ void Proxy::init_common() {
       cxi_transports_by_rank_[peer] = std::move(transport);
     }
 
-    std::thread receiver_thread([this, num_ranks, my_rank]() {
-      for (int peer = 0; peer < num_ranks; ++peer) {
-        if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-            !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-          continue;
-        int actual_peer;
-        recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
-                                       remote_infos_.data());
-      }
-    });
-
-    for (int peer = 0; peer < num_ranks; ++peer) {
-      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-        continue;
-      char const* peer_ip = peers_[peer].ip.c_str();
-      int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
-      send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
-                                     &local_infos_[peer]);
-    }
-
-    receiver_thread.join();
+    exchange_peer_connection_info(num_ranks);
 
     ctx_by_tag_.clear();
     ctx_by_tag_.resize(ctxs_for_all_ranks_.size() + 1, nullptr);
@@ -281,9 +285,7 @@ void Proxy::init_common() {
       c.tag = static_cast<uint32_t>(peer + 1);
       if (c.tag >= ctx_by_tag_.size()) ctx_by_tag_.resize(c.tag + 1, nullptr);
       ctx_by_tag_[c.tag] = &c;
-      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-        continue;
+      if (!should_connect_peer(peer)) continue;
 
       c.remote_addr = remote_infos_[peer].addr;
       c.remote_len = remote_infos_[peer].len;
@@ -435,10 +437,7 @@ void Proxy::init_common() {
     // Pre-post recv WRs once on the shared recv_ack_qp, sized for all peers.
     int num_active_peers = 0;
     for (int p = 0; p < num_ranks; ++p) {
-      if (p == my_rank) continue;
-      if (peers_[p].ip == peers_[my_rank].ip) continue;
-      if (!is_normal_mode_remote_peer(cfg_, my_rank, p)) continue;
-      ++num_active_peers;
+      if (should_connect_peer(p)) ++num_active_peers;
     }
     int const ack_depth =
         std::min(static_cast<int>(kMaxOutstandingRecvs),
@@ -474,10 +473,7 @@ void Proxy::init_common() {
     c.atomic_old_values_buf = ctx_.atomic_old_values_buf;
     c.atomic_old_values_mr = ctx_.atomic_old_values_mr;
 
-    if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node.
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (!is_normal_mode_remote_peer(cfg_, my_rank, peer)) continue;
+    if (!should_connect_peer(peer)) continue;
 #ifdef EFA
     // Alias the shared SRD QPs from ctx_; dst_ah/dst_qpn (set later in
     // modify_qp_to_rtr) routes per WR via ibv_wr_set_ud_addr.
@@ -499,38 +495,11 @@ void Proxy::init_common() {
 
   usleep(50 * 1000);
 
-  // Out-of-band exchange info per pair: start receiver thread first
-  std::thread receiver_thread([this, num_ranks, my_rank]() {
-    for (int peer = 0; peer < num_ranks; ++peer) {
-      // Skip rdma connection for intra-node.
-      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-        continue;
-      int actual_peer;
-      recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
-                                     remote_infos_.data());
-    }
-  });
-
-  // Then send our info to all peers
-  for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-      continue;
-    char const* peer_ip = peers_[peer].ip.c_str();
-    int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
-    send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
-                                   &local_infos_[peer]);
-  }
-
-  // Wait for receiver thread to finish
-  receiver_thread.join();
+  exchange_peer_connection_info(num_ranks);
 
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        !is_normal_mode_remote_peer(cfg_, my_rank, peer))
-      continue;
+    if (!should_connect_peer(peer)) continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
               "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
@@ -543,10 +512,7 @@ void Proxy::init_common() {
 
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node.
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (!is_normal_mode_remote_peer(cfg_, my_rank, peer)) continue;
+    if (!should_connect_peer(peer)) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
