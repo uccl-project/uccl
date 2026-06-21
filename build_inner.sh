@@ -204,7 +204,7 @@ build_ep() {
   elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* || "$TARGET" == "therock" ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
-    # make clean && rm -r build || true
+    make clean && rm -r build || true
     extra_env=()
     if [[ "$TARGET" == "therock" ]]; then
       # On TheRock, ROCm comes from a pip-installed rocm-sdk wheel; expose its
