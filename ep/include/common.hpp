@@ -85,7 +85,9 @@ static constexpr int kMaxMRChunks = 128;
 #define kReorderingBufferSize 16  // Right now only 4 bits.
 #define kRemoteBufferSize (kBatchSize * kNumProxyThs * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
+#ifndef MAX_NUM_GPUS
 #define MAX_NUM_GPUS 8
+#endif
 #define RECEIVER_BATCH_SIZE 16
 #define kAtomicWrTag 0xa70a000000000000ULL
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
