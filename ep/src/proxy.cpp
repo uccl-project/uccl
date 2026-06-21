@@ -1682,7 +1682,14 @@ void Proxy::send_barrier(uint64_t wr) {
   } else {
     assert(use_cxi_transport() && static_cast<uint64_t>(ctx_.barrier_wr) == wr);
   }
-  ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
+  if (use_cxi_transport()) {
+    ++ctx_.barrier_seq;
+    if (ctx_.barrier_seq == 0) {
+      throw std::runtime_error("CXI barrier sequence wrapped");
+    }
+  } else {
+    ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
+  }
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
