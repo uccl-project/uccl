@@ -325,16 +325,23 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   EP_DEVICE_ASSERT(
       num_d2h_channel_addrs % kChannelPerProxy == 0 &&
       "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
-  /* NOTE(MaoZiming): This is sent to all proxy threads. Since each proxy
-   * thread manages kChannelPerProxy ring buffers, we just need to post a quiet
-   * command to one out of the kChannelPerProxy ring buffer per cpu thread. */
   EP_DEVICE_ASSERT(num_d2h_channel_addrs % kChannelPerProxy == 0);
   EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
-  // First, atomically commit QUIET to one ring per proxy
-  uint64_t slots[kNumProxyThs];
+  // First, atomically commit QUIET to all CXI rings. Each proxy thread owns
+  // multiple D2H rings, so posting to one ring per proxy is not enough to fence
+  // sibling rings before RDMA buffer reuse.
+#if defined(USE_LIBFABRIC_CXI)
+  constexpr int kQuietStride = 1;
+  constexpr int kMaxQuietPosts = kNumProxyThs * kChannelPerProxy;
+#else
+  constexpr int kQuietStride = kChannelPerProxy;
+  constexpr int kMaxQuietPosts = kNumProxyThs;
+#endif
+  uint64_t slots[kMaxQuietPosts];
+  int posted_d2h_channel_idxs[kMaxQuietPosts];
   int num_posted = 0;
   for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
-       d2h_channel_idx += kChannelPerProxy) {
+       d2h_channel_idx += kQuietStride) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 #ifdef USE_MSCCLPP_FIFO_BACKEND
@@ -343,7 +350,9 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       TransferCmd cmd{};
       cmd.cmd_type = CmdType::QUIET;
       h->atomic_set_and_commit(cmd, &slot);
-      slots[num_posted++] = slot;
+      slots[num_posted] = slot;
+      posted_d2h_channel_idxs[num_posted] = d2h_channel_idx;
+      ++num_posted;
     }
 #else
     while (true) {
@@ -356,6 +365,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
         cmd.cmd_type = CmdType::QUIET;
         h->atomic_set_and_commit(cmd, &slot);
         slots[num_posted] = slot;
+        posted_d2h_channel_idxs[num_posted] = d2h_channel_idx;
         ++num_posted;
         break;
       }
@@ -366,7 +376,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   // Then wait for all QUIET commands to complete
   for (int i = 0; i < num_posted; ++i) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
-        static_cast<uintptr_t>(d2h_channel_addrs[i * kChannelPerProxy]));
+        static_cast<uintptr_t>(d2h_channel_addrs[posted_d2h_channel_idxs[i]]));
     wait_until_cmd_consumed(h, slots[i], nvl_rank, CmdType::QUIET);
   }
 }
