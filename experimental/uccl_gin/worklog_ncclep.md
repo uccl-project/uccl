@@ -146,3 +146,21 @@ NCCL-EP kernel 内的 `net.put(world, ...)` / `net.signal(world, ...)` / `net.wa
 - Phase 2：vendor nccl_ep → adapter (uccl_gin_net.cuh) → HT dispatch 接通
 - Phase 3：HT combine 接通
 - 详细计划见 NCCL_EP_PLAN.md §3-4
+
+---
+
+## 2026-06-22: standalone 代码指南与 NCCL-EP 计划收口
+
+- 新增 `CODE_GUIDE.md`，按 resources → Rail command → device API → host
+  context → microbench 的数据流记录当前 standalone 实现。
+- 修正文档中已过时的 `value_staging_off`：当前 `WRITE_VALUE` 使用
+  per-proxy host bounce MR，不再切 GPU window staging slot。
+- 明确 `quiet` 的 gate 是本 lane 早先 WRITE/WRITE_VALUE 的 sender CQE，
+  保证 source buffer 可复用；receiver visibility 仍需上层协议/测试 settle。
+- 修正 ordered-atomic 文档：queue inflight cap 不能单独证明 4-bit seq
+  不 alias，还需同 counter 固定 lane 和 per-counter outstanding 边界。
+- 更新 `NCCL_EP_PLAN.md` 状态为已有 Phase 1-2 adapter 准备代码，并删除
+  “直接把最后一个 WR 的 signal piggyback”这个不满足 EFA SRD 乱序语义的
+  调优前提。
+
+本轮只整理文档，transport/device/host 代码零改动，未重跑服务器测试。
