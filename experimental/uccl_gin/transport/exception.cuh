@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ep_configs.cuh"
 #include <exception>
 #include <string>
 

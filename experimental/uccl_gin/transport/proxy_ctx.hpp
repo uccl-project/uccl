@@ -1,11 +1,8 @@
 #pragma once
 #include "barrier_local.hpp"
-#include "common.hpp"
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
-#include <array>
 #include <atomic>
-#include <cassert>
 #include <map>
 #include <unordered_map>
 #include <vector>
@@ -64,16 +61,6 @@ struct WRSegment {
 #endif  // USE_DMABUF
 
 struct ProxyCtx {
-  // Ordered atomic immediate carries a 13-bit byte offset. Tail words are
-  // int64_t-aligned, so the wire ABI bounds the directly indexed state table.
-  static constexpr size_t kOrderedAtomicSeqSlots = (1u << 13) / sizeof(int64_t);
-
-  struct OrderedAtomicSeqBuf {
-    uint8_t expected = 0;
-    uint16_t present_mask = 0;
-    int vals[kReorderingBufferSize] = {0};
-  };
-
   // RDMA objects
   ibv_context* context = nullptr;
   ibv_pd* pd = nullptr;
@@ -170,6 +157,10 @@ struct ProxyCtx {
   uint64_t remote_atomic_buffer_len = 0;    // Remote atomic_buffer_ptr length
   uint32_t remote_atomic_buffer_rkey = 0;   // Remote atomic_buffer_ptr rkey
 
+  // Buffer offset within rdma_buffer for address translation
+  uintptr_t dispatch_recv_data_offset =
+      0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
+
   // Local scratch buffer for native RDMA atomics (e.g.,
   // IBV_WR_ATOMIC_FETCH_AND_ADD). The NIC writes the "old value" into this
   // local buffer; it must be registered and 8-byte aligned because verbs
@@ -231,26 +222,11 @@ struct ProxyCtx {
   int local_rank = -1;        // convenience mirror of cfg_.local_rank
   int thread_idx = -1;        // thread index used in shm name
 
-  std::array<uint8_t, kOrderedAtomicSeqSlots> next_seq_per_index{};
-  std::array<OrderedAtomicSeqBuf, kOrderedAtomicSeqSlots>
-      ordered_atomic_seqbufs{};
-  bool profile_receiver_atomics = false;
-  uint64_t profile_receiver_atomic_cqes = 0;
-  uint64_t profile_receiver_atomic_in_order = 0;
-  uint64_t profile_receiver_atomic_buffered = 0;
-  uint64_t profile_receiver_atomic_drained = 0;
-  uint64_t profile_receiver_atomic_max_buffered = 0;
-  uint64_t profile_receiver_atomic_process_ns = 0;
-  uint64_t profile_receiver_atomic_process_max_ns = 0;
-  uint64_t profile_receiver_atomic_commits = 0;
-  uint64_t profile_receiver_atomic_commit_ns = 0;
-  uint64_t profile_receiver_atomic_commit_max_ns = 0;
-  inline uint8_t take_next_atomic_seq(size_t index) {
-    assert(index < next_seq_per_index.size());
-    uint8_t const seq = next_seq_per_index[index];
-    next_seq_per_index[index] =
-        static_cast<uint8_t>((seq + 1) % kReorderingBufferSize);
-    return seq;
+  std::unordered_map<uint64_t, uint8_t> next_seq_per_index;
+  inline uint64_t seq_key(int dst_rank, size_t index) {
+    // assumes dst_rank fits 32 bits; if index > 32 bits, prefer Pair Hash below
+    return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
+           static_cast<uint64_t>(static_cast<uint32_t>(index));
   }
 };
 

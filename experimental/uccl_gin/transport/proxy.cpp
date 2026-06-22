@@ -86,6 +86,9 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 #endif
 
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
+  // Unset (-1) device/NIC ranks fall back to local_rank.
+  if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
+  if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
   // Initialize state tracking for each ring buffer
   listen_port_ = uccl::create_listen_socket(&listen_fd_);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -115,8 +118,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
     int const mode_offset =
         cfg_.use_normal_mode ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
+    int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
-                      cfg_.local_rank * kNumProxyThs);
+                      cpu_local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
@@ -124,7 +128,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
       printf(
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d, mode: %s\n",
-          cpu, cfg_.thread_idx, cfg_.local_rank,
+          cpu, cfg_.thread_idx, cpu_local_rank,
           cfg_.use_normal_mode ? "high_throughput" : "low_latency");
     }
   }
@@ -133,7 +137,8 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
-    pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
+    int const cpu_local_rank = cfg_.nic_local_rank;
+    pin_thread_unique(ctx_.numa_node, cpu_local_rank, cfg_.thread_idx,
                       kNumProxyThs);
 
     // Get the actual CPU this thread is running on
@@ -148,7 +153,7 @@ void Proxy::pin_thread_to_numa_wrapper() {
         "Local CPU thread pinned to NUMA node %d, thread_idx: %d, local_rank: "
         "%d, "
         "running on CPU %d.\n",
-        ctx_.numa_node, cfg_.thread_idx, cfg_.local_rank, cpu);
+        ctx_.numa_node, cfg_.thread_idx, cpu_local_rank, cpu);
   }
 }
 
@@ -187,22 +192,17 @@ void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
-                       cfg_.thread_idx, cfg_.local_rank);
+                       cfg_.thread_idx, cfg_.device_index, cfg_.nic_local_rank);
   pin_thread_to_numa_wrapper();
   if (!get_cq(ctx_)) {
     (void)create_per_thread_comp_channel(ctx_);
     (void)create_per_thread_cq(ctx_);
   }
 
-  // Register atomic_buffer_ptr as a separate RDMA memory region if it was set.
-  // This must be done after PD is initialized by per_thread_rdma_init.  The EFA
-  // normal WRITE path does not use native RDMA atomics, and registering the
-  // cudaHostAllocMapped atomic buffer is not required for V2/UCCL dispatch.
-  bool should_register_atomic_buffer = atomic_buffer_ptr_ != nullptr;
-#ifdef EFA
-  if (cfg_.use_normal_mode) should_register_atomic_buffer = false;
-#endif
-  if (should_register_atomic_buffer && !ctx_.atomic_buffer_mr) {
+  // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
+  // This must be done after PD is initialized by per_thread_rdma_init
+  // TODO(MaoZiming): Skip registering for EFA.
+  if (atomic_buffer_ptr_ && !ctx_.atomic_buffer_mr) {
     ctx_.atomic_buffer_mr =
         ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
@@ -432,24 +432,17 @@ void Proxy::init_common() {
     c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
 
     if (c.remote_atomic_buffer_addr == 0) {
-      // EFA normal mode uses WRITE-with-imm software atomics: the receiver CPU
-      // proxy applies the update into its local atomic buffer, so no remote
-      // hardware-atomic MR is required. Keep the warning for LL/non-normal paths
-      // and for explicit debugging only.
-      if (!cfg_.use_normal_mode || debug_atomic_buffer) {
-        fprintf(stderr,
-                "[Proxy] WARNING: Remote atomic buffer not registered for peer "
-                "%d (local atomic_buffer_ptr=%p, local atomic_buffer_mr=%p)\n",
-                peer, atomic_buffer_ptr_, (void*)ctx_.atomic_buffer_mr);
-      }
+      fprintf(
+          stderr,
+          "[Proxy] WARNING: Remote atomic buffer not registered for peer %d "
+          "(local atomic_buffer_ptr=%p, local atomic_buffer_mr=%p)\n",
+          peer, atomic_buffer_ptr_, (void*)ctx_.atomic_buffer_mr);
     } else {
-      if (debug_atomic_buffer) {
-        fprintf(stderr,
-                "[Proxy] Remote atomic buffer info for peer %d: addr=0x%llx, "
-                "len=%zu, rkey=0x%x\n",
-                peer, (unsigned long long)c.remote_atomic_buffer_addr,
-                (size_t)c.remote_atomic_buffer_len, c.remote_atomic_buffer_rkey);
-      }
+      fprintf(stderr,
+              "[Proxy] Remote atomic buffer info for peer %d: addr=0x%llx, "
+              "len=%zu, rkey=0x%x\n",
+              peer, (unsigned long long)c.remote_atomic_buffer_addr,
+              (size_t)c.remote_atomic_buffer_len, c.remote_atomic_buffer_rkey);
     }
   }
   usleep(50 * 1000);
@@ -470,12 +463,21 @@ void Proxy::init_common() {
     }
     ctx_.num_local_ranks = (int)local_ranks.size();
     ctx_.node_leader_rank = leader_rank;
-    ctx_.local_rank = cfg_.local_rank;
+    ctx_.local_rank = cfg_.barrier_local_rank >= 0 ? cfg_.barrier_local_rank
+                                                   : cfg_.local_rank;
     ctx_.thread_idx = cfg_.thread_idx;
 
     if (ctx_.num_local_ranks > UCCL_MAX_LOCAL_RANKS) {
       fprintf(stderr, "num_local_ranks=%d exceeds UCCL_MAX_LOCAL_RANKS=%d\n",
               ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
+      std::abort();
+    }
+    if (ctx_.local_rank < 0 || ctx_.local_rank >= ctx_.num_local_ranks) {
+      fprintf(stderr,
+              "barrier_local_rank=%d invalid for num_local_ranks=%d "
+              "(rank=%d, local_rank=%d)\n",
+              ctx_.local_rank, ctx_.num_local_ranks, cfg_.rank,
+              cfg_.local_rank);
       std::abort();
     }
 #ifndef USE_SUBSET_BARRIER
@@ -542,7 +544,6 @@ void Proxy::run_sender() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, acked_wrs_, cfg_.thread_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
-    progress_pending_atomics();
     post_gpu_command(my_tail, seen);
   }
 }
@@ -596,7 +597,6 @@ void Proxy::run_dual() {
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
                  adaptive_sleeper_, cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
-    progress_pending_atomics();
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
     if (!cfg_.use_normal_mode) {
@@ -624,7 +624,6 @@ void Proxy::run_dual() {
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
-  expand_atomic_completion_aliases();
   if (acked_wrs_.empty()) return;
 
     // Mark all acked command slots in each ring's bitmask
@@ -638,7 +637,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       auto [front_wr, front_bytes] = pend.front();
       if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
-      retire_inflight_write(front_wr);
       pend.pop_front();            // retire pending entry
 
       if (front_bytes) {
@@ -661,7 +659,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   }
 #else
   for (auto wr_id : acked_wrs_) {
-    retire_inflight_write(wr_id);
     size_t const rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
     size_t const cmd_idx = wr_id & 0xFFFFFFFF;
 
@@ -671,10 +668,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
 
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
-    if (ctx_.quiet_wr != -1 && wr_id == static_cast<uint64_t>(ctx_.quiet_wr)) {
-      ctx_.quiet_inflight = false;
-      ctx_.quiet_wr = -1;
-    }
     h->volatile_clear_cmd_type(cmd_idx);
     h->mark_acked(cmd_idx % h->capacity());
   }
@@ -784,16 +777,10 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       CmdType cmd = h->volatile_load_cmd_type(i);
       // NOTE(MaoZiming): Non-blocking. prevent local and remote both while
       // loop.
-      if (cmd == CmdType::EMPTY) {
-        maybe_dump_empty_gap(i, "cmd_type_empty");
-        break;
-      }
+      if (cmd == CmdType::EMPTY) break;
 
       TransferCmd& cmd_entry = h->load_cmd_entry(i);
-      if (cmd_entry.cmd_type == CmdType::EMPTY) {
-        maybe_dump_empty_gap(i, "entry_empty");
-        break;
-      }
+      if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
           get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
@@ -956,49 +943,12 @@ void Proxy::run_local() {
 void Proxy::post_gpu_commands_mixed(
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post) {
-  if (cmds_to_post.empty()) return;
-  rdma_wrs.clear();
-  rdma_cmds.clear();
-  atomic_wrs.clear();
-  atomic_cmds.clear();
-
-  // Preserve D2H command order around control commands.  UCCL-GIN relies on
-  // WRITE ... QUIET ... ATOMIC, so the tail ATOMIC must not be moved before
-  // the device-issued QUIET.
-  auto flush_writes = [&]() {
-    if (rdma_wrs.empty()) return;
-    assert(rdma_wrs.size() == rdma_cmds.size());
-    post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
-                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, cfg_.use_normal_mode);
-    inflight_write_wrs_.insert(rdma_wrs.begin(), rdma_wrs.end());
-    // A WRITE_WITH_IMM piggyback count and a later ordered finish ATOMIC use
-    // the same per-(dst, tail word) sequence. The receiver applies the finish
-    // only after those payload counts, and each count arrives with its payload
-    // WRITE completion. Only plain WRITEs lack that ordering and must remain
-    // sender-side completion dependencies.
-    for (size_t i = 0; i < rdma_wrs.size(); ++i) {
-      if (rdma_cmds[i].atomic_val == 0) {
-        atomic_dependency_wrs_.push_back(rdma_wrs[i]);
-      }
-    }
-    rdma_wrs.clear();
-    rdma_cmds.clear();
-  };
-
-  auto enqueue_atomics_ordered = [&]() {
-    if (atomic_wrs.empty()) return;
-    // Keep NCCL-GIN's payload-before-tail semantics without stopping the WRITE
-    // pipeline.  Each tail batch records the payload WRs posted before it; the
-    // main proxy loop posts the ATOMIC only after those WRs complete, while
-    // later WRITE commands may keep flowing.
-    enqueue_pending_atomics(atomic_wrs, atomic_cmds, atomic_dependency_wrs_);
-    progress_pending_atomics();
-  };
+  // Separate atomic operations from regular RDMA writes
+  std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
+  std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    const auto base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
-    switch (base_cmd) {
+    switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
       case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
         if (!cfg_.use_normal_mode) {
@@ -1032,7 +982,6 @@ void Proxy::post_gpu_commands_mixed(
         }
 #endif
 
-        flush_writes();
         atomic_wrs.push_back(wrs_to_post[i]);
         atomic_cmds.push_back(cmds_to_post[i]);
 
@@ -1060,32 +1009,18 @@ void Proxy::post_gpu_commands_mixed(
         break;
       }
       case (CmdType::WRITE): {
-        enqueue_atomics_ordered();
         rdma_wrs.push_back(wrs_to_post[i]);
         rdma_cmds.push_back(cmds_to_post[i]);
         break;
       }
       case (CmdType::QUIET): {
-        flush_writes();
-        enqueue_atomics_ordered();
-        drain_pending_atomics();
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-        assert(ctx_.quiet_wr == -1);
-#endif
-        ctx_.quiet_wr = wrs_to_post[i];
-        quiet({wrs_to_post[i]}, {cmds_to_post[i]}, {});
-        atomic_dependency_wrs_.clear();
+        quiet_cmds.push_back(cmds_to_post[i]);
+        quiet_wrs.push_back(wrs_to_post[i]);
         break;
       }
       case (CmdType::BARRIER): {
-        flush_writes();
-        enqueue_atomics_ordered();
-        drain_pending_atomics();
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-        assert(ctx_.barrier_wr == -1);
-#endif
-        send_barrier(wrs_to_post[i]);
-        atomic_dependency_wrs_.clear();
+        barrier_cmds.push_back(cmds_to_post[i]);
+        barrier_wrs.push_back(wrs_to_post[i]);
         break;
       }
       default: {
@@ -1095,35 +1030,61 @@ void Proxy::post_gpu_commands_mixed(
       }
     }
   }
-  flush_writes();
-  enqueue_atomics_ordered();
+  if (rdma_wrs.size() + atomic_wrs.size() + barrier_cmds.size() +
+          quiet_cmds.size() ==
+      0) {
+    return;
+  }
+  // Handle regular RDMA writes
+  if (!rdma_wrs.empty()) {
+    post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
+                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                            cfg_.thread_idx, cfg_.use_normal_mode);
+    rdma_wrs.clear();
+    rdma_cmds.clear();
+  }
+
+  if (!atomic_wrs.empty()) {
+    post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
+                           cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                           cfg_.use_normal_mode);
+    atomic_wrs.clear();
+    atomic_cmds.clear();
+  }
+
+  if (!barrier_cmds.empty()) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
+#endif
+    assert(quiet_wrs.empty() && "quiet_wrs should be empty");
+    send_barrier(barrier_wrs[0]);
+    barrier_wrs.clear();
+    barrier_cmds.clear();
+  }
+
+  if (!quiet_cmds.empty()) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
+#endif
+    ctx_.quiet_wr = quiet_wrs[0];
+    quiet(quiet_wrs, quiet_cmds);
+    quiet_wrs.clear();
+    quiet_cmds.clear();
+  }
 }
 
-void Proxy::wait_for_cq(std::vector<uint64_t> release_wrs,
-                        bool include_all_writes) {
-  std::unordered_set<uint64_t> pending_release_wrs;
-  pending_release_wrs.reserve(release_wrs.size() + inflight_write_wrs_.size());
-  for (uint64_t wr_id : release_wrs) {
-    if (inflight_write_wrs_.find(wr_id) != inflight_write_wrs_.end()) {
-      pending_release_wrs.insert(wr_id);
-    }
-  }
-  if (include_all_writes) {
-    pending_release_wrs.insert(inflight_write_wrs_.begin(),
-                               inflight_write_wrs_.end());
-  }
-  if (pending_release_wrs.empty()) return;
-  auto outstanding_batches = [&]() -> size_t {
-    return pending_release_wrs.size();
-  };
+void Proxy::quiet_cq() {
+  auto outstanding_batches = [&]() -> size_t { return 0; };
+  constexpr int kConsecutiveEmptyToExit = 3;
+  int empty_iters = 0;
   ibv_wc wc[kMaxOutstandingSends];
   using clock = std::chrono::steady_clock;
   auto last_log = clock::now();
   std::set<PendingUpdate> pending_atomic_updates;
-  uint64_t dummy_tail = 0;
   for (;;) {
     int ne = poll_cq_once(get_cq(ctx_), wc, kMaxOutstandingSends);
     if (ne > 0) {
+      empty_iters = 0;
       local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
                                 ctx_by_tag_);
       remote_process_completions(
@@ -1136,21 +1097,10 @@ void Proxy::wait_for_cq(std::vector<uint64_t> release_wrs,
                               cfg_.num_experts, cfg_.num_ranks);
       }
 #endif
+    } else {
+      ++empty_iters;
     }
-    for (auto it = pending_release_wrs.begin(); it != pending_release_wrs.end();) {
-      if (acked_wrs_.find(*it) != acked_wrs_.end()) {
-        // Keep the inflight set bounded: a completed write must leave
-        // inflight_write_wrs_, otherwise the set grows without bound and a later
-        // quiet_cq can dead-wait on a WR whose ack was already drained from
-        // acked_wrs_.
-        retire_inflight_write(*it);
-        it = pending_release_wrs.erase(it);
-      } else {
-        ++it;
-      }
-    }
-    notify_gpu_completion(dummy_tail);
-    if (outstanding_batches() == 0) {
+    if (outstanding_batches() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
       break;
     }
     auto now = clock::now();
@@ -1162,17 +1112,10 @@ void Proxy::wait_for_cq(std::vector<uint64_t> release_wrs,
   }
 }
 
-void Proxy::quiet_cq(std::vector<uint64_t> release_wrs) {
-  wait_for_cq(std::move(release_wrs), /*include_all_writes=*/true);
-}
-
-void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds,
-                  std::vector<uint64_t> release_wrs) {
+void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-  quiet_cq(std::move(release_wrs));
+  quiet_cq();
   acked_wrs_.insert(wrs[0]);
-  uint64_t dummy_tail = 0;
-  notify_gpu_completion(dummy_tail);
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {

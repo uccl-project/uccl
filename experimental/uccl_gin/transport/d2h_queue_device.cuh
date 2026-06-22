@@ -71,8 +71,7 @@ struct D2HHandle {
 #endif
 
   __device__ __forceinline__ bool atomic_set_and_commit(
-      TransferCmd const& item, uint64_t* out_slot = nullptr,
-      uint64_t max_inflight = kQueueSize) {
+      TransferCmd const& item, uint64_t* out_slot = nullptr) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
 #ifdef MSCCLPP_DEVICE_COMPILE
     mscclpp::ProxyTrigger trig;
@@ -87,7 +86,7 @@ struct D2HHandle {
 #endif
     return true;
 #else
-    return ring->atomic_set_and_commit(item, out_slot, max_inflight);
+    return ring->atomic_set_and_commit(item, out_slot);
 #endif
   }
 };

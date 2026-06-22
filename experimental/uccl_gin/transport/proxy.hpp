@@ -12,7 +12,6 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <assert.h>
 #include <stdio.h>
@@ -45,7 +44,12 @@ class Proxy {
     size_t total_size = 0;
     int rank = 0;
     int node_idx = -1;
+    // Base local rank. The role-specific ranks below fall back to it when
+    // unset (-1).
     int local_rank = -1;
+    int device_index = -1;    // CUDA device ordinal
+    int nic_local_rank = -1;  // physical GPU rank for NIC/NUMA affinity
+    int barrier_local_rank = -1;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
@@ -62,6 +66,11 @@ class Proxy {
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
+  }
+
+  // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
+  void set_dispatch_recv_data_offset(uintptr_t offset) {
+    ctx_.dispatch_recv_data_offset = offset;
   }
 
   void set_atomic_buffer_ptr(void* ptr) { atomic_buffer_ptr_ = ptr; }
@@ -90,13 +99,6 @@ class Proxy {
 
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
-  struct PendingAtomicBatch {
-    std::vector<uint64_t> wrs;
-    std::vector<TransferCmd> cmds;
-    std::vector<uint64_t> dep_wrs;
-    size_t pending_writes = 0;
-  };
-
   ProxyCtx ctx_;
   EPAdaptiveSleeper adaptive_sleeper_;
   void init_common();
@@ -110,19 +112,8 @@ class Proxy {
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
   void send_barrier(uint64_t wr);
   void barrier_check();
-  void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds,
-             std::vector<uint64_t> release_wrs);
-  void quiet_cq(std::vector<uint64_t> release_wrs);
-  void wait_for_cq(std::vector<uint64_t> release_wrs, bool include_all_writes);
-  void retire_inflight_write(uint64_t wr_id);
-  void clear_atomic_batch_deps(PendingAtomicBatch& batch);
-  void enqueue_pending_atomics(std::vector<uint64_t>& wrs,
-                               std::vector<TransferCmd>& cmds,
-                               std::vector<uint64_t>& deps);
-  void coalesce_atomic_batch(PendingAtomicBatch& batch);
-  void expand_atomic_completion_aliases();
-  void progress_pending_atomics(bool force = false);
-  void drain_pending_atomics();
+  void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
+  void quiet_cq();
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Reuse across multiple calls to avoid reallocations
@@ -133,7 +124,6 @@ class Proxy {
 
   // Completion tracking
   std::unordered_set<uint64_t> acked_wrs_;
-  std::unordered_set<uint64_t> inflight_write_wrs_;
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
       wr_id_to_start_time_;
   uint64_t completion_count_ = 0;
@@ -154,13 +144,6 @@ class Proxy {
   void* atomic_buffer_ptr_;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
-
-  std::deque<PendingAtomicBatch> pending_atomic_batches_;
-  std::unordered_map<uint64_t, PendingAtomicBatch*> atomic_dep_by_wr_;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> atomic_completion_aliases_;
-  std::vector<uint64_t> atomic_dependency_wrs_;
-  std::vector<uint64_t> coalesced_atomic_wrs_;
-  std::vector<TransferCmd> coalesced_atomic_cmds_;
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;

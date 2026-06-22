@@ -1,7 +1,5 @@
 #include "uccl_proxy.hpp"
 #include "common.hpp"
-#include "d2h_queue_device.cuh"
-#include "ep_util.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
@@ -14,20 +12,21 @@
 
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
-	                     int num_experts, int num_ranks, int num_nodes,
-	                     bool use_normal_mode, bool is_intranode,
-	                     bool gpu_buffer_is_host_allocated,
-	                     bool owns_gpu_buffer)
-	    : thread_{},
-	      mode_{Mode::None},
-	      running_{false},
-	      is_intranode_{is_intranode},
-	      owns_gpu_buffer_{owns_gpu_buffer} {
+                     int num_experts, int num_ranks, int num_nodes,
+                     bool use_normal_mode, bool is_intranode,
+                     bool gpu_buffer_is_host_allocated, int barrier_local_rank,
+                     int device_index, int nic_local_rank)
+    : thread_{},
+      mode_{Mode::None},
+      running_{false},
+      is_intranode_{is_intranode} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
+  device_index_ = device_index >= 0 ? device_index : local_rank;
+  nic_local_rank_ = nic_local_rank >= 0 ? nic_local_rank : local_rank;
 
   cfg.d2h_queues.reserve(kChannelPerProxy);
   d2h_queues.resize(kChannelPerProxy);
@@ -44,52 +43,16 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     d2h_channel_addrs_.push_back(addr);
   }
 
-  CUDA_CHECK(cudaMallocManaged(
-      &d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle)));
-  auto* d2h_device_handles =
-      reinterpret_cast<d2hq::D2HHandle*>(d2h_device_handle_objs_);
-  d2h_device_handle_addrs_.reserve(kChannelPerProxy);
-  for (size_t i = 0; i < kChannelPerProxy; ++i) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    d2h_device_handles[i].init_from_host_value(fifos[i]->deviceHandle());
-#else
-    void* host_ptr = reinterpret_cast<void*>(d2h_channel_addrs_[i]);
-    void* dev_ptr = nullptr;
-#ifndef USE_GRACE_HOPPER
-    CUDA_CHECK(cudaHostGetDevicePointer(reinterpret_cast<void**>(&dev_ptr),
-                                        host_ptr, 0));
-#else
-    dev_ptr = host_ptr;
-#endif
-    d2h_device_handles[i].init_from_dev_ptr(dev_ptr);
-#endif
-    d2h_device_handle_addrs_.push_back(
-        reinterpret_cast<uint64_t>(d2h_device_handles + i));
-  }
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && CUDA_VERSION >= 12000
-  int device = 0;
-  CUDA_CHECK(cudaGetDevice(&device));
-  cudaMemLocation loc;
-  loc.type = cudaMemLocationTypeDevice;
-  loc.id = device;
-  CUDA_CHECK(cudaMemPrefetchAsync(
-      d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle), loc,
-      0));
-#else
-  int device = 0;
-  CUDA_CHECK(cudaGetDevice(&device));
-  CUDA_CHECK(cudaMemPrefetchAsync(
-      d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle),
-      device, 0));
-#endif
-  CUDA_CHECK(cudaDeviceSynchronize());
-
   cfg.thread_idx = thread_idx;
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
   cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
+  cfg.device_index = device_index_;
+  cfg.nic_local_rank = nic_local_rank_;
+  cfg.barrier_local_rank =
+      barrier_local_rank >= 0 ? barrier_local_rank : local_rank;
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
@@ -117,7 +80,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
     // cudaMalloc; use pinned host memory then. Override with
     // UCCL_ATOMICS_USE_HOST_MEMORY=1 to force host memory.
-    if (can_register_gpu_memory_for_atomics(local_rank)) {
+    if (can_register_gpu_memory_for_atomics(device_index_)) {
       cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
       atomic_buffer_is_host_allocated_ = false;
     } else {
@@ -157,11 +120,6 @@ UcclProxy::~UcclProxy() {
     free_cmd_ring(d2h_channel_addr);
   }
 #endif
-  if (d2h_device_handle_objs_) {
-    cudaFree(d2h_device_handle_objs_);
-    d2h_device_handle_objs_ = nullptr;
-  }
-  d2h_device_handle_addrs_.clear();
   d2h_channel_addrs_.clear();
 }
 
@@ -172,26 +130,6 @@ std::vector<uint64_t> UcclProxy::get_d2h_channel_addrs() const {
     addrs.push_back(static_cast<uint64_t>(addr));
   }
   return addrs;
-}
-
-std::vector<uint64_t> UcclProxy::get_d2h_channel_device_addrs() const {
-  std::vector<uint64_t> addrs;
-  addrs.reserve(d2h_channel_addrs_.size());
-  for (auto addr : d2h_channel_addrs_) {
-#ifdef USE_GRACE_HOPPER
-    void* dev_ptr = reinterpret_cast<void*>(addr);
-#else
-    void* dev_ptr = nullptr;
-    CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&dev_ptr), reinterpret_cast<void*>(addr), 0));
-#endif
-    addrs.push_back(reinterpret_cast<uint64_t>(dev_ptr));
-  }
-  return addrs;
-}
-
-std::vector<uint64_t> UcclProxy::get_d2h_channel_handle_addrs() const {
-  return d2h_device_handle_addrs_;
 }
 
 void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
@@ -211,11 +149,10 @@ void UcclProxy::stop() {
   proxy_->set_progress_run(false);
   if (thread_.joinable()) thread_.join();
   running_.store(false, std::memory_order_release);
-	  // Because proxies share the gpu_buffer, only the first proxy may own it.
-	  // Native V2 passes a DeepEP-owned symmetric window, so it sets
-	  // owns_gpu_buffer_=false and leaves the window lifetime to DeepEP.
-	  proxy_->destroy(owns_gpu_buffer_ && thread_idx_ == 0);
-	}
+  // Because proxies share the gpu_buffer, only destroy gpu_buffer for the first
+  // proxy.
+  proxy_->destroy(thread_idx_ == 0);
+}
 
 void UcclProxy::start(Mode m) {
   if (running_.load(std::memory_order_acquire)) {

@@ -21,7 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <regex>
@@ -390,7 +390,8 @@ bool is_cuda_host_pointer(void* ptr) {
 }  // namespace
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank) {
+                          int thread_idx, int device_index,
+                          int nic_local_rank) {
   if (S.context) return;  // already initialized
 
   int num_devices = 0;
@@ -399,15 +400,42 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     perror("Failed to get IB devices list");
     exit(1);
   }
-  int gpu_idx = local_rank;
-  cudaSetDevice(gpu_idx);  // Needed.
+  int nic_affinity_rank = nic_local_rank;
+  cudaSetDevice(device_index);  // Needed.
 
-  // Ranked by GPU idx
-  auto gpu_cards = uccl::get_gpu_cards();
+  // Map the local affinity rank to its PCI BDF for NIC/NUMA selection.
+  auto all_gpu_bdfs = uccl::enumerate_all_gpu_bdfs();
+  std::filesystem::path gpu_device_path;
+  std::string gpu_bdf;
+  if (nic_affinity_rank >= 0 &&
+      nic_affinity_rank < static_cast<int>(all_gpu_bdfs.size())) {
+    gpu_bdf = all_gpu_bdfs[nic_affinity_rank];
+    gpu_device_path = uccl::sysfs_pci_path_from_bdf(gpu_bdf);
+  } else {
+    auto gpu_cards = uccl::get_gpu_cards();
+    int gpu_card_idx = -1;
+    if (nic_local_rank >= 0 &&
+        nic_local_rank < static_cast<int>(gpu_cards.size())) {
+      nic_affinity_rank = nic_local_rank;
+      gpu_card_idx = nic_local_rank;
+    } else if (device_index >= 0 &&
+               device_index < static_cast<int>(gpu_cards.size())) {
+      nic_affinity_rank = nic_local_rank >= 0 ? nic_local_rank : device_index;
+      gpu_card_idx = device_index;
+    }
+    if (gpu_card_idx < 0) {
+      fprintf(stderr,
+              "[RDMA] invalid device_index=%d nic_local_rank=%d "
+              "(visible GPUs=%zu, physical GPUs=%zu)\n",
+              device_index, nic_local_rank, gpu_cards.size(),
+              all_gpu_bdfs.size());
+      std::abort();
+    }
+    gpu_device_path = gpu_cards[gpu_card_idx];
+    gpu_bdf = gpu_device_path.filename().string();
+  }
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
-  // Get GPU pcie path
-  auto gpu_device_path = gpu_cards[gpu_idx];
   // Find the RDMA NIC that is closest to the GPU.
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
@@ -468,7 +496,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       selected_nic_name = dist.front().first;
     } else {
       // NUMA-aware tie-breaker: prefer NICs on same NUMA node as GPU
-      int gpu_numa_node = uccl::get_gpu_numa_node(local_rank);
+      int gpu_numa_node = gpu_bdf.empty()
+                              ? uccl::get_gpu_numa_node(device_index)
+                              : uccl::get_gpu_numa_node_from_bdf(gpu_bdf);
       std::vector<std::string> numa_candidates;
       for (auto const& nic_name : candidates) {
         int nic_numa = uccl::get_dev_numa_node(nic_name.c_str());
@@ -493,7 +523,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
           // On p5e/p5en, there are 4 NICs with the same distance per GPU.
           // We hardcode the first half Proxies to use the first NIC, and the
           // second half to use the second NIC.
-          auto half = (local_rank % 2) * 2;
+          auto half = (nic_affinity_rank % 2) * 2;
           // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
           selected_nic_name = candidates[thread_idx % 2 + half];
         } else if (candidates.size() == 2) {
@@ -512,7 +542,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         // On p6-b200, there is 2 NICs with the same distance.
         assert(num_efas == 8);
         assert(candidates.size() == 2);
-        auto half = (local_rank % 2) * 1;
+        auto half = (nic_affinity_rank % 2) * 1;
         selected_nic_name = candidates[thread_idx % 1 + half];
         use_ll_sl = true;
       }
@@ -566,8 +596,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       entry.refcount++;
       printf(
           "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
-          "for GPU %d\n",
-          thread_idx, selected_nic_name.c_str(), entry.refcount - 1, gpu_idx);
+          "for affinity rank %d\n",
+          thread_idx, selected_nic_name.c_str(), entry.refcount - 1,
+          nic_affinity_rank);
       ibv_free_device_list(dev_list);
       return;
     }
@@ -598,8 +629,11 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
-  printf("[RDMA] Selected NIC %s (index %d) for GPU %d, NUMA node %d\n",
-         selected_nic_name.c_str(), selected_dev_idx, gpu_idx, S.numa_node);
+  printf(
+      "[RDMA] Selected NIC %s (index %d) for affinity rank %d, CUDA device %d, "
+      "NUMA node %d\n",
+      selected_nic_name.c_str(), selected_dev_idx, nic_affinity_rank,
+      device_index, S.numa_node);
   ibv_free_device_list(dev_list);
   S.pd = ibv_alloc_pd(S.context);
   if (!S.pd) {
@@ -767,6 +801,19 @@ bool probe_gpu_memory_registration(int gpu_idx, size_t bytes, char const* label,
 }
 
 }  // namespace
+
+bool has_any_nic() {
+  static bool cached_valid = false;
+  static bool cached = false;
+  if (cached_valid) return cached;
+
+  int num_devices = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
+  cached = (dev_list != nullptr && num_devices > 0);
+  if (dev_list) ibv_free_device_list(dev_list);
+  cached_valid = true;
+  return cached;
+}
 
 bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
   static thread_local std::map<std::pair<int, size_t>, bool> cache;
@@ -1092,17 +1139,8 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
             (size_t)local_info->atomic_buffer_len,
             local_info->atomic_buffer_rkey);
   } else {
-#ifdef EFA
-    if (use_normal_mode) {
-      local_info->atomic_buffer_rkey = 0;
-      local_info->atomic_buffer_addr = 0;
-      local_info->atomic_buffer_len = 0;
-    } else {
-      assert(false && "Atomic buffer is not registered");
-    }
-#else
+    // TODO(MaoZiming): Only for non-EFA case.
     assert(false && "Atomic buffer is not registered");
-#endif
   }
 
   fill_local_gid(S, local_info);
@@ -1490,7 +1528,7 @@ static void post_rdma_async_batched_normal_mode(
           std::abort();
         }
         // Optionally send an inline "atomic" via imm, else use imm only on tail
-        if (cmd.atomic_val > 0) {
+        if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
           int v = static_cast<int>(cmd.atomic_val);
           if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
             fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
@@ -1498,7 +1536,15 @@ static void post_rdma_async_batched_normal_mode(
           }
           size_t index =
               static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-          uint8_t seq = ctx->take_next_atomic_seq(index);
+          // Initialize missing entries lazily
+          auto key = ctx->seq_key(dst_rank, index);
+          if (ctx->next_seq_per_index.find(key) ==
+              ctx->next_seq_per_index.end())
+            ctx->next_seq_per_index[key] = 0;
+
+          uint8_t seq = ctx->next_seq_per_index[key];
+          ctx->next_seq_per_index[key] =
+              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
           uint32_t imm =
               AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
@@ -1628,7 +1674,7 @@ static void post_rdma_async_batched_normal_mode(
 #endif
 
           // Put IMM on the last sub-WR of this command (if applicable).
-          if (cmd.atomic_val > 0) {
+          if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
             int v = static_cast<int>(cmd.atomic_val);
             if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
               fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
@@ -1636,7 +1682,15 @@ static void post_rdma_async_batched_normal_mode(
             }
             size_t index =
                 static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-            uint8_t seq = ctx->take_next_atomic_seq(index);
+            // Initialize missing entries lazily
+            auto key = ctx->seq_key(dst_rank, index);
+            if (ctx->next_seq_per_index.find(key) ==
+                ctx->next_seq_per_index.end())
+              ctx->next_seq_per_index[key] = 0;
+
+            uint8_t seq = ctx->next_seq_per_index[key];
+            ctx->next_seq_per_index[key] =
+                (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
             uint32_t imm =
                 AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                     .GetImmData();
@@ -1767,7 +1821,7 @@ static void post_rdma_async_batched_normal_mode(
 #endif
 
           // Put IMM on the last sub-WR of this command (if applicable).
-          if (cmd.atomic_val > 0) {
+          if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
             int v = static_cast<int>(cmd.atomic_val);
             if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
               fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
@@ -2282,18 +2336,25 @@ void remote_process_completions_normal_mode(
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
       if (!aimm.IsReorderable()) {
-        commit(value);
+        addr64->fetch_add(value, std::memory_order_release);
       } else {
 #ifndef EFA
         assert(false &&
                "Reorderable atomic operations should not be triggered");
 #endif
-        if (index >= S.ordered_atomic_seqbufs.size()) {
-          fprintf(stderr, "Error: ordered atomic index %zu out of range\n", index);
-          std::abort();
-        }
-        auto& sb = S.ordered_atomic_seqbufs[index];
+        struct SeqBuf {
+          uint8_t expected = 0;       // next seq expected
+          uint16_t present_mask = 0;  // bitmask of buffered seqs
+          int vals[kReorderingBufferSize] = {0};
+        };
 
+        // Thread-local map to maintain per-index state
+        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
+        auto& sb = seqbufs[index];
+
+        auto commit = [&](int delta) {
+          addr64->fetch_add(delta, std::memory_order_release);
+        };
         uint8_t seq = aimm.GetSeq();
         if (seq >= kReorderingBufferSize) {
           fprintf(stderr, "Error: seq %u out of range\n", seq);
@@ -2889,23 +2950,7 @@ static void post_atomic_operations_normal_mode(
           std::abort();
         }
 
-        uint32_t imm;
-        if (cmd.atomic_offset != 0) {
-          if (offset > AtomicsImm::kOFF_MASK) {
-            fprintf(stderr,
-                    "[EFA] ordered atomic offset=%u exceeds immediate field "
-                    "limit=%u\n",
-                    offset, AtomicsImm::kOFF_MASK);
-            std::abort();
-          }
-          size_t index = static_cast<size_t>(offset / sizeof(int64_t));
-          uint8_t seq = ctx->take_next_atomic_seq(index);
-          imm = AtomicsImm::PackAtomicWithSeq(v, static_cast<uint16_t>(offset),
-                                              seq, true)
-                    .GetImmData();
-        } else {
-          imm = AtomicsImm::PackAtomic(v, offset).GetImmData();
-        }
+        uint32_t imm = AtomicsImm::PackAtomic(v, offset).GetImmData();
 
         qpx->wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
         qpx->comp_mask = 0;
