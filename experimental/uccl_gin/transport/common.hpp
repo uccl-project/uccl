@@ -1,0 +1,212 @@
+#ifndef COMMON_HPP
+#define COMMON_HPP
+
+#include "util/gpu_rt.h"
+#include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <thread>
+#include <stdio.h>
+#include <unistd.h>
+
+// #define SOFTWARE_ORDERING
+#define MAX_IB_DEVS 32
+// #define MEASURE_PER_OP_LATENCY
+// #define MEASURE_PER_VERB_LATENCY
+
+// Barrier type selection (can be overridden at compile time)
+#ifndef USE_SENDER_BARRIER
+#ifdef EFA
+#define USE_RECEIVER_BARRIER
+#endif
+#endif
+
+#ifdef EFA
+#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+extern bool use_ll_sl;
+#endif
+
+#define USE_MSCCLPP_FIFO_BACKEND
+// #define USE_SUBSET_BARRIER
+
+// Intel RDMA NIC support
+#ifdef INTEL_RDMA_NIC
+// Use DMA-BUF for GPU memory registration (avoids nvidia_peermem dependency).
+// Falls back to ibv_reg_mr_iova2 at runtime if DMA-BUF is unsupported.
+#define USE_DMABUF
+// Use pinned host memory for the atomic buffer instead of cudaMalloc.
+// Required for NICs without nvidia_peermem (e.g. Intel irdma) so that
+// ibv_reg_mr succeeds, and allows CPU proxy threads to do std::atomic ops.
+#define ATOMICS_USE_HOST_MEMORY
+// Ethernet-based RDMA (iWARP/RoCEv2) — no IB-specific CQ attributes.
+#define ETHERNET_RDMA
+#endif
+
+#ifdef USE_DMABUF
+// Maximum size for a single DMA-BUF MR registration.  Under full IOMMU
+// translation (intel_iommu=on without iommu=pt), each registration requires
+// per-page IOMMU mappings for the full DMA-BUF scatter-gather list.  For
+// larger buffers, this exhausts IOMMU mapping resources, causing ENOMEM on
+// ibv_reg_dmabuf_mr if size is greater than 2 GiB.  Splitting into chunks of
+// 1 GiB size avoids the issue.
+static constexpr size_t kMaxDmabufChunkSize = 1ULL << 30;  // 1 GiB
+static constexpr int kMaxMRChunks = 128;
+#endif
+
+#define kAtomicBufferSize 81960
+#ifndef UCCL_QUEUE_SIZE
+#define UCCL_QUEUE_SIZE 2048
+#endif
+#define kQueueSize UCCL_QUEUE_SIZE
+#define kQueueMask (kQueueSize - 1)
+static_assert((kQueueSize & kQueueMask) == 0, "UCCL_QUEUE_SIZE must be a power of two");
+// This is the highest we can get due to the number of bits we allocate in the
+// imm for reordering buffer sequence tracking.
+#define kMaxInflightLowLatency 32
+#define kMaxInflightNormal 8
+#ifndef UCCL_GIN_MAX_INFLIGHT_NORMAL
+#define UCCL_GIN_MAX_INFLIGHT_NORMAL 8
+#endif
+#define kUCCLGinMaxInflightNormal UCCL_GIN_MAX_INFLIGHT_NORMAL
+static_assert(kUCCLGinMaxInflightNormal == 0 ||
+                  kUCCLGinMaxInflightNormal <= kQueueSize,
+              "UCCL_GIN_MAX_INFLIGHT_NORMAL must be 0 or <= UCCL_QUEUE_SIZE");
+#ifndef UCCL_CHANNEL_PER_PROXY
+#define UCCL_CHANNEL_PER_PROXY 8
+#endif
+#ifndef UCCL_NUM_PROXY_THS
+#define UCCL_NUM_PROXY_THS 4
+#endif
+#define kChannelPerProxy UCCL_CHANNEL_PER_PROXY
+#define kNumProxyThs UCCL_NUM_PROXY_THS
+// NCCL EFA plugin default: 8 MB mimicing (512KB*16)
+// NCCL IB net.cc default: 2 MB (128KB*16)
+#define kMaxInflightBytes SIZE_MAX
+#define kBatchSize 32
+#define kIterations 40000
+#define kTestNumGpuThPerBlock 1
+#define kObjectSize 7168  // 7 KB
+// #define kObjectSize 10752  // 10.5 KB
+// #define kObjectSize 14336  // 14 KB
+#define kMaxOutstandingSends 2048  // = max_send_wr, max_recv_wr, cq_depth / 2
+#define kMaxOutstandingRecvs 2048
+#define kSenderAckQueueDepth 2048
+#define kWarmupOps 10000
+// TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
+// values.
+#define kReorderingBufferSize 16  // Right now only 4 bits.
+#define kRemoteBufferSize (kBatchSize * kNumProxyThs * kObjectSize * 100)
+#define MAIN_THREAD_CPU_IDX 31
+#define MAX_NUM_GPUS 8
+#define RECEIVER_BATCH_SIZE 16
+#define kAtomicWrTag 0xa70a000000000000ULL
+#define kAtomicMask 0x0000FFFFFFFFFFFFULL
+#define kBarrierWrTag 0xbaba000000000000ULL
+#define kBarrierMask 0x0000FFFFFFFFFFFFULL
+#define kPrintCycleInterval 100000000000ULL
+#define MAX_RETRIES 100
+#define RETRY_DELAY_MS 50
+#define QKEY 0x11111111u
+#define kLargeAtomicValue 33550000
+#define kMaxSendAtomicValue 16383
+
+// P2P enable flags (once per GPU pair)
+extern std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
+bool pin_thread_to_cpu(int cpu);
+bool pin_thread_to_numa(int numa_node);
+bool pin_thread_unique(int numa_node, int local_rank, int thread_idx,
+                       int threads_per_rank);
+void cpu_relax();
+int get_num_max_nvl_peers();
+
+void maybe_enable_peer_access(int src_dev, int dst_dev);
+
+uint64_t make_wr_id(uint32_t tag, uint32_t slot);
+uint32_t wr_tag(uint64_t wrid);
+uint32_t wr_slot(uint64_t wrid);
+
+extern thread_local std::atomic<size_t> current_inflight_bytes;
+
+// C++11 guarantees that a static local variable's initializer runs exactly
+// once, even under concurrent access — the compiler emits a guard variable and
+// lock. This eliminates both the data race and the redundant getenv calls.
+static inline size_t get_max_inflight_bytes() {
+  static size_t val = []() -> size_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_BYTES");
+    return env ? static_cast<size_t>(atoi(env)) : kMaxInflightBytes;
+  }();
+  return val;
+}
+
+static inline uint32_t get_max_inflight_low_latency() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_LOW_LATENCY");
+    return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightLowLatency;
+  }();
+  return val;
+}
+
+static inline uint32_t get_max_inflight_normal() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
+    return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightNormal;
+  }();
+  return val;
+}
+
+// On AMD CDNA, vanilla __ATOMIC_RELEASE/__ATOMIC_ACQUIRE system-scope atomics
+// do NOT emit the `s_waitcnt vmcnt(0)` needed to drain prior vector-memory
+// writes before the producer's tail-pointer store becomes visible to peer
+// GPUs over XGMI. The "aggressive" variant inserts that waitcnt and uses a
+// relaxed-sys load/store, which is what is actually needed for the intranode
+// dispatch/combine ring buffers to work reliably. Without this, the combine
+// receiver eventually deadlocks because later tail updates (e.g.
+// final_tail=115) never propagate past an early value (e.g. shared_tail=24),
+// even though the sender provably finished writing.
+//
+// setup.py injects -DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1 for ROCm builds so
+// the default is "on" there; CUDA builds keep the historical default of 0.
+#ifndef UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC
+#define UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC 0
+#endif
+
+static inline bool get_aggressive_atomic_enabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC");
+    return env ? static_cast<uint32_t>(atoi(env))
+               : static_cast<uint32_t>(UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC);
+  }();
+  return val != 0;
+}
+
+// Runtime override for the CPU-side recv timeout.
+// Long training steps (e.g. Megatron-LM with large grad accumulation, heavy
+// checkpoint I/O, or EP groups initializing sequentially under PP >= 2) can
+// exceed the compile-time `NUM_CPU_TIMEOUT_SECS` default (100 s) and falsely
+// trigger "DeepEP error: CPU recv timeout" / "timeout (dispatch CPU)".
+static inline int get_cpu_timeout_secs(int fallback_secs) {
+  static int const val = [fallback_secs]() -> int {
+    char const* env = getenv("UCCL_EP_CPU_TIMEOUT_SECS");
+    if (env == nullptr || *env == '\0') return fallback_secs;
+    char* end = nullptr;
+    errno = 0;
+    long v = strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || v <= 0) {
+      fprintf(stderr,
+              "[UCCL] Warning: invalid UCCL_EP_CPU_TIMEOUT_SECS='%s', "
+              "using default %d seconds\n",
+              env, fallback_secs);
+      return fallback_secs;
+    }
+    if (v > INT_MAX) v = INT_MAX;
+    return static_cast<int>(v);
+  }();
+  return val;
+}
+
+#endif  // COMMON_HPP
