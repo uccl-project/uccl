@@ -409,6 +409,7 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       }
     }
 #endif
+    break;
   }
 
   // Then wait for each proxy’s barrier to complete
