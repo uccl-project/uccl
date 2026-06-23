@@ -1,0 +1,412 @@
+name: UCCL Build & Test (GH200)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to benchmark
+        required: true
+      sha:
+        description: PR head commit SHA to benchmark
+        required: true
+      head_repo:
+        description: PR head repository, for example owner/repo
+        required: true
+      benchmark:
+        description: Benchmark target name for PR comment write-back
+        required: false
+        default: gh200
+      reply_comment_id:
+        description: PR comment ID to update with benchmark result
+        required: false
+        default: ""
+      reply_marker:
+        description: Marker used to identify the benchmark reply comment
+        required: false
+        default: ""
+
+concurrency:
+  group: gh200-uccl-build-test
+  cancel-in-progress: false
+
+jobs:
+  mark-running:
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment with run URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status running \
+            --workflow-url "$WORKFLOW_URL"
+
+  build-and-test-on-gh200:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'workflow_dispatch' && inputs.head_repo || github.repository }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup SSH for gh200
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{secrets.UCCL_GH200_SSH_KEY}}" > ~/.ssh/uccl-gh200
+          chmod 600 ~/.ssh/uccl-gh200
+
+          cat >> ~/.ssh/config << 'EOF'
+          Host gh0
+              HostName "${{secrets.UCCL_GH200_HOST0}}"
+              User "${{secrets.UCCL_GH200_USER}}"
+              IdentityFile ~/.ssh/uccl-gh200
+              IdentitiesOnly yes
+
+          Host gh1
+              HostName "${{secrets.UCCL_GH200_HOST1}}"
+              User "${{secrets.UCCL_GH200_USER}}"
+              IdentityFile ~/.ssh/uccl-gh200
+              IdentitiesOnly yes
+          EOF
+
+          ssh-keyscan -H "${{secrets.UCCL_GH200_HOST0}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_GH200_HOST1}}" >> ~/.ssh/known_hosts
+
+      - name: Install CXI system dependencies on gh200
+        shell: bash
+        run: |
+          set -euo pipefail
+          for host in gh0 gh1; do
+            ssh -o BatchMode=yes "$host" bash -s << 'EOF'
+              set -euo pipefail
+              sudo apt-get update
+              sudo apt-get install -y libfabric-dev libhwloc-dev
+          EOF
+          done
+
+      - name: Sync pushed code to gh200
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive thirdparty/nccl
+          for host in gh0 gh1; do
+            rsync -az --exclude .venv --exclude .git --delete \
+              --rsync-path="mkdir -p /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox && rsync" \
+              ./ep ./ \
+              "$host":/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+          done
+
+      - name: Build and verify UCCL on gh200
+        shell: bash
+        run: |
+          set -euo pipefail
+          for host in gh0 gh1; do
+            ssh -o BatchMode=yes "$host" bash -s << 'EOF'
+          set -euo pipefail
+
+          source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+
+          conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13 pip
+          conda activate uccl-ci-sandbox
+          python -c 'import torch' 2>/dev/null || python -m pip install torch torchvision torchaudio
+
+          cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+
+          ./build.sh cu13 ep 3.13 --install 2>&1 | tee build.log
+
+          if ! python -c 'import torch; import uccl.ep'; then
+            echo 'Import of torch and uccl.ep failed.'
+            exit 1
+          fi
+
+          echo 'Build and Verification Successful!'
+          EOF
+          done
+
+      - name: Run EP inter-node latency test
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes gh0 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            # abort if there are active jobs on the cluster
+            if [ -n "$active_jobs" ]; then
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
+
+            export UCCL_SOCKET_IFNAME=enx3c18a0d51943
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+          EOF
+          PID_SERVER=$!
+
+          sleep 2
+          echo "Started test on server..."
+
+          ssh -o BatchMode=yes gh1 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            # abort if there are active jobs on the cluster
+            if [ -n "$active_jobs" ]; then
+                echo "gh1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            source /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/ep
+            export UCCL_SOCKET_IFNAME=enxc8a36290119d
+
+            /home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=${{secrets.UCCL_GH200_HOST0}} --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+          EOF
+          PID_CLIENT=$!
+
+          echo "Started test on client..."
+
+          wait $PID_SERVER
+          STATUS_SERVER=$?
+          echo "Server exit code: $STATUS_SERVER"
+
+          wait $PID_CLIENT
+          STATUS_CLIENT=$?
+          echo "Client exit code: $STATUS_CLIENT"
+
+          if [ $STATUS_SERVER -ne 0 ] || [ $STATUS_CLIENT -ne 0 ]; then
+            echo "2-Node Latency Test Failed!"
+            exit 1
+          fi
+
+      - name: Run P2P nixlbench
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes gh0 << 'EOF'
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+            NIXL_INSTALL_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test
+            CONDA_ENV_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox
+            NVIDIA_NCCL_LIB="${CONDA_ENV_DIR}/lib/python3.13/site-packages/nvidia/nccl/lib"
+            mkdir -p "${NIXL_INSTALL_DIR}/lib"
+            if [ -e /lib/aarch64-linux-gnu/libcudart.so.12 ]; then
+              cudart_target="$(readlink -f /lib/aarch64-linux-gnu/libcudart.so.12)"
+              cp -f "${cudart_target}" "${NIXL_INSTALL_DIR}/lib/$(basename "${cudart_target}")"
+              ln -sf "$(basename "${cudart_target}")" "${NIXL_INSTALL_DIR}/lib/libcudart.so.12"
+            fi
+            if [ -e "${NVIDIA_NCCL_LIB}/libnccl.so.2" ]; then
+              ln -sf "${NVIDIA_NCCL_LIB}/libnccl.so.2" "${NIXL_INSTALL_DIR}/lib/libnccl.so"
+            fi
+            export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu/plugins:${CONDA_ENV_DIR}/lib:${NVIDIA_NCCL_LIB}:${LD_LIBRARY_PATH:-}"
+            export UCCL_SOCKET_IFNAME=enx3c18a0d51943
+            export NCCL_SOCKET_IFNAME=enx3c18a0d51943
+            
+            bash .github/workflows/nixlbench_test.sh "${NIXL_INSTALL_DIR}" 2>&1 | tee nixlbench.log
+          EOF
+
+      - name: Run P2P nixlbench inter-node (RDMA + NCCL)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -o BatchMode=yes gh0 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "gh0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+            NIXL_INSTALL_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test
+            CONDA_ENV_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox
+            NVIDIA_NCCL_LIB="${CONDA_ENV_DIR}/lib/python3.13/site-packages/nvidia/nccl/lib"
+            mkdir -p "${NIXL_INSTALL_DIR}/lib"
+            if [ -e /lib/aarch64-linux-gnu/libcudart.so.12 ]; then
+              cudart_target="$(readlink -f /lib/aarch64-linux-gnu/libcudart.so.12)"
+              cp -f "${cudart_target}" "${NIXL_INSTALL_DIR}/lib/$(basename "${cudart_target}")"
+              ln -sf "$(basename "${cudart_target}")" "${NIXL_INSTALL_DIR}/lib/libcudart.so.12"
+            fi
+            if [ -e "${NVIDIA_NCCL_LIB}/libnccl.so.2" ]; then
+              ln -sf "${NVIDIA_NCCL_LIB}/libnccl.so.2" "${NIXL_INSTALL_DIR}/lib/libnccl.so"
+            fi
+            export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu/plugins:${CONDA_ENV_DIR}/lib:${NVIDIA_NCCL_LIB}:${LD_LIBRARY_PATH:-}"
+            export ETCD_HOST_IP=${{secrets.UCCL_GH200_HOST0}}
+            export UCCL_SOCKET_IFNAME=enx3c18a0d51943
+            export NCCL_SOCKET_IFNAME=enx3c18a0d51943
+
+            bash .github/workflows/nixlbench_test_internode.sh "${NIXL_INSTALL_DIR}" --host-etcd 2>&1 | tee nixlbench_internode_gh0.log
+          EOF
+          PID_GH0=$!
+
+          sleep 5
+
+          ssh -o BatchMode=yes gh1 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "gh1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            cd /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox
+            NIXL_INSTALL_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/nixl_test
+            CONDA_ENV_DIR=/home/${{secrets.UCCL_GH200_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox
+            NVIDIA_NCCL_LIB="${CONDA_ENV_DIR}/lib/python3.13/site-packages/nvidia/nccl/lib"
+            mkdir -p "${NIXL_INSTALL_DIR}/lib"
+            if [ -e /lib/aarch64-linux-gnu/libcudart.so.12 ]; then
+              cudart_target="$(readlink -f /lib/aarch64-linux-gnu/libcudart.so.12)"
+              cp -f "${cudart_target}" "${NIXL_INSTALL_DIR}/lib/$(basename "${cudart_target}")"
+              ln -sf "$(basename "${cudart_target}")" "${NIXL_INSTALL_DIR}/lib/libcudart.so.12"
+            fi
+            if [ -e "${NVIDIA_NCCL_LIB}/libnccl.so.2" ]; then
+              ln -sf "${NVIDIA_NCCL_LIB}/libnccl.so.2" "${NIXL_INSTALL_DIR}/lib/libnccl.so"
+            fi
+            export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu/plugins:${CONDA_ENV_DIR}/lib:${NVIDIA_NCCL_LIB}:${LD_LIBRARY_PATH:-}"
+            export ETCD_HOST_IP=${{secrets.UCCL_GH200_HOST0}}
+            export UCCL_SOCKET_IFNAME=enxc8a36290119d
+            export NCCL_SOCKET_IFNAME=enxc8a36290119d
+
+            bash .github/workflows/nixlbench_test_internode.sh "${NIXL_INSTALL_DIR}" 2>&1 | tee nixlbench_internode_gh1.log
+          EOF
+          PID_GH1=$!
+
+          wait $PID_GH0; STATUS_GH0=$?
+          echo "gh0 exit code: $STATUS_GH0"
+
+          wait $PID_GH1; STATUS_GH1=$?
+          echo "gh1 exit code: $STATUS_GH1"
+
+          if [ $STATUS_GH0 -ne 0 ] || [ $STATUS_GH1 -ne 0 ]; then
+            echo "Inter-node nixlbench tests FAILED!"
+            exit 1
+          fi
+
+      - name: Fetch remote logs
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build-gh0.log || true
+          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log ./gh200-build-gh1.log || true
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./gh200-nixlbench.log || true
+          scp -o BatchMode=yes gh0:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh0.log ./gh200-nixlbench-internode-gh0.log || true
+          scp -o BatchMode=yes gh1:/home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh1.log ./gh200-nixlbench-internode-gh1.log || true
+          ssh -o BatchMode=yes gh1 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/build.log
+          EOF
+          ssh -o BatchMode=yes gh0 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench.log
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh0.log
+          EOF
+          ssh -o BatchMode=yes gh1 << 'EOF'
+            rm -f /home/${{secrets.UCCL_GH200_USER}}/nfs/uccl-ci-sandbox/nixlbench_internode_gh1.log
+          EOF
+
+      - name: Upload log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-and-benchmark-logs-gh200
+          path: |
+            gh200-build-gh0.log
+            gh200-build-gh1.log
+            gh200-nixlbench.log
+            gh200-nixlbench-internode-gh0.log
+            gh200-nixlbench-internode-gh1.log
+          if-no-files-found: warn
+
+  write-back-result:
+    needs: [mark-running, build-and-test-on-gh200]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          BENCHMARK_RESULT: ${{ needs.build-and-test-on-gh200.result }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status "$BENCHMARK_RESULT" \
+            --result "$BENCHMARK_RESULT" \
+            --workflow-url "$WORKFLOW_URL"

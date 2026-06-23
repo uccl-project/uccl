@@ -4,8 +4,8 @@
 #
 # Runs inter-node nixlbench tests (RDMA + NCCL) across two nodes coordinating via etcd.
 #
-#   --host-etcd: This node (spark0) starts etcd on 10.0.0.1:12379
-#   Without flag: This node (spark1) connects to etcd on spark0
+#   --host-etcd: This node starts etcd on ETCD_HOST_IP:12379
+#   Without flag: This node connects to ETCD_HOST_IP
 
 set -euo pipefail
 
@@ -16,11 +16,12 @@ UCCL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MINICONDA_DIR="${HOME}/nfs/miniconda3"
 CONDA_ENV="uccl-ci-sandbox"
+NIXL_DEPS_DIR="${NIXL_DEPS_DIR:-${HOME}/nfs/nixl_deps}"
 
 HOST_ETCD=false
 ETCD_PORT=12379
 ETCD_PEER_PORT=12380
-ETCD_HOST_IP="10.0.0.1"
+ETCD_HOST_IP="${ETCD_HOST_IP:-10.0.0.1}"
 ETCD_ENDPOINT="http://${ETCD_HOST_IP}:${ETCD_PORT}"
 
 ETCD_PID=""
@@ -64,14 +65,14 @@ ARCH=$(uname -m)
 [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
 
 export PATH="${NIXL_INSTALL_DIR}/bin:${PATH}"
-export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:${NIXL_DEPS_DIR}/lib:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export NIXL_PLUGIN_DIR="${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins"
-export UCCL_SOCKET_IFNAME="enP2p1s0f0np0"
+export UCCL_SOCKET_IFNAME="${UCCL_SOCKET_IFNAME:-enP2p1s0f0np0}"
 
 # NCCL environment variables for debugging and inter-node communication
 export NCCL_DEBUG=INFO
 export NCCL_IB_DISABLE=1
-export NCCL_SOCKET_IFNAME="enP2p1s0f0np0"
+export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${UCCL_SOCKET_IFNAME}}"
 
 echo "NIXL_PLUGIN_DIR=${NIXL_PLUGIN_DIR}"
 echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
@@ -159,7 +160,7 @@ run_test() {
 # ── Run tests sequentially ─────────────────────────────────────────────────────
 echo ""
 echo "=== Running inter-node nixlbench tests ==="
-echo "NOTE: This script must run on BOTH spark0 and spark1 simultaneously!"
+echo "NOTE: This script must run on BOTH nodes simultaneously!"
 echo ""
 
 OVERALL_STATUS=0
@@ -178,6 +179,12 @@ run_test "nccl" || OVERALL_STATUS=1
 if [ $OVERALL_STATUS -ne 0 ]; then
     echo "=== NCCL test FAILED ==="
     exit 1
+fi
+
+if $HOST_ETCD; then
+    ETCD_GRACE_SECONDS="${NIXL_HOST_ETCD_GRACE_SECONDS:-10}"
+    echo "=== Keeping etcd alive for ${ETCD_GRACE_SECONDS}s for peer shutdown ==="
+    sleep "${ETCD_GRACE_SECONDS}"
 fi
 
 echo ""

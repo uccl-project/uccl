@@ -2,6 +2,7 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
+#include "cxi/cxi_endpoint.h"
 #include "nccl_endpoint.h"
 #include "rdma_endpoint.h"
 #include "transport_type.h"
@@ -26,9 +27,10 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint: holds either RDMA or NCCL endpoint.
+// Runtime-polymorphic endpoint.
 using GenericEndpoint =
-    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>>;
+    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
+                 std::shared_ptr<CxiEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
@@ -48,6 +50,7 @@ struct P2PMhandle {
   MRArray mr_array;
   CompressCtx compress_ctx;
   std::vector<MrCacheHandleRef> cache_refs;
+  std::shared_ptr<CxiMemoryRegion> cxi_region;
 };
 
 struct MR {
@@ -248,6 +251,7 @@ class Endpoint {
   static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
 
   static uccl::UCCLLogLevel parse_log_level_from_env();
+  static size_t max_one_sided_inflight_ops();
 
  public:
   /* Create engine threads running in background for a single interface. It also
