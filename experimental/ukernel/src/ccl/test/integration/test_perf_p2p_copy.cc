@@ -1,6 +1,7 @@
 #include "backend/async_backend.h"
 #include "backend/backend.h"
 #include "backend/device_backend.h"
+#include "backend/transport_backend.h"
 #include "coll_config.h"
 #include "coll_types.h"
 #include "gpu_rt.h"
@@ -432,6 +433,222 @@ int main(int argc, char** argv) {
   }
   std::printf("[p2p-perf] comm->put benchmarks done.\n");
 
+  // ── 9b. Benchmark TransportBackend (AsyncBackend wrapper) ─────────
+  // Uses OpKind::Send to push from local buf1 (d_local) to peer buf1
+  // (peer d_local), running through AsyncBackend on top of TransportBackend.
+  {
+    TransportBackend tpt_be(comm.get());
+    // Only register local buffers — remote (IPC-mapped) pointers cannot be
+    // re-wrapped with gpuIpcGetMemHandle.  Both sides register buf1 = d_local;
+    // we then Send from local buf1 to peer buf1 (registered by the peer).
+    BufSpec bufs[3] = {
+        {d_local, kMaxBytes}, {nullptr, 0}, {nullptr, 0}};
+    tpt_be.init(bufs);
+    if (!comm->resolve_remote_buffer(peer, /*buffer_id=*/1)) {
+      std::fprintf(stderr, "[p2p-perf] resolve_remote_buffer(peer=%d,1) failed\n",
+                   peer);
+      return 1;
+    }
+    AsyncBackend async(&tpt_be, 2048, 2048);
+    async.start();
+    std::printf("[p2p-perf] TransportBackend init done, rank=%d\n", rank);
+
+    if (rank == 0) {
+      for (size_t bytes : sizes) {
+        // Latency
+        constexpr int kLatencyIters = 5;
+        std::vector<double> latencies;
+        latencies.reserve(kLatencyIters);
+
+        for (int iter = 0; iter < kLatencyIters; ++iter) {
+          CmdWithId cwi;
+          cwi.cmd.kind = OpKind::Send;
+          cwi.cmd.bytes = static_cast<uint32_t>(bytes);
+          cwi.cmd.src_buf = 1;   // local d_local
+          cwi.cmd.dst_buf = 1;   // peer d_local (registered by peer's init)
+          cwi.cmd.src_off = 0; cwi.cmd.dst_off = 0;
+          cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
+          cwi.cmd.src_peer = static_cast<uint32_t>(rank);
+          cwi.cmd.transport = 0;  // auto
+          cwi.caller_id = static_cast<uint32_t>(iter);
+
+          auto t0 = std::chrono::steady_clock::now();
+          while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
+          uint32_t done = ~0u;
+          while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
+          auto t1 = std::chrono::steady_clock::now();
+          latencies.push_back(elapsed_us(t0, t1));
+        }
+
+        double avg_lat = 0;
+        for (double l : latencies) avg_lat += l;
+        avg_lat /= latencies.size();
+
+        // Throughput
+        constexpr int kBatchSize = 16;
+        constexpr int kThroughputIters = 3;
+        std::vector<double> throughputs;
+
+        for (int iter = 0; iter < kThroughputIters; ++iter) {
+          CmdWithId cwis[kBatchSize];
+          for (int b = 0; b < kBatchSize; ++b) {
+            cwis[b].cmd.kind = OpKind::Send;
+            cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
+            cwis[b].cmd.src_buf = 1;
+            cwis[b].cmd.dst_buf = 1;
+            cwis[b].cmd.src_off = 0; cwis[b].cmd.dst_off = 0;
+            cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
+            cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
+            cwis[b].cmd.transport = 0;
+            cwis[b].caller_id = static_cast<uint32_t>(b);
+          }
+
+          auto t0 = std::chrono::steady_clock::now();
+          size_t enqueued = 0;
+          while (enqueued < kBatchSize) {
+            size_t n = async.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
+            enqueued += n;
+            if (enqueued < kBatchSize) std::this_thread::yield();
+          }
+
+          size_t drained = 0;
+          uint32_t done_buf[kBatchSize];
+          while (drained < kBatchSize) {
+            size_t n = async.try_drain(done_buf + drained, kBatchSize - drained);
+            drained += n;
+            if (drained < kBatchSize) std::this_thread::yield();
+          }
+          auto t1 = std::chrono::steady_clock::now();
+
+          double total_bytes = static_cast<double>(bytes) * kBatchSize;
+          double time_s = elapsed_us(t0, t1) / 1e6;
+          double gbps = (total_bytes / time_s) / 1e9;
+          throughputs.push_back(gbps);
+        }
+
+        double avg_tp = 0;
+        for (double t : throughputs) avg_tp += t;
+        avg_tp /= throughputs.size();
+
+        results.push_back(
+            {"transport_backend", 0, bytes, avg_lat, avg_tp});
+      }
+      std::printf("[p2p-perf] TransportBackend benchmarks done.\n");
+    }
+    async.stop();
+  }
+
+  // ── 9c. Benchmark TransportBackend (RDMA transport) ────────────────
+  // Same as 9b, but forces PeerTransportKind::Rdma so every Send goes
+  // through the RDMA adapter instead of the default (auto / IPC).
+  {
+    TransportBackend tpt_be(comm.get());
+    BufSpec bufs[3] = {
+        {d_local, kMaxBytes}, {nullptr, 0}, {nullptr, 0}};
+    tpt_be.init(bufs);
+    if (!comm->resolve_remote_buffer(peer, /*buffer_id=*/1)) {
+      std::fprintf(stderr,
+                   "[p2p-perf] resolve_remote_buffer(peer=%d,1) failed (RDMA)\n",
+                   peer);
+      return 1;
+    }
+    AsyncBackend async(&tpt_be, 2048, 2048);
+    async.start();
+    std::printf("[p2p-perf] TransportBackend (RDMA) init done, rank=%d\n", rank);
+
+    // Establish the RDMA data-plane path at connect time instead of
+    // deferring to the first send.
+    if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
+        !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
+      std::fprintf(stderr, "[p2p-perf] RDMA connect/accept failed\n");
+      return 1;
+    }
+
+    if (rank == 0) {
+      for (size_t bytes : sizes) {
+        constexpr int kLatencyIters = 5;
+        std::vector<double> latencies;
+        latencies.reserve(kLatencyIters);
+
+        for (int iter = 0; iter < kLatencyIters; ++iter) {
+          CmdWithId cwi;
+          cwi.cmd.kind = OpKind::Send;
+          cwi.cmd.bytes = static_cast<uint32_t>(bytes);
+          cwi.cmd.src_buf = 1;
+          cwi.cmd.dst_buf = 1;
+          cwi.cmd.src_off = 0; cwi.cmd.dst_off = 0;
+          cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
+          cwi.cmd.src_peer = static_cast<uint32_t>(rank);
+          cwi.cmd.transport = 3;  // PeerTransportKind::Rdma
+          cwi.caller_id = static_cast<uint32_t>(iter);
+
+          auto t0 = std::chrono::steady_clock::now();
+          while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
+          uint32_t done = ~0u;
+          while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
+          auto t1 = std::chrono::steady_clock::now();
+          latencies.push_back(elapsed_us(t0, t1));
+        }
+
+        double avg_lat = 0;
+        for (double l : latencies) avg_lat += l;
+        avg_lat /= latencies.size();
+
+        constexpr int kBatchSize = 16;
+        constexpr int kThroughputIters = 3;
+        std::vector<double> throughputs;
+
+        for (int iter = 0; iter < kThroughputIters; ++iter) {
+          CmdWithId cwis[kBatchSize];
+          for (int b = 0; b < kBatchSize; ++b) {
+            cwis[b].cmd.kind = OpKind::Send;
+            cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
+            cwis[b].cmd.src_buf = 1;
+            cwis[b].cmd.dst_buf = 1;
+            cwis[b].cmd.src_off = 0; cwis[b].cmd.dst_off = 0;
+            cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
+            cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
+            cwis[b].cmd.transport = 3;  // PeerTransportKind::Rdma
+            cwis[b].caller_id = static_cast<uint32_t>(b);
+          }
+
+          auto t0 = std::chrono::steady_clock::now();
+          size_t enqueued = 0;
+          while (enqueued < kBatchSize) {
+            size_t n =
+                async.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
+            enqueued += n;
+            if (enqueued < kBatchSize) std::this_thread::yield();
+          }
+
+          size_t drained = 0;
+          uint32_t done_buf[kBatchSize];
+          while (drained < kBatchSize) {
+            size_t n =
+                async.try_drain(done_buf + drained, kBatchSize - drained);
+            drained += n;
+            if (drained < kBatchSize) std::this_thread::yield();
+          }
+          auto t1 = std::chrono::steady_clock::now();
+
+          double total_bytes = static_cast<double>(bytes) * kBatchSize;
+          double time_s = elapsed_us(t0, t1) / 1e6;
+          double gbps = (total_bytes / time_s) / 1e9;
+          throughputs.push_back(gbps);
+        }
+
+        double avg_tp = 0;
+        for (double t : throughputs) avg_tp += t;
+        avg_tp /= throughputs.size();
+
+        results.push_back(
+            {"transport_backend_rdma", 0, bytes, avg_lat, avg_tp});
+      }
+      std::printf("[p2p-perf] TransportBackend (RDMA) benchmarks done.\n");
+    }
+    async.stop();
+  }
+
   // ── 10. Output tables ─────────────────────────────────────────────────
   comm->barrier("results_barrier", 30000);
   if (rank != 0) {
@@ -466,7 +683,11 @@ int main(int argc, char** argv) {
   for (auto b : blocks_seen) names.push_back("b" + std::to_string(b));
   names.push_back("gpuMemcpyPeer");
   names.push_back("comm_put");
+  names.push_back("transport_backend");
+  names.push_back("transport_backend_rdma");
   std::vector<uint32_t> tb_values = blocks_seen;
+  tb_values.push_back(0);
+  tb_values.push_back(0);
   tb_values.push_back(0);
   tb_values.push_back(0);
 
@@ -486,8 +707,12 @@ int main(int argc, char** argv) {
         }
     } else if (r.method == "gpuMemcpyPeerAsync") {
       mi = blocks_seen.size();
+    } else if (r.method == "comm_put") {
+      mi = blocks_seen.size() + 1;
+    } else if (r.method == "transport_backend") {
+      mi = blocks_seen.size() + 2;
     } else {
-      mi = blocks_seen.size() + 1;  // comm_put
+      mi = blocks_seen.size() + 3;  // transport_backend_rdma
     }
     map[{r.bytes, mi}] = {r.latency_us, r.throughput_gbps};
   }
