@@ -3,6 +3,7 @@
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
 #include "rdma.hpp"
+#include "rdma_util.hpp"
 #include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
@@ -167,6 +168,7 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   ctxs_for_all_ranks_.resize(peers.size());
   for (size_t i = 0; i < peers.size(); ++i) {
     ctxs_for_all_ranks_[i] = std::make_unique<ProxyCtx>();
+    ctxs_for_all_ranks_[i]->udp_sport_base = get_udp_sport_base_from_env();
   }
 }
 
