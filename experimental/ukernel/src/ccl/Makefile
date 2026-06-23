@@ -78,7 +78,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_perf_async test_perf_p2p_copy
+INTEGRATION_TEST_BINS := test_perf_p2p_copy
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -93,8 +93,7 @@ test-unit: $(UNIT_TEST_BINS)
 	./test_async
 
 test-integration: $(INTEGRATION_TEST_BINS)
-	@echo "Running GPU performance test..."
-	CUDA_VISIBLE_DEVICES=6,7 ./test_perf_async
+	@echo "Built test_perf_p2p_copy. Run it manually in two terminals (server + client); see src/ccl/README.md."
 
 unit: test-unit
 
@@ -107,11 +106,6 @@ test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 
 test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_async.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
-
-test_perf_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o \
-		$(DEVICE_OBJ) test/integration/test_perf_async.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
 
 test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o backend/transport_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
@@ -172,5 +166,4 @@ clean:
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
 	test/unit/test_modules.d test/unit/test_async.d \
-	test/integration/test_perf_async.d \
 	test/integration/test_perf_p2p_copy.d

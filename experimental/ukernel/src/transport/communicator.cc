@@ -1349,11 +1349,15 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
   uint64_t last_gen = 0;
+  bool have_last_gen = false;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
     auto it =
         last_mr_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
-    if (it != last_mr_generation_.end()) last_gen = it->second;
+    if (it != last_mr_generation_.end()) {
+      last_gen = it->second;
+      have_last_gen = true;
+    }
   }
 
   constexpr int kPollMs = 10;
@@ -1380,7 +1384,10 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
       continue;
     }
 
-    if (payload.generation != last_gen) break;  // new data — accept
+    // First-ever resolve must be accepted unconditionally: the initial publish
+    // generation (0) equals the default last_gen (0), so a pure generation
+    // comparison would loop forever. De-duplicate by generation only after that.
+    if (!have_last_gen || payload.generation != last_gen) break;
 
     // Same generation, check if we already have it cached (CCL repeat calls)
     {
@@ -1526,11 +1533,15 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
   uint64_t last_gen = 0;
+  bool have_last_gen = false;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
     auto it =
         last_ipc_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
-    if (it != last_ipc_generation_.end()) last_gen = it->second;
+    if (it != last_ipc_generation_.end()) {
+      last_gen = it->second;
+      have_last_gen = true;
+    }
   }
 
   constexpr int kPollMs = 10;
@@ -1548,25 +1559,24 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
       continue;
     }
 
-    // New generation — update tracking and check validity.
-    // If the entry is invalid (e.g. a dereg_ipc publish that raced
-    // ahead of the next reg_ipc), skip it and keep polling for a
-    // valid one.
-    if (info.generation != last_gen) {
+    // First-ever resolve, or a newer publish. The initial publish generation
+    // (0) equals the default last_gen (0); without the have_last_gen guard a
+    // re-resolve of an already-resolved buffer (generation unchanged) would
+    // spin forever. Skip stale (invalid) deregister entries.
+    if (!have_last_gen || info.generation != last_gen) {
       std::lock_guard<std::mutex> lk(mr_gen_mu_);
       last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
           info.generation;
       last_gen = info.generation;
+      have_last_gen = true;
       if (!info.valid) {
         continue;  // stale deregister entry — wait for next publish
       }
       break;
     }
 
-    // Same generation — the remote peer may not have published a
-    // new entry yet (e.g., still running the previous iteration).
-    // Continue polling until a generation change is observed.
-    continue;
+    // Same generation we already resolved successfully before: reuse it.
+    return true;
   }
 
   IPCItem state{};
