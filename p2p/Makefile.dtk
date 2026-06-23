@@ -20,10 +20,6 @@ HIP_HOME ?= /opt/dtk
 HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME ?= /usr/lib
-# Point to the bundled EFA stub: Hygon machines lack the AWS EFA SDK but the
-# EFA provider sources still need to compile (transport disabled at runtime).
-EFA_HOME ?= $(CURDIR)/efa_stub
-
 
 CXX := g++
 
@@ -50,7 +46,7 @@ endif
 # selects DTK-specific fallbacks (no DMA-BUF export, no hipStreamLegacy).
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
-	-I$(HIP_INC) -I$(EFA_HOME)/include \
+	-I$(HIP_INC) \
 	-I${CONDA_LIB_HOME}/../include \
 	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
 	-D__HIP_PLATFORM_AMD__ -D__UCCL_DTK__ \
