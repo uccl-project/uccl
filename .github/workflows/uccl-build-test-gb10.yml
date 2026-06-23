@@ -116,6 +116,18 @@ jobs:
           ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK0_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
           ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK1_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
 
+      - name: Install CXI system dependencies on gb10
+        shell: bash
+        run: |
+          set -euo pipefail
+          for host in spark0 spark1; do
+            ssh -o BatchMode=yes "$host" bash -s << 'EOF'
+              set -euo pipefail
+              sudo apt-get update
+              sudo apt-get install -y libfabric-dev libhwloc-dev
+          EOF
+          done
+
       - name: Sync pushed code to gb10
         shell: bash
         run: |

@@ -1,10 +1,10 @@
 # Makefile for UCCL P2P Engine nanobind project (stable ABI)
 #
 # Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
-# libibverbs, libnccl, and libefa are loaded dynamically at runtime via
-# dlopen/dlsym (see *_dl.h). No transport libraries are linked.
+# libibverbs, libnccl, libefa, and libfabric/CXI are loaded dynamically at
+# runtime via dlopen/dlsym (see *_dl.h).
 #
-# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
+# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa|cxi (default: rdma)
 
 # DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -14,6 +14,7 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
+LIBFABRIC_HOME ?= /opt/libfabric
 
 # Building with the following settings:
 # NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
@@ -23,7 +24,7 @@ LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include -I$(CUDA_INC) \
-	-I$(EFA_HOME)/include \
+	-I$(EFA_HOME)/include -I$(LIBFABRIC_HOME)/include \
 	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
@@ -75,9 +76,9 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-# NO transport libraries linked (-libverbs, -lnccl, -lefa).
-# All ibv_* / nccl* / efadv_* symbols are provided by the dlsym wrappers
-# in rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/efadv_dl.cc.
+# No transport libraries are linked (-libverbs, -lnccl, -lefa, -lfabric).
+# All ibv_* / nccl* / efadv_* / fi_* symbols are provided by dlsym wrappers in
+# rdma/ibverbs_dl.cc, nccl/nccl_dl.cc, rdma/efadv_dl.cc, and cxi/fabric_dl.cc.
 # The --wrap flags redirect compat-layer calls from verbs.h to our wrappers.
 IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_query_port \
@@ -96,9 +97,11 @@ P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-# dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
-DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
-DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
+# dlsym wrapper objects provide ibv_*/nccl*/efadv_*/fi_* symbols at link time
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc \
+	cxi/fabric_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o \
+	cxi/fabric_dl.o
 P2P_IMPL_SOURCES := \
 	util/adaptive_sleeper.cc \
 	util/common.cc \
@@ -114,7 +117,8 @@ P2P_IMPL_SOURCES := \
 	rdma/rdma_endpoint.cc \
 	util/seq_num.cc \
 	rdma/providers/efa_data_channel_impl.cc \
-	rdma/providers/ib_data_channel_impl.cc
+	rdma/providers/ib_data_channel_impl.cc \
+	cxi/cxi_endpoint.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS) $(DL_OBJECTS)
@@ -176,6 +180,7 @@ clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
+	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
 
 # Test the module
