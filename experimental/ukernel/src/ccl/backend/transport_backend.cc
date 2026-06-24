@@ -94,14 +94,22 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
 size_t TransportBackend::drain(uint32_t* completed, size_t max) {
   UKernel::Transport::CompletionResult results[256];
   size_t n = comm_->try_complete(results, std::min(max, (size_t)256));
+  size_t out = 0;
   for (size_t i = 0; i < n; ++i) {
+    // Skip failed completions — they carry no useful data and would
+    // otherwise be reported as artificially fast (sub‑μs) latencies.
+    if (results[i].failed) {
+      auto it = rid_to_cmd_.find(results[i].rid);
+      if (it != rid_to_cmd_.end()) rid_to_cmd_.erase(it);
+      continue;
+    }
     auto it = rid_to_cmd_.find(results[i].rid);
     if (it != rid_to_cmd_.end()) {
-      completed[i] = it->second;
+      completed[out++] = it->second;
       rid_to_cmd_.erase(it);
     }
   }
-  return n;
+  return out;
 }
 
 size_t TransportBackend::drain_signals(uint32_t* completed, size_t max) {
