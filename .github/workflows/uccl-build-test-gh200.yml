@@ -116,13 +116,17 @@ jobs:
 
       - name: Install CXI system dependencies on gh200
         shell: bash
+        env:
+          UCCL_GH200_PASSWD: ${{ secrets.UCCL_GH200_PASSWD }}
         run: |
           set -euo pipefail
+          passwd_b64="$(printf '%s' "$UCCL_GH200_PASSWD" | base64 -w0)"
           for host in gh0 gh1; do
-            ssh -o BatchMode=yes "$host" bash -s << 'EOF'
+            ssh -o BatchMode=yes "$host" bash -s << EOF
               set -euo pipefail
-              sudo apt-get update
-              sudo apt-get install -y libfabric-dev libhwloc-dev
+              UCCL_GH200_PASSWD="\$(printf '%s' "${passwd_b64}" | base64 -d)"
+              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get update
+              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get install -y libfabric-dev libhwloc-dev
           EOF
           done
 

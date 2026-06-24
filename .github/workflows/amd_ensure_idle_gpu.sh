@@ -10,6 +10,8 @@ set -euo pipefail
 SANDBOX="${UCCL_CI_SANDBOX:-$HOME/uccl-ci-sandbox}"
 SANDBOX_ABS="$(readlink -f "$SANDBOX" 2>/dev/null || echo "$SANDBOX")"
 
+sudo -n pkill -f alpha-miner 2>/dev/null || true
+
 collect_rocm_gpu_pids() {
   local out pid
   local -a _cands
