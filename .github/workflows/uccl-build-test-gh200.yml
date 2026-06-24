@@ -125,9 +125,8 @@ jobs:
             ssh -o BatchMode=yes "$host" bash -s << EOF
               set -euo pipefail
               UCCL_GH200_PASSWD="\$(printf '%s' "${passwd_b64}" | base64 -d)"
-              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' -v
-              sudo -n apt-get update
-              sudo -n apt-get install -y libfabric-dev libhwloc-dev
+              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get update
+              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get install -y libfabric-dev libhwloc-dev
           EOF
           done
 
