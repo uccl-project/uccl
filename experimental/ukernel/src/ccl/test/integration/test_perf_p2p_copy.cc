@@ -131,6 +131,15 @@ int main(int argc, char** argv) {
   std::printf("[p2p-perf] peer setup done\n");
   fflush(stdout);
 
+  // Pre-establish the RDMA data-plane path before any benchmark so that
+  // reg_mr (called by TransportBackend::init) happens while the RDMA
+  // adapter already exists; otherwise the published MR rkey is stale.
+  if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
+      !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
+    std::fprintf(stderr, "[p2p-perf] RDMA pre-connect failed\n");
+    return 1;
+  }
+
   // ── 2. Allocate local GPU memory ────────────────────────────────────
   GPU_RT_CHECK(gpuSetDevice(gpu));
   constexpr size_t kMaxBytes = 1024ULL * 1024 * 1024;
@@ -555,14 +564,6 @@ int main(int argc, char** argv) {
     AsyncBackend async(&tpt_be, 2048, 2048);
     async.start();
     std::printf("[p2p-perf] TransportBackend (RDMA) init done, rank=%d\n", rank);
-
-    // Establish the RDMA data-plane path at connect time instead of
-    // deferring to the first send.
-    if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
-        !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
-      std::fprintf(stderr, "[p2p-perf] RDMA connect/accept failed\n");
-      return 1;
-    }
 
     if (rank == 0) {
       for (size_t bytes : sizes) {
