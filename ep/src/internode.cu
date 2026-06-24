@@ -3,10 +3,10 @@
 #include "ep_launch.cuh"
 #include "ep_utils.cuh"
 #include "exception.cuh"
+#include "internode.cuh"
 #include "uccl_transfer_device.cuh"
 #include <functional>
 #include <optional>
-#include "internode.cuh"
 
 namespace uccl {
 
@@ -134,14 +134,13 @@ __global__ void notify_dispatch(
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
     if (thread_id == WARP_SIZE) {
-      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank);
     }
     __syncthreads();
 
     if (thread_id == WARP_SIZE) {
-      uccl::sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     }
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
@@ -221,15 +220,14 @@ __global__ void notify_dispatch(
 
     // Wait previous operations to be finished
     if (thread_id == WARP_SIZE) {
-      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank);
     }
     __syncthreads();
 
     // Barrier
     if (thread_id == 0) {
-      uccl::sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     }
     __syncthreads();
 
@@ -340,8 +338,8 @@ __global__ void notify_dispatch(
 
     // Finally barrier
     if (thread_id == WARP_SIZE)
-      uccl::sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
@@ -1744,14 +1742,13 @@ __global__ void cached_notify(
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
     if (thread_id == WARP_SIZE)
-      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs,
-                                 nvl_rank, 3);
+      uccl::quiet(d2h_channel_addrs, num_d2h_channel_addrs, nvl_rank, 3);
     __syncthreads();
 
     // Barrier for RDMA
     if (thread_id == WARP_SIZE)
-      uccl::sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1788,8 +1785,8 @@ __global__ void cached_notify(
 
     // Barrier again
     if (thread_id == WARP_SIZE)
-      uccl::sync_with_same_gpu_idx(d2h_channel_addrs,
-                                           num_d2h_channel_addrs, nvl_rank);
+      uccl::sync_with_same_gpu_idx(d2h_channel_addrs, num_d2h_channel_addrs,
+                                   nvl_rank);
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {

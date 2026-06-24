@@ -136,9 +136,8 @@ __device__ __forceinline__ void put_nbi_warp(
 
       if constexpr (use_normal_mode) {
         if (atomic_offset >> 16) {
-          printf(
-              "[put_nbi_warp] atomic_offset too large: %llu\n",
-              (unsigned long long)atomic_offset);
+          printf("[put_nbi_warp] atomic_offset too large: %llu\n",
+                 (unsigned long long)atomic_offset);
           trap();
         }
         if (atomic_val >> 8) {
@@ -319,9 +318,10 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
   }
 }
 
-__device__ static __forceinline__ void quiet(
-    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
-    int nvl_rank = -1, int label = -1) {
+__device__ static __forceinline__ void quiet(uint64_t const* d2h_channel_addrs,
+                                             int num_d2h_channel_addrs,
+                                             int nvl_rank = -1,
+                                             int label = -1) {
   EP_DEVICE_ASSERT(
       num_d2h_channel_addrs % kChannelPerProxy == 0 &&
       "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
