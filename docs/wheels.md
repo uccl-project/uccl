@@ -5,13 +5,13 @@
 Run the following to build Python wheels: 
 ```bash
 cd $UCCL_HOME
-./build.sh [cu12|cu13|rocm|rocm7|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
+./build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
 ```
 
 Run the following to install the wheels locally: 
 ```bash
 cd $UCCL_HOME
-pip install wheelhouse-[cuda/rocm]/uccl-*.whl
+pip install wheelhouse-[cu12/roc7]/uccl-*.whl
 ```
 
 Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 

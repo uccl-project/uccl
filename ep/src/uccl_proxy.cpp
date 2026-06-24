@@ -14,7 +14,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated)
+                     bool gpu_buffer_is_host_allocated, int barrier_local_rank,
+                     int device_index, int nic_local_rank)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -24,6 +25,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
+  device_index_ = device_index >= 0 ? device_index : local_rank;
+  nic_local_rank_ = nic_local_rank >= 0 ? nic_local_rank : local_rank;
 
   cfg.d2h_queues.reserve(kChannelPerProxy);
   d2h_queues.resize(kChannelPerProxy);
@@ -46,6 +49,10 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.rank = rank;
   cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
+  cfg.device_index = device_index_;
+  cfg.nic_local_rank = nic_local_rank_;
+  cfg.barrier_local_rank =
+      barrier_local_rank >= 0 ? barrier_local_rank : local_rank;
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
@@ -73,7 +80,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
     // cudaMalloc; use pinned host memory then. Override with
     // UCCL_ATOMICS_USE_HOST_MEMORY=1 to force host memory.
-    if (can_register_gpu_memory_for_atomics(local_rank)) {
+    if (can_register_gpu_memory_for_atomics(device_index_)) {
       cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
       atomic_buffer_is_host_allocated_ = false;
     } else {

@@ -112,63 +112,6 @@ def _run_client(args):
     print("[Client] Benchmark complete")
 
 
-def _run_server_dual(args):
-    peer = 0  # client rank
-    for size in args.sizes:
-        tensor = _make_buffer(size, args.device, args.local_gpu_idx)
-        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
-        # Warm-up receive
-        _recv(tensor, src=peer)
-        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
-
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            recv_op = dist.P2POp(dist.irecv, tensor, peer)
-            send_op = dist.P2POp(dist.isend, tensor2, peer)
-            reqs = dist.batch_isend_irecv([send_op, recv_op])
-            for req in reqs:
-                req.wait()
-            total += size
-        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
-        elapsed = time.perf_counter() - start
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        print(
-            f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-    print("[Server] Benchmark complete")
-
-
-def _run_client_dual(args):
-
-    peer = 1  # server rank
-    for size in args.sizes:
-        tensor = _make_buffer(size, args.device, args.local_gpu_idx)
-        tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
-        # Warm-up send
-        _send(tensor, dst=peer)
-        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
-
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            send_op = dist.P2POp(dist.isend, tensor, peer)
-            recv_op = dist.P2POp(dist.irecv, tensor2, peer)
-            reqs = dist.batch_isend_irecv([send_op, recv_op])
-            for req in reqs:
-                req.wait()
-            total += size
-        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
-        elapsed = time.perf_counter() - start
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        print(
-            f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
-        )
-    print("[Client] Benchmark complete")
-
-
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -186,24 +129,27 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            16777216,
-            104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=10)
-    p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Run dual benchmark",
-    )
+    p.add_argument("--iters", type=int, default=128)
     args = p.parse_args()
 
     backend = "nccl" if args.device == "gpu" else "gloo"
@@ -220,16 +166,10 @@ def main():
     )
 
     try:
-        if args.dual:
-            if rank == 0:
-                _run_client_dual(args)
-            else:
-                _run_server_dual(args)
+        if rank == 0:
+            _run_client(args)
         else:
-            if rank == 0:
-                _run_client(args)
-            else:
-                _run_server(args)
+            _run_server(args)
     finally:
         dist.destroy_process_group()
 

@@ -21,26 +21,55 @@ except ImportError as exc:
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
-def _make_buffer(size_bytes: int, device: str, gpu_idx: int, pinned: bool = False):
-    """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
+_FLOAT_TYPE_TORCH = {
+    "float16": (torch.float16, 2),
+    "bfloat16": (torch.bfloat16, 2),
+    "float32": (torch.float32, 4),
+}
+
+
+def _str_to_float_type(name: str) -> "p2p.FloatType":
+    return {
+        "float16": p2p.FloatType.kFloat16,
+        "bfloat16": p2p.FloatType.kBFloat16,
+        "float32": p2p.FloatType.kFloat32,
+        "none": p2p.FloatType.kUndefined,
+    }.get(name, p2p.FloatType.kUndefined)
+
+
+def _make_buffer(
+    size_bytes: int,
+    device: str,
+    gpu_idx: int,
+    pinned: bool = False,
+    float_type_str: str = "none",
+):
+    """Allocate a contiguous buffer and return (buffer, ptr).
+
+    If *float_type_str* is set, the GPU tensor uses the matching dtype so
+    bytes are valid float elements for the DietGPU compressor.
+    """
+    if size_bytes <= 0:
+        raise ValueError(f"buffer size must be positive, got {size_bytes}")
     if device == "gpu":
-        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
-        n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype).cuda()
+        if float_type_str in _FLOAT_TYPE_TORCH:
+            dtype, esize = _FLOAT_TYPE_TORCH[float_type_str]
+            assert (
+                size_bytes % esize == 0
+            ), f"size {size_bytes} not divisible by {esize} for {float_type_str}"
+            buf = torch.ones(size_bytes // esize, dtype=dtype, device=f"cuda:{gpu_idx}")
+        else:
+            buf = torch.ones(size_bytes, dtype=torch.uint8, device=f"cuda:{gpu_idx}")
         assert buf.device.type == "cuda"
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     elif device == "cpu" and pinned:
-        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
-        n_elems = size_bytes // dtype.itemsize
-        buf = torch.ones(n_elems, dtype=dtype).pin_memory()
+        buf = torch.ones(size_bytes, dtype=torch.uint8).pin_memory()
         assert buf.is_pinned()
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu (pageable)
-        dtype = np.dtype(np.float32) if size_bytes >= 4 else np.dtype(np.uint8)
-        n_elems = size_bytes // dtype.itemsize
-        buf = np.ones(n_elems, dtype=dtype)
+        buf = np.ones(size_bytes, dtype=np.uint8)
         ptr = buf.ctypes.data
     return buf, ptr
 
@@ -56,416 +85,146 @@ def _pretty_size(num_bytes: int) -> str:
 
 
 def _run_server(args, ep, remote_metadata):
+    peer = 0
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok, "[Server] Failed to accept RDMA connection"
     print(f"[Server] Accept from {r_ip} (GPU {r_gpu}) conn_id={conn_id}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        size_per_block = size // args.num_kvblocks
+        size_per_block = size
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
         size_v = []
-        for _ in range(args.num_kvblocks):
+        for _ in range(args.num_iovs):
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.device,
+                args.local_gpu_idx,
+                args.pinned,
+                args.float_type,
             )
-            ok, mr_id = ep.reg(ptr, size_per_block)
+            ok, mr_id = ep.reg(ptr, size_per_block, ft)
             assert ok, "[Server] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
             size_v.append(size_per_block)
 
-        if args.num_kvblocks == 1:
-            if args.async_api:
-                ok, transfer_id = ep.recv_async(
-                    conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
-                )
-                assert ok, "[Server] recv_async error"
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Server] poll_async error"
-            else:
-                ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
-                assert ok, "[Server] recv error"
-
-            start = time.perf_counter()
-            total_recv = 0
-            for _ in range(args.iters):
-                if args.async_api:
-                    ok, transfer_id = ep.recv_async(
-                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
-                    )
-                    assert ok, "[Server] recv_async error"
-                    is_done = False
-                    while not is_done:
-                        ok, is_done = ep.poll_async(transfer_id)
-                        assert ok, "[Server] poll_async error"
-                        # Now, we assume async recv knows the to-receive size in advance.
-                    total_recv += size_v[0]
-                else:
-                    ok = ep.recv(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
-                    assert ok, "[Server] recv error"
-                    total_recv += size_v[0]
-            elapsed = time.perf_counter() - start
-
-            gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
-            gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-            lat = elapsed / args.iters
-        else:
-            if args.async_api:
-                ok, transfer_id = ep.recvv_async(
-                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                )
-                assert ok, "[Server] recvv_async error"
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Server] poll_async error"
-            else:
-                ep.recvv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-
-            start = time.perf_counter()
-            total_recv = 0
-            for _ in range(args.iters):
-                if args.async_api:
-                    ok, transfer_id = ep.recvv_async(
-                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                    )
-                    assert ok, "[Server] recvv_async error"
-                    is_done = False
-                    while not is_done:
-                        ok, is_done = ep.poll_async(transfer_id)
-                        assert ok, "[Server] poll_async error"
-                else:
-                    ok = ep.recvv(
-                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                    )
-                    assert ok, "[Server] recv error"
-                total_recv += sum(size_v)
-            elapsed = time.perf_counter() - start
-            gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
-            gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-            lat = elapsed / args.iters
-
-        print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
-        )
+        ok, fifo_blob_v = ep.advertisev(mr_id_v, data_ptr_v, size_v, args.num_iovs)
+        assert ok, "[Server] advertisev failed"
+        for fifo_blob in fifo_blob_v:
+            dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
+        dist.barrier()
     print("[Server] Benchmark complete")
 
 
 def _run_client(args, ep, remote_metadata):
+    peer = 1
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok, "[Client] Failed to connect to server"
     print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
 
+    ft = _str_to_float_type(args.float_type)
     for size in args.sizes:
-        size_per_block = size // args.num_kvblocks
+        size_per_block = size
         buf_v = []
         mr_id_v = []
         data_ptr_v = []
         size_v = []
-        for _ in range(args.num_kvblocks):
+        for _ in range(args.num_iovs):
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.device,
+                args.local_gpu_idx,
+                args.pinned,
+                args.float_type,
             )
-            ok, mr_id = ep.reg(ptr, size_per_block)
+            ok, mr_id = ep.reg(ptr, size_per_block, ft)
             assert ok, "[Client] register failed"
             buf_v.append(buf)
             mr_id_v.append(mr_id)
             data_ptr_v.append(ptr)
             size_v.append(size_per_block)
 
-        if args.num_kvblocks == 1:
+        fifo_blob_v = []
+        for _ in range(args.num_iovs):
+            fifo_blob = torch.zeros(64, dtype=torch.uint8)
+            dist.recv(fifo_blob, src=peer)
+            fifo_blob_v.append(bytes(fifo_blob.tolist()))
+
+        def submit_once():
             if args.async_api:
-                ok, transfer_id = ep.send_async(
-                    conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
-                )
-                assert ok, "[Client] send_async error"
+                if args.num_iovs == 1:
+                    if args.mode == "write":
+                        ok, transfer_id = ep.write_async(
+                            conn_id,
+                            mr_id_v[0],
+                            data_ptr_v[0],
+                            size_v[0],
+                            fifo_blob_v[0],
+                        )
+                    else:
+                        ok, transfer_id = ep.read_async(
+                            conn_id,
+                            mr_id_v[0],
+                            data_ptr_v[0],
+                            size_v[0],
+                            fifo_blob_v[0],
+                        )
+                else:
+                    if args.mode == "write":
+                        ok, transfer_id = ep.writev_async(
+                            conn_id,
+                            mr_id_v,
+                            data_ptr_v,
+                            size_v,
+                            fifo_blob_v,
+                            args.num_iovs,
+                        )
+                    else:
+                        ok, transfer_id = ep.readv_async(
+                            conn_id,
+                            mr_id_v,
+                            data_ptr_v,
+                            size_v,
+                            fifo_blob_v,
+                            args.num_iovs,
+                        )
+                assert ok, f"[Client] {args.mode}_async error"
                 is_done = False
                 while not is_done:
                     ok, is_done = ep.poll_async(transfer_id)
                     assert ok, "[Client] poll_async error"
             else:
-                ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
-
-            start = time.perf_counter()
-            total_sent = 0
-            for _ in range(args.iters):
-                if args.async_api:
-                    ok, transfer_id = ep.send_async(
-                        conn_id, mr_id_v[0], data_ptr_v[0], size_v[0]
+                if args.mode == "write":
+                    ok = ep.writev(
+                        conn_id, mr_id_v, data_ptr_v, size_v, fifo_blob_v, args.num_iovs
                     )
-                    assert ok, "[Client] send_async error"
-                    is_done = False
-                    while not is_done:
-                        ok, is_done = ep.poll_async(transfer_id)
-                        assert ok, "[Client] poll_async error"
                 else:
-                    ok = ep.send(conn_id, mr_id_v[0], data_ptr_v[0], size_v[0])
-                    assert ok, "[Client] send error"
-                total_sent += size_v[0]
-            elapsed = time.perf_counter() - start
-
-            gbps = (total_sent * 8) / elapsed / 1e9
-            gb_sec = total_sent / elapsed / 1e9
-            lat = elapsed / args.iters
-        else:
-            if args.async_api:
-                ok, transfer_id = ep.sendv_async(
-                    conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                )
-                assert ok, "[Client] sendv_async error"
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Client] poll_async error"
-            else:
-                ep.sendv(conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks)
-
-            start = time.perf_counter()
-            total_sent = 0
-            for _ in range(args.iters):
-                if args.async_api:
-                    ok, transfer_id = ep.sendv_async(
-                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
+                    ok = ep.readv(
+                        conn_id, mr_id_v, data_ptr_v, size_v, fifo_blob_v, args.num_iovs
                     )
-                    assert ok, "[Client] sendv_async error"
-                    is_done = False
-                    while not is_done:
-                        ok, is_done = ep.poll_async(transfer_id)
-                        assert ok, "[Client] poll_async error"
-                else:
-                    ok = ep.sendv(
-                        conn_id, mr_id_v, data_ptr_v, size_v, args.num_kvblocks
-                    )
-                    assert ok, "[Client] send error"
-                total_sent += sum(size_v)
-            elapsed = time.perf_counter() - start
-            gbps = (total_sent * 8) / elapsed / 1e9
-            gb_sec = total_sent / elapsed / 1e9
-            lat = elapsed / args.iters
+                assert ok, f"[Client] {args.mode} error"
 
-        print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
-        )
-    print("[Client] Benchmark complete")
-
-
-def _run_server_dual(args, ep, remote_metadata):
-    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
-
-    print("[Server] Waiting for connection …", flush=True)
-    ok, r_ip, r_gpu2, conn_id = ep.accept()
-    assert ok, "[Server] Failed to accept RDMA connection"
-    print(f"[Server] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id}")
-
-    ok, conn_id2 = ep.connect(ip, r_gpu, remote_port=port)
-    assert ok, "[Server] Failed to connect to client"
-    print(f"[Server] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id2}")
-
-    for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id = ep.reg(ptr, size)
-        assert ok, "[Server] register failed"
-        # ep.recv(conn_id, mr_id, ptr, size)
-
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id2 = ep.reg(ptr2, size)
-        assert ok, "[Server] register failed"
-        # ep.send(conn_id, mr_id2, ptr2, size)
-
+        submit_once()
         start = time.perf_counter()
-        total_recv = 0
+        total = 0
         for _ in range(args.iters):
-            transfer_ids = []
-
-            ok, transfer_id = ep.recv_async(conn_id, mr_id, ptr, size)
-            assert ok, "[Server] recv error"
-            transfer_ids.append(transfer_id)
-
-            ok, transfer_id2 = ep.send_async(conn_id2, mr_id2, ptr2, size)
-            assert ok, "[Server] send error"
-            transfer_ids.append(transfer_id2)
-
-            for transfer_id in transfer_ids:
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Server] poll error"
-
-            # ok = ep.send(conn_id, mr_id2, ptr2, size)
-            # assert ok, "[Server] send error"
-
-            total_recv += size
+            submit_once()
+            total += sum(size_v)
         elapsed = time.perf_counter() - start
-
-        gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
-        gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
         lat = elapsed / args.iters
 
         print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
-    print("[Server] Benchmark complete")
-
-
-def _run_client_dual(args, ep, remote_metadata):
-    ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
-
-    ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
-    assert ok, "[Client] Failed to connect to server"
-    print(f"[Client] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id}")
-
-    ok, r_ip, r_gpu2, conn_id2 = ep.accept()
-    assert ok, "[Client] Failed to accept RDMA connection"
-    print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
-
-    for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id = ep.reg(ptr, size)
-        assert ok, "[Client] register failed"
-        # ep.send(conn_id, mr_id, ptr, size)
-
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
-        ok, mr_id2 = ep.reg(ptr2, size)
-        assert ok, "[Client] register failed"
-        # ep.recv(conn_id, mr_id2, ptr2, size)
-
-        start = time.perf_counter()
-        total_sent = 0
-        for _ in range(args.iters):
-            transfer_ids = []
-
-            ok, transfer_id = ep.send_async(conn_id, mr_id, ptr, size)
-            assert ok, "[Client] send error"
-            transfer_ids.append(transfer_id)
-
-            ok, transfer_id2 = ep.recv_async(conn_id2, mr_id2, ptr2, size)
-            assert ok, "[Client] recv error"
-            transfer_ids.append(transfer_id2)
-
-            for transfer_id in transfer_ids:
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Client] poll error"
-
-            # ok = ep.recv(conn_id, mr_id2, ptr2, size)
-            # assert ok, "[Client] recv error"
-
-            total_sent += size
-        elapsed = time.perf_counter() - start
-
-        gbps = (total_sent * 8) / elapsed / 1e9
-        gb_sec = total_sent / elapsed / 1e9
-        lat = elapsed / args.iters
-
-        print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
-        )
+        dist.barrier()
     print("[Client] Benchmark complete")
-
-
-def _run_server_ipc(args, ep):
-    """Run IPC benchmark server - waits for local connection and receives data"""
-    ok, remote_gpu_idx, conn_id = ep.accept_local()
-    assert ok, "[Server] Failed to accept local IPC connection"
-
-    for size in args.sizes:
-        # Allocate receive buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(
-            size, args.receiver_device, args.local_gpu_idx, args.pinned
-        )
-
-        # Warm-up transfer
-        if args.async_api:
-            ok, transfer_id = ep.recv_ipc_async(conn_id, ptr, size)
-            assert ok, "[Server] recv_ipc_async error"
-            is_done = False
-            while not is_done:
-                ok, is_done = ep.poll_async(transfer_id)
-                assert ok, "[Server] poll_async error"
-        else:
-            ok = ep.recv_ipc(conn_id, ptr, size)
-            assert ok, "[Server] recv_ipc error"
-
-        start = time.perf_counter()
-        total_recv = 0
-        for _ in range(args.iters):
-            if args.async_api:
-                ok, transfer_id = ep.recv_ipc_async(conn_id, ptr, size)
-                assert ok, "[Server] recv_ipc_async error"
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Server] poll_async error"
-            else:
-                ok = ep.recv_ipc(conn_id, ptr, size)
-                assert ok, "[Server] recv_ipc error"
-            total_recv += size
-        elapsed = time.perf_counter() - start
-
-        gbps = (total_recv * 8) / elapsed / 1e9  # bits per second → Gbps
-        gb_sec = total_recv / elapsed / 1e9  # bytes per second → GB/s
-        lat = elapsed / args.iters if args.iters > 0 else 0
-
-        print(
-            f"[Server] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
-        )
-    print("[Server] IPC Benchmark complete")
-
-
-def _run_client_ipc(args, ep, remote_gpu_idx):
-    """Run IPC benchmark client - connects to local server and sends data"""
-    ok, conn_id = ep.connect_local(remote_gpu_idx)
-    assert ok, "[Client] Failed to connect to local server via IPC"
-
-    for size in args.sizes:
-        # Allocate send buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(
-            size, args.sender_device, args.local_gpu_idx, args.pinned
-        )
-
-        # Warm-up transfer
-        if args.async_api:
-            ok, transfer_id = ep.send_ipc_async(conn_id, ptr, size)
-            assert ok, "[Client] send_ipc_async error"
-            is_done = False
-            while not is_done:
-                ok, is_done = ep.poll_async(transfer_id)
-                assert ok, "[Client] poll_async error"
-        else:
-            ok = ep.send_ipc(conn_id, ptr, size)
-            assert ok, "[Client] send_ipc error"
-
-        start = time.perf_counter()
-        total_sent = 0
-        for _ in range(args.iters):
-            if args.async_api:
-                ok, transfer_id = ep.send_ipc_async(conn_id, ptr, size)
-                assert ok, "[Client] send_ipc_async error"
-                is_done = False
-                while not is_done:
-                    ok, is_done = ep.poll_async(transfer_id)
-                    assert ok, "[Client] poll_async error"
-            else:
-                ok = ep.send_ipc(conn_id, ptr, size)
-                assert ok, "[Client] send_ipc error"
-            total_sent += size
-        elapsed = time.perf_counter() - start
-
-        gbps = (total_sent * 8) / elapsed / 1e9
-        gb_sec = total_sent / elapsed / 1e9
-        lat = elapsed / args.iters if args.iters > 0 else 0
-
-        print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
-        )
-    print("[Client] IPC Benchmark complete")
 
 
 def _send_bytes_dist(payload: bytes, dst: int):
@@ -495,11 +254,11 @@ def _run_server_write_ipc(args, ep):
     ok, remote_gpu_idx, conn_id = ep.accept_local()
     assert ok, "[Server] Failed to accept local IPC connection"
 
-    num_kvblocks = args.num_kvblocks
+    num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_kvblocks
+        size_per_block = size
 
-        if num_kvblocks == 1:
+        if num_iovs == 1:
             buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
             ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
             assert ok, "[Server] advertise_ipc failed"
@@ -507,16 +266,14 @@ def _run_server_write_ipc(args, ep):
         else:
             bufs_ptrs = [
                 _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
-                for _ in range(num_kvblocks)
+                for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
             ok, info_blobs = ep.advertisev_ipc(
-                conn_id, ptrs, [size_per_block] * num_kvblocks
+                conn_id, ptrs, [size_per_block] * num_iovs
             )
             assert ok, "[Server] advertisev_ipc failed"
-            packed = struct.pack("I", num_kvblocks) + b"".join(
-                bytes(b) for b in info_blobs
-            )
+            packed = struct.pack("I", num_iovs) + b"".join(bytes(b) for b in info_blobs)
             _send_bytes_dist(packed, dst=0)
 
         _recv_bytes_dist(src=0)
@@ -529,11 +286,11 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
     ok, conn_id = ep.connect_local(remote_gpu_idx)
     assert ok, "[Client] Failed to connect to local server via IPC"
 
-    num_kvblocks = args.num_kvblocks
+    num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_kvblocks
+        size_per_block = size
 
-        if num_kvblocks == 1:
+        if num_iovs == 1:
             buf, ptr = _make_buffer(
                 size_per_block, args.device, args.local_gpu_idx, args.pinned
             )
@@ -574,16 +331,16 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
                 _make_buffer(
                     size_per_block, args.device, args.local_gpu_idx, args.pinned
                 )
-                for _ in range(num_kvblocks)
+                for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
             packed = _recv_bytes_dist(src=1)
-            blob_size = (len(packed) - 4) // num_kvblocks
+            blob_size = (len(packed) - 4) // num_iovs
             info_blobs = [
                 packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
-                for i in range(num_kvblocks)
+                for i in range(num_iovs)
             ]
-            size_v = [size_per_block] * num_kvblocks
+            size_v = [size_per_block] * num_iovs
 
             # Warm-up
             if args.async_api:
@@ -612,7 +369,7 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
                 else:
                     ok = ep.writev_ipc(conn_id, ptrs, size_v, info_blobs)
                     assert ok, "[Client] writev_ipc error"
-                total += size_per_block * num_kvblocks
+                total += size_per_block * num_iovs
 
         elapsed = time.perf_counter() - start
         gbps = (total * 8) / elapsed / 1e9
@@ -620,7 +377,7 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
         lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
 
         _send_bytes_dist(b"\x01", dst=1)
@@ -633,11 +390,11 @@ def _run_server_read_ipc(args, ep):
     ok, remote_gpu_idx, conn_id = ep.accept_local()
     assert ok, "[Server] Failed to accept local IPC connection"
 
-    num_kvblocks = args.num_kvblocks
+    num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_kvblocks
+        size_per_block = size
 
-        if num_kvblocks == 1:
+        if num_iovs == 1:
             buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
             ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
             assert ok, "[Server] advertise_ipc failed"
@@ -645,16 +402,14 @@ def _run_server_read_ipc(args, ep):
         else:
             bufs_ptrs = [
                 _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
-                for _ in range(num_kvblocks)
+                for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
             ok, info_blobs = ep.advertisev_ipc(
-                conn_id, ptrs, [size_per_block] * num_kvblocks
+                conn_id, ptrs, [size_per_block] * num_iovs
             )
             assert ok, "[Server] advertisev_ipc failed"
-            packed = struct.pack("I", num_kvblocks) + b"".join(
-                bytes(b) for b in info_blobs
-            )
+            packed = struct.pack("I", num_iovs) + b"".join(bytes(b) for b in info_blobs)
             _send_bytes_dist(packed, dst=0)
 
         _recv_bytes_dist(src=0)
@@ -667,11 +422,11 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
     ok, conn_id = ep.connect_local(remote_gpu_idx)
     assert ok, "[Client] Failed to connect to local server via IPC"
 
-    num_kvblocks = args.num_kvblocks
+    num_iovs = args.num_iovs
     for size in args.sizes:
-        size_per_block = size // num_kvblocks
+        size_per_block = size
 
-        if num_kvblocks == 1:
+        if num_iovs == 1:
             buf, ptr = _make_buffer(
                 size_per_block, args.device, args.local_gpu_idx, args.pinned
             )
@@ -712,16 +467,16 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
                 _make_buffer(
                     size_per_block, args.device, args.local_gpu_idx, args.pinned
                 )
-                for _ in range(num_kvblocks)
+                for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
             packed = _recv_bytes_dist(src=1)
-            blob_size = (len(packed) - 4) // num_kvblocks
+            blob_size = (len(packed) - 4) // num_iovs
             info_blobs = [
                 packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
-                for i in range(num_kvblocks)
+                for i in range(num_iovs)
             ]
-            size_v = [size_per_block] * num_kvblocks
+            size_v = [size_per_block] * num_iovs
 
             # Warm-up
             if args.async_api:
@@ -750,7 +505,7 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
                 else:
                     ok = ep.readv_ipc(conn_id, ptrs, size_v, info_blobs)
                     assert ok, "[Client] readv_ipc error"
-                total += size_per_block * num_kvblocks
+                total += size_per_block * num_iovs
 
         elapsed = time.perf_counter() - start
         gbps = (total * 8) / elapsed / 1e9
@@ -758,7 +513,7 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
         lat = elapsed / args.iters
 
         print(
-            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat * 1e6:8.2f} us"
         )
 
         _send_bytes_dist(b"\x01", dst=1)
@@ -796,45 +551,59 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
+            8,
+            16,
+            32,
+            64,
+            128,
             256,
+            512,
             1024,
+            2048,
             4096,
+            8192,
             16384,
+            32768,
             65536,
+            131072,
             262144,
+            524288,
             1048576,
-            10485760,
-            16777216,
-            104857600,
         ],
         help="Comma separated list of message sizes in bytes",
     )
     p.add_argument(
         "--iters",
         type=int,
-        default=10,
+        default=128,
         help="Iterations per message size (excluding 1 warm-up)",
     )
     p.add_argument(
-        "--num-kvblocks",
+        "--float-type",
+        choices=["float16", "bfloat16", "float32", "none"],
+        default="float16",
+        help=(
+            "Float element type passed to ep.reg for compression context. "
+            "Use 'none' to disable compression (kUndefined). "
+            "Default: float16."
+        ),
+    )
+    p.add_argument(
+        "--num-iovs",
         type=int,
         default=1,
-        help="Number of key-value blocks to send/recv in a single call",
+        help="Number of iovs to read/write in a single call",
+    )
+    p.add_argument(
+        "--mode",
+        choices=["write", "read"],
+        default="write",
+        help="One-sided network benchmark mode",
     )
     p.add_argument(
         "--async-api",
         action="store_true",
         help="Use asynchronous transfers",
-    )
-    p.add_argument(
-        "--dual",
-        action="store_true",
-        help="Run dual benchmark",
-    )
-    p.add_argument(
-        "--ipc",
-        action="store_true",
-        help="Run IPC benchmark using Unix Domain Sockets and CUDA/HIP memory handles",
     )
     p.add_argument(
         "--sender-device",
@@ -867,11 +636,9 @@ def main():
         args.receiver_device = args.device
 
     # Check for incompatible options
-    mode_flags = sum([args.dual, args.ipc, args.write_ipc, args.read_ipc])
+    mode_flags = sum([args.write_ipc, args.read_ipc])
     if mode_flags > 1:
-        print(
-            "Error: --dual, --ipc, --write-ipc, and --read-ipc are mutually exclusive"
-        )
+        print("Error: --write-ipc and --read-ipc are mutually exclusive")
         sys.exit(1)
 
     dist.init_process_group(backend="gloo")
@@ -879,15 +646,11 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    is_ipc_mode = args.ipc or args.write_ipc or args.read_ipc
+    is_ipc_mode = args.write_ipc or args.read_ipc
     if args.write_ipc:
         mode = "write_ipc"
     elif args.read_ipc:
         mode = "read_ipc"
-    elif args.ipc:
-        mode = "IPC"
-    elif args.dual:
-        mode = "Dual"
     else:
         mode = "Standard"
     api_type = "Async" if args.async_api else "Sync"
@@ -896,22 +659,24 @@ def main():
         "client" if rank == 0 else "server",
     )
     if not is_ipc_mode:
-        print("Number of key-value blocks per message:", args.num_kvblocks)
+        print("Number of IOVs per message:", args.num_iovs)
     else:
         # Use the rank as the local GPU index for IPC
         print(f"Using rank {rank} as local GPU index for IPC")
         args.local_gpu_idx = rank
 
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
+    if not is_ipc_mode:
+        print("Float type:", args.float_type)
     pinned_str = " (pinned)" if args.pinned else ""
     if is_ipc_mode:
-        kvblocks_str = (
-            f" | Blocks per call: {args.num_kvblocks}"
+        iovs_str = (
+            f" | IOVs per call: {args.num_iovs}"
             if (args.write_ipc or args.read_ipc)
             else ""
         )
         print(
-            f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}{kvblocks_str}"
+            f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}{iovs_str}"
         )
     else:
         print(
@@ -934,18 +699,7 @@ def main():
         dist.send(torch.ByteTensor(list(local_metadata)), dst=0)
         remote_metadata = bytes(remote_metadata_tensor.tolist())
 
-    if args.dual:
-        if rank == 0:
-            _run_client_dual(args, ep, remote_metadata)
-        else:
-            _run_server_dual(args, ep, remote_metadata)
-    elif args.ipc:
-        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
-        if rank == 0:
-            _run_client_ipc(args, ep, remote_gpu_idx)
-        else:
-            _run_server_ipc(args, ep)
-    elif args.write_ipc:
+    if args.write_ipc:
         _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
         if rank == 0:
             _run_client_write_ipc(args, ep, remote_gpu_idx)

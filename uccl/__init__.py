@@ -22,11 +22,10 @@ is_efa = has_efa()
 if not is_efa:
     try:
         from . import p2p
-        from . import collective
     except ImportError:
         pass
 
-__version__ = "0.1.0.post6"
+__version__ = "0.1.1"
 
 
 def nccl_plugin_path():

@@ -16,7 +16,9 @@ class UcclProxy {
             int rank, int node_idx, int local_rank, int num_experts = 0,
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
             bool is_intranode = false,
-            bool gpu_buffer_is_host_allocated = false);
+            bool gpu_buffer_is_host_allocated = false,
+            int barrier_local_rank = -1, int device_index = -1,
+            int nic_local_rank = -1);
   ~UcclProxy();
 
   void start_sender();
@@ -70,11 +72,15 @@ class UcclProxy {
   std::vector<uint64_t> get_d2h_channel_addrs() const;
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
+  bool use_normal_mode() const noexcept { return proxy_->cfg_.use_normal_mode; }
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
   double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);
   void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
     proxy_->set_bench_d2h_channel_addrs(addrs);
+  }
+  void notify_proxy_thread_adaptive_sleeper() {
+    proxy_->notify_proxy_thread_adaptive_sleeper();
   }
 
  private:
@@ -90,6 +96,8 @@ class UcclProxy {
   void* gpu_buffer_addr_;
   std::vector<PeerMeta> peers_;
   int local_rank_;
+  int device_index_;
+  int nic_local_rank_;
   void* atomic_buffer_ptr_;
   bool atomic_buffer_is_host_allocated_ =
       false;  // true => cudaFreeHost, false => cudaFree

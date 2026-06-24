@@ -44,12 +44,14 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  * Connect to a remote peer.
  * @param engine        The engine instance.
  * @param ip_addr       The IP address of the remote server.
- * @param remote_gpu_idx The GPU index of the remote server.
+ * @param remote_gpu    The GPU identity of the remote server (PCI BDF string
+ *                      such as "0000:4a:00.0", or a CUDA device index string
+ *                      such as "0").
  * @param remote_port   The port of the remote server.
  * @return              Connection handle, or NULL on failure.
  */
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port,
+                                 char const* remote_gpu, int remote_port,
                                  bool same_process = false);
 /**
  * Start the listener thread for the connection.
@@ -113,26 +115,27 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             uint64_t* transfer_id,
                             std::vector<char*> ipc_bufs = {});
 /**
- * Send data (Non blocking).
+ * Send data (Non blocking). Deprecated: two-sided send/recv path is disabled.
  * @param conn          Connection handle.
  * @param mr            Memory region handle.
  * @param data          Pointer to the data to send.
  * @param size          Size of the data.
  * @param transfer_id   Pointer to store the transfer ID.
- * @return              0 on success, non-zero on failure.
+ * @return              Always -1.
  */
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, uint64_t* transfer_id);
 
 /**
- * Send a vector of data chunks (Non blocking).
+ * Send a vector of data chunks (Non blocking). Deprecated: two-sided send/recv
+ * path is disabled.
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param src_v         Vector of pointers to the data to write.
- * @param num_iovs      Number of IO vectors.
  * @param size_v        Vector of sizes of the data to write.
+ * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
- * @return              0 on success, non-zero on failure.
+ * @return              Always -1.
  */
 int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void const*> src_v,
@@ -171,12 +174,12 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              uint64_t* transfer_id,
                              std::vector<char*> ipc_bufs = {});
 /**
- * Receive data (blocking).
+ * Receive data (blocking). Deprecated: two-sided send/recv path is disabled.
  * @param conn          Connection handle.
  * @param mr            Memory region handle.
  * @param data          Pointer to the buffer to receive data.
  * @param max_size      Maximum size of the buffer.
- * @return              0 on success, non-zero on failure.
+ * @return              Always -1.
  */
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t max_size);
@@ -223,9 +226,9 @@ std::vector<notify_msg_t> uccl_engine_get_notifs();
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
 
 /**
- * Prepare FIFO metadata for a memory region without requiring a connection.
- * This can be called at memory registration time to pre-compute the fifo_item
- * for true one-sided RDMA operations.
+ * Prepare FifoItem metadata for a registered memory region (same as advertise).
+ * Can be called at registration time to pre-compute fifo_item for one-sided
+ * RDMA.
  * @param engine        The engine instance.
  * @param mr            Memory region handle.
  * @param data          Pointer to the data buffer.

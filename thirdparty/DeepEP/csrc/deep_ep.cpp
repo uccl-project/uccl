@@ -468,9 +468,11 @@ Buffer::intranode_dispatch(const torch::Tensor& x, const std::optional<torch::Te
         }
     }
 
-    // Allocate new tensors
-    auto recv_x = torch::empty({num_recv_tokens, hidden}, x.options());
-    auto recv_src_idx = torch::empty({num_recv_tokens}, dtype(torch::kInt32).device(torch::kCUDA));
+    // Allocate at least 1 row so data_ptr() remains valid even when the logical
+    // receive count is 0.
+    auto alloc_recv_tokens = std::max(num_recv_tokens, 1);
+    auto recv_x = torch::empty({alloc_recv_tokens, hidden}, x.options());
+    auto recv_src_idx = torch::empty({alloc_recv_tokens}, dtype(torch::kInt32).device(torch::kCUDA));
     auto recv_topk_idx = std::optional<torch::Tensor>(), recv_topk_weights = std::optional<torch::Tensor>(), recv_x_scales = std::optional<torch::Tensor>();
     auto recv_channel_prefix_matrix = torch::empty({num_ranks, num_channels}, dtype(torch::kInt32).device(torch::kCUDA));
     auto send_head = torch::empty({num_tokens, num_ranks}, dtype(torch::kInt32).device(torch::kCUDA));
@@ -480,15 +482,15 @@ Buffer::intranode_dispatch(const torch::Tensor& x, const std::optional<torch::Te
     float* recv_topk_weights_ptr = nullptr;
     float* recv_x_scales_ptr = nullptr;
     if (topk_idx.has_value()) {
-        recv_topk_idx = torch::empty({num_recv_tokens, num_topk}, topk_idx->options());
-        recv_topk_weights = torch::empty({num_recv_tokens, num_topk}, topk_weights->options());
+        recv_topk_idx = torch::empty({alloc_recv_tokens, num_topk}, topk_idx->options());
+        recv_topk_weights = torch::empty({alloc_recv_tokens, num_topk}, topk_weights->options());
         recv_topk_idx_ptr = recv_topk_idx->data_ptr<int64_t>();
         recv_topk_weights_ptr = recv_topk_weights->data_ptr<float>();
     }
     if (x_scales.has_value()) {
         recv_x_scales = x_scales->dim() == 1 ?
-                        torch::empty({num_recv_tokens}, x_scales->options()) :
-                        torch::empty({num_recv_tokens, num_scales}, x_scales->options());
+                        torch::empty({alloc_recv_tokens}, x_scales->options()) :
+                        torch::empty({alloc_recv_tokens, num_scales}, x_scales->options());
         recv_x_scales_ptr = static_cast<float*>(recv_x_scales->data_ptr());
     }
 
@@ -534,6 +536,16 @@ Buffer::intranode_dispatch(const torch::Tensor& x, const std::optional<torch::Te
     // Switch back compute stream
     if (allocate_on_comm_stream)
         at::cuda::setCurrentCUDAStream(compute_stream);
+
+    // Slice payload tensors back to the logical receive count.
+    recv_x = recv_x.slice(0, 0, num_recv_tokens);
+    recv_src_idx = recv_src_idx.slice(0, 0, num_recv_tokens);
+    if (recv_topk_idx.has_value())
+        recv_topk_idx = recv_topk_idx->slice(0, 0, num_recv_tokens);
+    if (recv_topk_weights.has_value())
+        recv_topk_weights = recv_topk_weights->slice(0, 0, num_recv_tokens);
+    if (recv_x_scales.has_value())
+        recv_x_scales = recv_x_scales->slice(0, 0, num_recv_tokens);
 
     // Return values
     return {recv_x, recv_x_scales, recv_topk_idx, recv_topk_weights, num_recv_tokens_per_expert_list, rank_prefix_matrix, channel_prefix_matrix, recv_channel_prefix_matrix, recv_src_idx, send_head, event};
@@ -581,13 +593,24 @@ Buffer::intranode_combine(const torch::Tensor& x, const std::optional<torch::Ten
     auto recv_topk_weights = std::optional<torch::Tensor>();
     float* topk_weights_ptr = nullptr;
     float* recv_topk_weights_ptr = nullptr;
+    auto num_x_rows = num_tokens;
+    auto x_kernel = x;
+    auto src_idx_kernel = src_idx;
+    if (num_x_rows == 0) {
+        x_kernel = torch::empty({1, hidden}, x.options());
+        src_idx_kernel = torch::empty({1}, src_idx.options());
+    }
+    auto topk_weights_kernel = topk_weights;
     if (topk_weights.has_value()) {
         EP_HOST_ASSERT(topk_weights->dim() == 2 and topk_weights->is_contiguous());
         EP_HOST_ASSERT(topk_weights->size(0) == num_tokens);
         EP_HOST_ASSERT(topk_weights->scalar_type() == torch::kFloat32);
         num_topk = static_cast<int>(topk_weights->size(1));
-        topk_weights_ptr = topk_weights->data_ptr<float>();
-        recv_topk_weights = torch::empty({num_recv_tokens, num_topk}, topk_weights->options());
+        if (num_x_rows == 0) {
+            topk_weights_kernel = torch::empty({1, num_topk}, topk_weights->options());
+        }
+        topk_weights_ptr = topk_weights_kernel->data_ptr<float>();
+        recv_topk_weights = torch::empty({std::max(num_recv_tokens, 1), num_topk}, topk_weights->options());
         recv_topk_weights_ptr = recv_topk_weights->data_ptr<float>();
     }
 
@@ -610,7 +633,7 @@ Buffer::intranode_combine(const torch::Tensor& x, const std::optional<torch::Ten
     }
 
     // Combine data
-    auto recv_x = torch::empty({num_recv_tokens, hidden}, x.options());
+    auto recv_x = torch::empty({std::max(num_recv_tokens, 1), hidden}, x.options());
     EP_HOST_ASSERT(num_channels * num_ranks * sizeof(int) * 2 +                                                      // Queue head and tail
                    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * hidden * x.element_size() +    // Data buffer
                    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * sizeof(int) +                  // Source index buffer
@@ -618,9 +641,9 @@ Buffer::intranode_combine(const torch::Tensor& x, const std::optional<torch::Ten
                    <= num_nvl_bytes);
     intranode::combine(at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
                        recv_x.data_ptr(), recv_topk_weights_ptr,
-                       x.data_ptr(), topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
-                       src_idx.data_ptr<int>(), rank_prefix_matrix.data_ptr<int>(), channel_prefix_matrix.data_ptr<int>(),
-                       send_head.data_ptr<int>(), num_tokens, num_recv_tokens, hidden, num_topk,
+                       x_kernel.data_ptr(), topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
+                       src_idx_kernel.data_ptr<int>(), rank_prefix_matrix.data_ptr<int>(), channel_prefix_matrix.data_ptr<int>(),
+                       send_head.data_ptr<int>(), num_x_rows, num_recv_tokens, hidden, num_topk,
                        buffer_ptrs_gpu, rank, num_ranks,
                        comm_stream, config.num_sms,
                        config.num_max_nvl_chunked_send_tokens, config.num_max_nvl_chunked_recv_tokens);
@@ -646,6 +669,10 @@ Buffer::intranode_combine(const torch::Tensor& x, const std::optional<torch::Ten
     // Switch back compute stream
     if (allocate_on_comm_stream)
         at::cuda::setCurrentCUDAStream(compute_stream);
+
+    recv_x = recv_x.slice(0, 0, num_recv_tokens);
+    if (recv_topk_weights.has_value())
+        recv_topk_weights = recv_topk_weights->slice(0, 0, num_recv_tokens);
 
     return {recv_x, recv_topk_weights, event};
 }

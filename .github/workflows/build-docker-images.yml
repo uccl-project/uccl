@@ -40,7 +40,7 @@ jobs:
             base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
           # ROCm
           - dockerfile: docker/Dockerfile.rocm
-            image_name: uccl-builder-rocm
+            image_name: uccl-builder-roc7
     steps:
       - name: Checkout
         uses: actions/checkout@v4

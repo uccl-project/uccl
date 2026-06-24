@@ -1,6 +1,7 @@
 import inspect
 from typing import Any, Optional, Tuple, Union
 import os
+import socket
 import torch
 import torch.distributed as dist
 from typing import Optional
@@ -96,6 +97,93 @@ def _gather_peer_ips(group):
     ips = [None] * world
     dist.all_gather_object(ips, my_ip, group=group)
     return ips
+
+
+def detect_group_topology(
+    group: dist.ProcessGroup,
+) -> Tuple[int, int, int, int, int, bool]:
+    """
+    Infer CUDA-local rank, node-local rank, and node topology.
+
+    Returns:
+        local_rank: CUDA-visible device index for the current process.
+        node_local_rank: dense rank slot within the current node, ordered by
+            physical GPU BDF.
+        nic_local_rank: rank of the CUDA device in UCCL's physical GPU BDF
+            order.
+        node_idx: compact node index within the given group.
+        num_nodes: number of distinct nodes spanned by the group.
+        is_intranode: whether all ranks in the group are on the same node.
+    """
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        local_rank = torch.cuda.current_device()
+
+    node_token = ep.get_oob_ip() or socket.gethostname()
+    nic_local_rank = ep.get_physical_gpu_rank(local_rank)
+
+    world = dist.get_world_size(group)
+    rank = dist.get_rank(group)
+    local_info = {
+        "rank": rank,
+        "node_token": node_token,
+        "local_rank": local_rank,
+        "nic_local_rank": nic_local_rank,
+    }
+    all_info = [None] * world
+    dist.all_gather_object(all_info, local_info, group=group)
+    same_node = [info for info in all_info if info["node_token"] == node_token]
+
+    if nic_local_rank < 0:
+        raise ValueError(
+            "Could not map CUDA device to UCCL physical GPU rank: "
+            + json.dumps(local_info, sort_keys=True)
+        )
+
+    ranks_by_physical_gpu = {}
+    for info in same_node:
+        mapped_rank = info["nic_local_rank"]
+        if mapped_rank < 0:
+            continue
+        ranks_by_physical_gpu.setdefault(mapped_rank, []).append(info)
+
+    duplicate_physical_ranks = {
+        mapped_rank: infos
+        for mapped_rank, infos in ranks_by_physical_gpu.items()
+        if len(infos) > 1
+    }
+    if duplicate_physical_ranks:
+        raise ValueError(
+            "Duplicate physical GPU rank mapping on node: "
+            + json.dumps(duplicate_physical_ranks, sort_keys=True)
+        )
+
+    node_ranks = [
+        info["rank"]
+        for info in sorted(
+            same_node, key=lambda info: (info["nic_local_rank"], info["rank"])
+        )
+    ]
+    node_local_rank = node_ranks.index(rank)
+
+    token_to_idx = {}
+    for info in all_info:
+        token = info["node_token"]
+        if token not in token_to_idx:
+            token_to_idx[token] = len(token_to_idx)
+
+    node_idx = token_to_idx[node_token]
+    num_nodes = len(token_to_idx)
+    is_intranode = num_nodes == 1
+    return (
+        local_rank,
+        node_local_rank,
+        nic_local_rank,
+        node_idx,
+        num_nodes,
+        is_intranode,
+    )
 
 
 def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
@@ -513,52 +601,38 @@ def initialize_uccl(
     num_ranks,
     group,
     num_experts=0,
-    is_intranode=False,
+    is_intranode: Optional[bool] = None,
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
 ):
+    # Only sweep barriers belonging to OUR mode so we don't stomp on a
+    # coexisting Buffer of the other mode in the same process. The C++
+    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<ht|ll>_th<idx>`,
+    # where `ht` = high-throughput (use_normal_mode=True) and `ll` =
+    # low-latency.
     try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
+        mode_token = "_ht_" if use_normal_mode else "_ll_"
+        for shm_file in glob.glob(f"/dev/shm/uccl_barrier_*{mode_token}*"):
             os.remove(shm_file)
     except Exception:
         pass
 
-    # Try to get local_rank from environment or infer from current device
-    if "LOCAL_RANK" in os.environ:
-        local_rank = int(os.environ["LOCAL_RANK"])
-    else:
-        # Fallback: use current CUDA device as local_rank
-        local_rank = torch.cuda.current_device()
-
-    # Try to get nproc_per_node from environment
-    if "LOCAL_WORLD_SIZE" in os.environ:
-        nproc_per_node = int(os.environ["LOCAL_WORLD_SIZE"])
-    else:
-        # Fallback: infer from is_intranode and num_ranks
-        if is_intranode:
-            # All ranks are on the same node
-            nproc_per_node = num_ranks
-        else:
-            # Assume uniform distribution across nodes
-            # If we have N GPUs, assume each node has same number of GPUs
-            num_gpus = torch.cuda.device_count()
-            nproc_per_node = num_gpus if num_gpus > 0 else 1
-
-    node_idx = rank // nproc_per_node if nproc_per_node > 0 else 0
-
-    # Only check WORLD_SIZE consistency if it's defined
-    if "WORLD_SIZE" in os.environ and nproc_per_node > 0:
-        world_size = int(os.environ.get("WORLD_SIZE"))
-        if world_size % nproc_per_node != 0:
-            raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+    (
+        local_rank,
+        node_local_rank,
+        nic_local_rank,
+        node_idx,
+        num_nodes,
+        detected_is_intranode,
+    ) = detect_group_topology(group)
+    if is_intranode is None:
+        is_intranode = detected_is_intranode
+    elif is_intranode and not detected_is_intranode:
+        raise ValueError(
+            "Detected multi-node group topology, but `is_intranode=True` was requested"
+        )
 
     proxies = []
-
-    # Calculate num_nodes from num_ranks and nproc_per_node
-    if nproc_per_node > 0:
-        num_nodes = num_ranks // nproc_per_node
-    else:
-        num_nodes = num_ranks  # Fallback: assume each rank is on a different node
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -574,6 +648,9 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            barrier_local_rank=node_local_rank,
+            device_index=local_rank,
+            nic_local_rank=nic_local_rank,
         )
         proxies.append(proxy)
 

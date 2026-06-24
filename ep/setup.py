@@ -138,6 +138,7 @@ if __name__ == "__main__":
         "-Wno-attributes",
         "-Wno-unused-result",
         "-Wno-unused-function",
+        "-DNB_DOMAIN=uccl_ep",
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
@@ -152,6 +153,14 @@ if __name__ == "__main__":
         cxx_flags.extend(abi_flags)
         nvcc_flags.extend(abi_flags)
 
+    max_num_gpus = os.getenv("MAX_NUM_GPUS")
+    if max_num_gpus:
+        max_num_gpus = int(max_num_gpus)
+        max_num_gpus_flag = f"-DMAX_NUM_GPUS={max_num_gpus}"
+        print(f"Building with MAX_NUM_GPUS={max_num_gpus}")
+        cxx_flags.append(max_num_gpus_flag)
+        nvcc_flags.append(max_num_gpus_flag)
+
     # Collect header files for dependency tracking
     header_files = []
     for inc_dir in include_dirs:
@@ -161,6 +170,7 @@ if __name__ == "__main__":
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
+    use_dmabuf = False
 
     if torch.version.cuda:
         # Add CUDA library directory to library_dirs
@@ -232,6 +242,16 @@ if __name__ == "__main__":
             library_dirs.append(Path(efa_home) / "lib")
             libraries.append("efa")
 
+        # DMA-BUF registration avoids nvidia_peermem/efa_nv_peermem.
+        # Set USE_DMABUF=1 to compile with this path.
+        use_dmabuf = int(os.getenv("USE_DMABUF", "0"))
+        if use_dmabuf:
+            print("Building with DMA-BUF GPU memory registration (USE_DMABUF)")
+            cxx_flags.append("-DUSE_DMABUF")
+            nvcc_flags.append("-DUSE_DMABUF")
+        else:
+            print("Building without DMA-BUF GPU memory registration")
+
         # Add GH200 flags if detected
         if has_gh200:
             cxx_flags.append("-DUSE_GRACE_HOPPER")
@@ -268,35 +288,41 @@ if __name__ == "__main__":
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
         os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
-        # AMD GPU Architecture Detection
+        # AMD GPU Architecture Detection.
+        # Priority: PYTORCH_ROCM_ARCH > TORCH_CUDA_ARCH_LIST > rocminfo > fallback.
+        # In TheRock CI / manylinux build containers, rocminfo isn't installed
+        # and there is no GPU on the build host; arch must come from the env.
+        env_arch = os.getenv("PYTORCH_ROCM_ARCH") or os.getenv("TORCH_CUDA_ARCH_LIST")
         detected_amd_arch = None
-        try:
-            rocminfo_output = subprocess.check_output(
-                ["rocminfo"], stderr=subprocess.DEVNULL
-            ).decode("ascii")
-            # Parse rocminfo output to find GPU architecture (e.g., gfx942, gfx90a)
-            for line in rocminfo_output.split("\n"):
-                if "Name:" in line and "gfx" in line.lower():
-                    # Extract architecture like "gfx942" from the line
-                    parts = line.split()
-                    for part in parts:
-                        if part.lower().startswith("gfx"):
-                            detected_amd_arch = part.lower()
+        if env_arch:
+            print(f"Using AMD GPU arch from env: {env_arch}")
+        else:
+            try:
+                rocminfo_output = subprocess.check_output(
+                    ["rocminfo"], stderr=subprocess.DEVNULL
+                ).decode("ascii")
+                # Parse rocminfo output to find GPU architecture (e.g., gfx942, gfx90a)
+                for line in rocminfo_output.split("\n"):
+                    if "Name:" in line and "gfx" in line.lower():
+                        # Extract architecture like "gfx942" from the line
+                        for part in line.split():
+                            if part.lower().startswith("gfx"):
+                                detected_amd_arch = part.lower()
+                                break
+                        if detected_amd_arch:
                             break
-                    if detected_amd_arch:
-                        break
-            if detected_amd_arch:
-                print(f"Detected AMD GPU architecture: {detected_amd_arch}")
-        except Exception as e:
-            print(
-                f"Warning: could not detect AMD GPU info via rocminfo: {e} (perhaps inside a container)"
-            )
+                if detected_amd_arch:
+                    print(f"Detected AMD GPU architecture: {detected_amd_arch}")
+            except Exception as e:
+                print(
+                    f"Warning: could not detect AMD GPU info via rocminfo: {e}"
+                    " (perhaps inside a container)"
+                )
 
-        # Use environment variable, then detected arch, then fallback
-        device_arch = os.getenv(
-            "TORCH_CUDA_ARCH_LIST",
-            detected_amd_arch if detected_amd_arch else "gfx420",
-        )
+        # Fallback: gfx94x — the generic CDNA3/CDNA4 family target that
+        # covers both gfx942 (MI300X) and gfx950 (MI355X) on a sufficiently
+        # recent ROCm/LLVM.
+        device_arch = env_arch or detected_amd_arch or "gfx94x"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
@@ -305,11 +331,55 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
-        if int(os.getenv("DISABLE_AGGRESSIVE_ATOMIC", 1)):
-            # NOTE(zhuang12): Enable aggressive atomic operations will have better performance on MI300X and MI355X.
-            # Set DISABLE_AGGRESSIVE_ATOMIC=0 to enable this optimization. Turn off (default) if you encounter errors.
-            cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
-            nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+        # Default the "aggressive atomic" path to ON for AMD builds so the
+        # cross-GPU tail-pointer stores in intranode/internode dispatch and
+        # combine actually drain prior vector-memory writes (s_waitcnt vmcnt).
+        # Vanilla acquire/release sys-scope atomics on CDNA do not, which
+        # causes the combine receiver to spin-wait on a stale shared_tail
+        # forever. Users can still opt out with
+        # UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC=0 at runtime.
+        cxx_flags.append("-DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1")
+        nvcc_flags.append("-DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1")
+
+        # ROCm root discovery for TheRock-style installs.
+        # When ROCm comes from pip wheels (rocm-sdk), there is no /opt/rocm.
+        # Honor explicit HIP_HOME first, else query rocm-sdk, else /opt/rocm.
+        rocm_home = (
+            os.getenv("HIP_HOME") or os.getenv("ROCM_HOME") or os.getenv("ROCM_PATH")
+        )
+        if not rocm_home:
+            try:
+                rocm_home = (
+                    subprocess.check_output(
+                        ["rocm-sdk", "path", "--root"],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode("ascii")
+                    .strip()
+                )
+                print(f"Discovered ROCm root via rocm-sdk: {rocm_home}")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                rocm_home = "/opt/rocm"
+
+        if rocm_home and Path(rocm_home).exists():
+            rocm_inc = Path(rocm_home) / "include"
+            rocm_lib = Path(rocm_home) / "lib"
+            if rocm_inc.exists():
+                include_dirs.append(rocm_inc)
+            if rocm_lib.exists():
+                library_dirs.append(rocm_lib)
+            os.environ.setdefault("ROCM_HOME", rocm_home)
+            os.environ.setdefault("ROCM_PATH", rocm_home)
+            os.environ.setdefault("HIP_HOME", rocm_home)
+            os.environ.setdefault("HIP_PATH", rocm_home)
+            print(f"Using ROCm root: {rocm_home}")
+        else:
+            print(
+                f"Warning: ROCm root '{rocm_home}' not found;"
+                " HIP toolchain may not link correctly."
+            )
+
+        os.environ["PYTORCH_ROCM_ARCH"] = device_arch
 
         if int(os.getenv("DISABLE_BUILTIN_SHLF_SYNC", 1)):
             # Disable built-in warp shuffle sync will have better performance in internode_combine kernel
@@ -365,6 +435,7 @@ if __name__ == "__main__":
             print(f" > GPU: {gpu_name}")
         print(f" > EFA Support: {'Yes' if has_efa else 'No'}")
         print(f" > GH200 Support: {'Yes' if has_gh200 else 'No'}")
+        print(f" > DMA-BUF Support: {'Yes' if use_dmabuf else 'No'}")
     print(f" > Device Arch: {device_arch}")
     print(f" > Sources: {len(sources)} files")
     print(f" > Headers (tracked): {len(header_files)} files")

@@ -113,12 +113,158 @@ def test_main(
     # Test dispatch
     # noinspection PyShadowingNames
     def check_data(check_x, rank_prefix_matrix):
+        if check_x.size(0) == 0:
+            return
         assert torch.allclose(check_x.amin(dim=1), check_x.amax(dim=1))
         check_start = 0
         for i in range(num_ranks):
             check_end = rank_prefix_matrix[i][rank].item()
             assert (check_x[check_start:check_end, :].int() - i).sum().item() == 0
             check_start = check_end
+
+    def build_layout_metadata(current_topk_idx):
+        current_rank_idx = current_topk_idx // (num_experts // num_ranks)
+        current_rank_idx.masked_fill_(current_topk_idx == -1, -1)
+        inplace_unique(current_rank_idx, num_ranks)
+
+        current_num_tokens_per_expert = torch.zeros(
+            (num_experts,), dtype=torch.int, device="cuda"
+        )
+        for i in range(num_experts):
+            current_num_tokens_per_expert[i] = (current_topk_idx == i).sum()
+        current_gbl_num_tokens_per_expert = current_num_tokens_per_expert.clone()
+        dist.all_reduce(current_gbl_num_tokens_per_expert, group=group)
+
+        current_num_tokens_per_rank = torch.empty(
+            (num_ranks,), dtype=torch.int, device="cuda"
+        )
+        current_token_idx_in_rank = torch.full(
+            (num_ranks, num_tokens), -1, dtype=torch.long, device="cuda"
+        )
+        for i in range(num_ranks):
+            current_num_tokens_per_rank[i] = (current_rank_idx == i).sum()
+            token_sel = (current_rank_idx == i).max(dim=-1)[0]
+            count = token_sel.sum().item()
+            tokens = torch.sort(token_sel.to(torch.int), descending=True)[1]
+            tokens[:count] = torch.sort(tokens[:count])[0]
+            current_token_idx_in_rank[i][tokens[:count]] = torch.arange(
+                count, dtype=torch.long, device="cuda"
+            )
+        current_token_idx_in_rank = current_token_idx_in_rank.T.contiguous().to(
+            torch.int
+        )
+        current_is_token_in_rank = current_token_idx_in_rank >= 0
+        current_gbl_num_tokens_per_rank = current_num_tokens_per_rank.clone()
+        dist.all_reduce(current_gbl_num_tokens_per_rank, group=group)
+
+        return (
+            current_num_tokens_per_rank,
+            current_num_tokens_per_expert,
+            current_is_token_in_rank,
+            current_gbl_num_tokens_per_rank,
+            current_gbl_num_tokens_per_expert,
+        )
+
+    def run_zero_recv_rank_test():
+        if num_ranks < 2:
+            return
+
+        num_local_experts = num_experts // num_ranks
+        active_ranks = num_ranks - 1
+        active_experts = active_ranks * num_local_experts
+        assert active_experts >= num_topk
+
+        zero_recv_rank = num_ranks - 1
+        zero_recv_x = (
+            torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device="cuda") * rank
+        )
+        token_offsets = torch.arange(
+            num_tokens, dtype=torch.int64, device="cuda"
+        ).unsqueeze(1)
+        topk_offsets = torch.arange(
+            num_topk, dtype=torch.int64, device="cuda"
+        ).unsqueeze(0)
+        zero_recv_topk_idx = (token_offsets + topk_offsets) % active_experts
+        zero_recv_topk_weights = torch.ones(
+            (num_tokens, num_topk), dtype=torch.float32, device="cuda"
+        ) * (rank + 1)
+
+        (
+            zero_recv_num_tokens_per_rank,
+            zero_recv_num_tokens_per_expert,
+            zero_recv_is_token_in_rank,
+            zero_recv_gbl_num_tokens_per_rank,
+            zero_recv_gbl_num_tokens_per_expert,
+        ) = build_layout_metadata(zero_recv_topk_idx.clone())
+
+        zero_recv_ranks = (
+            (zero_recv_gbl_num_tokens_per_rank == 0).nonzero(as_tuple=True)[0].tolist()
+        )
+        assert zero_recv_ranks == [zero_recv_rank], zero_recv_ranks
+
+        if local_rank == 0:
+            print(
+                f"[zero-recv-rank] forcing rank {zero_recv_rank} to receive 0 tokens ...",
+                flush=True,
+                end="",
+            )
+
+        (
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            recv_num_tokens_per_expert_list,
+            handle,
+            event,
+        ) = buffer.dispatch(
+            x=zero_recv_x,
+            topk_idx=zero_recv_topk_idx,
+            topk_weights=zero_recv_topk_weights,
+            num_tokens_per_rank=zero_recv_num_tokens_per_rank,
+            is_token_in_rank=zero_recv_is_token_in_rank,
+            num_tokens_per_expert=zero_recv_num_tokens_per_expert,
+            config=config,
+        )
+        rank_prefix_matrix = handle[0]
+        expected_recv_tokens = int(zero_recv_gbl_num_tokens_per_rank[rank].item())
+        assert recv_x.size(0) == expected_recv_tokens
+        assert (
+            zero_recv_gbl_num_tokens_per_expert.view(num_ranks, -1)[rank].tolist()
+            == recv_num_tokens_per_expert_list
+        )
+        check_data(recv_x, rank_prefix_matrix)
+
+        if rank == zero_recv_rank:
+            assert recv_x.size(0) == 0
+            assert recv_topk_idx.size(0) == 0
+            assert recv_topk_weights.size(0) == 0
+
+        cached_recv_x, _, _, _, _, cached_event = buffer.dispatch(
+            x=zero_recv_x,
+            handle=handle,
+            config=config,
+        )
+        assert torch.equal(cached_recv_x, recv_x)
+
+        combined_x, combined_topk_weights, combine_event = buffer.combine(
+            x=recv_x,
+            handle=handle,
+            topk_weights=recv_topk_weights,
+            config=config,
+        )
+
+        routed_rank_count = zero_recv_is_token_in_rank.sum(dim=1).unsqueeze(1)
+        check_x = combined_x.float() / routed_rank_count
+        assert calc_diff(check_x, zero_recv_x) < 5e-6
+
+        # Dispatch masks non-local expert weights to 0 on each rank, so combine
+        # reconstructs the original top-k weights by summing disjoint
+        # per-rank contributions rather than averaging duplicated payloads.
+        check_topk_weights = combined_topk_weights
+        assert calc_diff(check_topk_weights, zero_recv_topk_weights) < 1e-9
+
+        if local_rank == 0:
+            print(" passed", flush=True)
 
     for previous_mode in (False, True):
         for async_mode in (False, True):
@@ -304,6 +450,8 @@ def test_main(
                         print(" passed", flush=True)
     if local_rank == 0:
         print("", flush=True)
+
+    run_zero_recv_rank_test()
 
     # Tune dispatch performance
     best_dispatch_results = None

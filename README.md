@@ -2,14 +2,13 @@
 
 <p align="center"> <img src="./docs/images/uccl_logo.png" alt="" width="300"> </p>
 
-[![🌐 UCCL](https://img.shields.io/badge/-Visit%20Website-5865F2?style=for-the-badge)](https://uccl-project.github.io/) [![Github](https://img.shields.io/badge/UCCL-000000?style=for-the-badge&logo=github&logoColor=000&logoColor=white)](https://github.com/uccl-project/uccl) [![Twitter](https://img.shields.io/badge/UCCL-white?style=for-the-badge&logo=X&logoColor=000&color=000&labelColor=white)](https://x.com/uccl_proj)
 <p align="center">
-    <a href="#about"><b>About</b></a> | 
-    <a href="#road-map"><b>Road Map</b></a> | 
-    <a href="#quick-start"><b>Quick Start</b></a> | 
-    <a href="#dev-guide"><b>Dev Guide</b></a> | 
-    <a href="#acknowledgement"><b>Acknowledgement</b></a> |
-    <a href="#contact"><b>Contact</b></a>
+    <a href="https://uccl-project.github.io/"><b>Blog</b></a> | 
+    <a href="https://join.slack.com/t/uccl-dev/shared_invite/zt-3xbjdb0d0-tvDeUhGxtYxvGqsGKQ31Uw"><b>Join Slack</b></a> | 
+    <a href="https://x.com/uccl_proj"><b>Twitter/X</b></a> | 
+    <a href="#road-map"><b>Roadmap</b></a> | 
+    <a href="#quick-start"><b>Quick Start</b></a> |
+    <a href="https://github.com/uccl-project/uccl/issues/944"><b>Open Letter</b></a>
 </p>
 
 </div>
@@ -22,7 +21,7 @@ UCCL is an efficient communication library for GPUs, covering collectives, P2P (
 
 An UCCL overview can be found in this [slide deck](https://docs.google.com/presentation/d/1LQxZzxghRmua4FkfQjWu69wXy9hrs9V_tXrXt_DT-F4/edit?usp=sharing) with the following components: 
 
-* **[UCCL-collective](collective/)** serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
+* **[UCCL-collective](collective/)** (UCCL-Tran) serves as a drop-in replacement for NCCL/RCCL (e.g., requiring no changes to application code), and significantly outperforms them in both latency and throughput across various settings. 
 
   <details>
   <summary>UCCL-collective performance comparison</summary>
@@ -47,7 +46,7 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
     * More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
 
-* **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
+* **[UCCL-P2P](p2p/)** provides NIXL-style initiator-target transfer APIs. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines.
 
   <details>
   <summary>UCCL-P2P performance comparison</summary>
@@ -97,11 +96,11 @@ The easiest way to use UCCL is to first build based on your platform. The build 
 git clone https://github.com/uccl-project/uccl.git && cd uccl
 
 # Eg, bash build.sh cu12 ep --install
-bash build.sh [cu12|cu13|rocm|rocm7|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
+bash build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
-> - By default, `build.sh cu12` targets CUDA 12.8 and `build.sh rocm` targets ROCm 7.1, but you can also specify `cu13|rocm6` to target CUDA 13.0 or ROCm 6.4.
+> - By default, `build.sh cu12` targets CUDA 12.8 and `build.sh roc7` targets ROCm 7.1, but you can also specify `cu13|roc6` to target CUDA 13.0 or ROCm 6.4.
 > - UCCL uses [nanobind](https://github.com/wjakob/nanobind) for C++/Python bindings. On Python 3.12+, wheels are tagged `cp312-abi3` (stable ABI, one wheel for all 3.12+ interpreters); on older Pythons, wheels are CPython-version-specific.
 > - When building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 
@@ -164,25 +163,35 @@ For quick installation with docker, you can directly dive into:
 
 </details>
 
+## Adoptions
+
+* NVIDIA NeMo agent framework integrates UCCL-EP for expert-parallel communication: [homepage](https://docs.nvidia.com/nemo/automodel/latest/apidocs/nemo_automodel/nemo_automodel.components.moe.uccl_ep.html). 
+* NVIDIA NIXL inference transfer library integrates UCCL-P2P as a RDMA backend: [release page](https://github.com/ai-dynamo/nixl/releases/tag/0.9.0).
+* Red Hat/IBM/Google llm-d distributed inference stack leverages UCCL-P2P for KV-cache transfer: [blog](https://llm-d.ai/blog/llm-d-v0.5-sustaining-performance-at-scale).
+* AMD Primus training framework uses UCCL-EP for expert-parallel communication: [code](https://github.com/AMD-AGI/Primus/tree/main/examples/moe_package).
+* AMD TheRock build platform incorporates UCCL-Tran, UCCL-EP, and UCCL-P2P: [homepage](https://github.com/ROCm/TheRock/tree/main/external-builds/uccl).
+
 ## Citation
+
 The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
-@article{uccl_transport,
-  title={An Extensible Software Transport Layer for GPU Networking},
+@article{uccl_tran,
+  title={UCCL-Tran: An Extensible Software Transport Layer for GPU Networking},
   author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and Ren, Fengyuan and Xu, Zhiying and Raiciu, Costin and Stoica, Ion},
-  journal={arXiv preprint arXiv:2504.17307},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
 ```bibtex
 @article{uccl_ep,
   title={UCCL-EP: Portable Expert-Parallel Communication},
   author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
-  journal={arXiv preprint arXiv:2512.19849},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
+
 ## Acknowledgement
 
 UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/) and [UC Davis ArtSy lab](https://github.com/artsy-lab). We enthusiastically welcome open-source developers joining us! 
@@ -196,6 +205,3 @@ UCCL is generously supported by (in alphabetical order):
 [IBM](https://www.ibm.com/), 
 [Lambda](https://lambda.ai/),
 [Mibura](https://www.mibura.com/).
-
-## Contact
-Feel free to raise GitHub issues if you have any questions or suggestions. 

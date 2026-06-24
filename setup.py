@@ -59,7 +59,6 @@ setup(
             "p2p*.so",
             "ep*.so",
             "lib/*.a",
-            "collective.py",
             "utils.py",
         ],
     },

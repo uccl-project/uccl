@@ -1,4 +1,6 @@
 #include "endpoint_wrapper.h"
+#include "util/debug.h"
+#include "util/gpu_rt.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -27,7 +29,7 @@ struct XferHandle {
   uint64_t transfer_id;
 };
 
-bool IsHostPtr(void const* ptr) {
+bool is_host_ptr(void const* ptr) {
   return uccl::get_dev_idx(const_cast<void*>(ptr)) == -1;
 }
 
@@ -168,13 +170,13 @@ NB_MODULE(p2p, m) {
                " size=" + std::to_string(d.size) +
                " mr_id=" + std::to_string(d.mr_id) + ">";
       });
-  nb::enum_<uccl::FloatType>(m, "FloatType")
-      .value("kUndefined", uccl::FloatType::kUndefined)
-      .value("kFloat16", uccl::FloatType::kFloat16)
-      .value("kBFloat16", uccl::FloatType::kBFloat16)
-      .value("kFloat32", uccl::FloatType::kFloat32)
-      .value("kFloat8E4M3FN", uccl::FloatType::kFloat8E4M3FN)
-      .value("kFloat8E5M2", uccl::FloatType::kFloat8E5M2)
+  nb::enum_<FloatType>(m, "FloatType")
+      .value("kUndefined", FloatType::kUndefined)
+      .value("kFloat16", FloatType::kFloat16)
+      .value("kBFloat16", FloatType::kBFloat16)
+      .value("kFloat32", FloatType::kFloat32)
+      .value("kFloat8E4M3FN", FloatType::kFloat8E4M3FN)
+      .value("kFloat8E5M2", FloatType::kFloat8E5M2)
       .export_values();
 
   // Endpoint class binding
@@ -200,19 +202,18 @@ NB_MODULE(p2p, m) {
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
-             int remote_gpu_idx, int remote_port) {
+             std::string const& remote_gpu_bdf, int remote_port) {
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.connect(remote_ip_addr, remote_gpu_idx,
-                                     remote_port, conn_id);
+              success = self.connect(remote_ip_addr, 0, remote_port, conn_id);
             }
             return nb::make_tuple(success, conn_id);
           },
           "Connect to a remote server", nb::arg("remote_ip_addr"),
-          nb::arg("remote_gpu_idx"), nb::arg("remote_port") = -1)
+          nb::arg("remote_gpu_bdf"), nb::arg("remote_port") = -1)
       .def(
           "add_remote_endpoint",
           [](Endpoint& self, nb::bytes metadata_bytes) {
@@ -255,10 +256,10 @@ NB_MODULE(p2p, m) {
           [](nb::bytes metadata_bytes) {
             std::string buf(metadata_bytes.c_str(), metadata_bytes.size());
             std::vector<uint8_t> metadata(buf.begin(), buf.end());
-            auto [ip, port, gpu_idx] = Endpoint::parse_metadata(metadata);
-            return nb::make_tuple(ip, port, gpu_idx);
+            auto [ip, port, gpu_bdf] = Endpoint::parse_metadata(metadata);
+            return nb::make_tuple(ip, port, gpu_bdf);
           },
-          "Parse endpoint metadata to extract IP address, port, and GPU index",
+          "Parse endpoint metadata to extract IP address, port, and GPU BDF",
           nb::arg("metadata"))
       .def(
           "accept",
@@ -278,8 +279,7 @@ NB_MODULE(p2p, m) {
           "Accept an incoming connection")
       .def(
           "reg",
-          [](Endpoint& self, uint64_t ptr, size_t size,
-             uccl::FloatType floatType) {
+          [](Endpoint& self, uint64_t ptr, size_t size, FloatType floatType) {
             uint64_t mr_id;
             bool success;
             {
@@ -291,7 +291,7 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, mr_id);
           },
           "Register a data buffer", nb::arg("ptr"), nb::arg("size"),
-          nb::arg("floatType") = uccl::FloatType::kUndefined)
+          nb::arg("floatType") = FloatType::kUndefined)
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
@@ -354,7 +354,7 @@ NB_MODULE(p2p, m) {
                   assert(mhandle != nullptr);
                   xfer_desc.mr_id = mr_id;
                   for (size_t j = 0; j < kNICContextNumber; j++) {
-                    auto mr = mhandle->mr_array.getKeyByContextID(j);
+                    auto mr = mhandle->mr_array.get_key_by_context_id(j);
                     assert(mr != nullptr);
                     xfer_desc.lkeys.push_back(mr->lkey);
                     xfer_desc.rkeys.push_back(mr->rkey);
@@ -477,7 +477,7 @@ NB_MODULE(p2p, m) {
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
-                if (IsHostPtr(ldesc.addr) && info.is_host) {
+                if (is_host_ptr(ldesc.addr) && info.is_host) {
                   use_loopback_rdma = true;
                   break;
                 }
@@ -490,8 +490,8 @@ NB_MODULE(p2p, m) {
                     nb::gil_scoped_release release;
                     InsidePythonGuard guard;
                     success =
-                        self.connect(conn->ip_addr_, conn->remote_gpu_idx_,
-                                     conn->remote_port_, loopback_conn_id);
+                        self.connect(conn->ip_addr_, 0, conn->remote_port_,
+                                     loopback_conn_id);
                   }
                   if (!success) {
                     return nb::make_tuple(false, uint64_t{0});
@@ -675,148 +675,6 @@ NB_MODULE(p2p, m) {
           },
           "Deregister a memory region", nb::arg("mr_id"))
       .def(
-          "send",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send(conn_id, mr_id,
-                                  reinterpret_cast<void const*>(ptr), size);
-            }
-            return success;
-          },
-          "Send a data buffer, optionally using metadata (serialized FifoItem)",
-          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Receive a key-value buffer", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "send_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send_async(conn_id, mr_id,
-                                        reinterpret_cast<void const*>(ptr),
-                                        size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
-          nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "sendv",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void const*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void const*>(ptr));
-            }
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.sendv(conn_id, mr_id_v, data_v, size_v, num_iovs);
-            }
-            return success;
-          },
-          "Send multiple data buffers", nb::arg("conn_id"), nb::arg("mr_id_v"),
-          nb::arg("data_ptr_v"), nb::arg("size_v"), nb::arg("num_iovs"))
-      .def(
-          "recvv",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void*>(ptr));
-            }
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
-            }
-            return success;
-          },
-          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
-      .def(
-          "sendv_async",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void const*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void const*>(ptr));
-            }
-            uint64_t transfer_id;
-            bool success = self.sendv_async(conn_id, mr_id_v, data_v, size_v,
-                                            num_iovs, &transfer_id);
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
-      .def(
-          "recvv_async",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-             std::vector<uint64_t> data_ptr_v, std::vector<size_t> size_v,
-             size_t num_iovs) {
-            std::vector<void*> data_v;
-            data_v.reserve(data_ptr_v.size());
-            for (uint64_t ptr : data_ptr_v) {
-              data_v.push_back(reinterpret_cast<void*>(ptr));
-            }
-            uint64_t transfer_id;
-            bool success = self.recvv_async(conn_id, mr_id_v, data_v, size_v,
-                                            num_iovs, &transfer_id);
-
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
-          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
-          nb::arg("num_iovs"))
-      .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, nb::bytes meta_blob) {
@@ -876,22 +734,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             bool ok;
             {
@@ -918,22 +774,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             uint64_t transfer_id;
             bool ok;
@@ -1011,22 +865,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             bool ok;
             {
@@ -1053,22 +905,20 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<FifoItem> item_v;
-            item_v.reserve(num_iovs);
+            std::vector<FifoItem> item_v(num_iovs);
+            std::vector<void*> data_v(num_iovs);
+            PyObject* meta_list_ptr = meta_blob_v.ptr();
             for (size_t i = 0; i < num_iovs; ++i) {
-              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
-              std::string buf(_b.c_str(), _b.size());
-              if (buf.size() != sizeof(FifoItem))
+              char* bytes_data;
+              Py_ssize_t bytes_len;
+              if (PyBytes_AsStringAndSize(PyList_GetItem(meta_list_ptr, i),
+                                          &bytes_data, &bytes_len) != 0 ||
+                  bytes_len != sizeof(FifoItem)) {
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              FifoItem item;
-              deserialize_fifo_item(buf.data(), &item);
-              item_v.push_back(item);
-            }
-            std::vector<void*> data_v;
-            data_v.reserve(num_iovs);
-            for (size_t i = 0; i < num_iovs; ++i) {
-              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+              }
+              deserialize_fifo_item(bytes_data, &item_v[i]);
+              data_v[i] = reinterpret_cast<void*>(ptr_v[i]);
             }
             uint64_t transfer_id;
             bool ok;
@@ -1088,7 +938,7 @@ NB_MODULE(p2p, m) {
           nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "advertise",
-          [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
+          [](Endpoint& self, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
             char serialized[sizeof(FifoItem)]{};  // 64-byte scratch buffer
@@ -1096,8 +946,8 @@ NB_MODULE(p2p, m) {
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              ok = self.advertise(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, serialized);
+              ok = self.advertise(mr_id, reinterpret_cast<void*>(ptr), size,
+                                  serialized);
             }
             /* return (success, bytes) — empty bytes when failed */
             return nb::make_tuple(ok,
@@ -1105,10 +955,10 @@ NB_MODULE(p2p, m) {
                                      : nb::bytes("", 0));
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
-          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
+          nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "advertisev",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+          [](Endpoint& self, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
              size_t num_iovs) {
             std::vector<char*> serialized_vec(num_iovs);
@@ -1125,8 +975,8 @@ NB_MODULE(p2p, m) {
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              ok = self.advertisev(conn_id, mr_id_v, data_v, size_v,
-                                   serialized_vec, num_iovs);
+              ok = self.advertisev(mr_id_v, data_v, size_v, serialized_vec,
+                                   num_iovs);
             }
 
             nb::list py_bytes_list;
@@ -1141,98 +991,37 @@ NB_MODULE(p2p, m) {
           },
           "Expose multiple registered buffers for the peer to RDMA-READ or "
           "RDMA-WRITE",
-          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
-          nb::arg("size_v"), nb::arg("num_iovs"))
-      // IPC-specific functions for local connections via Unix Domain Sockets
+          nb::arg("mr_id_v"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("num_iovs"))
+      // IPC-specific functions for local (same-node) connections via CUDA IPC
       .def(
           "connect_local",
-          [](Endpoint& self, int remote_gpu_idx) {
+          [](Endpoint& self, std::string const& remote_gpu_bdf) {
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.connect_local(remote_gpu_idx, conn_id);
+              success = self.connect_local(remote_gpu_bdf, conn_id);
             }
             return nb::make_tuple(success, conn_id);
           },
-          "Connect to a local process via Unix Domain Socket",
-          nb::arg("remote_gpu_idx"))
+          "Connect to a local process via shared memory",
+          nb::arg("remote_gpu_bdf"))
       .def(
           "accept_local",
           [](Endpoint& self) {
-            int remote_gpu_idx;
+            std::string remote_gpu_bdf;
             uint64_t conn_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.accept_local(remote_gpu_idx, conn_id);
+              success = self.accept_local(remote_gpu_bdf, conn_id);
             }
-            return nb::make_tuple(success, remote_gpu_idx, conn_id);
+            return nb::make_tuple(success, remote_gpu_bdf, conn_id);
           },
-          "Accept an incoming local connection via Unix Domain Socket")
-      .def(
-          "send_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "send_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send_ipc_async(conn_id,
-                                            reinterpret_cast<void const*>(ptr),
-                                            size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously via IPC using CUDA/HIP memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
-      .def(
-          "recv_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              nb::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.recv_ipc_async(
-                  conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
-            }
-            return nb::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously via IPC using CUDA/HIP memory handles",
-          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
+          "Accept an incoming local connection via shared memory")
       .def(
           "write_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
@@ -1511,9 +1300,8 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", nb::arg("transfer_id"))
-      .def(
-          "conn_id_of_rank", &Endpoint::conn_id_of_rank,
-          "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
-          nb::arg("rank"))
+      .def("conn_id_of_rank", &Endpoint::conn_id_of_rank,
+           "Get the connection ID for a given peer (or UINT64_MAX if none)",
+           nb::arg("rank"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }

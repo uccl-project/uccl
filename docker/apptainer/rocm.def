@@ -49,7 +49,7 @@ From: {{ BASE_IMAGE }}
     rm -rf /var/lib/apt/lists/*
 
     # ───── Install PyTorch with ROCm support ─────
-    python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
+    python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 
     # ─────────────────────────────────────────────────────────
     # Install Python build back-end (for Python ${PY_VER})

@@ -572,8 +572,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 # assert current_hash == ref_hash, f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
-    buffer.destroy()
     dist.barrier()
+    buffer.destroy()
     dist.destroy_process_group()
 
 

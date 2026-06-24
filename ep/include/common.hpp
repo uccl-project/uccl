@@ -3,6 +3,8 @@
 
 #include "util/gpu_rt.h"
 #include <atomic>
+#include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -83,7 +85,9 @@ static constexpr int kMaxMRChunks = 128;
 #define kReorderingBufferSize 16  // Right now only 4 bits.
 #define kRemoteBufferSize (kBatchSize * kNumProxyThs * kObjectSize * 100)
 #define MAIN_THREAD_CPU_IDX 31
+#ifndef MAX_NUM_GPUS
 #define MAX_NUM_GPUS 8
+#endif
 #define RECEIVER_BATCH_SIZE 16
 #define kAtomicWrTag 0xa70a000000000000ULL
 #define kAtomicMask 0x0000FFFFFFFFFFFFULL
@@ -136,6 +140,56 @@ static inline uint32_t get_max_inflight_normal() {
   static uint32_t val = []() -> uint32_t {
     char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
     return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightNormal;
+  }();
+  return val;
+}
+
+// On AMD CDNA, vanilla __ATOMIC_RELEASE/__ATOMIC_ACQUIRE system-scope atomics
+// do NOT emit the `s_waitcnt vmcnt(0)` needed to drain prior vector-memory
+// writes before the producer's tail-pointer store becomes visible to peer
+// GPUs over XGMI. The "aggressive" variant inserts that waitcnt and uses a
+// relaxed-sys load/store, which is what is actually needed for the intranode
+// dispatch/combine ring buffers to work reliably. Without this, the combine
+// receiver eventually deadlocks because later tail updates (e.g.
+// final_tail=115) never propagate past an early value (e.g. shared_tail=24),
+// even though the sender provably finished writing.
+//
+// setup.py injects -DUCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC=1 for ROCm builds so
+// the default is "on" there; CUDA builds keep the historical default of 0.
+#ifndef UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC
+#define UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC 0
+#endif
+
+static inline bool get_aggressive_atomic_enabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC");
+    return env ? static_cast<uint32_t>(atoi(env))
+               : static_cast<uint32_t>(UCCL_EP_DEFAULT_AGGRESSIVE_ATOMIC);
+  }();
+  return val != 0;
+}
+
+// Runtime override for the CPU-side recv timeout.
+// Long training steps (e.g. Megatron-LM with large grad accumulation, heavy
+// checkpoint I/O, or EP groups initializing sequentially under PP >= 2) can
+// exceed the compile-time `NUM_CPU_TIMEOUT_SECS` default (100 s) and falsely
+// trigger "DeepEP error: CPU recv timeout" / "timeout (dispatch CPU)".
+static inline int get_cpu_timeout_secs(int fallback_secs) {
+  static int const val = [fallback_secs]() -> int {
+    char const* env = getenv("UCCL_EP_CPU_TIMEOUT_SECS");
+    if (env == nullptr || *env == '\0') return fallback_secs;
+    char* end = nullptr;
+    errno = 0;
+    long v = strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || v <= 0) {
+      fprintf(stderr,
+              "[UCCL] Warning: invalid UCCL_EP_CPU_TIMEOUT_SECS='%s', "
+              "using default %d seconds\n",
+              env, fallback_secs);
+      return fallback_secs;
+    }
+    if (v > INT_MAX) v = INT_MAX;
+    return static_cast<int>(v);
   }();
   return val;
 }

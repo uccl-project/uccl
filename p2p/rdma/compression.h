@@ -1,6 +1,100 @@
 #pragma once
-#include "define.h"
+#include "common.h"
 #include "memory_allocator.h"
+#include "util/gpu_rt.h"
+#include <cstddef>
+#include <cstdint>
+
+size_t get_min_compress_bytes_from_env();
+extern size_t const& kMinCompressBytes;
+
+size_t get_compress_buffer_bytes_from_env();
+extern size_t const& kCompressBufferSize;
+
+enum class CompressStrategy {
+  kNone,         // no compression
+  kSplitOnly,    // only split, no encode
+  kSplitEncode,  // split + encode (default)
+};
+
+CompressStrategy get_compress_strategy_from_env();
+
+#if defined USE_DIETGPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
+    defined(__HIPCC__)
+#include "dietgpu/float/GpuFloatCodec_hip.h"
+#include "dietgpu/utils/DeviceUtils_hip.h"
+#include "dietgpu/utils/GreenContext_hip.h"
+#include "dietgpu/utils/StackDeviceMemory_hip.h"
+#include <hip/hip_fp16.h>
+#else
+#include "dietgpu/float/GpuFloatCodec.h"
+#include "dietgpu/utils/DeviceUtils.h"
+#include "dietgpu/utils/GreenContext.h"
+#include "dietgpu/utils/StackDeviceMemory.h"
+#include <cuda_fp16.h>
+#endif
+
+dietgpu::FloatType to_dietgpu(FloatType t);
+FloatType from_dietgpu(dietgpu::FloatType t);
+
+/**
+ * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
+ * FloatType-based constructor and get_float_type() accessor, hiding the
+ * internal dietgpu::FloatType from external callers.
+ */
+struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext,
+                          public CompressionContext {
+  FloatCompressCtx();
+  explicit FloatCompressCtx(FloatType ft);
+
+  // Raw device buffer for the [in_ptr, inSize, out_ptr] tuple in params_dev.
+  // Plain cudaMalloc so each ctx frees independently (no LIFO constraint).
+  void* raw_params_dev = nullptr;
+
+  FloatCompressCtx(FloatCompressCtx const&) = delete;
+  FloatCompressCtx& operator=(FloatCompressCtx const&) = delete;
+
+  ~FloatCompressCtx() override;
+
+  FloatType get_float_type() const override;
+  size_t get_max_size() const override;
+};
+
+#else
+
+/**
+ * @brief Dummy device allocation that mimics dietgpu's
+ * StackDeviceMemory::Reservation. Provides a no-op release() method for
+ * compatibility.
+ */
+struct DummyDevAlloc {
+  void release() {}
+  void* data() { return nullptr; }
+};
+
+/**
+ * @brief Dummy compression context that mirrors the interface of
+ * dietgpu::FloatCompressSplitContext. This allows code to compile
+ * without #ifdef guards scattered throughout.
+ */
+struct DummyCompressCtx : public CompressionContext {
+  FloatType float_type = FloatType::kUndefined;
+  size_t max_size = 0;
+  DummyDevAlloc params_dev;
+  DummyDevAlloc histogram_dev;
+  DummyDevAlloc toComp_dev;
+
+  DummyCompressCtx();
+  explicit DummyCompressCtx(FloatType ft);
+
+  FloatType get_float_type() const override;
+  size_t get_max_size() const override;
+};
+
+#endif
+
+CompressCtx make_compress_ctx(FloatType ft);
 
 /**
  * @brief Abstract interface for compressor backends.
@@ -17,13 +111,13 @@ class ICompressorBackend {
    * @brief Get the compression buffer.
    * @return Shared pointer to the compression buffer RegMemBlock.
    */
-  virtual std::shared_ptr<RegMemBlock> getCompressBuffer() const = 0;
+  virtual std::shared_ptr<RegMemBlock> get_compress_buffer() const = 0;
 
   /**
    * @brief Get the decompression buffer.
    * @return Shared pointer to the decompression buffer RegMemBlock.
    */
-  virtual std::shared_ptr<RegMemBlock> getDecompressBuffer() const = 0;
+  virtual std::shared_ptr<RegMemBlock> get_decompress_buffer() const = 0;
 
   /**
    * @brief Compress a send request's data.
@@ -33,13 +127,6 @@ class ICompressorBackend {
   virtual bool compress(std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  virtual bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) = 0;
-
-  /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.
    * @param input The RemoteMemInfo containing compressed data.
    * @param output The RegMemBlock to write decompressed data to.
@@ -47,21 +134,27 @@ class ICompressorBackend {
    * @return true on success, false on failure.
    */
   virtual bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                          uccl::FloatType float_type) = 0;
+                          FloatType float_type) = 0;
+
+  // Queue decompress asynchronously. on_done fires via gpuLaunchHostFunc after
+  // the kernel completes; it must not call any GPU APIs.
+  virtual void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                                FloatType float_type, gpuHostFn_t on_done,
+                                void* user_data) = 0;
 
   /**
    * @brief Check if a request should be compressed based on size threshold.
    * @param size The size in bytes to check.
    * @return true if the size meets the minimum compression threshold.
    */
-  virtual bool shouldCompress(size_t size) = 0;
+  virtual bool should_compress(size_t size) = 0;
 
   /**
    * @brief Check if data should be compressed and split first.
    * @param size The size in bytes to check.
    * @return true if should compress and split first.
    */
-  virtual bool shouldCompressAndSplitFirst(size_t size) = 0;
+  virtual bool should_compress_and_split_first(size_t size) = 0;
 
   /**
    * @brief Prepare a context for split+encode two-phase compression.
@@ -69,29 +162,30 @@ class ICompressorBackend {
    * @param size Size of the input data in bytes.
    * @param ctx Compression context.
    */
-  virtual void prepareSplitContext(void* addr, size_t size,
-                                   CompressCtx ctx) = 0;
+  virtual void prepare_split_context(void* addr, size_t size,
+                                     CompressCtx ctx) = 0;
 
   /**
    * @brief Phase 1 of two-phase compression: split float data.
    * @param req The send request with compress_ctx already prepared.
    * @return true on success, false on failure.
    */
-  virtual bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) = 0;
+  virtual bool compress_split_one_batch(
+      std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
    * @brief Phase 2 of two-phase compression: ANS encode.
    * @param req The send request with compress_ctx already split.
    * @return compressed size on success, 0 on failure.
    */
-  virtual uint32_t compressEncodeOneBatch(
+  virtual uint32_t compress_encode_one_batch(
       std::shared_ptr<RDMASendRequest> req) = 0;
 
   /**
    * @brief Get the compression strategy.
    * @return The current compression strategy.
    */
-  virtual CompressStrategy getCompressStrategy() = 0;
+  virtual CompressStrategy get_compress_strategy() = 0;
 };
 
 /**
@@ -102,55 +196,40 @@ class ICompressorBackend {
  */
 class NullCompressorBackend : public ICompressorBackend {
  public:
-  NullCompressorBackend() : compress_strategy_(CompressStrategy::kNone) {}
-  ~NullCompressorBackend() override = default;
+  NullCompressorBackend();
+  ~NullCompressorBackend() override;
 
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override {
-    return nullptr;
-  }
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const override;
 
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const override {
-    return nullptr;
-  }
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const override;
 
-  bool compress(std::shared_ptr<RDMASendRequest> /*req*/) override {
-    return false;
-  }
+  bool compress(std::shared_ptr<RDMASendRequest> req) override;
 
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> /*req*/) override {
-    return false;
-  }
+  bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
+                  FloatType float_type) override;
 
-  bool decompress(RemoteMemInfo const& /*input*/, RegMemBlock& /*output*/,
-                  uccl::FloatType /*float_type*/) override {
-    return false;
-  }
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data) override;
 
-  bool shouldCompress(size_t /*size*/) override { return false; }
+  bool should_compress(size_t size) override;
 
-  bool shouldCompressAndSplitFirst(size_t /*size*/) override { return false; }
+  bool should_compress_and_split_first(size_t size) override;
 
-  void prepareSplitContext(void* /*addr*/, size_t /*size*/,
-                           CompressCtx /*ctx*/) override {}
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx) override;
 
-  bool compressSplitOneBatch(
-      std::shared_ptr<RDMASendRequest> /*req*/) override {
-    return false;
-  }
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req) override;
 
-  uint32_t compressEncodeOneBatch(
-      std::shared_ptr<RDMASendRequest> /*req*/) override {
-    return 0;
-  }
+  uint32_t compress_encode_one_batch(
+      std::shared_ptr<RDMASendRequest> req) override;
 
-  CompressStrategy getCompressStrategy() override { return compress_strategy_; }
+  CompressStrategy get_compress_strategy() override;
 
  private:
   CompressStrategy compress_strategy_;
 };
 
 #ifdef USE_DIETGPU
-#include "dietgpu/utils/GreenContext.h"
 /**
  * @brief DietGPU-based compressor backend.
  *
@@ -159,317 +238,41 @@ class NullCompressorBackend : public ICompressorBackend {
  */
 class DietGPUCompressorBackend : public ICompressorBackend {
  public:
-  DietGPUCompressorBackend()
-      : stream_(nullptr),
-        res_(nullptr),
-        res_meta_(nullptr),
-        devCompressedSize_(nullptr) {
-    compress_strategy_ = getCompressStrategyFromEnv();
-    if (compress_strategy_ == CompressStrategy::kNone) {
-      return;
-    }
-    // Initialize green context BEFORE creating any CUDA resources (streams,
-    // memory) so that they all belong to the green context.
-    dietgpu::initGreenContextIfNeeded(dietgpu::getCurrentDevice());
+  DietGPUCompressorBackend();
+  ~DietGPUCompressorBackend() override;
 
-    GPU_RT_CHECK(gpuMalloc(&devCompressedSize_, sizeof(uint32_t)));
-    // Initialize compression buffer
-    auto allocator = std::make_shared<MemoryAllocator>();
-    buffer_ =
-        allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const override;
 
-    // Initialize decompression buffer
-    decompressBuffer_ =
-        allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const override;
 
-    // Initialize GPU stream
-    GPU_RT_CHECK(gpuStreamCreate(&stream_));
-
-    // Initialize StackDeviceMemory for compress/decompress operations
-    res_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),
-                                          3 * kCompressBufferSize);
-
-    // Initialize StackDeviceMemory for split context metadata allocations
-    res_meta_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),
-                                               kCompressBufferSize);
-  }
-
-  ~DietGPUCompressorBackend() override {
-    if (stream_) {
-      gpuStreamDestroy(stream_);
-      stream_ = nullptr;
-    }
-    if (res_) {
-      delete res_;
-      res_ = nullptr;
-    }
-    if (res_meta_) {
-      delete res_meta_;
-      res_meta_ = nullptr;
-    }
-    if (devCompressedSize_) {
-      GPU_RT_CHECK(gpuFree(devCompressedSize_));
-    }
-  }
-
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override {
-    return buffer_;
-  }
-
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const override {
-    return decompressBuffer_;
-  }
-
-  bool compress(std::shared_ptr<RDMASendRequest> req) override {
-    if (unlikely(!req || !req->local_mem || !stream_ || !res_ || !buffer_)) {
-      UCCL_LOG(WARN)
-          << "DietGPUCompressorBackend::compress - Invalid parameters";
-      return false;
-    }
-    // Setup compression config
-    dietgpu::FloatCompressConfig compressConfig;
-    compressConfig.floatType = to_dietgpu(req->compress_ctx->getFloatType());
-    compressConfig.useChecksum = false;
-    compressConfig.is16ByteAligned = true;
-
-    // Calculate element count from bytes
-    uint32_t numFloats = dietgpu::getElementCountFromBytes(
-        to_dietgpu(req->compress_ctx->getFloatType()), req->local_mem->size);
-
-    // Setup batch (single element batch)
-    void const* inPtrs[1] = {req->local_mem->addr};
-    uint32_t inSizes[1] = {numFloats};
-    void* outPtrs[1] = {buffer_->addr};
-
-    // Compress
-    dietgpu::floatCompress(*res_, compressConfig,
-                           1,  // numInBatch
-                           inPtrs, inSizes, outPtrs, devCompressedSize_,
-                           stream_);
-    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
-    // Get compressed size
-    uint32_t compressedSize = 0;
-    GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
-                           sizeof(compressedSize), gpuMemcpyDeviceToHost));
-
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
-        << " bytes to " << compressedSize << " bytes, ratio: "
-        << static_cast<float>(compressedSize) /
-               static_cast<float>(req->local_mem->size)
-        << "x";
-
-    // Update request to use compressed buffer
-    req->local_mem = std::make_shared<RegMemBlock>(
-        buffer_->addr, compressedSize, buffer_->mr_array, buffer_->type);
-    return true;
-  }
-
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override {
-    if (unlikely(!req || !req->local_mem)) {
-      UCCL_LOG(WARN)
-          << "DietGPUCompressorBackend::prepareDecompress - Invalid parameters";
-      return false;
-    }
-
-    // Backup local_mem to local_compression_mem
-    req->local_compression_mem = req->local_mem;
-    req->local_mem = std::make_shared<RegMemBlock>(
-        decompressBuffer_->addr, decompressBuffer_->size,
-        decompressBuffer_->mr_array, decompressBuffer_->type);
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "DietGPUCompressorBackend: Prepared for decompression, backed "
-           "up local_mem ("
-        << req->local_compression_mem->size
-        << " bytes) to local_compression_mem";
-
-    return true;
-  }
+  bool compress(std::shared_ptr<RDMASendRequest> req) override;
 
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                  uccl::FloatType float_type) override {
-    if (unlikely(!stream_ || !res_)) {
-      UCCL_LOG(WARN)
-          << "DietGPUCompressorBackend::decompress - Invalid internal state";
-      return false;
-    }
+                  FloatType float_type) override;
 
-    if (unlikely(input.addr == 0 || input.length == 0)) {
-      UCCL_LOG(WARN)
-          << "DietGPUCompressorBackend::decompress - Invalid input parameters";
-      return false;
-    }
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data) override;
 
-    if (unlikely(output.addr == nullptr || output.size == 0)) {
-      UCCL_LOG(WARN)
-          << "DietGPUCompressorBackend::decompress - Invalid output parameters";
-      return false;
-    }
+  bool should_compress(size_t size) override;
 
-    dietgpu::FloatType ft = to_dietgpu(float_type);
+  bool should_compress_and_split_first(size_t size) override;
 
-    // Setup decompression config
-    dietgpu::FloatDecompressConfig decompressConfig;
-    decompressConfig.floatType = ft;
-    decompressConfig.useChecksum = false;
-    decompressConfig.is16ByteAligned = true;
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx) override;
 
-    // Calculate element count from bytes for output capacity
-    uint32_t numFloats = dietgpu::getElementCountFromBytes(ft, output.size);
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req) override;
 
-    // Setup batch for decompression
-    void const* compInPtrs[1] = {reinterpret_cast<void const*>(input.addr)};
-    void* decompOutPtrs[1] = {output.addr};
-    uint32_t outCapacities[1] = {numFloats};
+  uint32_t compress_encode_one_batch(
+      std::shared_ptr<RDMASendRequest> req) override;
 
-    // Decompress
-    dietgpu::FloatDecompressStatus status =
-        dietgpu::floatDecompress(*res_, decompressConfig,
-                                 1,  // numInBatch
-                                 compInPtrs, decompOutPtrs, outCapacities,
-                                 nullptr,  // outSuccess_dev (optional)
-                                 nullptr,  // outSize_dev (optional)
-                                 stream_);
-
-    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
-
-    if (unlikely(status.error != dietgpu::FloatDecompressError::None)) {
-      UCCL_LOG(ERROR) << "DietGPUCompressorBackend: Decompression failed!";
-      return false;
-    }
-
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "DietGPUCompressorBackend: Decompressed data from " << input.length
-        << " bytes to " << output.size << " bytes";
-
-    return true;
-  }
-
-  bool shouldCompress(size_t size) override {
-    if (compress_strategy_ == CompressStrategy::kNone) {
-      return false;
-    }
-    if (unlikely(size > buffer_->size)) {
-      UCCL_LOG(ERROR) << "DietGPUCompressorBackend::shouldCompress: data size ("
-                      << size << " bytes) exceeds compress buffer capacity ("
-                      << buffer_->size << " bytes), skipping compression";
-      return false;
-    }
-    return size >= kMinCompressBytes;
-  }
-
-  bool shouldCompressAndSplitFirst(size_t size) override {
-    return compress_strategy_ == CompressStrategy::kSplitOnly &&
-           shouldCompress(size);
-  }
-
-  void prepareSplitContext(void* addr, size_t size, CompressCtx ctx) override {
-    if (unlikely(ctx == nullptr)) {
-      std::cout << "unlikely(ctx == nullptr)" << std::endl;
-      return;
-    }
-    if (unlikely(!shouldCompress(size))) {
-      return;
-    }
-    dietgpu::FloatType float_type = to_dietgpu(ctx->getFloatType());
-    uint32_t numFloats = static_cast<uint32_t>(
-        dietgpu::getElementCountFromBytes(float_type, size));
-    // FP8 types pack two values into one uint16 pair, so the split kernel
-    // expects the pair count (half the element count).
-    if (dietgpu::isFloat8Type(float_type)) {
-      assert(numFloats % 2 == 0);
-      numFloats /= 2;
-    }
-
-    // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]
-    uintptr_t hostParams[3];
-    hostParams[0] = reinterpret_cast<uintptr_t>(addr);
-    hostParams[1] = static_cast<uintptr_t>(numFloats);
-    hostParams[2] = reinterpret_cast<uintptr_t>(buffer_->addr);
-
-    auto devParams = res_meta_->alloc<uintptr_t>(stream_, 3);
-    GPU_RT_CHECK(gpuMemcpyAsync(devParams.data(), hostParams,
-                                sizeof(hostParams), gpuMemcpyHostToDevice,
-                                stream_));
-    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
-
-    ctx->params_dev = std::move(devParams);
-    ctx->maxSize = size;
-  }
-
-  bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) override {
-    if (unlikely(!req || !req->compress_ctx || !stream_ || !res_)) {
-      UCCL_LOG(WARN) << "DietGPUCompressorBackend::compressSplitOneBatch - "
-                        "Invalid parameters";
-      return false;
-    }
-
-    dietgpu::FloatCompressConfig compressConfig;
-    compressConfig.floatType = to_dietgpu(req->compress_ctx->getFloatType());
-    compressConfig.useChecksum = false;
-    compressConfig.is16ByteAligned = true;
-
-    dietgpu::floatCompressSplitOneBatch(*res_, compressConfig, stream_,
-                                        *req->compress_ctx);
-
-    int32_t data_size = dietgpu::roundDown(
-        getUncompDataSizeFromByteSize(compressConfig.floatType,
-                                      req->compress_ctx->maxSize),
-        ChunkSplitStrategy::kMessageChunkSizeKB);
-    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
-    req->local_mem = std::make_shared<RegMemBlock>(
-        buffer_->addr, data_size, buffer_->mr_array, buffer_->type);
-    return true;
-  }
-
-  uint32_t compressEncodeOneBatch(
-      std::shared_ptr<RDMASendRequest> req) override {
-    if (unlikely(!req || !req->compress_ctx || !stream_ || !res_ || !buffer_)) {
-      UCCL_LOG(WARN) << "DietGPUCompressorBackend::compressEncodeOneBatch - "
-                        "Invalid parameters";
-      return 0;
-    }
-
-    dietgpu::FloatCompressConfig compressConfig;
-    compressConfig.floatType = to_dietgpu(req->compress_ctx->getFloatType());
-    compressConfig.useChecksum = false;
-    compressConfig.is16ByteAligned = true;
-
-    dietgpu::floatCompressEncodeOneBatch(
-        *res_, compressConfig, *req->compress_ctx, devCompressedSize_, stream_);
-    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
-    // Get compressed size
-    uint32_t compressedSize = 0;
-    GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
-                           sizeof(compressedSize), gpuMemcpyDeviceToHost));
-
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "DietGPUCompressorBackend: Encode done, " << req->local_mem->size
-        << " bytes -> " << compressedSize << " bytes, ratio: "
-        << static_cast<float>(compressedSize) /
-               static_cast<float>(req->local_mem->size)
-        << "x";
-
-    // Update request to use compressed buffer
-    uint32_t uncompressed_size = req->local_mem->size;
-    req->local_mem = std::make_shared<RegMemBlock>(
-        static_cast<char*>(buffer_->addr) + uncompressed_size,
-        compressedSize - uncompressed_size, buffer_->mr_array, buffer_->type);
-    req->remote_mem->addr = req->remote_mem->addr + uncompressed_size;
-    req->compress_ctx->histogram_dev.release();
-    req->compress_ctx->toComp_dev.release();
-    return compressedSize;
-  }
-
-  CompressStrategy getCompressStrategy() override { return compress_strategy_; }
+  CompressStrategy get_compress_strategy() override;
 
  private:
-  uint32_t* devCompressedSize_;
+  uint32_t* dev_compressed_size_;
   std::shared_ptr<RegMemBlock> buffer_;            // Compression buffer
   std::shared_ptr<RegMemBlock> decompressBuffer_;  // Decompression buffer
   gpuStream_t stream_;                             // GPU stream
   dietgpu::StackDeviceMemory* res_;  // Device memory for compress/decompress
-  dietgpu::StackDeviceMemory* res_meta_;  // Device memory for split context
   CompressStrategy compress_strategy_;
 };
 
@@ -484,10 +287,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
  */
 class Compressor {
  public:
-  static Compressor& getInstance() {
-    static Compressor instance;
-    return instance;
-  }
+  static Compressor& get_instance();
 
   // Non-copyable, non-movable
   Compressor(Compressor const&) = delete;
@@ -499,35 +299,20 @@ class Compressor {
    * @brief Get the compression buffer.
    * @return Shared pointer to the compression buffer RegMemBlock.
    */
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const {
-    return backend_->getCompressBuffer();
-  }
+  std::shared_ptr<RegMemBlock> get_compress_buffer() const;
 
   /**
    * @brief Get the decompression buffer.
    * @return Shared pointer to the decompression buffer RegMemBlock.
    */
-  std::shared_ptr<RegMemBlock> getDecompressBuffer() const {
-    return backend_->getDecompressBuffer();
-  }
+  std::shared_ptr<RegMemBlock> get_decompress_buffer() const;
 
   /**
    * @brief Compress a send request's data.
    * @param req The send request to compress.
    * @return true on success, false on failure.
    */
-  bool compress(std::shared_ptr<RDMASendRequest> req) {
-    return backend_->compress(req);
-  }
-
-  /**
-   * @brief Prepare a receive request for decompression.
-   * @param req The receive request to prepare.
-   * @return true on success, false on failure.
-   */
-  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) {
-    return backend_->prepareDecompress(req);
-  }
+  bool compress(std::shared_ptr<RDMASendRequest> req);
 
   /**
    * @brief Decompress data from RemoteMemInfo to RegMemBlock.
@@ -537,25 +322,25 @@ class Compressor {
    * @return true on success, false on failure.
    */
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
-                  uccl::FloatType float_type) {
-    return backend_->decompress(input, output, float_type);
-  }
+                  FloatType float_type);
+
+  void decompress_async(RemoteMemInfo const& input, RegMemBlock& output,
+                        FloatType float_type, gpuHostFn_t on_done,
+                        void* user_data);
 
   /**
    * @brief Check if a request should be compressed based on size threshold.
    * @param size The size in bytes to check.
    * @return true if the size meets the minimum compression threshold.
    */
-  bool shouldCompress(size_t size) { return backend_->shouldCompress(size); }
+  bool should_compress(size_t size);
 
   /**
    * @brief Check if data should be compressed and split first.
    * @param size The size in bytes to check.
    * @return true if should compress and split first.
    */
-  bool shouldCompressAndSplitFirst(size_t size) {
-    return backend_->shouldCompressAndSplitFirst(size);
-  }
+  bool should_compress_and_split_first(size_t size);
 
   /**
    * @brief Prepare a context for split+encode two-phase compression.
@@ -563,46 +348,32 @@ class Compressor {
    * @param size Size of the input data in bytes.
    * @param ctx Compression context.
    */
-  void prepareSplitContext(void* addr, size_t size, CompressCtx ctx) {
-    backend_->prepareSplitContext(addr, size, ctx);
-  }
+  void prepare_split_context(void* addr, size_t size, CompressCtx ctx);
 
   /**
    * @brief Phase 1 of two-phase compression: split float data.
    * @param req The send request with compress_ctx already prepared.
    * @return true on success, false on failure.
    */
-  bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) {
-    return backend_->compressSplitOneBatch(req);
-  }
+  bool compress_split_one_batch(std::shared_ptr<RDMASendRequest> req);
 
   /**
    * @brief Phase 2 of two-phase compression: ANS encode.
    * @param req The send request with compress_ctx already split.
    * @return compressed size on success, 0 on failure.
    */
-  uint32_t compressEncodeOneBatch(std::shared_ptr<RDMASendRequest> req) {
-    return backend_->compressEncodeOneBatch(req);
-  }
+  uint32_t compress_encode_one_batch(std::shared_ptr<RDMASendRequest> req);
 
   /**
    * @brief Get the compression strategy.
    * @return The current compression strategy.
    */
-  CompressStrategy getCompressStrategy() {
-    return backend_->getCompressStrategy();
-  }
+  CompressStrategy get_compress_strategy();
 
  private:
-  Compressor() {
-#ifdef USE_DIETGPU
-    backend_ = std::make_unique<DietGPUCompressorBackend>();
-#else
-    backend_ = std::make_unique<NullCompressorBackend>();
-#endif
-  }
+  Compressor();
 
-  ~Compressor() = default;
+  ~Compressor();
 
   std::unique_ptr<ICompressorBackend> backend_;
 };

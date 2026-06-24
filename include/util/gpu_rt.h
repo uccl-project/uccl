@@ -8,10 +8,14 @@
 #define gpuGetErrorString cudaGetErrorString
 #define gpuStream_t cudaStream_t
 #define gpuStreamNonBlocking cudaStreamNonBlocking
+#define gpuStreamLegacy cudaStreamLegacy
+#define gpuStreamPerThread cudaStreamPerThread
 #define gpuStreamCreate cudaStreamCreate
 #define gpuStreamCreateWithFlags cudaStreamCreateWithFlags
 #define gpuStreamSynchronize cudaStreamSynchronize
 #define gpuStreamDestroy cudaStreamDestroy
+#define gpuLaunchHostFunc cudaLaunchHostFunc
+#define gpuHostFn_t cudaHostFn_t
 #define gpuDeviceProp cudaDeviceProp
 #define gpuSetDevice cudaSetDevice
 #define gpuDeviceMapHost cudaDeviceMapHost
@@ -93,10 +97,19 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuGetErrorString hipGetErrorString
 #define gpuStream_t hipStream_t
 #define gpuStreamNonBlocking hipStreamNonBlocking
+// Hygon DTK lacks hipStreamLegacy; hipStreamDefault has equivalent semantics.
+#ifdef __UCCL_DTK__
+#define gpuStreamLegacy hipStreamDefault
+#else
+#define gpuStreamLegacy hipStreamLegacy
+#endif
+#define gpuStreamPerThread hipStreamPerThread
 #define gpuStreamCreate hipStreamCreate
 #define gpuStreamCreateWithFlags hipStreamCreateWithFlags
 #define gpuStreamSynchronize hipStreamSynchronize
 #define gpuStreamDestroy hipStreamDestroy
+#define gpuLaunchHostFunc hipLaunchHostFunc
+#define gpuHostFn_t hipHostFn_t
 #define gpuSetDevice hipSetDevice
 #define gpuDeviceMapHost hipDeviceMapHost
 #define gpuSetDeviceFlags hipSetDeviceFlags
@@ -152,15 +165,22 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
 #define gpuDriverSuccess hipSuccess
+// Hygon DTK lacks hipMemGetHandleForAddressRange (DMA-BUF export).
+#ifndef __UCCL_DTK__
 #define gpuMemRangeHandleType hipMemRangeHandleType
 #define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "hipMemGetHandleForAddressRange"
+#else
+typedef int gpuMemRangeHandleType;
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 0
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME ""
+#endif
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
-#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
-  "hipMemGetHandleForAddressRange"
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 

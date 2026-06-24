@@ -1,0 +1,44 @@
+#pragma once
+
+#include "algo/chunk_graph.h"
+#include "coll_config.h"
+#include "coll_types.h"
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace UKernel {
+namespace CCL {
+
+struct Op {
+  OpKind kind = OpKind::Copy;
+  size_t bytes = 0;
+  size_t src_off = 0;
+  size_t dst_off = 0;
+  uint32_t src_peer = 0;
+  uint32_t dst_peer = 0;
+  bool copy_from_staging = false;
+  uint64_t tag = 0;
+  std::vector<uint32_t> deps;
+};
+
+struct TiledResult {
+  std::vector<Op> ops;
+  std::vector<uint32_t> chunk_of;
+  std::vector<std::vector<uint32_t>> layers;
+  size_t staging_bytes_required = 0;
+  size_t input_bytes = 0;
+  size_t output_bytes = 0;
+  int rank = 0;
+  int nranks = 1;
+  ReductionKind reduction = ReductionKind::None;
+};
+
+TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes);
+
+std::vector<std::vector<uint32_t>> bfs_layers(std::vector<Op> const& ops);
+
+TiledResult build_tiled(CollectiveConfig const& config, bool inplace);
+
+}  // namespace CCL
+}  // namespace UKernel

@@ -1,139 +1,90 @@
 #pragma once
-#include "define.h"
+#include "common.h"
 #include "rdma_context.h"
 #include "rdma_data_channel_impl.h"
-#include "seq_num.h"
+#include "transport_type.h"
 #include "util/debug.h"
 #include "util/util.h"
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <vector>
 
-#ifdef UCCL_P2P_USE_EFA
-#include "providers/efa/rdma_data_channel_impl_efa.h"
-#else
-#include "providers/ib/rdma_data_channel_impl_ib.h"
-#endif
-
-// Factory function implementation (inline, defined after including provider
-// headers)
-inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
-#ifdef UCCL_P2P_USE_EFA
-  return std::make_unique<EFAChannelImpl>();
-#else
-  return std::make_unique<IBChannelImpl>();
-#endif
-}
+// When set on a thread, RDMADataChannel::submit_request() accumulates send
+// requests in a per-channel batch instead of immediately posting them. The
+// thread must subsequently call flush_batch() (typically via
+// RDMAEndpoint::flush_all_sends()) to flush all pending work requests in a
+// single doorbell per channel.
+inline thread_local bool g_uccl_batch_post = false;
 
 class RDMADataChannel {
  public:
-  explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
-                           uint32_t channel_id = 0)
-      : ctx_(ctx),
-        qp_(nullptr),
-        cq_ex_(nullptr),
-        ah_(nullptr),
-        channel_id_(channel_id),
-        local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>()),
-        impl_(createRDMADataChannelImpl()) {
-    initQP();
-  }
+  struct RawSendRequest {
+    SendType send_type = SendType::Write;
+    uint64_t wr_id = 0;
+    uint64_t local_addr = 0;
+    uint32_t local_len = 0;
+    uint32_t local_key = 0;
+    uint64_t remote_addr = 0;
+    uint32_t remote_key = 0;
+    ImmData imm_data = 0;
+  };
 
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
+                           uint32_t channel_id = 0);
   explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
                            ChannelMetaData const& remote_meta,
-                           uint32_t channel_id = 0)
-      : ctx_(ctx),
-        qp_(nullptr),
-        cq_ex_(nullptr),
-        ah_(nullptr),
-        channel_id_(channel_id),
-        local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
-        impl_(createRDMADataChannelImpl()) {
-    initQP();
-    establishChannel(remote_meta);
-  }
+                           uint32_t channel_id = 0);
 
   RDMADataChannel(RDMADataChannel const&) = delete;
   RDMADataChannel& operator=(RDMADataChannel const&) = delete;
 
-  ~RDMADataChannel() {
-    if (qp_) ibv_destroy_qp(qp_);
-    if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
-  }
+  ~RDMADataChannel();
 
-  void establishChannel(ChannelMetaData const& remote_meta) {
-    remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
-#ifdef UCCL_P2P_USE_EFA
-    ah_ = ctx_->createAH(remote_meta_->gid);
-#endif
-    impl_->connectQP(qp_, ctx_, *remote_meta_);
-    UCCL_LOG_EP << "RDMADataChannel connected to remote qpn="
-                << remote_meta.qpn;
-  }
+  void establish_channel(ChannelMetaData const& remote_meta);
 
-  int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {
-    return postRequest(req);
-  }
+  // ── Send posting and batching ──────────────────────────────────────────────
+  int64_t submit_request(std::shared_ptr<RDMASendRequest> req);
 
-  int64_t read(std::shared_ptr<RDMASendRequest> req) {
-    int ret = postRequest(req);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "Failed to post read request, wr_id=" << req->wr_id;
-      return -1;
-    }
-    return req->wr_id;
-  }
+  // Immediate verbs post (bypasses g_uccl_batch_post). Returns 0 on success.
+  int post_request(std::shared_ptr<RDMASendRequest> req);
 
-  int64_t send(std::shared_ptr<RDMASendRequest> req) {
-    int ret = postRequest(req);
-    if (ret != 0) {
-      UCCL_LOG(ERROR) << "Failed to post send request, wr_id=" << req->wr_id;
-      return -1;
-    }
-    return req->wr_id;
-  }
+  // Flush all accumulated batched send requests in one doorbell. Safe to call
+  // when nothing is batched (returns 0).
+  int flush_batch();
+  int post_raw_batch(std::vector<RawSendRequest> const& batch);
 
-  int64_t recv(std::shared_ptr<RDMARecvRequest> req) {
-    struct ibv_sge sge = {
-        .addr = (uintptr_t)req->getLocalAddress(),
-        .length = (uint32_t)req->getLocalLen(),
-        .lkey = req->getLocalKey(),
-    };
-    struct ibv_recv_wr wr = {0}, *bad_wr = nullptr;
-    int64_t wr_id = req->wr_id;
-    wr.wr_id = wr_id;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-      UCCL_LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
-    }
-    return wr_id;
-  }
+  // ── Completion polling ─────────────────────────────────────────────────────
+  // Given a CQE wr_id, return all wr_ids that should be acknowledged in the
+  // tracker. With selective signaling, a single signaled CQE represents
+  // completion of the WR with that wr_id plus all earlier unsignaled WRs
+  // posted as part of the same batched flush. For CQEs that do not match
+  // any pending batch (i.e. immediate-path WRs that signaled themselves),
+  // only the original wr_id is returned.
+  void expand_completion(uint64_t cqe_wr_id, std::vector<uint64_t>& acks);
 
-  bool pollOnce(std::vector<CQMeta>& cq_datas) {
-    uint32_t nb_post_recv = 0;
-    bool result = impl_->pollOnce(cq_ex_, cq_datas, channel_id_, nb_post_recv);
-    impl_->lazyPostRecvWrsN(qp_, nb_post_recv, false);
-    return result;
-  }
+  bool poll_once(std::vector<CQMeta>& cq_datas);
 
-  // Get local metadata
-  std::shared_ptr<ChannelMetaData> get_local_meta() const {
-    return local_meta_;
-  }
+  // ── Ack writes ─────────────────────────────────────────────────────────────
+  // Post an 8-byte RDMA WRITE ack to the sender's ack_ring.
+  // Uses a pre-registered staging slot (bnxt_re rejects IBV_SEND_INLINE).
+  int post_ack_write(uint64_t remote_addr, uint32_t remote_rkey,
+                     uint32_t ack_slot, uint64_t value);
 
-  // Get remote metadata
-  std::shared_ptr<ChannelMetaData> get_remote_meta() const {
-    return remote_meta_;
-  }
-
-  // Get RdmaContext
-  inline std::shared_ptr<RdmaContext> const getContext() const { return ctx_; }
-
-  inline uint64_t const getContextID() const { return ctx_->getContextID(); }
-
-  inline uint32_t getChannelID() const { return channel_id_; }
+  // ── Accessors ──────────────────────────────────────────────────────────────
+  std::shared_ptr<ChannelMetaData> get_local_meta() const;
+  std::shared_ptr<ChannelMetaData> get_remote_meta() const;
+  std::shared_ptr<RdmaContext> const get_context() const;
+  uint64_t const get_context_id() const;
+  uint32_t get_channel_id() const;
 
  private:
+  // ── Constants ──────────────────────────────────────────────────────────────
+  static constexpr uint64_t kAckSignalMarker = 0xACCAFEFEull;
+  static constexpr uint32_t kAckSigEvery = 64;
+
+  // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<RdmaContext> ctx_;
   uint32_t channel_id_;
 
@@ -144,169 +95,57 @@ class RDMADataChannel {
   std::shared_ptr<ChannelMetaData> local_meta_;
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
-  std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMADataChannelImpl> impl_;
 
-  struct ibv_cq_ex* getCQ() const {
-    return cq_ex_;
-  }
+  // Per-channel buffer for batched doorbell posting. Protected by batch_mu_.
+  std::vector<std::shared_ptr<RDMASendRequest>> batch_;
+  size_t batch_bytes_ = 0;
+  std::mutex batch_mu_;
 
-  struct ibv_qp* getQP() const {
-    return qp_;
-  }
+  // Verbs posting on a QP must be single-producer. Serialize direct posts,
+  // deferred flushes, raw vector batches, and ack writes on this channel.
+  std::mutex post_mu_;
 
-  // Post send request based on send_type
-  // Returns 0 on success, error code on failure
-  inline int __postRequest_ex(std::shared_ptr<RDMASendRequest> req) {
-    auto* qpx = ibv_qp_to_qp_ex(qp_);
-    ibv_wr_start(qpx);
-    // UCCL_LOG(INFO, UCCL_RDMA) << *req;
-    qpx->wr_id = req->wr_id;
-    qpx->comp_mask = 0;
-    qpx->wr_flags = IBV_SEND_SIGNALED;
+  // Selective-signaling state: each batched flush emits one signaled CQE.
+  // When that CQE arrives, all preceding unsignaled WRs in the same batch
+  // are guaranteed (by the RC ordering rules) to have completed and can be
+  // acknowledged together. Each entry corresponds to one batched flush, in
+  // post order on this channel's QP.
+  struct PendingSignalGroup {
+    uint64_t signal_wr_id;
+    std::vector<uint64_t> unsignaled_wr_ids;
+  };
+  std::deque<PendingSignalGroup> pending_groups_;
+  std::mutex pending_mu_;
 
-    if (req->send_type == SendType::Send) {
-      ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
-                            req->imm_data);
-    } else if (req->send_type == SendType::Write) {
-      ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
-    } else if (req->send_type == SendType::Read) {
-      ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
-    } else {
-      UCCL_LOG(ERROR) << "Unknown SendType in RDMADataChannel::postRequest";
-      return -1;
-    }
+  uint32_t ack_unsig_count_ = 0;  // selective-signal counter for post_ack_write
+  std::mutex ack_mu_;             // serializes ibv_post_send for ack WRs
 
-    struct ibv_sge sge[1];
-    int num_sge = prepareSGEList(sge, req);
+  std::vector<uint64_t> ack_staging_;  // staging buffer for post_ack_write
+  struct ibv_mr* ack_staging_mr_ = nullptr;
 
-    if (req->send_type != SendType::Read &&
-        req->getLocalLen() <= impl_->getMaxInlineData()) {
-      qpx->wr_flags |= IBV_SEND_INLINE;
-      ibv_wr_set_inline_data(qpx, (void*)req->getLocalAddress(),
-                             req->getLocalLen());
-    } else {
-      ibv_wr_set_sge_list(qpx, num_sge, sge);
-    }
+  // ── QP init and SGE helpers ────────────────────────────────────────────────
+  struct ibv_cq_ex* get_cq() const;
+  struct ibv_qp* get_qp() const;
+  void init_qp();
+  int prepare_sge_list(struct ibv_sge* sge,
+                       std::shared_ptr<RDMASendRequest> req);
 
-    impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
+  // ── Verbs posting (internal) ───────────────────────────────────────────────
+  int __post_request_ex(std::shared_ptr<RDMASendRequest> req);
+  int __post_request(std::shared_ptr<RDMASendRequest> req);
 
-    int ret = ibv_wr_complete(qpx);
-    if (ret) {
-      std::ostringstream sge_info;
-      sge_info << "[";
-      for (int i = 0; i < num_sge; ++i) {
-        if (i > 0) sge_info << ", ";
-        sge_info << "{addr:0x" << std::hex << sge[i].addr
-                 << ", len:" << std::dec << sge[i].length << ", lkey:0x"
-                 << std::hex << sge[i].lkey << std::dec << "}";
-      }
-      sge_info << "]";
+  // Post all requests in `batch` using a single ibv_wr_start/ibv_wr_complete
+  // pair (one doorbell). IB uses selective signaling; EFA SRD requires each
+  // WR to be signaled even when doorbell-batched.
+  int __flush_batch_ex(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch);
 
-      UCCL_LOG(ERROR) << "ibv_wr_complete failed in postRequest: " << ret << " "
-                      << strerror(ret) << ", ah_=" << (void*)ah_
-                      << ", remote_qpn=" << remote_meta_->qpn
-                      << ", local_qpn=" << qp_->qp_num
-                      << ", wr_id=" << req->wr_id
-                      << ", remote_key=" << req->getRemoteKey()
-                      << ", remote_addr=0x" << std::hex
-                      << req->getRemoteAddress()
-                      << ", local_key=" << req->getLocalKey()
-                      << ", num_sge=" << num_sge
-                      << ", sge_list=" << sge_info.str() << std::dec;
-    }
-    return ret;
-  }
+  // Legacy verbs path: build a linked ibv_send_wr list and post once. Only
+  // the last WR is IBV_SEND_SIGNALED.
+  int __flush_batch_legacy(
+      std::vector<std::shared_ptr<RDMASendRequest>> const& batch);
 
-  inline int __postRequest(std::shared_ptr<RDMASendRequest> req) {
-    struct ibv_send_wr wr;
-    struct ibv_send_wr* bad_wr = nullptr;
-    struct ibv_sge sge[1];
-
-    memset(&wr, 0, sizeof(wr));
-    // UCCL_LOG(INFO, UCCL_RDMA) << *req;
-
-    wr.wr_id = req->wr_id;
-    wr.send_flags = IBV_SEND_SIGNALED;
-
-    int num_sge = prepareSGEList(sge, req);
-    wr.sg_list = sge;
-    wr.num_sge = num_sge;
-
-    if (req->send_type == SendType::Send) {
-      wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wr.wr.rdma.remote_addr = req->getRemoteAddress();
-      wr.wr.rdma.rkey = req->getRemoteKey();
-      wr.imm_data = req->imm_data;
-    } else if (req->send_type == SendType::Write) {
-      wr.opcode = IBV_WR_RDMA_WRITE;
-      wr.wr.rdma.remote_addr = req->getRemoteAddress();
-      wr.wr.rdma.rkey = req->getRemoteKey();
-    } else if (req->send_type == SendType::Read) {
-      wr.opcode = IBV_WR_RDMA_READ;
-      wr.wr.rdma.remote_addr = req->getRemoteAddress();
-      wr.wr.rdma.rkey = req->getRemoteKey();
-    } else {
-      UCCL_LOG(ERROR) << "Unknown SendType in RDMADataChannel::postRequest";
-      return -1;
-    }
-
-    if (req->send_type != SendType::Read &&
-        req->getLocalLen() <= impl_->getMaxInlineData()) {
-      wr.send_flags |= IBV_SEND_INLINE;
-    }
-
-    int ret = ibv_post_send(qp_, &wr, &bad_wr);
-
-    if (ret) {
-      std::ostringstream sge_info;
-      sge_info << "[";
-      for (int i = 0; i < num_sge; ++i) {
-        if (i > 0) sge_info << ", ";
-        sge_info << "{addr:0x" << std::hex << sge[i].addr
-                 << ", len:" << std::dec << sge[i].length << ", lkey:0x"
-                 << std::hex << sge[i].lkey << std::dec << "}";
-      }
-      sge_info << "]";
-
-      UCCL_LOG(ERROR) << "ibv_post_send failed: " << ret << " " << strerror(ret)
-                      << ", ah_=" << (void*)ah_
-                      << ", remote_qpn=" << remote_meta_->qpn
-                      << ", local_qpn=" << qp_->qp_num
-                      << ", wr_id=" << req->wr_id
-                      << ", remote_key=" << req->getRemoteKey()
-                      << ", remote_addr=0x" << std::hex
-                      << req->getRemoteAddress() << ", num_sge=" << num_sge
-                      << ", sge_list=" << sge_info.str();
-    }
-    return ret;
-  }
-
-  inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
-    if (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
-        ctx_->getVendorID() == 0x8086) {  // Intel irdma
-      // These NICs don't support ibv_wr_* extended posting API.
-      return __postRequest(req);
-    }
-
-    return __postRequest_ex(req);
-  }
-
-  void initQP() {
-    impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
-    impl_->initPreAllocResources();
-  }
-
-  // Prepare SGE list for send request
-  // Returns the number of SGE entries filled
-  inline int prepareSGEList(struct ibv_sge* sge,
-                            std::shared_ptr<RDMASendRequest> req) {
-    uint32_t total_len = req->getLocalLen();
-    uint64_t local_addr = req->getLocalAddress();
-    uint32_t local_key = req->getLocalKey();
-    sge[0].addr = local_addr;
-    sge[0].length = total_len;
-    sge[0].lkey = local_key;
-    return 1;
-  }
+  int __post_raw_batch_ex(std::vector<RawSendRequest> const& batch);
+  int __post_raw_batch_legacy(std::vector<RawSendRequest> const& batch);
 };

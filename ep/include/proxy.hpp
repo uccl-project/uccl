@@ -19,6 +19,7 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "adaptive_sleeper.hpp"
 #include "d2h_queue_host.hpp"
 #include <deque>
 #include <set>
@@ -43,7 +44,12 @@ class Proxy {
     size_t total_size = 0;
     int rank = 0;
     int node_idx = -1;
+    // Base local rank. The role-specific ranks below fall back to it when
+    // unset (-1).
     int local_rank = -1;
+    int device_index = -1;    // CUDA device ordinal
+    int nic_local_rank = -1;  // physical GPU rank for NIC/NUMA affinity
+    int barrier_local_rank = -1;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
@@ -87,9 +93,14 @@ class Proxy {
   CopyRingBuffer ring;
   Config cfg_;
 
+  void notify_proxy_thread_adaptive_sleeper() {
+    adaptive_sleeper_.maybe_wake_proxy_thread();
+  }
+
  private:
   friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
+  EPAdaptiveSleeper adaptive_sleeper_;
   void init_common();
   void init_sender();
   void init_remote();

@@ -1,0 +1,346 @@
+#pragma once
+
+#include <deep_ep/common/handle.cuh>
+#include <deep_ep/common/layout.cuh>
+#include <deep_ep/common/ptx.cuh>
+#include <cooperative_groups.h>
+#include <nccl.h>
+#include <nccl_device.h>
+
+namespace deep_ep::elastic::comm {
+
+static constexpr int64_t kNumOneSecCycles =
+    2000000000;  // An approximation of the GPU clock at 2000 MHz
+
+// Some reserved tags
+static constexpr int kDeviceBarrierTag = 0;
+static constexpr int kKernelBarrierTag = 1;
+static constexpr int kDispatchTag0 = 2;
+static constexpr int kDispatchTag1 = 3;
+static constexpr int kCombineTag0 = 4;
+static constexpr int kCombineTag1 = 5;
+static constexpr int kHybridDispatchTag0 = 6;
+static constexpr int kHybridDispatchTag1 = 7;
+static constexpr int kHybridCombineTag0 = 8;
+static constexpr int kHybridCombineTag1 = 9;
+
+// Some reserved count
+static constexpr int kFlushAllAllocatedQPs = -1;
+
+template <int64_t kNumTimeoutCycles, typename func_t>
+__device__ __forceinline__ void timeout_while(bool const& condition,
+                                              func_t const& func,
+                                              int64_t start_clock = 0) {
+  // User may share a start clock for multiple waits
+  if (start_clock == 0) start_clock = clock64();
+
+  while (condition) {
+    bool const timeout = clock64() - start_clock >= kNumTimeoutCycles;
+    if (func(timeout)) break;
+
+    if (timeout) {
+      // Wait another 1 second to let all threads print information and trap
+      start_clock = clock64();
+      while (clock64() - start_clock < kNumOneSecCycles) {
+      }
+      ptx::trap();
+    }
+  }
+}
+
+template <int64_t kNumTimeoutCycles, typename func_t>
+__device__ __forceinline__ void timeout_while(func_t const& func,
+                                              int64_t const& start_clock = 0) {
+  timeout_while<kNumTimeoutCycles, func_t>(true, func, start_clock);
+}
+
+template <int kNumSMs, int kNumQPs, int kNumChannelsPerSM,
+          bool kWithNotifyWarps = false>
+__device__ __forceinline__ std::pair<int, ncclGinResourceSharingMode>
+get_qp_mode(int const& sm_idx, int const& channel_in_sm_idx,
+            bool const& is_notify_warp = false) {
+  constexpr auto kSharingCTA = NCCL_GIN_RESOURCE_SHARING_CTA;
+  constexpr auto kSharingGrid = kNumSMs == 1 ? NCCL_GIN_RESOURCE_SHARING_CTA
+                                             : NCCL_GIN_RESOURCE_SHARING_GPU;
+
+  // Only one QP
+  if constexpr (kNumQPs == 1) return {0, kSharingGrid};
+
+  // The notify warp always use 1 SM and 1 QP
+  if (is_notify_warp) return {0, kSharingCTA};
+
+  // Data channels
+  constexpr int kQPStartIdx = static_cast<int>(kWithNotifyWarps);
+  constexpr int kNumAvailableQPs = kNumQPs - kQPStartIdx;
+  if constexpr (kNumSMs <= kNumAvailableQPs) {
+    // A single SM uses an entire QP
+    // e.g., 3 SMs and 10 QPs
+    // SM 0: 0 3 6 9
+    // SM 1: 1 4 7
+    // SM 2: 2 5 8
+    int const num_qps_in_sm =
+        (kNumAvailableQPs / kNumSMs) + (sm_idx < (kNumAvailableQPs % kNumSMs));
+    return {
+        kQPStartIdx + sm_idx + (channel_in_sm_idx % num_qps_in_sm) * kNumSMs,
+        kSharingCTA};
+  } else {
+    // All SMs share all QPs
+    auto const global_channel_idx =
+        sm_idx * kNumChannelsPerSM + channel_in_sm_idx;
+    return {kQPStartIdx + (global_channel_idx % kNumAvailableQPs),
+            kSharingGrid};
+  }
+}
+
+template <int kNumRanks, int kNumSMs, int kNumThreads,
+          int64_t kNumTimeoutCycles, int kTag = kDeviceBarrierTag>
+__forceinline__ __device__ void nvlink_barrier_wo_local_sync(
+    handle::NCCLGin const& gin, layout::WorkspaceLayout const& workspace,
+    int const& rank_idx, int const& sm_idx, int const& thread_idx) {
+  // This barrier only uses 1 SM
+  if (kNumSMs > 1 and sm_idx > 0) return;
+
+  // Read the current barrier phase first
+  int const status =
+      static_cast<int>((*workspace.get_nvl_barrier_counter_ptr()) & 3);
+  int const phase = status & 1, sign = status >> 1;
+
+  EP_STATIC_ASSERT(kNumRanks <= kNumThreads, "Insufficient threads");
+  if (thread_idx < kNumRanks) {
+    auto const dst_ptr = gin.get_sym_ptr<ncclTeamTagLsa>(
+        workspace.get_nvl_barrier_signal_ptr(phase), thread_idx);
+    ptx::red_add_rel_sys(dst_ptr, sign ? -1 : 1);
+  }
+  __syncthreads();
+
+  // NOTES: we need `2^64 / 1e6 / 3600 / 24 / 365 = 571000` years to make the
+  // counter overflow (1 barrier per us) Add the phase counter
+  if (thread_idx == 0) atomicAdd(workspace.get_nvl_barrier_counter_ptr(), 1);
+
+  // Check timeout
+  auto const target = sign ? 0 : kNumRanks;
+  timeout_while<kNumTimeoutCycles>(
+      thread_idx == 0, [=](bool const& is_last_check) {
+        const auto signal = ptx::ld_acquire_sys<int>(
+            workspace.get_nvl_barrier_signal_ptr(phase));
+        if (signal == target) return true;
+
+        if (is_last_check) {
+          printf(
+              "DeepEP NVLink barrier timeout, tag: %d, nvl: %d, thread: %d, "
+              "status: %d, signal: %d, phase: %d, target: %d, counter: %llu\n",
+              kTag, rank_idx, thread_idx, status, signal, phase, target,
+              *workspace.get_nvl_barrier_counter_ptr());
+        }
+        return false;
+      });
+}
+
+template <int kNumRanks, int kNumSMs, int kNumThreads, int kNumQPs,
+          int64_t kNumTimeoutCycles, typename team_t,
+          int kTag = kDeviceBarrierTag, bool kFlushStores = true,
+          int kNumWarps = kNumThreads / 32>
+__forceinline__ __device__ void gin_barrier_wo_local_sync(
+    handle::NCCLGin const& gin_handle, layout::WorkspaceLayout const& workspace,
+    int const& scaleout_rank_idx, int const& scaleup_rank_idx,
+    int const& sm_idx, int const& thread_idx) {
+  auto const global_warp_idx = sm_idx * kNumWarps + (thread_idx / 32);
+  int const& rank_idx = (std::is_same_v<team_t, ncclTeamTagWorld>)
+                            ? scaleup_rank_idx
+                            : scaleout_rank_idx;
+#ifdef EP_USE_UCCL_PROXY
+  int const num_qps = gin_handle.uccl_num_d2h_channel_addrs;
+#else
+  int const num_qps = kNumQPs == kFlushAllAllocatedQPs
+                          ? gin_handle.nccl_dev_comm.ginContextCount
+                          : kNumQPs;
+#endif
+
+  // Flush all QPs by all SMs (only needed for release semantics)
+  if constexpr (kFlushStores) {
+#ifdef EP_USE_UCCL_PROXY
+    (gridDim.x > 1) ? cooperative_groups::this_grid().sync() : __syncthreads();
+    if (global_warp_idx == 0) gin_handle.gin.flush(ncclCoopWarp());
+#else
+    for (int i = global_warp_idx; i < num_qps; i += kNumSMs * kNumWarps) {
+      ncclGin(gin_handle.nccl_dev_comm, i, NCCL_GIN_RESOURCE_SHARING_CTA)
+          .flush(ncclCoopWarp());
+    }
+#endif
+    // NOTES: we can not use `kNumSMs` to judge, as maybe only part of the SMs
+    // will call this function
+    (gridDim.x > 1) ? cooperative_groups::this_grid().sync() : __syncthreads();
+  }
+
+  if (sm_idx == 0) {
+    // Use QP 0 to do barrier
+    auto const gin =
+        handle::NCCLGin(gin_handle.nccl_dev_comm, gin_handle.nccl_window, 0,
+                        NCCL_GIN_RESOURCE_SHARING_CTA,
+                        reinterpret_cast<void*>(gin_handle.lsa_base_ptr),
+#ifdef EP_USE_UCCL_PROXY
+                        gin_handle.uccl_d2h_channel_addrs,
+                        gin_handle.uccl_num_d2h_channel_addrs, rank_idx,
+                        gin_handle.uccl_signal_shadow
+#else
+                        nullptr, 0, -1
+#endif
+        );
+#ifdef EP_USE_UCCL_PROXY
+    auto const signal_shadow_base =
+        (kTag % layout::WorkspaceLayout::kNumGinBarrierTags) *
+        layout::WorkspaceLayout::kNumMaxRanks;
+    auto const send_shadow_ptr = gin.gin.getSignalShadowPtr(
+        static_cast<ncclGinSignal_t>(signal_shadow_base + rank_idx));
+    if (thread_idx == 0) ++(*send_shadow_ptr);
+    __syncthreads();
+    for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
+      auto const send_target = *send_shadow_ptr;
+      if (i != rank_idx)
+        gin.put_value<team_t>(
+            workspace.get_gin_barrier_signal_ptr(rank_idx, kTag), send_target,
+            i);
+    }
+#else
+    auto const send_shadow_ptr =
+        gin.gin.getSignalShadowPtr(static_cast<ncclGinSignal_t>(rank_idx));
+    auto const send_target = ++(*send_shadow_ptr);
+    for (int i = thread_idx; i < kNumRanks; i += kNumThreads)
+      if (i != rank_idx)
+        gin.put_value<team_t>(workspace.get_gin_barrier_signal_ptr(rank_idx),
+                              send_target, i);
+#endif
+    __syncthreads();
+
+    for (int i = thread_idx; i < kNumRanks; i += kNumThreads) {
+      if (i == rank_idx) continue;
+#ifdef EP_USE_UCCL_PROXY
+      auto const shadow_ptr = gin.gin.getSignalShadowPtr(
+          static_cast<ncclGinSignal_t>(signal_shadow_base + i));
+#else
+      auto const signal_idx = static_cast<ncclGinSignal_t>(i);
+      auto const shadow_ptr = gin.gin.getSignalShadowPtr(signal_idx);
+#endif
+      auto const target = ++(*shadow_ptr);
+
+      timeout_while<kNumTimeoutCycles>([=](bool const& is_last_check) {
+#ifdef EP_USE_UCCL_PROXY
+        const auto signal =
+            uccl::ld_cv_u64(workspace.get_gin_barrier_signal_ptr(i, kTag));
+#else
+        const auto signal = ptx::ld_acquire_sys<uint64_t>(
+            workspace.get_gin_barrier_signal_ptr(i));
+#endif
+        if (signal >= target) return true;
+
+        if (is_last_check) {
+          printf(
+              "DeepEP Gin barrier timeout, tag: %d, scaleout: %d, scaleup: %d, "
+              "thread: %d, "
+              "signal: %lu, target: %lu\n",
+              kTag, scaleout_rank_idx, scaleup_rank_idx, thread_idx, signal,
+              target);
+        }
+        return false;
+      });
+    }
+  }
+}
+
+template <bool kIsScaleupNVLink, int kNumRanks, int kNumSMs, int kNumThreads,
+          int kNumQPs, int64_t kNumTimeoutCycles, int kTag = kDeviceBarrierTag,
+          bool kFlushStores = true>
+__forceinline__ __device__ void scaleup_barrier_wo_local_sync(
+    handle::NCCLGin const& gin, layout::WorkspaceLayout const& workspace,
+    int const& rank_idx, int const& sm_idx, int const& thread_idx) {
+  if constexpr (kIsScaleupNVLink) {
+    nvlink_barrier_wo_local_sync<kNumRanks, kNumSMs, kNumThreads,
+                                 kNumTimeoutCycles, kTag>(
+        gin, workspace, rank_idx, sm_idx, thread_idx);
+  } else {
+    gin_barrier_wo_local_sync<kNumRanks, kNumSMs, kNumThreads, kNumQPs,
+                              kNumTimeoutCycles, ncclTeamTagWorld, kTag,
+                              kFlushStores>(gin, workspace, 1, rank_idx, sm_idx,
+                                            thread_idx);
+  }
+}
+
+template <int kNumRanks, int kNumSMs, int kNumThreads, int kNumQPs,
+          int64_t kNumTimeoutCycles, int kTag = kDeviceBarrierTag,
+          bool kFlushStores = true>
+__forceinline__ __device__ void scaleout_barrier_wo_local_sync(
+    handle::NCCLGin const& gin, layout::WorkspaceLayout const& workspace,
+    int const& scaleout_rank_idx, int const& scaleup_rank_idx,
+    int const& sm_idx, int const& thread_idx) {
+  gin_barrier_wo_local_sync<kNumRanks, kNumSMs, kNumThreads, kNumQPs,
+                            kNumTimeoutCycles, ncclTeamTagRail, kTag,
+                            kFlushStores>(gin, workspace, scaleout_rank_idx,
+                                          scaleup_rank_idx, sm_idx, thread_idx);
+}
+
+template <bool kIsScaleupNVLink, int kNumScaleoutRanks, int kNumScaleupRanks,
+          int kNumSMs, int kNumThreads, int kNumQPs, int64_t kNumTimeoutCycles,
+          int kTag = kDeviceBarrierTag, bool kFlushStores = true,
+          bool kSyncAtStart = true, bool kSyncAtEnd = true>
+__forceinline__ __device__ void gpu_barrier(
+    handle::NCCLGin const& gin, layout::WorkspaceLayout const& workspace,
+    int const& scaleout_rank_idx, int const& scaleup_rank_idx,
+    int const& sm_idx, int const& thread_idx, bool do_scaleout = true,
+    bool do_scaleup = true) {
+  // A general TMA store wait to prevent proxy memory issues
+  if constexpr (kFlushStores) {
+    ptx::tma_store_commit();
+    ptx::tma_store_wait();
+    __syncwarp();
+  }
+
+  // All the SMs should wait
+  if constexpr (kSyncAtStart) {
+    cooperative_groups::this_grid().sync();
+  } else {
+    EP_STATIC_ASSERT(not kFlushStores, "No data to be flushed");
+  }
+
+  do_scaleout &= kNumScaleoutRanks > 1;
+  do_scaleup &= kNumScaleupRanks > 1;
+  if (do_scaleup and do_scaleout) {
+    // Do scaleup and scaleout barrier in parallel
+    EP_DEVICE_ASSERT(kNumSMs >= 2 and "At least 2 SMs for a hybrid barrier");
+    if (sm_idx == 0) {
+      // First SM do the scaleup barrier
+      scaleup_barrier_wo_local_sync<kIsScaleupNVLink, kNumScaleupRanks, kNumSMs,
+                                    kNumThreads, kNumQPs, kNumTimeoutCycles,
+                                    kTag, kFlushStores>(
+          gin, workspace, scaleup_rank_idx, sm_idx, thread_idx);
+
+      // We need an extra grid sync, as the scaleout barrier will do a sync
+      // after flush, before the barrier NOTES: this is kind of hacky
+      if constexpr (kFlushStores) cooperative_groups::this_grid().sync();
+    } else {
+      // The remaining SMs do the scaleout barrier
+      scaleout_barrier_wo_local_sync<kNumScaleoutRanks, kNumSMs - 1,
+                                     kNumThreads, kNumQPs, kNumTimeoutCycles,
+                                     kTag, kFlushStores>(
+          gin, workspace, scaleout_rank_idx, scaleup_rank_idx, sm_idx - 1,
+          thread_idx);
+    }
+  } else if (do_scaleup) {
+    // Scaleup only
+    scaleup_barrier_wo_local_sync<kIsScaleupNVLink, kNumScaleupRanks, kNumSMs,
+                                  kNumThreads, kNumQPs, kNumTimeoutCycles, kTag,
+                                  kFlushStores>(
+        gin, workspace, scaleup_rank_idx, sm_idx, thread_idx);
+  } else if (do_scaleout) {
+    // Scaleout only
+    scaleout_barrier_wo_local_sync<kNumScaleoutRanks, kNumSMs, kNumThreads,
+                                   kNumQPs, kNumTimeoutCycles, kTag,
+                                   kFlushStores>(
+        gin, workspace, scaleout_rank_idx, scaleup_rank_idx, sm_idx,
+        thread_idx);
+  }
+
+  // All the SMs should wait
+  if constexpr (kSyncAtEnd) cooperative_groups::this_grid().sync();
+}
+
+}  // namespace deep_ep::elastic::comm

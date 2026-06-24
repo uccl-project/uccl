@@ -338,6 +338,9 @@ class UCCLLogger {
     if (logLevel > logLevel_) return false;
     // FATAL/ERROR/WARN always print regardless of subsystem filter
     if (logLevel <= UCCLLogLevel::WARN) return true;
+    // UCCL_SUBSYS_NONE and UCCL_SUBSYS_COUNT are sentinel values outside the
+    // bitset range; suppress rather than call test() out of bounds.
+    if (subsys >= UCCLLogSubsys::UCCL_SUBSYS_COUNT) return false;
     return subsys_bitset_.test(subsys);
   }
 

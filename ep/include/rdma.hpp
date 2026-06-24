@@ -1,5 +1,6 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
+#include "adaptive_sleeper.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
 // clang-format off
@@ -203,31 +204,32 @@ class AtomicsImm {
 
 class WriteImm {
  public:
-  // Bit positions (adjusted for 128 tokens, 512 experts max)
-  static constexpr int kRANK = 0;         // 10 bits (0-1023 ranks)
-  static constexpr int kNUM_TOKENS = 10;  // 8 bits (0-255 tokens)
-  static constexpr int kEXPERT_IDX = 18;  // 9 bits (0-511 experts)
-  static constexpr int kBUFFER_IDX = 27;  // 1 bit
-  static constexpr int kIS_COMBINE = 28;  // 1 bit
-  // bits 29-31 unused (can use for future expansion)
+  // Bit layout (bits [31:30] reserved = 0 for write type):
+  //   [29]    IS_COMBINE   (1 bit)
+  //   [28]    BUFFER_IDX   (1 bit)
+  //   [27:19] EXPERT_IDX   (9 bits, 0..511)
+  //   [18:6]  NUM_TOKENS   (13 bits, 0..8191)
+  //   [5:0]   RANK         (6 bits, 0..63)
+  static constexpr int kRANK = 0;
+  static constexpr int kNUM_TOKENS = 6;
+  static constexpr int kEXPERT_IDX = 19;
+  static constexpr int kBUFFER_IDX = 28;
+  static constexpr int kIS_COMBINE = 29;
 
   // Masks
-  static constexpr uint32_t kRANK_MASK = 0x3FF;    // 10 bits
-  static constexpr uint32_t kTOKENS_MASK = 0xFF;   // 8 bits
-  static constexpr uint32_t kEXPERT_MASK = 0x1FF;  // 9 bits
+  static constexpr uint32_t kRANK_MASK = 0x3Fu;      // 6 bits
+  static constexpr uint32_t kTOKENS_MASK = 0x1FFFu;  // 13 bits
+  static constexpr uint32_t kEXPERT_MASK = 0x1FFu;   // 9 bits
 
   explicit WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
   static WriteImm Pack(bool is_combine,
                        uint32_t buffer_idx,  // 0/1
-                       uint32_t expert_idx,  // 0..511 (9 bits)
-                       uint32_t num_tokens,  // 0..255 (8 bits)
-                       uint32_t my_rank) {   // 0..1023 (10 bits)
+                       uint32_t expert_idx,  // 0..511  (9 bits)
+                       uint32_t num_tokens,  // 0..8191 (13 bits)
+                       uint32_t my_rank) {   // 0..63   (6 bits)
     constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
     constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
-    constexpr uint32_t kEXPERT_MASK = 0x1FFu;  // 9 bits
-    constexpr uint32_t kTOKENS_MASK = 0xFFu;   // 8 bits
-    constexpr uint32_t kRANK_MASK = 0x3FFu;    // 10 bits
 
     // Runtime validation
     assert((is_combine & ~kIS_COMBINE_MASK) == 0 &&
@@ -242,16 +244,16 @@ class WriteImm {
     assert((expert_idx & ~kEXPERT_MASK) == 0 && "expert_idx overflow (9 bits)");
     if ((num_tokens & ~kTOKENS_MASK) != 0) {
       fprintf(stderr,
-              "[RDMA ERROR] num_tokens=%u exceeds 8-bit limit (max 255)\n",
+              "[RDMA ERROR] num_tokens=%u exceeds 13-bit limit (max 8191)\n",
               num_tokens);
     }
-    assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (8 bits)");
+    assert((num_tokens & ~kTOKENS_MASK) == 0 &&
+           "num_tokens overflow (13 bits)");
     if ((my_rank & ~kRANK_MASK) != 0) {
-      fprintf(stderr,
-              "[RDMA ERROR] my_rank=%u exceeds 10-bit limit (max 1023)\n",
+      fprintf(stderr, "[RDMA ERROR] my_rank=%u exceeds 6-bit limit (max 63)\n",
               my_rank);
     }
-    assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (10 bits)");
+    assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (6 bits)");
 
     uint32_t imm = ((is_combine & 0x1u) << kIS_COMBINE) |
                    ((buffer_idx & 0x1u) << kBUFFER_IDX) |
@@ -357,6 +359,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           size_t num_rings, bool use_normal_mode,
                           void* atomic_buffer_ptr = nullptr);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
+ibv_comp_channel* create_per_thread_comp_channel(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
                              void* atomic_buffer_ptr, int num_ranks,
@@ -365,7 +368,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int my_rank, int num_nodes,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank);
+                          int thread_idx, int device_index, int nic_local_rank);
 
 // Returns true if a cudaMalloc'd main RDMA buffer of |bytes| can be registered
 // on this node with the same path used by per_thread_rdma_init(). If false,
@@ -375,6 +378,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // Returns true if a cudaMalloc'd buffer can be registered for the atomic
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+// Returns true if at least one IB verbs device is visible on this host.
+bool has_any_nic();
 
 #ifdef USE_DMABUF
 // Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
@@ -413,7 +419,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode = false);
+                  int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
+                  bool use_normal_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
