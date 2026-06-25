@@ -26,9 +26,7 @@ DeviceBackend::~DeviceBackend() {
 }
 
 bool DeviceBackend::supports(OpKind kind) const {
-  return kind == OpKind::Copy || kind == OpKind::Reduce ||
-         kind == OpKind::Send || kind == OpKind::RecvReduce ||
-         kind == OpKind::Recv;
+  return kind == OpKind::Put || kind == OpKind::Reduce;
 }
 
 void DeviceBackend::ensure_runtime() {
@@ -101,20 +99,11 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
 
     Device::TaskType tt;
     switch (c.kind) {
-      case OpKind::Copy:
+      case OpKind::Put:
         tt = Device::TaskType::CollCopy;
         break;
       case OpKind::Reduce:
         tt = Device::TaskType::CollReduce;
-        break;
-      case OpKind::Send:
-        tt = Device::TaskType::CollSend;
-        break;
-      case OpKind::Recv:
-        tt = Device::TaskType::CollRecv;
-        break;
-      case OpKind::RecvReduce:
-        tt = Device::TaskType::CollRecvReduce;
         break;
       default:
         ++accepted;

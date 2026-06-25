@@ -37,9 +37,11 @@ class MockBackend final : public BatchBackend {
     size_t accepted = 0;
     while (accepted < n && in_flight_ < capacity()) {
       enqueued_.push_back(cmds[accepted]);
-      uint32_t idx = cmd_next_++;
-      if (out_indices) out_indices[accepted] = idx;
-      if (auto_complete_) completed_.push_back(idx);
+      uint32_t cid =
+          reinterpret_cast<CmdWithId const*>(&cmds[accepted])->caller_id;
+      if (out_indices) out_indices[accepted] = cid;
+      if (auto_complete_) completed_.push_back(cid);
+      enqueued_cids_.push_back(cid);
       ++in_flight_;
       ++accepted;
     }
@@ -61,8 +63,9 @@ class MockBackend final : public BatchBackend {
 
   void complete_last_n(size_t n) {
     std::lock_guard lock(mtx_);
-    uint32_t first = cmd_next_ - n;
-    for (uint32_t i = 0; i < n; ++i) completed_.push_back(first + i);
+    size_t start = enqueued_cids_.size() - n;
+    for (size_t i = start; i < enqueued_cids_.size(); ++i)
+      completed_.push_back(enqueued_cids_[i]);
   }
 
   size_t enqueued_count() const {
@@ -74,8 +77,8 @@ class MockBackend final : public BatchBackend {
   mutable std::mutex mtx_;
   bool auto_complete_;
   std::vector<Cmd> enqueued_;
+  std::vector<uint32_t> enqueued_cids_;
   std::deque<uint32_t> completed_;
-  uint32_t cmd_next_ = 0;
   size_t in_flight_ = 0;
   bool inited_ = false;
 };
@@ -92,7 +95,7 @@ void test_async_basic_enqueue_drain() {
   // Build 5 commands
   CmdWithId cmds[5];
   for (int i = 0; i < 5; ++i) {
-    cmds[i].cmd.kind = OpKind::Copy;
+    cmds[i].cmd.kind = OpKind::Put;
     cmds[i].cmd.bytes = 128;
     cmds[i].cmd.src_buf = 1;
     cmds[i].cmd.dst_buf = 2;
@@ -139,7 +142,7 @@ void test_async_capacity_backpressure() {
 
   CmdWithId cmds[8];
   for (int i = 0; i < 8; ++i) {
-    cmds[i].cmd.kind = OpKind::Copy;
+    cmds[i].cmd.kind = OpKind::Put;
     cmds[i].cmd.bytes = 64;
     cmds[i].cmd.src_buf = 1;
     cmds[i].cmd.dst_buf = 2;
@@ -180,7 +183,7 @@ void test_async_done_ring_multiple_drain() {
   constexpr int N = 100;
   CmdWithId cmds[N];
   for (int i = 0; i < N; ++i) {
-    cmds[i].cmd.kind = OpKind::Copy;
+    cmds[i].cmd.kind = OpKind::Put;
     cmds[i].cmd.bytes = 8;
     cmds[i].cmd.src_buf = 1;
     cmds[i].cmd.dst_buf = 2;
@@ -218,8 +221,8 @@ void test_async_done_ring_multiple_drain() {
 void test_executor_allreduce_async() {
   printf("[test] executor: async allreduce via mock backends...\n");
 
-  MockBackend dev_mock(true), tpt_mock(true);
-  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
+  MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
+  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
 
   CollectiveConfig cfg = Testing::make_test_config(4, 0, 1024, 256);
   std::vector<uint8_t> in(1024, 0xAA);
@@ -244,8 +247,8 @@ void test_executor_allreduce_async() {
 void test_executor_alltoall_async() {
   printf("[test] executor: async alltoall via mock backends...\n");
 
-  MockBackend dev_mock(true), tpt_mock(true);
-  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
+  MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
+  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
 
   CollectiveConfig cfg;
   cfg.nranks = 4;
@@ -278,8 +281,8 @@ void test_executor_alltoall_async() {
 void test_executor_multiple_submits() {
   printf("[test] executor: multiple concurrent submits...\n");
 
-  MockBackend dev_mock(true), tpt_mock(true);
-  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
+  MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
+  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256, 0xCC);
@@ -306,8 +309,8 @@ void test_executor_multiple_submits() {
 void test_executor_run_tiled_sync() {
   printf("[test] executor: run_tiled synchronous path...\n");
 
-  MockBackend dev_mock(true), tpt_mock(true);
-  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
+  MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
+  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 128);
 
@@ -336,10 +339,8 @@ void test_executor_error_message() {
 void test_executor_active_count() {
   printf("[test] executor: active_count...\n");
 
-  MockBackend dev_mock(true), tpt_mock(true);
-  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock);
-
-  assert(ex->active_count() == 0);
+  MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
+  auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scratch(256);

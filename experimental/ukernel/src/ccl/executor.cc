@@ -3,7 +3,6 @@
 #include "algo/chunk_graph.h"
 #include "backend/async_backend.h"
 #include "backend/backend.h"
-#include "backend/transport_backend.h"
 #include "coll_config.h"
 #include "utils.h"
 #include <algorithm>
@@ -18,24 +17,18 @@ namespace CCL {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 static CollectiveBufferRole buf_role(OpKind kind, bool is_src,
-                                     bool copy_from_staging) {
+                                      bool copy_from_staging) {
   switch (kind) {
-    case OpKind::Copy:
+    case OpKind::Put:
       return is_src ? (copy_from_staging ? CollectiveBufferRole::Scratch
-                                         : CollectiveBufferRole::Input)
-                    : CollectiveBufferRole::Output;
+                                          : CollectiveBufferRole::Input)
+                     : CollectiveBufferRole::Output;
     case OpKind::Reduce:
       return is_src ? CollectiveBufferRole::Input
                     : CollectiveBufferRole::Output;
-    case OpKind::Send:
-      return is_src ? CollectiveBufferRole::Input
-                    : CollectiveBufferRole::Output;
-    case OpKind::Recv:
-    case OpKind::RecvReduce:
-      return CollectiveBufferRole::Output;
     case OpKind::Signal:
-    case OpKind::SignalWait:
-      return CollectiveBufferRole::Input;
+    case OpKind::WaitSignal:
+      return CollectiveBufferRole::Output;
     default:
       return CollectiveBufferRole::Input;
   }
@@ -56,9 +49,7 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
   c.dst_peer = op.dst_peer;
   c.src_buf = buf_of(op, true);
   c.dst_buf = buf_of(op, false);
-  c.redop = (op.kind == OpKind::Reduce || op.kind == OpKind::RecvReduce)
-                ? redop
-                : ReductionKind::None;
+  c.redop = (op.kind == OpKind::Reduce) ? redop : ReductionKind::None;
   c.transport = static_cast<uint8_t>(Transport::PeerTransportKind::Unknown);
   c.tag = op.tag;
   return c;
@@ -66,9 +57,11 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
 
 // ── Constructor ───────────────────────────────────────────────────────
 
-SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
+SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
+                             BatchBackend* signal_be)
     : device_be_(device_be),
       tpt_be_(tpt_be),
+      signal_be_(signal_be),
       owned_device_(),
       owned_transport_(),
       owned_comm_(),
@@ -90,6 +83,9 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be)
         std::thread(&SprayExecutor::drain_loop, this, async_dev_.get());
   if (async_tpt_)
     drain_th_tpt_ = std::thread(&SprayExecutor::drain_tpt_loop, this);
+  if (signal_be_)
+    drain_th_signal_ =
+        std::thread(&SprayExecutor::drain_signal_loop, this);
 }
 
 SprayExecutor::~SprayExecutor() {
@@ -97,6 +93,7 @@ SprayExecutor::~SprayExecutor() {
   if (enqueue_th_.joinable()) enqueue_th_.join();
   if (drain_th_dev_.joinable()) drain_th_dev_.join();
   if (drain_th_tpt_.joinable()) drain_th_tpt_.join();
+  if (drain_th_signal_.joinable()) drain_th_signal_.join();
   if (async_dev_) async_dev_->stop();
   if (async_tpt_) async_tpt_->stop();
 }
@@ -255,8 +252,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run, AsyncBackend* async_be) {
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction);
 
-    // LB decision: for Send ops, pick IPC vs RDMA dynamically
-    if (c.kind == OpKind::Send && c.dst_peer != ~0u) {
+    // LB decision: for Put ops, pick IPC vs RDMA dynamically
+    if (c.kind == OpKind::Put && c.dst_peer != ~0u) {
       auto tpt = pick_transport(static_cast<int>(c.dst_peer));
       c.transport = static_cast<uint8_t>(tpt);
       // Bump inflight counter for the chosen path
@@ -272,14 +269,20 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run, AsyncBackend* async_be) {
     cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
     cmd_transport_[cwi.caller_id] = c.transport;
 
-    // Route: Signal/SignalWait → TransportBackend; Send with explicit transport
-    // → TptBE
-    if (c.kind == OpKind::Signal || c.kind == OpKind::SignalWait ||
-        (async_tpt_ && (c.kind == OpKind::Send || c.kind == OpKind::Recv) &&
-         c.transport != 0)) {
-      run.tpt_cmds.push_back(cwi);
-    } else if (async_tpt_ && tpt_be_->supports(c.kind)) {
-      run.tpt_cmds.push_back(cwi);
+    if (c.kind == OpKind::Signal || c.kind == OpKind::WaitSignal) {
+      if (signal_be_) {
+        signal_be_->enqueue(&cwi.cmd, 1, nullptr);
+      }
+      run.submitted[idx] = true;
+      continue;
+    }
+
+    if (c.kind == OpKind::Put) {
+      if (c.transport == 0) {
+        run.dev_cmds.push_back(cwi);
+      } else {
+        run.tpt_cmds.push_back(cwi);
+      }
     } else {
       run.dev_cmds.push_back(cwi);
     }
@@ -362,7 +365,7 @@ Transport::PeerTransportKind SprayExecutor::pick_transport(int peer) {
 void SprayExecutor::drain_tpt_loop() {
   uint32_t done_buf[256];
   while (!stop_) {
-    // Channel 1: data completions via AsyncBackend (Send, Signal ops)
+    // Channel 1: data completions via AsyncBackend (Put/Get ops)
     size_t nd = async_tpt_->try_drain(done_buf, 256);
     for (size_t i = 0; i < nd; ++i) {
       uint32_t caller_id = done_buf[i];
@@ -390,9 +393,28 @@ void SprayExecutor::drain_tpt_loop() {
       }
     }
 
-    // Channel 2: direct signal completions (1-hop, bypasses AsyncBackend)
-    auto* tpt_be = static_cast<TransportBackend*>(tpt_be_);
-    size_t ns = tpt_be->drain_signals(done_buf, 256);
+    // Mark completed runs
+    {
+      std::lock_guard lock(runs_mutex_);
+      for (auto& [h, run] : runs_) {
+        if (run->status != CollectiveOpStatus::Running) continue;
+        size_t dc = run->done_count.load(std::memory_order_acquire);
+        if (dc >= run->tiled.ops.size())
+          run->status = CollectiveOpStatus::Completed;
+      }
+    }
+
+    if (nd == 0) {
+      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
+      std::this_thread::yield();
+    }
+  }
+}
+
+void SprayExecutor::drain_signal_loop() {
+  uint32_t done_buf[256];
+  while (!stop_) {
+    size_t ns = signal_be_->drain(done_buf, 256);
     for (size_t i = 0; i < ns; ++i) {
       uint32_t caller_id = done_buf[i];
       auto& m = cmd_to_run_[caller_id & (kMaxCmdIdx - 1)];
@@ -416,7 +438,7 @@ void SprayExecutor::drain_tpt_loop() {
       }
     }
 
-    if (nd == 0 && ns == 0) {
+    if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
     }

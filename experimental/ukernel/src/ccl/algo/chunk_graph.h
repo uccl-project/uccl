@@ -10,7 +10,7 @@ namespace UKernel {
 namespace CCL {
 
 struct Chunk {
-  OpKind op = OpKind::Copy;
+  OpKind op = OpKind::Put;
   size_t bytes = 0;
   size_t src_off = 0;
   size_t dst_off = 0;

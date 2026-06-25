@@ -33,7 +33,7 @@ TileResult tile_chunks(CollAlgo const& algo, size_t tile_bytes) {
           (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
       tile.dst_peer =
           (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
-      tile.copy_from_staging = (c.op == OpKind::Copy && c.sequential_tiles);
+      tile.copy_from_staging = (c.op == OpKind::Put && c.sequential_tiles);
       r.ops.push_back(tile);
       r.chunk_of.push_back(static_cast<uint32_t>(i));
     }

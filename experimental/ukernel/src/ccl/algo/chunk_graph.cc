@@ -203,15 +203,17 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1, send_peer,
+      builder.add_op(OpKind::Put, send_bytes, offset, offset, -1, send_peer,
                      std::move(deps));
     }
 
     if (recv_bytes > 0) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t reduce_op = builder.add_op(OpKind::RecvReduce, recv_bytes,
-                                          offset, offset, recv_peer, -1, {});
+      uint32_t wait_op = builder.add_op(OpKind::WaitSignal, recv_bytes,
+                                        offset, offset, recv_peer, -1, {});
+      uint32_t reduce_op = builder.add_op(OpKind::Reduce, recv_bytes, offset,
+                                          offset, -1, -1, {wait_op});
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
     }
   }
@@ -231,16 +233,16 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(OpKind::Send, send_bytes, offset, offset, -1, send_peer,
+      builder.add_op(OpKind::Put, send_bytes, offset, offset, -1, send_peer,
                      std::move(deps));
     }
 
     if (recv_bytes > 0) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t recv_op = builder.add_op(OpKind::Recv, recv_bytes, offset,
+      uint32_t wait_op = builder.add_op(OpKind::WaitSignal, recv_bytes, offset,
                                         offset, recv_peer, -1, {});
-      ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
+      ready_ops[static_cast<size_t>(recv_owner)] = wait_op;
     }
   }
 
@@ -278,7 +280,7 @@ CollAlgo build_alltoall_pairwise_algo_dma(CollectiveConfig const& config,
         "alltoall self split size must match between input and output");
   }
   if (self_slice_bytes != 0 && !inplace) {
-    builder.add_op(OpKind::Copy, self_slice_bytes, self_input_offset,
+    builder.add_op(OpKind::Put, self_slice_bytes, self_input_offset,
                    self_output_offset, -1, -1, {});
   }
 
@@ -295,19 +297,19 @@ CollAlgo build_alltoall_pairwise_algo_dma(CollectiveConfig const& config,
     uint32_t send_op = kNoOp;
     if (send_bytes > 0) {
       send_op =
-          builder.add_op(OpKind::Send, send_bytes, send_offset, staging_offset,
+          builder.add_op(OpKind::Put, send_bytes, send_offset, staging_offset,
                          0, peer, {}, /*sequential_tiles=*/true);
     }
 
     if (recv_bytes > 0) {
-      uint32_t recv_op = builder.add_op(OpKind::Recv, recv_bytes, recv_offset,
-                                        staging_offset, peer, 0, {},
-                                        /*sequential_tiles=*/true);
+      uint32_t recv_op = builder.add_op(OpKind::WaitSignal, recv_bytes,
+                                        recv_offset, staging_offset, peer, 0,
+                                        {}, /*sequential_tiles=*/true);
 
       std::vector<uint32_t> copy_deps;
       add_dep(copy_deps, send_op);
       add_dep(copy_deps, recv_op);
-      builder.add_op(OpKind::Copy, recv_bytes, staging_offset, recv_offset, -1,
+      builder.add_op(OpKind::Put, recv_bytes, staging_offset, recv_offset, -1,
                      -1, std::move(copy_deps),
                      /*sequential_tiles=*/true);
     }
@@ -349,7 +351,7 @@ CollAlgo build_alltoall_pairwise_algo_sm(CollectiveConfig const& config,
         "alltoall self split size must match between input and output");
 
   if (self_slice_bytes != 0 && !inplace) {
-    builder.add_op(OpKind::Copy, self_slice_bytes, self_input_offset,
+    builder.add_op(OpKind::Put, self_slice_bytes, self_input_offset,
                    self_output_offset, -1, -1, {});
   }
 
@@ -362,12 +364,12 @@ CollAlgo build_alltoall_pairwise_algo_sm(CollectiveConfig const& config,
     size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
 
     if (send_bytes > 0) {
-      builder.add_op(OpKind::Send, send_bytes, send_offset, send_offset, -1,
+      builder.add_op(OpKind::Put, send_bytes, send_offset, send_offset, -1,
                      peer, {});
     }
     if (recv_bytes > 0) {
-      builder.add_op(OpKind::Recv, recv_bytes, recv_offset, recv_offset, peer,
-                     -1, {});
+      builder.add_op(OpKind::WaitSignal, recv_bytes, recv_offset, recv_offset,
+                     peer, -1, {});
     }
   }
 

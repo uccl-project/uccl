@@ -18,11 +18,9 @@ namespace UKernel {
 namespace Device {
 
 enum class TaskType : uint64_t {
-  CollCopy,
-  CollReduce,
-  CollSend,
-  CollRecv,
-  CollRecvReduce,
+  CollCopy,   // pure GPU copy (used by tests/benchmarks)
+  CollPut,    // GPU copy + signal (used by CCL) — was CollSend
+  CollReduce, // local reduction
   BenchNop,
   Stop,
 };
@@ -225,10 +223,8 @@ class TaskManager {
   Task create_task(TaskArgs const& h, TaskType tt, DataType dt,
                    uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce ||
-           tt == TaskType::CollSend || tt == TaskType::CollRecvReduce ||
-           tt == TaskType::CollRecv);
-    bool is_reduce =
-        (tt == TaskType::CollReduce || tt == TaskType::CollRecvReduce);
+           tt == TaskType::CollPut);
+    bool is_reduce = (tt == TaskType::CollReduce);
     assert(!is_reduce || is_supported_reduce_dtype(dt));
     if (is_reduce) {
       uint8_t red = static_cast<uint8_t>(h.redTypeRaw & 0xFF);
@@ -272,6 +268,10 @@ class TaskManager {
     assert(task_in_use_[idx] == 1 && "double free on task args slot");
     task_in_use_[idx] = 0;
     free_task_.push_back(idx);
+    // Clear the publish marker on GPU so the slot is not seen as published
+    uint64_t zero = 0;
+    GPU_RT_CHECK(gpuMemcpy(&d_task_[idx].reserved0, &zero, sizeof(zero),
+                           gpuMemcpyHostToDevice));
   }
 
   // GPU: get args pointer by index

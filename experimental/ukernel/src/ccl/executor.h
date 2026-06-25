@@ -92,7 +92,8 @@ class SprayExecutor {
  public:
   static std::unique_ptr<SprayExecutor> create(
       SprayExecutorConfig const& config);
-  SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be);
+  SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
+                BatchBackend* signal_be = nullptr);
   ~SprayExecutor();
 
   SprayExecutor(SprayExecutor const&) = delete;
@@ -124,20 +125,24 @@ class SprayExecutor {
 
   Transport::PeerTransportKind pick_transport(int peer);
   void drain_tpt_loop();
+  void drain_signal_loop();
 
   // ── Owned resources ──
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
+  BatchBackend* signal_be_ = nullptr;
   std::unique_ptr<AsyncBackend> async_dev_;
   std::unique_ptr<AsyncBackend> async_tpt_;
   std::unique_ptr<BatchBackend> owned_device_;
   std::unique_ptr<BatchBackend> owned_transport_;
+  std::unique_ptr<BatchBackend> owned_signal_;
   std::shared_ptr<Transport::Communicator> owned_comm_;
 
   // ── Threads ──
   std::thread enqueue_th_;
   std::thread drain_th_dev_;
   std::thread drain_th_tpt_;
+  std::thread drain_th_signal_;
   std::atomic<bool> stop_{false};
 
   // ── cmd_idx → (run, op_idx) mapping ──

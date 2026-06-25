@@ -34,12 +34,14 @@ void test_enum_distinct_values() {
          static_cast<uint32_t>(CollKind::AllToAllPairwise));
   assert(static_cast<uint32_t>(CollKind::AllReduceRing) !=
          static_cast<uint32_t>(CollKind::AllToAllPairwise));
-  assert(static_cast<uint32_t>(OpKind::Send) !=
-         static_cast<uint32_t>(OpKind::Copy));
-  assert(static_cast<uint32_t>(OpKind::Send) !=
-         static_cast<uint32_t>(OpKind::Recv));
-  assert(static_cast<uint32_t>(OpKind::Recv) !=
-         static_cast<uint32_t>(OpKind::RecvReduce));
+  assert(static_cast<uint32_t>(OpKind::Put) !=
+         static_cast<uint32_t>(OpKind::Reduce));
+  assert(static_cast<uint32_t>(OpKind::Put) !=
+         static_cast<uint32_t>(OpKind::Signal));
+  assert(static_cast<uint32_t>(OpKind::Put) !=
+         static_cast<uint32_t>(OpKind::WaitSignal));
+  assert(static_cast<uint32_t>(OpKind::Reduce) !=
+         static_cast<uint32_t>(OpKind::WaitSignal));
   assert(static_cast<uint32_t>(ReductionKind::None) !=
          static_cast<uint32_t>(ReductionKind::Sum));
 }
@@ -98,7 +100,7 @@ void test_collective_config_field_assignment() {
 void test_chunk_defaults() {
   printf("[test] Chunk defaults...\n");
   Chunk chunk;
-  assert(chunk.op == OpKind::Copy);
+  assert(chunk.op == OpKind::Put);
   assert(chunk.bytes == 0);
   assert(chunk.src_off == 0);
   assert(chunk.dst_off == 0);
@@ -155,20 +157,25 @@ void test_build_coll_algo_ring_allreduce_basic() {
   assert(algo.input_bytes == 4096);
   assert(algo.reduction == ReductionKind::Sum);
 
-  // 4 ranks ring allreduce: 2 phases × 3 ring_steps, 2 ops per step
-  // = 2 × 3 × 2 = 12 abstract ops.
+  // 4 ranks ring allreduce: 2 phases × 3 ring_steps,
+  // phase 1: Put + WaitSignal + Reduce per step (3 ops × 3 steps = 9)
+  // phase 2: Put + WaitSignal per step (2 ops × 3 steps = 6)
+  // = 15 abstract ops.
   assert(!algo.chunks.empty());
-  assert(algo.chunks.size() == 12);
+  assert(algo.chunks.size() == 15);
 
-  // Phase 1 (reduce-scatter) should have DeviceRecvReduce ops.
-  bool saw_recv_reduce = false;
+  // Phase 1 (reduce-scatter) should have WaitSignal and Reduce ops.
+  bool saw_wait = false;
+  bool saw_reduce = false;
   bool saw_send = false;
   for (auto const& chunk : algo.chunks) {
-    if (chunk.op == OpKind::RecvReduce) saw_recv_reduce = true;
-    if (chunk.op == OpKind::Send) saw_send = true;
+    if (chunk.op == OpKind::WaitSignal) saw_wait = true;
+    if (chunk.op == OpKind::Reduce) saw_reduce = true;
+    if (chunk.op == OpKind::Put) saw_send = true;
     assert(chunk.sequential_tiles == false);
   }
-  assert(saw_recv_reduce);
+  assert(saw_wait);
+  assert(saw_reduce);
   assert(saw_send);
 
   // Dependencies should form a chain across ring steps.
@@ -219,7 +226,7 @@ void test_bfs_layers_empty() {
 void test_bfs_layers_single() {
   printf("[test] schedule_ops single...\n");
   std::vector<Op> ops(1);
-  ops[0].kind = OpKind::Copy;
+  ops[0].kind = OpKind::Put;
   ops[0].bytes = 128;
   auto s = bfs_layers(ops);
   assert(s.size() == 1);
@@ -231,7 +238,7 @@ void test_bfs_layers_independent() {
   printf("[test] schedule_ops independent ops...\n");
   std::vector<Op> ops(5);
   for (int i = 0; i < 5; ++i) {
-    ops[i].kind = OpKind::Copy;
+    ops[i].kind = OpKind::Put;
     ops[i].bytes = 128;
   }
   auto s = bfs_layers(ops);
@@ -243,7 +250,7 @@ void test_bfs_layers_chain() {
   printf("[test] schedule_ops chain...\n");
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
-    ops[i].kind = OpKind::Copy;
+    ops[i].kind = OpKind::Put;
     ops[i].bytes = 128;
   }
   ops[1].deps = {0};
@@ -261,7 +268,7 @@ void test_bfs_layers_diamond() {
   printf("[test] schedule_ops diamond...\n");
   std::vector<Op> ops(4);
   for (int i = 0; i < 4; ++i) {
-    ops[i].kind = OpKind::Copy;
+    ops[i].kind = OpKind::Put;
     ops[i].bytes = 128;
   }
   ops[1].deps = {0};
@@ -289,8 +296,8 @@ void test_lower_algo_ring_basic() {
   assert(!tiled.ops.empty());
   assert(tiled.layers.size() >= 1);
   // Ring allreduce with 4 ranks, 1024-byte shards, 512-byte tiles:
-  // Each abstract op → 2 tiles. 12 abstract ops → 24 tiled ops.
-  assert(tiled.ops.size() == 24);
+  // Each abstract op → 2 tiles. 15 abstract ops → 30 tiled ops.
+  assert(tiled.ops.size() == 30);
 
   // All tiled ops should have bytes <= tile_bytes.
   for (auto const& op : tiled.ops) assert(op.bytes <= 512);
@@ -350,7 +357,7 @@ void test_bfs_layers_total_covers_all_ops() {
   for (int test_num = 0; test_num < 20; ++test_num) {
     std::vector<Op> ops(static_cast<size_t>(test_num + 1));
     for (auto& op : ops) {
-      op.kind = OpKind::Copy;
+      op.kind = OpKind::Put;
       op.bytes = 128;
     }
     auto s = bfs_layers(ops);
@@ -464,7 +471,7 @@ void bench_bfs_layers_wide_dag() {
   printf("[bench] schedule_ops wide DAG (1000 independent ops)...\n");
   std::vector<Op> ops(1000);
   for (auto& op : ops) {
-    op.kind = OpKind::Copy;
+    op.kind = OpKind::Put;
     op.bytes = 128;
   }
   constexpr int kWarmup = 20;

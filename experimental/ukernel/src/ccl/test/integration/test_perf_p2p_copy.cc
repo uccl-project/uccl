@@ -131,15 +131,6 @@ int main(int argc, char** argv) {
   std::printf("[p2p-perf] peer setup done\n");
   fflush(stdout);
 
-  // Pre-establish the RDMA data-plane path before any benchmark so that
-  // reg_mr (called by TransportBackend::init) happens while the RDMA
-  // adapter already exists; otherwise the published MR rkey is stale.
-  if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
-      !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
-    std::fprintf(stderr, "[p2p-perf] RDMA pre-connect failed\n");
-    return 1;
-  }
-
   // ── 2. Allocate local GPU memory ────────────────────────────────────
   GPU_RT_CHECK(gpuSetDevice(gpu));
   constexpr size_t kMaxBytes = 1024ULL * 1024 * 1024;
@@ -246,7 +237,7 @@ int main(int argc, char** argv) {
 
       for (int iter = 0; iter < kLatencyIters; ++iter) {
         CmdWithId cwi;
-        cwi.cmd.kind = OpKind::Copy;
+        cwi.cmd.kind = OpKind::Put;
         cwi.cmd.bytes = static_cast<uint32_t>(bytes);
         cwi.cmd.src_buf = 1;
         cwi.cmd.dst_buf = 2;
@@ -276,7 +267,7 @@ int main(int argc, char** argv) {
       for (int iter = 0; iter < kThroughputIters; ++iter) {
         CmdWithId cwis[kBatchSize];
         for (int b = 0; b < kBatchSize; ++b) {
-          cwis[b].cmd.kind = OpKind::Copy;
+          cwis[b].cmd.kind = OpKind::Put;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
           cwis[b].cmd.src_buf = 1;
           cwis[b].cmd.dst_buf = 2;
@@ -443,13 +434,13 @@ int main(int argc, char** argv) {
   std::printf("[p2p-perf] comm->put benchmarks done.\n");
 
   // ── 9b. Benchmark TransportBackend (AsyncBackend wrapper) ─────────
-  // Uses OpKind::Send to push from local buf1 (d_local) to peer buf1
+  // Uses OpKind::Put to push from local buf1 (d_local) to peer buf1
   // (peer d_local), running through AsyncBackend on top of TransportBackend.
   {
     TransportBackend tpt_be(comm.get());
     // Only register local buffers — remote (IPC-mapped) pointers cannot be
     // re-wrapped with gpuIpcGetMemHandle.  Both sides register buf1 = d_local;
-    // we then Send from local buf1 to peer buf1 (registered by the peer).
+    // we then Put from local buf1 to peer buf1 (registered by the peer).
     BufSpec bufs[3] = {
         {d_local, kMaxBytes}, {nullptr, 0}, {nullptr, 0}};
     tpt_be.init(bufs);
@@ -471,7 +462,7 @@ int main(int argc, char** argv) {
 
         for (int iter = 0; iter < kLatencyIters; ++iter) {
           CmdWithId cwi;
-          cwi.cmd.kind = OpKind::Send;
+          cwi.cmd.kind = OpKind::Put;
           cwi.cmd.bytes = static_cast<uint32_t>(bytes);
           cwi.cmd.src_buf = 1;   // local d_local
           cwi.cmd.dst_buf = 1;   // peer d_local (registered by peer's init)
@@ -501,7 +492,7 @@ int main(int argc, char** argv) {
         for (int iter = 0; iter < kThroughputIters; ++iter) {
           CmdWithId cwis[kBatchSize];
           for (int b = 0; b < kBatchSize; ++b) {
-            cwis[b].cmd.kind = OpKind::Send;
+            cwis[b].cmd.kind = OpKind::Put;
             cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
             cwis[b].cmd.src_buf = 1;
             cwis[b].cmd.dst_buf = 1;
@@ -548,8 +539,16 @@ int main(int argc, char** argv) {
   }
 
   // ── 9c. Benchmark TransportBackend (RDMA transport) ────────────────
-  // Same as 9b, but forces PeerTransportKind::Rdma so every Send goes
+  // Same as 9b, but forces PeerTransportKind::Rdma so every Put goes
   // through the RDMA adapter instead of the default (auto / IPC).
+  // Pre-connect here, just before the RDMA section: the QP timeout is
+  // only ~67 ms, so a QP created at the top of the test would be dead
+  // by the time we reach this point.
+  if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
+      !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
+    std::fprintf(stderr, "[p2p-perf] RDMA re-connect failed\n");
+    return 1;
+  }
   {
     TransportBackend tpt_be(comm.get());
     BufSpec bufs[3] = {
@@ -565,7 +564,43 @@ int main(int argc, char** argv) {
     async.start();
     std::printf("[p2p-perf] TransportBackend (RDMA) init done, rank=%d\n", rank);
 
+    // Quick probe: verify the RDMA data path works before running the full
+    // size scan.  ibv_reg_mr on a 1 GB GPU allocation may fail on some
+    // systems; this check pinpoints whether the issue is registration or
+    // something downstream.
+    // Mirror bench_transport's exact RDMA pattern: dedicated buffer ids,
+    // register AFTER connect, skip reg_ipc.
+    fprintf(stderr, "[p2p-perf] bench-probe enter\n"); fflush(stderr);
+    constexpr uint32_t kProbeSendBufId = 1000000;
+    constexpr uint32_t kProbeRecvBufId = 2000000;
+    constexpr size_t kProbeSize = 1024;
+
+    comm->reg_mr(kProbeSendBufId, d_local, kProbeSize, false);
+    comm->reg_mr(kProbeRecvBufId, d_local, kProbeSize, true);
+    // For RDMA we only need wait_mr; resolve_remote_buffer would also
+    // wait_ipc which would hang (we intentionally skipped reg_ipc).
+    if (!comm->wait_mr(peer, kProbeRecvBufId)) {
+      std::fprintf(stderr, "[p2p-perf] wait_mr probe failed\n");
+    }
+
+    bool rdma_ok = false;
     if (rank == 0) {
+      unsigned probe_rid =
+          comm->send_put_async(peer, kProbeSendBufId, 0, kProbeRecvBufId, 0,
+                               kProbeSize, UKernel::Transport::PeerTransportKind::Rdma);
+      rdma_ok = (probe_rid != 0);
+      fprintf(stderr, "[p2p-perf] RDMA probe: %s\n", rdma_ok ? "OK" : "FAIL");
+      fflush(stderr);
+      if (rdma_ok) {
+        while (true) {
+          CompletionResult r[1];
+          if (comm->try_complete(r, 1) > 0 && r[0].rid == probe_rid) break;
+          std::this_thread::yield();
+        }
+      }
+    }
+
+    if (rank == 0 && rdma_ok) {
       for (size_t bytes : sizes) {
         constexpr int kLatencyIters = 5;
         std::vector<double> latencies;
@@ -573,7 +608,7 @@ int main(int argc, char** argv) {
 
         for (int iter = 0; iter < kLatencyIters; ++iter) {
           CmdWithId cwi;
-          cwi.cmd.kind = OpKind::Send;
+          cwi.cmd.kind = OpKind::Put;
           cwi.cmd.bytes = static_cast<uint32_t>(bytes);
           cwi.cmd.src_buf = 1;
           cwi.cmd.dst_buf = 1;
@@ -602,7 +637,7 @@ int main(int argc, char** argv) {
         for (int iter = 0; iter < kThroughputIters; ++iter) {
           CmdWithId cwis[kBatchSize];
           for (int b = 0; b < kBatchSize; ++b) {
-            cwis[b].cmd.kind = OpKind::Send;
+            cwis[b].cmd.kind = OpKind::Put;
             cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
             cwis[b].cmd.src_buf = 1;
             cwis[b].cmd.dst_buf = 1;

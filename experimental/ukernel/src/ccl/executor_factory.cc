@@ -1,6 +1,7 @@
 #include "../../include/transport.h"
 #include "backend/backend.h"
 #include "backend/device_backend.h"
+#include "backend/signal_backend.h"
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include "gpu_rt.h"
@@ -27,6 +28,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       .smem_size = static_cast<uint32_t>(config.smem_size),
   });
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
+  auto sig_be = std::make_unique<SignalBackend>();
 
   int n = comm->world_size();
   std::vector<GpuSignalPeer> gpu_comp(n);
@@ -47,13 +49,15 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   }
   dev_be->set_signal_buffers(gpu_comp);
 
-  auto ex = std::make_unique<SprayExecutor>(dev_be.get(), tpt_be.get());
+  auto ex = std::make_unique<SprayExecutor>(dev_be.get(), tpt_be.get(), sig_be.get());
   ex->owned_device_ = std::move(dev_be);
   ex->owned_transport_ = std::move(tpt_be);
+  ex->owned_signal_ = std::move(sig_be);
   ex->owned_comm_ = std::move(comm);
 
   ex->device_be_->set_comm(ex->owned_comm_.get());
   ex->tpt_be_->set_comm(ex->owned_comm_.get());
+  ex->signal_be_->set_comm(ex->owned_comm_.get());
 
   return ex;
 }

@@ -12,8 +12,7 @@ constexpr uint32_t kCommandExit = 2;
 
 __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
   return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce ||
-         ttype == TaskType::CollSend || ttype == TaskType::CollRecvReduce ||
-         ttype == TaskType::CollRecv;
+         ttype == TaskType::CollPut;
 }
 
 __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
@@ -129,29 +128,6 @@ __device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
   sm_write_seq(a);
 }
 
-template <typename T>
-__device__ __forceinline__ void run_recv_reduce(TaskArgs const& a,
-                                                uint32_t block_id,
-                                                uint32_t num_blocks,
-                                                void* smem_buf) {
-  sm_wait_seq(a);
-  ReduceType red = static_cast<ReduceType>(a.redTypeRaw & 0xFF);
-
-  T* dst = reinterpret_cast<T*>(a.dst);
-  T const* src = reinterpret_cast<T const*>(a.src);
-  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
-  if (blockDim.x > 1024) return;
-
-  const uint64_t count_per_block = total_count / num_blocks;
-  const uint64_t block_offset = block_id * count_per_block;
-  const uint64_t my_count = (block_id + 1 == num_blocks)
-                                ? (total_count - block_offset)
-                                : count_per_block;
-
-  read_reduce_store<T>(dst + block_offset, src + block_offset,
-                       static_cast<size_t>(my_count), red, smem_buf);
-}
-
 // ── benchmarks ────────────────────────────────────────────────────────
 
 __global__ void benchDispatchNopKernel() {}
@@ -215,17 +191,11 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
     case TaskType::CollCopy:
       RUN_COPY_BODY(dtype, run_typed_copy);
       break;
-    case TaskType::CollSend:
+    case TaskType::CollPut:
       RUN_COPY_BODY(dtype, run_send);
       break;
     case TaskType::CollReduce:
       RUN_REDUCE_BODY(dtype);
-      break;
-    case TaskType::CollRecvReduce:
-      RUN_COPY_BODY(dtype, run_recv_reduce);
-      break;
-    case TaskType::CollRecv:
-      sm_wait_seq(args);
       break;
     default:
       break;

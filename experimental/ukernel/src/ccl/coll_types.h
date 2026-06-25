@@ -12,13 +12,10 @@ enum class CollKind : uint32_t {
 };
 
 enum class OpKind : uint32_t {
-  Send,
-  Recv,
-  Copy,
-  Reduce,
-  RecvReduce,
-  Signal,  // send_signal_async(peer, tag) — completes via completion_ring_
-  SignalWait,  // wait_signal_async(peer, tag) — completes via signal_ring_
+  Put,        // one-sided data write: scheduler routes to device(copy) or transport(IPC/RDMA)
+  Reduce,     // local element-wise reduction (device backend)
+  Signal,     // send notification (signal backend)
+  WaitSignal, // wait for notification (signal backend)
 };
 
 enum class ScalarType : uint32_t {
