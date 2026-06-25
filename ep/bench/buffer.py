@@ -116,7 +116,7 @@ class Buffer:
             # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
             # segmented caching-allocator mapping.
             scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
-                num_rdma_bytes, device_index
+                num_rdma_bytes, device_index, bool(low_latency_mode)
             )
             self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:

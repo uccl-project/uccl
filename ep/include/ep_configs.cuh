@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef NUM_MAX_NVL_PEERS
 #define NUM_MAX_NVL_PEERS 8
+#endif
 #define NUM_MAX_RDMA_PEERS 20
 #define NUM_WORKSPACE_BYTES (32 * 1024 * 1024)
 #define NUM_MAX_LOCAL_EXPERTS 1024
