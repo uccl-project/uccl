@@ -1,13 +1,13 @@
 #include "executor.h"
 #include "../../include/transport.h"
 #include "algo/chunk_graph.h"
-#include "backend/async_backend.h"
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "utils.h"
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <pthread.h>
 #include <stdexcept>
 #include <thread>
 
@@ -34,12 +34,21 @@ static CollectiveBufferRole buf_role(OpKind kind, bool is_src,
   }
 }
 
-static uint32_t buf_of(Op const& op, bool is_src) {
-  auto r = buf_role(op.kind, is_src, op.copy_from_staging);
-  return static_cast<uint32_t>(r) + 1;
+static uint32_t role_to_buf(CollectiveBufferRole role, uint32_t in, uint32_t out,
+                            uint32_t scr) {
+  switch (role) {
+    case CollectiveBufferRole::Input:
+      return in;
+    case CollectiveBufferRole::Output:
+      return out;
+    case CollectiveBufferRole::Scratch:
+      return scr;
+  }
+  return 0;
 }
 
-static Cmd make_cmd(Op const& op, ReductionKind redop) {
+static Cmd make_cmd(Op const& op, ReductionKind redop, uint32_t input_buf,
+                    uint32_t output_buf, uint32_t scratch_buf) {
   Cmd c{};
   c.kind = op.kind;
   c.bytes = static_cast<uint32_t>(op.bytes);
@@ -47,45 +56,60 @@ static Cmd make_cmd(Op const& op, ReductionKind redop) {
   c.dst_off = static_cast<uint32_t>(op.dst_off);
   c.src_peer = op.src_peer;
   c.dst_peer = op.dst_peer;
-  c.src_buf = buf_of(op, true);
-  c.dst_buf = buf_of(op, false);
+  auto role_src = buf_role(op.kind, true, op.copy_from_staging);
+  auto role_dst = buf_role(op.kind, false, op.copy_from_staging);
+  c.src_buf = role_to_buf(role_src, input_buf, output_buf, scratch_buf);
+  c.dst_buf = role_to_buf(role_dst, input_buf, output_buf, scratch_buf);
   c.redop = (op.kind == OpKind::Reduce) ? redop : ReductionKind::None;
   c.transport = static_cast<uint8_t>(Transport::PeerTransportKind::Unknown);
   c.tag = op.tag;
   return c;
 }
 
+uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
+  if (!ptr || !bytes) return 0;
+  uintptr_t key = reinterpret_cast<uintptr_t>(ptr);
+  auto it = tensor_to_buf_id_.find(key);
+  if (it != tensor_to_buf_id_.end()) return it->second;
+  uint32_t id = next_buf_id_++;
+  tensor_to_buf_id_[key] = id;
+  if (owned_comm_ && register_buf_fn_)
+    register_buf_fn_(owned_comm_.get(), id, ptr, bytes);
+  return id;
+}
+
 // ── Constructor ───────────────────────────────────────────────────────
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
-                             BatchBackend* signal_be)
+                             BatchBackend* signal_be, int world_size)
     : device_be_(device_be),
       tpt_be_(tpt_be),
       signal_be_(signal_be),
       owned_device_(),
       owned_transport_(),
       owned_comm_(),
-      stop_(false) {
-  std::memset(cmd_to_run_, 0, sizeof(cmd_to_run_));
-
-  if (device_be_) {
-    async_dev_ = std::make_unique<AsyncBackend>(device_be_, 2048, 2048);
-    async_dev_->start();
-  }
-  if (tpt_be_) {
-    async_tpt_ = std::make_unique<AsyncBackend>(tpt_be_, 2048, 2048);
-    async_tpt_->start();
-  }
+      stop_(false),
+      world_size_(world_size) {
+  for (auto& m : cmd_to_run_) m = CmdRunMapping{};
+  if (world_size_ > 0)
+    tpt_metrics_.reset(new PeerMetrics[static_cast<size_t>(world_size_)]{});
 
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
-  if (async_dev_)
+  pthread_setname_np(enqueue_th_.native_handle(), "ucl-enq");
+  if (device_be_) {
     drain_th_dev_ =
-        std::thread(&SprayExecutor::drain_loop, this, async_dev_.get());
-  if (async_tpt_)
+        std::thread(&SprayExecutor::drain_loop, this, device_be_);
+    pthread_setname_np(drain_th_dev_.native_handle(), "ucl-drain-dev");
+  }
+  if (tpt_be_) {
     drain_th_tpt_ = std::thread(&SprayExecutor::drain_tpt_loop, this);
-  if (signal_be_)
+    pthread_setname_np(drain_th_tpt_.native_handle(), "ucl-drain-tpt");
+  }
+  if (signal_be_) {
     drain_th_signal_ =
         std::thread(&SprayExecutor::drain_signal_loop, this);
+    pthread_setname_np(drain_th_signal_.native_handle(), "ucl-drain-sig");
+  }
 }
 
 SprayExecutor::~SprayExecutor() {
@@ -94,8 +118,6 @@ SprayExecutor::~SprayExecutor() {
   if (drain_th_dev_.joinable()) drain_th_dev_.join();
   if (drain_th_tpt_.joinable()) drain_th_tpt_.join();
   if (drain_th_signal_.joinable()) drain_th_signal_.join();
-  if (async_dev_) async_dev_->stop();
-  if (async_tpt_) async_tpt_->stop();
 }
 
 // ── Lookup ───────────────────────────────────────────────────────────────
@@ -107,27 +129,24 @@ SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
 }
 
 CollectiveOpStatus SprayExecutor::status(CollectiveOpHandle h) const {
-  auto* ex = const_cast<SprayExecutor*>(this);
-  std::lock_guard lock(ex->runs_mutex_);
-  auto it = ex->runs_.find(h);
-  return it != ex->runs_.end() ? it->second->status
-                               : CollectiveOpStatus::Completed;
+  std::lock_guard lock(runs_mutex_);
+  auto it = runs_.find(h);
+  return it != runs_.end() ? it->second->status.load(std::memory_order_acquire)
+                           : CollectiveOpStatus::Completed;
 }
 
 size_t SprayExecutor::active_count() const {
-  auto* ex = const_cast<SprayExecutor*>(this);
-  std::lock_guard lock(ex->runs_mutex_);
+  std::lock_guard lock(runs_mutex_);
   size_t n = 0;
-  for (auto& [h, r] : ex->runs_)
-    if (r->status == CollectiveOpStatus::Running) ++n;
+  for (auto& [h, r] : runs_)
+    if (r->status.load(std::memory_order_acquire) == CollectiveOpStatus::Running) ++n;
   return n;
 }
 
 std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
-  auto* ex = const_cast<SprayExecutor*>(this);
-  std::lock_guard lock(ex->runs_mutex_);
-  auto it = ex->runs_.find(h);
-  return it != ex->runs_.end() ? it->second->error : std::string{};
+  std::lock_guard lock(runs_mutex_);
+  auto it = runs_.find(h);
+  return it != runs_.end() ? it->second->error : std::string{};
 }
 
 // ── Submit ───────────────────────────────────────────────────────────────
@@ -139,32 +158,35 @@ CollectiveOpHandle SprayExecutor::submit_allreduce(CollectiveConfig const& cfg,
   c.kind = CollKind::AllReduceRing;
   TiledResult tiled = build_tiled(c, input == output);
 
-  BufSpec bufs[3] = {
-      {input, tiled.input_bytes},
-      {output, tiled.output_bytes},
-      {scratch, tiled.staging_bytes_required},
-  };
-
-  if (device_be_) device_be_->init(bufs);
-  if (tpt_be_) tpt_be_->init(bufs);
-
   std::lock_guard lock(runs_mutex_);
   auto h = next_handle_++;
   if (tiled.ops.empty()) {
     auto run = std::make_unique<SprayRun>();
-    run->status = CollectiveOpStatus::Completed;
+    run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
     runs_[h] = std::move(run);
     return h;
   }
 
   auto run = std::make_unique<SprayRun>();
-  run->status = CollectiveOpStatus::Running;
+  run->status.store(CollectiveOpStatus::Running, std::memory_order_release);
   run->tiled = std::move(tiled);
-  run->input = input;
-  run->output = output;
-  run->scratch = scratch;
-  run->done.resize(run->tiled.ops.size(), false);
-  run->submitted.resize(run->tiled.ops.size(), false);
+  run->input_buf_id = get_or_register_buf(input, run->tiled.input_bytes);
+  run->output_buf_id = get_or_register_buf(output, run->tiled.output_bytes);
+  run->scratch_buf_id =
+      get_or_register_buf(scratch, run->tiled.staging_bytes_required);
+  run->done.resize(run->tiled.ops.size(), 0);
+  run->submitted.resize(run->tiled.ops.size(), 0);
+
+  // Build reverse dependency map and indegree for countdown-latch
+  size_t nops = run->tiled.ops.size();
+  run->successors.resize(nops);
+  run->indegree.resize(nops, 0);
+  for (uint32_t i = 0; i < nops; ++i) {
+    run->indegree[i] = static_cast<uint32_t>(run->tiled.ops[i].deps.size());
+    for (uint32_t dep : run->tiled.ops[i].deps)
+      run->successors[dep].push_back(i);
+  }
+
   runs_[h] = std::move(run);
   return h;
 }
@@ -183,37 +205,55 @@ bool SprayExecutor::poll(CollectiveOpHandle h) {
   std::lock_guard lock(runs_mutex_);
   auto it = runs_.find(h);
   if (it == runs_.end()) return true;
-  auto s = it->second->status;
+  auto s = it->second->status.load(std::memory_order_acquire);
   return s == CollectiveOpStatus::Completed || s == CollectiveOpStatus::Failed;
 }
 
 bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
-  constexpr int kSpin = 1000;
-  int spin = 0;
+  SprayRun* run = get(h);
+  if (!run) return true;
+
+  auto check_complete = [&]() {
+    if (run->done_count.load(std::memory_order_acquire) >= run->tiled.ops.size())
+      run->status.store(CollectiveOpStatus::Completed,
+                        std::memory_order_release);
+  };
+
   if (to.count() == 0) {
-    while (!poll(h)) {
-      if (spin < kSpin) {
-        ++spin;
-        std::this_thread::yield();
-      } else
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    int spin = 0;
+    int sleep_us = 100;
+    while (run->status.load(std::memory_order_acquire) ==
+           CollectiveOpStatus::Running) {
+      if (spin < 1000) { ++spin; std::this_thread::yield(); }
+      else { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+             sleep_us = std::min(sleep_us * 2, 10000); }
+      check_complete();
     }
-    return true;
+    return run->status.load(std::memory_order_acquire) !=
+           CollectiveOpStatus::Failed;
   }
+
   auto dl = std::chrono::steady_clock::now() + to;
-  do {
-    if (poll(h)) return true;
-    std::this_thread::yield();
-  } while (std::chrono::steady_clock::now() < dl);
-  return poll(h);
+  int spin = 0;
+  int sleep_us = 100;
+  while (run->status.load(std::memory_order_acquire) ==
+         CollectiveOpStatus::Running) {
+    if (std::chrono::steady_clock::now() >= dl) break;
+    if (spin < 1000) { ++spin; std::this_thread::yield(); }
+    else { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+           sleep_us = std::min(sleep_us * 2, 10000); }
+    check_complete();
+  }
+  return run->status.load(std::memory_order_acquire) !=
+         CollectiveOpStatus::Failed;
 }
 
 void SprayExecutor::release(CollectiveOpHandle h) {
   std::lock_guard lock(runs_mutex_);
   auto it = runs_.find(h);
   if (it == runs_.end()) return;
-  if (it->second->status == CollectiveOpStatus::Queued ||
-      it->second->status == CollectiveOpStatus::Running)
+  if (it->second->status.load(std::memory_order_acquire) == CollectiveOpStatus::Queued ||
+      it->second->status.load(std::memory_order_acquire) == CollectiveOpStatus::Running)
     throw std::logic_error("cannot release running collective");
   runs_.erase(it);
 }
@@ -232,68 +272,89 @@ void SprayExecutor::collect_ready(SprayRun& run) {
       ld = false;
       bool ok = true;
       for (uint32_t d : ops[op].deps)
-        if (!run.done[d]) {
-          ok = false;
-          break;
-        }
+        if (!run.done[d]) { ok = false; break; }
       if (ok) run.ready.push_back(op);
     }
     if (ld) run.next_layer = l + 1;
   }
 }
 
-void SprayExecutor::enqueue_to_ring(SprayRun& run, AsyncBackend* async_be) {
-  (void)async_be;
+void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   if (run.ready.empty()) return;
 
   run.dev_cmds.clear();
   run.tpt_cmds.clear();
+  std::vector<uint32_t> dev_idx;
+  std::vector<uint32_t> tpt_idx;
 
   for (uint32_t idx : run.ready) {
-    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction);
+    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction,
+                     run.input_buf_id, run.output_buf_id, run.scratch_buf_id);
 
     // LB decision: for Put ops, pick IPC vs RDMA dynamically
     if (c.kind == OpKind::Put && c.dst_peer != ~0u) {
-      auto tpt = pick_transport(static_cast<int>(c.dst_peer));
+      auto peer = static_cast<int>(c.dst_peer);
+      auto tpt = pick_transport(peer);
       c.transport = static_cast<uint8_t>(tpt);
-      // Bump inflight counter for the chosen path
-      auto& pm = tpt_metrics_[static_cast<int>(c.dst_peer)];
-      if (tpt == Transport::PeerTransportKind::Ipc)
-        pm.ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-      else if (tpt == Transport::PeerTransportKind::Rdma)
-        pm.rdma.inflight.fetch_add(1, std::memory_order_relaxed);
+      if (peer >= 0 && peer < world_size_) {
+        auto& pm = tpt_metrics_[peer];
+        if (tpt == Transport::PeerTransportKind::Ipc)
+          pm.ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+        else if (tpt == Transport::PeerTransportKind::Rdma)
+          pm.rdma.inflight.fetch_add(1, std::memory_order_relaxed);
+      }
     }
 
     CmdWithId cwi{c, 0};
     cwi.caller_id = next_cmd_idx_++;
-    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx};
-    cmd_transport_[cwi.caller_id] = c.transport;
+    cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx, c.transport,
+                                                      cwi.caller_id};
 
     if (c.kind == OpKind::Signal || c.kind == OpKind::WaitSignal) {
-      if (signal_be_) {
-        signal_be_->enqueue(&cwi.cmd, 1, nullptr);
-      }
-      run.submitted[idx] = true;
+      signal_be_->try_enqueue(&cwi, 1);
+      run.submitted[idx] = 1;
       continue;
     }
 
     if (c.kind == OpKind::Put) {
       if (c.transport == 0) {
         run.dev_cmds.push_back(cwi);
+        dev_idx.push_back(idx);
       } else {
         run.tpt_cmds.push_back(cwi);
+        tpt_idx.push_back(idx);
       }
     } else {
       run.dev_cmds.push_back(cwi);
+      dev_idx.push_back(idx);
     }
-    run.submitted[idx] = true;
   }
 
-  if (!run.dev_cmds.empty())
-    async_dev_->try_enqueue(run.dev_cmds.data(), run.dev_cmds.size());
+  // Submit device batch, stop on backpressure
+  {
+    size_t off = 0;
+    while (off < run.dev_cmds.size()) {
+      size_t n = device_be_->try_enqueue(run.dev_cmds.data() + off,
+                                         run.dev_cmds.size() - off);
+      for (size_t j = 0; j < n; ++j)
+        run.submitted[dev_idx[off + j]] = 1;
+      off += n;
+      if (n == 0) break;
+    }
+  }
 
-  if (!run.tpt_cmds.empty())
-    async_tpt_->try_enqueue(run.tpt_cmds.data(), run.tpt_cmds.size());
+  // Submit transport batch, stop on backpressure
+  {
+    size_t off = 0;
+    while (off < run.tpt_cmds.size()) {
+      size_t n = tpt_be_->try_enqueue(run.tpt_cmds.data() + off,
+                                      run.tpt_cmds.size() - off);
+      for (size_t j = 0; j < n; ++j)
+        run.submitted[tpt_idx[off + j]] = 1;
+      off += n;
+      if (n == 0) break;
+    }
+  }
 }
 
 // ── Thread loops ─────────────────────────────────────────────────────────
@@ -304,12 +365,18 @@ void SprayExecutor::enqueue_loop() {
     {
       std::lock_guard lock(runs_mutex_);
       for (auto& [h, run] : runs_) {
-        if (run->status != CollectiveOpStatus::Running) continue;
+        if (run->status.load(std::memory_order_acquire) !=
+            CollectiveOpStatus::Running)
+          continue;
         {
           std::lock_guard rlock(run->mtx);
           collect_ready(*run);
-          enqueue_to_ring(*run, nullptr);
+          enqueue_to_ring(*run);
         }
+        if (run->done_count.load(std::memory_order_acquire) >=
+            run->tiled.ops.size())
+          run->status.store(CollectiveOpStatus::Completed,
+                            std::memory_order_release);
         any = true;
       }
     }
@@ -317,131 +384,71 @@ void SprayExecutor::enqueue_loop() {
   }
 }
 
-void SprayExecutor::drain_loop(AsyncBackend* async_be) {
+void SprayExecutor::drain_loop(BatchBackend* be) {
   uint32_t done_buf[256];
   while (!stop_) {
-    size_t n = async_be->try_drain(done_buf, 256);
+    size_t n = be->try_drain(done_buf, 256);
     if (n == 0) {
       std::this_thread::yield();
       continue;
     }
-
-    for (size_t i = 0; i < n; ++i) {
-      auto& m = cmd_to_run_[done_buf[i] & (kMaxCmdIdx - 1)];
-      if (!m.run) continue;
-
-      std::lock_guard rlock(m.run->mtx);
-      if (!m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = true;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-      }
-    }
-    // Release m.run->mtx before locking runs_mutex_ to avoid deadlock:
-    // enqueue_thread: runs_mutex_ → run->mtx
-    // drain_thread:   run->mtx → ... (done above) → runs_mutex_
-
-    std::lock_guard lock(runs_mutex_);
-    for (auto& [h, run] : runs_) {
-      if (run->status != CollectiveOpStatus::Running) continue;
-      size_t dc = run->done_count.load(std::memory_order_acquire);
-      if (dc >= run->tiled.ops.size())
-        run->status = CollectiveOpStatus::Completed;
-    }
+    drain_batch(done_buf, n, [](auto&, uint32_t) {});
   }
 }
 
 Transport::PeerTransportKind SprayExecutor::pick_transport(int peer) {
+  if (peer < 0 || peer >= world_size_) return Transport::PeerTransportKind::Ipc;
   auto& m = tpt_metrics_[peer];
-  double cost_ipc =
-      static_cast<double>(m.ipc.inflight.load(std::memory_order_relaxed)) *
-      m.ipc.latency_us.load(std::memory_order_relaxed);
-  double cost_rdma =
-      static_cast<double>(m.rdma.inflight.load(std::memory_order_relaxed)) *
-      m.rdma.latency_us.load(std::memory_order_relaxed);
+  uint64_t cost_ipc =
+      static_cast<uint64_t>(m.ipc.inflight.load(std::memory_order_relaxed)) *
+      m.ipc.latency_ns.load(std::memory_order_relaxed);
+  uint64_t cost_rdma =
+      static_cast<uint64_t>(m.rdma.inflight.load(std::memory_order_relaxed)) *
+      m.rdma.latency_ns.load(std::memory_order_relaxed);
   return cost_ipc <= cost_rdma ? Transport::PeerTransportKind::Ipc
-                               : Transport::PeerTransportKind::Rdma;
+                                : Transport::PeerTransportKind::Rdma;
 }
 
 void SprayExecutor::drain_tpt_loop() {
   uint32_t done_buf[256];
   while (!stop_) {
-    // Channel 1: data completions via AsyncBackend (Put/Get ops)
-    size_t nd = async_tpt_->try_drain(done_buf, 256);
-    for (size_t i = 0; i < nd; ++i) {
-      uint32_t caller_id = done_buf[i];
-      auto& m = cmd_to_run_[caller_id & (kMaxCmdIdx - 1)];
-      if (!m.run) continue;
-
-      std::lock_guard rlock(m.run->mtx);
-      if (!m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = true;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-
-        auto it = cmd_transport_.find(caller_id);
-        if (it != cmd_transport_.end()) {
-          auto tpt = static_cast<Transport::PeerTransportKind>(it->second);
-          if (tpt != Transport::PeerTransportKind::Unknown) {
-            int peer = static_cast<int>(m.run->tiled.ops[m.op_idx].dst_peer);
-            auto& pm = tpt_metrics_[peer];
-            if (tpt == Transport::PeerTransportKind::Ipc)
-              pm.ipc.inflight.fetch_sub(1, std::memory_order_relaxed);
-            else if (tpt == Transport::PeerTransportKind::Rdma)
-              pm.rdma.inflight.fetch_sub(1, std::memory_order_relaxed);
-          }
-          cmd_transport_.erase(it);
-        }
-      }
-    }
-
-    // Mark completed runs
-    {
-      std::lock_guard lock(runs_mutex_);
-      for (auto& [h, run] : runs_) {
-        if (run->status != CollectiveOpStatus::Running) continue;
-        size_t dc = run->done_count.load(std::memory_order_acquire);
-        if (dc >= run->tiled.ops.size())
-          run->status = CollectiveOpStatus::Completed;
-      }
-    }
-
+    size_t nd = tpt_be_->try_drain(done_buf, 256);
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
+      continue;
     }
+
+    drain_batch(done_buf, nd, [this](auto& m, uint32_t) {
+      auto transport = m.transport;
+      if (transport != 0) {
+        auto tpt = static_cast<Transport::PeerTransportKind>(transport);
+        if (tpt != Transport::PeerTransportKind::Unknown) {
+          int peer = static_cast<int>(m.run->tiled.ops[m.op_idx].dst_peer);
+          if (peer >= 0 && peer < world_size_) {
+            if (tpt == Transport::PeerTransportKind::Ipc)
+              tpt_metrics_[peer].ipc.inflight.fetch_sub(
+                  1, std::memory_order_relaxed);
+            else if (tpt == Transport::PeerTransportKind::Rdma)
+              tpt_metrics_[peer].rdma.inflight.fetch_sub(
+                  1, std::memory_order_relaxed);
+          }
+        }
+      }
+    });
   }
 }
 
 void SprayExecutor::drain_signal_loop() {
   uint32_t done_buf[256];
   while (!stop_) {
-    size_t ns = signal_be_->drain(done_buf, 256);
-    for (size_t i = 0; i < ns; ++i) {
-      uint32_t caller_id = done_buf[i];
-      auto& m = cmd_to_run_[caller_id & (kMaxCmdIdx - 1)];
-      if (!m.run) continue;
-
-      std::lock_guard rlock(m.run->mtx);
-      if (!m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = true;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-      }
-    }
-
-    // Mark completed runs
-    {
-      std::lock_guard lock(runs_mutex_);
-      for (auto& [h, run] : runs_) {
-        if (run->status != CollectiveOpStatus::Running) continue;
-        size_t dc = run->done_count.load(std::memory_order_acquire);
-        if (dc >= run->tiled.ops.size())
-          run->status = CollectiveOpStatus::Completed;
-      }
-    }
-
+    size_t ns = signal_be_->try_drain(done_buf, 256);
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
+      continue;
     }
+    drain_batch(done_buf, ns, [](auto&, uint32_t) {});
   }
 }
 

@@ -15,6 +15,7 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuGetDevice(&device_idx_));
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
+  ensure_runtime();
 }
 
 DeviceBackend::~DeviceBackend() {
@@ -47,17 +48,8 @@ void DeviceBackend::ensure_runtime() {
     worker_pool_->waitWorker(i);
   }
 }
-
-void DeviceBackend::init(BufSpec bufs[3]) {
-  for (int i = 0; i < 3; ++i) bufs_[i] = bufs[i];
-  ensure_runtime();
-  inited_ = true;
-}
-
-size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
+size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
                               uint32_t* out_indices) {
-  if (!inited_) return 0;
-
   size_t accepted = 0;
   while (accepted < n) {
     Cmd const& c = cmds[accepted];
@@ -69,27 +61,72 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
     args.src_device = device_idx_;
     args.dst_device = device_idx_;
 
-    if (c.src_buf > 0 && c.src_buf <= 3) {
+    if (c.src_buf > 0) {
       if (c.src_peer != ~0u && comm_) {
-        void* remote = nullptr;
-        if (comm_->try_resolve_remote_ipc_pointer((int)c.src_peer, c.src_buf,
-                                                  c.src_off, c.bytes, &remote,
-                                                  &args.src_device))
-          args.src = remote;
-      } else if (bufs_[c.src_buf - 1].ptr) {
-        args.src = (char*)bufs_[c.src_buf - 1].ptr + c.src_off;
+        // Check cache first — resolved ptr never changes once set
+        void* cached = nullptr;
+        for (auto& e : resolved_remote_cache_) {
+          if (e.remote_rank == (int)c.src_peer && e.buffer_id == c.src_buf) {
+            cached = e.ptr;
+            args.src_device = e.device_idx;
+            break;
+          }
+        }
+        if (cached) {
+          args.src = (char*)cached + c.src_off;
+        } else if (comm_->try_resolve_remote_ipc_pointer((int)c.src_peer, c.src_buf,
+                                                         c.src_off, c.bytes, &cached,
+                                                         &args.src_device)) {
+          resolved_remote_cache_.push_back(
+              {(int)c.src_peer, c.src_buf, cached, args.src_device});
+          args.src = (char*)cached + c.src_off;
+        }
+      } else if (comm_) {
+        if (c.src_buf < kMaxLocalBufs && local_ptr_cache_[c.src_buf]) {
+          args.src = (char*)local_ptr_cache_[c.src_buf] + c.src_off;
+        } else {
+          auto ipc = comm_->get_ipc(c.src_buf);
+          if (ipc.direct_ptr) {
+            if (c.src_buf < kMaxLocalBufs)
+              local_ptr_cache_[c.src_buf] = ipc.direct_ptr;
+            args.src = (char*)ipc.direct_ptr + c.src_off;
+          }
+        }
       }
     }
-    if (c.dst_buf > 0 && c.dst_buf <= 3) {
+    if (c.dst_buf > 0) {
       if (c.dst_peer != ~0u && comm_) {
-        void* remote = nullptr;
-        int remote_dev = device_idx_;
-        if (comm_->try_resolve_remote_ipc_pointer((int)c.dst_peer, c.dst_buf,
-                                                  c.dst_off, c.bytes, &remote,
-                                                  &remote_dev))
-          args.dst = remote;
-      } else if (bufs_[c.dst_buf - 1].ptr) {
-        args.dst = (char*)bufs_[c.dst_buf - 1].ptr + c.dst_off;
+        void* cached = nullptr;
+        int cached_dev = device_idx_;
+        for (auto& e : resolved_remote_cache_) {
+          if (e.remote_rank == (int)c.dst_peer && e.buffer_id == c.dst_buf) {
+            cached = e.ptr;
+            cached_dev = e.device_idx;
+            break;
+          }
+        }
+        if (cached) {
+          args.dst = (char*)cached + c.dst_off;
+          args.dst_device = cached_dev;
+        } else if (comm_->try_resolve_remote_ipc_pointer((int)c.dst_peer, c.dst_buf,
+                                                         c.dst_off, c.bytes, &cached,
+                                                         &cached_dev)) {
+          resolved_remote_cache_.push_back(
+              {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
+          args.dst = (char*)cached + c.dst_off;
+          args.dst_device = cached_dev;
+        }
+      } else if (comm_) {
+        if (c.dst_buf < kMaxLocalBufs && local_ptr_cache_[c.dst_buf]) {
+          args.dst = (char*)local_ptr_cache_[c.dst_buf] + c.dst_off;
+        } else {
+          auto ipc = comm_->get_ipc(c.dst_buf);
+          if (ipc.direct_ptr) {
+            if (c.dst_buf < kMaxLocalBufs)
+              local_ptr_cache_[c.dst_buf] = ipc.direct_ptr;
+            args.dst = (char*)ipc.direct_ptr + c.dst_off;
+          }
+        }
       }
     }
     args.set_red_type(c.redop == ReductionKind::None ? Device::ReduceType::None
@@ -125,15 +162,12 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
         args, tt, Device::DataType::Fp32, 0);
 
     uint64_t tid = worker_pool_->enqueue(task, fid);
-    if (tid == Device::WorkerPool::kInvalidTaskId) {
-      std::lock_guard<std::mutex> lk(pending_mu_);
-      --cmd_next_;
-      break;
-    }
-
-    // Commit to pending_ under lock
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
+      if (tid == Device::WorkerPool::kInvalidTaskId) {
+        --cmd_next_;
+        break;
+      }
       if (out_indices) out_indices[accepted] = cmd_idx;
       pending_.push_back({fid, tid, task.args_index(), cmd_idx});
     }
@@ -142,7 +176,7 @@ size_t DeviceBackend::enqueue(Cmd const* cmds, size_t n,
   return accepted;
 }
 
-size_t DeviceBackend::drain(uint32_t* completed, size_t max) {
+size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   std::lock_guard<std::mutex> lk(pending_mu_);
   size_t count = 0;
   for (size_t i = 0; i < pending_.size() && count < max;) {

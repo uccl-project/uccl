@@ -30,10 +30,9 @@ class DeviceBackend final : public BatchBackend {
   char const* name() const override { return "device"; }
   bool supports(OpKind kind) const override;
 
-  void init(BufSpec bufs[3]) override;
-  size_t enqueue(Cmd const* cmds, size_t n,
-                 uint32_t* out_indices = nullptr) override;
-  size_t drain(uint32_t* completed, size_t max) override;
+  size_t do_enqueue(Cmd const* cmds, size_t n,
+                    uint32_t* out_indices = nullptr) override;
+  size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
 
   void set_signal_buffers(std::vector<GpuSignalPeer> const& peers);
@@ -45,8 +44,6 @@ class DeviceBackend final : public BatchBackend {
   int sm_count_ = 1;
   int device_idx_ = 0;
 
-  BufSpec bufs_[3] = {};
-  bool inited_ = false;
   bool owns_task_manager_ = false;
 
   std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
@@ -63,6 +60,19 @@ class DeviceBackend final : public BatchBackend {
   std::mutex pending_mu_;
 
   std::vector<GpuSignalPeer> gpu_signal_bufs_;
+
+  // Resolved remote IPC pointer cache — written once, read without lock
+  struct ResolvedRemote {
+    int remote_rank = -1;
+    uint32_t buffer_id = 0;
+    void* ptr = nullptr;
+    int device_idx = -1;
+  };
+  std::vector<ResolvedRemote> resolved_remote_cache_;
+
+  // Local buffer base-pointer cache — populated once per collective, read lock-free
+  static constexpr size_t kMaxLocalBufs = 8;
+  void* local_ptr_cache_[kMaxLocalBufs] = {};
 
   uint32_t cmd_next_ = 0;  // global command sequence counter
   uint32_t cmd_done_ = 0;  // completed up to this point

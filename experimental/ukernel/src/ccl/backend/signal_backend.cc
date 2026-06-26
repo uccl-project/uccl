@@ -13,11 +13,7 @@ bool SignalBackend::supports(OpKind kind) const {
   return kind == OpKind::Signal || kind == OpKind::WaitSignal;
 }
 
-void SignalBackend::init(BufSpec[3]) {
-  // signals don't need buffer registration
-}
-
-size_t SignalBackend::enqueue(Cmd const* cmds, size_t n,
+size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
                                uint32_t* out_indices) {
   size_t accepted = 0;
   for (size_t i = 0; i < n; ++i) {
@@ -59,7 +55,7 @@ size_t SignalBackend::enqueue(Cmd const* cmds, size_t n,
   return accepted;
 }
 
-size_t SignalBackend::drain(uint32_t* completed, size_t max) {
+size_t SignalBackend::do_drain(uint32_t* completed, size_t max) {
   size_t out = 0;
 
   // Channel 1: Drain SignalWait completions from signal_ring_

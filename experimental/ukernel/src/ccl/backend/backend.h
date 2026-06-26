@@ -1,8 +1,13 @@
 #pragma once
 
 #include "../coll_types.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
+
+struct jring;
+typedef struct jring jring_t;
 
 namespace UKernel {
 namespace Transport {
@@ -42,23 +47,38 @@ struct BufSpec {
 
 class BatchBackend {
  public:
-  virtual ~BatchBackend() = default;
-
+  virtual ~BatchBackend();
   virtual char const* name() const = 0;
   virtual bool supports(OpKind kind) const = 0;
-
-  virtual void init(BufSpec bufs[3]) = 0;
-
   void set_comm(UKernel::Transport::Communicator* comm) { comm_ = comm; }
 
-  virtual size_t enqueue(Cmd const* cmds, size_t n,
-                         uint32_t* out_indices = nullptr) = 0;
-  virtual size_t drain(uint32_t* completed, size_t max) = 0;
+  // ── Non-blocking async interface (called by executor) ──
+  void start(uint32_t cmd_slots = 2048, uint32_t done_slots = 2048);
+  void stop();
+  size_t try_enqueue(CmdWithId const* cmds, size_t n);
+  size_t try_drain(uint32_t* caller_ids, size_t max);
+
+ protected:
+  // ── Subclass implements blocking operations ──
+  virtual size_t do_enqueue(Cmd const* cmds, size_t n,
+                            uint32_t* out_indices = nullptr) = 0;
+  virtual size_t do_drain(uint32_t* completed, size_t max) = 0;
   virtual size_t capacity() const = 0;
   virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
 
- protected:
   UKernel::Transport::Communicator* comm_ = nullptr;
+
+ private:
+  void submit_loop_();
+  void drain_loop_();
+
+  jring_t* cmd_ring_ = nullptr;
+  jring_t* done_ring_ = nullptr;
+  static constexpr size_t kPendingSlots = 65536;
+  std::atomic<uint32_t>* pending_ = nullptr;
+  std::thread submit_th_;
+  std::thread drain_th_;
+  std::atomic<bool> stop_{false};
 };
 
 struct GpuSignalPeer {

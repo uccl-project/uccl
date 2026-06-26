@@ -12,31 +12,17 @@ namespace CCL {
 static_assert(offsetof(CmdWithId, cmd) == 0,
               "Cmd must be first field of CmdWithId for caller_id extraction");
 
-TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm)
-    : comm_(comm) {
-  if (!comm_)
+TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm) {
+  if (!comm)
     throw std::invalid_argument("TransportBackend: null communicator");
+  comm_ = comm;  // base class member
 }
 
 bool TransportBackend::supports(OpKind kind) const {
   return kind == OpKind::Put;
 }
 
-void TransportBackend::init(BufSpec bufs[3]) {
-  for (int i = 0; i < 3; ++i) {
-    if (bufs[i].ptr != nullptr && bufs[i].bytes > 0) {
-      uint32_t id = static_cast<uint32_t>(i + 1);
-      if (!comm_->reg_mr(id, bufs[i].ptr, bufs[i].bytes, true)) {
-        std::fprintf(stderr, "[tpt-be] reg_mr id=%u failed\n", id);
-      }
-      if (!comm_->reg_ipc(id, bufs[i].ptr, bufs[i].bytes, true)) {
-        std::fprintf(stderr, "[tpt-be] reg_ipc id=%u failed\n", id);
-      }
-    }
-  }
-}
-
-size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
+size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
                                  uint32_t* out_indices) {
   size_t accepted = 0;
   for (size_t i = 0; i < n; ++i) {
@@ -63,7 +49,7 @@ size_t TransportBackend::enqueue(Cmd const* cmds, size_t n,
   return accepted;
 }
 
-size_t TransportBackend::drain(uint32_t* completed, size_t max) {
+size_t TransportBackend::do_drain(uint32_t* completed, size_t max) {
   UKernel::Transport::CompletionResult results[256];
   size_t n = comm_->try_complete(results, std::min(max, (size_t)256));
   size_t out = 0;

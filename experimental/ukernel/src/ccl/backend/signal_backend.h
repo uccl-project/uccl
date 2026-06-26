@@ -18,10 +18,9 @@ class SignalBackend final : public BatchBackend {
   char const* name() const override { return "signal"; }
   bool supports(OpKind kind) const override;
 
-  void init(BufSpec bufs[3]) override;
-  size_t enqueue(Cmd const* cmds, size_t n,
-                 uint32_t* out_indices = nullptr) override;
-  size_t drain(uint32_t* completed, size_t max) override;
+  size_t do_enqueue(Cmd const* cmds, size_t n,
+                    uint32_t* out_indices = nullptr) override;
+  size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override { return 2048; }
   void release(uint32_t cmd_idx) override;
 

@@ -1,5 +1,4 @@
 #include "algo/chunk_graph.h"
-#include "backend/async_backend.h"
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "executor.h"
@@ -29,10 +28,8 @@ class MockBackend final : public BatchBackend {
   char const* name() const override { return "mock"; }
   bool supports(OpKind) const override { return true; }
 
-  void init(BufSpec[3]) override { inited_ = true; }
-
-  size_t enqueue(Cmd const* cmds, size_t n,
-                 uint32_t* out_indices = nullptr) override {
+  size_t do_enqueue(Cmd const* cmds, size_t n,
+                    uint32_t* out_indices = nullptr) override {
     std::lock_guard lock(mtx_);
     size_t accepted = 0;
     while (accepted < n && in_flight_ < capacity()) {
@@ -40,15 +37,14 @@ class MockBackend final : public BatchBackend {
       uint32_t cid =
           reinterpret_cast<CmdWithId const*>(&cmds[accepted])->caller_id;
       if (out_indices) out_indices[accepted] = cid;
-      if (auto_complete_) completed_.push_back(cid);
-      enqueued_cids_.push_back(cid);
+      completed_.push_back(cid);
       ++in_flight_;
       ++accepted;
     }
     return accepted;
   }
 
-  size_t drain(uint32_t* out, size_t max) override {
+  size_t do_drain(uint32_t* out, size_t max) override {
     std::lock_guard lock(mtx_);
     size_t n = std::min(completed_.size(), max);
     for (size_t i = 0; i < n; ++i) {
@@ -59,14 +55,7 @@ class MockBackend final : public BatchBackend {
     return n;
   }
 
-  size_t capacity() const override { return 256; }
-
-  void complete_last_n(size_t n) {
-    std::lock_guard lock(mtx_);
-    size_t start = enqueued_cids_.size() - n;
-    for (size_t i = start; i < enqueued_cids_.size(); ++i)
-      completed_.push_back(enqueued_cids_[i]);
-  }
+  size_t capacity() const override { return 4096; }
 
   size_t enqueued_count() const {
     std::lock_guard lock(mtx_);
@@ -77,144 +66,9 @@ class MockBackend final : public BatchBackend {
   mutable std::mutex mtx_;
   bool auto_complete_;
   std::vector<Cmd> enqueued_;
-  std::vector<uint32_t> enqueued_cids_;
   std::deque<uint32_t> completed_;
   size_t in_flight_ = 0;
-  bool inited_ = false;
 };
-
-// ── AsyncBackend tests ───────────────────────────────────────────────────
-
-void test_async_basic_enqueue_drain() {
-  printf("[test] async backend: basic enqueue → drain...\n");
-
-  MockBackend mock(false);  // explicit completion mode
-  AsyncBackend async(&mock, 256, 256);
-  async.start();
-
-  // Build 5 commands
-  CmdWithId cmds[5];
-  for (int i = 0; i < 5; ++i) {
-    cmds[i].cmd.kind = OpKind::Put;
-    cmds[i].cmd.bytes = 128;
-    cmds[i].cmd.src_buf = 1;
-    cmds[i].cmd.dst_buf = 2;
-    cmds[i].cmd.src_peer = ~0u;
-    cmds[i].cmd.dst_peer = ~0u;
-    cmds[i].caller_id = 100 + i;
-  }
-
-  size_t n = async.try_enqueue(cmds, 5);
-  assert(n == 5);
-
-  // Wait for submit thread to pick up, then simulate completion
-  uint32_t out[5];
-  size_t total = 0;
-  for (int retry = 0; retry < 500 && mock.enqueued_count() < 5; ++retry)
-    std::this_thread::sleep_for(std::chrono::microseconds(200));
-  assert(mock.enqueued_count() == 5);
-  mock.complete_last_n(5);
-
-  // Drain thread should now push caller_ids to done_ring
-  total = 0;
-  for (int retry = 0; retry < 1000 && total < 5; ++retry) {
-    size_t d = async.try_drain(out + total, 5 - total);
-    total += d;
-    if (total < 5) std::this_thread::sleep_for(std::chrono::microseconds(100));
-  }
-  assert(total == 5);
-
-  // Verify caller_ids match
-  for (int i = 0; i < 5; ++i) assert(out[i] >= 100 && out[i] <= 104);
-
-  assert(mock.enqueued_count() == 5);
-
-  async.stop();
-  assert(true);
-}
-
-void test_async_capacity_backpressure() {
-  printf("[test] async backend: capacity backpressure...\n");
-
-  MockBackend mock(false);
-  // cmd_ring: 4 slots → usable 3
-  AsyncBackend async(&mock, 4, 64);
-
-  CmdWithId cmds[8];
-  for (int i = 0; i < 8; ++i) {
-    cmds[i].cmd.kind = OpKind::Put;
-    cmds[i].cmd.bytes = 64;
-    cmds[i].cmd.src_buf = 1;
-    cmds[i].cmd.dst_buf = 2;
-    cmds[i].cmd.src_peer = ~0u;
-    cmds[i].cmd.dst_peer = ~0u;
-    cmds[i].caller_id = i;
-  }
-
-  // Before start, cmd_ring is empty, so we can enqueue up to capacity
-  size_t nfree = async.cmd_free();
-  assert(nfree == 3);  // 4 slots → 3 usable
-
-  size_t n = async.try_enqueue(cmds, 8);
-  assert(n == 3);  // only 3 fit
-
-  async.start();
-
-  // Wait for submit thread to drain the ring
-  for (int retry = 0; retry < 500; ++retry) {
-    if (async.cmd_free() >= 3) break;
-    std::this_thread::sleep_for(std::chrono::microseconds(200));
-  }
-  assert(async.cmd_free() >= 3);
-
-  n = async.try_enqueue(cmds + 3, 5);
-  assert(n >= 3);
-
-  async.stop();
-}
-
-void test_async_done_ring_multiple_drain() {
-  printf("[test] async backend: done_ring multiple drain batches...\n");
-
-  MockBackend mock;
-  AsyncBackend async(&mock, 512, 512);
-  async.start();
-
-  constexpr int N = 100;
-  CmdWithId cmds[N];
-  for (int i = 0; i < N; ++i) {
-    cmds[i].cmd.kind = OpKind::Put;
-    cmds[i].cmd.bytes = 8;
-    cmds[i].cmd.src_buf = 1;
-    cmds[i].cmd.dst_buf = 2;
-    cmds[i].cmd.src_peer = ~0u;
-    cmds[i].cmd.dst_peer = ~0u;
-    cmds[i].caller_id = 1000 + i;
-  }
-
-  size_t n = async.try_enqueue(cmds, N);
-  assert(n == N);
-
-  // Wait for submit thread and complete all
-  for (int retry = 0; retry < 500 && mock.enqueued_count() < N; ++retry)
-    std::this_thread::sleep_for(std::chrono::microseconds(200));
-  assert(mock.enqueued_count() == N);
-  mock.complete_last_n(N);
-
-  uint32_t out[N];
-  size_t total = 0;
-  for (int retry = 0; retry < 500 && total < N; ++retry) {
-    size_t d = async.try_drain(out + total, 16);  // drain in small batches
-    total += d;
-    if (total < N) std::this_thread::sleep_for(std::chrono::microseconds(200));
-  }
-  assert(total == N);
-
-  // All caller_ids should be in range
-  for (size_t i = 0; i < N; ++i) assert(out[i] >= 1000 && out[i] < 1000 + N);
-
-  async.stop();
-}
 
 // ── SprayExecutor integration test ───────────────────────────────────────
 
@@ -357,14 +211,6 @@ void test_executor_active_count() {
 
 int main() {
   using namespace UKernel::CCL;
-
-  printf("=== AsyncBackend Tests ===\n");
-  test_async_basic_enqueue_drain();
-  fprintf(stderr, "  PASSED\n");
-  test_async_capacity_backpressure();
-  fprintf(stderr, "  PASSED\n");
-  test_async_done_ring_multiple_drain();
-  fprintf(stderr, "  PASSED\n");
 
   printf("\n=== SprayExecutor Integration Tests ===\n");
   test_executor_allreduce_async();

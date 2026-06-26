@@ -1,4 +1,3 @@
-#include "backend/async_backend.h"
 #include "backend/backend.h"
 #include "backend/device_backend.h"
 #include "backend/transport_backend.h"
@@ -63,9 +62,22 @@ std::shared_ptr<Communicator> make_communicator(int gpu, int rank,
 
 bool setup_bidirectional_peer(std::shared_ptr<Communicator> const& comm,
                               int rank, int peer_rank) {
+  // Connect IPC first (always needed)
+  bool ipc_ok = false;
   if (rank < peer_rank)
-    return comm->connect(peer_rank) && comm->accept(peer_rank);
-  return comm->accept(peer_rank) && comm->connect(peer_rank);
+    ipc_ok = comm->connect(peer_rank, UKernel::Transport::PeerTransportKind::Ipc) &&
+             comm->accept(peer_rank, UKernel::Transport::PeerTransportKind::Ipc);
+  else
+    ipc_ok = comm->accept(peer_rank, UKernel::Transport::PeerTransportKind::Ipc) &&
+             comm->connect(peer_rank, UKernel::Transport::PeerTransportKind::Ipc);
+  // RDMA: best-effort — pre-connect so MR registration works, but don't fail if unavailable
+  if (rank < peer_rank)
+    comm->connect(peer_rank, UKernel::Transport::PeerTransportKind::Rdma) &&
+        comm->accept(peer_rank, UKernel::Transport::PeerTransportKind::Rdma);
+  else
+    comm->accept(peer_rank, UKernel::Transport::PeerTransportKind::Rdma) &&
+        comm->connect(peer_rank, UKernel::Transport::PeerTransportKind::Rdma);
+  return ipc_ok;
 }
 
 std::vector<size_t> make_size_scan() {
@@ -142,9 +154,20 @@ int main(int argc, char** argv) {
   uint32_t local_buf_id = (rank == 0) ? 0x1000 : 0x2000;
   uint32_t remote_buf_id = (rank == 0) ? 0x2000 : 0x1000;
 
+  // IPC exchange for GPU peer access (DeviceBackend resolves remote pointer via this)
   comm->reg_ipc(local_buf_id, d_local, kMaxBytes, true);
   if (!comm->wait_ipc(peer, remote_buf_id, 30000)) {
     std::fprintf(stderr, "[p2p-perf] wait_ipc failed for rank %d\n", rank);
+    return 1;
+  }
+
+  // Register buffer 1 for backends (MR + IPC). resolve_remote_buffer waits for
+  // both MR and IPC from the peer — the one-stop sync point.
+  comm->register_buffer(1, d_local, kMaxBytes);
+  if (!comm->resolve_remote_buffer(peer, 1, 30000)) {
+    std::fprintf(stderr,
+                 "[p2p-perf] resolve_remote_buffer(peer=%d,1) failed for rank %d\n",
+                 peer, rank);
     return 1;
   }
 
@@ -221,13 +244,10 @@ int main(int argc, char** argv) {
     dev_cfg.fifo_capacity = 64;  // enough for throughput batch (16)
 
     DeviceBackend dev_be(dev_cfg);
-    BufSpec bufs[3] = {
-        {d_local, kMaxBytes}, {d_remote, kMaxBytes}, {nullptr, 0}};
-    dev_be.init(bufs);
+    dev_be.set_comm(comm.get());
 
-    // Wrap with AsyncBackend (same pattern as SprayExecutor)
-    AsyncBackend async(&dev_be, 2048, 2048);
-    async.start();
+    // Start the backend with async task queue (same pattern as SprayExecutor)
+    dev_be.start(2048, 2048);
 
     for (size_t bytes : sizes) {
       // ── Latency ──
@@ -240,17 +260,17 @@ int main(int argc, char** argv) {
         cwi.cmd.kind = OpKind::Put;
         cwi.cmd.bytes = static_cast<uint32_t>(bytes);
         cwi.cmd.src_buf = 1;
-        cwi.cmd.dst_buf = 2;
+        cwi.cmd.dst_buf = 1;
         cwi.cmd.src_off = 0;
         cwi.cmd.dst_off = 0;
         cwi.cmd.src_peer = ~0u;
-        cwi.cmd.dst_peer = ~0u;
+        cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
         cwi.caller_id = static_cast<uint32_t>(iter);
 
         auto t0 = std::chrono::steady_clock::now();
-        while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
+        while (dev_be.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
         uint32_t done = ~0u;
-        while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
+        while (dev_be.try_drain(&done, 1) == 0) std::this_thread::yield();
         auto t1 = std::chrono::steady_clock::now();
         latencies.push_back(elapsed_us(t0, t1));
       }
@@ -270,18 +290,18 @@ int main(int argc, char** argv) {
           cwis[b].cmd.kind = OpKind::Put;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
           cwis[b].cmd.src_buf = 1;
-          cwis[b].cmd.dst_buf = 2;
+          cwis[b].cmd.dst_buf = 1;
           cwis[b].cmd.src_off = 0;
           cwis[b].cmd.dst_off = 0;
           cwis[b].cmd.src_peer = ~0u;
-          cwis[b].cmd.dst_peer = ~0u;
+          cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
           cwis[b].caller_id = static_cast<uint32_t>(b);
         }
 
         auto t0 = std::chrono::steady_clock::now();
         size_t enqueued = 0;
         while (enqueued < kBatchSize) {
-          size_t n = async.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
+          size_t n = dev_be.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
           enqueued += n;
           if (enqueued < kBatchSize) std::this_thread::yield();
         }
@@ -289,7 +309,7 @@ int main(int argc, char** argv) {
         size_t drained = 0;
         uint32_t done_buf[kBatchSize];
         while (drained < kBatchSize) {
-          size_t n = async.try_drain(done_buf + drained, kBatchSize - drained);
+          size_t n = dev_be.try_drain(done_buf + drained, kBatchSize - drained);
           drained += n;
           if (drained < kBatchSize) std::this_thread::yield();
         }
@@ -308,7 +328,7 @@ int main(int argc, char** argv) {
       results.push_back(
           {"device_backend", blocks_per_worker, bytes, avg_lat, avg_tp});
     }
-    async.stop();
+    dev_be.stop();
     std::printf("[p2p-perf]   DeviceBackend blocks_per_worker=%u done.\n",
                 blocks_per_worker);
   }
@@ -362,95 +382,10 @@ int main(int argc, char** argv) {
 
   gpuStreamDestroy(stream);
 
-  // ── 9. Benchmark comm->put (IPC adapter direct path) ──────────────────
-  comm->reg_mr(local_buf_id, d_local, kMaxBytes, true);
-  comm->reg_mr(remote_buf_id, d_local, kMaxBytes, true);
-  // Re-resolve remote buffer to ensure MR is fresh
-  comm->resolve_remote_buffer(peer, remote_buf_id);
-
-  std::printf("[p2p-perf] Starting comm->put benchmarks...\n");
-
-  for (size_t bytes : sizes) {
-    // Latency: blocking put
-    constexpr int kLatencyIters = 5;
-    std::vector<double> latencies;
-    for (int iter = 0; iter < kLatencyIters; ++iter) {
-      auto t0 = std::chrono::steady_clock::now();
-      unsigned rid =
-          comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0, bytes);
-      if (!rid) {
-        std::fprintf(stderr,
-                     "[p2p-perf] send_put_async failed for latency iter\n");
-        std::abort();
-      }
-      while (true) {
-        CompletionResult results[16];
-        size_t n = comm->try_complete(results, 16);
-        bool found = false;
-        for (size_t i = 0; i < n; ++i)
-          if (results[i].rid == rid) {
-            found = true;
-            break;
-          }
-        if (found) break;
-        std::this_thread::yield();
-      }
-      auto t1 = std::chrono::steady_clock::now();
-      latencies.push_back(elapsed_us(t0, t1));
-    }
-    double avg_lat = 0;
-    for (double l : latencies) avg_lat += l;
-    avg_lat /= latencies.size();
-
-    // Throughput: async send_put_async + try_complete
-    constexpr int kBatchSize = 16;
-    constexpr int kThroughputIters = 3;
-    std::vector<double> throughputs;
-    for (int iter = 0; iter < kThroughputIters; ++iter) {
-      auto t0 = std::chrono::steady_clock::now();
-      unsigned rids[kBatchSize];
-      for (int b = 0; b < kBatchSize; ++b)
-        rids[b] = comm->send_put_async(peer, local_buf_id, 0, remote_buf_id, 0,
-                                       bytes);
-      size_t drained = 0;
-      while (drained < kBatchSize) {
-        CompletionResult done[16];
-        size_t n = comm->try_complete(done, 16);
-        drained += n;
-        if (drained < kBatchSize) std::this_thread::yield();
-      }
-      auto t1 = std::chrono::steady_clock::now();
-      double total_bytes = static_cast<double>(bytes) * kBatchSize;
-      double time_s = elapsed_us(t0, t1) / 1e6;
-      double gbps = (total_bytes / time_s) / 1e9;
-      throughputs.push_back(gbps);
-    }
-    double avg_tp = 0;
-    for (double t : throughputs) avg_tp += t;
-    avg_tp /= throughputs.size();
-
-    results.push_back({"comm_put", 0, bytes, avg_lat, avg_tp});
-  }
-  std::printf("[p2p-perf] comm->put benchmarks done.\n");
-
-  // ── 9b. Benchmark TransportBackend (AsyncBackend wrapper) ─────────
-  // Uses OpKind::Put to push from local buf1 (d_local) to peer buf1
-  // (peer d_local), running through AsyncBackend on top of TransportBackend.
+  // ── 9. Benchmark TransportBackend (IPC) ────────────────
   {
     TransportBackend tpt_be(comm.get());
-    // Only register local buffers — remote (IPC-mapped) pointers cannot be
-    // re-wrapped with gpuIpcGetMemHandle.  Both sides register buf1 = d_local;
-    // we then Put from local buf1 to peer buf1 (registered by the peer).
-    BufSpec bufs[3] = {
-        {d_local, kMaxBytes}, {nullptr, 0}, {nullptr, 0}};
-    tpt_be.init(bufs);
-    if (!comm->resolve_remote_buffer(peer, /*buffer_id=*/1)) {
-      std::fprintf(stderr, "[p2p-perf] resolve_remote_buffer(peer=%d,1) failed\n",
-                   peer);
-      return 1;
-    }
-    AsyncBackend async(&tpt_be, 2048, 2048);
-    async.start();
+    tpt_be.start(2048, 2048);
     std::printf("[p2p-perf] TransportBackend init done, rank=%d\n", rank);
 
     if (rank == 0) {
@@ -469,13 +404,13 @@ int main(int argc, char** argv) {
           cwi.cmd.src_off = 0; cwi.cmd.dst_off = 0;
           cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
           cwi.cmd.src_peer = static_cast<uint32_t>(rank);
-          cwi.cmd.transport = 0;  // auto
+          cwi.cmd.transport = 1;  // PeerTransportKind::Ipc
           cwi.caller_id = static_cast<uint32_t>(iter);
 
           auto t0 = std::chrono::steady_clock::now();
-          while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
+          while (tpt_be.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
           uint32_t done = ~0u;
-          while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
+          while (tpt_be.try_drain(&done, 1) == 0) std::this_thread::yield();
           auto t1 = std::chrono::steady_clock::now();
           latencies.push_back(elapsed_us(t0, t1));
         }
@@ -499,14 +434,14 @@ int main(int argc, char** argv) {
             cwis[b].cmd.src_off = 0; cwis[b].cmd.dst_off = 0;
             cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
             cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
-            cwis[b].cmd.transport = 0;
+            cwis[b].cmd.transport = 1;  // PeerTransportKind::Ipc
             cwis[b].caller_id = static_cast<uint32_t>(b);
           }
 
           auto t0 = std::chrono::steady_clock::now();
           size_t enqueued = 0;
           while (enqueued < kBatchSize) {
-            size_t n = async.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
+            size_t n = tpt_be.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
             enqueued += n;
             if (enqueued < kBatchSize) std::this_thread::yield();
           }
@@ -514,7 +449,7 @@ int main(int argc, char** argv) {
           size_t drained = 0;
           uint32_t done_buf[kBatchSize];
           while (drained < kBatchSize) {
-            size_t n = async.try_drain(done_buf + drained, kBatchSize - drained);
+            size_t n = tpt_be.try_drain(done_buf + drained, kBatchSize - drained);
             drained += n;
             if (drained < kBatchSize) std::this_thread::yield();
           }
@@ -535,72 +470,18 @@ int main(int argc, char** argv) {
       }
       std::printf("[p2p-perf] TransportBackend benchmarks done.\n");
     }
-    async.stop();
+    tpt_be.stop();
   }
 
-  // ── 9c. Benchmark TransportBackend (RDMA transport) ────────────────
-  // Same as 9b, but forces PeerTransportKind::Rdma so every Put goes
-  // through the RDMA adapter instead of the default (auto / IPC).
-  // Pre-connect here, just before the RDMA section: the QP timeout is
-  // only ~67 ms, so a QP created at the top of the test would be dead
-  // by the time we reach this point.
-  if (!comm->connect(peer, UKernel::Transport::PeerTransportKind::Rdma) ||
-      !comm->accept(peer, UKernel::Transport::PeerTransportKind::Rdma)) {
-    std::fprintf(stderr, "[p2p-perf] RDMA re-connect failed\n");
-    return 1;
-  }
+  // ── 9a. Benchmark TransportBackend (RDMA) ──────────────
+  // RDMA path was pre-connected in setup_bidirectional_peer so MR is
+  // already registered.  Uses PeerTransportKind::Rdma on every Put.
   {
     TransportBackend tpt_be(comm.get());
-    BufSpec bufs[3] = {
-        {d_local, kMaxBytes}, {nullptr, 0}, {nullptr, 0}};
-    tpt_be.init(bufs);
-    if (!comm->resolve_remote_buffer(peer, /*buffer_id=*/1)) {
-      std::fprintf(stderr,
-                   "[p2p-perf] resolve_remote_buffer(peer=%d,1) failed (RDMA)\n",
-                   peer);
-      return 1;
-    }
-    AsyncBackend async(&tpt_be, 2048, 2048);
-    async.start();
+    tpt_be.start(2048, 2048);
     std::printf("[p2p-perf] TransportBackend (RDMA) init done, rank=%d\n", rank);
 
-    // Quick probe: verify the RDMA data path works before running the full
-    // size scan.  ibv_reg_mr on a 1 GB GPU allocation may fail on some
-    // systems; this check pinpoints whether the issue is registration or
-    // something downstream.
-    // Mirror bench_transport's exact RDMA pattern: dedicated buffer ids,
-    // register AFTER connect, skip reg_ipc.
-    fprintf(stderr, "[p2p-perf] bench-probe enter\n"); fflush(stderr);
-    constexpr uint32_t kProbeSendBufId = 1000000;
-    constexpr uint32_t kProbeRecvBufId = 2000000;
-    constexpr size_t kProbeSize = 1024;
-
-    comm->reg_mr(kProbeSendBufId, d_local, kProbeSize, false);
-    comm->reg_mr(kProbeRecvBufId, d_local, kProbeSize, true);
-    // For RDMA we only need wait_mr; resolve_remote_buffer would also
-    // wait_ipc which would hang (we intentionally skipped reg_ipc).
-    if (!comm->wait_mr(peer, kProbeRecvBufId)) {
-      std::fprintf(stderr, "[p2p-perf] wait_mr probe failed\n");
-    }
-
-    bool rdma_ok = false;
     if (rank == 0) {
-      unsigned probe_rid =
-          comm->send_put_async(peer, kProbeSendBufId, 0, kProbeRecvBufId, 0,
-                               kProbeSize, UKernel::Transport::PeerTransportKind::Rdma);
-      rdma_ok = (probe_rid != 0);
-      fprintf(stderr, "[p2p-perf] RDMA probe: %s\n", rdma_ok ? "OK" : "FAIL");
-      fflush(stderr);
-      if (rdma_ok) {
-        while (true) {
-          CompletionResult r[1];
-          if (comm->try_complete(r, 1) > 0 && r[0].rid == probe_rid) break;
-          std::this_thread::yield();
-        }
-      }
-    }
-
-    if (rank == 0 && rdma_ok) {
       for (size_t bytes : sizes) {
         constexpr int kLatencyIters = 5;
         std::vector<double> latencies;
@@ -619,9 +500,9 @@ int main(int argc, char** argv) {
           cwi.caller_id = static_cast<uint32_t>(iter);
 
           auto t0 = std::chrono::steady_clock::now();
-          while (async.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
+          while (tpt_be.try_enqueue(&cwi, 1) == 0) std::this_thread::yield();
           uint32_t done = ~0u;
-          while (async.try_drain(&done, 1) == 0) std::this_thread::yield();
+          while (tpt_be.try_drain(&done, 1) == 0) std::this_thread::yield();
           auto t1 = std::chrono::steady_clock::now();
           latencies.push_back(elapsed_us(t0, t1));
         }
@@ -652,7 +533,7 @@ int main(int argc, char** argv) {
           size_t enqueued = 0;
           while (enqueued < kBatchSize) {
             size_t n =
-                async.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
+                tpt_be.try_enqueue(cwis + enqueued, kBatchSize - enqueued);
             enqueued += n;
             if (enqueued < kBatchSize) std::this_thread::yield();
           }
@@ -661,7 +542,7 @@ int main(int argc, char** argv) {
           uint32_t done_buf[kBatchSize];
           while (drained < kBatchSize) {
             size_t n =
-                async.try_drain(done_buf + drained, kBatchSize - drained);
+                tpt_be.try_drain(done_buf + drained, kBatchSize - drained);
             drained += n;
             if (drained < kBatchSize) std::this_thread::yield();
           }
@@ -682,7 +563,7 @@ int main(int argc, char** argv) {
       }
       std::printf("[p2p-perf] TransportBackend (RDMA) benchmarks done.\n");
     }
-    async.stop();
+    tpt_be.stop();
   }
 
   // ── 10. Output tables ─────────────────────────────────────────────────
@@ -718,11 +599,9 @@ int main(int argc, char** argv) {
   std::vector<std::string> names;
   for (auto b : blocks_seen) names.push_back("b" + std::to_string(b));
   names.push_back("gpuMemcpyPeer");
-  names.push_back("comm_put");
   names.push_back("transport_backend");
   names.push_back("transport_backend_rdma");
   std::vector<uint32_t> tb_values = blocks_seen;
-  tb_values.push_back(0);
   tb_values.push_back(0);
   tb_values.push_back(0);
   tb_values.push_back(0);
@@ -743,12 +622,10 @@ int main(int argc, char** argv) {
         }
     } else if (r.method == "gpuMemcpyPeerAsync") {
       mi = blocks_seen.size();
-    } else if (r.method == "comm_put") {
-      mi = blocks_seen.size() + 1;
     } else if (r.method == "transport_backend") {
-      mi = blocks_seen.size() + 2;
+      mi = blocks_seen.size() + 1;
     } else {
-      mi = blocks_seen.size() + 3;  // transport_backend_rdma
+      mi = blocks_seen.size() + 2;  // transport_backend_rdma
     }
     map[{r.bytes, mi}] = {r.latency_us, r.throughput_gbps};
   }

@@ -49,15 +49,23 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   }
   dev_be->set_signal_buffers(gpu_comp);
 
-  auto ex = std::make_unique<SprayExecutor>(dev_be.get(), tpt_be.get(), sig_be.get());
+  auto ex = std::make_unique<SprayExecutor>(dev_be.get(), tpt_be.get(),
+                                            sig_be.get(), config.world_size);
   ex->owned_device_ = std::move(dev_be);
   ex->owned_transport_ = std::move(tpt_be);
   ex->owned_signal_ = std::move(sig_be);
   ex->owned_comm_ = std::move(comm);
 
   ex->device_be_->set_comm(ex->owned_comm_.get());
+  ex->device_be_->start(2048, 2048);
   ex->tpt_be_->set_comm(ex->owned_comm_.get());
+  ex->tpt_be_->start(2048, 2048);
   ex->signal_be_->set_comm(ex->owned_comm_.get());
+
+  ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
+                            void* ptr, size_t len) {
+    comm->register_buffer(id, ptr, len);
+  };
 
   return ex;
 }

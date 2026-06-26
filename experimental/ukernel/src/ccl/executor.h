@@ -35,28 +35,32 @@ inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 
 // ── Op sprayer with async jring backends ────────────────────────────────
 
-class AsyncBackend;
-
 struct SprayRun {
-  CollectiveOpStatus status = CollectiveOpStatus::Queued;
-  TiledResult tiled;
-  void* input = nullptr;
-  void* output = nullptr;
-  void* scratch = nullptr;
-  std::string error;
-
-  std::vector<bool> done;
-  std::vector<bool> submitted;  // op already enqueued to cmd_ring
-  std::vector<uint32_t> ready;
+  // ── Hot path: accessed every enqueue/drain cycle ──
+  std::atomic<CollectiveOpStatus> status{CollectiveOpStatus::Queued};
   std::atomic<size_t> done_count{0};
   uint32_t next_layer = 0;
-
-  // Mutex for done[] / map[] concurrent access between enqueue & drain threads
   std::mutex mtx;
-
-  // cmd_ring batch bookkeeping — per-cycle
+  std::vector<uint8_t> done;
+  std::vector<uint8_t> submitted;
+  std::vector<uint32_t> ready;
   std::vector<CmdWithId> dev_cmds;
   std::vector<CmdWithId> tpt_cmds;
+
+  // ── Countdown-latch dependency tracking ──
+  std::vector<uint32_t> indegree;                    // remaining unsatisfied deps
+  std::vector<std::vector<uint32_t>> successors;     // reverse dep map: op → ops that depend on it
+
+  // ── Read-only after construction ──
+  TiledResult tiled;
+
+  // ── Buffer IDs (dedup: same ptr+size = same ID) ──
+  uint32_t input_buf_id = 0;
+  uint32_t output_buf_id = 0;
+  uint32_t scratch_buf_id = 0;
+
+  // ── Cold: rarely accessed ──
+  std::string error;
 };
 
 struct SprayExecutorConfig {
@@ -75,12 +79,14 @@ struct SprayExecutorConfig {
 struct CmdRunMapping {
   SprayRun* run;
   uint32_t op_idx;
+  uint8_t transport = 0;
+  uint32_t caller_id = 0;
 };
 
 // Per-peer transport metrics for dynamic load balancing
 struct PathMetrics {
   std::atomic<uint32_t> inflight{0};
-  std::atomic<double> latency_us{100.0};
+  std::atomic<uint64_t> latency_ns{100000};  // 100 us default
 };
 
 struct PeerMetrics {
@@ -93,7 +99,7 @@ class SprayExecutor {
   static std::unique_ptr<SprayExecutor> create(
       SprayExecutorConfig const& config);
   SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
-                BatchBackend* signal_be = nullptr);
+                BatchBackend* signal_be = nullptr, int world_size = 0);
   ~SprayExecutor();
 
   SprayExecutor(SprayExecutor const&) = delete;
@@ -117,22 +123,52 @@ class SprayExecutor {
   SprayRun* get(CollectiveOpHandle h);
 
   void enqueue_loop();
-  void drain_loop(AsyncBackend* async_be);
+  void drain_loop(BatchBackend* be);
 
   // ── Phase helpers (under SprayRun::mtx) ──
   void collect_ready(SprayRun& run);
-  void enqueue_to_ring(SprayRun& run, AsyncBackend* async_be);
+  void enqueue_to_ring(SprayRun& run);
 
   Transport::PeerTransportKind pick_transport(int peer);
   void drain_tpt_loop();
   void drain_signal_loop();
 
+  template <typename F>
+  void drain_batch(uint32_t* caller_buf, size_t n, F&& cb) {
+    for (size_t i = 0; i < n; ++i) {
+      auto& m = cmd_to_run_[caller_buf[i] & (kMaxCmdIdx - 1)];
+      if (!m.run || m.caller_id != caller_buf[i]) continue;
+      std::lock_guard rlock(m.run->mtx);
+      if (!m.run->done[m.op_idx]) {
+        m.run->done[m.op_idx] = 1;
+        m.run->done_count.fetch_add(1, std::memory_order_release);
+        cb(m, caller_buf[i]);
+      }
+    }
+    // Mark completed runs — held outside rlock to avoid AB/BA with enqueue_loop
+    std::lock_guard lock(runs_mutex_);
+    for (auto& [h, run] : runs_) {
+      if (run->status.load(std::memory_order_acquire) != CollectiveOpStatus::Running)
+        continue;
+      size_t dc = run->done_count.load(std::memory_order_acquire);
+      if (dc >= run->tiled.ops.size())
+        run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
+    }
+  }
+
+  // ── Tensor → buffer ID mapping (dedup: same ptr = same ID) ──
+  std::unordered_map<uintptr_t, uint32_t> tensor_to_buf_id_;
+  uint32_t next_buf_id_ = 1;
+  uint32_t get_or_register_buf(void* ptr, size_t bytes);
+
+  // ── Buffer registration indirection (set by factory, avoids link deps) ──
+  void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
+                           size_t) = nullptr;
+
   // ── Owned resources ──
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
   BatchBackend* signal_be_ = nullptr;
-  std::unique_ptr<AsyncBackend> async_dev_;
-  std::unique_ptr<AsyncBackend> async_tpt_;
   std::unique_ptr<BatchBackend> owned_device_;
   std::unique_ptr<BatchBackend> owned_transport_;
   std::unique_ptr<BatchBackend> owned_signal_;
@@ -150,13 +186,13 @@ class SprayExecutor {
   CmdRunMapping cmd_to_run_[kMaxCmdIdx];
 
   // ── Transport LB state ──
-  std::unordered_map<int, PeerMetrics> tpt_metrics_;
-  std::unordered_map<uint32_t, uint8_t> cmd_transport_;
+  int world_size_ = 0;
+  std::unique_ptr<PeerMetrics[]> tpt_metrics_;
 
   // ── Global cmd_idx counter + run map ──
   uint32_t next_cmd_idx_ = 0;
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
-  std::mutex runs_mutex_;
+  mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
 };
 
