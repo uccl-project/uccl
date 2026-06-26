@@ -98,7 +98,7 @@ class UcclProxy {
   int local_rank_;
   int device_index_;
   int nic_local_rank_;
-  void* atomic_buffer_ptr_ = nullptr;
+  void* atomic_buffer_ptr_;
   bool atomic_buffer_is_host_allocated_ =
       false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;

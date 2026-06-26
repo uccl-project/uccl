@@ -2,7 +2,6 @@
 #define PROXY_HPP
 
 #include "common.hpp"
-#include "cxi_transport.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
@@ -10,7 +9,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -106,19 +104,11 @@ class Proxy {
   void init_common();
   void init_sender();
   void init_remote();
-  bool use_cxi_transport() const;
-  bool should_connect_peer(int peer) const;
-  void exchange_peer_connection_info(int num_ranks);
 
   void notify_gpu_completion(uint64_t& my_tail);
   void post_gpu_command(uint64_t& my_tail, size_t& seen);
   void post_gpu_commands_mixed(std::vector<uint64_t> const& wrs_to_post,
                                std::vector<TransferCmd> const& cmds_to_post);
-  void post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
-                         std::vector<TransferCmd> const& cmds_to_post);
-  void poll_cxi_completions();
-  CxiTransport* cxi_transport_for_rank(int rank) const;
-  uint64_t load_cxi_barrier_word_sum(size_t slot) const;
   void post_barrier_msg(int dst_rank, bool ack, uint64_t seq);
   void send_barrier(uint64_t wr);
   void barrier_check();
@@ -151,11 +141,7 @@ class Proxy {
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
   std::vector<ProxyCtx*> ctx_by_tag_;
-  void* atomic_buffer_ptr_ = nullptr;
-  bool use_cxi_transport_ = false;
-  CxiTransport* cxi_transport_ = nullptr;
-  std::vector<std::unique_ptr<CxiTransport>> cxi_transports_by_rank_;
-  size_t cxi_outstanding_ops_ = 0;
+  void* atomic_buffer_ptr_;
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 

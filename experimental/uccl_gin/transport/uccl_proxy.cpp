@@ -5,7 +5,6 @@
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
-#include <exception>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -65,14 +64,9 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   node_idx_ = node_idx;
 
   if (thread_idx == 0) {
-#ifdef USE_LIBFABRIC_CXI
-    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
-    atomic_buffer_is_host_allocated_ = false;
-#elif defined(USE_GRACE_HOPPER)
+#ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
-    atomic_buffer_is_host_allocated_ =
-        false;  // Uses unified memory when we are in Grace hopper (so Alps
-                // clariden will use this)
+    atomic_buffer_is_host_allocated_ = false;
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
@@ -107,7 +101,7 @@ UcclProxy::~UcclProxy() {
   }
 
   if (thread_idx_ == 0 && atomic_buffer_ptr_) {
-#if defined(USE_LIBFABRIC_CXI) || defined(USE_GRACE_HOPPER)
+#if defined(USE_GRACE_HOPPER)
     cudaFree(atomic_buffer_ptr_);
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipFree(atomic_buffer_ptr_);
@@ -169,39 +163,26 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
-    try {
-      if (is_intranode_) {
-        std::printf("UcclProxy: no peer IP set, running in local mode\n");
+    if (is_intranode_) {
+      std::printf("UcclProxy: no peer IP set, running in local mode\n");
+      proxy_->run_local();
+      return;
+    }
+    switch (mode_) {
+      case Mode::Sender:
+        proxy_->run_sender();
+        break;
+      case Mode::Remote:
+        proxy_->run_remote();
+        break;
+      case Mode::Local:
         proxy_->run_local();
-        return;
-      }
-      switch (mode_) {
-        case Mode::Sender:
-          proxy_->run_sender();
-          break;
-        case Mode::Remote:
-          proxy_->run_remote();
-          break;
-        case Mode::Local:
-          proxy_->run_local();
-          break;
-        case Mode::Dual:
-          proxy_->run_dual();
-          break;
-        default:
-          break;
-      }
-    } catch (std::exception const& e) {
-      std::fprintf(stderr, "UcclProxy thread %d failed with exception: %s\n",
-                   thread_idx_, e.what());
-      std::fflush(stderr);
-      std::terminate();
-    } catch (...) {
-      std::fprintf(stderr,
-                   "UcclProxy thread %d failed with unknown exception\n",
-                   thread_idx_);
-      std::fflush(stderr);
-      std::terminate();
+        break;
+      case Mode::Dual:
+        proxy_->run_dual();
+        break;
+      default:
+        break;
     }
   });
 }
