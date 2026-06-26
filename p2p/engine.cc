@@ -1342,9 +1342,16 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  // Open the remote IPC memory handle. On CNRT the handle must be opened from
+  // the owner GPU's context, and cross-GPU copies go through
+  // gpuMemcpyPeerAsync.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  int ipc_dev = (!is_host && info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+#else
+  int ipc_dev = local_gpu_idx_;
+#endif
   void* raw_dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1353,7 +1360,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& dst_streams = ipc_streams_[local_gpu_idx_];
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[ipc_dev];
   int num_streams =
       std::min(dst_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1367,8 +1374,19 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+    if (!is_host && ipc_dev != local_gpu_idx_) {
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst_ptr, ipc_dev, chunk_data,
+                                      local_gpu_idx_, copy_size,
+                                      dst_streams[i]));
+    } else {
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                  memcpy_kind, dst_streams[i]));
+    }
+#else
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
                                 memcpy_kind, dst_streams[i]));
+#endif
   }
 
   // Wait for all streams to complete
@@ -1401,9 +1419,14 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  // Open the remote IPC memory handle from the owner GPU's context on CNRT.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  int ipc_dev = (!is_host && info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+#else
+  int ipc_dev = local_gpu_idx_;
+#endif
   void* raw_src_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1412,7 +1435,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& src_streams = ipc_streams_[local_gpu_idx_];
+  std::vector<gpuStream_t>& src_streams = ipc_streams_[ipc_dev];
   int num_streams =
       std::min(src_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1426,8 +1449,18 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+    if (!is_host && ipc_dev != local_gpu_idx_) {
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_data, local_gpu_idx_, chunk_src_ptr,
+                                      ipc_dev, copy_size, src_streams[i]));
+    } else {
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
+                                  memcpy_kind, src_streams[i]));
+    }
+#else
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
                                 memcpy_kind, src_streams[i]));
+#endif
   }
 
   // Wait for all streams to complete
@@ -1460,8 +1493,16 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
+  // On CNRT open the handles from the owner GPU's context so peer copies work.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  bool first_is_dev = num_iovs > 0 && info_v[0].gpu_idx >= 0 &&
+                      uccl::get_dev_idx(const_cast<void*>(data_v[0])) != -1;
+  int ipc_dev_w = first_is_dev ? info_v[0].gpu_idx : local_gpu_idx_;
+#else
+  int ipc_dev_w = local_gpu_idx_;
+#endif
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
+  std::vector<gpuStream_t>& streams = ipc_streams_[ipc_dev_w];
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1488,8 +1529,18 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+      if (!is_host && ipc_dev_w != local_gpu_idx_) {
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, ipc_dev_w, chunk_src,
+                                        local_gpu_idx_, copy_size, streams[i]));
+      } else {
+        GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
+                                    memcpy_kind, streams[i]));
+      }
+#else
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
+#endif
     }
   }
 
@@ -1522,8 +1573,16 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
+  // On CNRT open the handles from the owner GPU's context so peer copies work.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  bool first_is_dev_r = num_iovs > 0 && info_v[0].gpu_idx >= 0 &&
+                        uccl::get_dev_idx(data_v[0]) != -1;
+  int ipc_dev_r = first_is_dev_r ? info_v[0].gpu_idx : local_gpu_idx_;
+#else
+  int ipc_dev_r = local_gpu_idx_;
+#endif
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
+  std::vector<gpuStream_t>& streams = ipc_streams_[ipc_dev_r];
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1550,8 +1609,18 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+      if (!is_host && ipc_dev_r != local_gpu_idx_) {
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, local_gpu_idx_, chunk_src,
+                                        ipc_dev_r, copy_size, streams[i]));
+      } else {
+        GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
+                                    memcpy_kind, streams[i]));
+      }
+#else
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
+#endif
     }
   }
 
@@ -1613,8 +1682,18 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     void* chunk_dst = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+    if (!is_host && target_gpu != local_gpu_idx_) {
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, target_gpu, chunk_data,
+                                      local_gpu_idx_, copy_size, streams[i]));
+    } else {
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size, memcpy_kind,
+                                  streams[i]));
+    }
+#else
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size, memcpy_kind,
                                 streams[i]));
+#endif
     GPU_RT_CHECK(
         gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
@@ -1677,8 +1756,18 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     void* chunk_data = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+    if (!is_host && target_gpu != local_gpu_idx_) {
+      GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_data, local_gpu_idx_, chunk_src,
+                                      target_gpu, copy_size, streams[i]));
+    } else {
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size, memcpy_kind,
+                                  streams[i]));
+    }
+#else
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size, memcpy_kind,
                                 streams[i]));
+#endif
     GPU_RT_CHECK(
         gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
@@ -1756,8 +1845,18 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+      if (!is_host && target_gpu != local_gpu_idx_) {
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, target_gpu, chunk_src,
+                                        local_gpu_idx_, copy_size, streams[i]));
+      } else {
+        GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
+                                    memcpy_kind, streams[i]));
+      }
+#else
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
+#endif
       gpuEvent_t ev;
       GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
       GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
@@ -1836,8 +1935,18 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+      if (!is_host && target_gpu != local_gpu_idx_) {
+        GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, local_gpu_idx_, chunk_src,
+                                        target_gpu, copy_size, streams[i]));
+      } else {
+        GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
+                                    memcpy_kind, streams[i]));
+      }
+#else
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
+#endif
       gpuEvent_t ev;
       GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
       GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
@@ -1873,6 +1982,16 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   transfer_info.size = len;
   transfer_info.operation = 1;  // response
 
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  // CNRT requires the exact allocation base, not a mask-aligned address.
+  void* base_ptr = nullptr;
+  size_t base_sz = 0;
+  GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr));
+  transfer_info.offset =
+      reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(base_ptr);
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle, base_ptr));
+  transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
+#else
   // Calculate aligned address and offset
   auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
   auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
@@ -1880,6 +1999,7 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
 
   GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
                                   reinterpret_cast<void*>(addr_aligned)));
+#endif
 
   // Copy the transfer info to output buffer
   std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
@@ -1912,6 +2032,16 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
     transfer_info.size = len_v[i];
     transfer_info.operation = 1;  // response
 
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+    // CNRT requires the exact allocation base, not a mask-aligned address.
+    void* base_ptr = nullptr;
+    size_t base_sz = 0;
+    GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr_v[i]));
+    transfer_info.offset = reinterpret_cast<uintptr_t>(addr_v[i]) -
+                           reinterpret_cast<uintptr_t>(base_ptr);
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle, base_ptr));
+    transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
+#else
     // Calculate aligned address and offset
     auto addr_aligned =
         reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
@@ -1920,6 +2050,7 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 
     GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
                                     reinterpret_cast<void*>(addr_aligned)));
+#endif
 
     // Copy the transfer info to output buffer
     std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));

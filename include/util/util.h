@@ -1182,7 +1182,14 @@ inline void checkMemoryLocation(void* ptr) {
 #endif
 
 inline int get_dev_idx(void* ptr) {
-#ifndef __HIP_PLATFORM_AMD__
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  cnrtPointerAttributes_t attributes;
+  if (cnrtPointerGetAttributes(&attributes, ptr) == cnrtSuccess &&
+      attributes.type == cnrtMemTypeDevice) {
+    return attributes.device;
+  }
+  return -1;
+#elif !defined(__HIP_PLATFORM_AMD__)
   cudaPointerAttributes attributes;
   cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
   if (err == cudaSuccess) {
@@ -1473,7 +1480,11 @@ static inline std::vector<fs::path> get_gpu_cards() {
       if (vf >> vs) {
         // vs may be "0x10de" or "0x1002"
         uint32_t vendor = std::stoul(vs, nullptr, 0);
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+        if (vendor != 0xcabc) ok = false;  // Cambricon MLU vendor id
+#else
         if (!(vendor == 0x10de || vendor == 0x1002)) ok = false;
+#endif
       }
     } catch (...) {
       // If vendor check fails due to restricted sysfs, keep going.
@@ -1679,7 +1690,19 @@ static inline std::string sanitize_bdf(std::string const& bdf) {
 static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
   std::vector<std::string> all_bdfs;
 
-#ifndef __HIP_PLATFORM_AMD__
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  // Cambricon: enumerate every visible MLU's BDF via CNRT.
+  int mlu_count = 0;
+  if (gpuGetDeviceCount(&mlu_count) == gpuSuccess) {
+    char bdf[64];
+    for (int i = 0; i < mlu_count; ++i) {
+      if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+        all_bdfs.push_back(normalize_pci_bus_id(bdf));
+    }
+  }
+#endif
+
+#if !defined(__CAMBRICON_PLATFORM_MLU__) && !defined(__HIP_PLATFORM_AMD__)
   // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
   fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
   if (fs::exists(nvidia_gpus)) {
