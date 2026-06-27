@@ -153,6 +153,42 @@ __device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
 }  // namespace amd
 #endif
 
+// Software grid barrier for CUDA (non-SM90) path.
+// Mirrors amd::grid_sync_then_zero: last arriver clears the counter so the
+// barrier is reusable across iterations without an extra clean kernel.
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
+__device__ __forceinline__ void cuda_grid_barrier(int* bar_ptr,
+                                                  int num_blocks) {
+  // Ensure all threads in this block have completed their prior memory
+  // operations before thread 0 signals arrival on behalf of the block.
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    // Release fence: ensure all prior writes (e.g. packed_recv_count clean)
+    // are visible to other blocks before we signal arrival.
+    __threadfence();
+
+    unsigned int val = atomicAdd(reinterpret_cast<unsigned int*>(bar_ptr), 1u);
+    if (val == static_cast<unsigned int>(num_blocks - 1)) {
+      // Last arriver: all blocks have fenced their writes. Reset counter.
+      // Use release semantics so the store of 0 is visible after all prior
+      // writes from this (last) block.
+      atomicExch(reinterpret_cast<unsigned int*>(bar_ptr), 0u);
+    } else {
+      // Spin until last arriver resets counter to 0.
+      while (*(unsigned int volatile*)bar_ptr != 0u)
+        ;
+    }
+
+    // Acquire fence: ensure we see all writes from all blocks that arrived
+    // before us (transitively through the atomic total order).
+    __threadfence();
+  }
+  // Broadcast barrier completion from thread 0 to all threads in the block
+  // before any thread proceeds past the barrier.
+  __syncthreads();
+}
+#endif
+
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
