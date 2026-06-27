@@ -1622,8 +1622,7 @@ class Buffer {
       CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // Sync NVSHMEM handles and allocate memory
-    // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr.
+    // Reset the local RDMA buffer and map peer RDMA IPC handles.
     if (num_rdma_bytes > 0) {
       // TODO(MaoZiming): this needs to be allocated by proxy.
       if (!rdma_buffer_ptr) {
