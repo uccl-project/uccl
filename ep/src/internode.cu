@@ -16,7 +16,7 @@ namespace internode {
 struct SourceMeta {
   int src_rdma_rank, is_token_in_nvl_rank_bits;
 
-  EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS == 8,
+  EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS <= 8,
                    "Invalid number of maximum NVL peers");
 
   __forceinline__ SourceMeta() = default;
@@ -38,6 +38,16 @@ struct SourceMeta {
 
 EP_STATIC_ASSERT(sizeof(SourceMeta) % sizeof(int) == 0,
                  "Invalid size of `SourceMeta`");
+
+__device__ __forceinline__ uint64_t
+pack_is_token_in_nvl_ranks(bool const* values) {
+  uint64_t packed = 0;
+#pragma unroll
+  for (int i = 0; i < NUM_MAX_NVL_PEERS; ++i) {
+    packed |= static_cast<uint64_t>(values[i]) << (i * 8);
+  }
+  return packed;
+}
 
 int get_source_meta_bytes() { return sizeof(SourceMeta); }
 
@@ -366,17 +376,15 @@ __global__ void notify_dispatch(
       int total_count = 0, per_nvl_rank_count[NUM_MAX_NVL_PEERS] = {0};
       for (int64_t i = token_start_idx + lane_id; i < token_end_idx;
            i += WARP_SIZE) {
-        EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS * sizeof(bool) == sizeof(uint64_t),
-                         "Invalid number of NVL peers");
-        auto is_token_in_rank_uint64 = *reinterpret_cast<uint64_t const*>(
-            is_token_in_rank + i * num_ranks +
-            dst_rdma_rank * NUM_MAX_NVL_PEERS);
-        auto is_token_in_rank_values =
-            reinterpret_cast<bool const*>(&is_token_in_rank_uint64);
+        auto is_token_in_rank_values = is_token_in_rank + i * num_ranks +
+                                       dst_rdma_rank * NUM_MAX_NVL_PEERS;
+        bool is_token_in_any_nvl_rank = false;
 #pragma unroll
-        for (int j = 0; j < NUM_MAX_NVL_PEERS; ++j)
+        for (int j = 0; j < NUM_MAX_NVL_PEERS; ++j) {
           per_nvl_rank_count[j] += is_token_in_rank_values[j];
-        total_count += (is_token_in_rank_uint64 != 0);
+          is_token_in_any_nvl_rank |= is_token_in_rank_values[j];
+        }
+        total_count += is_token_in_any_nvl_rank;
       }
 
       // Warp reduce
@@ -563,8 +571,7 @@ __global__ void __launch_bounds__(
   EP_DEVICE_ASSERT(num_topk <= WARP_SIZE);
 
   // RDMA symmetric layout
-  EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS * sizeof(bool) == sizeof(uint64_t),
-                   "Invalid number of NVL peers");
+  EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS <= 8, "Invalid number of NVL peers");
   auto hidden_bytes = hidden_int4 * sizeof(int4);
   auto scale_bytes = num_scales * sizeof(float);
   auto num_bytes_per_token =
@@ -757,9 +764,9 @@ __global__ void __launch_bounds__(
       // Read RDMA rank existence
       uint64_t is_token_in_rank_uint64 = 0;
       if (lane_id < kNumRDMARanks) {
-        is_token_in_rank_uint64 = *(reinterpret_cast<uint64_t const*>(
+        is_token_in_rank_uint64 = pack_is_token_in_nvl_ranks(
             is_token_in_rank + token_idx * num_ranks +
-            lane_id * NUM_MAX_NVL_PEERS));
+            lane_id * NUM_MAX_NVL_PEERS);
       }
 
       // Acquire sequential lock
@@ -806,9 +813,9 @@ __global__ void __launch_bounds__(
       // Read RDMA rank existence
       uint64_t is_token_in_rank_uint64 = 0;
       if (lane_id < kNumRDMARanks) {
-        is_token_in_rank_uint64 = __ldg(reinterpret_cast<uint64_t const*>(
+        is_token_in_rank_uint64 = pack_is_token_in_nvl_ranks(
             is_token_in_rank + token_idx * num_ranks +
-            lane_id * NUM_MAX_NVL_PEERS));
+            lane_id * NUM_MAX_NVL_PEERS);
 
         global_rdma_tail_idx += (is_token_in_rank_uint64 != 0);
       }

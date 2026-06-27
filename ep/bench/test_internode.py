@@ -6,13 +6,13 @@ export OMP_NUM_THREADS=6
 make clean && make -j install
 
 On first node:
-torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
+torchrun --nnodes=2 --nproc_per_node=<local_gpu_count> --node_rank=0 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
 
 On second node:
-torchrun --nnodes=2 --nproc_per_node=8 --node_rank=1 \
+torchrun --nnodes=2 --nproc_per_node=<local_gpu_count> --node_rank=1 \
   --master_addr=10.1.227.34 --master_port=12355 \
   bench/test_internode.py --num-tokens=4096 \
   --hidden=7168 --num-topk=8 --num-experts=256 --test-ll-compatibility
@@ -97,7 +97,7 @@ def test_main(
         args.num_experts,
     )
 
-    assert num_experts % num_ranks == 0 and num_local_ranks == 8
+    assert num_experts % num_ranks == 0
     if local_rank == 0:
         print(
             f"[config] num_tokens={num_tokens}, hidden={hidden}, num_topk_groups={num_topk_groups}, num_topk={num_topk}",
@@ -567,7 +567,7 @@ def test_loop(
         explicitly_destroy=True,
     )
 
-    assert num_local_ranks == 8 and num_ranks > 8
+    assert num_nodes > 1 and num_ranks > num_local_ranks
 
     for seed in range(int(1e9)):
         if local_rank == 0:
@@ -627,8 +627,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-processes",
         type=int,
-        default=8,
-        help="Number of processes to spawn (default: 8)",
+        default=None,
+        help="Number of local processes. Defaults to LOCAL_WORLD_SIZE from torchrun.",
     )
     parser.add_argument(
         "--num-tokens", type=int, default=4096, help="Number of tokens (default: 4096)"
@@ -668,9 +668,12 @@ if __name__ == "__main__":
     if args.num_topk_groups is None:
         args.num_topk_groups = min(num_nodes, 4)
 
-    num_processes = args.num_processes
-    if num_processes != 8:
-        raise ValueError("Only --num-processes=8 is supported for this test.")
+    num_processes = args.num_processes or local_world_size
+    if num_processes != local_world_size:
+        raise ValueError(
+            f"--num-processes must match LOCAL_WORLD_SIZE={local_world_size}, "
+            f"got {num_processes}"
+        )
     # NOTE: modified from deep_ep
     local_rank = int(os.environ["LOCAL_RANK"])
     num_local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
