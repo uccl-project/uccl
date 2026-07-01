@@ -105,6 +105,35 @@ std::string cq_error_string(fid_cq* cq, fi_cq_err_entry const& err) {
   return fi_strerror(err.err);
 }
 
+// Drain and stringify any pending completion-queue error entries. Used to
+// attach provider-level detail (prov_errno, op_context, ...) to a failed RMA
+// post so hard failures like FI_EIO are diagnosable rather than opaque.
+std::string drain_cq_errors(fid_cq* cq) {
+  if (!cq) return "";
+
+  std::ostringstream os;
+  bool wrote = false;
+  for (int i = 0; i < 16; ++i) {
+    fi_cq_err_entry err{};
+    ssize_t rc = fi_cq_readerr(cq, &err, 0);
+    if (rc == -FI_EAGAIN || rc == 0) break;
+    if (rc < 0) {
+      if (wrote) os << "; ";
+      os << "fi_cq_readerr failed rc=" << rc << " " << fi_strerror(-rc);
+      break;
+    }
+    if (wrote) os << "; ";
+    wrote = true;
+    os << "cq_err[" << i << "] err=" << err.err << "(" << fi_strerror(err.err)
+       << ") prov_errno=" << err.prov_errno << " flags=0x" << std::hex
+       << err.flags << " len=0x" << err.len << " olen=0x" << err.olen
+       << " data=0x" << err.data << " op_context=0x"
+       << reinterpret_cast<uintptr_t>(err.op_context) << std::dec << " msg=\""
+       << cq_error_string(cq, err) << "\"";
+  }
+  return os.str();
+}
+
 }  // namespace
 
 CxiEndpoint::CxiEndpoint(int gpu_index, uint64_t port) : gpu_index_(gpu_index) {
@@ -586,6 +615,7 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
   uint64_t const remote_offset = fifo_item.addr - metadata.base;
 
   ssize_t rc;
+  std::string post_error_cq_errors;
   {
     std::lock_guard<std::mutex> fabric_lock(fabric_mutex_);
     if (is_read) {
@@ -596,10 +626,16 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
                     remote_offset, metadata.key, &op->ctx);
     }
 
-    if (rc == -FI_EAGAIN || rc == -FI_EIO) {
+    // FI_EAGAIN means the provider is momentarily out of posting resources;
+    // drive the CQ, yield, and let the caller retry. Any other non-zero rc
+    // (notably FI_EIO) is a hard failure: fall through and fail closed.
+    if (rc == -FI_EAGAIN) {
       poll_cq_locked();
       std::this_thread::yield();
       return UCCL_POST_TRANSIENT;
+    }
+    if (rc != 0) {
+      post_error_cq_errors = drain_cq_errors(cq_);
     }
   }
   if (rc != 0) {
@@ -612,7 +648,17 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
        << " remote_base=0x" << metadata.base << " remote_len=0x" << metadata.len
        << " remote_offset=0x" << remote_offset << " key=0x" << metadata.key
        << std::dec;
-    UCCL_LOG(ERROR) << os.str();
+    if (!post_error_cq_errors.empty()) {
+      os << " pending_cq_errors=[" << post_error_cq_errors << "]";
+    }
+    // FI_EIO indicates a fatal transport error (e.g. an unrecoverable link or
+    // memory-registration fault); crash loudly rather than limp on with a
+    // half-broken KV path.
+    if (rc == -FI_EIO) {
+      UCCL_LOG(FATAL) << os.str();
+    } else {
+      UCCL_LOG(ERROR) << os.str();
+    }
     return -1;
   }
 
