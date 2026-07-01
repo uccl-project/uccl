@@ -2,7 +2,7 @@
  * CAS-based Ring Buffer Throughput Test
  * Goal: Test GPU-CPU communication throughput with CAS-based ring buffer
  * sharing Architecture: Multiple warps share ring buffers via CAS
- * (atomic_set_and_commit) Similar to production uccl_ibgda.cuh design
+ * (atomic_set_and_commit) Similar to production uccl_transfer_device.cuh design
  */
 
 #include "../include/common.hpp"
