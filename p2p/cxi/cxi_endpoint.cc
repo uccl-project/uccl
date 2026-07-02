@@ -189,6 +189,19 @@ void CxiEndpoint::init_fabric(int gpu_index) {
   try {
     check_fi("fi_getinfo(cxi)",
              fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0, hints, &info_));
+
+    uint32_t const lf_ver = fi_version();
+    UCCL_LOG(INFO) << "libfabric runtime version " << FI_MAJOR(lf_ver) << "."
+                   << FI_MINOR(lf_ver);
+    if (lf_ver < FI_VERSION(2, 0)) {
+      UCCL_LOG(WARN)
+          << "libfabric " << FI_MAJOR(lf_ver) << "." << FI_MINOR(lf_ver)
+          << " detected: CXI RMA throughput collapses (>10x) once a "
+             "registered region exceeds ~1.5 GiB (uccl-project/uccl#956, "
+             "measured on 1.22, fixed by 2.5.x). Large registered pools "
+             "(e.g. KV caches) will be severely degraded; upgrade libfabric "
+             "to >= 2.5.";
+    }
     info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
     UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
 
