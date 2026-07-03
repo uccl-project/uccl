@@ -578,12 +578,9 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
-  for (auto const& oob_msg : notify_list) {
-    notify_msg_t msg;
-    strncpy(msg.name, oob_msg.name, sizeof(msg.name) - 1);
-    msg.name[sizeof(msg.name) - 1] = '\0';
-    memcpy(msg.msg, oob_msg.msg, sizeof(msg.msg));
-    result.push_back(msg);
+  result.reserve(notify_list.size());
+  for (auto& oob_msg : notify_list) {
+    result.push_back({std::move(oob_msg.name), std::move(oob_msg.msg)});
   }
 
   notify_list.clear();
@@ -595,10 +592,8 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
   NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+  oob_msg.name = notify_msg->name;
+  oob_msg.msg = notify_msg->msg;
 
   // Same-process local connection: push notification directly to the local
   // list — no network path needed regardless of transport.
@@ -620,9 +615,9 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
                 << std::endl;
       return -1;
     }
-    std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+    std::string payload = serialize_notify_msg(oob_msg);
     return oob_client->send_meta(conn->oob_conn_key, payload)
-               ? sizeof(NotifyMsg)
+               ? static_cast<int>(payload.size())
                : -1;
   }
 
@@ -642,10 +637,10 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     return -1;
   }
 
-  std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+  std::string payload = serialize_notify_msg(oob_msg);
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
 
-  return ok ? sizeof(NotifyMsg) : -1;
+  return ok ? static_cast<int>(payload.size()) : -1;
 }
 
 // Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).

@@ -53,20 +53,68 @@ typedef struct AcceptedMeta {
   uint64_t peer_id;
 } AcceptedMeta;
 
-// Notifications
+// Notifications.
+//
+// Notification messages are variable-length. They travel over the OOB TCP
+// channel (or the NCCL control socket), both of which carry explicitly-sized
+// messages, so no fixed capacity is needed anywhere. Wire layout:
+//   u32 magic | u32 msg_type | u32 name_len | u32 msg_len | name | msg
+// (host byte order, like every other struct on these channels).
 static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
-static constexpr size_t NOTIFY_MSG_SIZE = 256;
+static constexpr size_t NOTIFY_MSG_HDR_SIZE = 4 * sizeof(uint32_t);
+// Sanity bound on a serialized notification frame, enforced on both sides of
+// the NCCL control socket: the receiver allocates its buffer from the
+// peer-advertised length before any payload arrives, so a corrupt header must
+// not be able to trigger an arbitrarily large allocation. Generous relative
+// to real notification payloads (KBs).
+static constexpr size_t NOTIFY_MSG_MAX_FRAME_BYTES = 64ull << 20;
 // Returned when no operation was posted, but retrying may succeed. CXI uses
 // this explicit sentinel; non-CXI paths keep the older -1 retry behavior in
 // engine.cc.
 static constexpr int UCCL_POST_TRANSIENT = -2;
 
 struct NotifyMsg {
-  uint32_t magic;
-  uint32_t msg_type;
-  char name[NOTIFY_MSG_SIZE];
-  char msg[NOTIFY_MSG_SIZE];
+  uint32_t msg_type = 0;
+  std::string name;
+  std::string msg;
 };
+
+inline std::string serialize_notify_msg(NotifyMsg const& m) {
+  std::string out;
+  out.reserve(NOTIFY_MSG_HDR_SIZE + m.name.size() + m.msg.size());
+  auto put_u32 = [&out](uint32_t v) {
+    out.append(reinterpret_cast<char const*>(&v), sizeof(v));
+  };
+  put_u32(NOTIFY_MSG_MAGIC);
+  put_u32(m.msg_type);
+  put_u32(static_cast<uint32_t>(m.name.size()));
+  put_u32(static_cast<uint32_t>(m.msg.size()));
+  out += m.name;
+  out += m.msg;
+  return out;
+}
+
+// Returns true iff payload is a well-formed notification: the magic matches
+// and the embedded lengths account for the payload exactly. process_meta
+// handlers rely on this to discriminate notifications from the other
+// (metadata-exchange) messages sharing the OOB channel.
+inline bool deserialize_notify_msg(std::string const& payload,
+                                   NotifyMsg& out) {
+  if (payload.size() < NOTIFY_MSG_HDR_SIZE) return false;
+  auto get_u32 = [&payload](size_t off) {
+    uint32_t v;
+    std::memcpy(&v, payload.data() + off, sizeof(v));
+    return v;
+  };
+  if (get_u32(0) != NOTIFY_MSG_MAGIC) return false;
+  uint64_t const name_len = get_u32(8);
+  uint64_t const msg_len = get_u32(12);
+  if (NOTIFY_MSG_HDR_SIZE + name_len + msg_len != payload.size()) return false;
+  out.msg_type = get_u32(4);
+  out.name.assign(payload, NOTIFY_MSG_HDR_SIZE, name_len);
+  out.msg.assign(payload, NOTIFY_MSG_HDR_SIZE + name_len, msg_len);
+  return true;
+}
 
 inline std::vector<NotifyMsg> notify_list;
 inline std::mutex notify_mutex;
