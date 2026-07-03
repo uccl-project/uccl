@@ -111,14 +111,17 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(DL_OBJECTS)
 nb_%.o: $(NB_SRC_DIR)/%.cpp
 	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
 
+# Auto-generated header deps: editing engine.h etc. rebuilds dependent .o (avoids ABI mismatch).
+-include $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d) $(DL_OBJECTS:.o=.d)
+
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -MMD -MP -c $< -o $@
 
 # Compile NCCL source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
-	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -MMD -MP -c $< -o $@
 
 define safe_install
 	@echo "Installing $(1) to $(2)..."
