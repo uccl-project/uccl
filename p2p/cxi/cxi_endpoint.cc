@@ -460,6 +460,9 @@ void CxiEndpoint::process_meta(std::string const& input, std::string& output,
   {
     NotifyMsg notify_msg;
     if (deserialize_notify_msg(input, notify_msg)) {
+      UCCL_LOG(INFO, UCCL_P2P)
+          << "process_meta: received notification from " << notify_msg.name
+          << " (" << notify_msg.msg.size() << " bytes)";
       std::lock_guard<std::mutex> lock(notify_mutex);
       notify_list.push_back(std::move(notify_msg));
       output = "";
