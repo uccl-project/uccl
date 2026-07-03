@@ -32,14 +32,19 @@ void check_fi(char const* what, int ret) {
 }
 
 fi_threading threading_hint() {
+  // Default to FI_THREAD_SAFE: libfabric >= 2.x rejects FI_THREAD_ENDPOINT in
+  // the CXI provider's domain-attr check, failing fi_getinfo with ENODATA.
+  // FI_THREAD_SAFE is accepted by both libfabric 1.x and 2.x.
   char const* value = std::getenv("UCCL_CXI_THREADING");
-  if (!value || std::strcmp(value, "endpoint") == 0) return FI_THREAD_ENDPOINT;
+  if (!value || std::strcmp(value, "safe") == 0) return FI_THREAD_SAFE;
+  if (std::strcmp(value, "endpoint") == 0) return FI_THREAD_ENDPOINT;
   if (std::strcmp(value, "completion") == 0) return FI_THREAD_COMPLETION;
   if (std::strcmp(value, "domain") == 0) return FI_THREAD_DOMAIN;
   if (std::strcmp(value, "fid") == 0) return FI_THREAD_FID;
-  if (std::strcmp(value, "safe") == 0) return FI_THREAD_SAFE;
   if (std::strcmp(value, "unspec") == 0) return FI_THREAD_UNSPEC;
-  throw std::runtime_error(std::string("Invalid UCCL_CXI_THREADING=") + value);
+  throw std::runtime_error(
+      std::string("Invalid UCCL_CXI_THREADING=") + value +
+      " (expected one of: safe, endpoint, completion, domain, fid, unspec)");
 }
 
 int cxi_device_index_for_gpu(int gpu_index) {
@@ -221,6 +226,16 @@ void CxiEndpoint::init_fabric(int gpu_index) {
   try {
     check_fi("fi_getinfo(cxi)",
              fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0, hints, &info_));
+
+    uint32_t const lf_ver = fi_version();
+    UCCL_LOG(INFO) << "libfabric runtime version " << FI_MAJOR(lf_ver) << "."
+                   << FI_MINOR(lf_ver);
+    if (lf_ver < FI_VERSION(2, 0)) {
+      UCCL_LOG(WARN)
+          << "libfabric " << FI_MAJOR(lf_ver) << "." << FI_MINOR(lf_ver)
+          << " detected: performance may be poor for large KV pools; see "
+             "uccl-project/uccl#956. Consider upgrading to libfabric >= 2.5.";
+    }
     info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
     UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
 
