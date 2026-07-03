@@ -42,7 +42,9 @@ fi_threading threading_hint() {
   if (std::strcmp(value, "domain") == 0) return FI_THREAD_DOMAIN;
   if (std::strcmp(value, "fid") == 0) return FI_THREAD_FID;
   if (std::strcmp(value, "unspec") == 0) return FI_THREAD_UNSPEC;
-  throw std::runtime_error(std::string("Invalid UCCL_CXI_THREADING=") + value);
+  throw std::runtime_error(
+      std::string("Invalid UCCL_CXI_THREADING=") + value +
+      " (expected one of: safe, endpoint, completion, domain, fid, unspec)");
 }
 
 int cxi_device_index_for_gpu(int gpu_index) {
