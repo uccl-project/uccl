@@ -108,6 +108,9 @@ std::string cq_error_string(fid_cq* cq, fi_cq_err_entry const& err) {
 // Drain and stringify any pending completion-queue error entries. Used to
 // attach provider-level detail (prov_errno, op_context, ...) to a failed RMA
 // post so hard failures like FI_EIO are diagnosable rather than opaque.
+// Consumes the entries without marking their owning OpContexts failed, which
+// starves poll_cq_locked() of error completions for unrelated inflight ops —
+// only call this when the process is about to abort.
 std::string drain_cq_errors(fid_cq* cq) {
   if (!cq) return "";
 
@@ -634,7 +637,10 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
       std::this_thread::yield();
       return UCCL_POST_TRANSIENT;
     }
-    if (rc != 0) {
+    // Drain only on the fatal path (FI_EIO aborts below): draining consumes
+    // CQ error entries that may belong to other inflight ops, which would
+    // otherwise never be marked failed by poll_cq_locked().
+    if (rc == -FI_EIO) {
       post_error_cq_errors = drain_cq_errors(cq_);
     }
   }
