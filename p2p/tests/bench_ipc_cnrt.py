@@ -27,15 +27,15 @@ H2D = 0
 
 # message sizes (bytes) and iteration counts
 SIZES = [
-    (1 << 12, 2000),   # 4 KB
-    (1 << 14, 2000),   # 16 KB
-    (1 << 16, 2000),   # 64 KB
-    (1 << 18, 1000),   # 256 KB
-    (1 << 20, 1000),   # 1 MB
-    (1 << 22, 500),    # 4 MB
-    (1 << 24, 200),    # 16 MB
-    (1 << 26, 100),    # 64 MB
-    (1 << 28, 50),     # 256 MB
+    (1 << 12, 2000),  # 4 KB
+    (1 << 14, 2000),  # 16 KB
+    (1 << 16, 2000),  # 64 KB
+    (1 << 18, 1000),  # 256 KB
+    (1 << 20, 1000),  # 1 MB
+    (1 << 22, 500),  # 4 MB
+    (1 << 24, 200),  # 16 MB
+    (1 << 26, 100),  # 64 MB
+    (1 << 28, 50),  # 256 MB
 ]
 MAX_SIZE = SIZES[-1][0]
 WARMUP = 10
@@ -54,7 +54,9 @@ def cnrt_malloc(cnrt, gpu_idx, size):
     check(cnrt.cnrtSetDevice(gpu_idx), "cnrtSetDevice")
     dev_ptr = ctypes.c_void_p(0)
     check(cnrt.cnrtMalloc(ctypes.byref(dev_ptr), ctypes.c_size_t(size)), "cnrtMalloc")
-    check(cnrt.cnrtMemset(dev_ptr, ctypes.c_int(0), ctypes.c_size_t(size)), "cnrtMemset")
+    check(
+        cnrt.cnrtMemset(dev_ptr, ctypes.c_int(0), ctypes.c_size_t(size)), "cnrtMemset"
+    )
     return dev_ptr
 
 
@@ -172,9 +174,7 @@ def main():
     print(f"{'size':>8} {'iters':>6} {'lat(us)':>10} {'BW(GB/s)':>10}")
     print("-" * 38)
     for size, iters, per_op, bw in client_results:
-        print(
-            f"{human(size):>8} {iters:>6} {per_op*1e6:>10.2f} {bw/1e9:>10.2f}"
-        )
+        print(f"{human(size):>8} {iters:>6} {per_op*1e6:>10.2f} {bw/1e9:>10.2f}")
     small = client_results[0]
     big = client_results[-1]
     print("\nSummary:")

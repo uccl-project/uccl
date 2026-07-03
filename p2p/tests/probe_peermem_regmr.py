@@ -10,6 +10,7 @@ cambricon_peer_mem (PeerDirect) 是否真能让网卡 DMA 寒武纪显存。
     python3 tests/probe_peermem_regmr.py            # 默认 mlx5_0 + MLU dev0
     python3 tests/probe_peermem_regmr.py mlx5_1 1   # 指定网卡/设备
 """
+
 import ctypes as C
 import os
 import sys
