@@ -16,7 +16,7 @@ class SignalBackend final : public BatchBackend {
   ~SignalBackend() override = default;
 
   char const* name() const override { return "signal"; }
-  bool supports(OpKind kind) const override;
+  bool supports(ExecOpKind kind) const override;
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override;

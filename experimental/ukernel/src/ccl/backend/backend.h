@@ -18,7 +18,7 @@ namespace CCL {
 // ── Command descriptor ──────────────────────────────────────────────────
 
 struct Cmd {
-  OpKind kind;          // 4
+  ExecOpKind kind;          // 4
   uint32_t src_buf;     // 4
   uint32_t dst_buf;     // 4
   uint32_t src_off;     // 4
@@ -49,7 +49,7 @@ class BatchBackend {
  public:
   virtual ~BatchBackend();
   virtual char const* name() const = 0;
-  virtual bool supports(OpKind kind) const = 0;
+  virtual bool supports(ExecOpKind kind) const = 0;
   void set_comm(UKernel::Transport::Communicator* comm) { comm_ = comm; }
 
   // ── Non-blocking async interface (called by executor) ──

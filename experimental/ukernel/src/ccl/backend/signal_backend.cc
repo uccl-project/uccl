@@ -9,8 +9,8 @@ namespace CCL {
 static_assert(offsetof(CmdWithId, cmd) == 0,
               "Cmd must be first field of CmdWithId for caller_id extraction");
 
-bool SignalBackend::supports(OpKind kind) const {
-  return kind == OpKind::Signal || kind == OpKind::WaitSignal;
+bool SignalBackend::supports(ExecOpKind kind) const {
+  return kind == ExecOpKind::Signal || kind == ExecOpKind::WaitSignal;
 }
 
 size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
@@ -24,13 +24,13 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
 
     unsigned rid = 0;
     switch (c.kind) {
-      case OpKind::Signal: {
+      case ExecOpKind::Signal: {
         auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
         rid =
             comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag, tpt);
         break;
       }
-      case OpKind::WaitSignal: {
+      case ExecOpKind::WaitSignal: {
         rid = comm_->wait_signal_async(static_cast<int>(c.src_peer), c.tag,
                                        Transport::PeerTransportKind::Unknown);
         break;
@@ -43,7 +43,7 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
     if (rid == 0) break;
     uint32_t idx = cmd_next_++;
     if (out_indices) out_indices[accepted] = idx;
-    if (c.kind == OpKind::WaitSignal) {
+    if (c.kind == ExecOpKind::WaitSignal) {
       signal_wait_rid_to_cmd_[rid] = idx;
       signal_wait_rid_to_caller_[rid] = caller_id;
     } else {

@@ -18,8 +18,8 @@ TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm) {
   comm_ = comm;  // base class member
 }
 
-bool TransportBackend::supports(OpKind kind) const {
-  return kind == OpKind::Put;
+bool TransportBackend::supports(ExecOpKind kind) const {
+  return kind == ExecOpKind::Put;
 }
 
 size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
@@ -29,7 +29,7 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
     Cmd const& c = cmds[i];
     unsigned rid = 0;
     switch (c.kind) {
-      case OpKind::Put: {
+      case ExecOpKind::Put: {
         auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
         rid = comm_->send_put_async(static_cast<int>(c.dst_peer), c.src_buf,
                                     c.src_off, c.dst_buf, c.dst_off, c.bytes,

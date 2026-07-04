@@ -26,8 +26,8 @@ DeviceBackend::~DeviceBackend() {
   }
 }
 
-bool DeviceBackend::supports(OpKind kind) const {
-  return kind == OpKind::Put || kind == OpKind::Reduce;
+bool DeviceBackend::supports(ExecOpKind kind) const {
+  return kind == ExecOpKind::Put || kind == ExecOpKind::Reduce;
 }
 
 void DeviceBackend::ensure_runtime() {
@@ -86,10 +86,11 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
           args.src = (char*)local_ptr_cache_[c.src_buf] + c.src_off;
         } else {
           auto ipc = comm_->get_ipc(c.src_buf);
-          if (ipc.direct_ptr) {
+          void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
+          if (ptr) {
             if (c.src_buf < kMaxLocalBufs)
-              local_ptr_cache_[c.src_buf] = ipc.direct_ptr;
-            args.src = (char*)ipc.direct_ptr + c.src_off;
+              local_ptr_cache_[c.src_buf] = ptr;
+            args.src = (char*)ptr + c.src_off;
           }
         }
       }
@@ -121,10 +122,11 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
           args.dst = (char*)local_ptr_cache_[c.dst_buf] + c.dst_off;
         } else {
           auto ipc = comm_->get_ipc(c.dst_buf);
-          if (ipc.direct_ptr) {
+          void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
+          if (ptr) {
             if (c.dst_buf < kMaxLocalBufs)
-              local_ptr_cache_[c.dst_buf] = ipc.direct_ptr;
-            args.dst = (char*)ipc.direct_ptr + c.dst_off;
+              local_ptr_cache_[c.dst_buf] = ptr;
+            args.dst = (char*)ptr + c.dst_off;
           }
         }
       }
@@ -136,10 +138,10 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
 
     Device::TaskType tt;
     switch (c.kind) {
-      case OpKind::Put:
+      case ExecOpKind::Put:
         tt = Device::TaskType::CollCopy;
         break;
-      case OpKind::Reduce:
+      case ExecOpKind::Reduce:
         tt = Device::TaskType::CollReduce;
         break;
       default:

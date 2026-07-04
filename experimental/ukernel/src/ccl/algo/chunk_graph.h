@@ -10,13 +10,13 @@ namespace UKernel {
 namespace CCL {
 
 struct Chunk {
-  OpKind op = OpKind::Put;
+  AlgoOpKind op = AlgoOpKind::Put;
   size_t bytes = 0;
   size_t src_off = 0;
   size_t dst_off = 0;
   int src_rank = -1;  // -1 = local buffer, >=0 = remote rank
   int dst_rank = -1;
-  bool sequential_tiles = false;
+  uint32_t pair_id = 0;  // matched Send/Recv pairs share the same id
   std::vector<uint32_t> deps;
 };
 

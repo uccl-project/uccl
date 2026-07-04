@@ -18,7 +18,6 @@ struct CollectiveConfig {
   std::vector<size_t> output_split_bytes;
   ScalarType dtype = ScalarType::Float32;
   ReductionKind reduction = ReductionKind::Sum;
-  bool use_sm_ipc = true;
 };
 
 }  // namespace CCL

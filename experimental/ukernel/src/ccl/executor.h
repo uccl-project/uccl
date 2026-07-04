@@ -3,6 +3,7 @@
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "lower.h"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -36,20 +37,32 @@ inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 // ── Op sprayer with async jring backends ────────────────────────────────
 
 struct SprayRun {
+  static constexpr uint32_t kIndegreeDone = ~0u;       // sentinel: op already processed
+
   // ── Hot path: accessed every enqueue/drain cycle ──
   std::atomic<CollectiveOpStatus> status{CollectiveOpStatus::Queued};
   std::atomic<size_t> done_count{0};
-  uint32_t next_layer = 0;
   std::mutex mtx;
-  std::vector<uint8_t> done;
   std::vector<uint8_t> submitted;
   std::vector<uint32_t> ready;
   std::vector<CmdWithId> dev_cmds;
   std::vector<CmdWithId> tpt_cmds;
 
-  // ── Countdown-latch dependency tracking ──
-  std::vector<uint32_t> indegree;                    // remaining unsatisfied deps
-  std::vector<std::vector<uint32_t>> successors;     // reverse dep map: op → ops that depend on it
+  // ── Lock-free drain path (drain threads, no mtx) ──
+  std::vector<uint32_t> successor_data;               // contiguous successor list
+  std::vector<uint32_t> successor_off;                // offset into data per op (size = nops+1)
+  std::vector<uint32_t> indegree;                     // __atomic_fetch_sub decrement, 0 = ready
+
+  struct ReadyRing {
+    static constexpr size_t kMask = 255;              // 256 slots
+    std::atomic<uint32_t> head{0};                    // consumer only (enqueue thread)
+    std::atomic<uint32_t> tail{0};                    // producers CAS (drain threads)
+    std::array<uint32_t, kMask + 1> buf;
+
+    bool push(uint32_t op);                            // multi-producer CAS push
+    uint32_t pop();                                    // single-consumer pop (returns ~0u if empty)
+  };
+  ReadyRing ready_ring;
 
   // ── Read-only after construction ──
   TiledResult tiled;
@@ -72,6 +85,7 @@ struct SprayExecutorConfig {
   int threads_per_block = 64;
   size_t fifo_capacity = 256;
   size_t smem_size = 48 * 1024;
+  size_t max_concurrent_runs = 16;                  // backpressure: block submit when exceeded
   std::shared_ptr<struct UKernel::Transport::CommunicatorConfig>
       communicator_config;
 };
@@ -105,10 +119,8 @@ class SprayExecutor {
   SprayExecutor(SprayExecutor const&) = delete;
   SprayExecutor& operator=(SprayExecutor const&) = delete;
 
-  CollectiveOpHandle submit_allreduce(CollectiveConfig const& cfg, void* input,
-                                      void* output, void* scratch);
-  CollectiveOpHandle submit_alltoall(CollectiveConfig const& cfg, void* input,
-                                     void* output, void* scratch);
+  CollectiveOpHandle submit(CollectiveConfig const& cfg, void* input,
+                             void* output, void* scratch);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
@@ -125,34 +137,33 @@ class SprayExecutor {
   void enqueue_loop();
   void drain_loop(BatchBackend* be);
 
-  // ── Phase helpers (under SprayRun::mtx) ──
+  // ── Phase helpers ──
   void collect_ready(SprayRun& run);
   void enqueue_to_ring(SprayRun& run);
 
   Transport::PeerTransportKind pick_transport(int peer);
   void drain_tpt_loop();
   void drain_signal_loop();
+  void check_completions_();
 
   template <typename F>
   void drain_batch(uint32_t* caller_buf, size_t n, F&& cb) {
     for (size_t i = 0; i < n; ++i) {
       auto& m = cmd_to_run_[caller_buf[i] & (kMaxCmdIdx - 1)];
       if (!m.run || m.caller_id != caller_buf[i]) continue;
-      std::lock_guard rlock(m.run->mtx);
-      if (!m.run->done[m.op_idx]) {
-        m.run->done[m.op_idx] = 1;
-        m.run->done_count.fetch_add(1, std::memory_order_release);
-        cb(m, caller_buf[i]);
+      uint32_t cur = __atomic_load_n(&m.run->indegree[m.op_idx], __ATOMIC_ACQUIRE);
+      if (cur == SprayRun::kIndegreeDone) continue;
+      m.run->done_count.fetch_add(1, std::memory_order_release);
+      cb(m, caller_buf[i]);
+
+      uint32_t off = m.run->successor_off[m.op_idx];
+      uint32_t end = m.run->successor_off[m.op_idx + 1];
+      for (uint32_t j = off; j < end; ++j) {
+        uint32_t succ = m.run->successor_data[j];
+        if (__atomic_fetch_sub(&m.run->indegree[succ], 1, __ATOMIC_RELEASE) == 1)
+          m.run->ready_ring.push(succ);
       }
-    }
-    // Mark completed runs — held outside rlock to avoid AB/BA with enqueue_loop
-    std::lock_guard lock(runs_mutex_);
-    for (auto& [h, run] : runs_) {
-      if (run->status.load(std::memory_order_acquire) != CollectiveOpStatus::Running)
-        continue;
-      size_t dc = run->done_count.load(std::memory_order_acquire);
-      if (dc >= run->tiled.ops.size())
-        run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
+      __atomic_store_n(&m.run->indegree[m.op_idx], SprayRun::kIndegreeDone, __ATOMIC_RELEASE);
     }
   }
 
@@ -188,6 +199,10 @@ class SprayExecutor {
   // ── Transport LB state ──
   int world_size_ = 0;
   std::unique_ptr<PeerMetrics[]> tpt_metrics_;
+
+  // ── Backpressure ──
+  size_t max_concurrent_runs_ = 16;
+  std::atomic<size_t> active_runs_{0};
 
   // ── Global cmd_idx counter + run map ──
   uint32_t next_cmd_idx_ = 0;

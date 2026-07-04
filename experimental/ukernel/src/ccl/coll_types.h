@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
@@ -11,11 +12,21 @@ enum class CollKind : uint32_t {
   AllToAllPairwise,
 };
 
-enum class OpKind : uint32_t {
-  Put,        // one-sided data write: scheduler routes to device(copy) or transport(IPC/RDMA)
-  Reduce,     // local element-wise reduction (device backend)
-  Signal,     // send notification (signal backend)
-  WaitSignal, // wait for notification (signal backend)
+// Planner-level op kinds (used in Chunk DAG)
+
+enum class AlgoOpKind : uint32_t {
+  Put,
+  Recv,
+  RecvReduce,
+};
+
+// Executor-level op kinds (used in TiledOp, lower output)
+
+enum class ExecOpKind : uint32_t {
+  Put,
+  Reduce,
+  Signal,
+  WaitSignal,
 };
 
 enum class ScalarType : uint32_t {
@@ -64,6 +75,41 @@ enum class CollectiveBufferRole : uint32_t {
   Input,
   Output,
   Scratch,
+};
+
+// Internal op (planner DAG → lower pipeline)
+
+struct Op {
+  AlgoOpKind kind = AlgoOpKind::Put;
+  size_t bytes = 0;
+  size_t src_off = 0;
+  size_t dst_off = 0;
+  uint32_t src_peer = 0;
+  uint32_t dst_peer = 0;
+  std::vector<uint32_t> deps;
+};
+
+// Tiled op (lower output → executor input)
+
+struct TiledOp {
+  ExecOpKind kind = ExecOpKind::Put;
+  size_t bytes = 0;
+  size_t src_off = 0;
+  size_t dst_off = 0;
+  uint32_t src_peer = 0;
+  uint32_t dst_peer = 0;
+  uint64_t tag = 0;
+  std::vector<uint32_t> deps;
+};
+
+struct TiledResult {
+  std::vector<TiledOp> ops;
+  size_t staging_bytes_required = 0;
+  size_t input_bytes = 0;
+  size_t output_bytes = 0;
+  int rank = 0;
+  int nranks = 1;
+  ReductionKind reduction = ReductionKind::None;
 };
 
 }  // namespace CCL

@@ -26,7 +26,7 @@ class MockBackend final : public BatchBackend {
   MockBackend(bool auto_complete = false) : auto_complete_(auto_complete) {}
 
   char const* name() const override { return "mock"; }
-  bool supports(OpKind) const override { return true; }
+  bool supports(ExecOpKind) const override { return true; }
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override {
@@ -83,7 +83,7 @@ void test_executor_allreduce_async() {
   std::vector<uint8_t> out(1024, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
@@ -111,13 +111,12 @@ void test_executor_alltoall_async() {
   cfg.output_bytes = 512;
   cfg.tile_bytes = 128;
   cfg.kind = CollKind::AllToAllPairwise;
-  cfg.use_sm_ipc = false;
 
   std::vector<uint8_t> in(512, 0xBB);
   std::vector<uint8_t> out(512, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit_alltoall(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
@@ -143,9 +142,9 @@ void test_executor_multiple_submits() {
   std::vector<uint8_t> out(256, 0);
   std::vector<uint8_t> scratch(256, 0);
 
-  auto h1 = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
-  auto h2 = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
-  auto h3 = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
+  auto h1 = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h2 = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h3 = ex->submit(cfg, in.data(), out.data(), scratch.data());
 
   // With auto-complete, runs may finish very fast; just verify all complete
   bool d1 = ex->wait(h1, std::chrono::milliseconds(5000));
@@ -172,7 +171,7 @@ void test_executor_run_tiled_sync() {
   std::vector<uint8_t> out(cfg.output_bytes, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
 
@@ -198,7 +197,7 @@ void test_executor_active_count() {
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scratch(256);
-  auto h = ex->submit_allreduce(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
   // With auto-complete, run may already be done; just verify wait succeeds
   ex->wait(h, std::chrono::milliseconds(5000));
   assert(ex->active_count() == 0);
