@@ -2,6 +2,7 @@
 
 #include "backend.h"
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 
 namespace UKernel {
@@ -26,6 +27,7 @@ class TransportBackend final : public BatchBackend {
 
  private:
   std::unordered_map<unsigned, uint32_t> rid_to_cmd_;
+  std::mutex mu_;
   uint32_t cmd_next_ = 0;
 };
 

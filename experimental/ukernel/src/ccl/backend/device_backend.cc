@@ -49,7 +49,7 @@ void DeviceBackend::ensure_runtime() {
   }
 }
 size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
-                              uint32_t* out_indices) {
+                                 uint32_t* out_indices) {
   size_t accepted = 0;
   while (accepted < n) {
     Cmd const& c = cmds[accepted];
@@ -74,9 +74,9 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
         }
         if (cached) {
           args.src = (char*)cached + c.src_off;
-        } else if (comm_->try_resolve_remote_ipc_pointer((int)c.src_peer, c.src_buf,
-                                                         c.src_off, c.bytes, &cached,
-                                                         &args.src_device)) {
+        } else if (comm_->try_resolve_remote_ipc_pointer(
+                       (int)c.src_peer, c.src_buf, c.src_off, c.bytes, &cached,
+                       &args.src_device)) {
           resolved_remote_cache_.push_back(
               {(int)c.src_peer, c.src_buf, cached, args.src_device});
           args.src = (char*)cached + c.src_off;
@@ -88,8 +88,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
           auto ipc = comm_->get_ipc(c.src_buf);
           void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
           if (ptr) {
-            if (c.src_buf < kMaxLocalBufs)
-              local_ptr_cache_[c.src_buf] = ptr;
+            if (c.src_buf < kMaxLocalBufs) local_ptr_cache_[c.src_buf] = ptr;
             args.src = (char*)ptr + c.src_off;
           }
         }
@@ -109,9 +108,9 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
         if (cached) {
           args.dst = (char*)cached + c.dst_off;
           args.dst_device = cached_dev;
-        } else if (comm_->try_resolve_remote_ipc_pointer((int)c.dst_peer, c.dst_buf,
-                                                         c.dst_off, c.bytes, &cached,
-                                                         &cached_dev)) {
+        } else if (comm_->try_resolve_remote_ipc_pointer(
+                       (int)c.dst_peer, c.dst_buf, c.dst_off, c.bytes, &cached,
+                       &cached_dev)) {
           resolved_remote_cache_.push_back(
               {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
           args.dst = (char*)cached + c.dst_off;
@@ -124,8 +123,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
           auto ipc = comm_->get_ipc(c.dst_buf);
           void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
           if (ptr) {
-            if (c.dst_buf < kMaxLocalBufs)
-              local_ptr_cache_[c.dst_buf] = ptr;
+            if (c.dst_buf < kMaxLocalBufs) local_ptr_cache_[c.dst_buf] = ptr;
             args.dst = (char*)ptr + c.dst_off;
           }
         }

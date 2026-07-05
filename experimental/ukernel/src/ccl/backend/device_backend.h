@@ -70,7 +70,8 @@ class DeviceBackend final : public BatchBackend {
   };
   std::vector<ResolvedRemote> resolved_remote_cache_;
 
-  // Local buffer base-pointer cache — populated once per collective, read lock-free
+  // Local buffer base-pointer cache — populated once per collective, read
+  // lock-free
   static constexpr size_t kMaxLocalBufs = 8;
   void* local_ptr_cache_[kMaxLocalBufs] = {};
 
