@@ -78,7 +78,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_perf_p2p_copy
+INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -113,6 +113,30 @@ test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_transport_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/transport_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_transport_backend_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/unit/test_transport_backend_e2e.o: test/unit/test_transport_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/unit/test_device_backend_e2e.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/unit/test_device_backend_e2e.o: test/unit/test_device_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_signal_backend_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/unit/test_signal_backend_e2e.o: test/unit/test_signal_backend_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 $(UCCL_RDMA_STATIC):
