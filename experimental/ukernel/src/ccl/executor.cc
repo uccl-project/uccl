@@ -373,7 +373,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
       uint32_t be_idx;
       if (signal_be_->do_enqueue(&cwi.cmd, 1, &be_idx) > 0) {
-        sig_caller_map_[be_idx & (kCallerMapSize - 1)].store(cwi.caller_id, std::memory_order_release);
+        sig_caller_map_[be_idx & (kCallerMapSize - 1)].store(
+            cwi.caller_id, std::memory_order_release);
         run.submitted[idx] = 1;
       }
       continue;
@@ -400,8 +401,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       uint32_t be_idx;
       size_t n = device_be_->do_enqueue(&run.dev_cmds[off].cmd, 1, &be_idx);
       if (n == 0) break;
-      dev_caller_map_[be_idx & (kCallerMapSize - 1)].store(run.dev_cmds[off].caller_id,
-                                    std::memory_order_release);
+      dev_caller_map_[be_idx & (kCallerMapSize - 1)].store(
+          run.dev_cmds[off].caller_id, std::memory_order_release);
       run.submitted[dev_idx[off]] = 1;
       ++off;
     }
@@ -414,8 +415,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       uint32_t be_idx;
       size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[off].cmd, 1, &be_idx);
       if (n == 0) break;
-      tpt_caller_map_[be_idx & (kCallerMapSize - 1)].store(run.tpt_cmds[off].caller_id,
-                                     std::memory_order_release);
+      tpt_caller_map_[be_idx & (kCallerMapSize - 1)].store(
+          run.tpt_cmds[off].caller_id, std::memory_order_release);
       run.submitted[tpt_idx[off]] = 1;
       ++off;
     }
@@ -457,14 +458,16 @@ void SprayExecutor::drain_dev_loop() {
     size_t valid = 0;
     for (size_t i = 0; i < n; ++i) {
       uint32_t caller_id;
-      while ((caller_id = dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
-                  std::memory_order_acquire)) == kMapSlotEmpty) {
+      while (
+          (caller_id = dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+               std::memory_order_acquire)) == kMapSlotEmpty) {
         if (stop_) break;
         std::this_thread::yield();
       }
       if (stop_) return;
       caller_buf[valid++] = caller_id;
-      dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+      dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(
+          kMapSlotEmpty, std::memory_order_relaxed);
     }
     drain_batch(caller_buf, valid, [](auto&, uint32_t) {});
     check_completions_();
@@ -513,14 +516,16 @@ void SprayExecutor::drain_tpt_loop() {
     size_t valid = 0;
     for (size_t i = 0; i < nd; ++i) {
       uint32_t caller_id;
-      while ((caller_id = tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
-                  std::memory_order_acquire)) == kMapSlotEmpty) {
+      while (
+          (caller_id = tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+               std::memory_order_acquire)) == kMapSlotEmpty) {
         if (stop_) break;
         std::this_thread::yield();
       }
       if (stop_) return;
       caller_buf[valid++] = caller_id;
-      tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+      tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(
+          kMapSlotEmpty, std::memory_order_relaxed);
     }
     drain_batch(caller_buf, valid, [this](auto& m, uint32_t) {
       auto transport = m.transport;
@@ -556,14 +561,16 @@ void SprayExecutor::drain_signal_loop() {
     size_t valid = 0;
     for (size_t i = 0; i < ns; ++i) {
       uint32_t caller_id;
-      while ((caller_id = sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
-                  std::memory_order_acquire)) == kMapSlotEmpty) {
+      while (
+          (caller_id = sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+               std::memory_order_acquire)) == kMapSlotEmpty) {
         if (stop_) break;
         std::this_thread::yield();
       }
       if (stop_) return;
       caller_buf[valid++] = caller_id;
-      sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+      sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(
+          kMapSlotEmpty, std::memory_order_relaxed);
     }
     drain_batch(caller_buf, valid, [](auto&, uint32_t) {});
     check_completions_();

@@ -280,10 +280,18 @@ int main(int argc, char** argv) {
         uint32_t be_idx;
         while (dev_be.do_enqueue(&cwi.cmd, 1, &be_idx) == 0)
           std::this_thread::yield();
-        caller_map[be_idx & (kMapSize - 1)].store(cwi.caller_id, std::memory_order_release);
+        caller_map[be_idx & (kMapSize - 1)].store(cwi.caller_id,
+                                                  std::memory_order_release);
         uint32_t be_buf[1];
         while (dev_be.do_drain(be_buf, 1) == 0) std::this_thread::yield();
-                { uint32_t cid; while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(std::memory_order_acquire)) == kEmpty) std::this_thread::yield(); caller_map[be_buf[0] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed); }
+        {
+          uint32_t cid;
+          while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(
+                      std::memory_order_acquire)) == kEmpty)
+            std::this_thread::yield();
+          caller_map[be_buf[0] & (kMapSize - 1)].store(
+              kEmpty, std::memory_order_relaxed);
+        }
         auto t1 = std::chrono::steady_clock::now();
         latencies.push_back(elapsed_us(t0, t1));
       }
@@ -297,8 +305,8 @@ int main(int argc, char** argv) {
       constexpr int kThroughputIters = 3;
       std::vector<double> throughputs;
 
-        for (int iter = 0; iter < kThroughputIters; ++iter) {
-          CmdWithId cwis[kBatchSize];
+      for (int iter = 0; iter < kThroughputIters; ++iter) {
+        CmdWithId cwis[kBatchSize];
         for (int b = 0; b < kBatchSize; ++b) {
           cwis[b].cmd.kind = ExecOpKind::Put;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
@@ -318,12 +326,22 @@ int main(int argc, char** argv) {
           while (enqueued < kBatchSize) {
             uint32_t be_idx;
             if (dev_be.do_enqueue(&cwis[enqueued].cmd, 1, &be_idx) > 0) {
-              caller_map[be_idx & (kMapSize - 1)].store(cwis[enqueued].caller_id, std::memory_order_release);
+              caller_map[be_idx & (kMapSize - 1)].store(
+                  cwis[enqueued].caller_id, std::memory_order_release);
               ++enqueued;
-            } else { break; }
+            } else {
+              break;
+            }
           }
           size_t n = dev_be.do_drain(be_buf, kBatchSize);
-          for (size_t i = 0; i < n; ++i) { uint32_t cid; while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(std::memory_order_acquire)) == kEmpty) std::this_thread::yield(); caller_map[be_buf[i] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed); }
+          for (size_t i = 0; i < n; ++i) {
+            uint32_t cid;
+            while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(
+                        std::memory_order_acquire)) == kEmpty)
+              std::this_thread::yield();
+            caller_map[be_buf[i] & (kMapSize - 1)].store(
+                kEmpty, std::memory_order_relaxed);
+          }
           drained += n;
           if (drained < kBatchSize) std::this_thread::yield();
         }
@@ -430,10 +448,18 @@ int main(int argc, char** argv) {
           uint32_t be_idx;
           while (tpt_be.do_enqueue(&cwi.cmd, 1, &be_idx) == 0)
             std::this_thread::yield();
-          caller_map[be_idx & (kMapSize - 1)].store(cwi.caller_id, std::memory_order_release);
+          caller_map[be_idx & (kMapSize - 1)].store(cwi.caller_id,
+                                                    std::memory_order_release);
           uint32_t be_buf[1];
           while (tpt_be.do_drain(be_buf, 1) == 0) std::this_thread::yield();
-                  { uint32_t cid; while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(std::memory_order_acquire)) == kEmpty) std::this_thread::yield(); caller_map[be_buf[0] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed); }
+          {
+            uint32_t cid;
+            while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(
+                        std::memory_order_acquire)) == kEmpty)
+              std::this_thread::yield();
+            caller_map[be_buf[0] & (kMapSize - 1)].store(
+                kEmpty, std::memory_order_relaxed);
+          }
           auto t1 = std::chrono::steady_clock::now();
           latencies.push_back(elapsed_us(t0, t1));
         }
@@ -458,42 +484,53 @@ int main(int argc, char** argv) {
             cwis[b].cmd.dst_off = 0;
             cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
             cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
-          cwis[b].cmd.transport = 0;  // auto
-          cwis[b].caller_id = static_cast<uint32_t>(b);
-        }
-
-        auto t0 = std::chrono::steady_clock::now();
-        size_t enqueued = 0, drained = 0;
-        uint32_t be_buf[kBatchSize];
-        while (drained < kBatchSize) {
-          while (enqueued < kBatchSize) {
-            uint32_t be_idx;
-            if (tpt_be.do_enqueue(&cwis[enqueued].cmd, 1, &be_idx) > 0) {
-              caller_map[be_idx & (kMapSize - 1)].store(cwis[enqueued].caller_id, std::memory_order_release);
-              ++enqueued;
-            } else { break; }
+            cwis[b].cmd.transport = 0;  // auto
+            cwis[b].caller_id = static_cast<uint32_t>(b);
           }
-          size_t n = tpt_be.do_drain(be_buf, kBatchSize);
-          for (size_t i = 0; i < n; ++i) { uint32_t cid; while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(std::memory_order_acquire)) == kEmpty) std::this_thread::yield(); caller_map[be_buf[i] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed); }
-          drained += n;
-          if (drained < kBatchSize) std::this_thread::yield();
+
+          auto t0 = std::chrono::steady_clock::now();
+          size_t enqueued = 0, drained = 0;
+          uint32_t be_buf[kBatchSize];
+          while (drained < kBatchSize) {
+            while (enqueued < kBatchSize) {
+              uint32_t be_idx;
+              if (tpt_be.do_enqueue(&cwis[enqueued].cmd, 1, &be_idx) > 0) {
+                caller_map[be_idx & (kMapSize - 1)].store(
+                    cwis[enqueued].caller_id, std::memory_order_release);
+                ++enqueued;
+              } else {
+                break;
+              }
+            }
+            size_t n = tpt_be.do_drain(be_buf, kBatchSize);
+            for (size_t i = 0; i < n; ++i) {
+              uint32_t cid;
+              while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(
+                          std::memory_order_acquire)) == kEmpty)
+                std::this_thread::yield();
+              caller_map[be_buf[i] & (kMapSize - 1)].store(
+                  kEmpty, std::memory_order_relaxed);
+            }
+            drained += n;
+            if (drained < kBatchSize) std::this_thread::yield();
+          }
+          auto t1 = std::chrono::steady_clock::now();
+
+          double total_bytes = static_cast<double>(bytes) * kBatchSize;
+          double time_s = elapsed_us(t0, t1) /
+                          1e6;  // IPC throughput            // IPC throughput
+          double gbps = (total_bytes / time_s) / 1e9;
+          throughputs.push_back(gbps);
         }
-        auto t1 = std::chrono::steady_clock::now();
 
-        double total_bytes = static_cast<double>(bytes) * kBatchSize;
-        double time_s = elapsed_us(t0, t1) / 1e6;            // IPC throughput            // IPC throughput
-        double gbps = (total_bytes / time_s) / 1e9;
-        throughputs.push_back(gbps);
+        double avg_tp = 0;
+        for (double t : throughputs) avg_tp += t;
+        avg_tp /= throughputs.size();
+
+        results.push_back({"transport_backend", 0, bytes, avg_lat, avg_tp});
       }
-
-      double avg_tp = 0;
-      for (double t : throughputs) avg_tp += t;
-      avg_tp /= throughputs.size();
-
-      results.push_back({"transport_backend", 0, bytes, avg_lat, avg_tp});
+      std::printf("[p2p-perf] TransportBackend benchmarks done.\n");
     }
-    std::printf("[p2p-perf] TransportBackend benchmarks done.\n");
-  }
   }
 
   // ── 9a. Benchmark TransportBackend (RDMA) ──────────────
@@ -519,8 +556,7 @@ int main(int argc, char** argv) {
         probe_cmd.dst_off = 0;
         probe_cmd.dst_peer = static_cast<uint32_t>(peer);
         probe_cmd.src_peer = static_cast<uint32_t>(rank);
-        probe_cmd.transport =
-            static_cast<uint8_t>(PeerTransportKind::Rdma);
+        probe_cmd.transport = static_cast<uint8_t>(PeerTransportKind::Rdma);
 
         uint32_t probe_idx;
         if (tpt_be.do_enqueue(&probe_cmd, 1, &probe_idx) > 0) {
@@ -532,9 +568,9 @@ int main(int argc, char** argv) {
               rdma_ok = true;
               break;
             }
-            auto elapsed = std::chrono::duration_cast<
-                std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0);
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0);
             if (elapsed.count() >= kProbeTimeoutMs) break;
             std::this_thread::yield();
           }
@@ -551,8 +587,9 @@ int main(int argc, char** argv) {
         auto timed_drain = [&](uint32_t* buf, size_t max, int timeout_ms) {
           auto t0 = std::chrono::steady_clock::now();
           while (tpt_be.do_drain(buf, max) == 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0);
+            auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0);
             if (elapsed.count() >= timeout_ms) return false;
             std::this_thread::yield();
           }
@@ -584,8 +621,7 @@ int main(int argc, char** argv) {
             cwi.cmd.dst_off = 0;
             cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
             cwi.cmd.src_peer = static_cast<uint32_t>(rank);
-            cwi.cmd.transport =
-                static_cast<uint8_t>(PeerTransportKind::Rdma);
+            cwi.cmd.transport = static_cast<uint8_t>(PeerTransportKind::Rdma);
             cwi.caller_id = static_cast<uint32_t>(iter);
 
             auto t0 = std::chrono::steady_clock::now();
@@ -659,9 +695,9 @@ int main(int argc, char** argv) {
               }
               size_t n = tpt_be.do_drain(be_buf, kBatchSize);
               if (n == 0) {
-                auto elapsed = std::chrono::duration_cast<
-                    std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - t0);
+                auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0);
                 if (elapsed.count() >= drain_timeout_ms) tp_timeout = true;
               }
               for (size_t i = 0; i < n; ++i) {
@@ -696,8 +732,7 @@ int main(int argc, char** argv) {
                 {"transport_backend_rdma", 0, bytes, avg_lat, avg_tp});
           }
         }
-        std::printf(
-            "[p2p-perf] TransportBackend RDMA benchmarks done.\n");
+        std::printf("[p2p-perf] TransportBackend RDMA benchmarks done.\n");
       }
     }
   }

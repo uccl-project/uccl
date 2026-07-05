@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
   int rank = (role == "server") ? 0 : 1, peer = (rank == 0) ? 1 : 0,
       gpu = gi(argc, argv, "--gpu", rank == 0 ? 0 : 1);
   auto ip = (role == "server") ? "0.0.0.0"
-                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
+                               : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
   int port = gi(argc, argv, "--exchanger-port", 16981);
   printf("=== DeviceBackend === %s r%d g%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));
@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
         uint32_t be_idx;
         if (dev.do_enqueue(&w[enq].cmd, 1, &be_idx) > 0) {
           caller_map[be_idx & (kMapSize - 1)].store(w[enq].caller_id,
-                                   std::memory_order_release);
+                                                    std::memory_order_release);
           ++enq;
         } else {
           // Backpressure: drain some completions to free FIFO slots.
@@ -138,7 +138,8 @@ int main(int argc, char** argv) {
             while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(
                         std::memory_order_acquire)) == kEmpty)
               std::this_thread::yield();
-            caller_map[be_buf[i] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed);
+            caller_map[be_buf[i] & (kMapSize - 1)].store(
+                kEmpty, std::memory_order_relaxed);
             ++total_done;
           }
         }
@@ -154,7 +155,8 @@ int main(int argc, char** argv) {
           while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(
                       std::memory_order_acquire)) == kEmpty)
             std::this_thread::yield();
-          caller_map[be_buf[i] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed);
+          caller_map[be_buf[i] & (kMapSize - 1)].store(
+              kEmpty, std::memory_order_relaxed);
           ++total_done;
         }
       }
@@ -180,7 +182,8 @@ int main(int argc, char** argv) {
 
     uint32_t be_idx;
     dev.do_enqueue(&w.cmd, 1, &be_idx);
-    caller_map[be_idx & (kMapSize - 1)].store(w.caller_id, std::memory_order_release);
+    caller_map[be_idx & (kMapSize - 1)].store(w.caller_id,
+                                              std::memory_order_release);
 
     uint32_t be_buf[1];
     int tr = 0;
@@ -190,10 +193,11 @@ int main(int argc, char** argv) {
     }
     if (tr <= 5000) {
       uint32_t cid;
-      while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(std::memory_order_acquire)) ==
-             kEmpty)
+      while ((cid = caller_map[be_buf[0] & (kMapSize - 1)].load(
+                  std::memory_order_acquire)) == kEmpty)
         std::this_thread::yield();
-      caller_map[be_buf[0] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed);
+      caller_map[be_buf[0] & (kMapSize - 1)].store(kEmpty,
+                                                   std::memory_order_relaxed);
     }
 
     std::vector<float> res(1024);

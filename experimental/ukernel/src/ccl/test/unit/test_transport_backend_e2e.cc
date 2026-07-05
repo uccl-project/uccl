@@ -27,7 +27,7 @@ static int gi(int c, char** v, std::string n, int d) {
   return std::stoi(ga(c, v, n, std::to_string(d)));
 }
 static void cp(std::shared_ptr<Communicator> cm, int r,
-                PeerTransportKind tpt = PeerTransportKind::Ipc) {
+               PeerTransportKind tpt = PeerTransportKind::Ipc) {
   int p = (r == 0) ? 1 : 0;
   if (r < p) {
     cm->connect(p, PeerTransportKind::Ipc);
@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
   int rank = (role == "server") ? 0 : 1, peer = (rank == 0) ? 1 : 0,
       gpu = gi(argc, argv, "--gpu", rank == 0 ? 0 : 1);
   auto ip = (role == "server") ? "0.0.0.0"
-                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
+                               : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
   int port = gi(argc, argv, "--exchanger-port", 16980);
   auto transport_str = ga(argc, argv, "--transport", "ipc");
   auto tpt_kind = (transport_str == "rdma") ? PeerTransportKind::Rdma
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
         uint32_t be_idx;
         if (tpt.do_enqueue(&w[enq].cmd, 1, &be_idx) > 0) {
           caller_map[be_idx & (kMapSize - 1)].store(w[enq].caller_id,
-                                   std::memory_order_release);
+                                                    std::memory_order_release);
           ++enq;
         }
       }
@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
           while ((cid = caller_map[be_buf[i] & (kMapSize - 1)].load(
                       std::memory_order_acquire)) == kEmpty)
             std::this_thread::yield();
-          caller_map[be_buf[i] & (kMapSize - 1)].store(kEmpty, std::memory_order_relaxed);
+          caller_map[be_buf[i] & (kMapSize - 1)].store(
+              kEmpty, std::memory_order_relaxed);
           ++ok;
         }
       }
@@ -139,16 +140,14 @@ int main(int argc, char** argv) {
       CompletionResult r;
       if (comm->try_complete(&r, 1) && r.rid == rid) break;
     }
-    unsigned wid =
-        comm->wait_signal_async(peer, 998, tpt_kind);
+    unsigned wid = comm->wait_signal_async(peer, 998, tpt_kind);
     while (1) {
       SignalCompletion s;
       if (comm->try_complete_signals(&s, 1) && s.rid == wid) break;
     }
     printf("  [PASS]\n");
   } else {
-    unsigned rid =
-        comm->wait_signal_async(peer, 999, tpt_kind);
+    unsigned rid = comm->wait_signal_async(peer, 999, tpt_kind);
     while (1) {
       SignalCompletion s;
       if (comm->try_complete_signals(&s, 1) && s.rid == rid) break;

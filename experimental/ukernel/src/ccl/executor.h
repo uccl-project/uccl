@@ -217,7 +217,8 @@ class SprayExecutor {
 
   // ── Backend cmd_idx → SprayExecutor caller_id mapping ──
   // Fixed-size atomic arrays with mask (mirrors old pending_ pattern).
-  // be_idx values grow unbounded; masking prevents OOB on capacity-sized arrays.
+  // be_idx values grow unbounded; masking prevents OOB on capacity-sized
+  // arrays.
   static constexpr size_t kCallerMapSize = 65536;
   static constexpr uint32_t kMapSlotEmpty = ~0u;
   std::unique_ptr<std::atomic<uint32_t>[]> dev_caller_map_;
