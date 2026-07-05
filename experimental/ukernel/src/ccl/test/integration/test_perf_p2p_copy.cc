@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
   std::printf("[p2p-perf] role=%s rank=%d gpu=%d preferred=%s\n", role.c_str(),
               rank, gpu, transport_str.c_str());
 
-  // ── 1. Create Communicator ──────────────────────────────────────────
+  // 1. Create Communicator
   auto comm =
       make_communicator(gpu, rank, exchanger_ip, exchanger_port, preferred);
   if (!setup_bidirectional_peer(comm, rank, peer)) {
@@ -147,14 +147,14 @@ int main(int argc, char** argv) {
   }
   std::printf("[p2p-perf] peer setup done\n");
 
-  // ── 2. Allocate local GPU memory ────────────────────────────────────
+  // 2. Allocate local GPU memory
   GPU_RT_CHECK(gpuSetDevice(gpu));
   constexpr size_t kMaxBytes = 1024ULL * 1024 * 1024;
   void* d_local = nullptr;
   GPU_RT_CHECK(gpuMalloc(&d_local, kMaxBytes));
   GPU_RT_CHECK(gpuMemset(d_local, 0xAB, kMaxBytes));
 
-  // ── 3. Exchange buffers via IPC ─────────────────────────────────────
+  // 3. Exchange buffers via IPC
   uint32_t local_buf_id = (rank == 0) ? 0x1000 : 0x2000;
   uint32_t remote_buf_id = (rank == 0) ? 0x2000 : 0x1000;
 
@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
   }
   std::printf("[p2p-perf] remote_dev=%d resolved\n", remote_dev);
 
-  // ── 4. Enable peer access ───────────────────────────────────────────
+  // 4. Enable peer access
   int can_access = 0;
   GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access, gpu, remote_dev));
   if (!can_access) {
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
   std::printf("[p2p-perf] peer access enabled: GPU %d -> %d\n", gpu,
               remote_dev);
 
-  // ── 5. Warm-up ──────────────────────────────────────────────────────
+  // 5. Warm-up
   gpuStream_t warmup_stream;
   GPU_RT_CHECK(gpuStreamCreate(&warmup_stream));
   for (int i = 0; i < 10; ++i)
@@ -217,11 +217,11 @@ int main(int argc, char** argv) {
   GPU_RT_CHECK(gpuStreamSynchronize(warmup_stream));
   gpuStreamDestroy(warmup_stream);
 
-  // ── 6. Prepare size scan ────────────────────────────────────────────
+  // 6. Prepare size scan
   auto sizes = make_size_scan();
   std::vector<Result> results;
 
-  // ── 7. Benchmark DeviceBackend (various blocks_per_worker) ──────────
+  // 7. Benchmark DeviceBackend (various blocks_per_worker)
   std::vector<uint32_t> all_blocks = {1, 2, 4, 8, 16, 32, 64, 128};
   int sm_count = 0;
   GPU_RT_CHECK(
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
       caller_map[i].store(kEmpty, std::memory_order_relaxed);
 
     for (size_t bytes : sizes) {
-      // ── Latency ──
+      // Latency
       constexpr int kLatencyIters = 5;
       std::vector<double> latencies;
       latencies.reserve(kLatencyIters);
@@ -300,7 +300,7 @@ int main(int argc, char** argv) {
       for (double l : latencies) avg_lat += l;
       avg_lat /= latencies.size();
 
-      // ── Throughput ──
+      // Throughput
       constexpr int kBatchSize = 16;
       constexpr int kThroughputIters = 3;
       std::vector<double> throughputs;
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
                 blocks_per_worker);
   }
 
-  // ── 8. Benchmark gpuMemcpyPeerAsync ─────────────────────────────────
+  // 8. Benchmark gpuMemcpyPeerAsync
   std::printf("[p2p-perf] Starting gpuMemcpyPeerAsync benchmarks...\n");
   gpuStream_t stream;
   GPU_RT_CHECK(gpuStreamCreate(&stream));
@@ -413,7 +413,7 @@ int main(int argc, char** argv) {
 
   gpuStreamDestroy(stream);
 
-  // ── 9. Benchmark TransportBackend (IPC) ────────────────
+  // 9. Benchmark TransportBackend (IPC)
   {
     TransportBackend tpt_be(comm.get());
     static constexpr uint32_t kEmpty = ~0u;
@@ -533,7 +533,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ── 9a. Benchmark TransportBackend (RDMA) ──────────────
+  // 9a. Benchmark TransportBackend (RDMA)
   {
     TransportBackend tpt_be(comm.get());
     static constexpr uint32_t kEmpty = ~0u;
@@ -737,7 +737,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ── 10. Output tables ─────────────────────────────────────────────────
+  // 10. Output tables
   comm->barrier("results_barrier", 30000);
   if (rank != 0) {
     // Cleanup and exit, only rank 0 prints
@@ -804,8 +804,8 @@ int main(int argc, char** argv) {
   int w_name = 10;
   int w_num = 9;
 
-  // ── Latency table ──
-  std::printf("\n========== P2P Copy Latency (us) ==========\n");
+  // Latency table
+  std::printf("\nP2P Copy Latency (us)\n");
   std::printf("  %-*s", w_name, "size");
   for (auto& n : names) std::printf("  %*s", w_num, n.c_str());
   std::printf("\n");
@@ -823,8 +823,8 @@ int main(int argc, char** argv) {
     std::printf("\n");
   }
 
-  // ── Throughput table ──
-  std::printf("\n========== P2P Copy Throughput (GB/s) ==========\n");
+  // Throughput table
+  std::printf("\nP2P Copy Throughput (GB/s)\n");
   std::printf("  %-*s", w_name, "size");
   for (auto& n : names) std::printf("  %*s", w_num, n.c_str());
   std::printf("\n");
@@ -844,7 +844,7 @@ int main(int argc, char** argv) {
   std::printf("\n");
   fflush(stdout);
 
-  // ── Cleanup ─────────────────────────────────────────────────────────
+  // Cleanup
   GPU_RT_CHECK(gpuFree(d_local));
   comm->dereg_ipc(local_buf_id);
 

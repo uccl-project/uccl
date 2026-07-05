@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
   auto transport_str = ga(argc, argv, "--transport", "ipc");
   auto tpt_kind = (transport_str == "rdma") ? PeerTransportKind::Rdma
                                             : PeerTransportKind::Ipc;
-  printf("=== TransportBackend e2e === %s r%d g%d transport=%s\n", role.c_str(),
+  printf("TransportBackend e2e %s r%d g%d transport=%s\n", role.c_str(),
          rank, gpu, transport_str.c_str());
   GPU_RT_CHECK(gpuSetDevice(gpu));
   auto cfg = std::make_shared<CommunicatorConfig>();
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
   if (rank == 1) {
     TransportBackend tpt(comm.get());
 
-    // ── Allocate caller_id mapping like SprayExecutor ──
+    // Allocate caller_id mapping (mirrors SprayExecutor pattern)
     static constexpr uint32_t kEmpty = ~0u;
     static constexpr size_t kMapSize = 65536;
     std::unique_ptr<std::atomic<uint32_t>[]> caller_map(

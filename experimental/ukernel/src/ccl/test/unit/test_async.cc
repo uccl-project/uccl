@@ -19,7 +19,7 @@ namespace UKernel {
 namespace CCL {
 namespace {
 
-// ── Mock backend ─────────────────────────────────────────────────────────
+// Mock backend
 
 class MockBackend final : public BatchBackend {
  public:
@@ -70,7 +70,7 @@ class MockBackend final : public BatchBackend {
   size_t in_flight_ = 0;
 };
 
-// ── SprayExecutor integration test ───────────────────────────────────────
+// SprayExecutor integration tests
 
 void test_executor_allreduce_async() {
   printf("[test] executor: async allreduce via mock backends...\n");
@@ -211,7 +211,7 @@ void test_executor_active_count() {
 int main() {
   using namespace UKernel::CCL;
 
-  printf("\n=== SprayExecutor Integration Tests ===\n");
+  printf("\nSprayExecutor Integration Tests\n");
   test_executor_allreduce_async();
   test_executor_alltoall_async();
   test_executor_multiple_submits();
@@ -220,6 +220,6 @@ int main() {
   test_executor_active_count();
   fprintf(stderr, "  PASSED\n");
 
-  printf("\n=== All async tests PASSED ===\n");
+  printf("\nAll async tests PASSED\n");
   return 0;
 }

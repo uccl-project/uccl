@@ -10,7 +10,7 @@ class Communicator;
 }
 namespace CCL {
 
-// ── Command descriptor ──────────────────────────────────────────────────
+// Command descriptor
 
 struct Cmd {
   ExecOpKind kind;      // 4
@@ -47,7 +47,7 @@ class BatchBackend {
   virtual bool supports(ExecOpKind kind) const = 0;
   void set_comm(UKernel::Transport::Communicator* comm) { comm_ = comm; }
 
-  // ── Backend operations (called directly by SprayExecutor) ──
+  // Backend API (called directly by SprayExecutor)
   virtual size_t do_enqueue(Cmd const* cmds, size_t n,
                             uint32_t* out_indices = nullptr) = 0;
   virtual size_t do_drain(uint32_t* completed, size_t max) = 0;

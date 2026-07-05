@@ -12,7 +12,7 @@ namespace UKernel {
 namespace CCL {
 namespace {
 
-// ── Layer 1: coll_types ─────────────────────────────────────────────────
+// Layer 1: coll_types
 
 void test_scalar_type_sizes() {
   printf("[test] scalar type sizes...\n");
@@ -51,7 +51,7 @@ void test_enum_distinct_values() {
          static_cast<uint32_t>(ReductionKind::Sum));
 }
 
-// ── Layer 2: coll_config ────────────────────────────────────────────────
+// Layer 2: coll_config
 
 void test_collective_config_defaults() {
   printf("[test] collective config defaults...\n");
@@ -97,7 +97,7 @@ void test_collective_config_field_assignment() {
   assert(cfg.output_split_bytes.size() == 2);
 }
 
-// ── Layer 3: coll_algo ──────────────────────────────────────────────────
+// Layer 3: coll_algo
 
 void test_chunk_defaults() {
   printf("[test] Chunk defaults...\n");
@@ -196,7 +196,7 @@ void test_build_coll_algo_alltoall_basic() {
   assert(saw_send);
 }
 
-// ── Layer 4: lower ──────────────────────────────────────────────────
+// Layer 4: lower
 
 void test_lower_algo_rejects_zero_tile_bytes() {
   printf("[test] lower_algo rejects zero tile_bytes...\n");
@@ -366,6 +366,6 @@ int main() {
   bench_lower_algo_large_ring();
   bench_lower_algo_large_alltoall();
 
-  printf("\n=== Module tests PASSED ===\n");
+  printf("\nModule tests PASSED\n");
   return 0;
 }

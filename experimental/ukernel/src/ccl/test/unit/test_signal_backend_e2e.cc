@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
   auto ip = (role == "server") ? "0.0.0.0"
                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
   int port = gi(argc, argv, "--exchanger-port", 16982);
-  printf("=== SignalBackend === %s r%d g%d\n", role.c_str(), rank, gpu);
+  printf("SignalBackend %s r%d g%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = ip;
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
   sig.set_comm(comm.get());
   int const N = 100;
 
-  // ── Allocate caller_id mapping like SprayExecutor ──
+  // Allocate caller_id mapping (mirrors SprayExecutor pattern)
   static constexpr uint32_t kEmpty = ~0u;
   static constexpr size_t kMapSize = 65536;
   std::unique_ptr<std::atomic<uint32_t>[]> caller_map(

@@ -131,7 +131,7 @@ uint64_t RdmaTransportAdapter::now_ns() {
           .count());
 }
 
-// ── constructor / destructor ────────────────────────────────────────────────
+// Constructor / destructor
 
 RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
                                            RdmaTransportConfig config)
@@ -245,7 +245,7 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   }
 }
 
-// ── table sizing helpers ────────────────────────────────────────────────────
+// Table sizing helpers
 
 std::atomic<RdmaTransportAdapter::RdmaPeer*>&
 RdmaTransportAdapter::ensure_peer_slot(int rank) {
@@ -289,7 +289,7 @@ void RdmaTransportAdapter::ensure_mr_slot(uint32_t id) {
   mr_table_capacity_ = new_cap;
 }
 
-// ── QP helpers ──────────────────────────────────────────────────────────────
+// QP helpers
 
 bool RdmaTransportAdapter::create_qp_set(ibv_qp** qps, ibv_cq** cq, int count,
                                          int cq_size, int max_recv_wr) {
@@ -424,7 +424,7 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
   return true;
 }
 
-// ── peer init / destroy ─────────────────────────────────────────────────────
+// Peer init / destroy
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
@@ -482,7 +482,7 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
   p.signal_pool.reset();
 }
 
-// ── connection management ───────────────────────────────────────────────────
+// Connection management
 
 RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
   RdmaPeerConnectSpec init;
@@ -639,7 +639,7 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   return true;
 }
 
-// ── QP selection ─────────────────────────────────────────────────────────────
+// QP selection
 
 int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
   if (msize <= kCacheSizeThresh &&
@@ -677,7 +677,7 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
   return chosen;
 }
 
-// ── send path (enqueue to jring) ─────────────────────────────────────────────
+// Send path (enqueue to jring)
 
 unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                                               uint32_t local_buf_id,
@@ -731,7 +731,7 @@ unsigned RdmaTransportAdapter::send_signal_async(int rank, uint64_t tag,
   return 1;
 }
 
-// ── recv path (enqueue to jring) ─────────────────────────────────────────────
+// Recv path (enqueue to jring)
 
 unsigned RdmaTransportAdapter::wait_signal_async(
     int rank, uint64_t /*expected_tag*/, std::optional<WaitTarget> /*target*/,
@@ -742,7 +742,7 @@ unsigned RdmaTransportAdapter::wait_signal_async(
   return 1;
 }
 
-// ── memory registration ─────────────────────────────────────────────────────
+// Memory registration
 
 bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
                                            size_t len) {
@@ -833,7 +833,7 @@ void RdmaTransportAdapter::register_remote_buffer(int rank, uint32_t buf_id,
   p->remote_buf_owners_[buf_id] = std::move(info);
 }
 
-// ── send_worker ──────────────────────────────────────────────────────────────
+// Send worker
 
 void RdmaTransportAdapter::send_worker() {
   RingElem e;
@@ -1026,7 +1026,7 @@ void RdmaTransportAdapter::send_worker() {
     publish_completion(drain.comm_rid, true);
 }
 
-// ── polling ──────────────────────────────────────────────────────────────────
+// Polling
 
 void RdmaTransportAdapter::poll_loop() {
   while (!stop_.load(std::memory_order_acquire)) {
@@ -1180,7 +1180,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
   return any;
 }
 
-// ── chunk splitting ──────────────────────────────────────────────────────────
+// Chunk splitting
 
 RdmaTransportAdapter::ChunkResult RdmaTransportAdapter::chunk_split(
     size_t len) const {

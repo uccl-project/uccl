@@ -34,13 +34,13 @@ enum class CollectiveOpStatus : uint32_t {
 using CollectiveOpHandle = uint64_t;
 inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 
-// ── Op sprayer with direct backend calls ────────────────────────────────
+// Op sprayer with direct backend calls
 
 struct SprayRun {
   static constexpr uint32_t kIndegreeDone =
       ~0u;  // sentinel: op already processed
 
-  // ── Hot path: accessed every enqueue/drain cycle ──
+  // Hot path: accessed every enqueue/drain cycle
   std::atomic<CollectiveOpStatus> status{CollectiveOpStatus::Queued};
   std::atomic<size_t> done_count{0};
   std::mutex mtx;
@@ -49,7 +49,7 @@ struct SprayRun {
   std::vector<CmdWithId> dev_cmds;
   std::vector<CmdWithId> tpt_cmds;
 
-  // ── Lock-free drain path (drain threads, no mtx) ──
+  // Lock-free drain path (drain threads, no mtx)
   std::vector<uint32_t> successor_data;  // contiguous successor list
   std::vector<uint32_t>
       successor_off;               // offset into data per op (size = nops+1)
@@ -66,15 +66,15 @@ struct SprayRun {
   };
   ReadyRing ready_ring;
 
-  // ── Read-only after construction ──
+  // Read-only after construction
   TiledResult tiled;
 
-  // ── Buffer IDs (dedup: same ptr+size = same ID) ──
+  // Buffer ID deduplication: same ptr+size = same ID
   uint32_t input_buf_id = 0;
   uint32_t output_buf_id = 0;
   uint32_t scratch_buf_id = 0;
 
-  // ── Cold: rarely accessed ──
+  // Cold: rarely accessed
   std::string error;
 };
 
@@ -141,7 +141,6 @@ class SprayExecutor {
   void drain_tpt_loop();
   void drain_signal_loop();
 
-  // ── Phase helpers ──
   void collect_ready(SprayRun& run);
   void enqueue_to_ring(SprayRun& run);
 
@@ -172,16 +171,15 @@ class SprayExecutor {
     }
   }
 
-  // ── Tensor → buffer ID mapping (dedup: same ptr = same ID) ──
+  // Tensor to buffer ID dedup: same ptr = same ID
   std::unordered_map<uintptr_t, uint32_t> tensor_to_buf_id_;
   uint32_t next_buf_id_ = 1;
   uint32_t get_or_register_buf(void* ptr, size_t bytes);
 
-  // ── Buffer registration indirection (set by factory, avoids link deps) ──
+  // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
                            size_t) = nullptr;
 
-  // ── Owned resources ──
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
   BatchBackend* signal_be_ = nullptr;
@@ -190,35 +188,33 @@ class SprayExecutor {
   std::unique_ptr<BatchBackend> owned_signal_;
   std::shared_ptr<Transport::Communicator> owned_comm_;
 
-  // ── Threads ──
   std::thread enqueue_th_;
   std::thread drain_th_dev_;
   std::thread drain_th_tpt_;
   std::thread drain_th_signal_;
   std::atomic<bool> stop_{false};
 
-  // ── cmd_idx → (run, op_idx) mapping ──
+  // cmd_idx to (run, op_idx) mapping
   static constexpr size_t kMaxCmdIdx = 65536;
   CmdRunMapping cmd_to_run_[kMaxCmdIdx];
 
-  // ── Transport LB state ──
+  // Transport LB state
   int world_size_ = 0;
   std::unique_ptr<PeerMetrics[]> tpt_metrics_;
 
-  // ── Backpressure ──
+  // Backpressure
   size_t max_concurrent_runs_ = 16;
   std::atomic<size_t> active_runs_{0};
 
-  // ── Global cmd_idx counter + run map ──
+  // Global cmd_idx counter and run map
   uint32_t next_cmd_idx_ = 0;
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
 
-  // ── Backend cmd_idx → SprayExecutor caller_id mapping ──
-  // Fixed-size atomic arrays with mask (mirrors old pending_ pattern).
-  // be_idx values grow unbounded; masking prevents OOB on capacity-sized
-  // arrays.
+  // Backend cmd_idx to SprayExecutor caller_id mapping.
+  // Fixed-size atomic arrays with mask. Indices grow unbounded;
+  // masking prevents OOB on capacity-sized arrays.
   static constexpr size_t kCallerMapSize = 65536;
   static constexpr uint32_t kMapSlotEmpty = ~0u;
   std::unique_ptr<std::atomic<uint32_t>[]> dev_caller_map_;

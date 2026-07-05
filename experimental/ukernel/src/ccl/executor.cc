@@ -14,8 +14,6 @@
 namespace UKernel {
 namespace CCL {
 
-// ── Helpers ─────────────────────────────────────────────────────────────
-
 static CollectiveBufferRole buf_role(ExecOpKind kind, bool is_src) {
   switch (kind) {
     case ExecOpKind::Put:
@@ -76,7 +74,7 @@ uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
   return id;
 }
 
-// ── ReadyRing lock-free MPSC ───────────────────────────────────────────
+// ReadyRing lock-free MPSC
 
 bool SprayRun::ReadyRing::push(uint32_t op) {
   uint32_t t = tail.load(std::memory_order_relaxed);
@@ -99,7 +97,6 @@ uint32_t SprayRun::ReadyRing::pop() {
   return op;
 }
 
-// ── Constructor ───────────────────────────────────────────────────────
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
                              BatchBackend* signal_be, int world_size)
@@ -154,7 +151,6 @@ SprayExecutor::~SprayExecutor() {
   if (drain_th_signal_.joinable()) drain_th_signal_.join();
 }
 
-// ── Lookup ───────────────────────────────────────────────────────────────
 
 SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
   std::lock_guard lock(runs_mutex_);
@@ -185,7 +181,6 @@ std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
   return it != runs_.end() ? it->second->error : std::string{};
 }
 
-// ── Submit ───────────────────────────────────────────────────────────────
 
 CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
                                          void* input, void* output,
@@ -258,7 +253,6 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   return h;
 }
 
-// ── Poll / Wait / Release ────────────────────────────────────────────────
 
 bool SprayExecutor::poll(CollectiveOpHandle h) {
   std::lock_guard lock(runs_mutex_);
@@ -328,7 +322,6 @@ void SprayExecutor::release(CollectiveOpHandle h) {
   runs_.erase(it);
 }
 
-// ── Phase helpers ────────────────────────────────────────────────────────
 
 void SprayExecutor::collect_ready(SprayRun& run) {
   run.ready.clear();
@@ -423,7 +416,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   }
 }
 
-// ── Thread loops ─────────────────────────────────────────────────────────
 
 void SprayExecutor::enqueue_loop() {
   while (!stop_) {

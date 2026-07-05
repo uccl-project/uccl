@@ -92,7 +92,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
-// ── SM IPC completion buffer helpers ─────────────────────────────────
+// SM IPC completion buffer helpers
 
 struct GpuComp {
   uint64_t last[2];
@@ -119,7 +119,7 @@ __device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
 #endif
 }
 
-// ── SM IPC kernel functions ──────────────────────────────────────────
+// SM IPC kernel functions
 
 template <typename T>
 __device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
@@ -128,7 +128,7 @@ __device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
   sm_write_seq(a);
 }
 
-// ── benchmarks ────────────────────────────────────────────────────────
+// Benchmarks
 
 __global__ void benchDispatchNopKernel() {}
 
@@ -140,7 +140,7 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
   run_reduce<float>(args, blockIdx.x, gridDim.x, nullptr);
 }
 
-// ── dispatch ──────────────────────────────────────────────────────────
+// Dispatch
 
 #define RUN_COPY_BODY(dtype, fn)                           \
   if (dtype == DataType::Int8)                             \

@@ -317,7 +317,7 @@ void UcclTransportAdapter::send_worker() {
   while (!stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
 
-    // ── Step 1: try to dequeue a new task (non-blocking) ──
+    // Step 1: try to dequeue a new task (non-blocking)
     if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) == 1) {
       did_work = true;
 
@@ -409,7 +409,7 @@ void UcclTransportAdapter::send_worker() {
       }
     }
 
-    // ── Step 2: poll all pending sends (non-blocking) ──
+    // Step 2: poll all pending sends (non-blocking)
     for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
@@ -420,7 +420,7 @@ void UcclTransportAdapter::send_worker() {
       }
     }
 
-    // ── Step 3: yield if idle ──
+    // Step 3: yield if idle
     if (!did_work) {
       std::this_thread::yield();
     }
@@ -448,7 +448,7 @@ void UcclTransportAdapter::recv_worker() {
   while (!stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
 
-    // ── Step 1: try to dequeue a new task (non-blocking) ──
+    // Step 1: try to dequeue a new task (non-blocking)
     if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) == 1) {
       did_work = true;
 
@@ -543,7 +543,7 @@ void UcclTransportAdapter::recv_worker() {
       }
     }
 
-    // ── Step 2: poll all pending recvs (non-blocking) ──
+    // Step 2: poll all pending recvs (non-blocking)
     for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
@@ -554,7 +554,7 @@ void UcclTransportAdapter::recv_worker() {
       }
     }
 
-    // ── Step 3: yield if idle ──
+    // Step 3: yield if idle
     if (!did_work) {
       std::this_thread::yield();
     }

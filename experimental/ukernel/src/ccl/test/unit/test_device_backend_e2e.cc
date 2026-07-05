@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
   auto ip = (role == "server") ? "0.0.0.0"
                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
   int port = gi(argc, argv, "--exchanger-port", 16981);
-  printf("=== DeviceBackend === %s r%d g%d\n", role.c_str(), rank, gpu);
+  printf("DeviceBackend %s r%d g%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = ip;
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
     DeviceBackend dev(dcfg);
     dev.set_comm(comm.get());
 
-    // ── Allocate caller_id mapping like SprayExecutor ──
+    // Allocate caller_id mapping (mirrors SprayExecutor pattern)
     static constexpr uint32_t kEmpty = ~0u;
     static constexpr size_t kMapSize = 65536;
     std::unique_ptr<std::atomic<uint32_t>[]> caller_map(
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
                  1e9);
     }
 
-    // ── Reduce correctness test ──
+    // Reduce correctness test
     float rd[1024];
     for (int i = 0; i < 1024; i++) rd[i] = (float)i;
     GPU_RT_CHECK(gpuMemcpy(d, rd, 4096, gpuMemcpyHostToDevice));

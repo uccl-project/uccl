@@ -57,7 +57,7 @@ class Communicator {
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
-  // ── Async data / signal / wait (thin wrappers over adapter) ──
+  // Async data / signal / wait (thin wrappers over adapter)
   //
   // One-sided transports (IPC, RDMA):
   //   send_put_async() writes directly into remote memory. No matching wait
@@ -75,7 +75,7 @@ class Communicator {
       int peer, uint64_t tag,
       PeerTransportKind transport = PeerTransportKind::Unknown);
 
-  // ── Async signal wait (tag-based matching via Communicator table) ──
+  // Async signal wait (tag-based matching via Communicator table)
   // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
   // Matching is done in on_signal_received() (called by RdmaTransportAdapter
   // poll_loop and by drain_ipc_signals for IPC).
@@ -121,10 +121,10 @@ class Communicator {
                                       size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
-  // ── Convenience: register local buffer (MR + IPC) ──
+  // Convenience: register local buffer (MR + IPC)
   bool register_buffer(uint32_t buffer_id, void* ptr, size_t len);
 
-  // ── Convenience: resolve remote buffer (wait MR + wait IPC) ──
+  // Convenience: resolve remote buffer (wait MR + wait IPC)
   bool resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                              int timeout_ms = 30000);
 

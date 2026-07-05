@@ -65,7 +65,7 @@ bool recv_discard(int fd, uint64_t len) {
 
 }  // namespace
 
-// ── CpuBouncePool ─────────────────────────────────────────────────────
+// CpuBouncePool
 
 CpuBouncePool::CpuBouncePool(size_t buffer_size, size_t num_buffers)
     : buffer_size_(buffer_size) {
@@ -182,7 +182,7 @@ TcpTransportAdapter::~TcpTransportAdapter() {
 
 uint16_t TcpTransportAdapter::get_listen_port() const { return listen_port_; }
 
-// ── Path management ─────────────────────────────────────────────────────
+// Path management
 
 bool TcpTransportAdapter::ensure_put_path(PeerConnectSpec const& spec) {
   auto const* tcp = std::get_if<TcpPeerConnectSpec>(&spec.detail);
@@ -210,7 +210,7 @@ bool TcpTransportAdapter::has_wait_path(int rank) const {
   return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
 }
 
-// ── Submission ──────────────────────────────────────────────────────────
+// Submission
 
 unsigned TcpTransportAdapter::send_put_async(int peer, void* local_ptr,
                                              uint32_t, void*, uint32_t,
@@ -241,7 +241,7 @@ unsigned TcpTransportAdapter::wait_signal_async(
   return 1;
 }
 
-// ── Workers ─────────────────────────────────────────────────────────────
+// Workers
 
 void TcpTransportAdapter::send_worker_loop() {
   RingElem e;
@@ -342,7 +342,7 @@ void TcpTransportAdapter::recv_worker_loop() {
     publish_completion(drain.comm_rid, true);
 }
 
-// ── Peer connection ─────────────────────────────────────────────────────
+// Peer connection
 
 bool TcpTransportAdapter::connect_to_peer(int rank, std::string ip,
                                           uint16_t port) {
@@ -425,7 +425,7 @@ bool TcpTransportAdapter::accept_from_peer(
   return false;
 }
 
-// ── Socket helpers ──────────────────────────────────────────────────────
+// Socket helpers
 
 int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);

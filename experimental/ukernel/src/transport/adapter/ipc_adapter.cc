@@ -102,7 +102,7 @@ void IpcAdapter::shutdown() {
   for (size_t r = 0; r < comps_.size(); ++r) close_comp(static_cast<int>(r));
 }
 
-// ── Data-completion SHM (fast path for IPC GPU data transfers) ───────────
+// Data-completion SHM (fast path for IPC GPU data transfers)
 
 std::string IpcAdapter::comp_shm_name(int peer_rank) const {
   return Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), peer_rank, comm_->rank());
@@ -184,7 +184,7 @@ void IpcAdapter::close_comp(int peer_rank) {
   }
 }
 
-// ── Connection / path state ────────────────────────────────────────────────
+// Connection / path state
 
 bool IpcAdapter::connect_to(int rank) { return ensure_remote_comp(rank); }
 
@@ -246,7 +246,7 @@ bool IpcAdapter::has_wait_path(int peer_rank) const {
   return dir_state_[static_cast<size_t>(peer_rank)].second;
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
+// Public API
 
 unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
                                     void* remote_ptr, uint32_t, size_t bytes,
