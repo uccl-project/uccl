@@ -7,9 +7,9 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
-#include <pthread.h>
 #include <stdexcept>
 #include <thread>
+#include <pthread.h>
 
 namespace UKernel {
 namespace CCL {
@@ -32,8 +32,8 @@ static CollectiveBufferRole buf_role(ExecOpKind kind, bool is_src) {
   }
 }
 
-static uint32_t role_to_buf(CollectiveBufferRole role, uint32_t in, uint32_t out,
-                            uint32_t scr) {
+static uint32_t role_to_buf(CollectiveBufferRole role, uint32_t in,
+                            uint32_t out, uint32_t scr) {
   switch (role) {
     case CollectiveBufferRole::Input:
       return in;
@@ -82,8 +82,7 @@ bool SprayRun::ReadyRing::push(uint32_t op) {
   uint32_t t = tail.load(std::memory_order_relaxed);
   for (;;) {
     uint32_t next = (t + 1) & kMask;
-    if (next == head.load(std::memory_order_acquire))
-      return false;  // full
+    if (next == head.load(std::memory_order_acquire)) return false;  // full
     if (tail.compare_exchange_weak(t, next, std::memory_order_release,
                                    std::memory_order_relaxed)) {
       buf[t] = op;
@@ -94,8 +93,7 @@ bool SprayRun::ReadyRing::push(uint32_t op) {
 
 uint32_t SprayRun::ReadyRing::pop() {
   uint32_t h = head.load(std::memory_order_relaxed);
-  if (h == tail.load(std::memory_order_acquire))
-    return ~0u;
+  if (h == tail.load(std::memory_order_acquire)) return ~0u;
   uint32_t op = buf[h];
   head.store((h + 1) & kMask, std::memory_order_release);
   return op;
@@ -114,14 +112,28 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
       stop_(false),
       world_size_(world_size) {
   for (auto& m : cmd_to_run_) m = CmdRunMapping{};
+  if (device_be_) {
+    dev_caller_map_.reset(new std::atomic<uint32_t>[kCallerMapSize]);
+    for (size_t i = 0; i < kCallerMapSize; ++i)
+      dev_caller_map_[i].store(kMapSlotEmpty, std::memory_order_relaxed);
+  }
+  if (tpt_be_) {
+    tpt_caller_map_.reset(new std::atomic<uint32_t>[kCallerMapSize]);
+    for (size_t i = 0; i < kCallerMapSize; ++i)
+      tpt_caller_map_[i].store(kMapSlotEmpty, std::memory_order_relaxed);
+  }
+  if (signal_be_) {
+    sig_caller_map_.reset(new std::atomic<uint32_t>[kCallerMapSize]);
+    for (size_t i = 0; i < kCallerMapSize; ++i)
+      sig_caller_map_[i].store(kMapSlotEmpty, std::memory_order_relaxed);
+  }
   if (world_size_ > 0)
     tpt_metrics_.reset(new PeerMetrics[static_cast<size_t>(world_size_)]{});
 
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
   pthread_setname_np(enqueue_th_.native_handle(), "ucl-enq");
   if (device_be_) {
-    drain_th_dev_ =
-        std::thread(&SprayExecutor::drain_loop, this, device_be_);
+    drain_th_dev_ = std::thread(&SprayExecutor::drain_dev_loop, this);
     pthread_setname_np(drain_th_dev_.native_handle(), "ucl-drain-dev");
   }
   if (tpt_be_) {
@@ -129,8 +141,7 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
     pthread_setname_np(drain_th_tpt_.native_handle(), "ucl-drain-tpt");
   }
   if (signal_be_) {
-    drain_th_signal_ =
-        std::thread(&SprayExecutor::drain_signal_loop, this);
+    drain_th_signal_ = std::thread(&SprayExecutor::drain_signal_loop, this);
     pthread_setname_np(drain_th_signal_.native_handle(), "ucl-drain-sig");
   }
 }
@@ -162,7 +173,9 @@ size_t SprayExecutor::active_count() const {
   std::lock_guard lock(runs_mutex_);
   size_t n = 0;
   for (auto& [h, r] : runs_)
-    if (r->status.load(std::memory_order_acquire) == CollectiveOpStatus::Running) ++n;
+    if (r->status.load(std::memory_order_acquire) ==
+        CollectiveOpStatus::Running)
+      ++n;
   return n;
 }
 
@@ -216,8 +229,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     __atomic_store_n(&run->indegree[i],
                      static_cast<uint32_t>(run->tiled.ops[i].deps.size()),
                      __ATOMIC_RELAXED);
-    for (uint32_t dep : run->tiled.ops[i].deps)
-      ++succ_count[dep];
+    for (uint32_t dep : run->tiled.ops[i].deps) ++succ_count[dep];
   }
 
   // Pass 2: build flat successor table
@@ -239,8 +251,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
 
   // Seed ready ring with initial indegree==0 ops
   for (uint32_t i = 0; i < nops; ++i) {
-    if (run->tiled.ops[i].deps.empty())
-      run->ready_ring.push(i);
+    if (run->tiled.ops[i].deps.empty()) run->ready_ring.push(i);
   }
 
   runs_[h] = std::move(run);
@@ -262,7 +273,8 @@ bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
   if (!run) return true;
 
   auto check_complete = [&]() {
-    if (run->done_count.load(std::memory_order_acquire) >= run->tiled.ops.size())
+    if (run->done_count.load(std::memory_order_acquire) >=
+        run->tiled.ops.size())
       run->status.store(CollectiveOpStatus::Completed,
                         std::memory_order_release);
   };
@@ -272,9 +284,13 @@ bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
     int sleep_us = 100;
     while (run->status.load(std::memory_order_acquire) ==
            CollectiveOpStatus::Running) {
-      if (spin < 1000) { ++spin; std::this_thread::yield(); }
-      else { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-             sleep_us = std::min(sleep_us * 2, 10000); }
+      if (spin < 1000) {
+        ++spin;
+        std::this_thread::yield();
+      } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+        sleep_us = std::min(sleep_us * 2, 10000);
+      }
       check_complete();
     }
     return run->status.load(std::memory_order_acquire) !=
@@ -287,9 +303,13 @@ bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
   while (run->status.load(std::memory_order_acquire) ==
          CollectiveOpStatus::Running) {
     if (std::chrono::steady_clock::now() >= dl) break;
-    if (spin < 1000) { ++spin; std::this_thread::yield(); }
-    else { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-           sleep_us = std::min(sleep_us * 2, 10000); }
+    if (spin < 1000) {
+      ++spin;
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+      sleep_us = std::min(sleep_us * 2, 10000);
+    }
     check_complete();
   }
   return run->status.load(std::memory_order_acquire) !=
@@ -300,8 +320,10 @@ void SprayExecutor::release(CollectiveOpHandle h) {
   std::lock_guard lock(runs_mutex_);
   auto it = runs_.find(h);
   if (it == runs_.end()) return;
-  if (it->second->status.load(std::memory_order_acquire) == CollectiveOpStatus::Queued ||
-      it->second->status.load(std::memory_order_acquire) == CollectiveOpStatus::Running)
+  if (it->second->status.load(std::memory_order_acquire) ==
+          CollectiveOpStatus::Queued ||
+      it->second->status.load(std::memory_order_acquire) ==
+          CollectiveOpStatus::Running)
     throw std::logic_error("cannot release running collective");
   runs_.erase(it);
 }
@@ -313,8 +335,7 @@ void SprayExecutor::collect_ready(SprayRun& run) {
   for (;;) {
     uint32_t op = run.ready_ring.pop();
     if (op == ~0u) break;
-    if (!run.submitted[op])
-      run.ready.push_back(op);
+    if (!run.submitted[op]) run.ready.push_back(op);
   }
 }
 
@@ -327,8 +348,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   std::vector<uint32_t> tpt_idx;
 
   for (uint32_t idx : run.ready) {
-    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction,
-                     run.input_buf_id, run.output_buf_id, run.scratch_buf_id);
+    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction, run.input_buf_id,
+                     run.output_buf_id, run.scratch_buf_id);
 
     // LB decision: for Put ops, pick IPC vs RDMA dynamically
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
@@ -347,11 +368,14 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     CmdWithId cwi{c, 0};
     cwi.caller_id = next_cmd_idx_++;
     cmd_to_run_[cwi.caller_id & (kMaxCmdIdx - 1)] = {&run, idx, c.transport,
-                                                      cwi.caller_id};
+                                                     cwi.caller_id};
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      signal_be_->try_enqueue(&cwi, 1);
-      run.submitted[idx] = 1;
+      uint32_t be_idx;
+      if (signal_be_->do_enqueue(&cwi.cmd, 1, &be_idx) > 0) {
+        sig_caller_map_[be_idx & (kCallerMapSize - 1)].store(cwi.caller_id, std::memory_order_release);
+        run.submitted[idx] = 1;
+      }
       continue;
     }
 
@@ -373,12 +397,13 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   {
     size_t off = 0;
     while (off < run.dev_cmds.size()) {
-      size_t n = device_be_->try_enqueue(run.dev_cmds.data() + off,
-                                         run.dev_cmds.size() - off);
-      for (size_t j = 0; j < n; ++j)
-        run.submitted[dev_idx[off + j]] = 1;
-      off += n;
+      uint32_t be_idx;
+      size_t n = device_be_->do_enqueue(&run.dev_cmds[off].cmd, 1, &be_idx);
       if (n == 0) break;
+      dev_caller_map_[be_idx & (kCallerMapSize - 1)].store(run.dev_cmds[off].caller_id,
+                                    std::memory_order_release);
+      run.submitted[dev_idx[off]] = 1;
+      ++off;
     }
   }
 
@@ -386,12 +411,13 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   {
     size_t off = 0;
     while (off < run.tpt_cmds.size()) {
-      size_t n = tpt_be_->try_enqueue(run.tpt_cmds.data() + off,
-                                      run.tpt_cmds.size() - off);
-      for (size_t j = 0; j < n; ++j)
-        run.submitted[tpt_idx[off + j]] = 1;
-      off += n;
+      uint32_t be_idx;
+      size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[off].cmd, 1, &be_idx);
       if (n == 0) break;
+      tpt_caller_map_[be_idx & (kCallerMapSize - 1)].store(run.tpt_cmds[off].caller_id,
+                                     std::memory_order_release);
+      run.submitted[tpt_idx[off]] = 1;
+      ++off;
     }
   }
 }
@@ -419,15 +445,28 @@ void SprayExecutor::enqueue_loop() {
   }
 }
 
-void SprayExecutor::drain_loop(BatchBackend* be) {
-  uint32_t done_buf[256];
+void SprayExecutor::drain_dev_loop() {
+  uint32_t be_buf[256];
+  uint32_t caller_buf[256];
   while (!stop_) {
-    size_t n = be->try_drain(done_buf, 256);
+    size_t n = device_be_->do_drain(be_buf, 256);
     if (n == 0) {
       std::this_thread::yield();
       continue;
     }
-    drain_batch(done_buf, n, [](auto&, uint32_t) {});
+    size_t valid = 0;
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t caller_id;
+      while ((caller_id = dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+                  std::memory_order_acquire)) == kMapSlotEmpty) {
+        if (stop_) break;
+        std::this_thread::yield();
+      }
+      if (stop_) return;
+      caller_buf[valid++] = caller_id;
+      dev_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+    }
+    drain_batch(caller_buf, valid, [](auto&, uint32_t) {});
     check_completions_();
   }
 }
@@ -457,20 +496,33 @@ Transport::PeerTransportKind SprayExecutor::pick_transport(int peer) {
       static_cast<uint64_t>(m.rdma.inflight.load(std::memory_order_relaxed)) *
       m.rdma.latency_ns.load(std::memory_order_relaxed);
   return cost_ipc <= cost_rdma ? Transport::PeerTransportKind::Ipc
-                                : Transport::PeerTransportKind::Rdma;
+                               : Transport::PeerTransportKind::Rdma;
 }
 
 void SprayExecutor::drain_tpt_loop() {
-  uint32_t done_buf[256];
+  uint32_t be_buf[256];
+  uint32_t caller_buf[256];
   while (!stop_) {
-    size_t nd = tpt_be_->try_drain(done_buf, 256);
+    size_t nd = tpt_be_->do_drain(be_buf, 256);
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
       continue;
     }
 
-    drain_batch(done_buf, nd, [this](auto& m, uint32_t) {
+    size_t valid = 0;
+    for (size_t i = 0; i < nd; ++i) {
+      uint32_t caller_id;
+      while ((caller_id = tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+                  std::memory_order_acquire)) == kMapSlotEmpty) {
+        if (stop_) break;
+        std::this_thread::yield();
+      }
+      if (stop_) return;
+      caller_buf[valid++] = caller_id;
+      tpt_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+    }
+    drain_batch(caller_buf, valid, [this](auto& m, uint32_t) {
       auto transport = m.transport;
       if (transport != 0) {
         auto tpt = static_cast<Transport::PeerTransportKind>(transport);
@@ -492,15 +544,28 @@ void SprayExecutor::drain_tpt_loop() {
 }
 
 void SprayExecutor::drain_signal_loop() {
-  uint32_t done_buf[256];
+  uint32_t be_buf[256];
+  uint32_t caller_buf[256];
   while (!stop_) {
-    size_t ns = signal_be_->try_drain(done_buf, 256);
+    size_t ns = signal_be_->do_drain(be_buf, 256);
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
       continue;
     }
-    drain_batch(done_buf, ns, [](auto&, uint32_t) {});
+    size_t valid = 0;
+    for (size_t i = 0; i < ns; ++i) {
+      uint32_t caller_id;
+      while ((caller_id = sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].load(
+                  std::memory_order_acquire)) == kMapSlotEmpty) {
+        if (stop_) break;
+        std::this_thread::yield();
+      }
+      if (stop_) return;
+      caller_buf[valid++] = caller_id;
+      sig_caller_map_[be_buf[i] & (kCallerMapSize - 1)].store(kMapSlotEmpty, std::memory_order_relaxed);
+    }
+    drain_batch(caller_buf, valid, [](auto&, uint32_t) {});
     check_completions_();
   }
 }
