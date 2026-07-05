@@ -18,9 +18,9 @@ namespace UKernel {
 namespace Device {
 
 enum class TaskType : uint64_t {
-  CollCopy,   // pure GPU copy (used by tests/benchmarks)
-  CollPut,    // GPU copy + signal (used by CCL) — was CollSend
-  CollReduce, // local reduction
+  CollCopy,    // pure GPU copy (used by tests/benchmarks)
+  CollPut,     // GPU copy + signal (used by CCL) — was CollSend
+  CollReduce,  // local reduction
   BenchNop,
   Stop,
 };

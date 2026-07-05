@@ -42,11 +42,11 @@ CUDA_VISIBLE_DEVICES=6,7 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --m
 CUDA_VISIBLE_DEVICES=6,7 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 1 --msg-size 1048576 --iterations 1000 --warmup 100 --transport ipc --port 6979
 ```
 
-UCCL:
+RDMA:
 
 ```bash
-CUDA_VISIBLE_DEVICES=6 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport uccl --port 6981
-CUDA_VISIBLE_DEVICES=6 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport uccl --port 6981
+CUDA_VISIBLE_DEVICES=6,7 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport rdma --port 6981
+CUDA_VISIBLE_DEVICES=6,7 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport rdma --port 6981
 ```
 
 TCP:

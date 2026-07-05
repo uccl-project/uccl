@@ -1386,7 +1386,8 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
 
     // First-ever resolve must be accepted unconditionally: the initial publish
     // generation (0) equals the default last_gen (0), so a pure generation
-    // comparison would loop forever. De-duplicate by generation only after that.
+    // comparison would loop forever. De-duplicate by generation only after
+    // that.
     if (!have_last_gen || payload.generation != last_gen) break;
 
     // Same generation, check if we already have it cached (CCL repeat calls)

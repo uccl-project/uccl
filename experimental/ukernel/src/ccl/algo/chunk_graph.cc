@@ -98,7 +98,8 @@ void require_collective_config(CollectiveConfig const& config) {
     throw std::invalid_argument(
         "alltoall requires positive input/output tensor bytes");
   }
-  if (config.input_bytes % elem_bytes != 0 || config.output_bytes % elem_bytes != 0) {
+  if (config.input_bytes % elem_bytes != 0 ||
+      config.output_bytes % elem_bytes != 0) {
     throw std::invalid_argument(
         "alltoall input/output tensor bytes must align to dtype size");
   }
@@ -107,7 +108,8 @@ void require_collective_config(CollectiveConfig const& config) {
   bool has_output_splits = !config.output_split_bytes.empty();
   if (has_input_splits != has_output_splits) {
     throw std::invalid_argument(
-        "alltoall split configuration must provide both input and output splits");
+        "alltoall split configuration must provide both input and output "
+        "splits");
   }
   if (!has_input_splits) {
     size_t denom = static_cast<size_t>(config.nranks) * elem_bytes;
@@ -192,9 +194,8 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
       uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
-      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes,
-                                        offset, offset, recv_peer, -1, {},
-                                        pair_id);
+      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {}, pair_id);
       uint32_t reduce_op = builder.add_op(AlgoOpKind::RecvReduce, recv_bytes,
                                           offset, offset, -1, -1, {recv_op});
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
@@ -226,8 +227,7 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
       uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2 + 1);
       uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
-                                        offset, recv_peer, -1, {},
-                                        pair_id);
+                                        offset, recv_peer, -1, {}, pair_id);
       ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
     }
   }

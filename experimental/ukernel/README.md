@@ -77,8 +77,8 @@ Manual two-process transport check:
 ```bash
 cd experimental/ukernel/src/transport
 make test-integration
-CUDA_VISIBLE_DEVICES=5,6 ./test_transport_integration communicator --role=server --case=exchange --transport ipc --exchanger-port 16979
-CUDA_VISIBLE_DEVICES=5,6 ./test_transport_integration communicator --role=client --case=exchange --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16979
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=server --case=exchange --transport ipc --exchanger-port 16979
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=client --case=exchange --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
 
 For IPC checks, expose both peer GPUs to both processes. The transport

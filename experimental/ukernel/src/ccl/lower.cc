@@ -171,8 +171,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
   for (auto& o : out) {
     for (auto& dep : o.deps) {
-      if (dep < n_old && old_to_new[dep] != kNoOp)
-        dep = old_to_new[dep];
+      if (dep < n_old && old_to_new[dep] != kNoOp) dep = old_to_new[dep];
     }
   }
 
@@ -181,8 +180,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
 }  // namespace
 
-TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
-                       bool inplace) {
+TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -196,8 +194,7 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
 
   std::vector<size_t> first_tile;
   auto tiled = tile_chunks(algo, tile_bytes, first_tile);
-  propagate_deps(algo.chunks, first_tile, tiled.tiles_per_chunk,
-                 tiled.ops);
+  propagate_deps(algo.chunks, first_tile, tiled.tiles_per_chunk, tiled.ops);
 
   size_t staging_bytes = 0;
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
