@@ -2112,6 +2112,19 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   return true;
 }
 
+bool Endpoint::wait_compressed_drained(uint64_t conn_id, double timeout_s) {
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) return false;
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
+  if (send_group == nullptr) return true;  // non-RDMA / no compression: nothing to drain
+  return send_group->wait_compressed_drained(timeout_s);
+}
+
+uint64_t Endpoint::poll_decompress_done() const {
+  return RecvConnection::decompress_done_count();
+}
+
 int Endpoint::get_sock_fd(uint64_t conn_id) const {
   auto it = conn_id_to_conn_.find(conn_id);
   if (it == conn_id_to_conn_.end()) {

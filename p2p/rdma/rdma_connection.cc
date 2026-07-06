@@ -2,6 +2,9 @@
 #include "util/debug.h"
 #include "util/util.h"
 
+#include <chrono>
+#include <thread>
+
 // ── RDMAConnection: Lifecycle ────────────────────────────────────────────────
 
 RDMAConnection::RDMAConnection() : last_channel_id_(0) {}
@@ -799,6 +802,22 @@ void SendConnection::poll_ack_ring() {
   for (auto off : released_offsets) decompress_arena_.release(off);
 }
 
+bool SendConnection::wait_compressed_drained(double timeout_s) {
+  if (!ack_ring_) return true;  // compression not configured on this connection
+  auto const start = std::chrono::steady_clock::now();
+  while (pending_compressed_count_.load(std::memory_order_acquire) != 0) {
+    // Drive ack processing ourselves (reads the receiver-written ack ring + releases the
+    // decompress arena) so we don't depend on the send proxy thread's polling cadence.
+    poll_ack_ring();
+    if (pending_compressed_count_.load(std::memory_order_acquire) == 0) break;
+    std::chrono::duration<double> const elapsed =
+        std::chrono::steady_clock::now() - start;
+    if (elapsed.count() > timeout_s) return false;
+    std::this_thread::yield();
+  }
+  return true;
+}
+
 void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   WriteReqMeta meta_to_push{};
   uint32_t push_slot = 0;
@@ -910,22 +929,35 @@ void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
   RegMemBlock out(reinterpret_cast<void*>(m.user_remote_addr),
                   m.total_uncomp_size, MemoryType::GPU);
 
-  // Ack immediately: meta arrival implies data is already in
-  // decompress_buffer (sender posts meta only after all chunk WCs). wr_id+1
-  // avoids writing the zero sentinel that poll_ack_ring uses to mean "not yet
-  // acked".
-  ctrl_channel_->post_ack_write(
+  // Ack AFTER the decompress kernel completes, not on meta arrival. The ack is posted
+  // from post_ack_host_fn, which decompress_async schedules via gpuLaunchHostFunc on the
+  // compressor stream once the kernel finishes. This makes the ack a true "decompress done"
+  // signal: (1) the sender's poll_ack_ring releases the decompress-arena slot only after the
+  // data is decoded into user memory, so a subsequent write cannot clobber the buffer
+  // mid-decode; and (2) the sender can block until the ack (see wait_compressed_drained) to
+  // guarantee the destination holds the final data before signalling downstream consumers.
+  // wr_id+1 avoids the zero sentinel poll_ack_ring uses for "not yet acked".
+  auto* ack_ctx = new AsyncAckCtx{
+      m.wr_id,
+      m.ack_slot,
       remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
-      remote_ack_ring_.get_key_by_context_id(0), m.ack_slot,
-      static_cast<uint64_t>(m.wr_id) + 1);
+      remote_ack_ring_.get_key_by_context_id(0),
+      ctrl_channel_,
+  };
 
   Compressor::get_instance().decompress_async(
       in, out, static_cast<FloatType>(m.float_type),
-      /*on_done=*/nullptr, /*user_data=*/nullptr);
+      /*on_done=*/&RecvConnection::post_ack_host_fn, /*user_data=*/ack_ctx);
 }
+
+std::atomic<uint64_t> RecvConnection::s_decompress_done_count_{0};
 
 void RecvConnection::post_ack_host_fn(void* user_data) {
   std::unique_ptr<AsyncAckCtx> ctx(static_cast<AsyncAckCtx*>(user_data));
+  // The decompress kernel that scheduled this host callback has now completed, so the
+  // destination holds the final data. Publish that before the ack (release ordering) so a
+  // relay spinning on decompress_done_count() sees a consistent count.
+  s_decompress_done_count_.fetch_add(1, std::memory_order_release);
   ctx->ctrl_channel->post_ack_write(ctx->remote_ack_addr, ctx->remote_ack_rkey,
                                     ctx->ack_slot,
                                     static_cast<uint64_t>(ctx->wr_id) + 1);

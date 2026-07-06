@@ -1300,6 +1300,23 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", nb::arg("transfer_id"))
+      .def(
+          "wait_compressed_drained",
+          [](Endpoint& self, uint64_t conn_id, double timeout_s) {
+            bool ok;
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              ok = self.wait_compressed_drained(conn_id, timeout_s);
+            }
+            return ok;
+          },
+          "Block until all compressed writes on conn_id are acked (data decompressed into "
+          "the remote buffer). Returns False on timeout, True if compression is unused.",
+          nb::arg("conn_id"), nb::arg("timeout_s") = 30.0)
+      .def("poll_decompress_done", &Endpoint::poll_decompress_done,
+           "Receiver side: monotonic count of compressed writes whose decompress has "
+           "completed. The relay waits for this to reach its bucket index before reading.")
       .def("conn_id_of_rank", &Endpoint::conn_id_of_rank,
            "Get the connection ID for a given peer (or UINT64_MAX if none)",
            nb::arg("rank"))

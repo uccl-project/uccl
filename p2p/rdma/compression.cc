@@ -218,8 +218,20 @@ DietGPUCompressorBackend::DietGPUCompressorBackend()
   decompressBuffer_ =
       allocator->allocate(kCompressBufferSize, MemoryType::GPU, nullptr);
 
-  // Initialize GPU stream
-  GPU_RT_CHECK(gpuStreamCreate(&stream_));
+  // Initialize GPU stream at the HIGHEST priority so decompress kernels preempt the
+  // relay's own GPU work (load_weights, copy-out D2D). Otherwise a busy relay delays the
+  // decompress, which holds a decompress-arena slot and stalls the next pipelined write
+  // (the source of the pause->continue tail spikes). Falls back to a plain stream if the
+  // priority range query fails.
+  {
+    int least_pri = 0, greatest_pri = 0;
+    if (gpuDeviceGetStreamPriorityRange(&least_pri, &greatest_pri) == 0) {
+      GPU_RT_CHECK(gpuStreamCreateWithPriority(&stream_, gpuStreamNonBlocking,
+                                               greatest_pri));
+    } else {
+      GPU_RT_CHECK(gpuStreamCreate(&stream_));
+    }
+  }
 
   // Initialize StackDeviceMemory for compress/decompress operations
   res_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),

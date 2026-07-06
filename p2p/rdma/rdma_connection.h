@@ -136,6 +136,14 @@ class SendConnection : public RDMAConnection {
   // g_uccl_batch_post.
   void flush_batches();
 
+  // Block until all outstanding compressed writes have been acked by the receiver.
+  // With ack-after-decompress (see RecvConnection::handle_compressed_write_arrival) an ack
+  // means the data has been decompressed into the remote user buffer, so returning true
+  // guarantees every prior compressed write on this connection has fully landed. Drives
+  // poll_ack_ring() itself, so it does not depend on the send proxy thread's cadence.
+  // Returns false on timeout. No-op (returns true) when compression is not in use.
+  bool wait_compressed_drained(double timeout_s = 30.0);
+
  private:
   // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<SendControlChannel> ctrl_channel_;
@@ -274,7 +282,9 @@ class RecvConnection : public RDMAConnection {
 
   void handle_compressed_write_arrival(WriteReqMeta const& m);
 
-  // Context for the async-decompress callback path (currently unused).
+  // Context for the async-decompress callback path: handle_compressed_write_arrival passes
+  // this to decompress_async as on_done so the ack is posted only after the decompress kernel
+  // finishes (ack-after-decompress).
   struct AsyncAckCtx {
     int64_t wr_id;
     uint32_t ack_slot;
@@ -285,12 +295,27 @@ class RecvConnection : public RDMAConnection {
 
   static void post_ack_host_fn(void* user_data);
 
+  // Monotonic count of compressed writes whose decompress kernel has completed, across
+  // all RecvConnections in this process. post_ack_host_fn increments it (it runs on the
+  // compressor stream after the kernel). Decompresses complete in submission order (single
+  // compressor stream), so a receiver of the N-th compressed write can wait for this to
+  // reach N before reading its destination. Used for overlap (1b): the trainer no longer
+  // blocks on the ack per bucket; the relay waits on this counter in copy_out instead.
+  // Correct for one connection per process (our relay: one trainer PP source per endpoint).
+  static uint64_t decompress_done_count() {
+    return s_decompress_done_count_.load(std::memory_order_acquire);
+  }
+
   // ── Polling ────────────────────────────────────────────────────────────────
   void poll_and_process_completions();
 
   void recv_routine();
 
  private:
+  // Incremented by post_ack_host_fn after each decompress kernel completes. See
+  // decompress_done_count().
+  static std::atomic<uint64_t> s_decompress_done_count_;
+
   // ── Members ────────────────────────────────────────────────────────────────
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
   std::mutex recv_routine_mu_;

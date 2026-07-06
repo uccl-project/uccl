@@ -393,6 +393,19 @@ class Endpoint {
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
+  // Block until every compressed write posted on this connection has been acked by the
+  // receiver. With ack-after-decompress the ack means the data has been decoded into the
+  // remote user buffer, so after this returns the destination holds the final data (safe to
+  // signal a downstream consumer / reuse the source). Returns false on timeout. Returns true
+  // immediately when compression is not in use. See SendConnection::wait_compressed_drained.
+  bool wait_compressed_drained(uint64_t conn_id, double timeout_s = 30.0);
+
+  // Monotonic count of compressed writes whose decompress has completed on this (receiver)
+  // process. A relay that has accepted one connection can wait for this to reach N before
+  // reading the destination of the N-th compressed write (they decompress in order). Enables
+  // overlap: the trainer fires the completion RPC without draining, and the relay waits here.
+  uint64_t poll_decompress_done() const;
+
   int get_sock_fd(uint64_t conn_id) const;
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */
