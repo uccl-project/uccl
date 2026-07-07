@@ -24,8 +24,9 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       .task_capacity = static_cast<uint32_t>(config.device_task_capacity),
       .max_fifos = static_cast<uint32_t>(config.max_device_fifos),
       .threads_per_block = static_cast<uint32_t>(config.threads_per_block),
+      .blocks_per_worker = static_cast<uint32_t>(config.blocks_per_worker),
       .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
-      .smem_size = static_cast<uint32_t>(config.smem_size),
+      .smem_size = config.smem_size,
   });
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
   auto sig_be = std::make_unique<SignalBackend>();
@@ -64,6 +65,32 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);
+  };
+  ex->peer_setup_fn_ = [](Transport::Communicator* comm, int rank,
+                          int world_size) {
+    for (int p = 0; p < world_size; ++p) {
+      if (p == rank) continue;
+      bool same = comm->same_host(p);
+
+      if (same) {
+        if (rank < p) {
+          comm->connect(p, Transport::PeerTransportKind::Ipc);
+          comm->accept(p, Transport::PeerTransportKind::Ipc);
+        } else {
+          comm->accept(p, Transport::PeerTransportKind::Ipc);
+          comm->connect(p, Transport::PeerTransportKind::Ipc);
+        }
+      }
+      comm->connect(p, Transport::PeerTransportKind::Rdma);
+      comm->accept(p, Transport::PeerTransportKind::Rdma);
+    }
+  };
+  ex->resolve_buf_fn_ = [](Transport::Communicator* comm, int peer,
+                           int /*world_size*/, uint32_t buf_id) {
+    comm->resolve_remote_buffer(peer, buf_id, 30000);
+  };
+  ex->same_host_fn_ = [](Transport::Communicator* comm, int peer) {
+    return comm->same_host(peer);
   };
 
   return ex;
