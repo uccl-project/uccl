@@ -69,7 +69,7 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, uint32_t input_buf,
   c.src_buf = role_to_buf(role_src, input_buf, output_buf, scratch_buf);
   c.dst_buf = role_to_buf(role_dst, input_buf, output_buf, scratch_buf);
   c.redop = (op.kind == ExecOpKind::Reduce) ? redop : ReductionKind::None;
-  c.transport = static_cast<uint8_t>(Transport::PeerTransportKind::Unknown);
+  c.put_path = PutPath::None;
   c.tag = op.tag;
   return c;
 }
@@ -335,14 +335,13 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                      run.output_buf_id, run.scratch_buf_id);
 
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
-      auto peer = static_cast<int>(c.dst_peer);
-      c.transport = static_cast<uint8_t>(pick_put_path(peer));
+      c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
       uint32_t be_idx;
       if (signal_be_->do_enqueue(&c, 1, &be_idx) > 0) {
-        sig_slots_.write(be_idx, &run, idx, 0);
+        sig_slots_.write(be_idx, &run, idx, PutPath::None);
         run.be_slots.emplace_back(2, be_idx);
         run.submitted[idx] = 1;
       } else {
@@ -351,7 +350,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       continue;
     }
 
-    if (c.kind == ExecOpKind::Put && c.transport != 0) {
+    if (c.kind == ExecOpKind::Put && c.put_path != PutPath::Device) {
       run.tpt_cmds.push_back(c);
       tpt_idx.push_back(idx);
     } else {
@@ -367,7 +366,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       uint32_t be_idx;
       size_t n = device_be_->do_enqueue(&run.dev_cmds[off], 1, &be_idx);
       if (n == 0) break;
-      dev_slots_.write(be_idx, &run, dev_idx[off], 0);
+      dev_slots_.write(be_idx, &run, dev_idx[off], PutPath::None);
       run.be_slots.emplace_back(0, be_idx);
       run.submitted[dev_idx[off]] = 1;
       ++off;
@@ -384,7 +383,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[off], 1, &be_idx);
       if (n == 0) break;
       tpt_slots_.write(be_idx, &run, tpt_idx[off],
-                       run.tpt_cmds[off].transport);
+                       run.tpt_cmds[off].put_path);
       run.be_slots.emplace_back(1, be_idx);
       run.submitted[tpt_idx[off]] = 1;
       ++off;
@@ -457,18 +456,18 @@ void SprayExecutor::check_completions_() {
   }
 }
 
-Transport::PeerTransportKind SprayExecutor::pick_put_path(int peer) {
+PutPath SprayExecutor::pick_put_path(int peer) {
   // FIXME: temporary — always IPC while debugging 3-way path selection
   if (tpt_metrics_ && peer >= 0 && peer < world_size_)
     tpt_metrics_[peer].ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-  return Transport::PeerTransportKind::Ipc;
+  return PutPath::Ipc;
 
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
-    return Transport::PeerTransportKind::Unknown;
+    return PutPath::Device;
   }
   if (!same_host_fn_ || !same_host_fn_(owned_comm_.get(), peer)) {
     tpt_metrics_[peer].rdma.inflight.fetch_add(1, std::memory_order_relaxed);
-    return Transport::PeerTransportKind::Rdma;
+    return PutPath::Rdma;
   }
   auto& pm = tpt_metrics_[peer];
   uint64_t dc = static_cast<uint64_t>(
@@ -481,16 +480,16 @@ Transport::PeerTransportKind SprayExecutor::pick_put_path(int peer) {
                     pm.rdma.inflight.load(std::memory_order_relaxed)) *
                 pm.rdma.latency_ns.load(std::memory_order_relaxed);
 
-  Transport::PeerTransportKind choice;
+  PutPath choice;
   PathMetrics* chosen;
   if (ic <= dc && ic <= rc) {
-    choice = Transport::PeerTransportKind::Ipc;
+    choice = PutPath::Ipc;
     chosen = &pm.ipc;
   } else if (dc <= rc) {
-    choice = Transport::PeerTransportKind::Unknown;  // device
+    choice = PutPath::Device;
     chosen = &pm.device;
   } else {
-    choice = Transport::PeerTransportKind::Rdma;
+    choice = PutPath::Rdma;
     chosen = &pm.rdma;
   }
   chosen->inflight.fetch_add(1, std::memory_order_relaxed);
@@ -515,15 +514,11 @@ void SprayExecutor::drain_tpt_loop() {
       slot_buf[valid++] = s;
     }
     drain_batch(slot_buf, valid, [this](BeSlot& s) {
-      auto transport = s.transport;
-      if (transport == 0) return;
-      auto tpt = static_cast<Transport::PeerTransportKind>(transport);
-      if (tpt == Transport::PeerTransportKind::Unknown) return;
+      if (s.put_path == PutPath::None) return;
       int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
       if (peer < 0 || peer >= world_size_) return;
-      auto& m = (tpt == Transport::PeerTransportKind::Ipc)
-                    ? tpt_metrics_[peer].ipc
-                    : tpt_metrics_[peer].rdma;
+      auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
+                                              : tpt_metrics_[peer].rdma;
       update_path_metrics(m, s.enqueue_ns);
     });
     check_completions_();

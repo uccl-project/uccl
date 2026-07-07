@@ -22,7 +22,9 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
       std::lock_guard<std::mutex> lk(mu_);
       switch (c.kind) {
         case ExecOpKind::Signal: {
-          auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
+          auto tpt = comm_->same_host(static_cast<int>(c.dst_peer))
+                         ? Transport::PeerTransportKind::Ipc
+                         : Transport::PeerTransportKind::Rdma;
           rid = comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag,
                                          tpt);
           if (rid) {
@@ -31,8 +33,11 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
           break;
         }
         case ExecOpKind::WaitSignal: {
+          auto tpt = comm_->same_host(static_cast<int>(c.src_peer))
+                         ? Transport::PeerTransportKind::Ipc
+                         : Transport::PeerTransportKind::Rdma;
           rid = comm_->wait_signal_async(static_cast<int>(c.src_peer), c.tag,
-                                         Transport::PeerTransportKind::Unknown);
+                                         tpt);
           if (rid) {
             signal_wait_rid_to_cmd_[rid] = idx;
           }

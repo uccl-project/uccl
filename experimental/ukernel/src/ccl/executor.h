@@ -117,7 +117,7 @@ struct alignas(64) BeSlot {
   std::atomic<uint32_t> tag{~0u};  // be_idx when ready, ~0u = empty
   SprayRun* run = nullptr;
   uint32_t op_idx = 0;
-  uint8_t transport = 0;
+  PutPath put_path = PutPath::Device;
   uint64_t enqueue_ns = 0;  // steady_clock timestamp, for latency EWMA
 };
 
@@ -142,11 +142,11 @@ class BeSlotTable {
   BeSlotTable() = default;
 
   void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx,
-             uint8_t transport) {
+             PutPath put_path) {
     auto& s = slots_[be_idx & mask_];
     s.run = run;
     s.op_idx = op_idx;
-    s.transport = transport;
+    s.put_path = put_path;
     s.enqueue_ns = std::chrono::steady_clock::now().time_since_epoch().count();
     s.tag.store(be_idx, std::memory_order_release);
   }
@@ -219,7 +219,7 @@ class SprayExecutor {
   void collect_ready(SprayRun& run);
   void enqueue_to_ring(SprayRun& run);
 
-  Transport::PeerTransportKind pick_put_path(int peer);
+  PutPath pick_put_path(int peer);
   void check_completions_();
 
   template <typename F>

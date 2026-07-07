@@ -10,6 +10,10 @@ class Communicator;
 }
 namespace CCL {
 
+// Put op routing: which backend handles the data transfer.
+// Values match the uint8_t stored in Cmd::put_path.
+enum class PutPath : uint8_t { Device = 0, Ipc = 1, Rdma = 2, None = 3 };
+
 // Command descriptor
 
 struct Cmd {
@@ -22,7 +26,7 @@ struct Cmd {
   uint32_t src_peer;    // 4
   uint32_t dst_peer;    // 4
   ReductionKind redop;  // 4
-  uint8_t transport;    // 1 — 0=auto/device default, 1=IPC, 2=RDMA
+  PutPath put_path;     // 1 — Device/IPC/RDMA for ops
   uint8_t _pad[3];      // 3 — alignment
   uint64_t tag;         // 8 — for Signal/SignalWait
 };

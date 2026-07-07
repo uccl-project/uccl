@@ -9,6 +9,14 @@
 namespace UKernel {
 namespace CCL {
 
+static Transport::PeerTransportKind to_peer_transport(PutPath p) {
+  switch (p) {
+    case PutPath::Ipc:   return Transport::PeerTransportKind::Ipc;
+    case PutPath::Rdma:  return Transport::PeerTransportKind::Rdma;
+    default:             return Transport::PeerTransportKind::Unknown;
+  }
+}
+
 TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm) {
   if (!comm) throw std::invalid_argument("TransportBackend: null communicator");
   comm_ = comm;  // base class member
@@ -31,10 +39,9 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
       std::lock_guard<std::mutex> lk(mu_);
       switch (c.kind) {
         case ExecOpKind::Put: {
-          auto tpt = static_cast<Transport::PeerTransportKind>(c.transport);
           rid = comm_->send_put_async(static_cast<int>(c.dst_peer), c.src_buf,
                                       c.src_off, c.dst_buf, c.dst_off, c.bytes,
-                                      tpt);
+                                      to_peer_transport(c.put_path));
           if (rid) rid_to_cmd_[rid] = idx;
           break;
         }
