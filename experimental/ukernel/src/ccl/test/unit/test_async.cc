@@ -34,10 +34,9 @@ class MockBackend final : public BatchBackend {
     size_t accepted = 0;
     while (accepted < n && in_flight_ < capacity()) {
       enqueued_.push_back(cmds[accepted]);
-      uint32_t cid =
-          reinterpret_cast<CmdWithId const*>(&cmds[accepted])->caller_id;
-      if (out_indices) out_indices[accepted] = cid;
-      completed_.push_back(cid);
+      uint32_t be = next_be_++;
+      if (out_indices) out_indices[accepted] = be;
+      completed_.push_back(be);
       ++in_flight_;
       ++accepted;
     }
@@ -68,6 +67,7 @@ class MockBackend final : public BatchBackend {
   std::vector<Cmd> enqueued_;
   std::deque<uint32_t> completed_;
   size_t in_flight_ = 0;
+  uint32_t next_be_ = 1;
 };
 
 // SprayExecutor integration tests
@@ -87,6 +87,11 @@ void test_executor_allreduce_async() {
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
+  // Spin until drain threads finish processing all completions
+  for (int retry = 0; retry < 100; ++retry) {
+    if (ex->status(h) == CollectiveOpStatus::Completed) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
   assert(ex->status(h) == CollectiveOpStatus::Completed);
 
   size_t dev_cmds = dev_mock.enqueued_count();
@@ -120,6 +125,11 @@ void test_executor_alltoall_async() {
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
+  // Spin until drain threads finish processing all completions
+  for (int retry = 0; retry < 100; ++retry) {
+    if (ex->status(h) == CollectiveOpStatus::Completed) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
   assert(ex->status(h) == CollectiveOpStatus::Completed);
 
   size_t dev_cmds = dev_mock.enqueued_count();
@@ -200,6 +210,8 @@ void test_executor_active_count() {
   auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
   // With auto-complete, run may already be done; just verify wait succeeds
   ex->wait(h, std::chrono::milliseconds(5000));
+  // Let drain threads finish processing so active_runs_ settles to 0
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
   assert(ex->active_count() == 0);
   ex->release(h);
 }

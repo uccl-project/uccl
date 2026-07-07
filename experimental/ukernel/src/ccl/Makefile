@@ -77,8 +77,8 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e
+UNIT_TEST_BINS := test_modules test_async test_spray_executor
+INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e test_spray_executor_e2e
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -91,6 +91,7 @@ test: test-unit test-integration
 test-unit: $(UNIT_TEST_BINS)
 	./test_modules
 	./test_async
+	./test_spray_executor
 
 test-integration: $(INTEGRATION_TEST_BINS)
 	@echo "Built test_perf_p2p_copy. Run it manually in two terminals (server + client); see src/ccl/README.md."
@@ -105,6 +106,9 @@ test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 test_async: $(CCL_CORE_OBJ) executor.o backend/backend.o test/unit/test_async.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+
+test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/backend.o test/unit/test_spray_executor.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o backend/transport_backend.o \
@@ -137,6 +141,14 @@ test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/si
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
 test/unit/test_signal_backend_e2e.o: test/unit/test_signal_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_spray_executor_e2e.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_spray_executor_e2e.o: test/integration/test_spray_executor_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 $(UCCL_RDMA_STATIC):
