@@ -99,6 +99,16 @@ cd experimental/ukernel
 make ccl_test SM=80
 ```
 
+CCL tests include:
+
+| Suite | Coverage |
+|---|---|
+| `test_modules` | planner, lower, tile scheduling |
+| `test_async` | SprayExecutor lifecycle (mock backends) |
+| `test_spray_executor` | multi-path dispatch priority (IPC > RDMA > DeviceBackend) |
+| `test_*_backend_e2e` | per-backend two-process tests with real Communicator |
+| `test_spray_executor_e2e` | full AllReduce DAG (Device + Transport + Signal) |
+
 ## Python Binding
 
 `experimental/ukernel/py` contains a `torch`-based Python extension that wraps
@@ -234,7 +244,8 @@ Current Python binding constraints:
 
 ## Modules
 
-- [`src/transport/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/transport/README.md)
-- [`src/device/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/device/README.md)
-- [`src/ccl/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/ccl/README.md)
-- [`benchmarks/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/benchmarks/README.md)
+- [src/transport](src/transport/) — RDMA/IPC/TCP transport adapters, Communicator, OOB exchange
+- [src/device](src/device/) — GPU SM persistent kernels, FIFO task manager, GDRCopy ops
+- [src/ccl](src/ccl/) — collective planner/lower, SprayExecutor, backends
+- [benchmarks](benchmarks/) — transport and device benchmarks
+- [include/util](include/util/) — shared lock-free jring, pause intrinsic

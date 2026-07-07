@@ -1,5 +1,10 @@
 # CCL
 
+Collective communication layer: planner, lower, SprayExecutor (multi-path
+parallel execution engine for collectives), and three backends — DeviceBackend
+(SM copy/reduce), TransportBackend (IPC/RDMA put), SignalBackend (peer
+coordination).
+
 ## Build
 
 ```bash
@@ -16,66 +21,128 @@ make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
 
 ## Test
 
-Run unit tests:
+### Unit tests
 
 ```bash
 make test-unit
 ```
 
-Run the integration benchmark (p2p copy performance).
+| Binary | Coverage |
+|---|---|
+| `test_modules` | planner, lower, tile scheduling, DAG construction |
+| `test_async` | SprayExecutor lifecycle with mock backends (allreduce / alltoall / concurrent) |
+| `test_spray_executor` | multi-path dispatch priority, deferred re-queue, SignalBackend routing |
 
-1. Build the benchmark binary:
+Unit tests run single-process with mock backends — no GPU or Communicator needed.
+
+### Backend e2e tests
+
+Each backend has a standalone two-process test using a real Communicator.
+
+Build:
 
 ```bash
-make test_perf_p2p_copy
+make test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e SM=80
 ```
 
-2. Pick two GPUs that support P2P. The benchmark requires P2P peer access between
-the two GPUs, so check the topology first and choose a pair shown as `OK`:
+Run (two terminals, pick a GPU pair with P2P support):
+
+**TransportBackend** — supports `--transport=ipc|rdma`:
+
+```bash
+# server
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=server --gpu=0
+# client (IPC)
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=client --gpu=1
+# client (RDMA)
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=client --gpu=1 --transport=rdma
+```
+
+**DeviceBackend**:
+
+```bash
+CUDA_VISIBLE_DEVICES=6,7 ./test_device_backend_e2e --role=server --gpu=0
+CUDA_VISIBLE_DEVICES=6,7 ./test_device_backend_e2e --role=client --gpu=1
+```
+
+**SignalBackend**:
+
+```bash
+CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=server --gpu=0
+CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=client --gpu=1
+```
+
+### SprayExecutor e2e test
+
+Full-pipeline integration: DeviceBackend + TransportBackend + SignalBackend with
+a real Communicator, exercising the complete AllReduce DAG.
+
+Build:
+
+```bash
+make test_spray_executor_e2e SM=80
+```
+
+Run:
+
+```bash
+# server
+CUDA_VISIBLE_DEVICES=6,7 ./test_spray_executor_e2e --role=server --gpu=0
+# client
+CUDA_VISIBLE_DEVICES=6,7 ./test_spray_executor_e2e --role=client --gpu=1
+```
+
+The test submits a 4 MB AllReduce correctness check (in=1.0, out=3.0 for rank 0;
+in=2.0, out=3.0 for rank 1) and exits cleanly.
+
+Troubleshooting:
+
+- `Failed to connect to Exchanger`: a stale run is holding the port.
+
+  ```bash
+  pkill -f test_spray_executor_e2e
+  ```
+
+- Start the server first, then the client within ~3s (leader-ready timeout is
+  3000 ms; raise it with `UHM_OOB_LEADER_READY_TIMEOUT_MS=30000`).
+
+### P2P copy performance benchmark
+
+Benchmarks three same-node P2P copy paths: ukernel `DeviceBackend` (several
+`blocks_per_worker`), CUDA `cudaMemcpyPeerAsync`, and
+`Communicator::send_put_async` (IPC put).
+
+Build:
+
+```bash
+make test_perf_p2p_copy SM=80
+```
+
+Pick a GPU pair with P2P support:
 
 ```bash
 nvidia-smi topo -p2p r
 ```
 
-Use that pair as `CUDA_VISIBLE_DEVICES` (same value in both terminals below).
-`--gpu` indexes into that list: `--gpu=0` is the first GPU, `--gpu=1` the second.
-The examples use `6,7`; replace it with your own `OK` pair if needed.
-
-3. Launch the server and client in two terminals.
-
-Terminal 1 — server:
+Run:
 
 ```bash
+# server
 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=server --gpu=0 --exchanger-port=6979
-```
-
-Terminal 2 — client:
-
-```bash
+# client
 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=client --gpu=1 --exchanger-ip=127.0.0.1 --exchanger-port=6979
 ```
 
-The two processes benchmark three same-node P2P copy paths side by side — ukernel
-`DeviceBackend` (several `blocks_per_worker`), CUDA `cudaMemcpyPeerAsync`, and
-`Communicator::send_put_async` (IPC put). The server terminal (rank 0) prints the
-final latency (us) and throughput (GB/s) tables over sizes from 1KB to 1GB.
+The server terminal prints latency (µs) and throughput (GB/s) tables over sizes
+from 1 KB to 1 GB.
 
 Troubleshooting:
 
-- `Failed to connect to Exchanger`: a stale run is still holding the port. Clean
-  up leftovers and/or retry on a fresh port (same value in both terminals):
+- `Peer access NOT supported` / `Cannot resolve remote IPC`: no P2P path between
+  the GPUs — pick a pair shown as `OK` in `nvidia-smi topo -p2p r`.
+- Stale port: `pkill -f test_perf_p2p_copy`, then retry with a fresh port.
 
-  ```bash
-  pkill -f test_perf_p2p_copy
-  # then retry, e.g. add --exchanger-port=7100 to both commands
-  ```
-
-- `Peer access NOT supported` / `Cannot resolve remote IPC`: the two GPUs have no
-  P2P path — pick a pair shown as `OK` in `nvidia-smi topo -p2p r`.
-- Start the server first, then the client within ~3s (leader-ready timeout is
-  3000ms; raise it with `UHM_OOB_LEADER_READY_TIMEOUT_MS=30000`).
-
-Run everything:
+### Run everything
 
 ```bash
 make test
@@ -83,5 +150,8 @@ make test
 
 ## Notes
 
-- `test-unit` covers planner, lowering, simulator, and executor behavior.
-- `test-integration` builds the p2p copy performance test; run it manually in two terminals (see above).
+- `test-unit` covers planner, lowering, executor lifecycle, and multi-path dispatch.
+- Each backend has a standalone e2e test; run manually in two terminals (see above).
+- `test-integration` builds the p2p copy performance test.
+- All e2e tests require two GPUs with P2P support on the same node.
+- Use `SM=80` (or your GPU's compute capability) when building CUDA tests.
