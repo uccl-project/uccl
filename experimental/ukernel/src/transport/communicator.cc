@@ -376,7 +376,6 @@ Communicator::~Communicator() {
 
     gpuSetDevice(orig_dev);
   }
-
   ipc_adapter_.reset();
 
   if (signal_ring_) {
@@ -620,6 +619,7 @@ bool Communicator::ensure_path(int rank, bool is_put,
   char const* dir_label = is_put ? "put" : "wait";
 
   auto fallback = [&] {
+    if (transport != PeerTransportKind::Unknown) return false;
     return try_fallback_tcp_accept(rank, resolved.local_meta);
   };
 
