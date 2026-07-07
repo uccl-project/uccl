@@ -74,7 +74,7 @@ size_t SignalBackend::do_drain(uint32_t* completed, size_t max) {
   // Channel 2: Drain Signal (send) completions from completion_ring_
   if (out < max) {
     UKernel::Transport::CompletionResult results[256];
-    size_t nd = comm_->try_complete(results, std::min(max - out, (size_t)256));
+    size_t nd = comm_->try_complete_signal_send(results, std::min(max - out, (size_t)256));
     for (size_t i = 0; i < nd; ++i) {
       if (results[i].failed) {
         auto it = signal_send_rid_to_cmd_.find(results[i].rid);

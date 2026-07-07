@@ -100,6 +100,8 @@ struct TiledOp {
   uint32_t dst_peer = 0;
   uint64_t tag = 0;
   std::vector<uint32_t> deps;
+  CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
+  CollectiveBufferRole dst_buf_role = CollectiveBufferRole::Output;
 };
 
 struct TiledResult {

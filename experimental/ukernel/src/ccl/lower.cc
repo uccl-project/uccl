@@ -79,12 +79,13 @@ uint64_t make_tag(uint32_t pair_id, size_t tile_idx) {
 TiledOp op_to_tiled(Op const& op) {
   TiledOp t;
   t.kind = ExecOpKind::Put;
-  assert(op.kind == AlgoOpKind::Put);  // only Put reaches this path
   t.bytes = op.bytes;
   t.src_off = op.src_off;
   t.dst_off = op.dst_off;
   t.src_peer = op.src_peer;
   t.dst_peer = op.dst_peer;
+  t.src_buf_role = CollectiveBufferRole::Input;
+  t.dst_buf_role = CollectiveBufferRole::Output;
   t.deps = std::move(op.deps);
   return t;
 }
@@ -99,6 +100,12 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
   out.reserve(n_old * 2);
   std::vector<uint32_t> old_to_new(n_old, kNoOp);
 
+  // New deps created during lowering (e.g. Signal→Put, Reduce→staging).
+  // Merged into the target op's deps after remapping so they don't collide
+  // with old-to-new index mapping.
+  struct NewDep { uint32_t target; uint32_t dep; };
+  std::vector<NewDep> new_deps;
+
   for (size_t ci = 0; ci < chunks.size(); ++ci) {
     auto const& ch = chunks[ci];
     size_t num_tiles = tiles_per_chunk[ci];
@@ -108,14 +115,20 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       Op const& op = ops[old_idx];
 
       if (op.kind == AlgoOpKind::Put && ch.pair_id != kNoPairId) {
-        old_to_new[old_idx] = static_cast<uint32_t>(out.size());
-        out.push_back(op_to_tiled(op));
+        uint32_t put_idx = static_cast<uint32_t>(out.size());
+        old_to_new[old_idx] = put_idx;
+        TiledOp put = op_to_tiled(op);
+        // Phase-2 Put: data was already reduced, source is Output buffer
+        if (!op.deps.empty() && op.src_peer == ~0u) {
+          put.src_buf_role = CollectiveBufferRole::Output;
+        }
+        out.push_back(put);
 
         TiledOp sig;
         sig.kind = ExecOpKind::Signal;
         sig.dst_peer = op.dst_peer;
         sig.tag = make_tag(ch.pair_id, t);
-        sig.deps = {old_to_new[old_idx]};
+        new_deps.push_back({static_cast<uint32_t>(out.size()), put_idx});
         out.push_back(sig);
 
       } else if (op.kind == AlgoOpKind::Recv) {
@@ -128,7 +141,6 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
       } else if (op.kind == AlgoOpKind::RecvReduce) {
         if (inplace) {
-          // Copy received data from output buf to staging before reducing
           size_t staging_off = staging_bytes;
           staging_bytes += op.bytes;
 
@@ -139,6 +151,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           cp.dst_off = staging_off;
           cp.src_peer = ~0u;
           cp.dst_peer = ~0u;
+          cp.src_buf_role = CollectiveBufferRole::Output;
+          cp.dst_buf_role = CollectiveBufferRole::Scratch;
           cp.deps = op.deps;
           out.push_back(cp);
           uint32_t cp_idx = static_cast<uint32_t>(out.size() - 1);
@@ -148,7 +162,11 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.bytes = op.bytes;
           red.src_off = staging_off;
           red.dst_off = op.dst_off;
-          red.deps = {cp_idx};
+          red.src_peer = ~0u;
+          red.dst_peer = ~0u;
+          red.src_buf_role = CollectiveBufferRole::Scratch;
+          red.dst_buf_role = CollectiveBufferRole::Output;
+          new_deps.push_back({static_cast<uint32_t>(out.size()), cp_idx});
           old_to_new[old_idx] = static_cast<uint32_t>(out.size());
           out.push_back(red);
         } else {
@@ -158,6 +176,10 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.bytes = op.bytes;
           red.src_off = op.src_off;
           red.dst_off = op.dst_off;
+          red.src_peer = ~0u;
+          red.dst_peer = ~0u;
+          red.src_buf_role = CollectiveBufferRole::Input;
+          red.dst_buf_role = CollectiveBufferRole::Output;
           red.deps = op.deps;
           out.push_back(red);
         }
@@ -174,6 +196,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       if (dep < n_old && old_to_new[dep] != kNoOp) dep = old_to_new[dep];
     }
   }
+
+  for (auto& nd : new_deps) out[nd.target].deps.push_back(nd.dep);
 
   return out;
 }

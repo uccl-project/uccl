@@ -8,7 +8,7 @@ namespace UKernel {
 namespace CCL {
 
 constexpr uint32_t kNoOp = 0xFFFFFFFFu;
-constexpr uint32_t kNoPairId = 0u;
+constexpr uint32_t kNoPairId = 0xFFFFFFFFu;
 
 inline void* byte_offset(void* base, size_t offset) {
   return static_cast<void*>(static_cast<char*>(base) + offset);
