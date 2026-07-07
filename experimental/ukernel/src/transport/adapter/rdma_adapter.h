@@ -29,6 +29,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   ~RdmaTransportAdapter() override;
 
   bool is_initialized() const { return ctx_handle_ != nullptr; }
+  void shutdown_workers();
+  void clear_registered_ids() { registered_ids_.clear(); }
   RdmaPeerConnectSpec get_connect_init(int peer_rank);
 
   void set_communicator(Communicator* comm) { comm_ = comm; }

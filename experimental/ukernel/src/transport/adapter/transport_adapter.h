@@ -11,7 +11,7 @@
 #include <vector>
 
 extern "C" {
-#include "../util/jring.h"
+#include "util/jring.h"
 }
 
 namespace UKernel {
@@ -100,14 +100,23 @@ class TransportAdapter {
                                      unsigned comm_rid) = 0;
 
   void set_completion_ring(jring_t* ring) { completion_ring_ = ring; }
+  void set_signal_send_ring(jring_t* ring) { signal_send_ring_ = ring; }
 
  protected:
   jring_t* completion_ring_ = nullptr;
+  jring_t* signal_send_ring_ = nullptr;
 
   void publish_completion(unsigned rid, bool failed) {
     if (!completion_ring_) return;
     CompletionEvent ev{rid, failed ? 1u : 0u};
     while (jring_mp_enqueue_bulk(completion_ring_, &ev, 1, nullptr) != 1)
+      std::this_thread::yield();
+  }
+
+  void publish_signal_send(unsigned rid, bool failed) {
+    if (!signal_send_ring_) return;
+    CompletionEvent ev{rid, failed ? 1u : 0u};
+    while (jring_mp_enqueue_bulk(signal_send_ring_, &ev, 1, nullptr) != 1)
       std::this_thread::yield();
   }
 };

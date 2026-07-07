@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../util/jring.h"
+#include "util/jring.h"
 #include "transport_adapter.h"
 #include <atomic>
 #include <cstddef>

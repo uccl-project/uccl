@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../memory/ipc_manager.h"
-#include "../util/jring.h"
+#include "util/jring.h"
 #include "gpu_rt.h"
 #include "transport_adapter.h"
 #include <array>

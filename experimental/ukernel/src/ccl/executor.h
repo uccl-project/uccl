@@ -3,6 +3,7 @@
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "lower.h"
+#include "util/jring.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -34,8 +35,6 @@ enum class CollectiveOpStatus : uint32_t {
 using CollectiveOpHandle = uint64_t;
 inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 
-// Op sprayer with direct backend calls
-
 struct SprayRun {
   static constexpr uint32_t kIndegreeDone =
       ~0u;  // sentinel: op already processed
@@ -46,8 +45,8 @@ struct SprayRun {
   std::mutex mtx;
   std::vector<uint8_t> submitted;
   std::vector<uint32_t> ready;
-  std::vector<CmdWithId> dev_cmds;
-  std::vector<CmdWithId> tpt_cmds;
+  std::vector<Cmd> dev_cmds;
+  std::vector<Cmd> tpt_cmds;
 
   // Lock-free drain path (drain threads, no mtx)
   std::vector<uint32_t> successor_data;  // contiguous successor list
@@ -55,16 +54,31 @@ struct SprayRun {
       successor_off;               // offset into data per op (size = nops+1)
   std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
 
-  struct ReadyRing {
-    static constexpr size_t kMask = 255;  // 256 slots
-    std::atomic<uint32_t> head{0};        // consumer only (enqueue thread)
-    std::atomic<uint32_t> tail{0};        // producers CAS (drain threads)
-    std::array<uint32_t, kMask + 1> buf;
+  // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
+  jring_t* ready_ring = nullptr;
 
-    bool push(uint32_t op);  // multi-producer CAS push
-    uint32_t pop();          // single-consumer pop (returns ~0u if empty)
-  };
-  ReadyRing ready_ring;
+  bool push_ready(uint32_t op) {
+    if (!ready_ring) return false;
+    return jring_mp_enqueue_bulk(ready_ring, &op, 1, nullptr) == 1;
+  }
+  uint32_t pop_ready() {
+    if (!ready_ring) return ~0u;
+    uint32_t op = ~0u;
+    if (jring_sc_dequeue_bulk(ready_ring, &op, 1, nullptr) == 1) return op;
+    return ~0u;
+  }
+
+  void init_ready_ring(size_t nops) {
+    uint32_t count = 1;
+    while (count <= nops) count <<= 1;
+    size_t sz = jring_get_buf_ring_size(sizeof(uint32_t), count);
+    ready_ring = static_cast<jring_t*>(calloc(1, sz));
+    jring_init(ready_ring, count, sizeof(uint32_t), 1, 0);  // MP/SC
+  }
+
+  ~SprayRun() {
+    if (ready_ring) { free(ready_ring); ready_ring = nullptr; }
+  }
 
   // Read-only after construction
   TiledResult tiled;
@@ -73,6 +87,10 @@ struct SprayRun {
   uint32_t input_buf_id = 0;
   uint32_t output_buf_id = 0;
   uint32_t scratch_buf_id = 0;
+
+  // (backend_tag, be_idx) pairs for release cleanup
+  // backend_tag: 0=dev, 1=tpt, 2=sig
+  std::vector<std::pair<uint8_t, uint32_t>> be_slots;
 
   // Cold: rarely accessed
   std::string error;
@@ -85,18 +103,74 @@ struct SprayExecutorConfig {
   size_t device_task_capacity = 256;
   size_t max_device_fifos = 2;
   int threads_per_block = 64;
+  int blocks_per_worker = 1;
   size_t fifo_capacity = 256;
-  size_t smem_size = 48 * 1024;
-  size_t max_concurrent_runs = 16;  // backpressure: block submit when exceeded
+  size_t smem_size = 0;  // dynamic shared memory, 0 = auto
+  size_t max_concurrent_runs = 16;
   std::shared_ptr<struct UKernel::Transport::CommunicatorConfig>
       communicator_config;
 };
 
-struct CmdRunMapping {
-  SprayRun* run;
-  uint32_t op_idx;
+// Per-backend slot: be_idx → (run, op_idx) in one lookup.
+// tag doubles as ready flag and generation counter.
+struct alignas(64) BeSlot {
+  std::atomic<uint32_t> tag{~0u};  // be_idx when ready, ~0u = empty
+  SprayRun* run = nullptr;
+  uint32_t op_idx = 0;
   uint8_t transport = 0;
-  uint32_t caller_id = 0;
+  uint64_t enqueue_ns = 0;  // steady_clock timestamp, for latency EWMA
+};
+
+static inline size_t round_up_pow2(size_t n) {
+  if (n == 0) return 0;
+  size_t c = 1;
+  while (c < n) c <<= 1;
+  return c;
+}
+
+// Lock-free slot table: be_idx → BeSlot, one-writer (enqueue) one-reader
+// (drain) per slot.  Sized to backend capacity for index stability.
+class BeSlotTable {
+ public:
+  explicit BeSlotTable(size_t capacity) {
+    size_t cap = round_up_pow2(capacity);
+    if (cap == 0) cap = 256;
+    slots_.reset(new BeSlot[cap]);
+    mask_ = cap - 1;
+  }
+
+  BeSlotTable() = default;
+
+  void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx,
+             uint8_t transport) {
+    auto& s = slots_[be_idx & mask_];
+    s.run = run;
+    s.op_idx = op_idx;
+    s.transport = transport;
+    s.enqueue_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    s.tag.store(be_idx, std::memory_order_release);
+  }
+
+  BeSlot* wait(uint32_t be_idx, std::atomic<bool> const& stop) {
+    auto& s = slots_[be_idx & mask_];
+    uint32_t tag;
+    while ((tag = s.tag.load(std::memory_order_acquire)) != be_idx) {
+      if (stop.load(std::memory_order_relaxed)) return nullptr;
+      std::this_thread::yield();
+    }
+    return &s;
+  }
+
+  void release(uint32_t be_idx) {
+    auto& s = slots_[be_idx & mask_];
+    uint32_t t = be_idx;
+    s.tag.compare_exchange_strong(t, ~0u, std::memory_order_release,
+                                  std::memory_order_relaxed);
+  }
+
+ private:
+  std::unique_ptr<BeSlot[]> slots_;
+  size_t mask_ = 0;
 };
 
 // Per-peer transport metrics for dynamic load balancing
@@ -106,6 +180,7 @@ struct PathMetrics {
 };
 
 struct PeerMetrics {
+  PathMetrics device;
   PathMetrics ipc;
   PathMetrics rdma;
 };
@@ -144,29 +219,31 @@ class SprayExecutor {
   void collect_ready(SprayRun& run);
   void enqueue_to_ring(SprayRun& run);
 
-  Transport::PeerTransportKind pick_transport(int peer);
+  Transport::PeerTransportKind pick_put_path(int peer);
   void check_completions_();
 
   template <typename F>
-  void drain_batch(uint32_t* caller_buf, size_t n, F&& cb) {
+  void drain_batch(BeSlot** slots, size_t n, F&& cb) {
     for (size_t i = 0; i < n; ++i) {
-      auto& m = cmd_to_run_[caller_buf[i] & (kMaxCmdIdx - 1)];
-      if (!m.run || m.caller_id != caller_buf[i]) continue;
+      auto& s = *slots[i];
+      SprayRun* run = s.run;
+      if (!run) continue;
+      uint32_t op_idx = s.op_idx;
       uint32_t cur =
-          __atomic_load_n(&m.run->indegree[m.op_idx], __ATOMIC_ACQUIRE);
+          __atomic_load_n(&run->indegree[op_idx], __ATOMIC_ACQUIRE);
       if (cur == SprayRun::kIndegreeDone) continue;
-      m.run->done_count.fetch_add(1, std::memory_order_release);
-      cb(m, caller_buf[i]);
+      run->done_count.fetch_add(1, std::memory_order_release);
+      cb(s);
 
-      uint32_t off = m.run->successor_off[m.op_idx];
-      uint32_t end = m.run->successor_off[m.op_idx + 1];
+      uint32_t off = run->successor_off[op_idx];
+      uint32_t end = run->successor_off[op_idx + 1];
       for (uint32_t j = off; j < end; ++j) {
-        uint32_t succ = m.run->successor_data[j];
-        if (__atomic_fetch_sub(&m.run->indegree[succ], 1, __ATOMIC_RELEASE) ==
+        uint32_t succ = run->successor_data[j];
+        if (__atomic_fetch_sub(&run->indegree[succ], 1, __ATOMIC_RELEASE) ==
             1)
-          m.run->ready_ring.push(succ);
+          run->push_ready(succ);
       }
-      __atomic_store_n(&m.run->indegree[m.op_idx], SprayRun::kIndegreeDone,
+      __atomic_store_n(&run->indegree[op_idx], SprayRun::kIndegreeDone,
                        __ATOMIC_RELEASE);
     }
   }
@@ -179,6 +256,10 @@ class SprayExecutor {
   // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
                            size_t) = nullptr;
+  void (*peer_setup_fn_)(Transport::Communicator*, int, int) = nullptr;
+  void (*resolve_buf_fn_)(Transport::Communicator*, int, int, uint32_t) =
+      nullptr;
+  bool (*same_host_fn_)(Transport::Communicator*, int) = nullptr;
 
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
@@ -194,9 +275,9 @@ class SprayExecutor {
   std::thread drain_th_signal_;
   std::atomic<bool> stop_{false};
 
-  // cmd_idx to (run, op_idx) mapping
-  static constexpr size_t kMaxCmdIdx = 65536;
-  CmdRunMapping cmd_to_run_[kMaxCmdIdx];
+  BeSlotTable dev_slots_;
+  BeSlotTable tpt_slots_;
+  BeSlotTable sig_slots_;
 
   // Transport LB state
   int world_size_ = 0;
@@ -206,20 +287,9 @@ class SprayExecutor {
   size_t max_concurrent_runs_ = 16;
   std::atomic<size_t> active_runs_{0};
 
-  // Global cmd_idx counter and run map
-  uint32_t next_cmd_idx_ = 0;
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
-
-  // Backend cmd_idx to SprayExecutor caller_id mapping.
-  // Fixed-size atomic arrays with mask. Indices grow unbounded;
-  // masking prevents OOB on capacity-sized arrays.
-  static constexpr size_t kCallerMapSize = 65536;
-  static constexpr uint32_t kMapSlotEmpty = ~0u;
-  std::unique_ptr<std::atomic<uint32_t>[]> dev_caller_map_;
-  std::unique_ptr<std::atomic<uint32_t>[]> tpt_caller_map_;
-  std::unique_ptr<std::atomic<uint32_t>[]> sig_caller_map_;
 };
 
 }  // namespace CCL
