@@ -279,7 +279,7 @@ unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
   remote_ring->write_idx.store(w + 1, std::memory_order_release);
-  publish_completion(comm_rid, false);
+  publish_signal_send(comm_rid, false);
   return 1;
 }
 

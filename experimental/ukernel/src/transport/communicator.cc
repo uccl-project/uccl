@@ -220,6 +220,15 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   }
   if (completion_ring_) ipc_adapter_->set_completion_ring(completion_ring_);
 
+  // Signal send completion ring — separate from data ring
+  ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
+  if (ring_sz != (size_t)-1) {
+    signal_send_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (signal_send_ring_)
+      jring_init(signal_send_ring_, 2048, sizeof(CompletionEvent), 0, 0);
+  }
+  if (signal_send_ring_) ipc_adapter_->set_signal_send_ring(signal_send_ring_);
+
   // Signal completion ring: on_signal_received pushes here,
   // try_complete_signals dequeues. MP/MC for thread safety.
   ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
@@ -321,58 +330,62 @@ void Communicator::exchange_peer_metas() {
 }
 
 Communicator::~Communicator() {
-  if (ipc_adapter_) {
-    ipc_adapter_->shutdown();
-  }
+  // 1. Stop threads so dereg below doesn't race with in-flight ops
+  if (rdma_adapter_) rdma_adapter_->shutdown_workers();
+  if (ipc_adapter_) ipc_adapter_->shutdown();
 
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
     uint64_t const registered_id = buffer_id;
-    if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_registered_mrs_.find(registered_id) !=
-          uccl_registered_mrs_.end()) {
-        uccl_adapter_->deregister_memory(registered_id);
-        uccl_registered_mrs_.erase(registered_id);
-      }
-      uccl_direct_reg_failed_mrs_.erase(registered_id);
-    }
+    // RDMA adapter destructor deregisters after QP teardown (flushes WRs).
+    // Just clean up bookkeeping here.
     if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
       std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_registered_mrs_.find(registered_id) !=
-          rdma_registered_mrs_.end()) {
-        rdma_adapter_->deregister_memory(registered_id);
-        rdma_registered_mrs_.erase(registered_id);
-      }
+      rdma_registered_mrs_.erase(registered_id);
       rdma_direct_reg_failed_mrs_.erase(registered_id);
     }
     (void)mr_manager_.delete_mr(static_cast<uint32_t>(buffer_id));
   }
 
-  std::vector<uint32_t> local_ipc_buffer_ids;
-  {
-    std::lock_guard<std::mutex> lk(resource_mu_);
-    local_ipc_buffer_ids.reserve(local_buffer_to_ipc_.size());
-    for (auto const& kv : local_buffer_to_ipc_) {
-      local_ipc_buffer_ids.push_back(kv.first);
-    }
-  }
-  for (uint32_t buffer_id : local_ipc_buffer_ids) {
-    (void)dereg_ipc(buffer_id);
-  }
-
-  for (int i = 0; i < world_size_; ++i) {
-    if (i == global_rank_) continue;
-    ipc_manager_.delete_ipc(i);
-  }
-
   uccl_adapter_.reset();
   tcp_adapter_.reset();
   rdma_adapter_.reset();
+
+  // FIXME: gpuIpcCloseMemHandle hangs when GPU and NIC share PCIe topology.
+  // IPC dereg must happen after RDMA QP/PD destruction (all ibv_mr references
+  // released), but the CUDA driver still blocks on internal state.  Resources
+  // are reclaimed by the OS on process exit.
+  if (false) {
+    int orig_dev = -1;
+    gpuGetDevice(&orig_dev);
+    gpuSetDevice(local_gpu_idx_);
+
+    std::vector<uint32_t> local_ipc_buffer_ids;
+    {
+      std::lock_guard<std::mutex> lk(resource_mu_);
+      local_ipc_buffer_ids.reserve(local_buffer_to_ipc_.size());
+      for (auto const& kv : local_buffer_to_ipc_)
+        local_ipc_buffer_ids.push_back(kv.first);
+    }
+    for (uint32_t buffer_id : local_ipc_buffer_ids)
+      (void)dereg_ipc(buffer_id);
+
+    for (int i = 0; i < world_size_; ++i) {
+      if (i == global_rank_) continue;
+      ipc_manager_.delete_ipc(i);
+    }
+
+    gpuSetDevice(orig_dev);
+  }
+
   ipc_adapter_.reset();
 
   if (signal_ring_) {
     free(signal_ring_);
     signal_ring_ = nullptr;
+  }
+  if (signal_send_ring_) {
+    free(signal_send_ring_);
+    signal_send_ring_ = nullptr;
   }
   if (completion_ring_) {
     free(completion_ring_);
@@ -447,6 +460,7 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                            std::move(rdma_cfg));
     if (completion_ring_) rdma_adapter_->set_completion_ring(completion_ring_);
+    if (signal_send_ring_) rdma_adapter_->set_signal_send_ring(signal_send_ring_);
     rdma_adapter_->set_communicator(this);
   }
   return *rdma_adapter_;
@@ -1132,6 +1146,20 @@ size_t Communicator::try_complete(CompletionResult* results, size_t max) {
   size_t count = 0;
   while (count < max &&
          jring_mc_dequeue_bulk(completion_ring_, &ev, 1, nullptr) == 1) {
+    results[count].rid = ev.rid;
+    results[count].failed = (ev.failed != 0);
+    count++;
+  }
+  return count;
+}
+
+size_t Communicator::try_complete_signal_send(CompletionResult* results,
+                                               size_t max) {
+  if (!signal_send_ring_) return 0;
+  CompletionEvent ev;
+  size_t count = 0;
+  while (count < max &&
+         jring_mc_dequeue_bulk(signal_send_ring_, &ev, 1, nullptr) == 1) {
     results[count].rid = ev.rid;
     results[count].failed = (ev.failed != 0);
     count++;

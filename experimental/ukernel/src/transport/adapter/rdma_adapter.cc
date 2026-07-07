@@ -209,13 +209,25 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
   poll_thread_ = std::thread([this] { poll_loop(); });
 }
 
-RdmaTransportAdapter::~RdmaTransportAdapter() {
+void RdmaTransportAdapter::shutdown_workers() {
   stop_.store(true, std::memory_order_release);
   cv_.notify_all();
   if (send_worker_.joinable()) send_worker_.join();
   if (poll_thread_.joinable()) poll_thread_.join();
 
-  // Destroy peers
+  // Drain remaining CQ entries so dereg doesn't block on inflight WRs
+  for (size_t r = 0; r < peer_capacity_; ++r) {
+    RdmaPeer* p = peer_table_[r].load(std::memory_order_acquire);
+    if (!p) continue;
+    if (p->data_cq) poll_cq_set(*p, static_cast<int>(r));
+    if (p->signal_cq) poll_signal_cq(*p, static_cast<int>(r));
+  }
+}
+
+RdmaTransportAdapter::~RdmaTransportAdapter() {
+  if (send_worker_.joinable()) send_worker_.join();
+  if (poll_thread_.joinable()) poll_thread_.join();
+
   for (size_t r = 0; r < peer_capacity_; ++r) {
     if (peer_owners_[r]) {
       peer_table_[r].store(nullptr, std::memory_order_release);
@@ -223,16 +235,6 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
       peer_owners_[r].reset();
     }
   }
-
-  // Deregister all MRs
-  for (uint32_t id : registered_ids_) {
-    ibv_mr* mr = mr_table_[id].load(std::memory_order_acquire);
-    if (mr) {
-      mr_table_[id].store(nullptr, std::memory_order_release);
-      ibv_dereg_mr(mr);
-    }
-  }
-  registered_ids_.clear();
 
   if (send_ring_) {
     free(send_ring_);

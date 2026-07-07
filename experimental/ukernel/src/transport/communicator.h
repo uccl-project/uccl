@@ -90,8 +90,8 @@ class Communicator {
 
   // C++ advanced API, not exposed to Python binding.
   size_t try_complete(CompletionResult* results, size_t max);
-  // C++ advanced API, not exposed to Python binding.
   size_t try_complete_signals(SignalCompletion* events, size_t max);
+  size_t try_complete_signal_send(CompletionResult* results, size_t max);
 
   // Returns number of completed rids from the input array.
   // Writes completed rids back into the first N positions of the array.
@@ -205,6 +205,7 @@ class Communicator {
   std::shared_ptr<IpcAdapter> ipc_adapter_;
   jring_t* completion_ring_ = nullptr;
   jring_t* signal_ring_ = nullptr;
+  jring_t* signal_send_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → vector<rid>
