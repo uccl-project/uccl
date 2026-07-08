@@ -352,8 +352,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Reset counter after sync so send-only launches (return_recv_hook) do not
   // leave a stale value that deadlocks the next dispatch.
   amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
-#elif defined(DISABLE_SM90_FEATURES)
-  cuda_grid_barrier(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -478,8 +476,6 @@ LOW_LATENCY_DISPATCH_RECV:
   if (phases & LOW_LATENCY_SEND_PHASE)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
-#elif defined(DISABLE_SM90_FEATURES)
-    cuda_grid_barrier(grid_sync_barrier_ptr, num_sms);
 #else
     cg::this_grid().sync();
 #endif
@@ -1165,8 +1161,6 @@ LOW_LATENCY_COMBINE_RECV:
   }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
-#elif defined(DISABLE_SM90_FEATURES)
-  cuda_grid_barrier(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
