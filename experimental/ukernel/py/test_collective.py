@@ -29,7 +29,7 @@ def main() -> None:
     x = torch.arange(0, 1024 * world + 1, device="cuda", dtype=torch.float32)
     x = x + rank * 1000
     work = dist.all_reduce(
-        x, group=pg, async_op=True, tile_bytes=64 << 10, num_flows=2
+        x, group=pg, async_op=True, tile_bytes=64 << 10, num_streams=2
     )
     work.wait()
     print(f"[rank {rank}] allreduce ok: {x[:8]}")
@@ -37,7 +37,7 @@ def main() -> None:
     send = torch.arange(0, 12 * world, device="cuda", dtype=torch.float32)
     send = send + rank * 10000
     recv = torch.empty_like(send)
-    dist.all_to_all_single(recv, send, group=pg, tile_bytes=64 << 10, num_flows=2)
+    dist.all_to_all_single(recv, send, group=pg, tile_bytes=64 << 10, num_streams=2)
     print(f"[rank {rank}] alltoall ok: {recv[:8]}")
 
     base = 4
@@ -56,7 +56,7 @@ def main() -> None:
         input_split_sizes=input_splits,
         group=pg,
         tile_bytes=64 << 10,
-        num_flows=2,
+        num_streams=2,
     )
     print(f"[rank {rank}] alltoallv ok: {recv_v[:8]}")
 

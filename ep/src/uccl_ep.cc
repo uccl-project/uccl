@@ -16,6 +16,7 @@
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
+#include "util/util.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
@@ -28,6 +29,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -40,6 +42,7 @@ std::map<ProxyRegistryKey, std::vector<nb::object>> g_proxies_by_dev;
 std::map<ProxyRegistryKey, std::vector<nb::object>>& proxies_by_dev() {
   return g_proxies_by_dev;
 }
+
 }  // namespace uccl
 
 #define NUM_MAX_LOCAL_EXPERTS 1024
@@ -56,6 +59,33 @@ struct Ctx {
 static std::atomic<long> g_next{1};
 static std::mutex g_mu;
 static std::unordered_map<long, Ctx> g_ctx;
+
+namespace {
+
+std::string get_cuda_device_bdf(int device_index) {
+  int num_devices = 0;
+  cudaError_t st = cudaGetDeviceCount(&num_devices);
+  if (st != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaGetDeviceCount failed: ") +
+                             cudaGetErrorString(st));
+  }
+  if (device_index < 0 || device_index >= num_devices) {
+    throw std::out_of_range("CUDA device index " +
+                            std::to_string(device_index) +
+                            " out of range for " + std::to_string(num_devices) +
+                            " visible devices");
+  }
+
+  char bdf[64];
+  st = cudaDeviceGetPCIBusId(bdf, sizeof(bdf), device_index);
+  if (st != cudaSuccess) {
+    throw std::runtime_error(std::string("cudaDeviceGetPCIBusId failed: ") +
+                             cudaGetErrorString(st));
+  }
+  return uccl::normalize_pci_bus_id(bdf);
+}
+
+}  // namespace
 
 enum DTypeCode : int {
   kUInt8 = 0,
@@ -246,7 +276,8 @@ nb::object make_rdma_buffer_dlpack_capsule(void* ptr, std::size_t bytes,
 }
 
 std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
-    std::size_t num_rdma_bytes, int device_index) {
+    std::size_t num_rdma_bytes, int device_index,
+    bool force_device_alloc = false) {
   std::size_t const alloc_bytes = std::max<std::size_t>(num_rdma_bytes, 1);
   bool is_host_allocated = false;
   void* ptr = nullptr;
@@ -261,7 +292,7 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
   CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
 #else
   bool const use_host_alloc =
-      num_rdma_bytes > 0 &&
+      !force_device_alloc && num_rdma_bytes > 0 && has_any_nic() &&
       !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
   if (!use_host_alloc) {
     CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
@@ -674,10 +705,16 @@ class Buffer {
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(num_tokens > 0);
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch but must still participate in the collective notification.
+    // PyTorch zero-element tensors have data_ptr() == 0, so only require a
+    // real is_token_in_rank buffer when there are tokens to route.
+    EP_HOST_ASSERT(num_tokens >= 0);
     EP_HOST_ASSERT(num_experts > 0);
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+    }
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
     EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
@@ -762,11 +799,21 @@ class Buffer {
       std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
+    // Allow num_tokens == 0: DP-attention ranks may have no tokens to
+    // dispatch but must still participate in the collective cached_notify
+    // and dispatch so that remote ranks are not left spinning. Send-side
+    // pointers (x, is_token_in_rank, send_head) are sized by num_tokens —
+    // PyTorch zero-element tensors have data_ptr() == 0 — so gate them on
+    // num_tokens > 0. Recv-side allocations are bumped to max(.., 1) by
+    // the Python wrapper, so their pointers stay non-zero.
+    EP_HOST_ASSERT(num_tokens >= 0 && hidden > 0 && num_recv_tokens >= 0);
+    if (num_tokens > 0) {
+      EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
+      EP_HOST_ASSERT(send_head_ptr != 0);
+    }
     EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
     EP_HOST_ASSERT(recv_x_ptr != 0 && recv_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_src_idx_ptr != 0 && send_head_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens >= 0);
+    EP_HOST_ASSERT(recv_src_idx_ptr != 0);
     EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
                    0);
 
@@ -840,7 +887,13 @@ class Buffer {
       bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
     EP_HOST_ASSERT(x_ptr != 0 && src_idx_ptr != 0 &&
                    rank_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0 && send_head_ptr != 0);
+    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
+    // send_head is sized by num_recv_tokens (the original dispatch send
+    // count). DP-attention ranks may have num_recv_tokens == 0, which
+    // makes send_head a zero-element tensor with data_ptr() == 0.
+    if (num_recv_tokens > 0) {
+      EP_HOST_ASSERT(send_head_ptr != 0);
+    }
     EP_HOST_ASSERT(recv_x_ptr != 0);
     EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
                    0);
@@ -1234,8 +1287,12 @@ class Buffer {
     check_boundary(ptr1, count1 * sizeof(int));
 
     auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-    uccl::internode_ll::clean_low_latency_buffer(ptr0, count0, ptr1, count1,
-                                                 stream);
+    EP_HOST_ASSERT(barrier_signal_ptrs_gpu != nullptr &&
+                   "clean_low_latency_buffer requires barrier_signal_ptrs_gpu "
+                   "to be initialized via Buffer::sync(...)");
+    uccl::internode_ll::clean_low_latency_buffer(
+        ptr0, count0, ptr1, count1, barrier_signal_ptrs_gpu, nvl_rank,
+        num_nvl_ranks, stream);
   }
 
   std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
@@ -1253,21 +1310,7 @@ class Buffer {
                        bool use_fp8, bool round_scale, bool use_ue8m0,
                        bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
-    // Handle empty token case: when x_rows == 0, this rank has no tokens
-    // to dispatch. PyTorch returns data_ptr() == 0 for zero-element tensors,
-    // so x_ptr and topk_idx_ptr will legitimately be 0.
-    if (x_rows == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else {
-        stream_wait(compute_stream, comm_stream);
-      }
-      std::optional<std::function<void()>> hook;
-      return {event, hook};
-    }
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0);
+    EP_HOST_ASSERT(x_rows == 0 || (x_ptr != 0 && topk_idx_ptr != 0));
     EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
     EP_HOST_ASSERT(packed_recv_src_info_ptr != 0 &&
                    packed_recv_layout_range_ptr != 0);
@@ -1378,22 +1421,11 @@ class Buffer {
       int num_sms = 0, std::uintptr_t src_signals_ptr = 0,
       int src_signal_expect_value = 0) {
     EP_HOST_ASSERT(low_latency_mode);
-    // Handle empty token case: when topk_rows == 0, this rank dispatched
-    // no tokens so there is nothing to combine. Return early.
-    if (topk_rows == 0) {
-      auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-      std::optional<EventHandle> event;
-      if (async) {
-        event = EventHandle(comm_stream);
-      } else if (not return_recv_hook) {
-        stream_wait(compute_stream, comm_stream);
-      }
-      std::optional<std::function<void()>> hook;
-      return {event, hook};
-    }
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
-    EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
-    EP_HOST_ASSERT(out_ptr != 0);
+    EP_HOST_ASSERT(topk_rows == 0 ||
+                   (x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0));
+    EP_HOST_ASSERT(topk_rows == 0 ||
+                   (src_info_ptr != 0 && layout_range_ptr != 0));
+    EP_HOST_ASSERT(topk_rows == 0 || out_ptr != 0);
     if (overlap) {
       throw std::runtime_error(
           "low_latency_combine(overlap=true) is not implemented yet. "
@@ -1871,13 +1903,27 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
+  m.def(
+      "get_physical_gpu_rank",
+      [](int device_index) {
+        std::string const bdf = get_cuda_device_bdf(device_index);
+        auto all_gpu_bdfs = uccl::enumerate_all_gpu_bdfs();
+        auto it = std::find(all_gpu_bdfs.begin(), all_gpu_bdfs.end(), bdf);
+        if (it == all_gpu_bdfs.end()) return -1;
+        return static_cast<int>(std::distance(all_gpu_bdfs.begin(), it));
+      },
+      nb::arg("device_index"),
+      "Return the CUDA device's index in UCCL's physical GPU BDF order");
 
   m.def(
       "get_rdma_buffer",
-      [](std::size_t num_rdma_bytes, int device_index) {
-        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index);
+      [](std::size_t num_rdma_bytes, int device_index,
+         bool force_device_alloc) {
+        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index,
+                                           force_device_alloc);
       },
       nb::arg("num_rdma_bytes"), nb::arg("device_index"),
+      nb::arg("force_device_alloc") = false,
       R"doc(
         Allocate the RDMA scratch buffer outside PyTorch's CUDA allocator and
         return it as a DLPack capsule plus an `is_host_allocated` flag.
@@ -1890,6 +1936,7 @@ NB_MODULE(ep, m) {
         return true;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return true;
         return can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
@@ -1906,6 +1953,7 @@ NB_MODULE(ep, m) {
         return false;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (!has_any_nic()) return false;
         return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
@@ -2363,13 +2411,15 @@ NB_MODULE(ep, m) {
   nb::class_<Stats>(m, "Stats");
   nb::class_<UcclProxy>(m, "Proxy")
       .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool>(),
+                    bool, bool, int, int, int>(),
            nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
            nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
            nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
            nb::arg("num_ranks") = -1, nb::arg("num_nodes") = 0,
            nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
-           nb::arg("gpu_buffer_is_host_allocated") = false)
+           nb::arg("gpu_buffer_is_host_allocated") = false,
+           nb::arg("barrier_local_rank") = -1, nb::arg("device_index") = -1,
+           nb::arg("nic_local_rank") = -1)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

@@ -125,6 +125,11 @@ static inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
+static inline bool is_retryable_post_failure(int rc) {
+  if (is_cxi_transport()) return rc == UCCL_POST_TRANSIENT;
+  return rc == -1;
+}
+
 static inline bool raw_one_sided_batch_eligible(
     std::vector<size_t> const& size_v, size_t num_iovs) {
   for (size_t i = 0; i < num_iovs; ++i) {
@@ -141,6 +146,21 @@ static inline size_t max_iov_bytes(std::vector<size_t> const& size_v,
     max_bytes = std::max(max_bytes, size_v[i]);
   }
   return max_bytes;
+}
+
+size_t Endpoint::max_one_sided_inflight_ops() {
+  size_t limit = kMaxInflightOps;
+  if (is_cxi_transport()) limit = 32;
+
+  char const* env = std::getenv("UCCL_P2P_MAX_INFLIGHT_OPS");
+  if (env && env[0] != '\0') {
+    char* end = nullptr;
+    unsigned long requested = std::strtoul(env, &end, 10);
+    if (end != env && requested > 0) {
+      limit = std::min<size_t>(requested, kMaxInflightOps);
+    }
+  }
+  return std::max<size_t>(1, limit);
 }
 
 // ShmChannel helper function
@@ -228,6 +248,9 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
+  } else if (is_cxi_transport()) {
+    ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
+    numa_node_ = get_numa_node_from_iface();
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
   }
@@ -240,7 +263,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-  if (!is_nccl_transport()) {
+  if (!is_nccl_transport() && !is_cxi_transport()) {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
   }
@@ -301,6 +324,8 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
 
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
+  } else if (is_cxi_transport()) {
+    ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
   }
@@ -670,9 +695,14 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
-                         &ureq) == -1)
-    ;
+  int rc;
+  do {
+    rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
+  } while (is_retryable_post_failure(rc));
+  if (is_cxi_transport() && rc < 0) {
+    UCCL_LOG(ERROR) << "read failed to post: rc=" << rc;
+    return false;
+  }
 
   bool done = false;
   while (!done) {
@@ -705,8 +735,14 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
-                           &ureq) == -1) {
+    int rc;
+    do {
+      rc =
+          uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
+    } while (is_retryable_post_failure(rc));
+    if (is_cxi_transport() && rc < 0) {
+      UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
+      return false;
     }
 
     auto* status = new TransferStatus();
@@ -778,13 +814,14 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
 
   UcclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};
+  size_t const max_inflight_ops = max_one_sided_inflight_ops();
 
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
 
   while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -799,7 +836,20 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
               : uccl_read_async(ep_, conn, mhandle_v[next_iov], dst_v[next_iov],
                                 size_v[next_iov], slot_item_v[next_iov],
                                 &ureq[slot]);
-      if (rc == -1) break;
+      if (is_retryable_post_failure(rc)) {
+        if (is_cxi_transport() && num_inflight == 0) {
+          uccl_drive_send(ep_);
+          uccl_drive_recv(ep_);
+          std::this_thread::yield();
+          continue;
+        }
+        break;
+      }
+      if (is_cxi_transport() && rc < 0) {
+        UCCL_LOG(ERROR) << "readv failed to post iov " << next_iov
+                        << ": rc=" << rc;
+        return false;
+      }
       active[slot] = true;
       next_iov++;
       num_inflight++;
@@ -877,15 +927,16 @@ bool Endpoint::run_raw_one_sided_pipeline(
   };
 
   std::array<PendingRawWait, kMaxInflightOps> pending_waits{};
+  size_t const max_inflight_ops = max_one_sided_inflight_ops();
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
 
   auto post_raw_window = [&]() -> bool {
-    if (next_iov >= num_iovs || num_inflight >= kMaxInflightOps) return true;
+    if (next_iov >= num_iovs || num_inflight >= max_inflight_ops) return true;
 
     size_t const batch_iovs =
-        std::min<size_t>(kMaxInflightOps - num_inflight, num_iovs - next_iov);
+        std::min<size_t>(max_inflight_ops - num_inflight, num_iovs - next_iov);
     std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
     int64_t wr_ids[kMaxInflightOps] = {};
     std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
@@ -924,7 +975,7 @@ bool Endpoint::run_raw_one_sided_pipeline(
   };
 
   while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
       if (!post_raw_window()) return false;
     }
 
@@ -965,12 +1016,18 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  while ((send_group != nullptr
-              ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
-                                          curr_slot_item, &ureq)
-              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                                 &ureq)) == -1)
-    ;
+  int rc;
+  do {
+    rc = send_group != nullptr
+             ? uccl_write_async_on_group(send_group, conn, mhandle, src, size,
+                                         curr_slot_item, &ureq)
+             : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                                &ureq);
+  } while (is_retryable_post_failure(rc));
+  if (is_cxi_transport() && rc < 0) {
+    UCCL_LOG(ERROR) << "write failed to post: rc=" << rc;
+    return false;
+  }
 
   bool done = false;
   while (!done) {
@@ -1002,8 +1059,14 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
     curr_slot_item.size = size;
-    while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                            &ureq) == -1) {
+    int rc;
+    do {
+      rc = uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                            &ureq);
+    } while (is_retryable_post_failure(rc));
+    if (is_cxi_transport() && rc < 0) {
+      UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
+      return false;
     }
 
     auto* status = new TransferStatus();
@@ -1077,13 +1140,14 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
 
   UcclRequest ureq[kMaxInflightOps] = {};
   bool active[kMaxInflightOps] = {false};
+  size_t const max_inflight_ops = max_one_sided_inflight_ops();
 
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
 
   while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < kMaxInflightOps) {
+    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -1098,7 +1162,20 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
               : uccl_write_async(ep_, conn, mhandle_v[next_iov],
                                  src_v[next_iov], size_v[next_iov],
                                  slot_item_v[next_iov], &ureq[slot]);
-      if (rc == -1) break;
+      if (is_retryable_post_failure(rc)) {
+        if (is_cxi_transport() && num_inflight == 0) {
+          uccl_drive_send(ep_);
+          uccl_drive_recv(ep_);
+          std::this_thread::yield();
+          continue;
+        }
+        break;
+      }
+      if (is_cxi_transport() && rc < 0) {
+        UCCL_LOG(ERROR) << "writev failed to post iov " << next_iov
+                        << ": rc=" << rc;
+        return false;
+      }
       active[slot] = true;
       next_iov++;
       num_inflight++;
@@ -2072,11 +2149,6 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
 
 int Endpoint::send_notification(uint64_t conn_id,
                                 NotifyMsg const& notification) const {
-  if (!is_nccl_transport()) {
-    (void)conn_id;
-    (void)notification;
-    return -1;
-  }
   Conn* conn = get_conn(conn_id);
   if (conn == nullptr) {
     return -1;
@@ -2085,9 +2157,17 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (peer_id == UINT64_MAX) {
     return -1;
   }
-  auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
-  if (!nccl_ep || !*nccl_ep) return -1;
-  return (*nccl_ep)->send_notification(peer_id, notification);
+  if (is_nccl_transport()) {
+    auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
+    if (!nccl_ep || !*nccl_ep) return -1;
+    return (*nccl_ep)->send_notification(peer_id, notification);
+  }
+  if (is_cxi_transport()) {
+    auto* cxi_ep = std::get_if<std::shared_ptr<CxiEndpoint>>(&ep_);
+    if (!cxi_ep || !*cxi_ep) return -1;
+    return (*cxi_ep)->send_notification(peer_id, notification);
+  }
+  return -1;
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2123,6 +2203,8 @@ void Endpoint::initialize_engine() {
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (is_nccl_transport()) {
+    numa_node_ = get_numa_node_from_iface();
+  } else if (is_cxi_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(

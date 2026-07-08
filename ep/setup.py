@@ -153,6 +153,14 @@ if __name__ == "__main__":
         cxx_flags.extend(abi_flags)
         nvcc_flags.extend(abi_flags)
 
+    max_num_gpus = os.getenv("MAX_NUM_GPUS")
+    if max_num_gpus:
+        max_num_gpus = int(max_num_gpus)
+        max_num_gpus_flag = f"-DMAX_NUM_GPUS={max_num_gpus}"
+        print(f"Building with MAX_NUM_GPUS={max_num_gpus}")
+        cxx_flags.append(max_num_gpus_flag)
+        nvcc_flags.append(max_num_gpus_flag)
+
     # Collect header files for dependency tracking
     header_files = []
     for inc_dir in include_dirs:
@@ -163,6 +171,24 @@ if __name__ == "__main__":
     nvcc_dlink = []
     extra_link_args = []
     use_dmabuf = False
+    use_libfabric_cxi = int(os.getenv("USE_LIBFABRIC_CXI", "0"))
+    num_max_nvl_peers = os.getenv("NUM_MAX_NVL_PEERS")
+    if num_max_nvl_peers:
+        nvl_peers_flag = f"-DNUM_MAX_NVL_PEERS={int(num_max_nvl_peers)}"
+        print(f"Building with NUM_MAX_NVL_PEERS={int(num_max_nvl_peers)}")
+        cxx_flags.append(nvl_peers_flag)
+        nvcc_flags.append(nvl_peers_flag)
+
+    if use_libfabric_cxi:
+        print("Building with libfabric CXI transport support (USE_LIBFABRIC_CXI)")
+        cxx_flags.append("-DUSE_LIBFABRIC_CXI")
+        nvcc_flags.append("-DUSE_LIBFABRIC_CXI")
+        libraries.append("fabric")
+
+        libfabric_home = os.getenv("LIBFABRIC_HOME")
+        if libfabric_home:
+            include_dirs.append(Path(libfabric_home) / "include")
+            library_dirs.append(Path(libfabric_home) / "lib")
 
     if torch.version.cuda:
         # Add CUDA library directory to library_dirs
@@ -428,6 +454,7 @@ if __name__ == "__main__":
         print(f" > EFA Support: {'Yes' if has_efa else 'No'}")
         print(f" > GH200 Support: {'Yes' if has_gh200 else 'No'}")
         print(f" > DMA-BUF Support: {'Yes' if use_dmabuf else 'No'}")
+        print(f" > libfabric CXI Support: {'Yes' if use_libfabric_cxi else 'No'}")
     print(f" > Device Arch: {device_arch}")
     print(f" > Sources: {len(sources)} files")
     print(f" > Headers (tracked): {len(header_files)} files")

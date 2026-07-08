@@ -12,6 +12,10 @@
 #   CONTAINER_ENGINE=podman         Use podman instead of docker.
 #   CONTAINER_ENGINE=apptainer      Use apptainer instead of docker/podman.
 #                                     Example: CONTAINER_ENGINE=apptainer ./build.sh cu12 all
+#   DOCKER_BUILD_NETWORK=host       Network mode for docker/podman image builds.
+#                                   Defaults to host to avoid bridge DNS issues on
+#                                   multi-homed test machines. Set to default to
+#                                   use Docker's default build network.
 #   USE_INTEL_RDMA_NIC=1            Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                                     Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
 #   USE_DMABUF=1                    Enable DMA-BUF GPU memory registration for EP builds
@@ -341,14 +345,19 @@ if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
 
   else
 
+    DOCKER_BUILD_NETWORK="${DOCKER_BUILD_NETWORK:-host}"
+    msg_info "Using ${CONTAINER_ENGINE} build network: ${DOCKER_BUILD_NETWORK}"
+
     if [[ "$ARCH" == "aarch64" ]]; then
       ${CONTAINER_ENGINE} build \
         --platform=linux/arm64 \
+        --network="${DOCKER_BUILD_NETWORK}" \
         $BUILD_ARGS \
         -t "$IMAGE_NAME" \
         -f "$DOCKERFILE" .
     else
       ${CONTAINER_ENGINE} build \
+        --network="${DOCKER_BUILD_NETWORK}" \
         $BUILD_ARGS \
         -t "$IMAGE_NAME" \
         -f "$DOCKERFILE" .

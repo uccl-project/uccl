@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../include/config.h"
-#include "../../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -29,7 +29,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp, Rdma };
+enum class PeerTransportKind { Unknown, Ipc, Tcp, Rdma };
 
 struct CommunicatorMeta;
 
