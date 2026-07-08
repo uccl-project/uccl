@@ -5,6 +5,7 @@
 #include "adapter/transport_adapter.h"
 #include "adapter/uccl_adapter.h"
 #include "util/utils.h"
+#include "util/jrqueue.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -931,58 +932,56 @@ void Communicator::register_existing_local_mrs_with_rdma() {
 
 bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
                                                  size_t len) {
-  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
 
-    void* base_ptr = ptr;
-    size_t mr_len = len;
-    bool is_direct_local_mr = false;
+  if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
 
-    MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
-    if (item.valid) {
-      base_ptr =
-          reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
-      mr_len = static_cast<size_t>(item.mr.length);
-      is_direct_local_mr = true;
-    }
+  void* base_ptr = ptr;
+  size_t mr_len = len;
+  bool is_direct_local_mr = false;
 
-    if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_direct_reg_failed_mrs_.find(buffer_id) !=
-          rdma_direct_reg_failed_mrs_.end()) {
-        return false;
-      }
-    }
-
-    if (base_ptr == nullptr || mr_len == 0) {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " invalid pointer or length for RDMA reg, buffer_id="
-                << buffer_id << std::endl;
-      return false;
-    }
-
-    bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
-    if (!ok) {
-      if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-        rdma_direct_reg_failed_mrs_.insert(buffer_id);
-        std::cerr << "[WARN] Communicator " << global_rank_
-                  << " failed to register local GPU MR " << buffer_id
-                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
-                  << std::endl;
-      } else {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host MR " << buffer_id << " with RDMA"
-                  << std::endl;
-      }
-    } else {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      rdma_registered_mrs_.insert(buffer_id);
-    }
-    return ok;
+  MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
+  if (item.valid) {
+    base_ptr =
+        reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
+    mr_len = static_cast<size_t>(item.mr.length);
+    is_direct_local_mr = true;
   }
 
-  return true;
+  if (is_direct_local_mr) {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    if (rdma_direct_reg_failed_mrs_.find(buffer_id) !=
+        rdma_direct_reg_failed_mrs_.end()) {
+      return false;
+    }
+  }
+
+  if (base_ptr == nullptr || mr_len == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " invalid pointer or length for RDMA reg, buffer_id="
+              << buffer_id << std::endl;
+    return false;
+  }
+
+  bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
+  if (!ok) {
+    if (is_direct_local_mr) {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      rdma_direct_reg_failed_mrs_.insert(buffer_id);
+      std::cerr << "[WARN] Communicator " << global_rank_
+                << " failed to register local GPU MR " << buffer_id
+                << " with RDMA, base=" << base_ptr << " len=" << mr_len
+                << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to register host MR " << buffer_id << " with RDMA"
+                << std::endl;
+    }
+  } else {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    rdma_registered_mrs_.insert(buffer_id);
+  }
+  return ok;
 }
 
 unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
@@ -1010,6 +1009,12 @@ unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
 
   // RDMA
   if (kind == PeerTransportKind::Rdma) {
+    if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) {
+      static int once = 0;
+      if (!once++) std::cerr << "[WARN] RDMA adapter not initialized, "
+                             << "cannot send_put_async" << std::endl;
+      return 0;
+    }
     if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return 0;
     uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
     MR remote_mr = get_mr(peer, remote_id);
@@ -1059,31 +1064,35 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
   }
 
   // IPC / RDMA: check buffered signals before registering wait.
+  SignalCompletion ev{};
+  bool matched = false;
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
 
-    // Check if a matching signal already arrived.
     auto sig_it = pending_signals_.find(peer);
     if (sig_it != pending_signals_.end()) {
       auto& sigs = sig_it->second;
       for (auto sit = sigs.begin(); sit != sigs.end(); ++sit) {
         if (*sit == tag) {
-          // Signal already arrived — dispatch immediately.
-          SignalCompletion ev;
           ev.rid = rid;
           ev.tag = tag;
           ev.peer = peer;
           ev.failed = false;
-          jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
           sigs.erase(sit);
           if (sigs.empty()) pending_signals_.erase(sig_it);
-          return rid;
+          matched = true;
+          break;
         }
       }
     }
 
-    // No buffered signal — register the wait.
-    pending_signal_waits_[peer][tag].push_back(rid);
+    if (!matched) {
+      pending_signal_waits_[peer][tag].push_back(rid);
+    }
+  }
+
+  if (matched) {
+    jrpush(signal_ring_, ev);
   }
 
   return rid;
@@ -1269,27 +1278,30 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
 }
 
 void Communicator::on_signal_received(int peer, uint64_t tag) {
-  std::lock_guard<std::mutex> lk(signal_waits_mu_);
-
-  auto it = pending_signal_waits_.find(peer);
-  if (it != pending_signal_waits_.end()) {
-    auto it2 = it->second.find(tag);
-    if (it2 != it->second.end()) {
-      // Match found: dispatch to the first waiting rid only (1:1 signal->wait).
-      SignalCompletion ev;
-      ev.peer = peer;
-      ev.tag = tag;
-      ev.failed = false;
-      ev.rid = it2->second.front();
-      jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
-      it2->second.erase(it2->second.begin());
-      if (it2->second.empty()) it->second.erase(it2);
-      return;
+  SignalCompletion ev{};
+  bool matched = false;
+  {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    auto it = pending_signal_waits_.find(peer);
+    if (it != pending_signal_waits_.end()) {
+      auto it2 = it->second.find(tag);
+      if (it2 != it->second.end()) {
+        ev.rid = it2->second.front();
+        ev.tag = tag;
+        ev.peer = peer;
+        ev.failed = false;
+        it2->second.erase(it2->second.begin());
+        if (it2->second.empty()) it->second.erase(it2);
+        matched = true;
+      }
+    }
+    if (!matched) {
+      pending_signals_[peer].push_back(tag);
     }
   }
-
-  // No matching wait — buffer the signal for later matching.
-  pending_signals_[peer].push_back(tag);
+  if (matched) {
+    jrpush(signal_ring_, ev);
+  }
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,

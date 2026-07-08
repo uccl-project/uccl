@@ -4,6 +4,7 @@
 #include "coll_config.h"
 #include "lower.h"
 #include "util/jring.h"
+#include "util/jrqueue.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -59,7 +60,8 @@ struct SprayRun {
 
   bool push_ready(uint32_t op) {
     if (!ready_ring) return false;
-    return jring_mp_enqueue_bulk(ready_ring, &op, 1, nullptr) == 1;
+    jrpush(ready_ring, op);
+    return true;
   }
   uint32_t pop_ready() {
     if (!ready_ring) return ~0u;
@@ -71,6 +73,7 @@ struct SprayRun {
   void init_ready_ring(size_t nops) {
     uint32_t count = 1;
     while (count <= nops) count <<= 1;
+    if (count < 1024) count = 1024;  // floor: avoid overflow under burst
     size_t sz = jring_get_buf_ring_size(sizeof(uint32_t), count);
     ready_ring = static_cast<jring_t*>(calloc(1, sz));
     jring_init(ready_ring, count, sizeof(uint32_t), 1, 0);  // MP/SC
@@ -245,6 +248,15 @@ class SprayExecutor {
       }
       __atomic_store_n(&run->indegree[op_idx], SprayRun::kIndegreeDone,
                        __ATOMIC_RELEASE);
+      auto& top = run->tiled.ops[op_idx];
+      if (top.kind == ExecOpKind::WaitSignal && off < end) {
+        static int ws_done = 0;
+        uint32_t succ = run->successor_data[off];
+        uint32_t deg = __atomic_load_n(&run->indegree[succ], __ATOMIC_ACQUIRE);
+        if (++ws_done <= 5)
+          std::fprintf(stderr, "[ws] done=%d succ=%u indeg=%u nsucc=%u\n",
+                       ws_done, succ, deg, end - off);
+      }
     }
   }
 

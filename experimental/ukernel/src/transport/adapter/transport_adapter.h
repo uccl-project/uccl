@@ -14,6 +14,8 @@ extern "C" {
 #include "util/jring.h"
 }
 
+#include "util/jrqueue.h"
+
 namespace UKernel {
 namespace Transport {
 
@@ -109,15 +111,13 @@ class TransportAdapter {
   void publish_completion(unsigned rid, bool failed) {
     if (!completion_ring_) return;
     CompletionEvent ev{rid, failed ? 1u : 0u};
-    while (jring_mp_enqueue_bulk(completion_ring_, &ev, 1, nullptr) != 1)
-      std::this_thread::yield();
+    jrpush(completion_ring_, ev);
   }
 
   void publish_signal_send(unsigned rid, bool failed) {
     if (!signal_send_ring_) return;
     CompletionEvent ev{rid, failed ? 1u : 0u};
-    while (jring_mp_enqueue_bulk(signal_send_ring_, &ev, 1, nullptr) != 1)
-      std::this_thread::yield();
+    jrpush(signal_send_ring_, ev);
   }
 };
 
