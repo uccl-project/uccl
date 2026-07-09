@@ -46,6 +46,13 @@ struct SprayRun {
   std::mutex mtx;
   std::vector<uint8_t> submitted;
   std::vector<uint32_t> ready;
+  // Backpressure: ops rejected by backend are deferred and retried first
+  // on the next enqueue cycle before pulling new ops from the ring.
+  // This preserves priority (FIFO within each backend) and avoids
+  // re-enqueue contention on the lock-free ring.
+  std::vector<uint32_t> deferred_dev;
+  std::vector<uint32_t> deferred_tpt;
+  std::vector<uint32_t> deferred_sig;
   std::vector<Cmd> dev_cmds;
   std::vector<Cmd> tpt_cmds;
 
@@ -103,12 +110,12 @@ struct SprayExecutorConfig {
   int gpu_id;
   int rank;
   int world_size;
-  size_t device_task_capacity = 256;
+  size_t device_task_capacity = 4096;
   size_t max_device_fifos = 2;
   int threads_per_block = 64;
   int blocks_per_worker = 1;
   size_t fifo_capacity = 256;
-  size_t smem_size = 0;  // dynamic shared memory, 0 = auto
+  size_t smem_size = 4096;  // dynamic shared memory for reduce kernel
   size_t max_concurrent_runs = 16;
   std::shared_ptr<struct UKernel::Transport::CommunicatorConfig>
       communicator_config;
@@ -248,15 +255,6 @@ class SprayExecutor {
       }
       __atomic_store_n(&run->indegree[op_idx], SprayRun::kIndegreeDone,
                        __ATOMIC_RELEASE);
-      auto& top = run->tiled.ops[op_idx];
-      if (top.kind == ExecOpKind::WaitSignal && off < end) {
-        static int ws_done = 0;
-        uint32_t succ = run->successor_data[off];
-        uint32_t deg = __atomic_load_n(&run->indegree[succ], __ATOMIC_ACQUIRE);
-        if (++ws_done <= 5)
-          std::fprintf(stderr, "[ws] done=%d succ=%u indeg=%u nsucc=%u\n",
-                       ws_done, succ, deg, end - off);
-      }
     }
   }
 
@@ -272,6 +270,9 @@ class SprayExecutor {
   void (*resolve_buf_fn_)(Transport::Communicator*, int, int, uint32_t) =
       nullptr;
   bool (*same_host_fn_)(Transport::Communicator*, int) = nullptr;
+
+  // Flush GPU L2 cache for addresses written by RDMA (CUDA 11.3+).
+  void (*flush_rdma_fn_)(void* addr, size_t bytes) = nullptr;
 
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;

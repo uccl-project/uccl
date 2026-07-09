@@ -26,22 +26,6 @@ static void update_path_metrics(PathMetrics& m, uint64_t enqueue_ns) {
     ;
 }
 
-static CollectiveBufferRole buf_role(ExecOpKind kind, bool is_src) {
-  switch (kind) {
-    case ExecOpKind::Put:
-      return is_src ? CollectiveBufferRole::Input
-                    : CollectiveBufferRole::Output;
-    case ExecOpKind::Reduce:
-      return is_src ? CollectiveBufferRole::Input
-                    : CollectiveBufferRole::Output;
-    case ExecOpKind::Signal:
-    case ExecOpKind::WaitSignal:
-      return CollectiveBufferRole::Output;
-    default:
-      return CollectiveBufferRole::Input;
-  }
-}
-
 static uint32_t role_to_buf(CollectiveBufferRole role, uint32_t in,
                             uint32_t out, uint32_t scr) {
   switch (role) {
@@ -323,6 +307,18 @@ void SprayExecutor::collect_ready(SprayRun& run) {
 }
 
 void SprayExecutor::enqueue_to_ring(SprayRun& run) {
+  // Prepend deferred ops from prior cycle (preserves priority).
+  {
+    run.ready.insert(run.ready.begin(), run.deferred_sig.begin(),
+                     run.deferred_sig.end());
+    run.ready.insert(run.ready.begin(), run.deferred_tpt.begin(),
+                     run.deferred_tpt.end());
+    run.ready.insert(run.ready.begin(), run.deferred_dev.begin(),
+                     run.deferred_dev.end());
+    run.deferred_dev.clear();
+    run.deferred_tpt.clear();
+    run.deferred_sig.clear();
+  }
   if (run.ready.empty()) return;
 
   run.dev_cmds.clear();
@@ -345,7 +341,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         run.be_slots.emplace_back(2, be_idx);
         run.submitted[idx] = 1;
       } else {
-        run.push_ready(idx);
+        run.deferred_sig.push_back(idx);
       }
       continue;
     }
@@ -361,36 +357,38 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
   // Submit device batch
   {
-    size_t off = 0;
-    while (off < run.dev_cmds.size()) {
+    for (size_t i = 0; i < run.dev_cmds.size(); ++i) {
       uint32_t be_idx;
-      size_t n = device_be_->do_enqueue(&run.dev_cmds[off], 1, &be_idx);
-      if (n == 0) break;
-      dev_slots_.write(be_idx, &run, dev_idx[off], PutPath::None);
+      size_t n = device_be_->do_enqueue(&run.dev_cmds[i], 1, &be_idx);
+      if (n == 0) {
+        // Backend full — defer remaining.
+        for (size_t j = i; j < run.dev_cmds.size(); ++j)
+          run.deferred_dev.push_back(dev_idx[j]);
+        break;
+      }
+      dev_slots_.write(be_idx, &run, dev_idx[i], PutPath::None);
       run.be_slots.emplace_back(0, be_idx);
-      run.submitted[dev_idx[off]] = 1;
-      ++off;
+      run.submitted[dev_idx[i]] = 1;
     }
-    for (size_t i = off; i < run.dev_cmds.size(); ++i)
-      run.push_ready(dev_idx[i]);
   }
 
   // Submit transport batch
   {
-    size_t off = 0;
-    while (off < run.tpt_cmds.size()) {
+    for (size_t i = 0; i < run.tpt_cmds.size(); ++i) {
       uint32_t be_idx;
-      size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[off], 1, &be_idx);
-      if (n == 0) break;
-      tpt_slots_.write(be_idx, &run, tpt_idx[off],
-                       run.tpt_cmds[off].put_path);
+      size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[i], 1, &be_idx);
+      if (n == 0) {
+        for (size_t j = i; j < run.tpt_cmds.size(); ++j)
+          run.deferred_tpt.push_back(tpt_idx[j]);
+        break;
+      }
+      tpt_slots_.write(be_idx, &run, tpt_idx[i], run.tpt_cmds[i].put_path);
       run.be_slots.emplace_back(1, be_idx);
-      run.submitted[tpt_idx[off]] = 1;
-      ++off;
+      run.submitted[tpt_idx[i]] = 1;
     }
-    for (size_t i = off; i < run.tpt_cmds.size(); ++i)
-      run.push_ready(tpt_idx[i]);
   }
+
+  run.ready.clear();
 }
 
 void SprayExecutor::enqueue_loop() {
@@ -541,7 +539,9 @@ void SprayExecutor::drain_signal_loop() {
       if (!s) return;
       slot_buf[valid++] = s;
     }
-    drain_batch(slot_buf, valid, [](BeSlot&) {});
+    drain_batch(slot_buf, valid, [this](BeSlot& s) {
+      if (flush_rdma_fn_) flush_rdma_fn_(nullptr, 0);
+    });
     check_completions_();
   }
 }

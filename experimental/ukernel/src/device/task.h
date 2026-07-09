@@ -236,7 +236,11 @@ class TaskManager {
     {
       std::lock_guard<std::mutex> g(task_mu_);
       assert(inited_ && "TaskManager not initialized");
-      assert(!free_task_.empty() && "args pool exhausted");
+      if (free_task_.empty()) {
+        // Pool exhausted — caller must drain and retry.
+        // Create task creates an empty/Nop task that will be rejected.
+        return Task();
+      }
       idx = free_task_.back();
       free_task_.pop_back();
       assert(task_in_use_[idx] == 0 && "Task args slot already in use");

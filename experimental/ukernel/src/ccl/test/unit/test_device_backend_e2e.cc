@@ -89,9 +89,12 @@ int main(int argc, char** argv) {
     printf("  p2p probe ok\n");
 
     DeviceBackendConfig dcfg;
+    dcfg.task_capacity = 256;
     dcfg.blocks_per_worker = 1;
+    dcfg.threads_per_block = 64;
     dcfg.max_fifos = 2;
-    dcfg.fifo_capacity = 64;
+    dcfg.fifo_capacity = 256;
+    dcfg.smem_size = 4096;
     DeviceBackend dev(dcfg);
     dev.set_comm(comm.get());
 

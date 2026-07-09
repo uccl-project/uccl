@@ -102,6 +102,7 @@ struct TiledOp {
   std::vector<uint32_t> deps;
   CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
   CollectiveBufferRole dst_buf_role = CollectiveBufferRole::Output;
+  bool bypass_l2 = false;  // dst was written by RDMA (bypasses GPU L2)
 };
 
 struct TiledResult {

@@ -92,6 +92,10 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->same_host_fn_ = [](Transport::Communicator* comm, int peer) {
     return comm->same_host(peer);
   };
+  // cuFlushGPUDirectRDMAWrites(target=0, scope=1) invalidates GPU L2
+  // for RDMA writes across nodes.  Called after WaitSignal to ensure
+  // subsequent kernels see data written by the NIC.
+  ex->flush_rdma_fn_ = [](void*, size_t) { gpuFlushRDMAWrites(); };
 
   return ex;
 }
