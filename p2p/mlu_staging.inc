@@ -1,8 +1,5 @@
-// Cambricon MLU (CNRT) Plan A staging: members/methods of class Endpoint.
-// Included inside the Endpoint class body in engine.h under
-// __CAMBRICON_PLATFORM_MLU__; implementations live in mlu_staging.cc.
-// Plain cnrtMalloc tensors aren't peer-able; relay them through a bounded
-// peer-able staging buffer in chunks.
+// Cambricon MLU (CNRT) Plan A staging: Endpoint members/methods (impls in
+// mlu_staging.cc). Plain cnrtMalloc tensors aren't peer-able; relayed in chunks.
 static constexpr size_t kMluStageChunk = 32ul << 20;
 struct MluStageRx {
   void* staging = nullptr;

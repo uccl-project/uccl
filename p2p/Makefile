@@ -29,8 +29,7 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
-# CXI transport is opt-in (needs the libfabric headers included above); other
-# platform Makefiles that lack libfabric simply omit this to compile it out.
+# CXI is opt-in: needs the libfabric headers above; others omit to compile out.
 CXXFLAGS += -DUCCL_ENABLE_CXI
 
 # ---------------- DietGPU ----------------

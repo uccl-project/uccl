@@ -1,7 +1,5 @@
-// Cambricon MLU (CNRT) Plan A staging: implementations of the Endpoint::mlu_*
-// methods declared in mlu_staging.inc. Split out of engine.cc so that engine.h
-// and engine.cc carry no Cambricon internals; other platforms are unaffected
-// (this file is compiled only by Makefile.cnrt).
+// Cambricon MLU (CNRT) Plan A staging: implementations of Endpoint::mlu_*
+// (declared in mlu_staging.inc). Compiled only by Makefile.cnrt.
 #if defined(__CAMBRICON_PLATFORM_MLU__)
 #include "endpoint_wrapper.h"
 #include "engine.h"
@@ -12,8 +10,7 @@
 #include <thread>
 #include <Python.h>
 
-// Local copy of engine.cc's helper to keep this translation unit
-// self-contained.
+// Local copy of engine.cc's helper to keep this TU self-contained.
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {

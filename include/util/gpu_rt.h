@@ -1,9 +1,8 @@
 #pragma once
 
 #if defined(__CAMBRICON_PLATFORM_MLU__)
-// Cambricon MLU: map the gpu* abstraction onto the CNRT runtime (cnrt*) and the
-// CNDRV driver (cn*). Naming and several signatures differ from CUDA, so direct
-// macros are used where they match and inline wrappers where args differ.
+// Cambricon MLU: map the gpu* abstraction onto CNRT (cnrt*) / CNDRV (cn*);
+// direct macros where signatures match, inline wrappers where they differ.
 #include <climits>  // CNRT headers do not pull in PATH_MAX like cuda_runtime.h
 #include <cn_api.h>
 #include <cnrt.h>

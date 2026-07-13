@@ -1457,8 +1457,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle. On CNRT the handle must be opened from
-  // the owner GPU's context, and cross-GPU copies go through
+  // On CNRT open the handle from the owner GPU's context; peer copies via
   // gpuMemcpyPeerAsync.
 #if defined(__CAMBRICON_PLATFORM_MLU__)
   int ipc_dev = (!is_host && info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
