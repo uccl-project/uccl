@@ -15,43 +15,51 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
   for (size_t i = 0; i < n; ++i) {
     Cmd const& c = cmds[i];
 
-    uint32_t idx = cmd_next_++;
-
     unsigned rid = 0;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      switch (c.kind) {
-        case ExecOpKind::Signal: {
-          auto tpt = comm_->same_host(static_cast<int>(c.dst_peer))
-                         ? Transport::PeerTransportKind::Ipc
-                         : Transport::PeerTransportKind::Rdma;
-          rid = comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag,
-                                         tpt);
-          if (rid) {
-            signal_send_rid_to_cmd_[rid] = idx;
-          }
-          break;
-        }
-        case ExecOpKind::WaitSignal: {
-          auto tpt = comm_->same_host(static_cast<int>(c.src_peer))
-                         ? Transport::PeerTransportKind::Ipc
-                         : Transport::PeerTransportKind::Rdma;
-          rid = comm_->wait_signal_async(static_cast<int>(c.src_peer), c.tag,
-                                         tpt);
-          if (rid) {
-            signal_wait_rid_to_cmd_[rid] = idx;
-          }
-          break;
-        }
-        default:
-          break;
+    uint32_t idx = 0;
+
+    if (c.kind == ExecOpKind::Signal) {
+      auto tpt = comm_->same_host(static_cast<int>(c.dst_peer))
+                     ? Transport::PeerTransportKind::Ipc
+                     : Transport::PeerTransportKind::Rdma;
+
+      // Allocate cmd index under lock, but call send_signal_async
+      // outside — it may block on a full IPC signal ring, and holding
+      // mu_ across that block would deadlock the drain thread.
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        idx = cmd_next_++;
+      }
+
+      rid = comm_->send_signal_async(static_cast<int>(c.dst_peer), c.tag, tpt);
+      if (rid) {
+        std::lock_guard<std::mutex> lk(mu_);
+        signal_send_rid_to_cmd_[rid] = idx;
+      } else {
+        std::lock_guard<std::mutex> lk(mu_);
+        --cmd_next_;
+      }
+
+    } else if (c.kind == ExecOpKind::WaitSignal) {
+      auto tpt = comm_->same_host(static_cast<int>(c.src_peer))
+                     ? Transport::PeerTransportKind::Ipc
+                     : Transport::PeerTransportKind::Rdma;
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        idx = cmd_next_++;
+      }
+
+      rid = comm_->wait_signal_async(static_cast<int>(c.src_peer), c.tag, tpt);
+      if (rid) {
+        std::lock_guard<std::mutex> lk(mu_);
+        signal_wait_rid_to_cmd_[rid] = idx;
+      } else {
+        std::lock_guard<std::mutex> lk(mu_);
+        --cmd_next_;
       }
     }
 
-    if (rid == 0) {
-      --cmd_next_;
-      break;
-    }
+    if (rid == 0) break;
     if (out_indices) out_indices[accepted] = idx;
     ++accepted;
   }
