@@ -62,12 +62,5 @@ class BatchBackend {
   UKernel::Transport::Communicator* comm_ = nullptr;
 };
 
-struct GpuSignalPeer {
-  constexpr static uint32_t kPending = 0;
-  constexpr static uint32_t kDone = 1;
-  uint32_t* local = nullptr;
-  uint32_t* remote = nullptr;
-};
-
 }  // namespace CCL
 }  // namespace UKernel

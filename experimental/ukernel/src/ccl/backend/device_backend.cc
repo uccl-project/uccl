@@ -210,10 +210,5 @@ size_t DeviceBackend::capacity() const {
   return (size_t)cfg_.max_fifos * cfg_.fifo_capacity;
 }
 
-void DeviceBackend::set_signal_buffers(
-    std::vector<GpuSignalPeer> const& peers) {
-  gpu_signal_bufs_ = peers;
-}
-
 }  // namespace CCL
 }  // namespace UKernel

@@ -35,8 +35,6 @@ class DeviceBackend final : public BatchBackend {
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
 
-  void set_signal_buffers(std::vector<GpuSignalPeer> const& peers);
-
  private:
   void ensure_runtime();
 
@@ -58,8 +56,6 @@ class DeviceBackend final : public BatchBackend {
   };
   std::vector<CmdRec> pending_;  // indexed by internal seq
   std::mutex pending_mu_;
-
-  std::vector<GpuSignalPeer> gpu_signal_bufs_;
 
   // Resolved remote IPC pointer cache — written once, read without lock
   struct ResolvedRemote {

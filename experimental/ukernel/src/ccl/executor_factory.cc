@@ -4,21 +4,18 @@
 #include "backend/signal_backend.h"
 #include "backend/transport_backend.h"
 #include "executor.h"
-#include "gpu_rt.h"
+#include <memory>
 #if !defined(__HIP_PLATFORM_AMD__)
 #include <gdrapi.h>
 #include <mutex>
 #include <unordered_map>
 #endif
 #include <cstring>
-#include <memory>
-#include <stdexcept>
-#include <vector>
 
 #if !defined(__HIP_PLATFORM_AMD__)
 namespace {
 struct GdrSlot {
-  gdr_mh_t mh = nullptr;
+  gdr_mh_t mh{};
   void* map_ptr = nullptr;
 };
 std::mutex g_gdr_mu;
@@ -29,8 +26,6 @@ gdr_t g_gdr = nullptr;
 
 namespace UKernel {
 namespace CCL {
-
-constexpr uint32_t kCompIdBase = 10000;
 
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
@@ -52,27 +47,6 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   });
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
   auto sig_be = std::make_unique<SignalBackend>();
-
-  fprintf(stderr, "[FACTORY] IPC exchange...\n");
-  int n = comm->world_size();
-  std::vector<GpuSignalPeer> gpu_comp(n);
-  for (int peer = 0; peer < n; ++peer) {
-    if (peer == config.rank) continue;
-    GPU_RT_CHECK(gpuMalloc(&gpu_comp[peer].local, 16));
-    GPU_RT_CHECK(gpuMemset(gpu_comp[peer].local, 0, 16));
-    comm->reg_ipc(kCompIdBase + peer, gpu_comp[peer].local, 16, true);
-  }
-  fprintf(stderr, "[FACTORY] waiting for peer IPC...\n");
-  for (int peer = 0; peer < n; ++peer) {
-    if (peer == config.rank) continue;
-    if (!comm->wait_ipc(peer, kCompIdBase + config.rank, 30000))
-      throw std::runtime_error("GPU comp buffer IPC exchange failed");
-    int remote_dev = -1;
-    comm->try_resolve_remote_ipc_pointer(
-        peer, kCompIdBase + config.rank, 0, 16,
-        reinterpret_cast<void**>(&gpu_comp[peer].remote), &remote_dev);
-  }
-  dev_be->set_signal_buffers(gpu_comp);
 
   auto ex = std::make_unique<SprayExecutor>(dev_be.get(), tpt_be.get(),
                                             sig_be.get(), config.world_size);
@@ -132,7 +106,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       }
     }
     CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(gpu_ptr);
-    gdr_mh_t mh = nullptr;
+    gdr_mh_t mh{};
     if (gdr_pin_buffer(g_gdr, dptr, bytes, 0, 0, &mh) != 0) return;
     void* map_ptr = nullptr;
     if (gdr_map(g_gdr, mh, &map_ptr, bytes) != 0) {
