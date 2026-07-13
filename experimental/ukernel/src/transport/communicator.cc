@@ -1020,8 +1020,9 @@ unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
     MR remote_mr = get_mr(peer, remote_id);
     void* remote_ptr = reinterpret_cast<void*>(
         static_cast<uint64_t>(remote_mr.address) + dst_off);
-    rdma_adapter_->register_remote_buffer(peer, remote_id, remote_mr.address,
-                                          remote_mr.key);
+    rdma_adapter_->register_remote_buffer(peer, remote_id,
+                                           reinterpret_cast<uint64_t>(remote_ptr),
+                                           remote_mr.key);
     if (!adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
                                  remote_id, bytes, rid))
       return 0;

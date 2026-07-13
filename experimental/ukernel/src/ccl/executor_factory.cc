@@ -5,24 +5,8 @@
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include <memory>
-#if !defined(__HIP_PLATFORM_AMD__)
-#include <gdrapi.h>
-#include <mutex>
-#include <unordered_map>
-#endif
-#include <cstring>
-
-#if !defined(__HIP_PLATFORM_AMD__)
-namespace {
-struct GdrSlot {
-  gdr_mh_t mh{};
-  void* map_ptr = nullptr;
-};
-std::mutex g_gdr_mu;
-std::unordered_map<void*, GdrSlot> g_gdr_slots;
-gdr_t g_gdr = nullptr;
-}  // namespace
-#endif
+#include <stdexcept>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
@@ -89,61 +73,6 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   };
   ex->same_host_fn_ = [](Transport::Communicator* comm, int peer) {
     return comm->same_host(peer);
-  };
-  // GDR read-tail: pin GPU output buffer once at registration time via
-  // GDRCopy BAR1 mapping.  At each RDMA-Put completion the drain thread
-  // reads the tail of the written range from the already-mapped pointer
-  // — the PCIe read forces GPU L2 invalidation on pre-Hopper hardware.
-  ex->pin_buf_fn_ = [](void* gpu_ptr, size_t bytes) {
-#if !defined(__HIP_PLATFORM_AMD__)
-    if (!gpu_ptr || !bytes) return;
-    {
-      std::lock_guard<std::mutex> lk(g_gdr_mu);
-      if (g_gdr_slots.count(gpu_ptr)) return;
-      if (!g_gdr) {
-        g_gdr = gdr_open();
-        if (!g_gdr) return;
-      }
-    }
-    CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(gpu_ptr);
-    gdr_mh_t mh{};
-    if (gdr_pin_buffer(g_gdr, dptr, bytes, 0, 0, &mh) != 0) return;
-    void* map_ptr = nullptr;
-    if (gdr_map(g_gdr, mh, &map_ptr, bytes) != 0) {
-      gdr_unpin_buffer(g_gdr, mh);
-      return;
-    }
-    std::lock_guard<std::mutex> lk(g_gdr_mu);
-    g_gdr_slots[gpu_ptr] = {mh, map_ptr};
-#else
-    (void)gpu_ptr; (void)bytes;
-#endif
-  };
-
-  ex->flush_rdma_fn_ = [](void* gpu_buf_ptr, size_t offset, size_t bytes) {
-#if !defined(__HIP_PLATFORM_AMD__)
-    void* map_ptr = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(g_gdr_mu);
-      auto it = g_gdr_slots.find(gpu_buf_ptr);
-      if (it != g_gdr_slots.end()) map_ptr = it->second.map_ptr;
-    }
-    if (!map_ptr) return;
-
-    size_t tail_off = offset + bytes;
-    size_t read_sz = 32;
-    if (tail_off < read_sz) {
-      tail_off = offset;
-      read_sz = (bytes < 32) ? bytes : 32;
-    } else {
-      tail_off -= read_sz;
-    }
-    volatile char sink[32];
-    std::memcpy(const_cast<char*>(sink),
-                static_cast<const char*>(map_ptr) + tail_off, read_sz);
-#else
-    (void)gpu_buf_ptr; (void)offset; (void)bytes;
-#endif
   };
 
   fprintf(stderr, "[FACTORY] done rank=%d\n", config.rank);

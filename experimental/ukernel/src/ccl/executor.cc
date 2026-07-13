@@ -67,7 +67,6 @@ uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
   tensor_to_buf_id_[key] = id;
   if (owned_comm_ && register_buf_fn_)
     register_buf_fn_(owned_comm_.get(), id, ptr, bytes);
-  if (pin_buf_fn_) pin_buf_fn_(ptr, bytes);
   return id;
 }
 
@@ -212,28 +211,6 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   for (uint32_t i = 0; i < nops; ++i) {
     for (uint32_t dep : run->tiled.ops[i].deps)
       run->successor_data[pos[dep]++] = i;
-  }
-
-  // Build flush table: for each WaitSignal, find the successor that
-  // reads Output buffer and record the range for GDR read-tail flush.
-  run->output_buf_ptr = output;
-  run->input_buf_ptr = input;
-  run->scratch_buf_ptr = scratch;
-  run->flush_off.resize(nops, ~0u);
-  run->flush_bytes.resize(nops, 0);
-  for (uint32_t i = 0; i < nops; ++i) {
-    if (run->tiled.ops[i].kind != ExecOpKind::WaitSignal) continue;
-    size_t s_start = run->successor_off[i];
-    size_t s_end = run->successor_off[i + 1];
-    for (size_t j = s_start; j < s_end; ++j) {
-      uint32_t succ = run->successor_data[j];
-      auto& sop = run->tiled.ops[succ];
-      if (sop.src_buf_role == CollectiveBufferRole::Output) {
-        run->flush_off[i] = static_cast<uint32_t>(sop.src_off);
-        run->flush_bytes[i] = static_cast<uint32_t>(sop.bytes);
-        break;
-      }
-    }
   }
 
   size_t initial = 0;
@@ -483,7 +460,7 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   // FIXME: temporary — always IPC while debugging 3-way path selection
   if (tpt_metrics_ && peer >= 0 && peer < world_size_)
     tpt_metrics_[peer].ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-  return PutPath::Ipc;
+  return PutPath::Rdma;
 
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
     return PutPath::Device;
@@ -564,17 +541,7 @@ void SprayExecutor::drain_signal_loop() {
       if (!s) return;
       slot_buf[valid++] = s;
     }
-    drain_batch(slot_buf, valid, [this](BeSlot& s) {
-      uint32_t op_idx = s.op_idx;
-      if (flush_rdma_fn_ && op_idx < s.run->flush_off.size()) {
-        uint32_t off = s.run->flush_off[op_idx];
-        if (off != ~0u) {
-          flush_rdma_fn_(s.run->output_buf_ptr,
-                         static_cast<size_t>(off),
-                         static_cast<size_t>(s.run->flush_bytes[op_idx]));
-        }
-      }
-    });
+    drain_batch(slot_buf, valid, [](BeSlot&) {});
     check_completions_();
   }
 }

@@ -66,7 +66,15 @@ int main(int argc, char** argv) {
 
   std::vector<float> host_in(kBufBytes / sizeof(float), (float)(rank + 1));
   GPU_RT_CHECK(gpuMemcpy(d_in, host_in.data(), kBufBytes, gpuMemcpyHostToDevice));
-  GPU_RT_CHECK(gpuMemset(d_out, 0, kBufBytes));
+  // Synchronously zero output buffer to avoid gpuMemset racing with
+  // subsequent RDMA writes and overwriting received data.
+  {
+    gpuStream_t zs;
+    GPU_RT_CHECK(gpuStreamCreate(&zs));
+    GPU_RT_CHECK(gpuMemsetAsync(d_out, 0, kBufBytes, zs));
+    GPU_RT_CHECK(gpuStreamSynchronize(zs));
+    GPU_RT_CHECK(gpuStreamDestroy(zs));
+  }
 
   CollectiveConfig ar;
   ar.nranks = 2;

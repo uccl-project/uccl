@@ -18,9 +18,10 @@ namespace UKernel {
 namespace Device {
 
 enum class TaskType : uint64_t {
-  CollCopy,    // pure GPU copy (used by tests/benchmarks)
-  CollPut,     // GPU copy + signal (used by CCL) — was CollSend
-  CollReduce,  // local reduction
+  None = 0,     // sentinel: empty/uninitialized task
+  CollCopy = 1, // pure GPU copy (used by tests/benchmarks)
+  CollPut = 2,  // GPU copy + signal (used by CCL) — was CollSend
+  CollReduce,   // 3 — local reduction
   BenchNop,
   Stop,
 };
@@ -208,6 +209,10 @@ class TaskManager {
     for (uint32_t i = 0; i < cap_task_; ++i)
       free_task_.push_back(cap_task_ - 1 - i);
 
+#ifndef __CUDA_ARCH__
+    fprintf(stderr, "[TaskManager] init done: cap=%u free=%zu host=%p\n",
+            cap_task_, free_task_.size(), (void*)host_task_);
+#endif
     inited_ = true;
   }
 
@@ -237,8 +242,9 @@ class TaskManager {
       std::lock_guard<std::mutex> g(task_mu_);
       assert(inited_ && "TaskManager not initialized");
       if (free_task_.empty()) {
-        // Pool exhausted — caller must drain and retry.
-        // Create task creates an empty/Nop task that will be rejected.
+        fprintf(stderr,
+                "[TaskManager] create_task: POOL EMPTY cap=%u free=%zu inited=%d\n",
+                cap_task_, free_task_.size(), (int)inited_);
         return Task();
       }
       idx = free_task_.back();

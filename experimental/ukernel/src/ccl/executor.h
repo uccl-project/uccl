@@ -99,17 +99,6 @@ struct SprayRun {
   uint32_t output_buf_id = 0;
   uint32_t scratch_buf_id = 0;
 
-  // GPU buffer pointers for GDR read-tail flush after RDMA writes
-  void* output_buf_ptr = nullptr;
-  void* input_buf_ptr = nullptr;
-  void* scratch_buf_ptr = nullptr;
-
-  // Per-op flush ranges indexed by op_idx (~0u = no flush).
-  // After a WaitSignal for an RDMA Put, the output buffer at
-  // [flush_off[i], flush_off[i]+flush_bytes[i]) must be flushed.
-  std::vector<uint32_t> flush_off;
-  std::vector<uint32_t> flush_bytes;
-
   // (backend_tag, be_idx) pairs for release cleanup
   // backend_tag: 0=dev, 1=tpt, 2=sig
   std::vector<std::pair<uint8_t, uint32_t>> be_slots;
@@ -285,16 +274,6 @@ class SprayExecutor {
   void (*resolve_buf_fn_)(Transport::Communicator*, int, int, uint32_t) =
       nullptr;
   bool (*same_host_fn_)(Transport::Communicator*, int) = nullptr;
-
-  // Pin GPU buffer for BAR1 access (called once per buffer at registration).
-  // The factory maps the buffer via GDRCopy; flush_rdma_fn_ reads from it.
-  void (*pin_buf_fn_)(void* gpu_ptr, size_t bytes) = nullptr;
-
-  // Flush GPU L2 cache for addresses written by RDMA.
-  // Called from drain_signal_loop after WaitSignal completion.
-  // gpu_buf_ptr must have been previously pinned via pin_buf_fn_.
-  void (*flush_rdma_fn_)(void* gpu_buf_ptr, size_t offset,
-                          size_t bytes) = nullptr;
 
   BatchBackend* device_be_;
   BatchBackend* tpt_be_;
