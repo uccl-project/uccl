@@ -1062,10 +1062,6 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       int qp = static_cast<int>((wc[i].wr_id >> 16) & 0xFFFF);
 
       if (wc[i].status != IBV_WC_SUCCESS) {
-        static int err_cnt = 0;
-        if (++err_cnt <= 3)
-          fprintf(stderr, "[rdma] CQE err status=%d opcode=%d qp=%d\n",
-                  wc[i].status, wc[i].opcode, qp);
         if (qp >= 0 && qp < p.num_qps)
           p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
 

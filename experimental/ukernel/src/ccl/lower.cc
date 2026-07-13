@@ -154,7 +154,6 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           cp.src_buf_role = CollectiveBufferRole::Output;
           cp.dst_buf_role = CollectiveBufferRole::Scratch;
           cp.deps = op.deps;
-          cp.bypass_l2 = 1;
           out.push_back(cp);
           uint32_t cp_idx = static_cast<uint32_t>(out.size() - 1);
 

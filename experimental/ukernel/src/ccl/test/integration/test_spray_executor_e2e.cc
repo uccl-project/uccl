@@ -52,6 +52,9 @@ int main(int argc, char** argv) {
   cfg.gpu_id = gpu;
   cfg.rank = rank;
   cfg.world_size = 2;
+  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : "127.0.0.1";
+  cfg.exchanger_port = port;
+  cfg.local_id = rank;
   auto ex = SprayExecutor::create(cfg);
 
   // 4MB in-place allreduce via IPC

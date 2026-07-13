@@ -67,6 +67,7 @@ uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
   tensor_to_buf_id_[key] = id;
   if (owned_comm_ && register_buf_fn_)
     register_buf_fn_(owned_comm_.get(), id, ptr, bytes);
+  if (pin_buf_fn_) pin_buf_fn_(ptr, bytes);
   return id;
 }
 
@@ -213,6 +214,28 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
       run->successor_data[pos[dep]++] = i;
   }
 
+  // Build flush table: for each WaitSignal, find the successor that
+  // reads Output buffer and record the range for GDR read-tail flush.
+  run->output_buf_ptr = output;
+  run->input_buf_ptr = input;
+  run->scratch_buf_ptr = scratch;
+  run->flush_off.resize(nops, ~0u);
+  run->flush_bytes.resize(nops, 0);
+  for (uint32_t i = 0; i < nops; ++i) {
+    if (run->tiled.ops[i].kind != ExecOpKind::WaitSignal) continue;
+    size_t s_start = run->successor_off[i];
+    size_t s_end = run->successor_off[i + 1];
+    for (size_t j = s_start; j < s_end; ++j) {
+      uint32_t succ = run->successor_data[j];
+      auto& sop = run->tiled.ops[succ];
+      if (sop.src_buf_role == CollectiveBufferRole::Output) {
+        run->flush_off[i] = static_cast<uint32_t>(sop.src_off);
+        run->flush_bytes[i] = static_cast<uint32_t>(sop.bytes);
+        break;
+      }
+    }
+  }
+
   size_t initial = 0;
   for (uint32_t i = 0; i < nops; ++i) {
     if (run->tiled.ops[i].deps.empty()) { run->push_ready(i); ++initial; }
@@ -308,13 +331,15 @@ void SprayExecutor::collect_ready(SprayRun& run) {
 
 void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   // Prepend deferred ops from prior cycle (preserves priority).
+  // Signal deferred ops get highest priority so peer WaitSignal unblocks
+  // promptly, avoiding head-of-line blocking from data-path backpressure.
   {
-    run.ready.insert(run.ready.begin(), run.deferred_sig.begin(),
-                     run.deferred_sig.end());
-    run.ready.insert(run.ready.begin(), run.deferred_tpt.begin(),
-                     run.deferred_tpt.end());
     run.ready.insert(run.ready.begin(), run.deferred_dev.begin(),
                      run.deferred_dev.end());
+    run.ready.insert(run.ready.begin(), run.deferred_tpt.begin(),
+                     run.deferred_tpt.end());
+    run.ready.insert(run.ready.begin(), run.deferred_sig.begin(),
+                     run.deferred_sig.end());
     run.deferred_dev.clear();
     run.deferred_tpt.clear();
     run.deferred_sig.clear();
@@ -540,7 +565,15 @@ void SprayExecutor::drain_signal_loop() {
       slot_buf[valid++] = s;
     }
     drain_batch(slot_buf, valid, [this](BeSlot& s) {
-      if (flush_rdma_fn_) flush_rdma_fn_(nullptr, 0);
+      uint32_t op_idx = s.op_idx;
+      if (flush_rdma_fn_ && op_idx < s.run->flush_off.size()) {
+        uint32_t off = s.run->flush_off[op_idx];
+        if (off != ~0u) {
+          flush_rdma_fn_(s.run->output_buf_ptr,
+                         static_cast<size_t>(off),
+                         static_cast<size_t>(s.run->flush_bytes[op_idx]));
+        }
+      }
     });
     check_completions_();
   }
