@@ -1,5 +1,6 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
+#include "adaptive_sleeper.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
 // clang-format off
@@ -42,6 +43,15 @@ struct RDMAConnectionInfo {
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
   // #endif
+
+#ifdef USE_LIBFABRIC_CXI
+  static constexpr uint32_t kMaxCxiEndpointName = 256;
+  uint32_t cxi_ep_name_len = 0;
+  uint8_t cxi_ep_name[kMaxCxiEndpointName] = {};
+  uint64_t cxi_main_mr_key = 0;
+  uint64_t cxi_atomic_mr_key = 0;
+  uint64_t cxi_barrier_mr_key = 0;
+#endif
 
 #ifdef USE_DMABUF
   // Chunked MR info — exchanged when the GPU buffer is split across
@@ -367,7 +377,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int my_rank, int num_nodes,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank);
+                          int thread_idx, int device_index, int nic_local_rank);
 
 // Returns true if a cudaMalloc'd main RDMA buffer of |bytes| can be registered
 // on this node with the same path used by per_thread_rdma_init(). If false,
@@ -377,6 +387,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // Returns true if a cudaMalloc'd buffer can be registered for the atomic
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+// Returns true if at least one IB verbs device is visible on this host.
+bool has_any_nic();
 
 #ifdef USE_DMABUF
 // Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
@@ -415,7 +428,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode = false);
+                  int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
+                  bool use_normal_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,

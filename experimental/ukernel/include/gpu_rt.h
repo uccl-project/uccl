@@ -47,10 +47,13 @@
 #define gpuMemcpy cudaMemcpy
 #define gpuMemcpyAsync cudaMemcpyAsync
 #define gpuMemcpyPeerAsync cudaMemcpyPeerAsync
+#define gpuMemcpyPeer cudaMemcpyPeer
 #define gpuMemcpyDeviceToDevice cudaMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuMemset cudaMemset
 #define gpuMemsetAsync cudaMemsetAsync
+#ifndef GPU_MEM_GET_ADDRESS_RANGE_DEFINED
+#define GPU_MEM_GET_ADDRESS_RANGE_DEFINED
 inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
                                         void* ptr) {
   if (ptr == nullptr) return cudaErrorInvalidValue;
@@ -62,6 +65,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
   }
   return static_cast<gpuError_t>(result);
 }
+#endif
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #define gpuErrorNotReady cudaErrorNotReady
@@ -164,6 +168,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuMemcpy hipMemcpy
 #define gpuMemcpyAsync hipMemcpyAsync
 #define gpuMemcpyPeerAsync hipMemcpyPeerAsync
+#define gpuMemcpyPeer hipMemcpyPeer
 #define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
 #define gpuMemset hipMemset
@@ -195,8 +200,8 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
 #define gpuDriverSuccess hipSuccess
-#define gpuMemRangeHandleType hipMemRangeHandleType
-#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define gpuMemRangeHandleType unsigned long long
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 1
 #define gpuPointerAttributes hipPointerAttribute_t
 #define gpuPointerAttribute_t hipPointerAttribute_t
 #define gpuPointerGetAttributes hipPointerGetAttributes

@@ -142,8 +142,14 @@ bool WorkerPool::pollWorker(uint32_t fifoId) {
 }
 
 void WorkerPool::waitWorker(uint32_t fifoId) {
+  int spin = 0;
   while (!pollWorker(fifoId)) {
-    std::this_thread::sleep_for(std::chrono::microseconds(10));
+    if (++spin < 10) {
+      // spin
+    } else {
+      spin = 0;
+      std::this_thread::yield();
+    }
   }
 }
 

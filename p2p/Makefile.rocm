@@ -2,7 +2,7 @@
 #
 # Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
 # libibverbs, librccl, and libefa are loaded dynamically at runtime via
-# dlopen/dlsym (see include/*_wrapper.h). No transport libraries are linked.
+# dlopen/dlsym (see *_dl.h). No transport libraries are linked.
 #
 # Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
 
@@ -38,7 +38,8 @@ endif
 
 # NOTE: -libverbs, -lrccl, -lefa are NOT linked at compile time.
 # Headers are included for type definitions only.
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
+	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
 	-I$(HIP_INC) -I$(EFA_HOME)/include \
 	-I${CONDA_LIB_HOME}/../include \
 	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
@@ -83,7 +84,8 @@ IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_qp_to_qp_ex
 LDFLAGS = -L$(HIP_LIB) -lamdhip64 -Wl,-rpath,$(HIP_LIB) \
           -L${CONDA_LIB_HOME} \
-          -lz -lelf -lpthread -ldl $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
+          -lz -lelf -lpthread -ldl -Wl,-Bsymbolic-functions \
+          $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
@@ -91,8 +93,25 @@ P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
-CORE_OBJECT := engine.o nccl/nccl_endpoint.o
+P2P_IMPL_SOURCES := \
+	util/adaptive_sleeper.cc \
+	util/common.cc \
+	rdma/compression.cc \
+	util/epoll_client.cc \
+	util/epoll_server.cc \
+	util/memory_allocator.cc \
+	rdma/rdma_context.cc \
+	rdma/rdma_connection.cc \
+	rdma/rdma_ctrl_channel.cc \
+	rdma/rdma_data_channel.cc \
+	rdma/rdma_device.cc \
+	rdma/rdma_endpoint.cc \
+	util/seq_num.cc \
+	rdma/providers/efa_data_channel_impl.cc \
+	rdma/providers/ib_data_channel_impl.cc
+P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
+SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS)
 
 # dlsym wrapper objects
 DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
@@ -128,11 +147,6 @@ nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
 
-# Compile RDMA provider source files
-rdma/providers/efa/%.o: rdma/providers/efa/%.cc
-	@mkdir -p rdma/providers/efa
-	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
-
 define safe_install
 	@echo "Installing $(1) to $(2)..."
 	@install -m $(3) $(1) $(2)/ || \
@@ -142,17 +156,18 @@ define safe_install
 endef
 
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
-	@mkdir -p $(INSTALL_DIR)
+	@mkdir -p $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@install -m 644 util/common.h $(INCDIR)/common.h
 
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
-	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/efa/*.o rdma/providers/efa/*.d
+	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 
 # Test the module
 test: $(P2P_PYTHON_EXT)

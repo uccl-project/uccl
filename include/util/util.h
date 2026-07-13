@@ -1253,6 +1253,27 @@ inline int get_gpu_numa_node(int device_id) {
   return std::stoi(line);
 }
 
+inline int get_gpu_numa_node_from_bdf(std::string const& bdf) {
+  std::string bdf_lower = bdf;
+  std::transform(bdf_lower.begin(), bdf_lower.end(), bdf_lower.begin(),
+                 ::tolower);
+  std::string path =
+      Format("/sys/bus/pci/devices/%s/numa_node", bdf_lower.c_str());
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    UCCL_LOG(ERROR) << "Failed to open " << path;
+    return -1;
+  }
+
+  std::string line;
+  if (!std::getline(file, line)) {
+    UCCL_LOG(ERROR) << "Failed to read " << path;
+    return -1;
+  }
+
+  return std::stoi(line);
+}
+
 static inline void pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
   UCCL_DCHECK(cpu >= 0 && cpu < num_cpus)

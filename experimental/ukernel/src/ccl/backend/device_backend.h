@@ -1,12 +1,10 @@
 #pragma once
 
 #include "backend.h"
-#include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
-#include <stdexcept>
-#include <unordered_map>
+#include <mutex>
+#include <vector>
 
 namespace UKernel {
 namespace Device {
@@ -16,65 +14,58 @@ namespace CCL {
 
 struct DeviceBackendConfig {
   uint32_t task_capacity = 4096;
-  uint32_t max_fifos = 8;
+  uint32_t max_fifos = 2;
   uint32_t threads_per_block = 256;
+  uint32_t blocks_per_worker = 1;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
+  uint32_t bytes_per_block = 0;  // 0=auto, >0=override
 };
 
-class DeviceBackend final : public Backend {
+class DeviceBackend final : public BatchBackend {
  public:
-  explicit DeviceBackend(DeviceBackendConfig const& config = {});
+  explicit DeviceBackend(DeviceBackendConfig const& cfg = {});
   ~DeviceBackend() override;
 
-  char const* name() const override;
-  void validate(ExecutionPlan const& plan,
-                CollectiveBinding& binding) const override;
-  bool supports(ExecOpKind kind) const override;
-  BackendToken submit(ExecOp const& op, CollectiveBinding& binding) override;
-  bool poll(BackendToken token) override;
-  bool try_pop_completed(BackendToken& token) override;
-  void release(BackendToken token) override;
-  void stop(uint32_t flow_id) override;
+  char const* name() const override { return "device"; }
+  bool supports(OpKind kind) const override;
+
+  void init(BufSpec bufs[3]) override;
+  size_t enqueue(Cmd const* cmds, size_t n,
+                 uint32_t* out_indices = nullptr) override;
+  size_t drain(uint32_t* completed, size_t max) override;
+  size_t capacity() const override;
+
+  void set_signal_buffers(std::vector<GpuSignalPeer> const& peers);
 
  private:
-  struct SubmittedTask {
+  void ensure_runtime();
+
+  DeviceBackendConfig cfg_;
+  int sm_count_ = 1;
+  int device_idx_ = 0;
+
+  BufSpec bufs_[3] = {};
+  bool inited_ = false;
+  bool owns_task_manager_ = false;
+
+  std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
+
+  // FIFO management
+  uint32_t next_fifo_ = 0;
+  struct CmdRec {
     uint32_t fifo_id;
     uint64_t task_id;
-    uint32_t flow_id;
     uint32_t args_id;
-    bool args_released = false;
-    bool completion_queued = false;
+    uint32_t cmd_idx;
   };
+  std::vector<CmdRec> pending_;  // indexed by internal seq
+  std::mutex pending_mu_;
 
-  struct ActiveFlow {
-    uint32_t fifo_id = 0;
-    uint32_t inflight = 0;
-  };
+  std::vector<GpuSignalPeer> gpu_signal_bufs_;
 
-  void* byte_offset(void* base, size_t offset) const;
-  void const* byte_offset(void const* base, size_t offset) const;
-  void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
-                        size_t bytes) const;
-  void const* resolve_const(CollectiveBinding const& binding,
-                            BufferRef const& ref, size_t bytes) const;
-  void ensure_device_context() const;
-  void ensure_runtime();
-  uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
-  void release_task_args(SubmittedTask& task);
-  void stop_flow(uint32_t flow_id);
-  uint32_t suggested_num_blocks(ExecOp const& op) const;
-
-  DeviceBackendConfig config_{};
-  bool owns_task_manager_ = false;
-  int local_device_idx_ = 0;
-  int sm_count_ = 1;
-  std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
-  uint64_t next_token_ = 1;
-  std::unordered_map<uint32_t, ActiveFlow> active_flows_;
-  std::deque<uint32_t> free_fifos_;
-  std::unordered_map<uint64_t, SubmittedTask> submitted_;
-  std::deque<uint64_t> completed_tokens_;
+  uint32_t cmd_next_ = 0;  // global command sequence counter
+  uint32_t cmd_done_ = 0;  // completed up to this point
 };
 
 }  // namespace CCL

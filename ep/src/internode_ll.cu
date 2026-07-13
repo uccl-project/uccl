@@ -19,12 +19,16 @@ constexpr int kNumMaxWarpGroups = 16;
 constexpr int kNumMaxWarpGroups = 32;
 #endif
 
-template <int kNumThreads>
+template <int kNumThreads, int kNumRanks>
 __launch_bounds__(kNumThreads, 1) __global__
     void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
-                                  int* clean_1, int num_clean_int_1) {
-  // Barrier before cleaning (in case of unfinished chunked EP)
-  // nvshmemx_barrier_all_block();
+                                  int* clean_1, int num_clean_int_1,
+                                  int** barrier_signal_ptrs, int rank) {
+  // Peers can still be issuing IPC writes to this rank's signaling buffer.
+  // Synchronize before and after cleaning so those writes are not wiped out.
+  if constexpr (kNumRanks > 1) {
+    barrier_block<kNumRanks>(barrier_signal_ptrs, rank);
+  }
 
   // Clean
   auto thread_id = static_cast<int>(threadIdx.x);
@@ -33,17 +37,25 @@ __launch_bounds__(kNumThreads, 1) __global__
 #pragma unroll
   for (int i = thread_id; i < num_clean_int_1; i += kNumThreads) clean_1[i] = 0;
 
-  // Barrier after cleaning (make sure the low-latency mode works fine)
-  // nvshmemx_barrier_all_block();
+  if constexpr (kNumRanks > 1) {
+    barrier_block<kNumRanks>(barrier_signal_ptrs, rank);
+  }
 }
 
 void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
-                              int num_clean_int_1, cudaStream_t stream) {
+                              int num_clean_int_1, int** barrier_signal_ptrs,
+                              int rank, int num_ranks, cudaStream_t stream) {
   constexpr int kNumThreads = 256;
 
   SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
-  LAUNCH_KERNEL(&cfg, clean_low_latency_buffer<kNumThreads>, clean_0,
-                num_clean_int_0, clean_1, num_clean_int_1);
+
+#define CLEAN_LL_LAUNCH_CASE(ranks)                                            \
+  LAUNCH_KERNEL(&cfg, (clean_low_latency_buffer<kNumThreads, ranks>), clean_0, \
+                num_clean_int_0, clean_1, num_clean_int_1,                     \
+                barrier_signal_ptrs, rank);                                    \
+  break
+  SWITCH_RANKS(CLEAN_LL_LAUNCH_CASE);
+#undef CLEAN_LL_LAUNCH_CASE
 }
 
 template <bool kUseFP8, bool kUseUE8M0, int kHidden, bool kUseAggressiveAtomic>

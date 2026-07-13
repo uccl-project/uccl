@@ -29,17 +29,24 @@ BARRIER_BASE_PORT = 29000
 SIZE_BARRIER_BASE_PORT = 30000
 
 DEFAULT_SIZES = [
+    8,
+    16,
+    32,
+    64,
+    128,
     256,
+    512,
     1024,
+    2048,
     4096,
+    8192,
     16384,
+    32768,
     65536,
+    131072,
     262144,
+    524288,
     1048576,
-    10485760,
-    16777216,
-    104857600,
-    104857600 * 2,
 ]
 # DEFAULT_SIZES = [104857600 * 2] * 10
 
@@ -122,7 +129,7 @@ def run_one_size(role, sock, agent, register_descs, size, pair_idx, warmup=2):
     gbs = (size / elapsed) / 1e9
 
     print(
-        f"[{role} {pair_idx}] {size/1024/1024:8.1f} MB : {gbps:6.2f} Gbps | {gbs:6.2f} GB/s | {elapsed:.6f} s"
+        f"[{role} {pair_idx}] {size/1024/1024:8.1f} MB : {gbps:6.2f} Gbps | {gbs:6.2f} GB/s | {elapsed * 1e6:8.2f} us"
     )
     return gbps, gbs, elapsed
 

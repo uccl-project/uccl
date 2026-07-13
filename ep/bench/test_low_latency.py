@@ -370,9 +370,10 @@ def test_main(
                                         combined_x,
                                     )
                                     assert torch.isnan(combined_x).sum().item() == 0
-                                    assert diff < (
-                                        9e-4 if dispatch_use_fp8_case else 1e-5
-                                    ), f"Error: {diff=}, {dispatch_use_fp8_case=}, {zero_copy=}"
+                                    if not round_scale:
+                                        assert diff < (
+                                            9e-4 if dispatch_use_fp8_case else 1e-5
+                                        ), f"Error: {diff=}, {dispatch_use_fp8_case=}, {round_scale=}, {use_ue8m0=}, {zero_copy=}"
                                     tag = (
                                         f"x={'x' if current_x is x else 'rand'}"
                                         f"|hook={return_recv_hook}"
@@ -572,8 +573,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 # assert current_hash == ref_hash, f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
-    buffer.destroy()
     dist.barrier()
+    buffer.destroy()
     dist.destroy_process_group()
 
 

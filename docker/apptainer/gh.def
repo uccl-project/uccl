@@ -23,7 +23,7 @@ From: {{ BASE_IMAGE }}
     apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         build-essential cmake git ninja-build g++ make patchelf \
-        rdma-core libibverbs-dev libnuma-dev libgfortran5 \
+        rdma-core libibverbs-dev libfabric-dev libhwloc-dev libnuma-dev libgfortran5 \
         libgflags-dev libgtest-dev libgomp1 libelf-dev \
         pkg-config zlib1g-dev curl unzip
 

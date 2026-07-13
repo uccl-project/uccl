@@ -1,7 +1,8 @@
 #pragma once
 
-#include "include/common.h"
-#include "include/nccl_types.h"
+#include "common.h"
+#include "nccl_types.h"
+#include "util/gpu_rt.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -10,23 +11,19 @@
 #include <string>
 #include <unordered_map>
 
-namespace uccl {
+using NcclPeerID = uint64_t;
 
-using FlowID = uint64_t;
-using PeerID = uint64_t;
-
-struct ConnID {
+struct NcclConnID {
   void* context;
   int sock_fd;
-  FlowID flow_id;
-  PeerID peer_id;
+  NcclPeerID peer_id;
   int dev;
 };
 
-struct Mhandle;
-class UcclFlow;
+struct NcclMhandle;
+class NcclFlow;
 
-struct FifoItem {
+struct NcclFifoItem {
   uint64_t addr;
   uint32_t size;
   uint32_t rkey;
@@ -36,99 +33,86 @@ struct FifoItem {
   uint32_t engine_offset;
   char padding[28];
 };
-static_assert(sizeof(struct FifoItem) == 64, "FifoItem must be 64 bytes");
+static_assert(sizeof(struct NcclFifoItem) == 64,
+              "NcclFifoItem must be 64 bytes");
 
-enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+enum class NcclReqType { ReqRead, ReqWrite };
 
-struct ucclRequest {
-  enum ReqType type;
-  uint32_t n;
+struct NcclRequest {
+  NcclReqType type;
+  uint32_t peer_id;
   void* context;
   uint32_t engine_idx;
 };
 
-}  // namespace uccl
-
 class EpollClient;
 
-namespace tcp {
+int get_numa_node_from_iface();
 
-int get_tcp_numa_node_from_iface();
-
-// Placeholder for RDMA-style MR arrays. TCP does not register memory, but the
+// Placeholder for RDMA-style MR arrays. NCCL does not register memory, but the
 // unified interface expects the type.
-struct MRArray {
+struct NcclMRArray {
   void* dummy = nullptr;
 };
 
-class TCPEndpoint {
+class NCCLEndpoint {
  public:
-  // NCCL-over-TCP endpoint: TCP control-plane + NCCL send/recv data-plane.
-  explicit TCPEndpoint(int gpu_index, uint16_t port = 0);
-  ~TCPEndpoint();
+  // NCCL endpoint: NCCL control-plane + NCCL send/recv data-plane.
+  explicit NCCLEndpoint(int gpu_index, uint16_t port = 0);
+  ~NCCLEndpoint();
 
   // GPU index selected by the engine; may be overridden by uccl_connect/accept.
-  int gpuIndex() const { return gpu_index_; }
+  int gpu_index() const { return gpu_index_; }
 
-  // RDMA endpoint exposes these for OOB metadata exchange; TCP path doesn't
+  // RDMA endpoint exposes these for OOB metadata exchange; NCCL path doesn't
   // use EpollClient but we keep stubs so engine code can compile unchanged.
   std::shared_ptr<EpollClient> get_oob_client() const { return nullptr; }
-  std::string get_oob_conn_key(uint64_t rank_id) const {
-    (void)rank_id;
+  std::string get_oob_conn_key(uint64_t peer_id) const {
+    (void)peer_id;
     return "";
   }
 
-  // Establish a TCP control connection, exchange NCCL IDs, and start a control
+  // Establish a NCCL control connection, exchange NCCL IDs, and start a control
   // thread for one-sided read/write requests.
-  uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
-                            int remote_gpuidx, std::string remote_ip,
-                            uint16_t remote_port);
-  // Listen socket metadata. dev is unused for TCP but required by the API.
+  NcclConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
+                          int remote_gpuidx, std::string remote_ip,
+                          uint16_t remote_port);
+  // Listen socket metadata. dev is unused for NCCL but required by the API.
   uint16_t get_p2p_listen_port(int dev) { return listen_port_; }
   int get_p2p_listen_fd(int dev) { return listen_fd_; }
-  // Accept a TCP control connection and initialize NCCL communicators.
-  uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                           std::string& remote_ip, int* remote_dev,
-                           int* remote_gpuidx);
+  // Accept a NCCL control connection and initialize NCCL communicators.
+  NcclConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
+                         std::string& remote_ip, int* remote_dev,
+                         int* remote_gpuidx);
 
-  // Memory registration is a no-op for TCP; we keep the interface.
-  int uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len, int type,
-                 struct uccl::Mhandle** mhandle);
-  int uccl_regmr(void* data, size_t len, MRArray& mr_array);
+  // Memory registration is a no-op for NCCL; we keep the interface.
+  int uccl_regmr(NcclFlow* flow, void* data, size_t len, int type,
+                 NcclMhandle** mhandle);
+  int uccl_regmr(void* data, size_t len, NcclMRArray& mr_array);
   int uccl_regmr(int dev, void* data, size_t len, int type,
-                 struct uccl::Mhandle** mhandle);
-  void uccl_deregmr(struct uccl::Mhandle* mhandle);
-  void uccl_deregmr(MRArray const& mr_array);
+                 NcclMhandle** mhandle);
+  void uccl_deregmr(NcclMhandle* mhandle);
+  void uccl_deregmr(NcclMRArray const& mr_array);
 
-  // Two-sided NCCL send/recv (async) used by the engine.
-  int uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
-                      void const* data, size_t size,
-                      struct uccl::ucclRequest* ureq);
-  int uccl_recv_async(uccl::UcclFlow* flow, struct uccl::Mhandle** mhandles,
-                      void** data, int* sizes, int n,
-                      struct uccl::ucclRequest* ureq);
   // One-sided semantics built on a control message + NCCL send/recv.
-  int uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh, void* dst,
-                      size_t size, uccl::FifoItem const& slot_item,
-                      uccl::ucclRequest* ureq);
-  int uccl_write_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
-                       void* src, size_t size, uccl::FifoItem const& slot_item,
-                       uccl::ucclRequest* ureq);
-  // Poll a ucclRequest created by send/recv/read/write.
-  bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq);
+  int uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst, size_t size,
+                      NcclFifoItem const& slot_item, NcclRequest* ureq);
+  int uccl_write_async(NcclFlow* flow, NcclMhandle* mh, void* src, size_t size,
+                       NcclFifoItem const& slot_item, NcclRequest* ureq);
+  // Poll a NcclRequest created by send/recv/read/write.
+  bool uccl_poll_ureq_once(NcclRequest* ureq);
   // Serialize a FIFO descriptor (addr/size) for control-plane exchange.
-  int prepare_fifo_metadata(uccl::UcclFlow* flow,
-                            struct uccl::Mhandle** mhandle, void const* data,
-                            size_t size, char* out_buf);
+  int prepare_fifo_metadata(NcclFlow* flow, NcclMhandle** mhandle,
+                            void const* data, size_t size, char* out_buf);
 
-  // TCP has no device selection or unified socket; keep these as no-ops.
+  // NCCL has no device selection or unified socket; keep these as no-ops.
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
   // Get the socket file descriptor for a connection.
-  int get_sock_fd(uint64_t flow_id);
+  int get_sock_fd(uint64_t peer_id);
 
   // Send a notification message to a peer (uses NotifyMsg from common.h)
-  int send_notification(uint64_t flow_id,
+  int send_notification(uint64_t peer_id,
                         struct ::NotifyMsg const& notification);
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
@@ -159,11 +143,11 @@ class TCPEndpoint {
   void control_loop_(Conn* conn);
   int comm_index_for_send_(Conn const& conn) const;
   int comm_index_for_recv_(Conn const& conn) const;
-  // Internal NCCL send/recv with completion events in ucclRequest.
+  // Internal NCCL send/recv with completion events in NcclRequest.
   bool send_internal_(Conn& conn, void const* data, size_t size, int comm_index,
-                      uccl::ucclRequest* ureq);
+                      NcclRequest* ureq);
   bool recv_internal_(Conn& conn, void* data, size_t size, int comm_index,
-                      uccl::ucclRequest* ureq);
+                      NcclRequest* ureq);
   void cleanup_conn_(Conn& conn);
 
   // GPU index the endpoint binds to by default.
@@ -171,10 +155,8 @@ class TCPEndpoint {
   // Control-plane listening socket.
   uint16_t listen_port_;
   int listen_fd_;
-  std::atomic<uint64_t> next_flow_id_{1};
+  std::atomic<uint64_t> next_peer_id_{1};
   std::atomic<bool> stop_accept_{false};
   std::mutex conn_mu_;
   std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
 };
-
-}  // namespace tcp

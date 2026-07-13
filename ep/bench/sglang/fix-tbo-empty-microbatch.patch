@@ -1,0 +1,50 @@
+diff --git a/python/sglang/srt/batch_overlap/two_batch_overlap.py b/python/sglang/srt/batch_overlap/two_batch_overlap.py
+index cfd2a54..2dfd449 100644
+--- a/python/sglang/srt/batch_overlap/two_batch_overlap.py
++++ b/python/sglang/srt/batch_overlap/two_batch_overlap.py
+@@ -72,7 +72,16 @@ def get_token_num_per_seq(
+         return None
+ 
+ 
+-# TODO: may smartly disable TBO when batch size is too small b/c it will slow down
++# Returning ``None`` here makes ``TboDPAttentionPreparer.prepare_all_gather`` set
++# ``local_can_run_tbo=False`` for this rank, which (via the ``min`` all-gather in
++# ``compute_output``) globally disables TBO for this forward pass on every rank.
++# We must return ``None`` whenever a batch cannot be safely split into TWO
++# non-empty micro-batches; otherwise a downstream attention kernel is launched
++# with a 0-token half (grid_dim=0) and FlashAttention-3 hits
++# ``cudaErrorInvalidConfiguration``. FA3's CUDA-error macro then calls
++# ``fprintf(stderr, ...); exit(1)`` from a non-Python thread, killing the DP
++# worker without any Python traceback. See uccl-ep README.md alongside this
++# patch for the full failure analysis and reproduction recipe.
+ def compute_split_seq_index(
+     forward_mode: ForwardMode,
+     num_tokens: int,
+@@ -81,10 +89,25 @@ def compute_split_seq_index(
+ ) -> Optional[int]:
+     if forward_mode == ForwardMode.EXTEND:
+         assert extend_lens is not None
+-        return _split_extend_seqs(extend_lens)
++        # Need at least 2 sequences to split into two non-empty halves.
++        if len(extend_lens) < 2:
++            return None
++        split_idx = _split_extend_seqs(extend_lens)
++        # Guard against splits that leave one side empty (e.g. a single huge
++        # sequence dominates and ``_split_array_by_cum_less_than_half`` picks
++        # index 0, or all weight ends up on one side).
++        if split_idx <= 0 or split_idx >= len(extend_lens):
++            return None
++        return split_idx
+     elif forward_mode.is_target_verify() or forward_mode.is_decode():
+         assert token_num_per_seq is not None
+-        return (num_tokens // token_num_per_seq) // 2
++        num_seqs = num_tokens // token_num_per_seq
++        # Need at least 2 sequences worth of tokens to produce two non-empty
++        # halves; with 1 (or 0) sequences ``num_seqs // 2 == 0`` -> empty
++        # micro-batch -> FA3 grid_dim=0 -> uncatchable exit(1).
++        if num_seqs < 2:
++            return None
++        return num_seqs // 2
+     elif forward_mode.is_idle() or forward_mode.is_prebuilt():
+         assert num_tokens == 0
+         return 0

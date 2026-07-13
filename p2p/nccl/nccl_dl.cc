@@ -1,11 +1,9 @@
 // Linker-level dlsym wrappers for libnccl functions.
 // Provides nccl* symbols via dlopen/dlsym instead of linking -lnccl.
 
-#include "include/nccl_wrapper.h"
+#include "nccl_dl.h"
 
-static void* nccl_resolve(char const* name) {
-  return uccl::nccl_dl::resolve(name);
-}
+static void* nccl_resolve(char const* name) { return nccl_dl::resolve(name); }
 
 extern "C" {
 

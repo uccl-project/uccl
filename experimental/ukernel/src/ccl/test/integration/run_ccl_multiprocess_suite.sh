@@ -4,19 +4,19 @@ set -euo pipefail
 BIN="${1:-./test_multiprocess_collective}"
 
 # Minimal functional config for local correctness checks.
-NPROC_PER_NODE=3
+GPU_IDS="${CUDA_VISIBLE_DEVICES:-0,6,7}"
+NPROC_PER_NODE=$(echo "${GPU_IDS}" | tr ',' '\n' | wc -l | tr -d ' ')
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1
 TORCHRUN_MASTER_PORT=29500
 EXCHANGER_PORT_BASE=29600
-GPU_IDS=0,6,7
 
 TRANSPORT=auto
 TILE_BYTES=$((64 * 1024))
 # 15 * 64KB = 983040, divisible by tile_bytes and by (3 * sizeof(float)=12).
 BYTES_PER_RANK=$((15 * TILE_BYTES))
-NUM_FLOWS=2
+NUM_STREAMS=2
 UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-$(date +%s)-$$}
 
 cleanup_ipc_shm() {
@@ -35,7 +35,7 @@ run_case() {
   }
   trap cleanup EXIT
 
-  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_flows=${NUM_FLOWS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
+  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_streams=${NUM_STREAMS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
 
   cleanup_ipc_shm "${host_id_override}"
   CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
@@ -54,7 +54,7 @@ run_case() {
       --transport "${TRANSPORT}" \
       --bytes-per-rank "${BYTES_PER_RANK}" \
       --tile-bytes "${TILE_BYTES}" \
-      --num-flows "${NUM_FLOWS}" \
+      --num-streams "${NUM_STREAMS}" \
       --exchanger-ip "${MASTER_ADDR}" \
       --exchanger-port "${exchanger_port}"
 
