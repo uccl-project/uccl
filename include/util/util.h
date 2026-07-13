@@ -1480,11 +1480,9 @@ static inline std::vector<fs::path> get_gpu_cards() {
       if (vf >> vs) {
         // vs may be "0x10de" or "0x1002"
         uint32_t vendor = std::stoul(vs, nullptr, 0);
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-        if (vendor != 0xcabc) ok = false;  // Cambricon MLU vendor id
-#else
-        if (!(vendor == 0x10de || vendor == 0x1002)) ok = false;
-#endif
+        // NVIDIA=0x10de, AMD=0x1002, Cambricon MLU=0xcabc
+        if (!(vendor == 0x10de || vendor == 0x1002 || vendor == 0xcabc))
+          ok = false;
       }
     } catch (...) {
       // If vendor check fails due to restricted sysfs, keep going.
