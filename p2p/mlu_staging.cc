@@ -8,11 +8,12 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/util.h"
-#include <Python.h>
 #include <chrono>
 #include <thread>
+#include <Python.h>
 
-// Local copy of engine.cc's helper to keep this translation unit self-contained.
+// Local copy of engine.cc's helper to keep this translation unit
+// self-contained.
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {

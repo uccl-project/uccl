@@ -91,7 +91,9 @@ class Rt:
         ptr = ctypes.c_void_p(0)
         self._chk(self._malloc(ctypes.byref(ptr), ctypes.c_size_t(NBYTES)), "malloc")
         self._chk(
-            self._memcpy(ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(self._h2d)),
+            self._memcpy(
+                ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(self._h2d)
+            ),
             "memcpy H->D",
         )
         return ptr
@@ -99,7 +101,9 @@ class Rt:
     def read_first8(self, ptr: ctypes.c_void_p) -> list:
         host_buf = (ctypes.c_float * 8)()
         self._chk(
-            self._memcpy(host_buf, ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(self._d2h)),
+            self._memcpy(
+                host_buf, ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(self._d2h)
+            ),
             "memcpy D->H",
         )
         return list(host_buf)

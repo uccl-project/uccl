@@ -1277,7 +1277,6 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-
 bool Endpoint::advertise(uint64_t mr_id, void* addr, size_t len,
                          char* out_buf) {
 #if defined(__CAMBRICON_PLATFORM_MLU__)
@@ -2080,7 +2079,6 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
 
   return true;
 }
-
 
 bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
                              char* out_buf) {
