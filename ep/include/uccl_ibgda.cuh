@@ -361,7 +361,6 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       }
     }
 #endif
-    break;
   }
 
   // Then wait for all QUIET commands to complete
@@ -410,7 +409,6 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       }
     }
 #endif
-    break;
   }
 
   // Then wait for each proxy’s barrier to complete

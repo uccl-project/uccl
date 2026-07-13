@@ -44,6 +44,15 @@ struct RDMAConnectionInfo {
   uint32_t data_qp_num[kChannelPerProxy];
   // #endif
 
+#ifdef USE_LIBFABRIC_CXI
+  static constexpr uint32_t kMaxCxiEndpointName = 256;
+  uint32_t cxi_ep_name_len = 0;
+  uint8_t cxi_ep_name[kMaxCxiEndpointName] = {};
+  uint64_t cxi_main_mr_key = 0;
+  uint64_t cxi_atomic_mr_key = 0;
+  uint64_t cxi_barrier_mr_key = 0;
+#endif
+
 #ifdef USE_DMABUF
   // Chunked MR info — exchanged when the GPU buffer is split across
   // multiple MRs (with IOMMU DMA-BUF 2 GiB limit).  num_mr_chunks == 0 means
