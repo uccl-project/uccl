@@ -77,7 +77,7 @@ static void setup_buffers(Communicator* comm, void* buf1, void* buf2,
 static void wait_completion(Communicator* comm, unsigned rid) {
   CompletionResult res;
   while (true) {
-    size_t n = comm->try_complete(&res, 1);
+    size_t n = comm->try_complete_put(&res, 1);
     if (n > 0 && res.rid == rid) {
       if (res.failed) throw std::runtime_error("RDMA put failed");
       return;
@@ -90,7 +90,7 @@ static void wait_completion(Communicator* comm, unsigned rid) {
 static void wait_signal_recv(Communicator* comm, unsigned signal_rid) {
   SignalCompletion ev;
   while (true) {
-    size_t n = comm->try_complete_signals(&ev, 1);
+    size_t n = comm->try_complete_sig_wait(&ev, 1);
     if (n > 0 && ev.rid == signal_rid) {
       if (ev.failed) throw std::runtime_error("signal recv failed");
       return;
@@ -227,9 +227,9 @@ int main(int argc, char** argv) {
     }
     CompletionResult res;
     for (int tries = 0; tries < 1000; ++tries) {
-      if (comm->try_complete_signal_send(&res, 1) > 0 && res.rid == sig_rid)
+      if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == sig_rid)
         break;
-      comm->try_complete(&res, 1);
+      comm->try_complete_put(&res, 1);
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     std::printf("[l2flush] rank0: signal sent\n");
@@ -267,9 +267,9 @@ int main(int argc, char** argv) {
       unsigned rid = comm->send_signal_async(0, 99, PeerTransportKind::Rdma);
       CompletionResult res;
       for (int tries = 0; tries < 1000; ++tries) {
-        if (comm->try_complete_signal_send(&res, 1) > 0 && res.rid == rid)
+        if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == rid)
           break;
-        comm->try_complete(&res, 1);
+        comm->try_complete_put(&res, 1);
         std::this_thread::sleep_for(std::chrono::microseconds(100));
       }
     }

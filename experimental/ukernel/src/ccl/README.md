@@ -142,6 +142,64 @@ Troubleshooting:
   the GPUs — pick a pair shown as `OK` in `nvidia-smi topo -p2p r`.
 - Stale port: `pkill -f test_perf_p2p_copy`, then retry with a fresh port.
 
+### RDMA L2 cache flush test
+
+Verifies GPU L2 cache coherence after RDMA write. Rank 0 writes a known
+float pattern via RDMA into rank 1's GPU buffer. Rank 1 waits for the
+signal, then reads the data through a selected backend path and validates
+correctness on the host. Three test cases isolate different read paths:
+
+| Case | Read path |
+|---|---|
+| `gpuMemcpy` | `cudaMemcpy` D2D (baseline) |
+| `CollCopy` | DeviceBackend SM CollCopy kernel |
+| `Reduce` | DeviceBackend SM Reduce kernel (sum with local data) |
+
+IPC (same-host) should pass. RDMA may fail on pre-Hopper GPUs due to
+stale L2 cache lines after the NIC writes directly to GPU DRAM.
+
+Build:
+
+```bash
+make test_rdma_l2_flush SM=80
+```
+
+Run:
+
+```bash
+# server (rank 0)
+CUDA_VISIBLE_DEVICES=6,7 ./test_rdma_l2_flush --role=server --gpu=0 --case=gpuMemcpy
+# client (rank 1)
+CUDA_VISIBLE_DEVICES=6,7 ./test_rdma_l2_flush --role=client --gpu=1 --case=gpuMemcpy
+```
+
+Substitute `--case=CollCopy` or `--case=Reduce` to test SM kernel paths.
+
+### SprayExecutor AllReduce performance benchmark
+
+Benchmarks AllReduce throughput for sizes 256 KB through 256 MB using the
+full SprayExecutor pipeline.
+
+Build:
+
+```bash
+make test_perf_spray_allreduce SM=80
+```
+
+Run:
+
+```bash
+
+pkill -f test_perf_spray_allreduce
+ls /dev/shm/uk_cmpl_* 2>/dev/null && rm -f /dev/shm/uk_cmpl_*
+nvidia-smi | grep test_perf
+
+# server
+CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0
+# client
+CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1
+```
+
 ### Run everything
 
 ```bash

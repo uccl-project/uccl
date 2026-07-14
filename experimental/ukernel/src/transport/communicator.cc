@@ -751,6 +751,28 @@ void Communicator::register_existing_local_mrs_with_rdma() {
     void* ptr = reinterpret_cast<void*>(item.mr.address);
     size_t len = static_cast<size_t>(item.mr.length);
     (void)ensure_rdma_memory_registered(buffer_id, ptr, len);
+
+    // Re-publish with correct rkey now that RDMA adapter is ready.
+    // Buffers registered before the RDMA adapter was created have
+    // rkey=0 in the published OOB entry.  Update it so the peer
+    // can use RDMA writes to this buffer.
+    if (rdma_adapter_->is_memory_registered(buffer_id)) {
+      uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+      if (rkey != 0) {
+        MR mr = get_mr(buffer_id);
+        mr.key = rkey;
+        {
+          std::lock_guard<std::mutex> lk(resource_mu_);
+          local_buffer_to_mr_[buffer_id].key = rkey;
+        }
+        NamedMRInfos payload{};
+        payload.generation =
+            mr_generation_.fetch_add(1, std::memory_order_relaxed);
+        payload.entries.push_back(NamedMR{buffer_id, mr});
+        oob_put(*exchanger_client_, oob_namespace(),
+                mr_global_buffer_key(global_rank_, buffer_id), payload);
+      }
+    }
   }
 }
 
@@ -854,7 +876,7 @@ bool Communicator::send_put_async_with_rid(
                                            reinterpret_cast<uint64_t>(remote_ptr),
                                            remote_mr.key);
     return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
-                                   remote_id, bytes, rid);
+                                    remote_id, bytes, rid);
   }
   void* remote_ptr = nullptr;
   int remote_gpu = -1;

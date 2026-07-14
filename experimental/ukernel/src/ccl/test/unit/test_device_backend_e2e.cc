@@ -216,13 +216,13 @@ int main(int argc, char** argv) {
     unsigned rid = comm->send_signal_async(peer, 999, PeerTransportKind::Ipc);
     while (1) {
       CompletionResult r;
-      if (comm->try_complete(&r, 1) && r.rid == rid) break;
+      if (comm->try_complete_put(&r, 1) && r.rid == rid) break;
     }
     unsigned wid =
         comm->wait_signal_async(peer, 998, PeerTransportKind::Unknown);
     while (1) {
       SignalCompletion s;
-      if (comm->try_complete_signals(&s, 1) && s.rid == wid) break;
+      if (comm->try_complete_sig_wait(&s, 1) && s.rid == wid) break;
     }
     printf("  [PASS]\n");
   } else {
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
         comm->wait_signal_async(peer, 999, PeerTransportKind::Unknown);
     while (1) {
       SignalCompletion s;
-      if (comm->try_complete_signals(&s, 1) && s.rid == rid) break;
+      if (comm->try_complete_sig_wait(&s, 1) && s.rid == rid) break;
     }
     auto* chk = new uint8_t[9000];
     GPU_RT_CHECK(gpuMemcpy(chk, d, 9000, gpuMemcpyDeviceToHost));
@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
     unsigned sid = comm->send_signal_async(peer, 998, PeerTransportKind::Ipc);
     while (1) {
       CompletionResult r;
-      if (comm->try_complete(&r, 1) && r.rid == sid) break;
+      if (comm->try_complete_put(&r, 1) && r.rid == sid) break;
     }
     printf("  [PASS]\n");
     delete[] chk;
