@@ -282,12 +282,12 @@ void TcpTransportAdapter::send_worker_loop() {
       if (ok && e.len > 0) ok = send_all(ctx->send_fd, ptr, e.len);
       if (bounce) bounce_pool_->release(bounce);
     }
-    publish_completion(e.comm_rid, !ok);
+    publish_put_completion(e.comm_rid, !ok);
   }
   // Drain remaining
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_task_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 void TcpTransportAdapter::recv_worker_loop() {
@@ -335,11 +335,11 @@ void TcpTransportAdapter::recv_worker_loop() {
         }
       }
     }
-    publish_completion(e.comm_rid, !ok);
+    publish_put_completion(e.comm_rid, !ok);
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_task_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 // Peer connection

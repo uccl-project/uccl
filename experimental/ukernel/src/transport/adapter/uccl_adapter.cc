@@ -42,7 +42,7 @@ UcclTransportAdapter::UcclTransportAdapter(int gpu_id, int world_size,
     throw std::runtime_error("UCCL ring alloc failed");
 
   // Try to create real UCCL endpoint. If UCCL is not available, workers
-  // will fall back to publish_completion-only behaviour.
+  // will fall back to publish_put_completion-only behaviour.
   int num_engines = static_cast<int>(::ucclParamNUM_ENGINES());
   if (num_engines <= 0) {
     std::cerr << "[WARN] UCCL NUM_ENGINES=" << num_engines
@@ -323,7 +323,7 @@ void UcclTransportAdapter::send_worker() {
 
       // Fallback: no UCCL endpoint — just publish completion immediately.
       if (!endpoint_) {
-        publish_completion(e.comm_rid, false);
+        publish_put_completion(e.comm_rid, false);
       } else {
         bool failed = false;
         ::uccl::UcclFlow* flow = nullptr;
@@ -386,7 +386,7 @@ void UcclTransportAdapter::send_worker() {
               for (auto it = pending.begin(); it != pending.end();) {
                 if (endpoint_->uccl_poll_ureq_once(&it->request)) {
                   did_work = true;
-                  publish_completion(it->comm_rid, false);
+                  publish_put_completion(it->comm_rid, false);
                   it = pending.erase(it);
                 } else {
                   ++it;
@@ -404,7 +404,7 @@ void UcclTransportAdapter::send_worker() {
         }
 
         if (failed) {
-          publish_completion(e.comm_rid, true);
+          publish_put_completion(e.comm_rid, true);
         }
       }
     }
@@ -413,7 +413,7 @@ void UcclTransportAdapter::send_worker() {
     for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
-        publish_completion(it->comm_rid, false);
+        publish_put_completion(it->comm_rid, false);
         it = pending.erase(it);
       } else {
         ++it;
@@ -428,11 +428,11 @@ void UcclTransportAdapter::send_worker() {
 
   // Drain on shutdown: publish failure for any remaining pending.
   for (auto& p : pending) {
-    publish_completion(p.comm_rid, true);
+    publish_put_completion(p.comm_rid, true);
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 void UcclTransportAdapter::recv_worker() {
@@ -454,7 +454,7 @@ void UcclTransportAdapter::recv_worker() {
 
       // Fallback: no UCCL endpoint — just publish completion immediately.
       if (!endpoint_) {
-        publish_completion(e.comm_rid, false);
+        publish_put_completion(e.comm_rid, false);
       } else {
         bool failed = false;
         ::uccl::UcclFlow* flow = nullptr;
@@ -520,7 +520,7 @@ void UcclTransportAdapter::recv_worker() {
               for (auto it = pending.begin(); it != pending.end();) {
                 if (endpoint_->uccl_poll_ureq_once(&it->request)) {
                   did_work = true;
-                  publish_completion(it->comm_rid, false);
+                  publish_put_completion(it->comm_rid, false);
                   it = pending.erase(it);
                 } else {
                   ++it;
@@ -538,7 +538,7 @@ void UcclTransportAdapter::recv_worker() {
         }
 
         if (failed) {
-          publish_completion(e.comm_rid, true);
+          publish_put_completion(e.comm_rid, true);
         }
       }
     }
@@ -547,7 +547,7 @@ void UcclTransportAdapter::recv_worker() {
     for (auto it = pending.begin(); it != pending.end();) {
       if (endpoint_ && endpoint_->uccl_poll_ureq_once(&it->request)) {
         did_work = true;
-        publish_completion(it->comm_rid, false);
+        publish_put_completion(it->comm_rid, false);
         it = pending.erase(it);
       } else {
         ++it;
@@ -562,11 +562,11 @@ void UcclTransportAdapter::recv_worker() {
 
   // Drain on shutdown: publish failure for any remaining pending.
   for (auto& p : pending) {
-    publish_completion(p.comm_rid, true);
+    publish_put_completion(p.comm_rid, true);
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 }  // namespace Transport

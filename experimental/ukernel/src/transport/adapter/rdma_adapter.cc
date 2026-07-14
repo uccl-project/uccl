@@ -740,7 +740,6 @@ unsigned RdmaTransportAdapter::wait_signal_async(
     unsigned comm_rid) {
   if (!has_wait_path(rank)) return 0;
   // SignalWait path is handled by poll_loop pushing tags to Communicator.
-  publish_completion(comm_rid, true);
   return 1;
 }
 
@@ -853,7 +852,7 @@ void RdmaTransportAdapter::send_worker() {
             std::memory_order_acquire);
       }
       if (!p || !p->put_ready) {
-        publish_completion(e.comm_rid, true);
+        publish_put_completion(e.comm_rid, true);
         continue;
       }
 
@@ -878,7 +877,7 @@ void RdmaTransportAdapter::send_worker() {
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
-          publish_completion(e.comm_rid, true);
+          publish_put_completion(e.comm_rid, true);
           goto next_elem;
         }
         expected = 0;
@@ -943,7 +942,7 @@ void RdmaTransportAdapter::send_worker() {
 
           // Mark slot as complete and free (error path)
           slot.completed_chunks.store(ck.count, std::memory_order_release);
-          publish_completion(e.comm_rid, true);
+          publish_put_completion(e.comm_rid, true);
           // Only free if we still own the slot
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
@@ -968,7 +967,7 @@ void RdmaTransportAdapter::send_worker() {
             std::memory_order_acquire);
       }
       if (!p || !p->put_ready) {
-        publish_completion(e.comm_rid, true);
+        publish_sig_send_completion(e.comm_rid, true);
         continue;
       }
 
@@ -982,7 +981,7 @@ void RdmaTransportAdapter::send_worker() {
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
-          publish_completion(e.comm_rid, true);
+          publish_sig_send_completion(e.comm_rid, true);
           goto next_elem;
         }
         expected = 0;
@@ -1010,14 +1009,14 @@ void RdmaTransportAdapter::send_worker() {
         fprintf(stderr, "[send_worker] SIGNAL_POST_FAILED rank=%d tag=%lu\n",
                 e.peer_rank, (unsigned long)payload);
         slot.completed_chunks.store(1, std::memory_order_release);
-        publish_completion(e.comm_rid, true);
+        publish_sig_send_completion(e.comm_rid, true);
         uint32_t exp = send_id;
         slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
         continue;
       }
     } else {
       // Unknown kind → fail immediately
-      publish_completion(e.comm_rid, true);
+      publish_put_completion(e.comm_rid, true);
     }
   next_elem:;
   }
@@ -1025,7 +1024,7 @@ void RdmaTransportAdapter::send_worker() {
   // Drain remaining on shutdown
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 // Polling
@@ -1072,7 +1071,7 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         if (slot.send_id.load(std::memory_order_acquire) == send_id) {
           slot.completed_chunks.store(slot.total_chunks,
                                       std::memory_order_release);
-          publish_completion(slot.comm_rid, true);
+          publish_put_completion(slot.comm_rid, true);
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
                                                std::memory_order_release);
@@ -1112,7 +1111,7 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         uint32_t expected = send_id;
         if (slot.send_id.compare_exchange_strong(expected, 0,
                                                  std::memory_order_release)) {
-          publish_completion(slot.comm_rid, false);
+          publish_put_completion(slot.comm_rid, false);
         }
         // If CAS failed, error path or another thread already handled it
       }
@@ -1137,7 +1136,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       if (slot.send_id.load(std::memory_order_acquire) == send_id) {
         slot.completed_chunks.store(slot.total_chunks,
                                     std::memory_order_release);
-        publish_completion(slot.comm_rid, true);
+        publish_sig_send_completion(slot.comm_rid, true);
         uint32_t exp = send_id;
         slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
       }
@@ -1158,7 +1157,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
             uint32_t expected = send_id;
             if (slot.send_id.compare_exchange_strong(
                     expected, 0, std::memory_order_release)) {
-              publish_completion(slot.comm_rid, false);
+              publish_sig_send_completion(slot.comm_rid, false);
             }
           }
         }

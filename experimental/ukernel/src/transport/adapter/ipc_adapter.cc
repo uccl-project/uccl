@@ -73,11 +73,13 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
 
 IpcAdapter::~IpcAdapter() { shutdown(); }
 
-void IpcAdapter::shutdown() {
-  bool expected = false;
-  if (!stop_.compare_exchange_strong(expected, true)) return;
-
+void IpcAdapter::stop() {
   stop_.store(true, std::memory_order_release);
+}
+
+void IpcAdapter::shutdown() {
+  stop_.store(true, std::memory_order_release);
+
   if (send_th_.joinable()) send_th_.join();
   if (recv_th_.joinable()) recv_th_.join();
 
@@ -279,7 +281,7 @@ unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
   remote_ring->write_idx.store(w + 1, std::memory_order_release);
-  publish_signal_send(comm_rid, false);
+  publish_sig_send_completion(comm_rid, false);
   return 1;
 }
 
@@ -299,7 +301,6 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
 
   // SignalWait: not handled by the IPC adapter inline; Communicator uses
   // drain_signal_tags() to drain incoming signal tags.
-  publish_completion(comm_rid, true);
   return 1;
 }
 
@@ -340,21 +341,17 @@ void IpcAdapter::send_worker() {
       std::this_thread::yield();
       continue;
     }
-    if (e.type == ReqType::DataPut) {
-      bool ok = send_one(&e);
-      if (ok) {
-        size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
-        comps_[e.peer].remote->last_completed[dir].store(
-            e.seq, std::memory_order_release);
-      }
-      publish_completion(e.comm_rid, !ok);
-    } else {
-      publish_completion(e.comm_rid, true);
+    bool ok = send_one(&e);
+    if (ok) {
+      size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
+      comps_[e.peer].remote->last_completed[dir].store(
+          e.seq, std::memory_order_release);
     }
+    publish_put_completion(e.comm_rid, !ok);
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 void IpcAdapter::recv_worker() {
@@ -365,11 +362,11 @@ void IpcAdapter::recv_worker() {
       continue;
     }
     bool ok = (e.type == ReqType::DataWait) ? recv_one(&e) : false;
-    publish_completion(e.comm_rid, !ok);
+    publish_put_completion(e.comm_rid, !ok);
   }
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
 bool IpcAdapter::send_one(RingElem* e) {

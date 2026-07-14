@@ -46,6 +46,10 @@ class IpcAdapter final : public TransportAdapter {
   ~IpcAdapter() override;
   void shutdown();
 
+  // Signal worker loops to exit without joining or releasing resources.
+  // Use when external threads may still be calling into the adapter.
+  void stop();
+
   uint64_t next_send_match_seq(int peer);
   uint64_t next_recv_match_seq(int peer);
 

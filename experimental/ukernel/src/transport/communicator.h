@@ -24,12 +24,12 @@ namespace Transport {
 class TransportAdapter;
 class IpcAdapter;
 class TcpTransportAdapter;
-class UcclTransportAdapter;
 class RdmaTransportAdapter;
 
 struct CompletionResult {
   unsigned rid;
   bool failed;
+  uint32_t user_ctx;
 };
 
 struct SignalCompletion {
@@ -37,6 +37,7 @@ struct SignalCompletion {
   uint64_t tag;
   int peer;
   bool failed;
+  uint32_t user_ctx;
 };
 
 class Communicator {
@@ -46,6 +47,8 @@ class Communicator {
       std::shared_ptr<CommunicatorConfig> config =
           std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env()));
   ~Communicator();
+
+  void stop_transports();
 
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
@@ -79,7 +82,7 @@ class Communicator {
   // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
   // Matching is done in on_signal_received() (called by RdmaTransportAdapter
   // poll_loop and by drain_ipc_signals for IPC).
-  // Completions are dequeued via try_complete_signals().
+  // Completions are dequeued via try_complete_sig_wait().
   unsigned wait_signal_async(
       int peer, uint64_t tag,
       PeerTransportKind transport = PeerTransportKind::Unknown);
@@ -88,14 +91,32 @@ class Communicator {
       int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
       PeerTransportKind transport = PeerTransportKind::Unknown);
 
+  // Variants accepting pre-allocated rid.
+  bool send_put_async_with_rid(
+      int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
+      size_t dst_off, size_t bytes,
+      PeerTransportKind transport, unsigned rid);
+  bool send_signal_async_with_rid(
+      int peer, uint64_t tag,
+      PeerTransportKind transport, unsigned rid);
+  bool wait_signal_async_with_rid(
+      int peer, uint64_t tag,
+      PeerTransportKind transport, unsigned rid);
+
+  unsigned alloc_rid() {
+    return next_rid_.fetch_add(1, std::memory_order_relaxed);
+  }
+  void record_user_ctx(unsigned rid, uint32_t user_ctx);
+  uint32_t consume_user_ctx(unsigned rid);
+
   // C++ advanced API, not exposed to Python binding.
-  size_t try_complete(CompletionResult* results, size_t max);
-  size_t try_complete_signals(SignalCompletion* events, size_t max);
-  size_t try_complete_signal_send(CompletionResult* results, size_t max);
+  size_t try_complete_put(CompletionResult* results, size_t max);
+  size_t try_complete_sig_wait(SignalCompletion* events, size_t max);
+  size_t try_complete_sig_send(CompletionResult* results, size_t max);
 
   // Returns number of completed rids from the input array.
   // Writes completed rids back into the first N positions of the array.
-  // For each rid: checks both completion_ring_ and signal_ring_.
+  // For each rid: checks both put_ring_ and sig_wait_ring_.
   size_t poll(unsigned* rids, size_t count);
 
   void set_oob_namespace(std::string ns);
@@ -152,10 +173,7 @@ class Communicator {
     std::unordered_map<PeerTransportKind, PeerPathState> paths;
   };
 
-  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
   RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta);
-  bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
-                               UCCLP2PInfo* out_remote_p2p_info);
   bool exchange_rdma_peer_info(int rank, RdmaTransportAdapter& rdma_adapter,
                                RdmaP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
@@ -179,9 +197,7 @@ class Communicator {
   void on_signal_received(int peer_rank, uint64_t tag);
   void drain_ipc_signals();
 
-  void register_existing_local_mrs_with_uccl();
   void register_existing_local_mrs_with_rdma();
-  bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
   bool ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
@@ -199,13 +215,12 @@ class Communicator {
   MRManager mr_manager_;
   IPCManager ipc_manager_;
 
-  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
-  jring_t* completion_ring_ = nullptr;
-  jring_t* signal_ring_ = nullptr;
-  jring_t* signal_send_ring_ = nullptr;
+  jring_t* put_ring_ = nullptr;
+  jring_t* sig_wait_ring_ = nullptr;
+  jring_t* sig_send_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → vector<rid>
@@ -218,6 +233,9 @@ class Communicator {
   // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
   mutable std::mutex signal_waits_mu_;
+
+  std::unordered_map<unsigned, uint32_t> rid_to_user_ctx_;
+  mutable std::mutex user_ctx_mu_;
 
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;
@@ -232,9 +250,6 @@ class Communicator {
       remote_buffer_to_mr_;
   std::unordered_map<uint32_t, IPCItem> local_buffer_to_ipc_;
 
-  mutable std::mutex uccl_reg_mu_;
-  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
-  std::unordered_set<uint64_t> uccl_registered_mrs_;
   mutable std::mutex rdma_reg_mu_;
   std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> rdma_registered_mrs_;
