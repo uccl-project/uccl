@@ -2,6 +2,7 @@
 #include "../../include/transport.h"
 #include "algo/chunk_graph.h"
 #include "backend/backend.h"
+#include "backend/signal_backend.h"
 #include "coll_config.h"
 #include "utils.h"
 #include <algorithm>
@@ -101,6 +102,7 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
 
 SprayExecutor::~SprayExecutor() {
   stop_ = true;
+  if (owned_comm_) owned_comm_->stop_transports();
   if (enqueue_th_.joinable()) enqueue_th_.join();
   if (drain_th_dev_.joinable()) drain_th_dev_.join();
   if (drain_th_tpt_.joinable()) drain_th_tpt_.join();
@@ -317,6 +319,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                      run.deferred_tpt.end());
     run.ready.insert(run.ready.begin(), run.deferred_sig.begin(),
                      run.deferred_sig.end());
+
     run.deferred_dev.clear();
     run.deferred_tpt.clear();
     run.deferred_sig.clear();
@@ -337,12 +340,14 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      uint32_t be_idx;
-      if (signal_be_->do_enqueue(&c, 1, &be_idx) > 0) {
-        sig_slots_.write(be_idx, &run, idx, PutPath::None);
+      auto* sig = static_cast<SignalBackend*>(signal_be_);
+      uint32_t be_idx = sig->reserve_slot();
+      sig_slots_.write(be_idx, &run, idx, PutPath::None);
+      if (sig->do_enqueue_reserved(c, be_idx)) {
         run.be_slots.emplace_back(2, be_idx);
         run.submitted[idx] = 1;
       } else {
+        sig_slots_.release(be_idx);
         run.deferred_sig.push_back(idx);
       }
       continue;
@@ -416,28 +421,100 @@ void SprayExecutor::enqueue_loop() {
 
 void SprayExecutor::drain_dev_loop() {
   uint32_t be_buf[256];
-  BeSlot* slot_buf[256];
+  BeSlotSnap snap_buf[256];
   while (!stop_) {
     size_t n = device_be_->do_drain(be_buf, 256);
-    if (n == 0) {
+    if (n == 0) { std::this_thread::yield(); continue; }
+    // Drain all available batches before checking completions,
+    // so release() never races with stale backend completions.
+    bool had_work = false;
+    while (n > 0) {
+      had_work = true;
+      size_t valid = 0;
+      for (size_t i = 0; i < n; ++i) {
+        auto snap = dev_slots_.try_claim(be_buf[i], stop_);
+        if (!snap.run) {
+          if (stop_.load(std::memory_order_relaxed)) return;
+          continue;
+        }
+        snap_buf[valid++] = snap;
+      }
+      drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
+        auto& op = s.run->tiled.ops[s.op_idx];
+        if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
+          int peer = static_cast<int>(op.dst_peer);
+          if (peer >= 0 && peer < world_size_)
+            update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);
+        }
+      });
+      n = device_be_->do_drain(be_buf, 256);
+    }
+    if (had_work) check_completions_();
+  }
+}
+
+void SprayExecutor::drain_tpt_loop() {
+  uint32_t be_buf[256];
+  BeSlotSnap snap_buf[256];
+  while (!stop_) {
+    size_t nd = tpt_be_->do_drain(be_buf, 256);
+    if (nd == 0) {
+      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
       std::this_thread::yield();
       continue;
     }
-    size_t valid = 0;
-    for (size_t i = 0; i < n; ++i) {
-      auto* s = dev_slots_.wait(be_buf[i], stop_);
-      if (!s) return;
-      slot_buf[valid++] = s;
-    }
-    drain_batch(slot_buf, valid, [this](BeSlot& s) {
-      auto& op = s.run->tiled.ops[s.op_idx];
-      if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
-        int peer = static_cast<int>(op.dst_peer);
-        if (peer >= 0 && peer < world_size_)
-          update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);
+    bool had_work = false;
+    while (nd > 0) {
+      had_work = true;
+      size_t valid = 0;
+      for (size_t i = 0; i < nd; ++i) {
+        auto snap = tpt_slots_.try_claim(be_buf[i], stop_);
+        if (!snap.run) {
+          if (stop_.load(std::memory_order_relaxed)) return;
+          continue;
+        }
+        snap_buf[valid++] = snap;
       }
-    });
-    check_completions_();
+      drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
+        if (s.put_path == PutPath::None) return;
+        int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
+        if (peer < 0 || peer >= world_size_) return;
+        auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
+                                                : tpt_metrics_[peer].rdma;
+        update_path_metrics(m, s.enqueue_ns);
+      });
+      nd = tpt_be_->do_drain(be_buf, 256);
+    }
+    if (had_work) check_completions_();
+  }
+}
+
+void SprayExecutor::drain_signal_loop() {
+  uint32_t be_buf[256];
+  BeSlotSnap snap_buf[256];
+  while (!stop_) {
+    size_t ns = signal_be_->do_drain(be_buf, 256);
+    if (ns == 0) {
+      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
+      std::this_thread::yield();
+      continue;
+    }
+    bool had_work = false;
+    while (ns > 0) {
+      had_work = true;
+      size_t valid = 0;
+      for (size_t i = 0; i < ns; ++i) {
+        auto snap = sig_slots_.try_claim(be_buf[i], stop_);
+        if (!snap.run) {
+          if (stop_.load(std::memory_order_relaxed)) return;
+          continue;
+        }
+        snap_buf[valid++] = snap;
+      }
+      drain_batch(snap_buf, valid, [](BeSlotSnap&) {});
+      ns = signal_be_->do_drain(be_buf, 256);
+    }
+    if (had_work) check_completions_();
   }
 }
 
@@ -460,6 +537,7 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   // FIXME: temporary — always IPC while debugging 3-way path selection
   if (tpt_metrics_ && peer >= 0 && peer < world_size_)
     tpt_metrics_[peer].ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+  // return PutPath::Ipc;
   return PutPath::Rdma;
 
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
@@ -494,56 +572,6 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   }
   chosen->inflight.fetch_add(1, std::memory_order_relaxed);
   return choice;
-}
-
-void SprayExecutor::drain_tpt_loop() {
-  uint32_t be_buf[256];
-  BeSlot* slot_buf[256];
-  while (!stop_) {
-    size_t nd = tpt_be_->do_drain(be_buf, 256);
-    if (nd == 0) {
-      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
-      std::this_thread::yield();
-      continue;
-    }
-
-    size_t valid = 0;
-    for (size_t i = 0; i < nd; ++i) {
-      auto* s = tpt_slots_.wait(be_buf[i], stop_);
-      if (!s) return;
-      slot_buf[valid++] = s;
-    }
-    drain_batch(slot_buf, valid, [this](BeSlot& s) {
-      if (s.put_path == PutPath::None) return;
-      int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
-      if (peer < 0 || peer >= world_size_) return;
-      auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
-                                              : tpt_metrics_[peer].rdma;
-      update_path_metrics(m, s.enqueue_ns);
-    });
-    check_completions_();
-  }
-}
-
-void SprayExecutor::drain_signal_loop() {
-  uint32_t be_buf[256];
-  BeSlot* slot_buf[256];
-  while (!stop_) {
-    size_t ns = signal_be_->do_drain(be_buf, 256);
-    if (ns == 0) {
-      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
-      std::this_thread::yield();
-      continue;
-    }
-    size_t valid = 0;
-    for (size_t i = 0; i < ns; ++i) {
-      auto* s = sig_slots_.wait(be_buf[i], stop_);
-      if (!s) return;
-      slot_buf[valid++] = s;
-    }
-    drain_batch(slot_buf, valid, [](BeSlot&) {});
-    check_completions_();
-  }
 }
 
 }  // namespace CCL

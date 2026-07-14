@@ -127,12 +127,23 @@ struct SprayExecutorConfig {
 
 // Per-backend slot: be_idx → (run, op_idx) in one lookup.
 // tag doubles as ready flag and generation counter.
+// Consumed by try_claim(): snapshot + CAS-release in one atomic step.
 struct alignas(64) BeSlot {
   std::atomic<uint32_t> tag{~0u};  // be_idx when ready, ~0u = empty
   SprayRun* run = nullptr;
   uint32_t op_idx = 0;
   PutPath put_path = PutPath::Device;
   uint64_t enqueue_ns = 0;  // steady_clock timestamp, for latency EWMA
+};
+
+// Snapshot of a claimed slot — carries the data so the slot can be
+// immediately reused by a subsequent write() without corrupting the
+// drain pipeline.
+struct BeSlotSnap {
+  SprayRun* run = nullptr;
+  uint32_t op_idx = 0;
+  PutPath put_path = PutPath::Device;
+  uint64_t enqueue_ns = 0;
 };
 
 static inline size_t round_up_pow2(size_t n) {
@@ -144,6 +155,9 @@ static inline size_t round_up_pow2(size_t n) {
 
 // Lock-free slot table: be_idx → BeSlot, one-writer (enqueue) one-reader
 // (drain) per slot.  Sized to backend capacity for index stability.
+// Slots are claimed by the drain thread via try_claim(), which
+// atomically snapshots the data and releases the slot in one CAS.
+// release() is a no-op safe-guard; try_claim() is the sole consumer.
 class BeSlotTable {
  public:
   explicit BeSlotTable(size_t capacity) {
@@ -165,14 +179,25 @@ class BeSlotTable {
     s.tag.store(be_idx, std::memory_order_release);
   }
 
-  BeSlot* wait(uint32_t be_idx, std::atomic<bool> const& stop) {
+  BeSlotSnap try_claim(uint32_t be_idx, std::atomic<bool> const& stop) {
     auto& s = slots_[be_idx & mask_];
     uint32_t tag;
+    int spins = 0;
     while ((tag = s.tag.load(std::memory_order_acquire)) != be_idx) {
-      if (stop.load(std::memory_order_relaxed)) return nullptr;
+      if (tag == ~0u) return {};
+      if (stop.load(std::memory_order_relaxed)) return {};
+      if (++spins > 100000) return {};
       std::this_thread::yield();
     }
-    return &s;
+    // Snapshot data before releasing the slot so a subsequent write()
+    // cannot corrupt what the drain pipeline is about to process.
+    BeSlotSnap snap{s.run, s.op_idx, s.put_path, s.enqueue_ns};
+    uint32_t expected = be_idx;
+    if (!s.tag.compare_exchange_strong(expected, ~0u,
+                                       std::memory_order_release,
+                                       std::memory_order_relaxed))
+      return {};  // claimed by another thread or release(), drop it
+    return snap;
   }
 
   void release(uint32_t be_idx) {
@@ -222,6 +247,10 @@ class SprayExecutor {
 
   size_t active_count() const;
 
+  // Pre-register a buffer with the Communicator.  Subsequent submits
+  // using the same pointer reuse the same buffer ID and MR.
+  uint32_t get_or_register_buf(void* ptr, size_t bytes);
+
  private:
   SprayRun* get(CollectiveOpHandle h);
 
@@ -237,9 +266,9 @@ class SprayExecutor {
   void check_completions_();
 
   template <typename F>
-  void drain_batch(BeSlot** slots, size_t n, F&& cb) {
+  void drain_batch(BeSlotSnap* snaps, size_t n, F&& cb) {
     for (size_t i = 0; i < n; ++i) {
-      auto& s = *slots[i];
+      auto& s = snaps[i];
       SprayRun* run = s.run;
       if (!run) continue;
       uint32_t op_idx = s.op_idx;
@@ -265,7 +294,6 @@ class SprayExecutor {
   // Tensor to buffer ID dedup: same ptr = same ID
   std::unordered_map<uintptr_t, uint32_t> tensor_to_buf_id_;
   uint32_t next_buf_id_ = 1;
-  uint32_t get_or_register_buf(void* ptr, size_t bytes);
 
   // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
