@@ -36,12 +36,9 @@ void DeviceBackend::ensure_runtime() {
     GPU_RT_CHECK(gpuSetDevice(device_idx_));
     tls_last_device = device_idx_;
   }
-  fprintf(stderr, "[dev] ensure_runtime: task_capacity=%u inited=%d\n",
-          cfg_.task_capacity, Device::TaskManager::instance().inited());
   if (!Device::TaskManager::instance().inited()) {
     Device::TaskManager::instance().init(cfg_.task_capacity);
     owns_task_manager_ = true;
-    fprintf(stderr, "[dev] ensure_runtime: init done\n");
   }
   if (worker_pool_) return;
   Device::WorkerPool::Config wc;
@@ -50,8 +47,6 @@ void DeviceBackend::ensure_runtime() {
   wc.fifoCapacity = cfg_.fifo_capacity;
   wc.smemSize = cfg_.smem_size;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
-  fprintf(stderr, "[dev] ensure_runtime: worker pool created, fifos=%u\n",
-          cfg_.max_fifos);
   // Pre-create all workers
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
     worker_pool_->createWorker(i, cfg_.blocks_per_worker);
@@ -163,11 +158,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
     uint32_t fid;
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
-      if (pending_.size() >= capacity()) {
-        fprintf(stderr, "[dev] enqueue: pending full (size=%zu cap=%zu)\n",
-                pending_.size(), capacity());
-        break;
-      }
+      if (pending_.size() >= capacity()) break;
       cmd_idx = cmd_next_++;
       fid = next_fifo_ % cfg_.max_fifos;
       next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
@@ -176,24 +167,17 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
     auto task = Device::TaskManager::instance().create_task(
         args, tt, Device::DataType::Fp32, 0);
 
-    if (task.type_u8() == 0) {
-      fprintf(stderr, "[dev] enqueue: create_task returned empty (pool full)\n");
-      --cmd_next_; break;
-    }
+    if (task.type_u8() == 0) { --cmd_next_; break; }
 
     uint64_t tid = worker_pool_->enqueue(task, fid);
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
       if (tid == Device::WorkerPool::kInvalidTaskId) {
-        fprintf(stderr, "[dev] enqueue: WorkerPool enqueue failed fid=%u\n",
-                fid);
         --cmd_next_;
         break;
       }
       if (out_indices) out_indices[accepted] = cmd_idx;
       pending_.push_back({fid, tid, task.args_index(), cmd_idx});
-      fprintf(stderr, "[dev] enqueue: ok fid=%u tid=%lu args=%u\n", fid, tid,
-              task.args_index());
     }
     ++accepted;
   }

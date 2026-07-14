@@ -3,7 +3,6 @@
 #include "backend.h"
 #include <cstdint>
 #include <mutex>
-#include <unordered_map>
 
 namespace UKernel {
 namespace Transport {
@@ -23,10 +22,8 @@ class TransportBackend final : public BatchBackend {
                     uint32_t* out_indices = nullptr) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override { return 2048; }
-  void release(uint32_t cmd_idx) override;
 
  private:
-  std::unordered_map<unsigned, uint32_t> rid_to_cmd_;
   std::mutex mu_;
   uint32_t cmd_next_ = 0;
 };

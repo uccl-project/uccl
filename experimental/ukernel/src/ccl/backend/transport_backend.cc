@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <stdexcept>
-#include <unordered_map>
 
 namespace UKernel {
 namespace CCL {
@@ -19,7 +18,7 @@ static Transport::PeerTransportKind to_peer_transport(PutPath p) {
 
 TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm) {
   if (!comm) throw std::invalid_argument("TransportBackend: null communicator");
-  comm_ = comm;  // base class member
+  comm_ = comm;
 }
 
 bool TransportBackend::supports(ExecOpKind kind) const {
@@ -32,25 +31,26 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
   for (size_t i = 0; i < n; ++i) {
     Cmd const& c = cmds[i];
 
-    uint32_t idx = cmd_next_++;
-
-    unsigned rid = 0;
+    uint32_t idx;
+    unsigned rid;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      switch (c.kind) {
-        case ExecOpKind::Put: {
-          rid = comm_->send_put_async(static_cast<int>(c.dst_peer), c.src_buf,
-                                      c.src_off, c.dst_buf, c.dst_off, c.bytes,
-                                      to_peer_transport(c.put_path));
-          if (rid) rid_to_cmd_[rid] = idx;
-          break;
-        }
-        default:
-          break;
-      }
+      idx = cmd_next_++;
+      rid = comm_->alloc_rid();
+      comm_->record_user_ctx(rid, idx);
     }
 
-    if (rid == 0) {
+    bool ok = false;
+    if (c.kind == ExecOpKind::Put) {
+      ok = comm_->send_put_async_with_rid(
+          static_cast<int>(c.dst_peer), c.src_buf,
+          c.src_off, c.dst_buf, c.dst_off, c.bytes,
+          to_peer_transport(c.put_path), rid);
+    }
+
+    if (!ok) {
+      std::lock_guard<std::mutex> lk(mu_);
+      comm_->consume_user_ctx(rid);
       --cmd_next_;
       break;
     }
@@ -62,36 +62,17 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
 
 size_t TransportBackend::do_drain(uint32_t* completed, size_t max) {
   UKernel::Transport::CompletionResult results[256];
-  size_t n = comm_->try_complete(results, std::min(max, (size_t)256));
+  size_t n = comm_->try_complete_put(results, std::min(max, (size_t)256));
   size_t out = 0;
-  std::lock_guard<std::mutex> lk(mu_);
   for (size_t i = 0; i < n; ++i) {
-    auto it = rid_to_cmd_.find(results[i].rid);
-    if (it != rid_to_cmd_.end()) {
-      // Return the cmd_idx regardless of success/failure so the caller
-      // always sees a completion and can handle the error gracefully
-      // instead of spinning forever waiting for a completion that was
-      // already consumed.
-      completed[out++] = it->second;
-      rid_to_cmd_.erase(it);
-      if (results[i].failed) {
-        std::fprintf(stderr,
-                     "[transport] do_drain: rid %u failed, cmd_idx %u\n",
-                     results[i].rid, it->second);
-      }
+    if (results[i].failed) {
+      std::fprintf(stderr,
+                   "[transport] do_drain: rid %u failed, user_ctx %u\n",
+                   results[i].rid, results[i].user_ctx);
     }
+    completed[out++] = results[i].user_ctx;
   }
   return out;
-}
-
-void TransportBackend::release(uint32_t cmd_idx) {
-  std::lock_guard<std::mutex> lk(mu_);
-  for (auto it = rid_to_cmd_.begin(); it != rid_to_cmd_.end(); ++it) {
-    if (it->second == cmd_idx) {
-      rid_to_cmd_.erase(it);
-      break;
-    }
-  }
 }
 
 }  // namespace CCL
