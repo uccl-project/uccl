@@ -125,6 +125,13 @@ struct SprayExecutorConfig {
   int local_id = -1;
 };
 
+// Backend path counters for load-balancing diagnostics.
+struct PathCounters {
+  size_t device = 0;
+  size_t ipc = 0;
+  size_t rdma = 0;
+};
+
 // Per-backend slot: be_idx → (run, op_idx) in one lookup.
 // tag doubles as ready flag and generation counter.
 // Consumed by try_claim(): snapshot + CAS-release in one atomic step.
@@ -251,6 +258,21 @@ class SprayExecutor {
   // using the same pointer reuse the same buffer ID and MR.
   uint32_t get_or_register_buf(void* ptr, size_t bytes);
 
+  // Snapshot path counters (atomically).
+  PathCounters get_path_counters() const {
+    PathCounters c;
+    c.device = put_path_device_.load(std::memory_order_relaxed);
+    c.ipc = put_path_ipc_.load(std::memory_order_relaxed);
+    c.rdma = put_path_rdma_.load(std::memory_order_relaxed);
+    return c;
+  }
+  void reset_path_counters() {
+    put_path_device_.store(0, std::memory_order_relaxed);
+    put_path_ipc_.store(0, std::memory_order_relaxed);
+    put_path_rdma_.store(0, std::memory_order_relaxed);
+  }
+  bool path_counters_enabled() const { return path_counters_enabled_; }
+
  private:
   SprayRun* get(CollectiveOpHandle h);
 
@@ -324,6 +346,12 @@ class SprayExecutor {
   // Transport LB state
   int world_size_ = 0;
   std::unique_ptr<PeerMetrics[]> tpt_metrics_;
+
+  // Put path counters (enqueue-time, for diagnostics)
+  std::atomic<size_t> put_path_device_{0};
+  std::atomic<size_t> put_path_ipc_{0};
+  std::atomic<size_t> put_path_rdma_{0};
+  bool path_counters_enabled_ = false;
 
   // Backpressure
   size_t max_concurrent_runs_ = 16;

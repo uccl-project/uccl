@@ -84,6 +84,10 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
   if (world_size_ > 0)
     tpt_metrics_.reset(new PeerMetrics[static_cast<size_t>(world_size_)]{});
 
+  char const* pc = std::getenv("UK_CCL_PATH_COUNTERS");
+  path_counters_enabled_ =
+      (pc && (strcmp(pc, "1") == 0 || strcmp(pc, "true") == 0));
+
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
   pthread_setname_np(enqueue_th_.native_handle(), "ucl-enq");
   if (device_be_) {
@@ -354,6 +358,23 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         tpt_metrics_[static_cast<size_t>(c.dst_peer)]
             .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
         c.put_path = PutPath::Ipc;
+      }
+    }
+
+    if (path_counters_enabled_ &&
+        c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
+      switch (c.put_path) {
+        case PutPath::Device:
+          put_path_device_.fetch_add(1, std::memory_order_relaxed);
+          break;
+        case PutPath::Ipc:
+          put_path_ipc_.fetch_add(1, std::memory_order_relaxed);
+          break;
+        case PutPath::Rdma:
+          put_path_rdma_.fetch_add(1, std::memory_order_relaxed);
+          break;
+        default:
+          break;
       }
     }
 

@@ -195,9 +195,9 @@ ls /dev/shm/uk_cmpl_* 2>/dev/null && rm -f /dev/shm/uk_cmpl_*
 nvidia-smi | grep test_perf
 
 # server
-CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0
+UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0
 # client
-CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1
+UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1
 ```
 
 ### Run everything

@@ -93,6 +93,7 @@ int main(int argc, char** argv) {
   }
 
   if (rank == 1) {
+    bool show_counters = (std::getenv("UK_CCL_PATH_COUNTERS") != nullptr);
     constexpr size_t kMaxTiles = 256;
     std::printf("%9s %10s %10s\n", "Size", "Lat(us)", "BW(GB/s)");
     for (int si = 0; si < kSizes; ++si) {
@@ -112,6 +113,8 @@ int main(int argc, char** argv) {
           std::this_thread::yield();
         ex->release(h);
       }
+      PathCounters before;
+      if (show_counters) before = ex->get_path_counters();
       double total_us = 0;
       for (int iter = 0; iter < kIters; ++iter) {
         sync_memset(d_in, 0, bytes);
@@ -126,6 +129,8 @@ int main(int argc, char** argv) {
         total_us +=
             std::chrono::duration<double, std::micro>(t1 - t0).count();
       }
+      PathCounters after;
+      if (show_counters) after = ex->get_path_counters();
       double avg_us = total_us / kIters;
       double bw_gbs = (bytes * 2.0) / (avg_us * 1e3);
       char const* unit;
@@ -134,6 +139,12 @@ int main(int argc, char** argv) {
       else if (bytes >= 1ul << 20) { unit = "MB"; sz = bytes / (double)(1ul << 20); }
       else { unit = "KB"; sz = bytes / (double)(1ul << 10); }
       std::printf("%8.1f %-3s %10.1f %10.2f\n", sz, unit, avg_us, bw_gbs);
+      if (show_counters) {
+        std::printf("         dev:%zu  ipc:%zu  rdma:%zu\n",
+                    after.device - before.device,
+                    after.ipc - before.ipc,
+                    after.rdma - before.rdma);
+      }
       fflush(stdout);
     }
     std::printf("\nSprayExecutor AllReduce benchmark done\n");
