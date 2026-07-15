@@ -44,6 +44,21 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->tpt_be_->set_comm(ex->owned_comm_.get());
   ex->signal_be_->set_comm(ex->owned_comm_.get());
 
+  // Enable P2P access for same-host peers so the DeviceBackend SM kernel
+  // can directly read/write remote GPU memory.
+  for (int p = 0; p < config.world_size; ++p) {
+    if (p == config.rank) continue;
+    if (ex->owned_comm_->same_host(p)) {
+      int peer_gpu = ex->owned_comm_->peer_gpu_idx(p);
+      if (peer_gpu >= 0) {
+        gpuError_t err = gpuDeviceEnablePeerAccess(peer_gpu, 0);
+        if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
+          std::cerr << "[FACTORY] gpuDeviceEnablePeerAccess failed gpu="
+                    << config.gpu_id << " peer=" << peer_gpu << std::endl;
+      }
+    }
+  }
+
   ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);

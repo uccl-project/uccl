@@ -107,6 +107,15 @@ SprayExecutor::~SprayExecutor() {
   if (drain_th_dev_.joinable()) drain_th_dev_.join();
   if (drain_th_tpt_.joinable()) drain_th_tpt_.join();
   if (drain_th_signal_.joinable()) drain_th_signal_.join();
+  // Explicitly release backends before communicator is destroyed.
+  // Backends hold raw comm_ pointers that must remain valid during
+  // their destructors (e.g. DeviceBackend tears down GPU task manager).
+  device_be_ = nullptr;
+  tpt_be_ = nullptr;
+  signal_be_ = nullptr;
+  owned_device_.reset();
+  owned_transport_.reset();
+  owned_signal_.reset();
 }
 
 SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
@@ -288,14 +297,6 @@ void SprayExecutor::release(CollectiveOpHandle h) {
       it->second->status.load(std::memory_order_acquire) ==
           CollectiveOpStatus::Running)
     throw std::logic_error("cannot release running collective");
-  for (auto& [tag, be_idx] : it->second->be_slots) {
-    if (tag == 0)
-      dev_slots_.release(be_idx);
-    else if (tag == 1)
-      tpt_slots_.release(be_idx);
-    else
-      sig_slots_.release(be_idx);
-  }
   runs_.erase(it);
 }
 
@@ -337,6 +338,23 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+      // On Nvidia consumer GPUs the PCIe BAR1 window is
+      // typically 256 MiB.  Set UK_BAR1_WINDOW_MB to enable the
+      // fallback to IPC for remote accesses exceeding that window.
+      // Data-center GPUs (H100/A100) have full BAR1 mapping and
+      // should leave this unset.
+      static const size_t kBar1Bytes = []() -> size_t {
+        char const* env = std::getenv("UK_BAR1_WINDOW_MB");
+        return env ? std::stoull(env) * 1024 * 1024 : 0;
+      }();
+      if (c.put_path == PutPath::Device && kBar1Bytes > 0 &&
+          c.dst_off + c.bytes > kBar1Bytes) {
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+            .device.inflight.fetch_sub(1, std::memory_order_relaxed);
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+            .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+        c.put_path = PutPath::Ipc;
+      }
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
@@ -534,12 +552,6 @@ void SprayExecutor::check_completions_() {
 }
 
 PutPath SprayExecutor::pick_put_path(int peer) {
-  // FIXME: temporary — always IPC while debugging 3-way path selection
-  if (tpt_metrics_ && peer >= 0 && peer < world_size_)
-    tpt_metrics_[peer].ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-  // return PutPath::Ipc;
-  return PutPath::Rdma;
-
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
     return PutPath::Device;
   }
