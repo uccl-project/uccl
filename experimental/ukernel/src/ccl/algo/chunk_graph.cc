@@ -235,8 +235,7 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
   return std::move(builder.algo);
 }
 
-CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
-                                      bool inplace) {
+CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config) {
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllToAllPairwise;
 
@@ -253,17 +252,12 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
 
   ChunkBuilder builder(std::move(algo));
 
-  size_t self_input_offset = input_prefix[static_cast<size_t>(config.rank)];
-  size_t self_output_offset = output_prefix[static_cast<size_t>(config.rank)];
   size_t self_slice_bytes = input_splits[static_cast<size_t>(config.rank)];
   if (self_slice_bytes != output_splits[static_cast<size_t>(config.rank)])
     throw std::invalid_argument(
         "alltoall self split size must match between input and output");
 
-  if (self_slice_bytes != 0 && !inplace) {
-    builder.add_op(AlgoOpKind::Put, self_slice_bytes, self_input_offset,
-                   self_output_offset, -1, -1, {});
-  }
+  // AllToAll is always inplace — self-slice needs no local copy.
 
   for (int peer = 0; peer < config.nranks; ++peer) {
     if (peer == config.rank) continue;
@@ -272,11 +266,12 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
     size_t send_bytes = input_splits[static_cast<size_t>(peer)];
     size_t recv_offset = output_prefix[static_cast<size_t>(peer)];
     size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
+    size_t dst_off = output_prefix[static_cast<size_t>(config.rank)];
 
     uint32_t pair_id = builder.next_pair_id++;
 
     if (send_bytes > 0) {
-      builder.add_op(AlgoOpKind::Put, send_bytes, send_offset, send_offset, -1,
+      builder.add_op(AlgoOpKind::Put, send_bytes, send_offset, dst_off, -1,
                      peer, {}, pair_id);
     }
     if (recv_bytes > 0) {
@@ -296,7 +291,7 @@ CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
     case CollKind::AllReduceRing:
       return build_allreduce_ring_algo(config);
     case CollKind::AllToAllPairwise:
-      return build_alltoall_pairwise_algo(config, inplace);
+      return build_alltoall_pairwise_algo(config);
   }
   throw std::invalid_argument("unsupported collective kind");
 }

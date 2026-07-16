@@ -12,7 +12,7 @@ namespace CCL {
 
 // Tile the algorithm DAG and insert per-tile Signal/WaitSignal ops.
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
-                       bool inplace = false);
+                       bool inplace = false, bool stage_puts = false);
 
 // Plan + lower: build CollAlgo from config, then lower to TiledResult.
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace);

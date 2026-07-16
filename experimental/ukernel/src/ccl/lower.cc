@@ -94,7 +94,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<Chunk> const& chunks,
                                     std::vector<size_t> const& first_tile,
                                     std::vector<size_t> const& tiles_per_chunk,
-                                    bool inplace, size_t& staging_bytes) {
+                                    bool inplace, bool stage_puts,
+                                    size_t& staging_bytes) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
@@ -106,15 +107,64 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
   struct NewDep { uint32_t target; uint32_t dep; };
   std::vector<NewDep> new_deps;
 
+  size_t staging_bytes_out = 0;
+
   for (size_t ci = 0; ci < chunks.size(); ++ci) {
     auto const& ch = chunks[ci];
     size_t num_tiles = tiles_per_chunk[ci];
+
+    std::vector<uint32_t> cp_indices;
+    std::vector<uint32_t> put_indices;
+    size_t chunk_staging = 0;
 
     for (size_t t = 0; t < num_tiles; ++t) {
       size_t old_idx = first_tile[ci] + t;
       Op const& op = ops[old_idx];
 
       if (op.kind == AlgoOpKind::Put && ch.pair_id != kNoPairId) {
+        if (stage_puts) {
+          size_t staging_off = chunk_staging;
+          chunk_staging += op.bytes;
+
+          TiledOp cp;
+          cp.kind = ExecOpKind::Put;
+          cp.bytes = op.bytes;
+          cp.src_off = op.src_off;
+          cp.dst_off = staging_off;
+          cp.src_peer = ~0u;
+          cp.dst_peer = ~0u;
+          cp.src_buf_role = CollectiveBufferRole::Input;
+          cp.dst_buf_role = CollectiveBufferRole::Scratch;
+          cp.deps = std::move(op.deps);
+          uint32_t cp_idx = static_cast<uint32_t>(out.size());
+          cp_indices.push_back(cp_idx);
+          out.push_back(cp);
+
+          TiledOp put;
+          put.kind = ExecOpKind::Put;
+          put.bytes = op.bytes;
+          put.src_off = staging_off;
+          put.dst_off = op.dst_off;
+          put.src_peer = ~0u;
+          put.dst_peer = op.dst_peer;
+          put.src_buf_role = CollectiveBufferRole::Scratch;
+          put.dst_buf_role = CollectiveBufferRole::Output;
+          old_to_new[old_idx] = static_cast<uint32_t>(out.size());
+          out.push_back(put);
+          put_indices.push_back(
+              static_cast<uint32_t>(out.size() - 1));
+          // Put depends on its own Copy
+          new_deps.push_back(
+              {static_cast<uint32_t>(out.size() - 1), cp_indices.back()});
+
+          TiledOp sig;
+          sig.kind = ExecOpKind::Signal;
+          sig.dst_peer = op.dst_peer;
+          sig.tag = make_tag(ch.pair_id, t);
+          new_deps.push_back({static_cast<uint32_t>(out.size()),
+                              put_indices.back()});
+          out.push_back(sig);
+        } else {
         uint32_t put_idx = static_cast<uint32_t>(out.size());
         old_to_new[old_idx] = put_idx;
         TiledOp put = op_to_tiled(op);
@@ -130,6 +180,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         sig.tag = make_tag(ch.pair_id, t);
         new_deps.push_back({static_cast<uint32_t>(out.size()), put_idx});
         out.push_back(sig);
+        }
 
       } else if (op.kind == AlgoOpKind::Recv) {
         TiledOp ws;
@@ -183,13 +234,46 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.deps = op.deps;
           out.push_back(red);
         }
-
-      } else {
-        old_to_new[old_idx] = static_cast<uint32_t>(out.size());
-        out.push_back(op_to_tiled(op));
       }
     }
+
+    // Cross-rank coordination: Signal "copies done" after all local
+    // Copies complete. All Puts wait for peer's "copies done" so that
+    // the peer's input data has been staged before we overwrite it.
+    if (stage_puts && !put_indices.empty()) {
+      uint64_t barrier_tag = make_tag(ch.pair_id, 0xFFFF);
+      int peer = ch.dst_rank;
+
+      // Signal "copies_done" → peer (depends on all copies)
+      TiledOp sig_cd;
+      sig_cd.kind = ExecOpKind::Signal;
+      sig_cd.dst_peer = static_cast<uint32_t>(peer);
+      sig_cd.tag = barrier_tag;
+      uint32_t sig_cd_idx = static_cast<uint32_t>(out.size());
+      for (uint32_t ci : cp_indices)
+        new_deps.push_back({sig_cd_idx, ci});
+      out.push_back(sig_cd);
+
+      // WaitSignal "copies_done" ← peer
+      TiledOp ws_cd;
+      ws_cd.kind = ExecOpKind::WaitSignal;
+      ws_cd.src_peer = static_cast<uint32_t>(peer);
+      ws_cd.tag = barrier_tag;
+      uint32_t ws_cd_idx = static_cast<uint32_t>(out.size());
+      out.push_back(ws_cd);
+
+      // All Puts wait for peer's "copies_done"
+      for (uint32_t pi : put_indices)
+        new_deps.push_back({pi, ws_cd_idx});
+    }
+
+    if (chunk_staging > staging_bytes_out)
+      staging_bytes_out = chunk_staging;
   }
+
+  // Use the larger of max-chunk-staging (AllToAll) or
+  // cumulative (AllReduce inplace RecvReduce).
+  staging_bytes = staging_bytes_out > staging_bytes ? staging_bytes_out : staging_bytes;
 
   for (auto& o : out) {
     for (auto& dep : o.deps) {
@@ -204,7 +288,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
 }  // namespace
 
-TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace) {
+TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
+                       bool stage_puts) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -222,14 +307,21 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace) {
 
   size_t staging_bytes = 0;
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
-                              tiled.tiles_per_chunk, inplace, staging_bytes);
+                              tiled.tiles_per_chunk, inplace, stage_puts,
+                              staging_bytes);
   result.staging_bytes_required = staging_bytes;
   return result;
 }
 
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
+  if (config.kind == CollKind::AllToAllPairwise && !inplace)
+    throw std::invalid_argument(
+        "AllToAll requires inplace (input == output)");
   CollAlgo algo = build_coll_algo(config, inplace);
-  return lower_algo(algo, config.tile_bytes, inplace);
+  // Only stage for variable-split AllToAll; equal-split offsets never overlap.
+  bool stage_puts = (config.kind == CollKind::AllToAllPairwise && inplace &&
+                     !config.input_split_bytes.empty());
+  return lower_algo(algo, config.tile_bytes, inplace, stage_puts);
 }
 
 }  // namespace CCL
