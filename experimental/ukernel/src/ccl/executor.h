@@ -246,6 +246,10 @@ class SprayExecutor {
   SprayExecutor(SprayExecutor const&) = delete;
   SprayExecutor& operator=(SprayExecutor const&) = delete;
 
+  // Start background threads. Must be called after owned_* members and
+  // backend comm pointers have been set by the factory.
+  void start();
+
   CollectiveOpHandle submit(CollectiveConfig const& cfg, void* input,
                             void* output);
 

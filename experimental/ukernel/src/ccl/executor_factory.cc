@@ -90,6 +90,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     return comm->same_host(peer);
   };
 
+  ex->start();
   fprintf(stderr, "[FACTORY] done rank=%d\n", config.rank);
   return ex;
 }

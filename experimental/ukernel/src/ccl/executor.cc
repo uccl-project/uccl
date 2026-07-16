@@ -72,7 +72,7 @@ uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
 }
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
-                             BatchBackend* signal_be, int world_size)
+                              BatchBackend* signal_be, int world_size)
     : device_be_(device_be),
       tpt_be_(tpt_be),
       signal_be_(signal_be),
@@ -87,7 +87,9 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
   char const* pc = std::getenv("UK_CCL_PATH_COUNTERS");
   path_counters_enabled_ =
       (pc && (strcmp(pc, "1") == 0 || strcmp(pc, "true") == 0));
+}
 
+void SprayExecutor::start() {
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
   pthread_setname_np(enqueue_th_.native_handle(), "ucl-enq");
   if (device_be_) {

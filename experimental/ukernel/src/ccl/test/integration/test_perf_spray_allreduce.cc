@@ -65,8 +65,7 @@ int main(int argc, char** argv) {
     GPU_RT_CHECK(gpuStreamDestroy(s));
   };
 
-  // size_t sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 268435456, 536870912};
-  size_t sizes[] = {262144, 1048576, 4194304, 16777216};
+  size_t sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 268435456, 536870912};
   constexpr int kSizes = sizeof(sizes) / sizeof(sizes[0]);
   constexpr int kWarmup = 5;
   constexpr int kIters = 20;
