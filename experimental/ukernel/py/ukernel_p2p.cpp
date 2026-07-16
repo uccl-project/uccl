@@ -232,7 +232,7 @@ class Communicator {
   void wait_one(unsigned rid) {
     while (true) {
       CompletionResult r[1];
-      size_t n = comm_->try_complete(r, 1);
+      size_t n = comm_->try_complete_put(r, 1);
       if (n == 1 && r[0].rid == rid) return;
       std::this_thread::yield();
     }
