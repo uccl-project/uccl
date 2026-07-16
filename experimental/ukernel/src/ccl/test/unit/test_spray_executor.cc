@@ -80,8 +80,8 @@ class CtlBackend final : public BatchBackend {
 static constexpr ExecOpKind kAnyKind = static_cast<ExecOpKind>(~0u);
 
 static bool submit_and_wait(SprayExecutor& ex, CollectiveConfig const& cfg,
-                            void* in, void* out, void* scr) {
-  auto h = ex.submit(cfg, in, out, scr);
+                            void* in, void* out) {
+  auto h = ex.submit(cfg, in, out);
   if (h == kInvalidHandle) return false;
   bool done = ex.wait(h, std::chrono::milliseconds(5000));
   if (!done) return false;
@@ -104,7 +104,7 @@ void test_path_priority() {
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 4);
   auto cfg = Testing::make_test_config(4, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
-  assert(submit_and_wait(*ex, cfg, in.data(), out.data(), scr.data()));
+  assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
   // Reduce tiles → device, Put tiles → transport (priority dispatch)
   assert(dev.enqueued_count() > 0);   // Reduce via device
   assert(tpt.enqueued_count() > 0);   // Put via transport
@@ -121,7 +121,7 @@ void test_reduce_device_only() {
   // AllReduceRing produces both Put and Reduce tiles
   auto cfg = Testing::make_test_config(4, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
-  assert(submit_and_wait(*ex, cfg, in.data(), out.data(), scr.data()));
+  assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
   size_t nd = dev.enqueued_count(), nt = tpt.enqueued_count();
   printf("  device: %zu, transport: %zu", nd, nt);
   assert(nd > 0);   // Reduce goes to device
@@ -138,7 +138,7 @@ void test_deferred_requeue() {
   auto cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
 
-  auto h = ex->submit(cfg, in.data(), out.data(), scr.data());
+  auto h = ex->submit(cfg, in.data(), out.data());
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   // Device has capacity for Reduce; transport is full — some tiles deferred
   printf("  initially: device=%zu transport=%zu\n",
@@ -163,9 +163,9 @@ void test_concurrent() {
   auto cfg = Testing::make_test_config(2, 0, 128, 32);
   std::vector<uint8_t> in(128), out(128), scr(128);
 
-  auto h1 = ex->submit(cfg, in.data(), out.data(), scr.data());
-  auto h2 = ex->submit(cfg, in.data(), out.data(), scr.data());
-  auto h3 = ex->submit(cfg, in.data(), out.data(), scr.data());
+  auto h1 = ex->submit(cfg, in.data(), out.data());
+  auto h2 = ex->submit(cfg, in.data(), out.data());
+  auto h3 = ex->submit(cfg, in.data(), out.data());
   assert(ex->wait(h1, std::chrono::milliseconds(5000)) &&
          ex->wait(h2, std::chrono::milliseconds(5000)) &&
          ex->wait(h3, std::chrono::milliseconds(5000)));
@@ -185,7 +185,7 @@ void test_signal_backend() {
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
   auto cfg = Testing::make_test_config(2, 0, 128, 32);
   std::vector<uint8_t> in(128), out(128), scr(128);
-  assert(submit_and_wait(*ex, cfg, in.data(), out.data(), scr.data()));
+  assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
   assert(sig.enqueued_count() > 0);
   printf("  signal enqueued: %zu — PASSED\n", sig.enqueued_count());
 }

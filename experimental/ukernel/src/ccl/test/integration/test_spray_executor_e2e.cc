@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
   ar.kind = CollKind::AllReduceRing;
 
   std::printf("[e2e] submit AllReduce 4MB non-inplace...\n");
-  auto h = ex->submit(ar, d_in, d_out, d_scr);
+  auto h = ex->submit(ar, d_in, d_out);
 
   bool passed = false;
   for (int p = 0; p < 120; ++p) {

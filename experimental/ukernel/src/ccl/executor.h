@@ -84,6 +84,10 @@ struct SprayRun {
     if (count < 1024) count = 1024;  // floor: avoid overflow under burst
     size_t sz = jring_get_buf_ring_size(sizeof(uint32_t), count);
     ready_ring = static_cast<jring_t*>(calloc(1, sz));
+    if (!ready_ring) {
+      std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);
+      std::abort();
+    }
     jring_init(ready_ring, count, sizeof(uint32_t), 1, 0);  // MP/SC
   }
 
@@ -243,7 +247,7 @@ class SprayExecutor {
   SprayExecutor& operator=(SprayExecutor const&) = delete;
 
   CollectiveOpHandle submit(CollectiveConfig const& cfg, void* input,
-                            void* output, void* scratch);
+                            void* output);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
@@ -332,6 +336,10 @@ class SprayExecutor {
   std::unique_ptr<BatchBackend> owned_transport_;
   std::unique_ptr<BatchBackend> owned_signal_;
   std::shared_ptr<Transport::Communicator> owned_comm_;
+
+  // Lazy-allocated scratch buffer for inplace staging (managed internally).
+  void* internal_scratch_ = nullptr;
+  size_t internal_scratch_cap_ = 0;
 
   std::thread enqueue_th_;
   std::thread drain_th_dev_;

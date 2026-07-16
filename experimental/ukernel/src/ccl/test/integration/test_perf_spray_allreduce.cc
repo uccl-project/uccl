@@ -1,4 +1,4 @@
-// SprayExecutor AllReduce throughput benchmark.
+// SprayExecutor collective throughput benchmark (AllReduce / AllToAll).
 
 #include "coll_config.h"
 #include "executor.h"
@@ -36,11 +36,15 @@ int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role != "server" && role != "client") {
-    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU]\n");
+    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU] [--kind=allreduce|alltoall]\n");
     return 1;
   }
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
+  std::string kind_str = get_arg(argc, argv, "--kind", "allreduce");
+  CollKind coll_kind = (kind_str == "alltoall") ? CollKind::AllToAllPairwise
+                                                : CollKind::AllReduceRing;
+  bool inplace = (coll_kind == CollKind::AllToAllPairwise);
   int port = 16998;
 
   GPU_RT_CHECK(gpuSetDevice(gpu));
@@ -49,6 +53,7 @@ int main(int argc, char** argv) {
   cfg.gpu_id = gpu; cfg.rank = rank; cfg.world_size = 2;
   cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : "127.0.0.1";
   cfg.exchanger_port = port; cfg.local_id = rank;
+  cfg.max_device_fifos = 1;
   auto ex = SprayExecutor::create(cfg);
 
   // Synchronous memset helper — avoids async gpuMemset racing with RDMA writes.
@@ -60,33 +65,35 @@ int main(int argc, char** argv) {
     GPU_RT_CHECK(gpuStreamDestroy(s));
   };
 
-  size_t sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 268435456, 536870912};
+  // size_t sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 268435456, 536870912};
+  size_t sizes[] = {262144, 1048576, 4194304, 16777216};
   constexpr int kSizes = sizeof(sizes) / sizeof(sizes[0]);
   constexpr int kWarmup = 5;
   constexpr int kIters = 20;
   size_t max_bytes = sizes[kSizes - 1];
 
-  void *d_in = nullptr, *d_out = nullptr, *d_scr = nullptr;
+  void *d_in = nullptr, *d_out = nullptr;
   GPU_RT_CHECK(gpuMalloc(&d_in, max_bytes));
-  GPU_RT_CHECK(gpuMalloc(&d_out, max_bytes));
-  GPU_RT_CHECK(gpuMalloc(&d_scr, max_bytes));
+  if (inplace) {
+    d_out = d_in;
+  } else {
+    GPU_RT_CHECK(gpuMalloc(&d_out, max_bytes));
+  }
 
   // Register buffers with their full capacity so any sub-range
   // offset used by a smaller collective remains within the MR.
   ex->get_or_register_buf(d_in, max_bytes);
-  ex->get_or_register_buf(d_out, max_bytes);
-  ex->get_or_register_buf(d_scr, max_bytes);
+  if (!inplace) ex->get_or_register_buf(d_out, max_bytes);
 
   // Handshake: one warm AllReduce to establish peer paths on both sides.
   {
-    sync_memset(d_in, 0, 65536);
-    sync_memset(d_out, 0, 65536);
-    sync_memset(d_scr, 0, 65536);
     CollectiveConfig hs;
     hs.nranks = 2; hs.rank = rank;
     hs.input_bytes = 65536; hs.output_bytes = 65536;
     hs.tile_bytes = 65536; hs.kind = CollKind::AllReduceRing;
-    auto h = ex->submit(hs, d_in, d_out, d_scr);
+    sync_memset(d_in, 0, 65536);
+    sync_memset(d_out, 0, 65536);
+    auto h = ex->submit(hs, d_in, d_out);
     while (ex->status(h) != CollectiveOpStatus::Completed)
       std::this_thread::yield();
     ex->release(h);
@@ -102,13 +109,12 @@ int main(int argc, char** argv) {
       CollectiveConfig ar;
       ar.nranks = 2; ar.rank = rank;
       ar.input_bytes = bytes; ar.output_bytes = bytes;
-      ar.tile_bytes = tile_bytes; ar.kind = CollKind::AllReduceRing;
+      ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
 
       for (int w = 0; w < kWarmup; ++w) {
         sync_memset(d_in, 0, bytes);
         sync_memset(d_out, 0, bytes);
-        sync_memset(d_scr, 0, bytes);
-        auto h = ex->submit(ar, d_in, d_out, d_scr);
+        auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
           std::this_thread::yield();
         ex->release(h);
@@ -119,9 +125,8 @@ int main(int argc, char** argv) {
       for (int iter = 0; iter < kIters; ++iter) {
         sync_memset(d_in, 0, bytes);
         sync_memset(d_out, 0, bytes);
-        sync_memset(d_scr, 0, bytes);
         auto t0 = std::chrono::high_resolution_clock::now();
-        auto h = ex->submit(ar, d_in, d_out, d_scr);
+        auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
           std::this_thread::yield();
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -133,6 +138,7 @@ int main(int argc, char** argv) {
       if (show_counters) after = ex->get_path_counters();
       double avg_us = total_us / kIters;
       double bw_gbs = (bytes * 2.0) / (avg_us * 1e3);
+      if (coll_kind == CollKind::AllToAllPairwise) bw_gbs = bytes / (avg_us * 1e3);
       char const* unit;
       double sz;
       if (bytes >= 1ul << 30) { unit = "GB"; sz = bytes / (double)(1ul << 30); }
@@ -147,7 +153,8 @@ int main(int argc, char** argv) {
       }
       fflush(stdout);
     }
-    std::printf("\nSprayExecutor AllReduce benchmark done\n");
+    std::printf("\nSprayExecutor %s benchmark done\n",
+                (coll_kind == CollKind::AllToAllPairwise) ? "AllToAll" : "AllReduce");
   } else {
     constexpr size_t kMaxTiles = 256;
     for (int si = 0; si < kSizes; ++si) {
@@ -156,12 +163,11 @@ int main(int argc, char** argv) {
       CollectiveConfig ar;
       ar.nranks = 2; ar.rank = rank;
       ar.input_bytes = bytes; ar.output_bytes = bytes;
-      ar.tile_bytes = tile_bytes; ar.kind = CollKind::AllReduceRing;
+      ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
       for (int i = 0; i < kWarmup + kIters; ++i) {
         sync_memset(d_in, 0, bytes);
         sync_memset(d_out, 0, bytes);
-        sync_memset(d_scr, 0, bytes);
-        auto h = ex->submit(ar, d_in, d_out, d_scr);
+        auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
           std::this_thread::yield();
         ex->release(h);
@@ -173,7 +179,6 @@ int main(int argc, char** argv) {
   // references to GPU buffers.
   ex.reset();
   GPU_RT_CHECK(gpuFree(d_in));
-  GPU_RT_CHECK(gpuFree(d_out));
-  GPU_RT_CHECK(gpuFree(d_scr));
+  if (!inplace) GPU_RT_CHECK(gpuFree(d_out));
   return 0;
 }

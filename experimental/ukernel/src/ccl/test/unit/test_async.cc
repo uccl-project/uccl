@@ -83,7 +83,7 @@ void test_executor_allreduce_async() {
   std::vector<uint8_t> out(1024, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data());
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
@@ -121,7 +121,7 @@ void test_executor_alltoall_async() {
   std::vector<uint8_t> out(512, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data());
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
@@ -152,9 +152,9 @@ void test_executor_multiple_submits() {
   std::vector<uint8_t> out(256, 0);
   std::vector<uint8_t> scratch(256, 0);
 
-  auto h1 = ex->submit(cfg, in.data(), out.data(), scratch.data());
-  auto h2 = ex->submit(cfg, in.data(), out.data(), scratch.data());
-  auto h3 = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h1 = ex->submit(cfg, in.data(), out.data());
+  auto h2 = ex->submit(cfg, in.data(), out.data());
+  auto h3 = ex->submit(cfg, in.data(), out.data());
 
   // With auto-complete, runs may finish very fast; just verify all complete
   bool d1 = ex->wait(h1, std::chrono::milliseconds(5000));
@@ -181,7 +181,7 @@ void test_executor_run_tiled_sync() {
   std::vector<uint8_t> out(cfg.output_bytes, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data());
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
 
@@ -207,7 +207,7 @@ void test_executor_active_count() {
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scratch(256);
-  auto h = ex->submit(cfg, in.data(), out.data(), scratch.data());
+  auto h = ex->submit(cfg, in.data(), out.data());
   // With auto-complete, run may already be done; just verify wait succeeds
   ex->wait(h, std::chrono::milliseconds(5000));
   // Let drain threads finish processing so active_runs_ settles to 0

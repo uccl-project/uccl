@@ -120,6 +120,7 @@ SprayExecutor::~SprayExecutor() {
   owned_device_.reset();
   owned_transport_.reset();
   owned_signal_.reset();
+  if (internal_scratch_) { GPU_RT_CHECK(gpuFree(internal_scratch_)); }
 }
 
 SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
@@ -152,8 +153,7 @@ std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
 }
 
 CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
-                                         void* input, void* output,
-                                         void* scratch) {
+                                         void* input, void* output) {
   TiledResult tiled = build_tiled(cfg, input == output);
 
   uint32_t in_id = 0, out_id = 0, scr_id = 0;
@@ -161,11 +161,20 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     peer_setup_fn_(owned_comm_.get(), cfg.rank, world_size_);
   }
 
+  // Allocate or grow internal scratch buffer as needed.
+  if (tiled.staging_bytes_required > 0) {
+    if (tiled.staging_bytes_required > internal_scratch_cap_) {
+      if (internal_scratch_) GPU_RT_CHECK(gpuFree(internal_scratch_));
+      internal_scratch_cap_ = tiled.staging_bytes_required;
+      GPU_RT_CHECK(gpuMalloc(&internal_scratch_, internal_scratch_cap_));
+    }
+  }
+
   if (owned_comm_) {
     in_id = get_or_register_buf(input, tiled.input_bytes);
     out_id = get_or_register_buf(output, tiled.output_bytes);
-    if (scratch && tiled.staging_bytes_required > 0)
-      scr_id = get_or_register_buf(scratch, tiled.staging_bytes_required);
+    if (internal_scratch_ && tiled.staging_bytes_required > 0)
+      scr_id = get_or_register_buf(internal_scratch_, tiled.staging_bytes_required);
 
     for (int p = 0; p < world_size_; ++p) {
       if (p == cfg.rank) continue;
@@ -392,7 +401,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       continue;
     }
 
-    if (c.kind == ExecOpKind::Put && c.put_path != PutPath::Device) {
+    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u &&
+        c.put_path != PutPath::Device) {
       run.tpt_cmds.push_back(c);
       tpt_idx.push_back(idx);
     } else {
