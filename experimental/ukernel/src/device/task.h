@@ -275,13 +275,18 @@ class TaskManager {
     std::lock_guard<std::mutex> g(task_mu_);
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_task_ && "free_task_args idx out of range");
-    assert(task_in_use_[idx] == 1 && "double free on task args slot");
+    if (task_in_use_[idx] == 0) {
+      std::fprintf(stderr,
+                   "[TaskManager] WARNING: double free on task args slot %u\n",
+                   idx);
+      return;
+    }
     task_in_use_[idx] = 0;
     free_task_.push_back(idx);
     // Clear the publish marker on GPU so the slot is not seen as published
     uint64_t zero = 0;
     GPU_RT_CHECK(gpuMemcpy(&d_task_[idx].reserved0, &zero, sizeof(zero),
-                           gpuMemcpyHostToDevice));
+                            gpuMemcpyHostToDevice));
   }
 
   // GPU: get args pointer by index

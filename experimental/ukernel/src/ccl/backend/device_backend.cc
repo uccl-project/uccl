@@ -66,6 +66,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
     args.dst_rank = (c.dst_peer != ~0u) ? (int)c.dst_peer : -1;
     args.src_device = device_idx_;
     args.dst_device = device_idx_;
+    bool src_ok = (c.src_buf == 0), dst_ok = (c.dst_buf == 0);
 
     if (c.src_buf > 0) {
       if (c.src_peer != ~0u && comm_) {
@@ -80,22 +81,26 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
         }
         if (cached) {
           args.src = (char*)cached + c.src_off;
+          src_ok = true;
         } else if (comm_->try_resolve_remote_ipc_pointer(
                        (int)c.src_peer, c.src_buf, c.src_off, c.bytes, &cached,
                        &args.src_device)) {
           resolved_remote_cache_.push_back(
               {(int)c.src_peer, c.src_buf, cached, args.src_device});
           args.src = (char*)cached + c.src_off;
+          src_ok = true;
         }
       } else if (comm_) {
         if (c.src_buf < kMaxLocalBufs && local_ptr_cache_[c.src_buf]) {
           args.src = (char*)local_ptr_cache_[c.src_buf] + c.src_off;
+          src_ok = true;
         } else {
           auto ipc = comm_->get_ipc(c.src_buf);
           void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
           if (ptr) {
             if (c.src_buf < kMaxLocalBufs) local_ptr_cache_[c.src_buf] = ptr;
             args.src = (char*)ptr + c.src_off;
+            src_ok = true;
           }
         }
       }
@@ -114,6 +119,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
         if (cached) {
           args.dst = (char*)cached + c.dst_off;
           args.dst_device = cached_dev;
+          dst_ok = true;
         } else if (comm_->try_resolve_remote_ipc_pointer(
                        (int)c.dst_peer, c.dst_buf, c.dst_off, c.bytes, &cached,
                        &cached_dev)) {
@@ -121,16 +127,19 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
               {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
           args.dst = (char*)cached + c.dst_off;
           args.dst_device = cached_dev;
+          dst_ok = true;
         }
       } else if (comm_) {
         if (c.dst_buf < kMaxLocalBufs && local_ptr_cache_[c.dst_buf]) {
           args.dst = (char*)local_ptr_cache_[c.dst_buf] + c.dst_off;
+          dst_ok = true;
         } else {
           auto ipc = comm_->get_ipc(c.dst_buf);
           void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
           if (ptr) {
             if (c.dst_buf < kMaxLocalBufs) local_ptr_cache_[c.dst_buf] = ptr;
             args.dst = (char*)ptr + c.dst_off;
+            dst_ok = true;
           }
         }
       }
@@ -151,6 +160,15 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
       default:
         ++accepted;
         continue;
+    }
+
+    if (!src_ok || !dst_ok) {
+      throw std::runtime_error(
+          std::string("[DeviceBackend] unresolved buffer ptr src_ok=") +
+          std::to_string((int)src_ok) +
+          " dst_ok=" + std::to_string((int)dst_ok) +
+          " src_buf=" + std::to_string(c.src_buf) +
+          " dst_buf=" + std::to_string(c.dst_buf));
     }
 
     // Reserve slot + fid under lock (cheap), heavy ops outside
