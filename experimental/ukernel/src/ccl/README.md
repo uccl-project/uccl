@@ -197,7 +197,7 @@ nvidia-smi | grep test_perf
 # server
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
 # client
-UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall --inplace=1
+UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall
 ```
 
 ### Run everything
