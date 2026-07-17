@@ -154,25 +154,60 @@ std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
   return it != runs_.end() ? it->second->error : std::string{};
 }
 
+void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
+                            void* output) {
+  if (!owned_comm_ || !peer_setup_fn_) return;
+
+  // Derive needed peers from the algorithm DAG.
+  CollAlgo algo = build_coll_algo(cfg, input == output);
+  std::vector<int> peers;
+  for (auto const& ch : algo.chunks) {
+    if (ch.src_rank >= 0)
+      peers.push_back(ch.src_rank);
+    if (ch.dst_rank >= 0)
+      peers.push_back(ch.dst_rank);
+  }
+  // Deduplicate and sort.
+  std::sort(peers.begin(), peers.end());
+  peers.erase(std::unique(peers.begin(), peers.end()), peers.end());
+
+  peer_setup_fn_(owned_comm_.get(), cfg.rank, peers);
+  owned_comm_->re_register_all_mrs();
+  prepared_peers_.insert(peers.begin(), peers.end());
+  prepared_ = true;
+
+  // Register and resolve user buffers.
+  uint32_t in_id = get_or_register_buf(input, cfg.input_bytes);
+  uint32_t out_id = get_or_register_buf(output, cfg.output_bytes);
+  for (int p : peers) {
+    if (in_id && resolve_buf_fn_)
+      resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
+    if (out_id && out_id != in_id && resolve_buf_fn_)
+      resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
+  }
+
+  prepared_ = true;
+}
+
 CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
                                          void* input, void* output) {
-  TiledResult tiled = build_tiled(cfg, input == output);
-
-  uint32_t in_id = 0, out_id = 0, scr_id = 0;
-  if (owned_comm_ && peer_setup_fn_) {
-    fprintf(stderr, "[EXEC] rank=%d: peer_setup_fn_ start\n", cfg.rank);
-    fflush(stderr);
-    peer_setup_fn_(owned_comm_.get(), cfg.rank, world_size_);
-    fprintf(stderr, "[EXEC] rank=%d: peer_setup_fn_ done\n", cfg.rank);
-    fflush(stderr);
-    // Re-publish any MRs that were registered before the RDMA adapter was ready.
-    owned_comm_->re_register_all_mrs();
+  if (owned_comm_ && !prepared_) {
+    // Check all peers needed by this algorithm are prepared.
+    CollAlgo algo = build_coll_algo(cfg, input == output);
+    for (auto const& ch : algo.chunks) {
+      if (ch.src_rank >= 0 && !prepared_peers_.count(ch.src_rank))
+        throw std::runtime_error("prepare() not called for peer " +
+                                 std::to_string(ch.src_rank));
+      if (ch.dst_rank >= 0 && !prepared_peers_.count(ch.dst_rank))
+        throw std::runtime_error("prepare() not called for peer " +
+                                 std::to_string(ch.dst_rank));
+    }
   }
+
+  TiledResult tiled = build_tiled(cfg, input == output);
 
   // Allocate or grow internal scratch buffer as needed.
   if (tiled.staging_bytes_required > 0) {
-    fprintf(stderr, "[EXEC] rank=%d: staging %zu bytes\n", cfg.rank, tiled.staging_bytes_required);
-    fflush(stderr);
     if (tiled.staging_bytes_required > internal_scratch_cap_) {
       if (internal_scratch_) GPU_RT_CHECK(gpuFree(internal_scratch_));
       internal_scratch_cap_ = tiled.staging_bytes_required;
@@ -180,26 +215,12 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     }
   }
 
+  uint32_t in_id = 0, out_id = 0, scr_id = 0;
   if (owned_comm_) {
     in_id = get_or_register_buf(input, tiled.input_bytes);
     out_id = get_or_register_buf(output, tiled.output_bytes);
     if (internal_scratch_ && tiled.staging_bytes_required > 0)
       scr_id = get_or_register_buf(internal_scratch_, tiled.staging_bytes_required);
-
-    fprintf(stderr, "[EXEC] rank=%d: resolving buffers...\n", cfg.rank);
-    fflush(stderr);
-    for (int p = 0; p < world_size_; ++p) {
-      if (p == cfg.rank) continue;
-      if (in_id && resolve_buf_fn_) {
-        fprintf(stderr, "[EXEC] rank=%d: resolve buf %u from peer %d\n", cfg.rank, in_id, p);
-        fflush(stderr);
-        resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
-      }
-      if (out_id && out_id != in_id && resolve_buf_fn_)
-        resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
-    }
-    fprintf(stderr, "[EXEC] rank=%d: buffers resolved\n", cfg.rank);
-    fflush(stderr);
   }
 
   std::lock_guard lock(runs_mutex_);

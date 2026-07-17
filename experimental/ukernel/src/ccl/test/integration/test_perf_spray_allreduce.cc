@@ -81,10 +81,14 @@ int main(int argc, char** argv) {
     GPU_RT_CHECK(gpuMalloc(&d_out, max_bytes));
   }
 
-  // Register buffers with their full capacity so any sub-range
-  // offset used by a smaller collective remains within the MR.
-  ex->get_or_register_buf(d_in, max_bytes);
-  if (!inplace) ex->get_or_register_buf(d_out, max_bytes);
+  // Prepare connections and buffer resources.
+  {
+    CollectiveConfig prep;
+    prep.nranks = 2; prep.rank = rank;
+    prep.input_bytes = max_bytes; prep.output_bytes = max_bytes;
+    prep.tile_bytes = 65536; prep.kind = coll_kind;
+    ex->prepare(prep, d_in, d_out);
+  }
 
   // Handshake: one warm AllReduce to establish peer paths on both sides.
   {

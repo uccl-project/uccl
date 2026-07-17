@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
   ar.tile_bytes = 65536;
   ar.kind = CollKind::AllReduceRing;
 
+  ex->prepare(ar, d_in, d_out);
+
   std::printf("[e2e] submit AllReduce 4MB non-inplace...\n");
   auto h = ex->submit(ar, d_in, d_out);
 

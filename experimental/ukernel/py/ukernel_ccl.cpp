@@ -187,6 +187,7 @@ class ProcessGroup {
     cfg.dtype = dtype;
 
     void* ptr = flat.data_ptr();
+    ensure_prepared(cfg, ptr, ptr);
     auto h = executor_->submit(cfg, ptr, ptr);
     wait_collective(*executor_, h);
     executor_->release(h);
@@ -240,6 +241,7 @@ class ProcessGroup {
 
     void* out_ptr = out_flat.data_ptr();
     void* in_ptr = in_flat.data_ptr();
+    ensure_prepared(cfg, in_ptr, out_ptr);
     auto h = executor_->submit(cfg, in_ptr, out_ptr);
     wait_collective(*executor_, h);
     executor_->release(h);
@@ -260,6 +262,11 @@ class ProcessGroup {
   }
 
  private:
+  void ensure_prepared(CollectiveConfig const& cfg, void* input, void* output) {
+    executor_->prepare(cfg, input, output);
+    prepared_ = true;
+  }
+
   void allreduce_internal(torch::Tensor tensor, uint32_t reduction,
                           size_t tile_bytes) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -287,6 +294,7 @@ class ProcessGroup {
     cfg.reduction = to_reduction(reduction);
 
     void* ptr = flat.data_ptr();
+    ensure_prepared(cfg, ptr, ptr);
     auto h = executor_->submit(cfg, ptr, ptr);
     wait_collective(*executor_, h);
     executor_->release(h);
@@ -297,6 +305,7 @@ class ProcessGroup {
   int gpu_id_;
   std::unique_ptr<SprayExecutor> executor_;
   torch::Tensor barrier_tensor_;
+  bool prepared_ = false;
   std::mutex mu_;
 };
 

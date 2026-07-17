@@ -8,6 +8,7 @@
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <algorithm>
+#include <thread>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -1353,8 +1354,11 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
     {
       std::lock_guard<std::mutex> lk(resource_mu_);
       auto it = remote_buffer_to_mr_.find(owner_rank);
-      if (it != remote_buffer_to_mr_.end() && it->second.count(buffer_id))
-        return true;
+      if (it != remote_buffer_to_mr_.end()) {
+        auto jt = it->second.find(buffer_id);
+        if (jt != it->second.end() && jt->second.key != 0)
+          return true;
+      }
     }
 
     if (timeout_ms >= 0) {
@@ -1678,8 +1682,25 @@ bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
-  return wait_mr(peer_rank, buffer_id, timeout_ms) &&
-         wait_ipc(peer_rank, buffer_id, timeout_ms);
+  if (!wait_mr(peer_rank, buffer_id, timeout_ms) ||
+      !wait_ipc(peer_rank, buffer_id, timeout_ms))
+    return false;
+  // If the MR was published with rkey=0 (RDMA adapter not yet ready at publish
+  // time), wait for a re-publish with the correct rkey.
+  for (int retry = 0; retry < 10; ++retry) {
+    MR mr = get_mr(peer_rank, buffer_id);
+    if (mr.key != 0) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!wait_mr(peer_rank, buffer_id, timeout_ms >= 0 ? timeout_ms : 30000))
+      break;
+    // Force re-poll by clearing gen cache
+    {
+      std::lock_guard<std::mutex> lk(mr_gen_mu_);
+      last_mr_generation_.erase(
+          (uint64_t(peer_rank) << 32) | buffer_id);
+    }
+  }
+  return true;
 }
 
 }  // namespace Transport

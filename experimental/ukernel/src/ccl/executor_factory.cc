@@ -64,8 +64,8 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     comm->register_buffer(id, ptr, len);
   };
   ex->peer_setup_fn_ = [](Transport::Communicator* comm, int rank,
-                          int world_size) {
-    for (int p = 0; p < world_size; ++p) {
+                          std::vector<int> const& peers) {
+    for (int p : peers) {
       if (p == rank) continue;
       bool same = comm->same_host(p);
 

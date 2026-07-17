@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -253,6 +254,12 @@ class SprayExecutor {
   CollectiveOpHandle submit(CollectiveConfig const& cfg, void* input,
                             void* output);
 
+  // Prepare peer connections and buffer resources for the given
+  // collective.  Must be called once before the first submit().
+  // Derives needed peers from the algorithm DAG so only relevant
+  // IPC / RDMA links are established.
+  void prepare(CollectiveConfig const& cfg, void* input, void* output);
+
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
   bool wait(CollectiveOpHandle h,
@@ -328,7 +335,8 @@ class SprayExecutor {
   // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
                            size_t) = nullptr;
-  void (*peer_setup_fn_)(Transport::Communicator*, int, int) = nullptr;
+  void (*peer_setup_fn_)(Transport::Communicator*, int,
+                         std::vector<int> const&) = nullptr;
   void (*resolve_buf_fn_)(Transport::Communicator*, int, int, uint32_t) =
       nullptr;
   bool (*same_host_fn_)(Transport::Communicator*, int) = nullptr;
@@ -344,6 +352,9 @@ class SprayExecutor {
   // Lazy-allocated scratch buffer for inplace staging (managed internally).
   void* internal_scratch_ = nullptr;
   size_t internal_scratch_cap_ = 0;
+
+  bool prepared_ = false;
+  std::set<int> prepared_peers_;
 
   std::thread enqueue_th_;
   std::thread drain_th_dev_;
