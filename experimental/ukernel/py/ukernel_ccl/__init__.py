@@ -15,88 +15,27 @@ class ReduceOp(IntEnum):
     BAND = 5
 
 
-_REDUCE_NAME_MAP = {
-    "SUM": ReduceOp.SUM,
-    "PRODUCT": ReduceOp.PRODUCT,
-    "PROD": ReduceOp.PRODUCT,
-    "MAX": ReduceOp.MAX,
-    "MIN": ReduceOp.MIN,
-    "BAND": ReduceOp.BAND,
-}
-
 _ARITHMETIC_DTYPES = {
-    torch.int8,
-    torch.int32,
-    torch.int64,
-    torch.float16,
-    torch.float32,
-    torch.float64,
-    torch.bfloat16,
-}
-
-_BITWISE_DTYPES = {
-    torch.int8,
-    torch.int32,
-    torch.int64,
+    torch.int8, torch.int32, torch.int64,
+    torch.float16, torch.float32, torch.float64, torch.bfloat16,
 }
 
 
-def _canonical_reduce_op(op) -> ReduceOp:
-    if isinstance(op, ReduceOp):
-        return op
-    if isinstance(op, int):
-        return ReduceOp(op)
-    name = getattr(op, "name", None)
-    if isinstance(name, str):
-        mapped = _REDUCE_NAME_MAP.get(name.upper())
-        if mapped is not None:
-            return mapped
-    raise ValueError(f"unsupported reduce op: {op!r}")
-
-
-def _validate_reduce_dtype(op: ReduceOp, tensor: torch.Tensor) -> None:
-    if op == ReduceOp.BAND:
-        if tensor.dtype not in _BITWISE_DTYPES:
-            raise ValueError(
-                "ReduceOp.BAND currently supports int8/int32/int64 tensors"
-            )
-        return
+def _validate_reduce_dtype(tensor: torch.Tensor) -> None:
     if tensor.dtype not in _ARITHMETIC_DTYPES:
-        raise ValueError(
-            "all_reduce currently supports int8/int32/int64/fp16/fp32/fp64/bf16 tensors"
-        )
+        raise ValueError("allreduce supports int8/int32/int64/fp16/fp32/fp64/bf16")
 
 
 def _validate_alltoall_dtype(tensor: torch.Tensor) -> None:
     if tensor.dtype not in _ARITHMETIC_DTYPES:
-        raise ValueError(
-            "all_to_all currently supports int8/int32/int64/fp16/fp32/fp64/bf16 tensors"
-        )
+        raise ValueError("alltoall supports int8/int32/int64/fp16/fp32/fp64/bf16")
 
 
-def _ensure_cuda_tensor(tensor: torch.Tensor, name: str) -> None:
+def _cuda_check(tensor: torch.Tensor, name: str) -> None:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"{name} must be a torch.Tensor")
     if not tensor.is_cuda:
         raise ValueError(f"{name} must be a CUDA tensor")
-
-
-def _ensure_contiguous_tensor(tensor: torch.Tensor, name: str) -> None:
-    if not tensor.is_contiguous():
-        raise ValueError(
-            f"{name} must be contiguous; ukernel does not perform implicit payload copies"
-        )
-
-
-class Work:
-    def __init__(self, result=None):
-        self._result = result
-
-    def wait(self):
-        return self._result
-
-    def is_completed(self) -> bool:
-        return True
 
 
 class ProcessGroup:
@@ -107,25 +46,14 @@ class ProcessGroup:
         gpu_id: int,
         exchanger_ip: str = "127.0.0.1",
         exchanger_port: int = 6979,
-        transport: str = "auto",
-        device_task_capacity: int = 4096,
-        max_device_fifos: int = 8,
-        threads_per_block: int = 256,
-        fifo_capacity: int = 64,
-        smem_size: int = 0,
+        threads_per_block: int = 64,
+        blocks_per_worker: int = 1,
+        smem_size: int = 4096,
     ) -> None:
         self._impl = _ProcessGroup(
-            rank,
-            world_size,
-            gpu_id,
-            exchanger_ip,
-            exchanger_port,
-            transport,
-            device_task_capacity,
-            max_device_fifos,
-            threads_per_block,
-            fifo_capacity,
-            smem_size,
+            rank, world_size, gpu_id,
+            exchanger_ip, exchanger_port,
+            threads_per_block, blocks_per_worker, smem_size,
         )
 
     @property
@@ -140,80 +68,27 @@ class ProcessGroup:
     def gpu_id(self) -> int:
         return self._impl.gpu_id
 
-    @property
-    def backend(self) -> str:
-        return "ukernel"
+    def allreduce(self, tensor, op=ReduceOp.SUM, tile_bytes=64 << 10):
+        _cuda_check(tensor, "tensor")
+        _validate_reduce_dtype(tensor)
+        self._impl.allreduce(tensor, int(op), tile_bytes)
 
-    def all_reduce(
-        self,
-        tensor: torch.Tensor,
-        op: ReduceOp = ReduceOp.SUM,
-        async_op: bool = False,
-        tile_bytes: int = 64 << 10,
-        num_streams: int = 2,
-    ):
-        op = _canonical_reduce_op(op)
-        _ensure_cuda_tensor(tensor, "tensor")
-        _ensure_contiguous_tensor(tensor, "tensor")
-        _validate_reduce_dtype(op, tensor)
-        self._impl.allreduce(
-            tensor,
-            tile_bytes=tile_bytes,
-            num_streams=num_streams,
-        )
-        if async_op:
-            return Work(tensor)
-        return None
+    def alltoall(self, tensor, tile_bytes=64 << 10):
+        _cuda_check(tensor, "tensor")
+        _validate_alltoall_dtype(tensor)
+        self._impl.alltoall(tensor, tile_bytes)
 
-    def all_to_all_single(
-        self,
-        output: torch.Tensor,
-        input: torch.Tensor,
-        output_split_sizes=None,
-        input_split_sizes=None,
-        async_op: bool = False,
-        tile_bytes: int = 64 << 10,
-        num_streams: int = 2,
-    ):
-        _ensure_cuda_tensor(output, "output tensor")
-        _ensure_cuda_tensor(input, "input tensor")
-        _ensure_contiguous_tensor(output, "output tensor")
-        _ensure_contiguous_tensor(input, "input tensor")
-        _validate_alltoall_dtype(input)
-        if output_split_sizes is None and input_split_sizes is None:
-            self._impl.alltoall_out(
-                output, input,
-                tile_bytes=tile_bytes, num_streams=num_streams,
-            )
-        else:
-            self._impl.alltoallv_out(
-                output, input,
-                output_split_sizes or [], input_split_sizes or [],
-                tile_bytes=tile_bytes, num_streams=num_streams,
-            )
-        if async_op:
-            return _CompletedWork(output)
-        return None
+    def alltoallv(self, output, input, output_split_sizes, input_split_sizes, tile_bytes=64 << 10):
+        _cuda_check(output, "output")
+        _cuda_check(input, "input")
+        _validate_alltoall_dtype(output)
+        self._impl.alltoallv(output, input, list(output_split_sizes), list(input_split_sizes), tile_bytes)
 
-    def barrier(self, async_op: bool = False):
+    def barrier(self):
         self._impl.barrier()
-        if async_op:
-            return Work()
-        return None
-
-    def same_host(self, peer_rank: int) -> bool:
-        return self._impl.same_host(peer_rank)
-
-    def peer_transport(self, peer_rank: int) -> str:
-        return self._impl.peer_transport(peer_rank)
 
 
 _DEFAULT_GROUP: Optional[ProcessGroup] = None
-
-
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return int(value) if value else default
 
 
 def init_process_group(
@@ -224,130 +99,69 @@ def init_process_group(
     gpu_id: Optional[int] = None,
     exchanger_ip: Optional[str] = None,
     exchanger_port: Optional[int] = None,
-    transport: str = "auto",
-    device_task_capacity: int = 4096,
-    max_device_fifos: int = 8,
-    threads_per_block: int = 256,
-    fifo_capacity: int = 64,
-    smem_size: int = 0,
+    threads_per_block: int = 64,
+    blocks_per_worker: int = 1,
+    smem_size: int = 4096,
 ) -> ProcessGroup:
     global _DEFAULT_GROUP
     if backend not in ("ukernel", "ucc", "ccl"):
         raise ValueError(f"unsupported backend: {backend}")
-
-    rank = _env_int("RANK", 0) if rank is None else rank
-    world_size = _env_int("WORLD_SIZE", 1) if world_size is None else world_size
-    gpu_id = _env_int("LOCAL_RANK", rank) if gpu_id is None else gpu_id
-    exchanger_ip = (
-        os.getenv("MASTER_ADDR", "127.0.0.1") if exchanger_ip is None else exchanger_ip
-    )
-    exchanger_port = (
-        _env_int("MASTER_PORT", 29500) if exchanger_port is None else exchanger_port
-    )
-
+    rank = int(os.getenv("RANK", "0")) if rank is None else rank
+    world_size = int(os.getenv("WORLD_SIZE", "1")) if world_size is None else world_size
+    gpu_id = int(os.getenv("LOCAL_RANK", str(rank))) if gpu_id is None else gpu_id
+    exchanger_ip = os.getenv("MASTER_ADDR", "127.0.0.1") if exchanger_ip is None else exchanger_ip
+    exchanger_port = int(os.getenv("MASTER_PORT", "29500")) if exchanger_port is None else exchanger_port
     _DEFAULT_GROUP = ProcessGroup(
-        rank=rank,
-        world_size=world_size,
-        gpu_id=gpu_id,
-        exchanger_ip=exchanger_ip,
-        exchanger_port=exchanger_port,
-        transport=transport,
-        device_task_capacity=device_task_capacity,
-        max_device_fifos=max_device_fifos,
+        rank=rank, world_size=world_size, gpu_id=gpu_id,
+        exchanger_ip=exchanger_ip, exchanger_port=exchanger_port,
         threads_per_block=threads_per_block,
-        fifo_capacity=fifo_capacity,
+        blocks_per_worker=blocks_per_worker,
         smem_size=smem_size,
     )
     return _DEFAULT_GROUP
-
-
-def destroy_process_group(group: Optional[ProcessGroup] = None) -> None:
-    global _DEFAULT_GROUP
-    if group is None or group is _DEFAULT_GROUP:
-        _DEFAULT_GROUP = None
 
 
 def is_initialized() -> bool:
     return _DEFAULT_GROUP is not None
 
 
-def get_rank(group: Optional[ProcessGroup] = None) -> int:
+def get_rank(group=None) -> int:
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
+        raise RuntimeError("process group not initialized")
     return pg.rank
 
 
-def get_world_size(group: Optional[ProcessGroup] = None) -> int:
+def get_world_size(group=None) -> int:
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
+        raise RuntimeError("process group not initialized")
     return pg.world_size
 
 
-def barrier(group: Optional[ProcessGroup] = None, async_op: bool = False):
+def barrier(group=None):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.barrier(async_op=async_op)
+        raise RuntimeError("process group not initialized")
+    pg.barrier()
 
 
-def all_reduce(
-    tensor: torch.Tensor,
-    op: ReduceOp = ReduceOp.SUM,
-    group: Optional[ProcessGroup] = None,
-    async_op: bool = False,
-    *,
-    tile_bytes: int = 64 << 10,
-    num_streams: int = 2,
-):
+def allreduce(tensor, op=ReduceOp.SUM, group=None, tile_bytes=64 << 10):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.all_reduce(
-        tensor,
-        op=op,
-        async_op=async_op,
-        tile_bytes=tile_bytes,
-        num_streams=num_streams,
-    )
+        raise RuntimeError("process group not initialized")
+    pg.allreduce(tensor, op=op, tile_bytes=tile_bytes)
 
 
-def all_to_all_single(
-    output: torch.Tensor,
-    input: torch.Tensor,
-    output_split_sizes=None,
-    input_split_sizes=None,
-    group: Optional[ProcessGroup] = None,
-    async_op: bool = False,
-    *,
-    tile_bytes: int = 64 << 10,
-    num_streams: int = 2,
-):
+def alltoall(tensor, group=None, tile_bytes=64 << 10):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.all_to_all_single(
-        output,
-        input,
-        output_split_sizes=output_split_sizes,
-        input_split_sizes=input_split_sizes,
-        async_op=async_op,
-        tile_bytes=tile_bytes,
-        num_streams=num_streams,
-    )
+        raise RuntimeError("process group not initialized")
+    pg.alltoall(tensor, tile_bytes=tile_bytes)
 
 
-__all__ = [
-    "ProcessGroup",
-    "ReduceOp",
-    "Work",
-    "init_process_group",
-    "destroy_process_group",
-    "is_initialized",
-    "get_rank",
-    "get_world_size",
-    "barrier",
-    "all_reduce",
-    "all_to_all_single",
-]
+def alltoallv(output, input, output_split_sizes, input_split_sizes, group=None, tile_bytes=64 << 10):
+    pg = _DEFAULT_GROUP if group is None else group
+    if pg is None:
+        raise RuntimeError("process group not initialized")
+    pg.alltoallv(output, input, output_split_sizes, input_split_sizes, tile_bytes=tile_bytes)
