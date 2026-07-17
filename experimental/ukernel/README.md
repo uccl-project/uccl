@@ -127,6 +127,15 @@ Run Python tests (requires 2+ GPUs):
 
 ```bash
 cd experimental/ukernel/py
+
+# Build
+python setup.py build_ext --inplace
+
+# Manual two-process test
+CUDA_VISIBLE_DEVICES=6,7 RANK=0 WORLD_SIZE=2 LOCAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=29700 python test_collective.py &
+CUDA_VISIBLE_DEVICES=6,7 RANK=1 WORLD_SIZE=2 LOCAL_RANK=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=29700 python test_collective.py &
+
+# Or via torchrun
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_collective.py
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_p2p.py
 
@@ -212,35 +221,29 @@ pg = ProcessGroup(
     gpu_id=local_rank,
     exchanger_ip=os.environ.get("MASTER_ADDR", "127.0.0.1"),
     exchanger_port=int(os.environ.get("MASTER_PORT", "29500")),
-    transport="auto",
 )
 
 x = torch.randn(1024 * world + 1, device="cuda", dtype=torch.float32)
-pg.allreduce(x, tile_bytes=65536, num_streams=2)
+pg.allreduce(x, tile_bytes=65536)
 
 y = torch.randn(1024 * world, device="cuda", dtype=torch.float32)
-pg.alltoall(y, tile_bytes=65536, num_streams=2)
+pg.alltoall(y, tile_bytes=65536)  # inplace
 
 send = torch.randn(13, device="cuda", dtype=torch.float32)
 recv = torch.empty(13, device="cuda", dtype=torch.float32)
-dist.all_to_all_single(
-    recv,
-    send,
-    output_split_sizes=[4, 5, 4],
-    input_split_sizes=[4, 5, 4],
-    group=pg,
-    tile_bytes=65536,
-    num_streams=2,
-)
+pg.alltoallv(recv, send,
+             output_split_sizes=[4, 5, 4],
+             input_split_sizes=[4, 5, 4],
+             tile_bytes=65536)
 ```
 
 Current Python binding constraints:
 
 - collective payload tensors must be CUDA and contiguous
-- `allreduce` supports non-divisible element counts
-- equal-split and variable-split `all_to_all_single` are both supported
-- variable-split `all_to_all_single` requires explicit
-  `input_split_sizes/output_split_sizes` whose sums match local tensor numel
+- `allreduce` supports non-divisible element counts (inplace, input == output)
+- `alltoall` is always inplace (equal-split)
+- `alltoallv` takes separate output/input tensors with explicit split sizes
+- scratch buffer is managed internally by the executor
 
 ## Modules
 
