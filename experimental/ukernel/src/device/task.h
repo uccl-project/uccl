@@ -10,7 +10,6 @@
 #include <vector>
 #ifndef __CUDA_ARCH__
 #include "fifo/fifo_gdrcopy.hpp"
-#include <emmintrin.h>
 namespace Gdr = mscclpp::detail;
 #endif
 
@@ -258,7 +257,6 @@ class TaskManager {
 #ifndef __CUDA_ARCH__
     if (host_task_) {
       host_task_[idx] = staged;
-      _mm_sfence();
     } else {
       GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
                              gpuMemcpyHostToDevice));

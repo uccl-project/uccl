@@ -1488,23 +1488,37 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
                                    env_int_or_default("LOCAL_RANK", -1));
   }
   node_leader_ = is_node_leader();
+  fprintf(stderr, "[OOB] rank local_id=%d is_server=%d node_leader=%d ns=%s host=%s port=%d\n",
+          local_id_, (int)is_server_, (int)node_leader_, kv_namespace().c_str(),
+          host_.c_str(), port_);
+  fflush(stderr);
 
   std::string const ns = kv_namespace();
   if (node_leader_) {
     shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/true);
-    if (!shm_ || !shm_->valid()) return;
-    if (!shm_->begin_leader_run()) return;
+    if (!shm_ || !shm_->valid()) {
+      fprintf(stderr, "[OOB] shm create failed\n"); fflush(stderr);
+      return;
+    }
+    if (!shm_->begin_leader_run()) {
+      fprintf(stderr, "[OOB] shm begin_leader_run failed\n"); fflush(stderr);
+      return;
+    }
     running_.store(true, std::memory_order_release);
     socket_ = std::make_unique<SocketExchanger>(
         is_server_, host_, port_, timeout_ms, max_line_bytes,
         [this](std::string const& key, std::string const& value) {
           apply_remote_entry(key, value);
         });
+    fprintf(stderr, "[OOB] socket created, calling start()...\n"); fflush(stderr);
     if (!socket_->start()) {
+      fprintf(stderr, "[OOB] socket start failed\n"); fflush(stderr);
       running_.store(false, std::memory_order_release);
       return;
     }
+    fprintf(stderr, "[OOB] socket start ok\n"); fflush(stderr);
     if (!shm_->mark_run_ready()) {
+      fprintf(stderr, "[OOB] shm mark_run_ready failed\n"); fflush(stderr);
       running_.store(false, std::memory_order_release);
       return;
     }

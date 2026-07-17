@@ -510,7 +510,7 @@ void SprayExecutor::drain_tpt_loop() {
   while (!stop_) {
     size_t nd = tpt_be_->do_drain(be_buf, 256);
     if (nd == 0) {
-      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
+      for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
       continue;
     }
@@ -546,7 +546,7 @@ void SprayExecutor::drain_signal_loop() {
   while (!stop_) {
     size_t ns = signal_be_->do_drain(be_buf, 256);
     if (ns == 0) {
-      for (int s = 0; s < 16 && !stop_; ++s) _mm_pause();
+      for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
       continue;
     }

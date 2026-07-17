@@ -7,8 +7,6 @@ UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
-UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
-UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
@@ -36,9 +34,8 @@ CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)
 NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
-                  -lcudart -lcuda -lgflags -lz -libverbs \
-                  -lnl-3 -lnl-route-3 -lpthread \
-                  $(UCCL_RDMA_STATIC)
+                  -lcudart -lcuda -lz -libverbs \
+                  -lnl-3 -lnl-route-3 -lpthread
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
@@ -55,7 +52,6 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/shmring_exchanger.cc \
                   ../transport/adapter/tcp_adapter.cc \
-                  ../transport/adapter/uccl_adapter.cc \
                   ../transport/adapter/ipc_adapter.cc \
                   ../transport/adapter/rdma_adapter.cc \
                   ../transport/util/utils.cc
@@ -66,10 +62,9 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_memory_ipc_manager.o \
                  transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
-                 transport_adapter_shmring_exchanger.o \
-                  transport_adapter_tcp_adapter.o \
-                  transport_adapter_uccl_adapter.o \
-                  transport_adapter_ipc_adapter.o \
+                  transport_adapter_shmring_exchanger.o \
+                   transport_adapter_tcp_adapter.o \
+                   transport_adapter_ipc_adapter.o \
                   transport_adapter_rdma_adapter.o \
                   transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
@@ -166,9 +161,6 @@ test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o executor_factory.o backend
 
 test/integration/test_perf_spray_allreduce.o: test/integration/test_perf_spray_allreduce.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
-
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)

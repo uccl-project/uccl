@@ -322,7 +322,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   auto config = std::make_shared<CommunicatorConfig>();
   config->exchanger_ip = local_ip;
   config->exchanger_port = listen_port;
-  config->local_id = rank;
+  config->local_id = gpu_id;
   config->preferred_transport = preferred_transport;
 
   // Create communicator
@@ -671,7 +671,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   auto config = std::make_shared<CommunicatorConfig>();
   config->exchanger_ip = local_ip;
   config->exchanger_port = listen_port;
-  config->local_id = rank;
+  config->local_id = gpu_id;
   config->preferred_transport = preferred_transport;
 
   // Create communicator
