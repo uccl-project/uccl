@@ -45,14 +45,16 @@ int main(int argc, char** argv) {
   CollKind coll_kind = (kind_str == "alltoall") ? CollKind::AllToAllPairwise
                                                 : CollKind::AllReduceRing;
   bool inplace = (coll_kind == CollKind::AllToAllPairwise);
-  int port = 16998;
+  std::string exchanger_ip = get_arg(argc, argv, "--exchanger-ip",
+                                     (rank == 0) ? "0.0.0.0" : "127.0.0.1");
+  int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 16998);
 
   GPU_RT_CHECK(gpuSetDevice(gpu));
 
   SprayExecutorConfig cfg;
   cfg.gpu_id = gpu; cfg.rank = rank; cfg.world_size = 2;
-  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : "127.0.0.1";
-  cfg.exchanger_port = port; cfg.local_id = rank;
+  cfg.exchanger_ip = exchanger_ip;
+  cfg.exchanger_port = exchanger_port; cfg.local_id = gpu;
   cfg.max_device_fifos = 1;
   auto ex = SprayExecutor::create(cfg);
 
@@ -92,10 +94,15 @@ int main(int argc, char** argv) {
     hs.tile_bytes = 65536; hs.kind = CollKind::AllReduceRing;
     sync_memset(d_in, 0, 65536);
     sync_memset(d_out, 0, 65536);
+    fprintf(stderr, "[TEST] rank=%d: submit handshake\n", rank);
+    fflush(stderr);
     auto h = ex->submit(hs, d_in, d_out);
+    fprintf(stderr, "[TEST] rank=%d: handshake submitted, polling...\n", rank);
+    fflush(stderr);
     while (ex->status(h) != CollectiveOpStatus::Completed)
       std::this_thread::yield();
-    ex->release(h);
+    fprintf(stderr, "[TEST] rank=%d: handshake done\n", rank);
+    fflush(stderr);
   }
 
   if (rank == 1) {

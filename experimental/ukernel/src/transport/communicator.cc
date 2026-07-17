@@ -517,11 +517,20 @@ bool Communicator::ensure_path(int rank, bool is_put,
 
   // Fall through to RDMA.
   if (resolved.kind == PeerTransportKind::Rdma) {
+    fprintf(stderr, "[COMM] rank=%d: ensure_path rdma rank=%d is_put=%d\n",
+            global_rank_, rank, (int)is_put);
+    fflush(stderr);
     auto& rdma = ensure_rdma_adapter(resolved.local_meta);
     bool ready = is_put ? rdma.has_put_path(rank) : rdma.has_wait_path(rank);
     if (!ready) {
+      fprintf(stderr, "[COMM] rank=%d: exchange_rdma_peer_info rank=%d\n",
+              global_rank_, rank);
+      fflush(stderr);
       RdmaP2PInfo remote;
       if (!exchange_rdma_peer_info(rank, rdma, &remote)) return fallback();
+      fprintf(stderr, "[COMM] rank=%d: rdma setup_peer_path rank=%d\n",
+              global_rank_, rank);
+      fflush(stderr);
 
       RdmaPeerConnectSpec rspec;
       rspec.num_qps = remote.num_qps;
@@ -746,11 +755,22 @@ bool Communicator::same_host(int rank) const {
 }
 
 void Communicator::register_existing_local_mrs_with_rdma() {
-  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) {
+    fprintf(stderr, "[COMM] reg_existing_mrs: rdma not ready, skip\n");
+    fflush(stderr);
+    return;
+  }
+  fprintf(stderr, "[COMM] reg_existing_mrs: starting, %zu mrs\n",
+          mr_manager_.list_local_mrs().size());
+  fflush(stderr);
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
     void* ptr = reinterpret_cast<void*>(item.mr.address);
     size_t len = static_cast<size_t>(item.mr.length);
-    (void)ensure_rdma_memory_registered(buffer_id, ptr, len);
+    if (!ensure_rdma_memory_registered(buffer_id, ptr, len)) {
+      fprintf(stderr, "[COMM] reg_existing_mrs: RDMA mem reg failed for buf %u\n", buffer_id);
+      fflush(stderr);
+      continue;
+    }
 
     // Re-publish with correct rkey now that RDMA adapter is ready.
     // Buffers registered before the RDMA adapter was created have
@@ -848,13 +868,25 @@ bool Communicator::send_put_async_with_rid(
     int peer, uint32_t src_buf, size_t src_off,
     uint32_t dst_buf, size_t dst_off, size_t bytes,
     PeerTransportKind transport, unsigned rid) {
-  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
+  if (!ensure_path(peer, /*is_put=*/true, transport)) {
+    fprintf(stderr, "[COMM] send_put: ensure_path failed peer=%d\n", peer);
+    fflush(stderr);
+    return false;
+  }
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
-  if (!adapter) return false;
+  if (!adapter) {
+    fprintf(stderr, "[COMM] send_put: no adapter for kind=%d\n", (int)kind);
+    fflush(stderr);
+    return false;
+  }
 
   MR local_mr = get_mr(src_buf);
-  if (src_off > local_mr.length || bytes > local_mr.length - src_off) return false;
+  if (src_off > local_mr.length || bytes > local_mr.length - src_off) {
+    fprintf(stderr, "[COMM] send_put: local mr bounds fail\n");
+    fflush(stderr);
+    return false;
+  }
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src_off);
 
@@ -867,16 +899,31 @@ bool Communicator::send_put_async_with_rid(
       if (!once++) std::cerr << "[WARN] RDMA adapter not initialized" << std::endl;
       return false;
     }
-    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return false;
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) {
+      fprintf(stderr, "[COMM] send_put: rdma mem reg failed src_buf=%u\n", src_buf);
+      fflush(stderr);
+      return false;
+    }
     uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
     MR remote_mr = get_mr(peer, remote_id);
+    if (remote_mr.length == 0 || remote_mr.key == 0) {
+      fprintf(stderr, "[COMM] send_put: remote mr invalid peer=%d remote_id=%u len=%zu key=%u\n",
+              peer, remote_id, remote_mr.length, remote_mr.key);
+      fflush(stderr);
+      return false;
+    }
     void* remote_ptr = reinterpret_cast<void*>(
         static_cast<uint64_t>(remote_mr.address) + dst_off);
     rdma_adapter_->register_remote_buffer(peer, remote_id,
                                            reinterpret_cast<uint64_t>(remote_ptr),
                                            remote_mr.key);
-    return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
-                                    remote_id, bytes, rid);
+    bool ok = adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
+                                       remote_id, bytes, rid);
+    if (!ok) {
+      fprintf(stderr, "[COMM] send_put: adapter send_put_async failed\n");
+      fflush(stderr);
+    }
+    return ok;
   }
   void* remote_ptr = nullptr;
   int remote_gpu = -1;
@@ -991,10 +1038,20 @@ unsigned Communicator::send_signal_async(int peer, uint64_t tag,
 
 bool Communicator::send_signal_async_with_rid(
     int peer, uint64_t tag, PeerTransportKind transport, unsigned rid) {
-  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
+  if (!ensure_path(peer, /*is_put=*/true, transport)) {
+    fprintf(stderr, "[COMM] send_put: ensure_path failed peer=%d\n", peer);
+    fflush(stderr);
+    return false;
+  }
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  fprintf(stderr, "[COMM] send_put: kind=%d peer=%d transport=%d\n", (int)kind, peer, (int)transport);
+  fflush(stderr);
   auto* adapter = get_adapter(kind);
-  if (!adapter) return false;
+  if (!adapter) {
+    fprintf(stderr, "[COMM] send_put: no adapter for kind=%d\n", (int)kind);
+    fflush(stderr);
+    return false;
+  }
   return adapter->send_signal_async(peer, tag, rid);
 }
 
@@ -1181,8 +1238,16 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    (void)ensure_rdma_memory_registered(buffer_id, local_buf, len);
+    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) {
+      fprintf(stderr, "[COMM] reg_mr: RDMA mem reg failed for buf %u\n", buffer_id);
+      fflush(stderr);
+    }
     uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+    fprintf(stderr, "[COMM] reg_mr: buf=%u rkey=%u is_init=%d is_reg=%d\n",
+            buffer_id, rkey,
+            (int)(rdma_adapter_ && rdma_adapter_->is_initialized()),
+            (int)rdma_adapter_->is_memory_registered(buffer_id));
+    fflush(stderr);
     if (rkey != 0) {
       mr.key = rkey;
       std::lock_guard<std::mutex> lk(resource_mu_);

@@ -194,10 +194,15 @@ pkill -f test_perf_spray_allreduce
 ls /dev/shm/uk_cmpl_* 2>/dev/null && rm -f /dev/shm/uk_cmpl_*
 nvidia-smi | grep test_perf
 
-# server
+# same-node
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
-# client
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall
+
+# cross-node (server node)
+UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall --exchanger-ip=0.0.0.0 --exchanger-port=16998
+
+# cross-node (client node, replace IP with server's address)
+UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP> --exchanger-port=16998
 ```
 
 ### Run everything

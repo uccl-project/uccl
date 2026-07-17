@@ -151,6 +151,8 @@ class Communicator {
 
   int peer_gpu_idx(int rank) const;
 
+  void re_register_all_mrs() { register_existing_local_mrs_with_rdma(); }
+
  private:
   struct ResolvedPeer {
     CommunicatorMeta local_meta;

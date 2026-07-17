@@ -160,11 +160,19 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
 
   uint32_t in_id = 0, out_id = 0, scr_id = 0;
   if (owned_comm_ && peer_setup_fn_) {
+    fprintf(stderr, "[EXEC] rank=%d: peer_setup_fn_ start\n", cfg.rank);
+    fflush(stderr);
     peer_setup_fn_(owned_comm_.get(), cfg.rank, world_size_);
+    fprintf(stderr, "[EXEC] rank=%d: peer_setup_fn_ done\n", cfg.rank);
+    fflush(stderr);
+    // Re-publish any MRs that were registered before the RDMA adapter was ready.
+    owned_comm_->re_register_all_mrs();
   }
 
   // Allocate or grow internal scratch buffer as needed.
   if (tiled.staging_bytes_required > 0) {
+    fprintf(stderr, "[EXEC] rank=%d: staging %zu bytes\n", cfg.rank, tiled.staging_bytes_required);
+    fflush(stderr);
     if (tiled.staging_bytes_required > internal_scratch_cap_) {
       if (internal_scratch_) GPU_RT_CHECK(gpuFree(internal_scratch_));
       internal_scratch_cap_ = tiled.staging_bytes_required;
@@ -178,13 +186,20 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     if (internal_scratch_ && tiled.staging_bytes_required > 0)
       scr_id = get_or_register_buf(internal_scratch_, tiled.staging_bytes_required);
 
+    fprintf(stderr, "[EXEC] rank=%d: resolving buffers...\n", cfg.rank);
+    fflush(stderr);
     for (int p = 0; p < world_size_; ++p) {
       if (p == cfg.rank) continue;
-      if (in_id && resolve_buf_fn_)
+      if (in_id && resolve_buf_fn_) {
+        fprintf(stderr, "[EXEC] rank=%d: resolve buf %u from peer %d\n", cfg.rank, in_id, p);
+        fflush(stderr);
         resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
+      }
       if (out_id && out_id != in_id && resolve_buf_fn_)
         resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
     }
+    fprintf(stderr, "[EXEC] rank=%d: buffers resolved\n", cfg.rank);
+    fflush(stderr);
   }
 
   std::lock_guard lock(runs_mutex_);
@@ -196,6 +211,9 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   }
 
   auto h = next_handle_++;
+  fprintf(stderr, "[EXEC] rank=%d: submit handle=%llu nops=%zu\n", cfg.rank,
+          (unsigned long long)h, tiled.ops.size());
+  fflush(stderr);
   if (tiled.ops.empty()) {
     auto run = std::make_unique<SprayRun>();
     run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
@@ -243,6 +261,8 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   for (uint32_t i = 0; i < nops; ++i) {
     if (run->tiled.ops[i].deps.empty()) { run->push_ready(i); ++initial; }
   }
+  fprintf(stderr, "[EXEC] submit: initial=%zu\n", initial);
+  fflush(stderr);
   runs_[h] = std::move(run);
   return h;
 }
@@ -325,10 +345,10 @@ void SprayExecutor::collect_ready(SprayRun& run) {
 }
 
 void SprayExecutor::enqueue_to_ring(SprayRun& run) {
-  // Prepend deferred ops from prior cycle (preserves priority).
-  // Signal deferred ops get highest priority so peer WaitSignal unblocks
-  // promptly, avoiding head-of-line blocking from data-path backpressure.
-  {
+      // Prepend deferred ops from prior cycle (preserves priority).
+      // Signal deferred ops get highest priority so peer WaitSignal unblocks
+      // promptly, avoiding head-of-line blocking from data-path backpressure.
+      {
     run.ready.insert(run.ready.begin(), run.deferred_dev.begin(),
                      run.deferred_dev.end());
     run.ready.insert(run.ready.begin(), run.deferred_tpt.begin(),
@@ -450,11 +470,18 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 }
 
 void SprayExecutor::enqueue_loop() {
+  bool first = true;
   while (!stop_) {
     bool any = false;
     {
       std::lock_guard lock(runs_mutex_);
       for (auto& [h, run] : runs_) {
+        if (first) {
+          fprintf(stderr, "[EXEC] enqueue_loop: processing handle=%llu\n",
+                  (unsigned long long)h);
+          fflush(stderr);
+          first = false;
+        }
         if (run->status.load(std::memory_order_acquire) !=
             CollectiveOpStatus::Running)
           continue;
@@ -473,8 +500,14 @@ void SprayExecutor::enqueue_loop() {
 void SprayExecutor::drain_dev_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  bool first = true;
   while (!stop_) {
     size_t n = device_be_->do_drain(be_buf, 256);
+    if (first && n > 0) {
+      fprintf(stderr, "[EXEC] drain_dev: got %zu completions\n", n);
+      fflush(stderr);
+      first = false;
+    }
     if (n == 0) { std::this_thread::yield(); continue; }
     // Drain all available batches before checking completions,
     // so release() never races with stale backend completions.
@@ -507,8 +540,14 @@ void SprayExecutor::drain_dev_loop() {
 void SprayExecutor::drain_tpt_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  bool first = true;
   while (!stop_) {
     size_t nd = tpt_be_->do_drain(be_buf, 256);
+    if (first && nd > 0) {
+      fprintf(stderr, "[EXEC] drain_tpt: got %zu completions\n", nd);
+      fflush(stderr);
+      first = false;
+    }
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -543,8 +582,14 @@ void SprayExecutor::drain_tpt_loop() {
 void SprayExecutor::drain_signal_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  bool first = true;
   while (!stop_) {
     size_t ns = signal_be_->do_drain(be_buf, 256);
+    if (first && ns > 0) {
+      fprintf(stderr, "[EXEC] drain_signal: got %zu completions\n", ns);
+      fflush(stderr);
+      first = false;
+    }
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
