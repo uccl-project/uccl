@@ -79,18 +79,10 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
         }
       }
       if (rank < p) {
-        fprintf(stderr, "[FACTORY] rank=%d: RDMA connect to %d\n", rank, p);
-        fflush(stderr);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
-        fprintf(stderr, "[FACTORY] rank=%d: RDMA accept from %d\n", rank, p);
-        fflush(stderr);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
       } else {
-        fprintf(stderr, "[FACTORY] rank=%d: RDMA accept from %d\n", rank, p);
-        fflush(stderr);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
-        fprintf(stderr, "[FACTORY] rank=%d: RDMA connect to %d\n", rank, p);
-        fflush(stderr);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
       }
     }

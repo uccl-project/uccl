@@ -98,15 +98,10 @@ int main(int argc, char** argv) {
     hs.tile_bytes = 65536; hs.kind = CollKind::AllReduceRing;
     sync_memset(d_in, 0, 65536);
     sync_memset(d_out, 0, 65536);
-    fprintf(stderr, "[TEST] rank=%d: submit handshake\n", rank);
-    fflush(stderr);
     auto h = ex->submit(hs, d_in, d_out);
-    fprintf(stderr, "[TEST] rank=%d: handshake submitted, polling...\n", rank);
-    fflush(stderr);
     while (ex->status(h) != CollectiveOpStatus::Completed)
       std::this_thread::yield();
-    fprintf(stderr, "[TEST] rank=%d: handshake done\n", rank);
-    fflush(stderr);
+    ex->release(h);
   }
 
   if (rank == 1) {

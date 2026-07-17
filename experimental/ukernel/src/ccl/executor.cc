@@ -232,9 +232,6 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   }
 
   auto h = next_handle_++;
-  fprintf(stderr, "[EXEC] rank=%d: submit handle=%llu nops=%zu\n", cfg.rank,
-          (unsigned long long)h, tiled.ops.size());
-  fflush(stderr);
   if (tiled.ops.empty()) {
     auto run = std::make_unique<SprayRun>();
     run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
@@ -282,8 +279,6 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   for (uint32_t i = 0; i < nops; ++i) {
     if (run->tiled.ops[i].deps.empty()) { run->push_ready(i); ++initial; }
   }
-  fprintf(stderr, "[EXEC] submit: initial=%zu\n", initial);
-  fflush(stderr);
   runs_[h] = std::move(run);
   return h;
 }
@@ -491,18 +486,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 }
 
 void SprayExecutor::enqueue_loop() {
-  bool first = true;
   while (!stop_) {
     bool any = false;
     {
       std::lock_guard lock(runs_mutex_);
       for (auto& [h, run] : runs_) {
-        if (first) {
-          fprintf(stderr, "[EXEC] enqueue_loop: processing handle=%llu\n",
-                  (unsigned long long)h);
-          fflush(stderr);
-          first = false;
-        }
         if (run->status.load(std::memory_order_acquire) !=
             CollectiveOpStatus::Running)
           continue;
@@ -521,14 +509,8 @@ void SprayExecutor::enqueue_loop() {
 void SprayExecutor::drain_dev_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
-  bool first = true;
   while (!stop_) {
     size_t n = device_be_->do_drain(be_buf, 256);
-    if (first && n > 0) {
-      fprintf(stderr, "[EXEC] drain_dev: got %zu completions\n", n);
-      fflush(stderr);
-      first = false;
-    }
     if (n == 0) { std::this_thread::yield(); continue; }
     // Drain all available batches before checking completions,
     // so release() never races with stale backend completions.
@@ -561,14 +543,8 @@ void SprayExecutor::drain_dev_loop() {
 void SprayExecutor::drain_tpt_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
-  bool first = true;
   while (!stop_) {
     size_t nd = tpt_be_->do_drain(be_buf, 256);
-    if (first && nd > 0) {
-      fprintf(stderr, "[EXEC] drain_tpt: got %zu completions\n", nd);
-      fflush(stderr);
-      first = false;
-    }
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -603,14 +579,8 @@ void SprayExecutor::drain_tpt_loop() {
 void SprayExecutor::drain_signal_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
-  bool first = true;
   while (!stop_) {
     size_t ns = signal_be_->do_drain(be_buf, 256);
-    if (first && ns > 0) {
-      fprintf(stderr, "[EXEC] drain_signal: got %zu completions\n", ns);
-      fflush(stderr);
-      first = false;
-    }
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();

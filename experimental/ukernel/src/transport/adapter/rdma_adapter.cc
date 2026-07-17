@@ -599,9 +599,7 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
          sizeof(p->remote_data_qpns));
 
   if (!qps_to_rtr(p->data_qps, p->num_qps, remote)) return false;
-  fprintf(stderr, "[RDMA] qps_to_rtr done\n"); fflush(stderr);
   if (!qps_to_rts(p->data_qps, p->num_qps)) return false;
-  fprintf(stderr, "[RDMA] qps_to_rts done\n"); fflush(stderr);
 
   {
     ibv_qp_attr attr = {};
@@ -688,11 +686,7 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                                               void* remote_ptr,
                                               uint32_t remote_buf_id,
                                               size_t len, unsigned comm_rid) {
-  if (!has_put_path(rank) || len == 0) {
-    fprintf(stderr, "[RDMA] send_put_async: has_put_path=%d len=%zu\n", (int)has_put_path(rank), len);
-    fflush(stderr);
-    return 0;
-  }
+  if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
   uint32_t lkey = 0;
@@ -700,11 +694,7 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
     ibv_mr* mr = mr_table_[local_buf_id].load(std::memory_order_acquire);
     if (mr) lkey = mr->lkey;
   }
-  if (lkey == 0) {
-    fprintf(stderr, "[RDMA] send_put_async: lkey=0 local_buf_id=%u\n", local_buf_id);
-    fflush(stderr);
-    return 0;
-  }
+  if (lkey == 0) return 0;
 
   // Lock-free peer + remote buffer lookup (Task 2)
   RdmaPeer* p =
@@ -724,12 +714,7 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
   if (remote_ptr && raddr == 0) {
     raddr = reinterpret_cast<uint64_t>(remote_ptr);
   }
-  if (raddr == 0 || rkey == 0) {
-    fprintf(stderr, "[RDMA] send_put_async: raddr=%lx rkey=%u remote_ptr=%p remote_buf_id=%u\n",
-            (unsigned long)raddr, rkey, remote_ptr, remote_buf_id);
-    fflush(stderr);
-    return 0;
-  }
+  if (raddr == 0 || rkey == 0) return 0;
 
   RingElem e{comm_rid,   rank,         Kind::DataPut, local_ptr,
              remote_ptr, local_buf_id, remote_buf_id, len,
