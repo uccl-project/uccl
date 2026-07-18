@@ -101,23 +101,23 @@ class TransportAdapter {
                                      std::optional<WaitTarget> target,
                                      unsigned comm_rid) = 0;
 
-  void set_put_ring(jring_t* ring) { put_ring_ = ring; }
-  void set_sig_send_ring(jring_t* ring) { sig_send_ring_ = ring; }
+  void set_put_completion_ring(jring_t* ring) { put_completion_ring_ = ring; }
+  void set_sig_send_completion_ring(jring_t* ring) { sig_send_completion_ring_ = ring; }
 
  protected:
-  jring_t* put_ring_ = nullptr;
-  jring_t* sig_send_ring_ = nullptr;
+  jring_t* put_completion_ring_ = nullptr;
+  jring_t* sig_send_completion_ring_ = nullptr;
 
   void publish_put_completion(unsigned rid, bool failed) {
-    if (!put_ring_) return;
+    if (!put_completion_ring_) return;
     CompletionEvent ev{rid, failed ? 1u : 0u};
-    jrpush(put_ring_, ev);
+    jrpush(put_completion_ring_, ev);
   }
 
   void publish_sig_send_completion(unsigned rid, bool failed) {
-    if (!sig_send_ring_) return;
+    if (!sig_send_completion_ring_) return;
     CompletionEvent ev{rid, failed ? 1u : 0u};
-    jrpush(sig_send_ring_, ev);
+    jrpush(sig_send_completion_ring_, ev);
   }
 };
 

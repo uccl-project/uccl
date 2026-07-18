@@ -89,7 +89,7 @@ struct SprayRun {
       std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);
       std::abort();
     }
-    jring_init(ready_ring, count, sizeof(uint32_t), 0, 0);
+    jring_init(ready_ring, count, sizeof(uint32_t), 0, 1);
   }
 
   ~SprayRun() {

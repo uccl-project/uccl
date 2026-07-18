@@ -161,28 +161,28 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   // Completion ring: adapters push CompletionEvent when ops finish.
   size_t ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
   if (ring_sz != (size_t)-1) {
-    put_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
-    if (put_ring_)
-      jring_init(put_ring_, 2048, sizeof(CompletionEvent), 0, 0);
+    put_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (put_completion_ring_)
+      jring_init(put_completion_ring_, 2048, sizeof(CompletionEvent), 0, 0);
   }
-  if (put_ring_) ipc_adapter_->set_put_ring(put_ring_);
+  if (put_completion_ring_) ipc_adapter_->set_put_completion_ring(put_completion_ring_);
 
   // Signal send completion ring — separate from data ring
   ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
   if (ring_sz != (size_t)-1) {
-    sig_send_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
-    if (sig_send_ring_)
-      jring_init(sig_send_ring_, 2048, sizeof(CompletionEvent), 0, 0);
+    sig_send_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (sig_send_completion_ring_)
+      jring_init(sig_send_completion_ring_, 2048, sizeof(CompletionEvent), 0, 1);
   }
-  if (sig_send_ring_) ipc_adapter_->set_sig_send_ring(sig_send_ring_);
+  if (sig_send_completion_ring_) ipc_adapter_->set_sig_send_completion_ring(sig_send_completion_ring_);
 
   // Signal completion ring: on_signal_received pushes here,
   // try_complete_sig_wait dequeues. MP/MC for thread safety.
   ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
   if (ring_sz != (size_t)-1) {
-    sig_wait_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
-    if (sig_wait_ring_)
-      jring_init(sig_wait_ring_, 2048, sizeof(SignalCompletion), 0, 1);
+    sig_wait_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (sig_wait_completion_ring_)
+      jring_init(sig_wait_completion_ring_, 2048, sizeof(SignalCompletion), 0, 1);
   }
 
   exchange_peer_metas();
@@ -327,17 +327,17 @@ Communicator::~Communicator() {
   }
   ipc_adapter_.reset();
 
-  if (sig_wait_ring_) {
-    free(sig_wait_ring_);
-    sig_wait_ring_ = nullptr;
+  if (sig_wait_completion_ring_) {
+    free(sig_wait_completion_ring_);
+    sig_wait_completion_ring_ = nullptr;
   }
-  if (sig_send_ring_) {
-    free(sig_send_ring_);
-    sig_send_ring_ = nullptr;
+  if (sig_send_completion_ring_) {
+    free(sig_send_completion_ring_);
+    sig_send_completion_ring_ = nullptr;
   }
-  if (put_ring_) {
-    free(put_ring_);
-    put_ring_ = nullptr;
+  if (put_completion_ring_) {
+    free(put_completion_ring_);
+    put_completion_ring_ = nullptr;
   }
 
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
@@ -351,8 +351,8 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     RdmaTransportConfig rdma_cfg;
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                            std::move(rdma_cfg));
-    if (put_ring_) rdma_adapter_->set_put_ring(put_ring_);
-    if (sig_send_ring_) rdma_adapter_->set_sig_send_ring(sig_send_ring_);
+    if (put_completion_ring_) rdma_adapter_->set_put_completion_ring(put_completion_ring_);
+    if (sig_send_completion_ring_) rdma_adapter_->set_sig_send_completion_ring(sig_send_completion_ring_);
     rdma_adapter_->set_communicator(this);
   }
   return *rdma_adapter_;
@@ -396,7 +396,7 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
   if (!tcp_adapter_) {
     tcp_adapter_ = std::make_unique<TcpTransportAdapter>(
         local_meta.ip, global_rank_, local_gpu_idx_);
-    if (put_ring_) tcp_adapter_->set_put_ring(put_ring_);
+    if (put_completion_ring_) tcp_adapter_->set_put_completion_ring(put_completion_ring_);
   }
   return *tcp_adapter_;
 }
@@ -937,7 +937,7 @@ bool Communicator::wait_signal_async_with_rid(
     }
     if (!matched) { pending_signal_waits_[peer][tag].push_back(rid); }
   }
-  if (matched) { jrpush(sig_wait_ring_, ev); }
+  if (matched) { jrpush(sig_wait_completion_ring_, ev); }
   return true;
 }
 
@@ -1001,11 +1001,11 @@ bool Communicator::send_signal_async_with_rid(
 }
 
 size_t Communicator::try_complete_put(CompletionResult* results, size_t max) {
-  if (!put_ring_) return 0;
+  if (!put_completion_ring_) return 0;
   CompletionEvent ev;
   size_t count = 0;
   while (count < max &&
-         jring_mc_dequeue_bulk(put_ring_, &ev, 1, nullptr) == 1) {
+         jring_mc_dequeue_bulk(put_completion_ring_, &ev, 1, nullptr) == 1) {
     results[count].rid = ev.rid;
     results[count].failed = (ev.failed != 0);
     results[count].user_ctx = consume_user_ctx(ev.rid);
@@ -1016,11 +1016,11 @@ size_t Communicator::try_complete_put(CompletionResult* results, size_t max) {
 
 size_t Communicator::try_complete_sig_send(CompletionResult* results,
                                                size_t max) {
-  if (!sig_send_ring_) return 0;
+  if (!sig_send_completion_ring_) return 0;
   CompletionEvent ev;
   size_t count = 0;
   while (count < max &&
-         jring_mc_dequeue_bulk(sig_send_ring_, &ev, 1, nullptr) == 1) {
+         jring_sc_dequeue_bulk(sig_send_completion_ring_, &ev, 1, nullptr) == 1) {
     results[count].rid = ev.rid;
     results[count].failed = (ev.failed != 0);
     results[count].user_ctx = consume_user_ctx(ev.rid);
@@ -1034,21 +1034,20 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
   drain_ipc_signals();
 
   size_t count = 0;
-  if (sig_wait_ring_) {
-    while (count < max && jring_mc_dequeue_bulk(sig_wait_ring_, events + count, 1,
-                                                nullptr) == 1) {
-      events[count].user_ctx = consume_user_ctx(events[count].rid);
-      ++count;
-    }
+  if (sig_wait_completion_ring_) {
+    count = jring_sc_dequeue_bulk(sig_wait_completion_ring_, events,
+                                   std::min(max, (size_t)256), nullptr);
+    for (size_t i = 0; i < count; ++i)
+      events[i].user_ctx = consume_user_ctx(events[i].rid);
   }
 
   // Drain data completion ring for TCP signal completions.
-  if (put_ring_ && count < max) {
+  if (put_completion_ring_ && count < max) {
     CompletionEvent ce;
     {
       std::lock_guard<std::mutex> lk(signal_waits_mu_);
       while (count < max &&
-             jring_mc_dequeue_bulk(put_ring_, &ce, 1, nullptr) == 1) {
+             jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1, nullptr) == 1) {
         auto it = tcp_signal_rids_.find(ce.rid);
         if (it != tcp_signal_rids_.end()) {
           events[count].rid = ce.rid;
@@ -1059,7 +1058,7 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
           tcp_signal_rids_.erase(it);
           ++count;
         } else {
-          jring_mp_enqueue_bulk(put_ring_, &ce, 1, nullptr);
+          jring_mp_enqueue_bulk(put_completion_ring_, &ce, 1, nullptr);
           break;
         }
       }
@@ -1101,11 +1100,11 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
   size_t completed = 0;
 
   // Check data completion ring
-  if (put_ring_ && completed < count) {
+  if (put_completion_ring_ && completed < count) {
     CompletionEvent ce;
     std::vector<CompletionEvent> stash;
     while (completed < count &&
-           jring_mc_dequeue_bulk(put_ring_, &ce, 1, nullptr) == 1) {
+           jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1, nullptr) == 1) {
       // Check if this rid is in the input array
       bool found = false;
       for (size_t i = 0; i < count; ++i) {
@@ -1119,15 +1118,15 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
       if (!found) stash.push_back(ce);
     }
     for (auto& ev : stash)
-      jring_mp_enqueue_bulk(put_ring_, &ev, 1, nullptr);
+      jring_mp_enqueue_bulk(put_completion_ring_, &ev, 1, nullptr);
   }
 
   // Check signal completion ring
-  if (sig_wait_ring_ && completed < count) {
+  if (sig_wait_completion_ring_ && completed < count) {
     SignalCompletion sc;
     std::vector<SignalCompletion> stash;
     while (completed < count &&
-           jring_mc_dequeue_bulk(sig_wait_ring_, &sc, 1, nullptr) == 1) {
+           jring_sc_dequeue_bulk(sig_wait_completion_ring_, &sc, 1, nullptr) == 1) {
       bool found = false;
       for (size_t i = 0; i < count; ++i) {
         if (rids[i] == sc.rid) {
@@ -1138,7 +1137,7 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
       }
       if (!found) stash.push_back(sc);
     }
-    for (auto& ev : stash) jring_mp_enqueue_bulk(sig_wait_ring_, &ev, 1, nullptr);
+    for (auto& ev : stash) jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr);
   }
 
   return completed;
@@ -1167,7 +1166,7 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
     }
   }
   if (matched) {
-    jrpush(sig_wait_ring_, ev);
+    jrpush(sig_wait_completion_ring_, ev);
   }
 }
 

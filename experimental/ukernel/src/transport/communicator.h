@@ -116,7 +116,7 @@ class Communicator {
 
   // Returns number of completed rids from the input array.
   // Writes completed rids back into the first N positions of the array.
-  // For each rid: checks both put_ring_ and sig_wait_ring_.
+  // For each rid: checks both put_completion_ring_ and sig_wait_completion_ring_.
   size_t poll(unsigned* rids, size_t count);
 
   void set_oob_namespace(std::string ns);
@@ -220,9 +220,9 @@ class Communicator {
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
-  jring_t* put_ring_ = nullptr;
-  jring_t* sig_wait_ring_ = nullptr;
-  jring_t* sig_send_ring_ = nullptr;
+  jring_t* put_completion_ring_ = nullptr;
+  jring_t* sig_wait_completion_ring_ = nullptr;
+  jring_t* sig_send_completion_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → vector<rid>
