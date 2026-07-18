@@ -1,126 +1,214 @@
 import sys
 import os
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils import ClosedIntervalTree
 
-
-def test_complete_example():
-    """Complete example test for closed intervals"""
-    print("=== Complete Closed Interval IntervalTree Example ===")
-
-    # Create closed interval tree
-    closed_tree = ClosedIntervalTree()
-
-    # Add closed intervals
-    intervals = [
-        (1, 10, "large_dataset"),
-        (2, 5, "sub_dataset_1"),
-        (3, 4, "core_data"),
-        (15, 25, "another_region"),
-        (20, 30, "overlapping_region"),
-    ]
-
-    for start, end, data in intervals:
-        closed_tree.add(start, end, data)
-
-    print("All closed intervals:")
-    print(closed_tree)
-
-    # Test containing queries
-    print("\n=== Containing Queries ===")
-    test_queries = [(3, 4), (16, 18), (22, 24), (12, 14)]
-
-    for query_start, query_end in test_queries:
-        containing = closed_tree.query_containing(query_start, query_end)
-        print(f"\nQuery [{query_start}, {query_end}]:")
-
-        if containing:
-            print(f"containing: {containing[0][2]}")
-            for start, end, data in containing:
-                print(f"  Contained by [{start}, {end}] -> {data}")
-        else:
-            print("  Not contained by any interval")
-
-    # Test removal operations
-    print("\n=== Removal Operations ===")
-    print("Before removal:", len(list(closed_tree)), "intervals")
-
-    # Remove interval [2, 5]
-    closed_tree.remove(2, 5, "sub_dataset_1")
-    print("After removing [2, 5]:", len(list(closed_tree)), "intervals")
-
-    # Display remaining intervals
-    print("\nRemaining intervals:")
-    for start, end, data in closed_tree:
-        print(f"  [{start}, {end}] -> {data}")
+# ---------------------------------------------------------------------------
+# add / basic iteration
+# ---------------------------------------------------------------------------
 
 
-def test_exact_match_function():
-    """Test the exact match query function"""
-    print("=== Testing Exact Match Query Function ===")
-
-    # Create and populate the tree
-    closed_tree = ClosedIntervalTree()
-
-    intervals = [
-        (1, 10, "dataset_1"),
-        (2, 5, "dataset_2"),
-        (2, 5, "dataset_2_duplicate"),  # Same boundaries, different data
-        (3, 4, "dataset_3"),
-        (15, 25, "dataset_4"),
-        (15, 25, "dataset_4_copy"),  # Same boundaries, different data
-    ]
-
-    for start, end, data in intervals:
-        closed_tree.add(start, end, data)
-
-    print("All intervals:")
-    print(closed_tree)
-
-    # Test exact match queries
-    test_cases = [
-        (1, 10, None),  # Match any data with boundaries [1,10]
-        (2, 5, None),  # Match any data with boundaries [2,5]
-        (2, 5, "dataset_2"),  # Match specific data with boundaries [2,5]
-        (3, 4, None),  # Match any data with boundaries [3,4]
-        (15, 25, "dataset_4"),  # Match specific data with boundaries [15,25]
-        (100, 200, None),  # Non-existent interval
-        (2, 6, None),  # Non-existent boundaries
-    ]
-
-    print("\n=== Exact Match Query Results ===")
-    for query_start, query_end, data_filter in test_cases:
-        if data_filter is None:
-            query_desc = f"[{query_start}, {query_end}] (any data)"
-        else:
-            query_desc = f"[{query_start}, {query_end}] -> {data_filter}"
-
-        matches = closed_tree.query_exact_match(query_start, query_end, data_filter)
-
-        print(f"\nQuery: {query_desc}")
-        if matches:
-            print(f"Found {len(matches)} exact match(es):")
-            for start, end, data in matches:
-                print(f"  [{start}, {end}] -> {data}")
-        else:
-            print("No exact matches found")
-
-    # Compare with other query types
-    print("\n=== Comparison with Other Query Types ===")
-    query_start, query_end = 2, 5
-
-    exact_matches = closed_tree.query_exact_match(query_start, query_end)
-    containing = closed_tree.query_containing(query_start, query_end)
-    overlapping = closed_tree.query_overlap(query_start, query_end)
-
-    print(f"Query: [{query_start}, {query_end}]")
-    print(f"Exact matches: {len(exact_matches)} intervals")
-    print(f"Containing: {len(containing)} intervals")
-    print(f"Overlapping: {len(overlapping)} intervals")
+def test_add_and_iterate():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    tree.add(2, 5, "b")
+    intervals = list(tree)
+    assert len(intervals) == 2
+    datas = {d for _, _, d in intervals}
+    assert datas == {"a", "b"}
 
 
-if __name__ == "__main__":
-    test_complete_example()
-    test_exact_match_function()
+def test_add_single_point_interval():
+    """start == end is a valid degenerate interval."""
+    tree = ClosedIntervalTree()
+    tree.add(5, 5, "point")
+    assert len(list(tree)) == 1
+
+
+def test_add_rejects_inverted_interval():
+    tree = ClosedIntervalTree()
+    with pytest.raises(ValueError):
+        tree.add(10, 5, "bad")
+
+
+# ---------------------------------------------------------------------------
+# remove
+# ---------------------------------------------------------------------------
+
+
+def test_remove_existing_interval():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    tree.add(2, 5, "b")
+    removed = tree.remove(2, 5, "b")
+    assert removed == 1
+    assert len(list(tree)) == 1
+
+
+def test_remove_nonexistent_returns_zero():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    removed = tree.remove(999, 1000, "ghost")
+    assert removed == 0
+    assert len(list(tree)) == 1  # original interval still present
+
+
+def test_remove_by_boundaries_only():
+    """Passing data=None removes any interval with those exact boundaries."""
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    removed = tree.remove(1, 10)
+    assert removed == 1
+    assert len(list(tree)) == 0
+
+
+# ---------------------------------------------------------------------------
+# query_containing
+# ---------------------------------------------------------------------------
+
+
+def test_query_containing_basic():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "large")
+    tree.add(2, 5, "small")
+
+    # [3, 4] is contained by both
+    result = tree.query_containing(3, 4)
+    datas = {d for _, _, d in result}
+    assert "large" in datas
+    assert "small" in datas
+
+
+def test_query_containing_exact_boundary():
+    """A query that exactly matches an interval's boundaries is contained."""
+    tree = ClosedIntervalTree()
+    tree.add(5, 15, "exact")
+    result = tree.query_containing(5, 15)
+    assert len(result) == 1
+    assert result[0][2] == "exact"
+
+
+def test_query_containing_no_match():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "buf")
+    # Query extends beyond the stored interval — not contained
+    result = tree.query_containing(5, 20)
+    assert result == []
+
+
+def test_query_containing_empty_tree():
+    tree = ClosedIntervalTree()
+    assert tree.query_containing(0, 100) == []
+
+
+# ---------------------------------------------------------------------------
+# query_overlap
+# ---------------------------------------------------------------------------
+
+
+def test_query_overlap_partial():
+    """Partial overlap should be returned."""
+    tree = ClosedIntervalTree()
+    tree.add(100, 200, "buf")
+    result = tree.query_overlap(180, 300)
+    assert len(result) == 1
+    assert result[0][2] == "buf"
+
+
+def test_query_overlap_full_containment():
+    """A query fully inside a stored interval should match."""
+    tree = ClosedIntervalTree()
+    tree.add(100, 200, "buf")
+    result = tree.query_overlap(120, 150)
+    assert len(result) == 1
+
+
+def test_query_overlap_no_match():
+    tree = ClosedIntervalTree()
+    tree.add(100, 200, "buf")
+    result = tree.query_overlap(300, 400)
+    assert result == []
+
+
+def test_query_overlap_multiple_matches():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    tree.add(5, 15, "b")
+    tree.add(20, 30, "c")
+    # [8, 12] overlaps a and b but not c
+    result = tree.query_overlap(8, 12)
+    datas = {d for _, _, d in result}
+    assert datas == {"a", "b"}
+
+
+def test_query_overlap_empty_tree():
+    tree = ClosedIntervalTree()
+    assert tree.query_overlap(0, 100) == []
+
+
+# ---------------------------------------------------------------------------
+# query_exact_match
+# ---------------------------------------------------------------------------
+
+
+def test_query_exact_match_any_data():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "x")
+    tree.add(1, 10, "y")
+    result = tree.query_exact_match(1, 10)
+    assert len(result) == 2
+
+
+def test_query_exact_match_specific_data():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "x")
+    tree.add(1, 10, "y")
+    result = tree.query_exact_match(1, 10, "x")
+    assert len(result) == 1
+    assert result[0][2] == "x"
+
+
+def test_query_exact_match_no_result():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "x")
+    # Different boundaries — should not match
+    result = tree.query_exact_match(1, 11)
+    assert result == []
+
+
+def test_query_exact_match_empty_tree():
+    tree = ClosedIntervalTree()
+    assert tree.query_exact_match(0, 10) == []
+
+
+# ---------------------------------------------------------------------------
+# clear
+# ---------------------------------------------------------------------------
+
+
+def test_clear_empties_tree():
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    tree.add(20, 30, "b")
+    tree.clear()
+    assert list(tree) == []
+
+
+def test_clear_then_add():
+    """Tree should be fully usable after clear."""
+    tree = ClosedIntervalTree()
+    tree.add(1, 10, "a")
+    tree.clear()
+    tree.add(5, 15, "b")
+    result = list(tree)
+    assert len(result) == 1
+    assert result[0][2] == "b"
+
+
+def test_clear_empty_tree_is_safe():
+    tree = ClosedIntervalTree()
+    tree.clear()  # should not raise
+    assert list(tree) == []
