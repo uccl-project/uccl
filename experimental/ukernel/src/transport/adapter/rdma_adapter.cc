@@ -874,11 +874,16 @@ void RdmaTransportAdapter::send_worker() {
 
       // CAS-acquire the slot: 0 → send_id
       uint32_t expected = 0;
+      int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                 std::memory_order_acquire)) {
+                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_put_completion(e.comm_rid, true);
           goto next_elem;
+        }
+        if (++cas_spin > 5000000) {
+          slot.send_id.store(send_id, std::memory_order_release);
+          break;
         }
         expected = 0;
         std::this_thread::yield();
@@ -978,11 +983,16 @@ void RdmaTransportAdapter::send_worker() {
 
       // CAS-acquire slot for signal send
       uint32_t expected = 0;
+      int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                 std::memory_order_acquire)) {
+                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_sig_send_completion(e.comm_rid, true);
           goto next_elem;
+        }
+        if (++cas_spin > 5000000) {
+          slot.send_id.store(send_id, std::memory_order_release);
+          break;
         }
         expected = 0;
         std::this_thread::yield();
