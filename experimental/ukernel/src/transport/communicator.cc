@@ -178,11 +178,11 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 
   // Signal completion ring: on_signal_received pushes here,
   // try_complete_sig_wait dequeues. MP/MC for thread safety.
-  ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
+  ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 65536);
   if (ring_sz != (size_t)-1) {
     sig_wait_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
     if (sig_wait_ring_)
-      jring_init(sig_wait_ring_, 2048, sizeof(SignalCompletion), 1, 1);
+      jring_init(sig_wait_ring_, 65536, sizeof(SignalCompletion), 0, 1);
   }
 
   exchange_peer_metas();

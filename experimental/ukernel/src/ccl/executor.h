@@ -75,7 +75,7 @@ struct SprayRun {
   uint32_t pop_ready() {
     if (!ready_ring) return ~0u;
     uint32_t op = ~0u;
-    if (jring_sc_dequeue_bulk(ready_ring, &op, 1, nullptr) == 1) return op;
+    if (jring_dequeue_bulk(ready_ring, &op, 1, nullptr) == 1) return op;
     return ~0u;
   }
 
@@ -89,7 +89,7 @@ struct SprayRun {
       std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);
       std::abort();
     }
-    jring_init(ready_ring, count, sizeof(uint32_t), 1, 0);  // MP/SC
+    jring_init(ready_ring, count, sizeof(uint32_t), 0, 0);
   }
 
   ~SprayRun() {
