@@ -27,12 +27,18 @@ struct Cmd {
   uint32_t dst_peer;    // 4
   ReductionKind redop;  // 4
   PutPath put_path;     // 1 — Device/IPC/RDMA for ops
-  uint8_t _pad[3];      // 3 — alignment
-  uint64_t tag;         // 8 — for Signal/SignalWait
+  // kCmdFlagPutSignal: this Put carries its partner Signal's tag (in
+  // Cmd::tag); the transport emits the signal once the data lands.
+  uint8_t flags;
+  uint8_t _pad[2];      // 2 — alignment
+  uint64_t tag;         // 8 — for Signal/SignalWait/PutSignal
 };
-// Total: 4*9 + 1 + 3 + 8 = 48 bytes
+// Total: 4*9 + 1 + 1 + 2 + 8 = 48 bytes
 
 static_assert(sizeof(Cmd) <= 64, "Cmd too large");
+
+// Cmd::flags bits
+inline constexpr uint8_t kCmdFlagPutSignal = 1u << 0;
 
 struct CmdWithId {
   Cmd cmd;

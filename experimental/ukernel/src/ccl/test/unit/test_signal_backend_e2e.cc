@@ -75,7 +75,6 @@ int main(int argc, char** argv) {
       snd[i].cmd.kind = ExecOpKind::Signal;
       snd[i].cmd.dst_peer = (uint32_t)peer;
       snd[i].cmd.tag = 100 + i;
-      snd[i].cmd.transport = (uint8_t)PeerTransportKind::Ipc;
       snd[i].caller_id = i;
     }
 
@@ -203,7 +202,6 @@ int main(int argc, char** argv) {
       snd[i].cmd.kind = ExecOpKind::Signal;
       snd[i].cmd.dst_peer = (uint32_t)peer;
       snd[i].cmd.tag = 200 + i;
-      snd[i].cmd.transport = (uint8_t)PeerTransportKind::Ipc;
       snd[i].caller_id = 100 + i;
     }
 

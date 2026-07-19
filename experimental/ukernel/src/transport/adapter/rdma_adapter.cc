@@ -426,11 +426,39 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
   return true;
 }
 
+bool RdmaTransportAdapter::post_data_recv(ibv_qp* qp) {
+  // Zero-sge receive: the data payload of a write-with-imm goes straight
+  // to the destination MR; only the 32-bit immediate (the signal tag)
+  // surfaces here as a recv completion.
+  ibv_recv_wr wr = {};
+  wr.wr_id = 0;
+  wr.sg_list = nullptr;
+  wr.num_sge = 0;
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(qp, &wr, &bad) != 0) {
+    fprintf(stderr, "[post_data_recv] FAILED errno=%d\n", errno);
+    return false;
+  }
+  return true;
+}
+
+bool RdmaTransportAdapter::post_data_recvs(RdmaPeer& p) {
+  // Posts the full pool on every QP. On partial failure we fail hard:
+  // a retry reposts from scratch and is stopped by the max_recv_wr cap,
+  // so setup cannot continue with a silently under-provisioned pool.
+  for (int i = 0; i < p.num_qps; ++i)
+    for (int k = 0; k < kDataRecvPool; ++k)
+      if (!post_data_recv(p.data_qps[i])) return false;
+  return true;
+}
+
 // Peer init / destroy
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
-  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size)) return false;
+  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size,
+                     kDataRecvPool))
+    return false;
   if (!qps_to_init(p.data_qps, p.num_qps)) return false;
 
   p.signal_cq = ibv_create_cq(ctx_, 256, nullptr, nullptr, 0);
@@ -601,6 +629,11 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   if (!qps_to_rtr(p->data_qps, p->num_qps, remote)) return false;
   if (!qps_to_rts(p->data_qps, p->num_qps)) return false;
 
+  // Pre-post receive WQEs on data QPs: write-with-imm signals consume
+  // one per arrival, and a missing recv WQE would RNR the sender.
+  if (!p->data_recvs_posted && !post_data_recvs(*p)) return false;
+  p->data_recvs_posted = true;
+
   {
     ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
@@ -686,6 +719,14 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                                               void* remote_ptr,
                                               uint32_t remote_buf_id,
                                               size_t len, unsigned comm_rid) {
+  return send_put_async(rank, local_ptr, local_buf_id, remote_ptr,
+                        remote_buf_id, len, ~0u, comm_rid);
+}
+
+unsigned RdmaTransportAdapter::send_put_async(
+    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
+    uint32_t remote_buf_id, size_t len, uint32_t qp_affinity,
+    unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
@@ -718,7 +759,60 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
 
   RingElem e{comm_rid,   rank,         Kind::DataPut, local_ptr,
              remote_ptr, local_buf_id, remote_buf_id, len,
-             0,          raddr,        rkey,          lkey};
+             0,          raddr,        rkey,          lkey,
+             qp_affinity};
+  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+  return 1;
+}
+
+unsigned RdmaTransportAdapter::send_put_signal_async(
+    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
+    uint32_t remote_buf_id, size_t len, uint64_t tag, unsigned comm_rid) {
+  return send_put_signal_async(rank, local_ptr, local_buf_id, remote_ptr,
+                               remote_buf_id, len, tag, ~0u, comm_rid);
+}
+
+unsigned RdmaTransportAdapter::send_put_signal_async(
+    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
+    uint32_t remote_buf_id, size_t len, uint64_t tag, uint32_t qp_affinity,
+    unsigned comm_rid) {
+  if (!has_put_path(rank) || len == 0) return 0;
+  // The immediate is 32 bits; callers must fall back to a separate
+  // put+signal for larger tags.
+  if (tag >> 32) return 0;
+
+  // Lock-free local MR lookup (Task 1)
+  uint32_t lkey = 0;
+  if (local_buf_id < mr_table_capacity_) {
+    ibv_mr* mr = mr_table_[local_buf_id].load(std::memory_order_acquire);
+    if (mr) lkey = mr->lkey;
+  }
+  if (lkey == 0) return 0;
+
+  // Lock-free peer + remote buffer lookup (Task 2)
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
+  if (!p || !p->put_ready) return 0;
+
+  uint64_t raddr = 0;
+  uint32_t rkey = 0;
+  if (remote_buf_id != 0 && remote_buf_id < p->remote_buf_capacity_) {
+    RemoteBufInfo* info =
+        p->remote_buffer_table_[remote_buf_id].load(std::memory_order_acquire);
+    if (info) {
+      raddr = info->addr;
+      rkey = info->rkey;
+    }
+  }
+  if (remote_ptr && raddr == 0) {
+    raddr = reinterpret_cast<uint64_t>(remote_ptr);
+  }
+  if (raddr == 0 || rkey == 0) return 0;
+
+  RingElem e{comm_rid,   rank,         Kind::PutSignal, local_ptr,
+             remote_ptr, local_buf_id, remote_buf_id,   len,
+             tag,        raddr,        rkey,            lkey,
+             qp_affinity};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
@@ -844,14 +938,18 @@ void RdmaTransportAdapter::send_worker() {
       continue;
     }
 
-    if (e.kind == Kind::DataPut) {
+    if (e.kind == Kind::DataPut || e.kind == Kind::PutSignal) {
+      // Fused PutSignal: all chunks go through one QP (ordered), and the
+      // last chunk carries the signal tag as a write-with-imm immediate,
+      // so the receiver observes the tag only after all data landed.
+      bool const fused = (e.kind == Kind::PutSignal);
       // Lock-free peer lookup (Task 2)
       RdmaPeer* p = nullptr;
       if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
         p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
             std::memory_order_acquire);
       }
-      if (!p || !p->put_ready) {
+      if (!p || !p->put_ready || (fused && (e.tag >> 32))) {
         publish_put_completion(e.comm_rid, true);
         continue;
       }
@@ -894,9 +992,19 @@ void RdmaTransportAdapter::send_worker() {
 
       bool failed = false;
       size_t off = 0;
+      // QP pinning: an explicit group affinity wins (all puts of one
+      // signal group share the QP, so the group's trailing imm implies
+      // the whole group landed); a fused PutSignal without affinity pins
+      // only its own chunks; plain puts stripe per chunk as before.
+      int pin_qp = -1;
+      if (e.qp_affinity != ~0u)
+        pin_qp = static_cast<int>(e.qp_affinity %
+                                  static_cast<uint32_t>(p->num_qps));
+      else if (fused)
+        pin_qp = select_qp(*p, static_cast<uint32_t>(e.len));
       for (uint32_t ci = 0; ci < ck.count; ++ci) {
         uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
-        int q = select_qp(*p, sz);
+        int q = (pin_qp >= 0) ? pin_qp : select_qp(*p, sz);
 
         // Back-pressure: wait for inflight WRs to drop
         while (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 >
@@ -929,7 +1037,13 @@ void RdmaTransportAdapter::send_worker() {
         wr.wr_id = wr_id;
         wr.sg_list = &sge;
         wr.num_sge = 1;
-        wr.opcode = IBV_WR_RDMA_WRITE;
+        if (fused && ci + 1 == ck.count) {
+          wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          // Immediate data travels in network byte order.
+          wr.imm_data = htonl(static_cast<uint32_t>(e.tag));
+        } else {
+          wr.opcode = IBV_WR_RDMA_WRITE;
+        }
         wr.send_flags = IBV_SEND_SIGNALED;
         wr.wr.rdma.remote_addr = e.remote_addr + off;
         wr.wr.rdma.rkey = e.remote_rkey;
@@ -1065,6 +1179,32 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
   while ((n = ibv_poll_cq(p.data_cq, 16, wc)) > 0) {
     for (int i = 0; i < n; ++i) {
       any = true;
+
+      // Recv completions (write-with-imm signals) are handled before the
+      // send-side wr_id decoding — their wr_id is a recv WQE id, not a
+      // send_id. The 32-bit immediate carries the signal tag (in network
+      // byte order), which the NIC surfaces only after the written data
+      // has landed.
+      if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        if (wc[i].status == IBV_WC_SUCCESS && comm_)
+          comm_->on_signal_received(rank, ntohl(wc[i].imm_data));
+        // Repost on the QP that consumed the WQE.
+        bool reposted = false;
+        for (int qi = 0; qi < p.num_qps; ++qi) {
+          if (p.data_qps[qi]->qp_num == wc[i].qp_num) {
+            (void)post_data_recv(p.data_qps[qi]);
+            reposted = true;
+            break;
+          }
+        }
+        if (!reposted)
+          fprintf(stderr,
+                  "[poll_cq_set] recv-with-imm on unknown qpn=%u, "
+                  "recv WQE not reposted\n",
+                  wc[i].qp_num);
+        continue;
+      }
+
       uint32_t send_id = static_cast<uint32_t>(wc[i].wr_id >> 32);
 
       // Decode QP index directly from wr_id (Task 4)

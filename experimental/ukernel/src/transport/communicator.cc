@@ -854,7 +854,7 @@ unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
 bool Communicator::send_put_async_with_rid(
     int peer, uint32_t src_buf, size_t src_off,
     uint32_t dst_buf, size_t dst_off, size_t bytes,
-    PeerTransportKind transport, unsigned rid) {
+    PeerTransportKind transport, unsigned rid, uint32_t qp_affinity) {
   if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
@@ -889,8 +889,9 @@ bool Communicator::send_put_async_with_rid(
     rdma_adapter_->register_remote_buffer(peer, remote_id,
                                            reinterpret_cast<uint64_t>(remote_ptr),
                                            remote_mr.key);
-    return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
-                                    remote_id, bytes, rid);
+    return rdma_adapter_->send_put_async(peer, local_ptr, src_buf, remote_ptr,
+                                         remote_id, bytes, qp_affinity,
+                                         rid) != 0;
   }
   void* remote_ptr = nullptr;
   int remote_gpu = -1;
@@ -901,6 +902,58 @@ bool Communicator::send_put_async_with_rid(
   }
   return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf,
                                  bytes, rid);
+}
+
+bool Communicator::send_put_signal_async_with_rid(
+    int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
+    size_t dst_off, size_t bytes, PeerTransportKind transport, uint64_t tag,
+    unsigned rid, uint32_t qp_affinity) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  auto* adapter = get_adapter(kind);
+  if (!adapter || !adapter->supports_put_signal()) return false;
+
+  MR local_mr = get_mr(src_buf);
+  if (src_off > local_mr.length || bytes > local_mr.length - src_off)
+    return false;
+  void* local_ptr = reinterpret_cast<void*>(
+      static_cast<uintptr_t>(local_mr.address) + src_off);
+
+  if (kind == PeerTransportKind::Rdma) {
+    if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes))
+      return false;
+    uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
+    MR remote_mr = get_mr(peer, remote_id);
+    if (remote_mr.length == 0 || remote_mr.key == 0) return false;
+    void* remote_ptr = reinterpret_cast<void*>(
+        static_cast<uint64_t>(remote_mr.address) + dst_off);
+    rdma_adapter_->register_remote_buffer(
+        peer, remote_id, reinterpret_cast<uint64_t>(remote_ptr),
+        remote_mr.key);
+    return rdma_adapter_->send_put_signal_async(
+               peer, local_ptr, src_buf, remote_ptr, remote_id, bytes, tag,
+               qp_affinity, rid) != 0;
+  }
+
+  // IPC: resolve the peer's buffer pointer and let the adapter's send
+  // worker write the signal ring after the copy completes.
+  void* remote_ptr = nullptr;
+  int remote_gpu = -1;
+  if (dst_buf != 0) {
+    if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
+                                        &remote_ptr, &remote_gpu))
+      return false;
+  }
+  return adapter->send_put_signal_async(peer, local_ptr, src_buf, remote_ptr,
+                                        dst_buf, bytes, tag, rid) != 0;
+}
+
+bool Communicator::can_fuse_put_signal(int peer,
+                                       PeerTransportKind transport) {
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  auto* adapter = get_adapter(kind);
+  return adapter && adapter->supports_put_signal();
 }
 
 unsigned Communicator::wait_signal_async(int peer, uint64_t tag,

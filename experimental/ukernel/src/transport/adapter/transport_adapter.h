@@ -101,6 +101,29 @@ class TransportAdapter {
                                      std::optional<WaitTarget> target,
                                      unsigned comm_rid) = 0;
 
+  // Fused put+signal: once the data has landed, the peer observes `tag`
+  // as a signal (IPC: written into the peer's shm signal ring; RDMA:
+  // delivered as write-with-imm). Completion semantics match
+  // send_put_async — exactly one completion for comm_rid, after BOTH the
+  // data and the signal are out. Default: unsupported (returns 0).
+  virtual bool supports_put_signal() const { return false; }
+  virtual unsigned send_put_signal_async(int peer_rank, void* local_ptr,
+                                         uint32_t local_buffer_id,
+                                         void* remote_ptr,
+                                         uint32_t remote_buffer_id,
+                                         size_t len, uint64_t tag,
+                                         unsigned comm_rid) {
+    (void)peer_rank;
+    (void)local_ptr;
+    (void)local_buffer_id;
+    (void)remote_ptr;
+    (void)remote_buffer_id;
+    (void)len;
+    (void)tag;
+    (void)comm_rid;
+    return 0;
+  }
+
   void set_put_completion_ring(jring_t* ring) { put_completion_ring_ = ring; }
   void set_sig_send_completion_ring(jring_t* ring) { sig_send_completion_ring_ = ring; }
 

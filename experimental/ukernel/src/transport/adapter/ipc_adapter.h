@@ -65,6 +65,11 @@ class IpcAdapter final : public TransportAdapter {
                              unsigned comm_rid) override;
   unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                              unsigned comm_rid) override;
+  bool supports_put_signal() const override { return true; }
+  unsigned send_put_signal_async(int peer, void* local_ptr,
+                                 uint32_t local_buf, void* remote_ptr,
+                                 uint32_t remote_buf, size_t len, uint64_t tag,
+                                 unsigned comm_rid) override;
 
   // Drain signal tags from the peer's shared-memory signal ring.
   // Called directly by Communicator::drain_ipc_signals().
@@ -73,7 +78,7 @@ class IpcAdapter final : public TransportAdapter {
   void close_comp(int peer_rank);
 
  private:
-  enum class ReqType : uint8_t { DataPut, DataWait };
+  enum class ReqType : uint8_t { DataPut, DataWait, PutSignal };
 
   struct RingElem {
     unsigned comm_rid;
@@ -83,6 +88,7 @@ class IpcAdapter final : public TransportAdapter {
     void* local_ptr;
     void* remote_ptr;
     size_t bytes;
+    uint64_t tag = 0;  // PutSignal: signal tag written after data lands
   };
 
   struct PeerComp {
@@ -98,6 +104,10 @@ class IpcAdapter final : public TransportAdapter {
   void recv_worker();
   bool send_one(RingElem* e);
   bool recv_one(RingElem* e);
+  // Write a signal tag into the peer's shm ring. Multi-producer safe:
+  // both the executor's enqueue thread (plain signals) and the send
+  // worker (fused PutSignal) publish through this.
+  bool write_signal_ring(int peer, uint64_t tag);
 
   bool connect_to(int rank);
   bool accept_from(int rank);

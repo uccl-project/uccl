@@ -95,13 +95,27 @@ class Communicator {
   bool send_put_async_with_rid(
       int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
       size_t dst_off, size_t bytes,
-      PeerTransportKind transport, unsigned rid);
+      PeerTransportKind transport, unsigned rid, uint32_t qp_affinity = ~0u);
   bool send_signal_async_with_rid(
       int peer, uint64_t tag,
       PeerTransportKind transport, unsigned rid);
   bool wait_signal_async_with_rid(
       int peer, uint64_t tag,
       PeerTransportKind transport, unsigned rid);
+
+  // Fused put+signal: once the data lands, the peer observes `tag` as a
+  // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
+  // for rid. Returns false when the effective transport cannot fuse —
+  // callers then fall back to a separate put + signal.
+  // qp_affinity (RDMA only, ~0u = auto): pins the op to
+  // (qp_affinity % num_qps); puts of one signal group must share a QP.
+  bool send_put_signal_async_with_rid(
+      int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
+      size_t dst_off, size_t bytes,
+      PeerTransportKind transport, uint64_t tag, unsigned rid,
+      uint32_t qp_affinity = ~0u);
+  // Whether the effective transport to `peer` supports fused PutSignal.
+  bool can_fuse_put_signal(int peer, PeerTransportKind transport);
 
   // rid encoding: backend-path rids carry a 2-bit tag in the top bits
   // (bit 30 = SignalBackend, bit 31 = TransportBackend); the low 30 bits are

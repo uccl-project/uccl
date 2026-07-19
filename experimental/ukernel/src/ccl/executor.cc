@@ -119,6 +119,14 @@ static std::shared_ptr<CollPlan const> build_plan(CollectiveConfig const& cfg,
 
   for (uint32_t i = 0; i < nops; ++i)
     if (plan->tiled.ops[i].deps.empty()) plan->initial_ready.push_back(i);
+
+  // PutSignal fusion candidates: 1:1 Signal↔Put pairs from the lowerer.
+  plan->sig_to_put.assign(nops, -1);
+  plan->put_to_sig.assign(nops, -1);
+  for (auto [sig_idx, put_idx] : plan->tiled.fused_put_signal) {
+    plan->sig_to_put[sig_idx] = static_cast<int32_t>(put_idx);
+    plan->put_to_sig[put_idx] = static_cast<int32_t>(sig_idx);
+  }
   return plan;
 }
 
@@ -343,6 +351,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   run->scratch_buf_id = scr_id;
   size_t nops = plan->nops;
   run->submitted.resize(nops, 0);
+  run->fused_sig.assign(nops, 0);
 
   UK_DBG(UK_DBG_LVL_EXEC, "[submit r%d] %zu ops", cfg.rank, nops);
   run->init_ready_ring(nops);
@@ -493,7 +502,37 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
     }
 
+    // PutSignal fusion: a 1:1 partner Signal rides this Put when the
+    // transport supports it; the Signal op then completes locally once
+    // it becomes ready. The decision is re-derived every cycle, and the
+    // per-run fused_sig marker is set only when the fused put is
+    // actually accepted by the backend (see the submission loops).
+    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u &&
+        c.put_path != PutPath::Device && owned_comm_ &&
+        !run.plan->put_to_sig.empty()) {
+      int32_t sig_idx = run.plan->put_to_sig[idx];
+      if (sig_idx >= 0) {
+        auto tpt_kind = (c.put_path == PutPath::Rdma)
+                            ? Transport::PeerTransportKind::Rdma
+                            : Transport::PeerTransportKind::Ipc;
+        if (owned_comm_->can_fuse_put_signal(static_cast<int>(c.dst_peer),
+                                             tpt_kind)) {
+          c.flags |= kCmdFlagPutSignal;
+          c.tag = run.plan->tiled.ops[sig_idx].tag;
+        }
+      }
+    }
+
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
+      // Fused: the partner Put already carried this Signal's tag — no
+      // backend dispatch needed, complete it locally.
+      if (c.kind == ExecOpKind::Signal && !run.plan->sig_to_put.empty() &&
+          run.plan->sig_to_put[idx] >= 0 && run.fused_sig[idx]) {
+        run.submitted[idx] = 1;
+        complete_op_local(run, idx);
+        ++sig_dispatched;
+        continue;
+      }
       uint32_t be_idx = signal_be_->reserve_slot();
       if (be_idx != BatchBackend::kInvalidBeIdx) {
         // Reserve-then-enqueue: publish the slot BEFORE the op can
@@ -590,6 +629,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
+        // The fused put was accepted: mark the partner Signal so it
+        // completes locally when it becomes ready.
+        if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
+          run.fused_sig[run.plan->put_to_sig[tpt_idx[i]]] = 1;
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
@@ -603,6 +646,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          run.tpt_cmds[i].put_path, stop_);
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
+        if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
+          run.fused_sig[run.plan->put_to_sig[tpt_idx[i]]] = 1;
       }
       for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
       tpt_dispatched = ok;

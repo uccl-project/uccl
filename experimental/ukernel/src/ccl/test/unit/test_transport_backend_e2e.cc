@@ -99,7 +99,9 @@ int main(int argc, char** argv) {
         w[i].cmd.bytes = sz;
         w[i].cmd.src_peer = ~0u;
         w[i].cmd.dst_peer = (uint32_t)peer;
-        w[i].cmd.transport = (uint8_t)tpt_kind;
+        w[i].cmd.put_path = (tpt_kind == PeerTransportKind::Rdma)
+                                ? PutPath::Rdma
+                                : PutPath::Ipc;
         w[i].caller_id = i;
       }
 

@@ -262,29 +262,50 @@ unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
   return 1;
 }
 
-unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
-                                       unsigned comm_rid) {
-  if (!has_put_path(peer)) return 0;
-
+bool IpcAdapter::write_signal_ring(int peer, uint64_t tag) {
   // Inline fast path: write tag to remote peer's signal ring in SHM.
   auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
       reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
-  uint64_t w = remote_ring->write_idx.load(std::memory_order_relaxed);
-  uint64_t r = remote_ring->read_idx.load(std::memory_order_acquire);
 
-  // Back-pressure: spin until slot is free.
-  while (w - r >= kSignalRingSize) {
-    r = remote_ring->read_idx.load(std::memory_order_acquire);
+  // Multi-producer claim: plain signals come from the executor's enqueue
+  // thread, fused PutSignal writes come from the send worker. Claim with
+  // fetch_add; the per-slot ready flag tolerates out-of-order publishes
+  // (the consumer stops at the first unready slot and catches up later).
+  // In-flight claims are bounded by the producer count (≤ 2), far below
+  // the ring size, so a new claim can never lap a stalled publisher.
+  uint64_t w =
+      remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
+  size_t idx = w & (kSignalRingSize - 1);
+
+  // Back-pressure: wait until this slot's previous lap was consumed.
+  while (remote_ring->slots[idx].ready.load(std::memory_order_acquire)) {
+    if (stop_.load(std::memory_order_relaxed)) return false;
     std::this_thread::yield();
   }
 
-  size_t idx = w & (kSignalRingSize - 1);
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
-  remote_ring->write_idx.store(w + 1, std::memory_order_release);
-  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d at idx=%zu w=%lu",
-         comm_->rank(), (unsigned long)tag, peer, idx, (unsigned long)(w + 1));
+  return true;
+}
+
+unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
+                                       unsigned comm_rid) {
+  if (!has_put_path(peer)) return 0;
+  if (!write_signal_ring(peer, tag)) return 0;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d",
+         comm_->rank(), (unsigned long)tag, peer);
   publish_sig_send_completion(comm_rid, false);
+  return 1;
+}
+
+unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr,
+                                           uint32_t, void* remote_ptr,
+                                           uint32_t, size_t len,
+                                           uint64_t tag, unsigned comm_rid) {
+  if (!has_put_path(peer)) return 0;
+  RingElem e{comm_rid,   peer, ReqType::PutSignal, next_send_match_seq(peer),
+             local_ptr, remote_ptr, len, tag};
+  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
 
@@ -362,13 +383,18 @@ void IpcAdapter::send_worker() {
     }
     UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] dequeued op type=%d peer=%d bytes=%lu",
            comm_->rank(), (int)e.type, e.peer, (unsigned long)e.bytes);
-    bool ok = send_one(&e);
+    bool ok = (e.type == ReqType::DataPut || e.type == ReqType::PutSignal)
+                  ? send_one(&e)
+                  : false;
     UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] send_one done ok=%d",
            comm_->rank(), (int)ok);
     if (ok) {
       size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
       comps_[e.peer].remote->last_completed[dir].store(
           e.seq, std::memory_order_release);
+      // Fused PutSignal: the peer observes the tag only after the data
+      // has landed, matching the semantics of a separate Signal op.
+      if (e.type == ReqType::PutSignal) ok = write_signal_ring(e.peer, e.tag);
     }
     publish_put_completion(e.comm_rid, !ok);
   }
@@ -393,7 +419,8 @@ void IpcAdapter::recv_worker() {
 }
 
 bool IpcAdapter::send_one(RingElem* e) {
-  if (!e || e->type != ReqType::DataPut) return false;
+  if (!e || (e->type != ReqType::DataPut && e->type != ReqType::PutSignal))
+    return false;
   void* src = e->local_ptr;
   void* dst = e->remote_ptr;
   UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] dst=%p src=%p peer=%d",

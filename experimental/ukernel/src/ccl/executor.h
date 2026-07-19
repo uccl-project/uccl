@@ -50,6 +50,11 @@ struct CollPlan {
   std::vector<uint32_t> successor_data;  // CSR successors
   std::vector<uint32_t> indegree_init;   // deps count per op
   std::vector<uint32_t> initial_ready;   // ops with no deps
+  // PutSignal fusion candidates (from TiledResult::fused_put_signal),
+  // indexed by op idx, -1 = none. A fused put carries its partner
+  // signal's tag; the partner Signal op is then completed locally.
+  std::vector<int32_t> sig_to_put;
+  std::vector<int32_t> put_to_sig;
 };
 
 struct SprayRun {
@@ -76,6 +81,11 @@ struct SprayRun {
   // Successor graph lives in the shared plan; only the mutable indegree
   // is per-run.
   std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
+
+  // Per-op: the partner Signal (see CollPlan::put_to_sig) was carried by
+  // this run's fused PutSignal, so the Signal op completes locally.
+  // Set only after the fused put is accepted by the backend.
+  std::vector<uint8_t> fused_sig;
 
   // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
   jring_t* ready_ring = nullptr;
@@ -337,6 +347,27 @@ class SprayExecutor {
   // active-run slot. Safe against concurrent callers.
   void finalize_run(SprayRun* run);
   int rank_or_neg1() const;
+
+  // Mark an op completed without a backend completion — used when a
+  // Signal op's tag already rode its partner fused PutSignal. Mirrors
+  // the drain_batch per-op path: bump done_count, release successor
+  // dependencies, and flip the run if this was the last op.
+  void complete_op_local(SprayRun& run, uint32_t op_idx) {
+    uint32_t cur =
+        __atomic_load_n(&run.indegree[op_idx], __ATOMIC_ACQUIRE);
+    if (cur == SprayRun::kIndegreeDone) return;
+    run.done_count.fetch_add(1, std::memory_order_release);
+    uint32_t off = run.plan->successor_off[op_idx];
+    uint32_t end = run.plan->successor_off[op_idx + 1];
+    for (uint32_t j = off; j < end; ++j) {
+      uint32_t succ = run.plan->successor_data[j];
+      if (__atomic_fetch_sub(&run.indegree[succ], 1, __ATOMIC_RELEASE) == 1)
+        run.push_ready(succ);
+    }
+    __atomic_store_n(&run.indegree[op_idx], SprayRun::kIndegreeDone,
+                     __ATOMIC_RELEASE);
+    finalize_run(&run);
+  }
 
   template <typename F>
   void drain_batch(BeSlotSnap* snaps, size_t n, F&& cb) {

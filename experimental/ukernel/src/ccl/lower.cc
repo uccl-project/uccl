@@ -96,7 +96,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<size_t> const& tiles_per_chunk,
                                     bool inplace, bool stage_puts,
                                     uint32_t signal_group_tiles,
-                                    size_t& staging_bytes) {
+                                    size_t& staging_bytes,
+                                    std::vector<std::pair<uint32_t, uint32_t>>&
+                                        fused_pairs) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
@@ -175,6 +177,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
             for (uint32_t pi : sig_group_puts)
               new_deps.push_back({sig_idx, pi});
             out.push_back(sig);
+            // Single-Put group with an imm-sized tag: fusion candidate.
+            if (sig_group_puts.size() == 1 && sig.tag <= 0xFFFFFFFFu)
+              fused_pairs.emplace_back(sig_idx, sig_group_puts[0]);
             sig_group_puts.clear();
           }
         } else {
@@ -199,6 +204,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           for (uint32_t pi : sig_group_puts)
             new_deps.push_back({sig_idx, pi});
           out.push_back(sig);
+          // Single-Put group with an imm-sized tag: fusion candidate.
+          if (sig_group_puts.size() == 1 && sig.tag <= 0xFFFFFFFFu)
+            fused_pairs.emplace_back(sig_idx, sig_group_puts[0]);
           sig_group_puts.clear();
         }
         }
@@ -334,7 +342,8 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
   size_t staging_bytes = 0;
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                               tiled.tiles_per_chunk, inplace, stage_puts,
-                              signal_group_tiles, staging_bytes);
+                              signal_group_tiles, staging_bytes,
+                              result.fused_put_signal);
   result.staging_bytes_required = staging_bytes;
   return result;
 }

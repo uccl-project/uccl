@@ -73,7 +73,7 @@ DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async test_spray_executor
-INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e test_spray_executor_e2e test_rdma_l2_flush test_perf_spray_allreduce
+INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e test_put_signal_e2e test_spray_executor_e2e test_rdma_l2_flush test_perf_spray_allreduce
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -140,6 +140,13 @@ test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/si
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
 test/unit/test_signal_backend_e2e.o: test/unit/test_signal_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_put_signal_e2e: $(CCL_CORE_OBJ) $(TRANSPORT_OBJ) test/integration/test_put_signal_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/integration/test_put_signal_e2e.o: test/integration/test_put_signal_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \

@@ -112,6 +112,11 @@ struct TiledResult {
   int rank = 0;
   int nranks = 1;
   ReductionKind reduction = ReductionKind::None;
+  // 1:1 Put↔Signal fusion candidates: (signal_op_idx, put_op_idx) for
+  // signal groups that cover exactly one Put and whose tag fits the
+  // 32-bit RDMA immediate. The executor may fuse these into a single
+  // PutSignal on transports that support it.
+  std::vector<std::pair<uint32_t, uint32_t>> fused_put_signal;
 };
 
 }  // namespace CCL

@@ -233,6 +233,17 @@ void test_lower_algo_ring_basic() {
   }
   assert(saw_signal);
   assert(saw_waitsig);
+
+  // G=1: every Signal op is a 1:1 PutSignal fusion candidate.
+  size_t nsig = 0;
+  for (auto const& op : tiled.ops)
+    if (op.kind == ExecOpKind::Signal) ++nsig;
+  assert(tiled.fused_put_signal.size() == nsig);
+  for (auto [s, p] : tiled.fused_put_signal) {
+    assert(tiled.ops[s].kind == ExecOpKind::Signal);
+    assert(tiled.ops[p].kind == ExecOpKind::Put);
+    assert(tiled.ops[s].deps.size() == 1 && tiled.ops[s].deps[0] == p);
+  }
 }
 
 void test_lower_algo_signal_grouping() {
@@ -276,6 +287,10 @@ void test_lower_algo_signal_grouping() {
     if (op.kind == ExecOpKind::Signal || op.kind == ExecOpKind::WaitSignal)
       assert((op.tag & 0xFFFFu) == 0);
   }
+
+  // G=2 groups are not 1:1, so no PutSignal fusion candidates.
+  assert(g2.fused_put_signal.empty());
+  assert(!g1.fused_put_signal.empty());
 }
 
 void test_lower_algo_alltoall_basic() {

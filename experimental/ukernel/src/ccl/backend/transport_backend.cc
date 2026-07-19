@@ -37,6 +37,14 @@ bool TransportBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
   // gap; the executor retries the op through its slot table.
   if (c.kind != ExecOpKind::Put) return false;
   unsigned rid = Transport::Communicator::kRidTagTransport | be_idx;
+  if (c.flags & kCmdFlagPutSignal) {
+    // No silent fallback: the executor suppresses the partner Signal
+    // only for puts accepted with this flag, so a failed fused
+    // submission must fail the op (it is retried next cycle).
+    return comm_->send_put_signal_async_with_rid(
+        static_cast<int>(c.dst_peer), c.src_buf, c.src_off, c.dst_buf,
+        c.dst_off, c.bytes, to_peer_transport(c.put_path), c.tag, rid);
+  }
   return comm_->send_put_async_with_rid(
       static_cast<int>(c.dst_peer), c.src_buf, c.src_off, c.dst_buf,
       c.dst_off, c.bytes, to_peer_transport(c.put_path), rid);
