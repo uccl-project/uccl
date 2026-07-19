@@ -59,6 +59,68 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, uint32_t input_buf,
   return c;
 }
 
+// Opaque binary key covering everything that shapes a plan. Buffer
+// pointers are deliberately excluded: plans reference buffers by role
+// and are shared across different input/output pointers.
+static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
+  std::string k;
+  k.reserve(128);
+  auto add = [&k](uint64_t v) {
+    k.append(reinterpret_cast<char const*>(&v), sizeof(v));
+  };
+  add(static_cast<uint64_t>(cfg.kind));
+  add(static_cast<uint64_t>(cfg.nranks));
+  add(static_cast<uint64_t>(cfg.rank));
+  add(cfg.input_bytes);
+  add(cfg.output_bytes);
+  add(cfg.tile_bytes);
+  add(static_cast<uint64_t>(cfg.dtype));
+  add(static_cast<uint64_t>(cfg.reduction));
+  add(inplace ? 1u : 0u);
+  add(cfg.input_split_bytes.size());
+  for (size_t v : cfg.input_split_bytes) add(v);
+  add(cfg.output_split_bytes.size());
+  for (size_t v : cfg.output_split_bytes) add(v);
+  return k;
+}
+
+// Build the immutable plan: tiling/lowering plus the successor CSR and
+// the initial scheduling state that submit() would otherwise rebuild
+// on every call.
+static std::shared_ptr<CollPlan const> build_plan(CollectiveConfig const& cfg,
+                                                  bool inplace) {
+  auto plan = std::make_shared<CollPlan>();
+  plan->tiled = build_tiled(cfg, inplace);
+  size_t nops = plan->tiled.ops.size();
+  plan->nops = nops;
+
+  plan->indegree_init.resize(nops);
+  std::vector<uint32_t> succ_count(nops, 0);
+  for (uint32_t i = 0; i < nops; ++i) {
+    plan->indegree_init[i] =
+        static_cast<uint32_t>(plan->tiled.ops[i].deps.size());
+    for (uint32_t dep : plan->tiled.ops[i].deps) ++succ_count[dep];
+  }
+
+  plan->successor_off.resize(nops + 1);
+  uint32_t off = 0;
+  for (uint32_t i = 0; i < nops; ++i) {
+    plan->successor_off[i] = off;
+    off += succ_count[i];
+  }
+  plan->successor_off[nops] = off;
+  plan->successor_data.resize(off);
+
+  std::vector<uint32_t> pos = plan->successor_off;
+  for (uint32_t i = 0; i < nops; ++i)
+    for (uint32_t dep : plan->tiled.ops[i].deps)
+      plan->successor_data[pos[dep]++] = i;
+
+  for (uint32_t i = 0; i < nops; ++i)
+    if (plan->tiled.ops[i].deps.empty()) plan->initial_ready.push_back(i);
+  return plan;
+}
+
 uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
   if (!ptr || !bytes) return 0;
   uintptr_t key = reinterpret_cast<uintptr_t>(ptr);
@@ -220,7 +282,22 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     }
   }
 
-  TiledResult tiled = build_tiled(cfg, input == output);
+  // Plan cache: identical collective shapes reuse the same immutable
+  // plan; only mutable scheduling state is per-run.
+  std::shared_ptr<CollPlan const> plan;
+  {
+    std::lock_guard lock(plan_cache_mu_);
+    std::string key = plan_key(cfg, input == output);
+    auto it = plan_cache_.find(key);
+    if (it != plan_cache_.end()) {
+      plan = it->second;
+    } else {
+      if (plan_cache_.size() >= kMaxCachedPlans) plan_cache_.clear();
+      plan = build_plan(cfg, input == output);
+      plan_cache_.emplace(std::move(key), plan);
+    }
+  }
+  TiledResult const& tiled = plan->tiled;
 
   // Allocate or grow internal scratch buffer as needed.
   if (tiled.staging_bytes_required > 0) {
@@ -248,8 +325,9 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   }
 
   auto h = next_handle_++;
-  if (tiled.ops.empty()) {
+  if (plan->nops == 0) {
     auto run = std::make_unique<SprayRun>();
+    run->plan = plan;
     run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
     runs_[h] = std::move(run);
     return h;
@@ -258,44 +336,17 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   auto run = std::make_unique<SprayRun>();
   active_runs_.fetch_add(1, std::memory_order_release);
   run->status.store(CollectiveOpStatus::Running, std::memory_order_release);
-  run->tiled = std::move(tiled);
+  run->plan = plan;
   run->input_buf_id = in_id;
   run->output_buf_id = out_id;
   run->scratch_buf_id = scr_id;
-  run->submitted.resize(run->tiled.ops.size(), 0);
+  size_t nops = plan->nops;
+  run->submitted.resize(nops, 0);
 
-  size_t nops = run->tiled.ops.size();
   UK_DBG(UK_DBG_LVL_EXEC, "[submit r%d] %zu ops", cfg.rank, nops);
   run->init_ready_ring(nops);
-  run->indegree.resize(nops);
-
-  std::vector<uint32_t> succ_count(nops, 0);
-  for (uint32_t i = 0; i < nops; ++i) {
-    __atomic_store_n(&run->indegree[i],
-                     static_cast<uint32_t>(run->tiled.ops[i].deps.size()),
-                     __ATOMIC_RELAXED);
-    for (uint32_t dep : run->tiled.ops[i].deps) ++succ_count[dep];
-  }
-
-  run->successor_off.resize(nops + 1);
-  uint32_t off = 0;
-  for (uint32_t i = 0; i < nops; ++i) {
-    run->successor_off[i] = off;
-    off += succ_count[i];
-  }
-  run->successor_off[nops] = off;
-  run->successor_data.resize(off);
-
-  std::vector<uint32_t> pos = run->successor_off;
-  for (uint32_t i = 0; i < nops; ++i) {
-    for (uint32_t dep : run->tiled.ops[i].deps)
-      run->successor_data[pos[dep]++] = i;
-  }
-
-  size_t initial = 0;
-  for (uint32_t i = 0; i < nops; ++i) {
-    if (run->tiled.ops[i].deps.empty()) { run->push_ready(i); ++initial; }
-  }
+  run->indegree = plan->indegree_init;  // one memcpy from the template
+  for (uint32_t op : plan->initial_ready) run->push_ready(op);
   runs_[h] = std::move(run);
   return h;
 }
@@ -393,7 +444,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
   static int op_kind_print_cnt = 0;
   for (uint32_t idx : run.ready) {
-    Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction, run.input_buf_id,
+    Cmd c = make_cmd(run.plan->tiled.ops[idx], run.plan->tiled.reduction,
+                     run.input_buf_id,
                      run.output_buf_id, run.scratch_buf_id);
     if (op_kind_print_cnt++ < 20) {
       UK_DBG(UK_DBG_LVL_EXEC,
@@ -576,7 +628,7 @@ void SprayExecutor::drain_dev_loop() {
         snap_buf[valid++] = snap;
       }
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
-        auto& op = s.run->tiled.ops[s.op_idx];
+        auto& op = s.run->plan->tiled.ops[s.op_idx];
         if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
           int peer = static_cast<int>(op.dst_peer);
           if (peer >= 0 && peer < world_size_)
@@ -622,7 +674,7 @@ void SprayExecutor::drain_tpt_loop() {
       }
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
         if (s.put_path == PutPath::None) return;
-        int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
+        int peer = static_cast<int>(s.run->plan->tiled.ops[s.op_idx].dst_peer);
         if (peer < 0 || peer >= world_size_) return;
         auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
                                                 : tpt_metrics_[peer].rdma;
@@ -686,7 +738,7 @@ void SprayExecutor::finalize_run(SprayRun* run) {
       CollectiveOpStatus::Running)
     return;
   if (run->done_count.load(std::memory_order_acquire) <
-      run->tiled.ops.size())
+      run->plan->tiled.ops.size())
     return;
   // Exactly-once: only the CAS winner flips status and releases the
   // active-run slot, no matter how many threads observe completion.
@@ -712,7 +764,7 @@ size_t SprayExecutor::progress_once() {
     }
     if (valid) {
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
-        auto& op = s.run->tiled.ops[s.op_idx];
+        auto& op = s.run->plan->tiled.ops[s.op_idx];
         if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
           int peer = static_cast<int>(op.dst_peer);
           if (peer >= 0 && peer < world_size_)
@@ -733,7 +785,7 @@ size_t SprayExecutor::progress_once() {
     if (valid) {
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
         if (s.put_path == PutPath::None) return;
-        int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
+        int peer = static_cast<int>(s.run->plan->tiled.ops[s.op_idx].dst_peer);
         if (peer < 0 || peer >= world_size_) return;
         auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
                                                : tpt_metrics_[peer].rdma;

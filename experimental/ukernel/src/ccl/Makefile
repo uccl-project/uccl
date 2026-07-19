@@ -211,7 +211,7 @@ clean:
 		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
--include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/unit/test_modules.d test/unit/test_async.d \
-	test/integration/test_perf_p2p_copy.d
+# Cover every generated .d (wildcard): the previous explicit list missed
+# several test objects, which then went stale on header changes (ODR).
+-include $(wildcard *.d algo/*.d backend/*.d test/common/*.d test/unit/*.d \
+		test/integration/*.d)

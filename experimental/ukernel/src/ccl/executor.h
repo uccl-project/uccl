@@ -39,6 +39,19 @@ enum class CollectiveOpStatus : uint32_t {
 using CollectiveOpHandle = uint64_t;
 inline constexpr CollectiveOpHandle kInvalidHandle = 0;
 
+// Immutable, pointer-independent execution plan for one collective
+// shape (kind/bytes/tile/dtype/splits/inplace). Built once and shared
+// by all runs with the same shape; buf IDs are resolved per run, so
+// plans are reusable across different input/output pointers.
+struct CollPlan {
+  TiledResult tiled;
+  size_t nops = 0;
+  std::vector<uint32_t> successor_off;   // CSR offsets, size nops+1
+  std::vector<uint32_t> successor_data;  // CSR successors
+  std::vector<uint32_t> indegree_init;   // deps count per op
+  std::vector<uint32_t> initial_ready;   // ops with no deps
+};
+
 struct SprayRun {
   static constexpr uint32_t kIndegreeDone =
       ~0u;  // sentinel: op already processed
@@ -59,10 +72,9 @@ struct SprayRun {
   std::vector<Cmd> dev_cmds;
   std::vector<Cmd> tpt_cmds;
 
-  // Lock-free drain path (drain threads, no mtx)
-  std::vector<uint32_t> successor_data;  // contiguous successor list
-  std::vector<uint32_t>
-      successor_off;               // offset into data per op (size = nops+1)
+  // Lock-free drain path (drain threads, no mtx).
+  // Successor graph lives in the shared plan; only the mutable indegree
+  // is per-run.
   std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
 
   // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
@@ -97,8 +109,8 @@ struct SprayRun {
     if (ready_ring) { free(ready_ring); ready_ring = nullptr; }
   }
 
-  // Read-only after construction
-  TiledResult tiled;
+  // Shared immutable plan (ops + successor graph); read-only here.
+  std::shared_ptr<CollPlan const> plan;
 
   // Buffer ID deduplication: same ptr+size = same ID
   uint32_t input_buf_id = 0;
@@ -346,10 +358,10 @@ class SprayExecutor {
       run->done_count.fetch_add(1, std::memory_order_release);
       cb(s);
 
-      uint32_t off = run->successor_off[op_idx];
-      uint32_t end = run->successor_off[op_idx + 1];
+      uint32_t off = run->plan->successor_off[op_idx];
+      uint32_t end = run->plan->successor_off[op_idx + 1];
       for (uint32_t j = off; j < end; ++j) {
-        uint32_t succ = run->successor_data[j];
+        uint32_t succ = run->plan->successor_data[j];
         if (__atomic_fetch_sub(&run->indegree[succ], 1, __ATOMIC_RELEASE) ==
             1)
           run->push_ready(succ);
@@ -414,6 +426,14 @@ class SprayExecutor {
   std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
+
+  // Plan cache: collective shape -> immutable plan. Plans are built once
+  // per shape; submit() on a hit only copies the mutable scheduling
+  // state (indegree) into the new run.
+  std::mutex plan_cache_mu_;
+  std::unordered_map<std::string, std::shared_ptr<CollPlan const>>
+      plan_cache_;
+  static constexpr size_t kMaxCachedPlans = 64;
 };
 
 }  // namespace CCL
