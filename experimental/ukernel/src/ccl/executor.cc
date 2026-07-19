@@ -2,7 +2,6 @@
 #include "../../include/transport.h"
 #include "algo/chunk_graph.h"
 #include "backend/backend.h"
-#include "backend/signal_backend.h"
 #include "coll_config.h"
 #include "utils.h"
 #include "util/uk_debug.h"
@@ -313,45 +312,30 @@ bool SprayExecutor::wait(CollectiveOpHandle h, std::chrono::milliseconds to) {
   SprayRun* run = get(h);
   if (!run) return true;
 
-  auto check_complete = [&]() {
-    if (run->done_count.load(std::memory_order_acquire) >=
-        run->tiled.ops.size())
-      run->status.store(CollectiveOpStatus::Completed,
-                        std::memory_order_release);
-  };
-
-  if (to.count() == 0) {
-    int spin = 0;
-    int sleep_us = 100;
-    while (run->status.load(std::memory_order_acquire) ==
-           CollectiveOpStatus::Running) {
-      if (spin < 1000) {
-        ++spin;
-        std::this_thread::yield();
-      } else {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-        sleep_us = std::min(sleep_us * 2, 10000);
-      }
-      check_complete();
-    }
-    return run->status.load(std::memory_order_acquire) !=
-           CollectiveOpStatus::Failed;
-  }
-
-  auto dl = std::chrono::steady_clock::now() + to;
-  int spin = 0;
-  int sleep_us = 100;
+  // Calling-thread-makes-progress (UCX/MPICH style): the waiting thread
+  // drains backends itself instead of sleeping on a timer, so completion
+  // is observed as soon as the last op drains rather than after a sleep
+  // quantum (previously up to 10ms of tail latency per wait).
+  auto const deadline = std::chrono::steady_clock::now() + to;
+  bool const use_deadline = to.count() > 0;
+  uint32_t empty = 0;
+  uint32_t sleep_us = 100;
   while (run->status.load(std::memory_order_acquire) ==
          CollectiveOpStatus::Running) {
-    if (std::chrono::steady_clock::now() >= dl) break;
-    if (spin < 1000) {
-      ++spin;
+    if (use_deadline && std::chrono::steady_clock::now() >= deadline) break;
+    size_t n = progress_once();
+    finalize_run(run);
+    if (n > 0) {
+      empty = 0;
+      sleep_us = 100;
+      continue;
+    }
+    if (++empty < 2000) {
       std::this_thread::yield();
     } else {
       std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-      sleep_us = std::min(sleep_us * 2, 10000);
+      sleep_us = std::min(sleep_us * 2, 1000u);
     }
-    check_complete();
   }
   return run->status.load(std::memory_order_acquire) !=
          CollectiveOpStatus::Failed;
@@ -457,16 +441,32 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      auto* sig = static_cast<SignalBackend*>(signal_be_);
-      uint32_t be_idx = sig->reserve_slot();
-      sig_slots_.write(be_idx, &run, idx, PutPath::None);
-      if (sig->do_enqueue_reserved(c, be_idx)) {
-        run.be_slots.emplace_back(2, be_idx);
-        run.submitted[idx] = 1;
-        ++sig_dispatched;
+      uint32_t be_idx = signal_be_->reserve_slot();
+      if (be_idx != BatchBackend::kInvalidBeIdx) {
+        // Reserve-then-enqueue: publish the slot BEFORE the op can
+        // complete (IPC signal sends complete synchronously).
+        sig_slots_.write(be_idx, &run, idx, PutPath::None, stop_);
+        if (signal_be_->do_enqueue_reserved(c, be_idx)) {
+          run.be_slots.emplace_back(2, be_idx);
+          run.submitted[idx] = 1;
+          ++sig_dispatched;
+        } else {
+          sig_slots_.release(be_idx);
+          run.deferred_sig.push_back(idx);
+        }
       } else {
-        sig_slots_.release(be_idx);
-        run.deferred_sig.push_back(idx);
+        // Backend without reserve support: enqueue first, then publish
+        // the slot. Only safe when completions never arrive
+        // synchronously during do_enqueue.
+        uint32_t gen_idx = 0;
+        if (signal_be_->do_enqueue(&c, 1, &gen_idx) == 1) {
+          sig_slots_.write(gen_idx, &run, idx, PutPath::None, stop_);
+          run.be_slots.emplace_back(2, gen_idx);
+          run.submitted[idx] = 1;
+          ++sig_dispatched;
+        } else {
+          run.deferred_sig.push_back(idx);
+        }
       }
       continue;
     }
@@ -493,7 +493,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           run.deferred_dev.push_back(dev_idx[j]);
         break;
       }
-      dev_slots_.write(be_idx, &run, dev_idx[i], PutPath::None);
+      dev_slots_.write(be_idx, &run, dev_idx[i], PutPath::None, stop_);
       run.be_slots.emplace_back(0, be_idx);
       run.submitted[dev_idx[i]] = 1;
       ++dev_dispatched;
@@ -511,7 +511,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           run.deferred_tpt.push_back(tpt_idx[j]);
         break;
       }
-      tpt_slots_.write(be_idx, &run, tpt_idx[i], run.tpt_cmds[i].put_path);
+      tpt_slots_.write(be_idx, &run, tpt_idx[i], run.tpt_cmds[i].put_path,
+                       stop_);
       run.be_slots.emplace_back(1, be_idx);
       run.submitted[tpt_idx[i]] = 1;
       ++tpt_dispatched;
@@ -677,17 +678,85 @@ int SprayExecutor::rank_or_neg1() const {
 
 void SprayExecutor::check_completions_() {
   std::lock_guard lock(runs_mutex_);
-  for (auto& [h, run] : runs_) {
-    if (run->status.load(std::memory_order_acquire) !=
-        CollectiveOpStatus::Running)
-      continue;
-    if (run->done_count.load(std::memory_order_acquire) >=
-        run->tiled.ops.size()) {
-      run->status.store(CollectiveOpStatus::Completed,
-                        std::memory_order_release);
-      active_runs_.fetch_sub(1, std::memory_order_release);
+  for (auto& [h, run] : runs_) finalize_run(run.get());
+}
+
+void SprayExecutor::finalize_run(SprayRun* run) {
+  if (run->status.load(std::memory_order_acquire) !=
+      CollectiveOpStatus::Running)
+    return;
+  if (run->done_count.load(std::memory_order_acquire) <
+      run->tiled.ops.size())
+    return;
+  // Exactly-once: only the CAS winner flips status and releases the
+  // active-run slot, no matter how many threads observe completion.
+  CollectiveOpStatus expected = CollectiveOpStatus::Running;
+  if (run->status.compare_exchange_strong(expected,
+                                          CollectiveOpStatus::Completed,
+                                          std::memory_order_release,
+                                          std::memory_order_relaxed))
+    active_runs_.fetch_sub(1, std::memory_order_release);
+}
+
+size_t SprayExecutor::progress_once() {
+  uint32_t be_buf[256];
+  BeSlotSnap snap_buf[256];
+  size_t total = 0;
+
+  if (device_be_) {
+    size_t n = device_be_->do_drain(be_buf, 256);
+    size_t valid = 0;
+    for (size_t i = 0; i < n; ++i) {
+      auto snap = dev_slots_.try_claim(be_buf[i], stop_);
+      if (snap.run) snap_buf[valid++] = snap;
+    }
+    if (valid) {
+      drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
+        auto& op = s.run->tiled.ops[s.op_idx];
+        if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
+          int peer = static_cast<int>(op.dst_peer);
+          if (peer >= 0 && peer < world_size_)
+            update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);
+        }
+      });
+      total += valid;
     }
   }
+
+  if (tpt_be_) {
+    size_t n = tpt_be_->do_drain(be_buf, 256);
+    size_t valid = 0;
+    for (size_t i = 0; i < n; ++i) {
+      auto snap = tpt_slots_.try_claim(be_buf[i], stop_);
+      if (snap.run) snap_buf[valid++] = snap;
+    }
+    if (valid) {
+      drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
+        if (s.put_path == PutPath::None) return;
+        int peer = static_cast<int>(s.run->tiled.ops[s.op_idx].dst_peer);
+        if (peer < 0 || peer >= world_size_) return;
+        auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
+                                               : tpt_metrics_[peer].rdma;
+        update_path_metrics(m, s.enqueue_ns);
+      });
+      total += valid;
+    }
+  }
+
+  if (signal_be_) {
+    size_t n = signal_be_->do_drain(be_buf, 256);
+    size_t valid = 0;
+    for (size_t i = 0; i < n; ++i) {
+      auto snap = sig_slots_.try_claim(be_buf[i], stop_);
+      if (snap.run) snap_buf[valid++] = snap;
+    }
+    if (valid) {
+      drain_batch(snap_buf, valid, [](BeSlotSnap&) {});
+      total += valid;
+    }
+  }
+
+  return total;
 }
 
 PutPath SprayExecutor::pick_put_path(int peer) {

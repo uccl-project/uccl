@@ -42,11 +42,25 @@ class CtlBackend final : public BatchBackend {
       uint32_t be_idx = next_be_++;
       if (out_indices) out_indices[accepted] = be_idx;
       enqueued_.push_back(c);
-      completed_.push_back({be_idx});
+      pending_.push_back({be_idx});
       ++in_flight_;
       ++accepted;
     }
     return accepted;
+  }
+
+  uint32_t reserve_slot() override {
+    std::lock_guard lock(mtx_);
+    return next_be_++;
+  }
+
+  bool do_enqueue_reserved(Cmd const& c, uint32_t be_idx) override {
+    std::lock_guard lock(mtx_);
+    if (in_flight_ >= cap_ || !supports(c.kind)) return false;
+    enqueued_.push_back(c);
+    completed_.push_back({be_idx});
+    ++in_flight_;
+    return true;
   }
 
   size_t do_drain(uint32_t* out, size_t max) override {
@@ -57,6 +71,11 @@ class CtlBackend final : public BatchBackend {
       completed_.pop_front();
       --in_flight_;
     }
+    // Ops enqueued via do_enqueue complete on the NEXT drain cycle, so
+    // the executor always publishes its slot-table entry first (real
+    // backends complete asynchronously; this keeps the mock faithful).
+    completed_.insert(completed_.end(), pending_.begin(), pending_.end());
+    pending_.clear();
     return n;
   }
 
@@ -73,6 +92,7 @@ class CtlBackend final : public BatchBackend {
   mutable std::mutex mtx_;
   std::vector<Cmd> enqueued_;
   std::deque<Item> completed_;
+  std::deque<Item> pending_;
   size_t in_flight_ = 0;
   uint32_t next_be_ = 1;
 };
@@ -102,6 +122,7 @@ void test_path_priority() {
   CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 4);
+  ex->start();
   auto cfg = Testing::make_test_config(4, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
   assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
@@ -118,6 +139,7 @@ void test_reduce_device_only() {
   CtlBackend dev("device", 8, kAnyKind), tpt("transport", 4),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 4);
+  ex->start();
   // AllReduceRing produces both Put and Reduce tiles
   auto cfg = Testing::make_test_config(4, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
@@ -135,6 +157,7 @@ void test_deferred_requeue() {
   CtlBackend dev("device", 4, kAnyKind), tpt("transport", 0),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
+  ex->start();
   auto cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scr(256);
 
@@ -160,6 +183,7 @@ void test_concurrent() {
   CtlBackend dev("device", 4, kAnyKind), tpt("transport", 4),
       sig("signal", 16, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
+  ex->start();
   auto cfg = Testing::make_test_config(2, 0, 128, 32);
   std::vector<uint8_t> in(128), out(128), scr(128);
 
@@ -183,6 +207,7 @@ void test_signal_backend() {
   CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
+  ex->start();
   auto cfg = Testing::make_test_config(2, 0, 128, 32);
   std::vector<uint8_t> in(128), out(128), scr(128);
   assert(submit_and_wait(*ex, cfg, in.data(), out.data()));

@@ -211,6 +211,24 @@ UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role
 make test
 ```
 
+## Debugging
+
+Runtime debug output is gated by `UK_CCL_DEBUG` (see
+`experimental/ukernel/include/util/uk_debug.h`). It is compiled in always
+and costs nothing when unset.
+
+```bash
+UK_CCL_DEBUG=1 ./test_perf_spray_allreduce ...   # executor events (submit/enqueue/drain)
+UK_CCL_DEBUG=2 ./test_perf_spray_allreduce ...   # + transport layer (signal matching, rings)
+UK_CCL_DEBUG=3 ./test_perf_spray_allreduce ...   # everything, incl. high-frequency per-op lines
+```
+
+Other runtime switches:
+
+- `UK_CCL_PATH_COUNTERS=1` — count Put ops per path (Device/IPC/RDMA).
+- `UK_BAR1_WINDOW_MB=<n>` — fall back to IPC for remote device-put
+  accesses beyond the BAR1 window (consumer GPUs with 256 MiB BAR1).
+
 ## Notes
 
 - `test-unit` covers planner, lowering, executor lifecycle, and multi-path dispatch.

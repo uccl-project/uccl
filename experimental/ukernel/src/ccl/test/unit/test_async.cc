@@ -36,11 +36,25 @@ class MockBackend final : public BatchBackend {
       enqueued_.push_back(cmds[accepted]);
       uint32_t be = next_be_++;
       if (out_indices) out_indices[accepted] = be;
-      completed_.push_back(be);
+      pending_.push_back(be);
       ++in_flight_;
       ++accepted;
     }
     return accepted;
+  }
+
+  uint32_t reserve_slot() override {
+    std::lock_guard lock(mtx_);
+    return next_be_++;
+  }
+
+  bool do_enqueue_reserved(Cmd const& c, uint32_t be_idx) override {
+    std::lock_guard lock(mtx_);
+    if (in_flight_ >= capacity()) return false;
+    enqueued_.push_back(c);
+    completed_.push_back(be_idx);
+    ++in_flight_;
+    return true;
   }
 
   size_t do_drain(uint32_t* out, size_t max) override {
@@ -51,6 +65,11 @@ class MockBackend final : public BatchBackend {
       completed_.pop_front();
       --in_flight_;
     }
+    // Ops enqueued via do_enqueue complete on the NEXT drain cycle, so
+    // the executor always publishes its slot-table entry first (real
+    // backends complete asynchronously; this keeps the mock faithful).
+    completed_.insert(completed_.end(), pending_.begin(), pending_.end());
+    pending_.clear();
     return n;
   }
 
@@ -66,6 +85,7 @@ class MockBackend final : public BatchBackend {
   bool auto_complete_;
   std::vector<Cmd> enqueued_;
   std::deque<uint32_t> completed_;
+  std::deque<uint32_t> pending_;
   size_t in_flight_ = 0;
   uint32_t next_be_ = 1;
 };
@@ -77,6 +97,7 @@ void test_executor_allreduce_async() {
 
   MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
+  ex->start();
 
   CollectiveConfig cfg = Testing::make_test_config(4, 0, 1024, 256);
   std::vector<uint8_t> in(1024, 0xAA);
@@ -108,6 +129,7 @@ void test_executor_alltoall_async() {
 
   MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
+  ex->start();
 
   CollectiveConfig cfg;
   cfg.nranks = 4;
@@ -117,11 +139,12 @@ void test_executor_alltoall_async() {
   cfg.tile_bytes = 128;
   cfg.kind = CollKind::AllToAllPairwise;
 
+  // AllToAll is always inplace: submit with input == output.
   std::vector<uint8_t> in(512, 0xBB);
   std::vector<uint8_t> out(512, 0);
   std::vector<uint8_t> scratch(1024, 0);
 
-  auto h = ex->submit(cfg, in.data(), out.data());
+  auto h = ex->submit(cfg, in.data(), in.data());
 
   bool done = ex->wait(h, std::chrono::milliseconds(5000));
   assert(done);
@@ -146,6 +169,7 @@ void test_executor_multiple_submits() {
 
   MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
+  ex->start();
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256, 0xCC);
@@ -174,6 +198,7 @@ void test_executor_run_tiled_sync() {
 
   MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
+  ex->start();
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 128);
 
@@ -204,6 +229,7 @@ void test_executor_active_count() {
 
   MockBackend dev_mock(true), tpt_mock(true), signal_mock(true);
   auto ex = std::make_unique<SprayExecutor>(&dev_mock, &tpt_mock, &signal_mock);
+  ex->start();
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 256, 64);
   std::vector<uint8_t> in(256), out(256), scratch(256);

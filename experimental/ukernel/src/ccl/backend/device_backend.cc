@@ -203,11 +203,11 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
 }
 
 size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
-  static thread_local int tls_last_device = -1;
-  if (tls_last_device != device_idx_) {
-    GPU_RT_CHECK(gpuSetDevice(device_idx_));
-    tls_last_device = device_idx_;
-  }
+  // do_drain may run on user threads (SprayExecutor::wait drives
+  // progress); save/restore the caller's CUDA device around it.
+  int prev_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&prev_device));
+  if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(device_idx_));
   std::lock_guard<std::mutex> lk(pending_mu_);
   size_t count = 0;
   for (size_t i = 0; i < pending_.size() && count < max;) {
@@ -221,6 +221,7 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
       ++i;
     }
   }
+  if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(prev_device));
   return count;
 }
 

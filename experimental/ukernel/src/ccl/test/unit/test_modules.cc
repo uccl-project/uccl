@@ -315,12 +315,13 @@ void bench_lower_algo_large_alltoall() {
 
   constexpr int kWarmup = 5;
   constexpr int kIters = 200;
-  for (int i = 0; i < kWarmup; ++i) build_tiled(cfg, false);
+  // AllToAll is always inplace (input == output).
+  for (int i = 0; i < kWarmup; ++i) build_tiled(cfg, true);
 
   auto t0 = std::chrono::steady_clock::now();
   size_t total_ops = 0;
   for (int i = 0; i < kIters; ++i) {
-    TiledResult r = build_tiled(cfg, false);
+    TiledResult r = build_tiled(cfg, true);
     total_ops += r.ops.size();
   }
   auto t1 = std::chrono::steady_clock::now();

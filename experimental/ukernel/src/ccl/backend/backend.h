@@ -58,6 +58,20 @@ class BatchBackend {
   virtual size_t capacity() const = 0;
   virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
 
+  // Reserve-then-enqueue API for ops whose completion may arrive
+  // synchronously during enqueue (e.g. same-host IPC signals). The
+  // executor publishes its slot-table entry between reserve_slot() and
+  // do_enqueue_reserved(), so the drain side never observes a
+  // completion for an unpublished slot. Default: unsupported
+  // (kInvalidBeIdx) — the executor then falls back to plain do_enqueue.
+  static constexpr uint32_t kInvalidBeIdx = ~0u;
+  virtual uint32_t reserve_slot() { return kInvalidBeIdx; }
+  virtual bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) {
+    (void)cmd;
+    (void)be_idx;
+    return false;
+  }
+
  protected:
   UKernel::Transport::Communicator* comm_ = nullptr;
 };

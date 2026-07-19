@@ -183,8 +183,17 @@ class BeSlotTable {
   BeSlotTable() = default;
 
   void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx,
-             PutPath put_path) {
+             PutPath put_path, std::atomic<bool> const& stop) {
     auto& s = slots_[be_idx & mask_];
+    // be_idx grows monotonically while slots are reused modulo table
+    // size. Never overwrite a slot whose previous occupant has not been
+    // claimed yet — its try_claim would otherwise spin forever on a tag
+    // that has already moved on. Single writer (the enqueue thread), so
+    // this is plain backpressure, not a race.
+    while (s.tag.load(std::memory_order_acquire) != ~0u) {
+      if (stop.load(std::memory_order_relaxed)) return;
+      std::this_thread::yield();
+    }
     s.run = run;
     s.op_idx = op_idx;
     s.put_path = put_path;
@@ -195,11 +204,17 @@ class BeSlotTable {
   BeSlotSnap try_claim(uint32_t be_idx, std::atomic<bool> const& stop) {
     auto& s = slots_[be_idx & mask_];
     uint32_t tag;
-    int spins = 0;
+    uint64_t spins = 0;
     while ((tag = s.tag.load(std::memory_order_acquire)) != be_idx) {
-      if (tag == ~0u) return {};
+      // A synchronous-completion backend may surface a completion
+      // before the enqueue thread publishes the slot. Every completion
+      // implies a publisher that is a few instructions behind, so wait
+      // for it: dropping a legitimate completion stalls the whole run.
       if (stop.load(std::memory_order_relaxed)) return {};
-      if (++spins > 100000) return {};
+      if ((++spins & 0xFFFFFu) == 0)
+        std::fprintf(stderr,
+                     "[BeSlotTable] try_claim be_idx=%u: waited %lu spins\n",
+                     be_idx, (unsigned long)spins);
       std::this_thread::yield();
     }
     // Snapshot data before releasing the slot so a subsequent write()
@@ -302,6 +317,14 @@ class SprayExecutor {
 
   PutPath pick_put_path(int peer);
   void check_completions_();
+  // One round of non-blocking progress across all backends: drain
+  // completions, claim slots, and release dependencies. Safe to call
+  // concurrently from the background drain threads and from user
+  // threads in wait(). Returns the number of completions processed.
+  size_t progress_once();
+  // Mark run Completed exactly once (CAS); the winner releases the
+  // active-run slot. Safe against concurrent callers.
+  void finalize_run(SprayRun* run);
   int rank_or_neg1() const;
 
   template <typename F>

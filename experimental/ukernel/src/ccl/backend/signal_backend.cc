@@ -64,6 +64,11 @@ size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,
 }
 
 size_t SignalBackend::do_drain(uint32_t* completed, size_t max) {
+  // Losers report no work this round instead of blocking — the winner's
+  // drain already advances shared state.
+  std::unique_lock<std::mutex> lk(drain_mu_, std::try_to_lock);
+  if (!lk.owns_lock()) return 0;
+
   size_t out = 0;
 
   {

@@ -100,11 +100,15 @@ real_backends: $(REAL_BACKEND_OBJ)
 test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-test_async: $(CCL_CORE_OBJ) executor.o backend/backend.o test/unit/test_async.o
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+test_async: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_async.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
-test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/backend.o test/unit/test_spray_executor.o
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_spray_executor.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
 test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o backend/transport_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
