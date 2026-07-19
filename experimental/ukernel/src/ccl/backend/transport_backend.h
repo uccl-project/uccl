@@ -1,8 +1,8 @@
 #pragma once
 
 #include "backend.h"
+#include <atomic>
 #include <cstdint>
-#include <mutex>
 
 namespace UKernel {
 namespace Transport {
@@ -24,8 +24,9 @@ class TransportBackend final : public BatchBackend {
   size_t capacity() const override { return 2048; }
 
  private:
-  std::mutex mu_;
-  uint32_t cmd_next_ = 0;
+  // Lock-free be_idx allocator. Values stay in [0, 2^30) so they fit in
+  // the tagged rid's low bits; failed enqueues leave harmless gaps.
+  std::atomic<uint32_t> cmd_next_{0};
 };
 
 }  // namespace CCL

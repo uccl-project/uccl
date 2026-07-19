@@ -1,9 +1,9 @@
 #pragma once
 
 #include "backend.h"
+#include <atomic>
 #include <cstdint>
 #include <mutex>
-#include <unordered_map>
 
 namespace UKernel {
 namespace Transport {
@@ -32,9 +32,10 @@ class SignalBackend final : public BatchBackend {
   size_t capacity() const override { return 2048; }
 
  private:
-  uint32_t cmd_next_ = 0;
-  std::mutex mu_;
-  std::unordered_map<uint32_t, unsigned> reserved_;
+  // Lock-free be_idx allocator. Values stay in [0, 2^30) so they fit in
+  // the tagged rid's low bits; failed enqueues leave harmless gaps (the
+  // executor's slot table only ever tracks live slots).
+  std::atomic<uint32_t> cmd_next_{0};
   // Serializes do_drain: the communicator's signal completion rings are
   // single-consumer, but do_drain may be called concurrently by the
   // background drain thread and by user threads in SprayExecutor::wait().

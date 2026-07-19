@@ -1106,6 +1106,9 @@ void Communicator::record_user_ctx(unsigned rid, uint32_t user_ctx) {
 }
 
 uint32_t Communicator::consume_user_ctx(unsigned rid) {
+  // Backend-tagged rid: the low 30 bits are the be_idx itself; no map
+  // entry was ever recorded for it.
+  if (rid & kRidTagMask) return rid & kRidBeIdxMask;
   std::lock_guard<std::mutex> lk(user_ctx_mu_);
   auto it = rid_to_user_ctx_.find(rid);
   if (it == rid_to_user_ctx_.end()) return 0;

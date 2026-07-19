@@ -10,45 +10,30 @@ bool SignalBackend::supports(ExecOpKind kind) const {
 }
 
 uint32_t SignalBackend::reserve_slot() {
-  std::lock_guard<std::mutex> lk(mu_);
-  uint32_t idx = cmd_next_++;
-  unsigned rid = comm_->alloc_rid();
-  comm_->record_user_ctx(rid, idx);
-  reserved_[idx] = rid;
-  return idx;
+  return cmd_next_.fetch_add(1, std::memory_order_relaxed) &
+         Transport::Communicator::kRidBeIdxMask;
 }
 
 bool SignalBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
-  unsigned rid = 0;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = reserved_.find(be_idx);
-    if (it == reserved_.end()) return false;
-    rid = it->second;
-    reserved_.erase(it);
-  }
-
-  bool ok = false;
+  // Tagged rid: completion paths decode be_idx directly (see
+  // Communicator::consume_user_ctx), so enqueue takes no lock and touches
+  // no map. On failure the be_idx is simply skipped — a harmless gap.
+  unsigned rid = Transport::Communicator::kRidTagSignal | be_idx;
   if (c.kind == ExecOpKind::Signal) {
     auto tpt = comm_->same_host(static_cast<int>(c.dst_peer))
                    ? Transport::PeerTransportKind::Ipc
                    : Transport::PeerTransportKind::Rdma;
-    ok = comm_->send_signal_async_with_rid(
+    return comm_->send_signal_async_with_rid(
         static_cast<int>(c.dst_peer), c.tag, tpt, rid);
-  } else if (c.kind == ExecOpKind::WaitSignal) {
+  }
+  if (c.kind == ExecOpKind::WaitSignal) {
     auto tpt = comm_->same_host(static_cast<int>(c.src_peer))
                    ? Transport::PeerTransportKind::Ipc
                    : Transport::PeerTransportKind::Rdma;
-    ok = comm_->wait_signal_async_with_rid(
+    return comm_->wait_signal_async_with_rid(
         static_cast<int>(c.src_peer), c.tag, tpt, rid);
   }
-
-  if (!ok) {
-    std::lock_guard<std::mutex> lk(mu_);
-    comm_->consume_user_ctx(rid);
-    --cmd_next_;
-  }
-  return ok;
+  return false;
 }
 
 size_t SignalBackend::do_enqueue(Cmd const* cmds, size_t n,

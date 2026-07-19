@@ -103,8 +103,24 @@ class Communicator {
       int peer, uint64_t tag,
       PeerTransportKind transport, unsigned rid);
 
+  // rid encoding: backend-path rids carry a 2-bit tag in the top bits
+  // (bit 30 = SignalBackend, bit 31 = TransportBackend); the low 30 bits are
+  // the backend's be_idx, so completion paths decode user_ctx directly
+  // without touching rid_to_user_ctx_. Legacy rids from alloc_rid() stay in
+  // [1, 2^30) and keep using the map.
+  static constexpr unsigned kRidTagSignal = 1u << 30;
+  static constexpr unsigned kRidTagTransport = 1u << 31;
+  static constexpr unsigned kRidTagMask = 3u << 30;
+  static constexpr unsigned kRidBeIdxMask = (1u << 30) - 1;
+
   unsigned alloc_rid() {
-    return next_rid_.fetch_add(1, std::memory_order_relaxed);
+    // Legacy rids must be nonzero (0 means failure) and clear of the
+    // backend tag bits.
+    unsigned r =
+        next_rid_.fetch_add(1, std::memory_order_relaxed) & kRidBeIdxMask;
+    if (r == 0)
+      r = next_rid_.fetch_add(1, std::memory_order_relaxed) & kRidBeIdxMask;
+    return r;
   }
   void record_user_ctx(unsigned rid, uint32_t user_ctx);
   uint32_t consume_user_ctx(unsigned rid);

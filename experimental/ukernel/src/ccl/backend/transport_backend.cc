@@ -31,14 +31,13 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
   for (size_t i = 0; i < n; ++i) {
     Cmd const& c = cmds[i];
 
-    uint32_t idx;
-    unsigned rid;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      idx = cmd_next_++;
-      rid = comm_->alloc_rid();
-      comm_->record_user_ctx(rid, idx);
-    }
+    // Tagged rid: completion paths decode be_idx directly (see
+    // Communicator::consume_user_ctx), so enqueue takes no lock and
+    // touches no map. On failure the idx is simply skipped — a harmless
+    // gap; the executor retries the op through its slot table.
+    uint32_t idx = cmd_next_.fetch_add(1, std::memory_order_relaxed) &
+                   Transport::Communicator::kRidBeIdxMask;
+    unsigned rid = Transport::Communicator::kRidTagTransport | idx;
 
     bool ok = false;
     if (c.kind == ExecOpKind::Put) {
@@ -48,12 +47,7 @@ size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
           to_peer_transport(c.put_path), rid);
     }
 
-    if (!ok) {
-      std::lock_guard<std::mutex> lk(mu_);
-      comm_->consume_user_ctx(rid);
-      --cmd_next_;
-      break;
-    }
+    if (!ok) break;
     if (out_indices) out_indices[accepted] = idx;
     ++accepted;
   }
