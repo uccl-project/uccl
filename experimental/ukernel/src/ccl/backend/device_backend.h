@@ -3,6 +3,7 @@
 #include "backend.h"
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -66,7 +67,11 @@ class DeviceBackend final : public BatchBackend {
     uint32_t args_id;
     uint32_t cmd_idx;
   };
-  std::vector<CmdRec> pending_;  // indexed by internal seq
+  // Per-FIFO submission-ordered queues. Each FIFO completes tasks in
+  // order (monotonic tail counter), so do_drain only pops done prefixes
+  // instead of scanning every pending record.
+  std::vector<std::deque<CmdRec>> pending_by_fifo_;
+  size_t pending_total_ = 0;
   std::mutex pending_mu_;
 
   // Resolved remote IPC pointer cache — written once, read without lock

@@ -15,6 +15,7 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuGetDevice(&device_idx_));
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
+  pending_by_fifo_.resize(cfg_.max_fifos);
   ensure_runtime();
 }
 
@@ -197,7 +198,7 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
     uint32_t fid;
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
-      if (pending_.size() + recs.size() >= capacity()) break;
+      if (pending_total_ + recs.size() >= capacity()) break;
       fid = next_fifo_ % cfg_.max_fifos;
       next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
     }
@@ -213,7 +214,8 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
   }
   if (!recs.empty()) {
     std::lock_guard<std::mutex> lk(pending_mu_);
-    pending_.insert(pending_.end(), recs.begin(), recs.end());
+    for (auto& r : recs) pending_by_fifo_[r.fifo_id].push_back(r);
+    pending_total_ += recs.size();
   }
   return accepted;
 }
@@ -236,19 +238,29 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   int prev_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&prev_device));
   if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(device_idx_));
-  std::lock_guard<std::mutex> lk(pending_mu_);
   size_t count = 0;
-  for (size_t i = 0; i < pending_.size() && count < max;) {
-    auto& rec = pending_[i];
-    if (worker_pool_->is_done(rec.task_id, rec.fifo_id)) {
-      Device::TaskManager::instance().free_task_args(rec.args_id);
-      completed[count++] = rec.cmd_idx;
-      if (i != pending_.size() - 1) rec = pending_.back();
-      pending_.pop_back();
-    } else {
-      ++i;
+  // Args slots to recycle, freed in one batch after pending_mu_ is
+  // released. Draining is capped by the buffer; callers loop anyway.
+  uint32_t args_buf[256];
+  {
+    std::lock_guard<std::mutex> lk(pending_mu_);
+    // Per FIFO, completions are in-order, so pop only the done prefix of
+    // each queue — cost is O(completed + fifos), not O(pending).
+    for (uint32_t fid = 0; fid < cfg_.max_fifos && count < max &&
+                           count < sizeof(args_buf) / sizeof(args_buf[0]);
+         ++fid) {
+      auto& q = pending_by_fifo_[fid];
+      while (!q.empty() && count < max &&
+             count < sizeof(args_buf) / sizeof(args_buf[0]) &&
+             worker_pool_->is_done(q.front().task_id, fid)) {
+        args_buf[count] = q.front().args_id;
+        completed[count++] = q.front().cmd_idx;
+        q.pop_front();
+      }
     }
+    pending_total_ -= count;
   }
+  Device::TaskManager::instance().free_task_args_batch(args_buf, count);
   if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(prev_device));
   return count;
 }

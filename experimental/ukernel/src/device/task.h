@@ -269,22 +269,38 @@ class TaskManager {
     return Task(tt, dt, blockId, idx);
   }
 
-  void free_task_args(uint32_t idx) {
+  void free_task_args(uint32_t idx) { free_task_args_batch(&idx, 1); }
+
+  void free_task_args_batch(uint32_t const* idxs, size_t n) {
+    if (n == 0) return;
     std::lock_guard<std::mutex> g(task_mu_);
     assert(inited_ && "TaskManager not initialized");
-    assert(idx < cap_task_ && "free_task_args idx out of range");
-    if (task_in_use_[idx] == 0) {
-      std::fprintf(stderr,
-                   "[TaskManager] WARNING: double free on task args slot %u\n",
-                   idx);
-      return;
+    for (size_t i = 0; i < n; ++i) {
+      uint32_t idx = idxs[i];
+      assert(idx < cap_task_ && "free_task_args idx out of range");
+      if (task_in_use_[idx] == 0) {
+        std::fprintf(stderr,
+                     "[TaskManager] WARNING: double free on task args slot %u\n",
+                     idx);
+        continue;
+      }
+      task_in_use_[idx] = 0;
+      free_task_.push_back(idx);
+      // Clear the publish marker on GPU so the slot is not seen as
+      // published. On the GDR path this is a plain host store into the
+      // mapped TaskArgs array — avoid a synchronous gpuMemcpy per
+      // completion (it syncs with the device and stalls the drain path).
+#ifndef __CUDA_ARCH__
+      if (host_task_) {
+        host_task_[idx].reserved0 = 0;
+      } else
+#endif
+      {
+        uint64_t zero = 0;
+        GPU_RT_CHECK(gpuMemcpy(&d_task_[idx].reserved0, &zero, sizeof(zero),
+                               gpuMemcpyHostToDevice));
+      }
     }
-    task_in_use_[idx] = 0;
-    free_task_.push_back(idx);
-    // Clear the publish marker on GPU so the slot is not seen as published
-    uint64_t zero = 0;
-    GPU_RT_CHECK(gpuMemcpy(&d_task_[idx].reserved0, &zero, sizeof(zero),
-                            gpuMemcpyHostToDevice));
   }
 
   // GPU: get args pointer by index
