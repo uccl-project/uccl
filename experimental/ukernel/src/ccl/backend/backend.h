@@ -72,6 +72,22 @@ class BatchBackend {
     return false;
   }
 
+  // Batch variants. reserve_slots() fills out[0..k) and returns k;
+  // do_enqueue_reserved_batch() submits previously reserved ops and
+  // returns the accepted prefix length — slots at or beyond the return
+  // value were NOT submitted and must be released by the caller.
+  virtual size_t reserve_slots(uint32_t* out, size_t n) {
+    size_t k = 0;
+    while (k < n && (out[k] = reserve_slot()) != kInvalidBeIdx) ++k;
+    return k;
+  }
+  virtual size_t do_enqueue_reserved_batch(Cmd const* cmds,
+                                           uint32_t const* be_idx, size_t n) {
+    size_t k = 0;
+    while (k < n && do_enqueue_reserved(cmds[k], be_idx[k])) ++k;
+    return k;
+  }
+
  protected:
   UKernel::Transport::Communicator* comm_ = nullptr;
 };

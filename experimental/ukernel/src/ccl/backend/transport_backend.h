@@ -20,6 +20,8 @@ class TransportBackend final : public BatchBackend {
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override;
+  uint32_t reserve_slot() override;
+  bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override { return 2048; }
 

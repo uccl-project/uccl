@@ -533,41 +533,78 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
   }
 
-  // Submit device batch
+  // Submit device batch: reserve be_idx range → publish all slots →
+  // submit (two-phase). A completion can therefore never arrive before
+  // its slot is published, so the drain side's try_claim never spins on
+  // this path.
   size_t dev_dispatched = 0;
-  {
-    for (size_t i = 0; i < run.dev_cmds.size(); ++i) {
-      uint32_t be_idx;
-      size_t n = device_be_->do_enqueue(&run.dev_cmds[i], 1, &be_idx);
-      if (n == 0) {
-        // Backend full — defer remaining.
-        for (size_t j = i; j < run.dev_cmds.size(); ++j)
-          run.deferred_dev.push_back(dev_idx[j]);
-        break;
+  if (!run.dev_cmds.empty()) {
+    size_t m = run.dev_cmds.size();
+    be_idx_scratch_.resize(m);
+    size_t reserved =
+        device_be_->reserve_slots(be_idx_scratch_.data(), m);
+    if (reserved > 0) {
+      for (size_t i = 0; i < reserved; ++i)
+        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i],
+                         PutPath::None, stop_);
+      size_t ok = device_be_->do_enqueue_reserved_batch(
+          run.dev_cmds.data(), be_idx_scratch_.data(), reserved);
+      for (size_t i = 0; i < ok; ++i) {
+        run.be_slots.emplace_back(0, be_idx_scratch_[i]);
+        run.submitted[dev_idx[i]] = 1;
       }
-      dev_slots_.write(be_idx, &run, dev_idx[i], PutPath::None, stop_);
-      run.be_slots.emplace_back(0, be_idx);
-      run.submitted[dev_idx[i]] = 1;
-      ++dev_dispatched;
+      // Roll back slots whose submission failed, defer the rest.
+      for (size_t i = ok; i < reserved; ++i)
+        dev_slots_.release(be_idx_scratch_[i]);
+      for (size_t i = ok; i < m; ++i) run.deferred_dev.push_back(dev_idx[i]);
+      dev_dispatched = ok;
+    } else {
+      // Backend without reserve support: submit first, publish after.
+      // try_claim spins for the rare completion that beats publication.
+      size_t ok = device_be_->do_enqueue(run.dev_cmds.data(), m,
+                                         be_idx_scratch_.data());
+      for (size_t i = 0; i < ok; ++i) {
+        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i],
+                         PutPath::None, stop_);
+        run.be_slots.emplace_back(0, be_idx_scratch_[i]);
+        run.submitted[dev_idx[i]] = 1;
+      }
+      for (size_t i = ok; i < m; ++i) run.deferred_dev.push_back(dev_idx[i]);
+      dev_dispatched = ok;
     }
   }
 
-  // Submit transport batch
+  // Submit transport batch (same two-phase scheme as device above).
   size_t tpt_dispatched = 0;
-  {
-    for (size_t i = 0; i < run.tpt_cmds.size(); ++i) {
-      uint32_t be_idx;
-      size_t n = tpt_be_->do_enqueue(&run.tpt_cmds[i], 1, &be_idx);
-      if (n == 0) {
-        for (size_t j = i; j < run.tpt_cmds.size(); ++j)
-          run.deferred_tpt.push_back(tpt_idx[j]);
-        break;
+  if (!run.tpt_cmds.empty()) {
+    size_t m = run.tpt_cmds.size();
+    be_idx_scratch_.resize(m);
+    size_t reserved = tpt_be_->reserve_slots(be_idx_scratch_.data(), m);
+    if (reserved > 0) {
+      for (size_t i = 0; i < reserved; ++i)
+        tpt_slots_.write(be_idx_scratch_[i], &run, tpt_idx[i],
+                         run.tpt_cmds[i].put_path, stop_);
+      size_t ok = tpt_be_->do_enqueue_reserved_batch(
+          run.tpt_cmds.data(), be_idx_scratch_.data(), reserved);
+      for (size_t i = 0; i < ok; ++i) {
+        run.be_slots.emplace_back(1, be_idx_scratch_[i]);
+        run.submitted[tpt_idx[i]] = 1;
       }
-      tpt_slots_.write(be_idx, &run, tpt_idx[i], run.tpt_cmds[i].put_path,
-                       stop_);
-      run.be_slots.emplace_back(1, be_idx);
-      run.submitted[tpt_idx[i]] = 1;
-      ++tpt_dispatched;
+      for (size_t i = ok; i < reserved; ++i)
+        tpt_slots_.release(be_idx_scratch_[i]);
+      for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
+      tpt_dispatched = ok;
+    } else {
+      size_t ok = tpt_be_->do_enqueue(run.tpt_cmds.data(), m,
+                                      be_idx_scratch_.data());
+      for (size_t i = 0; i < ok; ++i) {
+        tpt_slots_.write(be_idx_scratch_[i], &run, tpt_idx[i],
+                         run.tpt_cmds[i].put_path, stop_);
+        run.be_slots.emplace_back(1, be_idx_scratch_[i]);
+        run.submitted[tpt_idx[i]] = 1;
+      }
+      for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
+      tpt_dispatched = ok;
     }
   }
 

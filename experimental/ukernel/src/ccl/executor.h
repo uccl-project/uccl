@@ -408,6 +408,8 @@ class SprayExecutor {
   BeSlotTable dev_slots_;
   BeSlotTable tpt_slots_;
   BeSlotTable sig_slots_;
+  // Scratch for batched submission (single-threaded: the enqueue loop).
+  std::vector<uint32_t> be_idx_scratch_;
 
   // Transport LB state
   int world_size_ = 0;

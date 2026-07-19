@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend.h"
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -9,6 +10,8 @@
 namespace UKernel {
 namespace Device {
 class WorkerPool;
+struct TaskArgs;
+enum class TaskType : uint64_t;
 }
 namespace CCL {
 
@@ -32,11 +35,20 @@ class DeviceBackend final : public BatchBackend {
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override;
+  uint32_t reserve_slot() override;
+  bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) override;
+  size_t do_enqueue_reserved_batch(Cmd const* cmds, uint32_t const* be_idx,
+                                   size_t n) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
 
  private:
   void ensure_runtime();
+  // Fill TaskArgs/TaskType for a device op; returns false for op kinds
+  // this backend does not handle (caller skips them, matching the
+  // historical behavior). Throws on unresolvable buffer pointers.
+  bool build_task(Cmd const& c, Device::TaskArgs& args,
+                  Device::TaskType& tt);
 
   DeviceBackendConfig cfg_;
   int sm_count_ = 1;
@@ -71,7 +83,9 @@ class DeviceBackend final : public BatchBackend {
   static constexpr size_t kMaxLocalBufs = 8;
   void* local_ptr_cache_[kMaxLocalBufs] = {};
 
-  uint32_t cmd_next_ = 0;  // global command sequence counter
+  // Global command sequence counter; atomic so reserve_slot() is
+  // lock-free. Failed submissions leave harmless gaps.
+  std::atomic<uint32_t> cmd_next_{0};
   uint32_t cmd_done_ = 0;  // completed up to this point
 };
 

@@ -25,29 +25,29 @@ bool TransportBackend::supports(ExecOpKind kind) const {
   return kind == ExecOpKind::Put;
 }
 
+uint32_t TransportBackend::reserve_slot() {
+  return cmd_next_.fetch_add(1, std::memory_order_relaxed) &
+         Transport::Communicator::kRidBeIdxMask;
+}
+
+bool TransportBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
+  // Tagged rid: completion paths decode be_idx directly (see
+  // Communicator::consume_user_ctx), so submission takes no lock and
+  // touches no map. On failure the be_idx is simply skipped — a harmless
+  // gap; the executor retries the op through its slot table.
+  if (c.kind != ExecOpKind::Put) return false;
+  unsigned rid = Transport::Communicator::kRidTagTransport | be_idx;
+  return comm_->send_put_async_with_rid(
+      static_cast<int>(c.dst_peer), c.src_buf, c.src_off, c.dst_buf,
+      c.dst_off, c.bytes, to_peer_transport(c.put_path), rid);
+}
+
 size_t TransportBackend::do_enqueue(Cmd const* cmds, size_t n,
                                     uint32_t* out_indices) {
   size_t accepted = 0;
   for (size_t i = 0; i < n; ++i) {
-    Cmd const& c = cmds[i];
-
-    // Tagged rid: completion paths decode be_idx directly (see
-    // Communicator::consume_user_ctx), so enqueue takes no lock and
-    // touches no map. On failure the idx is simply skipped — a harmless
-    // gap; the executor retries the op through its slot table.
-    uint32_t idx = cmd_next_.fetch_add(1, std::memory_order_relaxed) &
-                   Transport::Communicator::kRidBeIdxMask;
-    unsigned rid = Transport::Communicator::kRidTagTransport | idx;
-
-    bool ok = false;
-    if (c.kind == ExecOpKind::Put) {
-      ok = comm_->send_put_async_with_rid(
-          static_cast<int>(c.dst_peer), c.src_buf,
-          c.src_off, c.dst_buf, c.dst_off, c.bytes,
-          to_peer_transport(c.put_path), rid);
-    }
-
-    if (!ok) break;
+    uint32_t idx = reserve_slot();
+    if (!do_enqueue_reserved(cmds[i], idx)) break;
     if (out_indices) out_indices[accepted] = idx;
     ++accepted;
   }
