@@ -234,7 +234,7 @@ void test_lower_algo_ring_basic() {
   assert(saw_signal);
   assert(saw_waitsig);
 
-  // G=1: every Signal op is a 1:1 PutSignal fusion candidate.
+  // G=1: every Signal op is a fusion-eligible group of one Put.
   size_t nsig = 0;
   for (auto const& op : tiled.ops)
     if (op.kind == ExecOpKind::Signal) ++nsig;
@@ -243,6 +243,11 @@ void test_lower_algo_ring_basic() {
     assert(tiled.ops[s].kind == ExecOpKind::Signal);
     assert(tiled.ops[p].kind == ExecOpKind::Put);
     assert(tiled.ops[s].deps.size() == 1 && tiled.ops[s].deps[0] == p);
+  }
+  assert(tiled.sig_group_size.size() == nsig);
+  for (auto [s, g] : tiled.sig_group_size) {
+    assert(tiled.ops[s].kind == ExecOpKind::Signal);
+    assert(g == 1);
   }
 }
 
@@ -288,9 +293,12 @@ void test_lower_algo_signal_grouping() {
       assert((op.tag & 0xFFFFu) == 0);
   }
 
-  // G=2 groups are not 1:1, so no PutSignal fusion candidates.
-  assert(g2.fused_put_signal.empty());
+  // G=2: each group contributes 2 fusion-carrying puts, group size 2.
+  assert(g2.fused_put_signal.size() == sig2 * 2);
   assert(!g1.fused_put_signal.empty());
+  for (auto [s, g] : g2.sig_group_size) assert(g == 2);
+  assert(!g2.wait_group_size.empty());
+  for (auto [w, g] : g2.wait_group_size) assert(g == 2);
 }
 
 void test_lower_algo_alltoall_basic() {

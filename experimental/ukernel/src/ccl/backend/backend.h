@@ -30,7 +30,9 @@ struct Cmd {
   // kCmdFlagPutSignal: this Put carries its partner Signal's tag (in
   // Cmd::tag); the transport emits the signal once the data lands.
   uint8_t flags;
-  uint8_t _pad[2];      // 2 — alignment
+  // WaitSignal: expected tag arrivals (0/1 = 1). A fused signal group
+  // delivers one arrival per tile, so the wait counts group_size.
+  uint16_t wait_count;
   uint64_t tag;         // 8 — for Signal/SignalWait/PutSignal
 };
 // Total: 4*9 + 1 + 1 + 2 + 8 = 48 bytes

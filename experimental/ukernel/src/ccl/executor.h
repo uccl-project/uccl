@@ -50,11 +50,16 @@ struct CollPlan {
   std::vector<uint32_t> successor_data;  // CSR successors
   std::vector<uint32_t> indegree_init;   // deps count per op
   std::vector<uint32_t> initial_ready;   // ops with no deps
-  // PutSignal fusion candidates (from TiledResult::fused_put_signal),
-  // indexed by op idx, -1 = none. A fused put carries its partner
-  // signal's tag; the partner Signal op is then completed locally.
-  std::vector<int32_t> sig_to_put;
+  // PutSignal fusion metadata (from the lowerer), indexed by op idx.
+  // put_to_sig[put] = the signal op whose tag this put may carry (-1 =
+  // none); several puts of one group map to the same signal. A fused
+  // group is fully carried when sig_group_size[sig] of its puts were
+  // accepted with the fusion flag; the Signal op then completes locally.
+  // wait_group_size[ws] = group tiles (0 = not fusion-eligible): the
+  // wait counts that many tag arrivals when the sender fuses the group.
   std::vector<int32_t> put_to_sig;
+  std::vector<uint16_t> sig_group_size;
+  std::vector<uint16_t> wait_group_size;
 };
 
 struct SprayRun {
@@ -82,10 +87,10 @@ struct SprayRun {
   // is per-run.
   std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
 
-  // Per-op: the partner Signal (see CollPlan::put_to_sig) was carried by
-  // this run's fused PutSignal, so the Signal op completes locally.
-  // Set only after the fused put is accepted by the backend.
-  std::vector<uint8_t> fused_sig;
+  // Per signal op: how many of its group's puts were accepted with the
+  // fusion flag (see CollPlan::sig_group_size). The Signal op completes
+  // locally once the count reaches the group size.
+  std::vector<uint16_t> fused_sig_cnt;
 
   // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
   jring_t* ready_ring = nullptr;

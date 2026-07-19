@@ -90,6 +90,14 @@ TiledOp op_to_tiled(Op const& op) {
   return t;
 }
 
+// Fusion metadata sinks (filled for signal groups whose tag fits the
+// 32-bit RDMA immediate).
+struct FusionMetaOut {
+  std::vector<std::pair<uint32_t, uint32_t>>* put_signal;
+  std::vector<std::pair<uint32_t, uint32_t>>* sig_groups;
+  std::vector<std::pair<uint32_t, uint32_t>>* wait_groups;
+};
+
 std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<Chunk> const& chunks,
                                     std::vector<size_t> const& first_tile,
@@ -97,8 +105,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     bool inplace, bool stage_puts,
                                     uint32_t signal_group_tiles,
                                     size_t& staging_bytes,
-                                    std::vector<std::pair<uint32_t, uint32_t>>&
-                                        fused_pairs) {
+                                    FusionMetaOut meta) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
@@ -177,9 +184,14 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
             for (uint32_t pi : sig_group_puts)
               new_deps.push_back({sig_idx, pi});
             out.push_back(sig);
-            // Single-Put group with an imm-sized tag: fusion candidate.
-            if (sig_group_puts.size() == 1 && sig.tag <= 0xFFFFFFFFu)
-              fused_pairs.emplace_back(sig_idx, sig_group_puts[0]);
+            // Imm-sized tag: every Put of the group may carry the tag
+            // (receiver counts arrivals); record the whole group.
+            if (sig.tag <= 0xFFFFFFFFu) {
+              for (uint32_t pi : sig_group_puts)
+                meta.put_signal->emplace_back(sig_idx, pi);
+              meta.sig_groups->emplace_back(
+                  sig_idx, static_cast<uint32_t>(sig_group_puts.size()));
+            }
             sig_group_puts.clear();
           }
         } else {
@@ -204,9 +216,14 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           for (uint32_t pi : sig_group_puts)
             new_deps.push_back({sig_idx, pi});
           out.push_back(sig);
-          // Single-Put group with an imm-sized tag: fusion candidate.
-          if (sig_group_puts.size() == 1 && sig.tag <= 0xFFFFFFFFu)
-            fused_pairs.emplace_back(sig_idx, sig_group_puts[0]);
+          // Imm-sized tag: every Put of the group may carry the tag
+          // (receiver counts arrivals); record the whole group.
+          if (sig.tag <= 0xFFFFFFFFu) {
+            for (uint32_t pi : sig_group_puts)
+              meta.put_signal->emplace_back(sig_idx, pi);
+            meta.sig_groups->emplace_back(
+                sig_idx, static_cast<uint32_t>(sig_group_puts.size()));
+          }
           sig_group_puts.clear();
         }
         }
@@ -221,6 +238,13 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           ws.tag = make_tag(ch.pair_id, t / G);
           cur_group_ws = static_cast<uint32_t>(out.size());
           out.push_back(ws);
+          // When the sender fuses this group, the wait must count one
+          // arrival per tile instead of a single signal.
+          if (ws.tag <= 0xFFFFFFFFu) {
+            uint32_t grp = static_cast<uint32_t>(
+                std::min<size_t>(G, num_tiles - t));
+            meta.wait_groups->emplace_back(cur_group_ws, grp);
+          }
         }
         old_to_new[old_idx] = cur_group_ws;
 
@@ -340,10 +364,11 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
   propagate_deps(algo.chunks, first_tile, tiled.tiles_per_chunk, tiled.ops);
 
   size_t staging_bytes = 0;
+  FusionMetaOut meta{&result.fused_put_signal, &result.sig_group_size,
+                     &result.wait_group_size};
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                               tiled.tiles_per_chunk, inplace, stage_puts,
-                              signal_group_tiles, staging_bytes,
-                              result.fused_put_signal);
+                              signal_group_tiles, staging_bytes, meta);
   result.staging_bytes_required = staging_bytes;
   return result;
 }

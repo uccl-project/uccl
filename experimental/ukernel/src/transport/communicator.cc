@@ -968,12 +968,16 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
 }
 
 bool Communicator::wait_signal_async_with_rid(
-    int peer, uint64_t tag, PeerTransportKind transport, unsigned rid) {
+    int peer, uint64_t tag, PeerTransportKind transport, unsigned rid,
+    uint32_t count) {
   if (!ensure_path(peer, /*is_put=*/false, transport)) return false;
 
   PeerTransportKind kind = get_wait_transport_kind(peer, transport);
 
   if (kind == PeerTransportKind::Tcp) {
+    // Counted waits are only produced by fused RDMA groups; a TCP peer
+    // never fuses, so count is always 1 here.
+    if (count > 1) return false;
     auto* adapter = get_adapter(kind);
     if (!adapter || !adapter->wait_signal_async(peer, tag, std::nullopt, rid))
       return false;
@@ -1002,18 +1006,27 @@ bool Communicator::wait_signal_async_with_rid(
              global_rank_, peer, (unsigned long)tag,
              sig_it != pending_signals_.end() ? 1 : 0, tags.c_str());
     }
+    // Drain up to `count` buffered arrivals of this tag first.
+    uint32_t remaining = count;
     if (sig_it != pending_signals_.end()) {
       auto& sigs = sig_it->second;
-      for (auto sit = sigs.begin(); sit != sigs.end(); ++sit) {
+      auto sit = sigs.begin();
+      while (remaining > 0 && sit != sigs.end()) {
         if (*sit == tag) {
-          ev.rid = rid; ev.tag = tag; ev.peer = peer; ev.failed = false;
-          sigs.erase(sit);
-          if (sigs.empty()) pending_signals_.erase(sig_it);
-          matched = true; break;
+          sit = sigs.erase(sit);
+          --remaining;
+        } else {
+          ++sit;
         }
       }
+      if (sigs.empty()) pending_signals_.erase(sig_it);
     }
-    if (!matched) { pending_signal_waits_[peer][tag].push_back(rid); }
+    if (remaining == 0) {
+      ev.rid = rid; ev.tag = tag; ev.peer = peer; ev.failed = false;
+      matched = true;
+    } else {
+      pending_signal_waits_[peer][tag].emplace_back(rid, remaining);
+    }
   }
   if (matched) { jrpush(sig_wait_completion_ring_, ev); }
   return true;
@@ -1234,22 +1247,30 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
 void Communicator::on_signal_received(int peer, uint64_t tag) {
   SignalCompletion ev{};
   bool matched = false;
+  bool consumed = false;
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
     auto it = pending_signal_waits_.find(peer);
     if (it != pending_signal_waits_.end()) {
       auto it2 = it->second.find(tag);
       if (it2 != it->second.end()) {
-        ev.rid = it2->second.front();
-        ev.tag = tag;
-        ev.peer = peer;
-        ev.failed = false;
-        it2->second.erase(it2->second.begin());
-        if (it2->second.empty()) it->second.erase(it2);
-        matched = true;
+        auto& front = it2->second.front();
+        consumed = true;
+        if (front.second > 1) {
+          // Counted wait (fused signal group): one arrival per tile.
+          --front.second;
+        } else {
+          ev.rid = front.first;
+          ev.tag = tag;
+          ev.peer = peer;
+          ev.failed = false;
+          it2->second.erase(it2->second.begin());
+          if (it2->second.empty()) it->second.erase(it2);
+          matched = true;
+        }
       }
     }
-    if (!matched) {
+    if (!consumed) {
       pending_signals_[peer].push_back(tag);
     }
   }

@@ -31,7 +31,8 @@ bool SignalBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
                    ? Transport::PeerTransportKind::Ipc
                    : Transport::PeerTransportKind::Rdma;
     return comm_->wait_signal_async_with_rid(
-        static_cast<int>(c.src_peer), c.tag, tpt, rid);
+        static_cast<int>(c.src_peer), c.tag, tpt, rid,
+        c.wait_count ? c.wait_count : 1);
   }
   return false;
 }

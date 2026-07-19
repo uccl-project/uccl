@@ -120,13 +120,16 @@ static std::shared_ptr<CollPlan const> build_plan(CollectiveConfig const& cfg,
   for (uint32_t i = 0; i < nops; ++i)
     if (plan->tiled.ops[i].deps.empty()) plan->initial_ready.push_back(i);
 
-  // PutSignal fusion candidates: 1:1 Signal↔Put pairs from the lowerer.
-  plan->sig_to_put.assign(nops, -1);
+  // PutSignal fusion metadata from the lowerer.
   plan->put_to_sig.assign(nops, -1);
-  for (auto [sig_idx, put_idx] : plan->tiled.fused_put_signal) {
-    plan->sig_to_put[sig_idx] = static_cast<int32_t>(put_idx);
+  plan->sig_group_size.assign(nops, 0);
+  plan->wait_group_size.assign(nops, 0);
+  for (auto [sig_idx, put_idx] : plan->tiled.fused_put_signal)
     plan->put_to_sig[put_idx] = static_cast<int32_t>(sig_idx);
-  }
+  for (auto [sig_idx, grp] : plan->tiled.sig_group_size)
+    plan->sig_group_size[sig_idx] = static_cast<uint16_t>(grp);
+  for (auto [ws_idx, grp] : plan->tiled.wait_group_size)
+    plan->wait_group_size[ws_idx] = static_cast<uint16_t>(grp);
   return plan;
 }
 
@@ -351,7 +354,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   run->scratch_buf_id = scr_id;
   size_t nops = plan->nops;
   run->submitted.resize(nops, 0);
-  run->fused_sig.assign(nops, 0);
+  run->fused_sig_cnt.assign(nops, 0);
 
   UK_DBG(UK_DBG_LVL_EXEC, "[submit r%d] %zu ops", cfg.rank, nops);
   run->init_ready_ring(nops);
@@ -512,10 +515,19 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         !run.plan->put_to_sig.empty()) {
       int32_t sig_idx = run.plan->put_to_sig[idx];
       if (sig_idx >= 0) {
+        uint16_t grp = run.plan->sig_group_size[sig_idx];
+        // Group fusion (grp > 1) is RDMA-only: a remote peer's path is
+        // deterministically RDMA, and the receiver mirrors the group
+        // size as its wait count. Same-host puts may mix Device/IPC per
+        // op, and IPC-fused puts would deliver G arrivals while the
+        // receiver expects 1 — so same-host groups stay unfused (G=1
+        // pairs still fuse on either transport).
+        bool const group_ok = (grp == 1 || c.put_path == PutPath::Rdma);
         auto tpt_kind = (c.put_path == PutPath::Rdma)
                             ? Transport::PeerTransportKind::Rdma
                             : Transport::PeerTransportKind::Ipc;
-        if (owned_comm_->can_fuse_put_signal(static_cast<int>(c.dst_peer),
+        if (group_ok &&
+            owned_comm_->can_fuse_put_signal(static_cast<int>(c.dst_peer),
                                              tpt_kind)) {
           c.flags |= kCmdFlagPutSignal;
           c.tag = run.plan->tiled.ops[sig_idx].tag;
@@ -524,14 +536,29 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      // Fused: the partner Put already carried this Signal's tag — no
-      // backend dispatch needed, complete it locally.
-      if (c.kind == ExecOpKind::Signal && !run.plan->sig_to_put.empty() &&
-          run.plan->sig_to_put[idx] >= 0 && run.fused_sig[idx]) {
+      // Fused: every Put of this Signal's group already carried the tag
+      // — no backend dispatch needed, complete it locally.
+      if (c.kind == ExecOpKind::Signal &&
+          !run.plan->sig_group_size.empty() &&
+          run.plan->sig_group_size[idx] > 0 &&
+          run.fused_sig_cnt[idx] == run.plan->sig_group_size[idx]) {
         run.submitted[idx] = 1;
         complete_op_local(run, idx);
         ++sig_dispatched;
         continue;
+      }
+      // Counted wait: when the sender fuses this group (remote RDMA
+      // only — deterministic and mirrored on both sides), each tile
+      // arrives as its own immediate, so the wait counts group_size
+      // arrivals instead of one standalone signal.
+      if (c.kind == ExecOpKind::WaitSignal && owned_comm_ &&
+          !run.plan->wait_group_size.empty() &&
+          run.plan->wait_group_size[idx] > 1 &&
+          !owned_comm_->same_host(static_cast<int>(c.src_peer)) &&
+          owned_comm_->can_fuse_put_signal(
+              static_cast<int>(c.src_peer),
+              Transport::PeerTransportKind::Rdma)) {
+        c.wait_count = run.plan->wait_group_size[idx];
       }
       uint32_t be_idx = signal_be_->reserve_slot();
       if (be_idx != BatchBackend::kInvalidBeIdx) {
@@ -629,10 +656,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
-        // The fused put was accepted: mark the partner Signal so it
-        // completes locally when it becomes ready.
+        // The fused put was accepted: count it toward its signal group;
+        // the Signal op completes locally once the whole group is out.
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
-          run.fused_sig[run.plan->put_to_sig[tpt_idx[i]]] = 1;
+          ++run.fused_sig_cnt[run.plan->put_to_sig[tpt_idx[i]]];
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
@@ -647,7 +674,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
-          run.fused_sig[run.plan->put_to_sig[tpt_idx[i]]] = 1;
+          ++run.fused_sig_cnt[run.plan->put_to_sig[tpt_idx[i]]];
       }
       for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
       tpt_dispatched = ok;

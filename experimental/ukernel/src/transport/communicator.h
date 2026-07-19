@@ -101,7 +101,7 @@ class Communicator {
       PeerTransportKind transport, unsigned rid);
   bool wait_signal_async_with_rid(
       int peer, uint64_t tag,
-      PeerTransportKind transport, unsigned rid);
+      PeerTransportKind transport, unsigned rid, uint32_t count = 1);
 
   // Fused put+signal: once the data lands, the peer observes `tag` as a
   // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
@@ -255,8 +255,11 @@ class Communicator {
   jring_t* sig_send_completion_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
 
-  // Signal matching: peer → tag → vector<rid>
-  std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>>
+  // Signal matching: peer → tag → waiters. A waiter carries a remaining
+  // arrival count: fused signal groups deliver one tag per tile, so the
+  // wait completes only after `remaining` arrivals.
+  std::unordered_map<
+      int, std::unordered_map<uint64_t, std::vector<std::pair<unsigned, uint32_t>>>>
       pending_signal_waits_;
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.

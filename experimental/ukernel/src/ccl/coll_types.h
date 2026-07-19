@@ -112,11 +112,17 @@ struct TiledResult {
   int rank = 0;
   int nranks = 1;
   ReductionKind reduction = ReductionKind::None;
-  // 1:1 Put↔Signal fusion candidates: (signal_op_idx, put_op_idx) for
-  // signal groups that cover exactly one Put and whose tag fits the
-  // 32-bit RDMA immediate. The executor may fuse these into a single
-  // PutSignal on transports that support it.
+  // PutSignal fusion metadata for signal groups whose tag fits the
+  // 32-bit RDMA immediate:
+  // - fused_put_signal: (signal_op_idx, put_op_idx) for EVERY Put of an
+  //   eligible group (G entries per group; each Put may carry the group
+  //   tag as an imm — the receiver then counts G arrivals).
+  // - sig_group_size: (signal_op_idx, group_put_count).
+  // - wait_group_size: (wait_op_idx, group_tile_count) — the expected
+  //   tag arrivals when the sender fuses the group (else 1).
   std::vector<std::pair<uint32_t, uint32_t>> fused_put_signal;
+  std::vector<std::pair<uint32_t, uint32_t>> sig_group_size;
+  std::vector<std::pair<uint32_t, uint32_t>> wait_group_size;
 };
 
 }  // namespace CCL
