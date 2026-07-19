@@ -4,6 +4,7 @@
 #include "adapter/tcp_adapter.h"
 #include "util/utils.h"
 #include "util/jrqueue.h"
+#include "util/uk_debug.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -11,6 +12,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -518,11 +520,15 @@ bool Communicator::ensure_path(int rank, bool is_put,
 
   // Fall through to RDMA.
   if (resolved.kind == PeerTransportKind::Rdma) {
+    UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA ensure_rdma_adapter ...", global_rank_);
     auto& rdma = ensure_rdma_adapter(resolved.local_meta);
+    UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA ensure_rdma_adapter done", global_rank_);
     bool ready = is_put ? rdma.has_put_path(rank) : rdma.has_wait_path(rank);
     if (!ready) {
       RdmaP2PInfo remote;
+      UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA exchange_rdma_peer_info ...", global_rank_);
       if (!exchange_rdma_peer_info(rank, rdma, &remote)) return fallback();
+      UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA exchange_rdma_peer_info done", global_rank_);
 
       RdmaPeerConnectSpec rspec;
       rspec.num_qps = remote.num_qps;
@@ -862,6 +868,12 @@ bool Communicator::send_put_async_with_rid(
   if (kind == PeerTransportKind::Tcp) {
     return adapter->send_put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid);
   }
+  {
+    static int dbg_cnt = 0;
+    if (dbg_cnt++ < 5)
+      UK_DBG(UK_DBG_LVL_TPT, "[comm-send r%d] peer=%d kind=%d IPC-or-RDMA",
+             global_rank_, peer, (int)kind);
+  }
   if (kind == PeerTransportKind::Rdma) {
     if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) {
       static int once = 0;
@@ -924,6 +936,19 @@ bool Communicator::wait_signal_async_with_rid(
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
     auto sig_it = pending_signals_.find(peer);
+    static int dbg = 0;
+    if (dbg++ < 5 && uk_dbg_lvl() >= UK_DBG_LVL_TPT) {
+      std::string tags;
+      if (sig_it != pending_signals_.end())
+        for (auto& t : sig_it->second) {
+          tags += std::to_string((unsigned long)t);
+          tags += ',';
+        }
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[wsig-wait r%d] peer=%d tag=%lu pending_sigs_has_peer=%d tags=[%s]",
+             global_rank_, peer, (unsigned long)tag,
+             sig_it != pending_signals_.end() ? 1 : 0, tags.c_str());
+    }
     if (sig_it != pending_signals_.end()) {
       auto& sigs = sig_it->second;
       for (auto sit = sigs.begin(); sit != sigs.end(); ++sit) {
@@ -1035,8 +1060,15 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
 
   size_t count = 0;
   if (sig_wait_completion_ring_) {
-    count = jring_sc_dequeue_bulk(sig_wait_completion_ring_, events,
-                                   std::min(max, (size_t)256), nullptr);
+    count = jring_sc_dequeue_burst(sig_wait_completion_ring_, events,
+                                    std::min(max, (size_t)256), nullptr);
+    if (count > 0) {
+      UK_DBG(UK_DBG_LVL_TPT, "[sig-wait-ring r%d] drained=%zu", global_rank_, count);
+    } else {
+      static int dbg = 0;
+      if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++dbg % 50000 == 0)
+        UK_DBG(UK_DBG_LVL_ALL, "[sig-wait-ring r%d] drained=0", global_rank_);
+    }
     for (size_t i = 0; i < count; ++i)
       events[i].user_ctx = consume_user_ctx(events[i].rid);
   }

@@ -44,21 +44,6 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->tpt_be_->set_comm(ex->owned_comm_.get());
   ex->signal_be_->set_comm(ex->owned_comm_.get());
 
-  // Enable P2P access for same-host peers so the DeviceBackend SM kernel
-  // can directly read/write remote GPU memory.
-  for (int p = 0; p < config.world_size; ++p) {
-    if (p == config.rank) continue;
-    if (ex->owned_comm_->same_host(p)) {
-      int peer_gpu = ex->owned_comm_->peer_gpu_idx(p);
-      if (peer_gpu >= 0) {
-        gpuError_t err = gpuDeviceEnablePeerAccess(peer_gpu, 0);
-        if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
-          std::cerr << "[FACTORY] gpuDeviceEnablePeerAccess failed gpu="
-                    << config.gpu_id << " peer=" << peer_gpu << std::endl;
-      }
-    }
-  }
-
   ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);
@@ -71,19 +56,49 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
 
       if (same) {
         if (rank < p) {
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...", rank, p);
           comm->connect(p, Transport::PeerTransportKind::Ipc);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...", rank, p);
           comm->accept(p, Transport::PeerTransportKind::Ipc);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done", rank, p);
         } else {
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...", rank, p);
           comm->accept(p, Transport::PeerTransportKind::Ipc);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...", rank, p);
           comm->connect(p, Transport::PeerTransportKind::Ipc);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done", rank, p);
         }
       }
       if (rank < p) {
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...", rank, p);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...", rank, p);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done", rank, p);
       } else {
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...", rank, p);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...", rank, p);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done", rank, p);
+      }
+    }
+    // Enable P2P access now that peer GPU indices are known (after RDMA exchange).
+    for (int p : peers) {
+      if (p == rank) continue;
+      if (comm->same_host(p)) {
+        int peer_gpu = comm->peer_gpu_idx(p);
+        if (peer_gpu >= 0) {
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] enable P2P to gpu=%d", rank, peer_gpu);
+          gpuError_t err = gpuDeviceEnablePeerAccess(peer_gpu, 0);
+          if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
+            std::cerr << "[peer_setup r" << rank << "] gpuDeviceEnablePeerAccess failed gpu="
+                      << peer_gpu << " err=" << err << std::endl;
+        }
       }
     }
   };

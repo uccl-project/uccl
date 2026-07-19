@@ -4,6 +4,7 @@
 #include "executor.h"
 #include "gpu_rt.h"
 #include "transport.h"
+#include "util/uk_debug.h"
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -98,9 +99,15 @@ int main(int argc, char** argv) {
     hs.tile_bytes = 65536; hs.kind = CollKind::AllReduceRing;
     sync_memset(d_in, 0, 65536);
     sync_memset(d_out, 0, 65536);
+    UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] before submit", rank);
     auto h = ex->submit(hs, d_in, d_out);
-    while (ex->status(h) != CollectiveOpStatus::Completed)
+    UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] after submit", rank);
+    int spin = 0;
+    while (ex->status(h) != CollectiveOpStatus::Completed) {
+      if (uk_dbg_lvl() >= UK_DBG_LVL_EXEC && ++spin % 100000 == 0)
+        UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] waiting... spin=%d", rank, spin);
       std::this_thread::yield();
+    }
     ex->release(h);
   }
 

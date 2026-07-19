@@ -5,6 +5,7 @@
 #include "backend/signal_backend.h"
 #include "coll_config.h"
 #include "utils.h"
+#include "util/uk_debug.h"
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -171,21 +172,37 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   std::sort(peers.begin(), peers.end());
   peers.erase(std::unique(peers.begin(), peers.end()), peers.end());
 
+  {
+    std::string plist;
+    for (auto p : peers) { if (!plist.empty()) plist += ","; plist += std::to_string(p); }
+    UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peers=%s  -> peer_setup_fn start", cfg.rank, plist.c_str());
+  }
   peer_setup_fn_(owned_comm_.get(), cfg.rank, peers);
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peer_setup_fn done  -> re_register_all_mrs", cfg.rank);
   owned_comm_->re_register_all_mrs();
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] re_register_all_mrs done  -> register bufs", cfg.rank);
   prepared_peers_.insert(peers.begin(), peers.end());
   prepared_ = true;
 
   // Register and resolve user buffers.
   uint32_t in_id = get_or_register_buf(input, cfg.input_bytes);
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] in_id=%u registered  -> resolve bufs", cfg.rank, in_id);
   uint32_t out_id = get_or_register_buf(output, cfg.output_bytes);
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] out_id=%u registered", cfg.rank, out_id);
   for (int p : peers) {
-    if (in_id && resolve_buf_fn_)
+    if (in_id && resolve_buf_fn_) {
+      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d ...", cfg.rank, in_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
-    if (out_id && out_id != in_id && resolve_buf_fn_)
+      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d done", cfg.rank, in_id, p);
+    }
+    if (out_id && out_id != in_id && resolve_buf_fn_) {
+      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve out_id=%u from peer %d ...", cfg.rank, out_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
+      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve out_id=%u from peer %d done", cfg.rank, out_id, p);
+    }
   }
 
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] ALL DONE", cfg.rank);
   prepared_ = true;
 }
 
@@ -249,6 +266,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   run->submitted.resize(run->tiled.ops.size(), 0);
 
   size_t nops = run->tiled.ops.size();
+  UK_DBG(UK_DBG_LVL_EXEC, "[submit r%d] %zu ops", cfg.rank, nops);
   run->init_ready_ring(nops);
   run->indegree.resize(nops);
 
@@ -358,6 +376,11 @@ void SprayExecutor::collect_ready(SprayRun& run) {
     if (op == ~0u) break;
     if (!run.submitted[op]) run.ready.push_back(op);
   }
+  if (run.ready.empty()) {
+    static int collect_zero_cnt = 0;
+    if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++collect_zero_cnt % 200000 == 0)
+      UK_DBG(UK_DBG_LVL_ALL, "[enqueue r%d] collected 0 ready", rank_or_neg1());
+  }
 }
 
 void SprayExecutor::enqueue_to_ring(SprayRun& run) {
@@ -382,10 +405,18 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   run.tpt_cmds.clear();
   std::vector<uint32_t> dev_idx;
   std::vector<uint32_t> tpt_idx;
+  size_t sig_dispatched = 0;
 
+  static int op_kind_print_cnt = 0;
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.tiled.ops[idx], run.tiled.reduction, run.input_buf_id,
                      run.output_buf_id, run.scratch_buf_id);
+    if (op_kind_print_cnt++ < 20) {
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[enqueue r%d] op[%u] kind=%d dst_peer=%u put_path=%d tag=%lu bytes=%u",
+             rank_or_neg1(), idx, (int)c.kind, c.dst_peer, (int)c.put_path,
+             (unsigned long)c.tag, c.bytes);
+    }
 
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
@@ -432,6 +463,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       if (sig->do_enqueue_reserved(c, be_idx)) {
         run.be_slots.emplace_back(2, be_idx);
         run.submitted[idx] = 1;
+        ++sig_dispatched;
       } else {
         sig_slots_.release(be_idx);
         run.deferred_sig.push_back(idx);
@@ -450,6 +482,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   }
 
   // Submit device batch
+  size_t dev_dispatched = 0;
   {
     for (size_t i = 0; i < run.dev_cmds.size(); ++i) {
       uint32_t be_idx;
@@ -463,10 +496,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       dev_slots_.write(be_idx, &run, dev_idx[i], PutPath::None);
       run.be_slots.emplace_back(0, be_idx);
       run.submitted[dev_idx[i]] = 1;
+      ++dev_dispatched;
     }
   }
 
   // Submit transport batch
+  size_t tpt_dispatched = 0;
   {
     for (size_t i = 0; i < run.tpt_cmds.size(); ++i) {
       uint32_t be_idx;
@@ -479,8 +514,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       tpt_slots_.write(be_idx, &run, tpt_idx[i], run.tpt_cmds[i].put_path);
       run.be_slots.emplace_back(1, be_idx);
       run.submitted[tpt_idx[i]] = 1;
+      ++tpt_dispatched;
     }
   }
+
+  UK_DBG(UK_DBG_LVL_ALL, "[enqueue r%d] dispatched: dev=%zu tpt=%zu sig=%zu",
+         rank_or_neg1(), dev_dispatched, tpt_dispatched, sig_dispatched);
 
   run.ready.clear();
 }
@@ -509,8 +548,17 @@ void SprayExecutor::enqueue_loop() {
 void SprayExecutor::drain_dev_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  int iter = 0;
+  static int dbg_count = 0;
   while (!stop_) {
+    if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-dev r%d] alive iter=%d", rank_or_neg1(), iter);
     size_t n = device_be_->do_drain(be_buf, 256);
+    if (n > 0 && dbg_count < 5) {
+      ++dbg_count;
+      UK_DBG(UK_DBG_LVL_EXEC, "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
+             rank_or_neg1(), n, dbg_count);
+    }
     if (n == 0) { std::this_thread::yield(); continue; }
     // Drain all available batches before checking completions,
     // so release() never races with stale backend completions.
@@ -543,8 +591,17 @@ void SprayExecutor::drain_dev_loop() {
 void SprayExecutor::drain_tpt_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  int iter = 0;
+  static int dbg_count = 0;
   while (!stop_) {
+    if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(), iter);
     size_t nd = tpt_be_->do_drain(be_buf, 256);
+    if (nd > 0 && dbg_count < 5) {
+      ++dbg_count;
+      UK_DBG(UK_DBG_LVL_EXEC, "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
+             rank_or_neg1(), nd, dbg_count);
+    }
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -579,8 +636,17 @@ void SprayExecutor::drain_tpt_loop() {
 void SprayExecutor::drain_signal_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
+  int iter = 0;
+  static int dbg_count = 0;
   while (!stop_) {
+    if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(), iter);
     size_t ns = signal_be_->do_drain(be_buf, 256);
+    if (ns > 0 && dbg_count < 5) {
+      ++dbg_count;
+      UK_DBG(UK_DBG_LVL_EXEC, "[drain-sig r%d] do_drain returned %zu completions (count=%d)",
+             rank_or_neg1(), ns, dbg_count);
+    }
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -603,6 +669,10 @@ void SprayExecutor::drain_signal_loop() {
     }
     if (had_work) check_completions_();
   }
+}
+
+int SprayExecutor::rank_or_neg1() const {
+  return owned_comm_ ? owned_comm_->rank() : -1;
 }
 
 void SprayExecutor::check_completions_() {

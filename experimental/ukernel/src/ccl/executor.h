@@ -5,6 +5,7 @@
 #include "lower.h"
 #include "util/jring.h"
 #include "util/jrqueue.h"
+#include "util/uk_debug.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -301,9 +302,16 @@ class SprayExecutor {
 
   PutPath pick_put_path(int peer);
   void check_completions_();
+  int rank_or_neg1() const;
 
   template <typename F>
   void drain_batch(BeSlotSnap* snaps, size_t n, F&& cb) {
+    static int dbg_count = 0;
+    if (n > 0 && dbg_count < 5) {
+      ++dbg_count;
+      UK_DBG(UK_DBG_LVL_EXEC, "[drain-batch r%d] %zu ops completed",
+             rank_or_neg1(), n);
+    }
     for (size_t i = 0; i < n; ++i) {
       auto& s = snaps[i];
       SprayRun* run = s.run;

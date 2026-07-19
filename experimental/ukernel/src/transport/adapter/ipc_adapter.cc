@@ -1,6 +1,7 @@
 #include "ipc_adapter.h"
 #include "../communicator.h"
 #include "../util/utils.h"
+#include "util/uk_debug.h"
 #include <algorithm>
 #include <chrono>
 #include <fcntl.h>
@@ -281,6 +282,8 @@ unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
   remote_ring->write_idx.store(w + 1, std::memory_order_release);
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d at idx=%zu w=%lu",
+         comm_->rank(), (unsigned long)tag, peer, idx, (unsigned long)(w + 1));
   publish_sig_send_completion(comm_rid, false);
   return 1;
 }
@@ -306,10 +309,22 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
 
 size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
                                      size_t max) {
-  if (!has_wait_path(peer_rank)) return 0;
+  if (!has_wait_path(peer_rank)) {
+    static int once = 0;
+    if (!once++)
+      UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no wait path for p%d",
+             comm_->rank(), peer_rank);
+    return 0;
+  }
   auto& pc = comps_[static_cast<size_t>(peer_rank)];
   PeerSignalRing* ring = pc.signal_ring;
-  if (!ring) return 0;
+  if (!ring) {
+    static int once2 = 0;
+    if (!once2++)
+      UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no signal_ring for p%d",
+             comm_->rank(), peer_rank);
+    return 0;
+  }
 
   uint64_t r = ring->read_idx.load(std::memory_order_relaxed);
   size_t count = 0;
@@ -328,6 +343,8 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
   }
 
   if (count > 0) {
+    UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] got %zu tags from p%d, first=%lu",
+           comm_->rank(), count, peer_rank, (unsigned long)tags[0]);
     ring->read_idx.store(r, std::memory_order_release);
   }
   return count;
@@ -336,12 +353,18 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
 void IpcAdapter::send_worker() {
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   RingElem e;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] worker alive, waiting for ops",
+         comm_->rank());
   while (!stop_.load(std::memory_order_relaxed)) {
     if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) != 1) {
       std::this_thread::yield();
       continue;
     }
+    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] dequeued op type=%d peer=%d bytes=%lu",
+           comm_->rank(), (int)e.type, e.peer, (unsigned long)e.bytes);
     bool ok = send_one(&e);
+    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] send_one done ok=%d",
+           comm_->rank(), (int)ok);
     if (ok) {
       size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
       comps_[e.peer].remote->last_completed[dir].store(
@@ -373,6 +396,8 @@ bool IpcAdapter::send_one(RingElem* e) {
   if (!e || e->type != ReqType::DataPut) return false;
   void* src = e->local_ptr;
   void* dst = e->remote_ptr;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] dst=%p src=%p peer=%d",
+         comm_->rank(), dst, src, e->peer);
   if (!dst) {
     std::cerr << "[ERROR] IPC send_put_async no remote_ptr\n";
     return false;
@@ -380,6 +405,8 @@ bool IpcAdapter::send_one(RingElem* e) {
 
   int remote_gpu = comm_->peer_gpu_idx(e->peer);
   if (remote_gpu < 0) remote_gpu = gpu_id_;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] remote_gpu=%d gpu_id=%d bytes=%lu",
+         comm_->rank(), remote_gpu, gpu_id_, (unsigned long)e->bytes);
 
   size_t bytes = e->bytes;
   size_t n_total = ipc_ctx_.size();
@@ -416,8 +443,11 @@ bool IpcAdapter::send_one(RingElem* e) {
     offset += sz;
   }
 
+  UK_DBG(UK_DBG_LVL_ALL, "[ipc-send_one r%d] memcpy launched, synchronizing...",
+         comm_->rank());
   for (size_t i = 0; i < num_streams; ++i)
     GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
+  UK_DBG(UK_DBG_LVL_ALL, "[ipc-send_one r%d] sync done", comm_->rank());
 
   return true;
 }
