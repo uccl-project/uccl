@@ -326,14 +326,14 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
 
   auto h = next_handle_++;
   if (plan->nops == 0) {
-    auto run = std::make_unique<SprayRun>();
+    auto run = std::make_shared<SprayRun>();
     run->plan = plan;
     run->status.store(CollectiveOpStatus::Completed, std::memory_order_release);
     runs_[h] = std::move(run);
     return h;
   }
 
-  auto run = std::make_unique<SprayRun>();
+  auto run = std::make_shared<SprayRun>();
   active_runs_.fetch_add(1, std::memory_order_release);
   run->status.store(CollectiveOpStatus::Running, std::memory_order_release);
   run->plan = plan;
@@ -616,22 +616,25 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
 void SprayExecutor::enqueue_loop() {
   while (!stop_) {
-    bool any = false;
+    // Snapshot running runs under the global lock, then process them
+    // lock-free — collect_ready/enqueue_to_ring do backend submission
+    // work that must not serialize submit/poll/wait behind runs_mutex_.
+    std::vector<std::shared_ptr<SprayRun>> snapshot;
     {
       std::lock_guard lock(runs_mutex_);
+      snapshot.reserve(runs_.size());
       for (auto& [h, run] : runs_) {
-        if (run->status.load(std::memory_order_acquire) !=
+        if (run->status.load(std::memory_order_acquire) ==
             CollectiveOpStatus::Running)
-          continue;
-        {
-          std::lock_guard rlock(run->mtx);
-          collect_ready(*run);
-          enqueue_to_ring(*run);
-        }
-        any = true;
+          snapshot.push_back(run);
       }
     }
-    if (!any) std::this_thread::yield();
+    for (auto& run : snapshot) {
+      std::lock_guard rlock(run->mtx);
+      collect_ready(*run);
+      enqueue_to_ring(*run);
+    }
+    if (snapshot.empty()) std::this_thread::yield();
   }
 }
 
@@ -650,11 +653,9 @@ void SprayExecutor::drain_dev_loop() {
              rank_or_neg1(), n, dbg_count);
     }
     if (n == 0) { std::this_thread::yield(); continue; }
-    // Drain all available batches before checking completions,
-    // so release() never races with stale backend completions.
-    bool had_work = false;
+    // Drain all available batches; finalize_run runs inline in
+    // drain_batch, so completion is observed without a runs_ sweep.
     while (n > 0) {
-      had_work = true;
       size_t valid = 0;
       for (size_t i = 0; i < n; ++i) {
         auto snap = dev_slots_.try_claim(be_buf[i], stop_);
@@ -674,7 +675,6 @@ void SprayExecutor::drain_dev_loop() {
       });
       n = device_be_->do_drain(be_buf, 256);
     }
-    if (had_work) check_completions_();
   }
 }
 
@@ -697,9 +697,7 @@ void SprayExecutor::drain_tpt_loop() {
       std::this_thread::yield();
       continue;
     }
-    bool had_work = false;
     while (nd > 0) {
-      had_work = true;
       size_t valid = 0;
       for (size_t i = 0; i < nd; ++i) {
         auto snap = tpt_slots_.try_claim(be_buf[i], stop_);
@@ -719,7 +717,6 @@ void SprayExecutor::drain_tpt_loop() {
       });
       nd = tpt_be_->do_drain(be_buf, 256);
     }
-    if (had_work) check_completions_();
   }
 }
 
@@ -742,9 +739,7 @@ void SprayExecutor::drain_signal_loop() {
       std::this_thread::yield();
       continue;
     }
-    bool had_work = false;
     while (ns > 0) {
-      had_work = true;
       size_t valid = 0;
       for (size_t i = 0; i < ns; ++i) {
         auto snap = sig_slots_.try_claim(be_buf[i], stop_);
@@ -757,17 +752,11 @@ void SprayExecutor::drain_signal_loop() {
       drain_batch(snap_buf, valid, [](BeSlotSnap&) {});
       ns = signal_be_->do_drain(be_buf, 256);
     }
-    if (had_work) check_completions_();
   }
 }
 
 int SprayExecutor::rank_or_neg1() const {
   return owned_comm_ ? owned_comm_->rank() : -1;
-}
-
-void SprayExecutor::check_completions_() {
-  std::lock_guard lock(runs_mutex_);
-  for (auto& [h, run] : runs_) finalize_run(run.get());
 }
 
 void SprayExecutor::finalize_run(SprayRun* run) {

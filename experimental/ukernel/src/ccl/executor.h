@@ -328,7 +328,6 @@ class SprayExecutor {
   void enqueue_to_ring(SprayRun& run);
 
   PutPath pick_put_path(int peer);
-  void check_completions_();
   // One round of non-blocking progress across all backends: drain
   // completions, claim slots, and release dependencies. Safe to call
   // concurrently from the background drain threads and from user
@@ -368,6 +367,10 @@ class SprayExecutor {
       }
       __atomic_store_n(&run->indegree[op_idx], SprayRun::kIndegreeDone,
                        __ATOMIC_RELEASE);
+      // Inline completion: flip the run's status as soon as its last op
+      // drains instead of waiting for a periodic check_completions_
+      // sweep (CAS-guarded, exactly-once).
+      finalize_run(run);
     }
   }
 
@@ -425,7 +428,10 @@ class SprayExecutor {
   size_t max_concurrent_runs_ = 16;
   std::atomic<size_t> active_runs_{0};
 
-  std::unordered_map<CollectiveOpHandle, std::unique_ptr<SprayRun>> runs_;
+  // shared_ptr so the enqueue loop can snapshot running runs and process
+  // them without holding runs_mutex_ (lifetime stays safe even if the
+  // run completes and is released concurrently).
+  std::unordered_map<CollectiveOpHandle, std::shared_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
 
