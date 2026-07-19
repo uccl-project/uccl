@@ -235,6 +235,49 @@ void test_lower_algo_ring_basic() {
   assert(saw_waitsig);
 }
 
+void test_lower_algo_signal_grouping() {
+  printf("[test] lower_algo signal grouping...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+
+  auto count_kind = [](TiledResult const& t, ExecOpKind k) {
+    size_t n = 0;
+    for (auto const& op : t.ops)
+      if (op.kind == k) ++n;
+    return n;
+  };
+
+  TiledResult g1 = lower_algo(algo, 512, /*inplace=*/false,
+                              /*stage_puts=*/false, /*signal_group_tiles=*/1);
+  TiledResult g2 = lower_algo(algo, 512, /*inplace=*/false,
+                              /*stage_puts=*/false, /*signal_group_tiles=*/2);
+
+  size_t sig1 = count_kind(g1, ExecOpKind::Signal);
+  size_t ws1 = count_kind(g1, ExecOpKind::WaitSignal);
+  size_t sig2 = count_kind(g2, ExecOpKind::Signal);
+  size_t ws2 = count_kind(g2, ExecOpKind::WaitSignal);
+
+  // 1024-byte shards / 512-byte tiles → exactly 2 tiles per chunk pair,
+  // so G=2 exactly halves the signal/wait counts.
+  assert(sig1 > 0 && sig2 * 2 == sig1);
+  assert(ws1 > 0 && ws2 * 2 == ws1);
+
+  // Data-moving op counts are unaffected by grouping.
+  assert(count_kind(g2, ExecOpKind::Put) == count_kind(g1, ExecOpKind::Put));
+  assert(count_kind(g2, ExecOpKind::Reduce) ==
+         count_kind(g1, ExecOpKind::Reduce));
+
+  // With G=2 every Signal depends on both Puts of its (full) group.
+  for (auto const& op : g2.ops)
+    if (op.kind == ExecOpKind::Signal) assert(op.deps.size() == 2);
+
+  // 2-tile groups collapse to group index 0 in the tag's low 16 bits.
+  for (auto const& op : g2.ops) {
+    if (op.kind == ExecOpKind::Signal || op.kind == ExecOpKind::WaitSignal)
+      assert((op.tag & 0xFFFFu) == 0);
+  }
+}
+
 void test_lower_algo_alltoall_basic() {
   printf("[test] tile_and_schedule alltoall...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
@@ -357,6 +400,7 @@ int main() {
   // Layer 4
   test_lower_algo_rejects_zero_tile_bytes();
   test_lower_algo_ring_basic();
+  test_lower_algo_signal_grouping();
   test_lower_algo_alltoall_basic();
 
   // Integration

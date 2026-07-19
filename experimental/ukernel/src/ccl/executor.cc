@@ -76,6 +76,7 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(cfg.tile_bytes);
   add(static_cast<uint64_t>(cfg.dtype));
   add(static_cast<uint64_t>(cfg.reduction));
+  add(static_cast<uint64_t>(cfg.signal_group_tiles));
   add(inplace ? 1u : 0u);
   add(cfg.input_split_bytes.size());
   for (size_t v : cfg.input_split_bytes) add(v);

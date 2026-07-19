@@ -43,6 +43,8 @@ int main(int argc, char** argv) {
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
   std::string kind_str = get_arg(argc, argv, "--kind", "allreduce");
+  // Signal aggregation factor: one Signal/WaitSignal per this many tiles.
+  int sig_group = get_int_arg(argc, argv, "--sig-group", 1);
   CollKind coll_kind = (kind_str == "alltoall") ? CollKind::AllToAllPairwise
                                                 : CollKind::AllReduceRing;
   bool inplace = (coll_kind == CollKind::AllToAllPairwise);
@@ -122,6 +124,7 @@ int main(int argc, char** argv) {
       ar.nranks = 2; ar.rank = rank;
       ar.input_bytes = bytes; ar.output_bytes = bytes;
       ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
+      ar.signal_group_tiles = (uint32_t)sig_group;
 
       for (int w = 0; w < kWarmup; ++w) {
         sync_memset(d_in, 0, bytes);
@@ -176,6 +179,7 @@ int main(int argc, char** argv) {
       ar.nranks = 2; ar.rank = rank;
       ar.input_bytes = bytes; ar.output_bytes = bytes;
       ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
+      ar.signal_group_tiles = (uint32_t)sig_group;
       for (int i = 0; i < kWarmup + kIters; ++i) {
         sync_memset(d_in, 0, bytes);
         sync_memset(d_out, 0, bytes);

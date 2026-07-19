@@ -95,11 +95,15 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<size_t> const& first_tile,
                                     std::vector<size_t> const& tiles_per_chunk,
                                     bool inplace, bool stage_puts,
+                                    uint32_t signal_group_tiles,
                                     size_t& staging_bytes) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
   std::vector<uint32_t> old_to_new(n_old, kNoOp);
+  // Signal aggregation factor: one Signal/WaitSignal pair per G tiles of
+  // a chunk pair. G=1 reproduces the per-tile scheme exactly.
+  uint32_t const G = signal_group_tiles ? signal_group_tiles : 1;
 
   // New deps created during lowering (e.g. Signal→Put, Reduce→staging).
   // Merged into the target op's deps after remapping so they don't collide
@@ -115,6 +119,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
     std::vector<uint32_t> cp_indices;
     std::vector<uint32_t> put_indices;
+    std::vector<uint32_t> sig_group_puts;  // Put ops of the current signal group
+    uint32_t cur_group_ws = kNoOp;         // WaitSignal of the current group
     size_t chunk_staging = 0;
 
     for (size_t t = 0; t < num_tiles; ++t) {
@@ -157,13 +163,20 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           new_deps.push_back(
               {static_cast<uint32_t>(out.size() - 1), cp_indices.back()});
 
-          TiledOp sig;
-          sig.kind = ExecOpKind::Signal;
-          sig.dst_peer = op.dst_peer;
-          sig.tag = make_tag(ch.pair_id, t);
-          new_deps.push_back({static_cast<uint32_t>(out.size()),
-                              put_indices.back()});
-          out.push_back(sig);
+          // Signal aggregation: one Signal per group of G tiles, fired
+          // when every Put in the group completed.
+          sig_group_puts.push_back(put_indices.back());
+          if (t % G == G - 1 || t + 1 == num_tiles) {
+            TiledOp sig;
+            sig.kind = ExecOpKind::Signal;
+            sig.dst_peer = op.dst_peer;
+            sig.tag = make_tag(ch.pair_id, t / G);
+            uint32_t sig_idx = static_cast<uint32_t>(out.size());
+            for (uint32_t pi : sig_group_puts)
+              new_deps.push_back({sig_idx, pi});
+            out.push_back(sig);
+            sig_group_puts.clear();
+          }
         } else {
         uint32_t put_idx = static_cast<uint32_t>(out.size());
         old_to_new[old_idx] = put_idx;
@@ -174,21 +187,34 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         }
         out.push_back(put);
 
-        TiledOp sig;
-        sig.kind = ExecOpKind::Signal;
-        sig.dst_peer = op.dst_peer;
-        sig.tag = make_tag(ch.pair_id, t);
-        new_deps.push_back({static_cast<uint32_t>(out.size()), put_idx});
-        out.push_back(sig);
+        // Signal aggregation: one Signal per group of G tiles, fired
+        // when every Put in the group completed.
+        sig_group_puts.push_back(put_idx);
+        if (t % G == G - 1 || t + 1 == num_tiles) {
+          TiledOp sig;
+          sig.kind = ExecOpKind::Signal;
+          sig.dst_peer = op.dst_peer;
+          sig.tag = make_tag(ch.pair_id, t / G);
+          uint32_t sig_idx = static_cast<uint32_t>(out.size());
+          for (uint32_t pi : sig_group_puts)
+            new_deps.push_back({sig_idx, pi});
+          out.push_back(sig);
+          sig_group_puts.clear();
+        }
         }
 
       } else if (op.kind == AlgoOpKind::Recv) {
-        TiledOp ws;
-        ws.kind = ExecOpKind::WaitSignal;
-        ws.src_peer = op.src_peer;
-        ws.tag = make_tag(ch.pair_id, t);
-        old_to_new[old_idx] = static_cast<uint32_t>(out.size());
-        out.push_back(ws);
+        // One WaitSignal per group of G tiles; ops consuming any tile in
+        // the group depend on it via old_to_new remapping.
+        if (t % G == 0) {
+          TiledOp ws;
+          ws.kind = ExecOpKind::WaitSignal;
+          ws.src_peer = op.src_peer;
+          ws.tag = make_tag(ch.pair_id, t / G);
+          cur_group_ws = static_cast<uint32_t>(out.size());
+          out.push_back(ws);
+        }
+        old_to_new[old_idx] = cur_group_ws;
 
       } else if (op.kind == AlgoOpKind::RecvReduce) {
         if (inplace) {
@@ -289,7 +315,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 }  // namespace
 
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
-                       bool stage_puts) {
+                       bool stage_puts, uint32_t signal_group_tiles) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -308,7 +334,7 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
   size_t staging_bytes = 0;
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                               tiled.tiles_per_chunk, inplace, stage_puts,
-                              staging_bytes);
+                              signal_group_tiles, staging_bytes);
   result.staging_bytes_required = staging_bytes;
   return result;
 }
@@ -321,7 +347,8 @@ TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
   // Only stage for variable-split AllToAll; equal-split offsets never overlap.
   bool stage_puts = (config.kind == CollKind::AllToAllPairwise && inplace &&
                      !config.input_split_bytes.empty());
-  return lower_algo(algo, config.tile_bytes, inplace, stage_puts);
+  return lower_algo(algo, config.tile_bytes, inplace, stage_puts,
+                    config.signal_group_tiles);
 }
 
 }  // namespace CCL
