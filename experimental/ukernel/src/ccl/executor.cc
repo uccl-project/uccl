@@ -480,8 +480,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }();
       if (c.put_path == PutPath::Device && kBar1Bytes > 0 &&
           c.dst_off + c.bytes > kBar1Bytes) {
-        // Rerouted to IPC; inflight is charged on this final path at
-        // acceptance time.
+        // Move the tentative charge from Device to IPC (reroute).
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+            .device.inflight.fetch_sub(1, std::memory_order_relaxed);
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+            .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
         c.put_path = PutPath::Ipc;
       }
     }
@@ -529,8 +532,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           if (!fuse && grp > 1 &&
               owned_comm_->same_host(static_cast<int>(c.dst_peer))) {
             // Device fusion unavailable: reroute to IPC so the group
-            // still fully fuses; inflight is charged on the final path
-            // at acceptance time.
+            // still fully fuses (move the tentative charge).
+            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+                .device.inflight.fetch_sub(1, std::memory_order_relaxed);
+            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+                .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
             c.put_path = PutPath::Ipc;
           }
         }
@@ -635,16 +641,19 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
-        if (run.dev_cmds[i].dst_peer != ~0u)
-          record_put_inflight(static_cast<int>(run.dev_cmds[i].dst_peer),
-                              run.dev_cmds[i].put_path);
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[run.plan->put_to_sig[dev_idx[i]]];
       }
-      // Roll back slots whose submission failed, defer the rest.
+      // Roll back slots whose submission failed, defer the rest
+      // (releasing their tentative inflight charges).
       for (size_t i = ok; i < reserved; ++i)
         dev_slots_.release(be_idx_scratch_[i]);
-      for (size_t i = ok; i < m; ++i) run.deferred_dev.push_back(dev_idx[i]);
+      for (size_t i = ok; i < m; ++i) {
+        if (run.dev_cmds[i].dst_peer != ~0u)
+          release_put_inflight(static_cast<int>(run.dev_cmds[i].dst_peer),
+                               run.dev_cmds[i].put_path);
+        run.deferred_dev.push_back(dev_idx[i]);
+      }
       dev_dispatched = ok;
     } else {
       // Backend without reserve support: submit first, publish after.
@@ -656,13 +665,15 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          PutPath::None, stop_);
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
-        if (run.dev_cmds[i].dst_peer != ~0u)
-          record_put_inflight(static_cast<int>(run.dev_cmds[i].dst_peer),
-                              run.dev_cmds[i].put_path);
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[run.plan->put_to_sig[dev_idx[i]]];
       }
-      for (size_t i = ok; i < m; ++i) run.deferred_dev.push_back(dev_idx[i]);
+      for (size_t i = ok; i < m; ++i) {
+        if (run.dev_cmds[i].dst_peer != ~0u)
+          release_put_inflight(static_cast<int>(run.dev_cmds[i].dst_peer),
+                               run.dev_cmds[i].put_path);
+        run.deferred_dev.push_back(dev_idx[i]);
+      }
       dev_dispatched = ok;
     }
   }
@@ -684,14 +695,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         run.submitted[tpt_idx[i]] = 1;
         // The fused put was accepted: count it toward its signal group;
         // the Signal op completes locally once the whole group is out.
-        record_put_inflight(static_cast<int>(run.tpt_cmds[i].dst_peer),
-                            run.tpt_cmds[i].put_path);
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[run.plan->put_to_sig[tpt_idx[i]]];
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
-      for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
+      for (size_t i = ok; i < m; ++i) {
+        release_put_inflight(static_cast<int>(run.tpt_cmds[i].dst_peer),
+                             run.tpt_cmds[i].put_path);
+        run.deferred_tpt.push_back(tpt_idx[i]);
+      }
       tpt_dispatched = ok;
     } else {
       size_t ok = tpt_be_->do_enqueue(run.tpt_cmds.data(), m,
@@ -701,12 +714,14 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          run.tpt_cmds[i].put_path, stop_);
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
-        record_put_inflight(static_cast<int>(run.tpt_cmds[i].dst_peer),
-                            run.tpt_cmds[i].put_path);
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[run.plan->put_to_sig[tpt_idx[i]]];
       }
-      for (size_t i = ok; i < m; ++i) run.deferred_tpt.push_back(tpt_idx[i]);
+      for (size_t i = ok; i < m; ++i) {
+        release_put_inflight(static_cast<int>(run.tpt_cmds[i].dst_peer),
+                             run.tpt_cmds[i].put_path);
+        run.deferred_tpt.push_back(tpt_idx[i]);
+      }
       tpt_dispatched = ok;
     }
   }
@@ -944,11 +959,14 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
     return PutPath::Device;
   }
-  // Pure function: inflight is charged at backend-acceptance time on the
-  // final path (see record_put_inflight), not at pick time — a deferred
-  // op would otherwise leak one inflight unit per retry cycle and
-  // permanently price a path out of the LB.
+  // Tentative charge: bump the chosen path now so a batch of picks
+  // rotates and every path gets measured. The charge is reconciled
+  // exactly once: released on deferral (release_put_inflight), moved on
+  // reroute (BAR1 / fusion fallback), or balanced by the drain-side
+  // decrement after acceptance. Deferred ops re-pick next cycle with a
+  // fresh tentative charge, so nothing leaks.
   if (!same_host_fn_ || !same_host_fn_(owned_comm_.get(), peer)) {
+    tpt_metrics_[peer].rdma.inflight.fetch_add(1, std::memory_order_relaxed);
     return PutPath::Rdma;
   }
   auto& pm = tpt_metrics_[peer];
@@ -962,23 +980,34 @@ PutPath SprayExecutor::pick_put_path(int peer) {
                     pm.rdma.inflight.load(std::memory_order_relaxed)) *
                 pm.rdma.latency_ns.load(std::memory_order_relaxed);
 
-  if (ic <= dc && ic <= rc) return PutPath::Ipc;
-  if (dc <= rc) return PutPath::Device;
-  return PutPath::Rdma;
+  PutPath choice;
+  PathMetrics* chosen;
+  if (ic <= dc && ic <= rc) {
+    choice = PutPath::Ipc;
+    chosen = &pm.ipc;
+  } else if (dc <= rc) {
+    choice = PutPath::Device;
+    chosen = &pm.device;
+  } else {
+    choice = PutPath::Rdma;
+    chosen = &pm.rdma;
+  }
+  chosen->inflight.fetch_add(1, std::memory_order_relaxed);
+  return choice;
 }
 
-void SprayExecutor::record_put_inflight(int peer, PutPath path) {
+void SprayExecutor::release_put_inflight(int peer, PutPath path) {
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) return;
   auto& pm = tpt_metrics_[peer];
   switch (path) {
     case PutPath::Device:
-      pm.device.inflight.fetch_add(1, std::memory_order_relaxed);
+      pm.device.inflight.fetch_sub(1, std::memory_order_relaxed);
       break;
     case PutPath::Ipc:
-      pm.ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+      pm.ipc.inflight.fetch_sub(1, std::memory_order_relaxed);
       break;
     case PutPath::Rdma:
-      pm.rdma.inflight.fetch_add(1, std::memory_order_relaxed);
+      pm.rdma.inflight.fetch_sub(1, std::memory_order_relaxed);
       break;
     default:
       break;

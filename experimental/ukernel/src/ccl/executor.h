@@ -343,9 +343,10 @@ class SprayExecutor {
   void enqueue_to_ring(SprayRun& run);
 
   PutPath pick_put_path(int peer);
-  // Charge one inflight unit on the op's final path at backend
-  // acceptance; the drain side releases it in update_path_metrics.
-  void record_put_inflight(int peer, PutPath path);
+  // Release one tentative inflight charge (op deferred before
+  // acceptance; see pick_put_path). The drain side releases accepted
+  // ops in update_path_metrics.
+  void release_put_inflight(int peer, PutPath path);
   // One round of non-blocking progress across all backends: drain
   // completions, claim slots, and release dependencies. Safe to call
   // concurrently from the background drain threads and from user
