@@ -54,6 +54,10 @@ void DeviceBackend::ensure_runtime() {
     worker_pool_->waitWorker(i);
   }
 }
+bool DeviceBackend::can_fuse_put_signal(int peer) const {
+  return comm_ && comm_->ipc_signal_ring_device_ptr(peer) != nullptr;
+}
+
 bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
                                Device::TaskType& tt) {
   args.bytes = c.bytes;
@@ -153,6 +157,24 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       break;
     default:
       return false;
+  }
+
+  if (c.flags & kCmdFlagPutSignal) {
+    // Fused PutSignal: the kernel writes the tag into the peer's shm
+    // signal ring after the copy (same channel as host-sent signals,
+    // so the receiver stays a CPU-side poll).
+    void* ring = comm_ ? comm_->ipc_signal_ring_device_ptr(
+                             static_cast<int>(c.dst_peer))
+                       : nullptr;
+    if (!ring) {
+      throw std::runtime_error(
+          "[DeviceBackend] PutSignal flagged but peer signal ring is not "
+          "GPU-mapped (dst_peer=" +
+          std::to_string(c.dst_peer) + ")");
+    }
+    tt = Device::TaskType::CollPut;
+    args.src2 = ring;
+    args.redTypeRaw = c.tag;
   }
 
   if (!src_ok || !dst_ok) {

@@ -505,30 +505,40 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
     }
 
-    // PutSignal fusion: a 1:1 partner Signal rides this Put when the
-    // transport supports it; the Signal op then completes locally once
-    // it becomes ready. The decision is re-derived every cycle, and the
-    // per-run fused_sig marker is set only when the fused put is
-    // actually accepted by the backend (see the submission loops).
-    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u &&
-        c.put_path != PutPath::Device && owned_comm_ &&
+    // PutSignal fusion: a partner Signal rides this Put when the path
+    // supports it; the Signal op then completes locally once it becomes
+    // ready. The decision is re-derived every cycle, and the per-run
+    // fused_sig_cnt is bumped only when the fused put is actually
+    // accepted by the backend (see the submission loops).
+    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u && owned_comm_ &&
         !run.plan->put_to_sig.empty()) {
       int32_t sig_idx = run.plan->put_to_sig[idx];
       if (sig_idx >= 0) {
         uint16_t grp = run.plan->sig_group_size[sig_idx];
-        // Group fusion (grp > 1) is RDMA-only: a remote peer's path is
-        // deterministically RDMA, and the receiver mirrors the group
-        // size as its wait count. Same-host puts may mix Device/IPC per
-        // op, and IPC-fused puts would deliver G arrivals while the
-        // receiver expects 1 — so same-host groups stay unfused (G=1
-        // pairs still fuse on either transport).
-        bool const group_ok = (grp == 1 || c.put_path == PutPath::Rdma);
-        auto tpt_kind = (c.put_path == PutPath::Rdma)
-                            ? Transport::PeerTransportKind::Rdma
-                            : Transport::PeerTransportKind::Ipc;
-        if (group_ok &&
-            owned_comm_->can_fuse_put_signal(static_cast<int>(c.dst_peer),
-                                             tpt_kind)) {
+        bool fuse = false;
+        if (c.put_path == PutPath::Device) {
+          // Device kernel writes the tag straight into the peer's shm
+          // signal ring (1:1 groups only; group counting is RDMA-only).
+          fuse = (grp == 1) &&
+                 device_be_->can_fuse_put_signal(
+                     static_cast<int>(c.dst_peer));
+        } else {
+          // Group fusion (grp > 1) is RDMA-only: a remote peer's path
+          // is deterministically RDMA, and the receiver mirrors the
+          // group size as its wait count. Same-host puts may mix
+          // Device/IPC per op, and IPC-fused puts would deliver G
+          // arrivals while the receiver expects 1 — so same-host
+          // groups stay unfused (G=1 pairs still fuse on either
+          // transport).
+          bool const group_ok = (grp == 1 || c.put_path == PutPath::Rdma);
+          auto tpt_kind = (c.put_path == PutPath::Rdma)
+                              ? Transport::PeerTransportKind::Rdma
+                              : Transport::PeerTransportKind::Ipc;
+          fuse = group_ok &&
+                 owned_comm_->can_fuse_put_signal(
+                     static_cast<int>(c.dst_peer), tpt_kind);
+        }
+        if (fuse) {
           c.flags |= kCmdFlagPutSignal;
           c.tag = run.plan->tiled.ops[sig_idx].tag;
         }
@@ -619,6 +629,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
+        if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
+          ++run.fused_sig_cnt[run.plan->put_to_sig[dev_idx[i]]];
       }
       // Roll back slots whose submission failed, defer the rest.
       for (size_t i = ok; i < reserved; ++i)
@@ -635,6 +647,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          PutPath::None, stop_);
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
+        if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
+          ++run.fused_sig_cnt[run.plan->put_to_sig[dev_idx[i]]];
       }
       for (size_t i = ok; i < m; ++i) run.deferred_dev.push_back(dev_idx[i]);
       dev_dispatched = ok;

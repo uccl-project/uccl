@@ -19,7 +19,7 @@ namespace Device {
 enum class TaskType : uint64_t {
   None = 0,     // sentinel: empty/uninitialized task
   CollCopy = 1, // pure GPU copy (used by tests/benchmarks)
-  CollPut = 2,  // GPU copy + signal (used by CCL) — was CollSend
+  CollPut = 2,  // GPU copy + signal ring write (used by CCL fused PutSignal)
   CollReduce,   // 3 — local reduction
   BenchNop,
   Stop,

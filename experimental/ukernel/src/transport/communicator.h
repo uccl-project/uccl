@@ -116,6 +116,10 @@ class Communicator {
       uint32_t qp_affinity = ~0u);
   // Whether the effective transport to `peer` supports fused PutSignal.
   bool can_fuse_put_signal(int peer, PeerTransportKind transport);
+  // GPU-visible address of the peer's IPC signal ring (zero-copy host
+  // mapping), or nullptr when unavailable. Device kernels write fused
+  // PutSignal tags through it.
+  void* ipc_signal_ring_device_ptr(int peer) const;
 
   // rid encoding: backend-path rids carry a 2-bit tag in the top bits
   // (bit 30 = SignalBackend, bit 31 = TransportBackend); the low 30 bits are

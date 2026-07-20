@@ -154,6 +154,30 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
       void* ptr = mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (ptr != MAP_FAILED) {
         pc.remote = reinterpret_cast<IpcDataCompletion*>(ptr);
+        // Zero-copy GPU mapping: lets device kernels write fused
+        // PutSignal tags straight into this ring. Optional — failure
+        // only disables device-side fusion for this peer. Requires GPU
+        // system atomics to host memory (the ring claim is an
+        // atomicAdd from the kernel).
+        int atomics_ok = 1;
+#ifndef __HIP_PLATFORM_AMD__
+        atomics_ok = 0;
+        if (gpuDeviceGetAttribute(&atomics_ok,
+                                  gpuDevAttrHostNativeAtomicSupported,
+                                  gpu_id_) != gpuSuccess)
+          atomics_ok = 0;
+#endif
+        int prev_dev = -1;
+        if (atomics_ok && gpuGetDevice(&prev_dev) == gpuSuccess) {
+          if (gpuSetDevice(gpu_id_) == gpuSuccess &&
+              gpuHostRegister(ptr, sz, gpuHostRegisterMapped) ==
+                  gpuSuccess) {
+            void* dptr = nullptr;
+            if (gpuHostGetDevicePointer(&dptr, ptr, 0) == gpuSuccess)
+              pc.remote_device = dptr;
+          }
+          gpuSetDevice(prev_dev);
+        }
         return true;
       }
       close(fd);
@@ -328,9 +352,16 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
   return 1;
 }
 
+void* IpcAdapter::peer_signal_ring_device_ptr(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size())
+    return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.remote_device) return nullptr;
+  return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion);
+}
+
 size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
-                                     size_t max) {
-  if (!has_wait_path(peer_rank)) {
+                                     size_t max) {  if (!has_wait_path(peer_rank)) {
     static int once = 0;
     if (!once++)
       UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no wait path for p%d",

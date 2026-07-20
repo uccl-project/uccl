@@ -956,6 +956,11 @@ bool Communicator::can_fuse_put_signal(int peer,
   return adapter && adapter->supports_put_signal();
 }
 
+void* Communicator::ipc_signal_ring_device_ptr(int peer) const {
+  return ipc_adapter_ ? ipc_adapter_->peer_signal_ring_device_ptr(peer)
+                      : nullptr;
+}
+
 unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
                                          PeerTransportKind transport) {
   unsigned rid = alloc_rid();

@@ -3,6 +3,7 @@
 #include "../memory/ipc_manager.h"
 #include "util/jring.h"
 #include "gpu_rt.h"
+#include "ipc_signal_ring.h"
 #include "transport_adapter.h"
 #include <array>
 #include <atomic>
@@ -25,19 +26,6 @@ class Communicator;
 // across ping-pong iterations where user tags (e.g., 1, 2) alternate.
 struct IpcDataCompletion {
   std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
-};
-
-static constexpr size_t kSignalRingSize = 4096;  // power of two
-
-struct SignalSlot {
-  std::atomic<bool> ready{false};
-  uint64_t tag{0};
-};
-
-struct PeerSignalRing {
-  SignalSlot slots[kSignalRingSize];
-  std::atomic<uint64_t> write_idx{0};
-  std::atomic<uint64_t> read_idx{0};
 };
 
 class IpcAdapter final : public TransportAdapter {
@@ -75,6 +63,11 @@ class IpcAdapter final : public TransportAdapter {
   // Called directly by Communicator::drain_ipc_signals().
   size_t drain_signal_tags(int peer_rank, uint64_t* tags, size_t max);
 
+  // GPU-visible address of the peer's signal ring (zero-copy host
+  // mapping registered when the peer path was opened), or nullptr when
+  // unavailable. Device kernels write fused PutSignal tags through it.
+  void* peer_signal_ring_device_ptr(int peer) const;
+
   void close_comp(int peer_rank);
 
  private:
@@ -95,6 +88,7 @@ class IpcAdapter final : public TransportAdapter {
     IpcDataCompletion* local = nullptr;
     IpcDataCompletion* remote = nullptr;
     PeerSignalRing* signal_ring = nullptr;  // in same SHM as local
+    void* remote_device = nullptr;  // remote mapping, GPU-visible (zero-copy)
     int shm_fd = -1;
     size_t shm_size = 0;
     std::string shm_name;

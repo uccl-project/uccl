@@ -42,6 +42,9 @@ class DeviceBackend final : public BatchBackend {
                                    size_t n) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
+  // True when the peer's IPC signal ring is GPU-mapped, so a fused
+  // PutSignal (CollPut task) can write the tag from the kernel.
+  bool can_fuse_put_signal(int peer) const override;
 
  private:
   void ensure_runtime();

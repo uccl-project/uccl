@@ -66,6 +66,14 @@ class BatchBackend {
   virtual size_t capacity() const = 0;
   virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
 
+  // Whether this backend can carry a Put's partner signal tag itself
+  // (Cmd::kCmdFlagPutSignal): DeviceBackend's kernels write the tag
+  // into the peer's shm signal ring after the copy. Default: no.
+  virtual bool can_fuse_put_signal(int peer) const {
+    (void)peer;
+    return false;
+  }
+
   // Reserve-then-enqueue API for ops whose completion may arrive
   // synchronously during enqueue (e.g. same-host IPC signals). The
   // executor publishes its slot-table entry between reserve_slot() and

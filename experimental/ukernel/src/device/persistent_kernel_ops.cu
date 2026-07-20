@@ -1,5 +1,6 @@
 #include "ops/ops.h"
 #include "persistent_kernel_ops.h"
+#include "../transport/adapter/ipc_signal_ring.h"
 
 namespace UKernel {
 namespace Device {
@@ -19,6 +20,41 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
                                                       uint64_t next_tail) {
   __threadfence_system();
   *reinterpret_cast<uint64_t volatile*>(tail) = next_tail;
+}
+
+// Fused PutSignal: write the tag into the peer's shared-memory signal
+// ring (zero-copy host mapping). Same producer protocol as the host
+// side (IpcAdapter::write_signal_ring): atomic claim, per-slot ready
+// flag, so GPU workers and host producers can share the ring. The
+// receiver always polls from the CPU — nothing ever waits on the GPU.
+__device__ __forceinline__ void signal_ring_write(
+    Transport::PeerSignalRingDevice* ring, uint64_t tag) {
+  unsigned long long w = atomicAdd_system(
+      reinterpret_cast<unsigned long long*>(&ring->write_idx), 1ull);
+  size_t idx = static_cast<size_t>(w) & (Transport::kSignalRingSize - 1);
+  // Back-pressure: wait for this slot's previous lap to be consumed.
+  while (*reinterpret_cast<bool volatile*>(&ring->slots[idx].ready)) {
+#ifdef __HIP_PLATFORM_AMD__
+    __builtin_amdgcn_s_sleep(2);
+#else
+    __nanosleep(200);
+#endif
+  }
+  ring->slots[idx].tag = tag;
+  __threadfence_system();
+  *reinterpret_cast<bool volatile*>(&ring->slots[idx].ready) = true;
+  __threadfence_system();
+}
+
+// If this task is a fused PutSignal, emit the tag now (copy finished).
+__device__ __forceinline__ void maybe_signal_ring_write(
+    Task const& task, TaskArgs const* args) {
+  if (static_cast<TaskType>(task.type_u8()) != TaskType::CollPut ||
+      args == nullptr)
+    return;
+  signal_ring_write(
+      reinterpret_cast<Transport::PeerSignalRingDevice*>(args->src2),
+      args->redTypeRaw);
 }
 
 }  // namespace
@@ -92,42 +128,6 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
-// SM IPC completion buffer helpers
-
-struct GpuComp {
-  uint64_t last[2];
-};
-
-__device__ __forceinline__ void sm_write_seq(TaskArgs const& a) {
-  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
-  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
-  cmp->last[dir] = a.redTypeRaw >> 8;
-  __threadfence_system();
-}
-
-__device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
-  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
-  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
-  uint64_t target = a.redTypeRaw >> 8;
-  for (int spin = 0; spin < 16; ++spin)
-    if (cmp->last[dir] >= target) return;
-  while (cmp->last[dir] < target)
-#ifdef __HIP_PLATFORM_AMD__
-    __builtin_amdgcn_s_sleep(2);
-#else
-    __nanosleep(200);
-#endif
-}
-
-// SM IPC kernel functions
-
-template <typename T>
-__device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
-                                         uint32_t num_blocks, void* smem_buf) {
-  run_typed_copy<T>(a, block_id, num_blocks, smem_buf);
-  sm_write_seq(a);
-}
-
 // Benchmarks
 
 __global__ void benchDispatchNopKernel() {}
@@ -189,10 +189,10 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
 
   switch (ttype) {
     case TaskType::CollCopy:
-      RUN_COPY_BODY(dtype, run_typed_copy);
-      break;
     case TaskType::CollPut:
-      RUN_COPY_BODY(dtype, run_send);
+      // CollPut: copy first; the signal ring write happens at task
+      // completion time (maybe_signal_ring_write), after all blocks.
+      RUN_COPY_BODY(dtype, run_typed_copy);
       break;
     case TaskType::CollReduce:
       RUN_REDUCE_BODY(dtype);
@@ -289,6 +289,7 @@ __global__ void singlePersistentKernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
+      maybe_signal_ring_write(current_task, current_args);
       ++cached_tail;
       publish_tail_progress(fifo.tail, cached_tail);
     }
@@ -409,6 +410,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         }
         // Same ordering requirement as the single-block path: all blocks'
         // writes must be visible before host observes task completion.
+        maybe_signal_ring_write(current_task, current_args);
         ++cached_tail;
         publish_tail_progress(fifo.tail, cached_tail);
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
