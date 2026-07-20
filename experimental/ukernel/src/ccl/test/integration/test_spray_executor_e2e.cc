@@ -43,8 +43,6 @@ int main(int argc, char** argv) {
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
   int port = get_int_arg(argc, argv, "--exchanger-port", 16998);
   std::string xip = get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
-  setenv("UHM_EXCHANGER_PORT", std::to_string(port).c_str(), 1);
-  if (rank != 0) setenv("UHM_EXCHANGER_IP", xip.c_str(), 1);
 
   std::printf("[e2e] %s rank=%d gpu=%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));

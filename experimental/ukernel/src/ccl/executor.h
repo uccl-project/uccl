@@ -154,7 +154,7 @@ struct SprayExecutorConfig {
 
   // Communicator settings
   std::string exchanger_ip = "0.0.0.0";
-  int exchanger_port = 6979;
+  int exchanger_port = 16998;  // matches all ccl test defaults
   int local_id = -1;
 };
 
