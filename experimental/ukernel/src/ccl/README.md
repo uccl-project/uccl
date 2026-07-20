@@ -21,6 +21,22 @@ make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
 
 ## Test
 
+Unit tests are single-process (mock backends, no GPU needed). Every e2e
+test is two processes — `--role=server` (rank 0) and `--role=client`
+(rank 1) — and takes `--gpu`, `--exchanger-ip`, `--exchanger-port`
+(each test has its own default port in 16980–16999). Conventions for
+all e2e sections below:
+
+- Same-node: pick a GPU pair with P2P support (`nvidia-smi topo -p2p r`).
+- Cross-node: same build on both nodes, client gets
+  `--exchanger-ip=<SERVER_IP>`, and the port must pass the firewall —
+  verify with `nc -vz <SERVER_IP> <PORT>` from the client and
+  `ss -tlnp | grep <PORT>` on the server. Cross-node traffic is RDMA
+  (data and signals), so an active mlx5 port must exist on both nodes;
+  same-node runs work even with RDMA down.
+- Stale state: `pkill -f <test>` and `rm -f /dev/shm/uk_cmpl_*` before
+  reruns.
+
 ### Unit tests
 
 ```bash
@@ -33,46 +49,56 @@ make test-unit
 | `test_async` | SprayExecutor lifecycle with mock backends (allreduce / alltoall / concurrent) |
 | `test_spray_executor` | multi-path dispatch priority, deferred re-queue, SignalBackend routing |
 
-Unit tests run single-process with mock backends — no GPU or Communicator needed.
+### test_transport_backend_e2e
 
-### Backend e2e tests
-
-Each backend has a standalone two-process test using a real Communicator.
-
-Build:
+Plain Put throughput/latency through TransportBackend over IPC and RDMA.
 
 ```bash
-make test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e SM=80
-```
+make test_transport_backend_e2e
 
-Run (two terminals, pick a GPU pair with P2P support):
-
-**TransportBackend** — supports `--transport=ipc|rdma`:
-
-```bash
-# server
+# same-node (IPC is the default)
 CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=server --gpu=0
-# client (IPC)
 CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=client --gpu=1
-# client (RDMA)
+
+# same-node over RDMA
+CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=server --gpu=0 --transport=rdma
 CUDA_VISIBLE_DEVICES=6,7 ./test_transport_backend_e2e --role=client --gpu=1 --transport=rdma
+
+# cross-node (RDMA)
+./test_transport_backend_e2e --role=server --gpu=0 --transport=rdma
+./test_transport_backend_e2e --role=client --gpu=0 --transport=rdma --exchanger-ip=<SERVER_IP>
 ```
 
-**DeviceBackend**:
+### test_device_backend_e2e
+
+DeviceBackend SM copy tasks through a real Communicator. Same-node only —
+the device path needs same-host P2P.
 
 ```bash
+make test_device_backend_e2e
+
 CUDA_VISIBLE_DEVICES=6,7 ./test_device_backend_e2e --role=server --gpu=0
 CUDA_VISIBLE_DEVICES=6,7 ./test_device_backend_e2e --role=client --gpu=1
 ```
 
-**SignalBackend**:
+### test_signal_backend_e2e
+
+Signal/WaitSignal matching latency through SignalBackend: same-node over
+the shm signal ring, cross-node over the RDMA signal QP.
 
 ```bash
+make test_signal_backend_e2e
+
+# same-node
 CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=server --gpu=0
 CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=client --gpu=1
+
+# cross-node
+./test_signal_backend_e2e --role=server --gpu=0
+./test_signal_backend_e2e --role=client --gpu=0 --exchanger-ip=<SERVER_IP>
 ```
 
-### PutSignal e2e test
+### test_put_signal_e2e
 
 Fused put+signal primitive: a single op delivers both the data and the
 peer signal — IPC: the send worker writes the tag into the peer's shm
@@ -80,104 +106,83 @@ signal ring right after the copy; RDMA: the last chunk is a
 write-with-imm carrying the tag. Verifies the core semantic: the peer
 observes the signal only after the data has landed.
 
-Build:
-
 ```bash
-make test_put_signal_e2e SM=80
-```
+make test_put_signal_e2e
 
-Run (two terminals, both sides on the same build — RDMA data QPs now
-pre-post receive WQEs for write-with-imm):
-
-```bash
-# IPC (default)
+# same-node (IPC is the default)
 CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=server --gpu=0
 CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=client --gpu=1
 
-# RDMA
+# same-node over RDMA
 CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=server --gpu=0 --transport=rdma
 CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=client --gpu=1 --transport=rdma
+
+# cross-node (RDMA; both sides must run this version — data QPs
+# pre-post receive WQEs for write-with-imm)
+./test_put_signal_e2e --role=server --gpu=0 --transport=rdma
+./test_put_signal_e2e --role=client --gpu=0 --transport=rdma --exchanger-ip=<SERVER_IP>
 ```
 
 Pass criteria: `can_fuse_put_signal=1`, `data-after-signal: verified`,
 `[PASS]` on both sides.
 
-### SprayExecutor e2e test
+### test_spray_executor_e2e
 
-Full-pipeline integration: DeviceBackend + TransportBackend + SignalBackend with
-a real Communicator, exercising the complete AllReduce DAG.
-
-Build:
-
-```bash
-make test_spray_executor_e2e SM=80
-```
-
-Run:
+Full-pipeline integration: DeviceBackend + TransportBackend +
+SignalBackend with a real Communicator, exercising the complete
+AllReduce DAG. Submits a 4 MB AllReduce correctness check (in=1.0,
+out=3.0 for rank 0; in=2.0, out=3.0 for rank 1) and exits.
 
 ```bash
-# server
+make test_spray_executor_e2e
+
+# same-node
 CUDA_VISIBLE_DEVICES=6,7 ./test_spray_executor_e2e --role=server --gpu=0
-# client
 CUDA_VISIBLE_DEVICES=6,7 ./test_spray_executor_e2e --role=client --gpu=1
-```
 
-The test submits a 4 MB AllReduce correctness check (in=1.0, out=3.0 for rank 0;
-in=2.0, out=3.0 for rank 1) and exits cleanly.
+# cross-node
+./test_spray_executor_e2e --role=server --gpu=0
+./test_spray_executor_e2e --role=client --gpu=0 --exchanger-ip=<SERVER_IP>
+```
 
 Troubleshooting:
 
-- `Failed to connect to Exchanger`: a stale run is holding the port.
+- `Failed to connect to Exchanger`: a stale run is holding the port —
+  `pkill -f test_spray_executor_e2e`.
+- Start the server first, then the client within ~3s (leader-ready
+  timeout is 3000 ms; raise it with `UHM_OOB_LEADER_READY_TIMEOUT_MS=30000`).
 
-  ```bash
-  pkill -f test_spray_executor_e2e
-  ```
+### test_perf_p2p_copy
 
-- Start the server first, then the client within ~3s (leader-ready timeout is
-  3000 ms; raise it with `UHM_OOB_LEADER_READY_TIMEOUT_MS=30000`).
-
-### P2P copy performance benchmark
-
-Benchmarks three same-node P2P copy paths: ukernel `DeviceBackend` (several
-`blocks_per_worker`), CUDA `cudaMemcpyPeerAsync`, and
-`Communicator::send_put_async` (IPC put).
-
-Build:
+Benchmarks three same-node P2P copy paths: ukernel `DeviceBackend`
+(several `blocks_per_worker`), CUDA `cudaMemcpyPeerAsync`, and
+`Communicator::send_put_async` (IPC put), plus an RDMA section. The
+server terminal prints latency (µs) and throughput (GB/s) tables over
+sizes from 1 KB to 1 GB.
 
 ```bash
-make test_perf_p2p_copy SM=80
-```
+make test_perf_p2p_copy
 
-Pick a GPU pair with P2P support:
-
-```bash
-nvidia-smi topo -p2p r
-```
-
-Run:
-
-```bash
-# server
+# same-node (device/ipc sections)
 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=server --gpu=0 --exchanger-port=6979
-# client
 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=client --gpu=1 --exchanger-ip=127.0.0.1 --exchanger-port=6979
-```
 
-The server terminal prints latency (µs) and throughput (GB/s) tables over sizes
-from 1 KB to 1 GB.
+# cross-node (RDMA section only; device/ipc copies are same-node)
+./test_perf_p2p_copy --role=server --gpu=0 --exchanger-port=6979
+./test_perf_p2p_copy --role=client --gpu=0 --exchanger-ip=<SERVER_IP> --exchanger-port=6979
+```
 
 Troubleshooting:
 
-- `Peer access NOT supported` / `Cannot resolve remote IPC`: no P2P path between
-  the GPUs — pick a pair shown as `OK` in `nvidia-smi topo -p2p r`.
-- Stale port: `pkill -f test_perf_p2p_copy`, then retry with a fresh port.
+- `Peer access NOT supported` / `Cannot resolve remote IPC`: no P2P path
+  between the GPUs — pick a pair shown as `OK` in `nvidia-smi topo -p2p r`.
 
-### RDMA L2 cache flush test
+### test_rdma_l2_flush
 
 Verifies GPU L2 cache coherence after RDMA write. Rank 0 writes a known
-float pattern via RDMA into rank 1's GPU buffer. Rank 1 waits for the
-signal, then reads the data through a selected backend path and validates
-correctness on the host. Three test cases isolate different read paths:
+float pattern via RDMA into rank 1's GPU buffer; rank 1 waits for the
+signal, reads the data through a selected path and validates on the
+host. Three cases isolate different read paths:
 
 | Case | Read path |
 |---|---|
@@ -188,51 +193,36 @@ correctness on the host. Three test cases isolate different read paths:
 IPC (same-host) should pass. RDMA may fail on pre-Hopper GPUs due to
 stale L2 cache lines after the NIC writes directly to GPU DRAM.
 
-Build:
-
 ```bash
-make test_rdma_l2_flush SM=80
-```
+make test_rdma_l2_flush
 
-Run:
-
-```bash
-# server (rank 0)
+# same-node
 CUDA_VISIBLE_DEVICES=6,7 ./test_rdma_l2_flush --role=server --gpu=0 --case=gpuMemcpy
-# client (rank 1)
 CUDA_VISIBLE_DEVICES=6,7 ./test_rdma_l2_flush --role=client --gpu=1 --case=gpuMemcpy
+
+# cross-node
+./test_rdma_l2_flush --role=server --gpu=0 --case=gpuMemcpy --transport rdma
+./test_rdma_l2_flush --role=client --gpu=0 --case=gpuMemcpy --transport rdma --exchanger-ip=<SERVER_IP>
 ```
 
 Substitute `--case=CollCopy` or `--case=Reduce` to test SM kernel paths.
 
-### SprayExecutor AllReduce performance benchmark
+### test_perf_spray_allreduce
 
-Benchmarks AllReduce throughput for sizes 256 KB through 256 MB using the
-full SprayExecutor pipeline.
-
-Build:
-
-```bash
-make test_perf_spray_allreduce SM=80
-```
-
-Run:
+Main performance vehicle: AllReduce/AllToAll throughput for sizes
+256 KB through 512 MB using the full SprayExecutor pipeline (fused
+PutSignal active).
 
 ```bash
-
-pkill -f test_perf_spray_allreduce
-ls /dev/shm/uk_cmpl_* 2>/dev/null && rm -f /dev/shm/uk_cmpl_*
-nvidia-smi | grep test_perf
+make test_perf_spray_allreduce
 
 # same-node
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall
 
-# cross-node (server node)
-UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall --exchanger-ip=0.0.0.0 --exchanger-port=16998
-
-# cross-node (client node, replace IP with server's address)
-UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP> --exchanger-port=16998
+# cross-node
+UK_CCL_PATH_COUNTERS=1 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
+UK_CCL_PATH_COUNTERS=1 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP>
 ```
 
 CLI reference:
@@ -287,40 +277,6 @@ only — the perf benchmark does not validate results numerically.
 make test
 ```
 
-### Cross-node testing
-
-All RDMA-capable e2e tests also run across two nodes (same build on
-both; IPC/device-copy paths are same-node only by nature). Generic
-pattern — server on node A, client on node B with the server's IP:
-
-```bash
-# node A (server)
-./<test> --role=server --gpu=0 [options] [--exchanger-port=PORT]
-# node B (client)
-./<test> --role=client --gpu=0 --exchanger-ip=<SERVER_IP> [options] [--exchanger-port=PORT]
-```
-
-| Test | Cross-node | Notes |
-|---|---|---|
-| `test_perf_spray_allreduce` | yes (RDMA) | main perf vehicle; see flags above |
-| `test_put_signal_e2e` | yes, `--transport=rdma` | PutSignal write-with-imm |
-| `test_transport_backend_e2e` | yes, `--transport=rdma` | plain RDMA puts |
-| `test_signal_backend_e2e` | yes | signals over the RDMA signal QP |
-| `test_spray_executor_e2e` | yes | numeric AllReduce check (3.0) |
-| `test_rdma_l2_flush` | yes, `--transport rdma` | L2 coherence after RDMA write |
-| `test_perf_p2p_copy` | RDMA section only | device/ipc copies are same-node |
-| `test_device_backend_e2e` | no | device path needs same-host P2P |
-
-Notes:
-
-- Each test has its own default exchanger port (16980–16999); when the
-  nodes' firewall only allows some ports, pass `--exchanger-port`
-  explicitly on both ends.
-- Verify reachability first: `nc -vz <SERVER_IP> <PORT>` from the
-  client node; `ss -tlnp | grep <PORT>` on the server node.
-- RDMA must be up on both nodes (active mlx5 port); same-node runs work
-  even with RDMA down (IPC/device paths).
-
 ## Debugging
 
 Runtime debug output is gated by `UK_CCL_DEBUG` (see
@@ -356,5 +312,5 @@ Other runtime switches:
 - `test-unit` covers planner, lowering, executor lifecycle, and multi-path dispatch.
 - Each backend has a standalone e2e test; run manually in two terminals (see above).
 - `test-integration` builds the p2p copy performance test.
-- All e2e tests require two GPUs with P2P support on the same node.
+- Same-node e2e tests require two GPUs with P2P support.
 - Use `SM=80` (or your GPU's compute capability) when building CUDA tests.
