@@ -24,8 +24,9 @@ make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
 Unit tests are single-process (mock backends, no GPU needed). Every e2e
 test is two processes — `--role=server` (rank 0) and `--role=client`
 (rank 1) — and takes `--gpu`, `--exchanger-ip`, `--exchanger-port`
-(each test has its own default port in 16980–16999). Conventions for
-all e2e sections below:
+(all tests default to exchanger port **16998**; override
+`--exchanger-port` on BOTH ends only when running several tests
+concurrently). Conventions for all e2e sections below:
 
 - Same-node: pick a GPU pair with P2P support (`nvidia-smi topo -p2p r`).
 - Cross-node: same build on both nodes, client gets
@@ -164,12 +165,12 @@ sizes from 1 KB to 1 GB.
 make test_perf_p2p_copy
 
 # same-node (device/ipc sections)
-CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=server --gpu=0 --exchanger-port=6979
-CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=client --gpu=1 --exchanger-ip=127.0.0.1 --exchanger-port=6979
+CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=server --gpu=0
+CUDA_VISIBLE_DEVICES=6,7 ./test_perf_p2p_copy --role=client --gpu=1 --exchanger-ip=127.0.0.1
 
 # cross-node (RDMA section only; device/ipc copies are same-node)
-./test_perf_p2p_copy --role=server --gpu=0 --exchanger-port=6979
-./test_perf_p2p_copy --role=client --gpu=0 --exchanger-ip=<SERVER_IP> --exchanger-port=6979
+./test_perf_p2p_copy --role=server --gpu=0
+./test_perf_p2p_copy --role=client --gpu=0 --exchanger-ip=<SERVER_IP>
 ```
 
 Troubleshooting:

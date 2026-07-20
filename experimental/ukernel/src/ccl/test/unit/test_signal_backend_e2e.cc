@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
       gpu = gi(argc, argv, "--gpu", rank == 0 ? 0 : 1);
   auto ip = (role == "server") ? "0.0.0.0"
                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
-  int port = gi(argc, argv, "--exchanger-port", 16982);
+  int port = gi(argc, argv, "--exchanger-port", 16998);
   printf("SignalBackend %s r%d g%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));
   auto cfg = std::make_shared<CommunicatorConfig>();

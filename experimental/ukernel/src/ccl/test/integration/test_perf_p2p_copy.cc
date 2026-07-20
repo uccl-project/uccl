@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
   std::string exchanger_ip =
       (role == "server") ? "0.0.0.0"
                          : get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
-  int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 6979);
+  int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 16998);
   std::string transport_str = get_arg(argc, argv, "--transport", "auto");
 
   PreferredTransport preferred = PreferredTransport::Auto;

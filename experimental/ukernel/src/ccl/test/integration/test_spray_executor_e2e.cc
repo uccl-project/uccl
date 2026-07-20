@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
-  int port = get_int_arg(argc, argv, "--exchanger-port", 16990);
+  int port = get_int_arg(argc, argv, "--exchanger-port", 16998);
   std::string xip = get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
   setenv("UHM_EXCHANGER_PORT", std::to_string(port).c_str(), 1);
   if (rank != 0) setenv("UHM_EXCHANGER_IP", xip.c_str(), 1);

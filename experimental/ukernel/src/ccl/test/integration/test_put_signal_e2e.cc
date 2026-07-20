@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
       gpu = gi(argc, argv, "--gpu", rank == 0 ? 0 : 1);
   auto ip = (role == "server") ? "0.0.0.0"
                                : ga(argc, argv, "--exchanger-ip", "127.0.0.1");
-  int port = gi(argc, argv, "--exchanger-port", 16984);
+  int port = gi(argc, argv, "--exchanger-port", 16998);
   auto transport_str = ga(argc, argv, "--transport", "ipc");
   auto tpt = (transport_str == "rdma") ? PeerTransportKind::Rdma
                                        : PeerTransportKind::Ipc;

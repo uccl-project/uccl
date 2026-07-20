@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
 
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
-  int port = get_int_arg(argc, argv, "--exchanger-port", 16999);
+  int port = get_int_arg(argc, argv, "--exchanger-port", 16998);
   std::string xip = get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
 
   std::string test_case = get_arg(argc, argv, "--case", "gpuMemcpy");
