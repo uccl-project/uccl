@@ -441,7 +441,7 @@ int main(int argc, char** argv) {
           cwi.cmd.dst_off = 0;
           cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
           cwi.cmd.src_peer = static_cast<uint32_t>(rank);
-          cwi.cmd.transport = 0;  // auto
+          cwi.cmd.put_path = PutPath::Ipc;  // same-host
           cwi.caller_id = static_cast<uint32_t>(iter);
 
           auto t0 = std::chrono::steady_clock::now();
@@ -484,7 +484,7 @@ int main(int argc, char** argv) {
             cwis[b].cmd.dst_off = 0;
             cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
             cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
-            cwis[b].cmd.transport = 0;  // auto
+            cwis[b].cmd.put_path = PutPath::Ipc;  // same-host
             cwis[b].caller_id = static_cast<uint32_t>(b);
           }
 
@@ -556,7 +556,7 @@ int main(int argc, char** argv) {
         probe_cmd.dst_off = 0;
         probe_cmd.dst_peer = static_cast<uint32_t>(peer);
         probe_cmd.src_peer = static_cast<uint32_t>(rank);
-        probe_cmd.transport = static_cast<uint8_t>(PeerTransportKind::Rdma);
+        probe_cmd.put_path = PutPath::Rdma;
 
         uint32_t probe_idx;
         if (tpt_be.do_enqueue(&probe_cmd, 1, &probe_idx) > 0) {
@@ -621,7 +621,7 @@ int main(int argc, char** argv) {
             cwi.cmd.dst_off = 0;
             cwi.cmd.dst_peer = static_cast<uint32_t>(peer);
             cwi.cmd.src_peer = static_cast<uint32_t>(rank);
-            cwi.cmd.transport = static_cast<uint8_t>(PeerTransportKind::Rdma);
+            cwi.cmd.put_path = PutPath::Rdma;
             cwi.caller_id = static_cast<uint32_t>(iter);
 
             auto t0 = std::chrono::steady_clock::now();
@@ -673,8 +673,7 @@ int main(int argc, char** argv) {
               cwis[b].cmd.dst_off = 0;
               cwis[b].cmd.dst_peer = static_cast<uint32_t>(peer);
               cwis[b].cmd.src_peer = static_cast<uint32_t>(rank);
-              cwis[b].cmd.transport =
-                  static_cast<uint8_t>(PeerTransportKind::Rdma);
+              cwis[b].cmd.put_path = PutPath::Rdma;
               cwis[b].caller_id = static_cast<uint32_t>(b);
             }
 
