@@ -241,9 +241,14 @@ signals are emitted on each path (fused PutSignal):
 
 | Path | G=1 | G>1 |
 |---|---|---|
-| same-node Device | device kernel writes the tag into the peer's shm signal ring after the P2P copy | standalone signals |
-| same-node IPC | send worker writes the tag after the copy | standalone signals |
+| same-node Device | device kernel writes the tag into the peer's shm signal ring after the P2P copy | every put fuses the same way; the wait counts G arrivals |
+| same-node IPC | send worker writes the tag after the copy | every put fuses the same way (a put that cannot fuse is rerouted to IPC); the wait counts G arrivals |
 | RDMA | write-with-imm on the put | every put carries an imm; the wait counts G arrivals |
+
+Same-host groups always fully fuse (IPC is the guaranteed fallback);
+remote groups fuse iff RDMA supports write-with-imm, else the group
+falls back to one standalone signal. All fused channels feed the same
+tag-matching layer, so per-op paths may mix within a group.
 
 ### Verifying the fused PutSignal changes
 
@@ -254,9 +259,8 @@ signal/fusion paths:
 2. `test_put_signal_e2e`, IPC and RDMA — data-before-signal semantics.
 3. `test_spray_executor_e2e` — numeric AllReduce correctness (3.0).
 4. `test_perf_spray_allreduce` same-node and cross-node, plus
-   `--sig-group 1/2/4/8` cross-node and `--sig-group 2/4` same-node —
-   every size must complete without hanging; compare small-size latency
-   against the previous commit.
+   `--sig-group 1/2/4/8` on both — every size must complete without
+   hanging; compare small-size latency against the previous commit.
 5. `test_signal_backend_e2e`, `test_transport_backend_e2e` (ipc and
    `--transport=rdma`), `test_device_backend_e2e` — unfused paths
    unaffected.

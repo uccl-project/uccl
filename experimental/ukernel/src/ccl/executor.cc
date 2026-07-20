@@ -510,6 +510,15 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     // ready. The decision is re-derived every cycle, and the per-run
     // fused_sig_cnt is bumped only when the fused put is actually
     // accepted by the backend (see the submission loops).
+    //
+    // Groups (grp > 1): every put of the group must fuse — the receiver
+    // counts grp arrivals, and all fused channels (device-kernel and
+    // IPC ring writes, RDMA immediates) share one matching layer, so
+    // per-op paths may freely mix. A put whose picked path cannot fuse
+    // (e.g. device kernel without a GPU-mapped ring) is rerouted to
+    // IPC, which is always fusable for same-host peers. Remote groups
+    // fall back to a standalone Signal when RDMA cannot fuse, mirrored
+    // by the receiver's wait count.
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u && owned_comm_ &&
         !run.plan->put_to_sig.empty()) {
       int32_t sig_idx = run.plan->put_to_sig[idx];
@@ -517,28 +526,25 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         uint16_t grp = run.plan->sig_group_size[sig_idx];
         bool fuse = false;
         if (c.put_path == PutPath::Device) {
-          // Device kernel writes the tag straight into the peer's shm
-          // signal ring (1:1 groups only; group counting is RDMA-only).
-          fuse = (grp == 1) &&
-                 device_be_->can_fuse_put_signal(
-                     static_cast<int>(c.dst_peer));
-        } else {
-          // Group fusion (grp > 1) requires a REMOTE peer: only then is
-          // every group put deterministically RDMA, delivering exactly
-          // grp arrivals that the receiver mirrors as its wait count.
-          // Same-host puts may land on Device/IPC/RDMA per op (metrics),
-          // so group fusion there would over-deliver arrivals and
-          // poison later waits on the same tag (1:1 pairs still fuse on
-          // any transport).
-          bool const group_ok =
-              (grp == 1 ||
-               !owned_comm_->same_host(static_cast<int>(c.dst_peer)));
+          fuse = device_be_->can_fuse_put_signal(
+              static_cast<int>(c.dst_peer));
+          if (!fuse && grp > 1 &&
+              owned_comm_->same_host(static_cast<int>(c.dst_peer))) {
+            // Device fusion unavailable: reroute to IPC so the group
+            // still fully fuses (mirror the BAR1 metrics adjustment).
+            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+                .device.inflight.fetch_sub(1, std::memory_order_relaxed);
+            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
+                .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+            c.put_path = PutPath::Ipc;
+          }
+        }
+        if (!fuse && c.put_path != PutPath::Device) {
           auto tpt_kind = (c.put_path == PutPath::Rdma)
                               ? Transport::PeerTransportKind::Rdma
                               : Transport::PeerTransportKind::Ipc;
-          fuse = group_ok &&
-                 owned_comm_->can_fuse_put_signal(
-                     static_cast<int>(c.dst_peer), tpt_kind);
+          fuse = owned_comm_->can_fuse_put_signal(
+              static_cast<int>(c.dst_peer), tpt_kind);
         }
         if (fuse) {
           c.flags |= kCmdFlagPutSignal;
@@ -559,17 +565,20 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         ++sig_dispatched;
         continue;
       }
-      // Counted wait: when the sender fuses this group (remote RDMA
-      // only — deterministic and mirrored on both sides), each tile
-      // arrives as its own immediate, so the wait counts group_size
-      // arrivals instead of one standalone signal.
+      // Counted wait: when the sender fuses this group, each tile
+      // arrives as its own signal, so the wait counts group_size
+      // arrivals instead of one standalone signal. The sender's rule is
+      // deterministic and mirrored here: same-host groups always fully
+      // fuse (IPC is the guaranteed fallback), remote groups fuse iff
+      // RDMA can fuse.
       if (c.kind == ExecOpKind::WaitSignal && owned_comm_ &&
           !run.plan->wait_group_size.empty() &&
           run.plan->wait_group_size[idx] > 1 &&
-          !owned_comm_->same_host(static_cast<int>(c.src_peer)) &&
-          owned_comm_->can_fuse_put_signal(
-              static_cast<int>(c.src_peer),
-              Transport::PeerTransportKind::Rdma)) {
+          (owned_comm_->can_fuse_put_signal(
+               static_cast<int>(c.src_peer), Transport::PeerTransportKind::Ipc) ||
+           owned_comm_->can_fuse_put_signal(
+               static_cast<int>(c.src_peer),
+               Transport::PeerTransportKind::Rdma))) {
         c.wait_count = run.plan->wait_group_size[idx];
       }
       uint32_t be_idx = signal_be_->reserve_slot();
