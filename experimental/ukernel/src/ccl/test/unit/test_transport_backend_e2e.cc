@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = ip;
   cfg->exchanger_port = port;
-  cfg->local_id = rank;
+  cfg->local_id = gpu;
   auto comm = std::make_shared<Communicator>(gpu, rank, kW, cfg);
   cp(comm, rank, tpt_kind);
   printf("  peer ok\n");

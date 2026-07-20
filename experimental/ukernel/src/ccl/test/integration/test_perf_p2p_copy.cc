@@ -56,7 +56,7 @@ std::shared_ptr<Communicator> make_communicator(int gpu, int rank,
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = exchanger_ip;
   cfg->exchanger_port = exchanger_port;
-  cfg->local_id = rank;
+  cfg->local_id = gpu;
   cfg->preferred_transport = preferred;
   return std::make_shared<Communicator>(gpu, rank, kWorldSize, cfg);
 }

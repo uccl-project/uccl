@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
   cfg.world_size = 2;
   cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : xip;
   cfg.exchanger_port = port;
-  cfg.local_id = rank;
+  cfg.local_id = gpu;
   auto comm_cfg = std::make_shared<CommunicatorConfig>();
   comm_cfg->exchanger_ip = cfg.exchanger_ip;
   comm_cfg->exchanger_port = cfg.exchanger_port;

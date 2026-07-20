@@ -160,9 +160,10 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     // Communicator (no peer metas, no completion rings), surfacing
     // later as confusing "transport peer metadata is not established"
     // errors that hide the real cause.
-    throw std::runtime_error("Communicator: failed to connect to exchanger at " +
-                             config_->exchanger_ip + ":" +
-                             std::to_string(config_->exchanger_port));
+    throw std::runtime_error(
+        "Communicator: exchanger init failed at " + config_->exchanger_ip +
+        ":" + std::to_string(config_->exchanger_port) +
+        " (see [oob] lines above for the exact stage)");
   }
 
   // Completion ring: adapters push CompletionEvent when ops finish.

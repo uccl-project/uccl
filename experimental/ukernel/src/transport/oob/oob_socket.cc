@@ -1492,8 +1492,16 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
   std::string const ns = kv_namespace();
   if (node_leader_) {
     shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/true);
-    if (!shm_ || !shm_->valid()) return;
-    if (!shm_->begin_leader_run()) return;
+    if (!shm_ || !shm_->valid()) {
+      fprintf(stderr, "[oob] leader: failed to create shm store %s\n",
+              ns.c_str());
+      return;
+    }
+    if (!shm_->begin_leader_run()) {
+      fprintf(stderr, "[oob] leader: begin_leader_run failed for %s\n",
+              ns.c_str());
+      return;
+    }
     running_.store(true, std::memory_order_release);
     socket_ = std::make_unique<SocketExchanger>(
         is_server_, host_, port_, timeout_ms, max_line_bytes,
@@ -1501,10 +1509,14 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
           apply_remote_entry(key, value);
         });
     if (!socket_->start()) {
+      fprintf(stderr, "[oob] leader: socket start failed on %s:%d\n",
+              host_.c_str(), port_);
       running_.store(false, std::memory_order_release);
       return;
     }
     if (!shm_->mark_run_ready()) {
+      fprintf(stderr, "[oob] leader: mark_run_ready failed for %s\n",
+              ns.c_str());
       running_.store(false, std::memory_order_release);
       return;
     }
@@ -1513,10 +1525,23 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
   } else {
     shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/false,
                                           timeout_ms);
-    if (!shm_ || !shm_->valid()) return;
+    if (!shm_ || !shm_->valid()) {
+      fprintf(stderr,
+              "[oob] non-leader (local_id=%d): shm store %s not found "
+              "within %d ms — is there a local leader (local_id=0) "
+              "process on this node?\n",
+              local_id_, ns.c_str(), timeout_ms);
+      return;
+    }
     int const wait_ms =
         env_int_or_default("UHM_OOB_LEADER_READY_TIMEOUT_MS", timeout_ms);
-    if (!shm_->wait_until_ready(wait_ms)) return;
+    if (!shm_->wait_until_ready(wait_ms)) {
+      fprintf(stderr,
+              "[oob] non-leader (local_id=%d): leader not ready within "
+              "%d ms for %s\n",
+              local_id_, wait_ms, ns.c_str());
+      return;
+    }
     running_.store(true, std::memory_order_release);
   }
 }

@@ -35,6 +35,12 @@ concurrently). Conventions for all e2e sections below:
   `ss -tlnp | grep <PORT>` on the server. Cross-node traffic is RDMA
   (data and signals), so an active mlx5 port must exist on both nodes;
   same-node runs work even with RDMA down.
+- Node leadership: the exchanger is hierarchical — each node needs a
+  local leader, and every test passes its `--gpu` index as `local_id`.
+  Same-node: use two different `--gpu` values (0 = leader, 1 =
+  follower). Cross-node: use `--gpu=0` on both nodes (each node gets
+  its own leader). A client started with a nonzero `local_id` on a
+  leaderless node fails with `[oob] non-leader ... shm store not found`.
 - Stale state: `pkill -f <test>` and `rm -f /dev/shm/uk_cmpl_*` before
   reruns.
 
