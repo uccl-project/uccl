@@ -523,14 +523,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                  device_be_->can_fuse_put_signal(
                      static_cast<int>(c.dst_peer));
         } else {
-          // Group fusion (grp > 1) is RDMA-only: a remote peer's path
-          // is deterministically RDMA, and the receiver mirrors the
-          // group size as its wait count. Same-host puts may mix
-          // Device/IPC per op, and IPC-fused puts would deliver G
-          // arrivals while the receiver expects 1 — so same-host
-          // groups stay unfused (G=1 pairs still fuse on either
-          // transport).
-          bool const group_ok = (grp == 1 || c.put_path == PutPath::Rdma);
+          // Group fusion (grp > 1) requires a REMOTE peer: only then is
+          // every group put deterministically RDMA, delivering exactly
+          // grp arrivals that the receiver mirrors as its wait count.
+          // Same-host puts may land on Device/IPC/RDMA per op (metrics),
+          // so group fusion there would over-deliver arrivals and
+          // poison later waits on the same tag (1:1 pairs still fuse on
+          // any transport).
+          bool const group_ok =
+              (grp == 1 ||
+               !owned_comm_->same_host(static_cast<int>(c.dst_peer)));
           auto tpt_kind = (c.put_path == PutPath::Rdma)
                               ? Transport::PeerTransportKind::Rdma
                               : Transport::PeerTransportKind::Ipc;
