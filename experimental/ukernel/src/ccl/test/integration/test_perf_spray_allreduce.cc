@@ -45,6 +45,9 @@ int main(int argc, char** argv) {
   std::string kind_str = get_arg(argc, argv, "--kind", "allreduce");
   // Signal aggregation factor: one Signal/WaitSignal per this many tiles.
   int sig_group = get_int_arg(argc, argv, "--sig-group", 1);
+  // DeviceBackend parallelism knobs.
+  int dev_fifos = get_int_arg(argc, argv, "--dev-fifos", 1);
+  int dev_blocks = get_int_arg(argc, argv, "--dev-blocks", 1);
   CollKind coll_kind = (kind_str == "alltoall") ? CollKind::AllToAllPairwise
                                                 : CollKind::AllReduceRing;
   bool inplace = (coll_kind == CollKind::AllToAllPairwise);
@@ -58,7 +61,8 @@ int main(int argc, char** argv) {
   cfg.gpu_id = gpu; cfg.rank = rank; cfg.world_size = 2;
   cfg.exchanger_ip = exchanger_ip;
   cfg.exchanger_port = exchanger_port; cfg.local_id = gpu;
-  cfg.max_device_fifos = 1;
+  cfg.max_device_fifos = dev_fifos;
+  cfg.blocks_per_worker = (size_t)dev_blocks;
   auto ex = SprayExecutor::create(cfg);
 
   // Synchronous memset helper — avoids async gpuMemset racing with RDMA writes.

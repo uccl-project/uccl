@@ -293,6 +293,11 @@ Other runtime switches:
   path for A/B benchmarking (remote peers are always RDMA). Combine with
   `UK_CCL_PATH_COUNTERS=1` to verify the forced distribution, and compare
   against the automatic multi-path LB (unset).
+- `UK_CCL_DEV_FIFOS=<n>` / `UK_CCL_DEV_BLOCKS=<n>` /
+  `UK_CCL_DEV_THREADS=<n>` — override DeviceBackend fifo count,
+  blocks-per-worker and threads-per-block at executor creation (win over
+  `SprayExecutorConfig` values). `test_perf_spray_allreduce` also takes
+  `--dev-fifos=<n>` / `--dev-blocks=<n>`.
 - `UK_BAR1_WINDOW_MB=<n>` — fall back to IPC for remote device-put
   accesses beyond the BAR1 window (consumer GPUs with 256 MiB BAR1).
 

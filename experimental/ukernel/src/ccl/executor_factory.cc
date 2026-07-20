@@ -4,6 +4,7 @@
 #include "backend/signal_backend.h"
 #include "backend/transport_backend.h"
 #include "executor.h"
+#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -21,14 +22,23 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   auto comm = std::make_shared<UKernel::Transport::Communicator>(
       config.gpu_id, config.rank, config.world_size, comm_cfg);
   fprintf(stderr, "[FACTORY] Communicator done\n");
-  auto dev_be = std::make_unique<DeviceBackend>(DeviceBackendConfig{
+  DeviceBackendConfig dev_cfg{
       .task_capacity = static_cast<uint32_t>(config.device_task_capacity),
       .max_fifos = static_cast<uint32_t>(config.max_device_fifos),
       .threads_per_block = static_cast<uint32_t>(config.threads_per_block),
       .blocks_per_worker = static_cast<uint32_t>(config.blocks_per_worker),
       .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
       .smem_size = config.smem_size,
-  });
+  };
+  // Optional env overrides for benchmarking (win over config values):
+  // UK_CCL_DEV_FIFOS / UK_CCL_DEV_BLOCKS / UK_CCL_DEV_THREADS.
+  if (char const* v = std::getenv("UK_CCL_DEV_FIFOS"))
+    dev_cfg.max_fifos = static_cast<uint32_t>(std::stoul(v));
+  if (char const* v = std::getenv("UK_CCL_DEV_BLOCKS"))
+    dev_cfg.blocks_per_worker = static_cast<uint32_t>(std::stoul(v));
+  if (char const* v = std::getenv("UK_CCL_DEV_THREADS"))
+    dev_cfg.threads_per_block = static_cast<uint32_t>(std::stoul(v));
+  auto dev_be = std::make_unique<DeviceBackend>(dev_cfg);
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
   auto sig_be = std::make_unique<SignalBackend>();
 
