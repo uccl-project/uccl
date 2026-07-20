@@ -22,6 +22,7 @@
 #define gpuGetDeviceCount cudaGetDeviceCount
 #define gpuGetDeviceProperties cudaGetDeviceProperties
 #define gpuDevAttrMultiProcessorCount cudaDevAttrMultiProcessorCount
+#define gpuDevAttrHostNativeAtomicSupported cudaDevAttrHostNativeAtomicSupported
 #define gpuDeviceGetAttribute cudaDeviceGetAttribute
 #define gpuDeviceGetPCIBusId cudaDeviceGetPCIBusId
 #define gpuDeviceReset cudaDeviceReset
@@ -36,6 +37,9 @@
 #define gpuMallocHost cudaMallocHost
 #define gpuHostAlloc cudaHostAlloc
 #define gpuHostAllocMapped cudaHostAllocMapped
+#define gpuHostRegister cudaHostRegister
+#define gpuHostRegisterMapped cudaHostRegisterMapped
+#define gpuHostGetDevicePointer cudaHostGetDevicePointer
 #define gpuHostFree cudaFreeHost
 #define gpuFreeHost cudaFreeHost
 #define gpuMalloc cudaMalloc
@@ -169,6 +173,9 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuHostAlloc hipHostAlloc
 #define gpuHostFree hipHostFree
 #define gpuHostAllocMapped hipHostAllocMapped
+#define gpuHostRegister hipHostRegister
+#define gpuHostRegisterMapped hipHostRegisterMapped
+#define gpuHostGetDevicePointer hipHostGetDevicePointer
 #define gpuFreeHost hipFreeHost
 #define gpuMalloc hipMalloc
 #define gpuFree hipFree
