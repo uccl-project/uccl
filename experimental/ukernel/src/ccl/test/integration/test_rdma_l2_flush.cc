@@ -105,13 +105,14 @@ int main(int argc, char** argv) {
   if (role != "server" && role != "client") {
     std::fprintf(stderr,
                  "Usage: --role=server|client [--gpu GPU] "
-                 "[--transport ipc|rdma] [--exchanger-port PORT]\n");
+                 "[--transport ipc|rdma] [--exchanger-ip IP] [--exchanger-port PORT]\n");
     return 1;
   }
 
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
   int port = get_int_arg(argc, argv, "--exchanger-port", 16999);
+  std::string xip = get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
 
   std::string test_case = get_arg(argc, argv, "--case", "gpuMemcpy");
   if (test_case != "gpuMemcpy" && test_case != "CollCopy" &&
@@ -132,7 +133,7 @@ int main(int argc, char** argv) {
   cfg.gpu_id = gpu;
   cfg.rank = rank;
   cfg.world_size = 2;
-  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : "127.0.0.1";
+  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : xip;
   cfg.exchanger_port = port;
   cfg.local_id = rank;
   auto comm_cfg = std::make_shared<CommunicatorConfig>();

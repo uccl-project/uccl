@@ -35,15 +35,16 @@ int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role != "server" && role != "client") {
-    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU] [--exchanger-port PORT]\n");
+    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU] [--exchanger-ip IP] [--exchanger-port PORT]\n");
     return 1;
   }
 
   int rank = (role == "server") ? 0 : 1;
   int gpu = get_int_arg(argc, argv, "--gpu", rank);
   int port = get_int_arg(argc, argv, "--exchanger-port", 16990);
+  std::string xip = get_arg(argc, argv, "--exchanger-ip", "127.0.0.1");
   setenv("UHM_EXCHANGER_PORT", std::to_string(port).c_str(), 1);
-  if (rank != 0) setenv("UHM_EXCHANGER_IP", "127.0.0.1", 1);
+  if (rank != 0) setenv("UHM_EXCHANGER_IP", xip.c_str(), 1);
 
   std::printf("[e2e] %s rank=%d gpu=%d\n", role.c_str(), rank, gpu);
   GPU_RT_CHECK(gpuSetDevice(gpu));
@@ -52,7 +53,7 @@ int main(int argc, char** argv) {
   cfg.gpu_id = gpu;
   cfg.rank = rank;
   cfg.world_size = 2;
-  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : "127.0.0.1";
+  cfg.exchanger_ip = (rank == 0) ? "0.0.0.0" : xip;
   cfg.exchanger_port = port;
   cfg.local_id = rank;
   auto ex = SprayExecutor::create(cfg);

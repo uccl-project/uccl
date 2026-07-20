@@ -287,6 +287,40 @@ only — the perf benchmark does not validate results numerically.
 make test
 ```
 
+### Cross-node testing
+
+All RDMA-capable e2e tests also run across two nodes (same build on
+both; IPC/device-copy paths are same-node only by nature). Generic
+pattern — server on node A, client on node B with the server's IP:
+
+```bash
+# node A (server)
+./<test> --role=server --gpu=0 [options] [--exchanger-port=PORT]
+# node B (client)
+./<test> --role=client --gpu=0 --exchanger-ip=<SERVER_IP> [options] [--exchanger-port=PORT]
+```
+
+| Test | Cross-node | Notes |
+|---|---|---|
+| `test_perf_spray_allreduce` | yes (RDMA) | main perf vehicle; see flags above |
+| `test_put_signal_e2e` | yes, `--transport=rdma` | PutSignal write-with-imm |
+| `test_transport_backend_e2e` | yes, `--transport=rdma` | plain RDMA puts |
+| `test_signal_backend_e2e` | yes | signals over the RDMA signal QP |
+| `test_spray_executor_e2e` | yes | numeric AllReduce check (3.0) |
+| `test_rdma_l2_flush` | yes, `--transport rdma` | L2 coherence after RDMA write |
+| `test_perf_p2p_copy` | RDMA section only | device/ipc copies are same-node |
+| `test_device_backend_e2e` | no | device path needs same-host P2P |
+
+Notes:
+
+- Each test has its own default exchanger port (16980–16999); when the
+  nodes' firewall only allows some ports, pass `--exchanger-port`
+  explicitly on both ends.
+- Verify reachability first: `nc -vz <SERVER_IP> <PORT>` from the
+  client node; `ss -tlnp | grep <PORT>` on the server node.
+- RDMA must be up on both nodes (active mlx5 port); same-node runs work
+  even with RDMA down (IPC/device paths).
+
 ## Debugging
 
 Runtime debug output is gated by `UK_CCL_DEBUG` (see
