@@ -289,6 +289,10 @@ UK_CCL_DEBUG=3 ./test_perf_spray_allreduce ...   # everything, incl. high-freque
 Other runtime switches:
 
 - `UK_CCL_PATH_COUNTERS=1` — count Put ops per path (Device/IPC/RDMA).
+- `UK_CCL_PUT_PATH=device|ipc|rdma` — force every same-host Put onto one
+  path for A/B benchmarking (remote peers are always RDMA). Combine with
+  `UK_CCL_PATH_COUNTERS=1` to verify the forced distribution, and compare
+  against the automatic multi-path LB (unset).
 - `UK_BAR1_WINDOW_MB=<n>` — fall back to IPC for remote device-put
   accesses beyond the BAR1 window (consumer GPUs with 256 MiB BAR1).
 

@@ -959,6 +959,27 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   if (!tpt_metrics_ || peer < 0 || peer >= world_size_) {
     return PutPath::Device;
   }
+  // Optional forced path for A/B benchmarking, same-host peers only
+  // (remote peers are always RDMA). UK_CCL_PUT_PATH=device|ipc|rdma;
+  // unset or anything else = normal load balancing.
+  static const PutPath forced = []() {
+    char const* v = std::getenv("UK_CCL_PUT_PATH");
+    if (!v) return PutPath::None;
+    std::string s(v);
+    if (s == "device") return PutPath::Device;
+    if (s == "ipc") return PutPath::Ipc;
+    if (s == "rdma") return PutPath::Rdma;
+    return PutPath::None;
+  }();
+  if (forced != PutPath::None &&
+      same_host_fn_ && same_host_fn_(owned_comm_.get(), peer)) {
+    auto& pfm = tpt_metrics_[peer];
+    PathMetrics* fm = (forced == PutPath::Device)   ? &pfm.device
+                      : (forced == PutPath::Ipc)    ? &pfm.ipc
+                                                    : &pfm.rdma;
+    fm->inflight.fetch_add(1, std::memory_order_relaxed);
+    return forced;
+  }
   // Tentative charge: bump the chosen path now so a batch of picks
   // rotates and every path gets measured. The charge is reconciled
   // exactly once: released on deferral (release_put_inflight), moved on
