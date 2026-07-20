@@ -72,6 +72,36 @@ CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=server --gpu=0
 CUDA_VISIBLE_DEVICES=6,7 ./test_signal_backend_e2e --role=client --gpu=1
 ```
 
+### PutSignal e2e test
+
+Fused put+signal primitive: a single op delivers both the data and the
+peer signal — IPC: the send worker writes the tag into the peer's shm
+signal ring right after the copy; RDMA: the last chunk is a
+write-with-imm carrying the tag. Verifies the core semantic: the peer
+observes the signal only after the data has landed.
+
+Build:
+
+```bash
+make test_put_signal_e2e SM=80
+```
+
+Run (two terminals, both sides on the same build — RDMA data QPs now
+pre-post receive WQEs for write-with-imm):
+
+```bash
+# IPC (default)
+CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=server --gpu=0
+CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=client --gpu=1
+
+# RDMA
+CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=server --gpu=0 --transport=rdma
+CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=client --gpu=1 --transport=rdma
+```
+
+Pass criteria: `can_fuse_put_signal=1`, `data-after-signal: verified`,
+`[PASS]` on both sides.
+
 ### SprayExecutor e2e test
 
 Full-pipeline integration: DeviceBackend + TransportBackend + SignalBackend with
@@ -204,6 +234,35 @@ UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role
 # cross-node (client node, replace IP with server's address)
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP> --exchanger-port=16998
 ```
+
+`--sig-group G` aggregates one signal per G tiles per chunk pair
+(default 1 = per tile). Sweep `1/2/4/8` to find the sweet spot. How
+signals are emitted on each path (fused PutSignal):
+
+| Path | G=1 | G>1 |
+|---|---|---|
+| same-node Device | device kernel writes the tag into the peer's shm signal ring after the P2P copy | standalone signals |
+| same-node IPC | send worker writes the tag after the copy | standalone signals |
+| RDMA | write-with-imm on the put | every put carries an imm; the wait counts G arrivals |
+
+### Verifying the fused PutSignal changes
+
+Run this checklist (both nodes on the same build) after touching the
+signal/fusion paths:
+
+1. `make test-unit` — planner/lower/executor regressions.
+2. `test_put_signal_e2e`, IPC and RDMA — data-before-signal semantics.
+3. `test_spray_executor_e2e` — numeric AllReduce correctness (3.0).
+4. `test_perf_spray_allreduce` same-node and cross-node, plus
+   `--sig-group 1/2/4/8` cross-node and `--sig-group 2/4` same-node —
+   every size must complete without hanging; compare small-size latency
+   against the previous commit.
+5. `test_signal_backend_e2e`, `test_transport_backend_e2e` (ipc and
+   `--transport=rdma`), `test_device_backend_e2e` — unfused paths
+   unaffected.
+
+Known gap: `--sig-group` correctness is covered by completion/perf
+only — the perf benchmark does not validate results numerically.
 
 ### Run everything
 
