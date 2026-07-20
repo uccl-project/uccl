@@ -235,6 +235,19 @@ UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role
 UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=0 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP> --exchanger-port=16998
 ```
 
+CLI reference:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--role=server\|client` | (required) | server = rank 0, client = rank 1 |
+| `--gpu=<n>` | rank | index into `CUDA_VISIBLE_DEVICES` |
+| `--kind=allreduce\|alltoall` | `allreduce` | collective kind |
+| `--exchanger-ip=<ip>` | `0.0.0.0` / `127.0.0.1` | bootstrap exchanger address |
+| `--exchanger-port=<n>` | `16998` | bootstrap exchanger port |
+| `--sig-group=<G>` | `1` | one Signal/WaitSignal per G tiles per chunk pair |
+| `--dev-fifos=<n>` | `1` | number of DeviceBackend workers (persistent kernels), one fifo each |
+| `--dev-blocks=<n>` | `1` | `blocks_per_worker`: grid size of each worker kernel; one copy task is partitioned across its blocks |
+
 `--sig-group G` aggregates one signal per G tiles per chunk pair
 (default 1 = per tile). Sweep `1/2/4/8` to find the sweet spot. How
 signals are emitted on each path (fused PutSignal):
@@ -294,10 +307,13 @@ Other runtime switches:
   `UK_CCL_PATH_COUNTERS=1` to verify the forced distribution, and compare
   against the automatic multi-path LB (unset).
 - `UK_CCL_DEV_FIFOS=<n>` / `UK_CCL_DEV_BLOCKS=<n>` /
-  `UK_CCL_DEV_THREADS=<n>` — override DeviceBackend fifo count,
-  blocks-per-worker and threads-per-block at executor creation (win over
-  `SprayExecutorConfig` values). `test_perf_spray_allreduce` also takes
-  `--dev-fifos=<n>` / `--dev-blocks=<n>`.
+  `UK_CCL_DEV_THREADS=<n>` — override DeviceBackend parallelism at
+  executor creation (win over `SprayExecutorConfig` values): FIFOS is
+  the number of workers (one persistent kernel per fifo), BLOCKS is
+  `blocks_per_worker` (grid size of each worker kernel, tasks are
+  partitioned across its blocks), THREADS is threads per block.
+  `test_perf_spray_allreduce` also takes `--dev-fifos=<n>` /
+  `--dev-blocks=<n>`.
 - `UK_BAR1_WINDOW_MB=<n>` — fall back to IPC for remote device-put
   accesses beyond the BAR1 window (consumer GPUs with 256 MiB BAR1).
 
