@@ -178,6 +178,11 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
           }
           gpuSetDevice(prev_dev);
         }
+        if (!pc.remote_device)
+          UK_DBG(UK_DBG_LVL_TPT,
+                 "[ipc r%d] peer %d signal ring not GPU-mapped "
+                 "(atomics_ok=%d) — device-side fusion disabled",
+                 comm_->rank(), peer_rank, atomics_ok);
         return true;
       }
       close(fd);

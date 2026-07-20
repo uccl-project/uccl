@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
       latencies.reserve(kLatencyIters);
 
       for (int iter = 0; iter < kLatencyIters; ++iter) {
-        CmdWithId cwi;
+        CmdWithId cwi{};
         cwi.cmd.kind = ExecOpKind::Put;
         cwi.cmd.bytes = static_cast<uint32_t>(bytes);
         cwi.cmd.src_buf = 1;
@@ -306,7 +306,7 @@ int main(int argc, char** argv) {
       std::vector<double> throughputs;
 
       for (int iter = 0; iter < kThroughputIters; ++iter) {
-        CmdWithId cwis[kBatchSize];
+        CmdWithId cwis[kBatchSize]{};
         for (int b = 0; b < kBatchSize; ++b) {
           cwis[b].cmd.kind = ExecOpKind::Put;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
         latencies.reserve(kLatencyIters);
 
         for (int iter = 0; iter < kLatencyIters; ++iter) {
-          CmdWithId cwi;
+          CmdWithId cwi{};
           cwi.cmd.kind = ExecOpKind::Put;
           cwi.cmd.bytes = static_cast<uint32_t>(bytes);
           cwi.cmd.src_buf = 1;  // local d_local
@@ -474,7 +474,7 @@ int main(int argc, char** argv) {
         std::vector<double> throughputs;
 
         for (int iter = 0; iter < kThroughputIters; ++iter) {
-          CmdWithId cwis[kBatchSize];
+          CmdWithId cwis[kBatchSize]{};
           for (int b = 0; b < kBatchSize; ++b) {
             cwis[b].cmd.kind = ExecOpKind::Put;
             cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
@@ -612,7 +612,7 @@ int main(int argc, char** argv) {
           latencies.reserve(kLatencyIters);
 
           for (int iter = 0; iter < kLatencyIters; ++iter) {
-            CmdWithId cwi;
+            CmdWithId cwi{};
             cwi.cmd.kind = ExecOpKind::Put;
             cwi.cmd.bytes = static_cast<uint32_t>(bytes);
             cwi.cmd.src_buf = 1;
@@ -663,7 +663,7 @@ int main(int argc, char** argv) {
           std::vector<double> throughputs;
 
           for (int iter = 0; iter < kThroughputIters && !lat_timeout; ++iter) {
-            CmdWithId cwis[kBatchSize];
+            CmdWithId cwis[kBatchSize]{};
             for (int b = 0; b < kBatchSize; ++b) {
               cwis[b].cmd.kind = ExecOpKind::Put;
               cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
