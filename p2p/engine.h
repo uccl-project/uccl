@@ -466,7 +466,7 @@ class Endpoint {
   P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
 
 #if defined(__CAMBRICON_PLATFORM_MLU__)
-#include "mlu_staging.inc"  // Cambricon Plan A staging members/methods
+#include "mlu/mlu_staging.inc"  // Cambricon Plan A staging members/methods
 #endif
 
   /* Initialize the engine Internal helper function for lazy initialization. */
