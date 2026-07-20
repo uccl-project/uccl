@@ -156,8 +156,13 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       /*timeout_ms=*/3000, /*max_line_bytes=*/1 * 1024 * 1024,
       /*local_id=*/config_->local_id);
   if (!exchanger_client_->valid()) {
-    fprintf(stderr, "[ERROR] Failed to connect to Exchanger\n");
-    return;
+    // Fail fast: an early return here used to leave a half-initialized
+    // Communicator (no peer metas, no completion rings), surfacing
+    // later as confusing "transport peer metadata is not established"
+    // errors that hide the real cause.
+    throw std::runtime_error("Communicator: failed to connect to exchanger at " +
+                             config_->exchanger_ip + ":" +
+                             std::to_string(config_->exchanger_port));
   }
 
   // Completion ring: adapters push CompletionEvent when ops finish.
