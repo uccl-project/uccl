@@ -33,12 +33,15 @@ static int gi(int c, char** v, std::string n, int d) {
 static void cp(std::shared_ptr<Communicator> cm, int r,
                PeerTransportKind tpt) {
   int p = (r == 0) ? 1 : 0;
-  if (r < p) {
-    cm->connect(p, PeerTransportKind::Ipc);
-    cm->accept(p, PeerTransportKind::Ipc);
-  } else {
-    cm->accept(p, PeerTransportKind::Ipc);
-    cm->connect(p, PeerTransportKind::Ipc);
+  // IPC paths are same-host only; skip them cross-node.
+  if (cm->same_host(p)) {
+    if (r < p) {
+      cm->connect(p, PeerTransportKind::Ipc);
+      cm->accept(p, PeerTransportKind::Ipc);
+    } else {
+      cm->accept(p, PeerTransportKind::Ipc);
+      cm->connect(p, PeerTransportKind::Ipc);
+    }
   }
   if (tpt == PeerTransportKind::Rdma) {
     if (r < p) {
