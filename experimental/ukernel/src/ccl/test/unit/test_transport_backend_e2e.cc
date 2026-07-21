@@ -29,12 +29,16 @@ static int gi(int c, char** v, std::string n, int d) {
 static void cp(std::shared_ptr<Communicator> cm, int r,
                PeerTransportKind tpt = PeerTransportKind::Ipc) {
   int p = (r == 0) ? 1 : 0;
-  if (r < p) {
-    cm->connect(p, PeerTransportKind::Ipc);
-    cm->accept(p, PeerTransportKind::Ipc);
-  } else {
-    cm->accept(p, PeerTransportKind::Ipc);
-    cm->connect(p, PeerTransportKind::Ipc);
+  // IPC paths are same-host only; skip them cross-node instead of
+  // triggering benign but alarming resolve errors.
+  if (cm->same_host(p)) {
+    if (r < p) {
+      cm->connect(p, PeerTransportKind::Ipc);
+      cm->accept(p, PeerTransportKind::Ipc);
+    } else {
+      cm->accept(p, PeerTransportKind::Ipc);
+      cm->connect(p, PeerTransportKind::Ipc);
+    }
   }
   if (tpt == PeerTransportKind::Rdma) {
     if (r < p) {
@@ -140,7 +144,7 @@ int main(int argc, char** argv) {
     unsigned rid = comm->send_signal_async(peer, 999, tpt_kind);
     while (1) {
       CompletionResult r;
-      if (comm->try_complete_put(&r, 1) && r.rid == rid) break;
+      if (comm->try_complete_sig_send(&r, 1) && r.rid == rid) break;
     }
     unsigned wid = comm->wait_signal_async(peer, 998, tpt_kind);
     while (1) {
@@ -166,7 +170,7 @@ int main(int argc, char** argv) {
     unsigned sid = comm->send_signal_async(peer, 998, tpt_kind);
     while (1) {
       CompletionResult r;
-      if (comm->try_complete_put(&r, 1) && r.rid == sid) break;
+      if (comm->try_complete_sig_send(&r, 1) && r.rid == sid) break;
     }
     printf("  [PASS]\n");
     delete[] chk;
