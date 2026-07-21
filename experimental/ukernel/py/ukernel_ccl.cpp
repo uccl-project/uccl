@@ -153,7 +153,12 @@ class ProcessGroup {
     cfg.blocks_per_worker = blocks_per_worker;
     cfg.smem_size = smem_size;
     cfg.max_device_fifos = 1;
-    executor_ = SprayExecutor::create(cfg);
+    {
+      // Exchanger connect + peer meta exchange can block for seconds;
+      // let Python handle signals meanwhile.
+      nb::gil_scoped_release release;
+      executor_ = SprayExecutor::create(cfg);
+    }
   }
 
   int rank() const { return rank_; }
@@ -288,14 +293,29 @@ class ProcessGroup {
                        void* output) {
     ensure_prepared(cfg, input, output);
     auto h = executor_->submit(cfg, input, output);
-    // wait() drives progress on the calling thread (UCX-style), so the
-    // collective completes as soon as the last op drains.
-    if (!executor_->wait(h)) {
-      std::string msg = executor_->error_message(h);
-      executor_->release(h);
-      throw std::runtime_error(
-          "ukernel collective failed" +
-          (msg.empty() ? std::string{} : std::string(": ") + msg));
+    // Wait in slices: release the GIL and check for pending Python
+    // signals (Ctrl+C → KeyboardInterrupt) between slices, so a long
+    // collective stays interruptible instead of pinning the process.
+    for (;;) {
+      bool ok;
+      {
+        nb::gil_scoped_release release;
+        ok = executor_->wait(h, std::chrono::milliseconds(20));
+      }
+      if (PyErr_CheckSignals() != 0) {
+        executor_->release(h);
+        throw nb::python_error();
+      }
+      auto st = executor_->status(h);
+      if (st == CollectiveOpStatus::Running) continue;
+      if (st != CollectiveOpStatus::Completed || !ok) {
+        std::string msg = executor_->error_message(h);
+        executor_->release(h);
+        throw std::runtime_error(
+            "ukernel collective failed" +
+            (msg.empty() ? std::string{} : std::string(": ") + msg));
+      }
+      break;
     }
     executor_->release(h);
   }

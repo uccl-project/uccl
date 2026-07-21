@@ -50,20 +50,25 @@ class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size, std::string exchanger_ip,
                int exchanger_port, std::string transport = "auto",
-               int local_id = -1)
-      : comm_(std::make_shared<UKernel::Transport::Communicator>(
-            gpu_id, rank, world_size,
-            std::make_shared<UKernel::Transport::CommunicatorConfig>(
-                UKernel::Transport::CommunicatorConfig{
-                    exchanger_ip,
-                    exchanger_port,
-                    // The exchanger elects a node leader by local_id; default
-                    // to the per-node ordinal (gpu id) — rank alone is wrong
-                    // cross-node.
-                    local_id >= 0 ? local_id : gpu_id,
-                    "default",
-                    parse_transport(transport),
-                }))) {
+               int local_id = -1) {
+    auto cfg = std::make_shared<UKernel::Transport::CommunicatorConfig>(
+        UKernel::Transport::CommunicatorConfig{
+            exchanger_ip,
+            exchanger_port,
+            // The exchanger elects a node leader by local_id; default
+            // to the per-node ordinal (gpu id) — rank alone is wrong
+            // cross-node.
+            local_id >= 0 ? local_id : gpu_id,
+            "default",
+            parse_transport(transport),
+        });
+    {
+      // Exchanger connect can block for seconds; let Python handle
+      // signals meanwhile.
+      nb::gil_scoped_release release;
+      comm_ = std::make_shared<UKernel::Transport::Communicator>(
+          gpu_id, rank, world_size, std::move(cfg));
+    }
     GPU_RT_CHECK(gpuSetDevice(gpu_id));
   }
 
@@ -230,6 +235,10 @@ class Communicator {
 
   bool barrier(std::string const& barrier_namespace = "default",
                int timeout_ms = -1) {
+    // Cannot be sliced safely (each barrier() call is a new seq), but
+    // releasing the GIL lets other Python threads proceed; callers
+    // wanting a hard abort should pass a finite timeout_ms.
+    nb::gil_scoped_release release;
     return comm_->barrier(barrier_namespace, timeout_ms);
   }
 
@@ -239,7 +248,11 @@ class Communicator {
       CompletionResult r[1];
       size_t n = comm_->try_complete_put(r, 1);
       if (n == 1 && r[0].rid == rid) return;
-      std::this_thread::yield();
+      {
+        nb::gil_scoped_release release;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      if (PyErr_CheckSignals() != 0) throw nb::python_error();
     }
   }
 
@@ -248,7 +261,11 @@ class Communicator {
       CompletionResult r[1];
       size_t n = comm_->try_complete_sig_send(r, 1);
       if (n == 1 && r[0].rid == rid) return;
-      std::this_thread::yield();
+      {
+        nb::gil_scoped_release release;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      if (PyErr_CheckSignals() != 0) throw nb::python_error();
     }
   }
 
