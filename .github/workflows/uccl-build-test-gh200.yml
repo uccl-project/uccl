@@ -261,7 +261,10 @@ jobs:
             export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu:${NIXL_INSTALL_DIR}/lib/aarch64-linux-gnu/plugins:${CONDA_ENV_DIR}/lib:${NVIDIA_NCCL_LIB}:${LD_LIBRARY_PATH:-}"
             export UCCL_SOCKET_IFNAME=enx3c18a0d51943
             export NCCL_SOCKET_IFNAME=enx3c18a0d51943
-            
+            # Non-interactive SSH PATH lacks /usr/local/cuda/bin; prefer toolkit nvcc over apt's.
+            export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+            export PATH="${CUDA_HOME}/bin:${PATH}"
+
             bash .github/workflows/nixlbench_test.sh "${NIXL_INSTALL_DIR}" 2>&1 | tee nixlbench.log
           EOF
 
