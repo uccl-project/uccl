@@ -25,8 +25,8 @@ def main() -> None:
         exchanger_port=env_int("EXCHANGER_PORT", 29600),
     )
 
-    # allreduce
-    x = torch.arange(0, 1024 * world + 1, device="cuda", dtype=torch.float32)
+    # allreduce (element count must be divisible by world_size)
+    x = torch.arange(0, 1024 * world, device="cuda", dtype=torch.float32)
     x = x + rank * 1000
     dist.allreduce(x, group=pg)
     print(f"[rank {rank}] allreduce ok: {x[:8]}")
