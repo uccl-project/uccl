@@ -90,10 +90,15 @@ def test_main(
     skip_benchmark: bool = False,
     debug_hash: bool = False,
     profile_tests: int = 30,
+    num_masked_topk: int = 10,
+    num_max_dispatch_tokens_per_rank: Optional[int] = None,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
 
+    if num_max_dispatch_tokens_per_rank is None:
+        num_max_dispatch_tokens_per_rank = num_tokens
+    assert num_tokens <= num_max_dispatch_tokens_per_rank
     assert num_experts % num_ranks == 0
     num_local_experts = num_experts // num_ranks
 
@@ -131,7 +136,7 @@ def test_main(
     ).abs()
 
     # Randomly mask some positions
-    for i in range(10):
+    for i in range(num_masked_topk):
         topk_idx[random.randint(0, num_tokens - 1), random.randint(0, num_topk - 1)] = (
             -1
         )
@@ -182,7 +187,7 @@ def test_main(
                                 ) = buffer.low_latency_dispatch(
                                     current_x,
                                     topk_idx,
-                                    num_tokens,
+                                    num_max_dispatch_tokens_per_rank,
                                     num_experts,
                                     use_fp8=dispatch_use_fp8_case,
                                     round_scale=round_scale,
@@ -267,7 +272,8 @@ def test_main(
                                     else:
                                         assert (
                                             recv_x[:, -128:]
-                                            - recv_src_info.view(-1, 1) % num_tokens
+                                            - recv_src_info.view(-1, 1)
+                                            % num_max_dispatch_tokens_per_rank
                                         ).sum().item() == 0
                                     for j in range(num_ranks):
                                         begin_idx, count = (
@@ -397,7 +403,7 @@ def test_main(
         recv_x, recv_count, handle, event, hook = buffer.low_latency_dispatch(
             current_x,
             topk_idx,
-            num_tokens,
+            num_max_dispatch_tokens_per_rank,
             num_experts,
             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
             use_fp8=dispatch_use_fp8,
@@ -473,8 +479,19 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     rank, num_ranks, group = init_dist_under_torchrun(local_rank, num_local_ranks)
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
+    num_max_dispatch_tokens_per_rank = (
+        args.num_max_dispatch_tokens_per_rank or num_tokens
+    )
+    if num_tokens > num_max_dispatch_tokens_per_rank:
+        raise ValueError(
+            "--num-tokens cannot exceed --num-max-dispatch-tokens-per-rank"
+        )
+    if (num_ranks * num_max_dispatch_tokens_per_rank) % 4 != 0:
+        raise ValueError(
+            "world size times max dispatch tokens per rank must be divisible by 4"
+        )
     num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
-        num_tokens, hidden, num_ranks, num_experts
+        num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
     )
 
     buffer = Buffer(
@@ -506,6 +523,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             skip_benchmark=args.skip_benchmark or args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
             profile_tests=args.profile_tests,
+            num_masked_topk=args.num_masked_topk,
+            num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
         )
         if args.debug_hash:
             ref_hash, ref_hash_details = ref_out
@@ -535,6 +554,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 skip_benchmark=args.skip_benchmark or args.pressure_test_mode == 1,
                 debug_hash=args.debug_hash,
                 profile_tests=args.profile_tests,
+                num_masked_topk=args.num_masked_topk,
+                num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
             )
             if args.debug_hash:
                 current_hash, current_hash_details = cur_out
@@ -593,6 +614,12 @@ if __name__ == "__main__":
         "--num-tokens", type=int, default=128, help="Number of tokens (default: 128)"
     )
     parser.add_argument(
+        "--num-max-dispatch-tokens-per-rank",
+        type=int,
+        default=None,
+        help="Dispatch buffer capacity per rank (defaults to --num-tokens).",
+    )
+    parser.add_argument(
         "--hidden", type=int, default=7168, help="Hidden dimension size (default: 7168)"
     )
     parser.add_argument(
@@ -635,6 +662,12 @@ if __name__ == "__main__":
         type=int,
         default=30,
         help="Number of iterations for each kernel profiling pass.",
+    )
+    parser.add_argument(
+        "--num-masked-topk",
+        type=int,
+        default=10,
+        help="Number of randomly masked top-k routes per rank.",
     )
     parser.add_argument(
         "--debug-hash",
