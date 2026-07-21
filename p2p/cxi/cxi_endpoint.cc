@@ -32,14 +32,19 @@ void check_fi(char const* what, int ret) {
 }
 
 fi_threading threading_hint() {
+  // Default to FI_THREAD_SAFE: libfabric >= 2.x rejects FI_THREAD_ENDPOINT in
+  // the CXI provider's domain-attr check, failing fi_getinfo with ENODATA.
+  // FI_THREAD_SAFE is accepted by both libfabric 1.x and 2.x.
   char const* value = std::getenv("UCCL_CXI_THREADING");
-  if (!value || std::strcmp(value, "endpoint") == 0) return FI_THREAD_ENDPOINT;
+  if (!value || std::strcmp(value, "safe") == 0) return FI_THREAD_SAFE;
+  if (std::strcmp(value, "endpoint") == 0) return FI_THREAD_ENDPOINT;
   if (std::strcmp(value, "completion") == 0) return FI_THREAD_COMPLETION;
   if (std::strcmp(value, "domain") == 0) return FI_THREAD_DOMAIN;
   if (std::strcmp(value, "fid") == 0) return FI_THREAD_FID;
-  if (std::strcmp(value, "safe") == 0) return FI_THREAD_SAFE;
   if (std::strcmp(value, "unspec") == 0) return FI_THREAD_UNSPEC;
-  throw std::runtime_error(std::string("Invalid UCCL_CXI_THREADING=") + value);
+  throw std::runtime_error(
+      std::string("Invalid UCCL_CXI_THREADING=") + value +
+      " (expected one of: safe, endpoint, completion, domain, fid, unspec)");
 }
 
 int cxi_device_index_for_gpu(int gpu_index) {
@@ -103,6 +108,38 @@ std::string cq_error_string(fid_cq* cq, fi_cq_err_entry const& err) {
       fi_cq_strerror(cq, err.prov_errno, err.err_data, buf, sizeof(buf));
   if (msg) return msg;
   return fi_strerror(err.err);
+}
+
+// Drain and stringify any pending completion-queue error entries. Used to
+// attach provider-level detail (prov_errno, op_context, ...) to a failed RMA
+// post so hard failures like FI_EIO are diagnosable rather than opaque.
+// Consumes the entries without marking their owning OpContexts failed, which
+// starves poll_cq_locked() of error completions for unrelated inflight ops —
+// only call this when the process is about to abort.
+std::string drain_cq_errors(fid_cq* cq) {
+  if (!cq) return "";
+
+  std::ostringstream os;
+  bool wrote = false;
+  for (int i = 0; i < 16; ++i) {
+    fi_cq_err_entry err{};
+    ssize_t rc = fi_cq_readerr(cq, &err, 0);
+    if (rc == -FI_EAGAIN || rc == 0) break;
+    if (rc < 0) {
+      if (wrote) os << "; ";
+      os << "fi_cq_readerr failed rc=" << rc << " " << fi_strerror(-rc);
+      break;
+    }
+    if (wrote) os << "; ";
+    wrote = true;
+    os << "cq_err[" << i << "] err=" << err.err << "(" << fi_strerror(err.err)
+       << ") prov_errno=" << err.prov_errno << " flags=0x" << std::hex
+       << err.flags << " len=0x" << err.len << " olen=0x" << err.olen
+       << " data=0x" << err.data << " op_context=0x"
+       << reinterpret_cast<uintptr_t>(err.op_context) << std::dec << " msg=\""
+       << cq_error_string(cq, err) << "\"";
+  }
+  return os.str();
 }
 
 }  // namespace
@@ -189,6 +226,16 @@ void CxiEndpoint::init_fabric(int gpu_index) {
   try {
     check_fi("fi_getinfo(cxi)",
              fi_getinfo(FI_VERSION(1, 18), nullptr, nullptr, 0, hints, &info_));
+
+    uint32_t const lf_ver = fi_version();
+    UCCL_LOG(INFO) << "libfabric runtime version " << FI_MAJOR(lf_ver) << "."
+                   << FI_MINOR(lf_ver);
+    if (lf_ver < FI_VERSION(2, 0)) {
+      UCCL_LOG(WARN)
+          << "libfabric " << FI_MAJOR(lf_ver) << "." << FI_MINOR(lf_ver)
+          << " detected: performance may be poor for large KV pools; see "
+             "uccl-project/uccl#956. Consider upgrading to libfabric >= 2.5.";
+    }
     info_->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
     UCCL_LOG(INFO) << "CXI FI_DELIVERY_COMPLETE enabled";
 
@@ -586,6 +633,7 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
   uint64_t const remote_offset = fifo_item.addr - metadata.base;
 
   ssize_t rc;
+  std::string post_error_cq_errors;
   {
     std::lock_guard<std::mutex> fabric_lock(fabric_mutex_);
     if (is_read) {
@@ -596,10 +644,19 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
                     remote_offset, metadata.key, &op->ctx);
     }
 
-    if (rc == -FI_EAGAIN || rc == -FI_EIO) {
+    // FI_EAGAIN means the provider is momentarily out of posting resources;
+    // drive the CQ, yield, and let the caller retry. Any other non-zero rc
+    // (notably FI_EIO) is a hard failure: fall through and fail closed.
+    if (rc == -FI_EAGAIN) {
       poll_cq_locked();
       std::this_thread::yield();
       return UCCL_POST_TRANSIENT;
+    }
+    // Drain only on the fatal path (FI_EIO aborts below): draining consumes
+    // CQ error entries that may belong to other inflight ops, which would
+    // otherwise never be marked failed by poll_cq_locked().
+    if (rc == -FI_EIO) {
+      post_error_cq_errors = drain_cq_errors(cq_);
     }
   }
   if (rc != 0) {
@@ -612,7 +669,17 @@ int CxiEndpoint::post_rma(bool is_read, ConnID const& conn,
        << " remote_base=0x" << metadata.base << " remote_len=0x" << metadata.len
        << " remote_offset=0x" << remote_offset << " key=0x" << metadata.key
        << std::dec;
-    UCCL_LOG(ERROR) << os.str();
+    if (!post_error_cq_errors.empty()) {
+      os << " pending_cq_errors=[" << post_error_cq_errors << "]";
+    }
+    // FI_EIO indicates a fatal transport error (e.g. an unrecoverable link or
+    // memory-registration fault); crash loudly rather than limp on with a
+    // half-broken KV path.
+    if (rc == -FI_EIO) {
+      UCCL_LOG(FATAL) << os.str();
+    } else {
+      UCCL_LOG(ERROR) << os.str();
+    }
     return -1;
   }
 

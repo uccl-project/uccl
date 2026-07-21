@@ -117,7 +117,7 @@ Notes:
 | UCCL_P2P_TRANSPORT | Network backend to use at runtime | ib (others: efa/nccl/tcp/tcpx/cxi) |
 | UCCL_CXI_DOMAIN | CXI/libfabric domain to use when `UCCL_P2P_TRANSPORT=cxi` | auto from GPU index, eg `cxi0` |
 | UCCL_CXI_DEVICE_INDEX | CXI device index used for automatic domain selection | GPU index modulo 4 |
-| UCCL_CXI_THREADING | libfabric threading hint for the CXI domain | endpoint |
+| UCCL_CXI_THREADING | libfabric threading hint for the CXI domain (`endpoint` is rejected by libfabric >= 2.x CXI) | safe |
 | UCCL_CXI_TX_QUEUE_SIZE | CXI transmit queue size | 4096 |
 | UCCL_CXI_RX_QUEUE_SIZE | CXI receive queue size | 4096 |
 | UCCL_CXI_CQ_SIZE | CXI completion queue size | 8192 |
