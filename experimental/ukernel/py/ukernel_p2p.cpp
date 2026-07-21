@@ -57,7 +57,10 @@ class Communicator {
                 UKernel::Transport::CommunicatorConfig{
                     exchanger_ip,
                     exchanger_port,
-                    local_id,
+                    // The exchanger elects a node leader by local_id; default
+                    // to the per-node ordinal (gpu id) — rank alone is wrong
+                    // cross-node.
+                    local_id >= 0 ? local_id : gpu_id,
                     "default",
                     parse_transport(transport),
                 }))) {
@@ -188,13 +191,14 @@ class Communicator {
     uint64_t rid = send_put_async(peer, src_buf, 0, buffer_size(src_buf),
                                   dst_buf, dst_off);
     if (rid == 0) throw std::runtime_error("send_put_async returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    wait_put(static_cast<unsigned>(rid));
   }
 
   void signal(int peer, uint64_t tag) {
     uint64_t rid = send_signal_async(peer, tag);
     if (rid == 0) throw std::runtime_error("send_signal_async returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    // Signal sends complete on the sig-send ring, NOT the put ring.
+    wait_sig_send(static_cast<unsigned>(rid));
   }
 
   void wait_data(int peer, uint64_t tag, uint32_t recv_buf, size_t off = 0,
@@ -203,7 +207,8 @@ class Communicator {
     uint64_t rid = comm_->wait_signal_async(peer, tag, recv_buf, off, len);
     if (rid == 0)
       throw std::runtime_error("wait_signal_async(data) returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    // DataWait completions land on the put ring (IPC recv worker / TCP).
+    wait_put(static_cast<unsigned>(rid));
   }
 
   // ── Inquiry ──
@@ -229,10 +234,19 @@ class Communicator {
   }
 
  private:
-  void wait_one(unsigned rid) {
+  void wait_put(unsigned rid) {
     while (true) {
       CompletionResult r[1];
       size_t n = comm_->try_complete_put(r, 1);
+      if (n == 1 && r[0].rid == rid) return;
+      std::this_thread::yield();
+    }
+  }
+
+  void wait_sig_send(unsigned rid) {
+    while (true) {
+      CompletionResult r[1];
+      size_t n = comm_->try_complete_sig_send(r, 1);
       if (n == 1 && r[0].rid == rid) return;
       std::this_thread::yield();
     }
