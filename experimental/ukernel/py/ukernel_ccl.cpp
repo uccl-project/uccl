@@ -285,7 +285,14 @@ class ProcessGroup {
     std::string key = prepare_key(cfg, input, output);
     if (prepared_keys_.find(key) != prepared_keys_.end()) return;
     if (prepared_keys_.size() >= kMaxPrepared) prepared_keys_.clear();
-    executor_->prepare(cfg, input, output);
+    {
+      // prepare() does peer setup, MR (re)registration and buffer
+      // resolution, which can block for tens of seconds on a cold
+      // shape; let Python handle signals meanwhile (Ctrl+C is
+      // delivered when the call returns, not mid-call).
+      nb::gil_scoped_release release;
+      executor_->prepare(cfg, input, output);
+    }
     prepared_keys_.insert(std::move(key));
   }
 
