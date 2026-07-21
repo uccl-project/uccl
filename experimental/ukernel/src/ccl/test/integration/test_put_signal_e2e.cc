@@ -57,7 +57,11 @@ static void cp(std::shared_ptr<Communicator> cm, int r,
 static void wait_put_rid(Communicator* comm, unsigned rid) {
   while (true) {
     CompletionResult r;
-    if (comm->try_complete_put(&r, 1) && r.rid == rid) return;
+    if (comm->try_complete_put(&r, 1) && r.rid == rid) {
+      if (r.failed)
+        printf("  [WARN] put rid=%u completed FAILED\n", rid);
+      return;
+    }
     std::this_thread::yield();
   }
 }
