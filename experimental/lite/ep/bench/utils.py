@@ -1,12 +1,12 @@
+from __future__ import annotations
+
 import inspect
 from typing import Any, Optional, Tuple, Union
 import os
 import torch
 import torch.distributed as dist
-from typing import Optional
 import glob
 import sys
-from uccl.ep import EventHandle
 import tempfile
 import json
 from pathlib import Path
@@ -17,17 +17,6 @@ import numpy as np
 try:
     from uccl import ep
 except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
-
-# import deep_ep as ep
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
@@ -45,6 +34,7 @@ def hash_tensor(t: torch.Tensor):
 
 def init_dist(local_rank: int, num_local_ranks: int):
     # Set device
+    torch.cuda.set_device(local_rank)
 
     # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
@@ -52,41 +42,49 @@ def init_dist(local_rank: int, num_local_ranks: int):
     world_size = int(os.getenv("WORLD_SIZE", 1))
     node_rank = int(os.getenv("RANK", 0))
 
-    sig = inspect.signature(dist.init_process_group)
     params = {
         "backend": "nccl",
         "init_method": f"tcp://{ip}:{port}",
         "world_size": world_size,
         "rank": node_rank,
     }
-    print(params)
-    if "device_id" in sig.parameters:
-        # noinspection PyTypeChecker
+    print(params, flush=True)
+    if "device_id" in inspect.signature(dist.init_process_group).parameters:
         params["device_id"] = torch.device(f"cuda:{local_rank}")
     dist.init_process_group(**params)
     torch.set_default_dtype(torch.bfloat16)
     return (
         dist.get_rank(),
         dist.get_world_size(),
-        dist.new_group(list(range(world_size))),
+        dist.group.WORLD,
     )
 
 
 def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
+    torch.cuda.set_device(local_rank)
     dist.init_process_group(
         backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
     )
 
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
-    torch.cuda.set_device(local_rank)
 
     return (
         dist.get_rank(),
         dist.get_world_size(),
-        dist.new_group(list(range(dist.get_world_size()))),
+        dist.group.WORLD,
     )
+
+
+_metadata_group = None
+
+
+def _get_metadata_group():
+    global _metadata_group
+    if _metadata_group is None:
+        _metadata_group = dist.new_group(backend="gloo")
+    return _metadata_group
 
 
 def _gather_peer_ips(group):
@@ -94,7 +92,7 @@ def _gather_peer_ips(group):
     world = dist.get_world_size(group)
     my_ip = ep.get_oob_ip()
     ips = [None] * world
-    dist.all_gather_object(ips, my_ip, group=group)
+    dist.all_gather_object(ips, my_ip, group=_get_metadata_group())
     return ips
 
 
@@ -126,7 +124,7 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     else:
         device_index = torch.cuda.current_device()
     torch.cuda.set_device(device_index)
-    dist.all_gather_object(all_meta, meta, group=group)
+    dist.all_gather_object(all_meta, meta, group=_get_metadata_group())
     rank2meta = {m["rank"]: m for m in all_meta}
 
     # Debug: print IP distribution
@@ -217,7 +215,7 @@ class EventOverlap:
 
     def __init__(
         self,
-        event: Optional[EventHandle] = None,
+        event: Optional[ep.EventHandle] = None,
         extra_tensors: Optional[Tuple[torch.Tensor]] = None,
     ) -> None:
         """

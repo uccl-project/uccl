@@ -501,7 +501,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             use_logfmt=args.use_logfmt,
             dispatch_use_fp8=args.dispatch_use_fp8,
             seed=seed,
-            skip_benchmark=args.pressure_test_mode == 1,
+            skip_benchmark=args.skip_benchmark or args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
         )
         if args.debug_hash:
@@ -620,6 +620,11 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="Pressure test mode. 0: don't do pressure test, 1: do pressure test without benchmarks, 2: do pressure test with benchmarks",
+    )
+    parser.add_argument(
+        "--skip-benchmark",
+        action="store_true",
+        help="Run one correctness pass without performance benchmarks.",
     )
     parser.add_argument(
         "--debug-hash",

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from contextlib import nullcontext
 import torch
@@ -12,7 +14,6 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
-from uccl.ep import EventHandle, Config
 
 # Support both execution modes:
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
@@ -287,7 +288,7 @@ class Buffer:
             event: the captured event.
         """
         stream_ptr = int(torch.cuda.current_stream().cuda_stream)
-        return EventOverlap(EventHandle(stream_ptr))
+        return EventOverlap(ep.EventHandle(stream_ptr))
 
     # noinspection PyTypeChecker
     def low_latency_dispatch(
@@ -707,7 +708,7 @@ class Buffer:
         return table[dtype]
 
     @staticmethod
-    def get_dispatch_config(num_ranks: int) -> Config:
+    def get_dispatch_config(num_ranks: int) -> ep.Config:
         """
         Get a recommended dispatch config.
 
@@ -720,22 +721,22 @@ class Buffer:
 
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 24, 256, 6, 128),
-            4: Config(Buffer.num_sms, 6, 256, 6, 128),
-            8: Config(Buffer.num_sms, 6, 256, 6, 128),
-            16: Config(Buffer.num_sms, 36, 288, 20, 128),
-            24: Config(Buffer.num_sms, 8, 288, 32, 128),
-            32: Config(Buffer.num_sms, 32, 288, 32, 128),
-            64: Config(Buffer.num_sms, 20, 288, 28, 128),
-            128: Config(Buffer.num_sms, 20, 560, 32, 128),
-            144: Config(Buffer.num_sms, 32, 720, 12, 128),
-            160: Config(Buffer.num_sms, 28, 720, 12, 128),
+            2: ep.Config(Buffer.num_sms, 24, 256, 6, 128),
+            4: ep.Config(Buffer.num_sms, 6, 256, 6, 128),
+            8: ep.Config(Buffer.num_sms, 6, 256, 6, 128),
+            16: ep.Config(Buffer.num_sms, 36, 288, 20, 128),
+            24: ep.Config(Buffer.num_sms, 8, 288, 32, 128),
+            32: ep.Config(Buffer.num_sms, 32, 288, 32, 128),
+            64: ep.Config(Buffer.num_sms, 20, 288, 28, 128),
+            128: ep.Config(Buffer.num_sms, 20, 560, 32, 128),
+            144: ep.Config(Buffer.num_sms, 32, 720, 12, 128),
+            160: ep.Config(Buffer.num_sms, 28, 720, 12, 128),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
         return config_map[num_ranks]
 
     @staticmethod
-    def get_combine_config(num_ranks: int) -> Config:
+    def get_combine_config(num_ranks: int) -> ep.Config:
         """
         Get a recommended combine config.
 
@@ -748,16 +749,16 @@ class Buffer:
 
         # TODO: automatically tune
         config_map = {
-            2: Config(Buffer.num_sms, 10, 256, 6, 128),
-            4: Config(Buffer.num_sms, 9, 256, 6, 128),
-            8: Config(Buffer.num_sms, 4, 256, 6, 128),
-            16: Config(Buffer.num_sms, 4, 288, 12, 128),
-            24: Config(Buffer.num_sms, 1, 288, 8, 128),
-            32: Config(Buffer.num_sms, 1, 288, 8, 128),
-            64: Config(Buffer.num_sms, 1, 288, 20, 128),
-            128: Config(Buffer.num_sms, 1, 560, 12, 128),
-            144: Config(Buffer.num_sms, 2, 720, 8, 128),
-            160: Config(Buffer.num_sms, 2, 720, 8, 128),
+            2: ep.Config(Buffer.num_sms, 10, 256, 6, 128),
+            4: ep.Config(Buffer.num_sms, 9, 256, 6, 128),
+            8: ep.Config(Buffer.num_sms, 4, 256, 6, 128),
+            16: ep.Config(Buffer.num_sms, 4, 288, 12, 128),
+            24: ep.Config(Buffer.num_sms, 1, 288, 8, 128),
+            32: ep.Config(Buffer.num_sms, 1, 288, 8, 128),
+            64: ep.Config(Buffer.num_sms, 1, 288, 20, 128),
+            128: ep.Config(Buffer.num_sms, 1, 560, 12, 128),
+            144: ep.Config(Buffer.num_sms, 2, 720, 8, 128),
+            160: ep.Config(Buffer.num_sms, 2, 720, 8, 128),
         }
         assert num_ranks in config_map, f"Unsupported number of EP ranks: {num_ranks}"
         return config_map[num_ranks]
@@ -861,7 +862,7 @@ class Buffer:
         topk_weights: Optional[torch.Tensor] = None,
         expert_alignment: int = 1,
         num_worst_tokens: int = 0,
-        config: Optional[Config] = None,
+        config: Optional[ep.Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
         allocate_on_comm_stream: bool = False,
@@ -1155,7 +1156,7 @@ class Buffer:
         handle: Tuple,
         topk_weights: Optional[torch.Tensor] = None,
         bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]] = None,
-        config: Optional[Config] = None,
+        config: Optional[ep.Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
         allocate_on_comm_stream: bool = False,
@@ -1267,7 +1268,7 @@ class Buffer:
         topk_weights: Optional[torch.Tensor] = None,
         expert_alignment: int = 1,
         num_worst_tokens: int = 0,
-        config: Optional[Config] = None,
+        config: Optional[ep.Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
         allocate_on_comm_stream: bool = False,
@@ -1546,7 +1547,7 @@ class Buffer:
         handle: Union[tuple, list],
         topk_weights: Optional[torch.Tensor] = None,
         bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]] = None,
-        config: Optional[Config] = None,
+        config: Optional[ep.Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
         allocate_on_comm_stream: bool = False,

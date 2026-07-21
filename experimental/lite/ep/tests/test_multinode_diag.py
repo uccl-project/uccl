@@ -118,7 +118,7 @@ def main():
     num_tokens = 64
     hidden = 2048
     num_experts = 4 * num_ranks
-    scratch_nbytes = int(1e9)
+    scratch_nbytes = int(os.environ.get("UCCL_DIAG_SCRATCH_BYTES", int(1e9)))
 
     buffer = Buffer(
         group=group,
@@ -149,7 +149,7 @@ def main():
 
     # Sync between tests
     dist.barrier()
-    buffer.runtime.clean()
+    buffer.clean_low_latency_buffer(num_tokens, hidden, num_experts)
     time.sleep(0.5)
 
     # Test 2: return_recv_hook=False (combined send+recv kernel)
