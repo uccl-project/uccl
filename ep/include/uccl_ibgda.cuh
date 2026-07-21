@@ -419,8 +419,9 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       }
     }
 #endif
-    // NOTE: the `break` here is intentional (only post to proxy thread 0): unlike
-    // QUIET, one proxy thread per GPU suffices since one GPU proxy thread is enough to form a complete barrier across all ranks.
+    // NOTE: the `break` here is intentional (only post to proxy thread 0):
+    // unlike QUIET, one proxy thread per GPU suffices since one GPU proxy
+    // thread is enough to form a complete barrier across all ranks.
     break;
   }
 
