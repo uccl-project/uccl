@@ -31,12 +31,15 @@ enum class CmdType : uint8_t {
   // Bits layout:
   // [7]     = low_latency_buffer_idx
   // [6]     = is_combine
-  // [5:0]   = command type (0–63)
+  // [5]     = is_normal_mode (1 = high-throughput encoding, 0 = low-latency)
+  // [4:0]   = command type (0–31)
 };
 
 __host__ __device__ inline CmdType make_cmd_type(CmdType base, bool is_combine,
-                                                 bool low_latency) {
+                                                 bool low_latency,
+                                                 bool is_normal_mode = false) {
   uint8_t v = static_cast<uint8_t>(base);
+  if (is_normal_mode) v |= (1u << 5);
   if (is_combine) v |= (1u << 6);
   if (low_latency) v |= (1u << 7);
   return static_cast<CmdType>(v);
@@ -50,8 +53,16 @@ __host__ __device__ inline bool get_low_latency(CmdType c) {
   return (static_cast<uint8_t>(c) >> 7) & 1u;
 }
 
+// True when this WRITE/ATOMIC was enqueued by a high-throughput (normal-mode)
+// kernel. Disambiguates the expert_idx/atomic_offset and req_lptr/value
+// unions plus the write-offset shift for a dual-mode proxy; single-mode
+// proxies keep using cfg_.use_normal_mode instead.
+__host__ __device__ inline bool get_is_normal_cmd(CmdType c) {
+  return (static_cast<uint8_t>(c) >> 5) & 1u;
+}
+
 __host__ __device__ inline CmdType get_base_cmd(CmdType c) {
-  return static_cast<CmdType>(static_cast<uint8_t>(c) & 0x3Fu);
+  return static_cast<CmdType>(static_cast<uint8_t>(c) & 0x1Fu);
 }
 
 // Command structure for each transfer

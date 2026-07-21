@@ -604,14 +604,18 @@ def initialize_uccl(
     is_intranode: Optional[bool] = None,
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
+    dual_mode=False,
 ):
     # Only sweep barriers belonging to OUR mode so we don't stomp on a
     # coexisting Buffer of the other mode in the same process. The C++
-    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<ht|ll>_th<idx>`,
-    # where `ht` = high-throughput (use_normal_mode=True) and `ll` =
-    # low-latency.
+    # shm name format is `/uccl_barrier_<ip>_uid<uid>_<ht|ll|dual>_th<idx>`,
+    # where `ht` = high-throughput (use_normal_mode=True), `ll` =
+    # low-latency, and `dual` = one pool serving both modes.
     try:
-        mode_token = "_ht_" if use_normal_mode else "_ll_"
+        if dual_mode:
+            mode_token = "_dual_"
+        else:
+            mode_token = "_ht_" if use_normal_mode else "_ll_"
         for shm_file in glob.glob(f"/dev/shm/uccl_barrier_*{mode_token}*"):
             os.remove(shm_file)
     except Exception:
@@ -651,6 +655,7 @@ def initialize_uccl(
             barrier_local_rank=node_local_rank,
             device_index=local_rank,
             nic_local_rank=nic_local_rank,
+            dual_mode=dual_mode,
         )
         proxies.append(proxy)
 

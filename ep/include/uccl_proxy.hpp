@@ -18,7 +18,7 @@ class UcclProxy {
             bool is_intranode = false,
             bool gpu_buffer_is_host_allocated = false,
             int barrier_local_rank = -1, int device_index = -1,
-            int nic_local_rank = -1);
+            int nic_local_rank = -1, bool dual_mode = false);
   ~UcclProxy();
 
   void start_sender();
@@ -73,6 +73,7 @@ class UcclProxy {
   int thread_idx() const noexcept { return thread_idx_; }
   void* gpu_buffer_addr() const noexcept { return gpu_buffer_addr_; }
   bool use_normal_mode() const noexcept { return proxy_->cfg_.use_normal_mode; }
+  bool dual_mode() const noexcept { return proxy_->cfg_.dual_mode; }
   double avg_rdma_write_us() const { return proxy_->avg_rdma_write_us(); }
   double avg_wr_latency_us() const { return proxy_->avg_wr_latency_us(); }
   void set_peers_meta(std::vector<PeerMeta> const& peers);

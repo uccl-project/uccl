@@ -58,6 +58,12 @@ class Proxy {
     int num_nodes = 0;
     bool use_normal_mode =
         false;  // Runtime flag for normal mode (batching optimization)
+    // Serve both high-throughput and low-latency traffic from this one proxy
+    // pool: init creates the superset of resources (all inter-node peers,
+    // per-channel data QPs, LocalBarrier shm) and WRITE/ATOMIC commands are
+    // decoded per-command via the cmd_type mode bit instead of
+    // use_normal_mode. When set, use_normal_mode must be false.
+    bool dual_mode = false;
     bool is_intranode = false;
     bool free_buffer_with_cuda_free_host = false;
   };

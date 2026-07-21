@@ -1293,6 +1293,18 @@ class Buffer {
     uccl::internode_ll::clean_low_latency_buffer(
         ptr0, count0, ptr1, count1, barrier_signal_ptrs_gpu, nvl_rank,
         num_nvl_ranks, stream);
+
+    // The LL rdma_recv_count_internode slots live in the proxy atomic buffer,
+    // which a dual-mode pool shares with the high-throughput phase's
+    // signaling atomics. HT rounds leave nonzero residue there, which the LL
+    // dispatch receiver asserts against ("Same node but
+    // rdma_recv_count_internode is not zero"). The clean contract already
+    // requires no traffic in flight, so restore the buffer to its
+    // construction state. Ordered on the same stream as the clean kernel.
+    if (atomic_buffer_ptr != nullptr) {
+      CUDA_CHECK(cudaMemsetAsync(atomic_buffer_ptr, 0, kAtomicBufferSize,
+                                 stream));
+    }
   }
 
   std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
@@ -1809,29 +1821,40 @@ NB_MODULE(ep, m) {
     // use_normal_mode=True/False.
     return !nb::cast<bool>(proxy.attr("use_normal_mode")());
   };
+  // Dual-mode pools serve HT and LL traffic from one thread pool; register
+  // them under both registry keys so a Buffer of either mode resolves them.
+  auto proxy_dual_mode = [](nb::object const& proxy) -> bool {
+    return nb::cast<bool>(proxy.attr("dual_mode")());
+  };
 
   m.def(
       "register_proxy",
-      [proxy_low_latency_mode](int device_index, nb::object proxy) {
+      [proxy_low_latency_mode, proxy_dual_mode](int device_index,
+                                                nb::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
-        bool ll = proxy_low_latency_mode(proxy);
-        auto& vec = uccl::g_proxies_by_dev[{device_index, ll}];
-        if (!vec.empty()) {
-          fprintf(stderr,
-                  "WARNING: overwriting existing proxies for device %d "
-                  "(%s mode)\n",
-                  device_index, ll ? "low-latency" : "high-throughput");
-          std::abort();
+        bool const dual = proxy_dual_mode(proxy);
+        bool const ll = proxy_low_latency_mode(proxy);
+        std::vector<bool> keys =
+            dual ? std::vector<bool>{false, true} : std::vector<bool>{ll};
+        for (bool key_ll : keys) {
+          auto& vec = uccl::g_proxies_by_dev[{device_index, key_ll}];
+          if (!vec.empty()) {
+            fprintf(stderr,
+                    "WARNING: overwriting existing proxies for device %d "
+                    "(%s mode)\n",
+                    device_index, key_ll ? "low-latency" : "high-throughput");
+            std::abort();
+          }
+          vec.push_back(proxy);
         }
-        vec.push_back(std::move(proxy));
         printf("Registered proxy for device %d (%s mode)\n", device_index,
-               ll ? "low-latency" : "high-throughput");
+               dual ? "dual" : (ll ? "low-latency" : "high-throughput"));
       },
       nb::arg("device_index"), nb::arg("proxy"));
   m.def(
       "register_proxies",
-      [proxy_low_latency_mode](int device_index,
-                               std::vector<nb::object> proxies) {
+      [proxy_low_latency_mode, proxy_dual_mode](
+          int device_index, std::vector<nb::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         if (proxies.empty()) {
           fprintf(stderr,
@@ -1839,29 +1862,35 @@ NB_MODULE(ep, m) {
                   device_index);
           std::abort();
         }
-        bool ll = proxy_low_latency_mode(proxies.front());
+        bool const dual = proxy_dual_mode(proxies.front());
+        bool const ll = proxy_low_latency_mode(proxies.front());
         // All proxies in a single registration must share the same mode.
         for (auto const& p : proxies) {
-          if (proxy_low_latency_mode(p) != ll) {
+          if (proxy_low_latency_mode(p) != ll || proxy_dual_mode(p) != dual) {
             fprintf(stderr,
                     "register_proxies: mixed-mode proxies for device %d\n",
                     device_index);
             std::abort();
           }
         }
-        auto& vec = uccl::g_proxies_by_dev[{device_index, ll}];
-        if (!vec.empty()) {
-          fprintf(stderr,
-                  "WARNING: overwriting existing proxies for device %d "
-                  "(%s mode)\n",
-                  device_index, ll ? "low-latency" : "high-throughput");
-          std::abort();
-        }
-        for (auto& proxy : proxies) {
-          vec.push_back(std::move(proxy));
+        // A dual pool answers lookups for both Buffer modes.
+        std::vector<bool> keys =
+            dual ? std::vector<bool>{false, true} : std::vector<bool>{ll};
+        for (bool key_ll : keys) {
+          auto& vec = uccl::g_proxies_by_dev[{device_index, key_ll}];
+          if (!vec.empty()) {
+            fprintf(stderr,
+                    "WARNING: overwriting existing proxies for device %d "
+                    "(%s mode)\n",
+                    device_index, key_ll ? "low-latency" : "high-throughput");
+            std::abort();
+          }
+          for (auto& proxy : proxies) {
+            vec.push_back(proxy);
+          }
         }
         printf("Registered proxies for device %d (%s mode)\n", device_index,
-               ll ? "low-latency" : "high-throughput");
+               dual ? "dual" : (ll ? "low-latency" : "high-throughput"));
       },
       nb::arg("device_index"), nb::arg("proxies"));
   m.def(
@@ -2411,7 +2440,7 @@ NB_MODULE(ep, m) {
   nb::class_<Stats>(m, "Stats");
   nb::class_<UcclProxy>(m, "Proxy")
       .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool, int, int, int>(),
+                    bool, bool, int, int, int, bool>(),
            nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
            nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
            nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
@@ -2419,7 +2448,7 @@ NB_MODULE(ep, m) {
            nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
            nb::arg("gpu_buffer_is_host_allocated") = false,
            nb::arg("barrier_local_rank") = -1, nb::arg("device_index") = -1,
-           nb::arg("nic_local_rank") = -1)
+           nb::arg("nic_local_rank") = -1, nb::arg("dual_mode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2435,6 +2464,7 @@ NB_MODULE(ep, m) {
            nb::arg("num_tokens"), nb::arg("hidden"), nb::arg("num_experts"))
       .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
       .def("use_normal_mode", &UcclProxy::use_normal_mode)
+      .def("dual_mode", &UcclProxy::dual_mode)
       .def_prop_ro("thread_idx", &UcclProxy::thread_idx)
       .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)

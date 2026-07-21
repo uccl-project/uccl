@@ -16,11 +16,16 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
                      bool gpu_buffer_is_host_allocated, int barrier_local_rank,
-                     int device_index, int nic_local_rank)
+                     int device_index, int nic_local_rank, bool dual_mode)
     : thread_{},
       mode_{Mode::None},
       running_{false},
       is_intranode_{is_intranode} {
+  if (dual_mode && use_normal_mode) {
+    throw std::runtime_error(
+        "UcclProxy: dual_mode requires use_normal_mode=False (dual serves "
+        "both modes; commands carry their own encoding)");
+  }
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
@@ -58,6 +63,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
+  cfg.dual_mode = dual_mode;
   cfg.is_intranode = is_intranode;
   cfg.free_buffer_with_cuda_free_host = gpu_buffer_is_host_allocated;
   proxy_ = std::make_unique<Proxy>(cfg);
