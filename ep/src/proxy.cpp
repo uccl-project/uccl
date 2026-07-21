@@ -177,8 +177,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     // Offset LL-mode proxies onto a separate CPU range so a high-throughput
     // Buffer and an LL-mode Buffer running in the same process don't fight
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
-    int const mode_offset =
-        wants_normal_resources(cfg_) ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
+    int const mode_offset = wants_normal_resources(cfg_)
+                                ? 0
+                                : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
     int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
                       cpu_local_rank * kNumProxyThs);
@@ -190,7 +191,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d, mode: %s\n",
           cpu, cfg_.thread_idx, cpu_local_rank,
-          cfg_.dual_mode ? "dual" : (cfg_.use_normal_mode ? "high_throughput" : "low_latency"));
+          cfg_.dual_mode
+              ? "dual"
+              : (cfg_.use_normal_mode ? "high_throughput" : "low_latency"));
     }
   }
 }
@@ -442,9 +445,10 @@ void Proxy::init_common() {
   // each peer ctx; per-peer dst_ah selects the destination per WR.
   RDMAConnectionInfo template_local_info{};
   if (!ctx_.qp) {
-    create_per_thread_qp(
-        ctx_, cfg_.gpu_buffer, cfg_.total_size, &template_local_info, cfg_.rank,
-        cfg_.d2h_queues.size(), wants_normal_resources(cfg_), atomic_buffer_ptr_);
+    create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size,
+                         &template_local_info, cfg_.rank,
+                         cfg_.d2h_queues.size(), wants_normal_resources(cfg_),
+                         atomic_buffer_ptr_);
     // Pre-post recv WRs once on the shared recv_ack_qp, sized for all peers.
     int num_active_peers = 0;
     for (int p = 0; p < num_ranks; ++p) {
@@ -696,10 +700,10 @@ void Proxy::run_remote() {
   init_remote();
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_, cfg_.num_ranks,
-                            cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                            cfg_.num_nodes, cfg_.use_normal_mode, cfg_.dual_mode);
+    remote_poll_completions(
+        ctx_, cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
+        cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+        cfg_.num_nodes, cfg_.use_normal_mode, cfg_.dual_mode);
 #ifdef USE_RECEIVER_BARRIER
     if (!cfg_.use_normal_mode || cfg_.dual_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
@@ -1226,7 +1230,7 @@ void Proxy::post_gpu_commands_mixed(
       case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
         if (cfg_.dual_mode ? !get_is_normal_cmd(cmds_to_post[i].cmd_type)
-                            : !cfg_.use_normal_mode) {
+                           : !cfg_.use_normal_mode) {
           int value = cmds_to_post[i].value;
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
@@ -1262,7 +1266,7 @@ void Proxy::post_gpu_commands_mixed(
 
 #ifdef USE_SENDER_BARRIER
         if (cfg_.dual_mode ? !get_is_normal_cmd(cmds_to_post[i].cmd_type)
-                            : !cfg_.use_normal_mode) {
+                           : !cfg_.use_normal_mode) {
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
               offset - get_low_latency(cmds_to_post[i].cmd_type) *

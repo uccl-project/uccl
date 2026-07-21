@@ -60,9 +60,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   {
     uint64_t slot = 0;
     TransferCmd cmd{};
-    cmd.cmd_type =
-        make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx,
-                      use_normal_mode);
+    cmd.cmd_type = make_cmd_type(CmdType::WRITE, is_combine,
+                                 low_latency_buffer_idx, use_normal_mode);
     // Normal mode may target int-based metadata buffers, while low-latency
     // mode stays int4-aligned.
     EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
@@ -111,9 +110,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
-      cmd.cmd_type =
-          make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx,
-                        use_normal_mode);
+      cmd.cmd_type = make_cmd_type(CmdType::WRITE, is_combine,
+                                   low_latency_buffer_idx, use_normal_mode);
       // Normal mode may target int-based metadata buffers, while low-latency
       // mode stays int4-aligned.
       EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
@@ -211,9 +209,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     {
       uint64_t slot = 0;
       TransferCmd cmd{};
-      cmd.cmd_type =
-          make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx,
-                        use_normal_mode);
+      cmd.cmd_type = make_cmd_type(CmdType::ATOMIC, is_combine,
+                                   low_latency_buffer_idx, use_normal_mode);
       cmd.value = value;
       cmd.dst_rank = dst_rank;
       cmd.req_rptr = rptr;
@@ -232,9 +229,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
           (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
-        cmd.cmd_type =
-            make_cmd_type(CmdType::ATOMIC, is_combine, low_latency_buffer_idx,
-                        use_normal_mode);
+        cmd.cmd_type = make_cmd_type(CmdType::ATOMIC, is_combine,
+                                     low_latency_buffer_idx, use_normal_mode);
         // TODO(MaoZiming): Check fields here.
         // NOTE(MaoZiming): cmd is needed for proxy to process the command.
         cmd.value = value;

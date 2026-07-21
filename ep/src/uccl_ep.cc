@@ -1302,8 +1302,8 @@ class Buffer {
     // requires no traffic in flight, so restore the buffer to its
     // construction state. Ordered on the same stream as the clean kernel.
     if (atomic_buffer_ptr != nullptr) {
-      CUDA_CHECK(cudaMemsetAsync(atomic_buffer_ptr, 0, kAtomicBufferSize,
-                                 stream));
+      CUDA_CHECK(
+          cudaMemsetAsync(atomic_buffer_ptr, 0, kAtomicBufferSize, stream));
     }
   }
 

@@ -1,20 +1,42 @@
-"""Performance benchmark for the unified dual-mode Buffer.
+"""
+Correctness + performance test for the unified dual-mode Buffer: ONE Buffer
+(``low_latency_mode=True, dual_mode=True``) backed by ONE dual proxy pool
+serves both the high-throughput kernels (internode.cu) and the low-latency
+kernels (internode_ll.cu), the way an application toggling on sequence length
+would use it.
 
-Runs the two canonical benchmarks back-to-back on ONE Buffer + one dual proxy
-pool, so the numbers are directly comparable with the dedicated-mode baselines:
+Build:
+export OMP_NUM_THREADS=6
+make clean && make -j install
 
-- Phase 1: ``test_internode.test_main`` (high-throughput dispatch/combine
-  correctness + full tuning sweep, reports best BF16/FP8 dispatch and BF16
-  combine bandwidth in GB/s RDMA + NVL)
-- ``clean_low_latency_buffer`` (mode switch)
-- Phase 2: ``test_low_latency.test_main`` (LL dispatch/combine correctness +
-  per-rank latency and bandwidth)
+On first node:
+NCCL_SOCKET_IFNAME=enp71s0 NCCL_IB_DISABLE=1 \
+UCCL_SOCKET_IFNAME=enp71s0 GLOO_SOCKET_IFNAME=enp71s0 \
+torchrun --nnodes=2 --nproc_per_node=<local_gpu_count> --node_rank=0 \
+  --master_addr=<first_node_ip> --master_port=12368 \
+  bench/bench_dual_mode.py --num-tokens=4096 \
+  --hidden=7168 --num-topk=8 --num-experts=256 --ll-num-tokens=128
 
-Launch (2 nodes x 8 ranks):
+On second node:
+NCCL_SOCKET_IFNAME=enp71s0 NCCL_IB_DISABLE=1 \
+UCCL_SOCKET_IFNAME=enp71s0 GLOO_SOCKET_IFNAME=enp71s0 \
+torchrun --nnodes=2 --nproc_per_node=<local_gpu_count> --node_rank=1 \
+  --master_addr=<first_node_ip> --master_port=12368 \
+  bench/bench_dual_mode.py --num-tokens=4096 \
+  --hidden=7168 --num-topk=8 --num-experts=256 --ll-num-tokens=128
 
-    ./run_bench.sh <node_rank> bench_dual_mode.py \
-        --num-tokens=4096 --hidden=7168 --num-topk=8 --num-experts=256 \
-        --ll-num-tokens=128
+This benchmark verifies, all on a single dual-mode Buffer:
+  * HT <-> LL mode toggling: ``--toggle-rounds`` correctness-only rounds of
+    HT -> clean_low_latency_buffer -> LL before the measured round (the
+    final round alternates once more, so the benchmarked kernels run on a
+    buffer that has already switched modes)
+  * HT dispatch/combine correctness for BF16/FP8 and the full NVL/RDMA chunk
+    tuning sweep (``test_internode.test_main`` verbatim)
+  * LL dispatch/combine correctness and per-rank latency/bandwidth
+    (``test_low_latency.test_main`` verbatim)
+
+The numbers are directly comparable with the dedicated-pool baselines:
+run test_internode.py / test_low_latency.py with the same arguments.
 """
 
 import argparse
@@ -27,6 +49,79 @@ from buffer import Buffer
 from utils import init_dist_under_torchrun
 import test_internode as ti
 import test_low_latency as tll
+
+
+def run_ht_phase(
+    args,
+    num_sms,
+    local_rank,
+    num_local_ranks,
+    num_ranks,
+    num_nodes,
+    rank,
+    buffer,
+    group,
+    skip_benchmark,
+):
+    if local_rank == 0:
+        print(
+            f"[dual-bench] ===== HT phase (test_internode.test_main, "
+            f"benchmark={'off' if skip_benchmark else 'on'}) =====",
+            flush=True,
+        )
+    ti.test_main(
+        args,
+        num_sms,
+        local_rank,
+        num_local_ranks,
+        num_ranks,
+        num_nodes,
+        rank,
+        buffer,
+        group,
+        skip_benchmark,
+    )
+    dist.barrier(group)
+
+
+def switch_to_ll(args, buffer, group, local_rank):
+    # HT kernels dirty the LL RDMA layout and the shared atomic buffer; the
+    # clean is required on every HT -> LL switch (LL -> HT needs nothing:
+    # LL self-resets its signaling).
+    if local_rank == 0:
+        print(
+            "[dual-bench] ===== clean_low_latency_buffer (mode switch) =====",
+            flush=True,
+        )
+    buffer.clean_low_latency_buffer(args.ll_num_tokens, args.hidden, args.num_experts)
+    torch.cuda.synchronize()
+    dist.barrier(group)
+
+
+def run_ll_phase(
+    args, rank, num_ranks, group, buffer, seed, skip_benchmark, local_rank
+):
+    if local_rank == 0:
+        print(
+            f"[dual-bench] ===== LL phase (test_low_latency.test_main, "
+            f"benchmark={'off' if skip_benchmark else 'on'}) =====",
+            flush=True,
+        )
+    tll.test_main(
+        args.ll_num_tokens,
+        args.hidden,
+        args.num_experts,
+        args.num_topk,
+        rank,
+        num_ranks,
+        group,
+        buffer,
+        use_logfmt=False,
+        dispatch_use_fp8=True,
+        seed=seed,
+        skip_benchmark=skip_benchmark,
+    )
+    dist.barrier(group)
 
 
 def main(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> None:
@@ -70,14 +165,39 @@ def main(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> Non
     )
     dist.barrier(group)
 
-    # Phase 1: canonical high-throughput benchmark (correctness + tuning).
-    if args.phase in ("both", "ht"):
-        if local_rank == 0:
-            print(
-                "[dual-bench] ===== HT phase (test_internode.test_main) =====",
-                flush=True,
+    # Correctness-only toggle rounds: prove the buffer survives repeated
+    # HT -> clean -> LL alternation before anything is measured.
+    if args.phase == "both":
+        for round_idx in range(args.toggle_rounds):
+            if local_rank == 0:
+                print(f"[dual-bench] toggle round {round_idx}", flush=True)
+            run_ht_phase(
+                args,
+                num_sms,
+                local_rank,
+                num_local_ranks,
+                num_ranks,
+                num_nodes,
+                rank,
+                buffer,
+                group,
+                skip_benchmark=True,
             )
-        ti.test_main(
+            switch_to_ll(args, buffer, group, local_rank)
+            run_ll_phase(
+                args,
+                rank,
+                num_ranks,
+                group,
+                buffer,
+                seed=round_idx,
+                skip_benchmark=True,
+                local_rank=local_rank,
+            )
+
+    # Measured round (correctness runs again inside each test_main).
+    if args.phase in ("both", "ht"):
+        run_ht_phase(
             args,
             num_sms,
             local_rank,
@@ -87,43 +207,20 @@ def main(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> Non
             rank,
             buffer,
             group,
-            False,
+            skip_benchmark=False,
         )
-        dist.barrier(group)
-
     if args.phase in ("both", "ll"):
-        # Mode switch: HT residue -> clean LL layout + shared atomic buffer.
-        if local_rank == 0:
-            print(
-                "[dual-bench] ===== clean_low_latency_buffer (mode switch) =====",
-                flush=True,
-            )
-        buffer.clean_low_latency_buffer(
-            args.ll_num_tokens, args.hidden, args.num_experts
-        )
-        torch.cuda.synchronize()
-        dist.barrier(group)
-
-        # Phase 2: canonical low-latency benchmark (correctness + latency/BW).
-        if local_rank == 0:
-            print(
-                "[dual-bench] ===== LL phase (test_low_latency.test_main) =====",
-                flush=True,
-            )
-        tll.test_main(
-            args.ll_num_tokens,
-            args.hidden,
-            args.num_experts,
-            args.num_topk,
+        switch_to_ll(args, buffer, group, local_rank)
+        run_ll_phase(
+            args,
             rank,
             num_ranks,
             group,
             buffer,
-            use_logfmt=False,
-            dispatch_use_fp8=True,
-            seed=1,
+            seed=args.toggle_rounds,
+            skip_benchmark=False,
+            local_rank=local_rank,
         )
-        dist.barrier(group)
 
     buffer.destroy()
     dist.barrier(group)
@@ -133,14 +230,27 @@ def main(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> Non
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Dual-mode buffer benchmark")
+    parser = argparse.ArgumentParser(
+        description="Dual-mode buffer correctness + performance benchmark"
+    )
     parser.add_argument("--num-tokens", type=int, default=4096)
     parser.add_argument("--hidden", type=int, default=7168)
     parser.add_argument("--num-topk-groups", type=int, default=None)
     parser.add_argument("--num-topk", type=int, default=8)
     parser.add_argument("--num-experts", type=int, default=256)
     parser.add_argument("--ll-num-tokens", type=int, default=128)
-    parser.add_argument("--phase", choices=["both", "ht", "ll"], default="both")
+    parser.add_argument(
+        "--toggle-rounds",
+        type=int,
+        default=1,
+        help="Correctness-only HT->clean->LL rounds before the measured round",
+    )
+    parser.add_argument(
+        "--phase",
+        choices=["both", "ht", "ll"],
+        default="both",
+        help="Restrict to one phase (skips the toggle rounds; for iteration)",
+    )
     args = parser.parse_args()
 
     world_size = int(os.environ["WORLD_SIZE"])
