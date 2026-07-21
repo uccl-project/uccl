@@ -89,6 +89,7 @@ def test_main(
     seed: int = 0,
     skip_benchmark: bool = False,
     debug_hash: bool = False,
+    profile_tests: int = 30,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
@@ -446,6 +447,7 @@ def test_main(
             kernel_names=("dispatch", "combine"),
             barrier_comm_profiling=True,
             suppress_kineto_output=True,
+            num_tests=profile_tests,
             num_kernels_per_period=2 if return_recv_hook else 1,
         )
         # kineto profiling failed.
@@ -503,6 +505,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             seed=seed,
             skip_benchmark=args.skip_benchmark or args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
+            profile_tests=args.profile_tests,
         )
         if args.debug_hash:
             ref_hash, ref_hash_details = ref_out
@@ -529,8 +532,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 use_logfmt=args.use_logfmt,
                 dispatch_use_fp8=args.dispatch_use_fp8,
                 seed=seed,
-                skip_benchmark=args.pressure_test_mode == 1,
+                skip_benchmark=args.skip_benchmark or args.pressure_test_mode == 1,
                 debug_hash=args.debug_hash,
+                profile_tests=args.profile_tests,
             )
             if args.debug_hash:
                 current_hash, current_hash_details = cur_out
@@ -625,6 +629,12 @@ if __name__ == "__main__":
         "--skip-benchmark",
         action="store_true",
         help="Run one correctness pass without performance benchmarks.",
+    )
+    parser.add_argument(
+        "--profile-tests",
+        type=int,
+        default=30,
+        help="Number of iterations for each kernel profiling pass.",
     )
     parser.add_argument(
         "--debug-hash",
