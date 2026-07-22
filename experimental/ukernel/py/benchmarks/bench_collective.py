@@ -1,9 +1,11 @@
 """Benchmark collective communication: ukernel_ccl vs NCCL."""
 
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import time
 import torch
-
 import ukernel_ccl as dist
 
 import torch.distributed as nccl_dist

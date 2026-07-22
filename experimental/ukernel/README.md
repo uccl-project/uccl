@@ -117,16 +117,17 @@ cd experimental/ukernel/py
 python setup.py build_ext --inplace
 ```
 
-Run tests (2+ GPUs; explicit ports avoid collisions):
+Run tests (2+ GPUs; explicit ports avoid collisions). See
+[py/README.md](py/README.md) for the full test and benchmark reference.
 
 ```bash
 cd experimental/ukernel/py
-CUDA_VISIBLE_DEVICES=6,7 RANK=0 WORLD_SIZE=2 LOCAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=16998 python test_collective.py &
-CUDA_VISIBLE_DEVICES=6,7 RANK=1 WORLD_SIZE=2 LOCAL_RANK=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=16998 python test_collective.py &
+CUDA_VISIBLE_DEVICES=6,7 RANK=0 WORLD_SIZE=2 LOCAL_RANK=0 MASTER_ADDR=127.0.0.1 MASTER_PORT=16998 python tests/test_collective.py &
+CUDA_VISIBLE_DEVICES=6,7 RANK=1 WORLD_SIZE=2 LOCAL_RANK=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=16998 python tests/test_collective.py &
 
 # or via torchrun
-CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_collective.py
-CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_p2p.py
+CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 tests/test_collective.py
+CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 tests/test_p2p.py
 ```
 
 Minimal usage under `torchrun`:

@@ -1,6 +1,9 @@
 """Benchmark P2P communication: ukernel_p2p vs uccl.p2p vs NCCL send/recv."""
 
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import time
 import torch
 import ukernel_p2p as p2p

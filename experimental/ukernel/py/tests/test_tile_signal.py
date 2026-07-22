@@ -1,6 +1,9 @@
 """Test out-of-order tag delivery via wait_signal + try_complete_signals API."""
 
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import time
 import torch
 import ukernel_p2p as p2p

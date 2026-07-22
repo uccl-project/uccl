@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import torch
 import ukernel_p2p as p2p
 
