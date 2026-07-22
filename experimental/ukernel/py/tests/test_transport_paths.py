@@ -153,8 +153,11 @@ def run_bidir(comm, rank: int, peer: int, selected: str):
         require(wait_rid != 0, "bidir: wait_signal_async failed")
         poll_rid(comm, wait_rid)
 
+        # Peer wrote into our buffer at offset 71 + rank*13.
+        my_recv_off_el = 71 + rank * 13
         exp = expected_payload(peer, case_id, 23 + peer * 11, payload_el)
-        verify_segment(recv_buf, recv_off_el, payload_el, exp, guard, "bidir_offset")
+        verify_segment(recv_buf, my_recv_off_el, payload_el, exp, guard,
+                       "bidir_offset")
         require(comm.barrier("bidir_done", 30000), "bidir: barrier failed")
     finally:
         unreg_bufs(comm, selected, case_id, rank)

@@ -32,6 +32,7 @@ def run_rank() -> bool:
     peer = 1 - rank
     gpu_id = env_int("LOCAL_RANK", 0)
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
+    torch.cuda.set_device(gpu_id)
 
     comm = p2p.Communicator(
         gpu_id=gpu_id, rank=rank, world_size=2,

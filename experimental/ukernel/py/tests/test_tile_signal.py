@@ -1,4 +1,4 @@
-"""Test out-of-order tag delivery via wait_signal + try_complete_signals API."""
+"""Test out-of-order tag delivery via wait_signal_async + poll API."""
 
 import os
 import sys

@@ -16,6 +16,7 @@ def run_server() -> None:
     world = 2
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
     gpu_id = env_int("LOCAL_RANK", 0)
+    torch.cuda.set_device(gpu_id)
 
     comm = p2p.Communicator(
         gpu_id=gpu_id,
@@ -65,6 +66,7 @@ def run_client() -> None:
     world = 2
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
     gpu_id = env_int("LOCAL_RANK", 0)
+    torch.cuda.set_device(gpu_id)
 
     comm = p2p.Communicator(
         gpu_id=gpu_id,
