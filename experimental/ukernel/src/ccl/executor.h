@@ -156,6 +156,11 @@ struct SprayExecutorConfig {
   std::string exchanger_ip = "0.0.0.0";
   int exchanger_port = 16998;  // matches all ccl test defaults
   int local_id = -1;
+  // Grace period (µs) of continuous fifo emptiness after which device
+  // worker kernels exit (relaunched on next enqueue). 0 = always
+  // resident. Enable when the process also runs torch/CUDA work — an
+  // always-spinning kernel deadlocks device-wide syncs.
+  uint32_t device_idle_exit_us = 0;
 };
 
 // Backend path counters for load-balancing diagnostics.

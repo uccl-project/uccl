@@ -24,6 +24,11 @@ struct DeviceBackendConfig {
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
   uint32_t bytes_per_block = 0;  // 0=auto, >0=override
+  // Grace period (µs) of continuous fifo emptiness after which a
+  // persistent worker kernel exits (relaunched on next enqueue).
+  // 0 = always resident. Enable for torch coexistence — see
+  // WorkerPool::Config::idleExitAfterUs.
+  uint32_t idle_exit_after_us = 0;
 };
 
 class DeviceBackend final : public BatchBackend {

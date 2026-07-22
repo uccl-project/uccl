@@ -222,9 +222,17 @@ __device__ __forceinline__ void process_task(Task const& task,
   dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
 }
 
+__device__ __forceinline__ void idle_sleep() {
+#ifdef __HIP_PLATFORM_AMD__
+  __builtin_amdgcn_s_sleep(2);
+#else
+  __nanosleep(100);
+#endif
+}
+
 __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
-    bool* should_stop) {
+    bool* should_stop, bool* exited_flag, uint32_t exit_idle_iters) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -234,6 +242,7 @@ __global__ void singlePersistentKernel(
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
+  uint32_t idle_ticks = 0;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
 
   if (threadIdx.x == 0) {
@@ -258,7 +267,22 @@ __global__ void singlePersistentKernel(
           cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
               fifo.head, mscclpp::memoryOrderAcquire);
         }
-        if (cached_tail < cached_head) {
+        if (cached_tail >= cached_head) {
+          // Fifo is drained. With an idle grace configured, exit after
+          // exit_idle_iters consecutive empty polls so host-side
+          // device-wide syncs (torch etc.) can pass; the host relaunches
+          // us on the next enqueue.
+          if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
+            if (exited_flag) {
+              *exited_flag = true;
+              __threadfence_system();
+            }
+            command = kCommandExit;
+          } else {
+            idle_sleep();
+          }
+        } else {
+          idle_ticks = 0;
           current_task = fifo.buffer[cached_tail % fifo.size];
           has_current_args = false;
           command = kCommandRun;
@@ -299,7 +323,8 @@ __global__ void singlePersistentKernel(
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
-                                      MultiBlockSync* d_sync) {
+                                      MultiBlockSync* d_sync, bool* exited_flag,
+                                      uint32_t exit_idle_iters) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -312,6 +337,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   uint32_t local_phase = 0;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
+  uint32_t idle_ticks = 0;
 
   if (bid == 0 && threadIdx.x == 0) {
     cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
@@ -346,8 +372,20 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
               fifo.head, mscclpp::memoryOrderAcquire);
         }
         if (cached_tail >= cached_head) {
+          // Fifo drained: exit after the idle grace so host-side
+          // device-wide syncs can pass; host relaunches on next enqueue.
+          if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
+            if (exited_flag) {
+              *exited_flag = true;
+              __threadfence_system();
+            }
+            command = kCommandExit;
+            break;
+          }
+          idle_sleep();
           continue;
         }
+        idle_ticks = 0;
 
         next_task = fifo.buffer[cached_tail % fifo.size];
         if (next_task.type_u8() == static_cast<uint8_t>(TaskType::Stop)) {

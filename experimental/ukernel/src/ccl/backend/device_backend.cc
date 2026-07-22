@@ -47,6 +47,7 @@ void DeviceBackend::ensure_runtime() {
   wc.threadsPerBlock = cfg_.threads_per_block;
   wc.fifoCapacity = cfg_.fifo_capacity;
   wc.smemSize = cfg_.smem_size;
+  wc.idleExitAfterUs = cfg_.idle_exit_after_us;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
   // Pre-create all workers
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
@@ -266,6 +267,14 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   uint32_t args_buf[256];
   {
     std::lock_guard<std::mutex> lk(pending_mu_);
+    // A task that raced the kernel's idle exit gets its worker
+    // relaunched here (enqueue-time checks are not atomic with the
+    // kernel's exit decision).
+    if (cfg_.idle_exit_after_us > 0) {
+      for (uint32_t fid = 0; fid < cfg_.max_fifos; ++fid)
+        if (!pending_by_fifo_[fid].empty())
+          worker_pool_->relaunch_if_exited(fid);
+    }
     // Per FIFO, completions are in-order, so pop only the done prefix of
     // each queue — cost is O(completed + fifos), not O(pending).
     for (uint32_t fid = 0; fid < cfg_.max_fifos && count < max &&

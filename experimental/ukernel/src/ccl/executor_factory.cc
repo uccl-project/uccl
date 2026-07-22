@@ -29,6 +29,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       .blocks_per_worker = static_cast<uint32_t>(config.blocks_per_worker),
       .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
       .smem_size = config.smem_size,
+      .idle_exit_after_us = config.device_idle_exit_us,
   };
   // Optional env overrides for benchmarking (win over config values):
   // UK_CCL_DEV_FIFOS / UK_CCL_DEV_BLOCKS / UK_CCL_DEV_THREADS.
