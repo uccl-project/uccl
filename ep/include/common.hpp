@@ -169,6 +169,22 @@ static inline bool get_aggressive_atomic_enabled() {
   return val != 0;
 }
 
+// Controls whether uccl-ep pins its own proxy threads to specific CPU cores
+// at all. CPU pinning is enabled by default (matches historical behavior).
+// Set UCCL_EP_DISABLE_CPU_AFFINITY=1 to opt out and let proxy threads simply
+// keep whatever affinity they inherited from their parent process (e.g. a
+// serving framework that already did its own NUMA-aware, per-rank CPU
+// binding before spawning uccl-ep), instead of uccl-ep re-pinning them to a
+// specific core. This avoids two independent pinning schemes fighting over
+// the same cores when uccl-ep is embedded in such a framework.
+static inline bool get_cpu_affinity_disabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_DISABLE_CPU_AFFINITY");
+    return env ? static_cast<uint32_t>(atoi(env)) : 0;
+  }();
+  return val != 0;
+}
+
 // Runtime override for the CPU-side recv timeout.
 // Long training steps (e.g. Megatron-LM with large grad accumulation, heavy
 // checkpoint I/O, or EP groups initializing sequentially under PP >= 2) can

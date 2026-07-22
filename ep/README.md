@@ -137,6 +137,7 @@ Notes:
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
 | UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
 | UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual `s_waitcnt vmcnt(0)` fences instead of acquire/release semantics. Required on AMD CDNA so the combine receiver actually sees the producer's tail-pointer updates over XGMI; without it the kernel deadlocks at scale. | 1 on AMD, 0 on CUDA |
+| UCCL_EP_DISABLE_CPU_AFFINITY | Disable uccl-ep's own CPU pinning for its proxy threads, leaving them with whatever affinity they inherited from the parent process. Useful when uccl-ep is embedded in a serving framework that already performs its own NUMA-aware, per-rank CPU binding before spawning uccl-ep, to avoid the two independent pinning schemes fighting over the same cores. | 0 |
 | UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
 
 ## Results
