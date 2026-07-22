@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../util/jring.h"
+#include "util/jring.h"
 #include <atomic>
 #include <cstdint>
 #include <deque>
