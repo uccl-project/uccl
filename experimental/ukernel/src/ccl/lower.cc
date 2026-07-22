@@ -103,6 +103,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<size_t> const& first_tile,
                                     std::vector<size_t> const& tiles_per_chunk,
                                     bool inplace, bool stage_puts,
+                                    bool reduce_snap_hs,
                                     uint32_t signal_group_tiles,
                                     size_t& staging_bytes,
                                     FusionMetaOut meta) {
@@ -128,6 +129,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
     std::vector<uint32_t> cp_indices;
     std::vector<uint32_t> put_indices;
+    std::vector<uint32_t> snap_cp_indices;  // in-place RecvReduce snapshots
     std::vector<uint32_t> sig_group_puts;  // Put ops of the current signal group
     uint32_t cur_group_ws = kNoOp;         // WaitSignal of the current group
     size_t chunk_staging = 0;
@@ -203,6 +205,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.src_buf_role = CollectiveBufferRole::Output;
         }
         out.push_back(put);
+        put_indices.push_back(put_idx);
 
         // Signal aggregation: one Signal per group of G tiles, fired
         // when every Put in the group completed.
@@ -253,6 +256,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           size_t staging_off = staging_bytes;
           staging_bytes += op.bytes;
 
+          // Snapshot the local shard BEFORE the peer's Put can overwrite
+          // it: no deps, so it runs immediately at submit. The peer's Put
+          // is gated on this snapshot via the pair handshake below.
           TiledOp cp;
           cp.kind = ExecOpKind::Put;
           cp.bytes = op.bytes;
@@ -262,9 +268,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           cp.dst_peer = ~0u;
           cp.src_buf_role = CollectiveBufferRole::Output;
           cp.dst_buf_role = CollectiveBufferRole::Scratch;
-          cp.deps = op.deps;
           out.push_back(cp);
           uint32_t cp_idx = static_cast<uint32_t>(out.size() - 1);
+          snap_cp_indices.push_back(cp_idx);
 
           TiledOp red;
           red.kind = ExecOpKind::Reduce;
@@ -275,6 +281,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.dst_peer = ~0u;
           red.src_buf_role = CollectiveBufferRole::Scratch;
           red.dst_buf_role = CollectiveBufferRole::Output;
+          red.deps = op.deps;  // waits for the peer's data to land
           new_deps.push_back({static_cast<uint32_t>(out.size()), cp_idx});
           old_to_new[old_idx] = static_cast<uint32_t>(out.size());
           out.push_back(red);
@@ -325,6 +332,33 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         new_deps.push_back({pi, ws_cd_idx});
     }
 
+    // In-place AllReduce phase-1 handshake (even pair_id by the
+    // build_allreduce_ring_algo convention): the receiver's snapshot of
+    // the shard must complete before the sender's Put may overwrite it.
+    if (reduce_snap_hs && ch.pair_id != kNoPairId && (ch.pair_id % 2) == 0) {
+      constexpr size_t kSnapTile = 0xFFFE;
+      if (!snap_cp_indices.empty()) {
+        TiledOp sig;
+        sig.kind = ExecOpKind::Signal;
+        sig.dst_peer = static_cast<uint32_t>(ch.src_rank);
+        sig.tag = make_tag(ch.pair_id, kSnapTile);
+        uint32_t sig_idx = static_cast<uint32_t>(out.size());
+        for (uint32_t ci : snap_cp_indices)
+          new_deps.push_back({sig_idx, ci});
+        out.push_back(sig);
+      }
+      if (!put_indices.empty()) {
+        uint32_t ws_idx = static_cast<uint32_t>(out.size());
+        TiledOp ws;
+        ws.kind = ExecOpKind::WaitSignal;
+        ws.src_peer = static_cast<uint32_t>(ch.dst_rank);
+        ws.tag = make_tag(ch.pair_id, kSnapTile);
+        out.push_back(ws);
+        for (uint32_t pi : put_indices)
+          new_deps.push_back({pi, ws_idx});
+      }
+    }
+
     if (chunk_staging > staging_bytes_out)
       staging_bytes_out = chunk_staging;
   }
@@ -347,7 +381,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 }  // namespace
 
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
-                       bool stage_puts, uint32_t signal_group_tiles) {
+                       bool stage_puts, uint32_t signal_group_tiles,
+                       bool reduce_snap_hs) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -368,7 +403,8 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes, bool inplace,
                      &result.wait_group_size};
   result.ops = lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                               tiled.tiles_per_chunk, inplace, stage_puts,
-                              signal_group_tiles, staging_bytes, meta);
+                              reduce_snap_hs, signal_group_tiles,
+                              staging_bytes, meta);
   result.staging_bytes_required = staging_bytes;
   return result;
 }
@@ -381,8 +417,11 @@ TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
   // Only stage for variable-split AllToAll; equal-split offsets never overlap.
   bool stage_puts = (config.kind == CollKind::AllToAllPairwise && inplace &&
                      !config.input_split_bytes.empty());
+  // In-place AllReduce phase-1: gate the sender's Put on the receiver's
+  // shard snapshot (see lower_to_tiled).
+  bool reduce_snap_hs = (config.kind == CollKind::AllReduceRing && inplace);
   return lower_algo(algo, config.tile_bytes, inplace, stage_puts,
-                    config.signal_group_tiles);
+                    config.signal_group_tiles, reduce_snap_hs);
 }
 
 }  // namespace CCL

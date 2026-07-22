@@ -197,7 +197,8 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config) {
       uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
                                         offset, recv_peer, -1, {}, pair_id);
       uint32_t reduce_op = builder.add_op(AlgoOpKind::RecvReduce, recv_bytes,
-                                          offset, offset, -1, -1, {recv_op});
+                                          offset, offset, recv_peer, -1,
+                                          {recv_op}, pair_id);
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
     }
   }
