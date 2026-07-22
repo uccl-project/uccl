@@ -469,6 +469,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+      UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
+             rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);
       // On Nvidia consumer GPUs the PCIe BAR1 window is
       // typically 256 MiB.  Set UK_BAR1_WINDOW_MB to enable the
       // fallback to IPC for remote accesses exceeding that window.

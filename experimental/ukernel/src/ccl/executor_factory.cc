@@ -106,9 +106,14 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
         if (peer_gpu >= 0) {
           UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] enable P2P to gpu=%d", rank, peer_gpu);
           gpuError_t err = gpuDeviceEnablePeerAccess(peer_gpu, 0);
-          if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
+          if (err == gpuErrorPeerAccessAlreadyEnabled) {
+            // Tolerated — but clear the sticky per-thread error so later
+            // CUDA users on this thread (e.g. torch) don't trip over it.
+            (void)gpuGetLastError();
+          } else if (err != gpuSuccess) {
             std::cerr << "[peer_setup r" << rank << "] gpuDeviceEnablePeerAccess failed gpu="
                       << peer_gpu << " err=" << err << std::endl;
+          }
         }
       }
     }

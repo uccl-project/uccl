@@ -3,6 +3,7 @@
 #include "../../device/task.h"
 #include "../../device/worker.h"
 #include "gpu_rt.h"
+#include "util/uk_debug.h"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -231,17 +232,27 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
     uint32_t fid;
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
-      if (pending_total_ + recs.size() >= capacity()) break;
+      if (pending_total_ + recs.size() >= capacity()) {
+        UK_DBG(UK_DBG_LVL_EXEC, "[dev-enq] capacity full %zu/%zu",
+               pending_total_ + recs.size(), capacity());
+        break;
+      }
       fid = next_fifo_ % cfg_.max_fifos;
       next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
     }
 
     auto task = Device::TaskManager::instance().create_task(
         args, tt, Device::DataType::Fp32, 0);
-    if (task.type_u8() == 0) break;
+    if (task.type_u8() == 0) {
+      UK_DBG(UK_DBG_LVL_EXEC, "[dev-enq] create_task failed (pool empty?)");
+      break;
+    }
 
     uint64_t tid = worker_pool_->enqueue(task, fid);
-    if (tid == Device::WorkerPool::kInvalidTaskId) break;
+    if (tid == Device::WorkerPool::kInvalidTaskId) {
+      UK_DBG(UK_DBG_LVL_EXEC, "[dev-enq] worker enqueue failed fifo=%u", fid);
+      break;
+    }
     recs.push_back({fid, tid, task.args_index(), be_idx[accepted]});
     ++accepted;
   }
@@ -300,6 +311,26 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
       }
     }
     pending_total_ -= count;
+
+    // Stall forensics: pending work but nothing drains — dump fifo
+    // head/tail vs the pending queue front to tell "kernel stuck on a
+    // task" from "host accounting bug".
+    static int stall_iters = 0;
+    if (count == 0 && pending_total_ > 0 && (++stall_iters % 5000) == 0) {
+      for (uint32_t fid = 0; fid < cfg_.max_fifos; ++fid) {
+        if (pending_by_fifo_[fid].empty()) continue;
+        auto ht = worker_pool_->fifo_head_tail(fid);
+        std::fprintf(stderr,
+                     "[dev-stall] fifo%u pending=%zu front_tid=%llu "
+                     "head=%llu tail=%llu\n",
+                     fid, pending_by_fifo_[fid].size(),
+                     (unsigned long long)pending_by_fifo_[fid].front().task_id,
+                     (unsigned long long)ht.first,
+                     (unsigned long long)ht.second);
+      }
+    } else if (count > 0) {
+      stall_iters = 0;
+    }
   }
   Device::TaskManager::instance().free_task_args_batch(args_buf, count);
   if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(prev_device));

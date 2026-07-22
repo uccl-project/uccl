@@ -867,7 +867,14 @@ bool Communicator::send_put_async_with_rid(
   if (!adapter) return false;
 
   MR local_mr = get_mr(src_buf);
-  if (src_off > local_mr.length || bytes > local_mr.length - src_off) return false;
+  if (src_off > local_mr.length || bytes > local_mr.length - src_off) {
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[comm-send r%d] REJECT local bounds: src_buf=%u src_off=%zu "
+           "bytes=%zu mr.length=%llu",
+           global_rank_, src_buf, src_off, bytes,
+           (unsigned long long)local_mr.length);
+    return false;
+  }
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src_off);
 
@@ -903,8 +910,13 @@ bool Communicator::send_put_async_with_rid(
   int remote_gpu = -1;
   if (dst_buf != 0) {
     if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
-                                        &remote_ptr, &remote_gpu))
+                                        &remote_ptr, &remote_gpu)) {
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[comm-send r%d] REJECT remote resolve: peer=%d dst_buf=%u "
+             "dst_off=%zu bytes=%zu",
+             global_rank_, peer, dst_buf, dst_off, bytes);
       return false;
+    }
   }
   return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf,
                                  bytes, rid);
@@ -948,8 +960,13 @@ bool Communicator::send_put_signal_async_with_rid(
   int remote_gpu = -1;
   if (dst_buf != 0) {
     if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
-                                        &remote_ptr, &remote_gpu))
+                                        &remote_ptr, &remote_gpu)) {
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[comm-send r%d] REJECT fused remote resolve: peer=%d dst_buf=%u "
+             "dst_off=%zu bytes=%zu",
+             global_rank_, peer, dst_buf, dst_off, bytes);
       return false;
+    }
   }
   return adapter->send_put_signal_async(peer, local_ptr, src_buf, remote_ptr,
                                         dst_buf, bytes, tag, rid) != 0;
