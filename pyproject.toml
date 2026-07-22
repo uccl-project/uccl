@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "uccl"
 version = "0.1.1"
 description = "UCCL: Ultra and Unified CCL"
+readme = { file = "README.md", content-type = "text/markdown" }
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = ["intervaltree"]
