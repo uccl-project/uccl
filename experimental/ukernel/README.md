@@ -97,8 +97,10 @@ Benchmarks live in [benchmarks/](benchmarks/) — see its README.
 with nanobind over the same `transport + ccl + device` stack:
 
 - `ukernel_ccl` — collectives behind a persistent `ProcessGroup`:
-  `allreduce` (ring), `alltoall` (equal-split, in place), `alltoallv`
-  (variable split), `barrier`. Peer setup and memory registration
+  `allreduce` (ring), `alltoall` (equal-split, in place), `barrier`,
+  plus an async API (`allreduce_submit` / `alltoall_submit` → handle,
+  with `poll` / `wait` / `status` / `error_message` / `release`) for
+  compute/communication overlap. Peer setup and memory registration
   (`prepare()`) are cached per collective shape + pointer set, so
   steady-state calls are submit + wait. Optional
   `signal_group_tiles` aggregates one signal per G tiles (2–4 is usually
