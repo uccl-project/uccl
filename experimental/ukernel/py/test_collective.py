@@ -37,23 +37,19 @@ def main() -> None:
     dist.alltoall(a2a, group=pg)
     print(f"[rank {rank}] alltoall ok: {a2a[:8]}")
 
-    # variable-split alltoallv
-    base = 4
-    input_splits = [base + ((rank + peer) % 2) for peer in range(world)]
-    output_splits = [base + ((src + rank) % 2) for src in range(world)]
-    send_v = torch.empty(sum(input_splits), device="cuda", dtype=torch.float32)
-    cursor = 0
-    for dst, split in enumerate(input_splits):
-        send_v[cursor: cursor + split] = rank * 10000 + dst * 100
-        cursor += split
-    recv_v = torch.empty(sum(output_splits), device="cuda", dtype=torch.float32)
-    dist.alltoallv(
-        recv_v, send_v,
-        output_split_sizes=output_splits,
-        input_split_sizes=input_splits,
-        group=pg,
-    )
-    print(f"[rank {rank}] alltoallv ok: {recv_v[:8]}")
+    # async API smoke: submit / poll / wait / status / release
+    x2 = torch.full((256 * world,), float(rank + 1),
+                    device="cuda", dtype=torch.float32)
+    h = pg.allreduce_submit(x2)
+    while not pg.poll(h):
+        pass
+    assert pg.wait(h), f"[rank {rank}] async allreduce failed"
+    assert pg.status(h) == dist.CollectiveOpStatus.Completed
+    pg.release(h)
+    expected_sum = float(world * (world + 1) // 2)
+    assert bool((x2 == expected_sum).all().item()), (
+        f"[rank {rank}] async allreduce mismatch: {x2[:8]} != {expected_sum}")
+    print(f"[rank {rank}] async allreduce ok: {x2[:8]}")
 
     dist.barrier(group=pg)
     if rank == 0:

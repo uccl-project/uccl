@@ -1,11 +1,13 @@
 #include "../src/ccl/coll_config.h"
 #include "../src/ccl/coll_types.h"
 #include "../src/ccl/executor.h"
+#include <c10/cuda/CUDAStream.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/extension.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -77,29 +79,6 @@ void validate_arithmetic_dtype(torch::ScalarType dtype, char const* what) {
       " supports int8/int32/int64/fp16/fp32/fp64/bf16");
 }
 
-std::vector<size_t> split_bytes_from_elements(
-    std::vector<int64_t> const& splits, int world_size,
-    size_t elem_size, size_t total_elems, char const* which) {
-  if (splits.size() != static_cast<size_t>(world_size)) {
-    throw std::invalid_argument(std::string(which) +
-                                " count must equal world_size");
-  }
-  std::vector<size_t> out;
-  out.reserve(splits.size());
-  size_t sum = 0;
-  for (auto s : splits) {
-    if (s < 0)
-      throw std::invalid_argument(std::string(which) + " must be non-negative");
-    size_t bytes = static_cast<size_t>(s) * elem_size;
-    sum += static_cast<size_t>(s);
-    out.push_back(bytes);
-  }
-  if (sum != total_elems)
-    throw std::invalid_argument(std::string("sum(") + which +
-                                ") must equal tensor numel");
-  return out;
-}
-
 // prepare() does peer setup, MR (re)registration and buffer resolution —
 // expensive, and only needed once per (shape, pointer) combination.
 std::string prepare_key(CollectiveConfig const& cfg, void const* input,
@@ -125,6 +104,13 @@ std::string prepare_key(CollectiveConfig const& cfg, void const* input,
 
 }  // namespace
 
+// The async methods mirror the SprayExecutor application API 1:1
+// (submit -> handle, poll / wait / status / error_message, release);
+// the sync collectives are thin submit+wait+release convenience
+// wrappers. Contract for async use: the tensor must stay alive and
+// unmodified until wait() observes completion, and every handle must be
+// released exactly once (releasing a running handle raises, mirroring
+// the C++ logic_error).
 class ProcessGroup {
  public:
   ProcessGroup(int rank, int world_size, int gpu_id,
@@ -153,6 +139,11 @@ class ProcessGroup {
     cfg.blocks_per_worker = blocks_per_worker;
     cfg.smem_size = smem_size;
     cfg.max_device_fifos = 1;
+    // Torch coexistence: let the persistent worker kernels exit after
+    // 1ms of fifo idleness (relaunched on the next enqueue), so torch's
+    // device-wide syncs (torch.cuda.synchronize(), .item(), D2H) can
+    // pass between collectives. Bursts keep the kernel resident.
+    cfg.device_idle_exit_us = 1000;
     {
       // Exchanger connect + peer meta exchange can block for seconds;
       // let Python handle signals meanwhile.
@@ -165,18 +156,18 @@ class ProcessGroup {
   int world_size() const { return world_size_; }
   int gpu_id() const { return gpu_id_; }
 
-  void allreduce(nb::handle tensor_handle,
-                 uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
-                 size_t tile_bytes = 64ull << 10,
-                 uint32_t signal_group_tiles = 1) {
-    auto tensor = tensor_from_python(tensor_handle, "tensor");
-    allreduce_internal(tensor, reduction, tile_bytes, signal_group_tiles);
+  uint64_t allreduce_submit(
+      nb::handle tensor_handle,
+      uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
+      size_t tile_bytes = 64ull << 10, uint32_t signal_group_tiles = 1) {
+    return allreduce_submit_tensor(
+        tensor_from_python(tensor_handle, "tensor"), reduction, tile_bytes,
+        signal_group_tiles);
   }
 
-  void alltoall(nb::handle tensor_handle,
-                size_t tile_bytes = 64ull << 10,
-                uint32_t signal_group_tiles = 1) {
-    std::lock_guard<std::mutex> lock(mu_);
+  uint64_t alltoall_submit(nb::handle tensor_handle,
+                           size_t tile_bytes = 64ull << 10,
+                           uint32_t signal_group_tiles = 1) {
     auto tensor = tensor_from_python(tensor_handle, "tensor");
     require_cuda_contiguous(tensor, "tensor");
     validate_arithmetic_dtype(tensor.scalar_type(), "alltoall");
@@ -201,56 +192,33 @@ class ProcessGroup {
     cfg.signal_group_tiles = signal_group_tiles;
 
     void* ptr = flat.data_ptr();
-    submit_and_wait(cfg, ptr, ptr);
+    return submit_collective(cfg, ptr, ptr);
   }
 
-  void alltoallv(nb::handle output_handle, nb::handle input_handle,
-                 std::vector<int64_t> output_split_sizes,
-                 std::vector<int64_t> input_split_sizes,
+  bool poll(uint64_t h) { return executor_->poll(h); }
+
+  bool wait(uint64_t h, uint64_t timeout_ms = 0) {
+    return wait_collective(h, timeout_ms);
+  }
+
+  CollectiveOpStatus status(uint64_t h) { return executor_->status(h); }
+  std::string error_message(uint64_t h) { return executor_->error_message(h); }
+  void release(uint64_t h) { executor_->release(h); }
+
+  void allreduce(nb::handle tensor_handle,
+                 uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
                  size_t tile_bytes = 64ull << 10,
                  uint32_t signal_group_tiles = 1) {
-    std::lock_guard<std::mutex> lock(mu_);
-    auto output = tensor_from_python(output_handle, "output");
-    auto input = tensor_from_python(input_handle, "input");
-    require_cuda_contiguous(output, "output");
-    require_cuda_contiguous(input, "input");
-    validate_arithmetic_dtype(output.scalar_type(), "alltoallv");
-    validate_arithmetic_dtype(input.scalar_type(), "alltoallv");
-    if (output.scalar_type() != input.scalar_type())
-      throw std::invalid_argument("output and input must have the same dtype");
+    wait_and_release(
+        allreduce_submit(tensor_handle, reduction, tile_bytes,
+                         signal_group_tiles));
+  }
 
-    auto out_flat = output.view({-1});
-    auto in_flat = input.view({-1});
-    ScalarType dtype = to_scalar_type(output.scalar_type());
-    size_t elem_bytes = static_cast<size_t>(out_flat.element_size());
-    size_t in_bytes = static_cast<size_t>(in_flat.numel()) * elem_bytes;
-    size_t out_bytes = static_cast<size_t>(out_flat.numel()) * elem_bytes;
-
-    auto in_split_bytes = split_bytes_from_elements(
-        input_split_sizes, world_size_, elem_bytes,
-        static_cast<size_t>(in_flat.numel()), "input_split_sizes");
-    auto out_split_bytes = split_bytes_from_elements(
-        output_split_sizes, world_size_, elem_bytes,
-        static_cast<size_t>(out_flat.numel()), "output_split_sizes");
-
-    size_t r = static_cast<size_t>(rank_);
-    if (in_split_bytes[r] != out_split_bytes[r])
-      throw std::invalid_argument(
-          "input_split_sizes[rank] must equal output_split_sizes[rank]");
-
-    CollectiveConfig cfg;
-    cfg.nranks = world_size_;
-    cfg.rank = rank_;
-    cfg.input_bytes = in_bytes;
-    cfg.output_bytes = out_bytes;
-    cfg.input_split_bytes = std::move(in_split_bytes);
-    cfg.output_split_bytes = std::move(out_split_bytes);
-    cfg.tile_bytes = tile_bytes;
-    cfg.kind = CollKind::AllToAllPairwise;
-    cfg.dtype = dtype;
-    cfg.signal_group_tiles = signal_group_tiles;
-
-    submit_and_wait(cfg, in_flat.data_ptr(), out_flat.data_ptr());
+  void alltoall(nb::handle tensor_handle,
+                size_t tile_bytes = 64ull << 10,
+                uint32_t signal_group_tiles = 1) {
+    wait_and_release(alltoall_submit(tensor_handle, tile_bytes,
+                                     signal_group_tiles));
   }
 
   void barrier() {
@@ -261,11 +229,11 @@ class ProcessGroup {
               .dtype(torch::kFloat32)
               .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
     }
-    allreduce_internal(barrier_tensor_,
-                       static_cast<uint32_t>(ReductionKind::Sum),
-                       static_cast<size_t>(barrier_tensor_.numel() *
-                                           barrier_tensor_.element_size()),
-                       1);
+    wait_and_release(allreduce_submit_tensor(
+        barrier_tensor_, static_cast<uint32_t>(ReductionKind::Sum),
+        static_cast<size_t>(barrier_tensor_.numel() *
+                            barrier_tensor_.element_size()),
+        1));
   }
 
  private:
@@ -296,40 +264,9 @@ class ProcessGroup {
     prepared_keys_.insert(std::move(key));
   }
 
-  void submit_and_wait(CollectiveConfig const& cfg, void* input,
-                       void* output) {
-    ensure_prepared(cfg, input, output);
-    auto h = executor_->submit(cfg, input, output);
-    // Wait in slices: release the GIL and check for pending Python
-    // signals (Ctrl+C → KeyboardInterrupt) between slices, so a long
-    // collective stays interruptible instead of pinning the process.
-    for (;;) {
-      bool ok;
-      {
-        nb::gil_scoped_release release;
-        ok = executor_->wait(h, std::chrono::milliseconds(20));
-      }
-      if (PyErr_CheckSignals() != 0) {
-        executor_->release(h);
-        throw nb::python_error();
-      }
-      auto st = executor_->status(h);
-      if (st == CollectiveOpStatus::Running) continue;
-      if (st != CollectiveOpStatus::Completed || !ok) {
-        std::string msg = executor_->error_message(h);
-        executor_->release(h);
-        throw std::runtime_error(
-            "ukernel collective failed" +
-            (msg.empty() ? std::string{} : std::string(": ") + msg));
-      }
-      break;
-    }
-    executor_->release(h);
-  }
-
-  void allreduce_internal(torch::Tensor tensor, uint32_t reduction,
-                          size_t tile_bytes, uint32_t signal_group_tiles) {
-    std::lock_guard<std::mutex> lock(mu_);
+  uint64_t allreduce_submit_tensor(torch::Tensor const& tensor,
+                                   uint32_t reduction, size_t tile_bytes,
+                                   uint32_t signal_group_tiles) {
     require_cuda_contiguous(tensor, "tensor");
     validate_arithmetic_dtype(tensor.scalar_type(), "allreduce");
 
@@ -354,7 +291,71 @@ class ProcessGroup {
     cfg.signal_group_tiles = signal_group_tiles;
 
     void* ptr = flat.data_ptr();
-    submit_and_wait(cfg, ptr, ptr);
+    return submit_collective(cfg, ptr, ptr);
+  }
+
+  // prepare (cached) + torch stream fence + executor submit. mu_ covers
+  // only this section: SprayExecutor::submit reallocs its internal
+  // scratch outside its own locks, while wait/poll/status are
+  // documented concurrent-safe — waits are deliberately NOT locked so
+  // in-flight collectives can overlap.
+  uint64_t submit_collective(CollectiveConfig const& cfg, void* input,
+                             void* output) {
+    std::lock_guard<std::mutex> lock(mu_);
+    ensure_prepared(cfg, input, output);
+    // Inherit torch's stream ordering: any kernels the user launched on
+    // the current stream (e.g. the in-place op producing this tensor)
+    // must finish before our device workers read the buffers. A host
+    // sync is the only correct fence with persistent worker kernels —
+    // their memory accesses are not stream-ordered with new stream
+    // waits.
+    cudaError_t serr = cudaStreamSynchronize(
+        c10::cuda::getCurrentCUDAStream().stream());
+    if (serr != cudaSuccess)
+      throw std::runtime_error(
+          std::string("stream sync before collective failed: ") +
+          cudaGetErrorString(serr));
+    return executor_->submit(cfg, input, output);
+  }
+
+  // Wait in 20ms slices: release the GIL and check for pending Python
+  // signals (Ctrl+C → KeyboardInterrupt) between slices, so a long
+  // collective stays interruptible instead of pinning the process.
+  // Mirrors SprayExecutor::wait semantics: returns false only on
+  // Failed; with timeout_ms > 0 it may return true while still Running
+  // (a timeout is not an error — use poll() to test completion). On a
+  // pending signal the handle is NOT released: a Running run cannot be
+  // released (the C++ release throws logic_error), and propagating the
+  // interrupt takes priority.
+  bool wait_collective(uint64_t h, uint64_t timeout_ms) {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    bool const use_deadline = timeout_ms > 0;
+    for (;;) {
+      {
+        nb::gil_scoped_release release;
+        executor_->wait(h, std::chrono::milliseconds(20));
+      }
+      if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      auto st = executor_->status(h);
+      if (st != CollectiveOpStatus::Running)
+        return st != CollectiveOpStatus::Failed;
+      if (use_deadline && std::chrono::steady_clock::now() >= deadline)
+        return true;
+    }
+  }
+
+  void wait_and_release(uint64_t h) {
+    wait_collective(h, 0);
+    auto st = executor_->status(h);
+    if (st != CollectiveOpStatus::Completed) {
+      std::string msg = executor_->error_message(h);
+      executor_->release(h);
+      throw std::runtime_error(
+          "ukernel collective failed" +
+          (msg.empty() ? std::string{} : std::string(": ") + msg));
+    }
+    executor_->release(h);
   }
 
   static constexpr size_t kMaxPrepared = 64;
@@ -375,6 +376,13 @@ class ProcessGroup {
 NB_MODULE(TORCH_EXTENSION_NAME, m) {
   using UKernel::CCL::Python::ProcessGroup;
 
+  nb::enum_<UKernel::CCL::CollectiveOpStatus>(m, "CollectiveOpStatus")
+      .value("Queued", UKernel::CCL::CollectiveOpStatus::Queued)
+      .value("Running", UKernel::CCL::CollectiveOpStatus::Running)
+      .value("Completed", UKernel::CCL::CollectiveOpStatus::Completed)
+      .value("Failed", UKernel::CCL::CollectiveOpStatus::Failed)
+      .export_values();
+
   nb::class_<ProcessGroup>(m, "ProcessGroup")
       .def(nb::init<int, int, int, std::string, int, int, int, size_t>(),
            nb::arg("rank"), nb::arg("world_size"), nb::arg("gpu_id"),
@@ -386,6 +394,42 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_prop_ro("rank", &ProcessGroup::rank)
       .def_prop_ro("world_size", &ProcessGroup::world_size)
       .def_prop_ro("gpu_id", &ProcessGroup::gpu_id)
+      .def("allreduce_submit",
+           [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+              size_t tile_bytes, uint32_t signal_group_tiles) {
+             return self.allreduce_submit(tensor, reduction, tile_bytes,
+                                          signal_group_tiles);
+           },
+           nb::arg("tensor"),
+           nb::arg("reduction") = static_cast<uint32_t>(
+               UKernel::CCL::ReductionKind::Sum),
+           nb::arg("tile_bytes") = 64ull << 10,
+           nb::arg("signal_group_tiles") = 1)
+      .def("alltoall_submit",
+           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+              uint32_t signal_group_tiles) {
+             return self.alltoall_submit(tensor, tile_bytes,
+                                         signal_group_tiles);
+           },
+           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+           nb::arg("signal_group_tiles") = 1)
+      .def("poll", [](ProcessGroup& self, uint64_t h) { return self.poll(h); },
+           nb::arg("handle"))
+      .def("wait",
+           [](ProcessGroup& self, uint64_t h, uint64_t timeout_ms) {
+             return self.wait(h, timeout_ms);
+           },
+           nb::arg("handle"), nb::arg("timeout_ms") = 0)
+      .def("status",
+           [](ProcessGroup& self, uint64_t h) { return self.status(h); },
+           nb::arg("handle"))
+      .def("error_message",
+           [](ProcessGroup& self, uint64_t h) {
+             return self.error_message(h);
+           },
+           nb::arg("handle"))
+      .def("release", [](ProcessGroup& self, uint64_t h) { self.release(h); },
+           nb::arg("handle"))
       .def("allreduce",
            [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
               size_t tile_bytes, uint32_t signal_group_tiles) {
@@ -403,20 +447,6 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
              self.alltoall(tensor, tile_bytes, signal_group_tiles);
            },
            nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("signal_group_tiles") = 1)
-      .def("alltoallv",
-           [](ProcessGroup& self, nb::handle output, nb::handle input,
-              std::vector<int64_t> output_split_sizes,
-              std::vector<int64_t> input_split_sizes, size_t tile_bytes,
-              uint32_t signal_group_tiles) {
-             self.alltoallv(output, input,
-                            std::move(output_split_sizes),
-                            std::move(input_split_sizes), tile_bytes,
-                            signal_group_tiles);
-           },
-           nb::arg("output"), nb::arg("input"),
-           nb::arg("output_split_sizes"), nb::arg("input_split_sizes"),
-           nb::arg("tile_bytes") = 64ull << 10,
            nb::arg("signal_group_tiles") = 1)
       .def("barrier", [](ProcessGroup& self) { self.barrier(); });
 }

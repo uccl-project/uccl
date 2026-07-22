@@ -1,9 +1,16 @@
-"""UKernel CCL — collective communication (allreduce / alltoall / alltoallv).
+"""UKernel CCL — collective communication (allreduce / alltoall).
 
 Python wrapper over the SprayExecutor-based CCL engine. Collectives run
 **in place** on CUDA tensors, which must be contiguous (call
 ``tensor.contiguous()`` yourself first if needed — the engine cannot
 silently copy back into a non-contiguous view).
+
+Async API (mirrors the C++ SprayExecutor interface): ``allreduce_submit``
+/ ``alltoall_submit`` return a handle; ``poll`` / ``wait`` / ``status`` /
+``error_message`` inspect it; ``release`` frees it. Contract: the tensor
+must stay alive and unmodified until ``wait`` observes completion, and
+every handle must be released exactly once (releasing a running handle
+raises).
 """
 
 import os
@@ -12,7 +19,20 @@ from typing import Optional
 
 import torch
 
-from ._C import ProcessGroup as _ProcessGroup
+from ._C import CollectiveOpStatus, ProcessGroup as _ProcessGroup
+
+__all__ = [
+    "CollectiveOpStatus",
+    "ProcessGroup",
+    "ReduceOp",
+    "allreduce",
+    "alltoall",
+    "barrier",
+    "get_rank",
+    "get_world_size",
+    "init_process_group",
+    "is_initialized",
+]
 
 
 class ReduceOp(IntEnum):
@@ -82,6 +102,50 @@ class ProcessGroup:
     def gpu_id(self) -> int:
         return self._impl.gpu_id
 
+    # Async API — mirrors the C++ SprayExecutor interface. The tensor
+    # must stay alive and unmodified until wait() observes completion;
+    # every handle must be released exactly once.
+
+    def allreduce_submit(self, tensor, op=ReduceOp.SUM, tile_bytes=64 << 10,
+                         signal_group_tiles=1):
+        """Submit an in-place allreduce, return a handle (non-blocking)."""
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "allreduce")
+        return self._impl.allreduce_submit(
+            tensor, int(op), tile_bytes, signal_group_tiles)
+
+    def alltoall_submit(self, tensor, tile_bytes=64 << 10,
+                        signal_group_tiles=1):
+        """Submit an in-place equal-split alltoall, return a handle."""
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "alltoall")
+        return self._impl.alltoall_submit(tensor, tile_bytes,
+                                          signal_group_tiles)
+
+    def poll(self, handle) -> bool:
+        """True once the collective reached a terminal state."""
+        return self._impl.poll(handle)
+
+    def wait(self, handle, timeout_ms: int = 0) -> bool:
+        """Block until completion (timeout_ms=0 waits forever).
+
+        Returns False only on failure; may return True while still
+        running if the timeout expired — use poll() to test completion.
+        """
+        return self._impl.wait(handle, timeout_ms)
+
+    def status(self, handle) -> CollectiveOpStatus:
+        return self._impl.status(handle)
+
+    def error_message(self, handle) -> str:
+        return self._impl.error_message(handle)
+
+    def release(self, handle) -> None:
+        """Free a completed/failed handle (raises if still running)."""
+        self._impl.release(handle)
+
+    # Sync convenience wrappers (submit + wait + release).
+
     def allreduce(self, tensor, op=ReduceOp.SUM, tile_bytes=64 << 10,
                   signal_group_tiles=1):
         """In-place allreduce over the ring algorithm.
@@ -98,17 +162,6 @@ class ProcessGroup:
         _cuda_check(tensor, "tensor")
         _validate_dtype(tensor, "alltoall")
         self._impl.alltoall(tensor, tile_bytes, signal_group_tiles)
-
-    def alltoallv(self, output, input, output_split_sizes, input_split_sizes,
-                  tile_bytes=64 << 10, signal_group_tiles=1):
-        """Variable-split alltoall (out of place)."""
-        _cuda_check(output, "output")
-        _cuda_check(input, "input")
-        _validate_dtype(output, "alltoallv")
-        self._impl.alltoallv(
-            output, input,
-            list(output_split_sizes), list(input_split_sizes),
-            tile_bytes, signal_group_tiles)
 
     def barrier(self):
         self._impl.barrier()
@@ -187,12 +240,3 @@ def alltoall(tensor, group=None, tile_bytes=64 << 10, signal_group_tiles=1):
         raise RuntimeError("process group not initialized")
     pg.alltoall(tensor, tile_bytes=tile_bytes,
                 signal_group_tiles=signal_group_tiles)
-
-
-def alltoallv(output, input, output_split_sizes, input_split_sizes, group=None,
-              tile_bytes=64 << 10, signal_group_tiles=1):
-    pg = _DEFAULT_GROUP if group is None else group
-    if pg is None:
-        raise RuntimeError("process group not initialized")
-    pg.alltoallv(output, input, output_split_sizes, input_split_sizes,
-                 tile_bytes=tile_bytes, signal_group_tiles=signal_group_tiles)
