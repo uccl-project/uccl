@@ -117,7 +117,6 @@ def main() -> None:
             print(f"{label:>12s} | {ar_ms:>16.3f} | {nc_ar_ms:>14.3f} | "
                   f"{a2a_ms:>17.3f} | {nc_a2a_ms:>14.3f}")
 
-    dist.destroy_process_group()
     nccl_dist.destroy_process_group()
 
 

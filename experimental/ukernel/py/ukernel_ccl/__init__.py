@@ -189,7 +189,9 @@ def init_process_group(
     world_size = int(os.getenv("WORLD_SIZE", "1")) if world_size is None else world_size
     gpu_id = int(os.getenv("LOCAL_RANK", str(rank))) if gpu_id is None else gpu_id
     exchanger_ip = os.getenv("MASTER_ADDR", "127.0.0.1") if exchanger_ip is None else exchanger_ip
-    exchanger_port = int(os.getenv("MASTER_PORT", "16998")) if exchanger_port is None else exchanger_port
+    if exchanger_port is None:
+        p = os.getenv("EXCHANGER_PORT")
+        exchanger_port = int(p) if p else 16998
     _DEFAULT_GROUP = ProcessGroup(
         rank=rank, world_size=world_size, gpu_id=gpu_id,
         exchanger_ip=exchanger_ip, exchanger_port=exchanger_port,
