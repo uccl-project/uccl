@@ -1,9 +1,10 @@
-"""Bidirectional P2P data transfer using only send_put_async + poll."""
+"""Bidirectional P2P data transfer via send_put_async + signal + wait_signal_async."""
 
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import time
 import torch
 import ukernel_p2p as p2p
 
@@ -18,19 +19,23 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def poll_rid(comm, rid):
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        if rid in comm.poll([rid]):
+            return
+    raise RuntimeError(f"timeout waiting for rid={rid}")
+
+
 def run_rank() -> bool:
     rank = env_int("RANK", 0)
     peer = 1 - rank
-    world = 2
     gpu_id = env_int("LOCAL_RANK", 0)
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
 
     comm = p2p.Communicator(
-        gpu_id=gpu_id,
-        rank=rank,
-        world_size=world,
-        exchanger_ip="127.0.0.1",
-        exchanger_port=exchanger_port,
+        gpu_id=gpu_id, rank=rank, world_size=2,
+        exchanger_ip="127.0.0.1", exchanger_port=exchanger_port,
         transport=os.getenv("UK_P2P_TRANSPORT", "auto"),
     )
 
@@ -46,16 +51,15 @@ def run_rank() -> bool:
             raise RuntimeError(f"accept_peer({peer}) failed")
 
     selected = comm.peer_transport(peer)
-    print(f"[rank {rank}] connected to peer {peer}; transport={selected}", flush=True)
+    print(f"[rank {rank}] transport={selected}", flush=True)
 
     if selected == "tcp":
-        raise RuntimeError(
-            "TCP transport requires signal/wait and is not supported by this test"
-        )
+        raise RuntimeError("TCP not supported by this test")
 
     # Each rank fills its send buffer with a distinct pattern.
     start_val = 0 if rank == 0 else N
-    send = torch.arange(start_val, start_val + N, device="cuda", dtype=torch.float32)
+    send = torch.arange(start_val, start_val + N, device="cuda",
+                        dtype=torch.float32)
     recv = torch.empty(N, device="cuda", dtype=torch.float32)
 
     if not comm.reg_rdma(SEND_BUF_ID, send, publish=False):
@@ -66,7 +70,7 @@ def run_rank() -> bool:
         if not comm.reg_ipc(RECV_BUF_ID, recv, publish=True):
             raise RuntimeError("reg_ipc(recv) failed")
 
-    # Resolve the peer's receive buffer before issuing the PUT.
+    # Resolve the peer's receive buffer.
     if selected == "ipc":
         if not comm.wait_ipc(peer, RECV_BUF_ID):
             raise RuntimeError("wait_ipc(peer recv) failed")
@@ -74,34 +78,31 @@ def run_rank() -> bool:
         if not comm.wait_mr(peer, RECV_BUF_ID):
             raise RuntimeError("wait_mr(peer recv) failed")
 
-    comm.barrier()
+    # Tags: each direction uses a distinct tag.
+    my_tag = 10 + rank      # tag I send to signal my put is done
+    peer_tag = 10 + peer    # tag I wait for from peer
 
-    # Issue one-sided PUT into peer's receive buffer.
-    if rank == 0:
-        rid = comm.send_put_async(
-            peer, local_buf=SEND_BUF_ID, remote_buf=RECV_BUF_ID, remote_off=0
-        )
-        if rid == 0:
-            raise RuntimeError("send_put_async returned 0")
-        while rid not in comm.poll([rid]):
-            pass
-        comm.barrier()
-    else:
-        comm.barrier()
-        rid = comm.send_put_async(
-            peer, local_buf=SEND_BUF_ID, remote_buf=RECV_BUF_ID, remote_off=0
-        )
-        if rid == 0:
-            raise RuntimeError("send_put_async returned 0")
-        while rid not in comm.poll([rid]):
-            pass
-        comm.barrier()
+    # Issue PUT into peer's recv buffer.
+    put_rid = comm.send_put_async(peer, local_buf=SEND_BUF_ID,
+                                   remote_buf=RECV_BUF_ID)
+    if put_rid == 0:
+        raise RuntimeError("send_put_async returned 0")
+    poll_rid(comm, put_rid)
 
-    # Ensure GPU writes are visible before validating on the CPU.
+    # Tell peer my data is ready.
+    comm.signal(peer, my_tag)
+
+    # Wait for peer's signal.
+    wait_rid = comm.wait_signal_async(peer, peer_tag)
+    if wait_rid == 0:
+        raise RuntimeError("wait_signal_async returned 0")
+    poll_rid(comm, wait_rid)
+
     torch.cuda.synchronize()
 
     expected_start = 0 if peer == 0 else N
-    expected = torch.arange(expected_start, expected_start + N, dtype=torch.float32)
+    expected = torch.arange(expected_start, expected_start + N,
+                            dtype=torch.float32)
     recv_cpu = recv.cpu()
     if not torch.equal(recv_cpu, expected):
         print(f"[rank {rank}] recv mismatch", flush=True)
@@ -109,7 +110,6 @@ def run_rank() -> bool:
         print(f"[rank {rank}] actual:   {recv_cpu[:16]}...", flush=True)
         return False
 
-    # Cleanup.
     if selected == "ipc":
         comm.unreg_ipc(RECV_BUF_ID)
     comm.unreg_rdma(SEND_BUF_ID)
