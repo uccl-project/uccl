@@ -37,7 +37,9 @@ int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role != "server" && role != "client") {
-    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU] [--kind=allreduce|alltoall]\n");
+    std::fprintf(stderr,
+                 "Usage: --role=server|client [--gpu GPU] "
+                 "[--kind=allreduce|alltoall]\n");
     return 1;
   }
   int rank = (role == "server") ? 0 : 1;
@@ -58,9 +60,12 @@ int main(int argc, char** argv) {
   GPU_RT_CHECK(gpuSetDevice(gpu));
 
   SprayExecutorConfig cfg;
-  cfg.gpu_id = gpu; cfg.rank = rank; cfg.world_size = 2;
+  cfg.gpu_id = gpu;
+  cfg.rank = rank;
+  cfg.world_size = 2;
   cfg.exchanger_ip = exchanger_ip;
-  cfg.exchanger_port = exchanger_port; cfg.local_id = gpu;
+  cfg.exchanger_port = exchanger_port;
+  cfg.local_id = gpu;
   cfg.max_device_fifos = dev_fifos;
   cfg.blocks_per_worker = (size_t)dev_blocks;
   auto ex = SprayExecutor::create(cfg);
@@ -74,7 +79,8 @@ int main(int argc, char** argv) {
     GPU_RT_CHECK(gpuStreamDestroy(s));
   };
 
-  size_t sizes[] = {262144, 1048576, 4194304, 16777216, 67108864, 268435456, 536870912};
+  size_t sizes[] = {262144,   1048576,   4194304,  16777216,
+                    67108864, 268435456, 536870912};
   constexpr int kSizes = sizeof(sizes) / sizeof(sizes[0]);
   constexpr int kWarmup = 5;
   constexpr int kIters = 20;
@@ -91,18 +97,24 @@ int main(int argc, char** argv) {
   // Prepare connections and buffer resources.
   {
     CollectiveConfig prep;
-    prep.nranks = 2; prep.rank = rank;
-    prep.input_bytes = max_bytes; prep.output_bytes = max_bytes;
-    prep.tile_bytes = 65536; prep.kind = coll_kind;
+    prep.nranks = 2;
+    prep.rank = rank;
+    prep.input_bytes = max_bytes;
+    prep.output_bytes = max_bytes;
+    prep.tile_bytes = 65536;
+    prep.kind = coll_kind;
     ex->prepare(prep, d_in, d_out);
   }
 
   // Handshake: one warm AllReduce to establish peer paths on both sides.
   {
     CollectiveConfig hs;
-    hs.nranks = 2; hs.rank = rank;
-    hs.input_bytes = 65536; hs.output_bytes = 65536;
-    hs.tile_bytes = 65536; hs.kind = CollKind::AllReduceRing;
+    hs.nranks = 2;
+    hs.rank = rank;
+    hs.input_bytes = 65536;
+    hs.output_bytes = 65536;
+    hs.tile_bytes = 65536;
+    hs.kind = CollKind::AllReduceRing;
     sync_memset(d_in, 0, 65536);
     sync_memset(d_out, 0, 65536);
     UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] before submit", rank);
@@ -111,7 +123,8 @@ int main(int argc, char** argv) {
     int spin = 0;
     while (ex->status(h) != CollectiveOpStatus::Completed) {
       if (uk_dbg_lvl() >= UK_DBG_LVL_EXEC && ++spin % 100000 == 0)
-        UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] waiting... spin=%d", rank, spin);
+        UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] waiting... spin=%d", rank,
+               spin);
       std::this_thread::yield();
     }
     ex->release(h);
@@ -123,11 +136,15 @@ int main(int argc, char** argv) {
     std::printf("%9s %10s %10s\n", "Size", "Lat(us)", "BW(GB/s)");
     for (int si = 0; si < kSizes; ++si) {
       size_t bytes = sizes[si];
-      size_t tile_bytes = std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
+      size_t tile_bytes =
+          std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
       CollectiveConfig ar;
-      ar.nranks = 2; ar.rank = rank;
-      ar.input_bytes = bytes; ar.output_bytes = bytes;
-      ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
+      ar.nranks = 2;
+      ar.rank = rank;
+      ar.input_bytes = bytes;
+      ar.output_bytes = bytes;
+      ar.tile_bytes = tile_bytes;
+      ar.kind = coll_kind;
       ar.signal_group_tiles = (uint32_t)sig_group;
 
       for (int w = 0; w < kWarmup; ++w) {
@@ -150,39 +167,50 @@ int main(int argc, char** argv) {
           std::this_thread::yield();
         auto t1 = std::chrono::high_resolution_clock::now();
         ex->release(h);
-        total_us +=
-            std::chrono::duration<double, std::micro>(t1 - t0).count();
+        total_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
       }
       PathCounters after;
       if (show_counters) after = ex->get_path_counters();
       double avg_us = total_us / kIters;
       double bw_gbs = (bytes * 2.0) / (avg_us * 1e3);
-      if (coll_kind == CollKind::AllToAllPairwise) bw_gbs = bytes / (avg_us * 1e3);
+      if (coll_kind == CollKind::AllToAllPairwise)
+        bw_gbs = bytes / (avg_us * 1e3);
       char const* unit;
       double sz;
-      if (bytes >= 1ul << 30) { unit = "GB"; sz = bytes / (double)(1ul << 30); }
-      else if (bytes >= 1ul << 20) { unit = "MB"; sz = bytes / (double)(1ul << 20); }
-      else { unit = "KB"; sz = bytes / (double)(1ul << 10); }
+      if (bytes >= 1ul << 30) {
+        unit = "GB";
+        sz = bytes / (double)(1ul << 30);
+      } else if (bytes >= 1ul << 20) {
+        unit = "MB";
+        sz = bytes / (double)(1ul << 20);
+      } else {
+        unit = "KB";
+        sz = bytes / (double)(1ul << 10);
+      }
       std::printf("%8.1f %-3s %10.1f %10.2f\n", sz, unit, avg_us, bw_gbs);
       if (show_counters) {
         std::printf("         dev:%zu  ipc:%zu  rdma:%zu\n",
-                    after.device - before.device,
-                    after.ipc - before.ipc,
+                    after.device - before.device, after.ipc - before.ipc,
                     after.rdma - before.rdma);
       }
       fflush(stdout);
     }
-    std::printf("\nSprayExecutor %s benchmark done\n",
-                (coll_kind == CollKind::AllToAllPairwise) ? "AllToAll" : "AllReduce");
+    std::printf(
+        "\nSprayExecutor %s benchmark done\n",
+        (coll_kind == CollKind::AllToAllPairwise) ? "AllToAll" : "AllReduce");
   } else {
     constexpr size_t kMaxTiles = 256;
     for (int si = 0; si < kSizes; ++si) {
       size_t bytes = sizes[si];
-      size_t tile_bytes = std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
+      size_t tile_bytes =
+          std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
       CollectiveConfig ar;
-      ar.nranks = 2; ar.rank = rank;
-      ar.input_bytes = bytes; ar.output_bytes = bytes;
-      ar.tile_bytes = tile_bytes; ar.kind = coll_kind;
+      ar.nranks = 2;
+      ar.rank = rank;
+      ar.input_bytes = bytes;
+      ar.output_bytes = bytes;
+      ar.tile_bytes = tile_bytes;
+      ar.kind = coll_kind;
       ar.signal_group_tiles = (uint32_t)sig_group;
       for (int i = 0; i < kWarmup + kIters; ++i) {
         sync_memset(d_in, 0, bytes);

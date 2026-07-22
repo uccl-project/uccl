@@ -121,7 +121,10 @@ struct SprayRun {
   }
 
   ~SprayRun() {
-    if (ready_ring) { free(ready_ring); ready_ring = nullptr; }
+    if (ready_ring) {
+      free(ready_ring);
+      ready_ring = nullptr;
+    }
   }
 
   // Shared immutable plan (ops + successor graph); read-only here.
@@ -214,8 +217,8 @@ class BeSlotTable {
 
   BeSlotTable() = default;
 
-  void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx,
-             PutPath put_path, std::atomic<bool> const& stop) {
+  void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx, PutPath put_path,
+             std::atomic<bool> const& stop) {
     auto& s = slots_[be_idx & mask_];
     // be_idx grows monotonically while slots are reused modulo table
     // size. Never overwrite a slot whose previous occupant has not been
@@ -253,8 +256,7 @@ class BeSlotTable {
     // cannot corrupt what the drain pipeline is about to process.
     BeSlotSnap snap{s.run, s.op_idx, s.put_path, s.enqueue_ns};
     uint32_t expected = be_idx;
-    if (!s.tag.compare_exchange_strong(expected, ~0u,
-                                       std::memory_order_release,
+    if (!s.tag.compare_exchange_strong(expected, ~0u, std::memory_order_release,
                                        std::memory_order_relaxed))
       return {};  // claimed by another thread or release(), drop it
     return snap;
@@ -367,8 +369,7 @@ class SprayExecutor {
   // the drain_batch per-op path: bump done_count, release successor
   // dependencies, and flip the run if this was the last op.
   void complete_op_local(SprayRun& run, uint32_t op_idx) {
-    uint32_t cur =
-        __atomic_load_n(&run.indegree[op_idx], __ATOMIC_ACQUIRE);
+    uint32_t cur = __atomic_load_n(&run.indegree[op_idx], __ATOMIC_ACQUIRE);
     if (cur == SprayRun::kIndegreeDone) return;
     run.done_count.fetch_add(1, std::memory_order_release);
     uint32_t off = run.plan->successor_off[op_idx];
@@ -396,8 +397,7 @@ class SprayExecutor {
       SprayRun* run = s.run;
       if (!run) continue;
       uint32_t op_idx = s.op_idx;
-      uint32_t cur =
-          __atomic_load_n(&run->indegree[op_idx], __ATOMIC_ACQUIRE);
+      uint32_t cur = __atomic_load_n(&run->indegree[op_idx], __ATOMIC_ACQUIRE);
       if (cur == SprayRun::kIndegreeDone) continue;
       run->done_count.fetch_add(1, std::memory_order_release);
       cb(s);
@@ -406,8 +406,7 @@ class SprayExecutor {
       uint32_t end = run->plan->successor_off[op_idx + 1];
       for (uint32_t j = off; j < end; ++j) {
         uint32_t succ = run->plan->successor_data[j];
-        if (__atomic_fetch_sub(&run->indegree[succ], 1, __ATOMIC_RELEASE) ==
-            1)
+        if (__atomic_fetch_sub(&run->indegree[succ], 1, __ATOMIC_RELEASE) == 1)
           run->push_ready(succ);
       }
       __atomic_store_n(&run->indegree[op_idx], SprayRun::kIndegreeDone,
@@ -428,8 +427,8 @@ class SprayExecutor {
                            size_t) = nullptr;
   void (*peer_setup_fn_)(Transport::Communicator*, int,
                          std::vector<int> const&) = nullptr;
-  void (*resolve_buf_fn_)(Transport::Communicator*, int, int, uint32_t) =
-      nullptr;
+  void (*resolve_buf_fn_)(Transport::Communicator*, int, int,
+                          uint32_t) = nullptr;
   bool (*same_host_fn_)(Transport::Communicator*, int) = nullptr;
 
   BatchBackend* device_be_;
@@ -484,8 +483,7 @@ class SprayExecutor {
   // per shape; submit() on a hit only copies the mutable scheduling
   // state (indegree) into the new run.
   std::mutex plan_cache_mu_;
-  std::unordered_map<std::string, std::shared_ptr<CollPlan const>>
-      plan_cache_;
+  std::unordered_map<std::string, std::shared_ptr<CollPlan const>> plan_cache_;
   static constexpr size_t kMaxCachedPlans = 64;
 };
 

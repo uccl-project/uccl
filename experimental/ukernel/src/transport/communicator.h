@@ -92,16 +92,15 @@ class Communicator {
       PeerTransportKind transport = PeerTransportKind::Unknown);
 
   // Variants accepting pre-allocated rid.
-  bool send_put_async_with_rid(
-      int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
-      size_t dst_off, size_t bytes,
-      PeerTransportKind transport, unsigned rid, uint32_t qp_affinity = ~0u);
-  bool send_signal_async_with_rid(
-      int peer, uint64_t tag,
-      PeerTransportKind transport, unsigned rid);
-  bool wait_signal_async_with_rid(
-      int peer, uint64_t tag,
-      PeerTransportKind transport, unsigned rid, uint32_t count = 1);
+  bool send_put_async_with_rid(int peer, uint32_t src_buf, size_t src_off,
+                               uint32_t dst_buf, size_t dst_off, size_t bytes,
+                               PeerTransportKind transport, unsigned rid,
+                               uint32_t qp_affinity = ~0u);
+  bool send_signal_async_with_rid(int peer, uint64_t tag,
+                                  PeerTransportKind transport, unsigned rid);
+  bool wait_signal_async_with_rid(int peer, uint64_t tag,
+                                  PeerTransportKind transport, unsigned rid,
+                                  uint32_t count = 1);
 
   // Fused put+signal: once the data lands, the peer observes `tag` as a
   // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
@@ -109,11 +108,11 @@ class Communicator {
   // callers then fall back to a separate put + signal.
   // qp_affinity (RDMA only, ~0u = auto): pins the op to
   // (qp_affinity % num_qps); puts of one signal group must share a QP.
-  bool send_put_signal_async_with_rid(
-      int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
-      size_t dst_off, size_t bytes,
-      PeerTransportKind transport, uint64_t tag, unsigned rid,
-      uint32_t qp_affinity = ~0u);
+  bool send_put_signal_async_with_rid(int peer, uint32_t src_buf,
+                                      size_t src_off, uint32_t dst_buf,
+                                      size_t dst_off, size_t bytes,
+                                      PeerTransportKind transport, uint64_t tag,
+                                      unsigned rid, uint32_t qp_affinity = ~0u);
   // Whether the effective transport to `peer` supports fused PutSignal.
   bool can_fuse_put_signal(int peer, PeerTransportKind transport);
   // GPU-visible address of the peer's IPC signal ring (zero-copy host
@@ -150,7 +149,8 @@ class Communicator {
 
   // Returns number of completed rids from the input array.
   // Writes completed rids back into the first N positions of the array.
-  // For each rid: checks both put_completion_ring_ and sig_wait_completion_ring_.
+  // For each rid: checks both put_completion_ring_ and
+  // sig_wait_completion_ring_.
   size_t poll(unsigned* rids, size_t count);
 
   void set_oob_namespace(std::string ns);
@@ -263,7 +263,8 @@ class Communicator {
   // arrival count: fused signal groups deliver one tag per tile, so the
   // wait completes only after `remaining` arrivals.
   std::unordered_map<
-      int, std::unordered_map<uint64_t, std::vector<std::pair<unsigned, uint32_t>>>>
+      int,
+      std::unordered_map<uint64_t, std::vector<std::pair<unsigned, uint32_t>>>>
       pending_signal_waits_;
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.

@@ -456,8 +456,7 @@ bool RdmaTransportAdapter::post_data_recvs(RdmaPeer& p) {
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
-  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size,
-                     kDataRecvPool))
+  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size, kDataRecvPool))
     return false;
   if (!qps_to_init(p.data_qps, p.num_qps)) return false;
 
@@ -723,10 +722,12 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                         remote_buf_id, len, ~0u, comm_rid);
 }
 
-unsigned RdmaTransportAdapter::send_put_async(
-    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
-    uint32_t remote_buf_id, size_t len, uint32_t qp_affinity,
-    unsigned comm_rid) {
+unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
+                                              uint32_t local_buf_id,
+                                              void* remote_ptr,
+                                              uint32_t remote_buf_id,
+                                              size_t len, uint32_t qp_affinity,
+                                              unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
@@ -757,10 +758,9 @@ unsigned RdmaTransportAdapter::send_put_async(
   }
   if (raddr == 0 || rkey == 0) return 0;
 
-  RingElem e{comm_rid,   rank,         Kind::DataPut, local_ptr,
-             remote_ptr, local_buf_id, remote_buf_id, len,
-             0,          raddr,        rkey,          lkey,
-             qp_affinity};
+  RingElem e{comm_rid,     rank,          Kind::DataPut, local_ptr, remote_ptr,
+             local_buf_id, remote_buf_id, len,           0,         raddr,
+             rkey,         lkey,          qp_affinity};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
@@ -809,9 +809,10 @@ unsigned RdmaTransportAdapter::send_put_signal_async(
   }
   if (raddr == 0 || rkey == 0) return 0;
 
-  RingElem e{comm_rid,   rank,         Kind::PutSignal, local_ptr,
-             remote_ptr, local_buf_id, remote_buf_id,   len,
-             tag,        raddr,        rkey,            lkey,
+  RingElem e{comm_rid,      rank,       Kind::PutSignal,
+             local_ptr,     remote_ptr, local_buf_id,
+             remote_buf_id, len,        tag,
+             raddr,         rkey,       lkey,
              qp_affinity};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
@@ -974,7 +975,7 @@ void RdmaTransportAdapter::send_worker() {
       uint32_t expected = 0;
       int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                  std::memory_order_acquire)) {
+                                                 std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_put_completion(e.comm_rid, true);
           goto next_elem;
@@ -998,8 +999,8 @@ void RdmaTransportAdapter::send_worker() {
       // only its own chunks; plain puts stripe per chunk as before.
       int pin_qp = -1;
       if (e.qp_affinity != ~0u)
-        pin_qp = static_cast<int>(e.qp_affinity %
-                                  static_cast<uint32_t>(p->num_qps));
+        pin_qp =
+            static_cast<int>(e.qp_affinity % static_cast<uint32_t>(p->num_qps));
       else if (fused)
         pin_qp = select_qp(*p, static_cast<uint32_t>(e.len));
       for (uint32_t ci = 0; ci < ck.count; ++ci) {
@@ -1099,7 +1100,7 @@ void RdmaTransportAdapter::send_worker() {
       uint32_t expected = 0;
       int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
-                                                  std::memory_order_acquire)) {
+                                                 std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
           publish_sig_send_completion(e.comm_rid, true);
           goto next_elem;

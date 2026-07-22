@@ -98,9 +98,8 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 // We use raw numeric values rather than the named enum constants because
 // *_SCOPE_LOCAL_SOCKET (scope=2) is not available in all CUDA 11.x headers.
 inline void gpuFlushRDMAWrites() {
-  cuFlushGPUDirectRDMAWrites(
-      static_cast<CUflushGPUDirectRDMAWritesTarget>(0),
-      static_cast<CUflushGPUDirectRDMAWritesScope>(1));
+  cuFlushGPUDirectRDMAWrites(static_cast<CUflushGPUDirectRDMAWritesTarget>(0),
+                             static_cast<CUflushGPUDirectRDMAWritesScope>(1));
 }
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t CUresult

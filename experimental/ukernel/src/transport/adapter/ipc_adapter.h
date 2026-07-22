@@ -1,10 +1,10 @@
 #pragma once
 
 #include "../memory/ipc_manager.h"
-#include "util/jring.h"
 #include "gpu_rt.h"
 #include "ipc_signal_ring.h"
 #include "transport_adapter.h"
+#include "util/jring.h"
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -54,9 +54,9 @@ class IpcAdapter final : public TransportAdapter {
   unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                              unsigned comm_rid) override;
   bool supports_put_signal() const override { return true; }
-  unsigned send_put_signal_async(int peer, void* local_ptr,
-                                 uint32_t local_buf, void* remote_ptr,
-                                 uint32_t remote_buf, size_t len, uint64_t tag,
+  unsigned send_put_signal_async(int peer, void* local_ptr, uint32_t local_buf,
+                                 void* remote_ptr, uint32_t remote_buf,
+                                 size_t len, uint64_t tag,
                                  unsigned comm_rid) override;
 
   // Drain signal tags from the peer's shared-memory signal ring.

@@ -30,8 +30,7 @@ static std::string ga(int c, char** v, std::string n, std::string d) {
 static int gi(int c, char** v, std::string n, int d) {
   return std::stoi(ga(c, v, n, std::to_string(d)));
 }
-static void cp(std::shared_ptr<Communicator> cm, int r,
-               PeerTransportKind tpt) {
+static void cp(std::shared_ptr<Communicator> cm, int r, PeerTransportKind tpt) {
   int p = (r == 0) ? 1 : 0;
   // IPC paths are same-host only; skip them cross-node.
   if (cm->same_host(p)) {
@@ -58,8 +57,7 @@ static void wait_put_rid(Communicator* comm, unsigned rid) {
   while (true) {
     CompletionResult r;
     if (comm->try_complete_put(&r, 1) && r.rid == rid) {
-      if (r.failed)
-        printf("  [WARN] put rid=%u completed FAILED\n", rid);
+      if (r.failed) printf("  [WARN] put rid=%u completed FAILED\n", rid);
       return;
     }
     std::this_thread::yield();
@@ -122,9 +120,9 @@ int main(int argc, char** argv) {
         unsigned rid = comm->alloc_rid();
         // Exercise group QP affinity: puts of consecutive groups pin to
         // different QPs (i % 4); ignored by IPC.
-        if (!comm->send_put_signal_async_with_rid(
-                peer, 1, off, 1, off, kChunk, tpt, tag_base + i, rid,
-                (uint32_t)(i % 4))) {
+        if (!comm->send_put_signal_async_with_rid(peer, 1, off, 1, off, kChunk,
+                                                  tpt, tag_base + i, rid,
+                                                  (uint32_t)(i % 4))) {
           printf("  [FAIL] send_put_signal_async_with_rid i=%d\n", i);
           return 1;
         }
@@ -146,8 +144,8 @@ int main(int argc, char** argv) {
       // The signal was observed => the data must already be there.
       size_t const last = (size_t)(kN - 1) * kChunk;
       auto* chk = new uint8_t[kChunk];
-      GPU_RT_CHECK(gpuMemcpy(chk, (char*)d + last, kChunk,
-                             gpuMemcpyDeviceToHost));
+      GPU_RT_CHECK(
+          gpuMemcpy(chk, (char*)d + last, kChunk, gpuMemcpyDeviceToHost));
       size_t bad = 0;
       for (size_t i = 0; i < kChunk; ++i)
         if (chk[i] != (uint8_t)pattern) ++bad;

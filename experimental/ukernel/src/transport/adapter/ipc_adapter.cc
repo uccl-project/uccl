@@ -74,9 +74,7 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
 
 IpcAdapter::~IpcAdapter() { shutdown(); }
 
-void IpcAdapter::stop() {
-  stop_.store(true, std::memory_order_release);
-}
+void IpcAdapter::stop() { stop_.store(true, std::memory_order_release); }
 
 void IpcAdapter::shutdown() {
   stop_.store(true, std::memory_order_release);
@@ -170,8 +168,7 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
         int prev_dev = -1;
         if (atomics_ok && gpuGetDevice(&prev_dev) == gpuSuccess) {
           if (gpuSetDevice(gpu_id_) == gpuSuccess &&
-              gpuHostRegister(ptr, sz, gpuHostRegisterMapped) ==
-                  gpuSuccess) {
+              gpuHostRegister(ptr, sz, gpuHostRegisterMapped) == gpuSuccess) {
             void* dptr = nullptr;
             if (gpuHostGetDevicePointer(&dptr, ptr, 0) == gpuSuccess)
               pc.remote_device = dptr;
@@ -302,8 +299,7 @@ bool IpcAdapter::write_signal_ring(int peer, uint64_t tag) {
   // (the consumer stops at the first unready slot and catches up later).
   // In-flight claims are bounded by the producer count (≤ 2), far below
   // the ring size, so a new claim can never lap a stalled publisher.
-  uint64_t w =
-      remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
+  uint64_t w = remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
   size_t idx = w & (kSignalRingSize - 1);
 
   // Back-pressure: wait until this slot's previous lap was consumed.
@@ -321,19 +317,25 @@ unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
                                        unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
   if (!write_signal_ring(peer, tag)) return 0;
-  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d",
-         comm_->rank(), (unsigned long)tag, peer);
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d", comm_->rank(),
+         (unsigned long)tag, peer);
   publish_sig_send_completion(comm_rid, false);
   return 1;
 }
 
-unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr,
-                                           uint32_t, void* remote_ptr,
-                                           uint32_t, size_t len,
-                                           uint64_t tag, unsigned comm_rid) {
+unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr, uint32_t,
+                                           void* remote_ptr, uint32_t,
+                                           size_t len, uint64_t tag,
+                                           unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  RingElem e{comm_rid,   peer, ReqType::PutSignal, next_send_match_seq(peer),
-             local_ptr, remote_ptr, len, tag};
+  RingElem e{comm_rid,
+             peer,
+             ReqType::PutSignal,
+             next_send_match_seq(peer),
+             local_ptr,
+             remote_ptr,
+             len,
+             tag};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
@@ -358,15 +360,15 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
 }
 
 void* IpcAdapter::peer_signal_ring_device_ptr(int peer) const {
-  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size())
-    return nullptr;
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
   auto const& pc = comps_[static_cast<size_t>(peer)];
   if (!pc.remote_device) return nullptr;
   return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion);
 }
 
 size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
-                                     size_t max) {  if (!has_wait_path(peer_rank)) {
+                                     size_t max) {
+  if (!has_wait_path(peer_rank)) {
     static int once = 0;
     if (!once++)
       UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no wait path for p%d",
@@ -400,7 +402,8 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
   }
 
   if (count > 0) {
-    UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] got %zu tags from p%d, first=%lu",
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[drain-sig-tags r%d] got %zu tags from p%d, first=%lu",
            comm_->rank(), count, peer_rank, (unsigned long)tags[0]);
     ring->read_idx.store(r, std::memory_order_release);
   }
@@ -417,13 +420,14 @@ void IpcAdapter::send_worker() {
       std::this_thread::yield();
       continue;
     }
-    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] dequeued op type=%d peer=%d bytes=%lu",
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[ipc-send r%d] dequeued op type=%d peer=%d bytes=%lu",
            comm_->rank(), (int)e.type, e.peer, (unsigned long)e.bytes);
     bool ok = (e.type == ReqType::DataPut || e.type == ReqType::PutSignal)
                   ? send_one(&e)
                   : false;
-    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] send_one done ok=%d",
-           comm_->rank(), (int)ok);
+    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] send_one done ok=%d", comm_->rank(),
+           (int)ok);
     if (ok) {
       size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
       comps_[e.peer].remote->last_completed[dir].store(

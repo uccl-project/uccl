@@ -17,10 +17,10 @@ namespace UKernel {
 namespace Device {
 
 enum class TaskType : uint64_t {
-  None = 0,     // sentinel: empty/uninitialized task
-  CollCopy = 1, // pure GPU copy (used by tests/benchmarks)
-  CollPut = 2,  // GPU copy + signal ring write (used by CCL fused PutSignal)
-  CollReduce,   // 3 — local reduction
+  None = 0,      // sentinel: empty/uninitialized task
+  CollCopy = 1,  // pure GPU copy (used by tests/benchmarks)
+  CollPut = 2,   // GPU copy + signal ring write (used by CCL fused PutSignal)
+  CollReduce,    // 3 — local reduction
   BenchNop,
   Stop,
 };
@@ -241,9 +241,10 @@ class TaskManager {
       std::lock_guard<std::mutex> g(task_mu_);
       assert(inited_ && "TaskManager not initialized");
       if (free_task_.empty()) {
-        fprintf(stderr,
-                "[TaskManager] create_task: POOL EMPTY cap=%u free=%zu inited=%d\n",
-                cap_task_, free_task_.size(), (int)inited_);
+        fprintf(
+            stderr,
+            "[TaskManager] create_task: POOL EMPTY cap=%u free=%zu inited=%d\n",
+            cap_task_, free_task_.size(), (int)inited_);
         return Task();
       }
       idx = free_task_.back();
@@ -279,9 +280,9 @@ class TaskManager {
       uint32_t idx = idxs[i];
       assert(idx < cap_task_ && "free_task_args idx out of range");
       if (task_in_use_[idx] == 0) {
-        std::fprintf(stderr,
-                     "[TaskManager] WARNING: double free on task args slot %u\n",
-                     idx);
+        std::fprintf(
+            stderr, "[TaskManager] WARNING: double free on task args slot %u\n",
+            idx);
         continue;
       }
       task_in_use_[idx] = 0;

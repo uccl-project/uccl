@@ -27,7 +27,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
-// TMA path for small messages (hardware async copy, up to 4KB)
+  // TMA path for small messages (hardware async copy, up to 4KB)
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
     if (tid == 0) {
       TmaSemaphore sem;

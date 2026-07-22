@@ -14,9 +14,9 @@
 // UK_DBG(lvl, fmt, ...) prints when UK_CCL_DEBUG >= lvl, with a
 // [DBG<lvl>|<tid>] prefix, to stderr.
 
-#define UK_DBG_LVL_EXEC  1
-#define UK_DBG_LVL_TPT   2
-#define UK_DBG_LVL_ALL   3
+#define UK_DBG_LVL_EXEC 1
+#define UK_DBG_LVL_TPT 2
+#define UK_DBG_LVL_ALL 3
 
 static inline int uk_dbg_lvl() {
   static int lvl = [] {
@@ -32,9 +32,9 @@ static inline unsigned uk_tid() {
   return id;
 }
 
-#define UK_DBG(lvl, fmt, ...)                                        \
-  do {                                                               \
-    if (uk_dbg_lvl() >= (lvl))                                       \
-      std::fprintf(stderr, "[DBG%u|%u] " fmt "\n",                  \
-                   (unsigned)(lvl), uk_tid(), ##__VA_ARGS__);        \
+#define UK_DBG(lvl, fmt, ...)                                                 \
+  do {                                                                        \
+    if (uk_dbg_lvl() >= (lvl))                                                \
+      std::fprintf(stderr, "[DBG%u|%u] " fmt "\n", (unsigned)(lvl), uk_tid(), \
+                   ##__VA_ARGS__);                                            \
   } while (0)

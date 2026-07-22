@@ -88,9 +88,9 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         src_ok = true;
       } else {
         size_t const need = c.src_off + c.bytes;
-        if (comm_->try_resolve_remote_ipc_pointer(
-                (int)c.src_peer, c.src_buf, 0, need, &cached,
-                &args.src_device)) {
+        if (comm_->try_resolve_remote_ipc_pointer((int)c.src_peer, c.src_buf, 0,
+                                                  need, &cached,
+                                                  &args.src_device)) {
           resolved_remote_cache_.push_back(
               {(int)c.src_peer, c.src_buf, cached, args.src_device});
           args.src = (char*)cached + c.src_off;
@@ -108,8 +108,8 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         // tensor inside a torch caching-allocator segment. The kernel
         // address must include base_offset, same as
         // try_resolve_remote_ipc_pointer does for remote items.
-        char* base = (char*)(ipc.is_local ? (void*)ipc.base_addr
-                                          : ipc.direct_ptr);
+        char* base =
+            (char*)(ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr);
         if (base) {
           char* ptr = base + ipc.base_offset;
           if (c.src_buf < kMaxLocalBufs) local_ptr_cache_[c.src_buf] = ptr;
@@ -136,9 +136,8 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         dst_ok = true;
       } else {
         size_t const need = c.dst_off + c.bytes;
-        if (comm_->try_resolve_remote_ipc_pointer(
-                (int)c.dst_peer, c.dst_buf, 0, need, &cached,
-                &cached_dev)) {
+        if (comm_->try_resolve_remote_ipc_pointer((int)c.dst_peer, c.dst_buf, 0,
+                                                  need, &cached, &cached_dev)) {
           resolved_remote_cache_.push_back(
               {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
           args.dst = (char*)cached + c.dst_off;
@@ -153,8 +152,8 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       } else {
         auto ipc = comm_->get_ipc(c.dst_buf);
         // Same base_offset requirement as the src path above.
-        char* base = (char*)(ipc.is_local ? (void*)ipc.base_addr
-                                          : ipc.direct_ptr);
+        char* base =
+            (char*)(ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr);
         if (base) {
           char* ptr = base + ipc.base_offset;
           if (c.dst_buf < kMaxLocalBufs) local_ptr_cache_[c.dst_buf] = ptr;
@@ -164,10 +163,9 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       }
     }
   }
-  args.set_red_type(c.redop == ReductionKind::None ? Device::ReduceType::None
-                    : c.redop == ReductionKind::Sum
-                        ? Device::ReduceType::Sum
-                        : Device::ReduceType::Sum);
+  args.set_red_type(c.redop == ReductionKind::None  ? Device::ReduceType::None
+                    : c.redop == ReductionKind::Sum ? Device::ReduceType::Sum
+                                                    : Device::ReduceType::Sum);
 
   switch (c.kind) {
     case ExecOpKind::Put:
@@ -184,9 +182,9 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
     // Fused PutSignal: the kernel writes the tag into the peer's shm
     // signal ring after the copy (same channel as host-sent signals,
     // so the receiver stays a CPU-side poll).
-    void* ring = comm_ ? comm_->ipc_signal_ring_device_ptr(
-                             static_cast<int>(c.dst_peer))
-                       : nullptr;
+    void* ring =
+        comm_ ? comm_->ipc_signal_ring_device_ptr(static_cast<int>(c.dst_peer))
+              : nullptr;
     if (!ring) {
       throw std::runtime_error(
           "[DeviceBackend] PutSignal flagged but peer signal ring is not "
@@ -201,8 +199,7 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   if (!src_ok || !dst_ok) {
     throw std::runtime_error(
         std::string("[DeviceBackend] unresolved buffer ptr src_ok=") +
-        std::to_string((int)src_ok) +
-        " dst_ok=" + std::to_string((int)dst_ok) +
+        std::to_string((int)src_ok) + " dst_ok=" + std::to_string((int)dst_ok) +
         " src_buf=" + std::to_string(c.src_buf) +
         " dst_buf=" + std::to_string(c.dst_buf));
   }

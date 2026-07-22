@@ -37,17 +37,28 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 
 ScalarType to_scalar_type(torch::ScalarType dtype) {
   switch (dtype) {
-    case torch::kUInt8:   return ScalarType::UInt8;
-    case torch::kInt8:    return ScalarType::Int8;
-    case torch::kInt16:   return ScalarType::Int16;
-    case torch::kInt32:   return ScalarType::Int32;
-    case torch::kInt64:   return ScalarType::Int64;
-    case torch::kFloat16: return ScalarType::Float16;
-    case torch::kFloat32: return ScalarType::Float32;
-    case torch::kFloat64: return ScalarType::Float64;
-    case torch::kBFloat16: return ScalarType::BFloat16;
-    case torch::kBool:    return ScalarType::Bool;
-    default: break;
+    case torch::kUInt8:
+      return ScalarType::UInt8;
+    case torch::kInt8:
+      return ScalarType::Int8;
+    case torch::kInt16:
+      return ScalarType::Int16;
+    case torch::kInt32:
+      return ScalarType::Int32;
+    case torch::kInt64:
+      return ScalarType::Int64;
+    case torch::kFloat16:
+      return ScalarType::Float16;
+    case torch::kFloat32:
+      return ScalarType::Float32;
+    case torch::kFloat64:
+      return ScalarType::Float64;
+    case torch::kBFloat16:
+      return ScalarType::BFloat16;
+    case torch::kBool:
+      return ScalarType::Bool;
+    default:
+      break;
   }
   throw std::invalid_argument("unsupported torch dtype for ukernel collective");
 }
@@ -61,22 +72,27 @@ ReductionKind to_reduction(uint32_t v) {
     case ReductionKind::Min:
     case ReductionKind::BitwiseAnd:
       return r;
-    default: break;
+    default:
+      break;
   }
   throw std::invalid_argument("unsupported reduction kind");
 }
 
 void validate_arithmetic_dtype(torch::ScalarType dtype, char const* what) {
   switch (dtype) {
-    case torch::kInt8:  case torch::kInt32: case torch::kInt64:
-    case torch::kFloat16: case torch::kFloat32: case torch::kFloat64:
+    case torch::kInt8:
+    case torch::kInt32:
+    case torch::kInt64:
+    case torch::kFloat16:
+    case torch::kFloat32:
+    case torch::kFloat64:
     case torch::kBFloat16:
       return;
-    default: break;
+    default:
+      break;
   }
-  throw std::invalid_argument(
-      std::string(what) +
-      " supports int8/int32/int64/fp16/fp32/fp64/bf16");
+  throw std::invalid_argument(std::string(what) +
+                              " supports int8/int32/int64/fp16/fp32/fp64/bf16");
 }
 
 // prepare() does peer setup, MR (re)registration and buffer resolution —
@@ -115,13 +131,10 @@ class ProcessGroup {
  public:
   ProcessGroup(int rank, int world_size, int gpu_id,
                std::string exchanger_ip = "127.0.0.1",
-               int exchanger_port = 16998,
-               int threads_per_block = 64,
-               int blocks_per_worker = 1,
-               size_t smem_size = 4096)
+               int exchanger_port = 16998, int threads_per_block = 64,
+               int blocks_per_worker = 1, size_t smem_size = 4096)
       : rank_(rank), world_size_(world_size), gpu_id_(gpu_id) {
-    if (world_size_ < 2)
-      throw std::invalid_argument("world_size must be >= 2");
+    if (world_size_ < 2) throw std::invalid_argument("world_size must be >= 2");
     if (rank_ < 0 || rank_ >= world_size_)
       throw std::invalid_argument("rank out of range");
 
@@ -160,9 +173,8 @@ class ProcessGroup {
       nb::handle tensor_handle,
       uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
       size_t tile_bytes = 64ull << 10, uint32_t signal_group_tiles = 1) {
-    return allreduce_submit_tensor(
-        tensor_from_python(tensor_handle, "tensor"), reduction, tile_bytes,
-        signal_group_tiles);
+    return allreduce_submit_tensor(tensor_from_python(tensor_handle, "tensor"),
+                                   reduction, tile_bytes, signal_group_tiles);
   }
 
   uint64_t alltoall_submit(nb::handle tensor_handle,
@@ -209,25 +221,23 @@ class ProcessGroup {
                  uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
                  size_t tile_bytes = 64ull << 10,
                  uint32_t signal_group_tiles = 1) {
-    wait_and_release(
-        allreduce_submit(tensor_handle, reduction, tile_bytes,
-                         signal_group_tiles));
+    wait_and_release(allreduce_submit(tensor_handle, reduction, tile_bytes,
+                                      signal_group_tiles));
   }
 
-  void alltoall(nb::handle tensor_handle,
-                size_t tile_bytes = 64ull << 10,
+  void alltoall(nb::handle tensor_handle, size_t tile_bytes = 64ull << 10,
                 uint32_t signal_group_tiles = 1) {
-    wait_and_release(alltoall_submit(tensor_handle, tile_bytes,
-                                     signal_group_tiles));
+    wait_and_release(
+        alltoall_submit(tensor_handle, tile_bytes, signal_group_tiles));
   }
 
   void barrier() {
     if (!barrier_tensor_.defined()) {
-      barrier_tensor_ = torch::ones(
-          {static_cast<int64_t>(world_size_)},
-          torch::TensorOptions()
-              .dtype(torch::kFloat32)
-              .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
+      barrier_tensor_ =
+          torch::ones({static_cast<int64_t>(world_size_)},
+                      torch::TensorOptions()
+                          .dtype(torch::kFloat32)
+                          .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
     }
     wait_and_release(allreduce_submit_tensor(
         barrier_tensor_, static_cast<uint32_t>(ReductionKind::Sum),
@@ -248,8 +258,7 @@ class ProcessGroup {
           "collectives run in place and cannot silently copy back)");
   }
 
-  void ensure_prepared(CollectiveConfig const& cfg, void* input,
-                       void* output) {
+  void ensure_prepared(CollectiveConfig const& cfg, void* input, void* output) {
     std::string key = prepare_key(cfg, input, output);
     if (prepared_keys_.find(key) != prepared_keys_.end()) return;
     if (prepared_keys_.size() >= kMaxPrepared) prepared_keys_.clear();
@@ -309,8 +318,8 @@ class ProcessGroup {
     // sync is the only correct fence with persistent worker kernels —
     // their memory accesses are not stream-ordered with new stream
     // waits.
-    cudaError_t serr = cudaStreamSynchronize(
-        c10::cuda::getCurrentCUDAStream().stream());
+    cudaError_t serr =
+        cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream().stream());
     if (serr != cudaSuccess)
       throw std::runtime_error(
           std::string("stream sync before collective failed: ") +
@@ -387,66 +396,69 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(nb::init<int, int, int, std::string, int, int, int, size_t>(),
            nb::arg("rank"), nb::arg("world_size"), nb::arg("gpu_id"),
            nb::arg("exchanger_ip") = "127.0.0.1",
-           nb::arg("exchanger_port") = 16998,
-           nb::arg("threads_per_block") = 64,
-           nb::arg("blocks_per_worker") = 1,
-           nb::arg("smem_size") = 4096)
+           nb::arg("exchanger_port") = 16998, nb::arg("threads_per_block") = 64,
+           nb::arg("blocks_per_worker") = 1, nb::arg("smem_size") = 4096)
       .def_prop_ro("rank", &ProcessGroup::rank)
       .def_prop_ro("world_size", &ProcessGroup::world_size)
       .def_prop_ro("gpu_id", &ProcessGroup::gpu_id)
-      .def("allreduce_submit",
-           [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
-              size_t tile_bytes, uint32_t signal_group_tiles) {
-             return self.allreduce_submit(tensor, reduction, tile_bytes,
-                                          signal_group_tiles);
-           },
-           nb::arg("tensor"),
-           nb::arg("reduction") = static_cast<uint32_t>(
-               UKernel::CCL::ReductionKind::Sum),
-           nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("signal_group_tiles") = 1)
-      .def("alltoall_submit",
-           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-              uint32_t signal_group_tiles) {
-             return self.alltoall_submit(tensor, tile_bytes,
+      .def(
+          "allreduce_submit",
+          [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+             size_t tile_bytes, uint32_t signal_group_tiles) {
+            return self.allreduce_submit(tensor, reduction, tile_bytes,
                                          signal_group_tiles);
-           },
-           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("signal_group_tiles") = 1)
-      .def("poll", [](ProcessGroup& self, uint64_t h) { return self.poll(h); },
-           nb::arg("handle"))
-      .def("wait",
-           [](ProcessGroup& self, uint64_t h, uint64_t timeout_ms) {
-             return self.wait(h, timeout_ms);
-           },
-           nb::arg("handle"), nb::arg("timeout_ms") = 0)
-      .def("status",
-           [](ProcessGroup& self, uint64_t h) { return self.status(h); },
-           nb::arg("handle"))
-      .def("error_message",
-           [](ProcessGroup& self, uint64_t h) {
-             return self.error_message(h);
-           },
-           nb::arg("handle"))
-      .def("release", [](ProcessGroup& self, uint64_t h) { self.release(h); },
-           nb::arg("handle"))
-      .def("allreduce",
-           [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
-              size_t tile_bytes, uint32_t signal_group_tiles) {
-             self.allreduce(tensor, reduction, tile_bytes,
-                            signal_group_tiles);
-           },
-           nb::arg("tensor"),
-           nb::arg("reduction") = static_cast<uint32_t>(
-               UKernel::CCL::ReductionKind::Sum),
-           nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("signal_group_tiles") = 1)
-      .def("alltoall",
-           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-              uint32_t signal_group_tiles) {
-             self.alltoall(tensor, tile_bytes, signal_group_tiles);
-           },
-           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-           nb::arg("signal_group_tiles") = 1)
+          },
+          nb::arg("tensor"),
+          nb::arg("reduction") =
+              static_cast<uint32_t>(UKernel::CCL::ReductionKind::Sum),
+          nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
+      .def(
+          "alltoall_submit",
+          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+             uint32_t signal_group_tiles) {
+            return self.alltoall_submit(tensor, tile_bytes, signal_group_tiles);
+          },
+          nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
+      .def(
+          "poll", [](ProcessGroup& self, uint64_t h) { return self.poll(h); },
+          nb::arg("handle"))
+      .def(
+          "wait",
+          [](ProcessGroup& self, uint64_t h, uint64_t timeout_ms) {
+            return self.wait(h, timeout_ms);
+          },
+          nb::arg("handle"), nb::arg("timeout_ms") = 0)
+      .def(
+          "status",
+          [](ProcessGroup& self, uint64_t h) { return self.status(h); },
+          nb::arg("handle"))
+      .def(
+          "error_message",
+          [](ProcessGroup& self, uint64_t h) { return self.error_message(h); },
+          nb::arg("handle"))
+      .def(
+          "release", [](ProcessGroup& self, uint64_t h) { self.release(h); },
+          nb::arg("handle"))
+      .def(
+          "allreduce",
+          [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+             size_t tile_bytes, uint32_t signal_group_tiles) {
+            self.allreduce(tensor, reduction, tile_bytes, signal_group_tiles);
+          },
+          nb::arg("tensor"),
+          nb::arg("reduction") =
+              static_cast<uint32_t>(UKernel::CCL::ReductionKind::Sum),
+          nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
+      .def(
+          "alltoall",
+          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+             uint32_t signal_group_tiles) {
+            self.alltoall(tensor, tile_bytes, signal_group_tiles);
+          },
+          nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
       .def("barrier", [](ProcessGroup& self) { self.barrier(); });
 }

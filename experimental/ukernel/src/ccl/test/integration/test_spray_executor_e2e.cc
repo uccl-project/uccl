@@ -9,8 +9,8 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <unistd.h>
 #include <vector>
+#include <unistd.h>
 
 using namespace UKernel::CCL;
 
@@ -28,14 +28,20 @@ static std::string get_arg(int argc, char** argv, std::string const& name,
 static int get_int_arg(int argc, char** argv, std::string const& name,
                        int def) {
   std::string s = get_arg(argc, argv, name, std::to_string(def));
-  try { return std::stoi(s); } catch (...) { return def; }
+  try {
+    return std::stoi(s);
+  } catch (...) {
+    return def;
+  }
 }
 
 int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role != "server" && role != "client") {
-    std::fprintf(stderr, "Usage: --role=server|client [--gpu GPU] [--exchanger-ip IP] [--exchanger-port PORT]\n");
+    std::fprintf(stderr,
+                 "Usage: --role=server|client [--gpu GPU] [--exchanger-ip IP] "
+                 "[--exchanger-port PORT]\n");
     return 1;
   }
 
@@ -64,7 +70,8 @@ int main(int argc, char** argv) {
   GPU_RT_CHECK(gpuMalloc(&d_scr, kBufBytes));
 
   std::vector<float> host_in(kBufBytes / sizeof(float), (float)(rank + 1));
-  GPU_RT_CHECK(gpuMemcpy(d_in, host_in.data(), kBufBytes, gpuMemcpyHostToDevice));
+  GPU_RT_CHECK(
+      gpuMemcpy(d_in, host_in.data(), kBufBytes, gpuMemcpyHostToDevice));
   // Synchronously zero output buffer to avoid gpuMemset racing with
   // subsequent RDMA writes and overwriting received data.
   {
@@ -94,15 +101,18 @@ int main(int argc, char** argv) {
     auto st = ex->status(h);
     if (st == CollectiveOpStatus::Completed) {
       float result_in, result_out;
-      GPU_RT_CHECK(gpuMemcpy(&result_in, d_in, sizeof(float), gpuMemcpyDeviceToHost));
-      GPU_RT_CHECK(gpuMemcpy(&result_out, d_out, sizeof(float), gpuMemcpyDeviceToHost));
+      GPU_RT_CHECK(
+          gpuMemcpy(&result_in, d_in, sizeof(float), gpuMemcpyDeviceToHost));
+      GPU_RT_CHECK(
+          gpuMemcpy(&result_out, d_out, sizeof(float), gpuMemcpyDeviceToHost));
       float expected = 3.0f;
       std::printf("[e2e] in=%.1f out=%.1f\n", result_in, result_out);
       if (std::abs(result_out - expected) < 1e-5f) {
         std::printf("[e2e] PASSED (%.1f)\n", result_out);
         passed = true;
       } else {
-        std::printf("[e2e] FAILED (got %.1f want %.1f)\n", result_out, expected);
+        std::printf("[e2e] FAILED (got %.1f want %.1f)\n", result_out,
+                    expected);
       }
       break;
     }

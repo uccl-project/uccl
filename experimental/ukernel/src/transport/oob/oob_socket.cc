@@ -1539,8 +1539,8 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
               local_id_, ns.c_str(), startup_ms);
       return;
     }
-    int const wait_ms = env_int_or_default("UHM_OOB_LEADER_READY_TIMEOUT_MS",
-                                           startup_ms);
+    int const wait_ms =
+        env_int_or_default("UHM_OOB_LEADER_READY_TIMEOUT_MS", startup_ms);
     if (!shm_->wait_until_ready(wait_ms)) {
       fprintf(stderr,
               "[oob] non-leader (local_id=%d): leader not ready within "

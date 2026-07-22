@@ -13,7 +13,7 @@ namespace Device {
 class WorkerPool;
 struct TaskArgs;
 enum class TaskType : uint64_t;
-}
+}  // namespace Device
 namespace CCL {
 
 struct DeviceBackendConfig {
@@ -56,8 +56,7 @@ class DeviceBackend final : public BatchBackend {
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds
   // this backend does not handle (caller skips them, matching the
   // historical behavior). Throws on unresolvable buffer pointers.
-  bool build_task(Cmd const& c, Device::TaskArgs& args,
-                  Device::TaskType& tt);
+  bool build_task(Cmd const& c, Device::TaskArgs& args, Device::TaskType& tt);
 
   DeviceBackendConfig cfg_;
   int sm_count_ = 1;

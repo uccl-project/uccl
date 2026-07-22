@@ -33,8 +33,7 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
     GPU_RT_CHECK(
         gpuMalloc(&wc->d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
-    GPU_RT_CHECK(gpuHostAlloc(&wc->h_exited, sizeof(bool),
-                              gpuHostAllocMapped));
+    GPU_RT_CHECK(gpuHostAlloc(&wc->h_exited, sizeof(bool), gpuHostAllocMapped));
     *wc->h_exited = false;
     workers_.emplace_back(wc);
 
@@ -288,8 +287,7 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
   if (!exit_idle_iters_ || fifoId >= fifos_.size()) return;
   for (size_t i = 0; i < workers_.size(); ++i) {
     auto* wc = workers_[i].get();
-    if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
-        *wc->h_exited) {
+    if (wc->fifoId == fifoId && wc->launched && wc->h_exited && *wc->h_exited) {
       *wc->h_exited = false;
       launchWorkerForFifo(i);
       return;
@@ -324,9 +322,9 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
                          &d_stop_flags_[workerIndex], &worker.h_exited,
                          &exit_idle_iters_};
 
-  void* args_multi[] = {&worker.d_fifo_handle, &d_task_args,
-                        &d_stop_flags_[workerIndex], &worker.d_multi_sync,
-                        &worker.h_exited, &exit_idle_iters_};
+  void* args_multi[] = {
+      &worker.d_fifo_handle, &d_task_args,     &d_stop_flags_[workerIndex],
+      &worker.d_multi_sync,  &worker.h_exited, &exit_idle_iters_};
 
   if (worker.numBlocks == 1) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,

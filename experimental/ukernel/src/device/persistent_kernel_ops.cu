@@ -1,6 +1,6 @@
+#include "../transport/adapter/ipc_signal_ring.h"
 #include "ops/ops.h"
 #include "persistent_kernel_ops.h"
-#include "../transport/adapter/ipc_signal_ring.h"
 
 namespace UKernel {
 namespace Device {
@@ -47,8 +47,8 @@ __device__ __forceinline__ void signal_ring_write(
 }
 
 // If this task is a fused PutSignal, emit the tag now (copy finished).
-__device__ __forceinline__ void maybe_signal_ring_write(
-    Task const& task, TaskArgs const* args) {
+__device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
+                                                        TaskArgs const* args) {
   if (static_cast<TaskType>(task.type_u8()) != TaskType::CollPut ||
       args == nullptr)
     return;

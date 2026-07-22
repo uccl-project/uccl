@@ -38,7 +38,10 @@ class CtlBackend final : public BatchBackend {
     size_t accepted = 0;
     while (accepted < n && in_flight_ < cap_) {
       auto const& c = cmds[accepted];
-      if (!supports(c.kind)) { ++accepted; continue; }
+      if (!supports(c.kind)) {
+        ++accepted;
+        continue;
+      }
       uint32_t be_idx = next_be_++;
       if (out_indices) out_indices[accepted] = be_idx;
       enqueued_.push_back(c);
@@ -80,12 +83,23 @@ class CtlBackend final : public BatchBackend {
   }
 
   size_t capacity() const override { return cap_; }
-  void set_capacity(size_t c) { std::lock_guard lk(mtx_); cap_ = c; }
-  size_t enqueued_count() const { std::lock_guard lk(mtx_); return enqueued_.size(); }
-  size_t pending_count() const { std::lock_guard lk(mtx_); return completed_.size(); }
+  void set_capacity(size_t c) {
+    std::lock_guard lk(mtx_);
+    cap_ = c;
+  }
+  size_t enqueued_count() const {
+    std::lock_guard lk(mtx_);
+    return enqueued_.size();
+  }
+  size_t pending_count() const {
+    std::lock_guard lk(mtx_);
+    return completed_.size();
+  }
 
  private:
-  struct Item { uint32_t be_idx; };
+  struct Item {
+    uint32_t be_idx;
+  };
   char const* label_;
   size_t cap_;
   ExecOpKind accept_;
@@ -127,8 +141,8 @@ void test_path_priority() {
   std::vector<uint8_t> in(256), out(256), scr(256);
   assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
   // Reduce tiles → device, Put tiles → transport (priority dispatch)
-  assert(dev.enqueued_count() > 0);   // Reduce via device
-  assert(tpt.enqueued_count() > 0);   // Put via transport
+  assert(dev.enqueued_count() > 0);  // Reduce via device
+  assert(tpt.enqueued_count() > 0);  // Put via transport
   printf("  device: %zu, transport: %zu — PASSED\n", dev.enqueued_count(),
          tpt.enqueued_count());
 }
@@ -146,8 +160,8 @@ void test_reduce_device_only() {
   assert(submit_and_wait(*ex, cfg, in.data(), out.data()));
   size_t nd = dev.enqueued_count(), nt = tpt.enqueued_count();
   printf("  device: %zu, transport: %zu", nd, nt);
-  assert(nd > 0);   // Reduce goes to device
-  assert(nt > 0);   // Put tiles go to transport (IPC/RDMA preferred)
+  assert(nd > 0);  // Reduce goes to device
+  assert(nt > 0);  // Put tiles go to transport (IPC/RDMA preferred)
   printf(" — PASSED\n");
 }
 
@@ -164,8 +178,8 @@ void test_deferred_requeue() {
   auto h = ex->submit(cfg, in.data(), out.data());
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   // Device has capacity for Reduce; transport is full — some tiles deferred
-  printf("  initially: device=%zu transport=%zu\n",
-         dev.enqueued_count(), tpt.enqueued_count());
+  printf("  initially: device=%zu transport=%zu\n", dev.enqueued_count(),
+         tpt.enqueued_count());
   assert(tpt.enqueued_count() == 0);  // transport full, nothing enqueued
 
   // Open transport capacity; tiles should flow through
@@ -194,10 +208,12 @@ void test_concurrent() {
          ex->wait(h2, std::chrono::milliseconds(5000)) &&
          ex->wait(h3, std::chrono::milliseconds(5000)));
 
-  printf("  device: %zu, transport: %zu, signal: %zu",
-         dev.enqueued_count(), tpt.enqueued_count(), sig.enqueued_count());
+  printf("  device: %zu, transport: %zu, signal: %zu", dev.enqueued_count(),
+         tpt.enqueued_count(), sig.enqueued_count());
   assert(tpt.enqueued_count() > 0 || dev.enqueued_count() > 0);
-  ex->release(h1); ex->release(h2); ex->release(h3);
+  ex->release(h1);
+  ex->release(h2);
+  ex->release(h3);
   printf(" — PASSED\n");
 }
 

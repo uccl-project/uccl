@@ -3,8 +3,8 @@
 #include "algo/chunk_graph.h"
 #include "backend/backend.h"
 #include "coll_config.h"
-#include "utils.h"
 #include "util/uk_debug.h"
+#include "utils.h"
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -17,13 +17,12 @@ namespace CCL {
 
 static void update_path_metrics(PathMetrics& m, uint64_t enqueue_ns) {
   m.inflight.fetch_sub(1, std::memory_order_relaxed);
-  uint64_t now =
-      std::chrono::steady_clock::now().time_since_epoch().count();
+  uint64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
   uint64_t sample = now - enqueue_ns;
   uint64_t old = m.latency_ns.load(std::memory_order_relaxed);
   uint64_t nv = (old * 7 + sample) / 8;
-  while (!m.latency_ns.compare_exchange_weak(
-      old, nv, std::memory_order_release, std::memory_order_relaxed))
+  while (!m.latency_ns.compare_exchange_weak(old, nv, std::memory_order_release,
+                                             std::memory_order_relaxed))
     ;
 }
 
@@ -146,7 +145,7 @@ uint32_t SprayExecutor::get_or_register_buf(void* ptr, size_t bytes) {
 }
 
 SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
-                              BatchBackend* signal_be, int world_size)
+                             BatchBackend* signal_be, int world_size)
     : device_be_(device_be),
       tpt_be_(tpt_be),
       signal_be_(signal_be),
@@ -196,7 +195,9 @@ SprayExecutor::~SprayExecutor() {
   owned_device_.reset();
   owned_transport_.reset();
   owned_signal_.reset();
-  if (internal_scratch_) { GPU_RT_CHECK(gpuFree(internal_scratch_)); }
+  if (internal_scratch_) {
+    GPU_RT_CHECK(gpuFree(internal_scratch_));
+  }
 }
 
 SprayRun* SprayExecutor::get(CollectiveOpHandle h) {
@@ -236,10 +237,8 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   CollAlgo algo = build_coll_algo(cfg, input == output);
   std::vector<int> peers;
   for (auto const& ch : algo.chunks) {
-    if (ch.src_rank >= 0)
-      peers.push_back(ch.src_rank);
-    if (ch.dst_rank >= 0)
-      peers.push_back(ch.dst_rank);
+    if (ch.src_rank >= 0) peers.push_back(ch.src_rank);
+    if (ch.dst_rank >= 0) peers.push_back(ch.dst_rank);
   }
   // Deduplicate and sort.
   std::sort(peers.begin(), peers.end());
@@ -247,31 +246,46 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
 
   {
     std::string plist;
-    for (auto p : peers) { if (!plist.empty()) plist += ","; plist += std::to_string(p); }
-    UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peers=%s  -> peer_setup_fn start", cfg.rank, plist.c_str());
+    for (auto p : peers) {
+      if (!plist.empty()) plist += ",";
+      plist += std::to_string(p);
+    }
+    UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peers=%s  -> peer_setup_fn start",
+           cfg.rank, plist.c_str());
   }
   peer_setup_fn_(owned_comm_.get(), cfg.rank, peers);
-  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peer_setup_fn done  -> re_register_all_mrs", cfg.rank);
+  UK_DBG(UK_DBG_LVL_EXEC,
+         "[prepare r%d] peer_setup_fn done  -> re_register_all_mrs", cfg.rank);
   owned_comm_->re_register_all_mrs();
-  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] re_register_all_mrs done  -> register bufs", cfg.rank);
+  UK_DBG(UK_DBG_LVL_EXEC,
+         "[prepare r%d] re_register_all_mrs done  -> register bufs", cfg.rank);
   prepared_peers_.insert(peers.begin(), peers.end());
   prepared_ = true;
 
   // Register and resolve user buffers.
   uint32_t in_id = get_or_register_buf(input, cfg.input_bytes);
-  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] in_id=%u registered  -> resolve bufs", cfg.rank, in_id);
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] in_id=%u registered  -> resolve bufs",
+         cfg.rank, in_id);
   uint32_t out_id = get_or_register_buf(output, cfg.output_bytes);
-  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] out_id=%u registered", cfg.rank, out_id);
+  UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] out_id=%u registered", cfg.rank,
+         out_id);
   for (int p : peers) {
     if (in_id && resolve_buf_fn_) {
-      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d ...", cfg.rank, in_id, p);
+      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d ...",
+             cfg.rank, in_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
-      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d done", cfg.rank, in_id, p);
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[prepare r%d] resolve in_id=%u from peer %d done", cfg.rank,
+             in_id, p);
     }
     if (out_id && out_id != in_id && resolve_buf_fn_) {
-      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve out_id=%u from peer %d ...", cfg.rank, out_id, p);
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[prepare r%d] resolve out_id=%u from peer %d ...", cfg.rank,
+             out_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
-      UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve out_id=%u from peer %d done", cfg.rank, out_id, p);
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[prepare r%d] resolve out_id=%u from peer %d done", cfg.rank,
+             out_id, p);
     }
   }
 
@@ -325,7 +339,8 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     in_id = get_or_register_buf(input, tiled.input_bytes);
     out_id = get_or_register_buf(output, tiled.output_bytes);
     if (internal_scratch_ && tiled.staging_bytes_required > 0)
-      scr_id = get_or_register_buf(internal_scratch_, tiled.staging_bytes_required);
+      scr_id =
+          get_or_register_buf(internal_scratch_, tiled.staging_bytes_required);
   }
 
   std::lock_guard lock(runs_mutex_);
@@ -432,10 +447,10 @@ void SprayExecutor::collect_ready(SprayRun& run) {
 }
 
 void SprayExecutor::enqueue_to_ring(SprayRun& run) {
-      // Prepend deferred ops from prior cycle (preserves priority).
-      // Signal deferred ops get highest priority so peer WaitSignal unblocks
-      // promptly, avoiding head-of-line blocking from data-path backpressure.
-      {
+  // Prepend deferred ops from prior cycle (preserves priority).
+  // Signal deferred ops get highest priority so peer WaitSignal unblocks
+  // promptly, avoiding head-of-line blocking from data-path backpressure.
+  {
     run.ready.insert(run.ready.begin(), run.deferred_dev.begin(),
                      run.deferred_dev.end());
     run.ready.insert(run.ready.begin(), run.deferred_tpt.begin(),
@@ -458,11 +473,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   static int op_kind_print_cnt = 0;
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.plan->tiled.ops[idx], run.plan->tiled.reduction,
-                     run.input_buf_id,
-                     run.output_buf_id, run.scratch_buf_id);
+                     run.input_buf_id, run.output_buf_id, run.scratch_buf_id);
     if (op_kind_print_cnt++ < 20) {
       UK_DBG(UK_DBG_LVL_EXEC,
-             "[enqueue r%d] op[%u] kind=%d dst_peer=%u put_path=%d tag=%lu bytes=%u",
+             "[enqueue r%d] op[%u] kind=%d dst_peer=%u put_path=%d tag=%lu "
+             "bytes=%u",
              rank_or_neg1(), idx, (int)c.kind, c.dst_peer, (int)c.put_path,
              (unsigned long)c.tag, c.bytes);
     }
@@ -483,16 +498,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       if (c.put_path == PutPath::Device && kBar1Bytes > 0 &&
           c.dst_off + c.bytes > kBar1Bytes) {
         // Move the tentative charge from Device to IPC (reroute).
-        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-            .device.inflight.fetch_sub(1, std::memory_order_relaxed);
-        tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-            .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)].device.inflight.fetch_sub(
+            1, std::memory_order_relaxed);
+        tpt_metrics_[static_cast<size_t>(c.dst_peer)].ipc.inflight.fetch_add(
+            1, std::memory_order_relaxed);
         c.put_path = PutPath::Ipc;
       }
     }
 
-    if (path_counters_enabled_ &&
-        c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
+    if (path_counters_enabled_ && c.kind == ExecOpKind::Put &&
+        c.dst_peer != ~0u) {
       switch (c.put_path) {
         case PutPath::Device:
           put_path_device_.fetch_add(1, std::memory_order_relaxed);
@@ -529,8 +544,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         uint16_t grp = run.plan->sig_group_size[sig_idx];
         bool fuse = false;
         if (c.put_path == PutPath::Device) {
-          fuse = device_be_->can_fuse_put_signal(
-              static_cast<int>(c.dst_peer));
+          fuse = device_be_->can_fuse_put_signal(static_cast<int>(c.dst_peer));
           if (!fuse && grp > 1 &&
               owned_comm_->same_host(static_cast<int>(c.dst_peer))) {
             // Device fusion unavailable: reroute to IPC so the group
@@ -546,8 +560,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           auto tpt_kind = (c.put_path == PutPath::Rdma)
                               ? Transport::PeerTransportKind::Rdma
                               : Transport::PeerTransportKind::Ipc;
-          fuse = owned_comm_->can_fuse_put_signal(
-              static_cast<int>(c.dst_peer), tpt_kind);
+          fuse = owned_comm_->can_fuse_put_signal(static_cast<int>(c.dst_peer),
+                                                  tpt_kind);
         }
         if (fuse) {
           c.flags |= kCmdFlagPutSignal;
@@ -559,8 +573,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
       // Fused: every Put of this Signal's group already carried the tag
       // — no backend dispatch needed, complete it locally.
-      if (c.kind == ExecOpKind::Signal &&
-          !run.plan->sig_group_size.empty() &&
+      if (c.kind == ExecOpKind::Signal && !run.plan->sig_group_size.empty() &&
           run.plan->sig_group_size[idx] > 0 &&
           run.fused_sig_cnt[idx] == run.plan->sig_group_size[idx]) {
         run.submitted[idx] = 1;
@@ -578,7 +591,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           !run.plan->wait_group_size.empty() &&
           run.plan->wait_group_size[idx] > 1 &&
           (owned_comm_->can_fuse_put_signal(
-               static_cast<int>(c.src_peer), Transport::PeerTransportKind::Ipc) ||
+               static_cast<int>(c.src_peer),
+               Transport::PeerTransportKind::Ipc) ||
            owned_comm_->can_fuse_put_signal(
                static_cast<int>(c.src_peer),
                Transport::PeerTransportKind::Rdma))) {
@@ -632,12 +646,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   if (!run.dev_cmds.empty()) {
     size_t m = run.dev_cmds.size();
     be_idx_scratch_.resize(m);
-    size_t reserved =
-        device_be_->reserve_slots(be_idx_scratch_.data(), m);
+    size_t reserved = device_be_->reserve_slots(be_idx_scratch_.data(), m);
     if (reserved > 0) {
       for (size_t i = 0; i < reserved; ++i)
-        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i],
-                         PutPath::None, stop_);
+        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i], PutPath::None,
+                         stop_);
       size_t ok = device_be_->do_enqueue_reserved_batch(
           run.dev_cmds.data(), be_idx_scratch_.data(), reserved);
       for (size_t i = 0; i < ok; ++i) {
@@ -663,8 +676,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       size_t ok = device_be_->do_enqueue(run.dev_cmds.data(), m,
                                          be_idx_scratch_.data());
       for (size_t i = 0; i < ok; ++i) {
-        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i],
-                         PutPath::None, stop_);
+        dev_slots_.write(be_idx_scratch_[i], &run, dev_idx[i], PutPath::None,
+                         stop_);
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
@@ -709,8 +722,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
       tpt_dispatched = ok;
     } else {
-      size_t ok = tpt_be_->do_enqueue(run.tpt_cmds.data(), m,
-                                      be_idx_scratch_.data());
+      size_t ok =
+          tpt_be_->do_enqueue(run.tpt_cmds.data(), m, be_idx_scratch_.data());
       for (size_t i = 0; i < ok; ++i) {
         tpt_slots_.write(be_idx_scratch_[i], &run, tpt_idx[i],
                          run.tpt_cmds[i].put_path, stop_);
@@ -765,14 +778,19 @@ void SprayExecutor::drain_dev_loop() {
   static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
-      UK_DBG(UK_DBG_LVL_ALL, "[drain-dev r%d] alive iter=%d", rank_or_neg1(), iter);
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-dev r%d] alive iter=%d", rank_or_neg1(),
+             iter);
     size_t n = device_be_->do_drain(be_buf, 256);
     if (n > 0 && dbg_count < 5) {
       ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC, "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), n, dbg_count);
     }
-    if (n == 0) { std::this_thread::yield(); continue; }
+    if (n == 0) {
+      std::this_thread::yield();
+      continue;
+    }
     // Drain all available batches; finalize_run runs inline in
     // drain_batch, so completion is observed without a runs_ sweep.
     while (n > 0) {
@@ -805,11 +823,13 @@ void SprayExecutor::drain_tpt_loop() {
   static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
-      UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(), iter);
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(),
+             iter);
     size_t nd = tpt_be_->do_drain(be_buf, 256);
     if (nd > 0 && dbg_count < 5) {
       ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC, "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), nd, dbg_count);
     }
     if (nd == 0) {
@@ -832,7 +852,7 @@ void SprayExecutor::drain_tpt_loop() {
         int peer = static_cast<int>(s.run->plan->tiled.ops[s.op_idx].dst_peer);
         if (peer < 0 || peer >= world_size_) return;
         auto& m = (s.put_path == PutPath::Ipc) ? tpt_metrics_[peer].ipc
-                                                : tpt_metrics_[peer].rdma;
+                                               : tpt_metrics_[peer].rdma;
         update_path_metrics(m, s.enqueue_ns);
       });
       nd = tpt_be_->do_drain(be_buf, 256);
@@ -847,11 +867,13 @@ void SprayExecutor::drain_signal_loop() {
   static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
-      UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(), iter);
+      UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(),
+             iter);
     size_t ns = signal_be_->do_drain(be_buf, 256);
     if (ns > 0 && dbg_count < 5) {
       ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC, "[drain-sig r%d] do_drain returned %zu completions (count=%d)",
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[drain-sig r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), ns, dbg_count);
     }
     if (ns == 0) {
@@ -889,10 +911,9 @@ void SprayExecutor::finalize_run(SprayRun* run) {
   // Exactly-once: only the CAS winner flips status and releases the
   // active-run slot, no matter how many threads observe completion.
   CollectiveOpStatus expected = CollectiveOpStatus::Running;
-  if (run->status.compare_exchange_strong(expected,
-                                          CollectiveOpStatus::Completed,
-                                          std::memory_order_release,
-                                          std::memory_order_relaxed))
+  if (run->status.compare_exchange_strong(
+          expected, CollectiveOpStatus::Completed, std::memory_order_release,
+          std::memory_order_relaxed))
     active_runs_.fetch_sub(1, std::memory_order_release);
 }
 
@@ -973,12 +994,12 @@ PutPath SprayExecutor::pick_put_path(int peer) {
     if (s == "rdma") return PutPath::Rdma;
     return PutPath::None;
   }();
-  if (forced != PutPath::None &&
-      same_host_fn_ && same_host_fn_(owned_comm_.get(), peer)) {
+  if (forced != PutPath::None && same_host_fn_ &&
+      same_host_fn_(owned_comm_.get(), peer)) {
     auto& pfm = tpt_metrics_[peer];
-    PathMetrics* fm = (forced == PutPath::Device)   ? &pfm.device
-                      : (forced == PutPath::Ipc)    ? &pfm.ipc
-                                                    : &pfm.rdma;
+    PathMetrics* fm = (forced == PutPath::Device) ? &pfm.device
+                      : (forced == PutPath::Ipc)  ? &pfm.ipc
+                                                  : &pfm.rdma;
     fm->inflight.fetch_add(1, std::memory_order_relaxed);
     return forced;
   }
@@ -996,12 +1017,12 @@ PutPath SprayExecutor::pick_put_path(int peer) {
   uint64_t dc = static_cast<uint64_t>(
                     pm.device.inflight.load(std::memory_order_relaxed)) *
                 pm.device.latency_ns.load(std::memory_order_relaxed);
-  uint64_t ic = static_cast<uint64_t>(
-                    pm.ipc.inflight.load(std::memory_order_relaxed)) *
-                pm.ipc.latency_ns.load(std::memory_order_relaxed);
-  uint64_t rc = static_cast<uint64_t>(
-                    pm.rdma.inflight.load(std::memory_order_relaxed)) *
-                pm.rdma.latency_ns.load(std::memory_order_relaxed);
+  uint64_t ic =
+      static_cast<uint64_t>(pm.ipc.inflight.load(std::memory_order_relaxed)) *
+      pm.ipc.latency_ns.load(std::memory_order_relaxed);
+  uint64_t rc =
+      static_cast<uint64_t>(pm.rdma.inflight.load(std::memory_order_relaxed)) *
+      pm.rdma.latency_ns.load(std::memory_order_relaxed);
 
   PutPath choice;
   PathMetrics* chosen;

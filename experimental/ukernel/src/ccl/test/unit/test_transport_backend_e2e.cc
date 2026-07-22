@@ -63,8 +63,8 @@ int main(int argc, char** argv) {
   auto transport_str = ga(argc, argv, "--transport", "ipc");
   auto tpt_kind = (transport_str == "rdma") ? PeerTransportKind::Rdma
                                             : PeerTransportKind::Ipc;
-  printf("TransportBackend e2e %s r%d g%d transport=%s\n", role.c_str(),
-         rank, gpu, transport_str.c_str());
+  printf("TransportBackend e2e %s r%d g%d transport=%s\n", role.c_str(), rank,
+         gpu, transport_str.c_str());
   GPU_RT_CHECK(gpuSetDevice(gpu));
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = ip;

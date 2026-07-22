@@ -21,7 +21,6 @@
 #endif
 #include <chrono>
 #include <cmath>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -33,8 +32,8 @@
 using namespace UKernel::CCL;
 using UKernel::Transport::Communicator;
 using UKernel::Transport::CommunicatorConfig;
-using UKernel::Transport::PeerTransportKind;
 using UKernel::Transport::CompletionResult;
+using UKernel::Transport::PeerTransportKind;
 using UKernel::Transport::SignalCompletion;
 
 static std::string get_arg(int argc, char** argv, std::string const& name,
@@ -58,7 +57,8 @@ static int get_int_arg(int argc, char** argv, std::string const& name,
   }
 }
 
-// Register both buffers on both ranks.  Buffer 1 = send/recv, buffer 2 = verify.
+// Register both buffers on both ranks.  Buffer 1 = send/recv, buffer 2 =
+// verify.
 static void setup_buffers(Communicator* comm, void* buf1, void* buf2,
                           size_t bytes, int rank, int world_size) {
   comm->register_buffer(1, buf1, bytes);
@@ -103,9 +103,10 @@ int main(int argc, char** argv) {
   setbuf(stdout, NULL);
   std::string role = get_arg(argc, argv, "--role", "");
   if (role != "server" && role != "client") {
-    std::fprintf(stderr,
-                 "Usage: --role=server|client [--gpu GPU] "
-                 "[--transport ipc|rdma] [--exchanger-ip IP] [--exchanger-port PORT]\n");
+    std::fprintf(
+        stderr,
+        "Usage: --role=server|client [--gpu GPU] "
+        "[--transport ipc|rdma] [--exchanger-ip IP] [--exchanger-port PORT]\n");
     return 1;
   }
 
@@ -169,7 +170,8 @@ int main(int argc, char** argv) {
   // --- GPU buffers ---
   constexpr size_t kBufBytes = 65536;  // one tile, ≤ BAR1 page
   constexpr size_t kFloats = kBufBytes / sizeof(float);
-  void *d_send = nullptr, *d_recv = nullptr, *d_verify = nullptr, *d_local = nullptr;
+  void *d_send = nullptr, *d_recv = nullptr, *d_verify = nullptr,
+       *d_local = nullptr;
   GPU_RT_CHECK(gpuMalloc(&d_send, kBufBytes));
   GPU_RT_CHECK(gpuMalloc(&d_recv, kBufBytes));
   GPU_RT_CHECK(gpuMalloc(&d_verify, kBufBytes));
@@ -207,15 +209,17 @@ int main(int argc, char** argv) {
       gpuStream_t ss;
       GPU_RT_CHECK(gpuStreamCreate(&ss));
       GPU_RT_CHECK(gpuMemcpyAsync(d_send, host_send.data(), kBufBytes,
-                                   gpuMemcpyHostToDevice, ss));
+                                  gpuMemcpyHostToDevice, ss));
       GPU_RT_CHECK(gpuStreamSynchronize(ss));
       GPU_RT_CHECK(gpuStreamDestroy(ss));
     }
 
-    unsigned put_rid = comm->send_put_async(1, 1, 0, 1, 0, kBufBytes,
-                                            PeerTransportKind::Rdma);
+    unsigned put_rid =
+        comm->send_put_async(1, 1, 0, 1, 0, kBufBytes, PeerTransportKind::Rdma);
     if (put_rid == 0) {
-      std::fprintf(stderr, "[l2flush] rank0: send_put_async returned 0 (path not ready)\n");
+      std::fprintf(
+          stderr,
+          "[l2flush] rank0: send_put_async returned 0 (path not ready)\n");
       return 1;
     }
     wait_completion(comm.get(), put_rid);
@@ -228,8 +232,7 @@ int main(int argc, char** argv) {
     }
     CompletionResult res;
     for (int tries = 0; tries < 1000; ++tries) {
-      if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == sig_rid)
-        break;
+      if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == sig_rid) break;
       comm->try_complete_put(&res, 1);
       std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
@@ -252,7 +255,7 @@ int main(int argc, char** argv) {
       gpuStream_t ms;
       GPU_RT_CHECK(gpuStreamCreate(&ms));
       GPU_RT_CHECK(gpuMemcpyAsync(d_recv, marker.data(), kBufBytes,
-                                   gpuMemcpyHostToDevice, ms));
+                                  gpuMemcpyHostToDevice, ms));
       GPU_RT_CHECK(gpuStreamSynchronize(ms));
       GPU_RT_CHECK(gpuStreamDestroy(ms));
 #if !defined(__HIP_PLATFORM_AMD__)
@@ -268,8 +271,7 @@ int main(int argc, char** argv) {
       unsigned rid = comm->send_signal_async(0, 99, PeerTransportKind::Rdma);
       CompletionResult res;
       for (int tries = 0; tries < 1000; ++tries) {
-        if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == rid)
-          break;
+        if (comm->try_complete_sig_send(&res, 1) > 0 && res.rid == rid) break;
         comm->try_complete_put(&res, 1);
         std::this_thread::sleep_for(std::chrono::microseconds(100));
       }
@@ -315,8 +317,10 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < kFloats; ++i) {
         float expected = static_cast<float>(i + 1) * 1.5f + 0.1f;
         if (std::fabs(hv[i] - expected) > 1e-5f) {
-          std::fprintf(stderr, "[l2flush] gpuMemcpy MISMATCH [%zu]: got %.1f want %.1f\n",
-                       i, hv[i], expected);
+          std::fprintf(
+              stderr,
+              "[l2flush] gpuMemcpy MISMATCH [%zu]: got %.1f want %.1f\n", i,
+              hv[i], expected);
           return 1;
         }
       }
@@ -352,8 +356,9 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < kFloats; ++i) {
         float expected = static_cast<float>(i + 1) * 1.5f + 0.1f;
         if (std::fabs(hv[i] - expected) > 1e-5f) {
-          std::fprintf(stderr, "[l2flush] CollCopy MISMATCH [%zu]: got %.1f want %.1f\n",
-                       i, hv[i], expected);
+          std::fprintf(
+              stderr, "[l2flush] CollCopy MISMATCH [%zu]: got %.1f want %.1f\n",
+              i, hv[i], expected);
           return 1;
         }
       }
@@ -375,7 +380,7 @@ int main(int argc, char** argv) {
         gpuStream_t rs;
         GPU_RT_CHECK(gpuStreamCreate(&rs));
         GPU_RT_CHECK(gpuMemcpyAsync(d_verify, local_init.data(), kBufBytes,
-                                     gpuMemcpyHostToDevice, rs));
+                                    gpuMemcpyHostToDevice, rs));
         GPU_RT_CHECK(gpuStreamSynchronize(rs));
         GPU_RT_CHECK(gpuStreamDestroy(rs));
       }
@@ -401,7 +406,8 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < kFloats; ++i) {
         float expected = 11.6f + 2.5f * static_cast<float>(i);
         if (std::fabs(hv[i] - expected) > 1e-5f) {
-          std::fprintf(stderr, "[l2flush] Reduce MISMATCH [%zu]: got %.1f want %.1f\n",
+          std::fprintf(stderr,
+                       "[l2flush] Reduce MISMATCH [%zu]: got %.1f want %.1f\n",
                        i, hv[i], expected);
           return 1;
         }

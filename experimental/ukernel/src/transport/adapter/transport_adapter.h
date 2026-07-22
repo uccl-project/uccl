@@ -110,9 +110,8 @@ class TransportAdapter {
   virtual unsigned send_put_signal_async(int peer_rank, void* local_ptr,
                                          uint32_t local_buffer_id,
                                          void* remote_ptr,
-                                         uint32_t remote_buffer_id,
-                                         size_t len, uint64_t tag,
-                                         unsigned comm_rid) {
+                                         uint32_t remote_buffer_id, size_t len,
+                                         uint64_t tag, unsigned comm_rid) {
     (void)peer_rank;
     (void)local_ptr;
     (void)local_buffer_id;
@@ -125,7 +124,9 @@ class TransportAdapter {
   }
 
   void set_put_completion_ring(jring_t* ring) { put_completion_ring_ = ring; }
-  void set_sig_send_completion_ring(jring_t* ring) { sig_send_completion_ring_ = ring; }
+  void set_sig_send_completion_ring(jring_t* ring) {
+    sig_send_completion_ring_ = ring;
+  }
 
  protected:
   jring_t* put_completion_ring_ = nullptr;

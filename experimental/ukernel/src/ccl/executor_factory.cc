@@ -14,7 +14,8 @@ namespace CCL {
 
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
-  fprintf(stderr, "[FACTORY] creating Communicator rank=%d gpu=%d\n", config.rank, config.gpu_id);
+  fprintf(stderr, "[FACTORY] creating Communicator rank=%d gpu=%d\n",
+          config.rank, config.gpu_id);
   auto comm_cfg = std::make_shared<Transport::CommunicatorConfig>();
   comm_cfg->exchanger_ip = config.exchanger_ip;
   comm_cfg->exchanger_port = config.exchanger_port;
@@ -67,52 +68,71 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
 
       if (same) {
         if (rank < p) {
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...",
+                 rank, p);
           comm->connect(p, Transport::PeerTransportKind::Ipc);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done", rank, p);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done",
+                 rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...",
+                 rank, p);
           comm->accept(p, Transport::PeerTransportKind::Ipc);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done",
+                 rank, p);
         } else {
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d ...",
+                 rank, p);
           comm->accept(p, Transport::PeerTransportKind::Ipc);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done", rank, p);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC accept from p%d done",
+                 rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d ...",
+                 rank, p);
           comm->connect(p, Transport::PeerTransportKind::Ipc);
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done", rank, p);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] IPC connect to p%d done",
+                 rank, p);
         }
       }
       if (rank < p) {
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...",
+               rank, p);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done", rank, p);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done",
+               rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...",
+               rank, p);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done",
+               rank, p);
       } else {
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d ...",
+               rank, p);
         comm->accept(p, Transport::PeerTransportKind::Rdma);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done", rank, p);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA accept from p%d done",
+               rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d ...",
+               rank, p);
         comm->connect(p, Transport::PeerTransportKind::Rdma);
-        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done", rank, p);
+        UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] RDMA connect to p%d done",
+               rank, p);
       }
     }
-    // Enable P2P access now that peer GPU indices are known (after RDMA exchange).
+    // Enable P2P access now that peer GPU indices are known (after RDMA
+    // exchange).
     for (int p : peers) {
       if (p == rank) continue;
       if (comm->same_host(p)) {
         int peer_gpu = comm->peer_gpu_idx(p);
         if (peer_gpu >= 0) {
-          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] enable P2P to gpu=%d", rank, peer_gpu);
+          UK_DBG(UK_DBG_LVL_EXEC, "[peer_setup r%d] enable P2P to gpu=%d", rank,
+                 peer_gpu);
           gpuError_t err = gpuDeviceEnablePeerAccess(peer_gpu, 0);
           if (err == gpuErrorPeerAccessAlreadyEnabled) {
             // Tolerated — but clear the sticky per-thread error so later
             // CUDA users on this thread (e.g. torch) don't trip over it.
             (void)gpuGetLastError();
           } else if (err != gpuSuccess) {
-            std::cerr << "[peer_setup r" << rank << "] gpuDeviceEnablePeerAccess failed gpu="
-                      << peer_gpu << " err=" << err << std::endl;
+            std::cerr << "[peer_setup r" << rank
+                      << "] gpuDeviceEnablePeerAccess failed gpu=" << peer_gpu
+                      << " err=" << err << std::endl;
           }
         }
       }
