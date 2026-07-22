@@ -71,7 +71,10 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
 
   if (c.src_buf > 0) {
     if (c.src_peer != ~0u && comm_) {
-      // Check cache first — resolved ptr never changes once set
+      // Check cache first — resolved ptr never changes once set.
+      // Cache stores the base pointer (offset=0); add c.src_off at
+      // each use because try_resolve_remote_ipc_pointer already bakes
+      // the passed offset into the returned pointer.
       void* cached = nullptr;
       for (auto& e : resolved_remote_cache_) {
         if (e.remote_rank == (int)c.src_peer && e.buffer_id == c.src_buf) {
@@ -83,13 +86,16 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       if (cached) {
         args.src = (char*)cached + c.src_off;
         src_ok = true;
-      } else if (comm_->try_resolve_remote_ipc_pointer(
-                     (int)c.src_peer, c.src_buf, c.src_off, c.bytes, &cached,
-                     &args.src_device)) {
-        resolved_remote_cache_.push_back(
-            {(int)c.src_peer, c.src_buf, cached, args.src_device});
-        args.src = (char*)cached + c.src_off;
-        src_ok = true;
+      } else {
+        size_t const need = c.src_off + c.bytes;
+        if (comm_->try_resolve_remote_ipc_pointer(
+                (int)c.src_peer, c.src_buf, 0, need, &cached,
+                &args.src_device)) {
+          resolved_remote_cache_.push_back(
+              {(int)c.src_peer, c.src_buf, cached, args.src_device});
+          args.src = (char*)cached + c.src_off;
+          src_ok = true;
+        }
       }
     } else if (comm_) {
       if (c.src_buf < kMaxLocalBufs && local_ptr_cache_[c.src_buf]) {
@@ -128,14 +134,17 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         args.dst = (char*)cached + c.dst_off;
         args.dst_device = cached_dev;
         dst_ok = true;
-      } else if (comm_->try_resolve_remote_ipc_pointer(
-                     (int)c.dst_peer, c.dst_buf, c.dst_off, c.bytes, &cached,
-                     &cached_dev)) {
-        resolved_remote_cache_.push_back(
-            {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
-        args.dst = (char*)cached + c.dst_off;
-        args.dst_device = cached_dev;
-        dst_ok = true;
+      } else {
+        size_t const need = c.dst_off + c.bytes;
+        if (comm_->try_resolve_remote_ipc_pointer(
+                (int)c.dst_peer, c.dst_buf, 0, need, &cached,
+                &cached_dev)) {
+          resolved_remote_cache_.push_back(
+              {(int)c.dst_peer, c.dst_buf, cached, cached_dev});
+          args.dst = (char*)cached + c.dst_off;
+          args.dst_device = cached_dev;
+          dst_ok = true;
+        }
       }
     } else if (comm_) {
       if (c.dst_buf < kMaxLocalBufs && local_ptr_cache_[c.dst_buf]) {
