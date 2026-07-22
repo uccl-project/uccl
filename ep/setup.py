@@ -171,6 +171,24 @@ if __name__ == "__main__":
     nvcc_dlink = []
     extra_link_args = []
     use_dmabuf = False
+    use_libfabric_cxi = int(os.getenv("USE_LIBFABRIC_CXI", "0"))
+    num_max_nvl_peers = os.getenv("NUM_MAX_NVL_PEERS")
+    if num_max_nvl_peers:
+        nvl_peers_flag = f"-DNUM_MAX_NVL_PEERS={int(num_max_nvl_peers)}"
+        print(f"Building with NUM_MAX_NVL_PEERS={int(num_max_nvl_peers)}")
+        cxx_flags.append(nvl_peers_flag)
+        nvcc_flags.append(nvl_peers_flag)
+
+    if use_libfabric_cxi:
+        print("Building with libfabric CXI transport support (USE_LIBFABRIC_CXI)")
+        cxx_flags.append("-DUSE_LIBFABRIC_CXI")
+        nvcc_flags.append("-DUSE_LIBFABRIC_CXI")
+        libraries.append("fabric")
+
+        libfabric_home = os.getenv("LIBFABRIC_HOME")
+        if libfabric_home:
+            include_dirs.append(Path(libfabric_home) / "include")
+            library_dirs.append(Path(libfabric_home) / "lib")
 
     if torch.version.cuda:
         # Add CUDA library directory to library_dirs
@@ -319,10 +337,9 @@ if __name__ == "__main__":
                     " (perhaps inside a container)"
                 )
 
-        # Fallback: gfx94x — the generic CDNA3/CDNA4 family target that
-        # covers both gfx942 (MI300X) and gfx950 (MI355X) on a sufficiently
-        # recent ROCm/LLVM.
-        device_arch = env_arch or detected_amd_arch or "gfx94x"
+        # Fallback: gfx942, the concrete compiler target for MI300A/MI300X
+        # supplied by TheRock's gfx94X-dcgpu package family.
+        device_arch = env_arch or detected_amd_arch or "gfx942"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
@@ -436,6 +453,7 @@ if __name__ == "__main__":
         print(f" > EFA Support: {'Yes' if has_efa else 'No'}")
         print(f" > GH200 Support: {'Yes' if has_gh200 else 'No'}")
         print(f" > DMA-BUF Support: {'Yes' if use_dmabuf else 'No'}")
+        print(f" > libfabric CXI Support: {'Yes' if use_libfabric_cxi else 'No'}")
     print(f" > Device Arch: {device_arch}")
     print(f" > Sources: {len(sources)} files")
     print(f" > Headers (tracked): {len(header_files)} files")

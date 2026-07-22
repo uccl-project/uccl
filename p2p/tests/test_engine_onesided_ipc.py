@@ -387,11 +387,16 @@ def main():
 
     print(f"=== UCCL One-Sided IPC Tests (rank {rank}) ===")
 
+    # Exchange metadata so rank 1 can learn rank 0's GPU BDF for connect_local.
+    my_meta = bytes(ep.get_metadata())
     if rank == 0:
-        ok, remote_gpu_idx, conn_id = ep.accept_local()
+        _send_bytes(my_meta, dst=1)
+        ok, _remote_bdf, conn_id = ep.accept_local()
         assert ok, "accept_local failed"
     else:
-        ok, conn_id = ep.connect_local(remote_gpu_idx=0)
+        meta_rank0 = _recv_bytes(src=0)
+        _, _, rank0_bdf = ep.parse_metadata(meta_rank0)
+        ok, conn_id = ep.connect_local(remote_gpu_bdf=rank0_bdf)
         assert ok, "connect_local failed"
 
     tests = [

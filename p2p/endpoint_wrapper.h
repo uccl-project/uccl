@@ -198,6 +198,8 @@ inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
           (void)len;
           (void)mhandle;
           return true;
+        } else if constexpr (std::is_same_v<T, CxiEndpoint>) {
+          return s->uccl_regmr(data, len, mhandle->cxi_region) >= 0;
         } else {
           return s->uccl_regmr(data, len, mhandle->mr_array,
                                mhandle->cache_refs, mhandle->compress_ctx) >= 0;
@@ -264,7 +266,7 @@ inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
   std::visit(
       [&](auto const& s) {
         using T = std::decay_t<decltype(*s)>;
-        if constexpr (!std::is_same_v<T, NCCLEndpoint>) {
+        if constexpr (std::is_same_v<T, RDMAEndpoint>) {
           result = s->get_send_group_raw(peer_id);
         }
       },
@@ -332,6 +334,10 @@ inline int uccl_read_async(GenericEndpoint const& ep, Conn* conn,
               dst, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
+        } else if constexpr (std::is_same_v<T, CxiEndpoint>) {
+          ureq->type = ReqType::ReqRead;
+          return s->uccl_read_async(conn->uccl_conn_id_, local_mh->cxi_region,
+                                    dst, size, slot_item, ureq);
         } else {
           ureq->type = ReqType::ReqRead;
           return set_request(s, conn, local_mh, dst, size, slot_item, ureq);
@@ -360,6 +366,10 @@ inline int uccl_write_async(GenericEndpoint const& ep, Conn* conn,
               src, size, nccl_item, &nreq);
           from_nccl_req(nreq, ureq);
           return ret;
+        } else if constexpr (std::is_same_v<T, CxiEndpoint>) {
+          ureq->type = ReqType::ReqWrite;
+          return s->uccl_write_async(conn->uccl_conn_id_, local_mh->cxi_region,
+                                     src, size, slot_item, ureq);
         } else {
           ureq->type = ReqType::ReqWrite;
           return set_request(s, conn, local_mh, src, size, slot_item, ureq);
@@ -397,6 +407,19 @@ inline int prepare_fifo_metadata(GenericEndpoint const& ep, P2PMhandle* mhandle,
           (void)mhandle;
           return s->prepare_fifo_metadata(nullptr, nullptr, data, size,
                                           out_buf);
+        } else if constexpr (std::is_same_v<T, CxiEndpoint>) {
+          (void)s;
+          if (!mhandle->cxi_region) return -1;
+          FifoItem remote_mem_info;
+          remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
+          remote_mem_info.size = size;
+          remote_mem_info.rkey = 0;
+          remote_mem_info.nmsgs = 0;
+          remote_mem_info.rid = 0;
+          remote_mem_info.idx = 0;
+          encode_cxi_fifo_metadata(*mhandle->cxi_region, remote_mem_info);
+          serialize_fifo_item(remote_mem_info, out_buf);
+          return 0;
         } else {
           FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
@@ -417,6 +440,8 @@ inline void uccl_deregmr(GenericEndpoint const& ep, P2PMhandle* mhandle) {
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint>) {
           (void)mhandle;
+        } else if constexpr (std::is_same_v<T, CxiEndpoint>) {
+          s->uccl_deregmr(mhandle->cxi_region);
         } else {
           s->uccl_deregmr(mhandle->cache_refs);
         }

@@ -181,5 +181,11 @@ if [ $OVERALL_STATUS -ne 0 ]; then
     exit 1
 fi
 
+if $HOST_ETCD; then
+    ETCD_GRACE_SECONDS="${NIXL_HOST_ETCD_GRACE_SECONDS:-10}"
+    echo "=== Keeping etcd alive for ${ETCD_GRACE_SECONDS}s for peer shutdown ==="
+    sleep "${ETCD_GRACE_SECONDS}"
+fi
+
 echo ""
 echo "=== All inter-node nixlbench tests PASSED ==="

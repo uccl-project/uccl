@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 
-enum class TransportType { RDMA, NCCL, EFA };
+enum class TransportType { RDMA, NCCL, EFA, CXI };
 
 inline TransportType get_transport_type() {
   static TransportType t = [] {
@@ -15,6 +15,7 @@ inline TransportType get_transport_type() {
         std::strcmp(env, "tcpx") == 0)
       return TransportType::NCCL;
     if (std::strcmp(env, "efa") == 0) return TransportType::EFA;
+    if (std::strcmp(env, "cxi") == 0) return TransportType::CXI;
     return TransportType::RDMA;
   }();
   return t;
@@ -26,4 +27,8 @@ inline bool is_nccl_transport() {
 
 inline bool is_efa_transport() {
   return get_transport_type() == TransportType::EFA;
+}
+
+inline bool is_cxi_transport() {
+  return get_transport_type() == TransportType::CXI;
 }
