@@ -1328,6 +1328,25 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
                           bool publish) {
   if (buffer_id == 0 || local_buf == nullptr || len == 0) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(resource_mu_);
+    auto it = local_buffer_to_mr_.find(buffer_id);
+    if (it != local_buffer_to_mr_.end()) {
+      // Idempotent re-registration of the same buffer is harmless;
+      // reject only when the pointer or size changed, which would
+      // race the remote side's OOB-based generation tracking.
+      if (it->second.address == reinterpret_cast<uintptr_t>(local_buf) &&
+          it->second.length == len) {
+        return true;  // same buffer, no-op
+      }
+      std::cerr << "[WARN] reg_mr: buffer_id " << buffer_id
+                << " already registered with different pointer/size;"
+                << " call dereg_mr first\n";
+      return false;
+    }
+  }
+
   MR mr = mr_manager_.create_local_mr(buffer_id, local_buf, len).mr;
   if (mr.address == 0 || mr.length == 0) return false;
 
@@ -1515,6 +1534,20 @@ MR Communicator::get_mr(int owner_rank, uint32_t buffer_id) const {
 bool Communicator::reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
                            bool publish) {
   if (buffer_id == 0) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(resource_mu_);
+    auto it = local_buffer_to_ipc_.find(buffer_id);
+    if (it != local_buffer_to_ipc_.end()) {
+      if (it->second.bytes == len && it->second.is_local) {
+        // Same size, still local — idempotent re-registration.
+        return true;
+      }
+      std::cerr << "[WARN] reg_ipc: buffer_id " << buffer_id
+                << " already registered; call dereg_ipc first\n";
+      return false;
+    }
+  }
 
   IPCItem local{};
   if (local_buf != nullptr && len != 0) {
