@@ -96,10 +96,17 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         src_ok = true;
       } else {
         auto ipc = comm_->get_ipc(c.src_buf);
-        void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
-        if (ptr) {
+        // A local IPC item describes the whole allocation (base_addr)
+        // plus the buffer's offset within it (base_offset) — e.g. a
+        // tensor inside a torch caching-allocator segment. The kernel
+        // address must include base_offset, same as
+        // try_resolve_remote_ipc_pointer does for remote items.
+        char* base = (char*)(ipc.is_local ? (void*)ipc.base_addr
+                                          : ipc.direct_ptr);
+        if (base) {
+          char* ptr = base + ipc.base_offset;
           if (c.src_buf < kMaxLocalBufs) local_ptr_cache_[c.src_buf] = ptr;
-          args.src = (char*)ptr + c.src_off;
+          args.src = ptr + c.src_off;
           src_ok = true;
         }
       }
@@ -135,10 +142,13 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
         dst_ok = true;
       } else {
         auto ipc = comm_->get_ipc(c.dst_buf);
-        void* ptr = ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr;
-        if (ptr) {
+        // Same base_offset requirement as the src path above.
+        char* base = (char*)(ipc.is_local ? (void*)ipc.base_addr
+                                          : ipc.direct_ptr);
+        if (base) {
+          char* ptr = base + ipc.base_offset;
           if (c.dst_buf < kMaxLocalBufs) local_ptr_cache_[c.dst_buf] = ptr;
-          args.dst = (char*)ptr + c.dst_off;
+          args.dst = ptr + c.dst_off;
           dst_ok = true;
         }
       }
