@@ -39,6 +39,9 @@ ensure_uv
 ensure_venv
 activate_venv
 
+echo "[bootstrap] installing dev dependencies via uv sync"
+uv sync --group dev
+
 echo "[bootstrap] running ep/install_deps.sh"
 bash "$UCCL_ROOT/ep/install_deps.sh"
 

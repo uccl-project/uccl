@@ -337,10 +337,9 @@ if __name__ == "__main__":
                     " (perhaps inside a container)"
                 )
 
-        # Fallback: gfx94x — the generic CDNA3/CDNA4 family target that
-        # covers both gfx942 (MI300X) and gfx950 (MI355X) on a sufficiently
-        # recent ROCm/LLVM.
-        device_arch = env_arch or detected_amd_arch or "gfx94x"
+        # Fallback: gfx942, the concrete compiler target for MI300A/MI300X
+        # supplied by TheRock's gfx94X-dcgpu package family.
+        device_arch = env_arch or detected_amd_arch or "gfx942"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
