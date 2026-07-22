@@ -244,28 +244,42 @@ class Communicator {
 
  private:
   void wait_put(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
     while (true) {
       CompletionResult r[1];
       size_t n = comm_->try_complete_put(r, 1);
       if (n == 1 && r[0].rid == rid) return;
-      {
-        nb::gil_scoped_release release;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
       }
-      if (PyErr_CheckSignals() != 0) throw nb::python_error();
     }
   }
 
   void wait_sig_send(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
     while (true) {
       CompletionResult r[1];
       size_t n = comm_->try_complete_sig_send(r, 1);
       if (n == 1 && r[0].rid == rid) return;
-      {
-        nb::gil_scoped_release release;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
       }
-      if (PyErr_CheckSignals() != 0) throw nb::python_error();
     }
   }
 
