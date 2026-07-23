@@ -101,11 +101,7 @@ int pick_dev_for_gpu(int gpu_idx) {
     char buf[32] = {};
     if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
     fclose(fp);
-    if (port_state != 4) {  // 4 = IBV_PORT_ACTIVE
-      fprintf(stderr, "[pick_dev] skip %s (port state=%d, not active)\n",
-              name.c_str(), port_state);
-      continue;
-    }
+    if (port_state != 4) continue;  // 4 = IBV_PORT_ACTIVE
 
     uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
@@ -113,12 +109,16 @@ int pick_dev_for_gpu(int gpu_idx) {
       best_idx = j;
     }
   }
+  std::string sel_name;
+  if (best_idx >= 0) sel_name = ibv_get_device_name(devs[best_idx]);
   ibv_free_device_list(devs);
 
   if (best_idx < 0) {
     fprintf(stderr, "[pick_dev] no active RDMA port found\n");
     return -1;
   }
+  fprintf(stderr, "[pick_dev] selected %s (pcie_dist=%u) for gpu %d\n",
+          sel_name.c_str(), best_dist, gpu_idx);
   return best_idx;
 }
 

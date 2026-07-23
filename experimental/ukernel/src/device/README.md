@@ -1,5 +1,17 @@
 # Device
 
+## Prerequisites
+
+This module requires GDRCopy (`gdrapi.h` + `libgdrapi`) for host-side
+access to GPU memory. See the [ukernel README](../../README.md#install-gdrcopy)
+for installation instructions.
+
+If GDRCopy is installed to a custom prefix, pass the paths at build time:
+
+```bash
+make GDRCOPY_INCLUDEDIR=/path/to/include GDRCOPY_LIBDIR=/path/to/lib
+```
+
 ## Build
 
 ```bash
@@ -8,10 +20,10 @@ make clean
 make -j$(nproc)
 ```
 
-Common override:
+Common overrides:
 
 ```bash
-make -j$(nproc) SM=80
+make -j$(nproc) SM=80 GDRCOPY_INCLUDEDIR=/home/user/gdrcopy/include GDRCOPY_LIBDIR=/home/user/gdrcopy/lib
 ```
 
 Default builds are release-style. To enable device debug compilation, add
@@ -93,9 +105,3 @@ Arguments are:
 
 - `test-unit` covers task encoding, task manager behavior, worker lifecycle, enqueue semantics, dtype copy, and multi-fifo behavior.
 - `test-integration` covers copy/reduce execution, same-flow reduce pipeline, and multi-block reduce.
-- This module requires system-installed GDRCopy (`gdrapi.h` + `libgdrapi`).
-- If `libgdrapi.so` is outside default linker paths, pass `GDRCOPY_LIBDIR`:
-
-```bash
-make GDRCOPY_LIBDIR=/usr/local/lib
-```

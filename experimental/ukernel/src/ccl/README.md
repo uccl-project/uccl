@@ -13,11 +13,16 @@ make clean
 make -j$(nproc)
 ```
 
-Common override:
+Common overrides:
 
 ```bash
-make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
+make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
+    GDRCOPY_INCLUDEDIR=/home/user/gdrcopy/include GDRCOPY_LIBDIR=/home/user/gdrcopy/lib
 ```
+
+DeviceBackend tests (e.g. `test_device_backend_e2e`, `test_spray_executor_e2e`)
+additionally require GDRCopy. See the [ukernel README](../../README.md#install-gdrcopy)
+for installation and custom path setup.
 
 ## Test
 

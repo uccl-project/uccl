@@ -1,6 +1,18 @@
-CXX      := g++
-NVCC     := nvcc
-DEFAULT_SMS := 80 86 89
+CXX      := /usr/bin/g++
+CUDA_HOME ?= /usr/local/cuda
+# Auto-detect CUDA if default path doesn't exist (e.g. /usr/local/cuda-13).
+ifeq ($(wildcard $(CUDA_HOME)/bin/nvcc),)
+  _CUDA_AUTO := $(firstword $(sort $(wildcard /usr/local/cuda-*)))
+  ifneq ($(_CUDA_AUTO),)
+    CUDA_HOME := $(_CUDA_AUTO)
+  endif
+endif
+NVCC_BIN ?= $(shell which nvcc 2>/dev/null)
+ifeq ($(NVCC_BIN),)
+  NVCC_BIN := $(CUDA_HOME)/bin/nvcc
+endif
+NVCC = $(NVCC_BIN)
+DEFAULT_SMS := 80 86 89 100
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
 ENABLE_TMA := 0
@@ -18,18 +30,25 @@ CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 UCCL_ROOT := $(abspath ../../../../)
-CUDA_HOME ?= /usr/local/cuda
+GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
-GDRCOPY_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR),)
+ifneq ($(strip $(GDRCOPY_LIBDIR)),)
+GDRCOPY_RPATH := -Wl,-rpath,$(GDRCOPY_LIBDIR)
+else
+GDRCOPY_RPATH :=
+endif
 
 INCLUDES := -I./ -I./fifo -I./ops -I./test -I./test/common -I./test/unit -I./test/integration \
-	-I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
-LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
+	-I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/include \
+	-I/usr/local/include -I/usr/include/$(GCC_MACHINE)
+LIBS := -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs -lcudart -lcuda -lnuma \
         $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi
-
-RPATH = $(GDRCOPY_RPATH_FLAGS)
+CXX_RPATH = -Wl,-rpath,$(CUDA_HOME)/lib64 \
+            -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
+            -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
+            $(GDRCOPY_RPATH)
 
 COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc
 COMMON_CU  := persistent_kernel_ops.cu
@@ -92,37 +111,37 @@ $(TEST_ALL_OBJ): $(TEST_ALL_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_ALL_BIN): $(COMMON_OBJ) $(TEST_ALL_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 $(SIMPLE_COPY_TEST_OBJ): $(SIMPLE_COPY_TEST_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(SIMPLE_COPY_TEST_BIN): $(COMMON_OBJ) $(SIMPLE_COPY_TEST_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 $(BENCH_OBJ): $(BENCH_SRC)
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 $(BENCH_FULL_OBJ): $(BENCH_FULL_SRC)
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_FULL_BIN): $(COMMON_OBJ) $(BENCH_FULL_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 $(BENCH_SM_OBJ): $(BENCH_SM_SRC)
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_SM_BIN): $(COMMON_OBJ) $(BENCH_SM_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 $(BENCH_VS_OBJ): $(BENCH_VS_SRC)
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_VS_BIN): $(COMMON_OBJ) $(BENCH_VS_OBJ)
-	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
 
 clean:
 	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./ops/*.o \

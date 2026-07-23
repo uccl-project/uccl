@@ -1,5 +1,12 @@
 # Compiler and environment
 CUDA_PATH      ?= /usr/local/cuda
+# Auto-detect CUDA if default path doesn't exist (e.g. /usr/local/cuda-13).
+ifeq ($(wildcard $(CUDA_PATH)/bin/nvcc),)
+  _CUDA_AUTO := $(firstword $(sort $(wildcard /usr/local/cuda-*)))
+  ifneq ($(_CUDA_AUTO),)
+    CUDA_PATH := $(_CUDA_AUTO)
+  endif
+endif
 override CXX   := /usr/bin/g++
 NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
@@ -10,7 +17,7 @@ DEBUG          ?= 0
 
 # GPU architecture
 # Default test builds target common datacenter GPUs used in this repo.
-DEFAULT_SMS := 80 86 89
+DEFAULT_SMS := 80 86 89 100
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
 ENABLE_TMA := 0
@@ -47,6 +54,8 @@ NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+              -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
+              -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
               -lcudart -lcuda \
               -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
@@ -54,7 +63,11 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
 LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
 
 # System and external library includes
-INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
+GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
+GDRCOPY_INCLUDEDIR ?= /usr/include
+INCLUDES := -I$(CUDA_PATH)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/include \
+            -I/usr/local/include -I/usr/include/$(GCC_MACHINE) \
+            -I../../include
 GDRCOPY_LIBDIR ?=
 ifneq ($(strip $(GDRCOPY_LIBDIR)),)
 GDRCOPY_LIBDIR_FLAGS := -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR)
@@ -89,8 +102,9 @@ BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
 BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
 BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
 BENCH_GDRCOPY_CXXFLAGS := $(CXXFLAGS) -DENABLE_CUDA
-BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
+BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/include -I/usr/include/$(GCC_MACHINE) -I/usr/local/include -I../../include
 BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+                      -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
                       $(GDRCOPY_LIBDIR_FLAGS) \
                       -lcudart -lcuda -lgdrapi
 BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)

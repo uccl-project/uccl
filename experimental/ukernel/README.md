@@ -9,12 +9,12 @@ Minimal build and test entry points for `experimental/ukernel`.
 - system-installed GDRCopy (`gdrapi.h` + `libgdrapi`) for `device` and `ccl` (NVIDIA only)
 - for the Python bindings: `torch` and `nanobind` (`pip install nanobind`)
 
-## Install GDRCopy (system)
+## Install GDRCopy
 
 `experimental/ukernel` no longer builds `thirdparty/gdrcopy`.
 Install GDRCopy from NVIDIA upstream first.
 
-Ubuntu quick path (source build):
+### System-wide install (requires sudo)
 
 ```bash
 sudo apt-get update
@@ -25,12 +25,33 @@ make CUDA=/usr/local/cuda
 sudo make CUDA=/usr/local/cuda prefix=/usr/local install
 ```
 
-Optional: if `libgdrapi.so` is not in the default linker path, pass
-`GDRCOPY_LIBDIR` when building:
+### Custom prefix install (no sudo required)
+
+If you don't have root access or want to keep GDRCopy in a local directory:
+
+```bash
+git clone https://github.com/NVIDIA/gdrcopy.git
+cd gdrcopy
+make CUDA=/usr/local/cuda
+mkdir -p /home/$USER/gdrcopy
+make CUDA=/usr/local/cuda prefix=/home/$USER/gdrcopy install
+```
+
+Then pass the custom paths when building ukernel:
 
 ```bash
 cd experimental/ukernel
-make GDRCOPY_LIBDIR=/usr/local/lib
+make -f Makefile \
+    GDRCOPY_INCLUDEDIR=/home/$USER/gdrcopy/include \
+    GDRCOPY_LIBDIR=/home/$USER/gdrcopy/lib
+```
+
+The same `GDRCOPY_INCLUDEDIR` and `GDRCOPY_LIBDIR` variables work for
+per-module builds as well:
+
+```bash
+make -C src/device GDRCOPY_INCLUDEDIR=/path/to/include GDRCOPY_LIBDIR=/path/to/lib
+make -C src/ccl   GDRCOPY_INCLUDEDIR=/path/to/include GDRCOPY_LIBDIR=/path/to/lib
 ```
 
 ## Build
@@ -54,8 +75,28 @@ make -j$(nproc) -f Makefile.rocm
 Common overrides:
 
 ```bash
-make -f Makefile CUDA_PATH=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
+make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
+    GDRCOPY_INCLUDEDIR=/usr/include GDRCOPY_LIBDIR=/usr/local/lib
 ```
+
+All path variables support environment variable override. When working on a
+machine with non-standard paths, export them once in your shell profile
+instead of passing them on every command:
+
+```bash
+# Example: custom CUDA and GDRCopy installed to user home
+export CUDA_HOME=/usr/local/cuda-13
+export GDRCOPY_INCLUDEDIR=$HOME/gdrcopy_install/include
+export GDRCOPY_LIBDIR=$HOME/gdrcopy_install/lib
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CUDA_HOME` / `CUDA_PATH` | `/usr/local/cuda` | CUDA toolkit root (auto-detected from `/usr/local/cuda-*` if missing) |
+| `GDRCOPY_INCLUDEDIR` | `/usr/include` | Path to `gdrapi.h` |
+| `GDRCOPY_LIBDIR` | (empty, system default) | Path to `libgdrapi.so` |
+| `CONDA_LIB_HOME` | `/usr/lib` | Library search path for system libs |
+| `SM` | `80 86 89` | GPU compute capability |
 
 ## Test
 
