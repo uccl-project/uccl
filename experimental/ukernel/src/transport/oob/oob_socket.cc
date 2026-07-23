@@ -1489,9 +1489,10 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
       return;
     }
     if (!shm_->begin_leader_run()) {
-      fprintf(stderr, "[oob] leader: begin_leader_run failed for %s\n",
-              ns.c_str());
-      return;
+      // Another process already owns the shm store; become non-leader.
+      shm_.reset();
+      node_leader_ = false;
+      goto init_non_leader;
     }
     running_.store(true, std::memory_order_release);
     socket_ = std::make_unique<SocketExchanger>(
@@ -1514,10 +1515,7 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
     last_replayed_epoch_ = 0;
     relay_thread_ = std::thread(&HierarchicalExchanger::relay_loop, this);
   } else {
-    // Non-leader path: the local leader creates the shm store only
-    // after its own (possibly slow) startup — torch import, CUDA init,
-    // socket bring-up. A short timeout here loses that race on slow
-    // machines, so default it generously (env-overridable).
+  init_non_leader:
     int const startup_ms =
         env_int_or_default("UHM_OOB_LEADER_STARTUP_TIMEOUT_MS", 30000);
     shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/false,
