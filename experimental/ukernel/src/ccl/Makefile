@@ -27,7 +27,9 @@ INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
-CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
+GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
+CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
+                   -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE)
 NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
 ifneq ($(strip $(GDRCOPY_LIBDIR)),)
 CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)

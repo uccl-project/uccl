@@ -149,10 +149,10 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
     : device_be_(device_be),
       tpt_be_(tpt_be),
       signal_be_(signal_be),
+      stop_(false),
       dev_slots_(device_be ? device_be->capacity() : 0),
       tpt_slots_(tpt_be ? tpt_be->capacity() : 0),
       sig_slots_(signal_be ? signal_be->capacity() : 0),
-      stop_(false),
       world_size_(world_size) {
   if (world_size_ > 0)
     tpt_metrics_.reset(new PeerMetrics[static_cast<size_t>(world_size_)]{});

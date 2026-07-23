@@ -108,16 +108,19 @@ struct SprayRun {
   }
 
   void init_ready_ring(size_t nops) {
-    uint32_t count = 1;
+    size_t count = 1;
+    // Cap to avoid uint32_t overflow; jring APIs only accept uint32_t count.
+    if (nops > RING_SZ_MASK) nops = RING_SZ_MASK;
     while (count <= nops) count <<= 1;
     if (count < 1024) count = 1024;  // floor: avoid overflow under burst
-    size_t sz = jring_get_buf_ring_size(sizeof(uint32_t), count);
+    size_t sz = jring_get_buf_ring_size(sizeof(uint32_t),
+                                        static_cast<uint32_t>(count));
     ready_ring = static_cast<jring_t*>(calloc(1, sz));
     if (!ready_ring) {
       std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);
       std::abort();
     }
-    jring_init(ready_ring, count, sizeof(uint32_t), 0, 1);
+    jring_init(ready_ring, static_cast<uint32_t>(count), sizeof(uint32_t), 0, 1);
   }
 
   ~SprayRun() {

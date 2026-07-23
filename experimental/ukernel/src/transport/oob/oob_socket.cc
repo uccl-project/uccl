@@ -56,15 +56,6 @@ int env_int_or_default(char const* name, int default_value) {
   }
 }
 
-bool env_bool_or_default(char const* name, bool default_value) {
-  char const* v = std::getenv(name);
-  if (!v || v[0] == '\0') return default_value;
-  if (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F') {
-    return false;
-  }
-  return true;
-}
-
 bool connect_with_timeout(int fd, sockaddr_in const& addr, int timeout_ms) {
   int const current_flags = ::fcntl(fd, F_GETFL, 0);
   if (current_flags < 0) return false;
