@@ -179,29 +179,32 @@ int main(int argc, char** argv) {
 
   void* d_remote = nullptr;
   int remote_dev = -1;
-  if (!comm->try_resolve_remote_ipc_pointer(peer, remote_buf_id, 0, kMaxBytes,
-                                            &d_remote, &remote_dev)) {
-    std::fprintf(stderr,
-                 "[p2p-perf] ERROR: Cannot resolve remote IPC.\n"
-                 "  Peer access may not be supported between GPU %d and %d.\n",
-                 gpu, (gpu == 0) ? 1 : 0);
-    GPU_RT_CHECK(gpuFree(d_local));
-    comm->dereg_ipc(local_buf_id);
-    return 1;
-  }
-  std::printf("[p2p-perf] remote_dev=%d resolved\n", remote_dev);
+  bool has_ipc =
+      comm->try_resolve_remote_ipc_pointer(peer, remote_buf_id, 0, kMaxBytes,
+                                           &d_remote, &remote_dev);
+  if (has_ipc) {
+    std::printf("[p2p-perf] remote_dev=%d resolved\n", remote_dev);
 
-  // 4. Enable peer access
-  int can_access = 0;
-  GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access, gpu, remote_dev));
-  if (!can_access) {
+    // 4. Enable peer access
+    int can_access = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access, gpu, remote_dev));
+    if (!can_access) {
+      std::fprintf(stderr,
+                   "[p2p-perf] Peer access NOT supported between GPU %d and %d\n",
+                   gpu, remote_dev);
+      has_ipc = false;
+    }
+  } else {
     std::fprintf(stderr,
-                 "[p2p-perf] Peer access NOT supported between GPU %d and %d\n",
-                 gpu, remote_dev);
-    GPU_RT_CHECK(gpuFree(d_local));
-    comm->dereg_ipc(local_buf_id);
-    return 1;
+                 "[p2p-perf] IPC not available (cross-machine or unsupported "
+                 "GPU topology), skipping DeviceBackend sections\n");
   }
+
+  // 6. Prepare size scan
+  auto sizes = make_size_scan();
+  std::vector<Result> results;
+
+  if (has_ipc) {
   gpuError_t err = gpuDeviceEnablePeerAccess(remote_dev, 0);
   if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
     GPU_RT_CHECK(err);
@@ -216,10 +219,6 @@ int main(int argc, char** argv) {
                                     warmup_stream));
   GPU_RT_CHECK(gpuStreamSynchronize(warmup_stream));
   gpuStreamDestroy(warmup_stream);
-
-  // 6. Prepare size scan
-  auto sizes = make_size_scan();
-  std::vector<Result> results;
 
   // 7. Benchmark DeviceBackend (various blocks_per_worker)
   std::vector<uint32_t> all_blocks = {1, 2, 4, 8, 16, 32, 64, 128};
@@ -532,6 +531,7 @@ int main(int argc, char** argv) {
       std::printf("[p2p-perf] TransportBackend benchmarks done.\n");
     }
   }
+  }  // if (has_ipc)
 
   // 9a. Benchmark TransportBackend (RDMA)
   {
@@ -813,7 +813,7 @@ int main(int argc, char** argv) {
     std::string label = fmt_size(sz);
     std::printf("  %-*s", w_name, label.c_str());
     for (size_t mi = 0; mi < names.size(); ++mi) {
-      auto it = map.find({sz, mi});
+      auto it = map.find(std::make_pair(sz, mi));
       if (it != map.end())
         std::printf("  %*.2f", w_num, it->second.lat);
       else
@@ -821,18 +821,12 @@ int main(int argc, char** argv) {
     }
     std::printf("\n");
   }
-
-  // Throughput table
-  std::printf("\nP2P Copy Throughput (GB/s)\n");
-  std::printf("  %-*s", w_name, "size");
-  for (auto& n : names) std::printf("  %*s", w_num, n.c_str());
-  std::printf("\n");
-
+  std::printf("\n  Throughput (GB/s):\n");
   for (auto& sz : sizes) {
     std::string label = fmt_size(sz);
     std::printf("  %-*s", w_name, label.c_str());
     for (size_t mi = 0; mi < names.size(); ++mi) {
-      auto it = map.find({sz, mi});
+      auto it = map.find(std::make_pair(sz, mi));
       if (it != map.end())
         std::printf("  %*.2f", w_num, it->second.tp);
       else
