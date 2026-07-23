@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cuda.h>
 #include <unistd.h>
 
 namespace UKernel {
@@ -846,15 +847,42 @@ bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
 
   ensure_mr_slot(buf_id);
 
-  // Check if already registered (fast path)
+  // Fast path: already registered
   {
     ibv_mr* existing = mr_table_[buf_id].load(std::memory_order_acquire);
     if (existing) return true;
   }
 
-  ibv_mr* mr = ibv_reg_mr(pd_, ptr, len,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_READ);
+  ibv_mr* mr = nullptr;
+
+  // Try DMA-BUF registration first — no nvidia-peermem required.
+  {
+    int dmabuf_fd = -1;
+    CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(ptr);
+    CUresult cu_ret = cuMemGetHandleForAddressRange(
+        &dmabuf_fd, dptr, len, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    if (cu_ret == CUDA_SUCCESS && dmabuf_fd >= 0) {
+      mr = ibv_reg_dmabuf_mr(pd_, 0, len,
+                             reinterpret_cast<uint64_t>(ptr), dmabuf_fd,
+                             IBV_ACCESS_LOCAL_WRITE |
+                                 IBV_ACCESS_REMOTE_WRITE |
+                                 IBV_ACCESS_REMOTE_READ);
+      if (mr) {
+        std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+        dmabuf_fds_[buf_id] = dmabuf_fd;
+      } else {
+        close(dmabuf_fd);
+      }
+    }
+  }
+
+  // Fallback: traditional ibv_reg_mr (requires nvidia-peermem for GPU ptrs)
+  if (!mr) {
+    mr = ibv_reg_mr(pd_, ptr, len,
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                        IBV_ACCESS_REMOTE_READ);
+  }
+
   if (!mr) return false;
 
   mr_table_[buf_id].store(mr, std::memory_order_release);
@@ -871,6 +899,18 @@ void RdmaTransportAdapter::deregister_memory(uint32_t buf_id) {
   ibv_mr* mr = mr_table_[buf_id].exchange(nullptr, std::memory_order_acq_rel);
   if (mr) {
     ibv_dereg_mr(mr);
+
+    int dmabuf_fd = -1;
+    {
+      std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+      auto it = dmabuf_fds_.find(buf_id);
+      if (it != dmabuf_fds_.end()) {
+        dmabuf_fd = it->second;
+        dmabuf_fds_.erase(it);
+      }
+    }
+    if (dmabuf_fd >= 0) close(dmabuf_fd);
+
     std::lock_guard<std::mutex> lk(mr_reg_mu_);
     registered_ids_.erase(buf_id);
   }
