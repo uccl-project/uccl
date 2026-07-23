@@ -238,7 +238,14 @@ bool ShmExchanger::begin_leader_run() {
   bool owner_alive = false;
   if (owner_pid > 1 && pid_is_alive(static_cast<pid_t>(owner_pid))) {
     if (owner_start_ticks == 0) {
-      owner_alive = true;
+      // No start_ticks available to verify PID ownership.  Try to read the
+      // current ticks; if we can read them, the PID is alive but could be a
+      // different process (PID reuse).  Without the original ticks we cannot
+      // distinguish, so treat the store as potentially stale and take over.
+      uint64_t cur = 0;
+      owner_alive = read_process_start_ticks(static_cast<pid_t>(owner_pid),
+                                             cur) &&
+                    cur != 0;
     } else {
       uint64_t current_ticks = 0;
       owner_alive = read_process_start_ticks(static_cast<pid_t>(owner_pid),
