@@ -149,7 +149,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   if (!is_server && config_->exchanger_ip == "0.0.0.0")
     config_->exchanger_ip = "127.0.0.1";
   std::cout << "[INFO] Using hierarchical bootstrap exchanger as "
-            << (is_server ? "server" : "client") << " " << config_->exchanger_ip
+            << (is_server ? "server" : "client") << " "
+            << config_->exchanger_ip << ":" << config_->exchanger_port
             << std::endl;
   exchanger_client_ = std::make_shared<HierarchicalExchanger>(
       (global_rank_ == 0), config_->exchanger_ip, config_->exchanger_port,
