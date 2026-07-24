@@ -59,13 +59,13 @@ bandwidth.
 cd experimental/ukernel/py
 
 # ukernel + NCCL only (default)
-CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
+CUDA_VISIBLE_DEVICES=1,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 
 # Include UCCL p2p (IPC mode)
-UCCL_P2P_MODE=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
+UK_P2P_TRANSPORT=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 
 # Force a specific transport
-UK_P2P_TRANSPORT=rdma CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
+UK_P2P_TRANSPORT=rdma CUDA_VISIBLE_DEVICES=1,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 ```
 
 Environment variables:
@@ -74,7 +74,6 @@ Environment variables:
 |---|---|---|
 | `EXCHANGER_PORT` | 29610 | Bootstrap exchanger port |
 | `UK_P2P_TRANSPORT` | `auto` | Force transport: `auto`, `ipc`, `rdma`, `tcp` |
-| `UCCL_P2P_MODE` | `ipc` | UCCL p2p mode: `ipc` or `rdma` |
 
 ---
 
