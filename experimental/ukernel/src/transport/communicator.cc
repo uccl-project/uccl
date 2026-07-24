@@ -1799,8 +1799,19 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
 }
 
 bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
-  return reg_mr(buffer_id, ptr, len, true) &&
-         reg_ipc(buffer_id, ptr, len, true);
+  bool ok = reg_mr(buffer_id, ptr, len, true);
+
+  // Only exchange IPC handles if there is at least one IPC-connected peer.
+  bool has_ipc_peer = false;
+  for (int r = 0; r < world_size_; ++r) {
+    if (r != global_rank_ && has_put_path(r, PeerTransportKind::Ipc)) {
+      has_ipc_peer = true;
+      break;
+    }
+  }
+  if (has_ipc_peer) ok = reg_ipc(buffer_id, ptr, len, true) && ok;
+
+  return ok;
 }
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
