@@ -149,7 +149,6 @@ if USE_ROCM:
 ExtensionCls = CUDAExtension
 
 common_libraries = [
-    "gflags",
     "z",
     "ibverbs",
     "nl-3",
