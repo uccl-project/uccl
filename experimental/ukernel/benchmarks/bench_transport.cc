@@ -80,7 +80,7 @@ static bool wait_all(Communicator& comm, std::vector<unsigned>& reqs) {
   pending.erase(0);
   while (!pending.empty()) {
     CompletionResult results[64];
-    size_t n = comm.try_complete(results, 64);
+    size_t n = comm.try_complete_put(results, 64);
     if (n == 0) std::this_thread::yield();
     for (size_t i = 0; i < n; ++i) {
       if (results[i].failed) {
@@ -98,17 +98,20 @@ static bool wait_one(Communicator& comm, unsigned rid) {
   if (rid == 0) return true;
   while (true) {
     CompletionResult results[16];
-    size_t n = comm.try_complete(results, 16);
+    size_t n = comm.try_complete_put(results, 16);
     for (size_t i = 0; i < n; ++i)
       if (results[i].rid == rid) return !results[i].failed;
 
-    // Also drain signal ring for wait_signal_async completions
     SignalCompletion events[16];
-    size_t m = comm.try_complete_signals(events, 16);
+    size_t m = comm.try_complete_sig_wait(events, 16);
     for (size_t i = 0; i < m; ++i)
       if (events[i].rid == rid) return !events[i].failed;
 
-    if (n == 0 && m == 0) std::this_thread::yield();
+    size_t k = comm.try_complete_sig_send(results, 16);
+    for (size_t i = 0; i < k; ++i)
+      if (results[i].rid == rid) return !results[i].failed;
+
+    if (n == 0 && m == 0 && k == 0) std::this_thread::yield();
   }
 }
 
@@ -238,7 +241,7 @@ static unsigned submit_send(Communicator& comm, int peer_rank,
     remote_id = recv_buffer_ids.at(static_cast<size_t>(slot));
   }
   return comm.send_put_async(peer_rank, local_send_mr_id, 0, remote_id, 0,
-                             msg_size);
+                             msg_size, kind);
 }
 
 static unsigned submit_recv(Communicator& comm, int peer_rank,
@@ -319,7 +322,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   auto config = std::make_shared<CommunicatorConfig>();
   config->exchanger_ip = local_ip;
   config->exchanger_port = listen_port;
-  config->local_id = rank;
+  config->local_id = gpu_id;
   config->preferred_transport = preferred_transport;
 
   // Create communicator
@@ -668,7 +671,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   auto config = std::make_shared<CommunicatorConfig>();
   config->exchanger_ip = local_ip;
   config->exchanger_port = listen_port;
-  config->local_id = rank;
+  config->local_id = gpu_id;
   config->preferred_transport = preferred_transport;
 
   // Create communicator

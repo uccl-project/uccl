@@ -9,7 +9,7 @@ namespace UKernel {
 namespace Device {
 namespace {
 
-// ── Vector type: 32B on SM80+, 16B otherwise ──────────────────────────
+// Vector type: 32B on SM80+, 16B otherwise
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
 using Vec = ulonglong4;
 static constexpr int kVEC_BYTES = 32;
@@ -27,7 +27,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
-  // ── TMA path for small messages (hardware async copy, up to 4KB) ──
+  // TMA path for small messages (hardware async copy, up to 4KB)
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
     if (tid == 0) {
       TmaSemaphore sem;
@@ -40,7 +40,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
     return;
   }
 
-  // ── Vectorized copy (kVEC_BYTES-byte loads through read-only cache) ──
+  // Vectorized copy (kVEC_BYTES-byte loads through read-only cache)
   constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
   size_t nvec = count / NELTS_PER_VEC;
 
