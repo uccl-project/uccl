@@ -1,8 +1,8 @@
 # Makefile for UCCL P2P Engine nanobind project (Cambricon MLU / CNRT)
 #
 # Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
-# libibverbs, libnccl, and libefa are loaded dynamically at runtime via
-# dlopen/dlsym (see *_dl.h). No transport libraries are linked.
+# libibverbs, libnccl, libefa, and libfabric/CXI are loaded dynamically at
+# runtime via dlopen/dlsym (see *_dl.h). No transport libraries are linked.
 #
 # p2p/ has no device kernels (pure host-side IPC/RDMA glue), so we compile
 # straight with g++ against the neuware headers and link the CNRT runtime
@@ -12,6 +12,7 @@
 NEUWARE_HOME ?= /usr/local/neuware
 NEUWARE_INC  := $(NEUWARE_HOME)/include
 NEUWARE_LIB  := $(NEUWARE_HOME)/lib64
+LIBFABRIC_HOME ?= /opt/libfabric
 
 CXX := g++
 
@@ -19,7 +20,7 @@ CXX := g++
 # Headers are included for type definitions only.
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
-	-I$(NEUWARE_INC) \
+	-I$(NEUWARE_INC) -I$(LIBFABRIC_HOME)/include \
 	-D__CAMBRICON_PLATFORM_MLU__ \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=$(NEUWARE_LIB)
@@ -85,14 +86,17 @@ P2P_IMPL_SOURCES := \
 	rdma/rdma_endpoint.cc \
 	util/seq_num.cc \
 	rdma/providers/efa_data_channel_impl.cc \
-	rdma/providers/ib_data_channel_impl.cc
+	rdma/providers/ib_data_channel_impl.cc \
+	cxi/cxi_endpoint.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
 SOURCES := engine.cc mlu/mlu_staging.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS)
 
 # dlsym wrapper objects
-DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
-DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc \
+	cxi/fabric_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o \
+	cxi/fabric_dl.o
 
 OBJECTS := $(SOURCES:.cc=.o)
 

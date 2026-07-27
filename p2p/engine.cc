@@ -248,11 +248,9 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
-#if defined(UCCL_ENABLE_CXI)
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
-#endif
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
   }
@@ -326,10 +324,8 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
 
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-#if defined(UCCL_ENABLE_CXI)
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
-#endif
   } else {
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
   }
@@ -2332,13 +2328,11 @@ int Endpoint::send_notification(uint64_t conn_id,
     if (!nccl_ep || !*nccl_ep) return -1;
     return (*nccl_ep)->send_notification(peer_id, notification);
   }
-#if defined(UCCL_ENABLE_CXI)
   if (is_cxi_transport()) {
     auto* cxi_ep = std::get_if<std::shared_ptr<CxiEndpoint>>(&ep_);
     if (!cxi_ep || !*cxi_ep) return -1;
     return (*cxi_ep)->send_notification(peer_id, notification);
   }
-#endif
   return -1;
 }
 

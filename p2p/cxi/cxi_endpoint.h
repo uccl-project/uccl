@@ -4,6 +4,7 @@
 #include "epoll_client.h"
 #include "epoll_server.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include <rdma/fabric.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
@@ -17,7 +18,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <cuda_runtime_api.h>
 
 struct CxiMemoryRegion {
   void* addr = nullptr;

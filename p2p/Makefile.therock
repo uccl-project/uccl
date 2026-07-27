@@ -5,10 +5,11 @@ HIP_HOME?=/opt/rocm
 HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
+LIBFABRIC_HOME ?= /opt/libfabric
 RDMA_HOME := ../collective/rdma
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
-	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
+	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include -I$(RDMA_HOME) -I$(HIP_INC) -I$(LIBFABRIC_HOME)/include \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lz -lelf -libverbs -lpthread
 
@@ -64,7 +65,9 @@ P2P_IMPL_SOURCES := \
 	rdma/rdma_endpoint.cc \
 	util/seq_num.cc \
 	rdma/providers/efa_data_channel_impl.cc \
-	rdma/providers/ib_data_channel_impl.cc
+	rdma/providers/ib_data_channel_impl.cc \
+	cxi/cxi_endpoint.cc \
+	cxi/fabric_dl.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
 SOURCES := engine.cc engine_api.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o $(P2P_IMPL_OBJECTS)
