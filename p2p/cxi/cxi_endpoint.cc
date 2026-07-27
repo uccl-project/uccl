@@ -84,7 +84,8 @@ bool is_cuda_pointer(void* ptr, int& cuda_device) {
     gpuGetLastError();
     return false;
   }
-  if (attrs.type == gpuMemoryTypeDevice || attrs.type == gpuMemoryTypeManaged) {
+  if (gpuMemTypeOf(attrs) == gpuMemoryTypeDevice ||
+      gpuMemTypeOf(attrs) == gpuMemoryTypeManaged) {
     cuda_device = attrs.device;
     return true;
   }

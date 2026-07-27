@@ -48,6 +48,7 @@
 #define gpuMemoryTypeDevice cnrtMemTypeDevice
 // CNRT has no managed memory type; alias to device so the check degenerates.
 #define gpuMemoryTypeManaged cnrtMemTypeDevice
+#define gpuMemTypeOf(a) (a).type
 // DMA-BUF / driver-level types for GPUDirect RDMA (inter-node path only).
 #define gpuDriverResult_t CNresult
 #define gpuDevicePtr_t CNaddr
@@ -171,6 +172,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuPointerGetAttributes cudaPointerGetAttributes
 #define gpuMemoryTypeDevice cudaMemoryTypeDevice
 #define gpuMemoryTypeManaged cudaMemoryTypeManaged
+#define gpuMemTypeOf(a) (a).type
 #define GPU_DRIVER_LIB_NAME "libcuda.so.1"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
@@ -276,6 +278,7 @@ typedef int gpuMemRangeHandleType;
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
 #define gpuMemoryTypeManaged hipMemoryTypeManaged
+#define gpuMemTypeOf(a) (a).memoryType
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define gpuMemGetAddressRange hipMemGetAddressRange
