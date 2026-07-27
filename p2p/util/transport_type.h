@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 enum class TransportType { RDMA, NCCL, EFA, CXI };
 
@@ -15,7 +16,14 @@ inline TransportType get_transport_type() {
         std::strcmp(env, "tcpx") == 0)
       return TransportType::NCCL;
     if (std::strcmp(env, "efa") == 0) return TransportType::EFA;
-    if (std::strcmp(env, "cxi") == 0) return TransportType::CXI;
+    if (std::strcmp(env, "cxi") == 0) {
+#if defined(UCCL_ENABLE_CXI)
+      return TransportType::CXI;
+#else
+      throw std::runtime_error(
+          "UCCL_P2P_TRANSPORT=cxi requested, but CXI support was not compiled");
+#endif
+    }
     return TransportType::RDMA;
   }();
   return t;

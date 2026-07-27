@@ -23,6 +23,7 @@ LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
+	-DUCCL_ENABLE_CXI=1 \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include -I$(CUDA_INC) \
 	-I$(EFA_HOME)/include -I$(LIBFABRIC_HOME)/include \
 	-MMD -MP \
