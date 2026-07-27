@@ -28,17 +28,16 @@ static constexpr size_t kMluTailOff = 0, kMluTailLen = 8, kMluTailSeq = 16,
                         kMluTailReq = 48, kMluTailReady = 56,
                         kMluTailBytes = 64;
 
-static bool mlu_peerable_alloc(size_t bytes, void** out) {
-  CNaddr a = 0;
-  if (cnMallocPeerAble(&a, (cn_uint64_t)bytes) != 0) return false;
-  *out = reinterpret_cast<void*>(a);
-  return true;
+static bool mlu_staging_alloc(size_t bytes, void** out) {
+  // 6.2.10: GDR reg needs plain device memory, not cnMallocPeerAble.
+  return cnrtMalloc(out, bytes) == cnrtSuccess;
 }
 
 bool Endpoint::mlu_ensure_tx() {
   if (mlu_tx_ready_) return true;
+  cnrtSetDevice(local_gpu_idx_);  // cnrtMalloc binds to current device
   size_t blk = kMluStageChunk + kMluTailBytes;
-  if (!mlu_peerable_alloc(blk, &mlu_tx_staging_)) return false;
+  if (!mlu_staging_alloc(blk, &mlu_tx_staging_)) return false;
   if (!reg(mlu_tx_staging_, blk, mlu_tx_staging_mr_)) return false;
   mlu_tx_ctrl_ = new uint64_t[4]();
   if (!reg(mlu_tx_ctrl_, 4 * sizeof(uint64_t), mlu_tx_ctrl_mr_)) return false;
@@ -91,12 +90,12 @@ bool Endpoint::mlu_setup_rx(uint64_t /*mr_id*/, void* dst, size_t len,
       e = it->second;
     } else {
       e = new MluStageRx();
+      cnrtSetDevice(local_gpu_idx_);  // cnrtMalloc binds to current device
       size_t blk = kMluStageChunk + kMluTailBytes;
-      if (!mlu_peerable_alloc(blk, &e->staging)) {
+      if (!mlu_staging_alloc(blk, &e->staging)) {
         delete e;
         return false;
       }
-      cnrtSetDevice(local_gpu_idx_);
       cnrtMemset((char*)e->staging + kMluStageChunk, 0, kMluTailBytes);
       if (!reg(e->staging, blk, e->staging_mr_id)) {
         delete e;
