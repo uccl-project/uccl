@@ -51,7 +51,7 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lnl-3 -lnl-route-3 -lpthread
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
+CCL_CORE_SRC := coll_algo.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc backend/backend.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
@@ -233,5 +233,5 @@ clean:
 
 # Cover every generated .d (wildcard): the previous explicit list missed
 # several test objects, which then went stale on header changes (ODR).
--include $(wildcard *.d algo/*.d backend/*.d test/common/*.d test/unit/*.d \
+-include $(wildcard *.d backend/*.d test/common/*.d test/unit/*.d \
 		test/integration/*.d)

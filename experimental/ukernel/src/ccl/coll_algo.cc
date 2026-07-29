@@ -1,0 +1,693 @@
+#include "coll_algo.h"
+
+#include "utils.h"
+#include <algorithm>
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace UKernel {
+namespace CCL {
+
+namespace {
+
+size_t balanced_shard_offset_bytes(size_t bytes, size_t elem_bytes, int nranks,
+                                   int owner_rank) {
+  size_t total_elems = bytes / elem_bytes;
+  size_t base_elems = total_elems / static_cast<size_t>(nranks);
+  size_t extra_elems = total_elems % static_cast<size_t>(nranks);
+  size_t offset_elems = static_cast<size_t>(owner_rank) * base_elems +
+                        std::min(static_cast<size_t>(owner_rank), extra_elems);
+  return offset_elems * elem_bytes;
+}
+
+size_t balanced_shard_size_bytes(size_t bytes, size_t elem_bytes, int nranks,
+                                 int owner_rank) {
+  size_t total_elems = bytes / elem_bytes;
+  size_t base_elems = total_elems / static_cast<size_t>(nranks);
+  size_t extra_elems = total_elems % static_cast<size_t>(nranks);
+  size_t shard_elems =
+      base_elems + (static_cast<size_t>(owner_rank) < extra_elems ? 1 : 0);
+  return shard_elems * elem_bytes;
+}
+
+std::vector<size_t> equal_alltoall_splits(size_t total_bytes, int nranks) {
+  std::vector<size_t> splits(static_cast<size_t>(nranks), 0);
+  size_t shard = total_bytes / static_cast<size_t>(nranks);
+  std::fill(splits.begin(), splits.end(), shard);
+  return splits;
+}
+
+std::vector<size_t> prefix_bytes(std::vector<size_t> const& splits) {
+  std::vector<size_t> prefix(splits.size(), 0);
+  size_t running = 0;
+  for (size_t i = 0; i < splits.size(); ++i) {
+    prefix[i] = running;
+    running += splits[i];
+  }
+  return prefix;
+}
+
+void validate_alltoall_splits(std::vector<size_t> const& splits, int nranks,
+                              size_t elem_bytes, size_t total_bytes,
+                              char const* which) {
+  if (splits.size() != static_cast<size_t>(nranks)) {
+    throw std::invalid_argument(std::string("alltoall ") + which +
+                                " split count must equal nranks");
+  }
+  size_t sum = 0;
+  for (size_t part : splits) {
+    if (part % elem_bytes != 0) {
+      throw std::invalid_argument(std::string("alltoall ") + which +
+                                  " split bytes must align to dtype size");
+    }
+    sum += part;
+  }
+  if (sum != total_bytes) {
+    throw std::invalid_argument(std::string("alltoall ") + which +
+                                " split bytes must sum to tensor bytes");
+  }
+}
+
+void require_collective_config(CollectiveConfig const& config) {
+  if (config.nranks < 2) {
+    throw std::invalid_argument("collective requires at least two ranks");
+  }
+  if (config.rank < 0 || config.rank >= config.nranks) {
+    throw std::invalid_argument("collective rank out of range");
+  }
+
+  size_t elem_bytes = scalar_type_size(config.dtype);
+  if (elem_bytes == 0) {
+    throw std::invalid_argument("collective dtype has invalid element size");
+  }
+
+  if (config.kind == CollKind::AllReduceRing) {
+    if (config.input_bytes == 0) {
+      throw std::invalid_argument("collective input_bytes must be positive");
+    }
+    if (config.input_bytes % elem_bytes != 0) {
+      throw std::invalid_argument(
+          "collective input_bytes must be aligned to dtype size");
+    }
+    return;
+  }
+
+  if (config.kind == CollKind::ReduceScatterRing) {
+    if (config.input_bytes == 0 || config.input_bytes % elem_bytes != 0) {
+      throw std::invalid_argument(
+          "reduce-scatter input_bytes must be positive and aligned to dtype "
+          "size");
+    }
+    size_t want = balanced_shard_size_bytes(config.input_bytes, elem_bytes,
+                                            config.nranks, config.rank);
+    if (config.output_bytes != want) {
+      throw std::invalid_argument(
+          "reduce-scatter output_bytes must equal this rank's balanced shard "
+          "size of the input");
+    }
+    return;
+  }
+
+  if (config.kind == CollKind::AllGatherRing) {
+    if (config.output_bytes == 0 || config.output_bytes % elem_bytes != 0) {
+      throw std::invalid_argument(
+          "all-gather output_bytes must be positive and aligned to dtype "
+          "size");
+    }
+    size_t want = balanced_shard_size_bytes(config.output_bytes, elem_bytes,
+                                            config.nranks, config.rank);
+    if (config.input_bytes != want) {
+      throw std::invalid_argument(
+          "all-gather input_bytes must equal this rank's balanced shard size "
+          "of the output");
+    }
+    return;
+  }
+
+  if (config.input_bytes == 0 || config.output_bytes == 0) {
+    throw std::invalid_argument(
+        "alltoall requires positive input/output tensor bytes");
+  }
+  if (config.input_bytes % elem_bytes != 0 ||
+      config.output_bytes % elem_bytes != 0) {
+    throw std::invalid_argument(
+        "alltoall input/output tensor bytes must align to dtype size");
+  }
+
+  bool has_input_splits = !config.input_split_bytes.empty();
+  bool has_output_splits = !config.output_split_bytes.empty();
+  if (has_input_splits != has_output_splits) {
+    throw std::invalid_argument(
+        "alltoall split configuration must provide both input and output "
+        "splits");
+  }
+  if (!has_input_splits) {
+    size_t denom = static_cast<size_t>(config.nranks) * elem_bytes;
+    if (config.input_bytes % denom != 0 || config.output_bytes % denom != 0) {
+      throw std::invalid_argument(
+          "equal-split alltoall requires input/output tensor bytes divisible "
+          "by nranks * dtype size");
+    }
+    return;
+  }
+
+  validate_alltoall_splits(config.input_split_bytes, config.nranks, elem_bytes,
+                           config.input_bytes, "input");
+  validate_alltoall_splits(config.output_split_bytes, config.nranks, elem_bytes,
+                           config.output_bytes, "output");
+}
+
+CollAlgo make_empty_algo(CollectiveConfig const& config) {
+  CollAlgo algo;
+  algo.nranks = config.nranks;
+  algo.rank = config.rank;
+  algo.input_bytes = config.input_bytes;
+  algo.output_bytes = config.output_bytes;
+  algo.reduction = config.reduction;
+  return algo;
+}
+
+struct AlgoBuilder {
+  explicit AlgoBuilder(CollAlgo algo_in) : algo(std::move(algo_in)) {}
+
+  uint32_t add_op(AlgoOpKind kind, size_t bytes, size_t src_off, size_t dst_off,
+                  int src_rank, int dst_rank, std::vector<uint32_t> deps,
+                  uint32_t pair_id = kNoPairId,
+                  BufRef src = {BufSpace::Input, 0},
+                  BufRef dst = {BufSpace::Output, 0}) {
+    MacroOp chunk;
+    chunk.op = kind;
+    chunk.bytes = bytes;
+    chunk.src_off = src_off;
+    chunk.dst_off = dst_off;
+    chunk.src_rank = src_rank;
+    chunk.dst_rank = dst_rank;
+    chunk.deps = std::move(deps);
+    chunk.pair_id = pair_id;
+    chunk.src = src;
+    chunk.dst = dst;
+    uint32_t idx = static_cast<uint32_t>(algo.chunks.size());
+    algo.chunks.push_back(std::move(chunk));
+    return idx;
+  }
+
+  CollAlgo algo;
+};
+
+// Reduce-scatter phase of ring allreduce: partial sums circulate
+// rank -> rank+1; virtual shard v's full sum ends at rank wrap(v-1).
+// First touch of a shard reads Input; afterwards the running sum.
+// Out-of-place: everything lives in Output. In-place (Input aliases
+// Output): partials accumulate in Tmp(0), laid out like the full
+// input — a peer's Put then never clobbers unread local input, so no
+// snapshot handshake is needed.
+void emit_ring_reduce_scatter(RingTopology const& ring,
+                              CollectiveConfig const& config,
+                              AlgoBuilder& builder,
+                              std::vector<uint32_t>& ready_ops,
+                              bool inplace) {
+  size_t elem_bytes = scalar_type_size(config.dtype);
+  BufRef const accum =
+      inplace ? BufRef{BufSpace::Tmp, 0} : BufRef{BufSpace::Output, 0};
+  for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
+    int send_owner = ring.wrap(config.rank - ring_step);
+    int recv_owner = ring.wrap(config.rank - ring_step - 1);
+    int send_peer = ring.next(config.rank);
+    int recv_peer = ring.prev(config.rank);
+    size_t send_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, send_owner);
+    size_t recv_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, recv_owner);
+
+    if (send_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, send_owner);
+      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      // First touch of a shard reads Input; afterwards the running sum
+      // in the accumulation buffer. Explicit by ring_step: at step s
+      // this rank sends shard wrap(rank-s), which it received at step
+      // s-1 — only s==0 (its own shard) has no prior receive.
+      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
+                     std::move(deps), pair_id,
+                     ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
+                     accum);
+    }
+
+    if (recv_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, recv_owner);
+      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
+      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {}, pair_id,
+                                        BufRef{BufSpace::Input, 0}, accum);
+      uint32_t reduce_op =
+          builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                         recv_peer, -1, {recv_op}, pair_id,
+                         BufRef{BufSpace::Input, 0}, accum);
+      ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
+    }
+  }
+}
+
+// All-gather phase of ring allreduce: fully-reduced shards circulate
+// rank -> rank+1 from their RS holder until every rank holds every
+// shard. Received shards land at their Output offset. In-place, the
+// shard this rank holds from the RS phase lives in Tmp(0): it is both
+// sent from Tmp at step 0 and published into the output layout by a
+// local copy (the peer's AG-phase Put never arrives before this rank
+// finished reading the region as input — the holder's send causally
+// follows the RS reduce that consumed it).
+void emit_ring_allgather(RingTopology const& ring,
+                         CollectiveConfig const& config,
+                         AlgoBuilder& builder,
+                         std::vector<uint32_t>& ready_ops, bool inplace) {
+  size_t elem_bytes = scalar_type_size(config.dtype);
+  if (inplace) {
+    // Publish the RS-held shard Tmp -> Output[own_offset].
+    int own = ring.wrap(config.rank + 1);
+    size_t own_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, own);
+    if (own_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, own);
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(own)]);
+      builder.add_op(AlgoOpKind::Put, own_bytes, offset, offset, -1, -1,
+                     std::move(deps), kNoPairId, BufRef{BufSpace::Tmp, 0},
+                     BufRef{BufSpace::Output, 0});
+    }
+  }
+  for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
+    int send_owner = ring.wrap(config.rank + 1 - ring_step);
+    int recv_owner = ring.wrap(config.rank - ring_step);
+    int send_peer = ring.next(config.rank);
+    int recv_peer = ring.prev(config.rank);
+    size_t send_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, send_owner);
+    size_t recv_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, recv_owner);
+
+    if (send_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, send_owner);
+      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2 + 1);
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      // In-place: the RS-held shard (sent at step 0) lives in Tmp(0);
+      // everything else was received into Output.
+      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
+                     std::move(deps), pair_id,
+                     (inplace && ring_step == 0)
+                         ? BufRef{BufSpace::Tmp, 0}
+                         : BufRef{BufSpace::Output, 0},
+                     BufRef{BufSpace::Output, 0});
+    }
+
+    if (recv_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, recv_owner);
+      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2 + 1);
+      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {}, pair_id,
+                                        BufRef{BufSpace::Input, 0},
+                                        BufRef{BufSpace::Output, 0});
+      ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
+    }
+  }
+}
+
+CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
+                                   bool inplace) {
+  RingTopology ring{config.nranks};
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllReduceRing;
+  // In-place: RS partials accumulate in a full-input-layout Tmp region
+  // (same footprint the snapshot staging used, so scratch does not
+  // grow).
+  if (inplace) algo.tmp_bytes = {config.input_bytes};
+
+  AlgoBuilder builder(std::move(algo));
+  std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
+
+  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace);
+  emit_ring_allgather(ring, config, builder, ready_ops, inplace);
+
+  return std::move(builder.algo);
+}
+
+// Standalone reduce-scatter (ring): the same circulation as the
+// allreduce RS phase, but rotated by one shard — the allreduce phase
+// leaves virtual shard v's full sum at rank wrap(v-1), while NCCL
+// reduce-scatter semantics require physical shard k at rank k, so the
+// owner indices shift by one (shard k first moves from rank wrap(k+1)
+// and arrives back at rank k in the last step). Partial sums live in a
+// full-input-layout Scratch: the peer's Put lands there, each
+// RecvReduce accumulates this rank's Input contribution into it, and
+// the running sum is forwarded from it. The loop's last RecvReduce
+// (recv_owner == rank) completes the rank's own shard in Scratch; a
+// final local copy moves it to Output[0].
+CollAlgo build_reduce_scatter_ring_algo(CollectiveConfig const& config) {
+  RingTopology ring{config.nranks};
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::ReduceScatterRing;
+  // Partial sums live in a declared Tmp region laid out like the full
+  // input; the lowering maps it into executor scratch.
+  algo.tmp_bytes = {config.input_bytes};
+  size_t elem_bytes = scalar_type_size(config.dtype);
+
+  AlgoBuilder builder(std::move(algo));
+  std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
+
+  for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
+    int send_owner = ring.wrap(config.rank - ring_step - 1);
+    int recv_owner = ring.wrap(config.rank - ring_step - 2);
+    int send_peer = ring.next(config.rank);
+    int recv_peer = ring.prev(config.rank);
+    size_t send_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, send_owner);
+    size_t recv_bytes = balanced_shard_size_bytes(
+        config.input_bytes, elem_bytes, config.nranks, recv_owner);
+
+    if (send_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, send_owner);
+      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      // First touch of a shard reads Input; afterwards the running sum
+      // in Tmp(0). The Put always lands in the peer's Tmp (same full
+      // layout there). Explicit by ring_step: at step s this rank sends
+      // shard wrap(rank-s-1), which it received at step s-1 — only
+      // s==0 (shard wrap(rank-1), never received before) reads Input.
+      // (Equivalent to the previous deps.empty() test: deps are empty
+      // exactly at step 0.)
+      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
+                     std::move(deps), pair_id,
+                     ring_step == 0 ? BufRef{BufSpace::Input, 0}
+                                    : BufRef{BufSpace::Tmp, 0},
+                     BufRef{BufSpace::Tmp, 0});
+    }
+
+    if (recv_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.input_bytes, elem_bytes, config.nranks, recv_owner);
+      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
+      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {}, pair_id,
+                                        BufRef{BufSpace::Input, 0},
+                                        BufRef{BufSpace::Tmp, 0});
+      uint32_t reduce_op =
+          builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                         recv_peer, -1, {recv_op}, pair_id,
+                         BufRef{BufSpace::Input, 0},
+                         BufRef{BufSpace::Tmp, 0});
+      ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
+    }
+  }
+
+  // Own shard: complete in Scratch after the loop's last RecvReduce;
+  // copy it to Output[0] (NCCL RS layout: only this rank's shard).
+  size_t own_bytes = balanced_shard_size_bytes(
+      config.input_bytes, elem_bytes, config.nranks, config.rank);
+  if (own_bytes > 0) {
+    size_t offset = balanced_shard_offset_bytes(
+        config.input_bytes, elem_bytes, config.nranks, config.rank);
+    std::vector<uint32_t> deps;
+    add_dep(deps, ready_ops[static_cast<size_t>(config.rank)]);
+    builder.add_op(AlgoOpKind::Put, own_bytes, offset, 0, -1, -1,
+                   std::move(deps), kNoPairId, BufRef{BufSpace::Tmp, 0},
+                   BufRef{BufSpace::Output, 0});
+  }
+
+  return std::move(builder.algo);
+}
+
+// Standalone all-gather (ring): shard k starts at rank k (its whole
+// input) and circulates rank -> rank+1 until every rank holds it — the
+// allreduce AG phase with owner indices shifted by one (there shard v
+// starts at its RS holder wrap(v-1)). The rank's own shard is sent
+// straight from Input[0] on the first step (no staging dependency);
+// the local copy Input[0] -> Output[offset(rank)] only publishes the
+// own shard into the output layout (NCCL AG semantics) and completes
+// with the run. Shards received from the ring are forwarded from their
+// Output offset, exactly like the allreduce AG phase (Put with deps
+// reads Output via the lowering's phase-2 rule).
+CollAlgo build_allgather_ring_algo(CollectiveConfig const& config) {
+  RingTopology ring{config.nranks};
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllGatherRing;
+  size_t elem_bytes = scalar_type_size(config.dtype);
+
+  AlgoBuilder builder(std::move(algo));
+  std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
+
+  // Local copy of the own shard into the output layout. Independent of
+  // the send path; only run completion orders it before the user read.
+  size_t own_bytes = balanced_shard_size_bytes(
+      config.output_bytes, elem_bytes, config.nranks, config.rank);
+  if (own_bytes > 0) {
+    size_t offset = balanced_shard_offset_bytes(
+        config.output_bytes, elem_bytes, config.nranks, config.rank);
+    builder.add_op(AlgoOpKind::Put, own_bytes, 0, offset, -1, -1, {},
+                   kNoPairId, BufRef{BufSpace::Input, 0},
+                   BufRef{BufSpace::Output, 0});
+  }
+
+  for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
+    int send_owner = ring.wrap(config.rank - ring_step);
+    int recv_owner = ring.wrap(config.rank - ring_step - 1);
+    int send_peer = ring.next(config.rank);
+    int recv_peer = ring.prev(config.rank);
+    size_t send_bytes = balanced_shard_size_bytes(
+        config.output_bytes, elem_bytes, config.nranks, send_owner);
+    size_t recv_bytes = balanced_shard_size_bytes(
+        config.output_bytes, elem_bytes, config.nranks, recv_owner);
+
+    if (send_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.output_bytes, elem_bytes, config.nranks, send_owner);
+      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2 + 1);
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      if (send_owner == config.rank) {
+        // First step: the own shard is sent straight from Input[0].
+        builder.add_op(AlgoOpKind::Put, send_bytes, 0, offset, -1, send_peer,
+                       std::move(deps), pair_id, BufRef{BufSpace::Input, 0},
+                       BufRef{BufSpace::Output, 0});
+      } else {
+        // Forwarded shards were received into the Output layout.
+        builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
+                       send_peer, std::move(deps), pair_id,
+                       BufRef{BufSpace::Output, 0},
+                       BufRef{BufSpace::Output, 0});
+      }
+    }
+
+    if (recv_bytes > 0) {
+      size_t offset = balanced_shard_offset_bytes(
+          config.output_bytes, elem_bytes, config.nranks, recv_owner);
+      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2 + 1);
+      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
+                                        offset, recv_peer, -1, {}, pair_id,
+                                        BufRef{BufSpace::Input, 0},
+                                        BufRef{BufSpace::Output, 0});
+      ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
+    }
+  }
+
+  return std::move(builder.algo);
+}
+
+CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
+                                      bool inplace) {
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllToAllPairwise;
+
+  std::vector<size_t> input_splits =
+      config.input_split_bytes.empty()
+          ? equal_alltoall_splits(config.input_bytes, config.nranks)
+          : config.input_split_bytes;
+  std::vector<size_t> output_splits =
+      config.output_split_bytes.empty()
+          ? equal_alltoall_splits(config.output_bytes, config.nranks)
+          : config.output_split_bytes;
+  std::vector<size_t> input_prefix = prefix_bytes(input_splits);
+  std::vector<size_t> output_prefix = prefix_bytes(output_splits);
+
+  AlgoBuilder builder(std::move(algo));
+
+  size_t self_slice_bytes = input_splits[static_cast<size_t>(config.rank)];
+  if (self_slice_bytes != output_splits[static_cast<size_t>(config.rank)])
+    throw std::invalid_argument(
+        "alltoall self split size must match between input and output");
+
+  // AllToAll is always inplace — self-slice needs no local copy.
+  // Variable splits can make a peer's write overlap local data this
+  // rank has not read yet: stage sends through scratch (mechanism in
+  // the lowering). Equal-split offsets never overlap, so no staging.
+  bool const stage = inplace && !config.input_split_bytes.empty();
+
+  for (int peer = 0; peer < config.nranks; ++peer) {
+    if (peer == config.rank) continue;
+
+    size_t send_offset = input_prefix[static_cast<size_t>(peer)];
+    size_t send_bytes = input_splits[static_cast<size_t>(peer)];
+    size_t recv_offset = output_prefix[static_cast<size_t>(peer)];
+    size_t recv_bytes = output_splits[static_cast<size_t>(peer)];
+    size_t dst_off = output_prefix[static_cast<size_t>(config.rank)];
+
+    // Canonical directed pair ids: both ranks derive the same value for
+    // the same transfer, so the sender's Signal tag matches the
+    // receiver's WaitSignal tag. (The previous per-rank next_pair_id++
+    // sequence only agreed for adjacent ranks — non-adjacent pairs
+    // never matched.)
+    uint32_t send_pair =
+        static_cast<uint32_t>(config.rank * config.nranks + peer);
+    uint32_t recv_pair =
+        static_cast<uint32_t>(peer * config.nranks + config.rank);
+
+    if (send_bytes > 0) {
+      uint32_t put_op =
+          builder.add_op(AlgoOpKind::Put, send_bytes, send_offset, dst_off, -1,
+                         peer, {}, send_pair, BufRef{BufSpace::Input, 0},
+                         BufRef{BufSpace::Output, 0});
+      builder.algo.chunks[put_op].stage_via_scratch = stage;
+    }
+    if (recv_bytes > 0) {
+      builder.add_op(AlgoOpKind::Recv, recv_bytes, recv_offset, recv_offset,
+                     peer, -1, {}, recv_pair, BufRef{BufSpace::Input, 0},
+                     BufRef{BufSpace::Output, 0});
+    }
+  }
+
+  return std::move(builder.algo);
+}
+
+}  // namespace
+
+CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
+  require_collective_config(config);
+  if (config.kind == CollKind::AllToAllPairwise && !inplace)
+    throw std::invalid_argument("AllToAll requires inplace (input == output)");
+  switch (config.kind) {
+    case CollKind::AllReduceRing:
+      return build_allreduce_ring_algo(config, inplace);
+    case CollKind::AllToAllPairwise:
+      return build_alltoall_pairwise_algo(config, inplace);
+    case CollKind::AllGatherRing:
+      return build_allgather_ring_algo(config);
+    case CollKind::ReduceScatterRing:
+      return build_reduce_scatter_ring_algo(config);
+  }
+  throw std::invalid_argument("unsupported collective kind");
+}
+
+void verify_algo_pairing(CollectiveConfig const& config, bool inplace) {
+  size_t elem_bytes = scalar_type_size(config.dtype);
+  int const n = config.nranks;
+  uint32_t const G = config.signal_group_tiles ? config.signal_group_tiles : 1;
+
+  auto fail = [](std::string const& msg) {
+    throw std::invalid_argument("verify_algo_pairing: " + msg);
+  };
+
+  // Build every rank's CollAlgo. RS/AG have rank-dependent sizes;
+  // recompute them per rank from the same formulas the validators use.
+  std::vector<CollAlgo> algos;
+  algos.reserve(static_cast<size_t>(n));
+  for (int r = 0; r < n; ++r) {
+    CollectiveConfig rcfg = config;
+    rcfg.rank = r;
+    if (config.kind == CollKind::ReduceScatterRing)
+      rcfg.output_bytes = balanced_shard_size_bytes(
+          config.input_bytes, elem_bytes, n, r);
+    if (config.kind == CollKind::AllGatherRing)
+      rcfg.input_bytes = balanced_shard_size_bytes(config.output_bytes,
+                                                   elem_bytes, n, r);
+    algos.push_back(build_coll_algo(rcfg, inplace));
+  }
+
+  for (int r = 0; r < n; ++r) {
+    auto const& chunks = algos[static_cast<size_t>(r)].chunks;
+    // Local deps reference strictly earlier ops (hence acyclic) and
+    // must have equal byte counts (hard lowering invariant).
+    for (size_t i = 0; i < chunks.size(); ++i)
+      for (uint32_t d : chunks[i].deps) {
+        if (d >= i)
+          fail("rank " + std::to_string(r) + " op " + std::to_string(i) +
+               " depends on a later op");
+        if (chunks[d].bytes != chunks[i].bytes)
+          fail("rank " + std::to_string(r) + " op " + std::to_string(i) +
+               " dep endpoints with unequal byte counts");
+      }
+    // Every RecvReduce pairs with a local Recv of the same pair_id.
+    for (auto const& c : chunks) {
+      if (c.op != AlgoOpKind::RecvReduce) continue;
+      bool found = false;
+      for (auto const& o : chunks)
+        if (o.op == AlgoOpKind::Recv && o.pair_id == c.pair_id) found = true;
+      if (!found)
+        fail("rank " + std::to_string(r) + " RecvReduce pair " +
+             std::to_string(c.pair_id) + " has no local Recv");
+    }
+  }
+
+  // Cross-rank Put/Recv pairing and tag-space disjointness. Each
+  // directed (src,dst) pair may use a pair id at most once, and tile
+  // groups must stay clear of the reserved all-ones handshake tag. The
+  // layout mirrors the lowering's adaptive group_bits, derived from the
+  // rank-independent max-tensor bound.
+  size_t const max_bytes = std::max(config.input_bytes, config.output_bytes);
+  size_t const max_tiles =
+      (max_bytes + config.tile_bytes - 1) / config.tile_bytes;
+  size_t const max_groups = (max_tiles + G - 1) / G;
+  uint32_t group_bits = 1;
+  while ((1u << group_bits) < max_groups + 1) ++group_bits;
+  uint32_t const all_ones = (1u << group_bits) - 1;
+  std::map<std::tuple<int, int, uint32_t>, size_t> tag_groups;
+  for (int r = 0; r < n; ++r) {
+    for (auto const& c : algos[static_cast<size_t>(r)].chunks) {
+      if (c.op != AlgoOpKind::Put || c.dst_rank < 0 ||
+          c.pair_id == kNoPairId)
+        continue;
+      int const p = c.dst_rank;
+      auto key = std::make_tuple(r, p, c.pair_id);
+      if (tag_groups.count(key))
+        fail("duplicate pair id " + std::to_string(c.pair_id) + " on rank " +
+             std::to_string(r) + " -> " + std::to_string(p));
+      size_t tiles = (c.bytes + config.tile_bytes - 1) / config.tile_bytes;
+      size_t groups = (tiles + G - 1) / G;
+      if (groups > all_ones)
+        fail("pair " + std::to_string(c.pair_id) +
+             " tag groups collide with the reserved handshake tag");
+      tag_groups[key] = groups;
+      int matches = 0;
+      for (auto const& o : algos[static_cast<size_t>(p)].chunks) {
+        if (o.op != AlgoOpKind::Recv || o.src_rank != r ||
+            o.pair_id != c.pair_id)
+          continue;
+        ++matches;
+        if (o.bytes != c.bytes)
+          fail("pair " + std::to_string(c.pair_id) +
+               " Put/Recv bytes mismatch");
+        if (o.dst.space != c.dst.space || o.dst.index != c.dst.index ||
+            o.dst_off != c.dst_off)
+          fail("pair " + std::to_string(c.pair_id) +
+               " Put/Recv dst buffer or offset mismatch");
+      }
+      if (matches != 1)
+        fail("Put rank " + std::to_string(r) + " -> " + std::to_string(p) +
+             " pair " + std::to_string(c.pair_id) + " has " +
+             std::to_string(matches) + " matching Recv (want exactly 1)");
+    }
+  }
+}
+
+}  // namespace CCL
+}  // namespace UKernel

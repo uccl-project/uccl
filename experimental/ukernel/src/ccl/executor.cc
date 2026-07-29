@@ -1,6 +1,6 @@
 #include "executor.h"
 #include "../../include/transport.h"
-#include "algo/chunk_graph.h"
+#include "coll_algo.h"
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "util/uk_debug.h"
