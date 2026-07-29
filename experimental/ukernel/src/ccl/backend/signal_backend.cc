@@ -27,12 +27,18 @@ bool SignalBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
                                              c.tag, tpt, rid);
   }
   if (c.kind == ExecOpKind::WaitSignal) {
-    auto tpt = comm_->same_host(static_cast<int>(c.src_peer))
+    // kCmdFlagImmWait: the sender fused this group's puts via RDMA
+    // write-with-imm, so the arrivals surface on the RDMA adapter even
+    // for a same-host peer (UK_CCL_PUT_PATH=rdma) — the usual
+    // same-host→IPC shortcut would hang.
+    bool const imm_wait = (c.flags & kCmdFlagImmWait) != 0;
+    auto tpt = (!imm_wait && comm_->same_host(static_cast<int>(c.src_peer)))
                    ? Transport::PeerTransportKind::Ipc
                    : Transport::PeerTransportKind::Rdma;
     return comm_->wait_signal_async_with_rid(static_cast<int>(c.src_peer),
                                              c.tag, tpt, rid,
-                                             c.wait_count ? c.wait_count : 1);
+                                             c.wait_count ? c.wait_count : 1,
+                                             imm_wait);
   }
   return false;
 }

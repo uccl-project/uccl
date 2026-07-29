@@ -990,7 +990,7 @@ void RdmaTransportAdapter::send_worker() {
         p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
             std::memory_order_acquire);
       }
-      if (!p || !p->put_ready || (fused && (e.tag >> 32))) {
+      if (!p || !p->put_ready) {
         publish_put_completion(e.comm_rid, true);
         continue;
       }
@@ -1080,6 +1080,11 @@ void RdmaTransportAdapter::send_worker() {
         wr.num_sge = 1;
         if (fused && ci + 1 == ck.count) {
           wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          // The immediate intentionally carries only the tag's low 32
+          // bits — the unsalted tag (the run epoch lives in the high
+          // bits, and low32(salted) == unsalted). Uniqueness across runs
+          // comes from per-peer FIFO arrival-order matching on the
+          // receiver (Communicator::on_imm_received), not from the tag.
           // Immediate data travels in network byte order.
           wr.imm_data = htonl(static_cast<uint32_t>(e.tag));
         } else {
@@ -1223,12 +1228,12 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
 
       // Recv completions (write-with-imm signals) are handled before the
       // send-side wr_id decoding — their wr_id is a recv WQE id, not a
-      // send_id. The 32-bit immediate carries the signal tag (in network
-      // byte order), which the NIC surfaces only after the written data
-      // has landed.
+      // send_id. The 32-bit immediate carries the unsalted signal tag (in
+      // network byte order), which the NIC surfaces only after the written
+      // data has landed; matching is per-peer FIFO in arrival order.
       if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
         if (wc[i].status == IBV_WC_SUCCESS && comm_)
-          comm_->on_signal_received(rank, ntohl(wc[i].imm_data));
+          comm_->on_imm_received(rank, ntohl(wc[i].imm_data));
         // Repost on the QP that consumed the WQE.
         bool reposted = false;
         for (int qi = 0; qi < p.num_qps; ++qi) {

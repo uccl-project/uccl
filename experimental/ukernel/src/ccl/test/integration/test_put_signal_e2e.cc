@@ -118,11 +118,12 @@ int main(int argc, char** argv) {
       for (int i = 0; i < kN; ++i) {
         size_t off = (size_t)i * kChunk;
         unsigned rid = comm->alloc_rid();
-        // Exercise group QP affinity: puts of consecutive groups pin to
-        // different QPs (i % 4); ignored by IPC.
+        // Fixed QP affinity: the receiver matches write-with-imm
+        // arrivals per-peer FIFO in arrival order, so fused puts to one
+        // peer must share a QP (the executor pins per peer). Ignored by
+        // IPC.
         if (!comm->send_put_signal_async_with_rid(peer, 1, off, 1, off, kChunk,
-                                                  tpt, tag_base + i, rid,
-                                                  (uint32_t)(i % 4))) {
+                                                  tpt, tag_base + i, rid, 0)) {
           printf("  [FAIL] send_put_signal_async_with_rid i=%d\n", i);
           return 1;
         }
@@ -153,6 +154,100 @@ int main(int argc, char** argv) {
              bad == 0 ? "verified" : "MISMATCH", bad);
       delete[] chk;
       if (bad) return 1;
+    }
+
+    // Section 1: cross-run identical tags. Two batches reuse the same tag
+    // range (immediates carry only the unsalted low 32 bits, so "runs"
+    // are indistinguishable by tag). The receiver must pair arrivals
+    // with waits strictly in issue order — verified by writing each
+    // batch to distinct offsets with distinct patterns and checking the
+    // batch's OWN chunk right after each wait fires.
+    {
+      uint64_t const xtag = 2000;
+      constexpr int kB = 10;
+      for (int batch = 0; batch < 2; ++batch) {
+        uint8_t const bp = (uint8_t)(0xA0 + 0x10 * batch + phase);
+        size_t const base_off = (size_t)batch * kB * kChunk;
+        if (am_sender) {
+          GPU_RT_CHECK(gpuMemset((char*)d + base_off, bp, kB * kChunk));
+          for (int i = 0; i < kB; ++i) {
+            size_t const off = base_off + (size_t)i * kChunk;
+            unsigned rid = comm->alloc_rid();
+            if (!comm->send_put_signal_async_with_rid(peer, 1, off, 1, off,
+                                                      kChunk, tpt, xtag + i,
+                                                      rid, 0)) {
+              printf("  [FAIL] xrun send batch=%d i=%d\n", batch, i);
+              return 1;
+            }
+            wait_put_rid(comm.get(), rid);
+          }
+        } else {
+          auto* chk = new uint8_t[kChunk];
+          for (int i = 0; i < kB; ++i) {
+            unsigned rid = comm->wait_signal_async(peer, xtag + i, tpt);
+            if (!rid) {
+              printf("  [FAIL] xrun wait batch=%d i=%d\n", batch, i);
+              return 1;
+            }
+            wait_sig_rid(comm.get(), rid);
+            size_t const off = base_off + (size_t)i * kChunk;
+            GPU_RT_CHECK(
+                gpuMemcpy(chk, (char*)d + off, kChunk, gpuMemcpyDeviceToHost));
+            size_t bad = 0;
+            for (size_t k = 0; k < kChunk; ++k)
+              if (chk[k] != bp) ++bad;
+            if (bad) {
+              printf("  [FAIL] xrun data batch=%d i=%d bad=%zu\n", batch, i,
+                     bad);
+              return 1;
+            }
+          }
+          delete[] chk;
+        }
+      }
+      if (!am_sender) printf("  cross-run same-tag FIFO: verified\n");
+    }
+
+    // Section 2: counted wait — kC fused puts carry the SAME tag, one
+    // wait counts kC arrivals (the fused signal-group shape).
+    {
+      uint64_t const ctag = 3000 + phase;
+      constexpr int kC = 4;
+      size_t const base_off = 32ULL * kChunk;
+      uint8_t const cpatt = (uint8_t)(0xC0 + phase);
+      if (am_sender) {
+        GPU_RT_CHECK(gpuMemset((char*)d + base_off, cpatt, kC * kChunk));
+        for (int i = 0; i < kC; ++i) {
+          size_t const off = base_off + (size_t)i * kChunk;
+          unsigned rid = comm->alloc_rid();
+          if (!comm->send_put_signal_async_with_rid(peer, 1, off, 1, off,
+                                                    kChunk, tpt, ctag, rid,
+                                                    0)) {
+            printf("  [FAIL] counted send i=%d\n", i);
+            return 1;
+          }
+          wait_put_rid(comm.get(), rid);
+        }
+      } else {
+        unsigned rid = comm->alloc_rid();
+        if (!comm->wait_signal_async_with_rid(peer, ctag, tpt, rid, kC)) {
+          printf("  [FAIL] counted wait\n");
+          return 1;
+        }
+        wait_sig_rid(comm.get(), rid);
+        auto* chk = new uint8_t[kC * kChunk];
+        GPU_RT_CHECK(gpuMemcpy(chk, (char*)d + base_off, kC * kChunk,
+                               gpuMemcpyDeviceToHost));
+        size_t bad = 0;
+        for (size_t k = 0; k < kC * kChunk; ++k)
+          if (chk[k] != cpatt) ++bad;
+        delete[] chk;
+        if (bad) {
+          printf("  [FAIL] counted data bad=%zu\n", bad);
+          return 1;
+        }
+        printf("  counted wait (count=%d): verified\n", kC);
+      }
     }
   }
   printf("  [PASS]\n");

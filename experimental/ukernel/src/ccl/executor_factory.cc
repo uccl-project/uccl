@@ -60,6 +60,10 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);
   };
+  ex->deregister_buf_fn_ = [](Transport::Communicator* comm, uint32_t id) {
+    comm->dereg_mr(id);
+    comm->dereg_ipc(id);
+  };
   ex->peer_setup_fn_ = [](Transport::Communicator* comm, int rank,
                           std::vector<int> const& peers) {
     for (int p : peers) {

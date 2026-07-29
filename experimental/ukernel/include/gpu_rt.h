@@ -112,6 +112,15 @@ inline void gpuFlushRDMAWrites() {
 #define gpuPointerGetAttributes cudaPointerGetAttributes
 #define gpuMemoryTypeDevice cudaMemoryTypeDevice
 #define gpuMemoryTypeManaged cudaMemoryTypeManaged
+// NCCL-compatible stream-ordered wait on a device memory value.
+#define CU_STREAM_WAIT_VALUE_GEQ 0x0
+inline gpuError_t gpuStreamWaitValue32(gpuStream_t stream, gpuDevicePtr_t addr,
+                                       unsigned int value, unsigned int flags) {
+  CUresult r = cuStreamWaitValue32(reinterpret_cast<CUstream>(stream),
+                                   reinterpret_cast<CUdeviceptr>(addr), value,
+                                   flags);
+  return (r == CUDA_SUCCESS) ? gpuSuccess : static_cast<gpuError_t>(r);
+}
 #define GPU_DRIVER_LIB_NAME "libcuda.so.1"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
@@ -226,6 +235,13 @@ inline void gpuFlushRDMAWrites() {}
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
 #define gpuMemoryTypeManaged hipMemoryTypeManaged
+#define CU_STREAM_WAIT_VALUE_GEQ 0x0
+inline gpuError_t gpuStreamWaitValue32(gpuStream_t stream, gpuDevicePtr_t addr,
+                                       unsigned int value, unsigned int flags) {
+  return hipStreamWaitValue64(stream, reinterpret_cast<void*>(addr),
+                              static_cast<uint64_t>(value),
+                              flags == 0 ? hipStreamWaitValueGte : flags, 0);
+}
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \

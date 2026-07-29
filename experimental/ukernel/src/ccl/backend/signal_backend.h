@@ -29,7 +29,13 @@ class SignalBackend final : public BatchBackend {
                     uint32_t* out_indices = nullptr) override;
   bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
-  size_t capacity() const override { return 2048; }
+  // In-flight Signal+WaitSignal slots. Must exceed the total signal ops
+  // of the largest plan (~2×tiles+2 at G=1): WaitSignals hold slots
+  // until peer arrivals, and Signal ops starve deadlocked once the table
+  // fills with uncompletable waits (seen at 128M in-place: 2048 waits =
+  // old cap). 65536 covers runs up to ~2GB at 64KB tiles; beyond that,
+  // WaitSignal submission needs throttling.
+  size_t capacity() const override { return 65536; }
 
  private:
   // Lock-free be_idx allocator. Values stay in [0, 2^30) so they fit in
