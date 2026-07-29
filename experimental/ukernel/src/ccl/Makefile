@@ -28,9 +28,9 @@ NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
 
-CXXFLAGS := -std=c++17 -O3 -g -Wall
+CXXFLAGS := -std=c++17 -O3 -g -Wall -fPIC
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
-NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
+NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
@@ -221,6 +221,27 @@ backend/device_backend.o: backend/device_backend.cc
 
 device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+# NCCL compatibility — driven by top-level `make nccl`.
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+NCCL_SO := libnccl.so
+NCCL_OBJ := nccl.o
+
+.PHONY: nccl_dev nccl
+nccl_dev: $(NCCL_SO)
+	@mkdir -p $(NCCL_PREFIX)/lib $(NCCL_PREFIX)/include
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/
+	cp ../../include/nccl.h $(NCCL_PREFIX)/include/
+	@echo "NCCL compat installed to $(NCCL_PREFIX)/"
+
+$(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o \
+		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ)
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(INCLUDES) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+$(NCCL_OBJ): nccl.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 clean:
 	rm -f *.o *.d backend/*.o backend/*.d \

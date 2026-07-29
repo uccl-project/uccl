@@ -143,6 +143,13 @@ $(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ)
 
 bench: $(BENCH_BINS)
 
+# NCCL compatibility shared library (drop-in replacement via LD_PRELOAD).
+# Installs to a standard include/lib layout.
+# Override: make nccl NCCL_PREFIX=/opt/ukernel_nccl
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+nccl:
+	$(MAKE) -C src/ccl nccl_dev NCCL_PREFIX=$(NCCL_PREFIX)
+
 device_test:
 	$(MAKE) -C src/device test $(SUBMAKE_SM)
 

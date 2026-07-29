@@ -1,0 +1,465 @@
+#include "nccl.h"
+#include "coll_config.h"
+#include "coll_types.h"
+#include "executor.h"
+#include <arpa/inet.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <ifaddrs.h>
+#include <memory>
+#include <netdb.h>
+#include <stdexcept>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <thread>
+#include <unistd.h>
+
+using namespace UKernel::CCL;
+
+struct ncclComm {
+  std::unique_ptr<SprayExecutor> executor;
+  int rank = 0;
+  int nranks = 1;
+  bool aborted = false;
+  bool finalized = false;
+  void* barrier_dev = nullptr;
+  // Async completion tracking: submitted handles stay in pending until
+  // reaped (reap runs at every collective entry and at destroy).
+  // async_error latches the first failure observed while reaping —
+  // reported once by ncclCommGetAsyncError, then cleared (NCCL
+  // semantics).
+  std::vector<CollectiveOpHandle> pending;
+  ncclResult_t async_error = ncclSuccess;
+};
+
+static void reap_pending(ncclComm_t comm);  // defined next to run_coll
+
+/* --- Unique ID format (wire-compatible layout) ---
+ * bytes 0-3:   magic 0x554B4343 ("UKCC")
+ * bytes 4-7:   exchanger port (uint32_t, network order)
+ * bytes 8-11:  world size (uint32_t, network order)
+ * bytes 12-75: exchanger IP (null-terminated, up to 64 bytes)
+ * bytes 76-127: reserved (zero)
+ */
+
+static constexpr uint32_t kUniqueIdMagic = 0x554B4343;
+
+static void pack_unique_id(ncclUniqueId* id, const char* ip, int port,
+                           int nranks) {
+  std::memset(id, 0, sizeof(*id));
+  uint32_t* p = reinterpret_cast<uint32_t*>(id->internal);
+  p[0] = htonl(kUniqueIdMagic);
+  p[1] = htonl(static_cast<uint32_t>(port));
+  p[2] = htonl(static_cast<uint32_t>(nranks));
+  std::strncpy(id->internal + 12, ip ? ip : "", 63);
+}
+
+static bool unpack_unique_id(const ncclUniqueId* id, std::string& ip, int& port,
+                              int& nranks) {
+  const uint32_t* p = reinterpret_cast<const uint32_t*>(id->internal);
+  if (ntohl(p[0]) != kUniqueIdMagic) return false;
+  port = static_cast<int>(ntohl(p[1]));
+  nranks = static_cast<int>(ntohl(p[2]));
+  ip = std::string(id->internal + 12, 63);
+  ip = ip.c_str();
+  return port > 0 && port < 65536 && nranks >= 0;
+}
+
+static std::string detect_host_ip() {
+  struct ifaddrs *ifaddr = nullptr, *ifa;
+  if (getifaddrs(&ifaddr) != 0) return "127.0.0.1";
+  std::string ip = "127.0.0.1";
+  const char* ifname = std::getenv("NCCL_SOCKET_IFNAME");
+  bool found = false;
+  size_t ifname_len = ifname ? std::strlen(ifname) : 0;
+  for (ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+    if (std::strcmp(ifa->ifa_name, "lo") == 0) continue;
+    if (ifname && std::strncmp(ifa->ifa_name, ifname, ifname_len) != 0) continue;
+    found = true;
+    char buf[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET,
+              &reinterpret_cast<sockaddr_in*>(ifa->ifa_addr)->sin_addr, buf,
+              sizeof(buf));
+    ip = buf;
+    break;
+  }
+  if (ifname && !found)
+    std::fprintf(stderr, "[nccl] NCCL_SOCKET_IFNAME=%s matched no interface\n", ifname);
+  freeifaddrs(ifaddr);
+  return ip;
+}
+
+static int alloc_port() {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return 17000 + (rand() % 1000);
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = 0;
+  int port = 17000 + (rand() % 1000);
+  if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+    socklen_t len = sizeof(addr);
+    getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+    port = ntohs(addr.sin_port);
+  }
+  close(fd);
+  return port;
+}
+
+static ScalarType to_scalar(ncclDataType_t dt) {
+  switch (dt) {
+    case ncclInt8:    return ScalarType::Int8;
+    case ncclUint8:   return ScalarType::UInt8;
+    case ncclFloat16: return ScalarType::Float16;
+    case ncclFloat32: return ScalarType::Float32;
+    case ncclFloat64: return ScalarType::Float64;
+    case ncclInt32:   return ScalarType::Int32;
+    case ncclUint32:  return ScalarType::Int32;
+    case ncclInt64:   return ScalarType::Int64;
+    case ncclUint64:  return ScalarType::Int64;
+    case ncclBfloat16: return ScalarType::BFloat16;
+    default:          return ScalarType::Float32;
+  }
+}
+
+static ReductionKind to_redop(ncclRedOp_t op) {
+  switch (op) {
+    case ncclSum:  return ReductionKind::Sum;
+    case ncclProd: return ReductionKind::Prod;
+    case ncclMax:  return ReductionKind::Max;
+    case ncclMin:  return ReductionKind::Min;
+    default:       return ReductionKind::Sum;
+  }
+}
+
+static const char* errstr(ncclResult_t r) {
+  switch (r) {
+    case ncclSuccess:            return "no error";
+    case ncclUnhandledCudaError: return "unhandled cuda error";
+    case ncclSystemError:        return "system error";
+    case ncclInternalError:      return "internal error";
+    case ncclInvalidArgument:    return "invalid argument";
+    case ncclInvalidUsage:       return "invalid usage";
+    case ncclRemoteError:        return "remote error";
+    default:                     return "unknown";
+  }
+}
+
+static bool s_rand_seeded = false;
+
+ncclResult_t ncclGetUniqueId(ncclUniqueId* uniqueId) {
+  if (!uniqueId) return ncclInvalidArgument;
+  if (!s_rand_seeded) { srand(static_cast<unsigned>(time(nullptr))); s_rand_seeded = true; }
+  std::string ip = detect_host_ip();
+  int port = alloc_port();
+  pack_unique_id(uniqueId, ip.c_str(), port, 0);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
+                              ncclUniqueId uniqueId, int rank) {
+  if (!comm || nranks < 1 || rank < 0 || rank >= nranks)
+    return ncclInvalidArgument;
+  std::string ip;
+  int port = 0, id_nranks = 0;
+  if (!unpack_unique_id(&uniqueId, ip, port, id_nranks))
+    return ncclInvalidArgument;
+  if (id_nranks != 0 && id_nranks != nranks)
+    return ncclInvalidArgument;
+  auto c = std::make_unique<ncclComm>();
+  c->rank = rank;
+  c->nranks = nranks;
+  int gpu_id = 0;
+  if (cudaGetDevice(&gpu_id) != cudaSuccess) {
+    std::fprintf(stderr, "[nccl] init r%d: cudaGetDevice failed\n", rank);
+    return ncclUnhandledCudaError;
+  }
+  SprayExecutorConfig cfg;
+  cfg.gpu_id = gpu_id;
+  cfg.rank = rank;
+  cfg.world_size = nranks;
+  cfg.exchanger_ip = ip;
+  cfg.exchanger_port = port;
+  cfg.local_id = gpu_id;
+  cfg.max_concurrent_runs = 16;
+  cfg.device_idle_exit_us = 500;  // allow persistent kernel to exit when idle
+  try {
+    c->executor = SprayExecutor::create(cfg);
+  } catch (std::exception const& e) {
+    std::fprintf(stderr, "[nccl] init r%d: %s\n", rank, e.what());
+    return ncclSystemError;
+  }
+  *comm = c.release();
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommDestroy(ncclComm_t comm) {
+  if (comm) {
+    // Best-effort reap; handles still Running (or Failed-but-unquiesced)
+    // stay with the executor, whose teardown stops the drain threads.
+    reap_pending(comm);
+    cudaFree(comm->barrier_dev);
+    delete comm;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommAbort(ncclComm_t comm) {
+  // NCCL semantics: abort only flags the communicator (subsequent
+  // collectives fail fast in run_coll); teardown still belongs to
+  // ncclCommDestroy, which apps call after abort.
+  if (comm) {
+    comm->aborted = true;
+    cudaFree(comm->barrier_dev);
+    comm->barrier_dev = nullptr;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommFinalize(ncclComm_t comm) {
+  if (comm) comm->finalized = true;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
+  if (!comm || !count) return ncclInvalidArgument;
+  *count = comm->nranks;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
+  if (!comm || !rank) return ncclInvalidArgument;
+  *rank = comm->rank;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError) {
+  if (!comm || !asyncError) return ncclInvalidArgument;
+  reap_pending(comm);
+  *asyncError = comm->async_error;
+  comm->async_error = ncclSuccess;  // reported once, then cleared
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
+  if (!comms || ndev < 1 || !devlist) return ncclInvalidArgument;
+  ncclUniqueId id;
+  ncclResult_t r = ncclGetUniqueId(&id);
+  if (r != ncclSuccess) return r;
+  pack_unique_id(&id, "127.0.0.1",
+                 ntohl(reinterpret_cast<uint32_t*>(id.internal)[1]), ndev);
+  std::vector<std::thread> threads;
+  threads.reserve(ndev);
+  std::vector<ncclResult_t> results(ndev, ncclSuccess);
+  for (int i = 0; i < ndev; ++i) {
+    threads.emplace_back([&, i] {
+      cudaSetDevice(devlist[i]);
+      results[i] = ncclCommInitRank(&comms[i], ndev, id, i);
+    });
+  }
+  for (auto& t : threads) t.join();
+  for (int i = 0; i < ndev; ++i) {
+    if (results[i] != ncclSuccess) {
+      for (int j = 0; j < ndev; ++j)
+        if (results[j] == ncclSuccess) ncclCommDestroy(comms[j]);
+      return results[i];
+    }
+  }
+  return ncclSuccess;
+}
+
+// Reap finished handles in comm->pending: Completed → release; Failed →
+// latch async_error (status() on a released handle reports Completed,
+// so the message must be captured BEFORE release). A Failed run whose
+// ops are still in flight cannot be released yet (the executor throws);
+// it stays in pending and is retried on the next reap.
+static void reap_pending(ncclComm_t comm) {
+  auto& pending = comm->pending;
+  for (size_t i = 0; i < pending.size();) {
+    CollectiveOpHandle h = pending[i];
+    auto st = comm->executor->status(h);
+    if (st == CollectiveOpStatus::Running) {
+      ++i;
+      continue;
+    }
+    try {
+      if (st == CollectiveOpStatus::Failed) {
+        std::string msg = comm->executor->error_message(h);
+        std::fprintf(stderr, "[nccl] r%d async error: %s\n", comm->rank,
+                     msg.c_str());
+        if (comm->async_error == ncclSuccess)
+          comm->async_error = ncclRemoteError;
+      }
+      comm->executor->release(h);
+    } catch (std::exception const&) {
+      ++i;  // failed run not quiesced yet; retry on the next reap
+      continue;
+    }
+    pending.erase(pending.begin() + static_cast<long>(i));
+  }
+}
+
+static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
+                              void* input, void* output, cudaStream_t stream) {
+  if (comm->aborted) return ncclInvalidUsage;
+  reap_pending(comm);
+  CollectiveOpHandle h = 0;
+  try {
+    // prepare() is idempotent (deduped on shape + allocations) and
+    // thread-safe inside the executor; the single-rank case is handled
+    // there too. Call it unconditionally before every submit.
+    comm->executor->prepare(cfg, input, output);
+    h = comm->executor->submit(cfg, input, output, stream);
+  } catch (std::exception const& e) {
+    std::fprintf(stderr, "[nccl] submit r%d: %s\n", comm->rank, e.what());
+    return ncclInternalError;
+  }
+  if (h == kInvalidHandle) return ncclInternalError;
+  // Truly async (NCCL semantics): completion is signaled on the stream
+  // by the executor's WaitValue gate; the handle is reaped lazily at
+  // the next collective entry / ncclCommDestroy.
+  comm->pending.push_back(h);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
+                           ncclDataType_t datatype, ncclRedOp_t op,
+                           ncclComm_t comm, cudaStream_t stream) {
+  if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
+  size_t elem_sz = scalar_type_size(to_scalar(datatype));
+  if (elem_sz == 0) return ncclInvalidArgument;
+  void* input = const_cast<void*>(sendbuff);
+  size_t nbytes = count * elem_sz;
+  CollectiveConfig cfg;
+  cfg.kind = CollKind::AllReduceRing;
+  cfg.nranks = comm->nranks;
+  cfg.rank = comm->rank;
+  cfg.input_bytes = nbytes;
+  cfg.output_bytes = nbytes;
+  cfg.tile_bytes = 65536;
+  cfg.dtype = to_scalar(datatype);
+  cfg.reduction = to_redop(op);
+  return run_coll(comm, cfg, input, recvbuff, stream);
+}
+
+ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+                          ncclDataType_t datatype, ncclComm_t comm,
+                          cudaStream_t stream) {
+  if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
+  if (sendbuff != recvbuff) return ncclInvalidUsage;
+  size_t elem_sz = scalar_type_size(to_scalar(datatype));
+  if (elem_sz == 0) return ncclInvalidArgument;
+  void* buf = recvbuff;
+  CollectiveConfig cfg;
+  cfg.kind = CollKind::AllToAllPairwise;
+  cfg.nranks = comm->nranks;
+  cfg.rank = comm->rank;
+  cfg.input_bytes = count * elem_sz;
+  cfg.output_bytes = count * elem_sz;
+  cfg.tile_bytes = 65536;
+  cfg.dtype = to_scalar(datatype);
+  return run_coll(comm, cfg, buf, buf, stream);
+}
+
+ncclResult_t ncclBarrier(ncclComm_t comm, cudaStream_t stream) {
+  if (!comm || !comm->executor) return ncclInvalidArgument;
+  if (comm->nranks == 1) return ncclSuccess;
+  if (!comm->barrier_dev &&
+      cudaMalloc(&comm->barrier_dev, 4) != cudaSuccess) {
+    std::fprintf(stderr, "[nccl] barrier r%d: cudaMalloc failed\n", comm->rank);
+    return ncclInternalError;
+  }
+  if (cudaMemsetAsync(comm->barrier_dev, 0, 4, stream) != cudaSuccess) {
+    std::fprintf(stderr, "[nccl] barrier r%d: cudaMemsetAsync failed\n",
+                 comm->rank);
+    return ncclInternalError;
+  }
+  CollectiveConfig cfg;
+  cfg.kind = CollKind::AllReduceRing;
+  cfg.nranks = comm->nranks;
+  cfg.rank = comm->rank;
+  cfg.input_bytes = 4;
+  cfg.output_bytes = 4;
+  cfg.tile_bytes = 4;
+  cfg.dtype = ScalarType::Float32;
+  cfg.reduction = ReductionKind::Sum;
+  return run_coll(comm, cfg, comm->barrier_dev, comm->barrier_dev, stream);
+}
+
+static ncclResult_t unsupported(const char* fn) {
+  std::fprintf(stderr, "[nccl] %s: not implemented\n", fn);
+  return ncclInvalidUsage;
+}
+
+ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
+                           ncclDataType_t datatype, ncclComm_t comm,
+                           cudaStream_t stream) {
+  if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
+  size_t elem_sz = scalar_type_size(to_scalar(datatype));
+  if (elem_sz == 0) return ncclInvalidArgument;
+  // In-place (NCCL form: sendbuff points at the rank's own shard inside
+  // recvbuff) is not supported yet; require distinct buffers.
+  const char* sendp = static_cast<const char*>(sendbuff);
+  const char* recvp = static_cast<const char*>(recvbuff);
+  size_t out_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
+  if (sendp >= recvp && sendp < recvp + out_bytes) {
+    std::fprintf(stderr, "[nccl] ncclAllGather: in-place not supported\n");
+    return ncclInvalidUsage;
+  }
+  CollectiveConfig cfg;
+  cfg.kind = CollKind::AllGatherRing;
+  cfg.nranks = comm->nranks;
+  cfg.rank = comm->rank;
+  cfg.input_bytes = count * elem_sz;
+  cfg.output_bytes = out_bytes;
+  cfg.tile_bytes = 65536;
+  cfg.dtype = to_scalar(datatype);
+  return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
+}
+
+ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
+                               size_t count, ncclDataType_t datatype,
+                               ncclRedOp_t op, ncclComm_t comm,
+                               cudaStream_t stream) {
+  if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
+  if (sendbuff == recvbuff) {
+    std::fprintf(stderr, "[nccl] ncclReduceScatter: in-place not supported\n");
+    return ncclInvalidUsage;
+  }
+  size_t elem_sz = scalar_type_size(to_scalar(datatype));
+  if (elem_sz == 0) return ncclInvalidArgument;
+  CollectiveConfig cfg;
+  cfg.kind = CollKind::ReduceScatterRing;
+  cfg.nranks = comm->nranks;
+  cfg.rank = comm->rank;
+  cfg.input_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
+  cfg.output_bytes = count * elem_sz;
+  cfg.tile_bytes = 65536;
+  cfg.dtype = to_scalar(datatype);
+  cfg.reduction = to_redop(op);
+  return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
+}
+
+ncclResult_t ncclBroadcast(const void*, void*, size_t, ncclDataType_t, int,
+                           ncclComm_t, cudaStream_t)
+{ return unsupported("ncclBroadcast"); }
+ncclResult_t ncclReduce(const void*, void*, size_t, ncclDataType_t, ncclRedOp_t,
+                        int, ncclComm_t, cudaStream_t)
+{ return unsupported("ncclReduce"); }
+ncclResult_t ncclSend(const void*, size_t, ncclDataType_t, int, ncclComm_t,
+                      cudaStream_t)
+{ return unsupported("ncclSend"); }
+ncclResult_t ncclRecv(void*, size_t, ncclDataType_t, int, ncclComm_t,
+                      cudaStream_t)
+{ return unsupported("ncclRecv"); }
+ncclResult_t ncclGroupStart(void) { return ncclSuccess; }
+ncclResult_t ncclGroupEnd(void) { return ncclSuccess; }
+
+const char* ncclGetErrorString(ncclResult_t result) { return errstr(result); }
+
+void ncclGetVersion(int* version) {
+  if (version) *version = NCCL_VERSION_CODE;
+}

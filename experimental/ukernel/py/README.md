@@ -65,7 +65,8 @@ CUDA_VISIBLE_DEVICES=1,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 UK_P2P_TRANSPORT=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 
 # Force a specific transport
-UK_P2P_TRANSPORT=rdma CUDA_VISIBLE_DEVICES=1,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
+UK_P2P_TRANSPORT=rdma CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
+UK_P2P_TRANSPORT=tcp CUDA_VISIBLE_DEVICES=1,7 torchrun --nproc_per_node=2 benchmarks/bench_p2p.py
 ```
 
 Environment variables:

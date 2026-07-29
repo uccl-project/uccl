@@ -96,7 +96,62 @@ export GDRCOPY_LIBDIR=$HOME/gdrcopy_install/lib
 | `GDRCOPY_INCLUDEDIR` | `/usr/include` | Path to `gdrapi.h` |
 | `GDRCOPY_LIBDIR` | (empty, system default) | Path to `libgdrapi.so` |
 | `CONDA_LIB_HOME` | `/usr/lib` | Library search path for system libs |
-| `SM` | `80 86 89` | GPU compute capability |
+| `SM` | `80 86 89 100` | GPU compute capability |
+
+## NCCL Compatibility
+
+`include/nccl.h` + `src/ccl/nccl.cc` implement a source-level drop-in for the
+NCCL C API.  Build `libnccl.so` and install into a standard `include/` +
+`lib/` layout:
+
+```bash
+cd experimental/ukernel
+make nccl
+# → build/nccl/include/nccl.h  +  build/nccl/lib/libnccl.so
+
+# Custom install prefix:
+make nccl NCCL_PREFIX=/opt/ukernel_nccl
+```
+
+Run standard [nccl-tests](https://github.com/NVIDIA/nccl-tests) via
+`LD_LIBRARY_PATH`:
+
+```bash
+# Build nccl-tests (MPI required for multi-rank)
+cd thirdparty/nccl-tests
+make MPI=1 CUDA_HOME=/usr/local/cuda \
+    MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi \
+    NCCL_HOME=$(pwd)/../../experimental/ukernel/build/nccl \
+    NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90" \
+    -j$(nproc)
+
+# Multi-rank, same node (2 GPUs, one process per rank — exercises
+# ncclGetUniqueId + ncclCommInitRank). Result validation (-c 1) is on
+# by default; do NOT pass -c 0, a 1-rank run without mpirun measures
+# nothing (single-rank collectives are no-ops).
+cd ../../experimental/ukernel
+CUDA_VISIBLE_DEVICES=6,7 mpirun -np 2 -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
+    -x CUDA_VISIBLE_DEVICES \
+    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
+
+# Single process, multiple GPUs (exercises ncclCommInitAll, which
+# initializes one communicator per device on its own thread):
+LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
+    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 2
+
+# Multi-node: rank 0 packs its NIC IP into the unique ID and peers
+# connect to it. On multi-homed hosts pick the interface via
+# NCCL_SOCKET_IFNAME (prefix match, e.g. "eth" matches eth0/eth1);
+# a warning is printed if it matches no interface.
+mpirun -np 2 -H node0,node1 \
+    -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
+    -x NCCL_SOCKET_IFNAME=eth0 \
+    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
+```
+
+Supported APIs: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclCommInitAll`,
+`ncclAllReduce`, `ncclAllToAll`, `ncclBarrier`, `ncclCommDestroy`,
+`ncclCommAbort`, `ncclCommFinalize`, `ncclGetErrorString`, `ncclGetVersion`.
 
 ## Test
 
