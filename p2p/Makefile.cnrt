@@ -1,58 +1,29 @@
-# Makefile for UCCL P2P Engine nanobind project (Hygon DTK / DCU)
-#
-# Hygon DTK is a HIP-compatible SDK for Hygon DCUs (Deep Computing Units).
-# It ships libamdhip64.so and the same HIP runtime API as AMD ROCm, but does
-# not include hipMemGetHandleForAddressRange (no DMA-BUF GPUDirect RDMA).
-# All other P2P features (IPC handles, peer access, RCCL) work as normal.
+# Makefile for UCCL P2P Engine nanobind project (Cambricon MLU / CNRT)
 #
 # Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
-# libibverbs, librccl, and libefa are loaded dynamically at runtime via
-# dlopen/dlsym (see *_dl.h). No transport libraries are linked.
+# libibverbs, libnccl, libefa, and libfabric/CXI are loaded dynamically at
+# runtime via dlopen/dlsym (see *_dl.h). No transport libraries are linked.
 #
-# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
-# For NCCL transport, set UCCL_NCCL_SO=/opt/dtk/rccl/lib/librccl.so
-
-# DietGPU optional integration
-USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
+# p2p/ has no device kernels (pure host-side IPC/RDMA glue), so we compile
+# straight with g++ against the neuware headers and link the CNRT runtime
+# (libcnrt.so) and CNDRV driver (libcndrv.so); cncc is never invoked here.
 
 # Compiler and flags
-HIP_HOME ?= /opt/dtk
+NEUWARE_HOME ?= /usr/local/neuware
+NEUWARE_INC  := $(NEUWARE_HOME)/include
+NEUWARE_LIB  := $(NEUWARE_HOME)/lib64
 LIBFABRIC_HOME ?= /opt/libfabric
-HIP_INC  := $(HIP_HOME)/include
-HIP_LIB  := $(HIP_HOME)/lib
-CONDA_LIB_HOME ?= /usr/lib
 
 CXX := g++
 
-# ---------------- DietGPU ----------------
-DIETGPU_ROOT      := ../thirdparty/dietgpu
-DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
-DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
-
-ifeq ($(USE_DIETGPU),1)
-	DIETGPU_INC  := -I$(DIETGPU_ROOT)
-	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
-	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
-	                -Wl,-rpath,'$$ORIGIN/lib'
-	CXXFLAGS_DIETGPU := -DUSE_DIETGPU
-else
-	DIETGPU_INC  :=
-	DIETGPU_LIBS :=
-	CXXFLAGS_DIETGPU :=
-endif
-
-# NOTE: -libverbs, -lrccl, -lefa are NOT linked at compile time.
+# NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
 # Headers are included for type definitions only.
-# __HIP_PLATFORM_AMD__ enables the HIP code path in gpu_rt.h; __UCCL_DTK__
-# selects DTK-specific fallbacks (no DMA-BUF export, no hipStreamLegacy).
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
-	-I$(HIP_INC) -I$(LIBFABRIC_HOME)/include \
-	-I${CONDA_LIB_HOME}/../include \
-	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
-	-D__HIP_PLATFORM_AMD__ -D__UCCL_DTK__ \
+	-I$(NEUWARE_INC) -I$(LIBFABRIC_HOME)/include \
+	-D__CAMBRICON_PLATFORM_MLU__ \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME}
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=$(NEUWARE_LIB)
 
 # Python and nanobind configuration
 PYTHON          ?= python3
@@ -73,6 +44,7 @@ NB_SRCS         := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
                    trampoline.cpp implicit.cpp
 NB_OBJECTS      := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
 PYTHON_LDFLAGS  := $(shell $(PYTHON_CONFIG) --ldflags)
+PYTHON_LIB      := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' | head -1 | sed 's/^/-l/')
 
 # Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
@@ -89,10 +61,9 @@ IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
                   -Wl,--wrap=ibv_create_cq \
                   -Wl,--wrap=ibv_create_qp \
                   -Wl,--wrap=ibv_qp_to_qp_ex
-LDFLAGS = -L$(HIP_LIB) -lamdhip64 -Wl,-rpath,$(HIP_LIB) \
-          -L${CONDA_LIB_HOME} \
-          -lz -lelf -lpthread -ldl -Wl,-Bsymbolic-functions \
-          $(IBV_WRAP_FLAGS) $(DIETGPU_LIBS)
+LDFLAGS = -L$(NEUWARE_LIB) -lcnrt -lcndrv -Wl,-rpath,$(NEUWARE_LIB) \
+          -lz -lpthread -ldl -Wl,-Bsymbolic-functions \
+          $(IBV_WRAP_FLAGS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
@@ -118,7 +89,7 @@ P2P_IMPL_SOURCES := \
 	rdma/providers/ib_data_channel_impl.cc \
 	cxi/cxi_endpoint.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
-SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
+SOURCES := engine.cc mlu/mlu_staging.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS)
 
 # dlsym wrapper objects
@@ -134,28 +105,27 @@ all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
 $(P2P_PYTHON_EXT): $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS)
 	$(CXX) $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS) \
-	      -L$(HIP_LIB) -lamdhip64 \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB)
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS)
 
 $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(DL_OBJECTS)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(DL_OBJECTS) \
-	      -L$(HIP_LIB) -lamdhip64 \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB)
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) $(PYTHON_LIB)
 
 # Compile nanobind source files for stable ABI
 nb_%.o: $(NB_SRC_DIR)/%.cpp
 	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
 
+# Auto-generated header deps: editing engine.h etc. rebuilds dependent .o (avoids ABI mismatch).
+-include $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d) $(DL_OBJECTS:.o=.d)
+
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -MMD -MP -c $< -o $@
 
 # Compile NCCL source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
-	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -MMD -MP -c $< -o $@
 
 define safe_install
 	@echo "Installing $(1) to $(2)..."
@@ -179,26 +149,8 @@ clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 
-# Test the module
-test: $(P2P_PYTHON_EXT)
-	$(PYTHON) tests/test_engine_write.py
-
 # Install nanobind if not available
 install-deps:
 	pip3 install nanobind
 
-# Help target
-help:
-	@echo "Available targets:"
-	@echo "  all          - Build the nanobind module and shared library"
-	@echo "  install      - Install the module to Python site-packages"
-	@echo "  clean        - Remove build artifacts"
-	@echo "  test         - Run the test script"
-	@echo "  install-deps - Install nanobind dependency"
-	@echo "  help         - Show this help message"
-	@echo ""
-	@echo "Hygon DTK notes:"
-	@echo "  HIP_HOME defaults to /opt/dtk; override with HIP_HOME=/path/to/dtk"
-	@echo "  For NCCL transport: UCCL_NCCL_SO=/opt/dtk/rccl/lib/librccl.so"
-
-.PHONY: all clean test install-deps help install
+.PHONY: all clean install-deps install

@@ -209,7 +209,7 @@ bool RdmaContext::is_gpu_pointer(void* ptr) {
     (void)gpuGetLastError();  // clear sticky error
     return false;
   }
-  return (attrs.type == gpuMemoryTypeDevice);
+  return (gpuMemTypeOf(attrs) == gpuMemoryTypeDevice);
 }
 
 struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
