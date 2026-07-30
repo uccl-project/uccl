@@ -1203,8 +1203,7 @@ inline int get_dev_idx(void* ptr) {
   hipPointerAttribute_t attributes;
   hipError_t err = hipPointerGetAttributes(&attributes, ptr);
   if (err == hipSuccess) {
-    // DTK/HIP exposes the memory type as .memoryType (not .type).
-    if (attributes.memoryType == hipMemoryTypeDevice) {
+    if (gpuMemTypeOf(attributes) == hipMemoryTypeDevice) {
       return attributes.device;
     }
     return -1;
