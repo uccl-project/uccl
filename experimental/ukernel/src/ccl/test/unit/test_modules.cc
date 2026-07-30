@@ -338,6 +338,9 @@ void test_verify_algo_pairing_all_kinds() {
         cfg.tile_bytes = 512;
         cfg.dtype = ScalarType::Float32;
         verify_algo_pairing(cfg, inplace);
+        // Binary tree (out-of-place only).
+        cfg.kind = CollKind::AllReduceTree;
+        verify_algo_pairing(cfg, /*inplace=*/false);
       }
     }
     // AllToAll (inplace only): equal split. NOTE: jointly-consistent
@@ -380,6 +383,70 @@ void test_verify_algo_pairing_all_kinds() {
       verify_algo_pairing(ag, /*inplace=*/false);
     }
   }
+}
+
+void test_build_coll_algo_tree_basic() {
+  printf("[test] build_coll_algo binary-tree allreduce...\n");
+
+  // rank 1 of 4: children {3} (single -> lands Output), parent 0 with
+  // two children -> this rank's up-put lands in the parent's Tmp(0).
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllReduceTree;
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  assert(algo.kind == CollKind::AllReduceTree);
+  // Tmp declared only on two-children ranks; rank 1 has one child.
+  assert(algo.tmp_bytes.empty());
+  // Recv(3), RecvReduce, Put->0, Recv<-0, Put->3.
+  assert(algo.chunks.size() == 5);
+  auto const& red = algo.chunks[1];
+  assert(red.op == AlgoOpKind::RecvReduce);
+  assert(red.src.space == BufSpace::Input && red.dst.space == BufSpace::Output);
+  auto const& up = algo.chunks[2];
+  assert(up.op == AlgoOpKind::Put && up.dst_rank == 0);
+  assert(up.pair_id == (1 * 4 + 0) * 2);
+  assert(up.src.space == BufSpace::Output);
+  assert(up.dst.space == BufSpace::Tmp);  // first child of a 2-child parent
+  assert(!up.deps.empty());
+  auto const& dn = algo.chunks.back();
+  assert(dn.op == AlgoOpKind::Put && dn.dst_rank == 3);
+  assert(dn.pair_id == (1 * 4 + 3) * 2 + 1);
+  assert(dn.src.space == BufSpace::Output && !dn.deps.empty());
+
+  // Root (rank 0, children {1,2}): first child reduced into Tmp, last
+  // into Output; no up-put; down-puts to both children from Output.
+  cfg.rank = 0;
+  CollAlgo root = build_coll_algo(cfg, /*inplace=*/false);
+  assert(root.tmp_bytes.size() == 1 && root.tmp_bytes[0] == 4096);
+  assert(root.chunks.size() == 6);
+  assert(root.chunks[0].pair_id == (1 * 4 + 0) * 2);
+  assert(root.chunks[1].dst.space == BufSpace::Tmp);
+  assert(root.chunks[2].pair_id == (2 * 4 + 0) * 2);
+  assert(root.chunks[3].dst.space == BufSpace::Output);
+  assert(root.chunks[3].src.space == BufSpace::Tmp);
+  for (auto const& c : root.chunks)
+    if (c.op == AlgoOpKind::Put)
+      assert(c.dst_rank == 1 || c.dst_rank == 2);
+  assert(root.chunks[4].pair_id == (0 * 4 + 1) * 2 + 1);
+  assert(root.chunks[5].pair_id == (0 * 4 + 2) * 2 + 1);
+
+  // Leaf (rank 3, no children): sends Input, receives result in Output.
+  cfg.rank = 3;
+  CollAlgo leaf = build_coll_algo(cfg, /*inplace=*/false);
+  assert(leaf.chunks.size() == 2);
+  assert(leaf.chunks[0].op == AlgoOpKind::Put);
+  assert(leaf.chunks[0].src.space == BufSpace::Input);
+  assert(leaf.chunks[0].dst.space == BufSpace::Output);  // 1-child parent
+  assert(leaf.chunks[1].op == AlgoOpKind::Recv);
+  assert(leaf.chunks[1].dst.space == BufSpace::Output);
+
+  // In-place is rejected for now.
+  bool threw = false;
+  try {
+    build_coll_algo(cfg, /*inplace=*/true);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
 }
 
 void test_build_coll_algo_ag_rs_validation() {
@@ -741,6 +808,7 @@ int main() {
   test_build_coll_algo_alltoall_basic();
   test_build_coll_algo_reduce_scatter_basic();
   test_build_coll_algo_allgather_basic();
+  test_build_coll_algo_tree_basic();
   test_build_coll_algo_ag_rs_validation();
   test_verify_algo_pairing_all_kinds();
 

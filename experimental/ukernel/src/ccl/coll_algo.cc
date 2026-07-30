@@ -85,7 +85,8 @@ void require_collective_config(CollectiveConfig const& config) {
     throw std::invalid_argument("collective dtype has invalid element size");
   }
 
-  if (config.kind == CollKind::AllReduceRing) {
+  if (config.kind == CollKind::AllReduceRing ||
+      config.kind == CollKind::AllReduceTree) {
     if (config.input_bytes == 0) {
       throw std::invalid_argument("collective input_bytes must be positive");
     }
@@ -504,6 +505,114 @@ CollAlgo build_allgather_ring_algo(CollectiveConfig const& config) {
   return std::move(builder.algo);
 }
 
+// Binary-tree allreduce over the binary-heap indexing (parent =
+// (r-1)/2, children 2r+1 / 2r+2 when < nranks; root = 0).
+//
+// Up phase (reduce): leaves send their Input to the parent. An inner
+// rank reduces each child's partial into its own contribution: the
+// only/last child lands in Output and the final RecvReduce leaves the
+// subtree sum there (src = Input for a single child, Tmp(0) holding
+// the first child's partial plus this rank's Input for two children);
+// the FIRST of two children lands in Tmp(0) instead, so the final
+// result always ends in Output. The rank then Puts to its parent
+// (src = Input for leaves, Output for inner ranks).
+//
+// Down phase (broadcast): the root already holds the result in
+// Output; every rank Recv's it from its parent into Output[0] and
+// forwards Output to its children.
+//
+// WAR safety without local deps across the up/down boundary: a peer's
+// down-phase Put into my Output (or a child's into mine) can only be
+// sent after the sender received the broadcast from ITS parent, which
+// is causally after the root's full reduction — and that reduction
+// causally includes my up-phase Put having been consumed. So no local
+// dep is needed between the up-put and the down-recv, the same
+// argument as ring AG forwarding.
+//
+// Out-of-place only: in-place would need a final full-buffer Tmp->Output
+// copy on top of the Tmp-landing reduce path (now available);
+// rejected in build_coll_algo for now.
+//
+// Tmp(0) is declared only on two-children ranks; scratch lives under a
+// fixed reserved buf id, so rank-asymmetric declaration is safe.
+CollAlgo build_allreduce_tree_algo(CollectiveConfig const& config) {
+  int const n = config.nranks;
+  int const r = config.rank;
+  CollAlgo algo = make_empty_algo(config);
+  algo.kind = CollKind::AllReduceTree;
+  size_t const bytes = config.input_bytes;
+
+  AlgoBuilder builder(std::move(algo));
+  std::vector<int> children;
+  if (2 * r + 1 < n) children.push_back(2 * r + 1);
+  if (2 * r + 2 < n) children.push_back(2 * r + 2);
+  int const parent = (r - 1) / 2;  // used only when r > 0
+
+  // Tmp(0) buffers the first child's partial — declared only on
+  // two-children ranks: scratch lives under a fixed reserved buf id, so
+  // rank-asymmetric declaration no longer breaks id symmetry.
+  if (children.size() == 2) builder.algo.tmp_bytes = {bytes};
+
+  // ---- Up phase (reduce) ----
+  uint32_t last_reduce = kNoOp;
+  for (size_t i = 0; i < children.size(); ++i) {
+    int const c = children[static_cast<size_t>(i)];
+    bool const last = (i + 1 == children.size());
+    uint32_t const pair_id = static_cast<uint32_t>((c * n + r) * 2);
+    BufRef const land =
+        last ? BufRef{BufSpace::Output, 0} : BufRef{BufSpace::Tmp, 0};
+    uint32_t recv_op =
+        builder.add_op(AlgoOpKind::Recv, bytes, 0, 0, c, -1, {}, pair_id,
+                       BufRef{BufSpace::Input, 0}, land);
+    std::vector<uint32_t> rdeps{recv_op};
+    add_dep(rdeps, last_reduce);
+    BufRef const rdst =
+        last ? BufRef{BufSpace::Output, 0} : BufRef{BufSpace::Tmp, 0};
+    BufRef const rsrc = last && children.size() > 1
+                            ? BufRef{BufSpace::Tmp, 0}
+                            : BufRef{BufSpace::Input, 0};
+    last_reduce = builder.add_op(AlgoOpKind::RecvReduce, bytes, 0, 0, c, -1,
+                                 std::move(rdeps), pair_id, rsrc, rdst);
+  }
+  if (r > 0) {
+    // Forward the subtree sum: leaves send Input, inner ranks the
+    // reduced Output. The first of two children lands in the parent's
+    // Tmp(0), every other child in the parent's Output (mirrors the
+    // parent's landing rule above).
+    uint32_t const pair_id = static_cast<uint32_t>((r * n + parent) * 2);
+    BufRef const psrc = children.empty() ? BufRef{BufSpace::Input, 0}
+                                         : BufRef{BufSpace::Output, 0};
+    bool const parent_two = (2 * parent + 2 < n);
+    BufRef const pdst = (parent_two && r == 2 * parent + 1)
+                            ? BufRef{BufSpace::Tmp, 0}
+                            : BufRef{BufSpace::Output, 0};
+    std::vector<uint32_t> deps;
+    add_dep(deps, last_reduce);
+    builder.add_op(AlgoOpKind::Put, bytes, 0, 0, -1, parent, std::move(deps),
+                   pair_id, psrc, pdst);
+  }
+
+  // ---- Down phase (broadcast) ----
+  uint32_t down_recv = kNoOp;
+  if (r > 0) {
+    uint32_t const pair_id = static_cast<uint32_t>((parent * n + r) * 2 + 1);
+    down_recv =
+        builder.add_op(AlgoOpKind::Recv, bytes, 0, 0, parent, -1, {},
+                       pair_id, BufRef{BufSpace::Input, 0},
+                       BufRef{BufSpace::Output, 0});
+  }
+  for (int c : children) {
+    uint32_t const pair_id = static_cast<uint32_t>((r * n + c) * 2 + 1);
+    std::vector<uint32_t> deps;
+    add_dep(deps, r > 0 ? down_recv : last_reduce);
+    builder.add_op(AlgoOpKind::Put, bytes, 0, 0, -1, c, std::move(deps),
+                   pair_id, BufRef{BufSpace::Output, 0},
+                   BufRef{BufSpace::Output, 0});
+  }
+
+  return std::move(builder.algo);
+}
+
 CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
                                       bool inplace) {
   CollAlgo algo = make_empty_algo(config);
@@ -578,6 +687,13 @@ CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
   switch (config.kind) {
     case CollKind::AllReduceRing:
       return build_allreduce_ring_algo(config, inplace);
+    case CollKind::AllReduceTree:
+      if (inplace)
+        throw std::invalid_argument(
+            "binary-tree allreduce: in-place not supported yet (a final "
+            "full-buffer Tmp->Output copy would enable it; left for when "
+            "needed)");
+      return build_allreduce_tree_algo(config);
     case CollKind::AllToAllPairwise:
       return build_alltoall_pairwise_algo(config, inplace);
     case CollKind::AllGatherRing:

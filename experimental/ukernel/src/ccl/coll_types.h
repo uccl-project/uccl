@@ -12,6 +12,7 @@ enum class CollKind : uint32_t {
   AllToAllPairwise,
   AllGatherRing,
   ReduceScatterRing,
+  AllReduceTree,
 };
 
 // Planner-level op kinds (used in MacroOp DAG)

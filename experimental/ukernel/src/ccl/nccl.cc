@@ -334,7 +334,20 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   void* input = const_cast<void*>(sendbuff);
   size_t nbytes = count * elem_sz;
   CollectiveConfig cfg;
-  cfg.kind = CollKind::AllReduceRing;
+  // Opt-in binary-tree allreduce via UK_CCL_TREE_THRESHOLD_BYTES
+  // (default 0 = never; tree kicks in at nbytes >= threshold when set).
+  // With nranks == 2 the tree degenerates to the ring's shape, so this
+  // machine cannot tune the crossover — threshold calibration is left
+  // to a larger-rank environment.
+  static const size_t kTreeThreshold = []() {
+    char const* env = std::getenv("UK_CCL_TREE_THRESHOLD_BYTES");
+    return env ? std::stoull(env) : 0UL;
+  }();
+  // In-place stays on the ring — the tree has no snapshot support yet.
+  cfg.kind = (kTreeThreshold > 0 && nbytes >= kTreeThreshold &&
+              input != recvbuff)
+                 ? CollKind::AllReduceTree
+                 : CollKind::AllReduceRing;
   cfg.nranks = comm->nranks;
   cfg.rank = comm->rank;
   cfg.input_bytes = nbytes;
