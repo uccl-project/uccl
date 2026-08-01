@@ -135,6 +135,15 @@ static ReductionKind to_redop(ncclRedOp_t op) {
   }
 }
 
+// The device kernel has no unsigned reduce type; UInt32/UInt64 map to
+// the signed bit pattern. Sum/Prod are then bit-exact, but Max/Min
+// compare signed and silently produce wrong results on values with the
+// high bit set — reject that combination honestly.
+static bool unsupported_uint_redop(ncclDataType_t dt, ncclRedOp_t op) {
+  return (dt == ncclUint32 || dt == ncclUint64) &&
+         (op == ncclMax || op == ncclMin);
+}
+
 static const char* errstr(ncclResult_t r) {
   switch (r) {
     case ncclSuccess:            return "no error";
@@ -329,6 +338,11 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclRedOp_t op,
                            ncclComm_t comm, cudaStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
+  if (unsupported_uint_redop(datatype, op)) {
+    std::fprintf(stderr, "[nccl] r%d: unsigned Max/Min not supported\n",
+                 comm->rank);
+    return ncclInvalidUsage;
+  }
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
   void* input = const_cast<void*>(sendbuff);
@@ -365,13 +379,18 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   if (sendbuff != recvbuff) return ncclInvalidUsage;
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
+  // NCCL semantics: count is the element count per rank PAIR — the
+  // total tensor per rank is nranks * count elements.
+  if (count > SIZE_MAX / (static_cast<size_t>(comm->nranks) * elem_sz))
+    return ncclInvalidArgument;
+  size_t total_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
   void* buf = recvbuff;
   CollectiveConfig cfg;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.nranks = comm->nranks;
   cfg.rank = comm->rank;
-  cfg.input_bytes = count * elem_sz;
-  cfg.output_bytes = count * elem_sz;
+  cfg.input_bytes = total_bytes;
+  cfg.output_bytes = total_bytes;
   cfg.tile_bytes = 65536;
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, buf, buf, stream);
@@ -413,17 +432,16 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
-  // In-place (NCCL form: sendbuff points at the rank's own shard inside
-  // recvbuff) is not supported yet; require distinct buffers.
+  // In-place (NCCL form): sendbuff points at the rank's own shard inside
+  // recvbuff (sendbuff == recvbuff + rank*sendcount). Detect the overlap
+  // and run the in-place algorithm variant.
   const char* sendp = static_cast<const char*>(sendbuff);
   const char* recvp = static_cast<const char*>(recvbuff);
   size_t out_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
-  if (sendp >= recvp && sendp < recvp + out_bytes) {
-    std::fprintf(stderr, "[nccl] ncclAllGather: in-place not supported\n");
-    return ncclInvalidUsage;
-  }
+  bool const inplace = sendp >= recvp && sendp < recvp + out_bytes;
   CollectiveConfig cfg;
   cfg.kind = CollKind::AllGatherRing;
+  cfg.inplace = inplace;
   cfg.nranks = comm->nranks;
   cfg.rank = comm->rank;
   cfg.input_bytes = count * elem_sz;
@@ -438,17 +456,29 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
                                ncclRedOp_t op, ncclComm_t comm,
                                cudaStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
-  if (sendbuff == recvbuff) {
-    std::fprintf(stderr, "[nccl] ncclReduceScatter: in-place not supported\n");
+  if (unsupported_uint_redop(datatype, op)) {
+    std::fprintf(stderr, "[nccl] r%d: unsigned Max/Min not supported\n",
+                 comm->rank);
     return ncclInvalidUsage;
   }
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
+  // In-place (NCCL form): recvbuff points at the rank's own shard inside
+  // sendbuff (recvbuff == sendbuff + rank*recvcount). The algorithm needs
+  // no change (partials accumulate in Tmp; the final Tmp->Output[0] copy
+  // lands on Input[offset(rank)] via the allocation-scoped offset), but
+  // the executor must know not to treat the two distinct overlapping
+  // pointers as out-of-place buffers.
+  const char* sendp = static_cast<const char*>(sendbuff);
+  const char* recvp = static_cast<const char*>(recvbuff);
+  size_t in_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
+  bool const inplace = recvp >= sendp && recvp < sendp + in_bytes;
   CollectiveConfig cfg;
   cfg.kind = CollKind::ReduceScatterRing;
+  cfg.inplace = inplace;
   cfg.nranks = comm->nranks;
   cfg.rank = comm->rank;
-  cfg.input_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
+  cfg.input_bytes = in_bytes;
   cfg.output_bytes = count * elem_sz;
   cfg.tile_bytes = 65536;
   cfg.dtype = to_scalar(datatype);
