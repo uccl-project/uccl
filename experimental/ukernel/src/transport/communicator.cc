@@ -1501,7 +1501,24 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) return false;
+    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) {
+      // Fail fast instead of silently returning false with the OOB key
+      // unpublished: the peer's wait_mr would otherwise block for its
+      // full timeout and surface as a confusing 30s hang. Publish an
+      // EMPTY entry (wait_mr rejects "empty entries" immediately) so the
+      // failure propagates promptly and loudly on both sides.
+      std::fprintf(stderr,
+                   "[reg_mr r%d] FAILED RDMA reg buf=%u ptr=%p len=%zu; "
+                   "publishing empty entry for fail-fast\n",
+                   global_rank_, buffer_id, local_buf, len);
+      if (exchanger_client_ && exchanger_client_->valid()) {
+        NamedMRInfos empty{};
+        empty.generation = mr_generation_.fetch_add(1, std::memory_order_relaxed);
+        (void)oob_put(*exchanger_client_, oob_namespace(),
+                      mr_global_buffer_key(global_rank_, buffer_id), empty);
+      }
+      return false;
+    }
     uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
     if (rkey != 0) {
       mr.key = rkey;
@@ -1603,11 +1620,10 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
     }
 
     if (payload.entries.empty()) {
-      if (timeout_ms >= 0) {
-        elapsed += kPollMs;
-        if (elapsed >= timeout_ms) return fail("empty entries");
-      }
-      continue;
+      // An EMPTY entry is an explicit failure signal (the owner failed
+      // to register the buffer and published a placeholder for
+      // fail-fast). Never retry it — the entry is not going to change.
+      return fail("empty entries");
     }
 
     // First-ever resolve must be accepted unconditionally: the initial publish

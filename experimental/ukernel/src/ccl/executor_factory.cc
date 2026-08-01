@@ -144,7 +144,14 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   };
   ex->resolve_buf_fn_ = [](Transport::Communicator* comm, int peer,
                            int /*world_size*/, uint32_t buf_id) {
-    comm->resolve_remote_buffer(peer, buf_id, 30000);
+    // Fail fast: a failed resolve means the peer never published (or
+    // explicitly failed) the buffer — silently continuing leaves the
+    // executor to crash later at enqueue with a confusing error.
+    // propagate as an exception so prepare() surfaces it immediately.
+    if (!comm->resolve_remote_buffer(peer, buf_id, 30000))
+      throw std::runtime_error("resolve_remote_buffer failed peer=" +
+                               std::to_string(peer) + " buf=" +
+                               std::to_string(buf_id));
   };
   ex->same_host_fn_ = [](Transport::Communicator* comm, int peer) {
     return comm->same_host(peer);
