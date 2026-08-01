@@ -126,13 +126,14 @@ make MPI=1 CUDA_HOME=/usr/local/cuda \
     -j$(nproc)
 
 # Multi-rank, same node (2 GPUs, one process per rank — exercises
-# ncclGetUniqueId + ncclCommInitRank). Result validation (-c 1) is on
-# by default; do NOT pass -c 0, a 1-rank run without mpirun measures
-# nothing (single-rank collectives are no-ops).
+# ncclGetUniqueId + ncclCommInitRank). Result validation is ON by
+# default; keep -c 1 (do NOT pass -c 0, or the run measures nothing —
+# and a 1-rank run without mpirun measures nothing either, since
+# single-rank collectives are no-ops).
 cd ../../experimental/ukernel
-CUDA_VISIBLE_DEVICES=6,7 mpirun -np 2 -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
+UK_CCL_DEBUG=2 CUDA_VISIBLE_DEVICES=6,7 mpirun -np 2 -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
     -x CUDA_VISIBLE_DEVICES \
-    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
+    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -f 2 -g 1 -c 1
 
 # Single process, multiple GPUs (exercises ncclCommInitAll, which
 # initializes one communicator per device on its own thread):
@@ -150,8 +151,26 @@ mpirun -np 2 -H node0,node1 \
 ```
 
 Supported APIs: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclCommInitAll`,
-`ncclAllReduce`, `ncclAllToAll`, `ncclBarrier`, `ncclCommDestroy`,
-`ncclCommAbort`, `ncclCommFinalize`, `ncclGetErrorString`, `ncclGetVersion`.
+`ncclAllReduce` (ring + opt-in binary tree), `ncclAllGather`,
+`ncclReduceScatter`, `ncclAllToAll` (in-place only), `ncclBarrier`,
+`ncclCommDestroy`, `ncclCommAbort`, `ncclCommFinalize`,
+`ncclCommGetAsyncError`, `ncclGetErrorString`, `ncclGetVersion`.
+
+In-place semantics match NCCL: AllReduce supports both placements;
+AllGather / ReduceScatter detect NCCL's in-place form (sendbuff pointing
+inside recvbuff, and vice versa) and run the in-place algorithm variant;
+AllToAll requires in-place (`sendbuff == recvbuff`). Unsupported:
+`ncclBroadcast`, `ncclReduce`, `ncclSend`, `ncclRecv` return
+`ncclInvalidUsage` — of the stock nccl-tests binaries, only
+`all_reduce_perf` (both placements), `all_gather_perf` and
+`reduce_scatter_perf` pass; `broadcast_perf` / `reduce_perf` /
+`alltoall_perf` / `sendrecv_perf` fail by design (those APIs are not
+implemented).
+
+Binary-tree AllReduce is opt-in via `UK_CCL_TREE_THRESHOLD_BYTES`
+(default 0 = never). With `nranks == 2` the tree degenerates to the
+ring's shape, so the crossover can only be calibrated on a larger-rank
+environment.
 
 ## Test
 
