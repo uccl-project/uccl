@@ -23,6 +23,14 @@ struct CollectiveConfig {
   // larger values cut signal-op counts at the cost of coarser pipelining
   // at group boundaries. Both sides derive identical group tags.
   uint32_t signal_group_tiles = 1;
+  // Explicit in-place declaration. The executor cannot infer it from
+  // buffer pointers for every collective: NCCL AllGather/ReduceScatter
+  // in-place layouts use DISTINCT pointers that physically overlap
+  // (sendbuff = recvbuff + rank*sendcount), so `input == output` is
+  // false. The shim sets this when it detects the overlapping layout;
+  // for AllReduce/AllToAll the executor also accepts input==output as
+  // the implicit form.
+  bool inplace = false;
 };
 
 }  // namespace CCL

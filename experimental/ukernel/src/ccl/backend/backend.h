@@ -24,6 +24,7 @@ struct Cmd {
   uint32_t src_peer;    // 4
   uint32_t dst_peer;    // 4
   ReductionKind redop;  // 4
+  ScalarType dtype;     // 4 — element type for device-kernel reduce/copy
   PutPath put_path;     // 1 — Device/IPC/RDMA for ops
   // kCmdFlagPutSignal: this Put carries its partner Signal's tag (in
   // Cmd::tag); the transport emits the signal once the data lands.

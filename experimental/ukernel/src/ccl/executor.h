@@ -532,16 +532,16 @@ class SprayExecutor {
     size_t alloc_size;
   };
   std::unordered_map<uintptr_t, BufReg> tensor_to_buf_id_;
-  // Canonical id assignment: 0 is the "no buffer" sentinel; ids
-  // [kScratchBufIdBase, +kScratchBufIdPoolSize) are the scratch pool —
-  // one fixed id PER DISTINCT SCRATCH SIZE, minted in first-seen order
-  // (rank-symmetric because all ranks prepare the same shape sequence);
-  // user allocations mint above the pool. Fixed per-size ids free
-  // algorithms from declaring Tmp regions uniformly across ranks just
-  // to keep id minting symmetric.
-  static constexpr uint32_t kScratchBufIdBase = 1;
-  static constexpr uint32_t kScratchBufIdPoolSize = 16;
-  uint32_t next_buf_id_ = kScratchBufIdBase + kScratchBufIdPoolSize;
+  // Canonical id assignment: 0 is the "no buffer" sentinel. Both user
+  // allocations and scratch buffers mint from next_buf_id_ in first-seen
+  // order (rank-symmetric because all ranks prepare the same shape
+  // sequence). Scratch buffers use one id PER DISTINCT SCRATCH SIZE;
+  // minting from the shared counter (instead of a fixed low pool) means
+  // the id space is unbounded — a long-running app sweeping many
+  // collective sizes (e.g. nccl-tests 8B→128M) no longer exhausts a
+  // fixed pool. Rank symmetry of scratch ids still holds because every
+  // rank drives the same (kind, size) prepare sequence.
+  uint32_t next_buf_id_ = 1;
 
   // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
@@ -570,7 +570,8 @@ class SprayExecutor {
   // plain first-publish wait, and in-flight puts into older sizes keep
   // working. Trade-off: holds ~2x the largest size at peak.
   struct ScratchBuf {
-    void* ptr;
+    void* ptr;          // aligned base used for registration/addressing
+    void* alloc_raw;    // original cudaMalloc result (must be freed with it)
     uint32_t id;
   };
   std::map<size_t, ScratchBuf> scratch_by_size_;

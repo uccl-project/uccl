@@ -64,6 +64,15 @@ static uint64_t role_to_off(CollectiveBufferRole role, uint64_t in,
   return 0;
 }
 
+// Effective in-place flag: the explicit CollectiveConfig::inplace wins
+// (the NCCL shim sets it for AllGather/ReduceScatter, whose in-place
+// layouts use distinct overlapping pointers that `input == output` would
+// miss); otherwise fall back to pointer equality (AllReduce/AllToAll).
+static inline bool cfg_inplace(CollectiveConfig const& cfg, void* input,
+                               void* output) {
+  return cfg.inplace || (input == output);
+}
+
 // Signal-tag epoch salting. Plan-level tags (make_tag) repeat across
 // runs of the same shape, and rank skew (±1 run) lets a future run's
 // arrivals satisfy — or be buffered for — the wrong run's waits:
@@ -105,13 +114,15 @@ static bool rdma_imm_fusion_active(Transport::Communicator* comm, int peer,
   return comm->can_fuse_put_signal(peer, Transport::PeerTransportKind::Rdma);
 }
 
-static Cmd make_cmd(TiledOp const& op, ReductionKind redop, uint32_t input_buf,
-                    uint32_t output_buf, uint32_t scratch_buf,
-                    uint64_t input_off, uint64_t output_off, uint64_t scr_off,
+static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
+                    uint32_t input_buf, uint32_t output_buf,
+                    uint32_t scratch_buf, uint64_t input_off,
+                    uint64_t output_off, uint64_t scr_off,
                     uint32_t tag_epoch) {
   Cmd c{};
   c.kind = op.kind;
   c.bytes = static_cast<uint32_t>(op.bytes);
+  c.dtype = dtype;
   // Op offsets are relative to the role's tensor; shift by the tensor's
   // offset within its registered allocation (allocation-scoped
   // registration).
@@ -431,7 +442,8 @@ SprayExecutor::~SprayExecutor() {
   owned_device_.reset();
   owned_transport_.reset();
   owned_signal_.reset();
-  for (auto& [bytes, sb] : scratch_by_size_) GPU_RT_CHECK(gpuFree(sb.ptr));
+  for (auto& [bytes, sb] : scratch_by_size_)
+    GPU_RT_CHECK(gpuFree(sb.alloc_raw));
   // Stream-ordered dep cleanup.
   for (gpuEvent_t ev : event_pool_)
     if (ev) (void)gpuEventDestroy(ev);
@@ -470,17 +482,25 @@ std::string SprayExecutor::error_message(CollectiveOpHandle h) const {
 }
 
 // Allocate the scratch buffer for this size if absent (api_mu_ held).
-// One buffer per distinct size, under a fixed pool id — see executor.h.
+// One buffer per distinct size, id minted from the shared counter so
+// the id space is unbounded (see executor.h).
 void SprayExecutor::ensure_internal_scratch(size_t bytes) {
   if (bytes == 0 || scratch_by_size_.count(bytes)) return;
-  uint32_t id = kScratchBufIdBase +
-                static_cast<uint32_t>(scratch_by_size_.size());
-  if (id >= kScratchBufIdBase + kScratchBufIdPoolSize)
-    throw std::runtime_error("scratch pool exhausted (too many distinct "
-                             "collective sizes in one executor)");
-  void* ptr = nullptr;
-  GPU_RT_CHECK(gpuMalloc(&ptr, bytes));
-  scratch_by_size_[bytes] = ScratchBuf{ptr, id};
+  uint32_t id = next_buf_id_++;
+  // RDMA DMA-BUF MR registration requires a 64KB-aligned buffer address;
+  // cudaMalloc only guarantees 256B alignment, so an unlucky placement
+  // (observed: 1M scratch at base%64K==2048) fails ibv_reg_dmabuf_mr and
+  // breaks the whole run. Allocate the alignment margin and round up;
+  // keep the raw allocation for gpuFree (it must free the original
+  // pointer, not the aligned interior).
+  constexpr size_t kScratchAlign = 65536;
+  void* raw = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&raw, bytes + kScratchAlign - 1));
+  uintptr_t aligned =
+      (reinterpret_cast<uintptr_t>(raw) + kScratchAlign - 1) &
+      ~(kScratchAlign - 1);
+  void* ptr = reinterpret_cast<void*>(aligned);
+  scratch_by_size_[bytes] = ScratchBuf{ptr, raw, id};
   if (owned_comm_ && register_buf_fn_)
     register_buf_fn_(owned_comm_.get(), id, ptr, bytes);
 }
@@ -493,7 +513,7 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   if (!owned_comm_ || !peer_setup_fn_) return;
 
   // Derive needed peers from the algorithm DAG.
-  CollAlgo algo = build_coll_algo(cfg, input == output);
+  CollAlgo algo = build_coll_algo(cfg, cfg_inplace(cfg, input, output));
   std::vector<int> peers;
   for (auto const& ch : algo.chunks) {
     if (ch.src_rank >= 0) peers.push_back(ch.src_rank);
@@ -629,7 +649,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
 
   if (owned_comm_ && !prepared_) {
     // Check all peers needed by this algorithm are prepared.
-    CollAlgo algo = build_coll_algo(cfg, input == output);
+    CollAlgo algo = build_coll_algo(cfg, cfg_inplace(cfg, input, output));
     for (auto const& ch : algo.chunks) {
       if (ch.src_rank >= 0 && !prepared_peers_.count(ch.src_rank))
         throw std::runtime_error("prepare() not called for peer " +
@@ -645,13 +665,13 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   std::shared_ptr<CollPlan const> plan;
   {
     std::lock_guard lock(plan_cache_mu_);
-    std::string key = plan_key(cfg, input == output);
+    std::string key = plan_key(cfg, cfg_inplace(cfg, input, output));
     auto it = plan_cache_.find(key);
     if (it != plan_cache_.end()) {
       plan = it->second;
     } else {
       if (plan_cache_.size() >= kMaxCachedPlans) plan_cache_.clear();
-      plan = build_plan(cfg, input == output);
+      plan = build_plan(cfg, cfg_inplace(cfg, input, output));
       plan_cache_.emplace(std::move(key), plan);
     }
   }
@@ -734,9 +754,21 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     run->done_seq =
         next_done_seq_.fetch_add(1, std::memory_order_relaxed);
 
-    gpuStreamWaitValue32(stream, done_flag_devptr_,
-                         static_cast<unsigned int>(run->done_seq),
-                         CU_STREAM_WAIT_VALUE_GEQ);
+    gpuError_t werr = gpuStreamWaitValue32(
+        stream, done_flag_devptr_, static_cast<unsigned int>(run->done_seq),
+        CU_STREAM_WAIT_VALUE_GEQ);
+    if (werr != gpuSuccess) {
+      // Failed enqueue silently drops the output gate: subsequent user
+      // kernels on the stream would race the collective. Fail loudly
+      // instead (run_coll maps the throw to ncclInternalError).
+      if (run->input_ready) {
+        event_pool_release(run->input_ready);
+        run->input_ready = nullptr;
+      }
+      throw std::runtime_error(std::string("stream wait-value enqueue "
+                                           "failed: ") +
+                               gpuGetErrorString(werr));
+    }
   }
 
   runs_[h] = std::move(run);
@@ -845,7 +877,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   static int op_kind_print_cnt = 0;
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.plan->tiled.ops[idx], run.plan->tiled.reduction,
-                     run.input_buf_id, run.output_buf_id, run.scratch_buf_id,
+                     run.plan->tiled.dtype, run.input_buf_id,
+                     run.output_buf_id, run.scratch_buf_id,
                      run.input_base_off, run.output_base_off,
                      run.scratch_base_off, run.tag_epoch);
     if (op_kind_print_cnt++ < 20) {

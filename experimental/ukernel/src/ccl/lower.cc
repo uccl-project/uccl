@@ -384,6 +384,7 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
   result.rank = algo.rank;
   result.nranks = algo.nranks;
   result.reduction = algo.reduction;
+  result.dtype = algo.dtype;
   if (algo.chunks.empty()) return result;
 
   std::vector<size_t> first_tile;

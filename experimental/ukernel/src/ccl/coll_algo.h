@@ -98,6 +98,7 @@ struct CollAlgo {
   size_t input_bytes = 0;
   size_t output_bytes = 0;
   ReductionKind reduction = ReductionKind::None;
+  ScalarType dtype = ScalarType::Float32;
   // Declared intermediate buffers (Tmp regions), sizes in bytes. The
   // lowering lays them out back-to-back and sizes the executor scratch
   // to cover them (plus lowering-internal staging).

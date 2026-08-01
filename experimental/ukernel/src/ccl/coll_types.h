@@ -115,6 +115,7 @@ struct TiledResult {
   int rank = 0;
   int nranks = 1;
   ReductionKind reduction = ReductionKind::None;
+  ScalarType dtype = ScalarType::Float32;
   // Signal-tag layout: low tag_group_bits bits hold the tile-group
   // index (all-ones reserved for the copies-done handshake), pair_id
   // sits above. Plan-adaptive, identical on all ranks.

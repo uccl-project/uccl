@@ -169,6 +169,7 @@ CollAlgo make_empty_algo(CollectiveConfig const& config) {
   algo.input_bytes = config.input_bytes;
   algo.output_bytes = config.output_bytes;
   algo.reduction = config.reduction;
+  algo.dtype = config.dtype;
   return algo;
 }
 
@@ -439,7 +440,17 @@ CollAlgo build_reduce_scatter_ring_algo(CollectiveConfig const& config) {
 // with the run. Shards received from the ring are forwarded from their
 // Output offset, exactly like the allreduce AG phase (Put with deps
 // reads Output via the lowering's phase-2 rule).
-CollAlgo build_allgather_ring_algo(CollectiveConfig const& config) {
+//
+// In-place (NCCL form: sendbuff == recvbuff + rank*sendcount): the
+// rank's own shard already sits at Output[offset(rank)] — skip the
+// local publish copy and source the step-0 send from there. Received
+// shards land in Output exactly as out-of-place; the own shard is read
+// once (step 0) before any peer write can touch it, and the peer's
+// step-0 Put is gated on this rank's step-0 send having consumed it via
+// the ring order (send causally follows recv on the sender side), so no
+// snapshot handshake is needed.
+CollAlgo build_allgather_ring_algo(CollectiveConfig const& config,
+                                   bool inplace) {
   RingTopology ring{config.nranks};
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllGatherRing;
@@ -450,9 +461,10 @@ CollAlgo build_allgather_ring_algo(CollectiveConfig const& config) {
 
   // Local copy of the own shard into the output layout. Independent of
   // the send path; only run completion orders it before the user read.
+  // In-place: the shard is already at Output[offset(rank)] — no copy.
   size_t own_bytes = balanced_shard_size_bytes(
       config.output_bytes, elem_bytes, config.nranks, config.rank);
-  if (own_bytes > 0) {
+  if (!inplace && own_bytes > 0) {
     size_t offset = balanced_shard_offset_bytes(
         config.output_bytes, elem_bytes, config.nranks, config.rank);
     builder.add_op(AlgoOpKind::Put, own_bytes, 0, offset, -1, -1, {},
@@ -477,9 +489,13 @@ CollAlgo build_allgather_ring_algo(CollectiveConfig const& config) {
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
       if (send_owner == config.rank) {
-        // First step: the own shard is sent straight from Input[0].
-        builder.add_op(AlgoOpKind::Put, send_bytes, 0, offset, -1, send_peer,
-                       std::move(deps), pair_id, BufRef{BufSpace::Input, 0},
+        // First step: the own shard is sent straight from Input[0]
+        // (out-of-place) or from its Output position (in-place).
+        builder.add_op(AlgoOpKind::Put, send_bytes,
+                       inplace ? offset : 0, offset, -1, send_peer,
+                       std::move(deps), pair_id,
+                       inplace ? BufRef{BufSpace::Output, 0}
+                               : BufRef{BufSpace::Input, 0},
                        BufRef{BufSpace::Output, 0});
       } else {
         // Forwarded shards were received into the Output layout.
@@ -548,10 +564,15 @@ CollAlgo build_allreduce_tree_algo(CollectiveConfig const& config) {
   if (2 * r + 2 < n) children.push_back(2 * r + 2);
   int const parent = (r - 1) / 2;  // used only when r > 0
 
-  // Tmp(0) buffers the first child's partial — declared only on
-  // two-children ranks: scratch lives under a fixed reserved buf id, so
-  // rank-asymmetric declaration no longer breaks id symmetry.
-  if (children.size() == 2) builder.algo.tmp_bytes = {bytes};
+  // Tmp(0) buffers the first child's partial on two-children ranks.
+  // Declared unconditionally on EVERY rank: an up-phase put targeting a
+  // two-children parent's Tmp(0) is addressed with the SENDER's scratch
+  // id (make_cmd's role_to_buf), which only matches the parent's
+  // registration if both ranks minted the same scratch id — that
+  // requires rank-symmetric tmp declaration (same shape sequence => same
+  // first-seen minting order). Rank-asymmetric declaration sent
+  // dst_buf=0 and hit the wait_mr "key not found" timeout class.
+  builder.algo.tmp_bytes = {bytes};
 
   // ---- Up phase (reduce) ----
   uint32_t last_reduce = kNoOp;
@@ -697,8 +718,13 @@ CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
     case CollKind::AllToAllPairwise:
       return build_alltoall_pairwise_algo(config, inplace);
     case CollKind::AllGatherRing:
-      return build_allgather_ring_algo(config);
+      return build_allgather_ring_algo(config, inplace);
     case CollKind::ReduceScatterRing:
+      // In-place RS needs no algorithm change: the NCCL layout
+      // (recvbuff = sendbuff + rank*recvBytes) makes the final
+      // Tmp->Output[0] copy land on Input[offset(rank)] via the
+      // allocation-scoped registration, and partial sums accumulate in
+      // Tmp so peer puts never touch Input.
       return build_reduce_scatter_ring_algo(config);
   }
   throw std::invalid_argument("unsupported collective kind");
