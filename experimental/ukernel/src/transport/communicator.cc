@@ -1502,28 +1502,23 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
     if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) {
-      // Fail fast instead of silently returning false with the OOB key
-      // unpublished: the peer's wait_mr would otherwise block for its
-      // full timeout and surface as a confusing 30s hang. Publish an
-      // EMPTY entry (wait_mr rejects "empty entries" immediately) so the
-      // failure propagates promptly and loudly on both sides.
+      // RDMA registration failure is NOT fatal: the buffer can still be
+      // used over IPC (same-host puts never need an rkey). Publish the MR
+      // entry with rkey=0 — the peer's wait_mr sees a valid entry, IPC
+      // resolve works, and a cross-node RDMA put rejects cleanly at send
+      // time (send_put_async_with_rid requires a nonzero rkey) instead of
+      // silently publishing an empty entry that breaks IPC too.
       std::fprintf(stderr,
-                   "[reg_mr r%d] FAILED RDMA reg buf=%u ptr=%p len=%zu; "
-                   "publishing empty entry for fail-fast\n",
+                   "[reg_mr r%d] WARN RDMA reg buf=%u ptr=%p len=%zu failed; "
+                   "continuing with rkey=0 (IPC-only for this buffer)\n",
                    global_rank_, buffer_id, local_buf, len);
-      if (exchanger_client_ && exchanger_client_->valid()) {
-        NamedMRInfos empty{};
-        empty.generation = mr_generation_.fetch_add(1, std::memory_order_relaxed);
-        (void)oob_put(*exchanger_client_, oob_namespace(),
-                      mr_global_buffer_key(global_rank_, buffer_id), empty);
+    } else {
+      uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+      if (rkey != 0) {
+        mr.key = rkey;
+        std::lock_guard<std::mutex> lk(resource_mu_);
+        local_buffer_to_mr_[buffer_id].key = rkey;
       }
-      return false;
-    }
-    uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
-    if (rkey != 0) {
-      mr.key = rkey;
-      std::lock_guard<std::mutex> lk(resource_mu_);
-      local_buffer_to_mr_[buffer_id].key = rkey;
     }
   }
 
@@ -2002,6 +1997,11 @@ bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                  global_rank_, peer_rank, buffer_id, (int)ok_mr, (int)ok_ipc);
     return false;
   }
+  // Same-host buffers are usable over IPC with rkey=0 (RDMA registration
+  // may have failed e.g. on unaligned small allocations): the IPC item is
+  // sufficient, so do not wait for an rkey that will never appear.
+  if (same_host(peer_rank)) return true;
+  // Cross-node: RDMA is required, so wait for a nonzero rkey.
   for (int retry = 0; retry < 10; ++retry) {
     MR mr = get_mr(peer_rank, buffer_id);
     if (mr.key != 0) break;
