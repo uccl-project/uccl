@@ -318,6 +318,39 @@ void test_build_coll_algo_allgather_basic() {
   assert(nputs == 3 && nrecvs == 3 && first_step == 1);
 }
 
+void test_build_coll_algo_allgather_inplace() {
+  printf("[test] build_coll_algo ring all-gather in-place...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllGatherRing;
+  cfg.input_bytes = 1024;  // this rank's shard of the 4096-byte output
+  cfg.inplace = true;
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/true);
+  assert(algo.kind == CollKind::AllGatherRing);
+
+  // In-place skips the local publish copy: 3 ring steps x (Put + Recv)
+  // only — no pairless local Put.
+  assert(algo.chunks.size() == 6);
+  size_t nputs = 0, nrecvs = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == AlgoOpKind::Put && chunk.pair_id != kNoPairId) {
+      ++nputs;
+      // Own-shard send (step 0) reads Output[offset(rank)] — the shard
+      // already sits in the output layout; forwarded shards read Output
+      // as in the out-of-place form.
+      assert(chunk.src.space == BufSpace::Output);
+      assert(chunk.dst.space == BufSpace::Output);
+    }
+    if (chunk.op == AlgoOpKind::Recv) {
+      ++nrecvs;
+      assert(chunk.dst.space == BufSpace::Output);
+    }
+  }
+  assert(nputs == 3 && nrecvs == 3);
+  // No local copy chunk (pair_id == kNoPairId).
+  for (auto const& chunk : algo.chunks)
+    assert(!(chunk.op == AlgoOpKind::Put && chunk.pair_id == kNoPairId));
+}
+
 void test_verify_algo_pairing_all_kinds() {
   printf("[test] verify_algo_pairing all kinds x nranks...\n");
   auto rank0_shard = [](size_t total_bytes, int nranks) {
@@ -381,6 +414,17 @@ void test_verify_algo_pairing_all_kinds() {
       ag.tile_bytes = 512;
       ag.dtype = ScalarType::Float32;
       verify_algo_pairing(ag, /*inplace=*/false);
+      // In-place AllGather: same pairing invariants (puts still pair
+      // 1:1 with recvs landing in Output); the builder just skips the
+      // local publish copy and sources the step-0 send from Output.
+      CollectiveConfig agi = ag;
+      agi.inplace = true;
+      verify_algo_pairing(agi, /*inplace=*/true);
+      // In-place ReduceScatter: algorithm unchanged (partials in Tmp),
+      // pairing invariants hold as out-of-place.
+      CollectiveConfig rsi = rs;
+      rsi.inplace = true;
+      verify_algo_pairing(rsi, /*inplace=*/true);
     }
   }
 }
@@ -394,8 +438,11 @@ void test_build_coll_algo_tree_basic() {
   cfg.kind = CollKind::AllReduceTree;
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
   assert(algo.kind == CollKind::AllReduceTree);
-  // Tmp declared only on two-children ranks; rank 1 has one child.
-  assert(algo.tmp_bytes.empty());
+  // Tmp declared on EVERY rank (rank-symmetric): a rank whose up-put
+  // targets a two-children parent's Tmp(0) addresses it with its own
+  // scratch id, which must match the parent's — that requires symmetric
+  // declaration (see build_allreduce_tree_algo).
+  assert(algo.tmp_bytes.size() == 1 && algo.tmp_bytes[0] == 4096);
   // Recv(3), RecvReduce, Put->0, Recv<-0, Put->3.
   assert(algo.chunks.size() == 5);
   auto const& red = algo.chunks[1];
@@ -808,6 +855,7 @@ int main() {
   test_build_coll_algo_alltoall_basic();
   test_build_coll_algo_reduce_scatter_basic();
   test_build_coll_algo_allgather_basic();
+  test_build_coll_algo_allgather_inplace();
   test_build_coll_algo_tree_basic();
   test_build_coll_algo_ag_rs_validation();
   test_verify_algo_pairing_all_kinds();
