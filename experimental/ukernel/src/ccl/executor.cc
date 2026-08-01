@@ -688,8 +688,34 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     // Scratch uses a fixed per-size pool id (registered by
     // ensure_internal_scratch on first use of the size); each buffer is
     // its own allocation, so the base offset is 0.
-    if (tiled.staging_bytes_required > 0)
+    if (tiled.staging_bytes_required > 0) {
       scr_id = scratch_by_size_[tiled.staging_bytes_required].id;
+      // A scratch id freshly minted by THIS submit (the plan's shape was
+      // never prepared, e.g. an in-place AllReduce handshake whose Tmp
+      // puts target the peer's scratch) must be resolved on the peer
+      // before any put referencing it can be sent — prepare() only
+      // resolved the scratch of the shape it was called with. Without
+      // this, the peer's wait for this id never completes and the run
+      // deadlocks (observed: AllToAll perf, whose prepare declares no
+      // Tmp, deadlocks on the in-place AllReduce handshake's scratch).
+      std::set<int> scratch_peers;
+      for (auto const& op : tiled.ops)
+        if (op.kind == ExecOpKind::Put &&
+            op.dst_buf_role == CollectiveBufferRole::Scratch &&
+            op.dst_peer != ~0u)
+          scratch_peers.insert(static_cast<int>(op.dst_peer));
+      if (resolve_buf_fn_ && !scratch_peers.empty()) {
+        for (int p : scratch_peers) {
+          UK_DBG(UK_DBG_LVL_EXEC,
+                 "[submit r%d] resolve scr_id=%u from peer %d ...", cfg.rank,
+                 scr_id, p);
+          resolve_buf_fn_(owned_comm_.get(), p, world_size_, scr_id);
+          UK_DBG(UK_DBG_LVL_EXEC,
+                 "[submit r%d] resolve scr_id=%u from peer %d done", cfg.rank,
+                 scr_id, p);
+        }
+      }
+    }
   }
 
   std::lock_guard lock(runs_mutex_);
