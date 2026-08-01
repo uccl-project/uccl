@@ -363,7 +363,8 @@ void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
-    int my_rank, int num_nodes, bool use_normal_mode = false);
+    int my_rank, int num_nodes, bool use_normal_mode = false,
+    bool dual_mode = false);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
                           size_t num_rings, bool use_normal_mode,
@@ -376,7 +377,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
                              int my_rank, int num_nodes,
-                             bool use_normal_mode = false);
+                             bool use_normal_mode = false,
+                             bool dual_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int device_index, int nic_local_rank);
 
@@ -430,7 +432,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
                   int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
-                  bool use_normal_mode = false);
+                  bool use_normal_mode = false, bool dual_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,

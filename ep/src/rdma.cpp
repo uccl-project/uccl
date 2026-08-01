@@ -2290,6 +2290,9 @@ int poll_cq_once(ibv_cq* cq, ibv_wc* wc, int max_cqes) {
     wc[n].wc_flags = ibv_wc_read_wc_flags(cqx);
     wc[n].imm_data = ibv_wc_read_imm_data(cqx);
     wc[n].byte_len = ibv_wc_read_byte_len(cqx);
+    // Local QP that produced/received this CQE; a dual-mode proxy uses it to
+    // tell HT traffic (per-channel data QPs) from LL traffic (base QP).
+    wc[n].qp_num = ibv_wc_read_qp_num(cqx);
     ++n;
     if (ibv_next_poll(cqx)) break;
   }
@@ -2321,7 +2324,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
                   int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
-                  bool use_normal_mode) {
+                  bool use_normal_mode, bool dual_mode) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
@@ -2330,7 +2333,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
       remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
-                                 use_normal_mode);
+                                 use_normal_mode, dual_mode);
       adaptive_sleeper.update_timer();
     }
   };
@@ -2796,11 +2799,66 @@ void remote_process_completions_fast_mode(
   }
 }
 
+// Dual-mode CQE classification: HT senders always target the receiver's
+// per-channel data QPs while LL senders target the base QP (writes and
+// EFA imm-atomics alike), so the local receiving QP number identifies which
+// wire encoding an incoming imm uses.
+static bool cqe_from_normal_mode_qp(ProxyCtx& S,
+                                    std::vector<ProxyCtx*>& ctx_by_tag,
+                                    ibv_wc const& cqe) {
+#ifdef EFA
+  // SRD QPs are shared across peers and owned by S.
+  for (auto* q : S.data_qps_by_channel)
+    if (q && q->qp_num == cqe.qp_num) return true;
+  return false;
+#else
+  uint32_t const tag = wr_tag(cqe.wr_id);
+  if (tag < ctx_by_tag.size() && ctx_by_tag[tag]) {
+    for (auto* q : ctx_by_tag[tag]->data_qps_by_channel)
+      if (q && q->qp_num == cqe.qp_num) return true;
+  }
+  return false;
+#endif
+}
+
 void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
-    int my_rank, int num_nodes, bool use_normal_mode) {
+    int my_rank, int num_nodes, bool use_normal_mode, bool dual_mode) {
+  if (dual_mode) {
+    // Hot path during combine: flow-control atomics ride these CQEs, so keep
+    // per-call heap traffic out (reuse per-thread scratch).
+    static thread_local std::vector<ibv_wc> ht_wc, ll_wc;
+    ht_wc.clear();
+    ll_wc.clear();
+    for (int i = 0; i < ne; ++i) {
+      // Only incoming imm CQEs are mode-sensitive; both handlers treat
+      // everything else (sender-side write/send completions, acks)
+      // identically, so skip the QP scan for those.
+      if (wc[i].opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
+        ht_wc.push_back(wc[i]);
+      } else if (cqe_from_normal_mode_qp(S, ctx_by_tag, wc[i])) {
+        ht_wc.push_back(wc[i]);
+      } else {
+        // Base-QP traffic: LL writes/atomics and barrier msgs.
+        ll_wc.push_back(wc[i]);
+      }
+    }
+    if (!ht_wc.empty()) {
+      remote_process_completions_normal_mode(
+          S, idx, g_ring, static_cast<int>(ht_wc.size()), ht_wc.data(),
+          ctx_by_tag, atomic_buffer_ptr, num_ranks, num_experts,
+          pending_atomic_updates, my_rank, num_nodes);
+    }
+    if (!ll_wc.empty()) {
+      remote_process_completions_fast_mode(
+          S, idx, g_ring, static_cast<int>(ll_wc.size()), ll_wc.data(),
+          ctx_by_tag, atomic_buffer_ptr, num_ranks, num_experts,
+          pending_atomic_updates, my_rank, num_nodes);
+    }
+    return;
+  }
   if (use_normal_mode) {
     remote_process_completions_normal_mode(
         S, idx, g_ring, ne, wc, ctx_by_tag, atomic_buffer_ptr, num_ranks,
@@ -2817,7 +2875,8 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
-                             int my_rank, int num_nodes, bool use_normal_mode) {
+                             int my_rank, int num_nodes, bool use_normal_mode,
+                             bool dual_mode) {
   ibv_wc wc[kMaxOutstandingRecvs];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingRecvs);
@@ -2825,7 +2884,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
-                                 use_normal_mode);
+                                 use_normal_mode, dual_mode);
     }
   };
   if (get_cq(S)) poll_one(get_cq(S));

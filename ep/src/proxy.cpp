@@ -25,26 +25,37 @@ static int ranks_per_node_for_proxy(Proxy::Config const& cfg) {
 
 static bool is_normal_mode_remote_peer(Proxy::Config const& cfg, int my_rank,
                                        int peer) {
-  if (!cfg.use_normal_mode) return true;
+  // Dual mode needs the LL superset (all inter-node peers); HT commands only
+  // ever target the rail-aligned subset at runtime.
+  if (!cfg.use_normal_mode || cfg.dual_mode) return true;
   int const ranks_per_node = ranks_per_node_for_proxy(cfg);
   return std::abs(peer - my_rank) % ranks_per_node == 0;
+}
+
+// True when this proxy must own the high-throughput resources (per-channel
+// data QPs, LocalBarrier shm, barrier_check progress).
+static bool wants_normal_resources(Proxy::Config const& cfg) {
+  return cfg.use_normal_mode || cfg.dual_mode;
 }
 
 static constexpr uint64_t kCxiInternalWrId = UINT64_MAX;
 
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip,
-                                        bool use_normal_mode, int thread_idx) {
+                                        Proxy::Config const& cfg,
+                                        int thread_idx) {
   // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
   // when a leftover object is owned by a different user.
-  // Include mode ("ht" for high-throughput vs "ll" for low-latency) so that
-  // two coexisting Buffers on the same node (e.g. one HT + one LL) get
-  // distinct barrier namespaces; otherwise their proxy threads (sharing
+  // Include mode ("ht" for high-throughput vs "ll" for low-latency vs "dual")
+  // so that two coexisting Buffers on the same node (e.g. one HT + one LL)
+  // get distinct barrier namespaces; otherwise their proxy threads (sharing
   // thread_idx 0..N-1) would collide on /dev/shm and corrupt each other's
   // LocalBarrier counters.
   uid_t uid = getuid();
-  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) +
-         (use_normal_mode ? "_ht" : "_ll") + "_th" + std::to_string(thread_idx);
+  char const* mode_token =
+      cfg.dual_mode ? "_dual" : (cfg.use_normal_mode ? "_ht" : "_ll");
+  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) + mode_token +
+         "_th" + std::to_string(thread_idx);
 }
 
 LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
@@ -166,8 +177,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
     // Offset LL-mode proxies onto a separate CPU range so a high-throughput
     // Buffer and an LL-mode Buffer running in the same process don't fight
     // for the same cores. Range size = kNumProxyThs * UCCL_MAX_LOCAL_RANKS.
-    int const mode_offset =
-        cfg_.use_normal_mode ? 0 : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
+    int const mode_offset = wants_normal_resources(cfg_)
+                                ? 0
+                                : (kNumProxyThs * UCCL_MAX_LOCAL_RANKS);
     int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_to_cpu(mode_offset + cfg_.thread_idx +
                       cpu_local_rank * kNumProxyThs);
@@ -179,7 +191,9 @@ void Proxy::pin_thread_to_cpu_wrapper() {
           "Local CPU thread pinned to core %d, thread_idx: %d, "
           "local_rank: %d, mode: %s\n",
           cpu, cfg_.thread_idx, cpu_local_rank,
-          cfg_.use_normal_mode ? "high_throughput" : "low_latency");
+          cfg_.dual_mode
+              ? "dual"
+              : (cfg_.use_normal_mode ? "high_throughput" : "low_latency"));
     }
   }
 }
@@ -300,7 +314,7 @@ void Proxy::init_common() {
       transport->connect_peer(peer, remote_infos_[peer]);
     }
 
-    if (cfg_.use_normal_mode) {
+    if (wants_normal_resources(cfg_)) {
       std::string const my_ip = peers_[cfg_.rank].ip;
       std::vector<int> local_ranks;
       local_ranks.reserve(ctxs_for_all_ranks_.size());
@@ -323,7 +337,7 @@ void Proxy::init_common() {
       }
 #ifndef USE_SUBSET_BARRIER
       std::string const shm_name =
-          shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+          shm_name_for_barrier(my_ip, cfg_, cfg_.thread_idx);
       ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
       if (!ctx_.lb) {
         fprintf(stderr, "Failed to map local barrier shm: %s\n",
@@ -431,9 +445,10 @@ void Proxy::init_common() {
   // each peer ctx; per-peer dst_ah selects the destination per WR.
   RDMAConnectionInfo template_local_info{};
   if (!ctx_.qp) {
-    create_per_thread_qp(
-        ctx_, cfg_.gpu_buffer, cfg_.total_size, &template_local_info, cfg_.rank,
-        cfg_.d2h_queues.size(), cfg_.use_normal_mode, atomic_buffer_ptr_);
+    create_per_thread_qp(ctx_, cfg_.gpu_buffer, cfg_.total_size,
+                         &template_local_info, cfg_.rank,
+                         cfg_.d2h_queues.size(), wants_normal_resources(cfg_),
+                         atomic_buffer_ptr_);
     // Pre-post recv WRs once on the shared recv_ack_qp, sized for all peers.
     int num_active_peers = 0;
     for (int p = 0; p < num_ranks; ++p) {
@@ -488,7 +503,7 @@ void Proxy::init_common() {
 #else
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
-                         cfg_.use_normal_mode, atomic_buffer_ptr_);
+                         wants_normal_resources(cfg_), atomic_buffer_ptr_);
 #endif
     modify_qp_to_init(c);
   }
@@ -516,7 +531,7 @@ void Proxy::init_common() {
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
-    modify_qp_to_rtr(c, &remote_infos_[peer], cfg_.use_normal_mode);
+    modify_qp_to_rtr(c, &remote_infos_[peer], wants_normal_resources(cfg_));
     modify_qp_to_rts(c, &local_infos_[peer]);
 
     c.remote_addr = remote_infos_[peer].addr;
@@ -570,7 +585,7 @@ void Proxy::init_common() {
     }
   }
   usleep(50 * 1000);
-  if (cfg_.use_normal_mode) {
+  if (wants_normal_resources(cfg_)) {
     // if (cfg_.thread_idx != 0) {
     //   return;
     // }
@@ -606,7 +621,7 @@ void Proxy::init_common() {
     }
 #ifndef USE_SUBSET_BARRIER
     std::string const shm_name =
-        shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+        shm_name_for_barrier(my_ip, cfg_, cfg_.thread_idx);
     ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
     if (!ctx_.lb) {
       fprintf(stderr, "Failed to map local barrier shm: %s\n",
@@ -685,12 +700,12 @@ void Proxy::run_remote() {
   init_remote();
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
-    remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
-                            atomic_buffer_ptr_, cfg_.num_ranks,
-                            cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                            cfg_.num_nodes, cfg_.use_normal_mode);
+    remote_poll_completions(
+        ctx_, cfg_.thread_idx, ring, ctx_by_tag_, atomic_buffer_ptr_,
+        cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+        cfg_.num_nodes, cfg_.use_normal_mode, cfg_.dual_mode);
 #ifdef USE_RECEIVER_BARRIER
-    if (!cfg_.use_normal_mode) {
+    if (!cfg_.use_normal_mode || cfg_.dual_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
@@ -730,19 +745,19 @@ void Proxy::run_dual() {
       poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                    atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
                    pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
-                   adaptive_sleeper_, cfg_.use_normal_mode);
+                   adaptive_sleeper_, cfg_.use_normal_mode, cfg_.dual_mode);
     }
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
-    if (!cfg_.use_normal_mode) {
+    if (!cfg_.use_normal_mode || cfg_.dual_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
 #endif
 
 #ifdef USE_SENDER_BARRIER
-    if (!cfg_.use_normal_mode) {
+    if (!cfg_.use_normal_mode || cfg_.dual_mode) {
       auto postponed_wr_ids = postponed_wr_ids_;
       auto postponed_atomics = postponed_atomics_;
       postponed_wr_ids_.clear();
@@ -753,7 +768,7 @@ void Proxy::run_dual() {
     }
 #endif
 
-    if (cfg_.use_normal_mode) {
+    if (wants_normal_resources(cfg_)) {
       barrier_check();
     }
   }
@@ -833,8 +848,9 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Available budget for this FIFO, constrainted by the 32bit imm.
     size_t pending = fifo_pending_[rb_idx].size();
-    size_t kMaxInflight = cfg_.use_normal_mode ? get_max_inflight_normal()
-                                               : get_max_inflight_low_latency();
+    size_t kMaxInflight = (cfg_.use_normal_mode && !cfg_.dual_mode)
+                              ? get_max_inflight_normal()
+                              : get_max_inflight_low_latency();
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     size_t max_inflight_bytes = get_max_inflight_bytes() / kNumProxyThs;
 
@@ -1144,13 +1160,16 @@ void Proxy::post_cxi_commands(std::vector<uint64_t> const& wrs_to_post,
           throw std::runtime_error(
               "CXI destination transport is not initialized");
         }
-        bool const low_latency = !cfg_.use_normal_mode;
+        bool const cmd_is_normal = cfg_.dual_mode
+                                       ? get_is_normal_cmd(cmd.cmd_type)
+                                       : cfg_.use_normal_mode;
+        bool const low_latency = !cmd_is_normal;
         uint64_t const local_offset =
             decode_write_offset(cmd.req_lptr, low_latency);
         uint64_t const remote_offset =
             decode_write_offset(cmd.req_rptr, low_latency);
         bool const has_signaling_atomic =
-            cfg_.use_normal_mode && cmd.atomic_offset > 0 && cmd.atomic_val > 0;
+            cmd_is_normal && cmd.atomic_offset > 0 && cmd.atomic_val > 0;
         transport->post_write(
             dst_rank, has_signaling_atomic ? kCxiInternalWrId : wrs_to_post[i],
             local_offset, remote_offset, cmd.bytes, low_latency);
@@ -1210,7 +1229,8 @@ void Proxy::post_gpu_commands_mixed(
     switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
       case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
-        if (!cfg_.use_normal_mode) {
+        if (cfg_.dual_mode ? !get_is_normal_cmd(cmds_to_post[i].cmd_type)
+                           : !cfg_.use_normal_mode) {
           int value = cmds_to_post[i].value;
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
@@ -1245,7 +1265,8 @@ void Proxy::post_gpu_commands_mixed(
         atomic_cmds.push_back(cmds_to_post[i]);
 
 #ifdef USE_SENDER_BARRIER
-        if (!cfg_.use_normal_mode) {
+        if (cfg_.dual_mode ? !get_is_normal_cmd(cmds_to_post[i].cmd_type)
+                           : !cfg_.use_normal_mode) {
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
               offset - get_low_latency(cmds_to_post[i].cmd_type) *
@@ -1294,19 +1315,70 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+  // Dual mode: a batch may interleave HT- and LL-encoded commands; split by
+  // the per-command mode bit and post each partition through its own
+  // implementation (offset shift, union decode, QP selection all differ).
+  // Per-thread scratch: this runs on the posting hot path every cycle.
+  static thread_local std::vector<uint64_t> ht_wrs, ll_wrs;
+  static thread_local std::vector<TransferCmd> ht_cmds, ll_cmds;
+  auto split_by_mode = [&](std::vector<uint64_t> const& wrs,
+                           std::vector<TransferCmd> const& cmds) {
+    ht_wrs.clear();
+    ht_cmds.clear();
+    ll_wrs.clear();
+    ll_cmds.clear();
+    for (size_t i = 0; i < cmds.size(); ++i) {
+      if (get_is_normal_cmd(cmds[i].cmd_type)) {
+        ht_wrs.push_back(wrs[i]);
+        ht_cmds.push_back(cmds[i]);
+      } else {
+        ll_wrs.push_back(wrs[i]);
+        ll_cmds.push_back(cmds[i]);
+      }
+    }
+  };
+
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
-    post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
-                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, cfg_.use_normal_mode);
+    if (cfg_.dual_mode) {
+      split_by_mode(rdma_wrs, rdma_cmds);
+      if (!ht_wrs.empty()) {
+        post_rdma_async_batched(ctx_, cfg_.gpu_buffer, ht_wrs.size(), ht_wrs,
+                                ht_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                                cfg_.thread_idx, /*use_normal_mode=*/true);
+      }
+      if (!ll_wrs.empty()) {
+        post_rdma_async_batched(ctx_, cfg_.gpu_buffer, ll_wrs.size(), ll_wrs,
+                                ll_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                                cfg_.thread_idx, /*use_normal_mode=*/false);
+      }
+    } else {
+      post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
+                              rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                              cfg_.thread_idx, cfg_.use_normal_mode);
+    }
     rdma_wrs.clear();
     rdma_cmds.clear();
   }
 
   if (!atomic_wrs.empty()) {
-    post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.thread_idx, acked_wrs_,
-                           cfg_.use_normal_mode);
+    if (cfg_.dual_mode) {
+      split_by_mode(atomic_wrs, atomic_cmds);
+      if (!ht_wrs.empty()) {
+        post_atomic_operations(ctx_, ht_wrs, ht_cmds, ctxs_for_all_ranks_,
+                               cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                               /*use_normal_mode=*/true);
+      }
+      if (!ll_wrs.empty()) {
+        post_atomic_operations(ctx_, ll_wrs, ll_cmds, ctxs_for_all_ranks_,
+                               cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                               /*use_normal_mode=*/false);
+      }
+    } else {
+      post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
+                             cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                             cfg_.use_normal_mode);
+    }
     atomic_wrs.clear();
     atomic_cmds.clear();
   }
@@ -1349,9 +1421,9 @@ void Proxy::quiet_cq() {
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes, cfg_.use_normal_mode);
+          cfg_.num_nodes, cfg_.use_normal_mode, cfg_.dual_mode);
 #ifdef USE_RECEIVER_BARRIER
-      if (!cfg_.use_normal_mode) {
+      if (!cfg_.use_normal_mode || cfg_.dual_mode) {
         apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                               cfg_.num_experts, cfg_.num_ranks);
       }
@@ -1413,7 +1485,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
                                     ? peers_[cfg_.rank].ip
                                     : "";
       std::string const shm_name =
-          shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+          shm_name_for_barrier(my_ip, cfg_, cfg_.thread_idx);
       unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
       ctx_.lb = nullptr;
       ctx_.lb_owner = false;
@@ -1606,7 +1678,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
   std::string const my_ip =
       (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
   std::string const shm_name =
-      shm_name_for_barrier(my_ip, cfg_.use_normal_mode, cfg_.thread_idx);
+      shm_name_for_barrier(my_ip, cfg_, cfg_.thread_idx);
   unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
   ctx_.lb = nullptr;
   ctx_.lb_owner = false;

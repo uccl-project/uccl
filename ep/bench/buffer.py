@@ -84,6 +84,7 @@ class Buffer:
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
         is_intranode: Optional[bool] = None,
+        dual_mode: bool = False,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -93,6 +94,12 @@ class Buffer:
             num_nvl_bytes: the buffer size for intranode NVLink communication.
             num_rdma_bytes: the buffer size for internode (also for intranode with low-latency mode) RDMA communication.
             low_latency_mode: whether to enable low-latency mode.
+            dual_mode: build a single proxy pool that serves both high-throughput
+                and low-latency kernels, so one Buffer can run normal
+                dispatch/combine and low_latency_dispatch/low_latency_combine
+                interchangeably (call `clean_low_latency_buffer` when switching
+                from HT to LL). Requires `low_latency_mode=True` and
+                `num_rdma_bytes` sized for the larger of the two layouts.
             num_qps_per_rank: the number of QPs for RDMA, the low-latency mode requires that this number equals
                 to the number of local experts.
             allow_nvlink_for_low_latency_mode: whether allow NVLink traffic for low-latency mode, you should notice
@@ -106,6 +113,12 @@ class Buffer:
             is_intranode: whether to force intranode-only proxy mode. If set to `None`, infer it from the
                 process-group topology automatically. Explicit `True` is rejected when the group spans multiple nodes.
         """
+        if dual_mode and not low_latency_mode:
+            raise ValueError(
+                "dual_mode requires low_latency_mode=True (the buffer keeps the "
+                "LL layout; HT kernels run alongside via the dual proxy pool)"
+            )
+
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
@@ -115,9 +128,15 @@ class Buffer:
             # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
             # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
             # segmented caching-allocator mapping.
-            scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
-                num_rdma_bytes, device_index, bool(low_latency_mode)
-            )
+            try:
+                scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+                    num_rdma_bytes, device_index, bool(low_latency_mode)
+                )
+            except TypeError:
+                # Older uccl.ep wheels only expose (num_rdma_bytes, device_index).
+                scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+                    num_rdma_bytes, device_index
+                )
             self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
             rdma_buffer_is_host_allocated = False
@@ -157,9 +176,10 @@ class Buffer:
             group.rank(),
             dist.get_world_size(group),
             group,
-            use_normal_mode=not low_latency_mode,
+            use_normal_mode=False if dual_mode else not low_latency_mode,
             is_intranode=is_intranode,
             rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            dual_mode=dual_mode,
         )
         check_nvlink_connections(group)
 
@@ -170,6 +190,7 @@ class Buffer:
         self.num_nvl_bytes = num_nvl_bytes
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
+        self.dual_mode = dual_mode
         self.explicitly_destroy = explicitly_destroy
         self._next_low_latency_combine_buffer = None
         self.runtime = ep.Buffer(
