@@ -855,8 +855,35 @@ bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
 
   ibv_mr* mr = nullptr;
 
-  // Try DMA-BUF registration first — no nvidia-peermem required.
+  // Traditional ibv_reg_mr first: no 64KB alignment requirement (page
+  // alignment suffices), so unaligned user buffers register fine on
+  // hosts with nvidia-peermem. DMA-BUF is the fallback for hosts
+  // without peermem — and it strictly requires a 64KB-aligned address.
   {
+    mr = ibv_reg_mr(pd_, ptr, len,
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                        IBV_ACCESS_REMOTE_READ);
+  }
+
+  // Fallback: DMA-BUF registration (no nvidia-peermem required), but
+  // the address MUST be 64KB-aligned (RDMA dma-buf offset rule).
+  // Refuse loudly instead of silently degrading — the user must align
+  // their buffer (e.g. cudaMalloc with padding + round-up) to use the
+  // DMA-BUF path.
+  if (!mr) {
+    constexpr uint64_t kDmaBufAlign = 65536;
+    if (reinterpret_cast<uint64_t>(ptr) % kDmaBufAlign != 0) {
+      std::fprintf(stderr,
+                   "[rdma-reg] buf=%u ptr=%p len=%zu: ibv_reg_mr failed and "
+                   "DMA-BUF path requires a 64KB-aligned buffer address "
+                   "(ptr %% 64K = %llu). Align the buffer (e.g. pad the "
+                   "allocation and round the pointer up to 64KB) or install "
+                   "nvidia-peermem so ibv_reg_mr can register GPU memory.\n",
+                   buf_id, ptr, len,
+                   (unsigned long long)(reinterpret_cast<uint64_t>(ptr) %
+                                        kDmaBufAlign));
+      return false;
+    }
     int dmabuf_fd = -1;
     CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(ptr);
     CUresult cu_ret = cuMemGetHandleForAddressRange(
@@ -874,13 +901,6 @@ bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
         close(dmabuf_fd);
       }
     }
-  }
-
-  // Fallback: traditional ibv_reg_mr (requires nvidia-peermem for GPU ptrs)
-  if (!mr) {
-    mr = ibv_reg_mr(pd_, ptr, len,
-                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                        IBV_ACCESS_REMOTE_READ);
   }
 
   if (!mr) return false;
