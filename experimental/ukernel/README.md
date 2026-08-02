@@ -299,3 +299,69 @@ Current constraints:
 - [py](py/) — `ukernel_ccl` / `ukernel_p2p` Python bindings
 - [benchmarks](benchmarks/) — transport and device benchmarks
 - [include/util](include/util/) — shared lock-free jring, pause intrinsic
+
+## Performance measurements
+
+Two-GPU AllReduce, A40 pair (CUDA 6,7; P2P over PCIe gen4). All numbers
+are true 2-rank runs — the shim rows are `mpirun -np 2` over
+nccl-tests, the spray row is the native SprayExecutor benchmark
+(`test_perf_spray_allreduce`). A single-process `-g 1` nccl-tests run
+is a 1-rank no-op (launch overhead only) and must NOT be used as a
+performance number.
+
+| Size | SprayExecutor | shim nccl-tests | native NCCL 2.29.7 |
+|---|---|---|---|
+| 256KB | 373us | 9439us | — |
+| 1MB | 555us | 7564us | 60.7us |
+| 4MB | 1999us | 12391us | 141.6us |
+| 16MB | 7994us | 17956us | 458.9us |
+| 64MB | 27696us | 29106us | 1696.7us |
+| 256MB | 105.5ms | 102.5ms | 6.24ms |
+
+> **IMPORTANT — run mpirun with CPU binding disabled.** OpenMPI's
+> default hwloc CPU binding pins shim processes to a subset of cores,
+> which starves the GPU-completion wait path (drain-thread polling /
+> WaitValue detection / persistent-kernel wakeup). On this machine it
+> inflated small-message AllReduce latency ~50x (256KB: 9.4ms → 167us).
+> Native NCCL is unaffected (hardware signals, no CPU polling). Always
+> launch the shim under:
+>
+> ```bash
+> mpirun -np 2 --mca plm_rsh_agent sh --mca hwloc_base_binding_policy none \
+>     -x LD_LIBRARY_PATH ... -x CUDA_VISIBLE_DEVICES ...
+> ```
+> (`OMPI_MCA_hwloc_base_binding_policy=none` env var is equivalent;
+> `--mca plm_rsh_agent sh` makes mpirun fork locally without ssh.)
+
+Two known gaps, both under investigation:
+
+1. **Shim small-message latency ~8x vs native** (was ~50x before the
+   MPI binding fix): at 256KB the shim path is 167.5us vs native NCCL
+   21.8us (7.7x). The remaining gap narrows with size — 1MB: 419us vs
+   60.7us (6.9x), 4MB: 1254us vs 141.6us (8.9x) — and vanishes in the
+   bandwidth-saturated regime (64MB+: ~20-25ms both).
+
+   Measured decomposition (probe programs, A40 pair, true 2-rank):
+   each shim `ncclAllReduce` call = CPU submit ~20us + GPU stream-wait
+   ~149us (native NCCL: ~15us + ~20us). The GPU-side 129us gap is
+   entirely inside the collective's own execution — a CUDA event
+   enqueued right after the call completes at the same time as a full
+   stream sync, so there is no extra done-flag / WaitValue-release
+   delay. Fixed-latency floor is data-size-independent: AllToAll of 64B
+   costs ~50us, 64KB ~55us; AllReduce 64KB ~115us (the extra ~60us is
+   the reduce path's extra synchronization rounds). Signal matching
+   itself is fast (0.1-0.4us/wait in `test_signal_backend_e2e`), and
+   the floor is identical for forced `UK_CCL_PUT_PATH=device|ipc`, so
+   it is not a per-path issue. Remaining suspects: per-collective GPU
+   pipeline latency (kernel-launch sequence + cross-rank signal
+   round-trips) versus native NCCL's ~20us end-to-end.
+
+2. **Same-node P2P bandwidth ~5 GB/s busbw**: far below the PCIe
+   gen4 P2P ceiling (~30 GB/s). At 256MB both the spray path and the
+   shim path saturate at ~5.1-5.2 GB/s busbw, vs native NCCL 43 GB/s
+   (256MB in 6.2ms vs ~103ms). The IPC/device P2P path is not
+   saturated. Related observation: DeviceBackend's persistent kernel
+   stalls under load — `test_perf_p2p_copy` floods stderr with
+   `[dev-stall] fifoN pending=... head/tail advancing slowly` forensic
+   logs, i.e. tasks sit in the FIFO while the kernel drains one at a
+   time. That is a separate throughput problem on the device path.
