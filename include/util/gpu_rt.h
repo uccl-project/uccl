@@ -278,7 +278,11 @@ typedef int gpuMemRangeHandleType;
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
 #define gpuMemoryTypeManaged hipMemoryTypeManaged
+#ifdef __UCCL_DTK__
 #define gpuMemTypeOf(a) (a).memoryType
+#else
+#define gpuMemTypeOf(a) (a).type
+#endif
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define gpuMemGetAddressRange hipMemGetAddressRange
