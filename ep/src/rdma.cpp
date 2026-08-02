@@ -28,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <fcntl.h>
@@ -387,6 +388,43 @@ bool is_cuda_host_pointer(void* ptr) {
 #endif
 }
 
+char const* rdma_hca_filter_from_env() {
+  char const* ib_hca = getenv("UCCL_IB_HCA");
+  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
+  return ib_hca;
+}
+
+bool rdma_device_matches_filter(char const* name, int port,
+                                char const* ib_hca) {
+  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+  return uccl::match_if_list(name, port, user_ib_ifs, num_ib_ifs, searchExact) ^
+         searchNot;
+}
+
+bool rdma_device_matches_filter(char const* name, int port) {
+  return rdma_device_matches_filter(name, port, rdma_hca_filter_from_env());
+}
+
+std::vector<int> selected_rdma_device_indices(struct ibv_device** dev_list,
+                                              int num_devices,
+                                              bool check_iface_up) {
+  char const* ib_hca = rdma_hca_filter_from_env();
+  std::vector<int> candidates;
+  candidates.reserve(num_devices);
+  for (int i = 0; i < num_devices; ++i) {
+    char const* name = ibv_get_device_name(dev_list[i]);
+    if (!rdma_device_matches_filter(name, 1, ib_hca)) continue;
+    if (check_iface_up && !uccl::is_iface_up(name)) continue;
+    candidates.push_back(i);
+  }
+  return candidates;
+}
+
 }  // namespace
 
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
@@ -440,25 +478,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
 
-  // Conforming to UCCL_IB_HCA filter.
-  char* ib_hca = getenv("UCCL_IB_HCA");
-  if (!ib_hca) {
-    ib_hca = getenv("NCCL_IB_HCA");
-  }
-  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
-  bool searchNot = ib_hca && ib_hca[0] == '^';
-  if (searchNot) ib_hca++;
-  bool searchExact = ib_hca && ib_hca[0] == '=';
-  if (searchExact) ib_hca++;
-  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
-
   std::string selected_nic_name;
   for (auto& nic : ib_nics) {
-    if (!(uccl::match_if_list(nic.first.c_str(), 1, user_ib_ifs, num_ib_ifs,
-                              searchExact) ^
-          searchNot)) {
-      continue;
-    }
+    if (!rdma_device_matches_filter(nic.first.c_str(), 1)) continue;
     uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
     dist.emplace_back(nic.first, d);
   }
@@ -742,28 +764,13 @@ bool probe_gpu_memory_registration(int gpu_idx, size_t bytes, char const* label,
     return false;
   }
 
-  char* ib_hca = getenv("UCCL_IB_HCA");
-  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
-  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
-  bool searchNot = ib_hca && ib_hca[0] == '^';
-  if (searchNot) ib_hca++;
-  bool searchExact = ib_hca && ib_hca[0] == '=';
-  if (searchExact) ib_hca++;
-  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
-
-  std::vector<int> candidates;
-  candidates.reserve(num_devices);
-  for (int i = 0; i < num_devices; ++i) {
-    char const* name = ibv_get_device_name(dev_list[i]);
-    if (!(uccl::match_if_list(name, 1, user_ib_ifs, num_ib_ifs, searchExact) ^
-          searchNot)) {
-      continue;
-    }
 #ifndef EFA
-    if (!uccl::is_iface_up(name)) continue;
+  constexpr bool check_iface_up = true;
+#else
+  constexpr bool check_iface_up = false;
 #endif
-    candidates.push_back(i);
-  }
+  std::vector<int> const candidates =
+      selected_rdma_device_indices(dev_list, num_devices, check_iface_up);
 
   bool ok = !candidates.empty();
   for (int idx : candidates) {
@@ -796,6 +803,68 @@ bool probe_gpu_memory_registration(int gpu_idx, size_t bytes, char const* label,
   }
 
   cudaFree(probe_buf);
+  ibv_free_device_list(dev_list);
+  return ok;
+}
+
+bool device_supports_native_atomics(ibv_context* context) {
+#ifdef EFA
+  (void)context;
+  return false;
+#else
+  if (!context) return false;
+
+  char const* device_name = ibv_get_device_name(context->device);
+  static thread_local std::unordered_map<std::string, bool> cache;
+  auto const it = cache.find(device_name);
+  if (it != cache.end()) return it->second;
+
+  ibv_device_attr attr{};
+  if (ibv_query_device(context, &attr) != 0) {
+    perror("ibv_query_device");
+    cache[device_name] = false;
+    return false;
+  }
+
+  bool const supported = attr.atomic_cap != IBV_ATOMIC_NONE;
+  if (!supported) {
+    fprintf(stderr,
+            "[RDMA] Device %s reports atomic_cap=IBV_ATOMIC_NONE; using "
+            "write-with-immediate atomic emulation\n",
+            device_name);
+  }
+  cache[device_name] = supported;
+  return supported;
+#endif
+}
+
+bool selected_rdma_devices_support_native_atomics() {
+  int num_devices = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
+  if (!dev_list || num_devices == 0) {
+    if (dev_list) ibv_free_device_list(dev_list);
+    return false;
+  }
+
+#ifndef EFA
+  constexpr bool check_iface_up = true;
+#else
+  constexpr bool check_iface_up = false;
+#endif
+  std::vector<int> const candidates =
+      selected_rdma_device_indices(dev_list, num_devices, check_iface_up);
+  bool ok = !candidates.empty();
+  for (int idx : candidates) {
+    ibv_context* context = ibv_open_device(dev_list[idx]);
+    if (!context) {
+      ok = false;
+      break;
+    }
+    ok = device_supports_native_atomics(context);
+    ibv_close_device(context);
+    if (!ok) break;
+  }
+
   ibv_free_device_list(dev_list);
   return ok;
 }
@@ -874,6 +943,14 @@ bool can_register_gpu_memory_for_atomics(int gpu_idx) {
   char* force_host = getenv("UCCL_ATOMICS_USE_HOST_MEMORY");
   if (force_host &&
       (force_host[0] == '1' || force_host[0] == 'y' || force_host[0] == 'Y')) {
+    cache[gpu_idx] = false;
+    return false;
+  }
+
+  if (!selected_rdma_devices_support_native_atomics()) {
+    fprintf(
+        stderr,
+        "[RDMA] Using pinned host memory for the atomic signaling buffer\n");
     cache[gpu_idx] = false;
     return false;
   }
@@ -3508,21 +3585,22 @@ void post_atomic_operations(ProxyCtx& S,
                             int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
+  bool const use_native_atomics = device_supports_native_atomics(S.context);
   if (use_normal_mode) {
-#ifndef EFA
-    post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
-                                       my_rank, thread_idx, acked_wrs);
-#else
-    post_atomic_operations_normal_mode(S, wrs_to_post, cmds_to_post, ctxs,
-                                       my_rank, thread_idx, acked_wrs);
-#endif
+    if (use_native_atomics) {
+      post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
+                                         my_rank, thread_idx, acked_wrs);
+    } else {
+      post_atomic_operations_normal_mode(S, wrs_to_post, cmds_to_post, ctxs,
+                                         my_rank, thread_idx, acked_wrs);
+    }
   } else {
-#ifndef EFA
-    post_atomic_operations_fast_mode_native_rdma(
-        S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
-#else
-    post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs,
-                                     my_rank, thread_idx, acked_wrs);
-#endif
+    if (use_native_atomics) {
+      post_atomic_operations_fast_mode_native_rdma(
+          S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
+    } else {
+      post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs,
+                                       my_rank, thread_idx, acked_wrs);
+    }
   }
 }

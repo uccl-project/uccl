@@ -2,7 +2,7 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
-#include "cxi/cxi_endpoint.h"
+#include "cxi/cxi_endpoint.h"  // needs libfabric headers
 #include "nccl_endpoint.h"
 #include "rdma_endpoint.h"
 #include "transport_type.h"
@@ -456,6 +456,10 @@ class Endpoint {
   P2PAdaptiveSleeper send_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
+
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+#include "mlu/mlu_staging.inc"  // Cambricon Plan A staging members/methods
+#endif
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();

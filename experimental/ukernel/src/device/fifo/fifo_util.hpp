@@ -10,15 +10,10 @@
 #include <stdexcept>
 #include <string>
 
-// ============================================================================
-// GPU Platform Abstraction (from gpu.hpp)
-// ============================================================================
-
+// GPU Platform Abstraction
 #include "gpu_rt.h"
 
-// ============================================================================
-// Device Compilation Macros (from device.hpp)
-// ============================================================================
+// Device Compilation Macros
 #if (defined(__NVCC__) || defined(__HIP_PLATFORM_AMD__))
 
 #define MSCCLPP_DEVICE_COMPILE
@@ -39,18 +34,14 @@
 
 #endif  // !(defined(__NVCC__) || defined(__HIP_PLATFORM_AMD__))
 
-// ============================================================================
 // CUDA Atomic includes (must be outside namespace)
-// ============================================================================
 #if defined(MSCCLPP_DEVICE_CUDA)
 #include <cuda/atomic>
 #endif
 
 namespace mscclpp {
 
-// ============================================================================
-// Error Handling (from errors.hpp)
-// ============================================================================
+// Error Handling
 
 /// Base class for all errors thrown by MSCCL++.
 class BaseError : public std::runtime_error {
@@ -93,9 +84,7 @@ class CuError : public BaseError {
   virtual ~CuError() = default;
 };
 
-// ============================================================================
-// CUDA Error Checking Macros (from gpu_utils.hpp)
-// ============================================================================
+// CUDA Error Checking Macros
 
 /// Throw mscclpp::CudaError if @p cmd does not return cudaSuccess.
 #define MSCCLPP_CUDATHROW(cmd)                                              \
@@ -120,9 +109,7 @@ class CuError : public BaseError {
     }                                                                         \
   } while (false)
 
-// ============================================================================
-// NUMA Functions (from numa.hpp)
-// ============================================================================
+// NUMA Functions
 
 // Convert a logical deviceId index to the NVML device minor number
 static inline std::string const getBusId(int deviceId) {
@@ -153,9 +140,7 @@ inline int getDeviceNumaNode(int deviceId) {
   return numaNode;
 }
 
-// ============================================================================
-// Atomic Operations (from atomic_device.hpp)
-// ============================================================================
+// Atomic Operations
 
 #if defined(MSCCLPP_DEVICE_CUDA)
 
@@ -244,9 +229,7 @@ inline T atomicFetchAdd(T* ptr, T const& val, int memoryOrder) {
 
 #endif  // defined(MSCCLPP_DEVICE_HIP)
 
-// ============================================================================
-// Device Assertions (from assert_device.hpp)
-// ============================================================================
+// Device Assertions
 
 #if defined(MSCCLPP_DEVICE_COMPILE)
 
@@ -278,9 +261,7 @@ extern "C" __host__ __device__ void __assert_fail(
 
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)
 
-// ============================================================================
-// Polling Macros (from poll_device.hpp)
-// ============================================================================
+// Polling Macros
 
 #if defined(MSCCLPP_DEVICE_COMPILE)
 
@@ -295,9 +276,7 @@ extern "C" __host__ __device__ void __assert_fail(
 
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)
 
-// ============================================================================
-// GPU Memory Management (from gpu_utils.hpp)
-// ============================================================================
+// GPU Memory Management
 
 namespace detail {
 
