@@ -366,7 +366,10 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = nbytes;
   cfg.output_bytes = nbytes;
-  cfg.tile_bytes = 65536;
+  // Tile size grows with message size to cap the tile count (per-tile
+  // fixed overhead dominates throughput at high tile counts). Same
+  // formula as test_perf_spray_allreduce: at most 256 tiles.
+  cfg.tile_bytes = std::max<size_t>(65536, (nbytes + 255) / 256);
   cfg.dtype = to_scalar(datatype);
   cfg.reduction = to_redop(op);
   return run_coll(comm, cfg, input, recvbuff, stream);
@@ -391,7 +394,7 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = total_bytes;
   cfg.output_bytes = total_bytes;
-  cfg.tile_bytes = 65536;
+  cfg.tile_bytes = std::max<size_t>(65536, (total_bytes + 255) / 256);
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, buf, buf, stream);
 }
@@ -446,7 +449,7 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = count * elem_sz;
   cfg.output_bytes = out_bytes;
-  cfg.tile_bytes = 65536;
+  cfg.tile_bytes = std::max<size_t>(65536, (out_bytes + 255) / 256);
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
 }
@@ -480,7 +483,7 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
   cfg.rank = comm->rank;
   cfg.input_bytes = in_bytes;
   cfg.output_bytes = count * elem_sz;
-  cfg.tile_bytes = 65536;
+  cfg.tile_bytes = std::max<size_t>(65536, (in_bytes + 255) / 256);
   cfg.dtype = to_scalar(datatype);
   cfg.reduction = to_redop(op);
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);

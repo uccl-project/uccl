@@ -365,3 +365,15 @@ Two known gaps, both under investigation:
    `[dev-stall] fifoN pending=... head/tail advancing slowly` forensic
    logs, i.e. tasks sit in the FIFO while the kernel drains one at a
    time. That is a separate throughput problem on the device path.
+
+   **Root-caused and fixed (partially)**: the shim's fixed 64KB tile
+   size capped large-message throughput — 256MB meant 4096 tiles, and
+   per-tile fixed overhead (signal matching, scheduling, put
+   post-processing) dominated. `nccl.cc` now grows the tile with
+   message size (`max(64KB, bytes/256)`, at most 256 tiles, matching
+   `test_perf_spray_allreduce`). Result: 256MB AllReduce 103ms → 54ms
+   (matches the spray path 53.8ms; 64MB +45%). Small messages
+   unchanged (verified with a no-interference probe: 256KB 164us, 1MB
+   364us). AllGather 256MB: 22.6ms; ReduceScatter 256MB: 71.2ms. The
+   remaining ~5-10 GB/s busbw (vs 43 GB/s native) is now the transport
+   path itself (IPC puts dominate same-node), not the shim.
