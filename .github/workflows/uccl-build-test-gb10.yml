@@ -97,6 +97,11 @@ jobs:
           echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
           chmod 600 ~/.ssh/uccl-dev
 
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/uccl-dev
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
           cat >> ~/.ssh/config << 'EOF'
           Host jump_host
               HostName "${{secrets.UCCL_DEV_JUMP_HOST}}"
@@ -108,16 +113,16 @@ jobs:
               HostName localhost
               Port "${{secrets.UCCL_DEV_SPARK0_PORT}}"
               User "${{secrets.UCCL_DEV_SPARK_USER}}"
+              ForwardAgent yes
               IdentityFile ~/.ssh/uccl-dev
-              IdentitiesOnly yes
               ProxyCommand ssh -o 'ForwardAgent yes' jump_host 'ssh-add && nc %h %p'
 
           Host spark1
               HostName localhost
               Port "${{secrets.UCCL_DEV_SPARK1_PORT}}"
               User "${{secrets.UCCL_DEV_SPARK_USER}}"
+              ForwardAgent yes
               IdentityFile ~/.ssh/uccl-dev
-              IdentitiesOnly yes
               ProxyCommand ssh -o 'ForwardAgent yes' jump_host 'ssh-add && nc %h %p'
           EOF
 
