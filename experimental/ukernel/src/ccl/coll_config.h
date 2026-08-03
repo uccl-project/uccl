@@ -1,7 +1,9 @@
 #pragma once
 
 #include "coll_types.h"
+#include <cstdlib>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace UKernel {
@@ -32,6 +34,27 @@ struct CollectiveConfig {
   // the implicit form.
   bool inplace = false;
 };
+
+// Tile sizing rule, shared by the NCCL shim and the spray benchmarks:
+// messages at or below the sweet spot move as ONE tile (tiling tiny
+// messages only adds per-tile fixed overhead), and larger messages are
+// tiled to at most kMaxTilesPerMessage tiles so per-tile overhead stays
+// bounded at the large end. Measured on the A40/L40S pair, 64KB is the
+// best sweet spot for small messages (256KB-4MB: 64KB tiles win by
+// 6-29% over 256KB-1MB floors — more tiles pipeline the ring better
+// than the fixed per-tile cost hurts); 16MB prefers a 256KB-1MB floor
+// (-16%), and >=64MB is transport/device-bound regardless.
+// UK_CCL_TILE_MIN_BYTES overrides the sweet spot for tuning.
+inline size_t adaptive_tile_bytes(size_t bytes) {
+  constexpr size_t kMaxTilesPerMessage = 256;
+  static size_t const kTileSweetSpotBytes = [] {
+    char const* v = std::getenv("UK_CCL_TILE_MIN_BYTES");
+    return v ? static_cast<size_t>(std::stoull(v)) : (size_t{1} << 16);
+  }();
+  size_t tile = (bytes + kMaxTilesPerMessage - 1) / kMaxTilesPerMessage;
+  tile = ((tile + 31) / 32) * 32;  // 32B-aligned tile boundaries
+  return std::max(kTileSweetSpotBytes, tile);
+}
 
 }  // namespace CCL
 }  // namespace UKernel

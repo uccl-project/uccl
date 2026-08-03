@@ -346,6 +346,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
   void* input = const_cast<void*>(sendbuff);
+  if (count > SIZE_MAX / elem_sz) return ncclInvalidArgument;
   size_t nbytes = count * elem_sz;
   CollectiveConfig cfg;
   // Opt-in binary-tree allreduce via UK_CCL_TREE_THRESHOLD_BYTES
@@ -366,10 +367,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = nbytes;
   cfg.output_bytes = nbytes;
-  // Tile size grows with message size to cap the tile count (per-tile
-  // fixed overhead dominates throughput at high tile counts). Same
-  // formula as test_perf_spray_allreduce: at most 256 tiles.
-  cfg.tile_bytes = std::max<size_t>(65536, (nbytes + 255) / 256);
+  cfg.tile_bytes = adaptive_tile_bytes(nbytes);
   cfg.dtype = to_scalar(datatype);
   cfg.reduction = to_redop(op);
   return run_coll(comm, cfg, input, recvbuff, stream);
@@ -394,7 +392,7 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = total_bytes;
   cfg.output_bytes = total_bytes;
-  cfg.tile_bytes = std::max<size_t>(65536, (total_bytes + 255) / 256);
+  cfg.tile_bytes = adaptive_tile_bytes(total_bytes);
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, buf, buf, stream);
 }
@@ -440,6 +438,8 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
   // and run the in-place algorithm variant.
   const char* sendp = static_cast<const char*>(sendbuff);
   const char* recvp = static_cast<const char*>(recvbuff);
+  if (count > SIZE_MAX / (static_cast<size_t>(comm->nranks) * elem_sz))
+    return ncclInvalidArgument;
   size_t out_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
   bool const inplace = sendp >= recvp && sendp < recvp + out_bytes;
   CollectiveConfig cfg;
@@ -449,7 +449,7 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
   cfg.rank = comm->rank;
   cfg.input_bytes = count * elem_sz;
   cfg.output_bytes = out_bytes;
-  cfg.tile_bytes = std::max<size_t>(65536, (out_bytes + 255) / 256);
+  cfg.tile_bytes = adaptive_tile_bytes(out_bytes);
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
 }
@@ -474,6 +474,8 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
   // pointers as out-of-place buffers.
   const char* sendp = static_cast<const char*>(sendbuff);
   const char* recvp = static_cast<const char*>(recvbuff);
+  if (count > SIZE_MAX / (static_cast<size_t>(comm->nranks) * elem_sz))
+    return ncclInvalidArgument;
   size_t in_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
   bool const inplace = recvp >= sendp && recvp < sendp + in_bytes;
   CollectiveConfig cfg;
@@ -483,7 +485,7 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
   cfg.rank = comm->rank;
   cfg.input_bytes = in_bytes;
   cfg.output_bytes = count * elem_sz;
-  cfg.tile_bytes = std::max<size_t>(65536, (in_bytes + 255) / 256);
+  cfg.tile_bytes = adaptive_tile_bytes(in_bytes);
   cfg.dtype = to_scalar(datatype);
   cfg.reduction = to_redop(op);
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
