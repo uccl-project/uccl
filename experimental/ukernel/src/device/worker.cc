@@ -61,7 +61,7 @@ WorkerPool::~WorkerPool() {
       GPU_RT_CHECK(gpuFree(wc->d_fifo_handle));
     }
     if (wc->d_multi_sync) {
-      GPU_RT_CHECK(gpuFree(wc->d_multi_sync));
+      GPU_RT_CHECK(gpuFreeAsync(wc->d_multi_sync, wc->stream));
     }
     if (wc->h_exited) {
       GPU_RT_CHECK(gpuFreeHost(wc->h_exited));
@@ -116,12 +116,14 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
                                   control_stream_));
       GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
       if (workers_[i]->d_multi_sync) {
-        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        GPU_RT_CHECK(gpuFreeAsync(workers_[i]->d_multi_sync,
+                                  workers_[i]->stream));
         workers_[i]->d_multi_sync = nullptr;
       }
       if (numBlocks > 1) {
-        GPU_RT_CHECK(
-            gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
+        GPU_RT_CHECK(gpuMallocAsync(&workers_[i]->d_multi_sync,
+                                    sizeof(MultiBlockSync),
+                                    workers_[i]->stream));
         GPU_RT_CHECK(gpuMemsetAsync(workers_[i]->d_multi_sync, 0,
                                     sizeof(MultiBlockSync),
                                     workers_[i]->stream));
@@ -175,7 +177,13 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
       if (workers_[i]->d_multi_sync) {
-        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        // Stream-ordered free: plain cudaFree() of this buffer hung the
+        // context after the multi-block kernel ran on this driver
+        // (CUDA 13.3/610), while the identical path in the spray
+        // benchmark freed it fine — cudaFreeAsync avoids the implicit
+        // context-wide sync that wedged.
+        GPU_RT_CHECK(gpuFreeAsync(workers_[i]->d_multi_sync,
+                                  workers_[i]->stream));
         workers_[i]->d_multi_sync = nullptr;
       }
       workers_[i]->launched = false;
@@ -317,6 +325,17 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   size_t smem_size = cfg_.smemSize;
 
   if (worker.h_exited) *worker.h_exited = false;
+
+  // Relaunch after an idle exit must reset the multi-block sync state:
+  // the previous kernel's exit publishes publishedPhase=1 with
+  // command=kCommandExit, so a stale buffer makes the relaunched kernel
+  // see "exit" on its first phase check and return before consuming any
+  // tasks (observed: fifo head>0, tail=0 forever in the shim at
+  // blocks>1). Zero it on the worker stream, ordered before the launch.
+  if (worker.numBlocks > 1 && worker.d_multi_sync) {
+    GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
+                                sizeof(MultiBlockSync), worker.stream));
+  }
 
   void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
                          &d_stop_flags_[workerIndex], &worker.h_exited,

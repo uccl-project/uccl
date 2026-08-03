@@ -426,4 +426,13 @@ Two known gaps, both under investigation:
    on the sync buffer was traced to system-scope atomics on the GDR
    tail. Reverted to the original barrier-based `multiPersistentKernel`;
    with the ILP reduce it reaches 256MB AllReduce 11.9ms (45 GB/s) in
-   the spray benchmark at 64 blocks on the A40/L40S pair.
+   the spray benchmark at 64 blocks on the A40/L40S pair. Multi-block
+   (blocks_per_worker > 1) is now fully usable in the shim too, after
+   three fixes: the MultiBlockSync buffer is stream-ordered
+   (cudaMallocAsync/cudaFreeAsync — plain cudaFree hung the context on
+   this driver), the sync buffer is zeroed before every kernel launch
+   (a relaunched kernel otherwise read the previous kernel's exit phase
+   and returned before consuming tasks), and the per-task phase waits
+   use `<` instead of `!=` so a block preempted past a phase catches up
+   instead of deadlocking. nccl-tests at UK_CCL_DEV_BLOCKS=64: full
+   256K-256M sweep, 0 wrong, 256MB 14.8ms (18.1 GB/s), no stalls.

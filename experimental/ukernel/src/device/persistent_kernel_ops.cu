@@ -415,8 +415,15 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           mscclpp::memoryOrderRelease);
     }
 
+    // Phase values are strictly increasing (bid 0 publishes 2k+1 then
+    // 2k+2 per task). Waiting with `<` (instead of `!=`) makes a block
+    // that was preempted past the value catch up instead of spinning
+    // forever on a phase that never reappears — the `!=` form deadlocked
+    // under repeated idle-exit/relaunch cycles (observed: bid 0 waiting
+    // on completedBlocks=60/64 while 4 blocks were stuck on an earlier
+    // task's already-published phase).
     while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) <
            local_phase + 1) {
     }
     __syncthreads();
@@ -458,7 +465,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     }
 
     while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) <
            local_phase + 2) {
     }
     local_phase += 2;

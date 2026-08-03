@@ -40,6 +40,8 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     dev_cfg.blocks_per_worker = static_cast<uint32_t>(std::stoul(v));
   if (char const* v = std::getenv("UK_CCL_DEV_THREADS"))
     dev_cfg.threads_per_block = static_cast<uint32_t>(std::stoul(v));
+  if (char const* v = std::getenv("UK_CCL_DEV_IDLE_EXIT_US"))
+    dev_cfg.idle_exit_after_us = static_cast<uint32_t>(std::stoul(v));
   auto dev_be = std::make_unique<DeviceBackend>(dev_cfg);
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
   auto sig_be = std::make_unique<SignalBackend>();
