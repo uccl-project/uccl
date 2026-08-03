@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <csignal>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -217,6 +218,16 @@ static std::shared_ptr<CollPlan const> build_plan(CollectiveConfig const& cfg,
   plan->tiled = build_tiled(cfg, inplace);
   size_t nops = plan->tiled.ops.size();
   plan->nops = nops;
+
+  // Cmd.bytes is uint32_t (task ABI / RDMA WR width). Adaptive tiling
+  // can in principle produce single ops beyond that for multi-TB
+  // tensors; reject the plan loudly instead of silently truncating
+  // every op's byte count in make_cmd.
+  for (auto const& op : plan->tiled.ops) {
+    if (op.bytes > std::numeric_limits<uint32_t>::max())
+      throw std::invalid_argument(
+          "executor: op bytes exceed the 32-bit Cmd.bytes limit");
+  }
 
   plan->indegree_init.resize(nops);
   std::vector<uint32_t> succ_count(nops, 0);
