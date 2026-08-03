@@ -58,17 +58,72 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   }
 }
 
-template <typename T>
-__device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
-                                                  size_t count, ReduceType op,
-                                                  void* smem_buf) {
+// 16B-aligned typed vector for wide reduce loads/stores. All supported
+// reduce dtypes have sizeof(T) in {1,2,4,8}, so N = 16/sizeof(T) is
+// 16/8/4/2 and the struct is exactly 16B.
+template <typename T, int N>
+struct alignas(16) TypedVec {
+  T e[N];
+};
+
+// Bulk vectorized dst[i] = dst[i] op src[i], compile-time op so the
+// element loop fully unrolls and memory traffic stays 16B wide per
+// thread (NCCL-style wide reduce; the previous scalar loop was neither
+// vectorized nor coalesced).
+template <typename T, int N, ReduceType op>
+__device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
+                                                      size_t count, int tid,
+                                                      int nthread) {
+  using V = TypedVec<T, N>;
+  V const* svp = reinterpret_cast<V const*>(src);
+  V* dvp = reinterpret_cast<V*>(dst);
+  size_t nvec = count / static_cast<size_t>(N);
+  // ILP: each thread keeps kVecInFlight independent 16B loads in flight
+  // before storing. The element-wise reduce is latency-bound at low
+  // unroll (measured: U=1 needs ~16 blocks for 150 GB/s, U=4 reaches
+  // ~185 GB/s with 8 blocks on A40 — the DRAM ceiling), so fewer blocks
+  // saturate the memory system.
+  constexpr int kVecInFlight = 4;
+  size_t stride = static_cast<size_t>(nthread) * kVecInFlight;
+  for (size_t base = static_cast<size_t>(tid); base < nvec;
+       base += stride) {
+    V sv[kVecInFlight];
+    V dv[kVecInFlight];
+    size_t idx[kVecInFlight];
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      idx[u] = base + static_cast<size_t>(u) * nthread;
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) sv[u] = svp[idx[u]];
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) {
+        dv[u] = dvp[idx[u]];
+#pragma unroll
+        for (int e = 0; e < N; ++e)
+          dv[u].e[e] = apply_reduce(dv[u].e[e], sv[u].e[e], op);
+      }
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) dvp[idx[u]] = dv[u];
+  }
+  size_t base = nvec * static_cast<size_t>(N);
+  for (size_t i = base + tid; i < count; i += nthread)
+    dst[i] = apply_reduce(dst[i], src[i], op);
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
+                                                     size_t count,
+                                                     void* smem_buf) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
     T* dst_ptr = static_cast<T*>(dst);
-    const T* src_ptr = static_cast<const T*>(src);
+    T const* src_ptr = static_cast<T const*>(src);
     T* temp_result = static_cast<T*>(smem_buf);
 
     if (tid == 0) {
@@ -82,27 +137,55 @@ __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
     size_t chunk = (count + nthread - 1) / nthread;
     size_t start = tid * chunk;
     size_t end = (tid + 1 == nthread) ? count : start + chunk;
-    for (size_t i = start; i < end; ++i) {
+    for (size_t i = start; i < end; ++i)
       temp_result[i] = apply_reduce(temp_result[i], src_ptr[i], op);
-    }
 
     __syncthreads();
 
-    if (tid == 0) {
-      tma_store<T>(dst, smem_buf, bytes);
-    }
+    if (tid == 0) tma_store<T>(dst, smem_buf, bytes);
+    return;
+  }
+
+  T* dst_ptr = static_cast<T*>(dst);
+  T const* src_ptr = static_cast<T const*>(src);
+  constexpr int kVec = 16 / static_cast<int>(sizeof(T));
+  if (kVec > 1 &&
+      (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src_ptr) & 0xF) == 0) {
+    vec_read_reduce_store<T, kVec, op>(dst_ptr, src_ptr, count, tid, nthread);
   } else {
-    T* dst_ptr = static_cast<T*>(dst);
-    const T* src_ptr = static_cast<const T*>(src);
-    size_t chunk = (count + nthread - 1) / nthread;
-    size_t start = tid * chunk;
-    if (start >= count) {
-      return;
-    }
-    size_t end = (start + chunk < count) ? (start + chunk) : count;
-    for (size_t i = start; i < end; ++i) {
+    // Unaligned pointers (odd tile/block offsets): coalesced scalar path.
+    for (size_t i = tid; i < count; i += nthread)
       dst_ptr[i] = apply_reduce(dst_ptr[i], src_ptr[i], op);
-    }
+  }
+}
+
+// dst[i] = dst[i] op src[i] over [0, count). Runtime op dispatched to a
+// compile-time specialization so the vector loop fully unrolls.
+template <typename T>
+__device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
+                                                  size_t count, ReduceType op,
+                                                  void* smem_buf) {
+  switch (op) {
+    case ReduceType::Sum:
+      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
+      break;
+    case ReduceType::Prod:
+      read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, smem_buf);
+      break;
+    case ReduceType::Max:
+      read_reduce_store_op<T, ReduceType::Max>(dst, src, count, smem_buf);
+      break;
+    case ReduceType::Min:
+      read_reduce_store_op<T, ReduceType::Min>(dst, src, count, smem_buf);
+      break;
+    case ReduceType::BitwiseAnd:
+      read_reduce_store_op<T, ReduceType::BitwiseAnd>(dst, src, count,
+                                                      smem_buf);
+      break;
+    default:
+      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
+      break;
   }
 }
 
