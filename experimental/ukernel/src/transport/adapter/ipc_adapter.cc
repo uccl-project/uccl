@@ -4,6 +4,7 @@
 #include "util/uk_debug.h"
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -15,7 +16,16 @@ namespace {
 
 constexpr int kIpcControlTimeoutMs = 50000;
 constexpr size_t kTaskRingSize = 1024;
-constexpr size_t kIpcSizePerEngine = 1ul << 20;
+// Default in-flight put window (see IpcAdapter ctor; UK_CCL_IPC_BATCH
+// overrides, 1 = old per-put sync behavior). The old worker
+// synchronized after EVERY put (copy + ~10us fixed overhead
+// serialized), capping 1MB-tile throughput at ~37 GB/s vs ~52 GB/s for
+// large puts; the sliding window below keeps up to this many copies in
+// flight (round-robin across the streams) and only syncs each put's own
+// event when it reaches the front — the host never blocks on the GPU
+// while the window is full, and small messages drain immediately when
+// the ring empties.
+constexpr size_t kIpcSendBatchDefault = 16;
 
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
@@ -52,14 +62,16 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
   int n_streams = 4;
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   ipc_ctx_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(
-        gpuStreamCreateWithFlags(&ipc_ctx_[i].first, gpuStreamNonBlocking));
-    GPU_RT_CHECK(
-        gpuEventCreateWithFlags(&ipc_ctx_[i].second, gpuEventDisableTiming));
-  }
+  for (int i = 0; i < n_streams; ++i)
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&ipc_ctx_[i], gpuStreamNonBlocking));
 
   stop_.store(false, std::memory_order_release);
+
+  send_batch_ = kIpcSendBatchDefault;
+  if (char const* v = std::getenv("UK_CCL_IPC_BATCH")) {
+    size_t b = static_cast<size_t>(std::stoul(v));
+    if (b > 0) send_batch_ = b;
+  }
 
   // Clean up any stale IPC completion SHM from previous crashed runs
   for (int r = 0; r < comm_->world_size(); ++r) {
@@ -85,10 +97,8 @@ void IpcAdapter::shutdown() {
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-  for (auto& ctx : ipc_ctx_) {
-    if (ctx.first != nullptr) GPU_RT_CHECK(gpuStreamDestroy(ctx.first));
-    if (ctx.second != nullptr) GPU_RT_CHECK(gpuEventDestroy(ctx.second));
-  }
+  for (auto& s : ipc_ctx_)
+    if (s != nullptr) GPU_RT_CHECK(gpuStreamDestroy(s));
   ipc_ctx_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
@@ -412,35 +422,70 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
 
 void IpcAdapter::send_worker() {
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-  RingElem e;
   UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] worker alive, waiting for ops",
          comm_->rank());
+  struct PendingPut {
+    RingElem e;
+    size_t evi;
+    bool ok;
+  };
+  // Per-put event pool (one event per in-flight put). Events are reused
+  // via the free list: an event is only handed out again after its put
+  // completed (events are consumed FIFO, so the freed index is always
+  // the front's).
+  size_t const window = send_batch_;
+  std::vector<gpuEvent_t> evs(window);
+  for (size_t i = 0; i < window; ++i)
+    GPU_RT_CHECK(gpuEventCreateWithFlags(&evs[i], gpuEventDisableTiming));
+  std::deque<size_t> free_evs;
+  for (size_t i = 0; i < window; ++i) free_evs.push_back(i);
+  std::deque<PendingPut> pending;
+  size_t launch_serial = 0;
+
   while (!stop_.load(std::memory_order_relaxed)) {
-    if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) != 1) {
+    // Launch-ahead: keep the window full while the ring has work. Puts
+    // go round-robin across the streams, so consecutive tiles copy in
+    // parallel and the host-side launch cost overlaps the GPU copies.
+    bool ring_empty = false;
+    while (pending.size() < window) {
+      RingElem e;
+      if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) == 1) {
+        size_t stream_idx = launch_serial++ % ipc_ctx_.size();
+        bool ok = launch_one(&e, stream_idx);
+        size_t evi = free_evs.front();
+        free_evs.pop_front();
+        if (ok)
+          GPU_RT_CHECK(gpuEventRecord(evs[evi], ipc_ctx_[stream_idx]));
+        pending.push_back({e, evi, ok});
+      } else {
+        ring_empty = true;
+        break;
+      }
+    }
+    if (pending.empty()) {
       std::this_thread::yield();
       continue;
     }
-    UK_DBG(UK_DBG_LVL_TPT,
-           "[ipc-send r%d] dequeued op type=%d peer=%d bytes=%lu",
-           comm_->rank(), (int)e.type, e.peer, (unsigned long)e.bytes);
-    bool ok = (e.type == ReqType::DataPut || e.type == ReqType::PutSignal)
-                  ? send_one(&e)
-                  : false;
-    UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] send_one done ok=%d", comm_->rank(),
-           (int)ok);
-    if (ok) {
-      size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
-      comps_[e.peer].remote->last_completed[dir].store(
-          e.seq, std::memory_order_release);
-      // Fused PutSignal: the peer observes the tag only after the data
-      // has landed, matching the semantics of a separate Signal op.
-      if (e.type == ReqType::PutSignal) ok = write_signal_ring(e.peer, e.tag);
+    // Complete the oldest put once the window is full (steady-state
+    // pipeline) or the ring has no more work (drain immediately — no
+    // added latency for small messages). Syncing the front put's own
+    // event only waits for ITS copy; by the time the window is full the
+    // copy usually already landed, so the host never stalls the pipe.
+    if (pending.size() >= window || ring_empty) {
+      PendingPut p = pending.front();
+      pending.pop_front();
+      if (p.ok) GPU_RT_CHECK(gpuEventSynchronize(evs[p.evi]));
+      free_evs.push_back(p.evi);
+      complete_one(&p.e, p.ok);
     }
-    publish_put_completion(e.comm_rid, !ok);
   }
+  // Shutdown drain: flush pending puts and the ring (best effort).
+  for (auto const& p : pending) complete_one(&p.e, false);
+  pending.clear();
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
     publish_put_completion(drain.comm_rid, true);
+  for (auto& ev : evs) GPU_RT_CHECK(gpuEventDestroy(ev));
 }
 
 void IpcAdapter::recv_worker() {
@@ -458,7 +503,7 @@ void IpcAdapter::recv_worker() {
     publish_put_completion(drain.comm_rid, true);
 }
 
-bool IpcAdapter::send_one(RingElem* e) {
+bool IpcAdapter::launch_one(RingElem* e, size_t stream_idx) {
   if (!e || (e->type != ReqType::DataPut && e->type != ReqType::PutSignal))
     return false;
   void* src = e->local_ptr;
@@ -475,48 +520,32 @@ bool IpcAdapter::send_one(RingElem* e) {
   UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] remote_gpu=%d gpu_id=%d bytes=%lu",
          comm_->rank(), remote_gpu, gpu_id_, (unsigned long)e->bytes);
 
-  size_t bytes = e->bytes;
-  size_t n_total = ipc_ctx_.size();
-
-  // Adaptive stream count: P2P-style dynamic chunk sizing.
-  // <1MB -> 1 stream; otherwise min(n_total, bytes/1MB).
-  size_t num_streams = n_total;
-  if (bytes < kIpcSizePerEngine) {
-    num_streams = 1;
-  } else {
-    size_t by_size = bytes / kIpcSizePerEngine;
-    if (by_size < num_streams) num_streams = by_size;
-  }
-  if (num_streams == 0) num_streams = 1;
-
-  // Dynamic chunk size: divide bytes evenly, remainder to first chunks.
-  size_t chunk_size = bytes / num_streams;
-  size_t remainder = bytes % num_streams;
-
-  size_t offset = 0;
-  for (size_t i = 0; i < num_streams; ++i) {
-    size_t sz = chunk_size + (i < remainder ? 1 : 0);
-    if (sz == 0) break;
-    char* src_chunk = static_cast<char*>(src) + offset;
-    char* dst_chunk = static_cast<char*>(dst) + offset;
-    gpuStream_t stream = ipc_ctx_[i].first;
-    if (remote_gpu == gpu_id_)
-      GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, sz,
-                                  gpuMemcpyDeviceToDevice, stream));
-    else
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk, gpu_id_,
-                                      sz, stream));
-    GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
-    offset += sz;
-  }
-
-  UK_DBG(UK_DBG_LVL_ALL, "[ipc-send_one r%d] memcpy launched, synchronizing...",
-         comm_->rank());
-  for (size_t i = 0; i < num_streams; ++i)
-    GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
-  UK_DBG(UK_DBG_LVL_ALL, "[ipc-send_one r%d] sync done", comm_->rank());
-
+  // One stream per put (round-robin in send_worker): a single 1MB+
+  // copy already saturates the P2P link (~52 GB/s measured), and
+  // assigning consecutive puts to different streams lets them overlap
+  // while each put keeps a single, unambiguous event point. Intra-put
+  // chunking across streams would need per-chunk event tracking for
+  // completion and buys nothing at link saturation.
+  gpuStream_t stream = ipc_ctx_[stream_idx];
+  if (remote_gpu == gpu_id_)
+    GPU_RT_CHECK(gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice,
+                                stream));
+  else
+    GPU_RT_CHECK(gpuMemcpyPeerAsync(dst, remote_gpu, src, gpu_id_, e->bytes,
+                                    stream));
   return true;
+}
+
+void IpcAdapter::complete_one(RingElem const* e, bool ok) {
+  if (ok) {
+    size_t dir = (comm_->rank() < e->peer) ? 0u : 1u;
+    comps_[e->peer].remote->last_completed[dir].store(
+        e->seq, std::memory_order_release);
+    // Fused PutSignal: the peer observes the tag only after the data
+    // has landed, matching a separate Signal op's semantics.
+    if (e->type == ReqType::PutSignal) ok = write_signal_ring(e->peer, e->tag);
+  }
+  publish_put_completion(e->comm_rid, !ok);
 }
 
 bool IpcAdapter::recv_one(RingElem* e) {
