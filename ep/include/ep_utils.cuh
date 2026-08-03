@@ -33,6 +33,17 @@ struct SharedData {
 
 __shared__ SharedData shared_data;
 
+__device__ __forceinline__ void wait_all_memory_ops() {
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1250__)
+  asm volatile("s_wait_loadcnt 0\n\t"
+               "s_wait_storecnt 0\n\t"
+               "s_wait_dscnt 0\n\t"
+               "s_wait_kmcnt 0");
+#else
+  asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+#endif
+}
+
 __device__ __forceinline__ void barrier_init(int barrier_id) {
   shared_data.barrier[barrier_id] = 0;
 }
@@ -124,7 +135,7 @@ __device__ __forceinline__ dtype_t scoped_ld_acquire(dtype_t const* ptr) {
   dtype_t ret;
   if constexpr (kUseAggressiveAtomic) {
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    wait_all_memory_ops();
     ret = __hip_atomic_load(const_cast<dtype_t*>(ptr), __ATOMIC_RELAXED,
                             kMemoryScope);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
@@ -140,7 +151,7 @@ __device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
                                                       dtype_t val) {
   if constexpr (kUseAggressiveAtomic) {
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    wait_all_memory_ops();
     __hip_atomic_store(const_cast<dtype_t*>(ptr), val, __ATOMIC_RELAXED,
                        __HIP_MEMORY_SCOPE_SYSTEM);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
@@ -689,7 +700,7 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   if constexpr (kUseAggressiveAtomic) {
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    amd::wait_all_memory_ops();
     ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELAXED,
                                  __HIP_MEMORY_SCOPE_AGENT);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
