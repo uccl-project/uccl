@@ -369,11 +369,61 @@ Two known gaps, both under investigation:
    **Root-caused and fixed (partially)**: the shim's fixed 64KB tile
    size capped large-message throughput — 256MB meant 4096 tiles, and
    per-tile fixed overhead (signal matching, scheduling, put
-   post-processing) dominated. `nccl.cc` now grows the tile with
-   message size (`max(64KB, bytes/256)`, at most 256 tiles, matching
-   `test_perf_spray_allreduce`). Result: 256MB AllReduce 103ms → 54ms
+   post-processing) dominated. `nccl.cc` now sizes tiles adaptively via
+   the shared `adaptive_tile_bytes` helper in `coll_config.h` (also
+   used by `test_perf_spray_allreduce`): messages at or below the sweet
+   spot (default 64KB) move as ONE tile, and larger messages are tiled
+   to at most 256 tiles (`max(sweet_spot, ceil(bytes/256))`, rounded up
+   to 32B so tile boundaries stay aligned for the device copy's
+   vectorized path; `UK_CCL_TILE_MIN_BYTES` overrides the sweet spot).
+   Measured A/B (A40/L40S, nccl-tests): 64KB floor wins 256KB-4MB by
+   6-29% (more tiles pipeline the ring better than per-tile cost
+   hurts); 16MB prefers a 256KB-1MB floor (-16%); >=64MB is
+   transport/device-bound regardless of the floor.
+   Result: 256MB AllReduce 103ms → 54ms
    (matches the spray path 53.8ms; 64MB +45%). Small messages
    unchanged (verified with a no-interference probe: 256KB 164us, 1MB
    364us). AllGather 256MB: 22.6ms; ReduceScatter 256MB: 71.2ms. The
    remaining ~5-10 GB/s busbw (vs 43 GB/s native) is now the transport
    path itself (IPC puts dominate same-node), not the shim.
+
+   **Reduce kernel vectorized (NCCL-style)**: the device reduce path
+   (`read_reduce_store` in `device/ops/ops.h`) was a scalar, non-
+   coalesced element loop; it now uses 16B-aligned wide loads/stores
+   (`TypedVec<T,N>`, N = 16/sizeof(T)) with the reduce op folded in at
+   compile time, plus a coalesced scalar fallback for unaligned tile
+   offsets. Kernel-level: 5.6x (1 block) to 14x (64 blocks) on 256MB
+   fp32. End-to-end (nccl-tests, A40/L40S pair): AllReduce 256MB
+   54.1ms → 27.6ms, ReduceScatter 256MB 71.4ms → 44.7ms, AllReduce
+   64MB −42%; AllGather unchanged (put-bound). The blocks=1 collective
+   wall time is still dominated by the serialized per-tile IPC puts,
+   not the reduce compute.
+
+   **IPC send sliding window**: the send worker synchronized after
+   EVERY put (copy + ~10us fixed overhead serialized), capping 1MB-tile
+   puts at ~37 GB/s vs ~52 GB/s for large puts.
+   `IpcAdapter::send_worker` now keeps up to `UK_CCL_IPC_BATCH` (default
+   16) puts in flight: each put gets its own event and a round-robin
+   stream (consecutive tiles copy in parallel), launches run ahead of
+   completions, and puts are completed FIFO with data-before-signal
+   semantics (per-put event sync only at the front, when the window is
+   full or the ring empties — small messages drain with no added
+   latency). RDMA needs no equivalent: `ibv_post_send` is already
+   async with a CQ poll thread and a `kMaxInflightWrs` window. Measured
+   on a loaded box (other tenants active): 256MB AllGather (put-only)
+   −4.5% vs window=1; needs a re-check on an idle machine for the full
+   effect.
+
+   **Reduce kernel ILP + multi-block**: `read_reduce_store` keeps 4
+   independent 16B vectors in flight per thread — single-GPU 256MB fp32
+   reduce: 8 blocks ~153 GB/s, 16 blocks ~218 GB/s (vs ~72 GB/s at 8
+   blocks before), so fewer blocks saturate DRAM. An experiment
+   replacing the multi-block kernel's per-task grid barrier with a
+   lock-free slice pipeline (per-task counters + single-writer tail
+   publish) was numerically correct but regressed badly at 16-64 blocks
+   (every block polling the FIFO head with system-scope atomics costs
+   O(blocks) per task, exceeding the slice work), and a cudaFree hang
+   on the sync buffer was traced to system-scope atomics on the GDR
+   tail. Reverted to the original barrier-based `multiPersistentKernel`;
+   with the ILP reduce it reaches 256MB AllReduce 11.9ms (45 GB/s) in
+   the spray benchmark at 64 blocks on the A40/L40S pair.
