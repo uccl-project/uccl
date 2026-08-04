@@ -168,6 +168,7 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
   for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
     smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
   __syncthreads();
+#if 0  // DEBUG: skip store to isolate
   if (tid == 0) {
     tma_store<T>(dst_t + e0, smem_dst, len_bytes);
     // Wait for THIS thread's bulk-store group before the next chunk's
@@ -182,6 +183,7 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
     tma_fence_async_global();
   }
   __syncthreads();
+#endif
 }
 
 template <typename T, ReduceType op>
