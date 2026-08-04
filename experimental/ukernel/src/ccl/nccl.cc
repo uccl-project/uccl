@@ -182,8 +182,8 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
   c->rank = rank;
   c->nranks = nranks;
   int gpu_id = 0;
-  if (cudaGetDevice(&gpu_id) != cudaSuccess) {
-    std::fprintf(stderr, "[nccl] init r%d: cudaGetDevice failed\n", rank);
+  if (gpuGetDevice(&gpu_id) != gpuSuccess) {
+    std::fprintf(stderr, "[nccl] init r%d: gpuGetDevice failed\n", rank);
     return ncclUnhandledCudaError;
   }
   SprayExecutorConfig cfg;
@@ -210,7 +210,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     // Best-effort reap; handles still Running (or Failed-but-unquiesced)
     // stay with the executor, whose teardown stops the drain threads.
     reap_pending(comm);
-    cudaFree(comm->barrier_dev);
+    gpuFree(comm->barrier_dev);
     delete comm;
   }
   return ncclSuccess;
@@ -222,7 +222,7 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   // ncclCommDestroy, which apps call after abort.
   if (comm) {
     comm->aborted = true;
-    cudaFree(comm->barrier_dev);
+    gpuFree(comm->barrier_dev);
     comm->barrier_dev = nullptr;
   }
   return ncclSuccess;
@@ -265,7 +265,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   std::vector<ncclResult_t> results(ndev, ncclSuccess);
   for (int i = 0; i < ndev; ++i) {
     threads.emplace_back([&, i] {
-      cudaSetDevice(devlist[i]);
+      gpuSetDevice(devlist[i]);
       results[i] = ncclCommInitRank(&comms[i], ndev, id, i);
     });
   }
@@ -312,7 +312,7 @@ static void reap_pending(ncclComm_t comm) {
 }
 
 static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
-                              void* input, void* output, cudaStream_t stream) {
+                              void* input, void* output, gpuStream_t stream) {
   if (comm->aborted) return ncclInvalidUsage;
   reap_pending(comm);
   CollectiveOpHandle h = 0;
@@ -336,7 +336,7 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
 
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclRedOp_t op,
-                           ncclComm_t comm, cudaStream_t stream) {
+                           ncclComm_t comm, gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
   if (unsupported_uint_redop(datatype, op)) {
     std::fprintf(stderr, "[nccl] r%d: unsigned Max/Min not supported\n",
@@ -375,7 +375,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
 
 ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
                           ncclDataType_t datatype, ncclComm_t comm,
-                          cudaStream_t stream) {
+                          gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
   if (sendbuff != recvbuff) return ncclInvalidUsage;
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
@@ -397,16 +397,16 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   return run_coll(comm, cfg, buf, buf, stream);
 }
 
-ncclResult_t ncclBarrier(ncclComm_t comm, cudaStream_t stream) {
+ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream) {
   if (!comm || !comm->executor) return ncclInvalidArgument;
   if (comm->nranks == 1) return ncclSuccess;
   if (!comm->barrier_dev &&
-      cudaMalloc(&comm->barrier_dev, 4) != cudaSuccess) {
-    std::fprintf(stderr, "[nccl] barrier r%d: cudaMalloc failed\n", comm->rank);
+      gpuMalloc(&comm->barrier_dev, 4) != gpuSuccess) {
+    std::fprintf(stderr, "[nccl] barrier r%d: gpuMalloc failed\n", comm->rank);
     return ncclInternalError;
   }
-  if (cudaMemsetAsync(comm->barrier_dev, 0, 4, stream) != cudaSuccess) {
-    std::fprintf(stderr, "[nccl] barrier r%d: cudaMemsetAsync failed\n",
+  if (gpuMemsetAsync(comm->barrier_dev, 0, 4, stream) != gpuSuccess) {
+    std::fprintf(stderr, "[nccl] barrier r%d: gpuMemsetAsync failed\n",
                  comm->rank);
     return ncclInternalError;
   }
@@ -429,7 +429,7 @@ static ncclResult_t unsupported(const char* fn) {
 
 ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclComm_t comm,
-                           cudaStream_t stream) {
+                           gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
@@ -457,7 +457,7 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
 ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
                                size_t count, ncclDataType_t datatype,
                                ncclRedOp_t op, ncclComm_t comm,
-                               cudaStream_t stream) {
+                               gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
   if (unsupported_uint_redop(datatype, op)) {
     std::fprintf(stderr, "[nccl] r%d: unsigned Max/Min not supported\n",
@@ -492,16 +492,16 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
 }
 
 ncclResult_t ncclBroadcast(const void*, void*, size_t, ncclDataType_t, int,
-                           ncclComm_t, cudaStream_t)
+                           ncclComm_t, gpuStream_t)
 { return unsupported("ncclBroadcast"); }
 ncclResult_t ncclReduce(const void*, void*, size_t, ncclDataType_t, ncclRedOp_t,
-                        int, ncclComm_t, cudaStream_t)
+                        int, ncclComm_t, gpuStream_t)
 { return unsupported("ncclReduce"); }
 ncclResult_t ncclSend(const void*, size_t, ncclDataType_t, int, ncclComm_t,
-                      cudaStream_t)
+                      gpuStream_t)
 { return unsupported("ncclSend"); }
 ncclResult_t ncclRecv(void*, size_t, ncclDataType_t, int, ncclComm_t,
-                      cudaStream_t)
+                      gpuStream_t)
 { return unsupported("ncclRecv"); }
 ncclResult_t ncclGroupStart(void) { return ncclSuccess; }
 ncclResult_t ncclGroupEnd(void) { return ncclSuccess; }

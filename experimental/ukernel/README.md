@@ -72,6 +72,12 @@ make clean -f Makefile.rocm
 make -j$(nproc) -f Makefile.rocm
 ```
 
+The NCCL shim (`libnccl.so`) builds on both platforms: `make nccl`
+(NVIDIA) or `make -f Makefile.rocm nccl` (ROCm); the shim API and
+`nccl.cc` use the `gpu_rt.h` wrappers (`gpuStream_t` etc.), which map to
+hip types on ROCm, so the exported .so is ABI-compatible with
+ROCm-built nccl-tests.
+
 Common overrides:
 
 ```bash

@@ -132,6 +132,11 @@ device_test:
 ccl_test:
 	$(MAKE) -C src/ccl -f Makefile.rocm test
 
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+
+nccl:
+	$(MAKE) -C src/ccl -f Makefile.rocm nccl_dev NCCL_PREFIX=$(NCCL_PREFIX)
+
 transport_test:
 	$(MAKE) -C src/transport -f Makefile.rocm test
 

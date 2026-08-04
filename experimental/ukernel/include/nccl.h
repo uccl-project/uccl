@@ -6,7 +6,7 @@
 #ifndef UKERNEL_NCCL_H_
 #define UKERNEL_NCCL_H_
 
-#include <cuda_runtime.h>
+#include "gpu_rt.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -107,22 +107,22 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist);
  * In-place when sendbuff == recvbuff. */
 ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, ncclRedOp_t op,
-                           ncclComm_t comm, cudaStream_t stream);
+                           ncclComm_t comm, gpuStream_t stream);
 
 /* All-to-all: equal-split scatter/gather across all ranks.
  * In-place only (sendbuff == recvbuff). */
 ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
                           ncclDataType_t datatype, ncclComm_t comm,
-                          cudaStream_t stream);
+                          gpuStream_t stream);
 
 /* Barrier: collective synchronization point. */
-ncclResult_t ncclBarrier(ncclComm_t comm, cudaStream_t stream);
+ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream);
 
 /* Point-to-point (supported via GroupStart/GroupEnd). */
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,
-                      int peer, ncclComm_t comm, cudaStream_t stream);
+                      int peer, ncclComm_t comm, gpuStream_t stream);
 ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
-                      int peer, ncclComm_t comm, cudaStream_t stream);
+                      int peer, ncclComm_t comm, gpuStream_t stream);
 
 /* Group operations for fused collectives. */
 ncclResult_t ncclGroupStart(void);
@@ -131,17 +131,17 @@ ncclResult_t ncclGroupEnd(void);
 /* Additional collectives — unsupported, returns ncclInternalError. */
 ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count,
                            ncclDataType_t datatype, int root, ncclComm_t comm,
-                           cudaStream_t stream);
+                           gpuStream_t stream);
 ncclResult_t ncclReduce(const void* sendbuff, void* recvbuff, size_t count,
                         ncclDataType_t datatype, ncclRedOp_t op, int root,
-                        ncclComm_t comm, cudaStream_t stream);
+                        ncclComm_t comm, gpuStream_t stream);
 ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
                            ncclDataType_t datatype, ncclComm_t comm,
-                           cudaStream_t stream);
+                           gpuStream_t stream);
 ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
                                size_t recvcount, ncclDataType_t datatype,
                                ncclRedOp_t op, ncclComm_t comm,
-                               cudaStream_t stream);
+                               gpuStream_t stream);
 
 /* --- Query --- */
 

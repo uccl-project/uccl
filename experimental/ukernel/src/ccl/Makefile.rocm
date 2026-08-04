@@ -94,6 +94,31 @@ integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
 
+# NCCL compatibility shim (nccl.cc + installed nccl.h) — driven by
+# top-level `make -f Makefile.rocm nccl`. Same object set as the CUDA
+# build; the shim's API and nccl.cc use the gpu_rt.h wrappers
+# (gpuStream_t etc.), which map to hip types on this platform, so the
+# exported .so is ABI-compatible with ROCm-built nccl-tests.
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+NCCL_SO := libnccl.so
+NCCL_OBJ := nccl.o
+
+.PHONY: nccl_dev nccl
+nccl_dev: $(NCCL_SO)
+	@mkdir -p $(NCCL_PREFIX)/lib $(NCCL_PREFIX)/include
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/
+	cp ../../include/nccl.h $(NCCL_PREFIX)/include/
+	@echo "NCCL compat installed to $(NCCL_PREFIX)/"
+
+$(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o \
+		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ) | $(UCCL_RDMA_STATIC)
+	$(HIPCC) -shared -o $@ $^ $(HIPCCFLAGS) $(INCLUDES) \
+		-L$(HIP_LIB) -lamdhip64 $(DEVICE_LIBS) $(TRANSPORT_LIBS) -lpthread
+
+$(NCCL_OBJ): nccl.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a
 
