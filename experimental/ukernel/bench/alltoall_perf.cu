@@ -22,6 +22,7 @@
 #include <chrono>
 #include <string>
 #include <thread>
+#include <vector>
 
 static const char* kIdPath = "/tmp/uk_a2a_id";
 
