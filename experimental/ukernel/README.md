@@ -126,6 +126,13 @@ make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
 > the toolkit is absent) — so an active conda base no longer hijacks the
 > build with a CUDA 12.x nvcc that cannot target sm_103.
 >
+> If you have a conda base active, deactivate it before building (or at
+> least `export PATH=/usr/local/cuda/bin:/usr/bin:/bin:$PATH`): conda's
+> `ld` also breaks the link step (`cannot find -lgdrapi` — it does not
+> search `/usr/local/lib`), and on ROCm machines the same applies to
+> conda's compiler. Set `GDRCOPY_LIBDIR=/usr/local/lib` if gdrcopy was
+> installed outside the system default search path.
+>
 > Reduce-kernel ILP is a build-time knob: `make ... REDUCE_ILP=8` (default
 > 4, values 4/8/16; see `docs/reduce_ilp_tuning.md`). Build-time keeps the
 > fully-unrolled kernel cheap to compile (~20 s instead of ~20 min per
