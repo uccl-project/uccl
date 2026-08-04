@@ -226,7 +226,14 @@ __device__ __forceinline__ void idle_sleep() {
 #ifdef __HIP_PLATFORM_AMD__
   __builtin_amdgcn_s_sleep(2);
 #else
-  __nanosleep(100);
+  // __nanosleep's argument is a multiple of 100ns. The previous value
+  // (100) slept 10us per poll, so a 500us idle grace (5000 polls) took
+  // ~50ms wall time to actually exit — the worker spun 100x longer than
+  // configured, showing up as a ~25ms periodic gap in nsys traces and
+  // relaunch jitter. 1 = 100ns, matching the poll-count derivation in
+  // WorkerPool (idleExitAfterUs * 10 polls, ~300-500ns per poll with the
+  // loop + syncthreads overhead).
+  __nanosleep(1);
 #endif
 }
 

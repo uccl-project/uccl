@@ -6,7 +6,11 @@ namespace UKernel {
 namespace Device {
 
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
-  // ~100ns per idle poll (idle_sleep) → iterations for the grace window.
+  // ~100ns per idle poll (idle_sleep's __nanosleep(1), plus loop +
+  // syncthreads overhead ≈ 300-500ns) → 10 polls per us keeps the actual
+  // exit latency within a few x of the configured grace. (The old
+  // __nanosleep(100) slept 10us per poll and made a 500us grace take
+  // ~50ms — see persistent_kernel_ops.cu idle_sleep.)
   exit_idle_iters_ = cfg_.idleExitAfterUs * 10;
   if (cfg_.controlStream) {
     control_stream_ = cfg_.controlStream;
