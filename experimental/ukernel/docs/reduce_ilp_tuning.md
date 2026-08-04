@@ -168,7 +168,43 @@ channel).
 
 - Default stays `REDUCE_ILP=4` for fast builds; use `REDUCE_ILP=16` for
   peak runs (64 blocks ≈ 95% of native, 32 blocks ≈ 76%).
-- Implement the **TMA bulk reduce** for sm_90+ to lift per-block
-  throughput toward native's 16 GB/s and close the ≤32-block gap.
+- **TMA bulk reduce is implemented** (`TMA_REDUCE=1 REDUCE_SMEM_KB=128`):
+  see below.
 - Pipeline **put/reduce overlap** in the executor so BLK=32 stops
   plateauing at ~390 GB/s.
+
+## TMA bulk reduce (2026-08-04, B300)
+
+Build: `make SM=103 ENABLE_TMA=0 REDUCE_ILP=4 REDUCE_SMEM_KB=128
+TMA_REDUCE=1`. Per chunk: cp.async.bulk load src+dst into smem
+(mbarrier::complete_tx, mbarrier re-initialized per chunk — phase
+toggling hangs at ~512 chunks/tile), reduce in smem, bulk-group store
+back, `fence.proxy.async.global` at task completion.
+
+Shim AllReduce 256M (`LT=8 TM=8M IB=16`), vs ILP=4 baseline:
+
+| blocks | ILP=4 | TMA | wrong |
+|---:|---:|---:|---:|
+| 8 | 172 | **292** | 65536/64M |
+| 32 | 365 | **509.5** | 65536/64M |
+| 64 | 412 | 486 | 65536/64M |
+
+TMA at 32 blocks = **509.5 GB/s ≈ 99% of native 515** with the same block
+count — the "32 blocks to parity" goal is met on bandwidth.
+
+### TMA correctness status
+
+- The reduce kernel itself is correct: the standalone launch path
+  verifies `wrong=0` at 256M/8; the mbarrier-bulk pattern was validated
+  with a minimal standalone kernel on B300.
+- The shim still reports **65536 wrong elements (0.1%)**, flaky between
+  runs (sometimes 4) — a race, most likely TMA-store → next-iteration
+  TMA-load proxy-fence ordering when buffers are reused, or the odd-sized
+  tail chunk. **Not yet PR-ready**: keep `TMA_REDUCE=0` (default) until
+  the remaining 0.1% is fixed.
+- Bench harness note: the persistent-worker verify races the async-proxy
+  stores (host D2H vs always-resident kernel) — use the launch path or
+  the shim for correctness signals.
+
+Next debugging step: isolate the wrong region (per-iteration positions)
+and close the store→load proxy-fence gap or fix the tail-chunk path.
