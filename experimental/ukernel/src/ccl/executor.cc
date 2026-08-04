@@ -191,8 +191,9 @@ static void* alloc_base_of(void const* p) {
 // declared Tmp footprint (an in-place allreduce and its out-of-place
 // twin differ only here: the former registers/resolves scratch).
 static std::string prepare_key(CollectiveConfig const& cfg,
-                               std::vector<int> const& peers, void* input,
-                               void* output, size_t tmp_total) {
+                               std::vector<int> const& peers,
+                               uintptr_t input_base, uintptr_t output_base,
+                               size_t tmp_total) {
   std::string k;
   k.reserve(96);
   auto add = [&k](uint64_t v) {
@@ -204,9 +205,23 @@ static std::string prepare_key(CollectiveConfig const& cfg,
   add(tmp_total);
   add(peers.size());
   for (int p : peers) add(static_cast<uint64_t>(p));
-  add(reinterpret_cast<uintptr_t>(alloc_base_of(input)));
-  add(reinterpret_cast<uintptr_t>(alloc_base_of(output)));
+  add(input_base);
+  add(output_base);
   return k;
+}
+
+// Alloc-base lookup with a per-executor cache: nccl-tests shifts buffer
+// offsets inside one allocation every iteration, so the raw pointer
+// changes while the CUDA allocation base does not. The driver call per
+// lookup was part of the per-call prepare overhead.
+uintptr_t SprayExecutor::cached_alloc_base(void const* p) {
+  uintptr_t const raw = reinterpret_cast<uintptr_t>(p);
+  auto it = alloc_base_cache_.find(raw);
+  if (it != alloc_base_cache_.end()) return it->second;
+  uintptr_t const base = reinterpret_cast<uintptr_t>(alloc_base_of(p));
+  if (alloc_base_cache_.size() >= 8192) alloc_base_cache_.clear();
+  alloc_base_cache_.emplace(raw, base);
+  return base;
 }
 
 // Build the immutable plan: tiling/lowering plus the successor CSR and
@@ -523,8 +538,34 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   if (cfg.nranks <= 1) return;
   if (!owned_comm_ || !peer_setup_fn_) return;
 
+  // Fast path: the algorithm DAG is shape-determined (kind, ranks, byte
+  // counts, in-place) and does not depend on buffer pointers, so cache
+  // it keyed by shape. Rebuilding it per call plus two driver
+  // alloc-base lookups was ~5-8us of the ~15us per-call prepare+submit
+  // overhead (measured with a 2-rank 256KB ncclAllReduce probe).
+  const bool inplace = cfg_inplace(cfg, input, output);
+  std::string skey;
+  skey.reserve(48);
+  auto add = [&skey](uint64_t v) {
+    skey.append(reinterpret_cast<char const*>(&v), sizeof(v));
+  };
+  add(static_cast<uint64_t>(cfg.kind));
+  add(static_cast<uint64_t>(cfg.nranks));
+  add(static_cast<uint64_t>(cfg.rank));
+  add(cfg.input_bytes);
+  add(cfg.output_bytes);
+  add(inplace ? 1u : 0u);
+  CollAlgo algo;
+  auto ait = prepare_algo_cache_.find(skey);
+  if (ait != prepare_algo_cache_.end()) {
+    algo = ait->second;
+  } else {
+    algo = build_coll_algo(cfg, inplace);
+    if (prepare_algo_cache_.size() >= 256) prepare_algo_cache_.clear();
+    prepare_algo_cache_.emplace(skey, algo);
+  }
+
   // Derive needed peers from the algorithm DAG.
-  CollAlgo algo = build_coll_algo(cfg, cfg_inplace(cfg, input, output));
   std::vector<int> peers;
   for (auto const& ch : algo.chunks) {
     if (ch.src_rank >= 0) peers.push_back(ch.src_rank);
@@ -539,7 +580,9 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   // Callers are expected to invoke prepare() before every submit.
   size_t tmp_total = 0;
   for (size_t b : algo.tmp_bytes) tmp_total += b;
-  std::string pkey = prepare_key(cfg, peers, input, output, tmp_total);
+  uintptr_t const ibase = cached_alloc_base(input);
+  uintptr_t const obase = cached_alloc_base(output);
+  std::string pkey = prepare_key(cfg, peers, ibase, obase, tmp_total);
   if (prepared_keys_.count(pkey)) return;
   if (prepared_keys_.size() >= kMaxPreparedKeys) {
     prepared_keys_.clear();
@@ -621,10 +664,8 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   }
 
   prepared_keys_.insert(pkey);
-  prepared_key_bases_.emplace(
-      reinterpret_cast<uintptr_t>(alloc_base_of(input)), pkey);
-  prepared_key_bases_.emplace(
-      reinterpret_cast<uintptr_t>(alloc_base_of(output)), std::move(pkey));
+  prepared_key_bases_.emplace(ibase, pkey);
+  prepared_key_bases_.emplace(obase, std::move(pkey));
   UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] ALL DONE", cfg.rank);
   prepared_ = true;
 }

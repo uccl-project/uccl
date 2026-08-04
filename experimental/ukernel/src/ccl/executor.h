@@ -386,6 +386,7 @@ class SprayExecutor {
   // Derives needed peers from the algorithm DAG so only relevant
   // IPC / RDMA links are established. No-op for single-rank configs.
   void prepare(CollectiveConfig const& cfg, void* input, void* output);
+  uintptr_t cached_alloc_base(void const* p);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
@@ -597,6 +598,13 @@ class SprayExecutor {
   // referencing it, so a stale-registration eviction
   // (get_or_register_buf) can invalidate exactly the affected entries.
   std::unordered_multimap<uintptr_t, std::string> prepared_key_bases_;
+  // Fast-path caches for prepare(): the algorithm DAG is shape-
+  // determined (no pointer dependence) and alloc-base lookups repeat
+  // across nccl-tests iterations (buffers shift inside one allocation).
+  // Both avoid per-collective DAG rebuilds and driver calls; measured
+  // ~5-8us of the ~15us per-call prepare+submit overhead.
+  std::unordered_map<std::string, CollAlgo> prepare_algo_cache_;
+  std::unordered_map<uintptr_t, uintptr_t> alloc_base_cache_;
   static constexpr size_t kMaxPreparedKeys = 64;
 
   std::thread enqueue_th_;
