@@ -87,22 +87,6 @@ __device__ void tma_load(void* smem_dst, void const* gmem_src, uint64_t bytes,
       : "memory");
 }
 
-// Bulk load WITHOUT an mbarrier: tracked by cp.async.bulk's own
-// commit/wait_group instead. Simpler and avoids the mbarrier
-// init/parity/scope subtleties that hung the mbarrier version.
-__device__ __forceinline__ void tma_load_group(void* smem_dst,
-                                               void const* gmem_src,
-                                               uint64_t bytes) {
-  uint32_t size_bytes = static_cast<uint32_t>(bytes);
-  uint32_t dst_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_dst));
-  asm volatile(
-      "cp.async.bulk.shared::cta.global.bulk_group [%0], [%1], %2;\n" ::"r"(
-          dst_ptr),
-      "l"(gmem_src), "r"(size_bytes)
-      : "memory");
-  tma_commit_group();
-}
-
 template <typename T>
 __device__ void tma_store(void* gmem_dst, void const* smem_src,
                           uint64_t bytes) {
@@ -132,10 +116,6 @@ __device__ __forceinline__ void tma_fence() {}
 template <typename T>
 __device__ void tma_load(void* smem_dst, void const* gmem_src, uint64_t bytes,
                          TmaSemaphore& sem) {}
-
-__device__ __forceinline__ void tma_load_group(void* smem_dst,
-                                               void const* gmem_src,
-                                               uint64_t bytes) {}
 
 template <typename T>
 __device__ void tma_store(void* gmem_dst, void const* smem_src,
