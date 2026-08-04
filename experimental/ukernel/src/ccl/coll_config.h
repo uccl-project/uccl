@@ -39,12 +39,12 @@ struct CollectiveConfig {
 // messages at or below the sweet spot move as ONE tile (tiling tiny
 // messages only adds per-tile fixed overhead), and larger messages are
 // tiled to at most kMaxTilesPerMessage tiles so per-tile overhead stays
-// bounded at the large end. Measured on the A40/L40S pair, 64KB is the
-// best sweet spot for small messages (256KB-4MB: 64KB tiles win by
-// 6-29% over 256KB-1MB floors — more tiles pipeline the ring better
-// than the fixed per-tile cost hurts); 16MB prefers a 256KB-1MB floor
-// (-16%), and >=64MB is transport/device-bound regardless.
-// UK_CCL_TILE_MIN_BYTES overrides the sweet spot for tuning.
+// bounded at the large end. Measured on the A40 pair with the IPC put
+// path fixed, 1MB is the best sweet spot: each per-tile hop costs a CPU
+// round trip (scheduling, completion, signal), so fewer, bigger tiles
+// win at every size — 256KB 98.9us -> 88us, 1MB 181us -> 113us, 4MB
+// 519us -> 201us, 16MB 2267us -> 454us (native NCCL parity), 64MB
+// 2041us -> 1581us. UK_CCL_TILE_MIN_BYTES overrides the sweet spot.
 inline size_t adaptive_tile_bytes(size_t bytes) {
   constexpr size_t kMaxTilesPerMessage = 256;
   // Large messages target fewer, bigger tiles: per-tile fixed overhead
@@ -60,7 +60,7 @@ inline size_t adaptive_tile_bytes(size_t bytes) {
   }();
   static size_t const kTileSweetSpotBytes = [] {
     char const* v = std::getenv("UK_CCL_TILE_MIN_BYTES");
-    return v ? static_cast<size_t>(std::stoull(v)) : (size_t{1} << 16);
+    return v ? static_cast<size_t>(std::stoull(v)) : (size_t{1} << 20);
   }();
   size_t const target =
       (bytes > kLargeMessageFloor) ? kLargeTiles : kMaxTilesPerMessage;
