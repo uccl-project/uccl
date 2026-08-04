@@ -65,10 +65,20 @@ echo "NVCC_GENCODE=$NVCC_GENCODE"
 # NVCC_GENCODE="--offload-arch=gfx90a" (see rocm_agent_enumerator).
 ```
 
+Locate MPI too (OpenMPI; nccl-tests links `-lmpi`). `MPI_HOME` must
+contain `include/` and `lib/` (or `lib64/`) directly:
+
+```bash
+readlink -f "$(which mpirun)"                 # real binary -> install prefix
+find /usr /opt -name mpi.h 2>/dev/null | head -3
+# Ubuntu/Debian OpenMPI: MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi
+# conda OpenMPI:          MPI_HOME=$CONDA_PREFIX
+```
+
 ```bash
 cd <repo>/thirdparty/nccl-tests
 export NCCL_HOME=<native-nccl-prefix>                     # optional if nccl.h is on the default path
-export MPI_HOME=<your-openmpi-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/openmpi
+export MPI_HOME=<openmpi-prefix>                          # see "Locate MPI" above
 make NVCC_GENCODE="$NVCC_GENCODE" -j$(nproc)
 # binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...
 ```
@@ -140,7 +150,10 @@ Build and run:
 
 ```bash
 cd <repo>/thirdparty/rccl-tests
-make MPI=1 ROCM_PATH=/opt/rocm MPI_HOME=<your-openmpi-prefix> \
+# rccl-tests looks for <MPI_HOME>/openmpi/{include,lib} — on Ubuntu/Debian
+# that is MPI_HOME=/usr/lib/x86_64-linux-gnu (NOT the .../openmpi prefix
+# that nccl-tests uses). See §3 for how to locate MPI.
+make MPI=1 ROCM_PATH=/opt/rocm MPI_HOME=<mpi-prefix> \
     GPU_TARGETS="$GPU_TARGETS" -j$(nproc)
 # binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...
 

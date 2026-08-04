@@ -159,12 +159,20 @@ dpkg -L libnccl-dev 2>/dev/null | grep -E 'nccl\.h|libnccl\.so'   # Ubuntu/Debia
 # If nccl.h is already on the default CUDA include path, NCCL_HOME can be
 # omitted entirely — nccl-tests then uses the default search paths.
 
+# Locate MPI (OpenMPI; nccl-tests links -lmpi). MPI_HOME must contain
+# include/ and lib/ (or lib64/) directly:
+readlink -f "$(which mpirun)"                 # real binary -> install prefix
+find /usr /opt -name mpi.h 2>/dev/null | head -3
+# Ubuntu/Debian OpenMPI: MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi
+# conda OpenMPI:          MPI_HOME=$CONDA_PREFIX
+
 # Generate NVCC_GENCODE from the GPUs actually present instead of
 # hardcoding archs (each unique compute capability gets a gencode entry):
 export NVCC_GENCODE="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader \
   | sort -u | awk -F. '{printf " -gencode=arch=compute_%d%d,code=sm_%d%d", $1, $2, $1, $2}')"
 echo "NVCC_GENCODE=$NVCC_GENCODE"
 
+# Locate MPI first — see the find snippet above. On Ubuntu/Debian OpenMPI:
 make MPI=1 CUDA_HOME=/usr/local/cuda \
     MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi \
     NCCL_HOME=<native-nccl-prefix> \
@@ -214,6 +222,9 @@ cd thirdparty/rccl-tests
 export GPU_TARGETS="$(rocm_agent_enumerator | grep '^gfx' | sort -u | tr '\n' ',' | sed 's/,$//')"
 echo "GPU_TARGETS=$GPU_TARGETS"
 
+# rccl-tests looks for <MPI_HOME>/openmpi/{include,lib}, so on
+# Ubuntu/Debian use MPI_HOME=/usr/lib/x86_64-linux-gnu — NOT the
+# .../openmpi prefix that nccl-tests takes.
 make MPI=1 ROCM_PATH=/opt/rocm \
     MPI_HOME=/usr/lib/x86_64-linux-gnu \
     GPU_TARGETS="$GPU_TARGETS" \
