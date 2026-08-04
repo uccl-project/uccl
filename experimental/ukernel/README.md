@@ -121,6 +121,10 @@ make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
 > SM ≥ 90); omit it only if you intentionally want TMA. On machines with
 > many cores, cap the parallelism (`-j8`..`-j16`) — `-j$(nproc)` on a
 > 100+ core box thrashes and can look like a hang.
+>
+> nvcc comes from `CUDA_HOME/bin/nvcc` (falling back to PATH only when
+> the toolkit is absent) — so an active conda base no longer hijacks the
+> build with a CUDA 12.x nvcc that cannot target sm_103.
 
 All path variables support environment variable override. When working on a
 machine with non-standard paths, export them once in your shell profile

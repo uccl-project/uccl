@@ -7,9 +7,12 @@ ifeq ($(wildcard $(CUDA_HOME)/bin/nvcc),)
     CUDA_HOME := $(_CUDA_AUTO)
   endif
 endif
-NVCC_BIN ?= $(shell which nvcc 2>/dev/null)
-ifeq ($(NVCC_BIN),)
-  NVCC_BIN := $(CUDA_HOME)/bin/nvcc
+NVCC_BIN ?= $(CUDA_HOME)/bin/nvcc
+ifeq ($(wildcard $(NVCC_BIN)),)
+  # Fall back to PATH only if the CUDA_HOME toolkit is missing — never pick
+  # up a conda/pyenv nvcc when a real toolkit exists (conda CUDA 12.x cannot
+  # target sm_103 and drags the wrong host toolchain).
+  NVCC_BIN := $(shell which nvcc 2>/dev/null)
 endif
 NVCC = $(NVCC_BIN)
 DEFAULT_SMS := 80 86 89 100
