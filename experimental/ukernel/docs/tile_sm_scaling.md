@@ -108,3 +108,23 @@ in-place RS partials in Tmp(0) and the all-gather phase ends with a local
 that extra copy is the gap (~190us at BLK=16, i.e. ~680 GB/s copy rate).
 Optimizing that copy (TMA chunk path) or fusing it is the lever for ip;
 out-of-place already tracks the put-pipeline ceiling.
+
+## Update 2026-08-04 (3): chunked TMA bulk copy closes the in-place gap
+
+`copy()` gained a chunked cp.async.bulk path for large aligned messages
+(commit `4c8c4935`): one smem buffer sized to the full dynamic-smem budget
+(224KB chunk at a 224KB build — twice the reduce chunk), mbarrier load +
+bulk-group store per chunk, vectorized tail. The in-place all-gather's
+Tmp->Output shard copy now takes this path instead of the vectorized loop.
+
+Allreduce 256M, LT=8 (32MB tiles):
+
+| BLK | oop | ip before | ip after |
+|---|---|---|---|
+| 16 | 412-418 | 315-326 | **380-381** (+17-20%) |
+| 32 | 442-457 | 408-425 | 406-425 (pipeline-limited) |
+
+The in-place vs out-of-place gap shrank from ~25% to ~8% at BLK=16; the
+remaining gap is put/copy pipeline dependencies in the all-gather, not the
+copy kernel itself (device-bench copy throughput moved from ~680 GB/s
+vectorized to the TMA path). All runs wrong=0.
