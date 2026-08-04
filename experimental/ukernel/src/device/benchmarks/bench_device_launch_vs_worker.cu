@@ -86,6 +86,8 @@ struct DeviceBuffers {
   }
 };
 
+void verify_reduce_result(DeviceBuffers const& bufs, char const* label);
+
 TaskArgs make_launch_args(BenchOp op, DeviceBuffers const& bufs) {
   TaskArgs args{};
   args.src = bufs.src;
@@ -160,6 +162,7 @@ double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
   uint64_t t1 = now_ns();
+  if (op == BenchOp::Reduce) verify_reduce_result(bufs, "launch");
   return (t1 - t0) * 1e-9;
 }
 
@@ -234,6 +237,7 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
   }
   uint64_t t1 = now_ns();
 
+  if (op == BenchOp::Reduce) verify_reduce_result(bufs, "worker-single");
   pool.shutdown_all();
   if (op != BenchOp::Nop) {
     TaskManager::instance().free_task_args(task.args_index());
@@ -289,6 +293,7 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
   }
   uint64_t t1 = now_ns();
 
+  if (op == BenchOp::Reduce) verify_reduce_result(bufs, "worker-batch");
   pool.shutdown_all();
   if (op != BenchOp::Nop) {
     TaskManager::instance().free_task_args(task.args_index());
@@ -309,6 +314,21 @@ void print_result(char const* label, int tasks_per_batch, int rounds,
   std::printf("  Batch latency   : %.3f us\n", batch_us);
   std::printf("  Task latency    : %.3f us/task\n", task_us);
   std::printf("  Task throughput : %.2f K tasks/s\n", tasks_per_sec / 1e3);
+}
+
+void verify_reduce_result(DeviceBuffers const& bufs, char const* label) {
+  std::vector<float> host(bufs.bytes / sizeof(float));
+  GPU_RT_CHECK(gpuMemcpy(host.data(), bufs.dst, bufs.bytes,
+                         gpuMemcpyDeviceToHost));
+  size_t wrong = 0;
+  size_t first = static_cast<size_t>(-1);
+  for (size_t i = 0; i < host.size(); ++i) {
+    if (host[i] != 1.0f) {
+      ++wrong;
+      if (first == static_cast<size_t>(-1)) first = i;
+    }
+  }
+  std::printf("[check %s] wrong=%zu first=%zu\n", label, wrong, first);
 }
 
 }  // namespace
