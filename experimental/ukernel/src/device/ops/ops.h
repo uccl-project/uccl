@@ -204,12 +204,36 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
 }
 
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE && UK_TMA_WARPSPEC
-// Warp-specialized TMA reduce: producer warp (warp 0) issues the bulk
-// loads and stores while consumer warps (1..n) reduce in shared memory —
-// load[N+1]/store[N] overlap reduce[N] continuously (FlashAttention-style
-// producer/consumer). kNSlots-deep pipeline, per-slot "ready" (loads
-// done) and "cdone" (consumers done) mbarriers, consumer-only named
-// barrier (bar.sync 1).
+// Warp-specialized TMA reduce: producer warp (warp 0, lane 0) issues the
+// bulk loads and stores while consumer warps (1..7) reduce in shared
+// memory — load[N+kNSlots]/store[N] overlap reduce[N] continuously
+// (FlashAttention-3 / CUTLASS / DeepEP producer-consumer pattern).
+//
+// Synchronization protocol (canonical; see
+// docs/warp_spec_reduce_design.md): all mbarriers are initialized ONCE
+// per task, then every use toggles the phase. Chunk c uses slot
+// s = c % kNSlots for the (c / kNSlots)-th time, so both full[s] and
+// done[s] complete exactly that many times and the parity to wait on is
+// (c / kNSlots) & 1 — phases are derived from the chunk index, no
+// per-stage state needed. The previous re-init-per-chunk version was
+// racy: without __syncthreads() around every reuse, a consumer parked in
+// try_wait can observe a freshly re-initialized barrier.
+__device__ __forceinline__ void ws_slot_init(char* slot) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  TmaSemaphore* ready =
+      reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
+  TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  tma_init_semaphore(*ready, 0);
+  tma_init_semaphore(*cdone, 0);
+}
+
+__device__ __forceinline__ void ws_fence_init() {
+  asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
 template <typename T>
 __device__ __forceinline__ void ws_slot_load(T* dst_t, T const* src_t,
                                              char* slot, size_t off_bytes,
@@ -221,22 +245,18 @@ __device__ __forceinline__ void ws_slot_load(T* dst_t, T const* src_t,
   T* smem_dst = reinterpret_cast<T*>(slot + kChunkBytes);
   TmaSemaphore* ready =
       reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
-  TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
-      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
   size_t const e0 = off_bytes / sizeof(T);
-  tma_init_semaphore(*ready, 0);
-  tma_init_semaphore(*cdone, 0);
   tma_load<T>(smem_src, src_t + e0, len_bytes, *ready);
   tma_load<T>(smem_dst, dst_t + e0, len_bytes, *ready);
 }
 
-__device__ __forceinline__ void ws_slot_wait_ready(char* slot) {
+__device__ __forceinline__ void ws_slot_wait_ready(char* slot, int phase) {
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
       ~static_cast<size_t>(31);
   TmaSemaphore* ready =
       reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
-  tma_wait(*ready, 0);
+  tma_wait(*ready, phase);
 }
 
 __device__ __forceinline__ void ws_slot_arrive_done(char* slot) {
@@ -249,13 +269,13 @@ __device__ __forceinline__ void ws_slot_arrive_done(char* slot) {
   asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0];\n" ::"r"(sem_ptr));
 }
 
-__device__ __forceinline__ void ws_slot_wait_done(char* slot) {
+__device__ __forceinline__ void ws_slot_wait_done(char* slot, int phase) {
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
       ~static_cast<size_t>(31);
   TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
       slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
-  tma_wait(*cdone, 0);
+  tma_wait(*cdone, phase);
 }
 
 template <typename T>
@@ -287,59 +307,75 @@ __device__ __forceinline__ void ws_slot_reduce(char* slot, size_t len_bytes,
 }
 
 template <typename T, ReduceType op>
-__device__ __forceinline__ void tma_bulk_reduce_warp_spec(
+__device__ __forceinline__ bool tma_bulk_reduce_warp_spec(
     void* dst, void const* src, size_t count, void* smem_buf) {
   constexpr int kNSlots = 4;
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
       ~static_cast<size_t>(31);
   constexpr size_t kSlotBytes = 2 * kChunkBytes + 2 * sizeof(TmaSemaphore);
-  if (kChunkBytes < 32) return;
+  // Not usable (smem too small): caller falls back to the single-buffered
+  // path.
+  if (kChunkBytes < 32) return false;
 
   char* smem = static_cast<char*>(smem_buf);
   T* dst_t = static_cast<T*>(dst);
   T const* src_t = static_cast<T const*>(src);
   size_t const bytes = count * sizeof(T);
   size_t const nfull = bytes / kChunkBytes;
-  if (nfull == 0) return;  // tail-only handled by the caller's fallback
 
   int const tid = threadIdx.x;
   int const nthread = blockDim.x;
   // The consumer named barrier count is a compile-time 224 (7 warps); the
   // persistent kernel always launches 256 threads. Anything else falls
   // back to the single-buffered path below.
-  if (nthread != 256) return;
+  if (nthread != 256) return false;
   int const warp = tid >> 5;
   int const lane = tid & 31;
   int const nconsumer = nthread - 32;
   int const consumer_tid = tid - 32;
 
-  if (warp == 0) {
-    if (lane == 0) {
-      for (int c = 0; c < kNSlots && c < static_cast<int>(nfull); ++c)
-        ws_slot_load<T>(dst_t, src_t, smem + (c % kNSlots) * kSlotBytes,
-                        c * kChunkBytes, kChunkBytes);
+  // Init all 8 mbarriers once per task; fence + block barrier make them
+  // visible to every warp before the pipeline starts.
+  if (warp == 0 && lane == 0)
+    for (int s = 0; s < kNSlots; ++s)
+      ws_slot_init(smem + s * kSlotBytes);
+  ws_fence_init();
+  __syncthreads();
+
+  if (nfull > 0) {
+    if (warp == 0) {
+      if (lane == 0) {
+        for (int c = 0; c < kNSlots && c < static_cast<int>(nfull); ++c)
+          ws_slot_load<T>(dst_t, src_t, smem + (c % kNSlots) * kSlotBytes,
+                          c * kChunkBytes, kChunkBytes);
+        for (int c = 0; c < static_cast<int>(nfull); ++c) {
+          char* slot = smem + (c % kNSlots) * kSlotBytes;
+          int const phase = static_cast<int>((c / kNSlots) & 1);
+          ws_slot_wait_done(slot, phase);
+          ws_slot_store<T>(dst_t, slot, c * kChunkBytes, kChunkBytes);
+          int const c2 = c + kNSlots;
+          if (c2 < static_cast<int>(nfull))
+            ws_slot_load<T>(dst_t, src_t, slot, c2 * kChunkBytes, kChunkBytes);
+        }
+      }
+    } else {
       for (int c = 0; c < static_cast<int>(nfull); ++c) {
         char* slot = smem + (c % kNSlots) * kSlotBytes;
-        ws_slot_wait_done(slot);
-        ws_slot_store<T>(dst_t, slot, c * kChunkBytes, kChunkBytes);
-        int const c2 = c + kNSlots;
-        if (c2 < static_cast<int>(nfull))
-          ws_slot_load<T>(dst_t, src_t, slot, c2 * kChunkBytes, kChunkBytes);
+        int const phase = static_cast<int>((c / kNSlots) & 1);
+        ws_slot_wait_ready(slot, phase);
+        ws_slot_reduce<T, op>(slot, kChunkBytes, consumer_tid, nconsumer);
+        // All 224 consumers finished the stage; exactly ONE thread then
+        // signals cdone (count=1) — a per-warp arrive would over-arrive
+        // and corrupt the next phase. bar.sync's count must be immediate.
+        asm volatile("bar.sync 1, 224;\n" ::: "memory");
+        if (warp == 1 && lane == 0) ws_slot_arrive_done(slot);
       }
-    }
-  } else {
-    for (int c = 0; c < static_cast<int>(nfull); ++c) {
-      char* slot = smem + (c % kNSlots) * kSlotBytes;
-      ws_slot_wait_ready(slot);
-      ws_slot_reduce<T, op>(slot, kChunkBytes, consumer_tid, nconsumer);
-      // DEBUG: named barrier removed — tests whether bar.sync 1 is the
-      // hang (correctness intentionally broken).
-      if (warp == 1 && lane == 0) ws_slot_arrive_done(slot);
     }
   }
 
-  // Tail (< kChunkBytes) via the ILP vector path on all threads.
+  // Tail (< kChunkBytes) via the ILP vector path on all threads; also
+  // covers the whole buffer when nfull == 0 (odd/undersized slices).
   size_t off = nfull * kChunkBytes;
   if (off < bytes) {
     constexpr int kVec = 16 / static_cast<int>(sizeof(T));
@@ -355,6 +391,7 @@ __device__ __forceinline__ void tma_bulk_reduce_warp_spec(
         dst_t[i] = apply_reduce(dst_t[i], src_t[i], op);
     }
   }
+  return true;
 }
 #endif
 
@@ -363,8 +400,7 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
                                                 size_t count,
                                                 void* smem_buf) {
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE && UK_TMA_WARPSPEC
-  tma_bulk_reduce_warp_spec<T, op>(dst, src, count, smem_buf);
-  return;
+  if (tma_bulk_reduce_warp_spec<T, op>(dst, src, count, smem_buf)) return;
 #endif
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
