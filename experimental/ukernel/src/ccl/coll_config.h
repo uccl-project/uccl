@@ -47,11 +47,24 @@ struct CollectiveConfig {
 // UK_CCL_TILE_MIN_BYTES overrides the sweet spot for tuning.
 inline size_t adaptive_tile_bytes(size_t bytes) {
   constexpr size_t kMaxTilesPerMessage = 256;
+  // Large messages target fewer, bigger tiles: per-tile fixed overhead
+  // (IPC put launch/sync cadence, scheduling, signal matching) and the
+  // multi-block per-task barrier both scale with tile count. Above the
+  // 64MB floor the tile-count target drops to kLargeTiles (default 64),
+  // so 256MB uses 4MB tiles (64 puts) instead of 1MB tiles (256 puts).
+  // UK_CCL_LARGE_TILES overrides (256 = old behavior).
+  constexpr size_t kLargeMessageFloor = 64u << 20;
+  static size_t const kLargeTiles = [] {
+    char const* v = std::getenv("UK_CCL_LARGE_TILES");
+    return v ? static_cast<size_t>(std::stoull(v)) : 64;
+  }();
   static size_t const kTileSweetSpotBytes = [] {
     char const* v = std::getenv("UK_CCL_TILE_MIN_BYTES");
     return v ? static_cast<size_t>(std::stoull(v)) : (size_t{1} << 16);
   }();
-  size_t tile = (bytes + kMaxTilesPerMessage - 1) / kMaxTilesPerMessage;
+  size_t const target =
+      (bytes > kLargeMessageFloor) ? kLargeTiles : kMaxTilesPerMessage;
+  size_t tile = (bytes + target - 1) / target;
   tile = ((tile + 31) / 32) * 32;  // 32B-aligned tile boundaries
   return std::max(kTileSweetSpotBytes, tile);
 }
