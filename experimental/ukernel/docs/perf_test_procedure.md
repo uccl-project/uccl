@@ -186,6 +186,17 @@ CUDA_VISIBLE_DEVICES=0,1 ./test_perf_spray_allreduce --role=client --gpu 1 --dev
 
 - **mpirun must use `--mca hwloc_base_binding_policy none`** — CPU
   binding inflates small-message latency tens of times.
+- **Propagate env with `-x`.** Setting `UK_CCL_DEBUG=2` (or
+  `UK_CCL_PUT_PATH=...`) in the shell does NOT reach the rank processes;
+  add `-x UK_CCL_DEBUG` / `-x UK_CCL_PUT_PATH` to mpirun. Debug levels:
+  1 = executor, 2 = +transport, 3 = all. The per-op path is logged as
+  `[pick rN] op[x] peer=y -> path=z` (z: 0=device, 1=IPC, 2=RDMA) —
+  same-host ranks should show 1; anything else means transport selection
+  went wrong.
+- **A/B put-path knobs**: `UK_CCL_PUT_PATH=device|ipc|rdma` forces the
+  same-host data path (unset = IPC for same-host, RDMA for remote peers).
+  Use it to tell apart transport selection vs executor/device-kernel
+  slowdowns.
 - **Exchanger hang after a crashed run**: stale shared memory from a
   killed process makes both ranks wait for a leader that never comes:
   ```bash

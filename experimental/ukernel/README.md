@@ -174,9 +174,9 @@ echo "NVCC_GENCODE=$NVCC_GENCODE"
 
 # Locate MPI first — see the find snippet above. On Ubuntu/Debian OpenMPI:
 make MPI=1 CUDA_HOME=/usr/local/cuda \
-    MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi \
-    NCCL_HOME=<native-nccl-prefix> \
-    NVCC_GENCODE="$NVCC_GENCODE" \
+    MPI_HOME=/usr/mpi/gcc/openmpi-4.1.9a1 \
+    NCCL_HOME=/usr/lib/x86_64-linux-gnu \
+    NVCC_GENCODE="-gencode=arch=compute_103,code=sm_103" \
     -j$(nproc)
 
 # Multi-rank, same node (2 GPUs, one process per rank — exercises
@@ -185,9 +185,17 @@ make MPI=1 CUDA_HOME=/usr/local/cuda \
 # and a 1-rank run without mpirun measures nothing either, since
 # single-rank collectives are no-ops).
 cd ../../experimental/ukernel
-UK_CCL_DEBUG=2 CUDA_VISIBLE_DEVICES=6,7 mpirun -np 2 -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
-    -x CUDA_VISIBLE_DEVICES \
+CUDA_VISIBLE_DEVICES=6,7 mpirun --mca hwloc_base_binding_policy none -np 2 \
+    -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib -x CUDA_VISIBLE_DEVICES \
     ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -f 2 -g 1 -c 1
+
+# Debug (optional): propagate UK_CCL_DEBUG into the ranks — the shell env
+# alone does NOT reach them; 1=executor, 2=+transport, 3=all. Look for
+# "[pick rN] op[x] peer=y -> path=z" (z: 0=device 1=IPC 2=RDMA).
+CUDA_VISIBLE_DEVICES=6,7 mpirun --mca hwloc_base_binding_policy none -np 2 \
+    -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib -x CUDA_VISIBLE_DEVICES \
+    -x UK_CCL_DEBUG \
+    ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 4M -f 2 -g 1 -c 1 -n 3
 
 # Single process, multiple GPUs (exercises ncclCommInitAll, which
 # initializes one communicator per device on its own thread):
@@ -198,7 +206,7 @@ LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
 # connect to it. On multi-homed hosts pick the interface via
 # NCCL_SOCKET_IFNAME (prefix match, e.g. "eth" matches eth0/eth1);
 # a warning is printed if it matches no interface.
-mpirun -np 2 -H node0,node1 \
+mpirun --mca hwloc_base_binding_policy none -np 2 -H node0,node1 \
     -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
     -x NCCL_SOCKET_IFNAME=eth0 \
     ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
@@ -430,6 +438,15 @@ paths), 256-thread × 8-block device kernels (the RS output copy was a
 > ```
 > (`OMPI_MCA_hwloc_base_binding_policy=none` env var is equivalent;
 > `--mca plm_rsh_agent sh` makes mpirun fork locally without ssh.)
+>
+> Two more easy-to-miss env rules:
+> - **Propagate env with `-x`.** `UK_CCL_DEBUG=2 ... mpirun` in the shell
+>   does NOT reach the rank processes; add `-x UK_CCL_DEBUG` (and
+>   `-x UK_CCL_PUT_PATH` / `-x UK_BAR1_WINDOW_MB` if you set those).
+> - **A/B put-path knobs**: `UK_CCL_PUT_PATH=device|ipc|rdma` forces the
+>   same-host data path (unset = normal IPC for same-host, RDMA remote).
+>   Use it to isolate whether a slowdown is transport selection or the
+>   executor/device kernels.
 
 ## Current gaps
 
