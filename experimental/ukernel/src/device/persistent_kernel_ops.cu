@@ -456,7 +456,9 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         // Same ordering requirement as the single-block path: all blocks'
         // writes must be visible before host observes task completion.
         // TMA bulk stores complete via the async proxy; fence it to the
-        // generic proxy so host-side memsets/next-task loads see the data.
+        // generic proxy so host-side memsets/next-task loads see the data,
+        // then make it device-visible (fence.proxy.async.global only
+        // orders the executing thread's async ops vs generic accesses).
         tma_fence_async_global();
         __threadfence();
         maybe_signal_ring_write(current_task, current_args);
