@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include "high_perf.h"
 #include "reduce_ops.h"
 #include "reg_ops.h"
@@ -166,10 +167,15 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
     tma_load<T>(smem_dst, dst_t + e0, len_bytes, *sem_dst);
   }
   __syncthreads();
+  if (tid == 0)
+    printf("[tma-debug] off=%zu len=%zu par=%u: loads issued\n", off_bytes,
+           len_bytes, parity);
   if (tid == 0) {
     tma_wait(*sem_src, parity);
     tma_wait(*sem_dst, parity);
   }
+  if (tid == 0)
+    printf("[tma-debug] off=%zu par=%u: loads waited\n", off_bytes, parity);
   __syncthreads();
   size_t const n = len_bytes / sizeof(T);
   for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
