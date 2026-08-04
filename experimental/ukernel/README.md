@@ -299,6 +299,7 @@ Current constraints:
 - [py](py/) — `ukernel_ccl` / `ukernel_p2p` Python bindings
 - [benchmarks](benchmarks/) — transport and device benchmarks
 - [include/util](include/util/) — shared lock-free jring, pause intrinsic
+- [docs/put_path_selection.md](docs/put_path_selection.md) — design notes on IPC/device/RDMA path selection
 
 ## Performance measurements
 
