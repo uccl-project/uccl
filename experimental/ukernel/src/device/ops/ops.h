@@ -149,7 +149,7 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
 template <typename T, ReduceType op>
 __device__ __forceinline__ void tma_bulk_reduce_chunk(
     T* dst_t, T const* src_t, char* smem, size_t off_bytes, size_t len_bytes,
-    int tid, int nthread) {
+    int tid, int nthread, uint32_t parity) {
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
       ~static_cast<size_t>(31);
@@ -162,18 +162,13 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
   size_t const e0 = off_bytes / sizeof(T);
 
   if (tid == 0) {
-    tma_init_semaphore(*sem_src, 0);
-    tma_init_semaphore(*sem_dst, 0);
-  }
-  __syncthreads();
-  if (tid == 0) {
     tma_load<T>(smem_src, src_t + e0, len_bytes, *sem_src);
     tma_load<T>(smem_dst, dst_t + e0, len_bytes, *sem_dst);
   }
   __syncthreads();
   if (tid == 0) {
-    tma_wait(*sem_src, 0);
-    tma_wait(*sem_dst, 0);
+    tma_wait(*sem_src, parity);
+    tma_wait(*sem_dst, parity);
   }
   __syncthreads();
   size_t const n = len_bytes / sizeof(T);
@@ -206,23 +201,41 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   if (kChunkBytes < 32) return;  // smem too small; caller falls back
 
   char* smem = static_cast<char*>(smem_buf);
+  int tid = threadIdx.x;
+  int nthread = blockDim.x;
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
+      ~static_cast<size_t>(31);
+  TmaSemaphore* sem_src =
+      reinterpret_cast<TmaSemaphore*>(smem + 2 * kChunkBytes);
+  TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
+      smem + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  // mbarriers are initialized ONCE per task (PTX: init before first use,
+  // then arrive/wait with alternating parity); re-initializing between
+  // chunks is undefined and raced (hang observed).
+  if (tid == 0) {
+    tma_init_semaphore(*sem_src, 0);
+    tma_init_semaphore(*sem_dst, 0);
+  }
+  __syncthreads();
+
   T* dst_t = static_cast<T*>(dst);
   T const* src_t = static_cast<T const*>(src);
   size_t bytes = count * sizeof(T);
-  int tid = threadIdx.x;
-  int nthread = blockDim.x;
 
   size_t off = 0;
+  uint32_t parity = 0;
   while (off + kChunkBytes <= bytes) {
     tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, kChunkBytes, tid,
-                                 nthread);
+                                 nthread, parity);
     off += kChunkBytes;
+    parity ^= 1u;
   }
   size_t tail = bytes - off;
   size_t tail16 = tail & ~static_cast<size_t>(15);
   if (tail16 >= 16) {
     tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, tail16, tid,
-                                 nthread);
+                                 nthread, parity);
     off += tail16;
   }
   for (size_t i = off / sizeof(T); i < count; ++i)
