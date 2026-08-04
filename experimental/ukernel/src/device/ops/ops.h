@@ -54,17 +54,68 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
-  // TMA path for small messages (hardware async copy, up to 4KB)
-  if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
-    if (tid == 0) {
-      TmaSemaphore sem;
-      tma_init_semaphore(sem, 1);
-      tma_load<T>(smem_buf, src, bytes, sem);
-      tma_wait_group<0>();
-      tma_store<T>(dst, smem_buf, bytes);
+  // TMA path: small messages up to 4KB (one-shot load+store), and large
+  // messages via chunked cp.async.bulk (one smem buffer sized to the full
+  // dynamic-smem budget, so a 224KB build moves 224KB per chunk — twice
+  // the reduce chunk). The in-place allreduce all-gather's Tmp->Output
+  // shard copy (128MB/rank) is exactly this path; it replaced a plain
+  // vectorized loop (~680 GB/s measured) with deeper async pipelining.
+  if (is_tma_supported() && smem_buf != nullptr &&
+      (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src) & 0xF) == 0) {
+    constexpr size_t kChunkBytes =
+        (UK_REDUCE_SMEM_BYTES - sizeof(TmaSemaphore)) &
+        ~static_cast<size_t>(31);
+    if (bytes <= 4096) {
+      if (tid == 0) {
+        TmaSemaphore sem;
+        tma_init_semaphore(sem, 1);
+        tma_load<T>(smem_buf, src, bytes, sem);
+        tma_wait_group<0>();
+        tma_store<T>(dst, smem_buf, bytes);
+      }
+      __syncthreads();
+      return;
     }
-    __syncthreads();
-    return;
+    if (kChunkBytes >= 32) {
+      char* smem = static_cast<char*>(smem_buf);
+      T* dst_t = static_cast<T*>(dst);
+      T const* src_t = static_cast<T const*>(src);
+      TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(smem + kChunkBytes);
+      size_t off = 0;
+      while (off + kChunkBytes <= bytes) {
+        if (tid == 0) {
+          tma_init_semaphore(*sem, 1);
+          tma_load<T>(smem, src_t + off / sizeof(T), kChunkBytes, *sem);
+        }
+        __syncthreads();
+        if (tid == 0) {
+          tma_wait(*sem, 0);
+          tma_store<T>(dst_t + off / sizeof(T), smem, kChunkBytes);
+          tma_wait_group<0>();
+          tma_fence_async_global();
+        }
+        __syncthreads();
+        off += kChunkBytes;
+      }
+      if (off < bytes) {
+        // Tail (< kChunkBytes): vectorized loop, same as below.
+        constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
+        size_t nvec = (bytes - off) / (sizeof(T) * NELTS_PER_VEC);
+        Vec const* src_v = reinterpret_cast<Vec const*>(
+            reinterpret_cast<char const*>(src_t) + off);
+        Vec* dst_v = reinterpret_cast<Vec*>(
+            reinterpret_cast<char*>(dst_t) + off);
+        for (size_t vi = tid; vi < nvec; vi += nthread)
+          dst_v[vi] = src_v[vi];
+        if constexpr (NELTS_PER_VEC > 1) {
+          size_t base = off / sizeof(T) + nvec * NELTS_PER_VEC;
+          for (size_t i = base + tid; i < count; i += nthread)
+            dst_t[i] = src_t[i];
+        }
+      }
+      return;
+    }
   }
 
   // Vectorized copy (kVEC_BYTES-byte loads through read-only cache)
