@@ -309,14 +309,21 @@ nccl-tests, the spray row is the native SprayExecutor benchmark
 is a 1-rank no-op (launch overhead only) and must NOT be used as a
 performance number.
 
-| Size | SprayExecutor | shim nccl-tests | native NCCL 2.29.7 |
-|---|---|---|---|
-| 256KB | 373us | 9439us | — |
-| 1MB | 555us | 7564us | 60.7us |
-| 4MB | 1999us | 12391us | 141.6us |
-| 16MB | 7994us | 17956us | 458.9us |
-| 64MB | 27696us | 29106us | 1696.7us |
-| 256MB | 105.5ms | 102.5ms | 6.24ms |
+| Size | shim nccl-tests | native NCCL 2.29.7 |
+|---|---|---|
+| 256KB | 95us | 25.6us |
+| 1MB | 181us | 60.0us |
+| 4MB | 447us | 140.4us |
+| 16MB | 1686us | 454.4us |
+| 64MB | 2012us | 1691.8us |
+| 256MB | 5462us | 6352.8us |
+
+256MB AllReduce now beats native NCCL (5.5ms / 49 GB/s vs 6.35ms /
+42 GB/s); AllGather is at parity (3.8ms); ReduceScatter lags
+(8.3ms vs 3.8ms native) and is the next target. The jump came from
+routing same-host puts over IPC (the latency-based path balancer was
+misrouting onto the device/RDMA paths), 256-thread device blocks, and
+larger tiles for large messages.
 
 > **IMPORTANT — run mpirun with CPU binding disabled.** OpenMPI's
 > default hwloc CPU binding pins shim processes to a subset of cores,
