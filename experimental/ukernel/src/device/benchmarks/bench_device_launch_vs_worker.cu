@@ -227,6 +227,10 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
     pool.sync(last_id, 0);
   }
 
+  // Worker exits after its idle grace, so this sync terminates; it orders
+  // the reset memset after any in-flight TMA store (otherwise the memset
+  // races the async-proxy store and verify sees rounds ± 1).
+  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op != BenchOp::Nop) {
     reset_buffers(op, bufs);
   }
@@ -240,6 +244,7 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
   }
   uint64_t t1 = now_ns();
 
+  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op == BenchOp::Reduce)
     verify_reduce_result(bufs, "worker-single", static_cast<float>(rounds));
   pool.shutdown_all();
@@ -287,6 +292,7 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
     pool.sync(first_id + batch.size() - 1, 0);
   }
 
+  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op != BenchOp::Nop) {
     reset_buffers(op, bufs);
   }
@@ -297,6 +303,7 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
   }
   uint64_t t1 = now_ns();
 
+  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op == BenchOp::Reduce)
     verify_reduce_result(bufs, "worker-batch",
                          static_cast<float>(rounds * tasks_per_batch));

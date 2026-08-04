@@ -26,13 +26,12 @@ class WorkerPool {
     uint32_t smemSize = 0;
     // Grace period (µs) of continuous fifo emptiness after which the
     // persistent kernel exits; the host relaunches it on the next
-    // enqueue. 0 = always resident (default). Enable when the process
-    // also runs torch/other CUDA work: an always-spinning kernel
-    // deadlocks every device-wide sync (cudaDeviceSynchronize, legacy
-    // default stream, D2H/.item()), and a dedicated context does NOT
-    // help (sync spans contexts). Intra-collective bubbles are far
-    // below the grace period, so bursts keep the kernel resident.
-    uint32_t idleExitAfterUs = 0;
+    // enqueue. Default 500µs: consecutive collectives in a burst stay in
+    // ONE persistent instance (inter-op gaps are µs-scale), but a long
+    // idle lets the kernel exit so device-wide syncs (cudaDeviceSync-
+    // hronize, legacy default stream, D2H/.item()) do not deadlock.
+    // 0 = always resident (not recommended for apps that sync).
+    uint32_t idleExitAfterUs = 500;
     // Control stream used for host-driven bookkeeping copies such as stop
     // flags. Persistent worker kernels still run on per-worker streams.
     gpuStream_t controlStream = nullptr;
