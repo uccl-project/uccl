@@ -160,8 +160,10 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
     tma_load_group(smem_src, src_t + e0, len_bytes);
     tma_load_group(smem_dst, dst_t + e0, len_bytes);
   }
+#if 0  // DEBUG: skip load wait to isolate load-group vs store-group hang
   tma_wait_group<0>();  // tid0 waits its load groups; others return
   __syncthreads();      // ...and wait for tid0 here
+#endif
   size_t const n = len_bytes / sizeof(T);
   for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
     smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
