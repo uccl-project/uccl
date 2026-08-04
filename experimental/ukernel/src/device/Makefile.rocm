@@ -26,6 +26,8 @@ NVCCFLAGS += -G
 endif
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) -I$(CONDA_LIB_HOME)/../include
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+REDUCE_ILP ?= 4
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP)
 
 INCLUDES := -I./ -I./fifo -I./ops -I./test -I./test/common -I./test/unit -I./test/integration \
 	-I../../include -I$(HIP_HOME)/include -I/usr/local/include

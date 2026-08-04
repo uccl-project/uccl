@@ -19,15 +19,6 @@ using UKernel::Device::TaskManager;
 using UKernel::Device::TaskType;
 using UKernel::Device::WorkerPool;
 
-inline int reduce_ilp_env() {
-  static int const ilp = [] {
-    char const* v = std::getenv("UK_CCL_REDUCE_ILP");
-    int x = v ? std::atoi(v) : 4;
-    return (x == 8 || x == 16) ? x : 4;
-  }();
-  return ilp;
-}
-
 enum class BenchOp {
   Nop,
   Copy,
@@ -102,7 +93,6 @@ TaskArgs make_launch_args(BenchOp op, DeviceBuffers const& bufs) {
   args.bytes = bufs.bytes;
   if (op == BenchOp::Reduce) {
     args.set_red_type(ReduceType::Sum);
-    args.set_reduce_ilp(static_cast<uint32_t>(reduce_ilp_env()));
   }
   return args;
 }
@@ -191,7 +181,6 @@ Task make_worker_task(BenchOp op, DeviceBuffers const& bufs) {
       args.dst = bufs.dst;
       args.bytes = bufs.bytes;
       args.set_red_type(ReduceType::Sum);
-      args.set_reduce_ilp(static_cast<uint32_t>(reduce_ilp_env()));
       return TaskManager::instance().create_task(args, TaskType::CollReduce,
                                                  DataType::Fp32, 0);
     }

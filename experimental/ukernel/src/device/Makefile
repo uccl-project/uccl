@@ -37,6 +37,8 @@ NVCCFLAGS += -G
 endif
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+REDUCE_ILP ?= 4
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP)
 
 UCCL_ROOT := $(abspath ../../../../)
 GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)

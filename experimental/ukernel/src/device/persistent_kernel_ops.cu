@@ -125,8 +125,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                 : count_per_block;
 
   read_reduce_store<T>(dst + block_offset, src + block_offset,
-                       static_cast<size_t>(my_count), a.red_type(),
-                       static_cast<int>(a.reduce_ilp()), smem_buf);
+                       static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
 // Benchmarks

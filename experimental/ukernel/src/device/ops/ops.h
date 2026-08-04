@@ -5,6 +5,17 @@
 #include "reg_ops.h"
 #include "tma_ops.h"
 
+// Reduce ILP (16B loads in flight per thread) is a BUILD-TIME knob so the
+// fully-unrolled kernel stays cheap to compile: REDUCE_ILP=4|8|16 (default
+// 4). A runtime dispatch over 4/8/16 tripled cicc+ptxas time to ~20 min
+// per file on B300; with a single compile-time value it is ~1-2 min.
+#ifndef UK_REDUCE_ILP
+#define UK_REDUCE_ILP 4
+#endif
+#if UK_REDUCE_ILP != 4 && UK_REDUCE_ILP != 8 && UK_REDUCE_ILP != 16
+#error "UK_REDUCE_ILP must be 4, 8 or 16"
+#endif
+
 namespace UKernel {
 namespace Device {
 namespace {
@@ -70,7 +81,7 @@ struct alignas(16) TypedVec {
 // element loop fully unrolls and memory traffic stays 16B wide per
 // thread (NCCL-style wide reduce; the previous scalar loop was neither
 // vectorized nor coalesced).
-template <typename T, int N, ReduceType op, int kVecInFlight>
+template <typename T, int N, ReduceType op>
 __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
                                                       size_t count, int tid,
                                                       int nthread) {
@@ -82,9 +93,10 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
   // before storing. The element-wise reduce is latency-bound at low
   // unroll (measured: U=1 needs ~16 blocks for 150 GB/s, U=4 reaches
   // ~185 GB/s with 8 blocks on A40 — the DRAM ceiling), so fewer blocks
-  // saturate the memory system. U is runtime-tunable via
-  // UK_CCL_REDUCE_ILP (4/8/16): B300's HBM3e latency-bandwidth product is
-  // ~5x A40's, so it needs more bytes in flight per block.
+  // saturate the memory system. U = UK_REDUCE_ILP: B300's HBM3e
+  // latency-bandwidth product is ~5x A40's, so it needs more bytes in
+  // flight per block (rebuild with REDUCE_ILP=8/16 to sweep).
+  constexpr int kVecInFlight = UK_REDUCE_ILP;
   size_t stride = static_cast<size_t>(nthread) * kVecInFlight;
   for (size_t base = static_cast<size_t>(tid); base < nvec;
        base += stride) {
@@ -114,29 +126,10 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
     dst[i] = apply_reduce(dst[i], src[i], op);
 }
 
-// Dispatch kVecInFlight at runtime: the loop body only fully unrolls when
-// kVecInFlight is a compile-time constant, so pick the specialized
-// instantiation here instead of a runtime-bound loop.
-template <typename T, int N, ReduceType op>
-__device__ __forceinline__ void vec_read_reduce_store_dispatch(
-    T* dst, T const* src, size_t count, int tid, int nthread, int ilp) {
-  switch (ilp) {
-    case 8:
-      vec_read_reduce_store<T, N, op, 8>(dst, src, count, tid, nthread);
-      break;
-    case 16:
-      vec_read_reduce_store<T, N, op, 16>(dst, src, count, tid, nthread);
-      break;
-    default:
-      vec_read_reduce_store<T, N, op, 4>(dst, src, count, tid, nthread);
-      break;
-  }
-}
-
 template <typename T, ReduceType op>
 __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
                                                      size_t count,
-                                                     int ilp, void* smem_buf) {
+                                                     void* smem_buf) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
@@ -172,8 +165,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   if (kVec > 1 &&
       (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
       (reinterpret_cast<uintptr_t>(src_ptr) & 0xF) == 0) {
-    vec_read_reduce_store_dispatch<T, kVec, op>(dst_ptr, src_ptr, count, tid,
-                                                nthread, ilp);
+    vec_read_reduce_store<T, kVec, op>(dst_ptr, src_ptr, count, tid, nthread);
   } else {
     // Unaligned pointers (odd tile/block offsets): coalesced scalar path.
     for (size_t i = tid; i < count; i += nthread)
@@ -186,26 +178,26 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
 template <typename T>
 __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
                                                   size_t count, ReduceType op,
-                                                  int ilp, void* smem_buf) {
+                                                  void* smem_buf) {
   switch (op) {
     case ReduceType::Sum:
-      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, ilp, smem_buf);
+      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
       break;
     case ReduceType::Prod:
-      read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, ilp, smem_buf);
+      read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, smem_buf);
       break;
     case ReduceType::Max:
-      read_reduce_store_op<T, ReduceType::Max>(dst, src, count, ilp, smem_buf);
+      read_reduce_store_op<T, ReduceType::Max>(dst, src, count, smem_buf);
       break;
     case ReduceType::Min:
-      read_reduce_store_op<T, ReduceType::Min>(dst, src, count, ilp, smem_buf);
+      read_reduce_store_op<T, ReduceType::Min>(dst, src, count, smem_buf);
       break;
     case ReduceType::BitwiseAnd:
       read_reduce_store_op<T, ReduceType::BitwiseAnd>(dst, src, count,
-                                                      ilp, smem_buf);
+                                                      smem_buf);
       break;
     default:
-      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, ilp, smem_buf);
+      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
       break;
   }
 }

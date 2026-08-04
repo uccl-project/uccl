@@ -27,6 +27,8 @@ CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -D__HIP_PLATFORM_AMD__
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) -I$(CONDA_LIB_HOME)/../include
 NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+REDUCE_ILP ?= 4
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
 INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \

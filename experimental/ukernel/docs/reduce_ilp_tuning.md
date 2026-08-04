@@ -13,9 +13,15 @@ loads (of `src` and `dst`) in flight. To saturate DRAM you need
 `in-flight bytes ≈ latency × bandwidth`. B300's HBM3e latency-bandwidth
 product is ~5x A40's, so it needs ~5x the in-flight bytes per block —
 that is why the same kernel that saturates A40 at 8 blocks needs 32-128
-blocks on B300. `UK_CCL_REDUCE_ILP` (=4|8|16, default 4) raises `U`
-without adding blocks. Cost: registers (each in-flight vector = 4 regs);
-U=16 can spill at 256 threads.
+blocks on B300. `REDUCE_ILP` (=4|8|16, default 4) raises `U` without
+adding blocks. Cost: registers (each in-flight vector = 4 regs); U=16 can
+spill at 256 threads.
+
+> **ILP is a BUILD-TIME knob** (`make ... REDUCE_ILP=8`), because a
+> runtime dispatch over 4/8/16 tripled cicc+ptxas time to ~20 min per
+> device file on B300. With one compile-time value the same file builds
+> in ~15-20 s. Sweeping U therefore means one rebuild per value (the
+> build is fast, so this is cheap).
 
 ## B300 baseline (ILP=4, before this knob existed)
 
@@ -58,34 +64,38 @@ PCIe-bound there, unchanged as expected).
 ```bash
 cd ~/jinyao/uccl && git pull
 cd experimental/ukernel
-# Build ONLY the target arch (B300 = sm_103); the default 4-arch build is
-# very slow with the ILP dispatch and sm_103 is not in it anyway. Keep
-# TMA off and cap parallelism to avoid ptxas thrash.
-make SM=103 ENABLE_TMA=0 -j8 nccl
-make SM=103 ENABLE_TMA=0 -j8 device_bench
+# Build ONLY the target arch (B300 = sm_103) — the default 4-arch build
+# is slow and sm_103 is not in it. nvcc comes from CUDA_HOME/bin/nvcc
+# (never conda's — conda CUDA 12.x cannot target sm_103). Keep TMA off
+# and cap parallelism.
 
-# 1) reduce kernel throughput vs ILP (256M, 256 threads, blocks 8/16/32/64)
+# One clean+rebuild per ILP value (make does not track macro changes),
+# then measure reduce kernel and shim at that U:
 for ilp in 4 8 16; do
-  echo "== UK_CCL_REDUCE_ILP=$ilp"
-  UK_CCL_REDUCE_ILP=$ilp BLOCKS="8 16 32 64" THREADS="256" SIZES="256M" \
+  echo "== REDUCE_ILP=$ilp"
+  make clean -f Makefile >/dev/null
+  make SM=103 ENABLE_TMA=0 REDUCE_ILP=$ilp -j8 nccl || break
+  make SM=103 ENABLE_TMA=0 REDUCE_ILP=$ilp -j8 device_bench || break
+
+  # 1) reduce kernel throughput (256M, 256 threads, blocks 8/16/32/64)
+  BLOCKS="8 16 32 64" THREADS="256" SIZES="256M" \
     bash bench/bench_device_reduce_blocks.sh 2>/dev/null
-done
 
-# 2) shim AllReduce A/B: ILP x DEV_BLOCKS (256M, LT=8 TM=8M IB=16)
-cd ~/jinyao/uccl/thirdparty/nccl-tests/build
-export LD_LIBRARY_PATH=~/jinyao/uccl/experimental/ukernel/build/nccl/lib
-export CUDA_VISIBLE_DEVICES=6,7
-for ilp in 4 8 16; do
+  # 2) shim AllReduce A/B at this U (256M, LT=8 TM=8M IB=16)
+  cd ~/jinyao/uccl/thirdparty/nccl-tests/build
+  export LD_LIBRARY_PATH=~/jinyao/uccl/experimental/ukernel/build/nccl/lib
+  export CUDA_VISIBLE_DEVICES=6,7
   for blk in 8 32 64; do
     printf "ILP=%-2s BLK=%-2s  " "$ilp" "$blk"
-    UK_CCL_REDUCE_ILP=$ilp UK_CCL_DEV_BLOCKS=$blk UK_CCL_LARGE_TILES=8 \
+    UK_CCL_DEV_BLOCKS=$blk UK_CCL_LARGE_TILES=8 \
     UK_CCL_TILE_MIN_BYTES=8388608 UK_CCL_IPC_BATCH=16 \
     mpirun --mca hwloc_base_binding_policy none -np 2 -x LD_LIBRARY_PATH \
-      -x CUDA_VISIBLE_DEVICES -x UK_CCL_REDUCE_ILP -x UK_CCL_DEV_BLOCKS \
+      -x CUDA_VISIBLE_DEVICES -x UK_CCL_DEV_BLOCKS \
       -x UK_CCL_LARGE_TILES -x UK_CCL_TILE_MIN_BYTES -x UK_CCL_IPC_BATCH \
       ./all_reduce_perf -b 256M -e 256M -g 1 -c 1 2>/dev/null \
       | awk '$1 ~ /^[0-9]+$/ && NF>=13 {printf "time=%sus algbw=%sGB/s wrong=%s\n", $6, $7, $9}'
   done
+  cd ~/jinyao/uccl/experimental/ukernel
 done
 ```
 
@@ -96,7 +106,13 @@ done
   lever.
 - Shim A/B: does ILP=8/16 raise 256M AllReduce at the same block count
   (BLK=32 from 410 toward 510 GB/s)?
-- If ILP=16 fails with a register/launch error at 256 threads, retry with
-  `THREADS="128"` (128×U=16 has the same in-flight bytes as 256×U=8 but
-  fits registers).
+- If U=16 fails with a register/launch error at 256 threads, retry with
+  `THREADS="128"` in the bench (128×U=16 has the same in-flight bytes as
+  256×U=8 but fits registers).
 - Append results to this file with a date section; paste them in chat too.
+
+## A40 quick reference (build-time ILP, 2026-08-04)
+
+Reduce bench 16M, 8 blocks, 256 threads: ILP=4 → 115.5 GB/s, ILP=8 →
+130.9 GB/s — the knob measurably lifts per-block throughput at low block
+counts even on A40.

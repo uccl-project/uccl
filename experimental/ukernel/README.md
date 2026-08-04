@@ -125,6 +125,11 @@ make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
 > nvcc comes from `CUDA_HOME/bin/nvcc` (falling back to PATH only when
 > the toolkit is absent) — so an active conda base no longer hijacks the
 > build with a CUDA 12.x nvcc that cannot target sm_103.
+>
+> Reduce-kernel ILP is a build-time knob: `make ... REDUCE_ILP=8` (default
+> 4, values 4/8/16; see `docs/reduce_ilp_tuning.md`). Build-time keeps the
+> fully-unrolled kernel cheap to compile (~20 s instead of ~20 min per
+> device file).
 
 All path variables support environment variable override. When working on a
 machine with non-standard paths, export them once in your shell profile

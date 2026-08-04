@@ -131,23 +131,11 @@ struct alignas(16) TaskArgs {
   uint64_t reserved0 = 0;
 
   __host__ __device__ ReduceType red_type() const {
-    return static_cast<ReduceType>(redTypeRaw & 0xFFu);
+    return static_cast<ReduceType>(redTypeRaw);
   }
 
   __host__ __device__ void set_red_type(ReduceType type) {
-    redTypeRaw = (redTypeRaw & ~0xFFull) | (static_cast<uint64_t>(type) & 0xFFu);
-  }
-
-  // Reduce ILP (vector loads in flight) packed in bits 8-15. Kept out of
-  // the low byte so it never collides with ReduceType; put/signal tasks
-  // overwrite redTypeRaw wholesale with a tag and never set this.
-  __host__ __device__ uint32_t reduce_ilp() const {
-    return static_cast<uint32_t>((redTypeRaw >> 8) & 0xFFu);
-  }
-
-  __host__ __device__ void set_reduce_ilp(uint32_t ilp) {
-    redTypeRaw = (redTypeRaw & ~(0xFFull << 8)) |
-                 ((static_cast<uint64_t>(ilp) & 0xFFu) << 8);
+    redTypeRaw = static_cast<uint64_t>(type);
   }
 
   __host__ __device__ bool is_published() const {
