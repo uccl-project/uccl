@@ -12,6 +12,10 @@
 #   LARGE_TILES_VALS       tile-count targets, "-" = unset (default "64 32 16 8 4")
 #   IPC_BATCH_VALS         IPC in-flight sizes, "-" = unset (default "16 24 32 48")
 #   TILE_MIN_VALS          UK_CCL_TILE_MIN_BYTES, "-" = unset (default "- 2097152 4194304 8388608")
+#   DEV_BLOCKS_VALS        UK_CCL_DEV_BLOCKS sweep (default "8 16 32 64 128"),
+#                          run with BASE_LT / BASE_TM / BASE_IB fixed
+#   BASE_LT / BASE_TM / BASE_IB   config used for the DEV_BLOCKS pass
+#                                 (default 8 / 8388608 / 16)
 #
 # Output: one line per (config, size):
 #   label|size|oop_time_us|oop_algbw|oop_wrong|ip_time_us|ip_algbw|ip_wrong
@@ -40,6 +44,10 @@ WARMUP="${WARMUP:-5}"
 LARGE_TILES_VALS="${LARGE_TILES_VALS:-64 32 16 8 4}"
 IPC_BATCH_VALS="${IPC_BATCH_VALS:-16 24 32 48}"
 TILE_MIN_VALS="${TILE_MIN_VALS:-- 2097152 4194304 8388608}"
+DEV_BLOCKS_VALS="${DEV_BLOCKS_VALS:-8 16 32 64 128}"
+BASE_LT="${BASE_LT:-8}"
+BASE_TM="${BASE_TM:-8388608}"
+BASE_IB="${BASE_IB:-16}"
 
 echo "# collective=$COLL range=$MIN..$MAX iters=$ITERS warmup=$WARMUP gpus=$CUDA_VISIBLE_DEVICES"
 
@@ -88,6 +96,13 @@ done
 echo "# --- pass 2: TILE_MIN sweep (LARGE_TILES/IPC_BATCH default) ---"
 for tm in $TILE_MIN_VALS; do
   run_one "LT=- IB=- TM=$tm" "UK_CCL_TILE_MIN_BYTES=$tm"
+done
+
+echo "# --- pass 3: DEV_BLOCKS sweep (LT=$BASE_LT TM=$BASE_TM IB=$BASE_IB fixed) ---"
+for blk in $DEV_BLOCKS_VALS; do
+  run_one "BLK=$blk LT=$BASE_LT TM=$BASE_TM IB=$BASE_IB" \
+    "UK_CCL_DEV_BLOCKS=$blk" "UK_CCL_LARGE_TILES=$BASE_LT" \
+    "UK_CCL_TILE_MIN_BYTES=$BASE_TM" "UK_CCL_IPC_BATCH=$BASE_IB"
 done
 
 echo

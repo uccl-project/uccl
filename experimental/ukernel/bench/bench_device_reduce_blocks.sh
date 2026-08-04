@@ -7,7 +7,9 @@
 #
 # Env overrides:
 #   BLOCKS   space-separated block counts    (default "1 2 4 8 16 32 64 128")
-#   THREADS  space-separated threads/block   (default "128 256 512")
+#   THREADS  space-separated threads/block   (default "128 256"; 512 fails —
+#            "too many resources requested for launch", the ILP reduce
+#            exceeds the per-block register budget at 512 threads)
 #   SIZES    space-separated payload sizes   (default "16M 64M 256M"; K/M/G suffixes ok)
 #   ROUNDS / WARMUP                          (default 100 / 20)
 #   SMEM     reduce shared memory            (default 4096)
@@ -25,7 +27,7 @@ UK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$UK_DIR" || exit 1
 
 BLOCKS="${BLOCKS:-1 2 4 8 16 32 64 128}"
-THREADS="${THREADS:-128 256 512}"
+THREADS="${THREADS:-128 256}"
 SIZES="${SIZES:-16M 64M 256M}"
 ROUNDS="${ROUNDS:-100}"
 WARMUP="${WARMUP:-20}"
@@ -56,16 +58,20 @@ for sz in $SIZES; do
   bytes="$(bytes_of "$sz")"
   for b in $BLOCKS; do
     for t in $THREADS; do
-      out="$("$BENCH" 1 "$ROUNDS" "$WARMUP" "$bytes" "$b" "$t" "$SMEM" 2>/dev/null)"
+      err="$(mktemp)"
+      out="$("$BENCH" 1 "$ROUNDS" "$WARMUP" "$bytes" "$b" "$t" "$SMEM" 2>"$err")"
       task_us="$(printf '%s\n' "$out" | awk '
         /=== reduce ===/ { inr = 1; next }
         inr && /single enqueue/ { single = 1; next }
         single && /Task latency/ {
           match($0, /[0-9.]+/); print substr($0, RSTART, RLENGTH); exit }')"
       if [[ -z "$task_us" ]]; then
-        echo "# blocks=$b threads=$t bytes=$bytes : parse failed (bench output changed?)" >&2
+        reason="$(tail -1 "$err" 2>/dev/null)"
+        echo "# blocks=$b threads=$t bytes=$bytes : launch failed — ${reason:-parse failed}" >&2
+        rm -f "$err"
         continue
       fi
+      rm -f "$err"
       gbps="$(awk -v u="$task_us" -v n="$bytes" 'BEGIN { printf "%.1f", n / u / 1000.0 }')"
       printf '%s|%s|%s|%s|%s\n' "$b" "$t" "$bytes" "$task_us" "$gbps"
     done
