@@ -204,6 +204,20 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
 }
 
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE && UK_TMA_WARPSPEC
+#ifndef UK_WARPSPEC_DEBUG
+#define UK_WARPSPEC_DEBUG 0
+#endif
+
+// Debug: print pipeline progress from block 0 (first few + last chunks).
+// Not for production use; enabled with -DUK_WARPSPEC_DEBUG=1.
+__device__ __forceinline__ void ws_dbg(int bid, int c, int nfull,
+                                       char const* tag) {
+#if UK_WARPSPEC_DEBUG
+  if (bid == 0 && (c < 6 || c >= nfull - 2) && c >= 0)
+    printf("[ws] %s c=%d/%d\n", tag, c, nfull);
+#endif
+}
+
 // Warp-spec pipeline depth. 4 slots gives the deepest overlap but shrinks
 // the per-stage chunk to (smem - slots*2*barriers) / (2*slots), and every
 // chunk pays fixed TMA-op + barrier costs — at 224KB, 4 slots = 28.6KB
@@ -348,27 +362,39 @@ __device__ __forceinline__ bool tma_bulk_reduce_warp_spec(
         for (int c = 0; c < kNSlots && c < static_cast<int>(nfull); ++c)
           ws_slot_load<T>(dst_t, src_t, smem + (c % kNSlots) * kSlotBytes,
                           c * kChunkBytes, kChunkBytes);
+        ws_dbg(blockIdx.x, kNSlots - 1, static_cast<int>(nfull), "P prefill");
         for (int c = 0; c < static_cast<int>(nfull); ++c) {
           char* slot = smem + (c % kNSlots) * kSlotBytes;
           int const phase = static_cast<int>((c / kNSlots) & 1);
+          ws_dbg(blockIdx.x, c, static_cast<int>(nfull), "P wait_done");
           ws_slot_wait_done(slot, phase);
+          ws_dbg(blockIdx.x, c, static_cast<int>(nfull), "P store");
           ws_slot_store<T>(dst_t, slot, c * kChunkBytes, kChunkBytes);
           int const c2 = c + kNSlots;
-          if (c2 < static_cast<int>(nfull))
+          if (c2 < static_cast<int>(nfull)) {
             ws_slot_load<T>(dst_t, src_t, slot, c2 * kChunkBytes, kChunkBytes);
+            ws_dbg(blockIdx.x, c2, static_cast<int>(nfull), "P load");
+          }
         }
       }
     } else {
       for (int c = 0; c < static_cast<int>(nfull); ++c) {
         char* slot = smem + (c % kNSlots) * kSlotBytes;
         int const phase = static_cast<int>((c / kNSlots) & 1);
+        if (warp == 1 && lane == 0)
+          ws_dbg(blockIdx.x, c, static_cast<int>(nfull), "C wait_ready");
         ws_slot_wait_ready(slot, phase);
+        if (warp == 1 && lane == 0)
+          ws_dbg(blockIdx.x, c, static_cast<int>(nfull), "C reduce");
         ws_slot_reduce<T, op>(slot, kChunkBytes, consumer_tid, nconsumer);
         // All 224 consumers finished the stage; exactly ONE thread then
         // signals cdone (count=1) — a per-warp arrive would over-arrive
         // and corrupt the next phase. bar.sync's count must be immediate.
         asm volatile("bar.sync 1, 224;\n" ::: "memory");
-        if (warp == 1 && lane == 0) ws_slot_arrive_done(slot);
+        if (warp == 1 && lane == 0) {
+          ws_dbg(blockIdx.x, c, static_cast<int>(nfull), "C arrive");
+          ws_slot_arrive_done(slot);
+        }
       }
     }
   }
