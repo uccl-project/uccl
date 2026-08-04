@@ -218,3 +218,28 @@ practical approach until the worker-residency redesign lands.
 
 `kIpcSendBatchDefault` 16 -> 4 (window sweep showed 4 has the best median
 and lower host event pressure; window size is otherwise not a bottleneck).
+
+## Update 2026-08-04 (7): idle-exit spin root cause found and fixed
+
+`idle_sleep()` used `__nanosleep(100)` — the argument is a multiple of
+100ns, so each poll slept **10us**, not the ~100ns the poll-count
+derivation assumes (`exit_idle_iters_ = idleExitAfterUs * 10`). A 500us
+idle grace therefore took ~50ms of wall time to actually exit (seen as
+the ~25ms periodic gap in nsys traces). Fixed to `__nanosleep(1)`
+(commit `8b7725c2`); actual exit latency is now ~1.5-2.5ms for the 500us
+default.
+
+Measured effect (256M allreduce, LT=8, BLK=32, default BATCH=4, 6 runs):
+
+| metric | before fix | after fix |
+|---|---|---|
+| oop range | 444-503 (±10%) | 447-462 (±2%) |
+| oop median | ~462 | ~457 |
+| ip range | 405-471 | 419-435 |
+
+The worker now exits/relaunches quickly during host-side inter-iteration
+gaps instead of spinning ~25-50ms, which removes the relaunch-timing
+jitter. Median throughput is unchanged (~457 GB/s) — the fix targets
+stability, not peak. Worker remains resident through burst task flows
+(us-scale gaps) while still exiting on real idle so host-side
+device-wide syncs pass.
