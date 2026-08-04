@@ -197,17 +197,28 @@ count — the "32 blocks to parity" goal is met on bandwidth.
 - The reduce kernel itself is correct: the standalone launch path
   verifies `wrong=0` at 256M/8; the mbarrier-bulk pattern was validated
   with a minimal standalone kernel on B300.
-- The shim still reports **65536 wrong elements (0.1%)**, flaky between
-  runs (sometimes 4) — a race, most likely TMA-store → next-iteration
-  TMA-load proxy-fence ordering when buffers are reused, or the odd-sized
-  tail chunk. **Not yet PR-ready**: keep `TMA_REDUCE=0` (default) until
-  the remaining 0.1% is fixed.
+- **FIXED (2026-08-04)**: the wrongness was the odd-sized TAIL chunk of
+  each block slice — TMA bulk on e.g. a 512B final chunk wrote stale-smem
+  garbage (locator test: deterministic 130KB wrong clusters per 512KB
+  block slice, always starting at the tail chunk; values were garbage).
+  The tail now falls back to the ILP vector path (at most one chunk per
+  slice, no throughput impact). Shim AllReduce is now **0 wrong at every
+  size 1M..256M**:
+
+  | size | TMA BLK=32 algbw |
+  |---:|---:|
+  | 16M | 80.7 GB/s |
+  | 64M | 194.8 |
+  | 128M | 312.5 |
+  | 256M | 454.7 |
+
+  (run variance on the shared box: earlier 256M runs showed 467-509 GB/s)
 - Bench harness note: the persistent-worker verify races the async-proxy
   stores (host D2H vs always-resident kernel) — use the launch path or
   the shim for correctness signals.
 
-Next debugging step: isolate the wrong region (per-iteration positions)
-and close the store→load proxy-fence gap or fix the tail-chunk path.
+TMA stays opt-in (`TMA_REDUCE=1`) pending broader validation (multi-node
+RDMA + the put/reduce pipeline work); flip the default once stable.
 
 ### Persistent-kernel idle-exit (2026-08-04)
 
