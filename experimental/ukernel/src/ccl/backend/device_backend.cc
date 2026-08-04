@@ -5,6 +5,7 @@
 #include "gpu_rt.h"
 #include "util/uk_debug.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <stdexcept>
 #include <thread>
@@ -19,6 +20,15 @@ namespace {
 // unsigned data compares signed — the shim rejects that combination
 // (see nccl.cc). Int16 has no device kernel; the shim and Python
 // bindings never produce it, so reject loudly if it ever appears.
+inline int reduce_ilp_env() {
+  static int const ilp = [] {
+    char const* v = std::getenv("UK_CCL_REDUCE_ILP");
+    int x = v ? std::atoi(v) : 4;
+    return (x == 8 || x == 16) ? x : 4;
+  }();
+  return ilp;
+}
+
 Device::DataType to_device_dtype(ScalarType t) {
   switch (t) {
     case ScalarType::UInt8:
@@ -203,6 +213,11 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   args.set_red_type(c.redop == ReductionKind::None  ? Device::ReduceType::None
                     : c.redop == ReductionKind::Sum ? Device::ReduceType::Sum
                                                     : Device::ReduceType::Sum);
+  // Vector-reduce ILP (16B loads in flight per thread), tunable via
+  // UK_CCL_REDUCE_ILP = 4|8|16. Packed into bits 8-15 of redTypeRaw; the
+  // PutSignal path below overwrites redTypeRaw with the tag and never
+  // reduces, so there is no collision.
+  args.set_reduce_ilp(static_cast<uint32_t>(reduce_ilp_env()));
 
   switch (c.kind) {
     case ExecOpKind::Put:
