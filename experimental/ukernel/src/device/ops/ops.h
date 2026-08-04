@@ -24,6 +24,9 @@
 #ifndef UK_TMA_REDUCE
 #define UK_TMA_REDUCE 0
 #endif
+#ifndef UK_TMA_WARPSPEC
+#define UK_TMA_WARPSPEC 0
+#endif
 #ifndef UK_REDUCE_SMEM_KB
 #define UK_REDUCE_SMEM_KB 4
 #endif
@@ -200,10 +203,164 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
   __syncthreads();
 }
 
+#if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE && UK_TMA_WARPSPEC
+// Warp-specialized TMA reduce: producer warp (warp 0) issues the bulk
+// loads and stores while consumer warps (1..n) reduce in shared memory —
+// load[N+1]/store[N] overlap reduce[N] continuously (FlashAttention-style
+// producer/consumer). kNSlots-deep pipeline, per-slot "ready" (loads
+// done) and "cdone" (consumers done) mbarriers, consumer-only named
+// barrier (bar.sync 1).
+template <typename T>
+__device__ __forceinline__ void ws_slot_load(T* dst_t, T const* src_t,
+                                             char* slot, size_t off_bytes,
+                                             size_t len_bytes) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  T* smem_src = reinterpret_cast<T*>(slot);
+  T* smem_dst = reinterpret_cast<T*>(slot + kChunkBytes);
+  TmaSemaphore* ready =
+      reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
+  TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  size_t const e0 = off_bytes / sizeof(T);
+  tma_init_semaphore(*ready, 0);
+  tma_init_semaphore(*cdone, 0);
+  tma_load<T>(smem_src, src_t + e0, len_bytes, *ready);
+  tma_load<T>(smem_dst, dst_t + e0, len_bytes, *ready);
+}
+
+__device__ __forceinline__ void ws_slot_wait_ready(char* slot) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  TmaSemaphore* ready =
+      reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
+  tma_wait(*ready, 0);
+}
+
+__device__ __forceinline__ void ws_slot_arrive_done(char* slot) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(cdone));
+  asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0];\n" ::"r"(sem_ptr));
+}
+
+__device__ __forceinline__ void ws_slot_wait_done(char* slot) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  tma_wait(*cdone, 0);
+}
+
+template <typename T>
+__device__ __forceinline__ void ws_slot_store(T* dst_t, char* slot,
+                                              size_t off_bytes,
+                                              size_t len_bytes) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  T* smem_dst = reinterpret_cast<T*>(slot + kChunkBytes);
+  size_t const e0 = off_bytes / sizeof(T);
+  tma_store<T>(dst_t + e0, smem_dst, len_bytes);
+  tma_wait_group<0>();
+  tma_fence_async_global();
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void ws_slot_reduce(char* slot, size_t len_bytes,
+                                               int consumer_tid,
+                                               int nconsumer) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  T* smem_src = reinterpret_cast<T*>(slot);
+  T* smem_dst = reinterpret_cast<T*>(slot + kChunkBytes);
+  size_t const n = len_bytes / sizeof(T);
+  for (size_t i = static_cast<size_t>(consumer_tid); i < n; i += nconsumer)
+    smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_bulk_reduce_warp_spec(
+    void* dst, void const* src, size_t count, void* smem_buf) {
+  constexpr int kNSlots = 4;
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * 2 * sizeof(TmaSemaphore)) / 8) &
+      ~static_cast<size_t>(31);
+  constexpr size_t kSlotBytes = 2 * kChunkBytes + 2 * sizeof(TmaSemaphore);
+  if (kChunkBytes < 32) return;
+
+  char* smem = static_cast<char*>(smem_buf);
+  T* dst_t = static_cast<T*>(dst);
+  T const* src_t = static_cast<T const*>(src);
+  size_t const bytes = count * sizeof(T);
+  size_t const nfull = bytes / kChunkBytes;
+  if (nfull == 0) return;  // tail-only handled by the caller's fallback
+
+  int const tid = threadIdx.x;
+  int const nthread = blockDim.x;
+  int const warp = tid >> 5;
+  int const lane = tid & 31;
+  int const nconsumer = nthread - 32;
+  int const consumer_tid = tid - 32;
+
+  if (warp == 0) {
+    if (lane == 0) {
+      for (int c = 0; c < kNSlots && c < static_cast<int>(nfull); ++c)
+        ws_slot_load<T>(dst_t, src_t, smem + (c % kNSlots) * kSlotBytes,
+                        c * kChunkBytes, kChunkBytes);
+      for (int c = 0; c < static_cast<int>(nfull); ++c) {
+        char* slot = smem + (c % kNSlots) * kSlotBytes;
+        ws_slot_wait_done(slot);
+        ws_slot_store<T>(dst_t, slot, c * kChunkBytes, kChunkBytes);
+        int const c2 = c + kNSlots;
+        if (c2 < static_cast<int>(nfull))
+          ws_slot_load<T>(dst_t, src_t, slot, c2 * kChunkBytes, kChunkBytes);
+      }
+    }
+  } else {
+    for (int c = 0; c < static_cast<int>(nfull); ++c) {
+      char* slot = smem + (c % kNSlots) * kSlotBytes;
+      ws_slot_wait_ready(slot);
+      ws_slot_reduce<T, op>(slot, kChunkBytes, consumer_tid, nconsumer);
+      asm volatile("bar.sync 1, %0;\n" ::"r"(nconsumer));
+      if (lane == 0) ws_slot_arrive_done(slot);
+    }
+  }
+
+  // Tail (< kChunkBytes) via the ILP vector path on all threads.
+  size_t off = nfull * kChunkBytes;
+  if (off < bytes) {
+    constexpr int kVec = 16 / static_cast<int>(sizeof(T));
+    size_t tail_count = (bytes - off) / sizeof(T);
+    if (kVec > 1 && (reinterpret_cast<uintptr_t>(dst_t + off / sizeof(T)) &
+                     0xF) == 0 &&
+        (reinterpret_cast<uintptr_t>(src_t + off / sizeof(T)) & 0xF) == 0) {
+      vec_read_reduce_store<T, kVec, op>(dst_t + off / sizeof(T),
+                                         src_t + off / sizeof(T), tail_count,
+                                         tid, nthread);
+    } else {
+      for (size_t i = off / sizeof(T); i < count; ++i)
+        dst_t[i] = apply_reduce(dst_t[i], src_t[i], op);
+    }
+  }
+}
+#endif
+
 template <typename T, ReduceType op>
 __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
                                                 size_t count,
                                                 void* smem_buf) {
+#if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE && UK_TMA_WARPSPEC
+  tma_bulk_reduce_warp_spec<T, op>(dst, src, count, smem_buf);
+  return;
+#endif
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
       ~static_cast<size_t>(31);
