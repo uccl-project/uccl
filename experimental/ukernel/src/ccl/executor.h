@@ -226,7 +226,7 @@ struct SprayExecutorConfig {
   // worker kernels exit (relaunched on next enqueue). 0 = always
   // resident. Enable when the process also runs torch/CUDA work — an
   // always-spinning kernel deadlocks device-wide syncs.
-  uint32_t device_idle_exit_us = 500;  // see WorkerPool::Config::idleExitAfterUs
+  uint32_t device_idle_exit_us = 0;  // see WorkerPool::Config::idleExitAfterUs
 };
 
 // Backend path counters for load-balancing diagnostics.

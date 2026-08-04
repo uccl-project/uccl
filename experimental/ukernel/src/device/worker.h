@@ -26,12 +26,10 @@ class WorkerPool {
     uint32_t smemSize = 0;
     // Grace period (µs) of continuous fifo emptiness after which the
     // persistent kernel exits; the host relaunches it on the next
-    // enqueue. Default 500µs: consecutive collectives in a burst stay in
-    // ONE persistent instance (inter-op gaps are µs-scale), but a long
-    // idle lets the kernel exit so device-wide syncs (cudaDeviceSync-
-    // hronize, legacy default stream, D2H/.item()) do not deadlock.
-    // 0 = always resident (not recommended for apps that sync).
-    uint32_t idleExitAfterUs = 500;
+    // enqueue. 0 = always resident. TODO(ukernel): switch the default to a
+    // short grace (e.g. 500µs) so device-wide syncs work — the relaunch
+    // path still has an exit/enqueue race that must be fixed first.
+    uint32_t idleExitAfterUs = 0;
     // Control stream used for host-driven bookkeeping copies such as stop
     // flags. Persistent worker kernels still run on per-worker streams.
     gpuStream_t controlStream = nullptr;
