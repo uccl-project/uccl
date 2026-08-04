@@ -208,3 +208,19 @@ count — the "32 blocks to parity" goal is met on bandwidth.
 
 Next debugging step: isolate the wrong region (per-iteration positions)
 and close the store→load proxy-fence gap or fix the tail-chunk path.
+
+### Persistent-kernel idle-exit (2026-08-04)
+
+- The worker persistent kernel now **idle-exits after 500µs** of empty
+  fifo by default (`WorkerPool::Config::idleExitAfterUs`, shim default
+  `device_idle_exit_us=500`), so user apps calling `cudaDeviceSynchronize`
+  / D2H / legacy default stream no longer deadlock; bursts of consecutive
+  collectives stay in ONE instance (inter-op gaps are µs-scale), and the
+  next enqueue relaunches the kernel.
+- Relaunch hardened against the exit/enqueue race: post-push relaunch in
+  `enqueue`/`enqueue_batch`, relaunch-on-wait in `sync()`/`is_done()`, and
+  an atomic claim so concurrent callers relaunch once.
+- Caveat: the bench keeps `idleExitAfterUs=1e6` (always resident) — its
+  rapid create/destroy + idle-exit cycles trip a CUDA 13.3 context hang
+  (same driver family as the cudaFree hang documented in `destroyWorker`).
+  The shim's long-lived worker does not hit this.
