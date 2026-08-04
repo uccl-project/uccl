@@ -71,3 +71,40 @@ for lt in 64 32 16 8 4; do
   done
 done
 ```
+
+## Update 2026-08-04 (2): vectorized smem reduce
+
+`tma_bulk_reduce_chunk`'s per-chunk smem reduce was scalar; vectorized to
+16B `TypedVec` (commit `8de98798`). Measured on B300:
+
+### Pure reduce (device bench, 256M single task, no put/NVLink)
+
+| BLK | before | after |
+|---|---|---|
+| 8 | — | 181 GB/s |
+| 16 | ~262 | ~350 GB/s (+34%) |
+| 32 | ~493 | ~640 GB/s (+30%) |
+| 64 | — | ~1140 GB/s |
+
+### Allreduce 256M (shim), LT=8 (32MB tiles)
+
+| BLK | before oop | after oop | ip |
+|---|---|---|---|
+| 16 | 378-398 | 415-423 | 315-326 |
+| 32 | 440-465 | 457-465 | 408-425 |
+
+Conclusion: **the reduce kernel is no longer the bottleneck.** Pure reduce
+at BLK=32 (640 GB/s) far exceeds the ~500 GB/s the 2-rank allreduce needs.
+The allreduce ceiling (~425-465 oop, ~320-425 ip) is set by the
+put/NVLink/task pipeline, not the reduce kernel.
+
+### In-place gap root cause
+
+In-place allreduce is 15-25% slower than out-of-place (BLK=16: 415-423 oop
+vs 315-326 ip) NOT because of the reduce kernel (its dst/src are always
+distinct: dst=Tmp accumulation, src=Input). The ring algorithm stages
+in-place RS partials in Tmp(0) and the all-gather phase ends with a local
+**Tmp→Output copy of the held shard (128MB per rank at 256MB/2 ranks)** —
+that extra copy is the gap (~190us at BLK=16, i.e. ~680 GB/s copy rate).
+Optimizing that copy (TMA chunk path) or fusing it is the lever for ip;
+out-of-place already tracks the put-pipeline ceiling.
