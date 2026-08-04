@@ -333,6 +333,9 @@ void verify_reduce_result(DeviceBuffers const& bufs, char const* label,
     if (host[i] != expected) {
       ++wrong;
       if (first == static_cast<size_t>(-1)) first = i;
+      if (wrong <= 16)
+        std::printf("[check %s] wrong[%zu] idx=%zu val=%f\n", label, wrong, i,
+                    host[i]);
     }
   }
   std::printf("[check %s] wrong=%zu first=%zu\n", label, wrong, first);
