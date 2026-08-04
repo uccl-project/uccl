@@ -324,6 +324,20 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   dim3 block(cfg_.threadsPerBlock);
   size_t smem_size = cfg_.smemSize;
 
+  // TMA bulk reduce needs large dynamic smem (>48KB); opt in explicitly,
+  // otherwise the launch fails with "too much shared memory".
+  if (smem_size > 48 * 1024) {
+    const void* kernel =
+        (worker.numBlocks == 1)
+            ? reinterpret_cast<const void*>(
+                  &UKernel::Device::singlePersistentKernel)
+            : reinterpret_cast<const void*>(
+                  &UKernel::Device::multiPersistentKernel);
+    GPU_RT_CHECK(gpuFuncSetAttribute(
+        kernel, gpuFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(smem_size)));
+  }
+
   if (worker.h_exited) *worker.h_exited = false;
 
   // Relaunch after an idle exit must reset the multi-block sync state:

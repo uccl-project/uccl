@@ -46,6 +46,9 @@
 #define gpuFree cudaFree
 #define gpuMallocAsync cudaMallocAsync
 #define gpuFreeAsync cudaFreeAsync
+#define gpuFuncSetAttribute cudaFuncSetAttribute
+#define gpuFuncAttributeMaxDynamicSharedMemorySize \
+  cudaFuncAttributeMaxDynamicSharedMemorySize
 #define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
@@ -189,6 +192,9 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuFree hipFree
 #define gpuMallocAsync hipMallocAsync
 #define gpuFreeAsync hipFreeAsync
+#define gpuFuncSetAttribute hipFuncSetAttribute
+#define gpuFuncAttributeMaxDynamicSharedMemorySize \
+  hipFuncAttributeMaxDynamicSharedMemorySize
 #define gpuMemcpyHostToDevice hipMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuMemcpy hipMemcpy

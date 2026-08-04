@@ -22,7 +22,10 @@ struct TmaSemaphore {
 
 __device__ __forceinline__ void tma_init_semaphore(TmaSemaphore& sem,
                                                    uint32_t initial_phase) {
-  sem.expect_bytes = 0;
+  // Zero the whole mbarrier (expect_tx + parity + COUNT bits) — only
+  // clearing expect_tx/phase leaves garbage in the count field, which can
+  // hang or early-complete the phase wait.
+  sem = TmaSemaphore{};
   sem.phase = initial_phase;
 }
 

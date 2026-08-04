@@ -42,7 +42,10 @@ CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 REDUCE_ILP ?= 4
-NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP)
+REDUCE_SMEM_KB ?= 4
+TMA_REDUCE ?= 0
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE)
+CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
 GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)

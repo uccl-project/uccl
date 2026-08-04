@@ -209,7 +209,13 @@ struct SprayExecutorConfig {
   // AllReduce 84us -> 77us). 16 blocks gives only marginal RS gains.
   int blocks_per_worker = 8;
   size_t fifo_capacity = 256;
-  size_t smem_size = 4096;  // dynamic shared memory for reduce kernel
+  // Dynamic shared memory for the reduce kernel; follows the build's
+  // REDUCE_SMEM_KB (default 4KB) so the launch config always matches the
+  // kernel's TMA chunk sizing.
+#ifndef UK_REDUCE_SMEM_KB
+#define UK_REDUCE_SMEM_KB 4
+#endif
+  size_t smem_size = static_cast<size_t>(UK_REDUCE_SMEM_KB) * 1024;
   size_t max_concurrent_runs = 16;
 
   // Communicator settings

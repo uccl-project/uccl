@@ -16,6 +16,19 @@
 #error "UK_REDUCE_ILP must be 4, 8 or 16"
 #endif
 
+// Large-task TMA bulk reduce (sm_90+): REDUCE_SMEM_KB is the dynamic
+// shared-memory budget per block (src+dst chunk buffers + mbarriers);
+// TMA_REDUCE=1 enables the cp.async.bulk chunked path instead of the
+// register/ILP-limited vector loop. Both are build-time so the kernel
+// and the launch config stay consistent (no runtime size mismatch).
+#ifndef UK_TMA_REDUCE
+#define UK_TMA_REDUCE 0
+#endif
+#ifndef UK_REDUCE_SMEM_KB
+#define UK_REDUCE_SMEM_KB 4
+#endif
+#define UK_REDUCE_SMEM_BYTES (UK_REDUCE_SMEM_KB * 1024)
+
 namespace UKernel {
 namespace Device {
 namespace {
@@ -126,6 +139,84 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
     dst[i] = apply_reduce(dst[i], src[i], op);
 }
 
+#if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE
+// Chunked cp.async.bulk reduce for large tasks: per chunk, bulk-load src
+// and dst into shared memory (mbarrier-tracked), reduce in smem, bulk-
+// store dst back. In-flight bytes per block are bounded by smem, not by
+// per-thread registers — this is the lever to reach native-class
+// per-block throughput at low block counts. TmaSemaphores are carved out
+// of the same smem buffer (mbarriers must live in shared memory).
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_bulk_reduce_chunk(
+    T* dst_t, T const* src_t, char* smem, size_t off_bytes, size_t len_bytes,
+    int tid, int nthread) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
+      ~static_cast<size_t>(31);
+  T* smem_src = reinterpret_cast<T*>(smem);
+  T* smem_dst = reinterpret_cast<T*>(smem + kChunkBytes);
+  TmaSemaphore* sem_src = reinterpret_cast<TmaSemaphore*>(
+      smem + 2 * kChunkBytes);
+  TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
+      smem + 2 * kChunkBytes + sizeof(TmaSemaphore));
+  size_t const e0 = off_bytes / sizeof(T);
+
+  tma_init_semaphore(*sem_src, 0);
+  tma_init_semaphore(*sem_dst, 0);
+  __syncthreads();
+  if (tid == 0) {
+    tma_load<T>(smem_src, src_t + e0, len_bytes, *sem_src);
+    tma_load<T>(smem_dst, dst_t + e0, len_bytes, *sem_dst);
+  }
+  __syncthreads();
+  if (tid == 0) {
+    tma_wait(*sem_src, 0);
+    tma_wait(*sem_dst, 0);
+  }
+  __syncthreads();
+  size_t const n = len_bytes / sizeof(T);
+  for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
+    smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
+  __syncthreads();
+  if (tid == 0) tma_store<T>(dst_t + e0, smem_dst, len_bytes);
+  tma_wait_group<0>();
+  __syncthreads();
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
+                                                size_t count,
+                                                void* smem_buf) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
+      ~static_cast<size_t>(31);
+  if (kChunkBytes < 32) return;  // smem too small; caller falls back
+
+  char* smem = static_cast<char*>(smem_buf);
+  T* dst_t = static_cast<T*>(dst);
+  T const* src_t = static_cast<T const*>(src);
+  size_t bytes = count * sizeof(T);
+  int tid = threadIdx.x;
+  int nthread = blockDim.x;
+
+  size_t off = 0;
+  while (off + kChunkBytes <= bytes) {
+    tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, kChunkBytes, tid,
+                                 nthread);
+    off += kChunkBytes;
+  }
+  size_t tail = bytes - off;
+  size_t tail16 = tail & ~static_cast<size_t>(15);
+  if (tail16 >= 16) {
+    tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, tail16, tid,
+                                 nthread);
+    off += tail16;
+  }
+  for (size_t i = off / sizeof(T); i < count; ++i)
+    dst_t[i] = apply_reduce(dst_t[i], src_t[i], op);
+}
+#endif
+
 template <typename T, ReduceType op>
 __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
                                                      size_t count,
@@ -161,6 +252,15 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
 
   T* dst_ptr = static_cast<T*>(dst);
   T const* src_ptr = static_cast<T const*>(src);
+#if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE
+  // Large-task TMA bulk path: chunks of smem-sized blocks via cp.async.bulk.
+  if (smem_buf != nullptr &&
+      (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src_ptr) & 0xF) == 0) {
+    tma_bulk_reduce<T, op>(dst_ptr, src_ptr, count, smem_buf);
+    return;
+  }
+#endif
   constexpr int kVec = 16 / static_cast<int>(sizeof(T));
   if (kVec > 1 &&
       (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
