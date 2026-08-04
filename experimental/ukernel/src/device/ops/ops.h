@@ -149,7 +149,7 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
 template <typename T, ReduceType op>
 __device__ __forceinline__ void tma_bulk_reduce_chunk(
     T* dst_t, T const* src_t, char* smem, size_t off_bytes, size_t len_bytes,
-    int tid, int nthread, uint32_t parity) {
+    int tid, int nthread) {
   constexpr size_t kChunkBytes =
       ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
       ~static_cast<size_t>(31);
@@ -161,14 +161,23 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
       smem + 2 * kChunkBytes + sizeof(TmaSemaphore));
   size_t const e0 = off_bytes / sizeof(T);
 
+  // mbarrier.init per chunk (count=1, phase 0). Phase-toggling across
+  // chunks hangs at high chunk counts (observed at 512 chunks/tile), and
+  // the barrier must be re-armed for every arrive.expect_tx — a fresh
+  // init per chunk is what the earlier runs validated.
+  if (tid == 0) {
+    tma_init_semaphore(*sem_src, 0);
+    tma_init_semaphore(*sem_dst, 0);
+  }
+  __syncthreads();
   if (tid == 0) {
     tma_load<T>(smem_src, src_t + e0, len_bytes, *sem_src);
     tma_load<T>(smem_dst, dst_t + e0, len_bytes, *sem_dst);
   }
   __syncthreads();
   if (tid == 0) {
-    tma_wait(*sem_src, parity);
-    tma_wait(*sem_dst, parity);
+    tma_wait(*sem_src, 0);
+    tma_wait(*sem_dst, 0);
   }
   __syncthreads();
   size_t const n = len_bytes / sizeof(T);
@@ -203,36 +212,22 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   char* smem = static_cast<char*>(smem_buf);
   int tid = threadIdx.x;
   int nthread = blockDim.x;
-  TmaSemaphore* sem_src =
-      reinterpret_cast<TmaSemaphore*>(smem + 2 * kChunkBytes);
-  TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
-      smem + 2 * kChunkBytes + sizeof(TmaSemaphore));
-  // mbarriers initialized once per task (PTX: init before first use; the
-  // multi-block barrier between tasks makes the previous task's usage
-  // quiescent), then arrive/wait with alternating parity per chunk.
-  if (tid == 0) {
-    tma_init_semaphore(*sem_src, 0);
-    tma_init_semaphore(*sem_dst, 0);
-  }
-  __syncthreads();
 
   T* dst_t = static_cast<T*>(dst);
   T const* src_t = static_cast<T const*>(src);
   size_t bytes = count * sizeof(T);
 
   size_t off = 0;
-  uint32_t parity = 0;
   while (off + kChunkBytes <= bytes) {
     tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, kChunkBytes, tid,
-                                 nthread, parity);
+                                 nthread);
     off += kChunkBytes;
-    parity ^= 1u;
   }
   size_t tail = bytes - off;
   size_t tail16 = tail & ~static_cast<size_t>(15);
   if (tail16 >= 16) {
     tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, tail16, tid,
-                                 nthread, parity);
+                                 nthread);
     off += tail16;
   }
   for (size_t i = off / sizeof(T); i < count; ++i)
