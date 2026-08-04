@@ -58,7 +58,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
     if (tid == 0) {
       TmaSemaphore sem;
-      tma_init_semaphore(sem, 0);
+      tma_init_semaphore(sem, 1);
       tma_load<T>(smem_buf, src, bytes, sem);
       tma_wait_group<0>();
       tma_store<T>(dst, smem_buf, bytes);
@@ -169,8 +169,8 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
   // the barrier must be re-armed for every arrive.expect_tx — a fresh
   // init per chunk is what the earlier runs validated.
   if (tid == 0) {
-    tma_init_semaphore(*sem_src, 0);
-    tma_init_semaphore(*sem_dst, 0);
+    tma_init_semaphore(*sem_src, 1);
+    tma_init_semaphore(*sem_dst, 1);
   }
   __syncthreads();
   if (tid == 0) {
@@ -226,8 +226,11 @@ __device__ __forceinline__ void ws_slot_init(char* slot) {
       reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
   TmaSemaphore* cdone = reinterpret_cast<TmaSemaphore*>(
       slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
-  tma_init_semaphore(*ready, 0);
-  tma_init_semaphore(*cdone, 0);
+  // ready receives TWO arrive.expect_tx per use (src + dst loads), so its
+  // count is 2; cdone receives exactly one arrive per use (count=1). An
+  // arrive beyond count carries into the next phase and corrupts it.
+  tma_init_semaphore(*ready, 2);
+  tma_init_semaphore(*cdone, 1);
 }
 
 __device__ __forceinline__ void ws_fence_init() {
@@ -457,7 +460,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
 
     if (tid == 0) {
       TmaSemaphore sem_dst;
-      tma_init_semaphore(sem_dst, 0);
+      tma_init_semaphore(sem_dst, 1);
       tma_load<T>(smem_buf, dst_ptr, bytes, sem_dst);
       tma_wait_group<0>();
     }

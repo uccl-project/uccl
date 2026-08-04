@@ -21,14 +21,17 @@ struct TmaSemaphore {
 };
 
 __device__ __forceinline__ void tma_init_semaphore(TmaSemaphore& sem,
-                                                   uint32_t initial_phase) {
-  // Real mbarrier.init with COUNT=1: the single issuing thread's
-  // arrive.expect_tx is the one arrival. Zeroing the struct (count=0)
-  // makes the arrive underflow the count and the phase never completes
-  // (first real TMA execution exposed this hang).
+                                                   uint32_t count) {
+  // Real mbarrier.init. COUNT must equal the number of arrives per phase
+  // use: 1 when a single tma_load/arrive completes the barrier, 2 for a
+  // shared barrier fed by two loads (warp-spec "ready"). Zeroing the
+  // struct (count=0) makes the arrive underflow the count and the phase
+  // never completes (first real TMA execution exposed this hang), and an
+  // arrive beyond count carries into the next phase and corrupts it
+  // (observed as warp-spec deadlock).
   uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
-  asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;\n" ::"r"(sem_ptr));
-  (void)initial_phase;
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\n" ::"r"(sem_ptr),
+               "r"(count));
 }
 
 #if __CUDA_ARCH__ >= 900
