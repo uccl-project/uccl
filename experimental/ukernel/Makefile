@@ -20,14 +20,17 @@ DEBUG          ?= 0
 DEFAULT_SMS := 80 86 89 100
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
-ENABLE_TMA := 0
 SUBMAKE_SM :=
 else
 SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
 NVCC_ARCH_FLAGS := -arch=sm_$(SM)
-ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 SUBMAKE_SM := SM=$(SM)
 endif
+
+# NOTE: the old ENABLE_TMA / UKERNEL_ENABLE_TMA knob is a dead leftover —
+# no code reads it. The TMA bulk-reduce path is controlled by TMA_REDUCE
+# (and its warp-specialized variant TMA_WARPSPEC) in src/ccl & src/device.
+# Passing `ENABLE_TMA=...` on the command line is still accepted but ignored.
 
 # Base compilation flags
 ifeq ($(DEBUG),1)
@@ -39,15 +42,13 @@ NVCC_OPT_FLAGS := -O3
 endif
 
 CXXFLAGS   := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
-              -I$(CONDA_LIB_HOME)/../include \
-              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+              -I$(CONDA_LIB_HOME)/../include
 
 NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
               --compiler-options "-fPIC -Wall -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -pthread -I$(CONDA_LIB_HOME)/../include" \
               --expt-extended-lambda \
               --expt-relaxed-constexpr \
               -DKITTENS_HOPPER \
-              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) \
               $(NVCC_ARCH_FLAGS) \
               -ccbin $(CXX)
 #             -I$(TK_ROOT)/include \

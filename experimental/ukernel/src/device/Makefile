@@ -18,12 +18,15 @@ NVCC = $(NVCC_BIN)
 DEFAULT_SMS := 80 86 89 100
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
-ENABLE_TMA := 0
 else
 SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
 NVCC_ARCH_FLAGS := -arch=sm_$(SM)
-ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
+
+# NOTE: the old ENABLE_TMA / UKERNEL_ENABLE_TMA knob is a dead leftover —
+# no code reads it. The TMA bulk-reduce path is controlled by TMA_REDUCE
+# (and its warp-specialized variant TMA_WARPSPEC) below. Passing
+# `ENABLE_TMA=...` on the command line is still accepted but ignored.
 ifeq ($(DEBUG),1)
 DEV_OPT_FLAGS := -O0 -g
 else
@@ -35,8 +38,6 @@ NVCCFLAGS:= $(DEV_OPT_FLAGS) -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
 ifeq ($(DEBUG),1)
 NVCCFLAGS += -G
 endif
-CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
-NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 REDUCE_ILP ?= 4
 REDUCE_SMEM_KB ?= 4
 TMA_REDUCE ?= 0
