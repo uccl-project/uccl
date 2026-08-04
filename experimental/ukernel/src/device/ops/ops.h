@@ -228,8 +228,10 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   char* smem = static_cast<char*>(smem_buf);
   int tid = threadIdx.x;
   int nthread = blockDim.x;
+  // DEBUG: single slot with the halved chunk size — isolates whether the
+  // two-slot layout or the new chunk size is the missing-src bug.
   constexpr size_t kSlotBytes = 2 * kChunkBytes + 2 * sizeof(TmaSemaphore);
-  char* slots[2] = {smem, smem + kSlotBytes};
+  char* slots[1] = {smem};
 
   T* dst_t = static_cast<T*>(dst);
   T const* src_t = static_cast<T const*>(src);
@@ -242,7 +244,7 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   }
   for (; i < nfull; ++i) {
     size_t const off = i * kChunkBytes;
-    char* slot = slots[i % 2];
+    char* slot = slots[0];
     if (i > 0) {
       // DEBUG: load chunk i at iteration start (no prefetch) — isolates
       // whether the prefetch's early load is the missing-src bug.
