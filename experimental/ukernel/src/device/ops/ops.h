@@ -184,8 +184,34 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
   }
   __syncthreads();
   size_t const n = len_bytes / sizeof(T);
-  for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
-    smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
+  // Vectorize the smem reduce: one 16B TypedVec per thread per iteration
+  // instead of scalar element ops (4x fewer smem accesses / loop iters on
+  // fp32). kChunkBytes is 32B-aligned so both chunk buffers are 16B
+  // aligned for TypedVec; the scalar tail covers any remainder.
+  constexpr int kVec = 16 / static_cast<int>(sizeof(T));
+  if (kVec > 1) {
+    using V = TypedVec<T, kVec>;
+    V* sv = reinterpret_cast<V*>(smem_src);
+    V* dv = reinterpret_cast<V*>(smem_dst);
+    size_t const nvec = n / static_cast<size_t>(kVec);
+    for (size_t i = static_cast<size_t>(tid); i < nvec;
+         i += static_cast<size_t>(nthread)) {
+      V const s = sv[i];
+      V d = dv[i];
+#pragma unroll
+      for (int e = 0; e < kVec; ++e)
+        d.e[e] = apply_reduce(d.e[e], s.e[e], op);
+      dv[i] = d;
+    }
+    for (size_t i = nvec * static_cast<size_t>(kVec) +
+                    static_cast<size_t>(tid);
+         i < n; i += static_cast<size_t>(nthread))
+      smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
+  } else {
+    for (size_t i = static_cast<size_t>(tid); i < n;
+         i += static_cast<size_t>(nthread))
+      smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
+  }
   __syncthreads();
   if (tid == 0) {
     tma_store<T>(dst_t + e0, smem_dst, len_bytes);
