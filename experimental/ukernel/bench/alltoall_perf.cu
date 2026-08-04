@@ -27,8 +27,13 @@
 static const char* kIdPath = "/tmp/uk_a2a_id";
 
 static long get_long_arg(int argc, char** argv, const char* name, long def) {
-  for (int i = 1; i < argc - 1; ++i) {
-    if (std::string(argv[i]) == name) return std::atol(argv[i + 1]);
+  std::string n(name);
+  for (int i = 1; i < argc; ++i) {
+    std::string a(argv[i]);
+    if (a == n && i + 1 < argc) return std::atol(argv[i + 1]);
+    if (a.size() > n.size() && a.compare(0, n.size(), n) == 0 &&
+        a[n.size()] == '=')
+      return std::atol(a.c_str() + n.size() + 1);
   }
   return def;
 }
