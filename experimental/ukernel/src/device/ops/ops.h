@@ -223,15 +223,24 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
                                  nthread);
     off += kChunkBytes;
   }
-  size_t tail = bytes - off;
-  size_t tail16 = tail & ~static_cast<size_t>(15);
-  if (tail16 >= 16) {
-    tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, tail16, tid,
-                                 nthread);
-    off += tail16;
+  if (off < bytes) {
+    // Tail (< kChunkBytes): TMA bulk on odd-sized final chunks produced
+    // garbage (observed: 130KB wrong clusters per 512KB block slice,
+    // starting at the tail chunk). Fall back to the ILP vector path —
+    // the tail is at most one chunk, so the throughput impact is nil.
+    constexpr int kVec = 16 / static_cast<int>(sizeof(T));
+    size_t tail_count = (bytes - off) / sizeof(T);
+    if (kVec > 1 && (reinterpret_cast<uintptr_t>(dst_t + off / sizeof(T)) &
+                     0xF) == 0 &&
+        (reinterpret_cast<uintptr_t>(src_t + off / sizeof(T)) & 0xF) == 0) {
+      vec_read_reduce_store<T, kVec, op>(dst_t + off / sizeof(T),
+                                         src_t + off / sizeof(T), tail_count,
+                                         tid, nthread);
+    } else {
+      for (size_t i = off / sizeof(T); i < count; ++i)
+        dst_t[i] = apply_reduce(dst_t[i], src_t[i], op);
+    }
   }
-  for (size_t i = off / sizeof(T); i < count; ++i)
-    dst_t[i] = apply_reduce(dst_t[i], src_t[i], op);
 }
 #endif
 
