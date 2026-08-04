@@ -196,7 +196,11 @@ struct SprayExecutorConfig {
   int world_size;
   size_t device_task_capacity = 4096;
   size_t max_device_fifos = 2;
-  int threads_per_block = 64;
+  // 256 threads: measured 256KB AllReduce 124us -> 92us and 256MB
+  // (blocks=4) 17.8ms -> 12.9ms vs the old 64-thread default; 512
+  // threads currently exceeds the per-block register limit for the
+  // ILP reduce, so 256 is the sweet spot until launch bounds land.
+  int threads_per_block = 256;
   int blocks_per_worker = 1;
   size_t fifo_capacity = 256;
   size_t smem_size = 4096;  // dynamic shared memory for reduce kernel
