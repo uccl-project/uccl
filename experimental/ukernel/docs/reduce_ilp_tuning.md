@@ -116,3 +116,59 @@ done
 Reduce bench 16M, 8 blocks, 256 threads: ILP=4 → 115.5 GB/s, ILP=8 →
 130.9 GB/s — the knob measurably lifts per-block throughput at low block
 counts even on A40.
+
+## B300 results (2026-08-04, GPU 6/7, built with `SM=103 REDUCE_ILP=U`)
+
+Reduce bench — 256M payload, 256 threads, persistent worker:
+
+| blocks | ILP=4 | ILP=8 | ILP=16 |
+|---:|---:|---:|---:|
+| 8 | 57.4 | 60.2 | **71.0** |
+| 16 | 112.6 | 119.2 | **140.9** |
+| 32 | 219.7 | 232.4 | **274.9** |
+| 64 | 420.6 | 440.9 | **515.3** |
+
+Shim AllReduce 256M (`LT=8 TM=8M IB=16`, out-of-place, all 0 wrong):
+
+| blocks | ILP=4 | ILP=8 | ILP=16 |
+|---:|---:|---:|---:|
+| 8 | 172.3 | 181.8 | **198.0** |
+| 32 | 365.0 | 387.3 | 389.6 |
+| 64 | 442.4 | 427.8 | **489.8** |
+
+Native anchor: 510-515 GB/s @ 256M (32 coll channels ≈ 16 GB/s per
+channel).
+
+## B300 analysis / conclusions
+
+- **U=16 fits on B300 at 256 threads** (unlike A40, where it spilled):
+  B300's register file is large enough. It is the clear winner: +24% per
+  block on the reduce bench at every block count (8: 57→71, 32: 220→275,
+  64: 421→515 GB/s).
+- The reduce kernel at **64 blocks × U=16 hits 515 GB/s — parity with
+  native**, and the shim AllReduce reaches **489.8 GB/s (95% of native)**
+  at 64 blocks.
+- But per-block throughput is still ~8-9 GB/s (515/64, 275/32, 71/8) vs
+  native's ~16 GB/s per channel — **ILP alone cannot reach native at
+  ≤32 blocks** (32 blocks × U=16: 390 GB/s, 76%). The remaining gap is
+  per-thread/in-flight efficiency, which points to the TMA bulk path
+  (cp.async.bulk → smem reduce → bulk store) as the next lever.
+- BLK=32 allreduce plateaus at ~390 GB/s regardless of ILP — at that
+  block count the reduce is no longer the only limiter (put/executor
+  pipeline), so the put/reduce overlap work is complementary.
+- Build-time cost: U=16 is heavy (two cicc+ptxas passes, ~15-20 min
+  total for `nccl` + `device_bench`); U=4/8 build in ~1 min. Only pay
+  the U=16 cost when you are measuring it.
+- Note: these absolute numbers are ~10% lower than the ad-hoc sweep
+  measured before the build refactors (BLK=32/64: 410/485 GB/s); the
+  box is shared, so tenant load varies runs — the relative ILP trend is
+  consistent.
+
+### Suggested default / next steps
+
+- Default stays `REDUCE_ILP=4` for fast builds; use `REDUCE_ILP=16` for
+  peak runs (64 blocks ≈ 95% of native, 32 blocks ≈ 76%).
+- Implement the **TMA bulk reduce** for sm_90+ to lift per-block
+  throughput toward native's 16 GB/s and close the ≤32-block gap.
+- Pipeline **put/reduce overlap** in the executor so BLK=32 stops
+  plateauing at ~390 GB/s.
