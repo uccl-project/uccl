@@ -333,12 +333,8 @@ __device__ __forceinline__ void tma_bulk_reduce_warp_spec(
       char* slot = smem + (c % kNSlots) * kSlotBytes;
       ws_slot_wait_ready(slot);
       ws_slot_reduce<T, op>(slot, kChunkBytes, consumer_tid, nconsumer);
-      // Consumer-only barrier (count = 224 = 7 warps x 32; the block is
-      // 256 threads with warp 0 as producer). bar.sync's count must be an
-      // immediate.
-      asm volatile("bar.sync 1, 224;\n");
-      // Exactly ONE thread signals cdone (count=1 mbarrier) — a per-warp
-      // arrival would over-arrive and corrupt the next phase.
+      // DEBUG: named barrier removed — tests whether bar.sync 1 is the
+      // hang (correctness intentionally broken).
       if (warp == 1 && lane == 0) ws_slot_arrive_done(slot);
     }
   }
