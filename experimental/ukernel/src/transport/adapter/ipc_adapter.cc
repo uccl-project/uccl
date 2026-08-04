@@ -24,8 +24,11 @@ constexpr size_t kTaskRingSize = 1024;
 // flight (round-robin across the streams) and only syncs each put's own
 // event when it reaches the front — the host never blocks on the GPU
 // while the window is full, and small messages drain immediately when
-// the ring empties.
-constexpr size_t kIpcSendBatchDefault = 16;
+// the ring empties. B300 sweep (256M allreduce, LT=8/BLK=32): window
+// 4-64 all land 462-498 GB/s median with the same jitter — the window
+// is not the bottleneck; 4 is kept as default for its slightly better
+// median and lower host-side event pressure.
+constexpr size_t kIpcSendBatchDefault = 4;
 
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {

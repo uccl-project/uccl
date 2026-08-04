@@ -186,3 +186,35 @@ pipeline knob. So "bigger window" and "more streams" are both dead ends
 as measured; the useful next step is finding the jitter source (GPU
 clocks / neighbor load) or locking in BATCH=4-8 (slightly better
 median) as the default.
+
+## Update 2026-08-04 (6): jitter hunt — worker idle-spin and relaunch
+
+Findings from nsys traces (`-n 5 -w 5`, LT=8/BLK=32/BATCH=4):
+
+- The put stream is continuous: 32MB P2P memcpys back-to-back every
+  ~54us (~92% NVLink utilization, ~640 GB/s per direction). No gap inside
+  a tile group; periodic inter-group gaps (130-580us) are reduce/signal
+  sync, and a ~25ms gap appears roughly every 10 iterations.
+- That ~25ms gap is the persistent worker's idle-exit: `exit_idle_iters_
+  = idleExitAfterUs * 10` polling rounds, and `idle_sleep()` is ~5us per
+  round → 500us * 10 * 5us ≈ 25ms of spin before the worker actually
+  exits and the host relaunches it. So the "500us idle exit" default is
+  really a ~25ms spin.
+- `UK_CCL_DEV_IDLE_EXIT_US=50000` (stay resident through a 20-iter run)
+  did NOT remove the jitter (434-465, still ~±4%) and no 500+ outliers;
+  `=1000000` deadlocks (host waits on an exit that never comes). The
+  relaunch path is load-bearing; changing the idle-spin cost is risky
+  without first fixing the resident-worker handshake.
+- GPU clocks are not the cause: SM sits at 120MHz between runs but a
+  50-100-iter warmup does not improve or stabilize results.
+
+Conclusion: run-to-run jitter is multifactorial (host scheduling +
+worker idle-spin + relaunch timing). The measured band for this workload
+is ~445-500 oop / ~405-465 ip; the system does reach native-class 500+
+on good runs. Treating jitter as noise (median over 3 runs) is the
+practical approach until the worker-residency redesign lands.
+
+### Default change
+
+`kIpcSendBatchDefault` 16 -> 4 (window sweep showed 4 has the best median
+and lower host event pressure; window size is otherwise not a bottleneck).
