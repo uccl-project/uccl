@@ -1,10 +1,21 @@
 # Warp-specialized TMA reduce — design
 
-Status: **design + WIP kernel** (`UK_TMA_WARPSPEC=1`, build-time knob in
-`src/ccl/Makefile` / `src/device/Makefile`). The kernel currently re-inits
-mbarriers per chunk and has the consumer named barrier removed for a debug
-isolation run — it is NOT validated. See "Why re-init per chunk is racy"
-before touching the sync code again.
+Status: **implemented + validated, but no per-SM win over the single-buffer
+path — parked as WIP.** `UK_TMA_WARPSPEC=1` (build-time knob in
+`src/ccl/Makefile` / `src/device/Makefile`) enables the producer/consumer
+pipeline; the canonical protocol (init-once + derived parity, named
+barrier, correct arrive counts) is in place and correctness-verified.
+Performance conclusion: see "Experiment results" below — the pipeline
+does not raise the per-SM ceiling, so the default stays the single-buffer
+TMA reduce.
+
+> **UPDATE (2026-08-04, B300 experiments):** the design is implemented and
+> correct (wrong=0 at 1M/256M, BLK 32/16) but **does not beat the
+> single-buffer TMA path per SM** — see "Experiment results" below. The
+> pipelining hypothesis (per-chunk load→reduce→store serialization was the
+> per-SM limiter) is largely DISPROVEN. Recommend keeping the single-buffer
+> TMA (224KB, BLK=32 ≈ 443-490 GB/s) as default and pursuing bigger shim
+> tiles / multicast for the fewer-SMs goal.
 
 ## Goal and measured baseline
 
@@ -190,3 +201,59 @@ already taught us to keep odd sizes off the bulk path.
    blocks the load prefetch.
 3. Measure BLK=8/16/32: the win condition is BLK=16 ≈ 490+ GB/s (fewer SMs
    than today's BLK=32 single-buffer).
+
+## Experiment results (B300, 2026-08-04)
+
+Implementation status: canonical protocol shipped and validated
+(init-once + derived parity `(c/kNSlots)&1`, `bar.sync 1, 224` before a
+single warp1-lane0 `cdone` arrive, `ready` count=2 for the two bulk loads,
+tail via ILP). All completed runs were `wrong=0`.
+
+### 256M allreduce, 2 ranks, via shim (4MB tiles — adaptive_tile_bytes
+splits 256MB into 64 tiles)
+
+| config | BLK=32 | BLK=16 | notes |
+|---|---|---|---|
+| single-buffer TMA 224KB (baseline) | ~443 GB/s | ~419 GB/s | validated earlier |
+| warp-spec 4 slots (28.6KB chunks) | 178 GB/s | — | per-block task = 4 chunks, pipeline barely fills |
+| warp-spec 2 slots (56KB chunks) | 255 GB/s | 165-200 GB/s | per-block task = 2-4 chunks |
+| native NCCL 2.29.7 | 510 GB/s | — | 32 coll channels |
+
+### Device bench, full pipeline depth (per block 8MB → nfull = 146-292)
+
+| config | 256M @ 32 blocks |
+|---|---|
+| single-buffer TMA 224KB | 544us → 493 GB/s (15.4 GB/s/block) |
+| warp-spec 4 slots | 574us → 446 GB/s (14.0 GB/s/block) |
+| warp-spec 2 slots (debug build, 128M) | 299us → 428 GB/s (13.4 GB/s/block) |
+
+### Findings
+
+1. **Warp-spec is ~10% SLOWER per block than single-buffer at full depth.**
+   The pipeline overlap (load[N+1]/store[N-1] vs reduce[N]) did not pay:
+   total in-flight bytes per block are identical (224KB smem cap) — the
+   4x-smaller chunks only add per-chunk mbarrier/barrier overhead.
+2. **The shim's 4MB tiles make it worse:** at BLK=32 each block gets
+   128KB/task → nfull=2-4, so the pipeline never fills and per-task fixed
+   costs dominate. Larger tiles (UK_CCL_LARGE_TILES=8 → 32MB) would fill
+   the pipeline but the full-depth device-bench numbers above say it still
+   won't beat single-buffer.
+3. **Per-SM ceiling ≈ 14-15 GB/s payload (42-45 GB/s memory traffic) on
+   this workload is a memory/TMA-system property, not pipeline structure.**
+   Fewer-SMs-at-full-rate needs more in-flight bytes per SM: bigger tiles
+   (shim), multicast/NVLS, or cluster-shared smem (2-CTA DSMEM doubles the
+   per-SM budget). 224KB/block is the single-CTA smem cap.
+4. Intermittent wedge: non-debug 2-slot builds hang/crash at deep pipelines
+   (nfull >= 9) while the identical code with `UK_WARPSPEC_DEBUG=1` prints
+   completes. Suspect a full-speed hardware-protocol race (mbarrier or
+   named-barrier timing), NOT a logical deadlock — needs a controlled
+   debugger session to pin down. Given finding #1, low priority unless we
+   pursue warp-spec further.
+
+### Recommendation
+
+Keep single-buffer TMA (224KB, BLK=32) as the default reduce kernel. The
+fewer-SMs goal is better served by (a) larger shim tiles, (b) REDUCE_ILP
+register path at high ILP, (c) multicast. Warp-spec stays as a documented
+WIP with the canonical protocol as a reference for any future
+cluster/multicast work.
