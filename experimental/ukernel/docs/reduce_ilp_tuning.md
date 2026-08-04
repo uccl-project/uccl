@@ -220,6 +220,31 @@ count — the "32 blocks to parity" goal is met on bandwidth.
 TMA stays opt-in (`TMA_REDUCE=1`) pending broader validation (multi-node
 RDMA + the put/reduce pipeline work); flip the default once stable.
 
+## Fewer-SM sweep: REDUCE_SMEM_KB (2026-08-04, B300, TMA, 256M)
+
+Bigger per-block smem = bigger TMA chunks = more in-flight bytes, but the
+gains are modest — the bottleneck at low block counts is the per-chunk
+mbarrier wait + store serialization, not raw in-flight bytes:
+
+reduce bench (GB/s):
+
+| blocks | 128KB | 192KB | 224KB |
+|---:|---:|---:|---:|
+| 8 | 123.4 | 131.8 | 134.7 |
+| 16 | 241.8 | 256.8 | 262.7 |
+| 32 | 461.0 | 488.5 | 493.1 |
+
+shim AllReduce 256M (GB/s, all 0 wrong):
+
+| blocks | 128KB | 192KB | 224KB |
+|---:|---:|---:|---:|
+| 8 | 285.3 | 300.8 | 297.3 |
+| 16 | 386.7 | 406.6 | **419.6** |
+| 32 | 453.2 | **480.6** | 443.9 |
+
+Next lever: **double-buffer the TMA chunks** (overlap chunk N's
+reduce/store with chunk N+1's bulk loads) to hide the mbarrier wait.
+
 ### Persistent-kernel idle-exit (2026-08-04)
 
 - The worker persistent kernel now **idle-exits after 500µs** of empty

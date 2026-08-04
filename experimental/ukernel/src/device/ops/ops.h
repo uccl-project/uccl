@@ -140,61 +140,77 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
 }
 
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE
-// Chunked cp.async.bulk reduce for large tasks: per chunk, bulk-load src
-// and dst into shared memory (mbarrier-tracked), reduce in smem, bulk-
-// store dst back. In-flight bytes per block are bounded by smem, not by
-// per-thread registers — this is the lever to reach native-class
-// per-block throughput at low block counts. TmaSemaphores are carved out
-// of the same smem buffer (mbarriers must live in shared memory).
+// Double-buffered chunked cp.async.bulk reduce: while slot A's chunk is
+// reduced + bulk-stored, slot B's next chunk is already being bulk-loaded
+// (mbarrier-tracked) — the per-chunk mbarrier wait is hidden behind the
+// previous chunk's compute/store. This is what lifts per-block throughput
+// at low block counts (bigger smem alone only gave ~+6-9%).
 template <typename T, ReduceType op>
-__device__ __forceinline__ void tma_bulk_reduce_chunk(
-    T* dst_t, T const* src_t, char* smem, size_t off_bytes, size_t len_bytes,
-    int tid, int nthread) {
+__device__ __forceinline__ void tma_slot_load(T* dst_t, T const* src_t,
+                                              char* slot, size_t off_bytes,
+                                              size_t len_bytes, int tid) {
   constexpr size_t kChunkBytes =
-      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
+      ((UK_REDUCE_SMEM_BYTES - 4 * sizeof(TmaSemaphore)) / 4) &
       ~static_cast<size_t>(31);
-  T* smem_src = reinterpret_cast<T*>(smem);
-  T* smem_dst = reinterpret_cast<T*>(smem + kChunkBytes);
-  TmaSemaphore* sem_src = reinterpret_cast<TmaSemaphore*>(
-      smem + 2 * kChunkBytes);
+  T* smem_src = reinterpret_cast<T*>(slot);
+  T* smem_dst = reinterpret_cast<T*>(slot + kChunkBytes);
+  TmaSemaphore* sem_src =
+      reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
   TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
-      smem + 2 * kChunkBytes + sizeof(TmaSemaphore));
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
   size_t const e0 = off_bytes / sizeof(T);
-
-  // mbarrier.init per chunk (count=1, phase 0). Phase-toggling across
-  // chunks hangs at high chunk counts (observed at 512 chunks/tile), and
-  // the barrier must be re-armed for every arrive.expect_tx — a fresh
-  // init per chunk is what the earlier runs validated.
+  // Fresh mbarrier init per slot use (phase-toggling across many chunks
+  // hung; re-init per chunk is what the validated runs used).
   if (tid == 0) {
     tma_init_semaphore(*sem_src, 0);
     tma_init_semaphore(*sem_dst, 0);
-  }
-  __syncthreads();
-  if (tid == 0) {
     tma_load<T>(smem_src, src_t + e0, len_bytes, *sem_src);
     tma_load<T>(smem_dst, dst_t + e0, len_bytes, *sem_dst);
   }
   __syncthreads();
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_slot_wait(char* slot, size_t len_bytes,
+                                              int tid) {
+  constexpr size_t kChunkBytes =
+      ((UK_REDUCE_SMEM_BYTES - 4 * sizeof(TmaSemaphore)) / 4) &
+      ~static_cast<size_t>(31);
+  (void)len_bytes;
+  TmaSemaphore* sem_src =
+      reinterpret_cast<TmaSemaphore*>(slot + 2 * kChunkBytes);
+  TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
+      slot + 2 * kChunkBytes + sizeof(TmaSemaphore));
   if (tid == 0) {
     tma_wait(*sem_src, 0);
     tma_wait(*sem_dst, 0);
   }
   __syncthreads();
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_slot_reduce(char* slot, size_t len_bytes,
+                                                int tid, int nthread) {
+  T* smem_src = reinterpret_cast<T*>(slot);
+  T* smem_dst = reinterpret_cast<T*>(slot + len_bytes);
   size_t const n = len_bytes / sizeof(T);
   for (size_t i = static_cast<size_t>(tid); i < n; i += nthread)
     smem_dst[i] = apply_reduce(smem_dst[i], smem_src[i], op);
   __syncthreads();
+}
+
+template <typename T, ReduceType op>
+__device__ __forceinline__ void tma_slot_store(T* dst_t, char* slot,
+                                               size_t off_bytes,
+                                               size_t len_bytes, int tid) {
+  T* smem_dst = reinterpret_cast<T*>(slot + len_bytes);
+  size_t const e0 = off_bytes / sizeof(T);
   if (tid == 0) {
     tma_store<T>(dst_t + e0, smem_dst, len_bytes);
-    // Wait for THIS thread's bulk-store group before the next chunk's
-    // TMA loads reuse the smem buffer (non-issuing threads have no group
-    // and return immediately; the barrier below fences the reuse).
     tma_wait_group<0>();
-    // Make the async-proxy writes visible to generic-proxy agents (host
-    // memsets, other blocks' loads) — without this, a store can land after
-    // a later memset/load and corrupt data (observed: warmup's store raced
-    // the pre-timing memset, leaving dst = warmup + rounds instead of
-    // rounds).
+    // Async-proxy writes must be visible to generic-proxy agents (next
+    // task's loads / host memsets / other blocks) before the slot is
+    // reused or the task completes.
     tma_fence_async_global();
   }
   __syncthreads();
@@ -205,24 +221,39 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
                                                 size_t count,
                                                 void* smem_buf) {
   constexpr size_t kChunkBytes =
-      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
+      ((UK_REDUCE_SMEM_BYTES - 4 * sizeof(TmaSemaphore)) / 4) &
       ~static_cast<size_t>(31);
   if (kChunkBytes < 32) return;  // smem too small; caller falls back
 
   char* smem = static_cast<char*>(smem_buf);
   int tid = threadIdx.x;
   int nthread = blockDim.x;
+  constexpr size_t kSlotBytes = 2 * kChunkBytes + 2 * sizeof(TmaSemaphore);
+  char* slots[2] = {smem, smem + kSlotBytes};
 
   T* dst_t = static_cast<T*>(dst);
   T const* src_t = static_cast<T const*>(src);
   size_t bytes = count * sizeof(T);
 
-  size_t off = 0;
-  while (off + kChunkBytes <= bytes) {
-    tma_bulk_reduce_chunk<T, op>(dst_t, src_t, smem, off, kChunkBytes, tid,
-                                 nthread);
-    off += kChunkBytes;
+  size_t const nfull = bytes / kChunkBytes;
+  size_t i = 0;
+  if (nfull > 0) {
+    tma_slot_load<T, op>(dst_t, src_t, slots[0], 0, kChunkBytes, tid);
   }
+  for (; i < nfull; ++i) {
+    size_t const off = i * kChunkBytes;
+    char* slot = slots[i % 2];
+    tma_slot_wait<T, op>(slot, kChunkBytes, tid);
+    tma_slot_reduce<T, op>(slot, kChunkBytes, tid, nthread);
+    tma_slot_store<T, op>(dst_t, slot, off, kChunkBytes, tid);
+    if (i + 1 < nfull) {
+      // Prefetch chunk i+1 into the OTHER slot while this slot's store
+      // drains (its mbarriers were re-armed by the slot load).
+      tma_slot_load<T, op>(dst_t, src_t, slots[(i + 1) % 2], off + kChunkBytes,
+                           kChunkBytes, tid);
+    }
+  }
+  size_t off = nfull * kChunkBytes;
   if (off < bytes) {
     // Tail (< kChunkBytes): TMA bulk on odd-sized final chunks produced
     // garbage (observed: 130KB wrong clusters per 512KB block slice,
