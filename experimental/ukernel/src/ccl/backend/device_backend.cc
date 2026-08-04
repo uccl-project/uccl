@@ -84,7 +84,12 @@ void DeviceBackend::ensure_runtime() {
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
   // Pre-create all workers
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
-    worker_pool_->createWorker(i, cfg_.blocks_per_worker);
+    if (!worker_pool_->createWorker(i, cfg_.blocks_per_worker)) {
+      throw std::runtime_error(
+          "DeviceBackend: failed to create worker " + std::to_string(i) +
+          " with blocks_per_worker=" + std::to_string(cfg_.blocks_per_worker) +
+          " (exceeds this GPU's SM count, or the FIFO is already bound)");
+    }
     worker_pool_->waitWorker(i);
   }
 }
