@@ -128,3 +128,37 @@ The in-place vs out-of-place gap shrank from ~25% to ~8% at BLK=16; the
 remaining gap is put/copy pipeline dependencies in the all-gather, not the
 copy kernel itself (device-bench copy throughput moved from ~680 GB/s
 vectorized to the TMA path). All runs wrong=0.
+
+## Update 2026-08-04 (4): pipeline bottleneck diagnosis (nsys)
+
+Profiled the 2-rank 256M allreduce (LT=8, BLK=16, 3 iters) with nsys:
+
+- `multiPersistentKernel` dominates CUDA GPU kernel time (~538ms across 24
+  instances) but each instance is a worker lifecycle (task processing +
+  idle-grace + relaunch), not pure compute — the shim default
+  `device_idle_exit_us=500` exits the persistent worker after 500us idle
+  and relaunches it per task group (24 instances / 3 iters / 2 ranks).
+- Peer-to-peer memcpy (the IPC put) shows ~320 transfers, ~53us each
+  (~17ms total): the put is DMA-engine work running concurrently with the
+  reduce kernel, split into ~1.6MB window chunks rather than one 32MB
+  bulk per tile.
+- `UK_CCL_DEV_IDLE_EXIT_US=1000000` (keep worker resident) **deadlocks**
+  the shim (GPU spins, no progress) — the relaunch path is load-bearing;
+  the resident-worker path is not safe to default to without fixing the
+  relaunch/exit handshake.
+
+### Bandwidth budget
+
+2-rank ring allreduce moves 256MB per rank each direction over NVLink.
+At BLK=32 (~460 GB/s oop) that is ~460 GB/s per direction — the B300
+NVLink single-direction ceiling is ~450-500 GB/s, and native NCCL 2.29.7
+measures 510 GB/s. **The allreduce is now NVLink-bound, not reduce-bound**
+(pure reduce at BLK=32 is 640 GB/s). Remaining headroom to native is the
+put path's ability to keep all NVLink lanes busy (native uses 32 channels;
+the shim uses a single IPC sliding window).
+
+### Run-to-run variance
+
+±10% between consecutive runs at LT=8/BLK=16 (410-455 oop, 372-417 ip);
+BLK=32 is steadier (459-469 oop, 431-438 ip). Compare medians over 3+
+runs, not single samples.
