@@ -58,6 +58,12 @@ typedef enum {
   ncclNumOps = 5,
 } ncclRedOp_t;
 
+/* Scalar residence for custom reduction ops (NCCL >= 2.29 ABI). */
+typedef enum {
+  ncclScalarDevice = 0,
+  ncclScalarHostImmediate = 1
+} ncclScalarResidence_t;
+
 /* Bootstrap unique ID (128 bytes, matches NCCL wire format). */
 #define NCCL_UNIQUE_ID_BYTES 128
 typedef struct {
@@ -142,6 +148,22 @@ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff,
                                size_t recvcount, ncclDataType_t datatype,
                                ncclRedOp_t op, ncclComm_t comm,
                                gpuStream_t stream);
+
+/* --- Memory, buffer registration and custom ops (NCCL 2.19+ ABI) ---
+ * These exist so binaries compiled against a modern NCCL header load and
+ * run against the shim: ncclMemAlloc/Free wrap cudaMalloc/cudaFree,
+ * registration is a no-op (the shim never moves buffers), and custom
+ * pre-mul-sum ops are unsupported. */
+ncclResult_t ncclMemAlloc(void** ptr, size_t size);
+ncclResult_t ncclMemFree(void* ptr);
+ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size,
+                              void** handle);
+ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle);
+ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t* op, void* scalar,
+                                      ncclDataType_t datatype,
+                                      ncclScalarResidence_t residence,
+                                      ncclComm_t comm);
+ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm);
 
 /* --- Query --- */
 

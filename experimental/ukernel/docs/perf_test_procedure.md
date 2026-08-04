@@ -39,14 +39,15 @@ git submodule update --init --depth 1 thirdparty/nccl-tests
 # without --depth 1 if you need the full submodule history
 ```
 
-Build it (needs CUDA + OpenMPI; `NCCL_HOME` points at the shim install
-so perftests are compiled against our header — the binary resolves
-`libnccl.so` at runtime via `LD_LIBRARY_PATH` anyway, so the same build
-serves both the shim and the native comparison):
+Build it against a **normal NCCL install** (needs CUDA + OpenMPI).
+nccl-tests only needs NCCL's headers and library at build time; the
+binary resolves `libnccl.so` at runtime via `LD_LIBRARY_PATH`, so the
+same build serves both the shim and the native comparison — we never
+compile perftests against the ukernel shim itself.
 
 ```bash
 cd <repo>/thirdparty/nccl-tests
-export NCCL_HOME=<repo>/experimental/ukernel/build/nccl   # shim headers/lib
+export NCCL_HOME=<native-nccl-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/nccl or a source build
 export MPI_HOME=<your-openmpi-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/openmpi
 make -j$(nproc)
 # binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...

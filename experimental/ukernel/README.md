@@ -146,10 +146,13 @@ Run standard [nccl-tests](https://github.com/NVIDIA/nccl-tests) via
 # submodules stay untouched):
 git submodule update --init --depth 1 thirdparty/nccl-tests
 
+# Compile against a NORMAL NCCL install (headers + lib are only needed
+# at build time; which libnccl.so runs is decided at runtime by
+# LD_LIBRARY_PATH — so perftests are never built against the shim).
 cd thirdparty/nccl-tests
 make MPI=1 CUDA_HOME=/usr/local/cuda \
     MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi \
-    NCCL_HOME=$(pwd)/../../experimental/ukernel/build/nccl \
+    NCCL_HOME=<native-nccl-prefix> \
     NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90" \
     -j$(nproc)
 

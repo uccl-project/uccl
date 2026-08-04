@@ -506,6 +506,41 @@ ncclResult_t ncclRecv(void*, size_t, ncclDataType_t, int, ncclComm_t,
 ncclResult_t ncclGroupStart(void) { return ncclSuccess; }
 ncclResult_t ncclGroupEnd(void) { return ncclSuccess; }
 
+ncclResult_t ncclMemAlloc(void** ptr, size_t size) {
+  if (!ptr) return ncclInvalidArgument;
+  return gpuMalloc(ptr, size) == gpuSuccess ? ncclSuccess : ncclSystemError;
+}
+
+ncclResult_t ncclMemFree(void* ptr) {
+  return gpuFree(ptr) == gpuSuccess ? ncclSuccess : ncclSystemError;
+}
+
+ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size,
+                              void** handle) {
+  (void)comm; (void)buff; (void)size;
+  if (!handle) return ncclInvalidArgument;
+  *handle = buff;  // no-op registration; the shim never moves buffers
+  return ncclSuccess;
+}
+
+ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
+  (void)comm; (void)handle;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t* op, void* scalar,
+                                      ncclDataType_t datatype,
+                                      ncclScalarResidence_t residence,
+                                      ncclComm_t comm) {
+  (void)op; (void)scalar; (void)datatype; (void)residence; (void)comm;
+  return unsupported("ncclRedOpCreatePreMulSum");
+}
+
+ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
+  (void)op; (void)comm;
+  return ncclSuccess;
+}
+
 const char* ncclGetErrorString(ncclResult_t result) { return errstr(result); }
 
 void ncclGetVersion(int* version) {
