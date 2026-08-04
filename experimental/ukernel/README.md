@@ -14,6 +14,24 @@ Minimal build and test entry points for `experimental/ukernel`.
 `experimental/ukernel` no longer builds `thirdparty/gdrcopy`.
 Install GDRCopy from NVIDIA upstream first.
 
+> **Troubleshooting — conda toolchain breaks the build**: if linking
+> fails with `undefined reference to '__nptl_change_stack_perm@GLIBC_PRIVATE'`
+> (or other `GLIBC_PRIVATE` symbols), the conda linker is being used
+> against the system glibc. Deactivate conda and make sure the system
+> toolchain is first on `PATH` before running `make`:
+>
+> ```bash
+> conda deactivate
+> export PATH=/usr/local/cuda/bin:/usr/bin:/bin:$PATH
+> which gcc g++ ld        # all must point to /usr/bin, not miniconda
+> ```
+>
+> If the `tests` still fail (e.g. `gdrcopy_pplat` is linked by nvcc,
+> which can pick up conda's g++), either skip them — `make lib` then
+> `sudo make install` — or force the system compiler:
+> `/usr/local/cuda/bin/nvcc -ccbin=/usr/bin/g++ ...`.
+
+
 ### System-wide install (requires sudo)
 
 ```bash
