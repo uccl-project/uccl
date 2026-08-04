@@ -1685,41 +1685,21 @@ PutPath SprayExecutor::pick_put_path(int peer) {
     fm->inflight.fetch_add(1, std::memory_order_relaxed);
     return forced;
   }
-  // Tentative charge: bump the chosen path now so a batch of picks
-  // rotates and every path gets measured. The charge is reconciled
-  // exactly once: released on deferral (release_put_inflight), moved on
-  // reroute (BAR1 / fusion fallback), or balanced by the drain-side
-  // decrement after acceptance. Deferred ops re-pick next cycle with a
-  // fresh tentative charge, so nothing leaks.
+  // Same-host cross-GPU puts go over IPC: the CPU-side DMA path is the
+  // fast transport (sliding-window puts; measured 67 GB/s aggregate for
+  // 256MB AllGather vs 36 GB/s device and ~2 GB/s RDMA loopback). The
+  // old latency-based balancer misrouted same-host puts onto the
+  // device/RDMA paths — the sliding window inflates the IPC latency
+  // metric (completions burst after a window sync), so IPC lost the
+  // comparison and AllGather dropped from 3.8ms to 15.9ms. Device puts
+  // remain reachable for local ops (reduce is not routed here) and via
+  // UK_CCL_PUT_PATH; remote peers always use RDMA.
   if (!same_host_fn_ || !same_host_fn_(owned_comm_.get(), peer)) {
     tpt_metrics_[peer].rdma.inflight.fetch_add(1, std::memory_order_relaxed);
     return PutPath::Rdma;
   }
-  auto& pm = tpt_metrics_[peer];
-  uint64_t dc = static_cast<uint64_t>(
-                    pm.device.inflight.load(std::memory_order_relaxed)) *
-                pm.device.latency_ns.load(std::memory_order_relaxed);
-  uint64_t ic =
-      static_cast<uint64_t>(pm.ipc.inflight.load(std::memory_order_relaxed)) *
-      pm.ipc.latency_ns.load(std::memory_order_relaxed);
-  uint64_t rc =
-      static_cast<uint64_t>(pm.rdma.inflight.load(std::memory_order_relaxed)) *
-      pm.rdma.latency_ns.load(std::memory_order_relaxed);
-
-  PutPath choice;
-  PathMetrics* chosen;
-  if (ic <= dc && ic <= rc) {
-    choice = PutPath::Ipc;
-    chosen = &pm.ipc;
-  } else if (dc <= rc) {
-    choice = PutPath::Device;
-    chosen = &pm.device;
-  } else {
-    choice = PutPath::Rdma;
-    chosen = &pm.rdma;
-  }
-  chosen->inflight.fetch_add(1, std::memory_order_relaxed);
-  return choice;
+  tpt_metrics_[peer].ipc.inflight.fetch_add(1, std::memory_order_relaxed);
+  return PutPath::Ipc;
 }
 
 void SprayExecutor::release_put_inflight(int peer, PutPath path) {
