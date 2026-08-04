@@ -28,10 +28,34 @@ make -j$(nproc) -f Makefile nccl  # AMD: make -j$(nproc) -f Makefile.rocm nccl
 # artifacts: build/nccl/lib/libnccl.so + build/nccl/include/nccl.h
 ```
 
-## 3. nccl-tests sweeps (shim)
+## 3. Get and build nccl-tests
+
+Pull **only** the nccl-tests submodule (the other `thirdparty/`
+submodules stay untouched):
 
 ```bash
-cd <repo>/thirdparty/nccl-tests/build   # build first: make in thirdparty/nccl-tests
+cd <repo>
+git submodule update --init --depth 1 thirdparty/nccl-tests
+# without --depth 1 if you need the full submodule history
+```
+
+Build it (needs CUDA + OpenMPI; `NCCL_HOME` points at the shim install
+so perftests are compiled against our header — the binary resolves
+`libnccl.so` at runtime via `LD_LIBRARY_PATH` anyway, so the same build
+serves both the shim and the native comparison):
+
+```bash
+cd <repo>/thirdparty/nccl-tests
+export NCCL_HOME=<repo>/experimental/ukernel/build/nccl   # shim headers/lib
+export MPI_HOME=<your-openmpi-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/openmpi
+make -j$(nproc)
+# binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...
+```
+
+## 4. nccl-tests sweeps (shim)
+
+```bash
+cd <repo>/thirdparty/nccl-tests/build
 export LD_LIBRARY_PATH=<repo>/experimental/ukernel/build/nccl/lib:$LD_LIBRARY_PATH
 export CUDA_VISIBLE_DEVICES=0,1
 
@@ -53,7 +77,7 @@ Reference (A40 pair, our runs): AR 256KB 82us / 16MB 419us / 256MB
 5.5ms; AG 256MB 2.8ms; RS 256MB 3.1ms; all 0 wrong. Native NCCL 2.29.7
 baselines: AR 256MB 6.3ms, AG 3.8ms, RS 3.8ms.
 
-## 4. Native NCCL comparison
+## 5. Native NCCL comparison
 
 ```bash
 export LD_LIBRARY_PATH=<path-to-native-nccl-lib>:$LD_LIBRARY_PATH
@@ -61,7 +85,7 @@ ldd ./all_reduce_perf | grep nccl    # confirm it points at native
 # re-run the same sweeps above
 ```
 
-## 5. Spray (native ukernel executor) benchmark
+## 6. Spray (native ukernel executor) benchmark
 
 ```bash
 cd experimental/ukernel/src/ccl && make test_perf_spray_allreduce
@@ -74,7 +98,7 @@ CUDA_VISIBLE_DEVICES=0,1 ./test_perf_spray_allreduce --role=client --gpu 1 --dev
 # Multi-block: --dev-blocks=1|4|8|64 to sweep SM usage
 ```
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 - **mpirun must use `--mca hwloc_base_binding_policy none`** — CPU
   binding inflates small-message latency tens of times.
