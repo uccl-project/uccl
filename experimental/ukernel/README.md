@@ -212,33 +212,6 @@ mpirun --mca hwloc_base_binding_policy none -np 2 -H node0,node1 \
     ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
 ```
 
-ncu --set basic --kernel-name-base demangled -k "regex:ncclDevKernel" --launch-skip 20 --launch-count 3 \
-  ./all_reduce_perf -b 256M -e 256M -g 2 -n 30 2>&1 \
-  | grep -E "Grid Size|Block Size|ncclDevKernel|Duration"
-
-for c in 1 2 4 8 16 32; do
-  printf "== NCCL_MAX_NCHANNELS=%-2s  " "$c"
-  NCCL_MAX_NCHANNELS=$c ./all_reduce_perf -b 256M -e 256M -g 2 -n 20 2>/dev/null \
-    | awk '$1 ~ /^[0-9]+$/ && NF >= 13 {printf "time=%sus algbw=%sGB/s\n", $6, $7}'
-done
-
-ncu --set basic --kernel-name-base demangled -k "regex:ncclDevKernel" --launch-skip 20 --launch-count 3 \
-  ./all_reduce_perf -b 256M -e 256M -g 2 -n 30 2>&1 \
-  | grep -E "Grid Size|Block Size|ncclDevKernel|Duration"
-==PROF== Profiling "ncclDevKernel_AllReduce_Sum_f32_RING_LL(ncclDevKernelArgsStorage<(unsigned long)4096>)": 0%
-==ERROR== Failed to profile "ncclDevKernel_AllReduce_Sum_f..." in process 690214
-uccl@mi-sky-b300:~/jinyao/uccl/thirdparty/nccl-tests/build$ for c in 1 2 4 8 16 32; do
-  printf "== NCCL_MAX_NCHANNELS=%-2s  " "$c"
-  NCCL_MAX_NCHANNELS=$c ./all_reduce_perf -b 256M -e 256M -g 2 -n 20 2>/dev/null \
-    | awk '$1 ~ /^[0-9]+$/ && NF >= 13 {printf "time=%sus algbw=%sGB/s\n", $6, $7}'
-done
-== NCCL_MAX_NCHANNELS=1   time=11618us algbw=23.11GB/s
-== NCCL_MAX_NCHANNELS=2   time=5826.3us algbw=46.07GB/s
-== NCCL_MAX_NCHANNELS=4   time=2931.7us algbw=91.56GB/s
-== NCCL_MAX_NCHANNELS=8   time=1492.8us algbw=179.82GB/s
-== NCCL_MAX_NCHANNELS=16  time=792.8us algbw=338.59GB/s
-== NCCL_MAX_NCHANNELS=32  time=526.2us algbw=510.14GB/s
-
 ROCm / RCCL: use the vendored **rccl-tests** (ROCm's nccl-tests fork,
 same nccl\* API). Build it against the normal RCCL install — the binary
 is swapped to the shim at runtime via `LD_LIBRARY_PATH` (the ROCm shim

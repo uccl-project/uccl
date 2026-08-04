@@ -51,10 +51,6 @@ for c in 1 2 4 8 16 32; do
   NCCL_MAX_NCHANNELS=$c ./all_reduce_perf -b 256M -e 256M -g 2 -n 20 \
       2>/dev/null | awk '$1 ~ /^[0-9]+$/ && NF>=13 {print $6, $7}'
 done
-# kernel name / grid / block
-ncu --set basic --replay-mode application -k "regex:ncclDevKernel" \
-    --launch-skip 20 --launch-count 1 \
-    ./all_reduce_perf -b 256M -e 256M -g 2 -n 30
 ```
 
 Findings:
@@ -75,9 +71,9 @@ Findings:
 | 32 | 526 | 510.14 |
 
 - Per channel ≈ 16 GB/s at 32 channels (two-process: 515 GB/s total)
-- Threads/block: **not yet confirmed** — ncu replay failed with "Failed
-  to save memory for replay"; retry uses `--replay-mode application`
-  (see command above). Expect 512 for LL (default `NCCL_NTHREADS`).
+- Threads/block: not measured directly (ncu unavailable/hanging on this
+  box); probe indirectly with `NCCL_NTHREADS=256` (see TODO). Expect
+  512 for LL (default `NCCL_NTHREADS`).
 - Single-process `-g 2` peak: 507-508 GB/s @256M (vs two-process
   514-515 GB/s)
 
@@ -100,6 +96,5 @@ reduce instead of adding blocks.
 
 ## TODO / open items
 
-- Confirm native threads/block via `ncu --replay-mode application`
 - `NCCL_NTHREADS=256` at 32 channels (thread-count sensitivity)
 - Record native AllGather / ReduceScatter baselines the same way
