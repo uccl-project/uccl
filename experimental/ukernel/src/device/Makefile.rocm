@@ -13,8 +13,14 @@ NVCC_ARCH_FLAGS := --offload-arch=$(GFX)
 endif
 
 ENABLE_TMA := 0
-CXXFLAGS := -std=c++17 -O3 -g -Wall -D__HIP_PLATFORM_AMD__
-NVCCFLAGS:= -O3 -g -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
+ifeq ($(DEBUG),1)
+DEV_OPT_FLAGS := -O0 -g
+else
+DEV_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(DEV_OPT_FLAGS) -Wall -D__HIP_PLATFORM_AMD__
+NVCCFLAGS:= $(DEV_OPT_FLAGS) -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
 ifeq ($(DEBUG),1)
 NVCCFLAGS += -G
 endif

@@ -17,9 +17,15 @@ UCCL_ROOT := $(abspath ../../../..)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
 
-CXXFLAGS := -std=c++17 -O3 -g -Wall -D__HIP_PLATFORM_AMD__
+ifeq ($(DEBUG),1)
+CCL_OPT_FLAGS := -O0 -g
+else
+CCL_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -D__HIP_PLATFORM_AMD__
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) -I$(CONDA_LIB_HOME)/../include
-NVCCFLAGS := -std=c++17 -O3 -g -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
+NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo

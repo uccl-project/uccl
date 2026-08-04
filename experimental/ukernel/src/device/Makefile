@@ -21,8 +21,14 @@ SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
 NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
-CXXFLAGS := -std=c++17 -O3 -g -Wall
-NVCCFLAGS:= -O3 -g -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
+ifeq ($(DEBUG),1)
+DEV_OPT_FLAGS := -O0 -g
+else
+DEV_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(DEV_OPT_FLAGS) -Wall
+NVCCFLAGS:= $(DEV_OPT_FLAGS) -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
 ifeq ($(DEBUG),1)
 NVCCFLAGS += -G
 endif

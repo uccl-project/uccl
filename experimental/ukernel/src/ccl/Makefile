@@ -28,9 +28,15 @@ NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
 
-CXXFLAGS := -std=c++17 -O3 -g -Wall -fPIC
+ifeq ($(DEBUG),1)
+CCL_OPT_FLAGS := -O0 -g
+else
+CCL_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -fPIC
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
-NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
+NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
