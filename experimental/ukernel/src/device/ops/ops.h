@@ -243,15 +243,14 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   for (; i < nfull; ++i) {
     size_t const off = i * kChunkBytes;
     char* slot = slots[i % 2];
+    if (i > 0) {
+      // DEBUG: load chunk i at iteration start (no prefetch) — isolates
+      // whether the prefetch's early load is the missing-src bug.
+      tma_slot_load<T, op>(dst_t, src_t, slot, off, kChunkBytes, tid);
+    }
     tma_slot_wait<T, op>(slot, kChunkBytes, tid);
     tma_slot_reduce<T, op>(slot, kChunkBytes, tid, nthread);
     tma_slot_store<T, op>(dst_t, slot, off, kChunkBytes, tid);
-    if (i + 1 < nfull) {
-      // Prefetch chunk i+1 into the OTHER slot while this slot's store
-      // drains (its mbarriers were re-armed by the slot load).
-      tma_slot_load<T, op>(dst_t, src_t, slots[(i + 1) % 2], off + kChunkBytes,
-                           kChunkBytes, tid);
-    }
   }
   size_t off = nfull * kChunkBytes;
   if (off < bytes) {
