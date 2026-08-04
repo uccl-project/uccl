@@ -318,12 +318,12 @@ performance number.
 | 64MB | 2012us | 1691.8us |
 | 256MB | 5462us | 6352.8us |
 
-256MB AllReduce now beats native NCCL (5.5ms / 49 GB/s vs 6.35ms /
-42 GB/s); AllGather is at parity (3.8ms); ReduceScatter lags
-(8.3ms vs 3.8ms native) and is the next target. The jump came from
-routing same-host puts over IPC (the latency-based path balancer was
-misrouting onto the device/RDMA paths), 256-thread device blocks, and
-larger tiles for large messages.
+256MB AllReduce (5.5ms / 49 GB/s), AllGather (2.8ms / 94 GB/s) and
+ReduceScatter (3.1ms / 87 GB/s) all beat native NCCL (6.35 / 3.78 /
+3.9ms). The wins came from routing same-host puts over IPC (the
+latency-based path balancer was misrouting onto the device/RDMA
+paths), 256-thread × 8-block device kernels (the RS output copy was a
+1-block task at ~18 GB/s), and larger tiles for large messages.
 
 > **IMPORTANT — run mpirun with CPU binding disabled.** OpenMPI's
 > default hwloc CPU binding pins shim processes to a subset of cores,
