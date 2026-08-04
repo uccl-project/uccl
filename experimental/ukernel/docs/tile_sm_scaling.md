@@ -162,3 +162,27 @@ the shim uses a single IPC sliding window).
 ±10% between consecutive runs at LT=8/BLK=16 (410-455 oop, 372-417 ip);
 BLK=32 is steadier (459-469 oop, 431-438 ip). Compare medians over 3+
 runs, not single samples.
+
+## Update 2026-08-04 (5): IPC window size is not the bottleneck
+
+`UK_CCL_IPC_BATCH` sweep (LT=8, BLK=32, 3 runs each; window default 16,
+puts already round-robin over 4 streams):
+
+| BATCH | oop runs | oop median | ip median |
+|---|---|---|---|
+| 4 | 497.6 / 457.4 / 497.6 | ~498 | ~463 |
+| 8 | 501.5 / 461.6 / 437.3 | ~462 | ~439 |
+| 16 | 462.1 / 508.5 / 446.5 | ~462 | ~428 |
+| 32 | 475.2 / 446.0 / 497.3 | ~475 | ~442 |
+| 64 | 475.3 / 469.0 / 470.2 | ~470 | ~438 |
+
+No systematic window effect: medians all sit in 462-498 with ±10%
+run-to-run jitter inside every batch value (e.g. 437-508 at BATCH=16).
+The put path is not the limiter — it already hits ~630 GB/s aggregate
+(320 x 32MB P2P memcpys, ~53us each) near NVLink bidirectional
+saturation, and host-side launch-ahead is sufficient even at window 4.
+The remaining gap to native NCCL is run-to-run variance, not a missing
+pipeline knob. So "bigger window" and "more streams" are both dead ends
+as measured; the useful next step is finding the jitter source (GPU
+clocks / neighbor load) or locking in BATCH=4-8 (slightly better
+median) as the default.
