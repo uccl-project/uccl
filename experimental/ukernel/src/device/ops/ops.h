@@ -203,9 +203,6 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
   char* smem = static_cast<char*>(smem_buf);
   int tid = threadIdx.x;
   int nthread = blockDim.x;
-  constexpr size_t kChunkBytes =
-      ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
-      ~static_cast<size_t>(31);
   TmaSemaphore* sem_src =
       reinterpret_cast<TmaSemaphore*>(smem + 2 * kChunkBytes);
   TmaSemaphore* sem_dst = reinterpret_cast<TmaSemaphore*>(
