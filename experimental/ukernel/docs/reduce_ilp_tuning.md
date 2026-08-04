@@ -245,6 +245,15 @@ shim AllReduce 256M (GB/s, all 0 wrong):
 Next lever: **double-buffer the TMA chunks** (overlap chunk N's
 reduce/store with chunk N+1's bulk loads) to hide the mbarrier wait.
 
+Double-buffering was attempted (two smem slots, prefetch and sequential
+variants) but both lose the **src contribution for slot-1 chunks**
+(recv = local-only at sparse positions — e.g. first wrong at
+64MB+kChunkBytes); a single slot with the same halved chunk size is
+correct, so the bug is in the two-slot layout (addresses check out — a
+driver/compiler edge case). Reverted to the validated single-buffered
+TMA; current best with `REDUCE_SMEM_KB=224`: BLK=16 ~395-420 GB/s,
+BLK=32 ~485-490 GB/s (95% of native), 0 wrong.
+
 ### Persistent-kernel idle-exit (2026-08-04)
 
 - The worker persistent kernel now **idle-exits after 500µs** of empty
