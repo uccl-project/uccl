@@ -96,7 +96,8 @@ __device__ __forceinline__ void tma_load_group(void* smem_dst,
   uint32_t size_bytes = static_cast<uint32_t>(bytes);
   uint32_t dst_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_dst));
   asm volatile(
-      "cp.async.bulk.shared::cta.global [%0], [%1], %2;\n" ::"r"(dst_ptr),
+      "cp.async.bulk.shared::cta.global.bulk_group [%0], [%1], %2;\n" ::"r"(
+          dst_ptr),
       "l"(gmem_src), "r"(size_bytes)
       : "memory");
   tma_commit_group();
