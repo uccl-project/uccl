@@ -227,12 +227,6 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
     pool.sync(last_id, 0);
   }
 
-  // The persistent kernel never exits between tasks, so pool.sync (tail
-  // poll) is the only signal — a host memset on the default stream has no
-  // stream ordering with the worker's non-blocking stream. Sync the device
-  // before resetting buffers, or the memset can race an in-flight TMA
-  // store (observed as dst = rounds ± 1 in a slice-sized region).
-  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op != BenchOp::Nop) {
     reset_buffers(op, bufs);
   }
@@ -293,7 +287,6 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
     pool.sync(first_id + batch.size() - 1, 0);
   }
 
-  GPU_RT_CHECK(gpuDeviceSynchronize());
   if (op != BenchOp::Nop) {
     reset_buffers(op, bufs);
   }
