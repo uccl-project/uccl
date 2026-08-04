@@ -52,7 +52,7 @@ __device__ __forceinline__ void tma_wait(TmaSemaphore& sem, int phase) {
   uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
   asm volatile(
       "{ .reg .pred P1; LAB_WAIT%=: "
-      "mbarrier.try_wait.parity.acquire.shared::cta.b64 P1, [%0], %1; "
+      "mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 P1, [%0], %1; "
       "@P1 bra.uni DONE%=; bra.uni LAB_WAIT%=; DONE%=: }" ::"r"(sem_ptr),
       "r"(phase)
       : "memory");
