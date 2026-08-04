@@ -45,11 +45,31 @@ binary resolves `libnccl.so` at runtime via `LD_LIBRARY_PATH`, so the
 same build serves both the shim and the native comparison — we never
 compile perftests against the ukernel shim itself.
 
+Find the native NCCL prefix first (if `nccl.h` is already on the default
+CUDA include path, `NCCL_HOME` can be omitted — nccl-tests falls back to
+the default search paths):
+
+```bash
+ldconfig -p | grep libnccl                    # runtime .so location
+dpkg -L libnccl-dev 2>/dev/null | grep -E 'nccl\.h|libnccl\.so'   # Ubuntu/Debian
+```
+
+`NVCC_GENCODE` is generated from the GPUs actually present, so there is
+no hardcoded arch list (each unique compute capability gets an entry):
+
+```bash
+export NVCC_GENCODE="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader \
+  | sort -u | awk -F. '{printf " -gencode=arch=compute_%d%d,code=sm_%d%d", $1, $2, $1, $2}')"
+echo "NVCC_GENCODE=$NVCC_GENCODE"
+# AMD/ROCm: no nvidia-smi — pass the target archs explicitly, e.g.
+# NVCC_GENCODE="--offload-arch=gfx90a" (see rocm_agent_enumerator).
+```
+
 ```bash
 cd <repo>/thirdparty/nccl-tests
-export NCCL_HOME=<native-nccl-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/nccl or a source build
+export NCCL_HOME=<native-nccl-prefix>                     # optional if nccl.h is on the default path
 export MPI_HOME=<your-openmpi-prefix>                     # e.g. /usr/lib/x86_64-linux-gnu/openmpi
-make -j$(nproc)
+make NVCC_GENCODE="$NVCC_GENCODE" -j$(nproc)
 # binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...
 ```
 
@@ -86,7 +106,57 @@ ldd ./all_reduce_perf | grep nccl    # confirm it points at native
 # re-run the same sweeps above
 ```
 
-## 6. Spray (native ukernel executor) benchmark
+## 6. ROCm: build and run rccl-tests (AMD)
+
+On AMD machines the perftests are the vendored **rccl-tests** (ROCm's
+nccl-tests fork, same `nccl*` API). Build them against the normal RCCL
+install; the binary is swapped to the shim at runtime via
+`LD_LIBRARY_PATH` — the ROCm shim install ships as `librccl.so.1`
+(RCCL's SONAME) alongside `libnccl.so.2`.
+
+Pull **only** the rccl-tests submodule:
+
+```bash
+cd <repo>
+git submodule update --init --depth 1 thirdparty/rccl-tests
+```
+
+Find the RCCL install (usually `/opt/rocm`; `NCCL_HOME` can be left
+unset if RCCL is under `ROCM_PATH`):
+
+```bash
+find /opt/rocm /usr -name 'librccl.so*' 2>/dev/null | head
+```
+
+Generate `GPU_TARGETS` from the GPUs actually present instead of
+hardcoding a gfx list:
+
+```bash
+export GPU_TARGETS="$(rocm_agent_enumerator | grep '^gfx' | sort -u | tr '\n' ',' | sed 's/,$//')"
+echo "GPU_TARGETS=$GPU_TARGETS"
+```
+
+Build and run:
+
+```bash
+cd <repo>/thirdparty/rccl-tests
+make MPI=1 ROCM_PATH=/opt/rocm MPI_HOME=<your-openmpi-prefix> \
+    GPU_TARGETS="$GPU_TARGETS" -j$(nproc)
+# binaries land in build/: all_reduce_perf, all_gather_perf, reduce_scatter_perf, ...
+
+cd <repo>/experimental/ukernel
+export LD_LIBRARY_PATH=$(pwd)/build/nccl/lib:$LD_LIBRARY_PATH
+export HIP_VISIBLE_DEVICES=0,1
+mpirun --mca hwloc_base_binding_policy none -np 2 \
+    -x LD_LIBRARY_PATH -x HIP_VISIBLE_DEVICES \
+    ../../thirdparty/rccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
+```
+
+The native-RCCL comparison is the same run without the shim on
+`LD_LIBRARY_PATH` (and without `LD_LIBRARY_PATH` pointing at
+`build/nccl/lib`).
+
+## 7. Spray (native ukernel executor) benchmark
 
 ```bash
 cd experimental/ukernel/src/ccl && make test_perf_spray_allreduce
@@ -99,7 +169,7 @@ CUDA_VISIBLE_DEVICES=0,1 ./test_perf_spray_allreduce --role=client --gpu 1 --dev
 # Multi-block: --dev-blocks=1|4|8|64 to sweep SM usage
 ```
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 - **mpirun must use `--mca hwloc_base_binding_policy none`** — CPU
   binding inflates small-message latency tens of times.

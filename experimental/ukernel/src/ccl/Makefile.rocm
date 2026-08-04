@@ -106,12 +106,14 @@ NCCL_OBJ := nccl.o
 .PHONY: nccl_dev nccl
 nccl_dev: $(NCCL_SO)
 	@mkdir -p $(NCCL_PREFIX)/lib $(NCCL_PREFIX)/include
-	# ABI-compatible drop-in: native RCCL's SONAME is librccl.so.1 (and the
-	# NVIDIA libnccl SONAME is libnccl.so.2); consumers built against native
-	# NCCL record libnccl.so.2, so install under that name plus the dev
-	# symlink so LD_LIBRARY_PATH swaps work.
+	# ABI-compatible drop-in: native libnccl's SONAME is libnccl.so.2 and
+	# RCCL's is librccl.so.1. rccl-tests/nccl-tests built against native
+	# libs record those names, so install the shim under both (same nccl*
+	# API, same .so) plus dev symlinks — LD_LIBRARY_PATH swaps just work.
 	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/libnccl.so.2
 	ln -sf libnccl.so.2 $(NCCL_PREFIX)/lib/libnccl.so
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/librccl.so.1
+	ln -sf librccl.so.1 $(NCCL_PREFIX)/lib/librccl.so
 	cp ../../include/nccl.h $(NCCL_PREFIX)/include/
 	cp ../../include/gpu_rt.h $(NCCL_PREFIX)/include/
 	@echo "NCCL compat installed to $(NCCL_PREFIX)/"

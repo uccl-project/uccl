@@ -94,7 +94,9 @@ The NCCL shim (`libnccl.so`) builds on both platforms: `make nccl`
 (NVIDIA) or `make -f Makefile.rocm nccl` (ROCm); the shim API and
 `nccl.cc` use the `gpu_rt.h` wrappers (`gpuStream_t` etc.), which map to
 hip types on ROCm, so the exported .so is ABI-compatible with
-ROCm-built nccl-tests.
+ROCm-built nccl-tests and rccl-tests. On ROCm the install also ships as
+`librccl.so.1` (RCCL's SONAME), so rccl-tests runs against the shim with
+an `LD_LIBRARY_PATH` swap just like nccl-tests.
 
 Common overrides:
 
@@ -150,10 +152,23 @@ git submodule update --init --depth 1 thirdparty/nccl-tests
 # at build time; which libnccl.so runs is decided at runtime by
 # LD_LIBRARY_PATH — so perftests are never built against the shim).
 cd thirdparty/nccl-tests
+
+# Find the native NCCL prefix if you don't know it offhand:
+ldconfig -p | grep libnccl                    # runtime .so location
+dpkg -L libnccl-dev 2>/dev/null | grep -E 'nccl\.h|libnccl\.so'   # Ubuntu/Debian
+# If nccl.h is already on the default CUDA include path, NCCL_HOME can be
+# omitted entirely — nccl-tests then uses the default search paths.
+
+# Generate NVCC_GENCODE from the GPUs actually present instead of
+# hardcoding archs (each unique compute capability gets a gencode entry):
+export NVCC_GENCODE="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader \
+  | sort -u | awk -F. '{printf " -gencode=arch=compute_%d%d,code=sm_%d%d", $1, $2, $1, $2}')"
+echo "NVCC_GENCODE=$NVCC_GENCODE"
+
 make MPI=1 CUDA_HOME=/usr/local/cuda \
     MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi \
     NCCL_HOME=<native-nccl-prefix> \
-    NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90" \
+    NVCC_GENCODE="$NVCC_GENCODE" \
     -j$(nproc)
 
 # Multi-rank, same node (2 GPUs, one process per rank — exercises
@@ -179,6 +194,37 @@ mpirun -np 2 -H node0,node1 \
     -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
     -x NCCL_SOCKET_IFNAME=eth0 \
     ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
+```
+
+ROCm / RCCL: use the vendored **rccl-tests** (ROCm's nccl-tests fork,
+same nccl\* API). Build it against the normal RCCL install — the binary
+is swapped to the shim at runtime via `LD_LIBRARY_PATH` (the ROCm shim
+install includes `librccl.so.1`):
+
+```bash
+# Pull only the rccl-tests submodule:
+git submodule update --init --depth 1 thirdparty/rccl-tests
+
+# Find the RCCL install (usually /opt/rocm):
+find /opt/rocm /usr -name 'librccl.so*' 2>/dev/null | head
+
+cd thirdparty/rccl-tests
+# Auto-generate GPU_TARGETS from the GPUs actually present (no
+# hardcoded gfx list):
+export GPU_TARGETS="$(rocm_agent_enumerator | grep '^gfx' | sort -u | tr '\n' ',' | sed 's/,$//')"
+echo "GPU_TARGETS=$GPU_TARGETS"
+
+make MPI=1 ROCM_PATH=/opt/rocm \
+    MPI_HOME=/usr/lib/x86_64-linux-gnu \
+    GPU_TARGETS="$GPU_TARGETS" \
+    -j$(nproc)
+
+# Run against the shim (multinode/other args identical to nccl-tests):
+cd ../experimental/ukernel
+mpirun --mca hwloc_base_binding_policy none -np 2 \
+    -x LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
+    -x HIP_VISIBLE_DEVICES \
+    ../../thirdparty/rccl-tests/build/all_reduce_perf -b 1M -e 256M -g 1
 ```
 
 Supported APIs: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclCommInitAll`,
