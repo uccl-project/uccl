@@ -207,6 +207,10 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
   cfg.threadsPerBlock = threads_per_block;
   cfg.fifoCapacity = 1024;
   cfg.smemSize = smem_size;
+  // The bench is not an app: keep the worker always resident (pool.sync is
+  // the completion signal; idle-exit + relaunch cycles trip a CUDA 13.3
+  // context hang in the bench's rapid create/destroy pattern).
+  cfg.idleExitAfterUs = 1000000;
 
   WorkerPool pool(cfg);
   if (!pool.createWorker(0, num_blocks)) {

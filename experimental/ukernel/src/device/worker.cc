@@ -231,6 +231,11 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   }
 
   uint64_t taskId = ctx.fifo.push(task);
+  // Post-push relaunch: if the worker's idle-exit raced the push (exit was
+  // decided just before we enqueued), the relaunched kernel starts from
+  // the fifo and picks this task up. sync() below is the final safety net
+  // for the window where the exit flag is not yet visible.
+  relaunch_if_exited(fifoId);
   return taskId;
 }
 
@@ -264,6 +269,7 @@ uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
 
   uint64_t firstTaskId =
       ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
+  relaunch_if_exited(fifoId);
   return firstTaskId;
 }
 
@@ -285,6 +291,7 @@ void WorkerPool::shutdown_all() {
 bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   if (fifoId >= fifos_.size()) return true;
 
+  relaunch_if_exited(fifoId);
   auto& ctx = *fifos_[fifoId];
   uint64_t current = ctx.fifo.currentId();
 
@@ -295,8 +302,9 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
   if (!exit_idle_iters_ || fifoId >= fifos_.size()) return;
   for (size_t i = 0; i < workers_.size(); ++i) {
     auto* wc = workers_[i].get();
-    if (wc->fifoId == fifoId && wc->launched && wc->h_exited && *wc->h_exited) {
-      *wc->h_exited = false;
+    if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
+        // Atomic claim so concurrent enqueue/sync callers relaunch once.
+        __atomic_exchange_n(wc->h_exited, false, __ATOMIC_ACQ_REL)) {
       launchWorkerForFifo(i);
       return;
     }
@@ -305,7 +313,15 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
 
 void WorkerPool::sync(uint64_t taskId, uint32_t fifoId) {
   if (fifoId >= fifos_.size()) return;
-  fifos_[fifoId]->fifo.sync(taskId);
+  auto& ctx = *fifos_[fifoId];
+  // Poll the tail ourselves so a worker that idle-exited after our push
+  // (its exit flag becomes visible while we wait) gets relaunched and
+  // consumes the task — otherwise a task pushed into the race window is
+  // lost forever and the caller hangs.
+  while ((int64_t)(ctx.fifo.currentId() - taskId) <= 0) {
+    relaunch_if_exited(fifoId);
+    std::this_thread::yield();
+  }
 }
 
 void WorkerPool::launchWorkerForFifo(size_t workerIndex) {

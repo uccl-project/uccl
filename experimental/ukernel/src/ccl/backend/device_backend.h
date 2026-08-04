@@ -28,7 +28,7 @@ struct DeviceBackendConfig {
   // persistent worker kernel exits (relaunched on next enqueue).
   // 0 = always resident. Enable for torch coexistence — see
   // WorkerPool::Config::idleExitAfterUs.
-  uint32_t idle_exit_after_us = 0;  // see WorkerPool::Config::idleExitAfterUs
+  uint32_t idle_exit_after_us = 500;  // see WorkerPool::Config::idleExitAfterUs
 };
 
 class DeviceBackend final : public BatchBackend {

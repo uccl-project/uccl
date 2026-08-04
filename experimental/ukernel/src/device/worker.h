@@ -26,10 +26,9 @@ class WorkerPool {
     uint32_t smemSize = 0;
     // Grace period (µs) of continuous fifo emptiness after which the
     // persistent kernel exits; the host relaunches it on the next
-    // enqueue. 0 = always resident. TODO(ukernel): switch the default to a
-    // short grace (e.g. 500µs) so device-wide syncs work — the relaunch
-    // path still has an exit/enqueue race that must be fixed first.
-    uint32_t idleExitAfterUs = 0;
+    // enqueue. 0 = always resident. Default short grace so device-wide
+    // syncs work; bursts stay resident (inter-op gaps are µs-scale).
+    uint32_t idleExitAfterUs = 500;
     // Control stream used for host-driven bookkeeping copies such as stop
     // flags. Persistent worker kernels still run on per-worker streams.
     gpuStream_t controlStream = nullptr;
