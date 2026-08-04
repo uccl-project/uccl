@@ -105,6 +105,23 @@ make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
     GDRCOPY_INCLUDEDIR=/usr/include GDRCOPY_LIBDIR=/usr/local/lib
 ```
 
+> **Build for your GPU only — pass `SM=<arch>`, not the default 4-arch
+> list.** The default compiles compute_80/86/89/100; with the reduce-ILP
+> dispatch in `persistent_kernel_ops.cu` that makes ptxas very slow, and
+> B300 (sm_103) is not even in the default list. Always build the target
+> capability:
+>
+> ```bash
+> make SM=103 ENABLE_TMA=0 -j8 nccl          # B300 / GB300
+> make SM=86  ENABLE_TMA=0 -j8 nccl          # A40
+> make SM=89  ENABLE_TMA=0 -j8 device_bench  # L40S etc.
+> ```
+>
+> `ENABLE_TMA=0` keeps the TMA code paths off (they auto-enable for
+> SM ≥ 90); omit it only if you intentionally want TMA. On machines with
+> many cores, cap the parallelism (`-j8`..`-j16`) — `-j$(nproc)` on a
+> 100+ core box thrashes and can look like a hang.
+
 All path variables support environment variable override. When working on a
 machine with non-standard paths, export them once in your shell profile
 instead of passing them on every command:
@@ -122,7 +139,7 @@ export GDRCOPY_LIBDIR=$HOME/gdrcopy_install/lib
 | `GDRCOPY_INCLUDEDIR` | `/usr/include` | Path to `gdrapi.h` |
 | `GDRCOPY_LIBDIR` | (empty, system default) | Path to `libgdrapi.so` |
 | `CONDA_LIB_HOME` | `/usr/lib` | Library search path for system libs |
-| `SM` | `80 86 89 100` | GPU compute capability |
+| `SM` | `80 86 89 100` | GPU compute capability; set to ONE arch (e.g. `SM=103`) to build only that arch instead of the slow default list |
 
 ## NCCL Compatibility
 

@@ -23,8 +23,10 @@ tile sweet spot (see `coll_config.h`, `executor.h`).
 cd <repo>
 git checkout uk-300
 cd experimental/ukernel
+# Build ONLY the target arch: SM=<compute capability> (B300=103, A40=86,
+# L40S=89). The default 4-arch build is slow and sm_103 is not included.
 make clean -f Makefile            # AMD machine: make clean -f Makefile.rocm
-make -j$(nproc) -f Makefile nccl  # AMD: make -j$(nproc) -f Makefile.rocm nccl
+make SM=<arch> ENABLE_TMA=0 -j8 -f Makefile nccl   # AMD: ... -f Makefile.rocm nccl
 # artifacts: build/nccl/lib/libnccl.so + build/nccl/include/nccl.h
 ```
 

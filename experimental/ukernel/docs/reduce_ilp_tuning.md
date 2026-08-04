@@ -58,7 +58,11 @@ PCIe-bound there, unchanged as expected).
 ```bash
 cd ~/jinyao/uccl && git pull
 cd experimental/ukernel
-make -j$(nproc) nccl && make -j$(nproc) device_bench
+# Build ONLY the target arch (B300 = sm_103); the default 4-arch build is
+# very slow with the ILP dispatch and sm_103 is not in it anyway. Keep
+# TMA off and cap parallelism to avoid ptxas thrash.
+make SM=103 ENABLE_TMA=0 -j8 nccl
+make SM=103 ENABLE_TMA=0 -j8 device_bench
 
 # 1) reduce kernel throughput vs ILP (256M, 256 threads, blocks 8/16/32/64)
 for ilp in 4 8 16; do
