@@ -313,12 +313,12 @@ performance number.
 
 | Size | shim nccl-tests | native NCCL 2.29.7 |
 |---|---|---|
-| 256KB | 95us | 25.6us |
-| 1MB | 181us | 60.0us |
-| 4MB | 447us | 140.4us |
-| 16MB | 1686us | 454.4us |
-| 64MB | 2012us | 1691.8us |
-| 256MB | 5462us | 6352.8us |
+| 256KB | 82us | 25.6us |
+| 1MB | 101us | 60.0us |
+| 4MB | 159us | 140.4us |
+| 16MB | 419us | 454.4us |
+| 64MB | 1558us | 1691.8us |
+| 256MB | 5506us | 6352.8us |
 
 256MB AllReduce (5.5ms / 49 GB/s), AllGather (2.8ms / 94 GB/s) and
 ReduceScatter (3.1ms / 87 GB/s) all beat native NCCL (6.35 / 3.78 /
@@ -342,106 +342,35 @@ paths), 256-thread × 8-block device kernels (the RS output copy was a
 > (`OMPI_MCA_hwloc_base_binding_policy=none` env var is equivalent;
 > `--mca plm_rsh_agent sh` makes mpirun fork locally without ssh.)
 
-Two known gaps, both under investigation:
+## Current gaps
 
-1. **Shim small-message latency ~8x vs native** (was ~50x before the
-   MPI binding fix): at 256KB the shim path is 167.5us vs native NCCL
-   21.8us (7.7x). The remaining gap narrows with size — 1MB: 419us vs
-   60.7us (6.9x), 4MB: 1254us vs 141.6us (8.9x) — and vanishes in the
-   bandwidth-saturated regime (64MB+: ~20-25ms both).
+256MB AllReduce (5.5ms), AllGather (2.8ms) and ReduceScatter (3.1ms)
+all beat native NCCL (6.35 / 3.78 / 3.9ms) on the A40 pair; 16MB
+AllReduce is at parity (455us). Two gaps remain, both acceptable for
+the target workloads:
 
-   Measured decomposition (probe programs, A40 pair, true 2-rank):
-   each shim `ncclAllReduce` call = CPU submit ~20us + GPU stream-wait
-   ~149us (native NCCL: ~15us + ~20us). The GPU-side 129us gap is
-   entirely inside the collective's own execution — a CUDA event
-   enqueued right after the call completes at the same time as a full
-   stream sync, so there is no extra done-flag / WaitValue-release
-   delay. Fixed-latency floor is data-size-independent: AllToAll of 64B
-   costs ~50us, 64KB ~55us; AllReduce 64KB ~115us (the extra ~60us is
-   the reduce path's extra synchronization rounds). Signal matching
-   itself is fast (0.1-0.4us/wait in `test_signal_backend_e2e`), and
-   the floor is identical for forced `UK_CCL_PUT_PATH=device|ipc`, so
-   it is not a per-path issue. Remaining suspects: per-collective GPU
-   pipeline latency (kernel-launch sequence + cross-rank signal
-   round-trips) versus native NCCL's ~20us end-to-end.
+1. **Small-message latency (~3x native below 4MB)**: 256KB AllReduce
+   77-88us vs native 25us. The gap is the per-phase CPU round trips in
+   the copy-offload architecture (submit + IPC put launch/sync + stream
+   gates); it narrows with size and reaches parity around 16MB. The
+   native SprayExecutor path measures 63us at 256KB, so the shim's
+   prepare/gate overhead accounts for roughly 15us of it. Closing it
+   fully would require running the whole small-message collective
+   in-kernel (no CPU round trips), which is deferred.
 
-2. **Same-node P2P bandwidth ~5 GB/s busbw**: far below the PCIe
-   gen4 P2P ceiling (~30 GB/s). At 256MB both the spray path and the
-   shim path saturate at ~5.1-5.2 GB/s busbw, vs native NCCL 43 GB/s
-   (256MB in 6.2ms vs ~103ms). The IPC/device P2P path is not
-   saturated. Related observation: DeviceBackend's persistent kernel
-   stalls under load — `test_perf_p2p_copy` floods stderr with
-   `[dev-stall] fifoN pending=... head/tail advancing slowly` forensic
-   logs, i.e. tasks sit in the FIFO while the kernel drains one at a
-   time. That is a separate throughput problem on the device path.
+2. **AllToAll has no NCCL-native comparison**: NCCL exposes no
+   dedicated AllToAll primitive — engines build it from
+   `ncclSend`/`ncclRecv` groups, which the shim does not implement. The
+   comparison target is user-space MoE implementations (DeepEP); see
+   [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Our
+   native AllToAll (spray) reaches 2.9ms / 93 GB/s at 256MB.
 
-   **Root-caused and fixed (partially)**: the shim's fixed 64KB tile
-   size capped large-message throughput — 256MB meant 4096 tiles, and
-   per-tile fixed overhead (signal matching, scheduling, put
-   post-processing) dominated. `nccl.cc` now sizes tiles adaptively via
-   the shared `adaptive_tile_bytes` helper in `coll_config.h` (also
-   used by `test_perf_spray_allreduce`): messages at or below the sweet
-   spot (default 64KB) move as ONE tile, and larger messages are tiled
-   to at most 256 tiles (`max(sweet_spot, ceil(bytes/256))`, rounded up
-   to 32B so tile boundaries stay aligned for the device copy's
-   vectorized path; `UK_CCL_TILE_MIN_BYTES` overrides the sweet spot).
-   Measured A/B (A40/L40S, nccl-tests): 64KB floor wins 256KB-4MB by
-   6-29% (more tiles pipeline the ring better than per-tile cost
-   hurts); 16MB prefers a 256KB-1MB floor (-16%); >=64MB is
-   transport/device-bound regardless of the floor.
-   Result: 256MB AllReduce 103ms → 54ms
-   (matches the spray path 53.8ms; 64MB +45%). Small messages
-   unchanged (verified with a no-interference probe: 256KB 164us, 1MB
-   364us). AllGather 256MB: 22.6ms; ReduceScatter 256MB: 71.2ms. The
-   remaining ~5-10 GB/s busbw (vs 43 GB/s native) is now the transport
-   path itself (IPC puts dominate same-node), not the shim.
-
-   **Reduce kernel vectorized (NCCL-style)**: the device reduce path
-   (`read_reduce_store` in `device/ops/ops.h`) was a scalar, non-
-   coalesced element loop; it now uses 16B-aligned wide loads/stores
-   (`TypedVec<T,N>`, N = 16/sizeof(T)) with the reduce op folded in at
-   compile time, plus a coalesced scalar fallback for unaligned tile
-   offsets. Kernel-level: 5.6x (1 block) to 14x (64 blocks) on 256MB
-   fp32. End-to-end (nccl-tests, A40/L40S pair): AllReduce 256MB
-   54.1ms → 27.6ms, ReduceScatter 256MB 71.4ms → 44.7ms, AllReduce
-   64MB −42%; AllGather unchanged (put-bound). The blocks=1 collective
-   wall time is still dominated by the serialized per-tile IPC puts,
-   not the reduce compute.
-
-   **IPC send sliding window**: the send worker synchronized after
-   EVERY put (copy + ~10us fixed overhead serialized), capping 1MB-tile
-   puts at ~37 GB/s vs ~52 GB/s for large puts.
-   `IpcAdapter::send_worker` now keeps up to `UK_CCL_IPC_BATCH` (default
-   16) puts in flight: each put gets its own event and a round-robin
-   stream (consecutive tiles copy in parallel), launches run ahead of
-   completions, and puts are completed FIFO with data-before-signal
-   semantics (per-put event sync only at the front, when the window is
-   full or the ring empties — small messages drain with no added
-   latency). RDMA needs no equivalent: `ibv_post_send` is already
-   async with a CQ poll thread and a `kMaxInflightWrs` window. Measured
-   on a loaded box (other tenants active): 256MB AllGather (put-only)
-   −4.5% vs window=1; needs a re-check on an idle machine for the full
-   effect.
-
-   **Reduce kernel ILP + multi-block**: `read_reduce_store` keeps 4
-   independent 16B vectors in flight per thread — single-GPU 256MB fp32
-   reduce: 8 blocks ~153 GB/s, 16 blocks ~218 GB/s (vs ~72 GB/s at 8
-   blocks before), so fewer blocks saturate DRAM. An experiment
-   replacing the multi-block kernel's per-task grid barrier with a
-   lock-free slice pipeline (per-task counters + single-writer tail
-   publish) was numerically correct but regressed badly at 16-64 blocks
-   (every block polling the FIFO head with system-scope atomics costs
-   O(blocks) per task, exceeding the slice work), and a cudaFree hang
-   on the sync buffer was traced to system-scope atomics on the GDR
-   tail. Reverted to the original barrier-based `multiPersistentKernel`;
-   with the ILP reduce it reaches 256MB AllReduce 11.9ms (45 GB/s) in
-   the spray benchmark at 64 blocks on the A40/L40S pair. Multi-block
-   (blocks_per_worker > 1) is now fully usable in the shim too, after
-   three fixes: the MultiBlockSync buffer is stream-ordered
-   (cudaMallocAsync/cudaFreeAsync — plain cudaFree hung the context on
-   this driver), the sync buffer is zeroed before every kernel launch
-   (a relaunched kernel otherwise read the previous kernel's exit phase
-   and returned before consuming tasks), and the per-task phase waits
-   use `<` instead of `!=` so a block preempted past a phase catches up
-   instead of deadlocking. nccl-tests at UK_CCL_DEV_BLOCKS=64: full
-   256K-256M sweep, 0 wrong, 256MB 14.8ms (18.1 GB/s), no stalls.
+How the large-message wins were reached (`6ae8d24d..HEAD`):
+ILP-vectorized reduce kernel, pipelined IPC send window, same-host
+puts pinned to IPC (the latency-based path balancer was misrouting onto
+the device/RDMA paths — design notes in
+[docs/put_path_selection.md](docs/put_path_selection.md)), 1MB tile
+sweet spot, 256-thread × 8-block device kernels, and a fast-path
+prepare(). Multi-block teardown/relaunch/phase bugs were fixed along
+the way (stream-ordered MultiBlockSync free, d_sync reset before every
+launch, `<` phase waits).

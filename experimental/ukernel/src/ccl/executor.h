@@ -196,10 +196,10 @@ struct SprayExecutorConfig {
   int world_size;
   size_t device_task_capacity = 4096;
   size_t max_device_fifos = 2;
-  // 256 threads: measured 256KB AllReduce 124us -> 92us and 256MB
-  // (blocks=4) 17.8ms -> 12.9ms vs the old 64-thread default; 512
-  // threads currently exceeds the per-block register limit for the
-  // ILP reduce, so 256 is the sweet spot until launch bounds land.
+  // 256 threads: the ILP-vectorized reduce needs this many to keep the
+  // memory system fed (64 was latency-bound); 512 currently exceeds the
+  // per-block register limit for the ILP reduce, so 256 is the sweet
+  // spot until launch bounds land.
   int threads_per_block = 256;
   // 8 blocks: the device kernel splits copy/reduce tasks across them.
   // Measured vs the old 1-block default on the A40 pair — ReduceScatter
