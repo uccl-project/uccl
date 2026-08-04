@@ -68,6 +68,9 @@ __device__ __forceinline__ void tma_wait_group() {
 __device__ __forceinline__ void tma_fence_async() {
   asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
 }
+__device__ __forceinline__ void tma_fence_async_global() {
+  asm volatile("fence.proxy.async.global;\n" ::: "memory");
+}
 __device__ __forceinline__ void tma_fence() { __threadfence(); }
 
 template <typename T>
@@ -107,6 +110,7 @@ __device__ __forceinline__ void tma_commit_group() {}
 template <int N = 0>
 __device__ __forceinline__ void tma_wait_group() {}
 __device__ __forceinline__ void tma_fence_async() {}
+__device__ __forceinline__ void tma_fence_async_global() {}
 __device__ __forceinline__ void tma_fence() {}
 
 template <typename T>

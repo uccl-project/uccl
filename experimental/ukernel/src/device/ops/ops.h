@@ -186,6 +186,12 @@ __device__ __forceinline__ void tma_bulk_reduce_chunk(
     // TMA loads reuse the smem buffer (non-issuing threads have no group
     // and return immediately; the barrier below fences the reuse).
     tma_wait_group<0>();
+    // Make the async-proxy writes visible to generic-proxy agents (host
+    // memsets, other blocks' loads) — without this, a store can land after
+    // a later memset/load and corrupt data (observed: warmup's store raced
+    // the pre-timing memset, leaving dst = warmup + rounds instead of
+    // rounds).
+    tma_fence_async_global();
   }
   __syncthreads();
 }
