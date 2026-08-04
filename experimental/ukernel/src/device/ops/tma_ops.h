@@ -22,11 +22,13 @@ struct TmaSemaphore {
 
 __device__ __forceinline__ void tma_init_semaphore(TmaSemaphore& sem,
                                                    uint32_t initial_phase) {
-  // Zero the whole mbarrier (expect_tx + parity + COUNT bits) — only
-  // clearing expect_tx/phase leaves garbage in the count field, which can
-  // hang or early-complete the phase wait.
-  sem = TmaSemaphore{};
-  sem.phase = initial_phase;
+  // Real mbarrier.init with COUNT=1: the single issuing thread's
+  // arrive.expect_tx is the one arrival. Zeroing the struct (count=0)
+  // makes the arrive underflow the count and the phase never completes
+  // (first real TMA execution exposed this hang).
+  uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;\n" ::"r"(sem_ptr));
+  (void)initial_phase;
 }
 
 #if __CUDA_ARCH__ >= 900
