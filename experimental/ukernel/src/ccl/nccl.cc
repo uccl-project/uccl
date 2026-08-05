@@ -314,6 +314,17 @@ static void reap_pending(ncclComm_t comm) {
 static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
                               void* input, void* output, gpuStream_t stream) {
   if (comm->aborted) return ncclInvalidUsage;
+  // Signal aggregation: one Signal/WaitSignal per G tiles of a chunk
+  // pair instead of per tile. Per-tile host-side signaling is the
+  // multi-rank bottleneck (2-rank ~2.6us/op vs 4-rank ~83us/op on
+  // B300); aggregating cuts the signal count by G. The IPC wait already
+  // counts group arrivals (wait_count), so this is batch-wait too.
+  // UK_CCL_SIG_GROUP_TILES overrides (default 8).
+  static const uint32_t kSigGroupTiles = []() {
+    char const* v = std::getenv("UK_CCL_SIG_GROUP_TILES");
+    return v ? std::max(1u, static_cast<uint32_t>(std::stoul(v))) : 8u;
+  }();
+  cfg.signal_group_tiles = kSigGroupTiles;
   reap_pending(comm);
   CollectiveOpHandle h = 0;
   try {
