@@ -1,6 +1,7 @@
-#include "algo/chunk_graph.h"
+#include "coll_algo.h"
 #include "lower.h"
 #include "test_config.h"
+#include "utils.h"
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -100,8 +101,8 @@ void test_collective_config_field_assignment() {
 // Layer 3: coll_algo
 
 void test_chunk_defaults() {
-  printf("[test] Chunk defaults...\n");
-  Chunk chunk;
+  printf("[test] MacroOp defaults...\n");
+  MacroOp chunk;
   assert(chunk.op == AlgoOpKind::Put);
   assert(chunk.bytes == 0);
   assert(chunk.src_off == 0);
@@ -178,13 +179,39 @@ void test_build_coll_algo_ring_allreduce_basic() {
   for (auto const& chunk : algo.chunks)
     if (!chunk.deps.empty()) saw_dep = true;
   assert(saw_dep);
+
+  // Buffer roles are explicit on every data chunk: the RS-phase
+  // first-touch Put reads Input, later RS Puts and every AG-phase Put
+  // read Output; every RecvReduce is Input -> Output. (Even pair_id =
+  // RS phase, odd = AG phase.)
+  size_t rs_in = 0, rs_out = 0, ag_puts = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == AlgoOpKind::RecvReduce) {
+      assert(chunk.src.space == BufSpace::Input);
+      assert(chunk.dst.space == BufSpace::Output);
+    }
+    if (chunk.op != AlgoOpKind::Put) continue;
+    assert(chunk.dst.space == BufSpace::Output);
+    bool phase2 = (chunk.pair_id % 2) == 1;
+    if (phase2) {
+      assert(chunk.src.space == BufSpace::Output);
+      ++ag_puts;
+    } else if (chunk.deps.empty()) {
+      assert(chunk.src.space == BufSpace::Input);
+      ++rs_in;
+    } else {
+      assert(chunk.src.space == BufSpace::Output);
+      ++rs_out;
+    }
+  }
+  assert(rs_in == 1 && rs_out == 2 && ag_puts == 3);
 }
 
 void test_build_coll_algo_alltoall_basic() {
   printf("[test] build_coll_algo alltoall basic...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
   cfg.kind = CollKind::AllToAllPairwise;
-  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/true);
   assert(algo.kind == CollKind::AllToAllPairwise);
   assert(!algo.chunks.empty());
   bool saw_recv = false, saw_send = false;
@@ -194,6 +221,341 @@ void test_build_coll_algo_alltoall_basic() {
   }
   assert(saw_recv);
   assert(saw_send);
+}
+
+void test_build_coll_algo_reduce_scatter_basic() {
+  printf("[test] build_coll_algo ring reduce-scatter basic...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::ReduceScatterRing;
+  cfg.output_bytes = 1024;  // this rank's shard of the 4096-byte input
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  assert(algo.kind == CollKind::ReduceScatterRing);
+
+  // 4 ranks: 3 ring steps x (Put + Recv + RecvReduce) + final local copy.
+  assert(algo.chunks.size() == 10);
+  size_t nputs = 0, nrecvs = 0, nreduces = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == AlgoOpKind::Put) ++nputs;
+    if (chunk.op == AlgoOpKind::Recv) ++nrecvs;
+    if (chunk.op == AlgoOpKind::RecvReduce) ++nreduces;
+    // Peers' puts and all reduces target the full-layout Scratch.
+    if (chunk.op == AlgoOpKind::RecvReduce) {
+      assert(chunk.src.space == BufSpace::Input);
+      assert(chunk.dst.space == BufSpace::Tmp);
+    }
+  }
+  assert(nputs == 4 && nrecvs == 3 && nreduces == 3);
+
+  // The last chunk is the own-shard copy Scratch -> Output[0].
+  auto const& tail = algo.chunks.back();
+  assert(tail.op == AlgoOpKind::Put);
+  assert(tail.pair_id == kNoPairId);
+  assert(tail.src.space == BufSpace::Tmp);
+  assert(tail.dst.space == BufSpace::Output);
+  assert(tail.dst_off == 0);
+  assert(tail.bytes == 1024);
+  assert(tail.src_off == 1024);  // rank 1's shard offset (uniform shards)
+  assert(!tail.deps.empty());
+
+  // Forwarding puts land in the peer's Scratch; the first-touch put of a
+  // shard reads Input, later ones read Scratch.
+  size_t first_touch = 0, forward = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op != AlgoOpKind::Put || chunk.pair_id == kNoPairId) continue;
+    assert(chunk.dst.space == BufSpace::Tmp);
+    if (chunk.src.space == BufSpace::Input) {
+      assert(chunk.deps.empty());
+      ++first_touch;
+    } else {
+      assert(chunk.src.space == BufSpace::Tmp);
+      assert(!chunk.deps.empty());
+      ++forward;
+    }
+  }
+  assert(first_touch == 1 && forward == 2);
+}
+
+void test_build_coll_algo_allgather_basic() {
+  printf("[test] build_coll_algo ring all-gather basic...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllGatherRing;
+  cfg.input_bytes = 1024;  // this rank's shard of the 4096-byte output
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  assert(algo.kind == CollKind::AllGatherRing);
+
+  // 1 local copy + 3 ring steps x (Put + Recv).
+  assert(algo.chunks.size() == 7);
+
+  // First chunk: own-shard copy Input[0] -> Output[shard_offset].
+  auto const& head = algo.chunks.front();
+  assert(head.op == AlgoOpKind::Put);
+  assert(head.pair_id == kNoPairId);
+  assert(head.src.space == BufSpace::Input);
+  assert(head.dst.space == BufSpace::Output);
+  assert(head.src_off == 0);
+  assert(head.dst_off == 1024);  // rank 1's shard offset (uniform shards)
+  assert(head.bytes == 1024);
+
+  // Ring puts: the first-step own-shard send reads Input[0] with no
+  // deps; later sends forward received shards and depend on their Recv.
+  size_t nputs = 0, nrecvs = 0, first_step = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == AlgoOpKind::Put && chunk.pair_id != kNoPairId) {
+      ++nputs;
+      if (chunk.src.space == BufSpace::Input) {
+        assert(chunk.deps.empty());
+        assert(chunk.src_off == 0);
+        assert(chunk.dst.space == BufSpace::Output);
+        ++first_step;
+      } else {
+        assert(chunk.src.space == BufSpace::Output);
+        assert(chunk.dst.space == BufSpace::Output);
+        assert(!chunk.deps.empty());
+      }
+    }
+    if (chunk.op == AlgoOpKind::Recv) ++nrecvs;
+  }
+  assert(nputs == 3 && nrecvs == 3 && first_step == 1);
+}
+
+void test_build_coll_algo_allgather_inplace() {
+  printf("[test] build_coll_algo ring all-gather in-place...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllGatherRing;
+  cfg.input_bytes = 1024;  // this rank's shard of the 4096-byte output
+  cfg.inplace = true;
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/true);
+  assert(algo.kind == CollKind::AllGatherRing);
+
+  // In-place skips the local publish copy: 3 ring steps x (Put + Recv)
+  // only — no pairless local Put.
+  assert(algo.chunks.size() == 6);
+  size_t nputs = 0, nrecvs = 0;
+  for (auto const& chunk : algo.chunks) {
+    if (chunk.op == AlgoOpKind::Put && chunk.pair_id != kNoPairId) {
+      ++nputs;
+      // Own-shard send (step 0) reads Output[offset(rank)] — the shard
+      // already sits in the output layout; forwarded shards read Output
+      // as in the out-of-place form.
+      assert(chunk.src.space == BufSpace::Output);
+      assert(chunk.dst.space == BufSpace::Output);
+    }
+    if (chunk.op == AlgoOpKind::Recv) {
+      ++nrecvs;
+      assert(chunk.dst.space == BufSpace::Output);
+    }
+  }
+  assert(nputs == 3 && nrecvs == 3);
+  // No local copy chunk (pair_id == kNoPairId).
+  for (auto const& chunk : algo.chunks)
+    assert(!(chunk.op == AlgoOpKind::Put && chunk.pair_id == kNoPairId));
+}
+
+void test_verify_algo_pairing_all_kinds() {
+  printf("[test] verify_algo_pairing all kinds x nranks...\n");
+  auto rank0_shard = [](size_t total_bytes, int nranks) {
+    size_t elems = total_bytes / 4;
+    return (elems / static_cast<size_t>(nranks) +
+            (elems % static_cast<size_t>(nranks) ? 1 : 0)) * 4;
+  };
+  for (int n : {2, 3, 4, 8}) {
+    // AllReduce: both placements, divisible and non-divisible shards.
+    for (bool inplace : {false, true}) {
+      for (size_t bytes : {4096UL, 4100UL}) {
+        CollectiveConfig cfg;
+        cfg.kind = CollKind::AllReduceRing;
+        cfg.nranks = n;
+        cfg.rank = 0;
+        cfg.input_bytes = bytes;
+        cfg.output_bytes = bytes;
+        cfg.tile_bytes = 512;
+        cfg.dtype = ScalarType::Float32;
+        verify_algo_pairing(cfg, inplace);
+        // Binary tree (out-of-place only).
+        cfg.kind = CollKind::AllReduceTree;
+        verify_algo_pairing(cfg, /*inplace=*/false);
+      }
+    }
+    // AllToAll (inplace only): equal split. NOTE: jointly-consistent
+    // variable splits (rank r's slice for p == rank p's slice for r)
+    // cannot be expressed with one shared per-rank config — that is a
+    // user-level joint contract, and the byte check here is exactly
+    // what would flag a violation of it.
+    {
+      CollectiveConfig cfg;
+      cfg.kind = CollKind::AllToAllPairwise;
+      cfg.nranks = n;
+      cfg.rank = 0;
+      cfg.input_bytes = 1024 * static_cast<size_t>(n);
+      cfg.output_bytes = cfg.input_bytes;
+      cfg.tile_bytes = 512;
+      cfg.dtype = ScalarType::Float32;
+      verify_algo_pairing(cfg, /*inplace=*/true);
+    }
+    // ReduceScatter / AllGather: divisible and non-divisible shards.
+    for (size_t extra : {0UL, 4UL}) {
+      size_t bytes = 1024 * static_cast<size_t>(n) + extra;
+      CollectiveConfig rs;
+      rs.kind = CollKind::ReduceScatterRing;
+      rs.nranks = n;
+      rs.rank = 0;
+      rs.input_bytes = bytes;
+      rs.output_bytes = rank0_shard(bytes, n);
+      rs.tile_bytes = 512;
+      rs.dtype = ScalarType::Float32;
+      verify_algo_pairing(rs, /*inplace=*/false);
+
+      CollectiveConfig ag;
+      ag.kind = CollKind::AllGatherRing;
+      ag.nranks = n;
+      ag.rank = 0;
+      ag.input_bytes = rank0_shard(bytes, n);
+      ag.output_bytes = bytes;
+      ag.tile_bytes = 512;
+      ag.dtype = ScalarType::Float32;
+      verify_algo_pairing(ag, /*inplace=*/false);
+      // In-place AllGather: same pairing invariants (puts still pair
+      // 1:1 with recvs landing in Output); the builder just skips the
+      // local publish copy and sources the step-0 send from Output.
+      CollectiveConfig agi = ag;
+      agi.inplace = true;
+      verify_algo_pairing(agi, /*inplace=*/true);
+      // In-place ReduceScatter: algorithm unchanged (partials in Tmp),
+      // pairing invariants hold as out-of-place.
+      CollectiveConfig rsi = rs;
+      rsi.inplace = true;
+      verify_algo_pairing(rsi, /*inplace=*/true);
+    }
+  }
+}
+
+void test_build_coll_algo_tree_basic() {
+  printf("[test] build_coll_algo binary-tree allreduce...\n");
+
+  // rank 1 of 4: children {3} (single -> lands Output), parent 0 with
+  // two children -> this rank's up-put lands in the parent's Tmp(0).
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllReduceTree;
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  assert(algo.kind == CollKind::AllReduceTree);
+  // Tmp declared on EVERY rank (rank-symmetric): a rank whose up-put
+  // targets a two-children parent's Tmp(0) addresses it with its own
+  // scratch id, which must match the parent's — that requires symmetric
+  // declaration (see build_allreduce_tree_algo).
+  assert(algo.tmp_bytes.size() == 1 && algo.tmp_bytes[0] == 4096);
+  // Recv(3), RecvReduce, Put->0, Recv<-0, Put->3.
+  assert(algo.chunks.size() == 5);
+  auto const& red = algo.chunks[1];
+  assert(red.op == AlgoOpKind::RecvReduce);
+  assert(red.src.space == BufSpace::Input && red.dst.space == BufSpace::Output);
+  auto const& up = algo.chunks[2];
+  assert(up.op == AlgoOpKind::Put && up.dst_rank == 0);
+  assert(up.pair_id == (1 * 4 + 0) * 2);
+  assert(up.src.space == BufSpace::Output);
+  assert(up.dst.space == BufSpace::Tmp);  // first child of a 2-child parent
+  assert(!up.deps.empty());
+  auto const& dn = algo.chunks.back();
+  assert(dn.op == AlgoOpKind::Put && dn.dst_rank == 3);
+  assert(dn.pair_id == (1 * 4 + 3) * 2 + 1);
+  assert(dn.src.space == BufSpace::Output && !dn.deps.empty());
+
+  // Root (rank 0, children {1,2}): first child reduced into Tmp, last
+  // into Output; no up-put; down-puts to both children from Output.
+  cfg.rank = 0;
+  CollAlgo root = build_coll_algo(cfg, /*inplace=*/false);
+  assert(root.tmp_bytes.size() == 1 && root.tmp_bytes[0] == 4096);
+  assert(root.chunks.size() == 6);
+  assert(root.chunks[0].pair_id == (1 * 4 + 0) * 2);
+  assert(root.chunks[1].dst.space == BufSpace::Tmp);
+  assert(root.chunks[2].pair_id == (2 * 4 + 0) * 2);
+  assert(root.chunks[3].dst.space == BufSpace::Output);
+  assert(root.chunks[3].src.space == BufSpace::Tmp);
+  for (auto const& c : root.chunks)
+    if (c.op == AlgoOpKind::Put)
+      assert(c.dst_rank == 1 || c.dst_rank == 2);
+  assert(root.chunks[4].pair_id == (0 * 4 + 1) * 2 + 1);
+  assert(root.chunks[5].pair_id == (0 * 4 + 2) * 2 + 1);
+
+  // Leaf (rank 3, no children): sends Input, receives result in Output.
+  cfg.rank = 3;
+  CollAlgo leaf = build_coll_algo(cfg, /*inplace=*/false);
+  assert(leaf.chunks.size() == 2);
+  assert(leaf.chunks[0].op == AlgoOpKind::Put);
+  assert(leaf.chunks[0].src.space == BufSpace::Input);
+  assert(leaf.chunks[0].dst.space == BufSpace::Output);  // 1-child parent
+  assert(leaf.chunks[1].op == AlgoOpKind::Recv);
+  assert(leaf.chunks[1].dst.space == BufSpace::Output);
+
+  // In-place is rejected for now.
+  bool threw = false;
+  try {
+    build_coll_algo(cfg, /*inplace=*/true);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
+}
+
+void test_build_coll_algo_ag_rs_validation() {
+  printf("[test] build_coll_algo AG/RS validation...\n");
+
+  // Non-divisible shards: 1025 f32 elements (4100 B) over 4 ranks ->
+  // shard elems 257/256/256/256 = 1028/1024/1024/1024 bytes.
+  auto make_rs = [](int rank, size_t out_bytes) {
+    CollectiveConfig cfg;
+    cfg.kind = CollKind::ReduceScatterRing;
+    cfg.nranks = 4;
+    cfg.rank = rank;
+    cfg.input_bytes = 4100;
+    cfg.output_bytes = out_bytes;
+    cfg.tile_bytes = 512;
+    cfg.dtype = ScalarType::Float32;
+    return cfg;
+  };
+  // Rank 0's shard is 1028 B: accepted.
+  build_coll_algo(make_rs(0, 1028), /*inplace=*/false);
+  // Rank 1's shard is 1024 B: 1028 must be rejected, 1024 accepted.
+  bool threw = false;
+  try {
+    build_coll_algo(make_rs(1, 1028), /*inplace=*/false);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
+  CollAlgo rs1 = build_coll_algo(make_rs(1, 1024), /*inplace=*/false);
+  assert(rs1.chunks.back().dst_off == 0 && rs1.chunks.back().bytes == 1024);
+
+  // Non-divisible offsets: rank 3's shard starts at (3*256 + 1) elems.
+  CollAlgo rs3 = build_coll_algo(make_rs(3, 1024), /*inplace=*/false);
+  assert(rs3.chunks.back().src_off == (3 * 256 + 1) * 4);
+
+  auto make_ag = [](int rank, size_t in_bytes) {
+    CollectiveConfig cfg;
+    cfg.kind = CollKind::AllGatherRing;
+    cfg.nranks = 4;
+    cfg.rank = rank;
+    cfg.input_bytes = in_bytes;
+    cfg.output_bytes = 4100;
+    cfg.tile_bytes = 512;
+    cfg.dtype = ScalarType::Float32;
+    return cfg;
+  };
+  build_coll_algo(make_ag(1, 1024), /*inplace=*/false);
+  threw = false;
+  try {
+    build_coll_algo(make_ag(1, 1028), /*inplace=*/false);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
+  // Misaligned to dtype size.
+  threw = false;
+  try {
+    build_coll_algo(make_ag(1, 1023), /*inplace=*/false);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
 }
 
 // Layer 4: lower
@@ -263,10 +625,8 @@ void test_lower_algo_signal_grouping() {
     return n;
   };
 
-  TiledResult g1 = lower_algo(algo, 512, /*inplace=*/false,
-                              /*stage_puts=*/false, /*signal_group_tiles=*/1);
-  TiledResult g2 = lower_algo(algo, 512, /*inplace=*/false,
-                              /*stage_puts=*/false, /*signal_group_tiles=*/2);
+  TiledResult g1 = lower_algo(algo, 512, /*signal_group_tiles=*/1);
+  TiledResult g2 = lower_algo(algo, 512, /*signal_group_tiles=*/2);
 
   size_t sig1 = count_kind(g1, ExecOpKind::Signal);
   size_t ws1 = count_kind(g1, ExecOpKind::WaitSignal);
@@ -287,10 +647,11 @@ void test_lower_algo_signal_grouping() {
   for (auto const& op : g2.ops)
     if (op.kind == ExecOpKind::Signal) assert(op.deps.size() == 2);
 
-  // 2-tile groups collapse to group index 0 in the tag's low 16 bits.
+  // 2-tile groups collapse to group index 0 in the tag's low
+  // tag_group_bits bits (adaptive layout; all-ones value reserved).
   for (auto const& op : g2.ops) {
     if (op.kind == ExecOpKind::Signal || op.kind == ExecOpKind::WaitSignal)
-      assert((op.tag & 0xFFFFu) == 0);
+      assert((op.tag & ((1ull << g2.tag_group_bits) - 1)) == 0);
   }
 
   // G=2: each group contributes 2 fusion-carrying puts, group size 2.
@@ -301,11 +662,84 @@ void test_lower_algo_signal_grouping() {
   for (auto [w, g] : g2.wait_group_size) assert(g == 2);
 }
 
+void test_lower_algo_reduce_scatter() {
+  printf("[test] lower_algo reduce-scatter...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::ReduceScatterRing;
+  cfg.output_bytes = 1024;
+  TiledResult tiled = build_tiled(cfg, /*inplace=*/false);
+
+  // Full-input-layout scratch for partial shards.
+  assert(tiled.staging_bytes_required == 4096);
+
+  size_t nreduce = 0, copy_tiles = 0;
+  bool saw_signal = false, saw_wait = false;
+  for (auto const& op : tiled.ops) {
+    if (op.kind == ExecOpKind::Signal) saw_signal = true;
+    if (op.kind == ExecOpKind::WaitSignal) saw_wait = true;
+    if (op.kind == ExecOpKind::Reduce) {
+      // Reduce: Scratch (peer partial) += Input (my contribution).
+      assert(op.src_buf_role == CollectiveBufferRole::Input);
+      assert(op.dst_buf_role == CollectiveBufferRole::Scratch);
+      ++nreduce;
+    }
+    if (op.kind == ExecOpKind::Put) {
+      if (op.dst_peer == ~0u) {
+        // Local own-shard copy tiles -> Output[0..shard).
+        assert(op.src_buf_role == CollectiveBufferRole::Scratch);
+        assert(op.dst_buf_role == CollectiveBufferRole::Output);
+        assert(op.dst_off < 1024);
+        ++copy_tiles;
+      } else {
+        // Remote puts always land in the peer's Scratch.
+        assert(op.dst_buf_role == CollectiveBufferRole::Scratch);
+      }
+    }
+  }
+  assert(saw_signal && saw_wait);
+  assert(nreduce == 6);    // 3 RecvReduce chunks x 2 tiles
+  assert(copy_tiles == 2); // 1024-byte copy / 512-byte tiles
+}
+
+void test_lower_algo_allgather() {
+  printf("[test] lower_algo all-gather...\n");
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
+  cfg.kind = CollKind::AllGatherRing;
+  cfg.input_bytes = 1024;
+  TiledResult tiled = build_tiled(cfg, /*inplace=*/false);
+
+  assert(tiled.staging_bytes_required == 0);
+
+  size_t copy_tiles = 0, remote_puts = 0, in_src_puts = 0;
+  for (auto const& op : tiled.ops) {
+    if (op.kind != ExecOpKind::Put) continue;
+    if (op.dst_peer == ~0u) {
+      // Local own-shard copy Input[0] -> Output[offset].
+      assert(op.src_buf_role == CollectiveBufferRole::Input);
+      assert(op.dst_buf_role == CollectiveBufferRole::Output);
+      assert(op.dst_off >= 1024 && op.dst_off < 2048);
+      ++copy_tiles;
+    } else {
+      // Ring puts land in the peer's Output layout; the first-step own
+      // shard send reads Input[0], forwards read Output.
+      assert(op.dst_buf_role == CollectiveBufferRole::Output);
+      if (op.src_buf_role == CollectiveBufferRole::Input)
+        ++in_src_puts;
+      else
+        assert(op.src_buf_role == CollectiveBufferRole::Output);
+      ++remote_puts;
+    }
+  }
+  assert(copy_tiles == 2);   // 1024-byte copy / 512-byte tiles
+  assert(remote_puts == 6);  // 3 ring Put chunks x 2 tiles
+  assert(in_src_puts == 2);  // first-step send: 1 chunk x 2 tiles
+}
+
 void test_lower_algo_alltoall_basic() {
   printf("[test] tile_and_schedule alltoall...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256);
   cfg.kind = CollKind::AllToAllPairwise;
-  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/true);
   TiledResult tiled = lower_algo(algo, /*tile_bytes=*/256);
   assert(!tiled.ops.empty());
   bool has_signal = false;
@@ -332,7 +766,7 @@ void test_full_pipeline_alltoall() {
   printf("[test] full pipeline alltoall...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 2, 8192, 512);
   cfg.kind = CollKind::AllToAllPairwise;
-  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
+  CollAlgo algo = build_coll_algo(cfg, /*inplace=*/true);
   TiledResult tiled = lower_algo(algo, cfg.tile_bytes);
   assert(!tiled.ops.empty());
 }
@@ -419,11 +853,19 @@ int main() {
   test_build_coll_algo_empty_ops_for_zero_data();
   test_build_coll_algo_ring_allreduce_basic();
   test_build_coll_algo_alltoall_basic();
+  test_build_coll_algo_reduce_scatter_basic();
+  test_build_coll_algo_allgather_basic();
+  test_build_coll_algo_allgather_inplace();
+  test_build_coll_algo_tree_basic();
+  test_build_coll_algo_ag_rs_validation();
+  test_verify_algo_pairing_all_kinds();
 
   // Layer 4
   test_lower_algo_rejects_zero_tile_bytes();
   test_lower_algo_ring_basic();
   test_lower_algo_signal_grouping();
+  test_lower_algo_reduce_scatter();
+  test_lower_algo_allgather();
   test_lower_algo_alltoall_basic();
 
   // Integration

@@ -132,12 +132,10 @@ int main(int argc, char** argv) {
 
   if (rank == 1) {
     bool show_counters = (std::getenv("UK_CCL_PATH_COUNTERS") != nullptr);
-    constexpr size_t kMaxTiles = 256;
     std::printf("%9s %10s %10s\n", "Size", "Lat(us)", "BW(GB/s)");
     for (int si = 0; si < kSizes; ++si) {
       size_t bytes = sizes[si];
-      size_t tile_bytes =
-          std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
+      size_t tile_bytes = adaptive_tile_bytes(bytes);
       CollectiveConfig ar;
       ar.nranks = 2;
       ar.rank = rank;
@@ -199,11 +197,9 @@ int main(int argc, char** argv) {
         "\nSprayExecutor %s benchmark done\n",
         (coll_kind == CollKind::AllToAllPairwise) ? "AllToAll" : "AllReduce");
   } else {
-    constexpr size_t kMaxTiles = 256;
     for (int si = 0; si < kSizes; ++si) {
       size_t bytes = sizes[si];
-      size_t tile_bytes =
-          std::max((size_t)65536, (bytes + kMaxTiles - 1) / kMaxTiles);
+      size_t tile_bytes = adaptive_tile_bytes(bytes);
       CollectiveConfig ar;
       ar.nranks = 2;
       ar.rank = rank;

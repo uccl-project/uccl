@@ -29,9 +29,8 @@ static int gi(int c, char** v, std::string n, int d) {
 static void cp(std::shared_ptr<Communicator> cm, int r,
                PeerTransportKind tpt = PeerTransportKind::Ipc) {
   int p = (r == 0) ? 1 : 0;
-  // IPC paths are same-host only; skip them cross-node instead of
-  // triggering benign but alarming resolve errors.
-  if (cm->same_host(p)) {
+  // IPC paths are same-host only; skip them cross-node or for non-IPC transports.
+  if (tpt != PeerTransportKind::Tcp && cm->same_host(p)) {
     if (r < p) {
       cm->connect(p, PeerTransportKind::Ipc);
       cm->accept(p, PeerTransportKind::Ipc);
@@ -47,6 +46,15 @@ static void cp(std::shared_ptr<Communicator> cm, int r,
     } else {
       cm->accept(p, PeerTransportKind::Rdma);
       cm->connect(p, PeerTransportKind::Rdma);
+    }
+  }
+  if (tpt == PeerTransportKind::Tcp) {
+    if (r < p) {
+      cm->connect(p, PeerTransportKind::Tcp);
+      cm->accept(p, PeerTransportKind::Tcp);
+    } else {
+      cm->accept(p, PeerTransportKind::Tcp);
+      cm->connect(p, PeerTransportKind::Tcp);
     }
   }
 }
@@ -77,7 +85,8 @@ int main(int argc, char** argv) {
   void* d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&d, B));
   comm->register_buffer(1, d, B);
-  comm->resolve_remote_buffer(peer, 1, 30000);
+  if (tpt_kind != PeerTransportKind::Tcp)
+    comm->resolve_remote_buffer(peer, 1, 30000);
 
   uint32_t sizes[] = {4096, 65536, 262144, 1048576, 4194304, 16777216};
   int iters = 100;
