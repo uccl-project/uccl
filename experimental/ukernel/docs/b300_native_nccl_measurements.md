@@ -98,3 +98,46 @@ reduce instead of adding blocks.
 
 - `NCCL_NTHREADS=256` at 32 channels (thread-count sensitivity)
 - Record native AllGather / ReduceScatter baselines the same way
+# 8-card sweep (2026-08-05) — shim vs native at 4/8 ranks
+
+Environment: all 8 B300 GPUs idle, same node. `mpirun -np N` with each
+process selecting device = MPI local rank (no CUDA_VISIBLE_DEVICES
+filtering; nccl-tests uses `localRank` as the device ordinal).
+
+## 256MB AllReduce (algbw / busbw)
+
+| ranks | shim | native |
+|---|---|---|
+| 2 | ~580us / 455 GB/s oop | ~529us / 507 GB/s |
+| 4 | ~23-28ms / 9-12 GB/s | ~675us / 597 GB/s |
+| 8 | ~45-60ms / 5-6 GB/s | ~719us / 653 GB/s |
+
+All runs wrong=0. Native scales normally (2→8 ranks stays sub-ms); the
+shim collapses at 4+ ranks (~40-70x slower than 2-rank).
+
+## Bottleneck analysis (4-rank, -n 1, nsys)
+
+- 336 tiled ops per iteration (2-rank: 224) — op count is fine (1.5x).
+- P2P memcpys: 6144 x 4MB, ~9.9us each (~405 GB/s per copy) — the DMA
+  puts are fast; total memcpy time only ~10ms/iter.
+- multiPersistentKernel dominates kernel time but mostly idle-spin +
+  relaunch at the default 500us grace; with
+  `UK_CCL_DEV_IDLE_EXIT_US=50000` the real reduce work is ~3.8ms/iter.
+- Remaining ~20ms/iter is per-op scheduling/signaling: 4M allreduce
+  takes ~11ms (i.e. ~3.7ms per ring step for 1MB of data) — pure
+  per-op signal/sync overhead, not bandwidth.
+- 2-rank per-op cost is ~2.6us; 4-rank is ~83us (32x) — signaling
+  coordination does not scale with peer count.
+
+Conclusion: the shim's multi-rank allreduce is gated by per-tile
+signal/sync overhead (one Signal/WaitSignal per tile, host-side ring
+polling). Fix directions: signal aggregation (signal_group_tiles > 1),
+batching waits, or device-side signal matching. 2-rank remains fast
+(put/reduce overlap fine); 4+ ranks need this before the 8-GPU
+capability is usable.
+
+## 8-rank alltoall (harness is 2-rank only)
+
+Not yet measured — `bench/alltoall_perf.cu` is hardcoded to 2 ranks.
+Extending it (nranks param, unique-id broadcast, per-peer send/recv
+loop) is the next step once the allreduce signaling issue is addressed.
