@@ -218,21 +218,33 @@ harness verify):
 
 ### 256MB AllToAll, 2/4/8 ranks (all wrong=0)
 
-Shim: `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=1` (BLK=1 is no longer
-viable — the staging copy runs on the persistent worker and 1 block
-drops it to ~3.4ms). Native: nccl-tests `alltoall_perf`.
+Shim: out-of-place (`sendbuff != recvbuff`), `UK_CCL_LARGE_TILES=1`.
+The self-slice is a cudaMemcpyAsync on the user stream and every peer
+exchange is an IPC put, so **BLK is irrelevant** (BLK=1 == BLK=64 within
+noise) and the persistent worker never moves AllToAll data. Native:
+nccl-tests `alltoall_perf` (also out-of-place).
 
 | ranks | shim (us) | shim algbw | shim busbw | native (us) | native algbw | native busbw |
 |---:|---:|---:|---:|---:|---:|---:|
-| 2 | 378 | 710 | 355 | 415.6 | 645.8 | 322.9 |
-| 4 | 628 | 427 | 321 | 424.7 | 632.1 | 474.0 |
-| 8 | 884 | 303 | 266 | 432.6 | 620.5 | 543.0 |
+| 2 | 312 | 861 | 431 | 415.6 | 645.8 | 322.9 |
+| 4 | 544 | 493 | 370 | 424.7 | 632.1 | 474.0 |
+| 8 | 706 | 380 | 333 | 432.6 | 620.5 | 543.0 |
 
-BLK sweep at 2 ranks (staged): BLK=1 3387us, BLK=8 725us, BLK=16 506us,
-BLK=64 395us — the staging copy needs compute blocks; the old BLK=1
-alltoall numbers (284us) were racy and not trustworthy.
+The shim wins at 2 ranks (one big IPC put per direction on NVLink) and
+trails at 4/8: more peers means more per-peer puts, and the IPC send
+window/launch overhead per put does not pipeline as well as native's
+multi-channel path. The gap is now purely the IPC put path scaling —
+the next lever is put-window / launch pipelining, not staging or SM
+blocks.
 
-Next steps for AllToAll: move the staging copy to the copy engine
-(cudaMemcpyAsync) instead of the persistent worker so low-BLK stays
-viable, and pipeline copy/put per tile across the copies-done
-rendezvous (the same overlap machinery the AllReduce path needs).
+### Why native has no staging copy
+
+Native/nccl-tests AllToAll is **out-of-place** (separate sendbuff and
+recvbuff): the sender reads only its own sendbuff and writes only the
+receiver's recvbuff, so no partition is both read and written
+concurrently — no staging needed. The shim's ncclAllToAll used to be
+in-place-only, which creates exactly that aliasing (partition p is both
+the source of my Put to peer p and the target of peer p's Put into my
+buffer) and forced the Input->Scratch staging copy. Supporting
+out-of-place removes the copy entirely; in-place remains available
+through the staged variant for callers that need it.

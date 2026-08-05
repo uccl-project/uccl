@@ -246,19 +246,20 @@ optimization pass.
 
 ### AllToAll (256MB, in-place for the shim; `-g 1 -c 1 -n 20`)
 
-Shim config: `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=1` (staged
-exchange — see alltoall_comparison.md for the in-place race fix).
+Shim config: out-of-place `sendbuff != recvbuff`,
+`UK_CCL_LARGE_TILES=1`; the self-slice is a copy-engine
+cudaMemcpyAsync on the user stream and all peer exchanges are IPC puts,
+so BLK is irrelevant (BLK=1 == BLK=64). See alltoall_comparison.md for
+the in-place race fix and why native needs no staging (out-of-place).
 Native = nccl-tests `alltoall_perf` (ncclSend/ncclRecv, out-of-place).
 
 | ranks | shim time (us) | shim algbw (GB/s) | shim busbw (GB/s) | native time (us) | native algbw (GB/s) | native busbw (GB/s) |
 |---:|---:|---:|---:|---:|---:|---:|
-| 2 | 378 | 710 | 355 | 415.6 | 645.8 | 322.9 |
-| 4 | 628 | 427 | 321 | 424.7 | 632.1 | 474.0 |
-| 8 | 884 | 303 | 266 | 432.6 | 620.5 | 543.0 |
+| 2 | 312 | 861 | 431 | 415.6 | 645.8 | 322.9 |
+| 4 | 544 | 493 | 370 | 424.7 | 632.1 | 474.0 |
+| 8 | 706 | 380 | 333 | 432.6 | 620.5 | 543.0 |
 
-The shim wins at 2 ranks (no cross-rank staging rendezvous) and loses
-at 4/8: every send is staged through scratch (local copy + per-peer
-copies-done rendezvous before the put), so per-rank work grows with
-rank count while native stays flat (~420us). Fix directions: copy-engine
-staging instead of the persistent worker, and per-tile pipelining of
-copy/put across the rendezvous.
+The shim wins at 2 ranks and trails at 4/8 — the gap is per-peer IPC
+put overhead (send window / launch pipelining), not staging or SM
+blocks; the persistent worker is completely out of the AllToAll data
+path.

@@ -52,7 +52,9 @@ Match NCCL:
 - AllGather / ReduceScatter detect NCCL's in-place form (sendbuff
   pointing inside recvbuff, and vice versa) and run the in-place
   algorithm variant;
-- AllToAll requires in-place (`sendbuff == recvbuff`).
+- AllToAll supports out-of-place (`sendbuff != recvbuff`, preferred —
+  pure IPC puts, no staging) and in-place (runs a staged variant for
+  correctness).
 
 ## Unsupported APIs
 

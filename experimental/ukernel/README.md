@@ -508,11 +508,12 @@ and [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Summary
 |---|---:|---:|---:|
 | AllReduce 256M shim | 578us / 464 GB/s | 1026us / 262 GB/s | 1943us / 138 GB/s |
 | AllReduce 256M native | 521us / 515 GB/s | 673us / 399 GB/s | 719us / 373 GB/s |
-| AllToAll 256M shim | 378us / 710 GB/s | 628us / 427 GB/s | 884us / 303 GB/s |
+| AllToAll 256M shim | 312us / 861 GB/s | 544us / 493 GB/s | 706us / 380 GB/s |
 | AllToAll 256M native | 416us / 646 GB/s | 425us / 632 GB/s | 433us / 621 GB/s |
 
 AllReduce is 1.1x/1.5x/2.7x native at 2/4/8 ranks (per-tile host
-signal chain); AllToAll beats native at 2 ranks and trails at 4/8
-(every send is staged through scratch after the in-place race fix).
-Next optimization targets: signal aggregation + batched waits for
-AllReduce, copy-engine staging + copy/put pipelining for AllToAll.
+signal chain); AllToAll is out-of-place with no staging — pure IPC/copy
+engine, BLK-independent — beating native at 2 ranks and trailing at
+4/8 on per-peer put pipelining. Next optimization targets: signal
+aggregation + batched waits for AllReduce, IPC put-window pipelining
+for AllToAll.
