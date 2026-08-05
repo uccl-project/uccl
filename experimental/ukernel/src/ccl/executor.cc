@@ -729,6 +729,20 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   }
   TiledResult const& tiled = plan->tiled;
 
+  // Lazy worker: a plan with a device op (reduce, or a device-routed
+  // put) needs the persistent kernel; a pure-put plan (alltoall via
+  // IPC/RDMA) must not launch one. Ensure it here on the user thread —
+  // not in enqueue_loop, where a synchronous worker launch previously
+  // blocked the only thread that drives backend progress.
+  bool has_device_op = false;
+  for (auto const& op : tiled.ops) {
+    if (op.kind == ExecOpKind::Reduce) {
+      has_device_op = true;
+      break;
+    }
+  }
+  if (has_device_op) device_be_->ensure_worker();
+
   // Allocate or grow internal scratch buffer as needed.
   ensure_internal_scratch(tiled.staging_bytes_required);
 
