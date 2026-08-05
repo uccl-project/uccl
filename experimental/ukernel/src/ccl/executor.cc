@@ -1138,6 +1138,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           run.plan->sig_group_size[idx] > 0) {
         uint16_t grp = run.plan->sig_group_size[idx];
         if (run.fused_sig_cnt[idx] == grp) {
+          if (uk_dbg_lvl() >= 1)
+            std::fprintf(stderr, "[tss] r%d sig_local idx=%u t=%lld\n",
+                         rank_or_neg1(), idx, tss_us());
           run.submitted[idx] = 1;
           complete_op_local(run, idx);
           ++run.sig_local;
@@ -1283,6 +1286,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
+        if (uk_dbg_lvl() >= 1)
+          std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
+                       rank_or_neg1(), sg, tss_us());
       }
       // Roll back slots whose submission failed, defer the rest
       // (releasing their tentative inflight charges).
@@ -1345,6 +1351,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
+        if (uk_dbg_lvl() >= 1)
+          std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
+                       rank_or_neg1(), sg, tss_us());
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
@@ -1392,6 +1401,7 @@ void SprayExecutor::enqueue_loop() {
     return std::chrono::milliseconds(env ? std::stol(env) : 30000);
   }();
   while (!stop_) {
+    long long const loop_t0 = tss_us();
     // Snapshot running runs under the global lock, then process them
     // lock-free — collect_ready/enqueue_to_ring do backend submission
     // work that must not serialize submit/poll/wait behind runs_mutex_.
@@ -1455,7 +1465,14 @@ void SprayExecutor::enqueue_loop() {
       collect_ready(*run);
       enqueue_to_ring(*run);
     }
-    if (snapshot.empty()) std::this_thread::yield();
+    if (snapshot.empty()) {
+      std::this_thread::yield();
+    } else {
+      long long const dt = tss_us() - loop_t0;
+      if (uk_dbg_lvl() >= 1 && dt > 500)
+        std::fprintf(stderr, "[tss] r%d loop_slow dt=%lldus t=%lld\n",
+                     rank_or_neg1(), dt, tss_us());
+    }
   }
 }
 
