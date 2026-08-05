@@ -657,16 +657,28 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
     throw std::invalid_argument(
         "alltoall self split size must match between input and output");
 
-  // AllToAll is always inplace — self-slice needs no local copy.
-  // Every send must be staged through scratch: partition p is both the
-  // source of my Put to peer p AND the target of peer p's Put into my
-  // buffer, so an unstaged send reads data the peer's incoming copy may
-  // already have overwritten (observed at 2/4 ranks: the receiver got
-  // its own data back once the peer's source was clobbered mid-copy).
-  // Variable splits additionally need staging so a peer's write does
-  // not overlap unread local data. The lowering emits a local
+  // Out-of-place (sendbuff != recvbuff, the nccl-tests/native shape):
+  // no aliasing, so sends go straight out of Input via IPC — no staging
+  // copy, no SM worker involvement. The self-slice is an explicit local
+  // Input->Output copy (native sends partition r to itself).
+  //
+  // In-place (sendbuff == recvbuff): partition p is both the source of
+  // my Put to peer p AND the target of peer p's Put into my buffer, so
+  // every send must be staged through scratch — an unstaged send reads
+  // data the peer's incoming copy may already have overwritten
+  // (observed at 2/4 ranks: the receiver got its own data back once the
+  // peer's source was clobbered mid-copy). The lowering emits a local
   // Input->Scratch copy ahead of each staged Put.
   bool const stage = inplace;
+
+  if (!inplace && self_slice_bytes > 0) {
+    // pairless Put chunk -> plain local copy, no signal.
+    builder.add_op(AlgoOpKind::Put, self_slice_bytes,
+                   input_prefix[static_cast<size_t>(config.rank)],
+                   output_prefix[static_cast<size_t>(config.rank)], -1, -1,
+                   {}, kNoPairId, BufRef{BufSpace::Input, 0},
+                   BufRef{BufSpace::Output, 0});
+  }
 
   for (int peer = 0; peer < config.nranks; ++peer) {
     if (peer == config.rank) continue;
@@ -708,8 +720,6 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
 
 CollAlgo build_coll_algo(CollectiveConfig const& config, bool inplace) {
   require_collective_config(config);
-  if (config.kind == CollKind::AllToAllPairwise && !inplace)
-    throw std::invalid_argument("AllToAll requires inplace (input == output)");
   switch (config.kind) {
     case CollKind::AllReduceRing:
       return build_allreduce_ring_algo(config, inplace);

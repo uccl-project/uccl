@@ -81,8 +81,9 @@ static double now_s() {
 static void run_one(void* sendbuf, void* recvbuf, size_t count, int rank,
                     int nranks, ncclComm_t comm, cudaStream_t stream) {
 #ifdef USE_SHIM_API
-  // Shim extension: in-place only, so the exchange lives in recvbuf.
-  NCCLCHK(ncclAllToAll(recvbuf, recvbuf, count, ncclFloat, comm, stream));
+  // Shim extension: out-of-place supported (no staging copy); in-place
+  // also accepted but runs the staged variant.
+  NCCLCHK(ncclAllToAll(sendbuf, recvbuf, count, ncclFloat, comm, stream));
 #else
   // Native NCCL: no ncclAllToAll. nccl-tests pattern — one grouped
   // send/recv pair per peer (recv first, the conventional order),

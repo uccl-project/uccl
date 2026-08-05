@@ -373,7 +373,6 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
                           ncclDataType_t datatype, ncclComm_t comm,
                           gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
-  if (sendbuff != recvbuff) return ncclInvalidUsage;
   size_t elem_sz = scalar_type_size(to_scalar(datatype));
   if (elem_sz == 0) return ncclInvalidArgument;
   // NCCL semantics: count is the element count per rank PAIR — the
@@ -381,7 +380,6 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   if (count > SIZE_MAX / (static_cast<size_t>(comm->nranks) * elem_sz))
     return ncclInvalidArgument;
   size_t total_bytes = count * elem_sz * static_cast<size_t>(comm->nranks);
-  void* buf = recvbuff;
   CollectiveConfig cfg;
   cfg.kind = CollKind::AllToAllPairwise;
   cfg.nranks = comm->nranks;
@@ -390,7 +388,10 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   cfg.output_bytes = total_bytes;
   cfg.tile_bytes = adaptive_tile_bytes(total_bytes);
   cfg.dtype = to_scalar(datatype);
-  return run_coll(comm, cfg, buf, buf, stream);
+  // Out-of-place preferred (native semantics, no staging); in-place is
+  // still accepted and runs the staged variant.
+  cfg.inplace = (sendbuff == recvbuff);
+  return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
 }
 
 static ncclResult_t unsupported(const char* fn) {
