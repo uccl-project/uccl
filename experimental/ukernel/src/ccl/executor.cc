@@ -1590,6 +1590,7 @@ void SprayExecutor::drain_signal_loop() {
   int iter = 0;
   static int dbg_count = 0;
   while (!stop_) {
+    long long const sig_t0 = tss_us();
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(),
              iter);
@@ -1603,6 +1604,10 @@ void SprayExecutor::drain_signal_loop() {
     if (ns == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
+      long long const dt = tss_us() - sig_t0;
+      if (uk_dbg_lvl() >= 1 && dt > 200)
+        std::fprintf(stderr, "[tss] r%d sig_loop dt=%lldus t=%lld\n",
+                     rank_or_neg1(), dt, tss_us());
       continue;
     }
     if (uk_dbg_lvl() >= 1)
