@@ -6,9 +6,10 @@
 // ncclSend/ncclRecv, which the shim does not implement; this bench uses
 // ncclAllToAll directly (shim implements it, native has it).
 //
-// Usage (2 ranks, 1 GPU each, same node):
-//   mpirun -np 1 ./alltoall_perf --rank=0 --bytes=268435456 \
-//        : -np 1 ./alltoall_perf --rank=1 --bytes=268435456
+// Usage (N ranks, 1 GPU each, same node):
+//   mpirun -np 1 ./alltoall_perf --rank=0 --nranks=N --bytes=268435456 \
+//        : -np 1 ./alltoall_perf --rank=1 --nranks=N --bytes=268435456 \
+//        : ... : -np 1 ./alltoall_perf --rank=N-1 --nranks=N --bytes=...
 // rank 0 writes the NCCL unique id to /tmp/uk_a2a_id; rank 1 polls for it.
 // Report: algbw = (nranks-1)/nranks * total_bytes / avg_time (nccl-tests
 // convention), busbw = algbw * nranks/(nranks-1). total_bytes is the full
@@ -28,13 +29,11 @@ static const char* kIdPath = "/tmp/uk_a2a_id";
 
 // Build with -DUSE_SHIM_API for the ukernel shim (its nccl.h adds a
 // ncclAllToAll extension; native NCCL has no such API). Without the
-// define the harness uses ncclSend/ncclRecv to build the same 2-rank
+// define the harness uses ncclSend/ncclRecv to build the same N-rank
 // alltoall exchange, which is what nccl-tests' alltoall_perf does on
-// native NCCL. Same buffers, same count semantics.
-//
-// 2-rank exchange (in-place, buf = 2*count floats):
-//   rank r sends buf[r*count .. (r+1)*count) to peer, receives the
-//   peer's slice into buf[(1-r)*count .. (2-r)*count).
+// native NCCL. Same buffers, same count semantics (count = elements per
+// rank pair; partition r of rank x is sent to rank r and partition r is
+// received from rank r).
 
 static long get_long_arg(int argc, char** argv, const char* name, long def) {
   std::string n(name);
@@ -73,34 +72,36 @@ static double now_s() {
     }                                                                  \
   } while (0)
 
-static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
-                    cudaStream_t stream) {
+static void run_one(void* buf, size_t count, int rank, int nranks,
+                    ncclComm_t comm, cudaStream_t stream) {
 #ifdef USE_SHIM_API
   NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
 #else
-  // Native NCCL: no ncclAllToAll. 2-rank ring exchange (in-place):
-  // send my slice to the peer, receive the peer's slice.
-  int peer = 1 - rank;
-  // Standard alltoall: partition i of my buffer goes to rank i. With 2
-  // ranks I send partition peer and receive the peer's partition peer
-  // (= my own partition's slot), i.e. both offsets are peer * count.
-  size_t off = static_cast<size_t>(peer) * count;
-  // nccl-tests pattern: group the send/recv pair (recv first, the
-  // conventional order) so the exchange is one collective operation.
+  // Native NCCL: no ncclAllToAll. nccl-tests pattern — one grouped
+  // send/recv pair per peer (recv first, the conventional order),
+  // including self (harmless no-op), so the exchange is one collective.
   NCCLCHK(ncclGroupStart());
-  NCCLCHK(ncclRecv(static_cast<char*>(buf) + off * sizeof(float), count,
-                   ncclFloat, peer, comm, stream));
-  NCCLCHK(ncclSend(static_cast<char*>(buf) + off * sizeof(float), count,
-                   ncclFloat, peer, comm, stream));
+  for (int p = 0; p < nranks; ++p) {
+    size_t off = static_cast<size_t>(p) * count;
+    NCCLCHK(ncclRecv(static_cast<char*>(buf) + off * sizeof(float), count,
+                     ncclFloat, p, comm, stream));
+    NCCLCHK(ncclSend(static_cast<char*>(buf) + off * sizeof(float), count,
+                     ncclFloat, p, comm, stream));
+  }
   NCCLCHK(ncclGroupEnd());
 #endif
 }
 
-// Fill buf with rank-specific values, run one exchange, and check that
-// partition peer now holds the peer's original values.
-static bool verify_exchange(void* buf, size_t count, int rank,
+// Fill partition j with (rank*1000 + j), run one exchange, and check
+// that partition i now holds (i*1000 + rank) — the value rank i stored
+// in its partition `rank` before the exchange.
+static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
                             ncclComm_t comm, cudaStream_t stream) {
-  std::vector<float> fill(2 * count, static_cast<float>(rank + 1));
+  std::vector<float> fill(static_cast<size_t>(nranks) * count);
+  for (int p = 0; p < nranks; ++p)
+    for (size_t i = 0; i < count; ++i)
+      fill[static_cast<size_t>(p) * count + i] =
+          static_cast<float>(rank * 1000 + p);
   CUDACHK(cudaMemcpy(buf, fill.data(), fill.size() * sizeof(float),
                      cudaMemcpyHostToDevice));
   // IPC puts are one-sided writes into the peer's buffer, so a peer's
@@ -109,68 +110,43 @@ static bool verify_exchange(void* buf, size_t count, int rank,
   // exchange starts.
   NCCLCHK(ncclBarrier(comm, stream));
   CUDACHK(cudaStreamSynchronize(stream));
-  run_one(buf, count, rank, comm, stream);
+  run_one(buf, count, rank, nranks, comm, stream);
   // Full device sync: the shim's IPC puts run on the adapter's own
   // streams; stream-syncing only our stream may race their completion.
   // (The shim's collective-completion signal should order this, but
   // verify must not depend on it — check the data after everything
   // lands.)
   CUDACHK(cudaDeviceSynchronize());
-  // The shim's IPC puts are submitted by a host-side send_worker thread;
-  // a device sync does not wait for that thread to enqueue the memcpys.
-  // Give it time to submit, then sync again, to separate "submission
-  // timing" from "wrong address" as the failure cause.
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  CUDACHK(cudaDeviceSynchronize());
-  int peer = 1 - rank;
-  std::vector<float> got(count);
-  CUDACHK(cudaMemcpy(got.data(),
-                     static_cast<char*>(buf) +
-                         static_cast<size_t>(peer) * count * sizeof(float),
-                     count * sizeof(float), cudaMemcpyDeviceToHost));
-  // Scan the whole buffer for where the peer's data actually landed.
-  std::vector<float> whole(2 * count);
+  // Scan the whole buffer for where peer data landed (diagnostic).
+  std::vector<float> whole(static_cast<size_t>(nranks) * count);
   CUDACHK(cudaMemcpy(whole.data(), buf, whole.size() * sizeof(float),
                      cudaMemcpyDeviceToHost));
-  size_t first_peer_val = 2 * count, n_peer_val = 0;
-  for (size_t i = 0; i < 2 * count; ++i) {
-    if (whole[i] == static_cast<float>(peer + 1)) {
-      if (first_peer_val == 2 * count) first_peer_val = i;
-      ++n_peer_val;
+  size_t bad = 0, first_bad = whole.size();
+  for (int p = 0; p < nranks; ++p) {
+    float want = static_cast<float>(p * 1000 + rank);
+    for (size_t i = 0; i < count; ++i) {
+      float got = whole[static_cast<size_t>(p) * count + i];
+      if (got != want) {
+        ++bad;
+        if (first_bad == whole.size()) first_bad = static_cast<size_t>(p) * count + i;
+        if (bad <= 8)
+          fprintf(stderr, "[r%d] verify bad[%zu] (part %d, idx %zu)=%.0f want=%.0f\n",
+                  rank, static_cast<size_t>(p) * count + i, p, i, got, want);
+      }
     }
   }
-  fprintf(stderr,
-          "[r%d] peer-val: first@%zu (want %zu..%zu) count=%zu/%zu\n", rank,
-          first_peer_val, static_cast<size_t>(peer) * count,
-          static_cast<size_t>(peer + 1) * count - 1, n_peer_val, 2 * count);
-  std::vector<float> mine(count);
-  CUDACHK(cudaMemcpy(mine.data(),
-                     static_cast<char*>(buf) +
-                         static_cast<size_t>(rank) * count * sizeof(float),
-                     count * sizeof(float), cudaMemcpyDeviceToHost));
-  fprintf(stderr, "[r%d] my[0..3]=%.0f,%.0f,%.0f,%.0f peer[0..3]=%.0f,%.0f,%.0f,%.0f\n",
-          rank, mine[0], mine[1], mine[2], mine[3], got[0], got[1], got[2],
-          got[3]);
-  bool ok = true;
-  for (size_t i = 0; i < count; ++i) {
-    if (got[i] != static_cast<float>(peer + 1)) {
-      ok = false;
-      if (i < 64 || i % (count / 8) < 2)
-        fprintf(stderr, "[r%d] verify bad[%zu]=%.0f want=%.0f\n", rank, i,
-                got[i], static_cast<float>(peer + 1));
-      break;
-    }
-  }
-  return ok;
+  fprintf(stderr, "[r%d] verify: bad=%zu/%zu first@%zu\n", rank, bad,
+          whole.size(), first_bad);
+  return bad == 0;
 }
 
 int main(int argc, char** argv) {
   int rank = (int)get_long_arg(argc, argv, "--rank", 0);
+  int nranks = (int)get_long_arg(argc, argv, "--nranks", 2);
   size_t total_bytes = (size_t)get_long_arg(argc, argv, "--bytes", 1 << 28);
   int iters = (int)get_long_arg(argc, argv, "--iters", 20);
   int warmup = (int)get_long_arg(argc, argv, "--warmup", 5);
   int skip_verify = (int)get_long_arg(argc, argv, "--skip-verify", 0);
-  const int nranks = 2;
 
   int dev = rank;
   CUDACHK(cudaSetDevice(dev));
@@ -189,10 +165,9 @@ int main(int argc, char** argv) {
       f = fopen(kIdPath, "rb");
       if (!f) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    if (!f) { fprintf(stderr, "rank1: no unique id file\n"); exit(1); }
+    if (!f) { fprintf(stderr, "r%d: no unique id file\n", rank); exit(1); }
     if (fread(&id, sizeof(id), 1, f) != 1) { fprintf(stderr, "id read fail\n"); exit(1); }
     fclose(f);
-    remove(kIdPath);
   }
 
   ncclComm_t comm;
@@ -208,20 +183,26 @@ int main(int argc, char** argv) {
 
   cudaStream_t stream;
   CUDACHK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  // All ranks joined (comm init done): rank 0 may now drop the id file
+  // so the next run starts fresh. Barrier first so no straggler is still
+  // reading it.
+  NCCLCHK(ncclBarrier(comm, stream));
+  CUDACHK(cudaStreamSynchronize(stream));
+  if (rank == 0) remove(kIdPath);
 
   if (!skip_verify) {
-    bool vok = verify_exchange(buf, count, rank, comm, stream);
+    bool vok = verify_exchange(buf, count, rank, nranks, comm, stream);
     fprintf(stderr, "[r%d] verify %s\n", rank, vok ? "OK" : "FAIL");
   }
 
   for (int i = 0; i < warmup; ++i)
-    run_one(buf, count, rank, comm, stream);
+    run_one(buf, count, rank, nranks, comm, stream);
   CUDACHK(cudaStreamSynchronize(stream));
 
   std::vector<double> times;
   for (int i = 0; i < iters; ++i) {
     double t0 = now_s();
-    run_one(buf, count, rank, comm, stream);
+    run_one(buf, count, rank, nranks, comm, stream);
     CUDACHK(cudaStreamSynchronize(stream));
     double dt = now_s() - t0;
     if (i >= 2) times.push_back(dt);
