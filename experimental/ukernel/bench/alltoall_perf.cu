@@ -105,19 +105,10 @@ static bool verify_exchange(void* buf, size_t count, int rank,
                      cudaMemcpyHostToDevice));
   // IPC puts are one-sided writes into the peer's buffer, so a peer's
   // verify-fill can race our puts (fill after a put lands overwrites the
-  // exchanged data). Handshake on files so both ranks' fills complete
-  // before the exchange starts (shim ncclBarrier currently crashes).
-  std::string ready = "/tmp/uk_a2a_ready" + std::to_string(rank);
-  FILE* rf = fopen(ready.c_str(), "wb");
-  if (rf) { fwrite("x", 1, 1, rf); fclose(rf); }
-  int peer_r = 1 - rank;
-  for (int i = 0; i < 200; ++i) {
-    FILE* pf = fopen(("/tmp/uk_a2a_ready" + std::to_string(peer_r)).c_str(),
-                     "rb");
-    if (pf) { fclose(pf); break; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  remove(ready.c_str());
+  // exchanged data). Barrier so both ranks' fills complete before the
+  // exchange starts.
+  NCCLCHK(ncclBarrier(comm, stream));
+  CUDACHK(cudaStreamSynchronize(stream));
   run_one(buf, count, rank, comm, stream);
   // Full device sync: the shim's IPC puts run on the adapter's own
   // streams; stream-syncing only our stream may race their completion.

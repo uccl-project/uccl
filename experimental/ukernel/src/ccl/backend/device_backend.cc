@@ -254,8 +254,8 @@ bool DeviceBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
 size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
                                                 uint32_t const* be_idx,
                                                 size_t n) {
-  ensure_runtime();
   size_t accepted = 0;
+  bool runtime_ready = false;
   // Records of ops submitted in this batch, appended to pending_ under a
   // single lock at the end. Single-writer assumption: only the executor's
   // enqueue thread calls this (same as BeSlotTable).
@@ -269,6 +269,16 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
     if (!build_task(c, args, tt)) {
       ++accepted;
       continue;
+    }
+    // Lazy runtime: pure-put collectives (e.g. alltoall via the
+    // transport/IPC path) never submit device tasks, so they must not
+    // spin up the persistent worker (its idle kernel interferes with the
+    // DMA put pipeline; BLK=1 measured fastest for alltoall partly for
+    // this reason). Only create the pool once a real device task
+    // (reduce/copy/device-put) is actually being enqueued.
+    if (!runtime_ready) {
+      ensure_runtime();
+      runtime_ready = true;
     }
 
     // Capacity check + FIFO pick under lock (cheap), heavy ops outside.
@@ -320,6 +330,7 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
 }
 
 size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
+  if (!worker_pool_) return 0;  // no device tasks ever enqueued
   // do_drain may run on user threads (SprayExecutor::wait drives
   // progress); save/restore the caller's CUDA device around it.
   int prev_device = -1;

@@ -66,7 +66,10 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
     constexpr size_t kChunkBytes =
         (UK_REDUCE_SMEM_BYTES - sizeof(TmaSemaphore)) &
         ~static_cast<size_t>(31);
-    if (bytes <= 4096) {
+    // cp.async.bulk requires a multiple-of-16 size; a 4-byte allreduce
+    // barrier (ncclBarrier) previously hit this with bytes=4 and crashed
+    // the GPU context. Fall back to the plain path for odd sizes.
+    if (bytes <= 4096 && bytes % 16 == 0) {
       if (tid == 0) {
         TmaSemaphore sem;
         tma_init_semaphore(sem, 1);
@@ -552,7 +555,12 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
 
-  if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096) {
+  // cp.async.bulk needs multiple-of-16 size and 16B-aligned addresses;
+  // the 4-byte ncclBarrier allreduce used to crash here.
+  if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096 &&
+      bytes % 16 == 0 &&
+      (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src) & 0xF) == 0) {
     T* dst_ptr = static_cast<T*>(dst);
     T const* src_ptr = static_cast<T const*>(src);
     T* temp_result = static_cast<T*>(smem_buf);
