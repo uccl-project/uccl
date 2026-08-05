@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -243,6 +244,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
   size_t mr_table_capacity_ = 0;
   std::mutex mr_reg_mu_;  // for resize + registration set
   std::unordered_set<uint32_t> registered_ids_;
+
+  // DMA-BUF fds for GPU memory registered via cuMemGetHandleForAddressRange.
+  // Keyed by buffer_id; fd closed on deregistration.
+  std::unordered_map<uint32_t, int> dmabuf_fds_;
+  std::mutex dmabuf_fds_mu_;
 
   // Atomic peer table: sized on demand.
   std::unique_ptr<std::atomic<RdmaPeer*>[]> peer_table_;

@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cuda.h>
 #include <unistd.h>
 
 namespace UKernel {
@@ -101,11 +102,7 @@ int pick_dev_for_gpu(int gpu_idx) {
     char buf[32] = {};
     if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
     fclose(fp);
-    if (port_state != 4) {  // 4 = IBV_PORT_ACTIVE
-      fprintf(stderr, "[pick_dev] skip %s (port state=%d, not active)\n",
-              name.c_str(), port_state);
-      continue;
-    }
+    if (port_state != 4) continue;  // 4 = IBV_PORT_ACTIVE
 
     uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
@@ -113,12 +110,16 @@ int pick_dev_for_gpu(int gpu_idx) {
       best_idx = j;
     }
   }
+  std::string sel_name;
+  if (best_idx >= 0) sel_name = ibv_get_device_name(devs[best_idx]);
   ibv_free_device_list(devs);
 
   if (best_idx < 0) {
     fprintf(stderr, "[pick_dev] no active RDMA port found\n");
     return -1;
   }
+  fprintf(stderr, "[pick_dev] selected %s (pcie_dist=%u) for gpu %d\n",
+          sel_name.c_str(), best_dist, gpu_idx);
   return best_idx;
 }
 
@@ -846,15 +847,62 @@ bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
 
   ensure_mr_slot(buf_id);
 
-  // Check if already registered (fast path)
+  // Fast path: already registered
   {
     ibv_mr* existing = mr_table_[buf_id].load(std::memory_order_acquire);
     if (existing) return true;
   }
 
-  ibv_mr* mr = ibv_reg_mr(pd_, ptr, len,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_READ);
+  ibv_mr* mr = nullptr;
+
+  // Traditional ibv_reg_mr first: no 64KB alignment requirement (page
+  // alignment suffices), so unaligned user buffers register fine on
+  // hosts with nvidia-peermem. DMA-BUF is the fallback for hosts
+  // without peermem — and it strictly requires a 64KB-aligned address.
+  {
+    mr = ibv_reg_mr(pd_, ptr, len,
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                        IBV_ACCESS_REMOTE_READ);
+  }
+
+  // Fallback: DMA-BUF registration (no nvidia-peermem required), but
+  // the address MUST be 64KB-aligned (RDMA dma-buf offset rule).
+  // Refuse loudly instead of silently degrading — the user must align
+  // their buffer (e.g. cudaMalloc with padding + round-up) to use the
+  // DMA-BUF path.
+  if (!mr) {
+    constexpr uint64_t kDmaBufAlign = 65536;
+    if (reinterpret_cast<uint64_t>(ptr) % kDmaBufAlign != 0) {
+      std::fprintf(stderr,
+                   "[rdma-reg] buf=%u ptr=%p len=%zu: ibv_reg_mr failed and "
+                   "DMA-BUF path requires a 64KB-aligned buffer address "
+                   "(ptr %% 64K = %llu). Align the buffer (e.g. pad the "
+                   "allocation and round the pointer up to 64KB) or install "
+                   "nvidia-peermem so ibv_reg_mr can register GPU memory.\n",
+                   buf_id, ptr, len,
+                   (unsigned long long)(reinterpret_cast<uint64_t>(ptr) %
+                                        kDmaBufAlign));
+      return false;
+    }
+    int dmabuf_fd = -1;
+    CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(ptr);
+    CUresult cu_ret = cuMemGetHandleForAddressRange(
+        &dmabuf_fd, dptr, len, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    if (cu_ret == CUDA_SUCCESS && dmabuf_fd >= 0) {
+      mr = ibv_reg_dmabuf_mr(pd_, 0, len,
+                             reinterpret_cast<uint64_t>(ptr), dmabuf_fd,
+                             IBV_ACCESS_LOCAL_WRITE |
+                                 IBV_ACCESS_REMOTE_WRITE |
+                                 IBV_ACCESS_REMOTE_READ);
+      if (mr) {
+        std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+        dmabuf_fds_[buf_id] = dmabuf_fd;
+      } else {
+        close(dmabuf_fd);
+      }
+    }
+  }
+
   if (!mr) return false;
 
   mr_table_[buf_id].store(mr, std::memory_order_release);
@@ -871,6 +919,18 @@ void RdmaTransportAdapter::deregister_memory(uint32_t buf_id) {
   ibv_mr* mr = mr_table_[buf_id].exchange(nullptr, std::memory_order_acq_rel);
   if (mr) {
     ibv_dereg_mr(mr);
+
+    int dmabuf_fd = -1;
+    {
+      std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+      auto it = dmabuf_fds_.find(buf_id);
+      if (it != dmabuf_fds_.end()) {
+        dmabuf_fd = it->second;
+        dmabuf_fds_.erase(it);
+      }
+    }
+    if (dmabuf_fd >= 0) close(dmabuf_fd);
+
     std::lock_guard<std::mutex> lk(mr_reg_mu_);
     registered_ids_.erase(buf_id);
   }
@@ -950,7 +1010,7 @@ void RdmaTransportAdapter::send_worker() {
         p = peer_table_[static_cast<size_t>(e.peer_rank)].load(
             std::memory_order_acquire);
       }
-      if (!p || !p->put_ready || (fused && (e.tag >> 32))) {
+      if (!p || !p->put_ready) {
         publish_put_completion(e.comm_rid, true);
         continue;
       }
@@ -1040,6 +1100,11 @@ void RdmaTransportAdapter::send_worker() {
         wr.num_sge = 1;
         if (fused && ci + 1 == ck.count) {
           wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          // The immediate intentionally carries only the tag's low 32
+          // bits — the unsalted tag (the run epoch lives in the high
+          // bits, and low32(salted) == unsalted). Uniqueness across runs
+          // comes from per-peer FIFO arrival-order matching on the
+          // receiver (Communicator::on_imm_received), not from the tag.
           // Immediate data travels in network byte order.
           wr.imm_data = htonl(static_cast<uint32_t>(e.tag));
         } else {
@@ -1183,12 +1248,12 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
 
       // Recv completions (write-with-imm signals) are handled before the
       // send-side wr_id decoding — their wr_id is a recv WQE id, not a
-      // send_id. The 32-bit immediate carries the signal tag (in network
-      // byte order), which the NIC surfaces only after the written data
-      // has landed.
+      // send_id. The 32-bit immediate carries the unsalted signal tag (in
+      // network byte order), which the NIC surfaces only after the written
+      // data has landed; matching is per-peer FIFO in arrival order.
       if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
         if (wc[i].status == IBV_WC_SUCCESS && comm_)
-          comm_->on_signal_received(rank, ntohl(wc[i].imm_data));
+          comm_->on_imm_received(rank, ntohl(wc[i].imm_data));
         // Repost on the QP that consumed the WQE.
         bool reposted = false;
         for (int qi = 0; qi < p.num_qps; ++qi) {

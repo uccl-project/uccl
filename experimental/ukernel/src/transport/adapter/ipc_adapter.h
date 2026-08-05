@@ -96,7 +96,8 @@ class IpcAdapter final : public TransportAdapter {
 
   void send_worker();
   void recv_worker();
-  bool send_one(RingElem* e);
+  bool launch_one(RingElem* e, size_t stream_idx);
+  void complete_one(RingElem const* e, bool ok);
   bool recv_one(RingElem* e);
   // Write a signal tag into the peer's shm ring. Multi-producer safe:
   // both the executor's enqueue thread (plain signals) and the send
@@ -115,7 +116,8 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<bool> stop_{false};
   std::thread send_th_;
   std::thread recv_th_;
-  std::vector<std::pair<gpuStream_t, gpuEvent_t>> ipc_ctx_;
+  std::vector<gpuStream_t> ipc_ctx_;
+  size_t send_batch_ = 16;
 
   std::mutex seq_mu_;
   std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv

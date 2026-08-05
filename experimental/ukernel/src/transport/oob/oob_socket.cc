@@ -56,15 +56,6 @@ int env_int_or_default(char const* name, int default_value) {
   }
 }
 
-bool env_bool_or_default(char const* name, bool default_value) {
-  char const* v = std::getenv(name);
-  if (!v || v[0] == '\0') return default_value;
-  if (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F') {
-    return false;
-  }
-  return true;
-}
-
 bool connect_with_timeout(int fd, sockaddr_in const& addr, int timeout_ms) {
   int const current_flags = ::fcntl(fd, F_GETFL, 0);
   if (current_flags < 0) return false;
@@ -247,7 +238,14 @@ bool ShmExchanger::begin_leader_run() {
   bool owner_alive = false;
   if (owner_pid > 1 && pid_is_alive(static_cast<pid_t>(owner_pid))) {
     if (owner_start_ticks == 0) {
-      owner_alive = true;
+      // No start_ticks available to verify PID ownership.  Try to read the
+      // current ticks; if we can read them, the PID is alive but could be a
+      // different process (PID reuse).  Without the original ticks we cannot
+      // distinguish, so treat the store as potentially stale and take over.
+      uint64_t cur = 0;
+      owner_alive = read_process_start_ticks(static_cast<pid_t>(owner_pid),
+                                             cur) &&
+                    cur != 0;
     } else {
       uint64_t current_ticks = 0;
       owner_alive = read_process_start_ticks(static_cast<pid_t>(owner_pid),
@@ -1498,9 +1496,10 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
       return;
     }
     if (!shm_->begin_leader_run()) {
-      fprintf(stderr, "[oob] leader: begin_leader_run failed for %s\n",
-              ns.c_str());
-      return;
+      // Another process already owns the shm store; become non-leader.
+      shm_.reset();
+      node_leader_ = false;
+      goto init_non_leader;
     }
     running_.store(true, std::memory_order_release);
     socket_ = std::make_unique<SocketExchanger>(
@@ -1523,10 +1522,7 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
     last_replayed_epoch_ = 0;
     relay_thread_ = std::thread(&HierarchicalExchanger::relay_loop, this);
   } else {
-    // Non-leader path: the local leader creates the shm store only
-    // after its own (possibly slow) startup — torch import, CUDA init,
-    // socket bring-up. A short timeout here loses that race on slow
-    // machines, so default it generously (env-overridable).
+  init_non_leader:
     int const startup_ms =
         env_int_or_default("UHM_OOB_LEADER_STARTUP_TIMEOUT_MS", 30000);
     shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/false,

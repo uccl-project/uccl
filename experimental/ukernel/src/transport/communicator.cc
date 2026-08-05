@@ -149,7 +149,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   if (!is_server && config_->exchanger_ip == "0.0.0.0")
     config_->exchanger_ip = "127.0.0.1";
   std::cout << "[INFO] Using hierarchical bootstrap exchanger as "
-            << (is_server ? "server" : "client") << " " << config_->exchanger_ip
+            << (is_server ? "server" : "client") << " "
+            << config_->exchanger_ip << ":" << config_->exchanger_port
             << std::endl;
   exchanger_client_ = std::make_shared<HierarchicalExchanger>(
       (global_rank_ == 0), config_->exchanger_ip, config_->exchanger_port,
@@ -193,7 +194,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   if (ring_sz != (size_t)-1) {
     sig_wait_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
     if (sig_wait_completion_ring_)
-      jring_init(sig_wait_completion_ring_, 2048, sizeof(SignalCompletion), 0,
+      jring_init(sig_wait_completion_ring_, 2048, sizeof(SignalCompletion), 1,
                  1);
   }
 
@@ -1006,7 +1007,8 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
 
 bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
                                               PeerTransportKind transport,
-                                              unsigned rid, uint32_t count) {
+                                              unsigned rid, uint32_t count,
+                                              bool force_imm) {
   if (!ensure_path(peer, /*is_put=*/false, transport)) return false;
 
   PeerTransportKind kind = get_wait_transport_kind(peer, transport);
@@ -1021,6 +1023,43 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
     {
       std::lock_guard<std::mutex> lk(signal_waits_mu_);
       tcp_signal_rids_[rid] = {peer, tag};
+    }
+    return true;
+  }
+
+  // Fused RDMA PutSignal waits match write-with-imm arrivals, not the
+  // 64-bit tag map: either the caller flagged it (the executor's mirror of
+  // a fused group) or the kind+tag shape says the tag must have travelled
+  // as a 32-bit immediate. Matching is per-peer FIFO in arrival order.
+  bool const imm =
+      force_imm || (kind == PeerTransportKind::Rdma && tag <= 0xFFFFFFFFull);
+  if (imm) {
+    uint32_t const low32 = static_cast<uint32_t>(tag);
+    SignalCompletion ev{};
+    bool matched = false;
+    {
+      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      auto& buf = buffered_imms_[peer];
+      uint32_t remaining = count;
+      // Drain buffered arrivals, but only while the OLDEST buffered imm
+      // matches: an earlier arrival belongs to an earlier wait.
+      while (remaining > 0 && !buf.empty() && buf.front() == low32) {
+        buf.pop_front();
+        --remaining;
+      }
+      if (buf.empty()) buffered_imms_.erase(peer);
+      if (remaining == 0) {
+        ev.rid = rid;
+        ev.tag = tag;
+        ev.peer = peer;
+        ev.failed = false;
+        matched = true;
+      } else {
+        pending_imm_waits_[peer].push_back({rid, remaining, tag, low32});
+      }
+    }
+    if (matched) {
+      jrpush(sig_wait_completion_ring_, ev);
     }
     return true;
   }
@@ -1066,6 +1105,10 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
       ev.failed = false;
       matched = true;
     } else {
+      static const bool kLogSig = std::getenv("UK_CCL_LOG_SIG") != nullptr;
+      if (kLogSig)
+        std::fprintf(stderr, "[sig-wait r%d] peer=%d tag=%#lx count=%u\n",
+                     global_rank_, peer, (unsigned long)tag, remaining);
       pending_signal_waits_[peer][tag].emplace_back(rid, remaining);
     }
   }
@@ -1166,8 +1209,10 @@ size_t Communicator::try_complete_sig_send(CompletionResult* results,
 
 size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
                                            size_t max) {
-  drain_ipc_signals();
-
+  // Dequeue from the completion ring FIRST to free capacity, then drain
+  // IPC signals — avoiding a deadlock where drain_ipc_signals blocks on
+  // jrpush because the ring is full while the only consumer (this thread)
+  // is stuck trying to push.
   size_t count = 0;
   if (sig_wait_completion_ring_) {
     count = jring_sc_dequeue_burst(sig_wait_completion_ring_, events,
@@ -1183,6 +1228,22 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
     for (size_t i = 0; i < count; ++i)
       events[i].user_ctx = consume_user_ctx(events[i].rid);
   }
+
+  // Drain overflow: completions that couldn't fit the ring.
+  {
+    std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
+    size_t to_drain = std::min(static_cast<size_t>(max) - count,
+                               sig_wait_overflow_.size());
+    for (size_t i = 0; i < to_drain; ++i) {
+      events[count] = sig_wait_overflow_[i];
+      events[count].user_ctx = consume_user_ctx(events[count].rid);
+      ++count;
+    }
+    sig_wait_overflow_.erase(sig_wait_overflow_.begin(),
+                             sig_wait_overflow_.begin() + to_drain);
+  }
+
+  drain_ipc_signals();
 
   // Drain data completion ring for TCP signal completions.
   if (put_completion_ring_ && count < max) {
@@ -1240,6 +1301,39 @@ void Communicator::drain_ipc_signals() {
   }
 }
 
+void Communicator::dump_signal_state() const {
+  std::lock_guard<std::mutex> lk(signal_waits_mu_);
+  for (auto const& [peer, sigs] : pending_signals_) {
+    std::string sample;
+    int n = 0;
+    for (uint64_t t : sigs) {
+      if (n++ >= 10) { sample += "..."; break; }
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%#lx ", (unsigned long)t);
+      sample += buf;
+    }
+    std::fprintf(stderr,
+                 "[sig-dump r%d] peer %d: %zu buffered arrivals: %s\n",
+                 global_rank_, peer, sigs.size(), sample.c_str());
+  }
+  for (auto const& [peer, tags] : pending_signal_waits_) {
+    size_t waits = 0;
+    std::string sample;
+    for (auto const& [tag, dq] : tags) {
+      waits += dq.size();
+      if (sample.size() < 120) {
+        sample += std::to_string((unsigned long)tag);
+        sample += "x";
+        sample += std::to_string(dq.size());
+        sample += " ";
+      }
+    }
+    std::fprintf(stderr,
+                 "[sig-dump r%d] peer %d: %zu posted waits across %zu tags: %s\n",
+                 global_rank_, peer, waits, tags.size(), sample.c_str());
+  }
+}
+
 size_t Communicator::poll(unsigned* rids, size_t count) {
   drain_ipc_signals();
 
@@ -1291,6 +1385,7 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
 }
 
 void Communicator::on_signal_received(int peer, uint64_t tag) {
+  static const bool kLogSig = std::getenv("UK_CCL_LOG_SIG") != nullptr;
   SignalCompletion ev{};
   bool matched = false;
   bool consumed = false;
@@ -1319,9 +1414,59 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
     if (!consumed) {
       pending_signals_[peer].push_back(tag);
     }
+    if (kLogSig)
+      std::fprintf(stderr,
+                   "[sig-recv r%d] peer=%d tag=%#lx %s\n", global_rank_,
+                   peer, (unsigned long)tag,
+                   matched ? "matched" : (consumed ? "counted" : "buffered"));
+  }
+      if (matched) {
+    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1,
+                              nullptr) != 1) {
+      std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
+      sig_wait_overflow_.push_back(ev);
+    }
+  }
+}
+
+void Communicator::on_imm_received(int peer, uint32_t low32) {
+  SignalCompletion ev{};
+  bool matched = false;
+  {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    auto it = pending_imm_waits_.find(peer);
+    if (it != pending_imm_waits_.end() && !it->second.empty()) {
+      ImmWait& front = it->second.front();
+      if (front.low32 == low32) {
+        if (--front.remaining == 0) {
+          ev.rid = front.rid;
+          ev.tag = front.tag;
+          ev.peer = peer;
+          ev.failed = false;
+          it->second.pop_front();
+          if (it->second.empty()) pending_imm_waits_.erase(it);
+          matched = true;
+        }
+      } else {
+        // Arrival order is the matching contract; a tag mismatch at the
+        // head means the two ranks' streams diverged. Drop the imm (the
+        // stalled wait is the watchdog's job) rather than complete the
+        // wrong wait.
+        std::fprintf(stderr,
+                     "[imm-recv r%d] peer=%d imm=%#x head waits tag=%#lx — "
+                     "dropping\n",
+                     global_rank_, peer, low32, (unsigned long)front.tag);
+      }
+    } else {
+      buffered_imms_[peer].push_back(low32);
+    }
   }
   if (matched) {
-    jrpush(sig_wait_completion_ring_, ev);
+    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1,
+                              nullptr) != 1) {
+      std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
+      sig_wait_overflow_.push_back(ev);
+    }
   }
 }
 
@@ -1356,12 +1501,24 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) return false;
-    uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
-    if (rkey != 0) {
-      mr.key = rkey;
-      std::lock_guard<std::mutex> lk(resource_mu_);
-      local_buffer_to_mr_[buffer_id].key = rkey;
+    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) {
+      // RDMA registration failure is NOT fatal: the buffer can still be
+      // used over IPC (same-host puts never need an rkey). Publish the MR
+      // entry with rkey=0 — the peer's wait_mr sees a valid entry, IPC
+      // resolve works, and a cross-node RDMA put rejects cleanly at send
+      // time (send_put_async_with_rid requires a nonzero rkey) instead of
+      // silently publishing an empty entry that breaks IPC too.
+      std::fprintf(stderr,
+                   "[reg_mr r%d] WARN RDMA reg buf=%u ptr=%p len=%zu failed; "
+                   "continuing with rkey=0 (IPC-only for this buffer)\n",
+                   global_rank_, buffer_id, local_buf, len);
+    } else {
+      uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+      if (rkey != 0) {
+        mr.key = rkey;
+        std::lock_guard<std::mutex> lk(resource_mu_);
+        local_buffer_to_mr_[buffer_id].key = rkey;
+      }
     }
   }
 
@@ -1372,8 +1529,14 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   NamedMRInfos payload{};
   payload.generation = mr_generation_.fetch_add(1, std::memory_order_relaxed);
   payload.entries.push_back(NamedMR{buffer_id, mr});
-  return oob_put(*exchanger_client_, oob_namespace(),
-                 mr_global_buffer_key(global_rank_, buffer_id), payload);
+  bool ok = oob_put(*exchanger_client_, oob_namespace(),
+                    mr_global_buffer_key(global_rank_, buffer_id), payload);
+  if (!ok)
+    std::fprintf(stderr,
+                 "[reg_mr r%d] ERROR: failed to publish mr:rank:%d:buf:%u "
+                 "(exchanger store full?)\n",
+                 global_rank_, global_rank_, buffer_id);
+  return ok;
 }
 
 bool Communicator::dereg_mr(uint32_t buffer_id) {
@@ -1432,6 +1595,12 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   constexpr int kPollMs = 10;
   int elapsed = 0;
   NamedMRInfos payload{};
+  auto fail = [&](char const* why) {
+    std::fprintf(stderr,
+                 "[wait_mr r%d] FAIL key=mr:rank:%d:buf:%u (%s)\n",
+                 global_rank_, owner_rank, buffer_id, why);
+    return false;
+  };
   while (true) {
     int poll_to =
         (timeout_ms < 0) ? kPollMs : std::min(kPollMs, timeout_ms - elapsed);
@@ -1440,17 +1609,16 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
                  poll_to)) {
       if (timeout_ms >= 0) {
         elapsed += kPollMs;
-        if (elapsed >= timeout_ms) return false;
+        if (elapsed >= timeout_ms) return fail("key not found");
       }
       continue;
     }
 
     if (payload.entries.empty()) {
-      if (timeout_ms >= 0) {
-        elapsed += kPollMs;
-        if (elapsed >= timeout_ms) return false;
-      }
-      continue;
+      // An EMPTY entry is an explicit failure signal (the owner failed
+      // to register the buffer and published a placeholder for
+      // fail-fast). Never retry it — the entry is not going to change.
+      return fail("empty entries");
     }
 
     // First-ever resolve must be accepted unconditionally: the initial publish
@@ -1471,7 +1639,7 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
 
     if (timeout_ms >= 0) {
       elapsed += kPollMs;
-      if (elapsed >= timeout_ms) return false;
+      if (elapsed >= timeout_ms) return fail("stale generation, no cached rkey");
     }
   }
 
@@ -1648,21 +1816,28 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
     // First-ever resolve, or a newer publish. The initial publish generation
     // (0) equals the default last_gen (0); without the have_last_gen guard a
     // re-resolve of an already-resolved buffer (generation unchanged) would
-    // spin forever. Skip stale (invalid) deregister entries.
+    // spin forever. A deregister (invalid) entry is NOT a resolution: keep
+    // waiting for a valid publish without recording its generation —
+    // recording it would let the reuse branch below short-circuit a
+    // later re-publish with the stale cached item.
     if (!have_last_gen || info.generation != last_gen) {
-      std::lock_guard<std::mutex> lk(mr_gen_mu_);
-      last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
-          info.generation;
-      last_gen = info.generation;
-      have_last_gen = true;
       if (!info.valid) {
-        continue;  // stale deregister entry — wait for next publish
+        if (timeout_ms >= 0) {
+          elapsed += kPollMs;
+          if (elapsed >= timeout_ms) return false;
+        }
+        continue;  // deregister entry — wait for the valid publish
       }
       break;
     }
 
-    // Same generation we already resolved successfully before: reuse it.
-    return true;
+    // Same generation: reuse only with a cached VALID item (mirrors
+    // wait_mr's cached-rkey check).
+    if (ipc_manager_.get_ipc(owner_rank, buffer_id).valid) return true;
+    if (timeout_ms >= 0) {
+      elapsed += kPollMs;
+      if (elapsed >= timeout_ms) return false;
+    }
   }
 
   IPCItem state{};
@@ -1791,6 +1966,14 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
   uintptr_t const base = reinterpret_cast<uintptr_t>(item.direct_ptr);
   uintptr_t const resolved = base + item.base_offset + offset;
   *out_ptr = reinterpret_cast<void*>(resolved);
+  static int dbg_cnt = 0;
+  if (dbg_cnt++ < 12)
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[resolve r%d] peer=%d buf=%u off=%zu base_off=%llu base=%#lx "
+           "resolved=%#lx bytes=%zu",
+           global_rank_, remote_rank, remote_buffer_id, offset,
+           (unsigned long long)item.base_offset, (unsigned long)base,
+           (unsigned long)resolved, bytes);
   if (out_device_idx != nullptr) {
     *out_device_idx = item.device_idx;
   }
@@ -1798,15 +1981,43 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
 }
 
 bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
-  return reg_mr(buffer_id, ptr, len, true) &&
-         reg_ipc(buffer_id, ptr, len, true);
+  bool ok = reg_mr(buffer_id, ptr, len, true);
+
+  // Only exchange IPC handles if there is at least one IPC-connected peer.
+  bool has_ipc_peer = false;
+  for (int r = 0; r < world_size_; ++r) {
+    if (r != global_rank_ && has_put_path(r, PeerTransportKind::Ipc)) {
+      has_ipc_peer = true;
+      break;
+    }
+  }
+  if (has_ipc_peer) ok = reg_ipc(buffer_id, ptr, len, true) && ok;
+
+  return ok;
 }
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
-  if (!wait_mr(peer_rank, buffer_id, timeout_ms) ||
-      !wait_ipc(peer_rank, buffer_id, timeout_ms))
+  // Same-host buffers are usable over IPC with rkey=0; RDMA/MR
+  // registration can fail for small allocations (observed for <4KB
+  // allreduces: 1K/4K/16K resolve failed with mr=0 ipc=1). The IPC item
+  // is sufficient, so only require it here.
+  if (same_host(peer_rank)) {
+    if (!wait_ipc(peer_rank, buffer_id, timeout_ms)) {
+      std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (ipc)\n",
+                   global_rank_, peer_rank, buffer_id);
+      return false;
+    }
+    return true;
+  }
+  bool ok_mr = wait_mr(peer_rank, buffer_id, timeout_ms);
+  bool ok_ipc = wait_ipc(peer_rank, buffer_id, timeout_ms);
+  if (!ok_mr || !ok_ipc) {
+    std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (mr=%d ipc=%d)\n",
+                 global_rank_, peer_rank, buffer_id, (int)ok_mr, (int)ok_ipc);
     return false;
+  }
+  // Cross-node: RDMA is required, so wait for a nonzero rkey.
   for (int retry = 0; retry < 10; ++retry) {
     MR mr = get_mr(peer_rank, buffer_id);
     if (mr.key != 0) break;

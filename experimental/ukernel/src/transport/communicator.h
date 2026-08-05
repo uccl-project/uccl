@@ -53,6 +53,10 @@ class Communicator {
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
 
+  // Debug: print signal-matching state per peer (buffered arrivals and
+  // posted-but-unmatched waits). Used by the executor's SIGUSR2 dump.
+  void dump_signal_state() const;
+
   bool connect(int rank,
                PeerTransportKind transport = PeerTransportKind::Unknown);
   bool accept(int rank,
@@ -80,8 +84,10 @@ class Communicator {
 
   // Async signal wait (tag-based matching via Communicator table)
   // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
-  // Matching is done in on_signal_received() (called by RdmaTransportAdapter
-  // poll_loop and by drain_ipc_signals for IPC).
+  // Matching is done in on_signal_received() (called by drain_ipc_signals
+  // for IPC and by RdmaTransportAdapter for 64-bit signal-QP arrivals) —
+  // except RDMA write-with-imm arrivals, which carry only the tag's low
+  // 32 bits and match per-peer FIFO in on_imm_received().
   // Completions are dequeued via try_complete_sig_wait().
   unsigned wait_signal_async(
       int peer, uint64_t tag,
@@ -100,7 +106,7 @@ class Communicator {
                                   PeerTransportKind transport, unsigned rid);
   bool wait_signal_async_with_rid(int peer, uint64_t tag,
                                   PeerTransportKind transport, unsigned rid,
-                                  uint32_t count = 1);
+                                  uint32_t count = 1, bool force_imm = false);
 
   // Fused put+signal: once the data lands, the peer observes `tag` as a
   // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
@@ -231,6 +237,9 @@ class Communicator {
 
   friend class RdmaTransportAdapter;
   void on_signal_received(int peer_rank, uint64_t tag);
+  // RDMA write-with-imm arrival (fused PutSignal): the immediate carries
+  // the tag's low 32 bits only.
+  void on_imm_received(int peer_rank, uint32_t low32);
   void drain_ipc_signals();
 
   void register_existing_local_mrs_with_rdma();
@@ -257,6 +266,10 @@ class Communicator {
   jring_t* put_completion_ring_ = nullptr;
   jring_t* sig_wait_completion_ring_ = nullptr;
   jring_t* sig_send_completion_ring_ = nullptr;
+
+  // Overflow buffer for sig_wait completions when the ring is full.
+  std::mutex sig_wait_overflow_mu_;
+  std::vector<SignalCompletion> sig_wait_overflow_;
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → waiters. A waiter carries a remaining
@@ -269,6 +282,22 @@ class Communicator {
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.
   std::unordered_map<int, std::deque<uint64_t>> pending_signals_;
+  // RDMA write-with-imm matching (fused PutSignal). Immediates carry only
+  // the tag's low 32 bits, which collide across runs (the epoch lives in
+  // the high bits), so matching is per-peer FIFO in arrival order. This is
+  // sound for the same reason the tag map is: ranks issue fused puts in
+  // symmetric order, all fused puts to one peer are pinned to a single QP
+  // (so arrival order == issue order), and a ±1 run skew still matches the
+  // OLDEST pending wait first — the conservative direction.
+  struct ImmWait {
+    unsigned rid;
+    uint32_t remaining;
+    uint64_t tag;  // unsalted tag reported in the completion event
+    uint32_t low32;
+  };
+  std::unordered_map<int, std::deque<ImmWait>> pending_imm_waits_;
+  // Immediates that arrived before their wait was registered.
+  std::unordered_map<int, std::deque<uint32_t>> buffered_imms_;
   // TCP signal completions go through the data ring; this maps rid → {peer,
   // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
