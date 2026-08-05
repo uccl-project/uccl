@@ -1581,8 +1581,16 @@ void SprayExecutor::drain_signal_loop() {
              rank_or_neg1(), ns, dbg_count);
     }
     if (ns == 0) {
-      for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
-      std::this_thread::yield();
+      // When waits are registered, arrivals are on the critical path:
+      // spin on pauses instead of yielding to the scheduler (at 8 ranks
+      // a yield can cost 50-200us of signal-drain latency). Yield only
+      // when nothing is waiting.
+      bool const waits_pending =
+          owned_comm_ && owned_comm_->has_pending_signal_waits();
+      int const burst = waits_pending ? 512 : 16;
+      for (int s = 0; s < burst && !stop_; ++s) machnet_pause();
+      if (!waits_pending || stop_.load(std::memory_order_relaxed))
+        std::this_thread::yield();
       long long const dt = tss_us() - sig_t0;
       if (uk_dbg_lvl() >= 1 && dt > 200)
         std::fprintf(stderr, "[tss] r%d sig_loop dt=%lldus t=%lld\n",

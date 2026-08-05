@@ -1301,6 +1301,11 @@ void Communicator::drain_ipc_signals() {
   }
 }
 
+bool Communicator::has_pending_signal_waits() const {
+  std::lock_guard<std::mutex> lk(signal_waits_mu_);
+  return !pending_signal_waits_.empty();
+}
+
 void Communicator::dump_signal_state() const {
   std::lock_guard<std::mutex> lk(signal_waits_mu_);
   for (auto const& [peer, sigs] : pending_signals_) {

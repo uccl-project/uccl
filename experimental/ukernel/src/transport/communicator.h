@@ -193,6 +193,11 @@ class Communicator {
 
   void re_register_all_mrs() { register_existing_local_mrs_with_rdma(); }
 
+  // True when any signal wait is registered (used by the executor's
+  // drain_signal_loop to busy-poll instead of yielding — the signal
+  // arrival cadence is on the collective critical path at 8 ranks).
+  bool has_pending_signal_waits() const;
+
  private:
   struct ResolvedPeer {
     CommunicatorMeta local_meta;
