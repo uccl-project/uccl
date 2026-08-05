@@ -83,10 +83,14 @@ static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
   int peer = 1 - rank;
   size_t send_off = static_cast<size_t>(rank) * count;
   size_t recv_off = static_cast<size_t>(peer) * count;
-  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
-                   ncclFloat, peer, comm, stream));
+  // nccl-tests pattern: group the send/recv pair (recv first, the
+  // conventional order) so the exchange is one collective operation.
+  NCCLCHK(ncclGroupStart());
   NCCLCHK(ncclRecv(static_cast<char*>(buf) + recv_off * sizeof(float), count,
                    ncclFloat, peer, comm, stream));
+  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
+                   ncclFloat, peer, comm, stream));
+  NCCLCHK(ncclGroupEnd());
 #endif
 }
 
