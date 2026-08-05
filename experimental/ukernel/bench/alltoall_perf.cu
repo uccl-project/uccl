@@ -111,6 +111,14 @@ static bool verify_exchange(void* buf, size_t count, int rank,
                      static_cast<char*>(buf) +
                          static_cast<size_t>(peer) * count * sizeof(float),
                      count * sizeof(float), cudaMemcpyDeviceToHost));
+  std::vector<float> mine(count);
+  CUDACHK(cudaMemcpy(mine.data(),
+                     static_cast<char*>(buf) +
+                         static_cast<size_t>(rank) * count * sizeof(float),
+                     count * sizeof(float), cudaMemcpyDeviceToHost));
+  fprintf(stderr, "[r%d] my[0..3]=%.0f,%.0f,%.0f,%.0f peer[0..3]=%.0f,%.0f,%.0f,%.0f\n",
+          rank, mine[0], mine[1], mine[2], mine[3], got[0], got[1], got[2],
+          got[3]);
   bool ok = true;
   for (size_t i = 0; i < count; ++i) {
     if (got[i] != static_cast<float>(peer + 1)) {
