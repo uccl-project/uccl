@@ -104,7 +104,12 @@ static bool verify_exchange(void* buf, size_t count, int rank,
   CUDACHK(cudaMemcpy(buf, fill.data(), fill.size() * sizeof(float),
                      cudaMemcpyHostToDevice));
   run_one(buf, count, rank, comm, stream);
-  CUDACHK(cudaStreamSynchronize(stream));
+  // Full device sync: the shim's IPC puts run on the adapter's own
+  // streams; stream-syncing only our stream may race their completion.
+  // (The shim's collective-completion signal should order this, but
+  // verify must not depend on it — check the data after everything
+  // lands.)
+  CUDACHK(cudaDeviceSynchronize());
   int peer = 1 - rank;
   std::vector<float> got(count);
   CUDACHK(cudaMemcpy(got.data(),
