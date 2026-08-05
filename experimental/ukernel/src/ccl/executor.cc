@@ -17,6 +17,15 @@
 namespace UKernel {
 namespace CCL {
 
+// Host timestamp (us) for [tss] diagnostics (UK_CCL_DEBUG>=1): used to
+// break down the per-ring-step signaling/scheduling chain on multi-rank
+// allreduce. Same-process timestamps are comparable.
+static inline long long tss_us() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 namespace {
 // SIGUSR2 requests a state dump of all running runs (printed by
 // enqueue_loop, not the handler). Debug aid for distributed stalls:
@@ -980,6 +989,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
              rank_or_neg1(), idx, (int)c.kind, c.dst_peer, (int)c.put_path,
              (unsigned long)c.tag, c.bytes);
     }
+    if (uk_dbg_lvl() >= 1)
+      std::fprintf(stderr, "[tss] r%d enq kind=%d tag=%lu t=%lld\n",
+                   rank_or_neg1(), (int)c.kind, (unsigned long)c.tag,
+                   tss_us());
 
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
@@ -1444,6 +1457,9 @@ void SprayExecutor::drain_dev_loop() {
              "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), n, dbg_count);
     }
+    if (n > 0 && uk_dbg_lvl() >= 1)
+      std::fprintf(stderr, "[tss] r%d dev_done n=%zu t=%lld\n",
+                   rank_or_neg1(), n, tss_us());
     if (n == 0) {
       std::this_thread::yield();
       continue;
@@ -1538,6 +1554,9 @@ void SprayExecutor::drain_signal_loop() {
       std::this_thread::yield();
       continue;
     }
+    if (uk_dbg_lvl() >= 1)
+      std::fprintf(stderr, "[tss] r%d sig_recv n=%zu t=%lld\n",
+                   rank_or_neg1(), ns, tss_us());
     while (ns > 0) {
       size_t valid = 0;
       for (size_t i = 0; i < ns; ++i) {

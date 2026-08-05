@@ -12,6 +12,14 @@
 namespace UKernel {
 namespace Transport {
 
+// Host timestamp (us) for [tss] diagnostics (UK_CCL_DEBUG>=1): breaks
+// down the put-completion -> signal chain on multi-rank allreduce.
+static inline long long tss_us() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
 namespace {
 
 constexpr int kIpcControlTimeoutMs = 50000;
@@ -479,6 +487,9 @@ void IpcAdapter::send_worker() {
       pending.pop_front();
       if (p.ok) GPU_RT_CHECK(gpuEventSynchronize(evs[p.evi]));
       free_evs.push_back(p.evi);
+      if (uk_dbg_lvl() >= 1)
+        std::fprintf(stderr, "[tss] r%d put_done peer=%d t=%lld\n",
+                     comm_->rank(), p.e.peer, tss_us());
       complete_one(&p.e, p.ok);
     }
   }
@@ -546,7 +557,12 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
         e->seq, std::memory_order_release);
     // Fused PutSignal: the peer observes the tag only after the data
     // has landed, matching a separate Signal op's semantics.
-    if (e->type == ReqType::PutSignal) ok = write_signal_ring(e->peer, e->tag);
+    if (e->type == ReqType::PutSignal) {
+      if (uk_dbg_lvl() >= 1)
+        std::fprintf(stderr, "[tss] r%d sig_send peer=%d tag=%lu t=%lld\n",
+                     comm_->rank(), e->peer, (unsigned long)e->tag, tss_us());
+      ok = write_signal_ring(e->peer, e->tag);
+    }
   }
   publish_put_completion(e->comm_rid, !ok);
 }
