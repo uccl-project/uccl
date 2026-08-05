@@ -100,16 +100,20 @@ static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
 // partition peer now holds the peer's original values.
 static bool verify_exchange(void* buf, size_t count, int rank,
                             ncclComm_t comm, cudaStream_t stream) {
-  float* f = static_cast<float*>(buf);
-  for (size_t i = 0; i < 2 * count; ++i) f[i] = static_cast<float>(rank + 1);
-  CUDACHK(cudaDeviceSynchronize());
+  std::vector<float> fill(2 * count, static_cast<float>(rank + 1));
+  CUDACHK(cudaMemcpy(buf, fill.data(), fill.size() * sizeof(float),
+                     cudaMemcpyHostToDevice));
   run_one(buf, count, rank, comm, stream);
   CUDACHK(cudaStreamSynchronize(stream));
   int peer = 1 - rank;
+  std::vector<float> got(count);
+  CUDACHK(cudaMemcpy(got.data(),
+                     static_cast<char*>(buf) +
+                         static_cast<size_t>(peer) * count * sizeof(float),
+                     count * sizeof(float), cudaMemcpyDeviceToHost));
   bool ok = true;
-  for (size_t i = static_cast<size_t>(peer) * count;
-       i < static_cast<size_t>(peer + 1) * count; ++i) {
-    if (f[i] != static_cast<float>(peer + 1)) {
+  for (size_t i = 0; i < count; ++i) {
+    if (got[i] != static_cast<float>(peer + 1)) {
       ok = false;
       break;
     }
