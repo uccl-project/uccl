@@ -24,8 +24,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 
 static const char* kIdPath = "/tmp/uk_a2a_id";
+static const char* kFillPath = "/tmp/uk_a2a_fill";
 
 // Build with -DUSE_SHIM_API for the ukernel shim (its nccl.h adds a
 // ncclAllToAll extension; native NCCL has no such API). Without the
@@ -106,10 +108,31 @@ static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
                      cudaMemcpyHostToDevice));
   // IPC puts are one-sided writes into the peer's buffer, so a peer's
   // verify-fill can race our puts (fill after a put lands overwrites the
-  // exchanged data). Barrier so both ranks' fills complete before the
-  // exchange starts.
-  NCCLCHK(ncclBarrier(comm, stream));
+  // exchanged data). Native NCCL has no ncclBarrier (shim extension), so
+  // use a portable file handshake: every rank announces its fill done,
+  // then waits until all N flags exist before the exchange starts.
   CUDACHK(cudaStreamSynchronize(stream));
+  char flag[256];
+  snprintf(flag, sizeof(flag), "%s_%d", kFillPath, rank);
+  FILE* ff = fopen(flag, "w");
+  if (!ff) { perror("fopen fill flag"); exit(1); }
+  fclose(ff);
+  for (int waited = 0; waited < 500; ++waited) {
+    bool all = true;
+    for (int p = 0; p < nranks; ++p) {
+      char pf[256];
+      snprintf(pf, sizeof(pf), "%s_%d", kFillPath, p);
+      if (access(pf, F_OK) != 0) { all = false; break; }
+    }
+    if (all) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  if (rank == 0)
+    for (int p = 0; p < nranks; ++p) {
+      char pf[256];
+      snprintf(pf, sizeof(pf), "%s_%d", kFillPath, p);
+      remove(pf);
+    }
   run_one(buf, count, rank, nranks, comm, stream);
   // Full device sync: the shim's IPC puts run on the adapter's own
   // streams; stream-syncing only our stream may race their completion.
@@ -183,11 +206,8 @@ int main(int argc, char** argv) {
 
   cudaStream_t stream;
   CUDACHK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  // All ranks joined (comm init done): rank 0 may now drop the id file
-  // so the next run starts fresh. Barrier first so no straggler is still
-  // reading it.
-  NCCLCHK(ncclBarrier(comm, stream));
-  CUDACHK(cudaStreamSynchronize(stream));
+  // ncclCommInitRank blocks until every rank has joined, so by now all
+  // ranks have read the id file — rank 0 may drop it for the next run.
   if (rank == 0) remove(kIdPath);
 
   if (!skip_verify) {
