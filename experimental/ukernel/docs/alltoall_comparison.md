@@ -130,3 +130,32 @@ native's tiled multi-channel path at this size.
 backend/device_backend.cc:326: driver shutting down" on B300. The
 harness works around it with a file handshake; the barrier path needs
 investigation (likely the 4-byte ring put/reduce path).
+
+## 2026-08-05: ncclBarrier fixed — root cause was buffer resolve, not TMA
+
+`ncclBarrier` (and all sub-4KB allreduces: 1K/4K/16K) failed in
+`Communicator::resolve_remote_buffer`: same-host transfers only need IPC
+(rkey=0), but the code waited for the peer's MR first and returned
+false on timeout — the same-host shortcut below was unreachable. MR
+registration fails for small allocations, so every small collective
+timed out. Fix: same-host requires `wait_ipc` only
+(`4a61ad3d`). 1K..1M allreduces and `ncclBarrier` now pass.
+
+While debugging, two genuine device-path bugs were also fixed (both
+would hang/crash small TMA transfers even after the resolve fix):
+- `%16` + 16B-alignment gates on the <=4KB TMA small paths (4-byte
+  cp.async.bulk is illegal) (`fc168d48`).
+- The small paths passed a **stack** `TmaSemaphore` to mbarrier ops —
+  not a valid shared-memory mbarrier address. The mbarrier is now carved
+  out of smem after the payload, and the store waits its bulk group
+  (`5a0a4691`). `ncclBarrier` payload also moved 4B -> 256B (`f3e92df1`,
+  harmless hardening).
+
+### Worker-laziness reverted
+
+Creating the persistent worker only on first device-task enqueue
+deadlocked the shim's allreduce path (no output, GPU idle) and was
+reverted (`89ce7108`). Pure-put alltoall still launches the idle
+single-block worker; deferring it safely needs an executor-level trigger
+that is understood (the enqueue-time lazy create blocked in
+ensure_runtime's waitWorker inside the executor's enqueue thread).
