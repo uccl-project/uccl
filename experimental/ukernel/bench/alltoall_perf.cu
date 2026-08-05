@@ -54,23 +54,6 @@ static double now_s() {
       .count();
 }
 
-static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
-                    cudaStream_t stream) {
-#ifdef USE_SHIM_API
-  NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
-#else
-  // Native NCCL: no ncclAllToAll. 2-rank ring exchange (in-place):
-  // send my slice to the peer, receive the peer's slice.
-  int peer = 1 - rank;
-  size_t send_off = static_cast<size_t>(rank) * count;
-  size_t recv_off = static_cast<size_t>(peer) * count;
-  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
-                   ncclFloat, peer, comm, stream));
-  NCCLCHK(ncclRecv(static_cast<char*>(buf) + recv_off * sizeof(float), count,
-                   ncclFloat, peer, comm, stream));
-#endif
-}
-
 #define CUDACHK(c)                                                   \
   do {                                                               \
     cudaError_t e = (c);                                             \
@@ -89,6 +72,23 @@ static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
       exit(1);                                                         \
     }                                                                  \
   } while (0)
+
+static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
+                    cudaStream_t stream) {
+#ifdef USE_SHIM_API
+  NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
+#else
+  // Native NCCL: no ncclAllToAll. 2-rank ring exchange (in-place):
+  // send my slice to the peer, receive the peer's slice.
+  int peer = 1 - rank;
+  size_t send_off = static_cast<size_t>(rank) * count;
+  size_t recv_off = static_cast<size_t>(peer) * count;
+  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
+                   ncclFloat, peer, comm, stream));
+  NCCLCHK(ncclRecv(static_cast<char*>(buf) + recv_off * sizeof(float), count,
+                   ncclFloat, peer, comm, stream));
+#endif
+}
 
 int main(int argc, char** argv) {
   int rank = (int)get_long_arg(argc, argv, "--rank", 0);
