@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
   size_t total_bytes = (size_t)get_long_arg(argc, argv, "--bytes", 1 << 28);
   int iters = (int)get_long_arg(argc, argv, "--iters", 20);
   int warmup = (int)get_long_arg(argc, argv, "--warmup", 5);
+  int skip_verify = (int)get_long_arg(argc, argv, "--skip-verify", 0);
   const int nranks = 2;
 
   int dev = rank;
@@ -208,8 +209,10 @@ int main(int argc, char** argv) {
   cudaStream_t stream;
   CUDACHK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
-  bool vok = verify_exchange(buf, count, rank, comm, stream);
-  fprintf(stderr, "[r%d] verify %s\n", rank, vok ? "OK" : "FAIL");
+  if (!skip_verify) {
+    bool vok = verify_exchange(buf, count, rank, comm, stream);
+    fprintf(stderr, "[r%d] verify %s\n", rank, vok ? "OK" : "FAIL");
+  }
 
   for (int i = 0; i < warmup; ++i)
     run_one(buf, count, rank, comm, stream);
