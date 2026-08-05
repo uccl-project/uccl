@@ -658,10 +658,15 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
         "alltoall self split size must match between input and output");
 
   // AllToAll is always inplace — self-slice needs no local copy.
-  // Variable splits can make a peer's write overlap local data this
-  // rank has not read yet: stage sends through scratch (mechanism in
-  // the lowering). Equal-split offsets never overlap, so no staging.
-  bool const stage = inplace && !config.input_split_bytes.empty();
+  // Every send must be staged through scratch: partition p is both the
+  // source of my Put to peer p AND the target of peer p's Put into my
+  // buffer, so an unstaged send reads data the peer's incoming copy may
+  // already have overwritten (observed at 2/4 ranks: the receiver got
+  // its own data back once the peer's source was clobbered mid-copy).
+  // Variable splits additionally need staging so a peer's write does
+  // not overlap unread local data. The lowering emits a local
+  // Input->Scratch copy ahead of each staged Put.
+  bool const stage = inplace;
 
   for (int peer = 0; peer < config.nranks; ++peer) {
     if (peer == config.rank) continue;

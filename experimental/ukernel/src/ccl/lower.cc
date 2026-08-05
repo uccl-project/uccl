@@ -152,6 +152,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     std::vector<size_t> const& tmp_base,
                                     uint32_t group_bits,
                                     uint32_t signal_group_tiles,
+                                    int rank, int nranks,
                                     size_t& staging_bytes, FusionMetaOut meta) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
@@ -171,6 +172,12 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
   std::vector<NewDep> new_deps;
 
   size_t staging_bytes_out = 0;
+  // Each staged chunk needs its own scratch region: the copy and the Put
+  // of different chunks overlap in time, so reusing one region would let
+  // a later chunk's staging clobber an earlier chunk's data before its
+  // Put read it (4-rank alltoall sent wrong partitions). The base
+  // advances by the previous chunk's staging size.
+  size_t staging_base = 0;
 
   // Signal aggregation: one Signal per group of G tiles, fired once
   // every Put of the group has completed. Shared by the staged and
@@ -220,7 +227,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           cp.kind = ExecOpKind::Put;
           cp.bytes = op.bytes;
           cp.src_off = op.src_off;
-          cp.dst_off = staging_off;
+          cp.dst_off = staging_base + staging_off;
           cp.src_peer = ~0u;
           cp.dst_peer = ~0u;
           cp.src_buf_role = CollectiveBufferRole::Input;
@@ -233,7 +240,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           TiledOp put;
           put.kind = ExecOpKind::Put;
           put.bytes = op.bytes;
-          put.src_off = staging_off;
+          put.src_off = staging_base + staging_off;
           put.dst_off = op.dst_off;
           put.src_peer = ~0u;
           put.dst_peer = op.dst_peer;
@@ -329,23 +336,35 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
     if (ch.stage_via_scratch && !put_indices.empty()) {
       // The all-ones group value is reserved for this handshake.
       uint32_t const kAllOnesGroup = (1u << group_bits) - 1;
-      uint64_t barrier_tag = make_tag(ch.pair_id, kAllOnesGroup, group_bits);
       int peer = ch.dst_rank;
 
-      // Signal "copies_done" → peer (depends on all copies)
+      // Signal "copies_done" → peer (depends on all copies). The tag
+      // uses THIS chunk's pair: the peer's staged-put gating wait keys
+      // on the pair of the data it overwrites in MY buffer, which is
+      // exactly this send chunk's pair.
+      uint64_t sig_tag = make_tag(ch.pair_id, kAllOnesGroup, group_bits);
       TiledOp sig_cd;
       sig_cd.kind = ExecOpKind::Signal;
       sig_cd.dst_peer = static_cast<uint32_t>(peer);
-      sig_cd.tag = barrier_tag;
+      sig_cd.tag = sig_tag;
       uint32_t sig_cd_idx = static_cast<uint32_t>(out.size());
       for (uint32_t ci : cp_indices) new_deps.push_back({sig_cd_idx, ci});
       out.push_back(sig_cd);
 
-      // WaitSignal "copies_done" ← peer
+      // WaitSignal "copies_done" ← peer. My put writes into the peer's
+      // partition `rank`; that partition is the peer's send source for
+      // ITS chunk pair (peer*nranks+rank), so this wait must key on
+      // that pair, not on ch.pair_id — otherwise the tags never match
+      // and both sides wait on each other's never-sent signal
+      // (2-rank alltoall deadlock seen once staging was enabled).
+      uint32_t peer_send_pair =
+          static_cast<uint32_t>(peer * nranks + rank);
+      uint64_t wait_tag =
+          make_tag(peer_send_pair, kAllOnesGroup, group_bits);
       TiledOp ws_cd;
       ws_cd.kind = ExecOpKind::WaitSignal;
       ws_cd.src_peer = static_cast<uint32_t>(peer);
-      ws_cd.tag = barrier_tag;
+      ws_cd.tag = wait_tag;
       uint32_t ws_cd_idx = static_cast<uint32_t>(out.size());
       out.push_back(ws_cd);
 
@@ -353,10 +372,12 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       for (uint32_t pi : put_indices) new_deps.push_back({pi, ws_cd_idx});
     }
 
-    if (chunk_staging > staging_bytes_out) staging_bytes_out = chunk_staging;
+    staging_base += chunk_staging;
+    if (staging_base > staging_bytes_out) staging_bytes_out = staging_base;
   }
 
-  // Max per-chunk staging (AllToAll staging through scratch).
+  // Total staging footprint across all chunks (each chunk owns a
+  // disjoint region; they are live concurrently).
   staging_bytes =
       staging_bytes_out > staging_bytes ? staging_bytes_out : staging_bytes;
 
@@ -435,7 +456,8 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
   result.ops =
       lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                      tiled.tiles_per_op, tmp_base, group_bits,
-                     signal_group_tiles, staging_bytes, meta);
+                     signal_group_tiles, algo.rank, algo.nranks,
+                     staging_bytes, meta);
   result.staging_bytes_required =
       staging_bytes > tmp_total ? staging_bytes : tmp_total;
   return result;

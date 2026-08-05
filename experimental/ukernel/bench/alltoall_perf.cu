@@ -33,9 +33,13 @@ static const char* kFillPath = "/tmp/uk_a2a_fill";
 // ncclAllToAll extension; native NCCL has no such API). Without the
 // define the harness uses ncclSend/ncclRecv to build the same N-rank
 // alltoall exchange, which is what nccl-tests' alltoall_perf does on
-// native NCCL. Same buffers, same count semantics (count = elements per
-// rank pair; partition r of rank x is sent to rank r and partition r is
-// received from rank r).
+// native NCCL. Same count semantics (count = elements per rank pair;
+// partition r of rank x is sent to rank r and partition r is received
+// from rank r). Buffers: nccl-tests alltoall is NOT in-place — native
+// Send/Recv with sendbuff==recvbuff aliases and corrupts the exchange
+// ("We don't support in-place alltoall"). The harness always allocates
+// a separate send and recv buffer; the shim path (ncclAllToAll) is
+// in-place-only, so it exchanges recvbuf.
 
 static long get_long_arg(int argc, char** argv, const char* name, long def) {
   std::string n(name);
@@ -74,10 +78,11 @@ static double now_s() {
     }                                                                  \
   } while (0)
 
-static void run_one(void* buf, size_t count, int rank, int nranks,
-                    ncclComm_t comm, cudaStream_t stream) {
+static void run_one(void* sendbuf, void* recvbuf, size_t count, int rank,
+                    int nranks, ncclComm_t comm, cudaStream_t stream) {
 #ifdef USE_SHIM_API
-  NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
+  // Shim extension: in-place only, so the exchange lives in recvbuf.
+  NCCLCHK(ncclAllToAll(recvbuf, recvbuf, count, ncclFloat, comm, stream));
 #else
   // Native NCCL: no ncclAllToAll. nccl-tests pattern — one grouped
   // send/recv pair per peer (recv first, the conventional order),
@@ -85,9 +90,9 @@ static void run_one(void* buf, size_t count, int rank, int nranks,
   NCCLCHK(ncclGroupStart());
   for (int p = 0; p < nranks; ++p) {
     size_t off = static_cast<size_t>(p) * count;
-    NCCLCHK(ncclRecv(static_cast<char*>(buf) + off * sizeof(float), count,
+    NCCLCHK(ncclRecv(static_cast<char*>(recvbuf) + off * sizeof(float), count,
                      ncclFloat, p, comm, stream));
-    NCCLCHK(ncclSend(static_cast<char*>(buf) + off * sizeof(float), count,
+    NCCLCHK(ncclSend(static_cast<char*>(sendbuf) + off * sizeof(float), count,
                      ncclFloat, p, comm, stream));
   }
   NCCLCHK(ncclGroupEnd());
@@ -97,14 +102,17 @@ static void run_one(void* buf, size_t count, int rank, int nranks,
 // Fill partition j with (rank*1000 + j), run one exchange, and check
 // that partition i now holds (i*1000 + rank) — the value rank i stored
 // in its partition `rank` before the exchange.
-static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
-                            ncclComm_t comm, cudaStream_t stream) {
+static bool verify_exchange(void* sendbuf, void* recvbuf, size_t count,
+                            int rank, int nranks, ncclComm_t comm,
+                            cudaStream_t stream) {
   std::vector<float> fill(static_cast<size_t>(nranks) * count);
   for (int p = 0; p < nranks; ++p)
     for (size_t i = 0; i < count; ++i)
       fill[static_cast<size_t>(p) * count + i] =
           static_cast<float>(rank * 1000 + p);
-  CUDACHK(cudaMemcpy(buf, fill.data(), fill.size() * sizeof(float),
+  CUDACHK(cudaMemcpy(sendbuf, fill.data(), fill.size() * sizeof(float),
+                     cudaMemcpyHostToDevice));
+  CUDACHK(cudaMemcpy(recvbuf, fill.data(), fill.size() * sizeof(float),
                      cudaMemcpyHostToDevice));
   // IPC puts are one-sided writes into the peer's buffer, so a peer's
   // verify-fill can race our puts (fill after a put lands overwrites the
@@ -133,7 +141,7 @@ static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
       snprintf(pf, sizeof(pf), "%s_%d", kFillPath, p);
       remove(pf);
     }
-  run_one(buf, count, rank, nranks, comm, stream);
+  run_one(sendbuf, recvbuf, count, rank, nranks, comm, stream);
   // Full device sync: the shim's IPC puts run on the adapter's own
   // streams; stream-syncing only our stream may race their completion.
   // (The shim's collective-completion signal should order this, but
@@ -142,7 +150,7 @@ static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
   CUDACHK(cudaDeviceSynchronize());
   // Scan the whole buffer for where peer data landed (diagnostic).
   std::vector<float> whole(static_cast<size_t>(nranks) * count);
-  CUDACHK(cudaMemcpy(whole.data(), buf, whole.size() * sizeof(float),
+  CUDACHK(cudaMemcpy(whole.data(), recvbuf, whole.size() * sizeof(float),
                      cudaMemcpyDeviceToHost));
   size_t bad = 0, first_bad = whole.size();
   for (int p = 0; p < nranks; ++p) {
@@ -196,10 +204,13 @@ int main(int argc, char** argv) {
   ncclComm_t comm;
   NCCLCHK(ncclCommInitRank(&comm, nranks, id, rank));
 
-  void* buf = nullptr;
-  CUDACHK(cudaMalloc(&buf, total_bytes));
-  CUDACHK(cudaMemset(buf, 0, total_bytes));
-  fprintf(stderr, "[r%d] buf=%p total=%zu\n", rank, buf, total_bytes);
+  void* sendbuf = nullptr;
+  void* recvbuf = nullptr;
+  CUDACHK(cudaMalloc(&sendbuf, total_bytes));
+  CUDACHK(cudaMalloc(&recvbuf, total_bytes));
+  CUDACHK(cudaMemset(recvbuf, 0, total_bytes));
+  fprintf(stderr, "[r%d] send=%p recv=%p total=%zu\n", rank, sendbuf,
+          recvbuf, total_bytes);
 
   // count = elements per rank pair; total = nranks * count * 4 (float).
   size_t count = total_bytes / (sizeof(float) * nranks);
@@ -211,18 +222,19 @@ int main(int argc, char** argv) {
   if (rank == 0) remove(kIdPath);
 
   if (!skip_verify) {
-    bool vok = verify_exchange(buf, count, rank, nranks, comm, stream);
+    bool vok = verify_exchange(sendbuf, recvbuf, count, rank, nranks, comm,
+                               stream);
     fprintf(stderr, "[r%d] verify %s\n", rank, vok ? "OK" : "FAIL");
   }
 
   for (int i = 0; i < warmup; ++i)
-    run_one(buf, count, rank, nranks, comm, stream);
+    run_one(sendbuf, recvbuf, count, rank, nranks, comm, stream);
   CUDACHK(cudaStreamSynchronize(stream));
 
   std::vector<double> times;
   for (int i = 0; i < iters; ++i) {
     double t0 = now_s();
-    run_one(buf, count, rank, nranks, comm, stream);
+    run_one(sendbuf, recvbuf, count, rank, nranks, comm, stream);
     CUDACHK(cudaStreamSynchronize(stream));
     double dt = now_s() - t0;
     if (i >= 2) times.push_back(dt);
@@ -231,13 +243,16 @@ int main(int argc, char** argv) {
   double avg = 0;
   for (double t : times) avg += t;
   avg /= times.size();
-  double algbw = (double)(nranks - 1) / nranks * total_bytes / avg / 1e9;
-  double busbw = algbw * nranks / (nranks - 1);
+  // nccl-tests alltoall convention (AlltoAllGetBw): algbw = full
+  // per-rank buffer / time; busbw = algbw * (nranks-1)/nranks.
+  double algbw = total_bytes / avg / 1e9;
+  double busbw = algbw * (double)(nranks - 1) / nranks;
   fprintf(stderr,
           "[r%d] total=%zuMB iters=%zu avg=%.1fus algbw=%.1fGB/s busbw=%.1fGB/s\n",
           rank, total_bytes >> 20, times.size(), avg * 1e6, algbw, busbw);
 
   NCCLCHK(ncclCommDestroy(comm));
-  CUDACHK(cudaFree(buf));
+  CUDACHK(cudaFree(sendbuf));
+  CUDACHK(cudaFree(recvbuf));
   return 0;
 }
