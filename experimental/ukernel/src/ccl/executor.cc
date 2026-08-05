@@ -1465,7 +1465,7 @@ void SprayExecutor::enqueue_loop() {
       collect_ready(*run);
       if (uk_dbg_lvl() >= 1)
         std::fprintf(stderr, "[tss] r%d ready n=%zu t=%lld\n",
-                     rank_or_neg1(), run.ready.size(), tss_us());
+                     rank_or_neg1(), run->ready.size(), tss_us());
       enqueue_to_ring(*run);
       if (uk_dbg_lvl() >= 1)
         std::fprintf(stderr, "[tss] r%d enq_ring_done t=%lld\n",
