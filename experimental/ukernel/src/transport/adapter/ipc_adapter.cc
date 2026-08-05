@@ -584,19 +584,15 @@ bool IpcAdapter::launch_one(RingElem* e, size_t stream_idx) {
   UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] remote_gpu=%d gpu_id=%d bytes=%lu",
          comm_->rank(), remote_gpu, gpu_id_, (unsigned long)e->bytes);
 
-  // One stream per put (round-robin in send_worker): a single 1MB+
-  // copy already saturates the P2P link (~52 GB/s measured), and
-  // assigning consecutive puts to different streams lets them overlap
-  // while each put keeps a single, unambiguous event point. Intra-put
-  // chunking across streams would need per-chunk event tracking for
-  // completion and buys nothing at link saturation.
+  // One stream per put (per-peer round-robin in send_worker): copies to
+  // different peers overlap while each put keeps one event point.
+  // Use cudaMemcpyAsync with the resolved IPC pointer (NOT
+  // cudaMemcpyPeerAsync): the peer-copy API measured ~450 GB/s on B300
+  // while plain D2D memcpy through the IPC handle reaches ~670 GB/s —
+  // a 1.5x per-copy difference that dominates 8-rank alltoall.
   gpuStream_t stream = ipc_ctx_[stream_idx];
-  if (remote_gpu == gpu_id_)
-    GPU_RT_CHECK(gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice,
-                                stream));
-  else
-    GPU_RT_CHECK(gpuMemcpyPeerAsync(dst, remote_gpu, src, gpu_id_, e->bytes,
-                                    stream));
+  GPU_RT_CHECK(
+      gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice, stream));
   return true;
 }
 
