@@ -24,18 +24,16 @@ namespace {
 
 constexpr int kIpcControlTimeoutMs = 50000;
 constexpr size_t kTaskRingSize = 1024;
-// Default in-flight put window (see IpcAdapter ctor; UK_CCL_IPC_BATCH
-// overrides, 1 = old per-put sync behavior). The old worker
-// synchronized after EVERY put (copy + ~10us fixed overhead
-// serialized), capping 1MB-tile throughput at ~37 GB/s vs ~52 GB/s for
-// large puts; the sliding window below keeps up to this many copies in
-// flight (round-robin across the streams) and only syncs each put's own
-// event when it reaches the front — the host never blocks on the GPU
-// while the window is full, and small messages drain immediately when
-// the ring empties. B300 sweep (256M allreduce, LT=8/BLK=32): window
-// 4-64 all land 462-498 GB/s median with the same jitter — the window
-// is not the bottleneck; 4 is kept as default for its slightly better
-// median and lower host-side event pressure.
+// Default in-flight put window PER PEER (see IpcAdapter ctor;
+// UK_CCL_IPC_BATCH overrides, 1 = old per-put sync behavior). Each peer
+// owns an independent window + stream pool, so N peers run N x window
+// copies concurrently instead of sharing one global window (which
+// serialized 8-rank alltoall fan-out to 4 in-flight puts). The sliding
+// window keeps up to this many copies per peer in flight and completes
+// each peer FIFO (the receiver matches per-(peer,direction) sequences);
+// different peers complete out of order. B300 allreduce sweep
+// (256M, LT=8/BLK=32) measured window 4-64 all at 462-498 GB/s median —
+// 4 per peer keeps the same host event pressure as before.
 constexpr size_t kIpcSendBatchDefault = 4;
 
 template <typename T>
@@ -56,21 +54,29 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
       comps_(comm->world_size()),
       comm_(comm),
       gpu_id_(local_gpu_idx) {
-  send_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
+  send_rings_.resize(comm->world_size(), nullptr);
+  for (int r = 0; r < comm->world_size(); ++r) {
+    if (r == comm->rank()) continue;
+    send_rings_[static_cast<size_t>(r)] =
+        create_ring(sizeof(RingElem), kTaskRingSize);
+  }
   recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
-  if (send_ring_ == nullptr || recv_ring_ == nullptr) {
-    if (send_ring_ != nullptr) {
-      free(send_ring_);
-      send_ring_ = nullptr;
-    }
-    if (recv_ring_ != nullptr) {
-      free(recv_ring_);
-      recv_ring_ = nullptr;
-    }
-    throw std::runtime_error("IpcAdapter failed to allocate task rings");
+  for (size_t r = 0; r < send_rings_.size(); ++r)
+    if (static_cast<int>(r) != comm->rank() && send_rings_[r] == nullptr)
+      throw std::runtime_error("IpcAdapter failed to allocate send ring");
+  if (recv_ring_ == nullptr) {
+    for (auto* ring : send_rings_)
+      if (ring != nullptr) free(ring);
+    send_rings_.clear();
+    throw std::runtime_error("IpcAdapter failed to allocate recv ring");
   }
 
-  int n_streams = 4;
+  if (char const* v = std::getenv("UK_CCL_IPC_STREAMS_PER_PEER")) {
+    size_t s = static_cast<size_t>(std::stoul(v));
+    if (s > 0 && s <= 16) streams_per_peer_ = s;
+  }
+  size_t n_streams =
+      static_cast<size_t>(std::max(1, comm->world_size())) * streams_per_peer_;
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   ipc_ctx_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i)
@@ -113,10 +119,10 @@ void IpcAdapter::shutdown() {
   ipc_ctx_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
-  if (send_ring_) {
-    free(send_ring_);
-    send_ring_ = nullptr;
+  for (auto* ring : send_rings_) {
+    if (ring != nullptr) free(ring);
   }
+  send_rings_.clear();
   if (recv_ring_) {
     free(recv_ring_);
     recv_ring_ = nullptr;
@@ -302,10 +308,13 @@ unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
                                     void* remote_ptr, uint32_t, size_t bytes,
                                     unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
   RingElem e{
       comm_rid,   peer, ReqType::DataPut, next_send_match_seq(peer), local_ptr,
       remote_ptr, bytes};
-  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
   return 1;
 }
 
@@ -349,6 +358,9 @@ unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr, uint32_t,
                                            size_t len, uint64_t tag,
                                            unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
   RingElem e{comm_rid,
              peer,
              ReqType::PutSignal,
@@ -357,7 +369,7 @@ unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr, uint32_t,
              remote_ptr,
              len,
              tag};
-  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
   return 1;
 }
 
@@ -440,65 +452,89 @@ void IpcAdapter::send_worker() {
     size_t evi;
     bool ok;
   };
-  // Per-put event pool (one event per in-flight put). Events are reused
-  // via the free list: an event is only handed out again after its put
-  // completed (events are consumed FIFO, so the freed index is always
-  // the front's).
+  // Per-peer event pools (one event per in-flight put per peer). A
+  // peer's events are reused via its own free list only after that
+  // put completed, so a busy peer never steals a slot from an idle one.
   size_t const window = send_batch_;
-  std::vector<gpuEvent_t> evs(window);
-  for (size_t i = 0; i < window; ++i)
+  int const n = comm_->world_size();
+  int const rank = comm_->rank();
+  std::vector<gpuEvent_t> evs(window * static_cast<size_t>(n));
+  for (size_t i = 0; i < evs.size(); ++i)
     GPU_RT_CHECK(gpuEventCreateWithFlags(&evs[i], gpuEventDisableTiming));
-  std::deque<size_t> free_evs;
-  for (size_t i = 0; i < window; ++i) free_evs.push_back(i);
-  std::deque<PendingPut> pending;
-  size_t launch_serial = 0;
+  std::vector<std::deque<size_t>> free_evs(static_cast<size_t>(n));
+  for (int p = 0; p < n; ++p)
+    for (size_t i = 0; i < window; ++i)
+      free_evs[static_cast<size_t>(p)].push_back(
+          static_cast<size_t>(p) * window + i);
+  std::vector<std::deque<PendingPut>> pending(static_cast<size_t>(n));
+  std::vector<size_t> inflight(static_cast<size_t>(n), 0);
+  std::vector<size_t> launch_serial(static_cast<size_t>(n), 0);
 
   while (!stop_.load(std::memory_order_relaxed)) {
-    // Launch-ahead: keep the window full while the ring has work. Puts
-    // go round-robin across the streams, so consecutive tiles copy in
-    // parallel and the host-side launch cost overlaps the GPU copies.
-    bool ring_empty = false;
-    while (pending.size() < window) {
-      RingElem e;
-      if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) == 1) {
-        size_t stream_idx = launch_serial++ % ipc_ctx_.size();
-        bool ok = launch_one(&e, stream_idx);
-        size_t evi = free_evs.front();
-        free_evs.pop_front();
-        if (ok)
-          GPU_RT_CHECK(gpuEventRecord(evs[evi], ipc_ctx_[stream_idx]));
-        pending.push_back({e, evi, ok});
-      } else {
-        ring_empty = true;
-        break;
+    // Per-peer loop: complete ready fronts (each peer strictly FIFO —
+    // the receiver matches per-(peer,direction) sequences), then
+    // launch-ahead up to that peer's window. Peers never block each
+    // other, so 7-peer fan-out runs 7 x window copies concurrently.
+    bool any = false;
+    for (int p = 0; p < n; ++p) {
+      if (p == rank) continue;
+      size_t const pidx = static_cast<size_t>(p);
+      auto& pque = pending[pidx];
+      auto& pevs = free_evs[pidx];
+      while (inflight[pidx] > 0) {
+        auto& front = pque.front();
+        gpuError_t st = gpuEventQuery(evs[front.evi]);
+        if (st == gpuSuccess) {
+          complete_one(&front.e, front.ok);
+          pevs.push_back(front.evi);
+          pque.pop_front();
+          --inflight[pidx];
+          any = true;
+        } else if (st == gpuErrorNotReady) {
+          break;  // front still in flight; stream order keeps the rest
+        } else {
+          complete_one(&front.e, false);
+          pevs.push_back(front.evi);
+          pque.pop_front();
+          --inflight[pidx];
+          any = true;
+          std::fprintf(stderr,
+                       "[ipc-send r%d] event query failed p%d st=%d\n",
+                       comm_->rank(), p, static_cast<int>(st));
+        }
+      }
+      while (inflight[pidx] < window) {
+        RingElem e;
+        if (jring_sc_dequeue_bulk(send_rings_[pidx], &e, 1, nullptr) == 1) {
+          size_t stream_idx =
+              pidx * streams_per_peer_ +
+              (launch_serial[pidx]++ % streams_per_peer_);
+          bool ok = launch_one(&e, stream_idx);
+          size_t evi = pevs.front();
+          pevs.pop_front();
+          if (ok) GPU_RT_CHECK(gpuEventRecord(evs[evi], ipc_ctx_[stream_idx]));
+          pque.push_back({e, evi, ok});
+          ++inflight[pidx];
+          any = true;
+        } else {
+          break;
+        }
       }
     }
-    if (pending.empty()) {
+    if (!any) {
       std::this_thread::yield();
-      continue;
-    }
-    // Complete the oldest put once the window is full (steady-state
-    // pipeline) or the ring has no more work (drain immediately — no
-    // added latency for small messages). Syncing the front put's own
-    // event only waits for ITS copy; by the time the window is full the
-    // copy usually already landed, so the host never stalls the pipe.
-    if (pending.size() >= window || ring_empty) {
-      PendingPut p = pending.front();
-      pending.pop_front();
-      if (p.ok) GPU_RT_CHECK(gpuEventSynchronize(evs[p.evi]));
-      free_evs.push_back(p.evi);
-      if (uk_dbg_lvl() >= 1)
-        std::fprintf(stderr, "[tss] r%d put_done peer=%d t=%lld\n",
-                     comm_->rank(), p.e.peer, tss_us());
-      complete_one(&p.e, p.ok);
     }
   }
   // Shutdown drain: flush pending puts and the ring (best effort).
-  for (auto const& p : pending) complete_one(&p.e, false);
-  pending.clear();
-  RingElem drain;
-  while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_put_completion(drain.comm_rid, true);
+  for (int p = 0; p < n; ++p) {
+    if (p == rank) continue;
+    size_t const pidx = static_cast<size_t>(p);
+    for (auto const& pp : pending[pidx]) complete_one(&pp.e, false);
+    pending[pidx].clear();
+    RingElem drain;
+    while (jring_mc_dequeue_bulk(send_rings_[pidx], &drain, 1, nullptr) == 1)
+      publish_put_completion(drain.comm_rid, true);
+  }
   for (auto& ev : evs) GPU_RT_CHECK(gpuEventDestroy(ev));
 }
 

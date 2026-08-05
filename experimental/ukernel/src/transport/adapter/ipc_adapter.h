@@ -111,13 +111,16 @@ class IpcAdapter final : public TransportAdapter {
   bool ensure_local_comp(int peer);
   bool ensure_remote_comp(int peer);
 
-  jring_t* send_ring_ = nullptr;
+  // One send ring per peer: a peer's puts never block another peer's
+  // launch-ahead, so alltoall-style fan-out stays fully concurrent.
+  std::vector<jring_t*> send_rings_;
   jring_t* recv_ring_ = nullptr;
   std::atomic<bool> stop_{false};
   std::thread send_th_;
   std::thread recv_th_;
   std::vector<gpuStream_t> ipc_ctx_;
-  size_t send_batch_ = 16;
+  size_t send_batch_ = 4;         // in-flight puts PER PEER
+  size_t streams_per_peer_ = 4;   // per-peer stream pool (round-robin)
 
   std::mutex seq_mu_;
   std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
