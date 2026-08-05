@@ -1103,6 +1103,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           c.flags |= kCmdFlagPutSignal;
           c.tag = salted_sig_tag;
         }
+        if (uk_dbg_lvl() >= 1)
+          std::fprintf(stderr,
+                       "[tss] r%d put_fuse idx=%u path=%d sig=%d grp=%u "
+                       "fuse=%d t=%lld\n",
+                       rank_or_neg1(), idx, (int)c.put_path, sig_idx, grp,
+                       (int)fuse, tss_us());
       }
     }
 
