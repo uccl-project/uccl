@@ -1113,6 +1113,18 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
+      if (uk_dbg_lvl() >= 1 && c.kind == ExecOpKind::Signal)
+        std::fprintf(stderr,
+                     "[tss] r%d sig_check idx=%u grp=%u fused=%u accepted=%u "
+                     "t=%lld\n",
+                     rank_or_neg1(), idx,
+                     run.plan->sig_group_size.empty()
+                         ? 0u
+                         : run.plan->sig_group_size[idx],
+                     run.fused_sig_cnt.empty() ? 0u : run.fused_sig_cnt[idx],
+                     run.accepted_sig_cnt.empty() ? 0u
+                                                  : run.accepted_sig_cnt[idx],
+                     tss_us());
       // Fused group accounting: a Signal whose group's puts were ALL
       // accepted WITH the fuse flag completes locally — no backend
       // dispatch. If the group cannot (fully) fuse, it must go
