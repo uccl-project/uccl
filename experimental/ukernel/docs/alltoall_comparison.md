@@ -279,6 +279,21 @@ Next targets, in order: batch/cache the per-put dispatch path
 back-to-back (launch all puts in one tight pass before polling
 completions).
 
+### Follow-up (same day): dispatch trimmed, copy span is the wall
+
+The enqueue_loop now sleeps on a condition variable that `submit()`
+notifies (it previously yielded to the scheduler between back-to-back
+collectives), and the per-cycle dispatch instrumentation was gated to
+only fire on cycles with real work. Final 256MB numbers (BLK=1,
+LT=1): **~310 / ~580 / ~715us at 2/4/8 ranks** — the dispatch changes
+do not move the end-to-end, because the 8-rank time is dominated by the
+GPU-side copy span (~600us vs the raw 368us ceiling), not the host.
+Under 8-rank full-load the 7 x 32M copies serialize on the copy engine
+at ~1.6x the raw per-copy duration; LT=2/4 and more per-peer streams do
+not help. The next lever is chunk interleaving with signal aggregation
+(one signal per G tiles, cutting the per-tile completion cost that made
+LT=8 regress), which is the same aggregation machinery AllReduce needs.
+
 ### Why native has no staging copy
 
 Native/nccl-tests AllToAll is **out-of-place** (separate sendbuff and
