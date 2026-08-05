@@ -110,6 +110,12 @@ static bool verify_exchange(void* buf, size_t count, int rank,
   // verify must not depend on it — check the data after everything
   // lands.)
   CUDACHK(cudaDeviceSynchronize());
+  // The shim's IPC puts are submitted by a host-side send_worker thread;
+  // a device sync does not wait for that thread to enqueue the memcpys.
+  // Give it time to submit, then sync again, to separate "submission
+  // timing" from "wrong address" as the failure cause.
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  CUDACHK(cudaDeviceSynchronize());
   int peer = 1 - rank;
   std::vector<float> got(count);
   CUDACHK(cudaMemcpy(got.data(),
