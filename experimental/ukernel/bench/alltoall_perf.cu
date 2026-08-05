@@ -108,8 +108,8 @@ static bool verify_exchange(void* buf, size_t count, int rank, int nranks,
                      cudaMemcpyHostToDevice));
   // IPC puts are one-sided writes into the peer's buffer, so a peer's
   // verify-fill can race our puts (fill after a put lands overwrites the
-  // exchanged data). Native NCCL has no ncclBarrier (shim extension), so
-  // use a portable file handshake: every rank announces its fill done,
+  // exchanged data). NCCL (native or shim) exposes no barrier primitive,
+  // so use a portable file handshake: every rank announces its fill done,
   // then waits until all N flags exist before the exchange starts.
   CUDACHK(cudaStreamSynchronize(stream));
   char flag[256];

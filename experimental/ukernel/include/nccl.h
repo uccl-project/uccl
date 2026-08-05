@@ -116,13 +116,12 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclComm_t comm, gpuStream_t stream);
 
 /* All-to-all: equal-split scatter/gather across all ranks.
- * In-place only (sendbuff == recvbuff). */
+ * In-place only (sendbuff == recvbuff).
+ * NOTE: shim extension — upstream NCCL has no ncclAllToAll; nccl-tests
+ * builds the exchange from ncclSend/ncclRecv. */
 ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
                           ncclDataType_t datatype, ncclComm_t comm,
                           gpuStream_t stream);
-
-/* Barrier: collective synchronization point. */
-ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream);
 
 /* Point-to-point (supported via GroupStart/GroupEnd). */
 ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype,

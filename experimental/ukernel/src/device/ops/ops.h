@@ -67,8 +67,8 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
         (UK_REDUCE_SMEM_BYTES - sizeof(TmaSemaphore)) &
         ~static_cast<size_t>(31);
     // cp.async.bulk requires a multiple-of-16 size; a 4-byte allreduce
-    // barrier (ncclBarrier) previously hit this with bytes=4 and crashed
-    // the GPU context. Fall back to the plain path for odd sizes.
+    // previously hit this with bytes=4 and crashed the GPU context.
+    // Fall back to the plain path for odd sizes.
     if (bytes <= 4096 && bytes % 16 == 0) {
       if (tid == 0) {
         // mbarrier must live in shared memory (a stack TmaSemaphore is
@@ -561,7 +561,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   size_t bytes = count * sizeof(T);
 
   // cp.async.bulk needs multiple-of-16 size and 16B-aligned addresses;
-  // the 4-byte ncclBarrier allreduce used to crash here.
+  // a 4-byte allreduce used to crash here.
   if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096 &&
       bytes % 16 == 0 &&
       (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
@@ -572,8 +572,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
 
     if (tid == 0) {
       // mbarrier carved out of smem after the payload (a stack mbarrier
-      // is invalid — previously hung/crashed on sub-4KB allreduces such
-      // as ncclBarrier).
+      // is invalid — previously hung/crashed on sub-4KB allreduces).
       TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(
           static_cast<char*>(smem_buf) + bytes);
       tma_init_semaphore(*sem, 1);

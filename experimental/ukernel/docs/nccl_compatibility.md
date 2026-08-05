@@ -29,8 +29,9 @@ ncclCommInitAll            (deprecated NCCL path; one comm per device)
 ncclAllReduce              (ring + opt-in binary tree)
 ncclAllGather
 ncclReduceScatter
-ncclAllToAll               (in-place only)
-ncclBarrier
+ncclAllToAll               (in-place only; shim extension — upstream
+                            NCCL has no ncclAllToAll, nccl-tests builds
+                            the exchange from ncclSend/ncclRecv)
 ncclCommDestroy / ncclCommAbort / ncclCommFinalize
 ncclCommCount / ncclCommUserRank
 ncclCommGetAsyncError
@@ -57,6 +58,8 @@ Match NCCL:
 
 `ncclBroadcast`, `ncclReduce`, `ncclSend`, `ncclRecv`, and custom
 reduction ops (`ncclRedOpCreatePreMulSum`) return `ncclInvalidUsage`.
+The shim exposes no `ncclBarrier` — upstream NCCL has none, and
+extensions like that would break the drop-in contract.
 Of the stock nccl-tests binaries, only `all_reduce_perf` (both
 placements), `all_gather_perf`, and `reduce_scatter_perf` pass;
 `broadcast_perf` / `reduce_perf` / `alltoall_perf` / `sendrecv_perf`

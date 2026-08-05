@@ -24,7 +24,6 @@ struct ncclComm {
   int nranks = 1;
   bool aborted = false;
   bool finalized = false;
-  void* barrier_dev = nullptr;
   // Async completion tracking: submitted handles stay in pending until
   // reaped (reap runs at every collective entry and at destroy).
   // async_error latches the first failure observed while reaping —
@@ -210,7 +209,6 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     // Best-effort reap; handles still Running (or Failed-but-unquiesced)
     // stay with the executor, whose teardown stops the drain threads.
     reap_pending(comm);
-    gpuFree(comm->barrier_dev);
     delete comm;
   }
   return ncclSuccess;
@@ -222,8 +220,6 @@ ncclResult_t ncclCommAbort(ncclComm_t comm) {
   // ncclCommDestroy, which apps call after abort.
   if (comm) {
     comm->aborted = true;
-    gpuFree(comm->barrier_dev);
-    comm->barrier_dev = nullptr;
   }
   return ncclSuccess;
 }
@@ -395,37 +391,6 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   cfg.tile_bytes = adaptive_tile_bytes(total_bytes);
   cfg.dtype = to_scalar(datatype);
   return run_coll(comm, cfg, buf, buf, stream);
-}
-
-ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream) {
-  if (!comm || !comm->executor) return ncclInvalidArgument;
-  if (comm->nranks == 1) return ncclSuccess;
-  // Barrier payload size: a 4-byte allreduce exercises sub-16B edges in
-  // the TMA/vector reduce paths and crashed the GPU context on B300
-  // ("driver shutting down"). The barrier only needs a rendezvous word;
-  // use a 256B aligned payload so every path sees a well-formed size.
-  constexpr size_t kBarrierBytes = 256;
-  if (!comm->barrier_dev &&
-      gpuMalloc(&comm->barrier_dev, kBarrierBytes) != gpuSuccess) {
-    std::fprintf(stderr, "[nccl] barrier r%d: gpuMalloc failed\n", comm->rank);
-    return ncclInternalError;
-  }
-  if (gpuMemsetAsync(comm->barrier_dev, 0, kBarrierBytes, stream) !=
-      gpuSuccess) {
-    std::fprintf(stderr, "[nccl] barrier r%d: gpuMemsetAsync failed\n",
-                 comm->rank);
-    return ncclInternalError;
-  }
-  CollectiveConfig cfg;
-  cfg.kind = CollKind::AllReduceRing;
-  cfg.nranks = comm->nranks;
-  cfg.rank = comm->rank;
-  cfg.input_bytes = kBarrierBytes;
-  cfg.output_bytes = kBarrierBytes;
-  cfg.tile_bytes = kBarrierBytes;
-  cfg.dtype = ScalarType::Float32;
-  cfg.reduction = ReductionKind::Sum;
-  return run_coll(comm, cfg, comm->barrier_dev, comm->barrier_dev, stream);
 }
 
 static ncclResult_t unsupported(const char* fn) {
