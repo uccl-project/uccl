@@ -213,3 +213,52 @@ latency driver at 4+ ranks.
 Not yet measured — `bench/alltoall_perf.cu` is hardcoded to 2 ranks.
 Extending it (nranks param, unique-id broadcast, per-peer send/recv
 loop) is the next step once the allreduce signaling issue is addressed.
+
+## 2026-08-05 (late) — 2/4/8-rank sweep: shim vs native (allreduce +
+alltoall), after the history cleanup
+
+Both sides run on the same box with the same MPI invocation; only
+`LD_LIBRARY_PATH` differs (shim = `build/nccl/lib`, native = system
+NCCL 2.29.7). All results wrong=0.
+
+### AllReduce (nccl-tests `all_reduce_perf -b 1M -e 256M -f 2 -g 1 -c 1 -n 20`)
+
+Shim config: `UK_CCL_LARGE_TILES=8 UK_CCL_TILE_MIN_BYTES=8388608
+UK_CCL_IPC_BATCH=16 UK_CCL_DEV_BLOCKS=64`. OOP algbw (GB/s):
+
+| size | shim 2r | shim 4r | shim 8r | native 2r | native 4r | native 8r |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 5.9 | 2.4 | 0.9 | 55.8 | 44.9 | 32.5 |
+| 2M | 11.5 | 4.6 | 1.8 | 94.3 | 72.8 | 57.6 |
+| 4M | 21.6 | 9.2 | 3.4 | 104.2 | 92.9 | 71.0 |
+| 8M | 42.6 | 17.8 | 6.8 | 184.5 | 170.8 | 106.8 |
+| 16M | 79.7 | 34.3 | 13.4 | 296.3 | 165.8 | 155.0 |
+| 32M | 128.0 | 64.5 | 25.4 | 391.0 | 271.0 | 195.4 |
+| 64M | 192.6 | 103.6 | 51.4 | 440.6 | 361.1 | 239.9 |
+| 128M | 316.2 | 176.2 | 87.9 | 482.2 | 382.8 | 336.2 |
+| 256M | 464.5 | 261.7 | 138.2 | 514.9 | 399.0 | 373.3 |
+
+256M ratio shim/native: 1.11x (2r), 1.53x (4r), 2.70x (8r). The shim
+carries a fixed per-tile host signal floor (small sizes are
+disproportionately slow) and busbw falls with rank count while native's
+rises — the per-tile signal/wait chain remains the target for the next
+optimization pass.
+
+### AllToAll (256MB, in-place for the shim; `-g 1 -c 1 -n 20`)
+
+Shim config: `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=1` (staged
+exchange — see alltoall_comparison.md for the in-place race fix).
+Native = nccl-tests `alltoall_perf` (ncclSend/ncclRecv, out-of-place).
+
+| ranks | shim time (us) | shim algbw (GB/s) | shim busbw (GB/s) | native time (us) | native algbw (GB/s) | native busbw (GB/s) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 378 | 710 | 355 | 415.6 | 645.8 | 322.9 |
+| 4 | 628 | 427 | 321 | 424.7 | 632.1 | 474.0 |
+| 8 | 884 | 303 | 266 | 432.6 | 620.5 | 543.0 |
+
+The shim wins at 2 ranks (no cross-rank staging rendezvous) and loses
+at 4/8: every send is staged through scratch (local copy + per-peer
+copies-done rendezvous before the put), so per-rank work grows with
+rank count while native stays flat (~420us). Fix directions: copy-engine
+staging instead of the persistent worker, and per-tile pipelining of
+copy/put across the rendezvous.

@@ -185,3 +185,54 @@ Verified on B300:
 
 Benefit is mostly SM/GPU-resource savings (the idle single-block worker
 no longer occupies an SM); performance is unchanged within noise.
+
+## 2026-08-05 (late) — in-place AllToAll data race found and fixed;
+2/4/8-rank shim vs native
+
+Extending `bench/alltoall_perf.cu` to N ranks (`--nranks`, N-rank
+verify with per-partition values, separate send/recv buffers on the
+native path, portable fill handshake) exposed a **real correctness bug
+in the shim's in-place AllToAll**: partition p is simultaneously the
+source of my Put to peer p and the target of peer p's Put into my
+buffer, so an unstaged exchange reads data the peer's incoming copy
+already overwrote. The old "Equal-split offsets never overlap, so no
+staging" shortcut was wrong — 2/4/8-rank verify caught receivers
+getting their own data back (the earlier 2-rank "verify OK" runs passed
+only by timing luck).
+
+Three bugs were fixed in the staging path (all now covered by the N-rank
+harness verify):
+
+1. **No staging for equal splits** — every in-place AllToAll send now
+   stages Input->Scratch before the Put (`coll_algo.cc`).
+2. **copies-done rendezvous deadlock** — the staged Put waited for the
+   peer's "copies done" using the local chunk's pair id; the peer
+   signals from ITS send chunk whose pair is `dst_rank*nranks+rank`, so
+   the tags never matched and both sides waited forever (watchdog
+   `done=2/6`). The wait now keys on the peer's send pair (`lower.cc`).
+3. **Staging regions overlapped** — every chunk staged at scratch
+   offset 0 (later chunks clobbered earlier ones) and the Put source
+   lacked the chunk base (all Puts read chunk 0's data). Each chunk now
+   owns a disjoint scratch region and the Put reads its own region
+   (`lower.cc`).
+
+### 256MB AllToAll, 2/4/8 ranks (all wrong=0)
+
+Shim: `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=1` (BLK=1 is no longer
+viable — the staging copy runs on the persistent worker and 1 block
+drops it to ~3.4ms). Native: nccl-tests `alltoall_perf`.
+
+| ranks | shim (us) | shim algbw | shim busbw | native (us) | native algbw | native busbw |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 378 | 710 | 355 | 415.6 | 645.8 | 322.9 |
+| 4 | 628 | 427 | 321 | 424.7 | 632.1 | 474.0 |
+| 8 | 884 | 303 | 266 | 432.6 | 620.5 | 543.0 |
+
+BLK sweep at 2 ranks (staged): BLK=1 3387us, BLK=8 725us, BLK=16 506us,
+BLK=64 395us — the staging copy needs compute blocks; the old BLK=1
+alltoall numbers (284us) were racy and not trustworthy.
+
+Next steps for AllToAll: move the staging copy to the copy engine
+(cudaMemcpyAsync) instead of the persistent worker so low-BLK stays
+viable, and pipeline copy/put per tile across the copies-done
+rendezvous (the same overlap machinery the AllReduce path needs).

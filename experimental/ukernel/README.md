@@ -496,3 +496,23 @@ sweet spot, 256-thread × 8-block device kernels, and a fast-path
 prepare(). Multi-block teardown/relaunch/phase bugs were fixed along
 the way (stream-ordered MultiBlockSync free, d_sync reset before every
 launch, `<` phase waits).
+
+### B300 snapshot (2026-08-05, 2/4/8 ranks, tuned config)
+
+Full tables and commands live in
+[docs/b300_native_nccl_measurements.md](docs/b300_native_nccl_measurements.md)
+and [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Summary
+(shim vs native NCCL 2.29.7, all wrong=0):
+
+| collective | 2r | 4r | 8r |
+|---|---:|---:|---:|
+| AllReduce 256M shim | 578us / 464 GB/s | 1026us / 262 GB/s | 1943us / 138 GB/s |
+| AllReduce 256M native | 521us / 515 GB/s | 673us / 399 GB/s | 719us / 373 GB/s |
+| AllToAll 256M shim | 378us / 710 GB/s | 628us / 427 GB/s | 884us / 303 GB/s |
+| AllToAll 256M native | 416us / 646 GB/s | 425us / 632 GB/s | 433us / 621 GB/s |
+
+AllReduce is 1.1x/1.5x/2.7x native at 2/4/8 ranks (per-tile host
+signal chain); AllToAll beats native at 2 ranks and trails at 4/8
+(every send is staged through scratch after the in-place race fix).
+Next optimization targets: signal aggregation + batched waits for
+AllReduce, copy-engine staging + copy/put pipelining for AllToAll.
