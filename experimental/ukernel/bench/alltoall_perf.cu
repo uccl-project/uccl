@@ -81,17 +81,40 @@ static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
   // Native NCCL: no ncclAllToAll. 2-rank ring exchange (in-place):
   // send my slice to the peer, receive the peer's slice.
   int peer = 1 - rank;
-  size_t send_off = static_cast<size_t>(rank) * count;
-  size_t recv_off = static_cast<size_t>(peer) * count;
+  // Standard alltoall: partition i of my buffer goes to rank i. With 2
+  // ranks I send partition peer and receive the peer's partition peer
+  // (= my own partition's slot), i.e. both offsets are peer * count.
+  size_t off = static_cast<size_t>(peer) * count;
   // nccl-tests pattern: group the send/recv pair (recv first, the
   // conventional order) so the exchange is one collective operation.
   NCCLCHK(ncclGroupStart());
-  NCCLCHK(ncclRecv(static_cast<char*>(buf) + recv_off * sizeof(float), count,
+  NCCLCHK(ncclRecv(static_cast<char*>(buf) + off * sizeof(float), count,
                    ncclFloat, peer, comm, stream));
-  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
+  NCCLCHK(ncclSend(static_cast<char*>(buf) + off * sizeof(float), count,
                    ncclFloat, peer, comm, stream));
   NCCLCHK(ncclGroupEnd());
 #endif
+}
+
+// Fill buf with rank-specific values, run one exchange, and check that
+// partition peer now holds the peer's original values.
+static bool verify_exchange(void* buf, size_t count, int rank,
+                            ncclComm_t comm, cudaStream_t stream) {
+  float* f = static_cast<float*>(buf);
+  for (size_t i = 0; i < 2 * count; ++i) f[i] = static_cast<float>(rank + 1);
+  CUDACHK(cudaDeviceSynchronize());
+  run_one(buf, count, rank, comm, stream);
+  CUDACHK(cudaStreamSynchronize(stream));
+  int peer = 1 - rank;
+  bool ok = true;
+  for (size_t i = static_cast<size_t>(peer) * count;
+       i < static_cast<size_t>(peer + 1) * count; ++i) {
+    if (f[i] != static_cast<float>(peer + 1)) {
+      ok = false;
+      break;
+    }
+  }
+  return ok;
 }
 
 int main(int argc, char** argv) {
@@ -136,6 +159,9 @@ int main(int argc, char** argv) {
 
   cudaStream_t stream;
   CUDACHK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+  bool vok = verify_exchange(buf, count, rank, comm, stream);
+  fprintf(stderr, "[r%d] verify %s\n", rank, vok ? "OK" : "FAIL");
 
   for (int i = 0; i < warmup; ++i)
     run_one(buf, count, rank, comm, stream);
