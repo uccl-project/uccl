@@ -1966,6 +1966,14 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
   uintptr_t const base = reinterpret_cast<uintptr_t>(item.direct_ptr);
   uintptr_t const resolved = base + item.base_offset + offset;
   *out_ptr = reinterpret_cast<void*>(resolved);
+  static int dbg_cnt = 0;
+  if (dbg_cnt++ < 12)
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[resolve r%d] peer=%d buf=%u off=%zu base_off=%llu base=%#lx "
+           "resolved=%#lx bytes=%zu",
+           global_rank_, remote_rank, remote_buffer_id, offset,
+           (unsigned long long)item.base_offset, (unsigned long)base,
+           (unsigned long)resolved, bytes);
   if (out_device_idx != nullptr) {
     *out_device_idx = item.device_idx;
   }
