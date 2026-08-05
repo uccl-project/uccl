@@ -311,6 +311,21 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
                               void* input, void* output, gpuStream_t stream) {
   if (comm->aborted) return ncclInvalidUsage;
   reap_pending(comm);
+  // Signal aggregation: one Signal/WaitSignal pair per this many tiles
+  // of a chunk pair (1 = per-tile). Fewer signals cut host dispatch and
+  // drain cost; larger groups coarsen pipelining at group boundaries.
+  static uint32_t const kSigGroupTiles = [] {
+    char const* e = std::getenv("UK_CCL_SIG_GROUP_TILES");
+    return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
+  }();
+  cfg.signal_group_tiles = kSigGroupTiles;
+  if (std::getenv("UK_CCL_CHAIN_DEBUG")) {
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count();
+    std::fprintf(stderr, "[chain] r%d submit kind=%d t=%lld\n", comm->rank,
+                 (int)cfg.kind, (long long)us);
+  }
   CollectiveOpHandle h = 0;
   try {
     // prepare() is idempotent (deduped on shape + allocations) and
