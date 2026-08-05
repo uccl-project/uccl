@@ -671,7 +671,7 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
   // Input->Scratch copy ahead of each staged Put.
   bool const stage = inplace;
 
-  if (!inplace && self_slice_bytes > 0) {
+  if (!inplace && self_slice_bytes > 0 && !config.external_self_slice) {
     // pairless Put chunk -> plain local copy, no signal.
     builder.add_op(AlgoOpKind::Put, self_slice_bytes,
                    input_prefix[static_cast<size_t>(config.rank)],

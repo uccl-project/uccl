@@ -391,6 +391,19 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
   // Out-of-place preferred (native semantics, no staging); in-place is
   // still accepted and runs the staged variant.
   cfg.inplace = (sendbuff == recvbuff);
+  if (!cfg.inplace) {
+    // Self-slice: my own partition lands in recvbuff via the copy
+    // engine on the user stream (native sends partition r to itself).
+    // Doing it here keeps the persistent worker out of AllToAll, so
+    // BLK can stay 1 and every byte moves through IPC/copy-engine DMA.
+    size_t off = static_cast<size_t>(comm->rank) * count * elem_sz;
+    if (gpuMemcpyAsync(static_cast<char*>(recvbuff) + off,
+                       static_cast<const char*>(sendbuff) + off,
+                       count * elem_sz, gpuMemcpyDeviceToDevice, stream) !=
+        gpuSuccess)
+      return ncclUnhandledCudaError;
+    cfg.external_self_slice = true;
+  }
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
 }
 

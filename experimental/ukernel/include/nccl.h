@@ -116,7 +116,9 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
                            ncclComm_t comm, gpuStream_t stream);
 
 /* All-to-all: equal-split scatter/gather across all ranks.
- * In-place only (sendbuff == recvbuff).
+ * Out-of-place (sendbuff != recvbuff) preferred: direct IPC puts, no
+ * staging copy; in-place (sendbuff == recvbuff) also accepted and runs
+ * a staged variant.
  * NOTE: shim extension — upstream NCCL has no ncclAllToAll; nccl-tests
  * builds the exchange from ncclSend/ncclRecv. */
 ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
