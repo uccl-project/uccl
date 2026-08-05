@@ -136,6 +136,61 @@ batching waits, or device-side signal matching. 2-rank remains fast
 (put/reduce overlap fine); 4+ ranks need this before the 8-GPU
 capability is usable.
 
+## 2026-08-05 (late) — post-revert re-measurement: the collapse was a
+lazy-worker regression; NUMA is not the cause
+
+The 23-60ms 4/8-rank collapse above was measured while commit `199d520b`
+(safe lazy worker — ensure on submit, not enqueue) was active. That
+commit plus the follow-up signal experiments were all reverted in order
+(busy-wait `4d50febd`, immediate Signal local-completion `44595e71`,
+signal aggregation `28f92027`, lazy worker `199d520b` -> revert
+`011fb43a`), and the collapse is **gone**. Current clean numbers
+(tuned config `UK_CCL_LARGE_TILES=8 UK_CCL_TILE_MIN_BYTES=8388608
+UK_CCL_IPC_BATCH=16 UK_CCL_DEV_BLOCKS=64`, 256M allreduce,
+`-g 1 -c 1 -n 20`, OOP):
+
+| ranks | shim time (us) | shim algbw (GB/s) | shim busbw (GB/s) | native time (us) | native busbw (GB/s) |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 518-585 | 462-518 | 462-518 | 529 | 507 |
+| 4 | 1069-1075 | 250-253 | 374-378 | 676 | 595 |
+| 8 | 1994-2009 | 133-135 | 234-236 | 720 | 652 |
+
+All wrong=0. Native busbw rises with rank count (507 -> 595 -> 652);
+the shim's busbw falls (463 -> 377 -> 234) — per-tile host signaling
+does not pipeline across ring hops. Per-op cost from end-to-end time:
+2.6us (2r, 224 ops) -> 3.2us (4r, 336 ops) -> 4.5us (8r, ~448 ops).
+This is the remaining gap to attack (signal aggregation + batched
+waits, then put/reduce overlap), not the earlier 40-70x collapse.
+
+### NUMA experiments (B300 is 4 NUMA nodes: GPUs 0-1 / 2-3 / 4-5 / 6-7)
+
+- 2-rank same NUMA (6,7 and 0,1): 580-585us / 459-463 GB/s.
+- 2-rank cross NUMA (0,4): 518-554us / 484-518 GB/s — **no NUMA
+  penalty**; if anything slightly faster, inside run-to-run noise.
+- 4-rank on 2 NUMA nodes (0,1,2,3) vs all 4 NUMA nodes (0,2,4,6):
+  identical (378 vs 371 GB/s busbw).
+- 8-rank with `--map-by numa` CPU binding: no change (232 vs 234 GB/s).
+
+Conclusion: the multi-rank collapse and the remaining scaling gap are
+**not** NUMA effects. Signal rings are O(1)-per-peer polls
+(write_idx/read_idx), so polling cost per rank is small; the latency is
+in the per-tile host signal/wait chain (one Signal/WaitSignal per tile,
+host-side ring polling, no batching at G=1).
+
+### [tss] debug snapshot (4-rank, `UK_CCL_DEBUG=1`, `-w 0 -n 1`)
+
+Debug printing inflates absolute times, but shows the shape:
+
+- enqueue_loop cycle: median ~2-4us (ready -> enq_ring_done).
+- put accepted -> fused Signal local-completion: median ~0.1-0.2ms per
+  group (must wait for the next enqueue cycle; G=1 => one cycle's worth
+  of host signaling per tile).
+- arrival drains (sig_recv / tpt_done) come in bursts with median gaps
+  ~0.14-0.17ms under debug.
+
+The host signal chain, not DMA puts or reduce kernels, is the per-op
+latency driver at 4+ ranks.
+
 ## 8-rank alltoall (harness is 2-rank only)
 
 Not yet measured — `bench/alltoall_perf.cu` is hardcoded to 2 ranks.
