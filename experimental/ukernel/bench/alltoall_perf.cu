@@ -26,6 +26,16 @@
 
 static const char* kIdPath = "/tmp/uk_a2a_id";
 
+// Build with -DUSE_SHIM_API for the ukernel shim (its nccl.h adds a
+// ncclAllToAll extension; native NCCL has no such API). Without the
+// define the harness uses ncclSend/ncclRecv to build the same 2-rank
+// alltoall exchange, which is what nccl-tests' alltoall_perf does on
+// native NCCL. Same buffers, same count semantics.
+//
+// 2-rank exchange (in-place, buf = 2*count floats):
+//   rank r sends buf[r*count .. (r+1)*count) to peer, receives the
+//   peer's slice into buf[(1-r)*count .. (2-r)*count).
+
 static long get_long_arg(int argc, char** argv, const char* name, long def) {
   std::string n(name);
   for (int i = 1; i < argc; ++i) {
@@ -42,6 +52,23 @@ static double now_s() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now()
                                            .time_since_epoch())
       .count();
+}
+
+static void run_one(void* buf, size_t count, int rank, ncclComm_t comm,
+                    cudaStream_t stream) {
+#ifdef USE_SHIM_API
+  NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
+#else
+  // Native NCCL: no ncclAllToAll. 2-rank ring exchange (in-place):
+  // send my slice to the peer, receive the peer's slice.
+  int peer = 1 - rank;
+  size_t send_off = static_cast<size_t>(rank) * count;
+  size_t recv_off = static_cast<size_t>(peer) * count;
+  NCCLCHK(ncclSend(static_cast<char*>(buf) + send_off * sizeof(float), count,
+                   ncclFloat, peer, comm, stream));
+  NCCLCHK(ncclRecv(static_cast<char*>(buf) + recv_off * sizeof(float), count,
+                   ncclFloat, peer, comm, stream));
+#endif
 }
 
 #define CUDACHK(c)                                                   \
@@ -107,13 +134,13 @@ int main(int argc, char** argv) {
   CUDACHK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
   for (int i = 0; i < warmup; ++i)
-    NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
+    run_one(buf, count, rank, comm, stream);
   CUDACHK(cudaStreamSynchronize(stream));
 
   std::vector<double> times;
   for (int i = 0; i < iters; ++i) {
     double t0 = now_s();
-    NCCLCHK(ncclAllToAll(buf, buf, count, ncclFloat, comm, stream));
+    run_one(buf, count, rank, comm, stream);
     CUDACHK(cudaStreamSynchronize(stream));
     double dt = now_s() - t0;
     if (i >= 2) times.push_back(dt);
