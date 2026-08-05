@@ -81,11 +81,6 @@ class BatchBackend {
     (void)peer;
     return false;
   }
-  // Lazy worker/runtime creation hook, called from the executor's
-  // submit path when a plan needs this backend. Default: no-op;
-  // DeviceBackend uses it to avoid launching an idle persistent kernel
-  // for pure-put collectives.
-  virtual void ensure_worker() {}
 
   // Reserve-then-enqueue API for ops whose completion may arrive
   // synchronously during enqueue (e.g. same-host IPC signals). The

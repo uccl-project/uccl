@@ -49,12 +49,8 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
   pending_by_fifo_.resize(cfg_.max_fifos);
-  // Worker pool created lazily (see ensure_worker): pure-put collectives
-  // (alltoall via IPC) never enqueue device tasks and should not launch
-  // an idle persistent kernel.
+  ensure_runtime();
 }
-
-void DeviceBackend::ensure_worker() { ensure_runtime(); }
 
 DeviceBackend::~DeviceBackend() {
   worker_pool_.reset();
@@ -258,6 +254,7 @@ bool DeviceBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
 size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
                                                 uint32_t const* be_idx,
                                                 size_t n) {
+  ensure_runtime();
   size_t accepted = 0;
   // Records of ops submitted in this batch, appended to pending_ under a
   // single lock at the end. Single-writer assumption: only the executor's
@@ -273,12 +270,6 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
       ++accepted;
       continue;
     }
-    // Fallback for device ops routed late (e.g. UK_CCL_PUT_PATH=device
-    // puts that submit-time couldn't predict). submit() already ensures
-    // the worker for plans with a Reduce; this only fires for the rare
-    // device-put-only case. Creating the pool here (executor's enqueue
-    // thread) is safe now that buffer resolve no longer deadlocks.
-    if (!worker_pool_) ensure_runtime();
 
     // Capacity check + FIFO pick under lock (cheap), heavy ops outside.
     uint32_t fid;
@@ -329,7 +320,6 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
 }
 
 size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
-  if (!worker_pool_) return 0;  // no device tasks ever enqueued
   // do_drain may run on user threads (SprayExecutor::wait drives
   // progress); save/restore the caller's CUDA device around it.
   int prev_device = -1;

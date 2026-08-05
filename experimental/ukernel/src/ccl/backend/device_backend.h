@@ -50,12 +50,6 @@ class DeviceBackend final : public BatchBackend {
   // True when the peer's IPC signal ring is GPU-mapped, so a fused
   // PutSignal (CollPut task) can write the tag from the kernel.
   bool can_fuse_put_signal(int peer) const override;
-  // Lazily create the persistent worker pool. Called from the executor's
-  // submit path (user thread) when a plan contains device ops, and from
-  // do_enqueue_reserved_batch as a fallback for late-routed device puts.
-  // Pure-put collectives (alltoall via IPC) never call this, so no
-  // persistent kernel is launched for them.
-  void ensure_worker() override;
 
  private:
   void ensure_runtime();
