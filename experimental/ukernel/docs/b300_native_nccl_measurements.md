@@ -136,18 +136,28 @@ batching waits, or device-side signal matching. 2-rank remains fast
 (put/reduce overlap fine); 4+ ranks need this before the 8-GPU
 capability is usable.
 
-## 2026-08-05 (late) — post-revert re-measurement: the collapse was a
-lazy-worker regression; NUMA is not the cause
+## 2026-08-05 (late) — post-revert re-measurement: the 23-60ms collapse
+is NOT reproducible; NUMA is not the cause
 
-The 23-60ms 4/8-rank collapse above was measured while commit `199d520b`
-(safe lazy worker — ensure on submit, not enqueue) was active. That
-commit plus the follow-up signal experiments were all reverted in order
-(busy-wait `4d50febd`, immediate Signal local-completion `44595e71`,
-signal aggregation `28f92027`, lazy worker `199d520b` -> revert
-`011fb43a`), and the collapse is **gone**. Current clean numbers
-(tuned config `UK_CCL_LARGE_TILES=8 UK_CCL_TILE_MIN_BYTES=8388608
-UK_CCL_IPC_BATCH=16 UK_CCL_DEV_BLOCKS=64`, 256M allreduce,
-`-g 1 -c 1 -n 20`, OOP):
+Correction to the 8-card sweep above: the 23-60ms 4/8-rank collapse was
+**not** caused by the code state at the time. A/B test on the same box:
+commit `199d520b` (lazy worker, the only code delta active during the
+sweep) was re-applied on top of the current tree and rebuilt — 4-rank
+256M allreduce still measured ~1054us, identical to the reverted tree
+(1054us), and 2-rank stayed ~562us. The collapse is therefore not
+reproducible by any current or swept code state; it most plausibly came
+from a transient condition during that measurement (host CPU load —
+shim per-tile signaling is host-polling based, unlike native NCCL's
+device-driven LL flags, which were measured fine at the same time — or
+a different build configuration). The follow-up experiments (signal
+aggregation `28f92027`, immediate Signal local-completion `44595e71`,
+busy-wait `4d50febd`) were reverted because they regressed **2-rank**
+in the 05:00-07:00 debug window, not because they caused the 4/8-rank
+collapse.
+
+Current clean numbers (tuned config `UK_CCL_LARGE_TILES=8
+UK_CCL_TILE_MIN_BYTES=8388608 UK_CCL_IPC_BATCH=16 UK_CCL_DEV_BLOCKS=64`,
+256M allreduce, `-g 1 -c 1 -n 20`, OOP):
 
 | ranks | shim time (us) | shim algbw (GB/s) | shim busbw (GB/s) | native time (us) | native busbw (GB/s) |
 |---:|---:|---:|---:|---:|---:|
@@ -159,8 +169,15 @@ All wrong=0. Native busbw rises with rank count (507 -> 595 -> 652);
 the shim's busbw falls (463 -> 377 -> 234) — per-tile host signaling
 does not pipeline across ring hops. Per-op cost from end-to-end time:
 2.6us (2r, 224 ops) -> 3.2us (4r, 336 ops) -> 4.5us (8r, ~448 ops).
-This is the remaining gap to attack (signal aggregation + batched
-waits, then put/reduce overlap), not the earlier 40-70x collapse.
+This per-tile signaling gap is real and is the thing to attack (signal
+aggregation + batched waits, then put/reduce overlap).
+
+Small messages carry a fixed latency floor: 4-rank 1M/4M/16M all take
+~440-500us regardless of size (vs native ~25-40us) because a handful of
+tiles cannot fill the pipeline; only 64M+ starts to move
+(688us @64M, 1054us @256M). This floor is host signal chain latency
+(signal drain -> enqueue cycle -> device dispatch), and it is exactly
+what batching waits + aggregating signals attacks.
 
 ### NUMA experiments (B300 is 4 NUMA nodes: GPUs 0-1 / 2-3 / 4-5 / 6-7)
 
