@@ -116,6 +116,21 @@ static bool verify_exchange(void* buf, size_t count, int rank,
                      static_cast<char*>(buf) +
                          static_cast<size_t>(peer) * count * sizeof(float),
                      count * sizeof(float), cudaMemcpyDeviceToHost));
+  // Scan the whole buffer for where the peer's data actually landed.
+  std::vector<float> whole(2 * count);
+  CUDACHK(cudaMemcpy(whole.data(), buf, whole.size() * sizeof(float),
+                     cudaMemcpyDeviceToHost));
+  size_t first_peer_val = 2 * count, n_peer_val = 0;
+  for (size_t i = 0; i < 2 * count; ++i) {
+    if (whole[i] == static_cast<float>(peer + 1)) {
+      if (first_peer_val == 2 * count) first_peer_val = i;
+      ++n_peer_val;
+    }
+  }
+  fprintf(stderr,
+          "[r%d] peer-val: first@%zu (want %zu..%zu) count=%zu/%zu\n", rank,
+          first_peer_val, static_cast<size_t>(peer) * count,
+          static_cast<size_t>(peer + 1) * count - 1, n_peer_val, 2 * count);
   std::vector<float> mine(count);
   CUDACHK(cudaMemcpy(mine.data(),
                      static_cast<char*>(buf) +
