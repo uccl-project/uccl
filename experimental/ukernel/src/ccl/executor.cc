@@ -1546,6 +1546,9 @@ void SprayExecutor::drain_tpt_loop() {
              "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), nd, dbg_count);
     }
+    if (nd > 0 && uk_dbg_lvl() >= 1)
+      std::fprintf(stderr, "[tss] r%d tpt_done n=%zu t=%lld\n",
+                   rank_or_neg1(), nd, tss_us());
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
