@@ -294,6 +294,45 @@ not help. The next lever is chunk interleaving with signal aggregation
 (one signal per G tiles, cutting the per-tile completion cost that made
 LT=8 regress), which is the same aggregation machinery AllReduce needs.
 
+### Signal aggregation + chunk interleaving (UK_CCL_SIG_GROUP_TILES)
+
+The aggregation machinery (one Signal/WaitSignal per `G` tiles of a
+chunk pair, counted arrivals on the receiver) already existed in the
+lowerer with default G=1; it is now tunable via
+`UK_CCL_SIG_GROUP_TILES`. Sweeps (all wrong=0):
+
+AllReduce 256M (LT=8 TM=8M BLK=64), OOP:
+
+| G | 2r (us) | 4r (us) | 8r (us) |
+|---:|---:|---:|---:|
+| 1 | 610 | 1094 | 2201 |
+| 2 | **575** | 1266 | 2149 |
+| 4 | 653 | 1263 | **2114** |
+| 8 | 654 | 1197 | 2252 |
+| 16 | 671 | 1231 | 2177 |
+
+Best is G=2 at 2 ranks and G=4 at 8 ranks (~4-6%); G>=4 regresses
+2-rank (coarser group boundaries starve the short 2-rank pipeline — the
+same reason the earlier G=8 default was reverted). No single default is
+best everywhere, so the env override stays opt-in.
+
+AllToAll 256M at 8 ranks (BLK=1, out-of-place):
+
+| LT | G | avg (us) |
+|---:|---:|---:|
+| 1 | 1 | 773-784 |
+| 2 | 2 | 765 |
+| 4 | 4 | **714-723** |
+| 4 | 8 | 716 |
+| 8 | 8 | 742-751 |
+
+LT=4 (4MB tiles) + G=4 gives the best 8-rank alltoall so far
+(~715us, ~7% over the LT=1 baseline): smaller chunks interleave on the
+copy engine better than 32MB monoliths, and G=4 amortizes the per-tile
+signal/completion cost that made plain LT=8 regress. Still 1.9x the raw
+CE ceiling (368us) — the copy span under 8-rank full load remains the
+wall.
+
 ### Why native has no staging copy
 
 Native/nccl-tests AllToAll is **out-of-place** (separate sendbuff and
