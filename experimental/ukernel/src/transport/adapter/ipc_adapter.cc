@@ -521,7 +521,21 @@ void IpcAdapter::send_worker() {
         }
       }
     }
-    if (!any) {
+    bool inflight_any = false;
+    for (size_t v : inflight)
+      if (v > 0) {
+        inflight_any = true;
+        break;
+      }
+    if (inflight_any) {
+      // Copies in flight: poll events eagerly with a pause burst instead
+      // of yielding to the scheduler — completion latency is on the
+      // critical path (8-rank alltoall tail).
+      for (int s = 0; s < 16 && !stop_.load(std::memory_order_relaxed); ++s)
+        machnet_pause();
+      if (any) continue;
+      std::this_thread::yield();
+    } else {
       std::this_thread::yield();
     }
   }
@@ -591,6 +605,16 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
     size_t dir = (comm_->rank() < e->peer) ? 0u : 1u;
     comps_[e->peer].remote->last_completed[dir].store(
         e->seq, std::memory_order_release);
+  }
+  // Publish the put completion BEFORE the fused-signal ring write: the
+  // signal write can back-pressure on the receiver's drain cadence
+  // (observed ~150-250us stalls at 8 ranks), and the sender's collective
+  // must not wait on it — the receiver completes when IT drains the
+  // signal. Reordering keeps the sender's critical path to just the copy
+  // event; the signal still lands after the data (same thread, same
+  // order).
+  publish_put_completion(e->comm_rid, !ok);
+  if (ok) {
     // Fused PutSignal: the peer observes the tag only after the data
     // has landed, matching a separate Signal op's semantics.
     if (e->type == ReqType::PutSignal) {
@@ -600,7 +624,6 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
       ok = write_signal_ring(e->peer, e->tag);
     }
   }
-  publish_put_completion(e->comm_rid, !ok);
 }
 
 bool IpcAdapter::recv_one(RingElem* e) {
