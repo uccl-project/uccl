@@ -49,7 +49,10 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
   pending_by_fifo_.resize(cfg_.max_fifos);
-  ensure_runtime();
+  // Deliberately NOT creating the worker pool here: pure-put collectives
+  // (alltoall via IPC/RDMA transport) never enqueue device tasks, so no
+  // persistent kernel should be launched for them. ensure_runtime() runs
+  // lazily from do_enqueue_reserved_batch on the first real device task.
 }
 
 DeviceBackend::~DeviceBackend() {
