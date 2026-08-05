@@ -17,10 +17,22 @@ UCCL_ROOT := $(abspath ../../../..)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
 
-CXXFLAGS := -std=c++17 -O3 -g -Wall -D__HIP_PLATFORM_AMD__
+ifeq ($(DEBUG),1)
+CCL_OPT_FLAGS := -O0 -g
+else
+CCL_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -D__HIP_PLATFORM_AMD__
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) -I$(CONDA_LIB_HOME)/../include
-NVCCFLAGS := -std=c++17 -O3 -g -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
+NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall $(NVCC_ARCH_FLAGS) -D__HIP_PLATFORM_AMD__
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+REDUCE_ILP ?= 4
+REDUCE_SMEM_KB ?= 4
+TMA_REDUCE ?= 0
+TMA_WARPSPEC ?= 0
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
+CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
 INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
@@ -35,7 +47,7 @@ TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(HIP_LIB) \
                   $(UCCL_RDMA_STATIC)
 DEVICE_LIBS := -lnuma
 
-CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc executor.cc
+CCL_CORE_SRC := coll_algo.cc lower.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc backend/backend.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
@@ -93,6 +105,40 @@ unit: test-unit
 integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
+
+# NCCL compatibility shim (nccl.cc + installed nccl.h) — driven by
+# top-level `make -f Makefile.rocm nccl`. Same object set as the CUDA
+# build; the shim's API and nccl.cc use the gpu_rt.h wrappers
+# (gpuStream_t etc.), which map to hip types on this platform, so the
+# exported .so is ABI-compatible with ROCm-built nccl-tests.
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+NCCL_SO := libnccl.so
+NCCL_OBJ := nccl.o
+
+.PHONY: nccl_dev nccl
+nccl_dev: $(NCCL_SO)
+	@mkdir -p $(NCCL_PREFIX)/lib $(NCCL_PREFIX)/include
+	# ABI-compatible drop-in: native libnccl's SONAME is libnccl.so.2 and
+	# RCCL's is librccl.so.1. rccl-tests/nccl-tests built against native
+	# libs record those names, so install the shim under both (same nccl*
+	# API, same .so) plus dev symlinks — LD_LIBRARY_PATH swaps just work.
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/libnccl.so.2
+	ln -sf libnccl.so.2 $(NCCL_PREFIX)/lib/libnccl.so
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/librccl.so.1
+	ln -sf librccl.so.1 $(NCCL_PREFIX)/lib/librccl.so
+	cp ../../include/nccl.h $(NCCL_PREFIX)/include/
+	cp ../../include/gpu_rt.h $(NCCL_PREFIX)/include/
+	@echo "NCCL compat installed to $(NCCL_PREFIX)/"
+
+$(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o \
+		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ) | $(UCCL_RDMA_STATIC)
+	$(HIPCC) -shared -o $@ $^ $(HIPCCFLAGS) $(INCLUDES) \
+		-L$(HIP_LIB) -lamdhip64 $(DEVICE_LIBS) $(TRANSPORT_LIBS) -lpthread \
+		-Wl,-soname,libnccl.so.2
+
+$(NCCL_OBJ): nccl.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 $(UCCL_RDMA_STATIC):
 	$(MAKE) -C "$(UCCL_RDMA_ROOT)" -f Makefile.rocm librdma_hip.a

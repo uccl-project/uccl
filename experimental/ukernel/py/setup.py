@@ -62,8 +62,7 @@ sources = [
     rel(ROOT / "src" / "ccl" / "executor.cc"),
     rel(ROOT / "src" / "ccl" / "executor_factory.cc"),
     rel(ROOT / "src" / "ccl" / "lower.cc"),
-    rel(ROOT / "src" / "ccl" / "algo" / "chunk_graph.cc"),
-    rel(ROOT / "src" / "ccl" / "algo" / "topology.cc"),
+    rel(ROOT / "src" / "ccl" / "coll_algo.cc"),
     *transport_sources,
     rel(ROOT / "src" / "device" / "fifo" / "c2d_fifo.cc"),
     rel(ROOT / "src" / "device" / "fifo" / "d2c_fifo.cpp"),
@@ -149,7 +148,6 @@ if USE_ROCM:
 ExtensionCls = CUDAExtension
 
 common_libraries = [
-    "gflags",
     "z",
     "ibverbs",
     "nl-3",

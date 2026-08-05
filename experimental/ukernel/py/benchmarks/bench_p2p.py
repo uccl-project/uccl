@@ -327,7 +327,7 @@ def main() -> None:
 
     # Phase 2: uccl p2p only
     if uc_times is not None:
-        uc_mode = os.getenv("UCCL_P2P_MODE", "ipc").strip().lower()
+        uc_mode = os.getenv("UK_P2P_TRANSPORT", "ipc").strip().lower()
         if uc_mode not in ("rdma", "ipc"):
             raise RuntimeError(f"invalid UCCL_P2P_MODE={uc_mode}, expected rdma/ipc")
 

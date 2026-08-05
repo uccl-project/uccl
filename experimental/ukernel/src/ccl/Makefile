@@ -1,7 +1,21 @@
-CXX := g++
-NVCC := nvcc
-DEFAULT_SMS := 80 86 89
+CXX := /usr/bin/g++
 CUDA_HOME ?= /usr/local/cuda
+# Auto-detect CUDA if default path doesn't exist (e.g. /usr/local/cuda-13).
+ifeq ($(wildcard $(CUDA_HOME)/bin/nvcc),)
+  _CUDA_AUTO := $(firstword $(sort $(wildcard /usr/local/cuda-*)))
+  ifneq ($(_CUDA_AUTO),)
+    CUDA_HOME := $(_CUDA_AUTO)
+  endif
+endif
+NVCC_BIN ?= $(CUDA_HOME)/bin/nvcc
+ifeq ($(wildcard $(NVCC_BIN)),)
+  # Fall back to PATH only if the CUDA_HOME toolkit is missing — never pick
+  # up a conda/pyenv nvcc when a real toolkit exists (conda CUDA 12.x cannot
+  # target sm_103 and drags the wrong host toolchain).
+  NVCC_BIN := $(shell which nvcc 2>/dev/null)
+endif
+NVCC = $(NVCC_BIN)
+DEFAULT_SMS := 80 86 89 100
 CONDA_LIB_HOME ?= /usr/lib
 UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
@@ -10,35 +24,50 @@ GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
 
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
-ENABLE_TMA := 0
 else
 SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
 NVCC_ARCH_FLAGS := -arch=sm_$(SM)
-ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
 
-CXXFLAGS := -std=c++17 -O3 -g -Wall
-CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
-NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
-NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+# NOTE: the old ENABLE_TMA / UKERNEL_ENABLE_TMA knob is a dead leftover —
+# no code reads it. The TMA bulk-reduce path is controlled by TMA_REDUCE
+# (and its warp-specialized variant TMA_WARPSPEC) below. Passing
+# `ENABLE_TMA=...` on the command line is still accepted but ignored.
+
+ifeq ($(DEBUG),1)
+CCL_OPT_FLAGS := -O0 -g
+else
+CCL_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -fPIC
+NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
+REDUCE_ILP ?= 4
+REDUCE_SMEM_KB ?= 4
+TMA_REDUCE ?= 0
+TMA_WARPSPEC ?= 0
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
+CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
+GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
 INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
-            -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
-CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
-NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
+            -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/include \
+            -I/usr/local/include -I/usr/include/$(GCC_MACHINE)
+CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
+                   -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
+                   -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE)
 ifneq ($(strip $(GDRCOPY_LIBDIR)),)
 CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)
-NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lcudart -lcuda -lz -libverbs \
                   -lnl-3 -lnl-route-3 -lpthread
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
-CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
+CCL_CORE_SRC := coll_algo.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc backend/backend.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
@@ -112,7 +141,7 @@ test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal
 
 test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o backend/transport_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
@@ -128,7 +157,7 @@ test/unit/test_transport_backend_e2e.o: test/unit/test_transport_backend_e2e.cc
 
 test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/unit/test_device_backend_e2e.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/unit/test_device_backend_e2e.o: test/unit/test_device_backend_e2e.cc
@@ -151,7 +180,7 @@ test/integration/test_put_signal_e2e.o: test/integration/test_put_signal_e2e.cc
 
 test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_spray_executor_e2e.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/integration/test_spray_executor_e2e.o: test/integration/test_spray_executor_e2e.cc
@@ -159,7 +188,7 @@ test/integration/test_spray_executor_e2e.o: test/integration/test_spray_executor
 
 test_rdma_l2_flush: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_rdma_l2_flush.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/integration/test_rdma_l2_flush.o: test/integration/test_rdma_l2_flush.cc
@@ -167,7 +196,7 @@ test/integration/test_rdma_l2_flush.o: test/integration/test_rdma_l2_flush.cc
 
 test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_spray_allreduce.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
 
 test/integration/test_perf_spray_allreduce.o: test/integration/test_perf_spray_allreduce.cc
@@ -209,6 +238,33 @@ backend/device_backend.o: backend/device_backend.cc
 device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
+# NCCL compatibility — driven by top-level `make nccl`.
+NCCL_PREFIX ?= $(CURDIR)/build/nccl
+NCCL_SO := libnccl.so
+NCCL_OBJ := nccl.o
+
+.PHONY: nccl_dev nccl
+nccl_dev: $(NCCL_SO)
+	@mkdir -p $(NCCL_PREFIX)/lib $(NCCL_PREFIX)/include
+	# ABI-compatible drop-in: native libnccl's SONAME is libnccl.so.2, and
+	# perftests/engines built against native NCCL record that name — install
+	# the shim under it plus the dev symlink so LD_LIBRARY_PATH swaps work.
+	cp $(NCCL_SO) $(NCCL_PREFIX)/lib/libnccl.so.2
+	ln -sf libnccl.so.2 $(NCCL_PREFIX)/lib/libnccl.so
+	cp ../../include/nccl.h $(NCCL_PREFIX)/include/
+	cp ../../include/gpu_rt.h $(NCCL_PREFIX)/include/
+	@echo "NCCL compat installed to $(NCCL_PREFIX)/"
+
+$(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o \
+		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ)
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(INCLUDES) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread \
+		-Wl,-soname,libnccl.so.2
+
+$(NCCL_OBJ): nccl.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
 clean:
 	rm -f *.o *.d backend/*.o backend/*.d \
 		test/*.o test/*.d \
@@ -220,5 +276,5 @@ clean:
 
 # Cover every generated .d (wildcard): the previous explicit list missed
 # several test objects, which then went stale on header changes (ODR).
--include $(wildcard *.d algo/*.d backend/*.d test/common/*.d test/unit/*.d \
+-include $(wildcard *.d backend/*.d test/common/*.d test/unit/*.d \
 		test/integration/*.d)

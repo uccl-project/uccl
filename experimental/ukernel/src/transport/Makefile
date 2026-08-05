@@ -1,5 +1,15 @@
 CXX            := /usr/bin/g++
 CUDA_PATH      ?= /usr/local/cuda
+# Auto-detect CUDA if default path doesn't exist (e.g. /usr/local/cuda-13).
+ifeq ($(wildcard $(CUDA_PATH)/bin/nvcc),)
+  _CUDA_AUTO := $(firstword $(sort $(wildcard /usr/local/cuda-*)))
+  ifneq ($(_CUDA_AUTO),)
+    CUDA_PATH := $(_CUDA_AUTO)
+  endif
+endif
+# Alias for sub-makefiles that expect CUDA_HOME.
+CUDA_HOME      ?= $(CUDA_PATH)
+GCC_MACHINE    := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
 CONDA_LIB_HOME ?= /usr/lib
 DEBUG          ?= 0
 
@@ -10,7 +20,10 @@ CXX_OPT_FLAGS := -O3
 endif
 
 CXXFLAGS := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC -I$(CONDA_LIB_HOME)/../include
-LDFLAGS  := -L$(CONDA_LIB_HOME) -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 -lcudart -lcuda -lz -libverbs -lnl-3 -lnl-route-3 -lpthread
+LDFLAGS  := -L$(CONDA_LIB_HOME) -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+            -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
+            -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
+            -lcudart -lcuda -lz -libverbs -lnl-3 -lnl-route-3 -lpthread
 
 
 UCCL_ROOT := $(abspath ../../../..)
