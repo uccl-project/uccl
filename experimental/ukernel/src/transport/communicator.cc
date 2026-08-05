@@ -1998,6 +1998,18 @@ bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
+  // Same-host buffers are usable over IPC with rkey=0; RDMA/MR
+  // registration can fail for small allocations (observed for <4KB
+  // allreduces: 1K/4K/16K resolve failed with mr=0 ipc=1). The IPC item
+  // is sufficient, so only require it here.
+  if (same_host(peer_rank)) {
+    if (!wait_ipc(peer_rank, buffer_id, timeout_ms)) {
+      std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (ipc)\n",
+                   global_rank_, peer_rank, buffer_id);
+      return false;
+    }
+    return true;
+  }
   bool ok_mr = wait_mr(peer_rank, buffer_id, timeout_ms);
   bool ok_ipc = wait_ipc(peer_rank, buffer_id, timeout_ms);
   if (!ok_mr || !ok_ipc) {
@@ -2005,10 +2017,6 @@ bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                  global_rank_, peer_rank, buffer_id, (int)ok_mr, (int)ok_ipc);
     return false;
   }
-  // Same-host buffers are usable over IPC with rkey=0 (RDMA registration
-  // may have failed e.g. on unaligned small allocations): the IPC item is
-  // sufficient, so do not wait for an rkey that will never appear.
-  if (same_host(peer_rank)) return true;
   // Cross-node: RDMA is required, so wait for a nonzero rkey.
   for (int retry = 0; retry < 10; ++retry) {
     MR mr = get_mr(peer_rank, buffer_id);
