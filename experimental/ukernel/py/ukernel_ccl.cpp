@@ -11,11 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 namespace nb = nanobind;
@@ -93,29 +91,6 @@ void validate_arithmetic_dtype(torch::ScalarType dtype, char const* what) {
   }
   throw std::invalid_argument(std::string(what) +
                               " supports int8/int32/int64/fp16/fp32/fp64/bf16");
-}
-
-// prepare() does peer setup, MR (re)registration and buffer resolution —
-// expensive, and only needed once per (shape, pointer) combination.
-std::string prepare_key(CollectiveConfig const& cfg, void const* input,
-                        void const* output) {
-  std::string k;
-  k.reserve(96);
-  auto add = [&k](uint64_t v) {
-    k.append(reinterpret_cast<char const*>(&v), sizeof(v));
-  };
-  add(static_cast<uint64_t>(cfg.kind));
-  add(cfg.input_bytes);
-  add(cfg.output_bytes);
-  add(cfg.tile_bytes);
-  add(cfg.input_split_bytes.size());
-  for (size_t v : cfg.input_split_bytes) add(v);
-  add(cfg.output_split_bytes.size());
-  for (size_t v : cfg.output_split_bytes) add(v);
-  add(cfg.signal_group_tiles);
-  add(reinterpret_cast<uintptr_t>(input));
-  add(reinterpret_cast<uintptr_t>(output));
-  return k;
 }
 
 }  // namespace
@@ -258,21 +233,6 @@ class ProcessGroup {
           "collectives run in place and cannot silently copy back)");
   }
 
-  void ensure_prepared(CollectiveConfig const& cfg, void* input, void* output) {
-    std::string key = prepare_key(cfg, input, output);
-    if (prepared_keys_.find(key) != prepared_keys_.end()) return;
-    if (prepared_keys_.size() >= kMaxPrepared) prepared_keys_.clear();
-    {
-      // prepare() does peer setup, MR (re)registration and buffer
-      // resolution, which can block for tens of seconds on a cold
-      // shape; let Python handle signals meanwhile (Ctrl+C is
-      // delivered when the call returns, not mid-call).
-      nb::gil_scoped_release release;
-      executor_->prepare(cfg, input, output);
-    }
-    prepared_keys_.insert(std::move(key));
-  }
-
   uint64_t allreduce_submit_tensor(torch::Tensor const& tensor,
                                    uint32_t reduction, size_t tile_bytes,
                                    uint32_t signal_group_tiles) {
@@ -303,28 +263,24 @@ class ProcessGroup {
     return submit_collective(cfg, ptr, ptr);
   }
 
-  // prepare (cached) + torch stream fence + executor submit. mu_ covers
-  // only this section: SprayExecutor::submit reallocs its internal
-  // scratch outside its own locks, while wait/poll/status are
-  // documented concurrent-safe — waits are deliberately NOT locked so
-  // in-flight collectives can overlap.
+  // prepare (deduped inside the executor) + torch stream fence +
+  // executor submit. The executor serializes prepare/submit internally,
+  // so no client-side lock is needed; waits are deliberately NOT locked
+  // so in-flight collectives can overlap.
   uint64_t submit_collective(CollectiveConfig const& cfg, void* input,
                              void* output) {
-    std::lock_guard<std::mutex> lock(mu_);
-    ensure_prepared(cfg, input, output);
-    // Inherit torch's stream ordering: any kernels the user launched on
-    // the current stream (e.g. the in-place op producing this tensor)
-    // must finish before our device workers read the buffers. A host
-    // sync is the only correct fence with persistent worker kernels —
-    // their memory accesses are not stream-ordered with new stream
-    // waits.
-    cudaError_t serr =
-        cudaStreamSynchronize(c10::cuda::getCurrentCUDAStream().stream());
-    if (serr != cudaSuccess)
-      throw std::runtime_error(
-          std::string("stream sync before collective failed: ") +
-          cudaGetErrorString(serr));
-    return executor_->submit(cfg, input, output);
+    {
+      // prepare() does peer setup, MR (re)registration and buffer
+      // resolution on a cold shape, which can block for tens of
+      // seconds; let Python handle signals meanwhile (Ctrl+C is
+      // delivered when the call returns, not mid-call).
+      nb::gil_scoped_release release;
+      executor_->prepare(cfg, input, output);
+    }
+    // Stream-ordered deps are handled inside executor: input gated by
+    // cudaEventRecord+Query, output by cuStreamWaitValue32.
+    auto stream = c10::cuda::getCurrentCUDAStream().stream();
+    return executor_->submit(cfg, input, output, stream);
   }
 
   // Wait in 20ms slices: release the GIL and check for pending Python
@@ -367,15 +323,11 @@ class ProcessGroup {
     executor_->release(h);
   }
 
-  static constexpr size_t kMaxPrepared = 64;
-
   int rank_;
   int world_size_;
   int gpu_id_;
   std::unique_ptr<SprayExecutor> executor_;
   torch::Tensor barrier_tensor_;
-  std::unordered_set<std::string> prepared_keys_;
-  std::mutex mu_;
 };
 
 }  // namespace Python

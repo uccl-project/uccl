@@ -6,6 +6,7 @@
 #include "util/jring.h"
 #include "util/jrqueue.h"
 #include "util/uk_debug.h"
+#include "../../include/gpu_rt.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -69,6 +71,16 @@ struct SprayRun {
   // Hot path: accessed every enqueue/drain cycle
   std::atomic<CollectiveOpStatus> status{CollectiveOpStatus::Queued};
   std::atomic<size_t> done_count{0};
+  // Ops accepted by a backend whose completion has not drained yet
+  // (+1 on acceptance in enqueue_to_ring, -1 in drain_batch). A Failed
+  // run is releasable only once this hits 0: late completions reach the
+  // run through BeSlot raw pointers, so freeing it earlier is a
+  // use-after-free (release() gates on this).
+  std::atomic<size_t> inflight_ops{0};
+  // In-flight WaitSignal ops (subset of inflight_ops): throttled per run
+  // by UK_CCL_SIG_INFLIGHT_CAP in enqueue_to_ring, decremented in
+  // drain_batch alongside inflight_ops.
+  std::atomic<uint32_t> sig_inflight{0};
   std::mutex mtx;
   std::vector<uint8_t> submitted;
   std::vector<uint32_t> ready;
@@ -108,16 +120,19 @@ struct SprayRun {
   }
 
   void init_ready_ring(size_t nops) {
-    uint32_t count = 1;
+    size_t count = 1;
+    // Cap to avoid uint32_t overflow; jring APIs only accept uint32_t count.
+    if (nops > RING_SZ_MASK) nops = RING_SZ_MASK;
     while (count <= nops) count <<= 1;
     if (count < 1024) count = 1024;  // floor: avoid overflow under burst
-    size_t sz = jring_get_buf_ring_size(sizeof(uint32_t), count);
+    size_t sz = jring_get_buf_ring_size(sizeof(uint32_t),
+                                        static_cast<uint32_t>(count));
     ready_ring = static_cast<jring_t*>(calloc(1, sz));
     if (!ready_ring) {
       std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);
       std::abort();
     }
-    jring_init(ready_ring, count, sizeof(uint32_t), 0, 1);
+    jring_init(ready_ring, static_cast<uint32_t>(count), sizeof(uint32_t), 0, 1);
   }
 
   ~SprayRun() {
@@ -134,6 +149,10 @@ struct SprayRun {
   uint32_t input_buf_id = 0;
   uint32_t output_buf_id = 0;
   uint32_t scratch_buf_id = 0;
+  // Offset of each role's tensor within its registered allocation.
+  uint64_t input_base_off = 0;
+  uint64_t output_base_off = 0;
+  uint64_t scratch_base_off = 0;
 
   // (backend_tag, be_idx) pairs for release cleanup
   // backend_tag: 0=dev, 1=tpt, 2=sig
@@ -141,6 +160,34 @@ struct SprayRun {
 
   // Cold: rarely accessed
   std::string error;
+
+  // Stream-ordered dependency management (NCCL-compatible).
+  gpuStream_t user_stream = nullptr;  // submit() caller's stream
+  gpuEvent_t input_ready = nullptr;   // record on user_stream, gate enqueue
+  uint64_t done_seq = 0;              // monotonic completion sequence number
+
+  // Watchdog state (enqueue_loop only): fail the run when done_count
+  // stops advancing — turns silent deadlocks into loud errors.
+  size_t watchdog_done = 0;
+  std::chrono::steady_clock::time_point watchdog_ts{};
+
+  // Signal-tag epoch for this run (assigned in submit from
+  // next_run_epoch_); folded into every Signal/WaitSignal/fused tag.
+  uint32_t tag_epoch = 0;
+
+  // Debug counters: Signal ops completed locally (fused) vs dispatched
+  // standalone to the signal backend — a run whose puts fused must have
+  // sig_standalone == 0, or the peer sees duplicate arrivals.
+  uint32_t sig_local = 0;
+  uint32_t sig_standalone = 0;
+
+  // Per-signal-group acceptance accounting (indexed by Signal op idx,
+  // like fused_sig_cnt): fused_sig_cnt counts group puts accepted WITH
+  // the fuse flag, accepted_sig_cnt counts ALL accepted group puts.
+  // The Signal op must not be evaluated until accepted == grp — a
+  // point-in-time check against fused only would dispatch a standalone
+  // signal for a put that fuses one cycle later (duplicate arrival).
+  std::vector<uint16_t> accepted_sig_cnt;
 };
 
 struct SprayExecutorConfig {
@@ -149,10 +196,26 @@ struct SprayExecutorConfig {
   int world_size;
   size_t device_task_capacity = 4096;
   size_t max_device_fifos = 2;
-  int threads_per_block = 64;
-  int blocks_per_worker = 1;
+  // 256 threads: the ILP-vectorized reduce needs this many to keep the
+  // memory system fed (64 was latency-bound); 512 currently exceeds the
+  // per-block register limit for the ILP reduce, so 256 is the sweet
+  // spot until launch bounds land.
+  int threads_per_block = 256;
+  // 8 blocks: the device kernel splits copy/reduce tasks across them.
+  // Measured vs the old 1-block default on the A40 pair — ReduceScatter
+  // 256MB 8.3ms -> 3.1ms (beats native NCCL's 3.9ms; the output-copy
+  // task was the bottleneck), AllGather 256MB 3.8ms -> 2.8ms, AllReduce
+  // 256MB unchanged (5.5ms), and small messages improve too (256KB
+  // AllReduce 84us -> 77us). 16 blocks gives only marginal RS gains.
+  int blocks_per_worker = 8;
   size_t fifo_capacity = 256;
-  size_t smem_size = 4096;  // dynamic shared memory for reduce kernel
+  // Dynamic shared memory for the reduce kernel; follows the build's
+  // REDUCE_SMEM_KB (default 4KB) so the launch config always matches the
+  // kernel's TMA chunk sizing.
+#ifndef UK_REDUCE_SMEM_KB
+#define UK_REDUCE_SMEM_KB 4
+#endif
+  size_t smem_size = static_cast<size_t>(UK_REDUCE_SMEM_KB) * 1024;
   size_t max_concurrent_runs = 16;
 
   // Communicator settings
@@ -163,7 +226,7 @@ struct SprayExecutorConfig {
   // worker kernels exit (relaunched on next enqueue). 0 = always
   // resident. Enable when the process also runs torch/CUDA work — an
   // always-spinning kernel deadlocks device-wide syncs.
-  uint32_t device_idle_exit_us = 0;
+  uint32_t device_idle_exit_us = 500;  // see WorkerPool::Config::idleExitAfterUs
 };
 
 // Backend path counters for load-balancing diagnostics.
@@ -217,6 +280,8 @@ class BeSlotTable {
 
   BeSlotTable() = default;
 
+  size_t capacity() const { return mask_ + 1; }
+
   void write(uint32_t be_idx, SprayRun* run, uint32_t op_idx, PutPath put_path,
              std::atomic<bool> const& stop) {
     auto& s = slots_[be_idx & mask_];
@@ -225,8 +290,21 @@ class BeSlotTable {
     // claimed yet — its try_claim would otherwise spin forever on a tag
     // that has already moved on. Single writer (the enqueue thread), so
     // this is plain backpressure, not a race.
+    uint64_t spins = 0;
     while (s.tag.load(std::memory_order_acquire) != ~0u) {
       if (stop.load(std::memory_order_relaxed)) return;
+      if ((++spins & 0xFFFFFu) == 0) {
+        // Zombie-slot forensics: identify the occupant whose completion
+        // vanished (op kind via run->plan, backend tag, enqueue time).
+        auto const& op = s.run->plan->tiled.ops[s.op_idx];
+        std::fprintf(stderr,
+                     "[BeSlotTable] write be_idx=%u blocked %lu spins: "
+                     "occupant tag=%u op_idx=%u kind=%d bytes=%zu "
+                     "src_peer=%d dst_peer=%d\n",
+                     be_idx, (unsigned long)spins, s.tag.load(), s.op_idx,
+                     (int)op.kind, op.bytes, (int)op.src_peer,
+                     (int)op.dst_peer);
+      }
       std::this_thread::yield();
     }
     s.run = run;
@@ -234,6 +312,15 @@ class BeSlotTable {
     s.put_path = put_path;
     s.enqueue_ns = std::chrono::steady_clock::now().time_since_epoch().count();
     s.tag.store(be_idx, std::memory_order_release);
+  }
+
+  // Non-blocking occupancy query for the slot write() would target.
+  // Lets the enqueue thread defer an op instead of spinning in write()
+  // when the table has wrapped — blocking there can deadlock a run
+  // whose later ops (e.g. batched puts) produce the completions the
+  // earlier ones wait for.
+  bool occupied(uint32_t be_idx) const {
+    return slots_[be_idx & mask_].tag.load(std::memory_order_acquire) != ~0u;
   }
 
   BeSlotSnap try_claim(uint32_t be_idx, std::atomic<bool> const& stop) {
@@ -302,13 +389,16 @@ class SprayExecutor {
   void start();
 
   CollectiveOpHandle submit(CollectiveConfig const& cfg, void* input,
-                            void* output);
+                            void* output, gpuStream_t stream = nullptr);
 
   // Prepare peer connections and buffer resources for the given
-  // collective.  Must be called once before the first submit().
+  // collective. Idempotent and thread-safe: internally deduped on
+  // (kind, peers, allocations, bytes), so callers should invoke it
+  // before every submit() and let the executor skip repeats.
   // Derives needed peers from the algorithm DAG so only relevant
-  // IPC / RDMA links are established.
+  // IPC / RDMA links are established. No-op for single-rank configs.
   void prepare(CollectiveConfig const& cfg, void* input, void* output);
+  uintptr_t cached_alloc_base(void const* p);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
@@ -322,6 +412,8 @@ class SprayExecutor {
   // Pre-register a buffer with the Communicator.  Subsequent submits
   // using the same pointer reuse the same buffer ID and MR.
   uint32_t get_or_register_buf(void* ptr, size_t bytes);
+  uint32_t get_or_register_buf(void* ptr, size_t bytes, uint64_t* out_off,
+                               char const* role);
 
   // Snapshot path counters (atomically).
   PathCounters get_path_counters() const {
@@ -362,7 +454,20 @@ class SprayExecutor {
   // Mark run Completed exactly once (CAS); the winner releases the
   // active-run slot. Safe against concurrent callers.
   void finalize_run(SprayRun* run);
+  // Mark run Failed exactly once (CAS) with an error message; the winner
+  // releases the active-run slot. Used by the enqueue_loop watchdog.
+  // The run stays allocated until its in-flight ops drain (late
+  // completions still reference it through BeSlot raw pointers);
+  // release() gates on SprayRun::inflight_ops.
+  void fail_run(SprayRun* run, std::string msg);
+  // Dump per-kind submission state of a run (enqueue_loop context).
+  void dump_run_state(SprayRun* run, char const* why);
   int rank_or_neg1() const;
+  // Invalidate prepare-cache entries referencing an allocation base
+  // (stale-registration eviction path, get_or_register_buf).
+  void invalidate_prepared_by_base(uintptr_t base);
+  // Allocate or grow the internal scratch buffer (api_mu_ held).
+  void ensure_internal_scratch(size_t bytes);
 
   // Mark an op completed without a backend completion — used when a
   // Signal op's tag already rode its partner fused PutSignal. Mirrors
@@ -396,7 +501,22 @@ class SprayExecutor {
       auto& s = snaps[i];
       SprayRun* run = s.run;
       if (!run) continue;
+      // One drained completion retires one in-flight op (see
+      // SprayRun::inflight_ops), regardless of run state.
+      run->inflight_ops.fetch_sub(1, std::memory_order_acq_rel);
       uint32_t op_idx = s.op_idx;
+      if (run->plan->tiled.ops[op_idx].kind == ExecOpKind::WaitSignal)
+        run->sig_inflight.fetch_sub(1, std::memory_order_acq_rel);
+      if (run->status.load(std::memory_order_acquire) !=
+          CollectiveOpStatus::Running) {
+        // Late completion for a Failed run (watchdog fired with ops
+        // still out) or a Completed one (fused-signal local completion
+        // raced the last drain): release the backend path charge, but
+        // skip the scheduling bookkeeping — a Failed run's remaining
+        // ops are never submitted, a Completed run has none left.
+        cb(s);
+        continue;
+      }
       uint32_t cur = __atomic_load_n(&run->indegree[op_idx], __ATOMIC_ACQUIRE);
       if (cur == SprayRun::kIndegreeDone) continue;
       run->done_count.fetch_add(1, std::memory_order_release);
@@ -418,13 +538,32 @@ class SprayExecutor {
     }
   }
 
-  // Tensor to buffer ID dedup: same ptr = same ID
-  std::unordered_map<uintptr_t, uint32_t> tensor_to_buf_id_;
+  // Tensor registration table, keyed by ALLOCATION BASE (see
+  // get_or_register_buf): one entry per CUDA allocation, no matter how
+  // many tensors/offsets inside it are used. Registrations are
+  // immutable; buf ids are minted in first-seen order, which is
+  // rank-symmetric because all ranks drive the same collective sequence.
+  struct BufReg {
+    uint32_t id;
+    void* alloc_base;
+    size_t alloc_size;
+  };
+  std::unordered_map<uintptr_t, BufReg> tensor_to_buf_id_;
+  // Canonical id assignment: 0 is the "no buffer" sentinel. Both user
+  // allocations and scratch buffers mint from next_buf_id_ in first-seen
+  // order (rank-symmetric because all ranks prepare the same shape
+  // sequence). Scratch buffers use one id PER DISTINCT SCRATCH SIZE;
+  // minting from the shared counter (instead of a fixed low pool) means
+  // the id space is unbounded — a long-running app sweeping many
+  // collective sizes (e.g. nccl-tests 8B→128M) no longer exhausts a
+  // fixed pool. Rank symmetry of scratch ids still holds because every
+  // rank drives the same (kind, size) prepare sequence.
   uint32_t next_buf_id_ = 1;
 
   // Buffer registration indirection (set by factory, avoids link deps)
   void (*register_buf_fn_)(Transport::Communicator*, uint32_t, void*,
                            size_t) = nullptr;
+  void (*deregister_buf_fn_)(Transport::Communicator*, uint32_t) = nullptr;
   void (*peer_setup_fn_)(Transport::Communicator*, int,
                          std::vector<int> const&) = nullptr;
   void (*resolve_buf_fn_)(Transport::Communicator*, int, int,
@@ -439,12 +578,46 @@ class SprayExecutor {
   std::unique_ptr<BatchBackend> owned_signal_;
   std::shared_ptr<Transport::Communicator> owned_comm_;
 
-  // Lazy-allocated scratch buffer for inplace staging (managed internally).
-  void* internal_scratch_ = nullptr;
-  size_t internal_scratch_cap_ = 0;
+  // Scratch buffers for Tmp regions / lowering staging, ONE PER
+  // DISTINCT SIZE (key = staging bytes). Buffers stay allocated and
+  // registered for the executor's lifetime: no mid-session dereg (its
+  // RDMA QP flush can fail in-flight WRs) and no same-id
+  // re-registration (its generation re-resolve races peer polls) — a
+  // fresh size gets a fresh pool id, so peer re-resolution stays a
+  // plain first-publish wait, and in-flight puts into older sizes keep
+  // working. Trade-off: holds ~2x the largest size at peak.
+  struct ScratchBuf {
+    void* ptr;          // aligned base used for registration/addressing
+    void* alloc_raw;    // original cudaMalloc result (must be freed with it)
+    uint32_t id;
+  };
+  std::map<size_t, ScratchBuf> scratch_by_size_;
+
+  // Serializes prepare()/submit() against each other: both mutate the
+  // shared registration table (tensor_to_buf_id_), the internal scratch
+  // allocation, and the prepared_* state. Lock order: api_mu_ ->
+  // plan_cache_mu_ -> runs_mutex_; the enqueue/drain threads never take
+  // api_mu_, so this cannot deadlock the progress engine.
+  std::mutex api_mu_;
 
   bool prepared_ = false;
   std::set<int> prepared_peers_;
+  // prepare() dedup cache (see prepare_key in executor.cc): one entry per
+  // (kind, peers, input/output allocation, bytes) combination already
+  // prepared. Cleared wholesale when full — entries are cheap to rebuild.
+  std::set<std::string> prepared_keys_;
+  // Reverse index: input/output allocation base → prepare keys
+  // referencing it, so a stale-registration eviction
+  // (get_or_register_buf) can invalidate exactly the affected entries.
+  std::unordered_multimap<uintptr_t, std::string> prepared_key_bases_;
+  // Fast-path caches for prepare(): the algorithm DAG is shape-
+  // determined (no pointer dependence) and alloc-base lookups repeat
+  // across nccl-tests iterations (buffers shift inside one allocation).
+  // Both avoid per-collective DAG rebuilds and driver calls; measured
+  // ~5-8us of the ~15us per-call prepare+submit overhead.
+  std::unordered_map<std::string, CollAlgo> prepare_algo_cache_;
+  std::unordered_map<uintptr_t, uintptr_t> alloc_base_cache_;
+  static constexpr size_t kMaxPreparedKeys = 64;
 
   std::thread enqueue_th_;
   std::thread drain_th_dev_;
@@ -478,6 +651,11 @@ class SprayExecutor {
   std::unordered_map<CollectiveOpHandle, std::shared_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
   uint64_t next_handle_ = 1;
+  // Monotonic run counter for signal-tag epoch salting. Assigned to
+  // run->tag_epoch in submit() (under runs_mutex_). Ranks derive
+  // identical epochs because collective issue order is rank-symmetric
+  // (the same assumption tag matching already relies on).
+  uint64_t next_run_epoch_ = 0;
 
   // Plan cache: collective shape -> immutable plan. Plans are built once
   // per shape; submit() on a hit only copies the mutable scheduling
@@ -485,6 +663,21 @@ class SprayExecutor {
   std::mutex plan_cache_mu_;
   std::unordered_map<std::string, std::shared_ptr<CollPlan const>> plan_cache_;
   static constexpr size_t kMaxCachedPlans = 64;
+
+  // --- Stream-ordered dependency management (NCCL-compatible) ---
+
+  // Completion flag: host-pinned (gpuHostAlloc with gpuHostAllocMapped),
+  // CPU writes seq, GPU WaitValue polls. Monotonic uint64 avoids ABA.
+  uint64_t* done_flag_host_ = nullptr;
+  gpuDevicePtr_t done_flag_devptr_ = 0;
+  std::atomic<uint64_t> next_done_seq_{1};
+
+  // Event pool: pre-allocated gpuEventDisableTiming events for input deps.
+  static constexpr int kEventPoolSize = 32;
+  std::vector<gpuEvent_t> event_pool_;
+  std::mutex event_pool_mu_;
+  gpuEvent_t event_pool_acquire();
+  void event_pool_release(gpuEvent_t ev);
 };
 
 }  // namespace CCL

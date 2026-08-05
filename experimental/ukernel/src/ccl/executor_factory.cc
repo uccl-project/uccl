@@ -40,6 +40,8 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     dev_cfg.blocks_per_worker = static_cast<uint32_t>(std::stoul(v));
   if (char const* v = std::getenv("UK_CCL_DEV_THREADS"))
     dev_cfg.threads_per_block = static_cast<uint32_t>(std::stoul(v));
+  if (char const* v = std::getenv("UK_CCL_DEV_IDLE_EXIT_US"))
+    dev_cfg.idle_exit_after_us = static_cast<uint32_t>(std::stoul(v));
   auto dev_be = std::make_unique<DeviceBackend>(dev_cfg);
   auto tpt_be = std::make_unique<TransportBackend>(comm.get());
   auto sig_be = std::make_unique<SignalBackend>();
@@ -59,6 +61,10 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);
+  };
+  ex->deregister_buf_fn_ = [](Transport::Communicator* comm, uint32_t id) {
+    comm->dereg_mr(id);
+    comm->dereg_ipc(id);
   };
   ex->peer_setup_fn_ = [](Transport::Communicator* comm, int rank,
                           std::vector<int> const& peers) {
@@ -140,7 +146,14 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   };
   ex->resolve_buf_fn_ = [](Transport::Communicator* comm, int peer,
                            int /*world_size*/, uint32_t buf_id) {
-    comm->resolve_remote_buffer(peer, buf_id, 30000);
+    // Fail fast: a failed resolve means the peer never published (or
+    // explicitly failed) the buffer — silently continuing leaves the
+    // executor to crash later at enqueue with a confusing error.
+    // propagate as an exception so prepare() surfaces it immediately.
+    if (!comm->resolve_remote_buffer(peer, buf_id, 30000))
+      throw std::runtime_error("resolve_remote_buffer failed peer=" +
+                               std::to_string(peer) + " buf=" +
+                               std::to_string(buf_id));
   };
   ex->same_host_fn_ = [](Transport::Communicator* comm, int peer) {
     return comm->same_host(peer);

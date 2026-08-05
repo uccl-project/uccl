@@ -10,9 +10,12 @@ namespace CCL {
 enum class CollKind : uint32_t {
   AllReduceRing,
   AllToAllPairwise,
+  AllGatherRing,
+  ReduceScatterRing,
+  AllReduceTree,
 };
 
-// Planner-level op kinds (used in Chunk DAG)
+// Planner-level op kinds (used in MacroOp DAG)
 
 enum class AlgoOpKind : uint32_t {
   Put,
@@ -112,6 +115,11 @@ struct TiledResult {
   int rank = 0;
   int nranks = 1;
   ReductionKind reduction = ReductionKind::None;
+  ScalarType dtype = ScalarType::Float32;
+  // Signal-tag layout: low tag_group_bits bits hold the tile-group
+  // index (all-ones reserved for the copies-done handshake), pair_id
+  // sits above. Plan-adaptive, identical on all ranks.
+  uint32_t tag_group_bits = 0;
   // PutSignal fusion metadata for signal groups whose tag fits the
   // 32-bit RDMA immediate:
   // - fused_put_signal: (signal_op_idx, put_op_idx) for EVERY Put of an

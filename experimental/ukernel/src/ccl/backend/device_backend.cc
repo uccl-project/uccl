@@ -12,6 +12,38 @@
 namespace UKernel {
 namespace CCL {
 
+namespace {
+// CCL ScalarType → device-kernel DataType. The device layer supports
+// Int8/Int32/Int64/Fp16/Fp32/Fp64/Bf16. UInt32/UInt64 map to the signed
+// types: Sum/Prod are bit-exact (two's complement), but Max/Min on
+// unsigned data compares signed — the shim rejects that combination
+// (see nccl.cc). Int16 has no device kernel; the shim and Python
+// bindings never produce it, so reject loudly if it ever appears.
+Device::DataType to_device_dtype(ScalarType t) {
+  switch (t) {
+    case ScalarType::UInt8:
+    case ScalarType::Int8:
+      return Device::DataType::Int8;
+    case ScalarType::Int32:
+      return Device::DataType::Int32;
+    case ScalarType::Int64:
+      return Device::DataType::Int64;
+    case ScalarType::Float16:
+      return Device::DataType::Fp16;
+    case ScalarType::Float32:
+      return Device::DataType::Fp32;
+    case ScalarType::Float64:
+      return Device::DataType::Fp64;
+    case ScalarType::BFloat16:
+      return Device::DataType::Bf16;
+    case ScalarType::Int16:
+      throw std::invalid_argument(
+          "DeviceBackend: Int16 has no device-kernel reduce");
+  }
+  return Device::DataType::Fp32;
+}
+}  // namespace
+
 DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuGetDevice(&device_idx_));
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
@@ -52,7 +84,12 @@ void DeviceBackend::ensure_runtime() {
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
   // Pre-create all workers
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
-    worker_pool_->createWorker(i, cfg_.blocks_per_worker);
+    if (!worker_pool_->createWorker(i, cfg_.blocks_per_worker)) {
+      throw std::runtime_error(
+          "DeviceBackend: failed to create worker " + std::to_string(i) +
+          " with blocks_per_worker=" + std::to_string(cfg_.blocks_per_worker) +
+          " (exceeds this GPU's SM count, or the FIFO is already bound)");
+    }
     worker_pool_->waitWorker(i);
   }
 }
@@ -248,7 +285,7 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
     }
 
     auto task = Device::TaskManager::instance().create_task(
-        args, tt, Device::DataType::Fp32, 0);
+        args, tt, to_device_dtype(cmds[accepted].dtype), 0);
     if (task.type_u8() == 0) {
       UK_DBG(UK_DBG_LVL_EXEC, "[dev-enq] create_task failed (pool empty?)");
       break;

@@ -20,12 +20,11 @@ struct Cmd {
   ExecOpKind kind;      // 4
   uint32_t src_buf;     // 4
   uint32_t dst_buf;     // 4
-  uint32_t src_off;     // 4
-  uint32_t dst_off;     // 4
   uint32_t bytes;       // 4
   uint32_t src_peer;    // 4
   uint32_t dst_peer;    // 4
   ReductionKind redop;  // 4
+  ScalarType dtype;     // 4 — element type for device-kernel reduce/copy
   PutPath put_path;     // 1 — Device/IPC/RDMA for ops
   // kCmdFlagPutSignal: this Put carries its partner Signal's tag (in
   // Cmd::tag); the transport emits the signal once the data lands.
@@ -33,14 +32,23 @@ struct Cmd {
   // WaitSignal: expected tag arrivals (0/1 = 1). A fused signal group
   // delivers one arrival per tile, so the wait counts group_size.
   uint16_t wait_count;
-  uint64_t tag;  // 8 — for Signal/SignalWait/PutSignal
+  uint64_t tag;      // 8 — for Signal/SignalWait/PutSignal
+  uint64_t src_off;  // 8 — byte offset within src_buf's allocation
+  uint64_t dst_off;  // 8 — byte offset within dst_buf's allocation
 };
-// Total: 4*9 + 1 + 1 + 2 + 8 = 48 bytes
+// Total: 4*7 + 1 + 1 + 2 + 8*3 = 56 bytes
 
 static_assert(sizeof(Cmd) <= 64, "Cmd too large");
 
 // Cmd::flags bits
 inline constexpr uint8_t kCmdFlagPutSignal = 1u << 0;
+// kCmdFlagImmWait: this WaitSignal expects RDMA write-with-imm arrivals
+// from fused PutSignal puts. Immediates carry only the tag's low 32 bits
+// (the run epoch lives in the high bits), which collide across runs, so
+// matching is per-peer FIFO in arrival order — Cmd::tag then carries the
+// UNSALTED tag and wait_count counts the group's fused puts (one imm
+// each).
+inline constexpr uint8_t kCmdFlagImmWait = 1u << 1;
 
 struct CmdWithId {
   Cmd cmd;
