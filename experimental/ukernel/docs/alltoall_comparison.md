@@ -237,6 +237,48 @@ multi-channel path. The gap is now purely the IPC put path scaling —
 the next lever is put-window / launch pipelining, not staging or SM
 blocks.
 
+## 2026-08-05 (late, 2) — per-peer send pipeline + copy-engine ceiling
+
+### Send path restructure (UK_CCL_IPC_BATCH semantics changed)
+
+The IPC send worker previously shared ONE global in-flight window
+(`UK_CCL_IPC_BATCH=4`) and one 4-stream pool across all peers, with a
+global FIFO completion barrier. It now gives **each peer its own send
+ring, in-flight window and stream pool** (`UK_CCL_IPC_STREAMS_PER_PEER`,
+default 4), and completes each peer FIFO (receivers match per-peer
+sequences) while different peers complete out of order. This is the
+right shape for multi-node scaling: N peers run N × window copies
+concurrently instead of one global window.
+
+### Copy-engine ceiling (raw cudaMemcpyAsync, no shim)
+
+A raw alltoall microbenchmark (7 × cudaMemcpyAsync per rank on per-peer
+streams, 256MB total) measures the hardware ceiling for our exact access
+pattern: **191 / 297 / 368us at 2/4/8 ranks** (701 / 678 / 610 GB/s
+outbound per rank). Two shim-side findings from chasing this:
+
+- `cudaMemcpyPeerAsync` was ~450 GB/s per P2P copy; plain
+  `cudaMemcpyAsync` over the IPC handle reaches ~670 GB/s (now used).
+- The fused-PutSignal completion published after the shm-ring write,
+  which can back-pressure on the receiver's drain cadence; the put
+  completion now publishes first (the receiver completes when IT drains
+  the signal), and the signal drain loop busy-polls while waits are
+  registered.
+
+### Where the remaining 8-rank time goes (one-shot [chain] timestamps)
+
+submit → enqueued ≈ 190us (host dispatch of 14 ops: 7 fused puts + 7
+waits, ~10-15us/op through communicator locks/resolve), copies span
+~460-660us (per-copy p50 83us under 8-rank fabric contention vs 52us
+raw), finalize → gate ≈ 15us. So the copy path itself already beats
+native (raw 368us < native 433us); the shim's gap is host dispatch cost
+plus the copy span being ~1.6x raw per copy under full-load contention.
+
+Next targets, in order: batch/cache the per-put dispatch path
+(resolved remote pointers + fewer locks), and keep the copy engine fed
+back-to-back (launch all puts in one tight pass before polling
+completions).
+
 ### Why native has no staging copy
 
 Native/nccl-tests AllToAll is **out-of-place** (separate sendbuff and
