@@ -194,6 +194,7 @@ int main(int argc, char** argv) {
   void* buf = nullptr;
   CUDACHK(cudaMalloc(&buf, total_bytes));
   CUDACHK(cudaMemset(buf, 0, total_bytes));
+  fprintf(stderr, "[r%d] buf=%p total=%zu\n", rank, buf, total_bytes);
 
   // count = elements per rank pair; total = nranks * count * 4 (float).
   size_t count = total_bytes / (sizeof(float) * nranks);
