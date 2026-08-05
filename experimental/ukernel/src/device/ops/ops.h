@@ -577,7 +577,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
       // via the mbarrier, not the bulk group, so wait the mbarrier
       // before reducing (previously read unloaded smem and crashed on
       // sub-4KB allreduces such as ncclBarrier).
-      tma_wait(*sem_dst, 0);
+      tma_wait(sem_dst, 0);
     }
     __syncthreads();
 
