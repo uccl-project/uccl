@@ -123,7 +123,7 @@ static bool verify_exchange(void* buf, size_t count, int rank,
   for (size_t i = 0; i < count; ++i) {
     if (got[i] != static_cast<float>(peer + 1)) {
       ok = false;
-      if (i < 8)
+      if (i < 64 || i % (count / 8) < 2)
         fprintf(stderr, "[r%d] verify bad[%zu]=%.0f want=%.0f\n", rank, i,
                 got[i], static_cast<float>(peer + 1));
       break;
