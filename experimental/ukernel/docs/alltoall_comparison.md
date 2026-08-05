@@ -159,3 +159,29 @@ reverted (`89ce7108`). Pure-put alltoall still launches the idle
 single-block worker; deferring it safely needs an executor-level trigger
 that is understood (the enqueue-time lazy create blocked in
 ensure_runtime's waitWorker inside the executor's enqueue thread).
+
+## 2026-08-05 (2): lazy worker landed — submit-time ensure, workerless alltoall
+
+Revisited after the resolve fix. The earlier allreduce "deadlock" was
+actually the same-host buffer-resolve hang (every small collective
+stalled), not the lazy create itself — with `4a61ad3d` in place the
+safe design works (`199d520b`):
+
+- `DeviceBackend` no longer creates the worker pool in its ctor.
+- `submit()` (user thread, under api_mu_) scans the plan for
+  `ExecOpKind::Reduce` and calls the new `BatchBackend::ensure_worker()`
+  hook before publishing the run. Never inside `enqueue_loop`, whose
+  blocking was the original deadlock hazard.
+- `do_enqueue_reserved_batch` keeps a fallback `ensure_runtime()` for
+  device puts routed at runtime (`UK_CCL_PUT_PATH=device`).
+- `do_drain` returns 0 early when no worker was ever created.
+
+Verified on B300:
+- Pure alltoall (skip-verify): nsys reports **no CUDA kernel data** —
+  the persistent worker is not launched for IPC-only collectives.
+- alltoall 256MB: 281-288us, busbw ~930-953 GB/s (verify OK).
+- allreduce 256MB: 461 oop / 420 ip (regression clean).
+- ncclBarrier verify OK; 1K..1M allreduces pass.
+
+Benefit is mostly SM/GPU-resource savings (the idle single-block worker
+no longer occupies an SM); performance is unchanged within noise.
