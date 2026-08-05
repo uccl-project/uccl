@@ -859,6 +859,11 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   }
 
   runs_[h] = std::move(run);
+  {
+    std::lock_guard<std::mutex> lk(wake_mu_);
+    wake_pending_ = true;
+  }
+  wake_cv_.notify_one();
   return h;
 }
 
@@ -1458,7 +1463,16 @@ void SprayExecutor::enqueue_loop() {
                      rank_or_neg1(), tss_us());
     }
     if (snapshot.empty()) {
-      std::this_thread::yield();
+      // Nothing running: sleep until submit() publishes a run. The
+      // wake flag closes the lost-notify race; the timeout is a safety
+      // net for notifiers that do not set it (none today).
+      std::unique_lock<std::mutex> lk(wake_mu_);
+      wake_cv_.wait_for(lk, std::chrono::microseconds(200),
+                        [this] {
+                          return stop_.load(std::memory_order_relaxed) ||
+                                 wake_pending_;
+                        });
+      wake_pending_ = false;
     } else {
       long long const dt = tss_us() - loop_t0;
       if (uk_dbg_lvl() >= 1 && dt > 500)

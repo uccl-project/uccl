@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -650,6 +651,13 @@ class SprayExecutor {
   // run completes and is released concurrently).
   std::unordered_map<CollectiveOpHandle, std::shared_ptr<SprayRun>> runs_;
   mutable std::mutex runs_mutex_;
+  // Enqueue-loop wakeup: submit() notifies when a run is published, so
+  // the loop does not sit through a scheduler yield between back-to-back
+  // collectives (measured ~97us of the ~190us alltoall dispatch at 8
+  // ranks came from the yield->wake latency).
+  std::mutex wake_mu_;
+  std::condition_variable wake_cv_;
+  bool wake_pending_ = false;
   uint64_t next_handle_ = 1;
   // Monotonic run counter for signal-tag epoch salting. Assigned to
   // run->tag_epoch in submit() (under runs_mutex_). Ranks derive
