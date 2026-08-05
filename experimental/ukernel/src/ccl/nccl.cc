@@ -400,12 +400,18 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
 ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream) {
   if (!comm || !comm->executor) return ncclInvalidArgument;
   if (comm->nranks == 1) return ncclSuccess;
+  // Barrier payload size: a 4-byte allreduce exercises sub-16B edges in
+  // the TMA/vector reduce paths and crashed the GPU context on B300
+  // ("driver shutting down"). The barrier only needs a rendezvous word;
+  // use a 256B aligned payload so every path sees a well-formed size.
+  constexpr size_t kBarrierBytes = 256;
   if (!comm->barrier_dev &&
-      gpuMalloc(&comm->barrier_dev, 4) != gpuSuccess) {
+      gpuMalloc(&comm->barrier_dev, kBarrierBytes) != gpuSuccess) {
     std::fprintf(stderr, "[nccl] barrier r%d: gpuMalloc failed\n", comm->rank);
     return ncclInternalError;
   }
-  if (gpuMemsetAsync(comm->barrier_dev, 0, 4, stream) != gpuSuccess) {
+  if (gpuMemsetAsync(comm->barrier_dev, 0, kBarrierBytes, stream) !=
+      gpuSuccess) {
     std::fprintf(stderr, "[nccl] barrier r%d: gpuMemsetAsync failed\n",
                  comm->rank);
     return ncclInternalError;
@@ -414,9 +420,9 @@ ncclResult_t ncclBarrier(ncclComm_t comm, gpuStream_t stream) {
   cfg.kind = CollKind::AllReduceRing;
   cfg.nranks = comm->nranks;
   cfg.rank = comm->rank;
-  cfg.input_bytes = 4;
-  cfg.output_bytes = 4;
-  cfg.tile_bytes = 4;
+  cfg.input_bytes = kBarrierBytes;
+  cfg.output_bytes = kBarrierBytes;
+  cfg.tile_bytes = kBarrierBytes;
   cfg.dtype = ScalarType::Float32;
   cfg.reduction = ReductionKind::Sum;
   return run_coll(comm, cfg, comm->barrier_dev, comm->barrier_dev, stream);
