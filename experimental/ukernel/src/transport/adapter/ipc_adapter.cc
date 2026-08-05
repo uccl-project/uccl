@@ -579,11 +579,6 @@ bool IpcAdapter::launch_one(RingElem* e, size_t stream_idx) {
     return false;
   }
 
-  int remote_gpu = comm_->peer_gpu_idx(e->peer);
-  if (remote_gpu < 0) remote_gpu = gpu_id_;
-  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] remote_gpu=%d gpu_id=%d bytes=%lu",
-         comm_->rank(), remote_gpu, gpu_id_, (unsigned long)e->bytes);
-
   // One stream per put (per-peer round-robin in send_worker): copies to
   // different peers overlap while each put keeps one event point.
   // Use cudaMemcpyAsync with the resolved IPC pointer (NOT
