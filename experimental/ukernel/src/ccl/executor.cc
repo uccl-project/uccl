@@ -1286,6 +1286,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
+        // Immediate local completion: the fused put already carries the
+        // signal, so don't wait for enqueue_loop's next cycle to mark
+        // the Signal done (that wait is the multi-rank per-step
+        // latency: put_acc -> sig_local ~3ms on 4 ranks).
+        if (sg >= 0 && run.plan->sig_group_size[sg] > 0 &&
+            run.fused_sig_cnt[sg] == run.plan->sig_group_size[sg] &&
+            !run.submitted[sg]) {
+          run.submitted[sg] = 1;
+          complete_op_local(run, static_cast<uint32_t>(sg));
+        }
         if (uk_dbg_lvl() >= 1)
           std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
                        rank_or_neg1(), sg, tss_us());
@@ -1351,6 +1361,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
+        if (sg >= 0 && run.plan->sig_group_size[sg] > 0 &&
+            run.fused_sig_cnt[sg] == run.plan->sig_group_size[sg] &&
+            !run.submitted[sg]) {
+          run.submitted[sg] = 1;
+          complete_op_local(run, static_cast<uint32_t>(sg));
+        }
         if (uk_dbg_lvl() >= 1)
           std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
                        rank_or_neg1(), sg, tss_us());
