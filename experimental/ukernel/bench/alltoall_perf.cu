@@ -103,6 +103,12 @@ static bool verify_exchange(void* buf, size_t count, int rank,
   std::vector<float> fill(2 * count, static_cast<float>(rank + 1));
   CUDACHK(cudaMemcpy(buf, fill.data(), fill.size() * sizeof(float),
                      cudaMemcpyHostToDevice));
+  // IPC puts are one-sided writes into the peer's buffer, so a peer's
+  // verify-fill can race our puts (fill after a put lands overwrites the
+  // exchanged data). Barrier so both ranks' fills complete before the
+  // exchange starts.
+  NCCLCHK(ncclBarrier(comm, stream));
+  CUDACHK(cudaStreamSynchronize(stream));
   run_one(buf, count, rank, comm, stream);
   // Full device sync: the shim's IPC puts run on the adapter's own
   // streams; stream-syncing only our stream may race their completion.
