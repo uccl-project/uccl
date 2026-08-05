@@ -226,7 +226,14 @@ __device__ __forceinline__ void idle_sleep() {
 #ifdef __HIP_PLATFORM_AMD__
   __builtin_amdgcn_s_sleep(2);
 #else
-  __nanosleep(100);
+  // __nanosleep's argument is a multiple of 100ns. The previous value
+  // (100) slept 10us per poll, so a 500us idle grace (5000 polls) took
+  // ~50ms wall time to actually exit — the worker spun 100x longer than
+  // configured, showing up as a ~25ms periodic gap in nsys traces and
+  // relaunch jitter. 1 = 100ns, matching the poll-count derivation in
+  // WorkerPool (idleExitAfterUs * 10 polls, ~300-500ns per poll with the
+  // loop + syncthreads overhead).
+  __nanosleep(1);
 #endif
 }
 
@@ -415,8 +422,15 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           mscclpp::memoryOrderRelease);
     }
 
+    // Phase values are strictly increasing (bid 0 publishes 2k+1 then
+    // 2k+2 per task). Waiting with `<` (instead of `!=`) makes a block
+    // that was preempted past the value catch up instead of spinning
+    // forever on a phase that never reappears — the `!=` form deadlocked
+    // under repeated idle-exit/relaunch cycles (observed: bid 0 waiting
+    // on completedBlocks=60/64 while 4 blocks were stuck on an earlier
+    // task's already-published phase).
     while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) <
            local_phase + 1) {
     }
     __syncthreads();
@@ -448,6 +462,12 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         }
         // Same ordering requirement as the single-block path: all blocks'
         // writes must be visible before host observes task completion.
+        // TMA bulk stores complete via the async proxy; fence it to the
+        // generic proxy so host-side memsets/next-task loads see the data,
+        // then make it device-visible (fence.proxy.async.global only
+        // orders the executing thread's async ops vs generic accesses).
+        tma_fence_async_global();
+        __threadfence();
         maybe_signal_ring_write(current_task, current_args);
         ++cached_tail;
         publish_tail_progress(fifo.tail, cached_tail);
@@ -458,7 +478,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     }
 
     while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) <
            local_phase + 2) {
     }
     local_phase += 2;
