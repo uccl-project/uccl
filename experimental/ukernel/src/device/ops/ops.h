@@ -71,15 +71,16 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
     // the GPU context. Fall back to the plain path for odd sizes.
     if (bytes <= 4096 && bytes % 16 == 0) {
       if (tid == 0) {
-        TmaSemaphore sem;
-        tma_init_semaphore(sem, 1);
-        tma_load<T>(smem_buf, src, bytes, sem);
-        // cp.async.bulk with mbarrier completion is NOT tracked by the
-        // bulk group: wait_group returns immediately. Wait the mbarrier
-        // so the store doesn't read the load while it is still in flight
-        // (this crashed the GPU on 1KB allreduce / 256B ncclBarrier).
-        tma_wait(sem, 0);
+        // mbarrier must live in shared memory (a stack TmaSemaphore is
+        // not a valid mbarrier address — previously hung/crashed the GPU
+        // on small transfers). Carve it out of smem after the payload.
+        TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(
+            static_cast<char*>(smem_buf) + bytes);
+        tma_init_semaphore(*sem, 1);
+        tma_load<T>(smem_buf, src, bytes, *sem);
+        tma_wait(*sem, 0);
         tma_store<T>(dst, smem_buf, bytes);
+        tma_wait_group<0>();
       }
       __syncthreads();
       return;
@@ -570,14 +571,14 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
     T* temp_result = static_cast<T*>(smem_buf);
 
     if (tid == 0) {
-      TmaSemaphore sem_dst;
-      tma_init_semaphore(sem_dst, 1);
-      tma_load<T>(smem_buf, dst_ptr, bytes, sem_dst);
-      // Same mbarrier-vs-bulk-group issue as copy(): the load completes
-      // via the mbarrier, not the bulk group, so wait the mbarrier
-      // before reducing (previously read unloaded smem and crashed on
-      // sub-4KB allreduces such as ncclBarrier).
-      tma_wait(sem_dst, 0);
+      // mbarrier carved out of smem after the payload (a stack mbarrier
+      // is invalid — previously hung/crashed on sub-4KB allreduces such
+      // as ncclBarrier).
+      TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(
+          static_cast<char*>(smem_buf) + bytes);
+      tma_init_semaphore(*sem, 1);
+      tma_load<T>(smem_buf, dst_ptr, bytes, *sem);
+      tma_wait(*sem, 0);
     }
     __syncthreads();
 
@@ -589,7 +590,10 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
 
     __syncthreads();
 
-    if (tid == 0) tma_store<T>(dst, smem_buf, bytes);
+    if (tid == 0) {
+      tma_store<T>(dst, smem_buf, bytes);
+      tma_wait_group<0>();
+    }
     return;
   }
 
