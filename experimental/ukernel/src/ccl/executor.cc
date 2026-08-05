@@ -1512,9 +1512,7 @@ void SprayExecutor::drain_dev_loop() {
       std::fprintf(stderr, "[tss] r%d dev_done n=%zu t=%lld\n",
                    rank_or_neg1(), n, tss_us());
     if (n == 0) {
-      // Busy-wait (see drain_signal_loop): yield's reschedule latency
-      // delayed completion detection by ~ms on multi-rank runs.
-      for (int s = 0; s < 64 && !stop_; ++s) machnet_pause();
+      std::this_thread::yield();
       continue;
     }
     // Drain all available batches; finalize_run runs inline in
@@ -1559,7 +1557,8 @@ void SprayExecutor::drain_tpt_loop() {
              rank_or_neg1(), nd, dbg_count);
     }
     if (nd == 0) {
-      for (int s = 0; s < 64 && !stop_; ++s) machnet_pause();
+      for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
+      std::this_thread::yield();
       continue;
     }
     while (nd > 0) {
@@ -1603,13 +1602,8 @@ void SprayExecutor::drain_signal_loop() {
              rank_or_neg1(), ns, dbg_count);
     }
     if (ns == 0) {
-      // Short busy-wait instead of yield: yielding hands the CPU to a
-      // competing thread and the reschedule latency was ~3ms per round
-      // on 4-rank runs — that delayed signal detection by ~3ms per ring
-      // step and collapsed multi-rank allreduce. machnet_pause is a
-      // few-ns pause; 64 pauses keeps CPU pressure low while staying
-      // resident so an incoming signal is seen within microseconds.
-      for (int s = 0; s < 64 && !stop_; ++s) machnet_pause();
+      for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
+      std::this_thread::yield();
       long long const dt = tss_us() - sig_t0;
       if (uk_dbg_lvl() >= 1 && dt > 200)
         std::fprintf(stderr, "[tss] r%d sig_loop dt=%lldus t=%lld\n",
