@@ -53,3 +53,80 @@ Open question: whether to compare at the library API level (our
 pairwise AllToAll vs DeepEP's dispatch/combine on the same token-expert
 layout) or at the kernel level (our spray AllToAll vs DeepEP kernels on
 equivalent buffers).
+
+## 2026-08-04: B300 shim alltoall data-integrity bug (found while benchmarking)
+
+Added `bench/alltoall_perf.cu` (2-rank ncclAllToAll harness; shim uses
+the ncclAllToAll extension, native builds the exchange from
+ncclSend/ncclRecv). Verification (fill each rank's buffer with
+rank-specific values, exchange, check the peer partition) exposes a
+**data-integrity bug in the shim's alltoall**:
+
+- rank0 -> rank1 direction is correct (rank1's partition 0 holds rank0's
+  values).
+- rank1 -> rank0 direction is broken: rank0's partition 1 is only
+  partially/never written (observed both `peer[0..3]=2,2,2,2` with a bad
+  element later, and `bad[0]=1 want=2` across runs — partial write), even
+  after `cudaDeviceSynchronize()`.
+
+Debug trail:
+- Both ranks enqueue all 8 x 1MB puts to the IPC path (UK_CCL_DEBUG=2
+  shows `[enqueue r1] op... put_path=1` and `[ipc-send_one r1]
+  dst=... src=... peer=0`, dst increments 1MB as expected). No REJECT
+  bounds failures.
+- nsys shows the P2P memcpy stream is active (50 x 128MiB at 256MB/LT=1),
+  so puts are launched.
+- Events: per-put gpuEvent tracking lives in the transport layer
+  (`transport/adapter/ipc_adapter.cc:440-480`); the collective
+  completion signal lives in the executor (`ccl/executor.cc:380`,
+  event pool + WaitValue gate). The two are not strictly serialized in
+  the shim's ncclAllToAll path — the executor may signal completion
+  before the peer's put data is visible, or the dst resolution
+  (`try_resolve_remote_ipc_pointer` in `transport/communicator.cc`) maps
+  the offset wrong for one direction.
+
+**Status: perf comparison vs native is BLOCKED until this is fixed** —
+the earlier "shim 258us vs native 404us" numbers assumed correct data and
+are not trustworthy.
+
+## 2026-08-04 (2): false alarm — it was the harness's fill/put race
+
+Root cause of the "data-integrity bug": **the benchmark's verify fill
+races the peer's one-sided IPC puts**, not a shim bug. IPC puts are
+one-sided writes into the peer's buffer; if rank0's put lands before
+rank1's verify-fill (same buffer), rank1's fill overwrites the exchanged
+data and the check fails. The failing direction was random across runs,
+which is the signature of a fill/put ordering race.
+
+Confirmed with a minimal harness: raw `cudaIpcOpenMemHandle` +
+`cudaMemcpyPeerAsync` writes land fully (128B..8MB all verified) — the
+P2P mechanism is fine (an earlier "only 128B lands" was my own
+`1UL<<20/4` precedence bug in the mini program).
+
+Fix in `bench/alltoall_perf.cu`: file-based both-fills-done handshake
+before the exchange (shim's `ncclBarrier` currently crashes with a GPU
+error — separate shim bug, recorded below). After the fix:
+
+### Result: shim alltoall is CORRECT and FAST
+
+256MB alltoall, 2 ranks, GPU 6,7:
+
+| config | avg | note |
+|---|---|---|
+| **shim BLK=1 LT=1 (single 128MB IPC put per rank)** | **~296us** | verify OK x3, busbw ~900 GB/s |
+| shim BLK=1 LT=8 | ~330us | |
+| shim default (LT=64, 1MB tiles) | ~585us | per-tile overhead |
+| native NCCL (nccl-tests alltoall_perf) | 404.7us | in-place, ncclSend/Recv ring |
+
+Shim (BLK=1, LT=1) is ~27% faster than native. Key insight: alltoall is
+pure DMA put — **BLK=1 is best** (no reduce kernel / persistent worker
+interference; the executor still launches a single-block worker that
+idles), and **LT=1 makes the whole exchange one 128MB P2P put**, beating
+native's tiled multi-channel path at this size.
+
+### Separate shim bug found: ncclBarrier crashes
+
+`ncclBarrier` (4-byte AllReduceRing) triggers "GPU error
+backend/device_backend.cc:326: driver shutting down" on B300. The
+harness works around it with a file handshake; the barrier path needs
+investigation (likely the 4-byte ring put/reduce path).
