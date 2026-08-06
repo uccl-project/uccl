@@ -49,7 +49,7 @@ static constexpr int kVEC_BYTES = 16;
 
 template <typename T>
 __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
-                                     void* smem_buf) {
+                                     void* smem_buf, bool peer_dst = false) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
@@ -60,7 +60,7 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   // the reduce chunk). The in-place allreduce all-gather's Tmp->Output
   // shard copy (128MB/rank) is exactly this path; it replaced a plain
   // vectorized loop (~680 GB/s measured) with deeper async pipelining.
-  if (is_tma_supported() && smem_buf != nullptr &&
+  if (!peer_dst && is_tma_supported() && smem_buf != nullptr &&
       (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
       (reinterpret_cast<uintptr_t>(src) & 0xF) == 0) {
     constexpr size_t kChunkBytes =
