@@ -4,6 +4,7 @@
 #include "backend/backend.h"
 #include "coll_config.h"
 #include "util/uk_debug.h"
+#include "util/host_prof.h"
 #include "utils.h"
 #include <algorithm>
 #include <csignal>
@@ -468,6 +469,7 @@ SprayExecutor::~SprayExecutor() {
   if (drain_th_dev_.joinable()) drain_th_dev_.join();
   if (drain_th_tpt_.joinable()) drain_th_tpt_.join();
   if (drain_th_signal_.joinable()) drain_th_signal_.join();
+  HostProf::print();
   // Explicitly release backends before communicator is destroyed.
   // Backends hold raw comm_ pointers that must remain valid during
   // their destructors (e.g. DeviceBackend tears down GPU task manager).
@@ -960,6 +962,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   }
   if (run.ready.empty()) return;
 
+  HostProf::Scope hps(HostProf::enq_us);
   run.dev_cmds.clear();
   run.tpt_cmds.clear();
   std::vector<uint32_t> dev_idx;
@@ -1379,6 +1382,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
 
   UK_DBG(UK_DBG_LVL_ALL, "[enqueue r%d] dispatched: dev=%zu tpt=%zu sig=%zu",
          rank_or_neg1(), dev_dispatched, tpt_dispatched, sig_dispatched);
+  if (HostProf::enabled())
+    HostProf::enq_ops.fetch_add(dev_dispatched + tpt_dispatched + sig_dispatched,
+                                std::memory_order_relaxed);
 
   run.ready.clear();
 }
@@ -1491,7 +1497,13 @@ void SprayExecutor::drain_dev_loop() {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-dev r%d] alive iter=%d", rank_or_neg1(),
              iter);
-    size_t n = device_be_->do_drain(be_buf, 256);
+    size_t n;
+    {
+      HostProf::Scope hps(HostProf::dev_us);
+      n = device_be_->do_drain(be_buf, 256);
+    }
+    if (HostProf::enabled() && n > 0)
+      HostProf::dev_ops.fetch_add(n, std::memory_order_relaxed);
     if (n > 0 && dbg_count < 5) {
       ++dbg_count;
       UK_DBG(UK_DBG_LVL_EXEC,
@@ -1525,7 +1537,12 @@ void SprayExecutor::drain_dev_loop() {
             update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);
         }
       });
-      n = device_be_->do_drain(be_buf, 256);
+      {
+        HostProf::Scope hps(HostProf::dev_us);
+        n = device_be_->do_drain(be_buf, 256);
+      }
+      if (HostProf::enabled() && n > 0)
+        HostProf::dev_ops.fetch_add(n, std::memory_order_relaxed);
     }
   }
 }
@@ -1539,7 +1556,13 @@ void SprayExecutor::drain_tpt_loop() {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(),
              iter);
-    size_t nd = tpt_be_->do_drain(be_buf, 256);
+    size_t nd;
+    {
+      HostProf::Scope hps(HostProf::tpt_us);
+      nd = tpt_be_->do_drain(be_buf, 256);
+    }
+    if (HostProf::enabled() && nd > 0)
+      HostProf::tpt_ops.fetch_add(nd, std::memory_order_relaxed);
     if (nd > 0 && dbg_count < 5) {
       ++dbg_count;
       UK_DBG(UK_DBG_LVL_EXEC,
@@ -1572,7 +1595,12 @@ void SprayExecutor::drain_tpt_loop() {
                                                : tpt_metrics_[peer].rdma;
         update_path_metrics(m, s.enqueue_ns);
       });
-      nd = tpt_be_->do_drain(be_buf, 256);
+      {
+        HostProf::Scope hps(HostProf::tpt_us);
+        nd = tpt_be_->do_drain(be_buf, 256);
+      }
+      if (HostProf::enabled() && nd > 0)
+        HostProf::tpt_ops.fetch_add(nd, std::memory_order_relaxed);
     }
   }
 }
@@ -1587,7 +1615,13 @@ void SprayExecutor::drain_signal_loop() {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(),
              iter);
-    size_t ns = signal_be_->do_drain(be_buf, 256);
+    size_t ns;
+    {
+      HostProf::Scope hps(HostProf::sig_us);
+      ns = signal_be_->do_drain(be_buf, 256);
+    }
+    if (HostProf::enabled() && ns > 0)
+      HostProf::sig_ops.fetch_add(ns, std::memory_order_relaxed);
     if (ns > 0 && dbg_count < 5) {
       ++dbg_count;
       UK_DBG(UK_DBG_LVL_EXEC,
@@ -1625,7 +1659,12 @@ void SprayExecutor::drain_signal_loop() {
         snap_buf[valid++] = snap;
       }
       drain_batch(snap_buf, valid, [](BeSlotSnap&) {});
-      ns = signal_be_->do_drain(be_buf, 256);
+      {
+        HostProf::Scope hps(HostProf::sig_us);
+        ns = signal_be_->do_drain(be_buf, 256);
+      }
+      if (HostProf::enabled() && ns > 0)
+        HostProf::sig_ops.fetch_add(ns, std::memory_order_relaxed);
     }
   }
 }
