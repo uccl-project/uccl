@@ -333,6 +333,55 @@ signal/completion cost that made plain LT=8 regress. Still 1.9x the raw
 CE ceiling (368us) — the copy span under 8-rank full load remains the
 wall.
 
+### Why the shim cannot beat native at 8 ranks with copy-engine IPC
+
+The raw 368us ceiling is measured with ranks running **unsynchronized**
+loops (they drift apart, so the fabric never sees all 56 copies peak
+simultaneously). The shim's collective is synchronized by construction
+(every rank waits for all 7 signals every iteration), so all 8 ranks
+hammer the fabric in lockstep: per-copy duration under that load is
+~83us (vs 52us raw), and the copy span is 460-660us. Native's 433us is
+also synchronized, but it moves data with SM kernels that schedule
+better under contention. So with the IPC/copy-engine-only constraint,
+8-rank alltoall is CE-contention-bound (~600-715us) and cannot reach
+native's 433us — the copy engine wins at 2 ranks (no contention) and
+loses at 8.
+
+To actually beat native at 8 ranks the data movement must leave the
+copy engine: TMA bulk puts (`cp.async.bulk` to a peer-mapped address)
+use a dedicated engine — not SM compute, so the "no SM copy" preference
+still holds — and would be the next experiment.
+
+
+
+### Device-backend puts (vectorized LD/ST) beat the copy engine at 4/8 ranks
+
+NCCL's own intra-node data movement is per-thread vectorized LD/ST to
+peer memory (LL protocol: `ld.volatile.global.b64`/`st.volatile.global.b64`;
+symmetric kernels: 16B-packed load + `stcs`) — `cp.async.bulk` is only a
+TODO comment in their code. Our device copy op already has the same
+plain vectorized loop; it now takes that path for peer destinations
+(`dst_rank >= 0` skips the local-only TMA fast path, which hangs on
+peer-mapped addresses). Forcing alltoall puts through it with
+`UK_CCL_PUT_PATH=device`:
+
+256MB alltoall, `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=4
+UK_CCL_SIG_GROUP_TILES=4`, all wrong=0:
+
+| ranks | CE path | device path | native |
+|---:|---:|---:|---:|
+| 2 | 310us | 324us | 416us |
+| 4 | 550-580us | 612us | 425us |
+| 8 | 715us | **590-620us** | 433us |
+
+The device path is ~15% faster than the CE at 8 ranks and flattens the
+scaling curve (4r ~= 8r ~= 610us), matching NCCL's contention behavior;
+the CE still wins at 2 ranks (310 vs 324, both beat native). This is
+the same SM-threaded mechanism native uses — a deliberate tradeoff vs
+the earlier "no SM for alltoall" preference, but it is the only path so
+far that improves on the CE at 8 ranks. Suggested policy: CE for 2
+ranks, device path for 4+.
+
 ### Why native has no staging copy
 
 Native/nccl-tests AllToAll is **out-of-place** (separate sendbuff and
