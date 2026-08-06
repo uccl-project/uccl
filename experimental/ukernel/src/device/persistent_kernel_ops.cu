@@ -77,8 +77,7 @@ __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
                           ? (total_count - block_offset)
                           : count_per_block;
 
-  copy<char>(my_dst, my_src, static_cast<size_t>(my_count), smem_buf,
-             /*peer_dst=*/a.dst_rank >= 0);
+  copy<char>(my_dst, my_src, static_cast<size_t>(my_count), smem_buf);
 }
 
 template <typename T>
@@ -105,7 +104,7 @@ __device__ __forceinline__ void run_typed_copy(TaskArgs const& a,
                                 : count_per_block;
 
   copy<T>(dst + block_offset, src + block_offset, static_cast<size_t>(my_count),
-          smem_buf, /*peer_dst=*/a.dst_rank >= 0);
+          smem_buf);
 }
 
 template <typename T>

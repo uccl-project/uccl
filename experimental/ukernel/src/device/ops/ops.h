@@ -49,82 +49,13 @@ static constexpr int kVEC_BYTES = 16;
 
 template <typename T>
 __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
-                                     void* smem_buf, bool peer_dst = false) {
+                                     void* smem_buf) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
-
-  // TMA path: small messages up to 4KB (one-shot load+store), and large
-  // messages via chunked cp.async.bulk (one smem buffer sized to the full
-  // dynamic-smem budget, so a 224KB build moves 224KB per chunk — twice
-  // the reduce chunk). The in-place allreduce all-gather's Tmp->Output
-  // shard copy (128MB/rank) is exactly this path; it replaced a plain
-  // vectorized loop (~680 GB/s measured) with deeper async pipelining.
-  if (!peer_dst && is_tma_supported() && smem_buf != nullptr &&
-      (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
-      (reinterpret_cast<uintptr_t>(src) & 0xF) == 0) {
-    constexpr size_t kChunkBytes =
-        (UK_REDUCE_SMEM_BYTES - sizeof(TmaSemaphore)) &
-        ~static_cast<size_t>(31);
-    // cp.async.bulk requires a multiple-of-16 size; a 4-byte allreduce
-    // previously hit this with bytes=4 and crashed the GPU context.
-    // Fall back to the plain path for odd sizes.
-    if (bytes <= 4096 && bytes % 16 == 0) {
-      if (tid == 0) {
-        // mbarrier must live in shared memory (a stack TmaSemaphore is
-        // not a valid mbarrier address — previously hung/crashed the GPU
-        // on small transfers). Carve it out of smem after the payload.
-        TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(
-            static_cast<char*>(smem_buf) + bytes);
-        tma_init_semaphore(*sem, 1);
-        tma_load<T>(smem_buf, src, bytes, *sem);
-        tma_wait(*sem, 0);
-        tma_store<T>(dst, smem_buf, bytes);
-        tma_wait_group<0>();
-      }
-      __syncthreads();
-      return;
-    }
-    if (kChunkBytes >= 32) {
-      char* smem = static_cast<char*>(smem_buf);
-      T* dst_t = static_cast<T*>(dst);
-      T const* src_t = static_cast<T const*>(src);
-      TmaSemaphore* sem = reinterpret_cast<TmaSemaphore*>(smem + kChunkBytes);
-      size_t off = 0;
-      while (off + kChunkBytes <= bytes) {
-        if (tid == 0) {
-          tma_init_semaphore(*sem, 1);
-          tma_load<T>(smem, src_t + off / sizeof(T), kChunkBytes, *sem);
-        }
-        __syncthreads();
-        if (tid == 0) {
-          tma_wait(*sem, 0);
-          tma_store<T>(dst_t + off / sizeof(T), smem, kChunkBytes);
-          tma_wait_group<0>();
-          tma_fence_async_global();
-        }
-        __syncthreads();
-        off += kChunkBytes;
-      }
-      if (off < bytes) {
-        // Tail (< kChunkBytes): vectorized loop, same as below.
-        constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
-        size_t nvec = (bytes - off) / (sizeof(T) * NELTS_PER_VEC);
-        Vec const* src_v = reinterpret_cast<Vec const*>(
-            reinterpret_cast<char const*>(src_t) + off);
-        Vec* dst_v = reinterpret_cast<Vec*>(
-            reinterpret_cast<char*>(dst_t) + off);
-        for (size_t vi = tid; vi < nvec; vi += nthread)
-          dst_v[vi] = src_v[vi];
-        if constexpr (NELTS_PER_VEC > 1) {
-          size_t base = off / sizeof(T) + nvec * NELTS_PER_VEC;
-          for (size_t i = base + tid; i < count; i += nthread)
-            dst_t[i] = src_t[i];
-        }
-      }
-      return;
-    }
-  }
+  (void)smem_buf;  // TMA bulk copy removed: it hangs on peer-mapped
+                   // destinations and gains nothing over the vectorized
+                   // loop for local ones.
 
   // Vectorized copy (kVEC_BYTES-byte loads through read-only cache)
   constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
