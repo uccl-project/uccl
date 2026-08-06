@@ -359,11 +359,11 @@ still holds — and would be the next experiment.
 NCCL's own intra-node data movement is per-thread vectorized LD/ST to
 peer memory (LL protocol: `ld.volatile.global.b64`/`st.volatile.global.b64`;
 symmetric kernels: 16B-packed load + `stcs`) — `cp.async.bulk` is only a
-TODO comment in their code. Our device copy op already has the same
-plain vectorized loop; it now takes that path for peer destinations
-(`dst_rank >= 0` skips the local-only TMA fast path, which hangs on
-peer-mapped addresses). Forcing alltoall puts through it with
-`UK_CCL_PUT_PATH=device`:
+TODO comment in their code. Our device copy op is now exactly that: a
+plain 16B vectorized LD/ST loop for both local and peer destinations
+(the TMA bulk path was removed — it hangs on peer-mapped addresses and
+the local loop was serial, gaining nothing). Forcing alltoall puts
+through it with `UK_CCL_PUT_PATH=device`:
 
 256MB alltoall, `UK_CCL_DEV_BLOCKS=64 UK_CCL_LARGE_TILES=4
 UK_CCL_SIG_GROUP_TILES=4`, all wrong=0:
