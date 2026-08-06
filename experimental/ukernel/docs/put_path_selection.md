@@ -4,7 +4,7 @@ Design notes on how the ukernel CCL routes same-host cross-GPU puts, why
 the original latency-metric load balancer was disabled, and what a
 correct adaptive selector would look like.
 
-## Current state (as of commit `21fe8b29`)
+## Current state
 
 Same-host cross-GPU puts are pinned to **IPC** (`pick_put_path` returns
 `PutPath::Ipc` unconditionally for same-host peers). Remote peers always
@@ -22,6 +22,15 @@ Measured on the A40 pair (2 ranks, 256MB AllGather):
 Pinning same-host puts to IPC took 256MB AllReduce from 12.5ms to
 5.5ms (beating native NCCL's 6.35ms) and AllGather from 15.9ms to
 3.8ms.
+
+**B300 (2026-08-06) changes the device-path verdict for AllToAll**: with
+the copy op reduced to plain vectorized LD/ST (the same mechanism NCCL
+uses intra-node; TMA bulk copies hang on peer-mapped addresses), the
+device path at `UK_CCL_DEV_BLOCKS=64` reaches ~400 GB/s algbw for 256MB
+alltoall at 8 ranks — ~15% faster than the IPC/CE path (715 -> ~600us)
+and it flattens the rank-scaling curve (4r ~= 8r). It still loses
+marginally at 2 ranks (324 vs 310us). So the selector should be
+rank-count and message-size aware, not a single same-host default.
 
 ## Why the latency-metric balancer failed
 
@@ -44,8 +53,8 @@ wrong for two structural reasons:
 
 | path | when it can win | verdict |
 |---|---|---|
-| IPC | almost always, same-host — it *is* the GPU copy-engine/DMA path | correct default whenever P2P works |
-| device | (a) copy engines contended or PCIe-capped; (b) at high block counts it reaches ~52 GB/s (parity with IPC); (c) **the real win is a whole-collective-in-kernel mode** — no CPU round trips, small-message latency approaches native | in the current per-put architecture, device single-hop latency ≈ IPC (16.3 vs 16.2us at 256KB), so no win; revisit if the whole-collective-in-kernel design lands |
+| IPC | almost always, same-host — it *is* the GPU copy-engine/DMA path | correct default at 2 ranks and for small messages |
+| device | (a) copy engines contended or PCIe-capped; (b) vectorized LD/ST at high block counts — **beats IPC by ~15% for 4+ rank large-message AllToAll on B300**; (c) the real win is a whole-collective-in-kernel mode — no CPU round trips, small-message latency approaches native | current per-put device path wins the large-message multi-rank AllToAll case; revisit the selector to pick it there |
 | RDMA (same-host) | essentially never — data loops through host/NIC | keep excluded from same-host selection |
 
 Cross-node traffic is always RDMA (the ring seams between nodes); the
@@ -71,10 +80,11 @@ need.
 
 ## Recommendation
 
-- Keep "same-host → IPC" as the default: on tested hardware it is
-  optimal, and cross-node (the multi-node goal) is RDMA-only regardless.
+- Keep "same-host → IPC" as the default for 2 ranks and small messages.
+- Use the device path for 4+ rank large-message AllToAll on B300
+  (`UK_CCL_PUT_PATH=device UK_CCL_DEV_BLOCKS=64`) — measure and pick per
+  rank count / message size.
 - Do not reintroduce latency-metric-based selection — it was measuring
   the wrong quantity.
-- If a machine with IPC contention / copy-engine limits appears (or the
-  whole-collective-in-kernel mode makes the device path genuinely
-  faster), implement the capacity-probe selector above.
+- Cross-node (the multi-node goal) is RDMA-only regardless; the selector
+  only ever decides same-host IPC-vs-device.

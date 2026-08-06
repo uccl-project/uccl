@@ -497,7 +497,7 @@ prepare(). Multi-block teardown/relaunch/phase bugs were fixed along
 the way (stream-ordered MultiBlockSync free, d_sync reset before every
 launch, `<` phase waits).
 
-### B300 snapshot (2026-08-05, 2/4/8 ranks, tuned config)
+### B300 snapshot (2026-08-06, 2/4/8 ranks, tuned config)
 
 Full tables and commands live in
 [docs/b300_native_nccl_measurements.md](docs/b300_native_nccl_measurements.md)
@@ -506,14 +506,15 @@ and [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Summary
 
 | collective | 2r | 4r | 8r |
 |---|---:|---:|---:|
-| AllReduce 256M shim | 578us / 464 GB/s | 1026us / 262 GB/s | 1943us / 138 GB/s |
+| AllReduce 256M shim | 542us / 495 GB/s | 1090us / 246 GB/s | 2090us / 128 GB/s |
 | AllReduce 256M native | 521us / 515 GB/s | 673us / 399 GB/s | 719us / 373 GB/s |
-| AllToAll 256M shim | 312us / 861 GB/s | 544us / 493 GB/s | 706us / 380 GB/s |
+| AllToAll 256M shim (device path) | 324us / 829 GB/s | 612us / 437 GB/s | 600-620us / ~400 GB/s |
 | AllToAll 256M native | 416us / 646 GB/s | 425us / 632 GB/s | 433us / 621 GB/s |
 
-AllReduce is 1.1x/1.5x/2.7x native at 2/4/8 ranks (per-tile host
-signal chain); AllToAll is out-of-place with no staging — pure IPC/copy
-engine, BLK-independent — beating native at 2 ranks and trailing at
-4/8 on per-peer put pipelining. Next optimization targets: signal
-aggregation + batched waits for AllReduce, IPC put-window pipelining
-for AllToAll.
+AllReduce is ~1.0x/1.6x/2.9x native at 2/4/8 ranks (per-tile host
+signal chain). AllToAll (out-of-place, no staging) beats native at 2
+ranks; the device-backend vectorized LD/ST put path (the same mechanism
+NCCL uses; TMA-to-peer hangs on B300) beats the IPC/copy engine by ~15%
+at 4/8 ranks and flattens the scaling curve — still ~1.4x native at 8
+ranks. Recommended: CE path at 2 ranks, device path (`UK_CCL_PUT_PATH=
+device`, BLK=64, LT=4, G=4) at 4+.

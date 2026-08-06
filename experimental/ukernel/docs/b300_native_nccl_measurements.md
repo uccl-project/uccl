@@ -208,12 +208,6 @@ Debug printing inflates absolute times, but shows the shape:
 The host signal chain, not DMA puts or reduce kernels, is the per-op
 latency driver at 4+ ranks.
 
-## 8-rank alltoall (harness is 2-rank only)
-
-Not yet measured — `bench/alltoall_perf.cu` is hardcoded to 2 ranks.
-Extending it (nranks param, unique-id broadcast, per-peer send/recv
-loop) is the next step once the allreduce signaling issue is addressed.
-
 ## 2026-08-05 (late) — 2/4/8-rank sweep: shim vs native (allreduce +
 alltoall), after the history cleanup
 
