@@ -263,3 +263,40 @@ The shim wins at 2 ranks and trails at 4/8 — the gap is per-peer IPC
 put overhead (send window / launch pipelining), not staging or SM
 blocks; the persistent worker is completely out of the AllToAll data
 path.
+
+## 2026-08-06 — full-size sweep: shim vs native, 2/4/8 ranks
+
+### AllReduce (OOP algbw GB/s; shim LT=8 TM=8M IB=16 BLK=64)
+
+| size | shim 2r | shim 4r | shim 8r | native 2r | native 4r | native 8r |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 5.4 | 1.9 | 0.9 | 66.0 | 41.6 | 32.2 |
+| 2M | 10.5 | 3.9 | 1.7 | 98.0 | 74.0 | 58.3 |
+| 4M | 21.1 | 7.4 | 3.3 | 106.5 | 94.3 | 71.6 |
+| 8M | 39.1 | 14.6 | 6.9 | 180.9 | 175.4 | 107.7 |
+| 16M | 76.2 | 27.8 | 12.7 | 297.8 | 166.0 | 154.7 |
+| 32M | 134.1 | 54.2 | 24.7 | 394.4 | 272.1 | 196.0 |
+| 64M | 202.2 | 90.0 | 48.4 | 442.5 | 362.2 | 240.2 |
+| 128M | 324.6 | 148.6 | 82.0 | 481.7 | 385.4 | 337.2 |
+| 256M | 495.0 | 246.3 | 128.4 | 515.8 | 399.9 | 373.5 |
+
+### AllToAll (OOP algbw GB/s; shim = device path BLK=64 LT=4 G=4)
+
+| size | shim 2r | shim 4r | shim 8r | native 2r | native 4r | native 8r |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 12.2 | 7.7 | 7.3 | 58.2 | 46.7 | 47.1 |
+| 2M | 20.8 | 15.6 | 15.0 | 107.6 | 87.2 | 89.3 |
+| 4M | 44.2 | 33.6 | 27.7 | 179.4 | 149.3 | 143.7 |
+| 8M | 70.6 | 43.7 | 43.4 | 253.9 | 236.9 | 224.9 |
+| 16M | 72.6 | 61.5 | 39.6 | 385.8 | 331.4 | 306.7 |
+| 32M | 136.8 | 41.9 | 46.8 | 497.7 | 442.6 | 392.0 |
+| 64M | 131.0 | 63.4 | 45.5 | 533.7 | 528.5 | 488.6 |
+| 128M | 639.8 | 395.0 | 337.6 | 605.1 | 592.1 | 564.9 |
+| 256M | 849.1 | 431.3 | 400.4 | 652.5 | 635.3 | 620.3 |
+
+Notes: AllToAll shim small/medium sizes are worker/launch-bound (device
+path, BLK=64) and far from native below 128M; at 128M+ it closes to
+1.5-1.9x at 4/8 ranks and beats native at 2 ranks. The CE path is
+better at small sizes but was only swept at 256M. AllReduce small sizes
+carry the per-tile host-signal floor (fixed ~200-600us latency at
+1-16M).
