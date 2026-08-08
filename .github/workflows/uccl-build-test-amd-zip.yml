@@ -1,0 +1,317 @@
+name: UCCL Build & Test (AMD, DietGPU)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to benchmark
+        required: true
+      sha:
+        description: PR head commit SHA to benchmark
+        required: true
+      head_repo:
+        description: PR head repository, for example owner/repo
+        required: true
+      benchmark:
+        description: Benchmark target name for PR comment write-back
+        required: false
+        default: amd-zip
+      reply_comment_id:
+        description: PR comment ID to update with benchmark result
+        required: false
+        default: ""
+      reply_marker:
+        description: Marker used to identify the benchmark reply comment
+        required: false
+        default: ""
+
+# Share the concurrency group with uccl-build-test-amd.yml so only one AMD
+# workflow uses the hosts at a time.
+concurrency:
+  group: amd-uccl-build-test
+  cancel-in-progress: false
+
+jobs:
+  mark-running:
+    if: github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment with run URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status running \
+            --workflow-url "$WORKFLOW_URL"
+
+  build-with-dietgpu-on-amd:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'workflow_dispatch' && inputs.head_repo || github.repository }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Initialize submodules for ROCm
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init thirdparty/rccl
+
+      - name: Setup SSH for AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
+          chmod 600 ~/.ssh/uccl-dev
+
+          cat >> ~/.ssh/config << 'EOF'
+          Host amd0
+              HostName "${{secrets.UCCL_DEV_AMD_HOST0}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+              ForwardAgent yes
+
+          Host amd1
+              HostName "${{secrets.UCCL_DEV_AMD_HOST1}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+          EOF
+
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/uccl-dev
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST0}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST1}}" >> ~/.ssh/known_hosts
+
+      - name: Install CXI system dependencies on AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for host in amd0 amd1; do
+            ssh -o BatchMode=yes "$host" bash --norc --noprofile << 'EOF'
+              set -euo pipefail
+              sudo -n apt-get update
+              sudo -n apt-get install -y libfabric-dev libhwloc-dev
+          EOF
+          done
+
+      - name: Detect shared NFS between hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="nfs-probe-$$-$(date +%s)"
+          ssh -o BatchMode=yes amd0 "mkdir -p ~/uccl-ci-sandbox && echo $TOKEN > ~/uccl-ci-sandbox/.nfs_probe"
+          PROBE=$(ssh -o BatchMode=yes amd1 "cat ~/uccl-ci-sandbox/.nfs_probe 2>/dev/null" || true)
+          ssh -o BatchMode=yes amd0 "rm -f ~/uccl-ci-sandbox/.nfs_probe"
+          if [ "$PROBE" = "$TOKEN" ]; then
+            echo "SHARED_NFS=true" >> "$GITHUB_ENV"
+            echo "Shared NFS detected — will sync and build on amd0 only"
+          else
+            echo "SHARED_NFS=false" >> "$GITHUB_ENV"
+            echo "No shared NFS — will build on amd0 and sync sandbox to amd1"
+          fi
+
+      - name: Sync code to AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --exclude .venv --exclude .git --delete \
+            --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+            -e "ssh -o BatchMode=yes" \
+            ./ amd0:~/uccl-ci-sandbox/
+
+      - name: Build and install (USE_DIETGPU=1)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox
+            USE_DIETGPU=1 ./build.sh roc7 all --install 2>&1 | tee build.log
+          EOF
+
+          if [ "$SHARED_NFS" != "true" ]; then
+            DST_HOST="${{ secrets.UCCL_DEV_AMD_HOST1 }}"
+            DST_USER="${{ secrets.UCCL_DEV_AMD_USER }}"
+            ssh -o BatchMode=yes amd0 \
+              "DST_HOST=${DST_HOST@Q} DST_USER=${DST_USER@Q} bash ~/uccl-ci-sandbox/.github/workflows/amd_rsync_sandbox.sh"
+          fi
+
+      - name: Run P2P benchmark
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host0.log
+            sleep 1
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host0.log
+          EOF
+          PID0=$!
+
+          sleep 2
+
+          ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
+            set -euo pipefail
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_idle_gpu.sh
+            bash ~/uccl-ci-sandbox/.github/workflows/amd_ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.github/workflows/amd_set_env.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
+            cd ~/uccl-ci-sandbox/p2p
+            export PYTHONUNBUFFERED=1
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host1.log
+            sleep 1
+            UCCL_P2P_COMPRESS_STRATEGY=split torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py --num-iovs=128 2>&1 | stdbuf -oL tee -a ~/uccl-ci-sandbox/p2p-host1.log
+          EOF
+          PID1=$!
+
+          wait -n $PID0 $PID1
+          exitcode=$?
+          if [ $exitcode -ne 0 ]; then
+            kill $PID0 $PID1 2>/dev/null || true
+            sleep 1
+            kill -9 $PID0 $PID1 2>/dev/null || true
+            wait $PID0 $PID1 2>/dev/null || true
+            exit $exitcode
+          fi
+          wait $PID0 $PID1
+          exit $?
+
+      - name: Kill stale CI GPU processes
+        if: always()
+        shell: bash
+        run: |
+          for host in amd0 amd1; do
+            ssh -o BatchMode=yes "$host" bash --norc --noprofile << 'EOF' || true
+              for pid in $(rocm-smi --showpids 2>/dev/null | grep -oE "[0-9]+" | sort -nu); do
+                [ -d "/proc/$pid" ] || continue
+                cwd="$(readlink -f /proc/$pid/cwd 2>/dev/null || true)"
+                case "$cwd" in "$HOME/uccl-ci-sandbox"*) kill -9 "$pid" 2>/dev/null || true ;; esac
+              done
+          EOF
+          done
+
+      - name: Fetch remote logs
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          for log in build p2p-host0 p2p-host1; do
+            scp -o BatchMode=yes amd0:~/uccl-ci-sandbox/${log}.log ./amd0-${log}.log 2>/dev/null || true
+            scp -o BatchMode=yes amd1:~/uccl-ci-sandbox/${log}.log ./amd1-${log}.log 2>/dev/null || true
+          done
+
+      - name: Upload log artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amd-build-dietgpu-logs
+          path: |
+            amd0-*.log
+            amd1-*.log
+          if-no-files-found: warn
+
+  write-back-result:
+    needs: [mark-running, build-with-dietgpu-on-amd]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.reply_comment_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Update benchmark comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPLY_COMMENT_ID: ${{ inputs.reply_comment_id }}
+          REPLY_MARKER: ${{ inputs.reply_marker }}
+          BENCHMARK_PR: ${{ inputs.pr }}
+          BENCHMARK_SHA: ${{ inputs.sha }}
+          BENCHMARK_NAME: ${{ inputs.benchmark }}
+          BENCHMARK_RESULT: ${{ needs.build-with-dietgpu-on-amd.result }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/workflows/benchmark_comment.py \
+            --mode update \
+            --comment-id "$REPLY_COMMENT_ID" \
+            --marker "$REPLY_MARKER" \
+            --pr "$BENCHMARK_PR" \
+            --sha "$BENCHMARK_SHA" \
+            --benchmark "$BENCHMARK_NAME" \
+            --status "$BENCHMARK_RESULT" \
+            --result "$BENCHMARK_RESULT" \
+            --workflow-url "$WORKFLOW_URL"

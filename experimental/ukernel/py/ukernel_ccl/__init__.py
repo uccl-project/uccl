@@ -1,10 +1,38 @@
+"""UKernel CCL — collective communication (allreduce / alltoall).
+
+Python wrapper over the SprayExecutor-based CCL engine. Collectives run
+**in place** on CUDA tensors, which must be contiguous (call
+``tensor.contiguous()`` yourself first if needed — the engine cannot
+silently copy back into a non-contiguous view).
+
+Async API (mirrors the C++ SprayExecutor interface): ``allreduce_submit``
+/ ``alltoall_submit`` return a handle; ``poll`` / ``wait`` / ``status`` /
+``error_message`` inspect it; ``release`` frees it. Contract: the tensor
+must stay alive and unmodified until ``wait`` observes completion, and
+every handle must be released exactly once (releasing a running handle
+raises).
+"""
+
 import os
 from enum import IntEnum
-from typing import Callable, Optional, Sequence
+from typing import Optional
 
 import torch
 
-from ._C import ProcessGroup as _ProcessGroup
+from ._C import CollectiveOpStatus, ProcessGroup as _ProcessGroup
+
+__all__ = [
+    "CollectiveOpStatus",
+    "ProcessGroup",
+    "ReduceOp",
+    "allreduce",
+    "alltoall",
+    "barrier",
+    "get_rank",
+    "get_world_size",
+    "init_process_group",
+    "is_initialized",
+]
 
 
 class ReduceOp(IntEnum):
@@ -15,186 +43,51 @@ class ReduceOp(IntEnum):
     BAND = 5
 
 
-_REDUCE_NAME_MAP = {
-    "SUM": ReduceOp.SUM,
-    "PRODUCT": ReduceOp.PRODUCT,
-    "PROD": ReduceOp.PRODUCT,
-    "MAX": ReduceOp.MAX,
-    "MIN": ReduceOp.MIN,
-    "BAND": ReduceOp.BAND,
-}
-
 _ARITHMETIC_DTYPES = {
-    torch.int8,
-    torch.int32,
-    torch.int64,
-    torch.float16,
-    torch.float32,
-    torch.float64,
-    torch.bfloat16,
-}
-
-_BITWISE_DTYPES = {
-    torch.int8,
-    torch.int32,
-    torch.int64,
+    torch.int8, torch.int32, torch.int64,
+    torch.float16, torch.float32, torch.float64, torch.bfloat16,
 }
 
 
-def _canonical_reduce_op(op) -> ReduceOp:
-    if isinstance(op, ReduceOp):
-        return op
-    if isinstance(op, int):
-        return ReduceOp(op)
-    name = getattr(op, "name", None)
-    if isinstance(name, str):
-        mapped = _REDUCE_NAME_MAP.get(name.upper())
-        if mapped is not None:
-            return mapped
-    raise ValueError(f"unsupported reduce op: {op!r}")
-
-
-def _validate_reduce_dtype(op: ReduceOp, tensor: torch.Tensor) -> None:
-    if op == ReduceOp.BAND:
-        if tensor.dtype not in _BITWISE_DTYPES:
-            raise ValueError(
-                "ReduceOp.BAND currently supports int8/int32/int64 tensors"
-            )
-        return
+def _validate_dtype(tensor: torch.Tensor, what: str) -> None:
     if tensor.dtype not in _ARITHMETIC_DTYPES:
-        raise ValueError(
-            "all_reduce currently supports int8/int32/int64/fp16/fp32/fp64/bf16 tensors"
-        )
+        raise ValueError(f"{what} supports int8/int32/int64/fp16/fp32/fp64/bf16")
 
 
-def _ensure_cuda_tensor(tensor: torch.Tensor, name: str) -> None:
+def _cuda_check(tensor: torch.Tensor, name: str) -> None:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError(f"{name} must be a torch.Tensor")
     if not tensor.is_cuda:
         raise ValueError(f"{name} must be a CUDA tensor")
-
-
-def _ensure_contiguous_tensor(tensor: torch.Tensor, name: str) -> None:
     if not tensor.is_contiguous():
         raise ValueError(
-            f"{name} must be contiguous; ukernel does not perform implicit payload copies"
-        )
-
-
-def _require_contiguous_flat(tensor: torch.Tensor, name: str) -> torch.Tensor:
-    _ensure_contiguous_tensor(tensor, name)
-    return tensor.view(-1)
-
-
-def _normalize_split_sizes(
-    splits: Optional[Sequence[int]], total_elems: int, world_size: int, which: str
-) -> list[int]:
-    if splits is None:
-        if total_elems % world_size != 0:
-            raise ValueError(
-                f"{which} tensor numel must be divisible by world_size when split sizes are omitted"
-            )
-        each = total_elems // world_size
-        return [each] * world_size
-    normalized = [int(v) for v in splits]
-    if len(normalized) != world_size:
-        raise ValueError(f"{which}_split_sizes must have length world_size")
-    if any(v < 0 for v in normalized):
-        raise ValueError(f"{which}_split_sizes must be non-negative")
-    if sum(normalized) != total_elems:
-        raise ValueError(f"sum({which}_split_sizes) must equal {which}.numel()")
-    return normalized
-
-
-def _is_equal_split(splits: Sequence[int]) -> bool:
-    return all(v == splits[0] for v in splits)
-
-
-class _WorkRunner:
-    def wait(self):
-        raise NotImplementedError
-
-    def is_completed(self) -> bool:
-        raise NotImplementedError
-
-
-class _NativeCollectiveRunner(_WorkRunner):
-    def __init__(
-        self,
-        group: "ProcessGroup",
-        handle: int,
-        *,
-        result=None,
-        on_complete: Optional[Callable[[], None]] = None,
-    ) -> None:
-        self._group = group
-        self._handle = handle
-        self._result = result
-        self._on_complete = on_complete
-        self._done = False
-
-    def _finish(self):
-        if self._done:
-            return self._result
-        if self._on_complete is not None:
-            self._on_complete()
-            self._on_complete = None
-        self._done = True
-        return self._result
-
-    def wait(self):
-        if self._done:
-            return self._result
-        self._group._impl.wait_handle(self._handle)
-        return self._finish()
-
-    def is_completed(self) -> bool:
-        if self._done:
-            return True
-        if not self._group._impl.poll_handle(self._handle):
-            return False
-        self._finish()
-        return True
-
-
-class Work:
-    def __init__(self, runner: _WorkRunner):
-        self._runner = runner
-
-    def wait(self):
-        return self._runner.wait()
-
-    def is_completed(self) -> bool:
-        return self._runner.is_completed()
+            f"{name} must be contiguous (call .contiguous() first — "
+            "collectives run in place and cannot copy back)")
 
 
 class ProcessGroup:
+    """A ukernel process group over one GPU.
+
+    prepare() (peer setup, MR registration, buffer resolution) is cached
+    per collective shape + pointer set, so steady-state calls only pay
+    submit + wait.
+    """
+
     def __init__(
         self,
         rank: int,
         world_size: int,
         gpu_id: int,
         exchanger_ip: str = "127.0.0.1",
-        exchanger_port: int = 6979,
-        transport: str = "auto",
-        device_task_capacity: int = 4096,
-        max_device_fifos: int = 8,
-        threads_per_block: int = 256,
-        fifo_capacity: int = 64,
-        smem_size: int = 0,
+        exchanger_port: int = 16998,
+        threads_per_block: int = 64,
+        blocks_per_worker: int = 1,
+        smem_size: int = 4096,
     ) -> None:
         self._impl = _ProcessGroup(
-            rank,
-            world_size,
-            gpu_id,
-            exchanger_ip,
-            exchanger_port,
-            transport,
-            device_task_capacity,
-            max_device_fifos,
-            threads_per_block,
-            fifo_capacity,
-            smem_size,
+            rank, world_size, gpu_id,
+            exchanger_ip, exchanger_port,
+            threads_per_block, blocks_per_worker, smem_size,
         )
 
     @property
@@ -209,142 +102,72 @@ class ProcessGroup:
     def gpu_id(self) -> int:
         return self._impl.gpu_id
 
-    @property
-    def backend(self) -> str:
-        return "ukernel"
+    # Async API — mirrors the C++ SprayExecutor interface. The tensor
+    # must stay alive and unmodified until wait() observes completion;
+    # every handle must be released exactly once.
 
-    def all_reduce(
-        self,
-        tensor: torch.Tensor,
-        op: ReduceOp = ReduceOp.SUM,
-        async_op: bool = False,
-        tile_bytes: int = 64 << 10,
-        num_flows: int = 2,
-    ):
-        op = _canonical_reduce_op(op)
-        _ensure_cuda_tensor(tensor, "tensor")
-        _ensure_contiguous_tensor(tensor, "tensor")
-        _validate_reduce_dtype(op, tensor)
-        handle = self._impl.submit_allreduce(
-            tensor,
-            int(op),
-            tile_bytes=tile_bytes,
-            num_flows=num_flows,
-        )
-        work = Work(_NativeCollectiveRunner(self, handle, result=tensor))
-        if async_op:
-            return work
-        work.wait()
-        return None
+    def allreduce_submit(self, tensor, op=ReduceOp.SUM, tile_bytes=64 << 10,
+                         signal_group_tiles=1):
+        """Submit an in-place allreduce, return a handle (non-blocking)."""
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "allreduce")
+        return self._impl.allreduce_submit(
+            tensor, int(op), tile_bytes, signal_group_tiles)
 
-    def all_to_all_single(
-        self,
-        output: torch.Tensor,
-        input: torch.Tensor,
-        output_split_sizes=None,
-        input_split_sizes=None,
-        async_op: bool = False,
-        tile_bytes: int = 64 << 10,
-        num_flows: int = 2,
-    ):
-        runner = self._create_all_to_all_single_runner(
-            output,
-            input,
-            output_split_sizes=output_split_sizes,
-            input_split_sizes=input_split_sizes,
-            tile_bytes=tile_bytes,
-            num_flows=num_flows,
-        )
-        work = Work(runner)
-        if async_op:
-            return work
-        work.wait()
-        return None
+    def alltoall_submit(self, tensor, tile_bytes=64 << 10,
+                        signal_group_tiles=1):
+        """Submit an in-place equal-split alltoall, return a handle."""
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "alltoall")
+        return self._impl.alltoall_submit(tensor, tile_bytes,
+                                          signal_group_tiles)
 
-    def barrier(self, async_op: bool = False):
-        work = Work(_NativeCollectiveRunner(self, self._impl.submit_barrier()))
-        if async_op:
-            return work
-        work.wait()
-        return None
+    def poll(self, handle) -> bool:
+        """True once the collective reached a terminal state."""
+        return self._impl.poll(handle)
 
-    def same_host(self, peer_rank: int) -> bool:
-        return self._impl.same_host(peer_rank)
+    def wait(self, handle, timeout_ms: int = 0) -> bool:
+        """Block until completion (timeout_ms=0 waits forever).
 
-    def peer_transport(self, peer_rank: int) -> str:
-        return self._impl.peer_transport(peer_rank)
+        Returns False only on failure; may return True while still
+        running if the timeout expired — use poll() to test completion.
+        """
+        return self._impl.wait(handle, timeout_ms)
 
-    def _prepare_output_flat(
-        self, output: torch.Tensor
-    ) -> tuple[torch.Tensor, Optional[Callable[[], None]]]:
-        if not output.is_contiguous():
-            raise ValueError(
-                "output must be contiguous; ukernel does not perform implicit payload copies"
-            )
-        return output.view(-1), None
+    def status(self, handle) -> CollectiveOpStatus:
+        return self._impl.status(handle)
 
-    def _create_all_to_all_single_runner(
-        self,
-        output: torch.Tensor,
-        input: torch.Tensor,
-        *,
-        output_split_sizes,
-        input_split_sizes,
-        tile_bytes: int,
-        num_flows: int,
-    ) -> _WorkRunner:
-        _ensure_cuda_tensor(input, "input")
-        _ensure_cuda_tensor(output, "output")
-        if output.dtype != input.dtype:
-            raise ValueError("output and input must have the same dtype")
-        if output.device != input.device:
-            raise ValueError("output and input must be on the same device")
+    def error_message(self, handle) -> str:
+        return self._impl.error_message(handle)
 
-        input_splits = _normalize_split_sizes(
-            input_split_sizes, input.numel(), self.world_size, "input"
-        )
-        output_splits = _normalize_split_sizes(
-            output_split_sizes, output.numel(), self.world_size, "output"
-        )
+    def release(self, handle) -> None:
+        """Free a completed/failed handle (raises if still running)."""
+        self._impl.release(handle)
 
-        if _is_equal_split(input_splits) and _is_equal_split(output_splits):
-            if output.numel() != input.numel():
-                raise ValueError(
-                    "equal-split all_to_all_single requires output.numel() == input.numel()"
-                )
-            input_flat = _require_contiguous_flat(input, "input")
-            output_flat, copy_back = self._prepare_output_flat(output)
-            handle = self._impl.submit_alltoall_out(
-                output_flat,
-                input_flat,
-                tile_bytes=tile_bytes,
-                num_flows=num_flows,
-            )
-            return _NativeCollectiveRunner(
-                self, handle, result=output, on_complete=copy_back
-            )
+    # Sync convenience wrappers (submit + wait + release).
 
-        input_flat = _require_contiguous_flat(input, "input")
-        output_flat, copy_back = self._prepare_output_flat(output)
-        handle = self._impl.submit_alltoallv_out(
-            output_flat,
-            input_flat,
-            output_splits,
-            input_splits,
-            tile_bytes=tile_bytes,
-            num_flows=num_flows,
-        )
-        return _NativeCollectiveRunner(
-            self, handle, result=output, on_complete=copy_back
-        )
+    def allreduce(self, tensor, op=ReduceOp.SUM, tile_bytes=64 << 10,
+                  signal_group_tiles=1):
+        """In-place allreduce over the ring algorithm.
+
+        signal_group_tiles: one signal per this many tiles per chunk pair
+        (1 = per tile; 2-4 usually best for small messages).
+        """
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "allreduce")
+        self._impl.allreduce(tensor, int(op), tile_bytes, signal_group_tiles)
+
+    def alltoall(self, tensor, tile_bytes=64 << 10, signal_group_tiles=1):
+        """In-place equal-split alltoall."""
+        _cuda_check(tensor, "tensor")
+        _validate_dtype(tensor, "alltoall")
+        self._impl.alltoall(tensor, tile_bytes, signal_group_tiles)
+
+    def barrier(self):
+        self._impl.barrier()
 
 
 _DEFAULT_GROUP: Optional[ProcessGroup] = None
-
-
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    return int(value) if value else default
 
 
 def init_process_group(
@@ -355,130 +178,67 @@ def init_process_group(
     gpu_id: Optional[int] = None,
     exchanger_ip: Optional[str] = None,
     exchanger_port: Optional[int] = None,
-    transport: str = "auto",
-    device_task_capacity: int = 4096,
-    max_device_fifos: int = 8,
-    threads_per_block: int = 256,
-    fifo_capacity: int = 64,
-    smem_size: int = 0,
+    threads_per_block: int = 64,
+    blocks_per_worker: int = 1,
+    smem_size: int = 4096,
 ) -> ProcessGroup:
     global _DEFAULT_GROUP
     if backend not in ("ukernel", "ucc", "ccl"):
         raise ValueError(f"unsupported backend: {backend}")
-
-    rank = _env_int("RANK", 0) if rank is None else rank
-    world_size = _env_int("WORLD_SIZE", 1) if world_size is None else world_size
-    gpu_id = _env_int("LOCAL_RANK", rank) if gpu_id is None else gpu_id
-    exchanger_ip = (
-        os.getenv("MASTER_ADDR", "127.0.0.1") if exchanger_ip is None else exchanger_ip
-    )
-    exchanger_port = (
-        _env_int("MASTER_PORT", 29500) if exchanger_port is None else exchanger_port
-    )
-
+    rank = int(os.getenv("RANK", "0")) if rank is None else rank
+    world_size = int(os.getenv("WORLD_SIZE", "1")) if world_size is None else world_size
+    gpu_id = int(os.getenv("LOCAL_RANK", str(rank))) if gpu_id is None else gpu_id
+    exchanger_ip = os.getenv("MASTER_ADDR", "127.0.0.1") if exchanger_ip is None else exchanger_ip
+    if exchanger_port is None:
+        p = os.getenv("EXCHANGER_PORT")
+        exchanger_port = int(p) if p else 16998
     _DEFAULT_GROUP = ProcessGroup(
-        rank=rank,
-        world_size=world_size,
-        gpu_id=gpu_id,
-        exchanger_ip=exchanger_ip,
-        exchanger_port=exchanger_port,
-        transport=transport,
-        device_task_capacity=device_task_capacity,
-        max_device_fifos=max_device_fifos,
+        rank=rank, world_size=world_size, gpu_id=gpu_id,
+        exchanger_ip=exchanger_ip, exchanger_port=exchanger_port,
         threads_per_block=threads_per_block,
-        fifo_capacity=fifo_capacity,
+        blocks_per_worker=blocks_per_worker,
         smem_size=smem_size,
     )
     return _DEFAULT_GROUP
-
-
-def destroy_process_group(group: Optional[ProcessGroup] = None) -> None:
-    global _DEFAULT_GROUP
-    if group is None or group is _DEFAULT_GROUP:
-        _DEFAULT_GROUP = None
 
 
 def is_initialized() -> bool:
     return _DEFAULT_GROUP is not None
 
 
-def get_rank(group: Optional[ProcessGroup] = None) -> int:
+def get_rank(group=None) -> int:
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
+        raise RuntimeError("process group not initialized")
     return pg.rank
 
 
-def get_world_size(group: Optional[ProcessGroup] = None) -> int:
+def get_world_size(group=None) -> int:
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
+        raise RuntimeError("process group not initialized")
     return pg.world_size
 
 
-def barrier(group: Optional[ProcessGroup] = None, async_op: bool = False):
+def barrier(group=None):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.barrier(async_op=async_op)
+        raise RuntimeError("process group not initialized")
+    pg.barrier()
 
 
-def all_reduce(
-    tensor: torch.Tensor,
-    op: ReduceOp = ReduceOp.SUM,
-    group: Optional[ProcessGroup] = None,
-    async_op: bool = False,
-    *,
-    tile_bytes: int = 64 << 10,
-    num_flows: int = 2,
-):
+def allreduce(tensor, op=ReduceOp.SUM, group=None, tile_bytes=64 << 10,
+              signal_group_tiles=1):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.all_reduce(
-        tensor,
-        op=op,
-        async_op=async_op,
-        tile_bytes=tile_bytes,
-        num_flows=num_flows,
-    )
+        raise RuntimeError("process group not initialized")
+    pg.allreduce(tensor, op=op, tile_bytes=tile_bytes,
+                 signal_group_tiles=signal_group_tiles)
 
 
-def all_to_all_single(
-    output: torch.Tensor,
-    input: torch.Tensor,
-    output_split_sizes=None,
-    input_split_sizes=None,
-    group: Optional[ProcessGroup] = None,
-    async_op: bool = False,
-    *,
-    tile_bytes: int = 64 << 10,
-    num_flows: int = 2,
-):
+def alltoall(tensor, group=None, tile_bytes=64 << 10, signal_group_tiles=1):
     pg = _DEFAULT_GROUP if group is None else group
     if pg is None:
-        raise RuntimeError("process group is not initialized")
-    return pg.all_to_all_single(
-        output,
-        input,
-        output_split_sizes=output_split_sizes,
-        input_split_sizes=input_split_sizes,
-        async_op=async_op,
-        tile_bytes=tile_bytes,
-        num_flows=num_flows,
-    )
-
-
-__all__ = [
-    "ProcessGroup",
-    "ReduceOp",
-    "Work",
-    "init_process_group",
-    "destroy_process_group",
-    "is_initialized",
-    "get_rank",
-    "get_world_size",
-    "barrier",
-    "all_reduce",
-    "all_to_all_single",
-]
+        raise RuntimeError("process group not initialized")
+    pg.alltoall(tensor, tile_bytes=tile_bytes,
+                signal_group_tiles=signal_group_tiles)

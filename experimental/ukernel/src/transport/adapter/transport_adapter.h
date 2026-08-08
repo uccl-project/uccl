@@ -1,12 +1,20 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
+
+extern "C" {
+#include "util/jring.h"
+}
+
+#include "util/jrqueue.h"
 
 namespace UKernel {
 namespace Transport {
@@ -36,12 +44,33 @@ struct UcclPeerConnectSpec {
 
 struct IpcPeerConnectSpec {};
 
+struct RdmaPeerConnectSpec {
+  static constexpr int kMaxQPs = 4;
+
+  uint32_t remote_data_qpns[kMaxQPs] = {};
+  uint32_t remote_signal_qpn = 0;
+  uint8_t num_qps = kMaxQPs;
+  uint16_t remote_lid = 0;
+  std::array<uint8_t, 16> remote_gid_raw = {};
+
+  int local_dev_idx = -1;
+  int local_gpu_idx = -1;
+  int remote_dev_idx = -1;
+  int remote_gpu_idx = -1;
+};
+
 struct PeerConnectSpec {
   int peer_rank = -1;
   PeerConnectType type = PeerConnectType::Connect;
   std::variant<std::monostate, TcpPeerConnectSpec, UcclPeerConnectSpec,
-               IpcPeerConnectSpec>
+               IpcPeerConnectSpec, RdmaPeerConnectSpec>
       detail{};
+};
+
+// Pushed to completion ring by adapter worker threads on operation completion.
+struct CompletionEvent {
+  unsigned rid;     // Communicator-level request ID
+  unsigned failed;  // 0 = success, 1 = failed
 };
 
 class TransportAdapter {
@@ -60,22 +89,60 @@ class TransportAdapter {
   virtual bool has_put_path(int peer_rank) const = 0;
   virtual bool has_wait_path(int peer_rank) const = 0;
 
-  // Async data path.
-  // local_ptr / local_buffer_id: source data (may be host bounce buffer).
-  // remote_ptr / remote_buffer_id: resolved destination on peer, or nullptr/0
-  //   (for send/recv model where peer posts its own recv buffer).
-  virtual unsigned put_async(int peer_rank, void* local_ptr,
-                             uint32_t local_buffer_id, void* remote_ptr,
-                             uint32_t remote_buffer_id, size_t len) = 0;
-  virtual unsigned signal_async(int peer_rank, uint64_t tag) = 0;
-  virtual unsigned wait_async(
-      int peer_rank, uint64_t expected_tag,
-      std::optional<WaitTarget> target = std::nullopt) = 0;
+  // Async submission. comm_rid is pushed to completion_ring on completion.
+  // Returns non-zero on success (the comm_rid itself is the identifier).
+  virtual unsigned send_put_async(int peer_rank, void* local_ptr,
+                                  uint32_t local_buffer_id, void* remote_ptr,
+                                  uint32_t remote_buffer_id, size_t len,
+                                  unsigned comm_rid) = 0;
+  virtual unsigned send_signal_async(int peer_rank, uint64_t tag,
+                                     unsigned comm_rid) = 0;
+  virtual unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
+                                     std::optional<WaitTarget> target,
+                                     unsigned comm_rid) = 0;
 
-  virtual bool poll_completion(unsigned id) = 0;
-  virtual bool wait_completion(unsigned id) = 0;
-  virtual bool request_failed(unsigned id) = 0;
-  virtual void release_request(unsigned id) = 0;
+  // Fused put+signal: once the data has landed, the peer observes `tag`
+  // as a signal (IPC: written into the peer's shm signal ring; RDMA:
+  // delivered as write-with-imm). Completion semantics match
+  // send_put_async — exactly one completion for comm_rid, after BOTH the
+  // data and the signal are out. Default: unsupported (returns 0).
+  virtual bool supports_put_signal() const { return false; }
+  virtual unsigned send_put_signal_async(int peer_rank, void* local_ptr,
+                                         uint32_t local_buffer_id,
+                                         void* remote_ptr,
+                                         uint32_t remote_buffer_id, size_t len,
+                                         uint64_t tag, unsigned comm_rid) {
+    (void)peer_rank;
+    (void)local_ptr;
+    (void)local_buffer_id;
+    (void)remote_ptr;
+    (void)remote_buffer_id;
+    (void)len;
+    (void)tag;
+    (void)comm_rid;
+    return 0;
+  }
+
+  void set_put_completion_ring(jring_t* ring) { put_completion_ring_ = ring; }
+  void set_sig_send_completion_ring(jring_t* ring) {
+    sig_send_completion_ring_ = ring;
+  }
+
+ protected:
+  jring_t* put_completion_ring_ = nullptr;
+  jring_t* sig_send_completion_ring_ = nullptr;
+
+  void publish_put_completion(unsigned rid, bool failed) {
+    if (!put_completion_ring_) return;
+    CompletionEvent ev{rid, failed ? 1u : 0u};
+    jrpush(put_completion_ring_, ev);
+  }
+
+  void publish_sig_send_completion(unsigned rid, bool failed) {
+    if (!sig_send_completion_ring_) return;
+    CompletionEvent ev{rid, failed ? 1u : 0u};
+    jrpush(sig_send_completion_ring_, ev);
+  }
 };
 
 }  // namespace Transport

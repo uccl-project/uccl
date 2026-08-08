@@ -46,7 +46,7 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
     * More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
 
-* **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target transfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines.
+* **[UCCL-P2P](p2p/)** provides NIXL-style initiator-target transfer APIs. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines.
 
   <details>
   <summary>UCCL-P2P performance comparison</summary>
@@ -151,6 +151,14 @@ pip install paramiko intervaltree pybind11 nanobind
 # Upgrade conda glic to modern ones
 conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
+
+**Alternatively, use [uv](https://docs.astral.sh/uv/) for a faster, conda-free dev setup:**
+
+```bash
+source scripts/bootstrap.sh
+```
+
+This single command installs `uv` if missing, creates a `.venv` virtualenv with Python 3.12, pins all non-CUDA dev tools (`black`, `clang-format`, `pytest`, `paramiko`, etc.) from `uv.lock` via `uv sync --group dev`, and then runs `ep/install_deps.sh` to install CUDA-specific packages (torch, etc.) with automatic hardware detection.
 
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)

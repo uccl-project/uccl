@@ -179,7 +179,6 @@ build_p2p() {
   mkdir -p uccl/lib
   cp p2p/libuccl_p2p.so uccl/lib/
   cp p2p/p2p.*.so uccl/
-  cp p2p/collective.py uccl/
   cp p2p/utils.py uccl/
   rename_to_abi3 uccl
 }
@@ -205,7 +204,7 @@ build_ep() {
   elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* || "$TARGET" == "therock" ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
-    # make clean && rm -r build || true
+    make clean && rm -r build || true
     extra_env=()
     if [[ "$TARGET" == "therock" ]]; then
       # On TheRock, ROCm comes from a pip-installed rocm-sdk wheel; expose its
@@ -360,6 +359,8 @@ else
   fi
 fi
 
+rm -f /io/${WHEEL_DIR}/uccl*.whl
+
 auditwheel repair dist/uccl-*.whl \
   --plat "${AUDIT_PLAT}" \
   --exclude "libtorch*.so" \
@@ -397,9 +398,13 @@ if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
         version="${BASH_REMATCH[2]}"
         python_abi_platform="${BASH_REMATCH[3]}"
         suffix="${BASH_REMATCH[4]}"
-        new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
-        echo "Renaming wheel: $wheel -> $new_wheel"
-        mv "$wheel" "$new_wheel"
+        if [[ "$version" == *"+"* ]]; then
+          echo "Wheel already has local version tag, leaving unchanged: $wheel"
+        else
+          new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
+          echo "Renaming wheel: $wheel -> $new_wheel"
+          mv "$wheel" "$new_wheel"
+        fi
       else
         echo "Warning: Could not parse wheel filename: $wheel"
       fi
@@ -408,4 +413,6 @@ if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
   cd /io
 fi
 
-auditwheel show /io/${WHEEL_DIR}/*.whl
+for wheel in /io/${WHEEL_DIR}/uccl*.whl; do
+  auditwheel show "$wheel"
+done

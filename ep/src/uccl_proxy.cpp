@@ -5,6 +5,7 @@
 #include "ring_buffer.cuh"
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -14,7 +15,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated)
+                     bool gpu_buffer_is_host_allocated, int barrier_local_rank,
+                     int device_index, int nic_local_rank)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -24,6 +26,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
+  device_index_ = device_index >= 0 ? device_index : local_rank;
+  nic_local_rank_ = nic_local_rank >= 0 ? nic_local_rank : local_rank;
 
   cfg.d2h_queues.reserve(kChannelPerProxy);
   d2h_queues.resize(kChannelPerProxy);
@@ -46,6 +50,10 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.rank = rank;
   cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
+  cfg.device_index = device_index_;
+  cfg.nic_local_rank = nic_local_rank_;
+  cfg.barrier_local_rank =
+      barrier_local_rank >= 0 ? barrier_local_rank : local_rank;
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
@@ -57,9 +65,14 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   node_idx_ = node_idx;
 
   if (thread_idx == 0) {
-#ifdef USE_GRACE_HOPPER
-    cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+#ifdef USE_LIBFABRIC_CXI
+    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
     atomic_buffer_is_host_allocated_ = false;
+#elif defined(USE_GRACE_HOPPER)
+    cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+    atomic_buffer_is_host_allocated_ =
+        false;  // Uses unified memory when we are in Grace hopper (so Alps
+                // clariden will use this)
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
@@ -73,7 +86,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
     // cudaMalloc; use pinned host memory then. Override with
     // UCCL_ATOMICS_USE_HOST_MEMORY=1 to force host memory.
-    if (can_register_gpu_memory_for_atomics(local_rank)) {
+    if (can_register_gpu_memory_for_atomics(device_index_)) {
       cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
       atomic_buffer_is_host_allocated_ = false;
     } else {
@@ -94,7 +107,7 @@ UcclProxy::~UcclProxy() {
   }
 
   if (thread_idx_ == 0 && atomic_buffer_ptr_) {
-#if defined(USE_GRACE_HOPPER)
+#if defined(USE_LIBFABRIC_CXI) || defined(USE_GRACE_HOPPER)
     cudaFree(atomic_buffer_ptr_);
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipFree(atomic_buffer_ptr_);
@@ -156,26 +169,39 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
-    if (is_intranode_) {
-      std::printf("UcclProxy: no peer IP set, running in local mode\n");
-      proxy_->run_local();
-      return;
-    }
-    switch (mode_) {
-      case Mode::Sender:
-        proxy_->run_sender();
-        break;
-      case Mode::Remote:
-        proxy_->run_remote();
-        break;
-      case Mode::Local:
+    try {
+      if (is_intranode_) {
+        std::printf("UcclProxy: no peer IP set, running in local mode\n");
         proxy_->run_local();
-        break;
-      case Mode::Dual:
-        proxy_->run_dual();
-        break;
-      default:
-        break;
+        return;
+      }
+      switch (mode_) {
+        case Mode::Sender:
+          proxy_->run_sender();
+          break;
+        case Mode::Remote:
+          proxy_->run_remote();
+          break;
+        case Mode::Local:
+          proxy_->run_local();
+          break;
+        case Mode::Dual:
+          proxy_->run_dual();
+          break;
+        default:
+          break;
+      }
+    } catch (std::exception const& e) {
+      std::fprintf(stderr, "UcclProxy thread %d failed with exception: %s\n",
+                   thread_idx_, e.what());
+      std::fflush(stderr);
+      std::terminate();
+    } catch (...) {
+      std::fprintf(stderr,
+                   "UcclProxy thread %d failed with unknown exception\n",
+                   thread_idx_);
+      std::fflush(stderr);
+      std::terminate();
     }
   });
 }

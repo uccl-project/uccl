@@ -8,7 +8,10 @@ set -e
 DIRECTORIES=("collective" "ep" "p2p" "include" "experimental")
 
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-EXCLUDE=("collective/afxdp/lib" "experimental/lite/thirdparty")
+EXCLUDE=(
+    "collective/afxdp/lib"
+    "experimental/lite/lite-collective/thirdparty"
+)
 
 REQUIRED_VERSION="14"
 

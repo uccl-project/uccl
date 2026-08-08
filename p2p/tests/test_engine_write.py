@@ -68,9 +68,7 @@ def test_local():
         assert ok
         time.sleep(0.1)
         print("advertise data pointer hex", hex(tensor.data_ptr()))
-        ok, fifo_blob = ep.advertise(
-            conn_id, mr_id, tensor.data_ptr(), tensor.numel() * 4
-        )
+        ok, fifo_blob = ep.advertise(mr_id, tensor.data_ptr(), tensor.numel() * 4)
         assert isinstance(fifo_blob, (bytes, bytearray)) and len(fifo_blob) == 64
         print("Buffer exposed for RDMA WRITE")
 

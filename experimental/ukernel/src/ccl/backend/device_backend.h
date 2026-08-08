@@ -1,80 +1,104 @@
 #pragma once
 
 #include "backend.h"
-#include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <stdexcept>
-#include <unordered_map>
+#include <mutex>
+#include <vector>
 
 namespace UKernel {
 namespace Device {
 class WorkerPool;
-}
+struct TaskArgs;
+enum class TaskType : uint64_t;
+}  // namespace Device
 namespace CCL {
 
 struct DeviceBackendConfig {
   uint32_t task_capacity = 4096;
-  uint32_t max_fifos = 8;
+  uint32_t max_fifos = 2;
   uint32_t threads_per_block = 256;
+  uint32_t blocks_per_worker = 1;
   uint32_t fifo_capacity = 64;
   uint32_t smem_size = 0;
+  uint32_t bytes_per_block = 0;  // 0=auto, >0=override
+  // Grace period (µs) of continuous fifo emptiness after which a
+  // persistent worker kernel exits (relaunched on next enqueue).
+  // 0 = always resident. Enable for torch coexistence — see
+  // WorkerPool::Config::idleExitAfterUs.
+  uint32_t idle_exit_after_us = 0;
 };
 
-class DeviceBackend final : public Backend {
+class DeviceBackend final : public BatchBackend {
  public:
-  explicit DeviceBackend(DeviceBackendConfig const& config = {});
+  explicit DeviceBackend(DeviceBackendConfig const& cfg = {});
   ~DeviceBackend() override;
 
-  char const* name() const override;
-  void validate(ExecutionPlan const& plan,
-                CollectiveBinding& binding) const override;
+  char const* name() const override { return "device"; }
   bool supports(ExecOpKind kind) const override;
-  BackendToken submit(ExecOp const& op, CollectiveBinding& binding) override;
-  bool poll(BackendToken token) override;
-  bool try_pop_completed(BackendToken& token) override;
-  void release(BackendToken token) override;
-  void stop(uint32_t flow_id) override;
+
+  size_t do_enqueue(Cmd const* cmds, size_t n,
+                    uint32_t* out_indices = nullptr) override;
+  uint32_t reserve_slot() override;
+  bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) override;
+  size_t do_enqueue_reserved_batch(Cmd const* cmds, uint32_t const* be_idx,
+                                   size_t n) override;
+  size_t do_drain(uint32_t* completed, size_t max) override;
+  size_t capacity() const override;
+  // True when the peer's IPC signal ring is GPU-mapped, so a fused
+  // PutSignal (CollPut task) can write the tag from the kernel.
+  bool can_fuse_put_signal(int peer) const override;
 
  private:
-  struct SubmittedTask {
+  void ensure_runtime();
+  // Fill TaskArgs/TaskType for a device op; returns false for op kinds
+  // this backend does not handle (caller skips them, matching the
+  // historical behavior). Throws on unresolvable buffer pointers.
+  bool build_task(Cmd const& c, Device::TaskArgs& args, Device::TaskType& tt);
+
+  DeviceBackendConfig cfg_;
+  int sm_count_ = 1;
+  int device_idx_ = 0;
+
+  bool owns_task_manager_ = false;
+
+  std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
+
+  // FIFO management
+  uint32_t next_fifo_ = 0;
+  struct CmdRec {
     uint32_t fifo_id;
     uint64_t task_id;
-    uint32_t flow_id;
     uint32_t args_id;
-    bool args_released = false;
-    bool completion_queued = false;
+    uint32_t cmd_idx;
   };
+  // Per-FIFO submission-ordered queues. Each FIFO completes tasks in
+  // order (monotonic tail counter), so do_drain only pops done prefixes
+  // instead of scanning every pending record.
+  std::vector<std::deque<CmdRec>> pending_by_fifo_;
+  size_t pending_total_ = 0;
+  std::mutex pending_mu_;
 
-  struct ActiveFlow {
-    uint32_t fifo_id = 0;
-    uint32_t inflight = 0;
+  // Resolved remote IPC pointer cache — written once, read without lock
+  struct ResolvedRemote {
+    int remote_rank = -1;
+    uint32_t buffer_id = 0;
+    void* ptr = nullptr;
+    int device_idx = -1;
   };
+  std::vector<ResolvedRemote> resolved_remote_cache_;
 
-  void* byte_offset(void* base, size_t offset) const;
-  void const* byte_offset(void const* base, size_t offset) const;
-  void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
-                        size_t bytes) const;
-  void const* resolve_const(CollectiveBinding const& binding,
-                            BufferRef const& ref, size_t bytes) const;
-  void ensure_device_context() const;
-  void ensure_runtime();
-  uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
-  void release_task_args(SubmittedTask& task);
-  void stop_flow(uint32_t flow_id);
-  uint32_t suggested_num_blocks(ExecOp const& op) const;
+  // Local buffer base-pointer cache — populated once per collective, read
+  // lock-free
+  static constexpr size_t kMaxLocalBufs = 8;
+  void* local_ptr_cache_[kMaxLocalBufs] = {};
 
-  DeviceBackendConfig config_{};
-  bool owns_task_manager_ = false;
-  int local_device_idx_ = 0;
-  int sm_count_ = 1;
-  std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
-  uint64_t next_token_ = 1;
-  std::unordered_map<uint32_t, ActiveFlow> active_flows_;
-  std::deque<uint32_t> free_fifos_;
-  std::unordered_map<uint64_t, SubmittedTask> submitted_;
-  std::deque<uint64_t> completed_tokens_;
+  // Global command sequence counter; atomic so reserve_slot() is
+  // lock-free. Failed submissions leave harmless gaps.
+  std::atomic<uint32_t> cmd_next_{0};
+  uint32_t cmd_done_ = 0;  // completed up to this point
 };
 
 }  // namespace CCL

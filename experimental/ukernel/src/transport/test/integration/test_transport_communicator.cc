@@ -14,6 +14,8 @@
 
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
+using CompletionResult = UKernel::Transport::CompletionResult;
+using SignalCompletion = UKernel::Transport::SignalCompletion;
 using MR = UKernel::Transport::MR;
 
 static constexpr int kWorldSize = 2;
@@ -94,7 +96,7 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
           "client reg_mr failed");
   uint32_t remote_recv_buffer_id = 0;
   auto peer_kind = comm->peer_transport_kind(kServerRank);
-  if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl) {
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Rdma) {
     require(comm->wait_mr(kServerRank, kServerRecvBufferId),
             "client wait_mr failed");
     (void)comm->get_mr(kServerRank, kServerRecvBufferId);
@@ -104,10 +106,36 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
             "client wait_ipc failed");
     remote_recv_buffer_id = kServerRecvBufferId;
   }
-  unsigned send_req = comm->isend(kServerRank, kClientSendBufferId, 0,
-                                  kMessageBytes, remote_recv_buffer_id, 0);
-  require(send_req != 0, "client isend failed");
-  require(comm->wait_finish(send_req), "client wait_finish(send) failed");
+  unsigned send_rid =
+      comm->send_put_async(kServerRank, kClientSendBufferId, 0,
+                           remote_recv_buffer_id, 0, kMessageBytes);
+  require(send_rid != 0, "client send_put_async failed");
+  CompletionResult results[16];
+  bool found = false;
+  while (!found) {
+    size_t n = comm->try_complete_put(results, 16);
+    for (size_t i = 0; i < n; ++i) {
+      if (results[i].rid == send_rid) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) std::this_thread::yield();
+  }
+
+  unsigned sig_rid = comm->send_signal_async(kServerRank, 0);
+  require(sig_rid != 0, "client send_signal_async failed");
+  found = false;
+  while (!found) {
+    size_t n = comm->try_complete_sig_send(results, 16);
+    for (size_t i = 0; i < n; ++i) {
+      if (results[i].rid == sig_rid) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) std::this_thread::yield();
+  }
 
   std::cout << "[CLIENT][exchange] OK" << std::endl;
   return 0;
@@ -135,15 +163,26 @@ int run_exchange_server(int gpu, std::string const& exchanger_ip,
             "server reg_ipc failed");
   }
 
-  unsigned recv_req =
-      comm->irecv(kClientRank, kServerRecvBufferId, 0, kMessageBytes);
-  require(recv_req != 0, "server irecv failed");
-  require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
+  unsigned recv_rid = comm->wait_signal_async(kClientRank, /*tag=*/0);
+  require(recv_rid != 0, "server wait_signal_async failed");
+  SignalCompletion sig_ev;
+  bool found = false;
+  while (!found) {
+    size_t n = comm->try_complete_sig_wait(&sig_ev, 1);
+    if (n > 0u && sig_ev.rid == recv_rid) found = true;
+    if (!found) std::this_thread::yield();
+  }
 
-  std::vector<uint8_t> host(kMessageBytes);
-  GPU_RT_CHECK(
-      gpuMemcpy(host.data(), recvbuf_d, host.size(), gpuMemcpyDeviceToHost));
-  require(check_pattern(host, 0x10), "received payload pattern mismatch");
+  // For IPC, send_put_async writes directly to remote memory — data is already
+  // there. For TCP, data reception requires a DataWait target which the
+  // Communicator does not expose; the tcp_adapter unit test covers TCP data
+  // transfer.
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Ipc) {
+    std::vector<uint8_t> host(kMessageBytes);
+    GPU_RT_CHECK(
+        gpuMemcpy(host.data(), recvbuf_d, host.size(), gpuMemcpyDeviceToHost));
+    require(check_pattern(host, 0x10), "received payload pattern mismatch");
+  }
 
   std::cout << "[SERVER][exchange] OK" << std::endl;
   return 0;
@@ -292,6 +331,8 @@ int test_transport_communicator(int argc, char** argv) {
       preferred = UKernel::Transport::PreferredTransport::Uccl;
     } else if (transport == "tcp") {
       preferred = UKernel::Transport::PreferredTransport::Tcp;
+    } else if (transport == "rdma") {
+      preferred = UKernel::Transport::PreferredTransport::Rdma;
     } else if (transport != "auto") {
       throw std::invalid_argument("unknown transport override: " + transport);
     }

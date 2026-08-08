@@ -1,6 +1,6 @@
 #include "../include/config.h"
-#include "../include/gpu_rt.h"
 #include "../src/transport/communicator.h"
+#include "gpu_rt.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -14,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -38,8 +39,8 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return PreferredTransport::Auto;
   if (value == "ipc") return PreferredTransport::Ipc;
-  if (value == "uccl") return PreferredTransport::Uccl;
   if (value == "tcp") return PreferredTransport::Tcp;
+  if (value == "rdma") return PreferredTransport::Rdma;
   throw std::invalid_argument("unsupported transport: " + value);
 }
 
@@ -49,47 +50,38 @@ class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size, std::string exchanger_ip,
                int exchanger_port, std::string transport = "auto",
-               int local_id = -1)
-      : comm_(std::make_shared<UKernel::Transport::Communicator>(
-            gpu_id, rank, world_size,
-            std::make_shared<UKernel::Transport::CommunicatorConfig>(
-                UKernel::Transport::CommunicatorConfig{
-                    exchanger_ip,
-                    exchanger_port,
-                    local_id,
-                    "default",
-                    parse_transport(transport),
-                }))) {
+               int local_id = -1) {
+    auto cfg = std::make_shared<UKernel::Transport::CommunicatorConfig>(
+        UKernel::Transport::CommunicatorConfig{
+            exchanger_ip,
+            exchanger_port,
+            // The exchanger elects a node leader by local_id; default
+            // to the per-node ordinal (gpu id) — rank alone is wrong
+            // cross-node.
+            local_id >= 0 ? local_id : gpu_id,
+            "default",
+            parse_transport(transport),
+        });
+    {
+      // Exchanger connect can block for seconds; let Python handle
+      // signals meanwhile.
+      nb::gil_scoped_release release;
+      comm_ = std::make_shared<UKernel::Transport::Communicator>(
+          gpu_id, rank, world_size, std::move(cfg));
+    }
     GPU_RT_CHECK(gpuSetDevice(gpu_id));
   }
 
   ~Communicator() {
-    std::vector<uint32_t> rdma_buffer_ids;
-    std::vector<uint32_t> ipc_buffer_ids;
+    std::vector<uint32_t> ids;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      rdma_buffer_ids.reserve(rdma_buffer_to_ptr_.size());
-      for (auto const& it : rdma_buffer_to_ptr_) {
-        rdma_buffer_ids.push_back(it.first);
-      }
-      ipc_buffer_ids.reserve(ipc_buffer_to_ptr_.size());
-      for (auto const& it : ipc_buffer_to_ptr_) {
-        ipc_buffer_ids.push_back(it.first);
-      }
-      tensor_bindings_.clear();
-      rdma_buffer_to_ptr_.clear();
-      ipc_buffer_to_ptr_.clear();
-      pending_requests_.clear();
+      for (auto const& it : pinned_tensors_) ids.push_back(it.first);
+      pinned_tensors_.clear();
     }
-    for (uint32_t buffer_id : rdma_buffer_ids) {
-      if (buffer_id != 0) {
-        (void)comm_->dereg_mr(buffer_id);
-      }
-    }
-    for (uint32_t buffer_id : ipc_buffer_ids) {
-      if (buffer_id != 0) {
-        (void)comm_->dereg_ipc(buffer_id);
-      }
+    for (uint32_t id : ids) {
+      comm_->dereg_mr(id);
+      comm_->dereg_ipc(id);
     }
   }
 
@@ -105,9 +97,8 @@ class Communicator {
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda())
       throw std::invalid_argument("reg_rdma requires CUDA tensor");
-    if (!t.is_contiguous()) {
+    if (!t.is_contiguous())
       throw std::invalid_argument("reg_rdma requires contiguous tensor");
-    }
     size_t total_bytes =
         static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
     if (total_bytes == 0)
@@ -116,23 +107,17 @@ class Communicator {
     if (!comm_->reg_mr(buffer_id, ptr, total_bytes, publish)) return false;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      tensor_bindings_[ptr] =
-          PinnedTensor{std::move(t), buffer_id, total_bytes};
-      rdma_buffer_to_ptr_[buffer_id] = ptr;
+      pinned_tensors_[buffer_id] = std::move(t);
+      buffer_sizes_[buffer_id] = total_bytes;
     }
     return true;
   }
 
   bool unreg_rdma(uint32_t buffer_id) {
-    void* ptr = nullptr;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      auto it = rdma_buffer_to_ptr_.find(buffer_id);
-      if (it != rdma_buffer_to_ptr_.end()) {
-        ptr = it->second;
-        rdma_buffer_to_ptr_.erase(it);
-      }
-      if (ptr != nullptr) tensor_bindings_.erase(ptr);
+      pinned_tensors_.erase(buffer_id);
+      buffer_sizes_.erase(buffer_id);
     }
     return comm_->dereg_mr(buffer_id);
   }
@@ -143,9 +128,8 @@ class Communicator {
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda())
       throw std::invalid_argument("reg_ipc requires CUDA tensor");
-    if (!t.is_contiguous()) {
+    if (!t.is_contiguous())
       throw std::invalid_argument("reg_ipc requires contiguous tensor");
-    }
     size_t total_bytes =
         static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
     if (total_bytes == 0)
@@ -154,23 +138,17 @@ class Communicator {
     if (!comm_->reg_ipc(buffer_id, ptr, total_bytes, publish)) return false;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      tensor_bindings_[ptr] =
-          PinnedTensor{std::move(t), buffer_id, total_bytes};
-      ipc_buffer_to_ptr_[buffer_id] = ptr;
+      pinned_tensors_[buffer_id] = std::move(t);
+      buffer_sizes_[buffer_id] = total_bytes;
     }
     return true;
   }
 
   bool unreg_ipc(uint32_t buffer_id) {
-    void* ptr = nullptr;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      auto it = ipc_buffer_to_ptr_.find(buffer_id);
-      if (it != ipc_buffer_to_ptr_.end()) {
-        ptr = it->second;
-        ipc_buffer_to_ptr_.erase(it);
-      }
-      if (ptr != nullptr) tensor_bindings_.erase(ptr);
+      pinned_tensors_.erase(buffer_id);
+      buffer_sizes_.erase(buffer_id);
     }
     return comm_->dereg_ipc(buffer_id);
   }
@@ -183,130 +161,71 @@ class Communicator {
     return comm_->wait_mr(peer_rank, buffer_id);
   }
 
-  uint64_t isend(int peer_rank, nb::handle tensor, size_t offset = 0,
-                 size_t len = 0, uint32_t remote_buffer_id = 0,
-                 size_t remote_offset = 0) {
-    torch::Tensor t = tensor_from_python(tensor, "tensor");
-    if (!t.is_cuda()) {
-      throw std::invalid_argument("isend requires a CUDA tensor");
+  // ── New async API ──
+
+  uint64_t send_put_async(int peer, uint32_t local_buf, size_t off = 0,
+                          size_t len = 0, uint32_t remote_buf = 0,
+                          size_t remote_off = 0) {
+    if (len == 0) {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = buffer_sizes_.find(local_buf);
+      if (it != buffer_sizes_.end()) len = it->second;
     }
-    if (!t.is_contiguous()) {
-      throw std::invalid_argument("isend requires a contiguous tensor");
-    }
-    size_t elem_bytes = static_cast<size_t>(t.element_size());
-    size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
-    if (len == 0) len = total_bytes;
-    if (offset + len > total_bytes) {
-      throw std::invalid_argument("isend offset+len exceeds tensor size");
-    }
-    auto binding = find_tensor_binding(t.data_ptr(), total_bytes);
-    uint32_t buffer_id = 0;
-    if (binding.has_value()) {
-      buffer_id = binding->buffer_id;
-    } else {
-      buffer_id =
-          next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
-      if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
-        throw std::runtime_error("isend failed to register temporary MR");
-      }
-    }
-    uint64_t req = comm_->isend(peer_rank, buffer_id, offset, len,
-                                remote_buffer_id, remote_offset);
-    if (req == 0) {
-      if (!binding.has_value()) {
-        comm_->dereg_mr(buffer_id);
-      }
-      return 0;
-    }
-    track_request(req, std::move(t), binding.has_value() ? 0 : buffer_id);
-    return req;
+    return comm_->send_put_async(peer, local_buf, off, remote_buf, remote_off,
+                                 len);
   }
 
-  uint64_t irecv(int peer_rank, nb::handle tensor, size_t offset = 0,
+  uint64_t send_signal_async(int peer, uint64_t tag) {
+    return comm_->send_signal_async(peer, tag);
+  }
+
+  uint64_t wait_signal_async(int peer, uint64_t tag) {
+    return comm_->wait_signal_async(peer, tag);
+  }
+
+  std::vector<unsigned> poll_py(std::vector<unsigned> const& rids) {
+    std::vector<unsigned> rids_copy = rids;
+    size_t n = comm_->poll(rids_copy.data(), rids_copy.size());
+    rids_copy.resize(n);
+    return rids_copy;
+  }
+
+  // ── Blocking convenience wrappers ──
+
+  void send(int peer, uint32_t src_buf, uint32_t dst_buf, size_t dst_off) {
+    uint64_t rid = send_put_async(peer, src_buf, 0, buffer_size(src_buf),
+                                  dst_buf, dst_off);
+    if (rid == 0) throw std::runtime_error("send_put_async returned 0");
+    wait_put(static_cast<unsigned>(rid));
+  }
+
+  void signal(int peer, uint64_t tag) {
+    uint64_t rid = send_signal_async(peer, tag);
+    if (rid == 0) throw std::runtime_error("send_signal_async returned 0");
+    // Signal sends complete on the sig-send ring, NOT the put ring.
+    wait_sig_send(static_cast<unsigned>(rid));
+  }
+
+  void wait_data(int peer, uint64_t tag, uint32_t recv_buf, size_t off = 0,
                  size_t len = 0) {
-    torch::Tensor t = tensor_from_python(tensor, "tensor");
-    if (!t.is_cuda()) {
-      throw std::invalid_argument("irecv requires a CUDA tensor");
-    }
-    if (!t.is_contiguous()) {
-      throw std::invalid_argument("irecv requires a contiguous tensor");
-    }
-    size_t elem_bytes = static_cast<size_t>(t.element_size());
-    size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
-    if (len == 0) len = total_bytes;
-    if (offset + len > total_bytes) {
-      throw std::invalid_argument("irecv offset+len exceeds tensor size");
-    }
-    auto binding = find_tensor_binding(t.data_ptr(), total_bytes);
-    uint32_t buffer_id = 0;
-    if (binding.has_value()) {
-      buffer_id = binding->buffer_id;
-    } else {
-      buffer_id =
-          next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
-      if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
-        throw std::runtime_error("irecv failed to register temporary MR");
-      }
-    }
-    uint64_t req = comm_->irecv(peer_rank, buffer_id, offset, len);
-    if (req == 0) {
-      if (!binding.has_value()) {
-        comm_->dereg_mr(buffer_id);
-      }
-      return 0;
-    }
-    track_request(req, std::move(t), binding.has_value() ? 0 : buffer_id);
-    return req;
+    if (len == 0) len = buffer_size(recv_buf);
+    uint64_t rid = comm_->wait_signal_async(peer, tag, recv_buf, off, len);
+    if (rid == 0)
+      throw std::runtime_error("wait_signal_async(data) returned 0");
+    // DataWait completions land on the put ring (IPC recv worker / TCP).
+    wait_put(static_cast<unsigned>(rid));
   }
 
-  bool poll(uint64_t req) {
-    try {
-      bool done = comm_->poll(static_cast<unsigned>(req));
-      if (done) cleanup_request(req);
-      return done;
-    } catch (...) {
-      cleanup_request(req);
-      throw;
-    }
-  }
-  void release(uint64_t req) {
-    comm_->release(static_cast<unsigned>(req));
-    cleanup_request(req);
-  }
-  bool wait_finish(uint64_t req) {
-    try {
-      bool ok = comm_->wait_finish(static_cast<unsigned>(req));
-      cleanup_request(req);
-      return ok;
-    } catch (...) {
-      cleanup_request(req);
-      throw;
-    }
-  }
-
-  bool wait_finish_multi(std::vector<uint64_t> reqs) {
-    std::vector<unsigned> unsigned_reqs(reqs.size());
-    for (size_t i = 0; i < reqs.size(); ++i) {
-      unsigned_reqs[i] = static_cast<unsigned>(reqs[i]);
-    }
-    try {
-      bool ok = comm_->wait_finish(unsigned_reqs);
-      for (uint64_t req : reqs) cleanup_request(req);
-      return ok;
-    } catch (...) {
-      for (uint64_t req : reqs) cleanup_request(req);
-      throw;
-    }
-  }
+  // ── Inquiry ──
 
   std::string peer_transport(int peer_rank) const {
     switch (comm_->peer_transport_kind(peer_rank)) {
       case PeerTransportKind::Ipc:
         return "ipc";
-      case PeerTransportKind::Uccl:
-        return "uccl";
       case PeerTransportKind::Tcp:
         return "tcp";
+      case PeerTransportKind::Rdma:
+        return "rdma";
       default:
         return "unknown";
     }
@@ -316,71 +235,66 @@ class Communicator {
 
   bool barrier(std::string const& barrier_namespace = "default",
                int timeout_ms = -1) {
+    // Cannot be sliced safely (each barrier() call is a new seq), but
+    // releasing the GIL lets other Python threads proceed; callers
+    // wanting a hard abort should pass a finite timeout_ms.
+    nb::gil_scoped_release release;
     return comm_->barrier(barrier_namespace, timeout_ms);
   }
 
-  void send(int peer_rank, nb::handle tensor, uint32_t remote_buffer_id = 0,
-            size_t remote_offset = 0) {
-    uint64_t req =
-        isend(peer_rank, tensor, 0, 0, remote_buffer_id, remote_offset);
-    wait_finish(req);
-  }
-
-  void recv(int peer_rank, nb::handle tensor) {
-    uint64_t req = irecv(peer_rank, tensor);
-    wait_finish(req);
-  }
-
  private:
-  struct PendingTensorRequest {
-    torch::Tensor tensor;
-    uint32_t temporary_buffer_id = 0;
-  };
+  void wait_put(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
+    while (true) {
+      CompletionResult r[1];
+      size_t n = comm_->try_complete_put(r, 1);
+      if (n == 1 && r[0].rid == rid) return;
 
-  struct PinnedTensor {
-    torch::Tensor tensor;
-    uint32_t buffer_id = 0;
-    size_t bytes = 0;
-  };
-
-  std::optional<PinnedTensor> find_tensor_binding(void* ptr,
-                                                  size_t bytes) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = tensor_bindings_.find(ptr);
-    if (it == tensor_bindings_.end()) return std::nullopt;
-    if (it->second.bytes != bytes) {
-      throw std::runtime_error("registered tensor size mismatch");
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      }
     }
+  }
+
+  void wait_sig_send(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
+    while (true) {
+      CompletionResult r[1];
+      size_t n = comm_->try_complete_sig_send(r, 1);
+      if (n == 1 && r[0].rid == rid) return;
+
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      }
+    }
+  }
+
+  size_t buffer_size(uint32_t buffer_id) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = buffer_sizes_.find(buffer_id);
+    if (it == buffer_sizes_.end())
+      throw std::invalid_argument("buffer_id " + std::to_string(buffer_id) +
+                                  " not registered");
     return it->second;
   }
 
-  void track_request(uint64_t req, torch::Tensor tensor,
-                     uint32_t temporary_buffer_id) {
-    std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_[req] =
-        PendingTensorRequest{std::move(tensor), temporary_buffer_id};
-  }
-
-  void cleanup_request(uint64_t req) {
-    PendingTensorRequest pending;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = pending_requests_.find(req);
-      if (it == pending_requests_.end()) return;
-      pending = std::move(it->second);
-      pending_requests_.erase(it);
-    }
-    if (pending.temporary_buffer_id != 0) {
-      comm_->dereg_mr(pending.temporary_buffer_id);
-    }
-  }
-
   std::shared_ptr<UKernel::Transport::Communicator> comm_;
-  std::unordered_map<void*, PinnedTensor> tensor_bindings_;
-  std::unordered_map<uint32_t, void*> rdma_buffer_to_ptr_;
-  std::unordered_map<uint32_t, void*> ipc_buffer_to_ptr_;
-  std::unordered_map<uint64_t, PendingTensorRequest> pending_requests_;
-  std::atomic<uint32_t> next_temporary_buffer_id_{0x80000000u};
+  std::unordered_map<uint32_t, torch::Tensor> pinned_tensors_;
+  std::unordered_map<uint32_t, size_t> buffer_sizes_;
   mutable std::mutex mu_;
 };
 
@@ -411,23 +325,24 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("buffer_id"))
       .def("wait_ipc", &Communicator::wait_ipc, nb::arg("peer_rank"),
            nb::arg("buffer_id"))
-      .def("isend", &Communicator::isend, nb::arg("peer_rank"),
-           nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0,
-           nb::arg("remote_buffer_id") = 0, nb::arg("remote_offset") = 0)
-      .def("irecv", &Communicator::irecv, nb::arg("peer_rank"),
-           nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
-      .def("poll", &Communicator::poll, nb::arg("req"))
-      .def("release", &Communicator::release, nb::arg("req"))
-      .def("wait_finish", &Communicator::wait_finish, nb::arg("req"))
-      .def("wait_finish_multi", &Communicator::wait_finish_multi,
-           nb::arg("reqs"))
+      .def("send_put_async", &Communicator::send_put_async, nb::arg("peer"),
+           nb::arg("local_buf"), nb::arg("off") = 0, nb::arg("len") = 0,
+           nb::arg("remote_buf") = 0, nb::arg("remote_off") = 0)
+      .def("send_signal_async", &Communicator::send_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
+      .def("wait_signal_async", &Communicator::wait_signal_async,
+           nb::arg("peer"), nb::arg("tag"))
+      .def("poll", &Communicator::poll_py, nb::arg("rids"))
+      .def("signal", &Communicator::signal, nb::arg("peer"), nb::arg("tag"))
+      .def("wait_data", &Communicator::wait_data, nb::arg("peer"),
+           nb::arg("tag"), nb::arg("recv_buf"), nb::arg("off") = 0,
+           nb::arg("len") = 0)
       .def("peer_transport", &Communicator::peer_transport,
            nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
       .def("barrier", &Communicator::barrier,
            nb::arg("barrier_namespace") = "default", nb::arg("timeout_ms") = -1)
-      .def("send", &Communicator::send, nb::arg("peer_rank"), nb::arg("tensor"),
-           nb::arg("remote_buffer_id") = 0, nb::arg("remote_offset") = 0)
-      .def("recv", &Communicator::recv, nb::arg("peer_rank"),
-           nb::arg("tensor"));
+      .def("send", &Communicator::send, nb::arg("peer_rank"),
+           nb::arg("local_buffer_id"), nb::arg("remote_buffer_id") = 0,
+           nb::arg("remote_offset") = 0);
 }

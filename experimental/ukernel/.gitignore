@@ -1,8 +1,25 @@
+# Compiled objects
+*.o
+*.d
+
+# Static / shared libs
+*.a
+*.so
+
+# Python build artifacts
+py/build/
+
+# Benchmarks
+benchmarks/bench_gdrcopy
+src/device/benchmarks/bench_*
+!src/device/benchmarks/*.cu
+!src/device/benchmarks/*.h
+!src/device/benchmarks/*.md
+
+# Test binaries
 test_main
-./src/device/test_device_runtime
-./src/device/benchmarks/bench_info
-./src/device/benchmarks/bench_device_full_fifo
-./src/device/benchmarks/bench_device_fifo
-./src/device/benchmarks/bench_device_sm_fifo
-./*.so
 bench_transport
+src/ccl/test_*
+src/device/test_*
+src/device/simple_copy_test
+src/transport/test_transport_*

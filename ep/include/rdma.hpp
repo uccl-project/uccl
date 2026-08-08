@@ -1,5 +1,6 @@
 #ifndef RDMA_HPP
 #define RDMA_HPP
+#include "adaptive_sleeper.hpp"
 #include "common.hpp"
 #include "proxy_ctx.hpp"
 // clang-format off
@@ -42,6 +43,15 @@ struct RDMAConnectionInfo {
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
   // #endif
+
+#ifdef USE_LIBFABRIC_CXI
+  static constexpr uint32_t kMaxCxiEndpointName = 256;
+  uint32_t cxi_ep_name_len = 0;
+  uint8_t cxi_ep_name[kMaxCxiEndpointName] = {};
+  uint64_t cxi_main_mr_key = 0;
+  uint64_t cxi_atomic_mr_key = 0;
+  uint64_t cxi_barrier_mr_key = 0;
+#endif
 
 #ifdef USE_DMABUF
   // Chunked MR info — exchanged when the GPU buffer is split across
@@ -206,26 +216,26 @@ class WriteImm {
   // Bit layout (bits [31:30] reserved = 0 for write type):
   //   [29]    IS_COMBINE   (1 bit)
   //   [28]    BUFFER_IDX   (1 bit)
-  //   [27:19] EXPERT_IDX   (9 bits, 0..511)
-  //   [18:6]  NUM_TOKENS   (13 bits, 0..8191)
+  //   [27:18] EXPERT_IDX   (10 bits, 0..1023)
+  //   [17:6]  NUM_TOKENS   (12 bits, 0..4095)
   //   [5:0]   RANK         (6 bits, 0..63)
   static constexpr int kRANK = 0;
   static constexpr int kNUM_TOKENS = 6;
-  static constexpr int kEXPERT_IDX = 19;
+  static constexpr int kEXPERT_IDX = 18;
   static constexpr int kBUFFER_IDX = 28;
   static constexpr int kIS_COMBINE = 29;
 
   // Masks
-  static constexpr uint32_t kRANK_MASK = 0x3Fu;      // 6 bits
-  static constexpr uint32_t kTOKENS_MASK = 0x1FFFu;  // 13 bits
-  static constexpr uint32_t kEXPERT_MASK = 0x1FFu;   // 9 bits
+  static constexpr uint32_t kRANK_MASK = 0x3Fu;     // 6 bits
+  static constexpr uint32_t kTOKENS_MASK = 0xFFFu;  // 12 bits
+  static constexpr uint32_t kEXPERT_MASK = 0x3FFu;  // 10 bits
 
   explicit WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
   static WriteImm Pack(bool is_combine,
                        uint32_t buffer_idx,  // 0/1
-                       uint32_t expert_idx,  // 0..511  (9 bits)
-                       uint32_t num_tokens,  // 0..8191 (13 bits)
+                       uint32_t expert_idx,  // 0..1023 (10 bits)
+                       uint32_t num_tokens,  // 0..4095 (12 bits)
                        uint32_t my_rank) {   // 0..63   (6 bits)
     constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
     constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
@@ -237,17 +247,18 @@ class WriteImm {
            "buffer_idx overflow (1 bit)");
     if ((expert_idx & ~kEXPERT_MASK) != 0) {
       fprintf(stderr,
-              "[RDMA ERROR] expert_idx=%u exceeds 9-bit limit (max 511)\n",
+              "[RDMA ERROR] expert_idx=%u exceeds 10-bit limit (max 1023)\n",
               expert_idx);
     }
-    assert((expert_idx & ~kEXPERT_MASK) == 0 && "expert_idx overflow (9 bits)");
+    assert((expert_idx & ~kEXPERT_MASK) == 0 &&
+           "expert_idx overflow (10 bits)");
     if ((num_tokens & ~kTOKENS_MASK) != 0) {
       fprintf(stderr,
-              "[RDMA ERROR] num_tokens=%u exceeds 13-bit limit (max 8191)\n",
+              "[RDMA ERROR] num_tokens=%u exceeds 12-bit limit (max 4095)\n",
               num_tokens);
     }
     assert((num_tokens & ~kTOKENS_MASK) == 0 &&
-           "num_tokens overflow (13 bits)");
+           "num_tokens overflow (12 bits)");
     if ((my_rank & ~kRANK_MASK) != 0) {
       fprintf(stderr, "[RDMA ERROR] my_rank=%u exceeds 6-bit limit (max 63)\n",
               my_rank);
@@ -367,7 +378,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int my_rank, int num_nodes,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
-                          int thread_idx, int local_rank);
+                          int thread_idx, int device_index, int nic_local_rank);
 
 // Returns true if a cudaMalloc'd main RDMA buffer of |bytes| can be registered
 // on this node with the same path used by per_thread_rdma_init(). If false,
@@ -377,6 +388,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // Returns true if a cudaMalloc'd buffer can be registered for the atomic
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+// Returns true if at least one IB verbs device is visible on this host.
+bool has_any_nic();
 
 #ifdef USE_DMABUF
 // Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
@@ -415,7 +429,8 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode = false);
+                  int num_nodes, EPAdaptiveSleeper& adaptive_sleeper,
+                  bool use_normal_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
