@@ -35,10 +35,11 @@ __shared__ SharedData shared_data;
 
 __device__ __forceinline__ void wait_all_memory_ops() {
 #if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1250__)
-  asm volatile("s_wait_loadcnt 0\n\t"
-               "s_wait_storecnt 0\n\t"
-               "s_wait_dscnt 0\n\t"
-               "s_wait_kmcnt 0");
+  asm volatile(
+      "s_wait_loadcnt 0\n\t"
+      "s_wait_storecnt 0\n\t"
+      "s_wait_dscnt 0\n\t"
+      "s_wait_kmcnt 0");
 #else
   asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
 #endif
