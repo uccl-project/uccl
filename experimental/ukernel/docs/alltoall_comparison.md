@@ -40,7 +40,8 @@ native at 2 ranks; neither reaches native at 4/8 yet.
    does 191 / 297 / 368us at 2/4/8 ranks — but only with ranks running
    *unsynchronized* loops. The shim's collective is synchronized (every
    rank waits for all signals every iteration), so all 56 copies peak on
-   the fabric together and the CE cannot reach its raw ceiling.
+   the fabric together and the CE cannot reach its raw ceiling. Isolated
+   in the standalone CE contention microbenchmark below.
 2. **TMA to peer memory is blocked on B300**: `cp.async.bulk`
    store/load to a peer-mapped (IPC) address hangs the kernel's
    bulk-group/mbarrier wait. Local TMA works. NCCL 2.29.7 does not use
@@ -69,6 +70,75 @@ at 256M.
   levers.
 - A MoE-style comparison vs DeepEP (dispatch/combine shapes) was planned
   but not executed; revisit only if AllToAll becomes the workload focus.
+
+## CE contention microbenchmark (2026-08-10)
+
+Standalone 8-process alltoall (`bench/ce_contention.cu`, one process per
+GPU, no shim). 256MB per rank, 32MB per copy, per-peer streams, mmap
+sense-reversing barrier for the synchronized mode. `--serial 1` puts all
+7 copies on one stream (8 concurrent transfers instead of 56);
+`--sm 1` replaces `cudaMemcpyAsync` with a vectorized 512x256 copy
+kernel (LD/ST over NVLink, same pattern).
+
+Per-copy time (us), 8 ranks, iters=20 (rank 0 is the barrier leader, so
+it always enqueues a few us early — which is itself a queueing signal):
+
+| rank | CE unsync | CE sync | SM unsync | SM sync | CE serial-sync |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 58.5 | 69.2 | 49.6 | 52.0 | 53.6 |
+| 1 | 59.7 | 109.5 | 52.1 | 67.9 | 89.5 |
+| 2 | 54.1 | 141.0 | 51.2 | 82.4 | 118.2 |
+| 3 | 56.3 | 160.6 | 51.0 | 91.4 | 145.8 |
+| 4 | 53.5 | 160.8 | 49.3 | 102.9 | 155.7 |
+| 5 | 55.1 | 134.4 | 50.1 | 103.1 | 141.3 |
+| 6 | 53.9 | 148.4 | 49.9 | 98.2 | 155.7 |
+| 7 | 56.0 | 141.0 | 51.0 | 95.8 | 146.3 |
+
+2/4 ranks (same binary, 128MB/64MB per copy): CE sync ≈ CE unsync at 2
+ranks (189-191us); at 4 ranks sync degrades to 99-181us vs 98-111us
+unsync (ranks 1-3, rank 0 unaffected).
+
+Round-time aggregate (8 ranks, 1.75GB per round):
+
+| mode | avg round | aggregate |
+|---|---:|---:|
+| CE unsync | 390us | ~4.5 TB/s |
+| CE sync | 931us | ~1.9 TB/s |
+| CE serial-sync (8 concurrent) | 880us | ~2.0 TB/s |
+| SM sync | 607us | ~2.9 TB/s |
+
+Readings:
+
+1. **CE contention is real**: synchronized 8-rank peaks cost 2-3x per
+   copy vs staggered issue (69-161us vs 54-60us), and the barrier leader
+   always wins — first-enqueued transfers cut the queue.
+2. **The CE is only part of it**: the SM copy kernel under the same
+   synchronized peak drops far less (52-103us, 2.9 TB/s aggregate). The
+   fabric/NVLink startup and arbitration also cost, but the CE makes it
+   ~50% worse than an SM copy would.
+3. **Serializing per rank does not help**: 8 concurrent CE copies
+   degrade almost as much as 56. The penalty is not "too many
+   outstanding transfers", it is the synchronized start itself.
+
+Implication for AllReduce: moving the copy work from the CE to SM
+(fused copy+reduce reading peer buffers directly) targets the engine
+that survives the synchronized peak better, so it should recover most
+of the gap — but the residual fabric cost means full recovery to the
+staggered ceiling is not expected from path switching alone.
+
+Run it on the B300:
+
+```bash
+export PATH=/usr/local/cuda/bin:/usr/bin:/bin
+nvcc -O3 -arch=sm_103 -o /tmp/ce_contention bench/ce_contention.cu
+rm -f /tmp/ce_bar_* /tmp/ce_h_* /tmp/ce_rdy_*
+for r in 0 1 2 3 4 5 6 7; do
+  /tmp/ce_contention --rank $r --nranks 8 --bytes $((1<<28)) --iters 20 \
+    > /tmp/ce_r$r.log 2>&1 &
+done
+wait
+for r in 0 1 2 3 4 5 6 7; do cat /tmp/ce_r$r.log; done
+```
 
 ## History notes
 
