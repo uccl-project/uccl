@@ -78,7 +78,8 @@ GPU, no shim). 256MB per rank, 32MB per copy, per-peer streams, mmap
 sense-reversing barrier for the synchronized mode. `--serial 1` puts all
 7 copies on one stream (8 concurrent transfers instead of 56);
 `--sm 1` replaces `cudaMemcpyAsync` with a vectorized 512x256 copy
-kernel (LD/ST over NVLink, same pattern).
+kernel (LD/ST over NVLink, same pattern). Mechanism analysis and
+conclusions: [ce_contention.md](ce_contention.md).
 
 Per-copy time (us), 8 ranks, iters=20 (rank 0 is the barrier leader, so
 it always enqueues a few us early — which is itself a queueing signal):
