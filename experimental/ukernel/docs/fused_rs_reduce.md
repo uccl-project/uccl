@@ -167,3 +167,29 @@ OOP):
 2-rank is neutral by construction (n=2 has no fused tasks — pure
 plumbing check). 4-rank is neutral within run noise. The 8-rank test is
 pending a quiet machine; that is where the per-hop savings accumulate.
+
+### Device-completion flag slots + counted waits (final)
+
+The fused task's data-ready signal is a device-completion flag slot:
+each tile's task writes its own slot (plain store + `__threadfence_system`,
+no atomics — works where `HostNativeAtomicSupported=0`), and the
+receiver's host drain polls it, removing the dev-drain->enqueue->ring-write
+transitions. Slots are collision-free (`pair*K+tile`, K = plan tile bound;
+oversized plans fall back to host signals). G>1 groups are counted waits
+(`flag_count` consecutive slots must all match `base_tag+i`). A bug where
+the tag clobbered `redTypeRaw` (colliding with `ReduceType::None` in the
+low byte) was caught by the first full run and fixed with a dedicated
+`signal_tag` field.
+
+Final results (256M allreduce, LT=16 TM=8M IB=16 BLK=64, n=20, OOP):
+
+| ranks | fuse=0 | fused+flags G=1 | native |
+|---:|---:|---:|---:|
+| 2 | 590us / 455 GB/s | 619us / 433 GB/s | 529 / 507 |
+| 4 | 1142us / 235 | 1057us / 254 | 669 / 401 |
+| 8 | 2019us / 133 | 1639us / 164 | 719 / 373 |
+
+Correct at all ranks; 8-rank stress (n=100) wrong=0 (validates the flag
+write ordering under sustained load). Gain: +7.5% (4r), +18.8% (8r).
+The remaining ~920us gap at 8 ranks is the AG phase (still CE + host
+signals) and the ring critical path.
