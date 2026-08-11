@@ -97,6 +97,9 @@ struct MacroOp {
   bool fuse_copy_to_peer = false;
   BufRef copy_dst = {BufSpace::Output, 0};
   int copy_peer = -1;  // fused-copy target rank (ring next)
+  // Fused AG copy: this Put's data movement is a device copy task with
+  // an inline device-completion flag (no CE, no host signal op).
+  bool fuse_copy_flag = false;
   // The matching cross-rank sender emits a standalone Signal (not a
   // put), so this Recv's WaitSignal must be a plain one-arrival wait —
   // the lowering skips the put-fused group-count metadata.

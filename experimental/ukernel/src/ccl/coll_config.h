@@ -63,6 +63,12 @@ struct CollectiveConfig {
   // Off: the signal is a separate host-written ring Signal. Defaults on
   // when fuse_reduce_copy is on (UK_CCL_DEVICE_FLAGS=0 to disable).
   bool device_flags = false;
+  // Fused AG copy (AllReduceRing AG phase): each forward Put becomes a
+  // device copy task (read my output, write next's output) with an
+  // inline device-completion flag, removing the CE put + host signal
+  // chain from the AG per-hop path. Toggle via UK_CCL_FUSE_AG_COPY
+  // (default 0). Requires device_flags (the flag slot mechanism).
+  bool fuse_ag_copy = false;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

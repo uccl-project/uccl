@@ -270,11 +270,19 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.dst_buf_role = put_dst.role;
           put.src_off += put_src.base_off;
           put.dst_off += put_dst.base_off;
+          if (ch.fuse_copy_flag && device_flags) {
+            // Fused AG copy: the device task copies to the peer and
+            // writes the completion flag itself — no host signal op.
+            put.flag_slot = static_cast<uint32_t>(
+                static_cast<uint64_t>(ch.pair_id) * max_tiles +
+                static_cast<uint64_t>(t));
+            put.tag = put.flag_slot;
+          } else {
+            sig_group_puts.push_back(put_idx);
+            emit_group_signal(sig_group_puts, ch, op.dst_peer, t, num_tiles);
+          }
           out.push_back(put);
           put_indices.push_back(put_idx);
-
-          sig_group_puts.push_back(put_idx);
-          emit_group_signal(sig_group_puts, ch, op.dst_peer, t, num_tiles);
         }
 
       } else if (op.kind == AlgoOpKind::Recv) {

@@ -64,7 +64,7 @@ __device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
   if (args == nullptr) return;
   TaskType const t = static_cast<TaskType>(task.type_u8());
   bool const want = (t == TaskType::CollPut) ||
-                    (t == TaskType::CollReduce && args->signal_after());
+                    (t != TaskType::CollPut && args->signal_after());
   if (!want) return;
   if (t == TaskType::CollPut) {
     signal_ring_write(

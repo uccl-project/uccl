@@ -336,15 +336,23 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e && std::string(e) != "0";
   }();
   cfg.fuse_reduce_copy = kFuseReduceCopy;
+  // Fused AG copy: the AG forward is a device copy task with an inline
+  // completion flag (no CE, no host signal per hop).
+  static bool const kFuseAgCopy = [] {
+    char const* e = std::getenv("UK_CCL_FUSE_AG_COPY");
+    return e && std::string(e) != "0";
+  }();
+  cfg.fuse_ag_copy = kFuseAgCopy;
   // Device-completion flags for fused tasks (default on; the per-slot
   // plain-store protocol needs no host-native atomics). Only meaningful
-  // with fuse_reduce_copy (the wait/flag pairing lives in that path).
+  // with a fused mode (the wait/flag pairing lives there).
   static bool const kDeviceFlags = [] {
     char const* e = std::getenv("UK_CCL_DEVICE_FLAGS");
     return !e || std::string(e) != "0";
   }();
-  cfg.device_flags = kDeviceFlags && kFuseReduceCopy;
-  if (kFuseReduceCopy && !kDeviceFlags) cfg.signal_group_tiles = 1;
+  cfg.device_flags = kDeviceFlags && (kFuseReduceCopy || kFuseAgCopy);
+  if ((kFuseReduceCopy || kFuseAgCopy) && !kDeviceFlags)
+    cfg.signal_group_tiles = 1;
   CollectiveOpHandle h = 0;
   try {
     // prepare() is idempotent (deduped on shape + allocations) and

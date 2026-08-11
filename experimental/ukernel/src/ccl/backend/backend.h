@@ -64,6 +64,10 @@ inline constexpr uint8_t kCmdFlagReduce3Way = 1u << 2;
 // (copy_dst_*). The data-ready signal is a separate host-written Signal
 // op (B300 has no GPU-mapped signal ring, so the kernel cannot write it).
 inline constexpr uint8_t kCmdFlagReduceCopy = 1u << 3;
+// kCmdFlagCopySignal: the Put is a fused AG copy — a device task that
+// copies to the peer (dst_peer) and device-writes the completion flag
+// (flag_slot, tag) when done. No CE, no host signal op.
+inline constexpr uint8_t kCmdFlagCopySignal = 1u << 4;
 
 struct CmdWithId {
   Cmd cmd;

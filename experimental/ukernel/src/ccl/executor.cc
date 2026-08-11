@@ -151,6 +151,8 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   if (op.reduce_mode == 1) c.flags |= kCmdFlagReduce3Way;
   c.tag = salt_tag(op.tag, tag_epoch);
   if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
+  if (op.kind == ExecOpKind::Put && op.flag_slot != ~0u)
+    c.flags |= kCmdFlagCopySignal;
   return c;
 }
 
@@ -174,6 +176,7 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(static_cast<uint64_t>(cfg.signal_group_tiles));
   add(cfg.fuse_rs_reduce ? 1u : 0u);
   add(cfg.fuse_reduce_copy ? 1u : 0u);
+  add(cfg.fuse_ag_copy ? 1u : 0u);
   add(cfg.device_flags ? 1u : 0u);
   add(inplace ? 1u : 0u);
   add(cfg.input_split_bytes.size());
@@ -988,7 +991,13 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
              (unsigned long)c.tag, c.bytes);
     }
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
-      c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+      if (c.flags & kCmdFlagCopySignal) {
+        // Fused AG copy: must run on the device backend (the task writes
+        // the completion flag); never route to CE/RDMA.
+        c.put_path = PutPath::Device;
+      } else {
+        c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+      }
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
              rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);
       // On Nvidia consumer GPUs the PCIe BAR1 window is
@@ -1000,7 +1009,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         char const* env = std::getenv("UK_BAR1_WINDOW_MB");
         return env ? std::stoull(env) * 1024 * 1024 : 0;
       }();
-      if (c.put_path == PutPath::Device && kBar1Bytes > 0 &&
+      if (!(c.flags & kCmdFlagCopySignal) && c.put_path == PutPath::Device &&
+          kBar1Bytes > 0 &&
           c.dst_off + c.bytes > kBar1Bytes) {
         // Move the tentative charge from Device to IPC (reroute).
         tpt_metrics_[static_cast<size_t>(c.dst_peer)].device.inflight.fetch_sub(

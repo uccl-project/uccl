@@ -380,12 +380,15 @@ void emit_ring_allgather(RingTopology const& ring,
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
       // In-place: the RS-held shard (sent at step 0) lives in Tmp(0);
       // everything else was received into Output.
-      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
-                     std::move(deps), pair_id,
-                     (inplace && ring_step == 0 && !fused_rs)
-                         ? BufRef{BufSpace::Tmp, 0}
-                         : BufRef{BufSpace::Output, 0},
-                     BufRef{BufSpace::Output, 0});
+      uint32_t put_op =
+          builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
+                         send_peer, std::move(deps), pair_id,
+                         (inplace && ring_step == 0 && !fused_rs)
+                             ? BufRef{BufSpace::Tmp, 0}
+                             : BufRef{BufSpace::Output, 0},
+                         BufRef{BufSpace::Output, 0});
+      if (config.fuse_ag_copy)
+        builder.algo.chunks[put_op].fuse_copy_flag = true;
     }
 
     if (recv_bytes > 0) {
@@ -396,6 +399,8 @@ void emit_ring_allgather(RingTopology const& ring,
                                         offset, recv_peer, -1, {}, pair_id,
                                         BufRef{BufSpace::Input, 0},
                                         BufRef{BufSpace::Output, 0});
+      if (config.fuse_ag_copy)
+        builder.algo.chunks[recv_op].wait_standalone_signal = true;
       ready_ops[static_cast<size_t>(recv_owner)] = recv_op;
     }
   }

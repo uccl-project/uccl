@@ -302,6 +302,20 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       }
     }
   }
+  if (c.flags & kCmdFlagCopySignal) {
+    // Fused AG copy: the device copy task also writes the completion
+    // flag slot (peer's flag area) when it finishes.
+    if (c.flag_slot != ~0u) {
+      void* flag_area =
+          comm_ ? comm_->ipc_device_flag_ptr((int)c.dst_peer) : nullptr;
+      if (flag_area) {
+        args.src2 = static_cast<char*>(flag_area) +
+                    static_cast<size_t>(c.flag_slot) * sizeof(uint64_t);
+        args.signal_tag = c.tag;
+        args.taskFlags |= Device::TaskArgs::kFlagSignalAfter;
+      }
+    }
+  }
 
   if (!src_ok || !dst_ok || !src2_ok || !copy_dst_ok) {
     throw std::runtime_error(
