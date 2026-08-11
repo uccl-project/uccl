@@ -46,6 +46,17 @@ REDUCE_ILP ?= 4
 REDUCE_SMEM_KB ?= 4
 TMA_REDUCE ?= 0
 TMA_WARPSPEC ?= 0
+# VALIDATE=1: fast validation build — disables the TMA bulk-reduce and
+# warp-specialized paths (the expensive template instantiations behind
+# the 15-25min kernel compiles). The fused reduce/copy experiments run
+# on the vector LD/ST path, so TMA only matters for the final perf
+# build: `make VALIDATE=1 ... nccl` for quick correctness checks, drop
+# it for measurements.
+ifeq ($(VALIDATE),1)
+REDUCE_SMEM_KB ?= 4
+TMA_REDUCE ?= 0
+TMA_WARPSPEC ?= 0
+endif
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 
