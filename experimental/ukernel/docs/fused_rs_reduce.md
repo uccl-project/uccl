@@ -193,3 +193,34 @@ Correct at all ranks; 8-rank stress (n=100) wrong=0 (validates the flag
 write ordering under sustained load). Gain: +7.5% (4r), +18.8% (8r).
 The remaining ~920us gap at 8 ranks is the AG phase (still CE + host
 signals) and the ring critical path.
+
+### Fused AG copy (`UK_CCL_FUSE_AG_COPY=1`)
+
+The AG forward becomes a device copy task (read my output, write next's
+output) with an inline device-completion flag — no CE, no host signal per
+hop. Reuses the RS flag machinery (per-tile slots, counted waits,
+capacity fallback). The executor routes these puts to the device backend
+only; `UK_CCL_DEV_FIFOS=4` over-subscribes the SMs (4x64 > 148) and
+collapses, so keep the default 2 workers.
+
+Results (256M, LT=16 TM=8M IB=16 BLK=64, n=20, OOP):
+
+| config | 4r | 8r |
+|---|---:|---:|
+| fuse=0 | 1177us | 2007us |
+| fused RS | 1122us | 1560us |
+| fused RS+AG | 1129us | **1487us** |
+| native | ~669us | ~719us |
+
+The AG fusion is neutral at 4 ranks (worker serialization offsets the
+host-chain savings) and worth ~5% at 8 ranks (1560 -> 1487). LT sweep
+confirms LT=16 BLK=64 remains the fused-path optimum (deeper tiles
+regress; BLK=128 collapses).
+
+### Build speed
+
+`persistent_kernel_ops.cu` with `TMA_REDUCE=1 REDUCE_SMEM_KB=224` takes
+15-25min (the TMA bulk/warp-spec template instantiations). C++-only
+iterations relink in ~1min. Validation builds: `make VALIDATE=1 -j8 nccl`
+disables the TMA paths (the fused work runs on the vector LD/ST path);
+keep TMA_REDUCE=1 only for final perf builds.
