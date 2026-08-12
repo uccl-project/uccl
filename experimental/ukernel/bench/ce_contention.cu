@@ -120,6 +120,7 @@ int main(int argc, char** argv) {
   int iters = static_cast<int>(garg(argc, argv, "--iters", 20));
   int sm = static_cast<int>(garg(argc, argv, "--sm", 0));
   int serial = static_cast<int>(garg(argc, argv, "--serial", 0));
+  int batch = static_cast<int>(garg(argc, argv, "--batch", 0));
   CK(cudaSetDevice(rank));
   barrier_init(rank, n, "main");
 
@@ -181,26 +182,61 @@ int main(int argc, char** argv) {
 
   size_t part = total / static_cast<size_t>(n);
   auto exchange = [&] {
-    for (int p = 0; p < n; ++p) {
-      if (p == rank) continue;
-      char* dst = static_cast<char*>(recvs[static_cast<size_t>(p)]) +
-                  part * static_cast<size_t>(rank);
-      const char* src =
-          static_cast<const char*>(send) + part * static_cast<size_t>(p);
-      cudaStream_t s = serial ? st[0] : st[static_cast<size_t>(p)];
-      if (sm) {
-        copy_kernel<<<512, 256, 0, s>>>(
-            reinterpret_cast<const char4*>(src),
-            reinterpret_cast<char4*>(dst), part / sizeof(char4));
-      } else {
-        CK(cudaMemcpyAsync(dst, src, part, cudaMemcpyDeviceToDevice, s));
+    if (batch) {
+      // NCCL CE collective pattern: all peer copies in ONE cudaMemcpyBatchAsync
+      // call on a single stream (copies within a batch have no ordering
+      // guarantee; the driver is free to distribute them across CE queues).
+      std::vector<void*> dsts(static_cast<size_t>(n - 1));
+      std::vector<const void*> srcs(static_cast<size_t>(n - 1));
+      std::vector<size_t> sizes(static_cast<size_t>(n - 1));
+      int k = 0;
+      for (int p = 0; p < n; ++p) {
+        if (p == rank) continue;
+        dsts[static_cast<size_t>(k)] =
+            static_cast<char*>(recvs[static_cast<size_t>(p)]) +
+            part * static_cast<size_t>(rank);
+        srcs[static_cast<size_t>(k)] =
+            static_cast<const char*>(send) + part * static_cast<size_t>(p);
+        sizes[static_cast<size_t>(k)] = part;
+        ++k;
       }
-    }
-    if (serial) {
+      cudaMemcpyAttributes attr = {};
+      attr.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+      attr.flags = cudaMemcpyFlagPreferOverlapWithCompute;
+      size_t attrsIdxs = 0;
+#if CUDART_VERSION >= 13000
+      CK(cudaMemcpyBatchAsync(dsts.data(), srcs.data(), sizes.data(),
+                              static_cast<size_t>(n - 1), &attr, &attrsIdxs, 1,
+                              st[0]));
+#else
+      CK(cudaMemcpyBatchAsync(dsts.data(), srcs.data(), sizes.data(),
+                              static_cast<size_t>(n - 1), &attr, &attrsIdxs, 1,
+                              nullptr, st[0]));
+#endif
       CK(cudaStreamSynchronize(st[0]));
     } else {
-      for (int p = 0; p < n; ++p)
-        if (p != rank) CK(cudaStreamSynchronize(st[static_cast<size_t>(p)]));
+      for (int p = 0; p < n; ++p) {
+        if (p == rank) continue;
+        char* dst = static_cast<char*>(recvs[static_cast<size_t>(p)]) +
+                    part * static_cast<size_t>(rank);
+        const char* src =
+            static_cast<const char*>(send) + part * static_cast<size_t>(p);
+        cudaStream_t s = serial ? st[0] : st[static_cast<size_t>(p)];
+        if (sm) {
+          copy_kernel<<<512, 256, 0, s>>>(
+              reinterpret_cast<const char4*>(src),
+              reinterpret_cast<char4*>(dst), part / sizeof(char4));
+        } else {
+          CK(cudaMemcpyAsync(dst, src, part, cudaMemcpyDeviceToDevice, s));
+        }
+      }
+      if (serial) {
+        CK(cudaStreamSynchronize(st[0]));
+      } else {
+        for (int p = 0; p < n; ++p)
+          if (p != rank)
+            CK(cudaStreamSynchronize(st[static_cast<size_t>(p)]));
+      }
     }
   };
 
@@ -229,7 +265,9 @@ int main(int argc, char** argv) {
     return avg;
   };
 
-  const char* tag = serial ? (sm ? "sm-serial" : "serial") : (sm ? "sm" : "");
+  const char* tag =
+      batch ? "batch"
+            : (serial ? (sm ? "sm-serial" : "serial") : (sm ? "sm" : ""));
   measure((std::string(tag) + "-unsync").c_str(), false);
   measure((std::string(tag) + "-sync").c_str(), true);
   return 0;

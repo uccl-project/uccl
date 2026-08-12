@@ -141,6 +141,10 @@ wait
 for r in 0 1 2 3 4 5 6 7; do cat /tmp/ce_r$r.log; done
 ```
 
+`--batch` 追加在命令末尾即可跑 `cudaMemcpyBatchAsync` 单次提交的
+对照（NCCL CE collective 的提交方式），结论见
+[ce_contention.md](ce_contention.md)。
+
 ## History notes
 
 Earlier sections of this file (2026-08-04..05) chronicled a data-integrity

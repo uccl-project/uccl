@@ -60,6 +60,37 @@ engine）争用——8 rank 的集体操作同步启动时，56 个 CE 拷贝同
    每拷贝只慢 1-2 倍——不经过 CE 的窄调度入口，几十万线程的并行
    LD/ST 把排队分散成了高并行度吞吐。
 
+## 验证（2026-08-12）：batch 提交能否缓解
+
+NCCL 2.28+ 的零 SM 集合通信（CE collective）用 `cudaMemcpyBatchAsync`
+把一次 alltoall 的所有拷贝合并成单次调用（`srcAccessOrder=Stream` +
+`PreferOverlapWithCompute`，单 stream）。一个合理的猜测是：batch 提交
+让驱动把 7 个拷贝分发到多条 DMA 队列并行，从而缓解同步峰值下的争用。
+给 [`bench/ce_contention.cu`](../bench/ce_contention.cu) 加了 `--batch`
+模式（完全照抄 NCCL 的调用方式），B300 上 8 rank、256MB/rank、
+32MB/拷贝、20/50 iters，和 per-peer 提交直接对比：
+
+| 提交方式 | unsync 聚合 | sync 聚合 | 每拷贝 sync/per 衰减 | 说明 |
+|---|---:|---:|---|---|
+| per-peer（7 stream × 7 次 `cudaMemcpyAsync`） | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x | 与上次测量一致 |
+| batch（1 stream × 1 次 `cudaMemcpyBatchAsync`） | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x | 与 per-peer 无差别（复测略慢 ~3%） |
+
+两轮独立测量（20、50 iters）结论一致：**batch 提交对同步峰值争用没有
+帮助**。rank0 在两种模式下都是最快（barrier leader 先入队），其余 rank
+的排队衰减一模一样——瓶颈不是驱动提交/描述符开销，而是 CE 队列与
+fabric/接口仲裁本身。
+
+由此推断 NCCL 的 CE 路径并没有绕开这个争用：它只是用 batch 提交省掉
+驱动开销、用 multicast 同步省掉 host 往返，把"同步启动"做干净；传输
+本身的 CE/fabric 调度代价仍在（NCCL 的 CE collective 文档也承认它在
+带宽上不如 SM 路径，换取的是 SM 占用）。所以：
+
+1. **不值得把 IPC adapter 改成 batch 提交**——对争用无益，改动风险
+   白背。
+2. 如果以后要追 NCCL 的 CE 能力，值得验证的只剩 CE 无法做到的对称
+   内存/multicast（跨 rank 同步信号广播、multicast 写），这需要
+   CUDA 13 的 symm_mem 支持，普通 IPC handle 复现不了。
+
 ## 结论
 
 1. CE 争用是真实的，且是两层：单 GPU CE 排队 + fabric/接口仲裁过载。
