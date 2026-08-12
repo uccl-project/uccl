@@ -332,22 +332,31 @@ unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
   return 1;
 }
 
-bool IpcAdapter::try_write_signal_ring(int peer, uint64_t tag) {
+bool IpcAdapter::claim_signal_slot(int peer, size_t* out_slot) {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size() ||
+      comps_[static_cast<size_t>(peer)].remote == nullptr) {
+    *out_slot = static_cast<size_t>(~0u);  // path gone — drop the signal
+    return false;  // path torn down; caller should drop the signal
+  }
   auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
       reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
 
-  // Single producer per peer (the send worker), so check-then-claim is
-  // race-free: ready can only be cleared by the receiver, never set by
-  // anyone else, and no other writer can claim between check and fetch.
-  size_t idx = remote_ring->write_idx.load(std::memory_order_relaxed) &
-               (kSignalRingSize - 1);
-  if (remote_ring->slots[idx].ready.load(std::memory_order_acquire))
-    return false;  // previous lap not consumed — defer
+  // Claim FIRST (multi-producer: the device kernel's fused PutSignal
+  // path does atomicAdd_system on the same counter), then check the
+  // claimed slot's previous lap.
   uint64_t w = remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
-  idx = w & (kSignalRingSize - 1);
+  size_t idx = w & (kSignalRingSize - 1);
+  *out_slot = idx;
+  if (remote_ring->slots[idx].ready.load(std::memory_order_acquire))
+    return false;  // previous lap not consumed — caller defers this slot
+  return true;
+}
+
+void IpcAdapter::write_signal_slot(int peer, size_t idx, uint64_t tag) {
+  auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
+      reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
-  return true;
 }
 
 unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
@@ -521,7 +530,23 @@ void IpcAdapter::send_worker() {
       if (p == rank) continue;
       auto& dq = deferred_sigs_[static_cast<size_t>(p)];
       while (!dq.empty()) {
-        if (try_write_signal_ring(p, dq.front().tag)) {
+        // FIFO: claims are in slot order and the receiver consumes in
+        // slot order, so if the front is blocked every later entry is
+        // blocked too — break on the first unwritable.
+        if (comps_[static_cast<size_t>(p)].remote == nullptr) {
+          if (dq.front().publish_sig)
+            publish_sig_send_completion(dq.front().comm_rid, true);
+          dq.pop_front();
+          any = true;
+          continue;
+        }
+        auto* remote_ring =
+            reinterpret_cast<PeerSignalRing*>(
+                reinterpret_cast<char*>(comps_[static_cast<size_t>(p)].remote) +
+                sizeof(IpcDataCompletion));
+        if (!remote_ring->slots[dq.front().slot]
+                 .ready.load(std::memory_order_acquire)) {
+          write_signal_slot(p, dq.front().slot, dq.front().tag);
           if (dq.front().publish_sig)
             publish_sig_send_completion(dq.front().comm_rid, false);
           dq.pop_front();
@@ -571,11 +596,19 @@ void IpcAdapter::send_worker() {
             // ring now (data it refers to already landed — the executor
             // only enqueues the Signal after the producing op drained);
             // defer on back-pressure instead of spinning.
-            if (try_write_signal_ring(e.peer, e.tag))
+            size_t slot = 0;
+            if (claim_signal_slot(e.peer, &slot)) {
+              write_signal_slot(e.peer, slot, e.tag);
               publish_sig_send_completion(e.comm_rid, false);
-            else
-              deferred_sigs_[pidx].push_back({e.tag, e.comm_rid, true});
-            any = true;
+              any = true;
+            } else if (slot != static_cast<size_t>(~0u)) {
+              deferred_sigs_[pidx].push_back({e.tag, e.comm_rid, slot, true});
+              deferred_any = true;
+            } else {
+              // Path torn down mid-run: fail the signal completion.
+              publish_sig_send_completion(e.comm_rid, true);
+              any = true;
+            }
             continue;
           }
           size_t stream_idx =
@@ -719,8 +752,13 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
     // Fused PutSignal: the peer observes the tag only after the data
     // has landed, matching a separate Signal op's semantics.
     if (e->type == ReqType::PutSignal) {
-      if (!try_write_signal_ring(e->peer, e->tag))
-        deferred_sigs_[e->peer].push_back({e->tag, e->comm_rid, false});
+      size_t slot = 0;
+      if (claim_signal_slot(e->peer, &slot)) {
+        write_signal_slot(e->peer, slot, e->tag);
+      } else if (slot != static_cast<size_t>(~0u)) {
+        deferred_sigs_[e->peer].push_back({e->tag, e->comm_rid, slot, false});
+      }
+      // slot == ~0 (path gone): drop — the put completion already fired.
     }
   }
 }

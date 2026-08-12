@@ -877,6 +877,7 @@ unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
 
 bool Communicator::put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
                                  size_t src_off, size_t dst_off, size_t bytes,
+                                 PeerTransportKind transport,
                                  void** local_ptr, void** remote_ptr) {
   if (bytes == 0) return false;
   uint64_t gen = put_cache_gen_.load(std::memory_order_relaxed);
@@ -887,8 +888,13 @@ bool Communicator::put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
     if (it == put_cache_.end() || it->second.gen != gen) return false;
     e = it->second;
   }
+  // The cache only holds IPC entries, and only matches a request for the
+  // same kind — a later explicit RDMA/TCP request for the same
+  // (peer, src, dst) must not be silently served over IPC.
   if (e.kind != PeerTransportKind::Ipc || e.adapter == nullptr ||
       e.remote_base == nullptr)
+    return false;
+  if (transport != PeerTransportKind::Unknown && e.kind != transport)
     return false;
   if (src_off > e.local_len || bytes > e.local_len - src_off) return false;
   *local_ptr = static_cast<char*>(e.local_base) + src_off;
@@ -917,7 +923,7 @@ bool Communicator::send_put_async_with_rid(int peer, uint32_t src_buf,
   void* fast_local = nullptr;
   void* fast_remote = nullptr;
   if (put_cache_hit(peer, src_buf, dst_buf, src_off, dst_off, bytes,
-                    &fast_local, &fast_remote)) {
+                    transport, &fast_local, &fast_remote)) {
     return ipc_adapter_->send_put_async(peer, fast_local, src_buf, fast_remote,
                                         dst_buf, bytes, rid);
   }
@@ -995,7 +1001,7 @@ bool Communicator::send_put_signal_async_with_rid(
   void* fast_local = nullptr;
   void* fast_remote = nullptr;
   if (put_cache_hit(peer, src_buf, dst_buf, src_off, dst_off, bytes,
-                    &fast_local, &fast_remote)) {
+                    transport, &fast_local, &fast_remote)) {
     return ipc_adapter_->send_put_signal_async(
         peer, fast_local, src_buf, fast_remote, dst_buf, bytes, tag, rid);
   }

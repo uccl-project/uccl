@@ -112,17 +112,19 @@ class IpcAdapter final : public TransportAdapter {
   // Non-blocking DataWait completion check (recv_worker polls all
   // outstanding waits each iteration instead of blocking on one).
   bool recv_one_poll(RingElem const* e);
-  // Non-blocking signal ring write. The send worker is the ONLY writer
-  // per peer (plain signals and fused PutSignal both route through it),
-  // so the claim needs no multi-producer protocol. Returns false when
-  // the previous lap of the slot is still unconsumed — the caller defers
-  // the write and retries next loop instead of spinning (a stalled peer
-  // must never block other peers' puts).
-  bool try_write_signal_ring(int peer, uint64_t tag);
+  // Multi-producer-safe signal ring claim: fetch_add on the shared
+  // write_idx (the device kernel's fused PutSignal path claims the same
+  // counter), then check the claimed slot. Returns true when the slot
+  // can be written now (previous lap consumed); on false the claim is
+  // MADE and the caller must complete it later via write_signal_slot
+  // (deferred) — the slot index is returned through `out_slot`.
+  bool claim_signal_slot(int peer, size_t* out_slot);
+  void write_signal_slot(int peer, size_t idx, uint64_t tag);
 
   struct DeferredSignal {
     uint64_t tag;
     unsigned comm_rid;
+    size_t slot;  // claimed ring slot; write when its previous lap clears
     // Plain Signal ops own a sig_send completion; a fused PutSignal's
     // rid already completed on the put ring, so its deferred write is a
     // side effect only (dropped at shutdown, never completed again).

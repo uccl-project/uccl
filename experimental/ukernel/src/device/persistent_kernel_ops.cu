@@ -23,10 +23,11 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
 }
 
 // Fused PutSignal: write the tag into the peer's shared-memory signal
-// ring (zero-copy host mapping). Same producer protocol as the host
-// side (IpcAdapter::write_signal_ring): atomic claim, per-slot ready
-// flag, so GPU workers and host producers can share the ring. The
-// receiver always polls from the CPU — nothing ever waits on the GPU.
+// ring (zero-copy host mapping). Shares the producer protocol with the
+// host IPC send worker (IpcAdapter::claim_signal_slot): both claim the
+// same atomic write_idx (device: atomicAdd_system, host: fetch_add),
+// then check their claimed slot's per-slot ready flag. The receiver
+// always polls from the CPU — nothing ever waits on the GPU.
 __device__ __forceinline__ void signal_ring_write(
     Transport::PeerSignalRingDevice* ring, uint64_t tag) {
   unsigned long long w = atomicAdd_system(

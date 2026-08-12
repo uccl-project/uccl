@@ -248,6 +248,7 @@ class Communicator {
   }
   bool put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
                      size_t src_off, size_t dst_off, size_t bytes,
+                     PeerTransportKind transport,
                      void** local_ptr, void** remote_ptr);
   void put_cache_fill(int peer, uint32_t src_buf, uint32_t dst_buf,
                       PeerTransportKind kind, TransportAdapter* adapter,
