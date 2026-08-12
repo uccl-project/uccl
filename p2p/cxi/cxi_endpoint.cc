@@ -78,14 +78,14 @@ size_t cxi_size_env(char const* name, size_t fallback) {
 }
 
 bool is_cuda_pointer(void* ptr, int& cuda_device) {
-  cudaPointerAttributes attrs{};
-  cudaError_t err = cudaPointerGetAttributes(&attrs, ptr);
-  if (err != cudaSuccess) {
-    cudaGetLastError();
+  gpuPointerAttribute_t attrs{};
+  gpuError_t err = gpuPointerGetAttributes(&attrs, ptr);
+  if (err != gpuSuccess) {
+    gpuGetLastError();
     return false;
   }
-  if (attrs.type == cudaMemoryTypeDevice ||
-      attrs.type == cudaMemoryTypeManaged) {
+  if (gpuMemTypeOf(attrs) == gpuMemoryTypeDevice ||
+      gpuMemTypeOf(attrs) == gpuMemoryTypeManaged) {
     cuda_device = attrs.device;
     return true;
   }

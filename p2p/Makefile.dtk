@@ -17,6 +17,7 @@ USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
 
 # Compiler and flags
 HIP_HOME ?= /opt/dtk
+LIBFABRIC_HOME ?= /opt/libfabric
 HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME ?= /usr/lib
@@ -46,7 +47,7 @@ endif
 # selects DTK-specific fallbacks (no DMA-BUF export, no hipStreamLegacy).
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
 	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
-	-I$(HIP_INC) \
+	-I$(HIP_INC) -I$(LIBFABRIC_HOME)/include \
 	-I${CONDA_LIB_HOME}/../include \
 	$(DIETGPU_INC) $(CXXFLAGS_DIETGPU) \
 	-D__HIP_PLATFORM_AMD__ -D__UCCL_DTK__ \
@@ -114,14 +115,17 @@ P2P_IMPL_SOURCES := \
 	rdma/rdma_endpoint.cc \
 	util/seq_num.cc \
 	rdma/providers/efa_data_channel_impl.cc \
-	rdma/providers/ib_data_channel_impl.cc
+	rdma/providers/ib_data_channel_impl.cc \
+	cxi/cxi_endpoint.cc
 P2P_IMPL_OBJECTS := $(P2P_IMPL_SOURCES:.cc=.o)
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc $(P2P_IMPL_SOURCES)
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(P2P_IMPL_OBJECTS)
 
 # dlsym wrapper objects
-DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc
-DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/efadv_dl.cc \
+	cxi/fabric_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/efadv_dl.o \
+	cxi/fabric_dl.o
 
 OBJECTS := $(SOURCES:.cc=.o)
 

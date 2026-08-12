@@ -24,12 +24,12 @@ namespace Transport {
 class TransportAdapter;
 class IpcAdapter;
 class TcpTransportAdapter;
-class UcclTransportAdapter;
 class RdmaTransportAdapter;
 
 struct CompletionResult {
   unsigned rid;
   bool failed;
+  uint32_t user_ctx;
 };
 
 struct SignalCompletion {
@@ -37,6 +37,7 @@ struct SignalCompletion {
   uint64_t tag;
   int peer;
   bool failed;
+  uint32_t user_ctx;
 };
 
 class Communicator {
@@ -46,6 +47,8 @@ class Communicator {
       std::shared_ptr<CommunicatorConfig> config =
           std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env()));
   ~Communicator();
+
+  void stop_transports();
 
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
@@ -57,7 +60,7 @@ class Communicator {
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
 
-  // ── Async data / signal / wait (thin wrappers over adapter) ──
+  // Async data / signal / wait (thin wrappers over adapter)
   //
   // One-sided transports (IPC, RDMA):
   //   send_put_async() writes directly into remote memory. No matching wait
@@ -75,11 +78,11 @@ class Communicator {
       int peer, uint64_t tag,
       PeerTransportKind transport = PeerTransportKind::Unknown);
 
-  // ── Async signal wait (tag-based matching via Communicator table) ──
+  // Async signal wait (tag-based matching via Communicator table)
   // wait_signal_async(peer, tag): non-blocking, returns rid immediately.
   // Matching is done in on_signal_received() (called by RdmaTransportAdapter
   // poll_loop and by drain_ipc_signals for IPC).
-  // Completions are dequeued via try_complete_signals().
+  // Completions are dequeued via try_complete_sig_wait().
   unsigned wait_signal_async(
       int peer, uint64_t tag,
       PeerTransportKind transport = PeerTransportKind::Unknown);
@@ -88,14 +91,66 @@ class Communicator {
       int peer, uint64_t tag, uint32_t recv_buf, size_t off, size_t len,
       PeerTransportKind transport = PeerTransportKind::Unknown);
 
+  // Variants accepting pre-allocated rid.
+  bool send_put_async_with_rid(int peer, uint32_t src_buf, size_t src_off,
+                               uint32_t dst_buf, size_t dst_off, size_t bytes,
+                               PeerTransportKind transport, unsigned rid,
+                               uint32_t qp_affinity = ~0u);
+  bool send_signal_async_with_rid(int peer, uint64_t tag,
+                                  PeerTransportKind transport, unsigned rid);
+  bool wait_signal_async_with_rid(int peer, uint64_t tag,
+                                  PeerTransportKind transport, unsigned rid,
+                                  uint32_t count = 1);
+
+  // Fused put+signal: once the data lands, the peer observes `tag` as a
+  // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
+  // for rid. Returns false when the effective transport cannot fuse —
+  // callers then fall back to a separate put + signal.
+  // qp_affinity (RDMA only, ~0u = auto): pins the op to
+  // (qp_affinity % num_qps); puts of one signal group must share a QP.
+  bool send_put_signal_async_with_rid(int peer, uint32_t src_buf,
+                                      size_t src_off, uint32_t dst_buf,
+                                      size_t dst_off, size_t bytes,
+                                      PeerTransportKind transport, uint64_t tag,
+                                      unsigned rid, uint32_t qp_affinity = ~0u);
+  // Whether the effective transport to `peer` supports fused PutSignal.
+  bool can_fuse_put_signal(int peer, PeerTransportKind transport);
+  // GPU-visible address of the peer's IPC signal ring (zero-copy host
+  // mapping), or nullptr when unavailable. Device kernels write fused
+  // PutSignal tags through it.
+  void* ipc_signal_ring_device_ptr(int peer) const;
+
+  // rid encoding: backend-path rids carry a 2-bit tag in the top bits
+  // (bit 30 = SignalBackend, bit 31 = TransportBackend); the low 30 bits are
+  // the backend's be_idx, so completion paths decode user_ctx directly
+  // without touching rid_to_user_ctx_. Legacy rids from alloc_rid() stay in
+  // [1, 2^30) and keep using the map.
+  static constexpr unsigned kRidTagSignal = 1u << 30;
+  static constexpr unsigned kRidTagTransport = 1u << 31;
+  static constexpr unsigned kRidTagMask = 3u << 30;
+  static constexpr unsigned kRidBeIdxMask = (1u << 30) - 1;
+
+  unsigned alloc_rid() {
+    // Legacy rids must be nonzero (0 means failure) and clear of the
+    // backend tag bits.
+    unsigned r =
+        next_rid_.fetch_add(1, std::memory_order_relaxed) & kRidBeIdxMask;
+    if (r == 0)
+      r = next_rid_.fetch_add(1, std::memory_order_relaxed) & kRidBeIdxMask;
+    return r;
+  }
+  void record_user_ctx(unsigned rid, uint32_t user_ctx);
+  uint32_t consume_user_ctx(unsigned rid);
+
   // C++ advanced API, not exposed to Python binding.
-  size_t try_complete(CompletionResult* results, size_t max);
-  // C++ advanced API, not exposed to Python binding.
-  size_t try_complete_signals(SignalCompletion* events, size_t max);
+  size_t try_complete_put(CompletionResult* results, size_t max);
+  size_t try_complete_sig_wait(SignalCompletion* events, size_t max);
+  size_t try_complete_sig_send(CompletionResult* results, size_t max);
 
   // Returns number of completed rids from the input array.
   // Writes completed rids back into the first N positions of the array.
-  // For each rid: checks both completion_ring_ and signal_ring_.
+  // For each rid: checks both put_completion_ring_ and
+  // sig_wait_completion_ring_.
   size_t poll(unsigned* rids, size_t count);
 
   void set_oob_namespace(std::string ns);
@@ -121,14 +176,16 @@ class Communicator {
                                       size_t bytes, void** out_ptr,
                                       int* out_device_idx);
 
-  // ── Convenience: register local buffer (MR + IPC) ──
+  // Convenience: register local buffer (MR + IPC)
   bool register_buffer(uint32_t buffer_id, void* ptr, size_t len);
 
-  // ── Convenience: resolve remote buffer (wait MR + wait IPC) ──
+  // Convenience: resolve remote buffer (wait MR + wait IPC)
   bool resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                              int timeout_ms = 30000);
 
   int peer_gpu_idx(int rank) const;
+
+  void re_register_all_mrs() { register_existing_local_mrs_with_rdma(); }
 
  private:
   struct ResolvedPeer {
@@ -152,10 +209,7 @@ class Communicator {
     std::unordered_map<PeerTransportKind, PeerPathState> paths;
   };
 
-  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
   RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta);
-  bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
-                               UCCLP2PInfo* out_remote_p2p_info);
   bool exchange_rdma_peer_info(int rank, RdmaTransportAdapter& rdma_adapter,
                                RdmaP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
@@ -179,9 +233,7 @@ class Communicator {
   void on_signal_received(int peer_rank, uint64_t tag);
   void drain_ipc_signals();
 
-  void register_existing_local_mrs_with_uccl();
   void register_existing_local_mrs_with_rdma();
-  bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
   bool ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
 
   std::string ipc_open_error_message(int owner_rank, uint32_t buffer_id,
@@ -199,16 +251,20 @@ class Communicator {
   MRManager mr_manager_;
   IPCManager ipc_manager_;
 
-  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
-  jring_t* completion_ring_ = nullptr;
-  jring_t* signal_ring_ = nullptr;
+  jring_t* put_completion_ring_ = nullptr;
+  jring_t* sig_wait_completion_ring_ = nullptr;
+  jring_t* sig_send_completion_ring_ = nullptr;
   std::atomic<uint32_t> next_rid_{1};
 
-  // Signal matching: peer → tag → vector<rid>
-  std::unordered_map<int, std::unordered_map<uint64_t, std::vector<unsigned>>>
+  // Signal matching: peer → tag → waiters. A waiter carries a remaining
+  // arrival count: fused signal groups deliver one tag per tile, so the
+  // wait completes only after `remaining` arrivals.
+  std::unordered_map<
+      int,
+      std::unordered_map<uint64_t, std::vector<std::pair<unsigned, uint32_t>>>>
       pending_signal_waits_;
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.
@@ -217,6 +273,9 @@ class Communicator {
   // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
   mutable std::mutex signal_waits_mu_;
+
+  std::unordered_map<unsigned, uint32_t> rid_to_user_ctx_;
+  mutable std::mutex user_ctx_mu_;
 
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;
@@ -231,9 +290,6 @@ class Communicator {
       remote_buffer_to_mr_;
   std::unordered_map<uint32_t, IPCItem> local_buffer_to_ipc_;
 
-  mutable std::mutex uccl_reg_mu_;
-  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
-  std::unordered_set<uint64_t> uccl_registered_mrs_;
   mutable std::mutex rdma_reg_mu_;
   std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> rdma_registered_mrs_;
