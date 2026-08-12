@@ -52,9 +52,10 @@ task done → dev drain → enqueue signal → host ring write → peer poll →
 ```
 
 Every transition costs host scheduling/polling time. Signal aggregation
-(G) was flat; drain busy-polling was tried and reverted. The remaining
-cuts: **device-completion flags** (device writes a slot, host polls it —
-no atomics needed; removes dev-drain + enqueue + ring-write), and fewer
+(G) was flat; the drain loop busy-polls (pauses, no scheduler yield)
+while waits are pending and only yields when idle. The remaining cuts:
+**device-completion flags** (device writes a slot, host polls it — no
+atomics needed; removes dev-drain + enqueue + ring-write), and fewer
 hops via deeper pipelining.
 
 ## Attempt log (verdicts)
@@ -68,7 +69,7 @@ hops via deeper pipelining.
 | Fused AG copy (`UK_CCL_FUSE_AG_COPY`) | neutral at 4r, ~5% at 8r (1560 -> 1487us). Shipped. |
 | AG via standalone device puts (`UK_CCL_PUT_PATH=device` on AG) | regresses (worker serializes copies with reduces). AG fuses instead. |
 | Signal aggregation (G=2/4 at LT=16) | flat. Signal COUNT is not the lever. |
-| Drain busy-poll (conditional, has_pending) | tried, reverted (2-rank regression / CPU load). |
+| Drain busy-poll (conditional on pending waits) | shipped: spins on pauses while waits are pending, yields when idle; cuts 8-rank signal-drain latency. |
 | LT sweep (pipeline depth) | LT=16 best; finer tiles regress — per-tile host cost caps depth. |
 | REDUCE_ILP=16 | +24% per block on reduce bench; shim 95% of native at BLK=64; cannot reach native at <=32 blocks alone. |
 | TMA bulk reduce (TMA_REDUCE=1, 224KB smem) | 99% of native at BLK=32 (509.5 GB/s); tail-chunk bug fixed; opt-in pending broader validation. |
