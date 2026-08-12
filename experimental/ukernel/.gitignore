@@ -9,6 +9,10 @@
 # Python build artifacts
 py/build/
 
+# Top-level benchmark binaries (built from bench/)
+bench/bench_transport
+bench/bench_gdrcopy
+
 # Benchmarks
 benchmarks/bench_gdrcopy
 src/device/benchmarks/bench_*

@@ -96,12 +96,12 @@ OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
 
 # Benchmark files
-BENCH_TRANSPORT_SRC := benchmarks/bench_transport.cc
+BENCH_TRANSPORT_SRC := bench/bench_transport.cc
 BENCH_TRANSPORT_OBJ := $(BENCH_TRANSPORT_SRC:.cc=.o)
 BENCH_TRANSPORT_BIN := bench_transport
-BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
+BENCH_GDRCOPY_SRC := bench/bench_gdrcopy.cc
 BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
-BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
+BENCH_GDRCOPY_BIN := bench/bench_gdrcopy
 BENCH_GDRCOPY_CXXFLAGS := $(CXXFLAGS) -DENABLE_CUDA
 BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/include -I/usr/include/$(GCC_MACHINE) -I/usr/local/include -I../../include
 BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
@@ -170,7 +170,7 @@ device_bench:
 clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
 	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
-	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
+	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d bench/*.d
 	find src -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 	rm -f src/ccl/test_components
 	$(MAKE) -C src/ccl clean
