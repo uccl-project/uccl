@@ -51,6 +51,25 @@ pack_is_token_in_nvl_ranks(bool const* values) {
 
 int get_source_meta_bytes() { return sizeof(SourceMeta); }
 
+// Largest hidden_size the internode TMA sender-warp staging buffer is sized
+// for. The dispatch/combine kernels stage each token through a per-sender-warp
+// buffer of kNumTMABytesPerWarp bytes and assert
+//   num_bytes_per_token + sizeof(uint64_t) <= kNumTMABytesPerWarp,
+// where num_bytes_per_token ~= hidden * sizeof(bf16) + SourceMeta + scales +
+// topk (combine always stages bf16, even when dispatch is fp8). hidden=8192 ->
+// 16384 B of bf16 payload alone overflows a 16384-byte buffer, so size it for
+// hidden up to 8192 with headroom for the metadata and the 8-byte TMA mbarrier.
+// 20480 keeps smem within H200's 227 KB opt-in limit:
+//   dispatch: 20480 * NUM_MAX_NVL_PEERS     = 160 KB
+//   combine : max(20480 * 8, 9248 * 16)     = 160 KB
+static constexpr int kMaxSupportedHidden = 8192;
+static constexpr int kNumTMABytesPerWarp = 20480;
+static constexpr int kMaxBf16TokenBytes =
+    kMaxSupportedHidden * static_cast<int>(sizeof(nv_bfloat16)) +
+    static_cast<int>(sizeof(uint64_t));
+EP_STATIC_ASSERT(kNumTMABytesPerWarp >= kMaxBf16TokenBytes,
+                 "TMA sender-warp buffer too small for max supported hidden");
+
 __host__ __device__ __forceinline__ int get_num_bytes_per_token(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights) {
   return static_cast<int>(
@@ -1663,7 +1682,6 @@ void dispatch(
     bool low_latency_mode, uint64_t const* d2h_channel_addrs,
     int num_d2h_channel_addrs, void* atomic_buffer_ptr) {
   constexpr int kNumDispatchRDMASenderWarps = 7;
-  constexpr int kNumTMABytesPerWarp = 16384;
   constexpr int smem_size = kNumTMABytesPerWarp * NUM_MAX_NVL_PEERS;
 
   // Make sure never OOB
@@ -3038,7 +3056,7 @@ void combine(cudaDataType_t type, void* combined_x,
              void* atomic_buffer_ptr) {
   // NOTE(MaoZiming): I changed here from 24 to 16.
   constexpr int kNumCombineForwarderWarps = 16;
-  constexpr int kNumTMABytesPerSenderWarp = 16384;
+  constexpr int kNumTMABytesPerSenderWarp = kNumTMABytesPerWarp;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
 
 #if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
