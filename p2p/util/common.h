@@ -62,11 +62,13 @@ typedef struct AcceptedMeta {
 // (host byte order, like every other struct on these channels).
 static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
 static constexpr size_t NOTIFY_MSG_HDR_SIZE = 4 * sizeof(uint32_t);
-// Sanity bound on a serialized notification frame, enforced on both sides of
-// the NCCL control socket: the receiver allocates its buffer from the
-// peer-advertised length before any payload arrives, so a corrupt header must
-// not be able to trigger an arbitrarily large allocation. Generous relative
-// to real notification payloads (KBs).
+// Sanity bound on a serialized notification frame. Enforced once on the send
+// side, in uccl_engine_send_notif, so no transport can emit a frame whose
+// length wraps the u32 header fields or the OOB framing prefix; and on the
+// receive side of the NCCL control socket, which allocates its buffer from
+// the peer-advertised length before any payload arrives, so a corrupt header
+// must not be able to trigger an arbitrarily large allocation. Generous
+// relative to real notification payloads (KBs).
 static constexpr size_t NOTIFY_MSG_MAX_FRAME_BYTES = 64ull << 20;
 // Returned when no operation was posted, but retrying may succeed. CXI uses
 // this explicit sentinel; non-CXI paths keep the older -1 retry behavior in

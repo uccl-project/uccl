@@ -595,6 +595,19 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   oob_msg.name = notify_msg->name;
   oob_msg.msg = notify_msg->msg;
 
+  // Single choke point for the frame cap: every transport (OOB TCP, NCCL
+  // control socket, CXI) sends through this function, and both the wire
+  // header and the OOB framing prefix carry u32 lengths, so an unchecked
+  // frame >4 GiB would silently wrap and desync the stream.
+  size_t const frame_size =
+      NOTIFY_MSG_HDR_SIZE + oob_msg.name.size() + oob_msg.msg.size();
+  if (frame_size > NOTIFY_MSG_MAX_FRAME_BYTES) {
+    std::cerr << "Notification frame too large (" << frame_size
+              << " bytes, max " << NOTIFY_MSG_MAX_FRAME_BYTES << ")"
+              << std::endl;
+    return -1;
+  }
+
   // Same-process local connection: push notification directly to the local
   // list — no network path needed regardless of transport.
   if (conn->same_process) {
@@ -616,9 +629,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
       return -1;
     }
     std::string payload = serialize_notify_msg(oob_msg);
-    return oob_client->send_meta(conn->oob_conn_key, payload)
-               ? static_cast<int>(payload.size())
-               : -1;
+    return oob_client->send_meta(conn->oob_conn_key, payload) ? 0 : -1;
   }
 
   if (is_nccl_transport()) {
@@ -640,7 +651,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   std::string payload = serialize_notify_msg(oob_msg);
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
 
-  return ok ? static_cast<int>(payload.size()) : -1;
+  return ok ? 0 : -1;
 }
 
 // Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).

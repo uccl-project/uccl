@@ -819,13 +819,10 @@ int NCCLEndpoint::send_notification(uint64_t peer_id,
   Conn* conn = it->second.get();
 
   // Send notification header followed by the serialized payload; the header
-  // carries the payload size so the receiver can size its read exactly.
+  // carries the payload size so the receiver can size its read exactly. The
+  // frame cap is enforced upstream in uccl_engine_send_notif, the sole caller
+  // path, so the u32 narrowing below cannot truncate.
   std::string payload = serialize_notify_msg(notification);
-  if (payload.size() > NOTIFY_MSG_MAX_FRAME_BYTES) {
-    std::cerr << "[nccl] notification frame too large (" << payload.size()
-              << " bytes), refusing to send" << std::endl;
-    return -1;
-  }
   CtrlMsg msg{};
   msg.type = kNotification;
   msg.size = static_cast<uint32_t>(payload.size());
