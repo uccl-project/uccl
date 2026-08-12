@@ -198,7 +198,10 @@ class Communicator {
 
   int peer_gpu_idx(int rank) const;
 
-  void re_register_all_mrs() { register_existing_local_mrs_with_rdma(); }
+  void re_register_all_mrs() {
+    put_cache_bump();  // MR keys/pointers may change
+    register_existing_local_mrs_with_rdma();
+  }
 
   // True when any signal/flag wait is parked (used by the executor's
   // drain_signal_loop to busy-poll instead of yielding — the signal
@@ -208,6 +211,48 @@ class Communicator {
   bool has_pending_signal_waits() const;
 
  private:
+  // IPC put fast-path cache: a resolved (peer, src_buf, dst_buf) entry
+  // lets the steady-state put skip the per-op path resolution (two
+  // peer_mu_ acquisitions, resource_mu_ MR lookup, IPCManager remote_mu_
+  // lookup, and per-peer seq mutex). The entry is valid only while the
+  // generation matches: any path/buffer registration change bumps it and
+  // the next put re-resolves on the slow path.
+  struct PutFastKey {
+    int peer;
+    uint32_t src_buf;
+    uint32_t dst_buf;
+    bool operator==(PutFastKey const& o) const {
+      return peer == o.peer && src_buf == o.src_buf && dst_buf == o.dst_buf;
+    }
+  };
+  struct PutFastKeyHash {
+    size_t operator()(PutFastKey const& k) const {
+      return (static_cast<size_t>(k.peer) * 0x9E3779B1u) ^
+             (static_cast<size_t>(k.src_buf) << 20) ^
+             static_cast<size_t>(k.dst_buf);
+    }
+  };
+  struct PutFastEntry {
+    uint64_t gen = 0;
+    PeerTransportKind kind = PeerTransportKind::Unknown;
+    TransportAdapter* adapter = nullptr;
+    void* local_base = nullptr;
+    size_t local_len = 0;
+    void* remote_base = nullptr;  // remote buffer base; dst_off added per call
+  };
+  mutable std::mutex put_cache_mu_;
+  std::unordered_map<PutFastKey, PutFastEntry, PutFastKeyHash> put_cache_;
+  std::atomic<uint64_t> put_cache_gen_{1};
+  void put_cache_bump() {
+    put_cache_gen_.fetch_add(1, std::memory_order_relaxed);
+  }
+  bool put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
+                     size_t src_off, size_t dst_off, size_t bytes,
+                     void** local_ptr, void** remote_ptr);
+  void put_cache_fill(int peer, uint32_t src_buf, uint32_t dst_buf,
+                      PeerTransportKind kind, TransportAdapter* adapter,
+                      void* local_base, size_t local_len, void* remote_base);
+
   struct ResolvedPeer {
     CommunicatorMeta local_meta;
     CommunicatorMeta remote_meta;
@@ -288,7 +333,7 @@ class Communicator {
 
   // Overflow buffer for sig_wait completions when the ring is full.
   std::mutex sig_wait_overflow_mu_;
-  std::vector<SignalCompletion> sig_wait_overflow_;
+  std::deque<SignalCompletion> sig_wait_overflow_;
   std::atomic<uint32_t> next_rid_{1};
 
   // Signal matching: peer → tag → waiters. A waiter carries a remaining
@@ -331,10 +376,18 @@ class Communicator {
     uint32_t matched;
   };
   std::vector<FlagWait> pending_flag_waits_;
-  mutable std::mutex signal_waits_mu_;
+  // Per-peer signal matching locks: arrivals/waits for one peer never
+  // block another peer's registration or matching (alltoall fan-out
+  // touches every peer from the same enqueue thread). The global
+  // pending-wait counter stays atomic.
+  mutable std::vector<std::mutex> peer_sig_mu_;
+  // Device-flag waits and TCP signal rids are not per-peer-keyed, so
+  // they get their own locks.
+  mutable std::mutex flag_waits_mu_;
+  mutable std::mutex tcp_sig_mu_;
   // Number of parked waits (tag map + imm FIFO + flag slots + TCP rids)
-  // that have not completed yet. Maintained under signal_waits_mu_ but
-  // read lock-free by has_pending_signal_waits().
+  // that have not completed yet. Maintained under the per-peer/flag/tcp
+  // locks but read lock-free by has_pending_signal_waits().
   std::atomic<uint32_t> pending_waits_count_{0};
 
   std::unordered_map<unsigned, uint32_t> rid_to_user_ctx_;

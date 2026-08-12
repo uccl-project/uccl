@@ -40,12 +40,16 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
                        int local_gpu_idx)
-    : seqs_(comm->world_size(), std::array<uint64_t, 2>{1, 1}),
+    : seqs_(comm->world_size()),
       ns_(std::move(ring_namespace)),
       dir_state_(comm->world_size()),
       comps_(comm->world_size()),
       comm_(comm),
       gpu_id_(local_gpu_idx) {
+  for (auto& s : seqs_) {
+    s[0].store(1, std::memory_order_relaxed);
+    s[1].store(1, std::memory_order_relaxed);
+  }
   send_rings_.resize(comm->world_size(), nullptr);
   for (int r = 0; r < comm->world_size(); ++r) {
     if (r == comm->rank()) continue;
@@ -53,6 +57,7 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
         create_ring(sizeof(RingElem), kTaskRingSize);
   }
   recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
+  deferred_sigs_.resize(comm->world_size());
   for (size_t r = 0; r < send_rings_.size(); ++r)
     if (static_cast<int>(r) != comm->rank() && send_rings_[r] == nullptr)
       throw std::runtime_error("IpcAdapter failed to allocate send ring");
@@ -212,6 +217,11 @@ void IpcAdapter::close_comp(int peer_rank) {
     pc.local = nullptr;
   }
   if (pc.remote) {
+    // Teardown contract: the caller must guarantee no device kernel can
+    // write the flag area after this point. In the shim, ncclCommDestroy
+    // tears down the executor first (DeviceBackend stops the persistent
+    // worker), and only then is the Communicator destroyed — so the
+    // gpuHostUnregister below never races a live writer.
     // Unregister the CUDA host-mapped region BEFORE unmapping, and unmap
     // the FULL mapping (the old code unmapped only the leading page —
     // sizeof(IpcDataCompletion) rounds up to one page — leaking the
@@ -275,20 +285,22 @@ bool IpcAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
 }
 
 uint64_t IpcAdapter::next_send_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = comm_->rank();
   int dst = rank;
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = seqs_[rank][dir]++;
+  uint64_t counter =
+      seqs_[static_cast<size_t>(rank)][dir].fetch_add(1,
+                                                      std::memory_order_relaxed);
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
 uint64_t IpcAdapter::next_recv_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = rank;
   int dst = comm_->rank();
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = seqs_[rank][dir]++;
+  uint64_t counter =
+      seqs_[static_cast<size_t>(rank)][dir].fetch_add(1,
+                                                      std::memory_order_relaxed);
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
@@ -320,26 +332,19 @@ unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
   return 1;
 }
 
-bool IpcAdapter::write_signal_ring(int peer, uint64_t tag) {
-  // Inline fast path: write tag to remote peer's signal ring in SHM.
+bool IpcAdapter::try_write_signal_ring(int peer, uint64_t tag) {
   auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
       reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
 
-  // Multi-producer claim: plain signals come from the executor's enqueue
-  // thread, fused PutSignal writes come from the send worker. Claim with
-  // fetch_add; the per-slot ready flag tolerates out-of-order publishes
-  // (the consumer stops at the first unready slot and catches up later).
-  // In-flight claims are bounded by the producer count (≤ 2), far below
-  // the ring size, so a new claim can never lap a stalled publisher.
+  // Single producer per peer (the send worker), so check-then-claim is
+  // race-free: ready can only be cleared by the receiver, never set by
+  // anyone else, and no other writer can claim between check and fetch.
+  size_t idx = remote_ring->write_idx.load(std::memory_order_relaxed) &
+               (kSignalRingSize - 1);
+  if (remote_ring->slots[idx].ready.load(std::memory_order_acquire))
+    return false;  // previous lap not consumed — defer
   uint64_t w = remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
-  size_t idx = w & (kSignalRingSize - 1);
-
-  // Back-pressure: wait until this slot's previous lap was consumed.
-  while (remote_ring->slots[idx].ready.load(std::memory_order_acquire)) {
-    if (stop_.load(std::memory_order_relaxed)) return false;
-    std::this_thread::yield();
-  }
-
+  idx = w & (kSignalRingSize - 1);
   remote_ring->slots[idx].tag = tag;
   remote_ring->slots[idx].ready.store(true, std::memory_order_release);
   return true;
@@ -471,6 +476,15 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
   return count;
 }
 
+bool IpcAdapter::has_signal_arrivals(int peer_rank) const {
+  if (peer_rank < 0 || static_cast<size_t>(peer_rank) >= comps_.size())
+    return false;
+  auto const& pc = comps_[static_cast<size_t>(peer_rank)];
+  if (!pc.signal_ring) return false;
+  return pc.signal_ring->write_idx.load(std::memory_order_relaxed) !=
+         pc.signal_ring->read_idx.load(std::memory_order_relaxed);
+}
+
 void IpcAdapter::send_worker() {
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] worker alive, waiting for ops",
@@ -499,11 +513,29 @@ void IpcAdapter::send_worker() {
   std::vector<size_t> launch_serial(static_cast<size_t>(n), 0);
 
   while (!stop_.load(std::memory_order_relaxed)) {
+    bool any = false;
+    // Retry deferred signal writes first: a peer whose ring was behind
+    // must not hold up the other peers' launch/completion work below.
+    bool deferred_any = false;
+    for (int p = 0; p < n; ++p) {
+      if (p == rank) continue;
+      auto& dq = deferred_sigs_[static_cast<size_t>(p)];
+      while (!dq.empty()) {
+        if (try_write_signal_ring(p, dq.front().tag)) {
+          if (dq.front().publish_sig)
+            publish_sig_send_completion(dq.front().comm_rid, false);
+          dq.pop_front();
+          any = true;
+        } else {
+          break;
+        }
+      }
+      if (!dq.empty()) deferred_any = true;
+    }
     // Per-peer loop: complete ready fronts (each peer strictly FIFO —
     // the receiver matches per-(peer,direction) sequences), then
     // launch-ahead up to that peer's window. Peers never block each
     // other, so 7-peer fan-out runs 7 x window copies concurrently.
-    bool any = false;
     for (int p = 0; p < n; ++p) {
       if (p == rank) continue;
       size_t const pidx = static_cast<size_t>(p);
@@ -537,9 +569,12 @@ void IpcAdapter::send_worker() {
           if (e.type == ReqType::Signal) {
             // Plain signal: no copy to launch, no event slot. Write the
             // ring now (data it refers to already landed — the executor
-            // only enqueues the Signal after the producing op drained).
-            bool ok = write_signal_ring(e.peer, e.tag);
-            publish_sig_send_completion(e.comm_rid, !ok);
+            // only enqueues the Signal after the producing op drained);
+            // defer on back-pressure instead of spinning.
+            if (try_write_signal_ring(e.peer, e.tag))
+              publish_sig_send_completion(e.comm_rid, false);
+            else
+              deferred_sigs_[pidx].push_back({e.tag, e.comm_rid, true});
             any = true;
             continue;
           }
@@ -564,7 +599,7 @@ void IpcAdapter::send_worker() {
         inflight_any = true;
         break;
       }
-    if (inflight_any) {
+    if (inflight_any || deferred_any) {
       // Copies in flight: poll events eagerly with a pause burst instead
       // of yielding to the scheduler — completion latency is on the
       // critical path (8-rank alltoall tail).
@@ -580,6 +615,9 @@ void IpcAdapter::send_worker() {
   for (int p = 0; p < n; ++p) {
     if (p == rank) continue;
     size_t const pidx = static_cast<size_t>(p);
+    for (auto& ds : deferred_sigs_[pidx])
+      if (ds.publish_sig) publish_sig_send_completion(ds.comm_rid, true);
+    deferred_sigs_[pidx].clear();
     for (auto const& pp : pending[pidx]) complete_one(&pp.e, false);
     pending[pidx].clear();
     RingElem drain;
@@ -594,15 +632,46 @@ void IpcAdapter::send_worker() {
 }
 
 void IpcAdapter::recv_worker() {
-  RingElem e;
+  struct Wait {
+    RingElem e;
+    std::chrono::steady_clock::time_point deadline;
+  };
+  std::vector<Wait> waits;
+  constexpr auto kTimeout = std::chrono::milliseconds(kIpcControlTimeoutMs);
   while (!stop_.load(std::memory_order_relaxed)) {
-    if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
+    bool any = false;
+    // Accept all pending DataWaits first, then poll them non-blockingly.
+    // A slow peer no longer stalls other peers' DataWaits (the old code
+    // blocked the single worker thread in a 50s spin per wait).
+    RingElem e;
+    while (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) == 1) {
+      waits.push_back(
+          {e, std::chrono::steady_clock::now() + kTimeout});
+      any = true;
     }
-    bool ok = (e.type == ReqType::DataWait) ? recv_one(&e) : false;
-    publish_put_completion(e.comm_rid, !ok);
+    auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < waits.size();) {
+      auto& w = waits[i];
+      if (recv_one_poll(&w.e)) {
+        publish_put_completion(w.e.comm_rid, false);
+        waits[i] = waits.back();
+        waits.pop_back();
+        any = true;
+      } else if (now >= w.deadline) {
+        std::cerr << "[ERROR] IPC recv timed out, peer " << w.e.peer
+                  << " match_seq " << w.e.seq << std::endl;
+        publish_put_completion(w.e.comm_rid, true);
+        waits[i] = waits.back();
+        waits.pop_back();
+        any = true;
+      } else {
+        ++i;
+      }
+    }
+    if (!any) std::this_thread::yield();
   }
+  // Shutdown drain: fail everything outstanding.
+  for (auto& w : waits) publish_put_completion(w.e.comm_rid, true);
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
     publish_put_completion(drain.comm_rid, true);
@@ -650,31 +719,18 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
     // Fused PutSignal: the peer observes the tag only after the data
     // has landed, matching a separate Signal op's semantics.
     if (e->type == ReqType::PutSignal) {
-      ok = write_signal_ring(e->peer, e->tag);
+      if (!try_write_signal_ring(e->peer, e->tag))
+        deferred_sigs_[e->peer].push_back({e->tag, e->comm_rid, false});
     }
   }
 }
 
-bool IpcAdapter::recv_one(RingElem* e) {
+bool IpcAdapter::recv_one_poll(RingElem const* e) {
   if (!e || e->type != ReqType::DataWait) return false;
 
   size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
-  uint64_t expected = e->seq;
-  auto& pc = comps_[e->peer];
-  auto* counter = &pc.local->last_completed[dir];
-
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(kIpcControlTimeoutMs);
-  while (!stop_.load(std::memory_order_acquire) &&
-         std::chrono::steady_clock::now() < deadline) {
-    if (counter->load(std::memory_order_acquire) >= expected) return true;
-    std::this_thread::yield();
-  }
-  if (!stop_.load(std::memory_order_acquire)) {
-    std::cerr << "[ERROR] IPC recv timed out, peer " << e->peer << " match_seq "
-              << e->seq << std::endl;
-  }
-  return false;
+  auto* counter = &comps_[e->peer].local->last_completed[dir];
+  return counter->load(std::memory_order_acquire) >= e->seq;
 }
 
 }  // namespace Transport

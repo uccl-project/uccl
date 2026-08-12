@@ -132,6 +132,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       global_rank_(rank),
       world_size_(world_size),
       peer_states_(static_cast<size_t>(world_size)),
+      peer_sig_mu_(static_cast<size_t>(world_size)),
       config_(config) {
   if (!config_) {
     config_ =
@@ -290,6 +291,7 @@ void Communicator::exchange_peer_metas() {
 }
 
 void Communicator::stop_transports() {
+  put_cache_bump();  // teardown invalidates every cached put path
   if (rdma_adapter_) rdma_adapter_->shutdown_workers();
   if (ipc_adapter_) ipc_adapter_->stop();
 }
@@ -588,7 +590,10 @@ bool Communicator::ensure_path(int rank, bool is_put,
                  : ipc_adapter_->ensure_wait_path(spec))) {
       std::cerr << "[ERROR] Communicator " << global_rank_ << " IPC "
                 << dir_label << " failed to rank " << rank << std::endl;
-      if (is_put) ipc_adapter_->close_comp(rank);
+      if (is_put) {
+        put_cache_bump();  // the peer's put path is being torn down
+        ipc_adapter_->close_comp(rank);
+      }
       return false;
     }
     is_put ? mark_put_path_ready(rank, PeerTransportKind::Ipc)
@@ -672,6 +677,7 @@ void Communicator::mark_put_path_ready(int rank, PeerTransportKind kind) {
   if (peer.resolved_kind == PeerTransportKind::Unknown) {
     peer.resolved_kind = kind;
   }
+  put_cache_bump();  // a new path may resolve to a different adapter
 }
 
 void Communicator::mark_wait_path_ready(int rank, PeerTransportKind kind) {
@@ -869,11 +875,53 @@ unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
   return rid;
 }
 
+bool Communicator::put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
+                                 size_t src_off, size_t dst_off, size_t bytes,
+                                 void** local_ptr, void** remote_ptr) {
+  if (bytes == 0) return false;
+  uint64_t gen = put_cache_gen_.load(std::memory_order_relaxed);
+  PutFastEntry e;
+  {
+    std::lock_guard<std::mutex> lk(put_cache_mu_);
+    auto it = put_cache_.find(PutFastKey{peer, src_buf, dst_buf});
+    if (it == put_cache_.end() || it->second.gen != gen) return false;
+    e = it->second;
+  }
+  if (e.kind != PeerTransportKind::Ipc || e.adapter == nullptr ||
+      e.remote_base == nullptr)
+    return false;
+  if (src_off > e.local_len || bytes > e.local_len - src_off) return false;
+  *local_ptr = static_cast<char*>(e.local_base) + src_off;
+  *remote_ptr = static_cast<char*>(e.remote_base) + dst_off;
+  return true;
+}
+
+void Communicator::put_cache_fill(int peer, uint32_t src_buf, uint32_t dst_buf,
+                                  PeerTransportKind kind,
+                                  TransportAdapter* adapter, void* local_base,
+                                  size_t local_len, void* remote_base) {
+  std::lock_guard<std::mutex> lk(put_cache_mu_);
+  put_cache_[PutFastKey{peer, src_buf, dst_buf}] =
+      PutFastEntry{put_cache_gen_.load(std::memory_order_relaxed), kind,
+                   adapter, local_base, local_len, remote_base};
+}
+
 bool Communicator::send_put_async_with_rid(int peer, uint32_t src_buf,
                                            size_t src_off, uint32_t dst_buf,
                                            size_t dst_off, size_t bytes,
                                            PeerTransportKind transport,
                                            unsigned rid, uint32_t qp_affinity) {
+  // Fast path: resolved (peer, src, dst) IPC entry — no path/MR/IPC
+  // locks. Only safe for kind==Ipc (the dominant same-host path); other
+  // kinds always fall through.
+  void* fast_local = nullptr;
+  void* fast_remote = nullptr;
+  if (put_cache_hit(peer, src_buf, dst_buf, src_off, dst_off, bytes,
+                    &fast_local, &fast_remote)) {
+    return ipc_adapter_->send_put_async(peer, fast_local, src_buf, fast_remote,
+                                        dst_buf, bytes, rid);
+  }
+
   if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
@@ -931,14 +979,27 @@ bool Communicator::send_put_async_with_rid(int peer, uint32_t src_buf,
       return false;
     }
   }
-  return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf,
-                                 bytes, rid);
+  bool ok = adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
+                                    dst_buf, bytes, rid);
+  if (ok && kind == PeerTransportKind::Ipc && remote_ptr)
+    put_cache_fill(peer, src_buf, dst_buf, kind, adapter,
+                   reinterpret_cast<void*>(local_mr.address), local_mr.length,
+                   static_cast<char*>(remote_ptr) - dst_off);
+  return ok;
 }
 
 bool Communicator::send_put_signal_async_with_rid(
     int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
     size_t dst_off, size_t bytes, PeerTransportKind transport, uint64_t tag,
     unsigned rid, uint32_t qp_affinity) {
+  void* fast_local = nullptr;
+  void* fast_remote = nullptr;
+  if (put_cache_hit(peer, src_buf, dst_buf, src_off, dst_off, bytes,
+                    &fast_local, &fast_remote)) {
+    return ipc_adapter_->send_put_signal_async(
+        peer, fast_local, src_buf, fast_remote, dst_buf, bytes, tag, rid);
+  }
+
   if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
@@ -979,8 +1040,14 @@ bool Communicator::send_put_signal_async_with_rid(
       return false;
     }
   }
-  return adapter->send_put_signal_async(peer, local_ptr, src_buf, remote_ptr,
-                                        dst_buf, bytes, tag, rid) != 0;
+  bool ok = adapter->send_put_signal_async(peer, local_ptr, src_buf,
+                                           remote_ptr, dst_buf, bytes, tag,
+                                           rid) != 0;
+  if (ok && kind == PeerTransportKind::Ipc && remote_ptr)
+    put_cache_fill(peer, src_buf, dst_buf, kind, adapter,
+                   reinterpret_cast<void*>(local_mr.address), local_mr.length,
+                   static_cast<char*>(remote_ptr) - dst_off);
+  return ok;
 }
 
 bool Communicator::can_fuse_put_signal(int peer, PeerTransportKind transport) {
@@ -1024,13 +1091,15 @@ bool Communicator::wait_flag_async_with_rid(int peer, uint32_t slot,
   SignalCompletion ev{rid, tag, peer, false};
   uint32_t matched = 0;
   {
-    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    std::lock_guard<std::mutex> lk(flag_waits_mu_);
     // Count slots that already hold their tag (the device may have
     // completed before the wait registered).
     for (uint32_t i = 0; i < count; ++i)
       if (s[i] == tag + i) ++matched;
-    if (matched < count)
+    if (matched < count) {
       pending_flag_waits_.push_back({rid, peer, s, tag, count, matched});
+      pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
   if (matched == count) {
     if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr) !=
@@ -1038,8 +1107,6 @@ bool Communicator::wait_flag_async_with_rid(int peer, uint32_t slot,
       std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
       sig_wait_overflow_.push_back(ev);
     }
-  } else {
-    pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
 }
@@ -1060,10 +1127,10 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
     if (!adapter || !adapter->wait_signal_async(peer, tag, std::nullopt, rid))
       return false;
     {
-      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      std::lock_guard<std::mutex> lk(tcp_sig_mu_);
       tcp_signal_rids_[rid] = {peer, tag};
+      pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
 
@@ -1078,7 +1145,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
     SignalCompletion ev{};
     bool matched = false;
     {
-      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      std::lock_guard<std::mutex> lk(peer_sig_mu_[peer]);
       auto& buf = buffered_imms_[peer];
       uint32_t remaining = count;
       // Drain buffered arrivals, but only while the OLDEST buffered imm
@@ -1108,7 +1175,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
   SignalCompletion ev{};
   bool matched = false;
   {
-    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    std::lock_guard<std::mutex> lk(peer_sig_mu_[peer]);
     auto sig_it = pending_signals_.find(peer);
     static int dbg = 0;
     if (dbg++ < 5 && uk_dbg_lvl() >= UK_DBG_LVL_TPT) {
@@ -1277,12 +1344,11 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
     size_t to_drain = std::min(static_cast<size_t>(max) - count,
                                sig_wait_overflow_.size());
     for (size_t i = 0; i < to_drain; ++i) {
-      events[count] = sig_wait_overflow_[i];
+      events[count] = sig_wait_overflow_.front();
       events[count].user_ctx = consume_user_ctx(events[count].rid);
+      sig_wait_overflow_.pop_front();
       ++count;
     }
-    sig_wait_overflow_.erase(sig_wait_overflow_.begin(),
-                             sig_wait_overflow_.begin() + to_drain);
   }
 
   drain_ipc_signals();
@@ -1292,7 +1358,7 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
   // consumer per slot, so no claim/clear — the epoch-salted tag
   // invalidates stale values across runs.
   if (count < max && !pending_flag_waits_.empty()) {
-    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    std::lock_guard<std::mutex> lk(flag_waits_mu_);
     for (size_t i = 0; i < pending_flag_waits_.size() && count < max;) {
       auto& fw = pending_flag_waits_[i];
       while (fw.matched < fw.count &&
@@ -1318,7 +1384,7 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
   if (put_completion_ring_ && count < max) {
     CompletionEvent ce;
     {
-      std::lock_guard<std::mutex> lk(signal_waits_mu_);
+      std::lock_guard<std::mutex> lk(tcp_sig_mu_);
       while (count < max && jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1,
                                                   nullptr) == 1) {
         auto it = tcp_signal_rids_.find(ce.rid);
@@ -1363,6 +1429,9 @@ void Communicator::drain_ipc_signals() {
   if (!ipc_adapter_) return;
   for (int peer = 0; peer < world_size_; ++peer) {
     if (peer == global_rank_) continue;
+    // O(1) arrival hint: two relaxed atomic loads instead of walking the
+    // peer's ring (read_idx/write_idx + slot ready flags) on every poll.
+    if (!ipc_adapter_->has_signal_arrivals(peer)) continue;
     uint64_t tags[64];
     size_t n = ipc_adapter_->drain_signal_tags(peer, tags, 64);
     if (n > 0) on_signals_received(peer, tags, n);
@@ -1374,35 +1443,50 @@ bool Communicator::has_pending_signal_waits() const {
 }
 
 void Communicator::dump_signal_state() const {
-  std::lock_guard<std::mutex> lk(signal_waits_mu_);
-  for (auto const& [peer, sigs] : pending_signals_) {
-    std::string sample;
-    int n = 0;
-    for (uint64_t t : sigs) {
-      if (n++ >= 10) { sample += "..."; break; }
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%#lx ", (unsigned long)t);
-      sample += buf;
-    }
-    std::fprintf(stderr,
-                 "[sig-dump r%d] peer %d: %zu buffered arrivals: %s\n",
-                 global_rank_, peer, sigs.size(), sample.c_str());
-  }
-  for (auto const& [peer, tags] : pending_signal_waits_) {
-    size_t waits = 0;
-    std::string sample;
-    for (auto const& [tag, dq] : tags) {
-      waits += dq.size();
-      if (sample.size() < 120) {
-        sample += std::to_string((unsigned long)tag);
-        sample += "x";
-        sample += std::to_string(dq.size());
-        sample += " ";
+  for (int peer = 0; peer < world_size_; ++peer) {
+    if (peer == global_rank_) continue;
+    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
+    auto s_it = pending_signals_.find(peer);
+    if (s_it != pending_signals_.end()) {
+      std::string sample;
+      int n = 0;
+      for (uint64_t t : s_it->second) {
+        if (n++ >= 10) {
+          sample += "...";
+          break;
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%#lx ", (unsigned long)t);
+        sample += buf;
       }
+      std::fprintf(stderr,
+                   "[sig-dump r%d] peer %d: %zu buffered arrivals: %s\n",
+                   global_rank_, peer, s_it->second.size(), sample.c_str());
     }
-    std::fprintf(stderr,
-                 "[sig-dump r%d] peer %d: %zu posted waits across %zu tags: %s\n",
-                 global_rank_, peer, waits, tags.size(), sample.c_str());
+    auto w_it = pending_signal_waits_.find(peer);
+    if (w_it != pending_signal_waits_.end()) {
+      size_t waits = 0;
+      std::string sample;
+      for (auto const& [tag, dq] : w_it->second) {
+        waits += dq.size();
+        if (sample.size() < 120) {
+          sample += std::to_string((unsigned long)tag);
+          sample += "x";
+          sample += std::to_string(dq.size());
+          sample += " ";
+        }
+      }
+      std::fprintf(
+          stderr,
+          "[sig-dump r%d] peer %d: %zu posted waits across %zu tags: %s\n",
+          global_rank_, peer, waits, w_it->second.size(), sample.c_str());
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(flag_waits_mu_);
+    if (!pending_flag_waits_.empty())
+      std::fprintf(stderr, "[sig-dump r%d] %zu device-flag waits parked\n",
+                   global_rank_, pending_flag_waits_.size());
   }
 }
 
@@ -1460,7 +1544,7 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
   SignalCompletion done[64];
   size_t ndone = 0;
   {
-    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
     for (size_t t = 0; t < n; ++t) {
       uint64_t tag = tags[t];
       SignalCompletion ev{};
@@ -1506,41 +1590,43 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
 }
 
 void Communicator::on_imm_received(int peer, uint32_t low32) {
-  SignalCompletion ev{};
-  bool matched = false;
+  std::vector<SignalCompletion> done;
   {
-    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
+    auto& buf = buffered_imms_[peer];
+    // The arrival either matches the head wait or joins the buffer. Never
+    // drop it: a wait registered late (or a group continuing) must still
+    // be able to consume the arrival. Push to the FRONT when it matches
+    // the head so the drain below consumes it in order.
     auto it = pending_imm_waits_.find(peer);
-    if (it != pending_imm_waits_.end() && !it->second.empty()) {
-      ImmWait& front = it->second.front();
-      if (front.low32 == low32) {
-        if (--front.remaining == 0) {
-          ev.rid = front.rid;
-          ev.tag = front.tag;
-          ev.peer = peer;
-          ev.failed = false;
-          it->second.pop_front();
-          if (it->second.empty()) pending_imm_waits_.erase(it);
-          matched = true;
-        }
-      } else {
-        // Arrival order is the matching contract; a tag mismatch at the
-        // head means the two ranks' streams diverged. Drop the imm (the
-        // stalled wait is the watchdog's job) rather than complete the
-        // wrong wait.
-        std::fprintf(stderr,
-                     "[imm-recv r%d] peer=%d imm=%#x head waits tag=%#lx — "
-                     "dropping\n",
-                     global_rank_, peer, low32, (unsigned long)front.tag);
-      }
+    if (it != pending_imm_waits_.end() && !it->second.empty() &&
+        it->second.front().low32 == low32) {
+      buf.push_front(low32);
     } else {
-      buffered_imms_[peer].push_back(low32);
+      buf.push_back(low32);
     }
+    // Drain buffered arrivals into the head wait while they match. This
+    // also catches up waits that were parked behind a head mismatch.
+    while (true) {
+      auto wit = pending_imm_waits_.find(peer);
+      if (wit == pending_imm_waits_.end() || wit->second.empty()) break;
+      if (buf.empty() || buf.front() != wit->second.front().low32) break;
+      buf.pop_front();
+      ImmWait& h = wit->second.front();
+      if (--h.remaining == 0) {
+        SignalCompletion ev{h.rid, h.tag, peer, false, 0};
+        done.push_back(ev);
+        wit->second.pop_front();
+        if (wit->second.empty()) pending_imm_waits_.erase(wit);
+      }
+    }
+    if (buf.empty()) buffered_imms_.erase(peer);
   }
-  if (matched) {
-    pending_waits_count_.fetch_sub(1, std::memory_order_relaxed);
-    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1,
-                              nullptr) != 1) {
+  if (!done.empty())
+    pending_waits_count_.fetch_sub(done.size(), std::memory_order_relaxed);
+  for (auto const& ev : done) {
+    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr) !=
+        1) {
       std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
       sig_wait_overflow_.push_back(ev);
     }
@@ -1576,6 +1662,7 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
     std::lock_guard<std::mutex> lk(resource_mu_);
     local_buffer_to_mr_[buffer_id] = mr;
   }
+  put_cache_bump();  // local MR pointer may feed cached puts
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
     if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) {
@@ -1638,6 +1725,7 @@ bool Communicator::dereg_mr(uint32_t buffer_id) {
     rdma_direct_reg_failed_mrs_.erase(registered_id);
   }
   if (found) (void)mr_manager_.delete_mr(buffer_id);
+  if (found) put_cache_bump();  // cached local base is now stale
 
   if (exchanger_client_ && exchanger_client_->valid()) {
     NamedMRInfos empty{};
@@ -1811,6 +1899,7 @@ bool Communicator::reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
     std::lock_guard<std::mutex> lk(resource_mu_);
     local_buffer_to_ipc_[buffer_id] = local;
   }
+  put_cache_bump();  // cached remote base (for dst_buf) may be stale
 
   if (!publish || !exchanger_client_ || !exchanger_client_->valid()) {
     return true;
@@ -1842,6 +1931,7 @@ bool Communicator::dereg_ipc(uint32_t buffer_id) {
   if (found && local.base_addr != 0) {
     (void)ipc_manager_.delete_ipc(reinterpret_cast<void*>(local.base_addr));
   }
+  if (found) put_cache_bump();  // cached remote base is now stale
 
   if (exchanger_client_ && exchanger_client_->valid()) {
     IpcBufferInfo empty{};
@@ -1905,6 +1995,7 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
         }
         continue;  // deregister entry — wait for the valid publish
       }
+      put_cache_bump();  // remote IPC meta may have changed
       break;
     }
 

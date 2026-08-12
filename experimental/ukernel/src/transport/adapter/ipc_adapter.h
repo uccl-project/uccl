@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -62,6 +63,9 @@ class IpcAdapter final : public TransportAdapter {
   // Drain signal tags from the peer's shared-memory signal ring.
   // Called directly by Communicator::drain_ipc_signals().
   size_t drain_signal_tags(int peer_rank, uint64_t* tags, size_t max);
+  // O(1) arrival hint: true when the peer's ring has unconsumed tags.
+  // Lets drain_ipc_signals skip peers with nothing to read.
+  bool has_signal_arrivals(int peer_rank) const;
 
   // GPU-visible address of the peer's signal ring (zero-copy host
   // mapping registered when the peer path was opened), or nullptr when
@@ -105,11 +109,28 @@ class IpcAdapter final : public TransportAdapter {
   void recv_worker();
   bool launch_one(RingElem* e, size_t stream_idx);
   void complete_one(RingElem const* e, bool ok);
-  bool recv_one(RingElem* e);
-  // Write a signal tag into the peer's shm ring. Multi-producer safe:
-  // both the executor's enqueue thread (plain signals) and the send
-  // worker (fused PutSignal) publish through this.
-  bool write_signal_ring(int peer, uint64_t tag);
+  // Non-blocking DataWait completion check (recv_worker polls all
+  // outstanding waits each iteration instead of blocking on one).
+  bool recv_one_poll(RingElem const* e);
+  // Non-blocking signal ring write. The send worker is the ONLY writer
+  // per peer (plain signals and fused PutSignal both route through it),
+  // so the claim needs no multi-producer protocol. Returns false when
+  // the previous lap of the slot is still unconsumed — the caller defers
+  // the write and retries next loop instead of spinning (a stalled peer
+  // must never block other peers' puts).
+  bool try_write_signal_ring(int peer, uint64_t tag);
+
+  struct DeferredSignal {
+    uint64_t tag;
+    unsigned comm_rid;
+    // Plain Signal ops own a sig_send completion; a fused PutSignal's
+    // rid already completed on the put ring, so its deferred write is a
+    // side effect only (dropped at shutdown, never completed again).
+    bool publish_sig;
+  };
+  // Per-peer deferred signal ring writes (back-pressure on the
+  // receiver's drain cadence). Written by the send worker only.
+  std::vector<std::deque<DeferredSignal>> deferred_sigs_;
 
   bool connect_to(int rank);
   bool accept_from(int rank);
@@ -129,8 +150,10 @@ class IpcAdapter final : public TransportAdapter {
   size_t send_batch_ = 4;         // in-flight puts PER PEER
   size_t streams_per_peer_ = 4;   // per-peer stream pool (round-robin)
 
-  std::mutex seq_mu_;
-  std::vector<std::array<uint64_t, 2>> seqs_;  // [peer][0]=send, [1]=recv
+  // Per-peer per-direction sequence counters for DataWait matching.
+  // next_send_match_seq (send worker) and next_recv_match_seq (recv
+  // worker) can touch the same counter, so they are atomics.
+  std::vector<std::array<std::atomic<uint64_t>, 2>> seqs_;
 
   std::string ns_;
   mutable std::mutex dir_mu_;
