@@ -1,103 +1,125 @@
-# CE 争用：机制、证据与结论
+# Copy-engine contention: mechanism, evidence, conclusions
 
-背景：8-GPU allreduce 一直追不上原生 NCCL，怀疑是 CE（copy
-engine）争用——8 rank 的集体操作同步启动时，56 个 CE 拷贝同时
-打向 fabric。本文用独立微基准
-[`bench/ce_contention.cu`](../bench/ce_contention.cu) 验证这个假设，
-记录"争用到底是什么、为什么会发生"的机制分析。原始数据和复现命令见
-[alltoall_comparison.md](alltoall_comparison.md)。
+8-GPU AllReduce kept falling short of native NCCL, and the suspicion was
+copy-engine (CE) contention: when a collective starts synchronously, all
+ranks' CE copies hit the fabric at the same instant. This document
+verifies that hypothesis with the standalone microbenchmark
+[`bench/ce_contention.cu`](../bench/ce_contention.cu) and records what
+the contention actually is. Reproduction commands are in
+[benchmarks.md](benchmarks.md).
 
-## 什么是 CE
+## What the CE is
 
-每颗 GPU 只有个位数的 DMA 拷贝引擎，并行度很低，按队列调度：一次
-只能真正并行跑少数几个传输，一个传输要由引擎按块搬运几百微秒。多个
-传输排队时还要做描述符切换、地址解析，先到先服务。
+Each GPU has only a handful of DMA copy engines with very low
+parallelism, scheduled per queue: only a few transfers are truly
+concurrent, and each transfer is moved in blocks over hundreds of
+microseconds. When transfers queue up, the engine also pays descriptor
+switching and address resolution, first come first served.
 
-## 非同步 vs 同步
+## Unsync vs sync issue
 
-- **非同步（unsync）**：各 rank 跑自己的循环，无全局对齐点，拷贝
-  自然错开，任意瞬间只有一部分传输在 fabric 上。代表无集体耦合的
-  通信场景（独立 point-to-point、互不依赖的多条链），是引擎的
-  **理想上限**，不是 collectives 的常态。
-- **同步（sync）**：集体操作带完成依赖——alltoall 每 rank 必须收齐
-  所有 peer 的数据、allreduce 是环形链——每轮被"最慢的 peer"拴住，
-  几轮之后所有 rank 的 put 同时爆发。这是 collectives 的常态。
+- **Unsync**: each rank runs its own loop with no global alignment, so
+  copies naturally stagger and only a fraction of the transfers are on
+  the fabric at any instant. This is the engine's **ideal ceiling** and
+  represents uncoordinated point-to-point traffic, not collectives.
+- **Sync**: collectives carry completion dependencies — AllToAll waits
+  for every peer, AllReduce is a ring chain — so each round is gated by
+  the slowest peer and, after a few rounds, every rank's puts burst
+  together. This is the collective norm.
 
-我们的方案为什么是同步的：shim 每轮/每 tile 等齐所有 peer 的信号，
-下一轮只能等最慢者完成，所以拷贝峰值天然抱团。tile 级流水（8MB
-分块）只是把一轮内部的 put 错开一部分，轮间的完成依赖还在。
+Our shim is synchronous by construction: each round/tile waits for all
+peer signals before the next round, so copy peaks naturally clump.
+Tile-level pipelining only staggers the puts inside a round; the
+round-to-round completion dependency remains.
 
-## 争用机制：两层
+## Two-level contention
 
-同步时刻 8 rank × 7 个拷贝 = 56 个传输几乎同时入队：
+At the sync instant, 8 ranks x 7 copies = 56 transfers enqueue almost
+simultaneously:
 
-1. **单 GPU CE 队列**：平均每个 CE 面前排 7 个传输，FIFO 调度，
-   先入队者占优——barrier leader（rank 0）每次最快就是证据。
-2. **fabric/接口仲裁**：NVLink 出口、入口、内存系统都是共享的，
-   56 个传输同时打向所有方向的链路，链路层仲裁 + 包交错让每个
-   传输的有效带宽掉下来。
+1. **Per-GPU CE queue**: on average 7 transfers sit in front of each CE;
+   FIFO scheduling favors whoever enqueued first — the barrier leader
+   (rank 0) is consistently the fastest, which is the queueing
+   fingerprint.
+2. **Fabric/interface arbitration**: NVLink egress, ingress, and the
+   memory system are shared. 56 transfers hitting every link at once
+   degrade per-transfer effective bandwidth through link arbitration
+   and packet interleaving.
 
-注意这不是带宽不够：8 rank 同步时聚合才 ~1.9 TB/s，远低于 fabric
-上限——是"传输太多 × 引擎/接口并行度太低"的调度问题。
+This is not a bandwidth shortfall: an 8-rank synchronized round moves
+only ~1.9 TB/s aggregate, far below the fabric ceiling — it is a
+scheduling problem of "too many transfers x too little engine/interface
+parallelism".
 
-## 证据（8 rank，256MB/rank，32MB 每拷贝）
+## Evidence (8 ranks, 256MB/rank, 32MB per copy)
 
-| 模式 | 每拷贝耗时 (us) | 单轮聚合 |
+| mode | per-copy time (us) | per-round aggregate |
 |---|---:|---:|
-| CE 非同步 | 54-60 | ~4.5 TB/s |
-| CE 同步峰值 | 69-161（多数 rank 2-3x） | ~1.9 TB/s |
-| CE 串行同步（每 rank 仅 1 个传输） | 54-156 | ~2.0 TB/s |
-| SM 拷贝同步峰值 | 52-103 | ~2.9 TB/s |
+| CE unsync | 54-60 | ~4.5 TB/s |
+| CE sync peak | 69-161 (most ranks 2-3x worse) | ~1.9 TB/s |
+| CE serial-sync (1 transfer per rank) | 54-156 | ~2.0 TB/s |
+| SM copy sync peak | 52-103 | ~2.9 TB/s |
 
-三个关键观测：
+Three observations:
 
-1. **CE 争用坐实**：同步峰值每拷贝慢 2-3 倍，且先入队者（rank 0）
-   始终最快，排队特征明显。
-2. **串行化无效**：每 rank 只剩 1 个并发传输（8 个传输）几乎一样慢
-   ——瓶颈不是"单个 CE 队列太长"，而是"同步启动让 fabric 仲裁同时
-   过载"。这排除了"CE 队列是唯一原因"的简单解释。
-3. **SM 拷贝扛得住得多**：同样的同步模式，SM 路径聚合 2.9 TB/s，
-   每拷贝只慢 1-2 倍——不经过 CE 的窄调度入口，几十万线程的并行
-   LD/ST 把排队分散成了高并行度吞吐。
+1. **CE contention is real**: the synchronized peak costs 2-3x per copy,
+   and the first enqueuer (rank 0) always wins — clear queueing.
+2. **Serializing per rank does not help**: 8 concurrent transfers
+   degrade almost as much as 56. The bottleneck is not "one CE queue is
+   too long" but "the synchronized start overloads fabric arbitration
+   at once". This rules out the simple "CE queue is the only cause"
+   explanation.
+3. **SM copies survive the peak far better**: the same synchronized
+   pattern through vectorized LD/ST reaches 2.9 TB/s aggregate, only
+   1-2x slower per copy. Hundreds of thousands of threads spread the
+   queueing into high-parallelism throughput, bypassing the CE's narrow
+   scheduling entry.
 
-## 验证（2026-08-12）：batch 提交能否缓解
+## Batch submission does not relieve it (2026-08-12)
 
-NCCL 2.28+ 的零 SM 集合通信（CE collective）用 `cudaMemcpyBatchAsync`
-把一次 alltoall 的所有拷贝合并成单次调用（`srcAccessOrder=Stream` +
-`PreferOverlapWithCompute`，单 stream）。一个合理的猜测是：batch 提交
-让驱动把 7 个拷贝分发到多条 DMA 队列并行，从而缓解同步峰值下的争用。
-给 [`bench/ce_contention.cu`](../bench/ce_contention.cu) 加了 `--batch`
-模式（完全照抄 NCCL 的调用方式），B300 上 8 rank、256MB/rank、
-32MB/拷贝、20/50 iters，和 per-peer 提交直接对比：
+NCCL 2.28+ zero-SM collectives (CE collectives) submit one AllToAll's
+copies as a single `cudaMemcpyBatchAsync` call
+(`srcAccessOrder=Stream` + `PreferOverlapWithCompute`, one stream). The
+hypothesis worth testing: batch submission lets the driver distribute
+the 7 copies across DMA queues, easing the sync peak. We added a
+`--batch` mode to the microbenchmark that mirrors NCCL's call exactly
+and compared it against per-peer submission on the B300 (8 ranks,
+256MB/rank, 32MB/copy, 20 and 50 iters):
 
-| 提交方式 | unsync 聚合 | sync 聚合 | 每拷贝 sync/per 衰减 | 说明 |
-|---|---:|---:|---|---|
-| per-peer（7 stream × 7 次 `cudaMemcpyAsync`） | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x | 与上次测量一致 |
-| batch（1 stream × 1 次 `cudaMemcpyBatchAsync`） | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x | 与 per-peer 无差别（复测略慢 ~3%） |
+| submission | unsync aggregate | sync aggregate | per-copy sync/unsync |
+|---|---:|---:|---|
+| per-peer (7 streams x 7 `cudaMemcpyAsync`) | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x |
+| batch (1 stream x 1 `cudaMemcpyBatchAsync`) | ~4.5 TB/s | ~2.1 TB/s | 1.3-2.6x |
 
-两轮独立测量（20、50 iters）结论一致：**batch 提交对同步峰值争用没有
-帮助**。rank0 在两种模式下都是最快（barrier leader 先入队），其余 rank
-的排队衰减一模一样——瓶颈不是驱动提交/描述符开销，而是 CE 队列与
-fabric/接口仲裁本身。
+Two independent runs agree: **batch submission does not help the
+synchronized peak**. Rank 0 stays fastest in both modes and the queueing
+degradation is identical, so the bottleneck is not driver
+submission/descriptor overhead — it is the CE queue and fabric
+arbitration themselves.
 
-由此推断 NCCL 的 CE 路径并没有绕开这个争用：它只是用 batch 提交省掉
-驱动开销、用 multicast 同步省掉 host 往返，把"同步启动"做干净；传输
-本身的 CE/fabric 调度代价仍在（NCCL 的 CE collective 文档也承认它在
-带宽上不如 SM 路径，换取的是 SM 占用）。所以：
+The inference for NCCL is that its CE path does not dodge this
+contention either: batching saves driver overhead and multicast sync
+saves host round trips, but the transfer scheduling cost remains (NCCL
+documents its CE collectives as trading bandwidth for SM usage). Hence:
 
-1. **不值得把 IPC adapter 改成 batch 提交**——对争用无益，改动风险
-   白背。
-2. 如果以后要追 NCCL 的 CE 能力，值得验证的只剩 CE 无法做到的对称
-   内存/multicast（跨 rank 同步信号广播、multicast 写），这需要
-   CUDA 13 的 symm_mem 支持，普通 IPC handle 复现不了。
+1. **Do not switch the IPC adapter to batch submission** — it does not
+   help contention and would add risk for nothing.
+2. The only CE levers left are symmetric-memory/multicast (cross-rank
+   signal broadcast, multicast writes), which require CUDA 13 symm_mem
+   and cannot be reproduced with plain IPC handles.
 
-## 结论
+## Conclusions
 
-1. CE 争用是真实的，且是两层：单 GPU CE 排队 + fabric/接口仲裁过载。
-2. CE 是主要瓶颈但不是全部：SM 拷贝同样同步峰值下明显更好，说明
-   fabric 本身的突发启动/仲裁也有代价，CE 把它放大了约 50%。
-3. 设计含义：**融合算子方向正确**——allreduce 的 reduce kernel
-   直接 LD/ST 读对端 buffer（去掉 CE put），把拷贝从"扛不住同步峰值"
-   的 CE 挪到 SM 上，能拿回大部分差距；但 fabric 的残留代价是路径
-   切换解决不了的，不能期望回到非同步的 ~4.5 TB/s 上限。
-4. 原生 NCCL 的 LL 协议用 kernel 做拷贝、不经 CE，正是同一道理。
+1. CE contention is real and two-level: per-GPU CE queueing plus
+   fabric/interface arbitration overload.
+2. The CE is the main but not the only bottleneck: SM copies under the
+   same synchronized peak are clearly better, so the fabric's burst
+   start/arbitration has its own cost that the CE amplifies by ~50%.
+3. Design implication: **fusion is the right direction** — a reduce
+   kernel that LD/STs peer memory directly (dropping the CE put) moves
+   the copy from an engine that cannot handle the synchronized peak to
+   one that can, recovering most of the gap. The residual fabric cost
+   is not recoverable by path switching; the ~4.5 TB/s unsync ceiling
+   is not reachable for collectives.
+4. Native NCCL's LL protocol does kernel copies without the CE for the
+   same reason.

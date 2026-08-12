@@ -302,7 +302,7 @@ constexpr size_t kWSChunkBytes =
 // (FlashAttention-3 / CUTLASS / DeepEP producer-consumer pattern).
 //
 // Synchronization protocol (canonical; see
-// docs/warp_spec_reduce_design.md): all mbarriers are initialized ONCE
+// docs/reduce_kernel.md): all mbarriers are initialized ONCE
 // per task, then every use toggles the phase. Chunk c uses slot
 // s = c % kNSlots for the (c / kNSlots)-th time, so both full[s] and
 // done[s] complete exactly that many times and the parity to wait on is

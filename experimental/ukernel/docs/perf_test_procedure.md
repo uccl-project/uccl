@@ -16,9 +16,6 @@ nvidia-smi topo -m
 
 ## 2. Build the shim
 
-Default config is baked in: 256 threads/block, 8 blocks/worker, 1MB
-tile sweet spot (see `coll_config.h`, `executor.h`).
-
 ```bash
 cd <repo>
 git checkout uk-300
@@ -26,9 +23,19 @@ cd experimental/ukernel
 # Build ONLY the target arch: SM=<compute capability> (B300=103, A40=86,
 # L40S=89). The default 4-arch build is slow and sm_103 is not included.
 make clean -f Makefile            # AMD machine: make clean -f Makefile.rocm
-make SM=<arch> ENABLE_TMA=0 -j8 -f Makefile nccl   # AMD: ... -f Makefile.rocm nccl
+# Perf build (TMA bulk reduce + 224KB smem; ~15-25 min on B300):
+make SM=<arch> REDUCE_ILP=4 REDUCE_SMEM_KB=224 TMA_REDUCE=1 \
+    TMA_WARPSPEC=0 -j8 -f Makefile nccl   # AMD: ... -f Makefile.rocm nccl
+# Fast validation build (C++-only checks, ~1 min relink): drop the TMA
+# paths with VALIDATE=1:
+make SM=<arch> VALIDATE=1 -j8 nccl
 # artifacts: build/nccl/lib/libnccl.so + build/nccl/include/nccl.h
 ```
+
+The fused reduce+copy work runs on the vector LD/ST path, so validation
+builds can drop TMA; keep `TMA_REDUCE=1 REDUCE_SMEM_KB=224` only for
+final perf builds. See [reduce_kernel.md](reduce_kernel.md) for the
+kernel tuning knobs.
 
 ## 3. Get and build nccl-tests
 
@@ -171,18 +178,11 @@ The native-RCCL comparison is the same run without the shim on
 `LD_LIBRARY_PATH` (and without `LD_LIBRARY_PATH` pointing at
 `build/nccl/lib`).
 
-## 7. Spray (native ukernel executor) benchmark
+## 7. Project-owned benchmarks
 
-```bash
-cd experimental/ukernel/src/ccl && make test_perf_spray_allreduce
-
-# two terminals (or background the server)
-CUDA_VISIBLE_DEVICES=0,1 ./test_perf_spray_allreduce --role=server --gpu 0 --dev-blocks=8 &
-CUDA_VISIBLE_DEVICES=0,1 ./test_perf_spray_allreduce --role=client --gpu 1 --dev-blocks=8
-
-# AllToAll: add --kind=alltoall   (256MB ~2.9ms, beats native Send/Recv-group)
-# Multi-block: --dev-blocks=1|4|8|64 to sweep SM usage
-```
+Transport, GDRCopy, device-reduce, shim-sweep, AllToAll, and CE
+contention benchmarks are documented in
+[benchmarks.md](benchmarks.md).
 
 ## 8. Troubleshooting
 

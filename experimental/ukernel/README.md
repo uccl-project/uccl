@@ -134,7 +134,7 @@ make -f Makefile CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80 \
 > installed outside the system default search path.
 >
 > Reduce-kernel ILP is a build-time knob: `make ... REDUCE_ILP=8` (default
-> 4, values 4/8/16; see `docs/reduce_ilp_tuning.md`). Build-time keeps the
+> 4, values 4/8/16; see `docs/reduce_kernel.md`). Build-time keeps the
 > fully-unrolled kernel cheap to compile (~20 s instead of ~20 min per
 > device file).
 
@@ -315,7 +315,8 @@ CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=server
 CUDA_VISIBLE_DEVICES=6,7 ./test_transport_integration communicator --role=client --case=exchange --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
 
-Benchmarks live in [benchmarks/](benchmarks/) — see its README.
+Benchmarks live in [bench/](bench/) — see
+[docs/benchmarks.md](docs/benchmarks.md).
 
 ## Python bindings
 
@@ -408,11 +409,19 @@ Current constraints:
 - [src/device](src/device/) — GPU SM persistent kernels, FIFO task manager, GDRCopy ops
 - [src/ccl](src/ccl/) — collective planner/lower, SprayExecutor, backends
 - [py](py/) — `ukernel_ccl` / `ukernel_p2p` Python bindings
-- [benchmarks](benchmarks/) — transport and device benchmarks
+- [bench](bench/) — transport, GDRCopy, device-reduce, shim-sweep, and
+  CE-contention benchmarks (see [docs/benchmarks.md](docs/benchmarks.md))
 - [include/util](include/util/) — shared lock-free jring, pause intrinsic
+- [docs/benchmarks.md](docs/benchmarks.md) — how to build/run the project's benchmarks
 - [docs/put_path_selection.md](docs/put_path_selection.md) — design notes on IPC/device/RDMA path selection
-- [docs/alltoall_comparison.md](docs/alltoall_comparison.md) — AllToAll comparison plan vs user-space MoE implementations (DeepEP)
-- [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native/spray perf tests
+- [docs/ce_contention.md](docs/ce_contention.md) — copy-engine contention mechanism and verification
+- [docs/fused_rs_reduce.md](docs/fused_rs_reduce.md) — fused reduce+copy / fused AG for AllReduce
+- [docs/reduce_kernel.md](docs/reduce_kernel.md) — reduce kernel tuning (ILP, TMA, tiles, warp-spec)
+- [docs/alltoall_comparison.md](docs/alltoall_comparison.md) — AllToAll design and B300 results
+- [docs/optimization_framework.md](docs/optimization_framework.md) — optimization attempts and forward plan
+- [docs/b300_native_nccl_measurements.md](docs/b300_native_nccl_measurements.md) — native NCCL anchors on B300
+- [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native perf tests
+- [docs/nccl_compatibility.md](docs/nccl_compatibility.md) — shim drop-in compatibility
 
 ## Performance measurements
 
@@ -484,7 +493,7 @@ the target workloads:
    `ncclSend`/`ncclRecv` groups, which the shim does not implement. The
    comparison target is user-space MoE implementations (DeepEP); see
    [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Our
-- [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native/spray perf tests
+- [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native perf tests
    native AllToAll (spray) reaches 2.9ms / 93 GB/s at 256MB.
 
 How the large-message wins were reached (`6ae8d24d..HEAD`):
