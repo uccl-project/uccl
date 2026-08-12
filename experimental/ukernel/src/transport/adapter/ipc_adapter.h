@@ -77,7 +77,7 @@ class IpcAdapter final : public TransportAdapter {
   void close_comp(int peer_rank);
 
  private:
-  enum class ReqType : uint8_t { DataPut, DataWait, PutSignal };
+  enum class ReqType : uint8_t { DataPut, DataWait, PutSignal, Signal };
 
   struct RingElem {
     unsigned comm_rid;
@@ -95,6 +95,7 @@ class IpcAdapter final : public TransportAdapter {
     IpcDataCompletion* remote = nullptr;
     PeerSignalRing* signal_ring = nullptr;  // in same SHM as local
     void* remote_device = nullptr;  // remote mapping, GPU-visible (zero-copy)
+    bool remote_registered = false;  // gpuHostRegister'd remote SHM
     int shm_fd = -1;
     size_t shm_size = 0;
     std::string shm_name;

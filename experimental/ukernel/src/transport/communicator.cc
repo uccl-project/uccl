@@ -1038,6 +1038,8 @@ bool Communicator::wait_flag_async_with_rid(int peer, uint32_t slot,
       std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
       sig_wait_overflow_.push_back(ev);
     }
+  } else {
+    pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
 }
@@ -1061,6 +1063,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
       std::lock_guard<std::mutex> lk(signal_waits_mu_);
       tcp_signal_rids_[rid] = {peer, tag};
     }
+    pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
 
@@ -1093,6 +1096,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
         matched = true;
       } else {
         pending_imm_waits_[peer].push_back({rid, remaining, tag, low32});
+        pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
       }
     }
     if (matched) {
@@ -1147,6 +1151,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
         std::fprintf(stderr, "[sig-wait r%d] peer=%d tag=%#lx count=%u\n",
                      global_rank_, peer, (unsigned long)tag, remaining);
       pending_signal_waits_[peer][tag].emplace_back(rid, remaining);
+      pending_waits_count_.fetch_add(1, std::memory_order_relaxed);
     }
   }
   if (matched) {
@@ -1302,6 +1307,7 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
         ++count;
         pending_flag_waits_[i] = pending_flag_waits_.back();
         pending_flag_waits_.pop_back();
+        pending_waits_count_.fetch_sub(1, std::memory_order_relaxed);
       } else {
         ++i;
       }
@@ -1323,6 +1329,7 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
           events[count].failed = (ce.failed != 0);
           events[count].user_ctx = consume_user_ctx(ce.rid);
           tcp_signal_rids_.erase(it);
+          pending_waits_count_.fetch_sub(1, std::memory_order_relaxed);
           ++count;
         } else {
           jring_mp_enqueue_bulk(put_completion_ring_, &ce, 1, nullptr);
@@ -1358,15 +1365,12 @@ void Communicator::drain_ipc_signals() {
     if (peer == global_rank_) continue;
     uint64_t tags[64];
     size_t n = ipc_adapter_->drain_signal_tags(peer, tags, 64);
-    for (size_t i = 0; i < n; ++i) {
-      on_signal_received(peer, tags[i]);
-    }
+    if (n > 0) on_signals_received(peer, tags, n);
   }
 }
 
 bool Communicator::has_pending_signal_waits() const {
-  std::lock_guard<std::mutex> lk(signal_waits_mu_);
-  return !pending_signal_waits_.empty() || !pending_flag_waits_.empty();
+  return pending_waits_count_.load(std::memory_order_relaxed) > 0;
 }
 
 void Communicator::dump_signal_state() const {
@@ -1406,6 +1410,9 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
   drain_ipc_signals();
 
   size_t completed = 0;
+  // O(count) lookup instead of the previous linear scan per completion
+  // (O(count^2) worst case).
+  std::unordered_set<unsigned> want(rids, rids + count);
 
   // Check data completion ring
   if (put_completion_ring_ && completed < count) {
@@ -1413,17 +1420,11 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
     std::vector<CompletionEvent> stash;
     while (completed < count &&
            jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1, nullptr) == 1) {
-      // Check if this rid is in the input array
-      bool found = false;
-      for (size_t i = 0; i < count; ++i) {
-        if (rids[i] == ce.rid) {
-          // Write completed rid to front
-          rids[completed++] = ce.rid;
-          found = true;
-          break;
-        }
+      if (want.erase(ce.rid)) {
+        rids[completed++] = ce.rid;
+      } else {
+        stash.push_back(ce);
       }
-      if (!found) stash.push_back(ce);
     }
     for (auto& ev : stash)
       jring_mp_enqueue_bulk(put_completion_ring_, &ev, 1, nullptr);
@@ -1435,15 +1436,11 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
     std::vector<SignalCompletion> stash;
     while (completed < count && jring_sc_dequeue_bulk(sig_wait_completion_ring_,
                                                       &sc, 1, nullptr) == 1) {
-      bool found = false;
-      for (size_t i = 0; i < count; ++i) {
-        if (rids[i] == sc.rid) {
-          rids[completed++] = sc.rid;
-          found = true;
-          break;
-        }
+      if (want.erase(sc.rid)) {
+        rids[completed++] = sc.rid;
+      } else {
+        stash.push_back(sc);
       }
-      if (!found) stash.push_back(sc);
     }
     for (auto& ev : stash)
       jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr);
@@ -1453,46 +1450,57 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
 }
 
 void Communicator::on_signal_received(int peer, uint64_t tag) {
+  on_signals_received(peer, &tag, 1);
+}
+
+void Communicator::on_signals_received(int peer, uint64_t const* tags,
+                                       size_t n) {
   static const bool kLogSig = std::getenv("UK_CCL_LOG_SIG") != nullptr;
-  SignalCompletion ev{};
-  bool matched = false;
-  bool consumed = false;
+  // drain_ipc_signals never passes more than 64 tags per call.
+  SignalCompletion done[64];
+  size_t ndone = 0;
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
-    auto it = pending_signal_waits_.find(peer);
-    if (it != pending_signal_waits_.end()) {
-      auto it2 = it->second.find(tag);
-      if (it2 != it->second.end()) {
-        auto& front = it2->second.front();
-        consumed = true;
-        if (front.second > 1) {
-          // Counted wait (fused signal group): one arrival per tile.
-          --front.second;
-        } else {
-          ev.rid = front.first;
-          ev.tag = tag;
-          ev.peer = peer;
-          ev.failed = false;
-          it2->second.erase(it2->second.begin());
-          if (it2->second.empty()) it->second.erase(it2);
-          matched = true;
+    for (size_t t = 0; t < n; ++t) {
+      uint64_t tag = tags[t];
+      SignalCompletion ev{};
+      bool matched = false;
+      bool consumed = false;
+      auto it = pending_signal_waits_.find(peer);
+      if (it != pending_signal_waits_.end()) {
+        auto it2 = it->second.find(tag);
+        if (it2 != it->second.end()) {
+          auto& front = it2->second.front();
+          consumed = true;
+          if (front.second > 1) {
+            // Counted wait (fused signal group): one arrival per tile.
+            --front.second;
+          } else {
+            ev.rid = front.first;
+            ev.tag = tag;
+            ev.peer = peer;
+            ev.failed = false;
+            it2->second.erase(it2->second.begin());
+            if (it2->second.empty()) it->second.erase(it2);
+            matched = true;
+          }
         }
       }
+      if (!consumed) pending_signals_[peer].push_back(tag);
+      if (kLogSig)
+        std::fprintf(stderr, "[sig-recv r%d] peer=%d tag=%#lx %s\n",
+                     global_rank_, peer, (unsigned long)tag,
+                     matched ? "matched" : (consumed ? "counted" : "buffered"));
+      if (matched) done[ndone++] = ev;
     }
-    if (!consumed) {
-      pending_signals_[peer].push_back(tag);
-    }
-    if (kLogSig)
-      std::fprintf(stderr,
-                   "[sig-recv r%d] peer=%d tag=%#lx %s\n", global_rank_,
-                   peer, (unsigned long)tag,
-                   matched ? "matched" : (consumed ? "counted" : "buffered"));
   }
-      if (matched) {
-    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1,
+  if (ndone > 0)
+    pending_waits_count_.fetch_sub(ndone, std::memory_order_relaxed);
+  for (size_t i = 0; i < ndone; ++i) {
+    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &done[i], 1,
                               nullptr) != 1) {
       std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
-      sig_wait_overflow_.push_back(ev);
+      sig_wait_overflow_.push_back(done[i]);
     }
   }
 }
@@ -1530,6 +1538,7 @@ void Communicator::on_imm_received(int peer, uint32_t low32) {
     }
   }
   if (matched) {
+    pending_waits_count_.fetch_sub(1, std::memory_order_relaxed);
     if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1,
                               nullptr) != 1) {
       std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);

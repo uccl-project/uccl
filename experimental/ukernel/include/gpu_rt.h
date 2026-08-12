@@ -39,6 +39,7 @@
 #define gpuHostAllocMapped cudaHostAllocMapped
 #define gpuHostRegister cudaHostRegister
 #define gpuHostRegisterMapped cudaHostRegisterMapped
+#define gpuHostUnregister cudaHostUnregister
 #define gpuHostGetDevicePointer cudaHostGetDevicePointer
 #define gpuHostFree cudaFreeHost
 #define gpuFreeHost cudaFreeHost
@@ -186,6 +187,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuHostAllocMapped hipHostAllocMapped
 #define gpuHostRegister hipHostRegister
 #define gpuHostRegisterMapped hipHostRegisterMapped
+#define gpuHostUnregister hipHostUnregister
 #define gpuHostGetDevicePointer hipHostGetDevicePointer
 #define gpuFreeHost hipFreeHost
 #define gpuMalloc hipMalloc

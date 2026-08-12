@@ -181,12 +181,13 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
         // disables device-side signal writes for this peer.
         int prev_dev = -1;
         if (gpuGetDevice(&prev_dev) == gpuSuccess) {
-          if (gpuSetDevice(gpu_id_) == gpuSuccess &&
-              gpuHostRegister(ptr, sz, gpuHostRegisterMapped) == gpuSuccess) {
-            void* dptr = nullptr;
-            if (gpuHostGetDevicePointer(&dptr, ptr, 0) == gpuSuccess)
-              pc.remote_device = dptr;
-          }
+      if (gpuSetDevice(gpu_id_) == gpuSuccess &&
+          gpuHostRegister(ptr, sz, gpuHostRegisterMapped) == gpuSuccess) {
+        void* dptr = nullptr;
+        if (gpuHostGetDevicePointer(&dptr, ptr, 0) == gpuSuccess)
+          pc.remote_device = dptr;
+        pc.remote_registered = true;
+      }
           gpuSetDevice(prev_dev);
         }
         if (!pc.remote_device)
@@ -194,6 +195,7 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
                  "[ipc r%d] peer %d SHM not GPU-mapped — device-side "
                  "signal writes disabled",
                  comm_->rank(), peer_rank);
+        pc.shm_size = sz;  // close_comp unmaps the full remote mapping
         return true;
       }
       close(fd);
@@ -210,8 +212,21 @@ void IpcAdapter::close_comp(int peer_rank) {
     pc.local = nullptr;
   }
   if (pc.remote) {
-    munmap(pc.remote, sizeof(IpcDataCompletion));
+    // Unregister the CUDA host-mapped region BEFORE unmapping, and unmap
+    // the FULL mapping (the old code unmapped only the leading page —
+    // sizeof(IpcDataCompletion) rounds up to one page — leaking the
+    // signal ring + flag area pages and leaving a stale CUDA mapping).
+    if (pc.remote_registered) {
+      int prev_dev = -1;
+      if (gpuGetDevice(&prev_dev) == gpuSuccess) {
+        gpuSetDevice(gpu_id_);
+        gpuHostUnregister(pc.remote);
+        gpuSetDevice(prev_dev);
+      }
+    }
+    munmap(pc.remote, pc.shm_size);
     pc.remote = nullptr;
+    pc.remote_registered = false;
   }
   if (pc.shm_fd >= 0) {
     close(pc.shm_fd);
@@ -333,10 +348,19 @@ bool IpcAdapter::write_signal_ring(int peer, uint64_t tag) {
 unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
                                        unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
-  if (!write_signal_ring(peer, tag)) return 0;
-  UK_DBG(UK_DBG_LVL_TPT, "[ipc-sig-send r%d] tag=%lu to p%d", comm_->rank(),
-         (unsigned long)tag, peer);
-  publish_sig_send_completion(comm_rid, false);
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
+  // Route the write through the send worker instead of writing the ring
+  // inline on the enqueue thread: the ring's back-pressure (a previous
+  // lap slot the receiver has not drained yet) was observed to stall the
+  // enqueue thread 150-250us at 8 ranks. The worker owns all signal-ring
+  // writes for a peer, which also gives plain signals a total order with
+  // fused PutSignal writes. The op became ready only after its producing
+  // data completed, so the worker may write it immediately on dequeue
+  // (no dependency on in-flight puts to the same peer).
+  RingElem e{comm_rid, peer, ReqType::Signal, 0, nullptr, nullptr, 0, tag};
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
   return 1;
 }
 
@@ -510,6 +534,15 @@ void IpcAdapter::send_worker() {
       while (inflight[pidx] < window) {
         RingElem e;
         if (jring_sc_dequeue_bulk(send_rings_[pidx], &e, 1, nullptr) == 1) {
+          if (e.type == ReqType::Signal) {
+            // Plain signal: no copy to launch, no event slot. Write the
+            // ring now (data it refers to already landed — the executor
+            // only enqueues the Signal after the producing op drained).
+            bool ok = write_signal_ring(e.peer, e.tag);
+            publish_sig_send_completion(e.comm_rid, !ok);
+            any = true;
+            continue;
+          }
           size_t stream_idx =
               pidx * streams_per_peer_ +
               (launch_serial[pidx]++ % streams_per_peer_);
@@ -550,8 +583,12 @@ void IpcAdapter::send_worker() {
     for (auto const& pp : pending[pidx]) complete_one(&pp.e, false);
     pending[pidx].clear();
     RingElem drain;
-    while (jring_mc_dequeue_bulk(send_rings_[pidx], &drain, 1, nullptr) == 1)
-      publish_put_completion(drain.comm_rid, true);
+    while (jring_mc_dequeue_bulk(send_rings_[pidx], &drain, 1, nullptr) == 1) {
+      if (drain.type == ReqType::Signal)
+        publish_sig_send_completion(drain.comm_rid, true);
+      else
+        publish_put_completion(drain.comm_rid, true);
+    }
   }
   for (auto& ev : evs) GPU_RT_CHECK(gpuEventDestroy(ev));
 }

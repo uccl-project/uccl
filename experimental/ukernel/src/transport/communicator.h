@@ -200,9 +200,11 @@ class Communicator {
 
   void re_register_all_mrs() { register_existing_local_mrs_with_rdma(); }
 
-  // True when any signal wait is registered (used by the executor's
+  // True when any signal/flag wait is parked (used by the executor's
   // drain_signal_loop to busy-poll instead of yielding — the signal
   // arrival cadence is on the collective critical path at 8 ranks).
+  // Backed by an atomic counter so the per-iteration check in the drain
+  // loop takes no lock.
   bool has_pending_signal_waits() const;
 
  private:
@@ -249,6 +251,11 @@ class Communicator {
 
   friend class RdmaTransportAdapter;
   void on_signal_received(int peer_rank, uint64_t tag);
+  // Batch form used by drain_ipc_signals: all tags drained from one peer
+  // are matched in a single lock scope (the old per-tag path took the
+  // lock once per arrival — up to 448 acquisitions per drain cycle at 8
+  // ranks).
+  void on_signals_received(int peer_rank, uint64_t const* tags, size_t n);
   // RDMA write-with-imm arrival (fused PutSignal): the immediate carries
   // the tag's low 32 bits only.
   void on_imm_received(int peer_rank, uint32_t low32);
@@ -325,6 +332,10 @@ class Communicator {
   };
   std::vector<FlagWait> pending_flag_waits_;
   mutable std::mutex signal_waits_mu_;
+  // Number of parked waits (tag map + imm FIFO + flag slots + TCP rids)
+  // that have not completed yet. Maintained under signal_waits_mu_ but
+  // read lock-free by has_pending_signal_waits().
+  std::atomic<uint32_t> pending_waits_count_{0};
 
   std::unordered_map<unsigned, uint32_t> rid_to_user_ctx_;
   mutable std::mutex user_ctx_mu_;
