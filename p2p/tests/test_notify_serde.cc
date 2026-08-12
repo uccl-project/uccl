@@ -7,12 +7,12 @@
 #include <string>
 
 static int failures = 0;
-#define CHECK(cond, what)                                   \
-  do {                                                      \
-    if (!(cond)) {                                          \
-      std::printf("FAIL: %s (line %d)\n", what, __LINE__);  \
-      ++failures;                                           \
-    }                                                       \
+#define CHECK(cond, what)                                  \
+  do {                                                     \
+    if (!(cond)) {                                         \
+      std::printf("FAIL: %s (line %d)\n", what, __LINE__); \
+      ++failures;                                          \
+    }                                                      \
   } while (0)
 
 static void roundtrip(std::string const& name, std::string const& msg,
@@ -35,13 +35,13 @@ int main() {
   roundtrip("agent-a", "hello", 7);
   roundtrip("prefill-agent-0", std::string(255, 'x'), 0);
   roundtrip("prefill-agent-0", std::string(256, 'x'), 0);
-  roundtrip("prefill-agent-0", std::string(305, 'x'), 0);   // the observed HB
+  roundtrip("prefill-agent-0", std::string(305, 'x'), 0);  // the observed HB
   roundtrip("prefill-agent-0", std::string(16384, 'x'), 0);
   roundtrip("prefill-agent-0", std::string(16385, 'x'), 0);
   roundtrip("prefill-agent-0", std::string(8u << 20, 'x'), 0);
   // Embedded NULs and arbitrary bytes survive (payloads are opaque blobs).
-  std::string blob = std::string("a\0b", 3) + "\xde\xad\xde\xad" +
-                     std::string(1000, '\xff');
+  std::string blob =
+      std::string("a\0b", 3) + "\xde\xad\xde\xad" + std::string(1000, '\xff');
   roundtrip(std::string("n\0m", 3), blob, 42);
 
   // A realistic vLLM heartbeat at high concurrency: 3072 request ids.

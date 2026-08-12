@@ -1,6 +1,7 @@
 // Two-process notification test over the real network control path.
-// Exercises uccl_engine_send_notif -> (transport wire) -> uccl_engine_get_notifs
-// with payloads far beyond the old 256-byte and 16 KiB limits.
+// Exercises uccl_engine_send_notif -> (transport wire) ->
+// uccl_engine_get_notifs with payloads far beyond the old 256-byte and 16 KiB
+// limits.
 //
 //   build:  make notif_e2e   (from p2p/)
 //   server: ./notif_e2e server
@@ -9,7 +10,6 @@
 // Run with UCCL_P2P_TRANSPORT=tcp UCCL_P2P_DISABLE_IPC=1 so a localhost pair
 // takes the network path instead of the IPC shortcut.
 #include "uccl_engine.h"
-#include <cuda_runtime.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -17,9 +17,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cuda_runtime.h>
 
-static std::vector<size_t> const kSizes = {5, 305, 4096, 16385, 262144,
-                                           2u << 20};
+static std::vector<size_t> const kSizes = {5,     305,    4096,
+                                           16385, 262144, 2u << 20};
 
 static std::string pattern_msg(size_t idx, size_t size) {
   std::string m = std::to_string(idx) + ":";
@@ -33,8 +34,8 @@ static bool init_engine_gpu(uccl_engine_t* eng) {
   void* buf = nullptr;
   if (cudaMalloc(&buf, 1 << 20) != cudaSuccess) return false;
   uccl_mr_t mr = 0;
-  return uccl_engine_reg(eng, reinterpret_cast<uintptr_t>(buf), 1 << 20,
-                         mr) == 0;
+  return uccl_engine_reg(eng, reinterpret_cast<uintptr_t>(buf), 1 << 20, mr) ==
+         0;
 }
 
 int run_server() {

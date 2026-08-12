@@ -100,8 +100,7 @@ inline std::string serialize_notify_msg(NotifyMsg const& m) {
 // and the embedded lengths account for the payload exactly. process_meta
 // handlers rely on this to discriminate notifications from the other
 // (metadata-exchange) messages sharing the OOB channel.
-inline bool deserialize_notify_msg(std::string const& payload,
-                                   NotifyMsg& out) {
+inline bool deserialize_notify_msg(std::string const& payload, NotifyMsg& out) {
   if (payload.size() < NOTIFY_MSG_HDR_SIZE) return false;
   auto get_u32 = [&payload](size_t off) {
     uint32_t v;
