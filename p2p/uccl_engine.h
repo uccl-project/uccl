@@ -223,7 +223,7 @@ std::vector<notify_msg_t> uccl_engine_get_notifs();
  * Send a notification message.
  * @param conn          Connection handle.
  * @param notify_msg    Notification message.
- * @return              Number of bytes sent, or -1 on failure.
+ * @return              0 on success, -1 on failure.
  */
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
 

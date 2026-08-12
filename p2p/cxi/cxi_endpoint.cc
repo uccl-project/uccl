@@ -776,9 +776,7 @@ int CxiEndpoint::send_notification(uint64_t peer_id,
   if (conn_key.empty() || !oob_client_) return -1;
 
   std::string payload = serialize_notify_msg(notification);
-  return oob_client_->send_meta(conn_key, payload)
-             ? static_cast<int>(payload.size())
-             : -1;
+  return oob_client_->send_meta(conn_key, payload) ? 0 : -1;
 }
 
 void encode_cxi_fifo_metadata(CxiMemoryRegion const& region, FifoItem& item) {
