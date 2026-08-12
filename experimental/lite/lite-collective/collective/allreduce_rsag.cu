@@ -6,8 +6,49 @@
 #include "common.hpp"
 #include "logger.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+
 namespace mscclpp {
 namespace collective {
+
+namespace {
+
+// Opt-in prototype for the PCIe single-node path.  Keep the existing fused
+// SM-driven RSAG as the default until this path has been benchmarked on all
+// supported topologies.
+bool copyEngineRsAgEnabled() {
+  static bool const enabled = [] {
+    char const* value = std::getenv("MSCCLPP_AR_RSAG_COPY_ENGINE");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
+__global__ void copyEngineRsAgBarrier(
+    DeviceHandle<BaseMemoryChannel>* memoryChannels, int nPeers) {
+  if (blockIdx.x == 0 && threadIdx.x < nPeers) {
+    memoryChannels[threadIdx.x].signal();
+    memoryChannels[threadIdx.x].wait();
+  }
+}
+
+__global__ void reduceCopyEngineRowsFloat(float const* own,
+                                          float const* peerRows,
+                                          float* output, size_t count,
+                                          size_t rowStrideElems, int nPeers) {
+  for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       idx < count;
+       idx += static_cast<size_t>(gridDim.x) * blockDim.x) {
+    float value = own[idx];
+    for (int peer = 0; peer < nPeers; ++peer) {
+      value += peerRows[static_cast<size_t>(peer) * rowStrideElems + idx];
+    }
+    output[idx] = value;
+  }
+}
+
+}  // namespace
 
 // Allreduce using the Reduce-Scatter + All-Gather (RSAG) pattern.
 //
@@ -186,6 +227,129 @@ CommResult AllreduceRsAg::allreduceKernelFunc(
     int nBlocks, int nThreadsPerBlock,
     std::unordered_map<std::string, uintptr_t> const&) {
   auto algoCtx = std::static_pointer_cast<AlgorithmCtx>(ctx);
+
+  /*
+  Copy-engine RSAG for the PCIe-only 1n4g mid-size path:
+  
+    1. Stage the complete input in local scratch (also makes in-place safe).
+    2. Pull this rank's shard from every peer scratch with D2D copies.
+    3. Reduce the local rows with a small GPU kernel.
+    4. Push the reduced shard to every peer scratch and assemble output.
+  
+  The peer scratch handles are CUDA-IPC mappings, so cudaMemcpyAsync uses a
+  copy engine instead of issuing fine-grained remote loads from the SMs.
+  Restrict the prototype to the regular float/sum shape selected for the
+  current 1n4g performance gap. Other shapes retain the fused kernel below.
+  */
+  bool const regularCopyEngineShape =
+      copyEngineRsAgEnabled() && algoCtx->workSize == 4 &&
+      algoCtx->nRanksPerNode == 4 && dtype == DataType::FLOAT32 &&
+      op == ReduceOp::SUM && inputSize != 0 &&
+      inputSize % (4 * sizeof(float)) == 0;
+
+  if (regularCopyEngineShape) {
+    int const rank = algoCtx->rank;
+    int const nPeers = algoCtx->nRanksPerNode - 1;
+    size_t const shardBytes = inputSize / algoCtx->nRanksPerNode;
+    size_t const shardElems = shardBytes / sizeof(float);
+    size_t const temporaryOffset = (inputSize + 255) & ~size_t{255};
+    size_t const requiredScratch =
+        temporaryOffset + static_cast<size_t>(nPeers) * shardBytes;
+
+    if (requiredScratch <= scratchBufferSize_ &&
+        remoteScratchMemories_.size() == static_cast<size_t>(nPeers)) {
+      auto cudaCall = [](cudaError_t error, char const* operation) {
+        if (error == cudaSuccess) return true;
+        WARN(ALGO, operation, " failed: ", cudaGetErrorString(error));
+        return false;
+      };
+      auto* localScratch = static_cast<char*>(scratchBuffer_);
+      auto* peerRows = localScratch + temporaryOffset;
+      size_t const shardOffset = static_cast<size_t>(rank) * shardBytes;
+
+      if (!cudaCall(cudaMemcpyAsync(localScratch, input, inputSize,
+                                    cudaMemcpyDeviceToDevice, stream),
+                    "copy-engine RSAG input staging")) {
+        return CommResult::CommUnhandledCudaError;
+      }
+
+      copyEngineRsAgBarrier<<<1, 32, 0, stream>>>(
+          baseMemoryChannelHandles_.get(), nPeers);
+      if (!cudaCall(cudaGetLastError(),
+                    "copy-engine RSAG input barrier launch")) {
+        return CommResult::CommUnhandledCudaError;
+      }
+
+      for (int peerIdx = 0; peerIdx < nPeers; ++peerIdx) {
+        auto const* remoteScratch = static_cast<char const*>(
+            remoteScratchMemories_[peerIdx].data());
+        if (!cudaCall(cudaMemcpyAsync(
+                          peerRows + static_cast<size_t>(peerIdx) * shardBytes,
+                          remoteScratch + shardOffset, shardBytes,
+                          cudaMemcpyDeviceToDevice, stream),
+                      "copy-engine RSAG peer-shard pull")) {
+          return CommResult::CommUnhandledCudaError;
+        }
+      }
+
+      int constexpr threads = 256;
+      int blocks = static_cast<int>((shardElems + threads - 1) / threads);
+      blocks = std::min(blocks, 32);
+      reduceCopyEngineRowsFloat<<<blocks, threads, 0, stream>>>(
+          reinterpret_cast<float const*>(localScratch + shardOffset),
+          reinterpret_cast<float const*>(peerRows),
+          reinterpret_cast<float*>(static_cast<char*>(output) + shardOffset),
+          shardElems, shardElems, nPeers);
+      if (!cudaCall(cudaGetLastError(),
+                    "copy-engine RSAG reduce kernel launch")) {
+        return CommResult::CommUnhandledCudaError;
+      }
+
+      // No rank may overwrite a peer's staged input until every rank has
+      // completed its pulls and local reduction.
+      copyEngineRsAgBarrier<<<1, 32, 0, stream>>>(
+          baseMemoryChannelHandles_.get(), nPeers);
+      if (!cudaCall(cudaGetLastError(),
+                    "copy-engine RSAG pre-push barrier launch")) {
+        return CommResult::CommUnhandledCudaError;
+      }
+
+      auto const* reducedShard =
+          static_cast<char const*>(output) + shardOffset;
+      for (int peerIdx = 0; peerIdx < nPeers; ++peerIdx) {
+        auto* remoteScratch =
+            static_cast<char*>(remoteScratchMemories_[peerIdx].data());
+        if (!cudaCall(cudaMemcpyAsync(remoteScratch + shardOffset, reducedShard,
+                                      shardBytes, cudaMemcpyDeviceToDevice,
+                                      stream),
+                      "copy-engine RSAG reduced-shard push")) {
+          return CommResult::CommUnhandledCudaError;
+        }
+      }
+
+      copyEngineRsAgBarrier<<<1, 32, 0, stream>>>(
+          baseMemoryChannelHandles_.get(), nPeers);
+      if (!cudaCall(cudaGetLastError(),
+                    "copy-engine RSAG gather barrier launch")) {
+        return CommResult::CommUnhandledCudaError;
+      }
+
+      // Peer owners placed their reduced shards in our local scratch. The own
+      // shard is already in output, so only copy the other three shards.
+      for (int owner = 0; owner < algoCtx->nRanksPerNode; ++owner) {
+        if (owner == rank) continue;
+        size_t const offset = static_cast<size_t>(owner) * shardBytes;
+        if (!cudaCall(cudaMemcpyAsync(static_cast<char*>(output) + offset,
+                                      localScratch + offset, shardBytes,
+                                      cudaMemcpyDeviceToDevice, stream),
+                      "copy-engine RSAG output assembly")) {
+          return CommResult::CommUnhandledCudaError;
+        }
+      }
+      return CommResult::CommSuccess;
+    }
+  }
+
   AllreduceFunc allreduce = dispatch<AllreduceRsAgAdapter>(op, dtype);
   if (!allreduce) {
     WARN(ALGO, "Unsupported operation or data type for allreduce: op=",
