@@ -182,11 +182,25 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
+	rm -f test_notify_serde notif_e2e
 
 # Test the module
-test:
+test: test_notify_serde
+	./test_notify_serde
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
+
+# Wire-format unit test for the notification serde; needs no CUDA, fabric
+# libs, or Python.
+test_notify_serde: tests/test_notify_serde.cc util/common.h
+	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
+
+# Two-process end-to-end notification test; build-only (needs a GPU and two
+# processes to run — see the header comment in tests/test_notify_e2e.cc).
+notif_e2e: tests/test_notify_e2e.cc $(P2P_SHARED_LIB)
+	$(CXX) -std=c++17 -O2 -I. -I./util -I$(CUDA_INC) -o $@ \
+		tests/test_notify_e2e.cc -L. -luccl_p2p -L$(CUDA_LIB) -lcudart \
+		-Wl,-rpath,'$$ORIGIN' -Wl,-rpath,$(CUDA_LIB)
 
 # Install nanobind if not available
 install-deps:
@@ -199,6 +213,8 @@ help:
 	@echo "  install      - Install the module to Python site-packages"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
+	@echo "  test_notify_serde - Build and run the notification wire-format test"
+	@echo "  notif_e2e    - Build the two-process notification e2e test"
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
 	@echo ""

@@ -2,6 +2,7 @@
 // Exercises uccl_engine_send_notif -> (transport wire) -> uccl_engine_get_notifs
 // with payloads far beyond the old 256-byte and 16 KiB limits.
 //
+//   build:  make notif_e2e   (from p2p/)
 //   server: ./notif_e2e server
 //   client: ./notif_e2e client <ip> <port>
 //
