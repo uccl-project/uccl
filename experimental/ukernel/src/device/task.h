@@ -118,16 +118,31 @@ static_assert(sizeof(Task) == 16);
 
 struct alignas(16) TaskArgs {
   static constexpr uint64_t kPublishedMagic = 0x554b544152475331ull;
+  // Fused out-of-place reduce: write dst = src op src2 (fresh) instead
+  // of dst = dst op src. src is the peer's buffer, src2 the local Input
+  // contribution.
+  static constexpr uint64_t kFlagReduce3Way = 1ull << 0;
+  // Fused reduce+copy: after the reduce, copy dst -> dst2 (peer's
+  // accumulation buffer) and, when kFlagSignalAfter is set, write the
+  // signal tag (redTypeRaw) into the peer's ring (src2).
+  static constexpr uint64_t kFlagReduceCopy = 1ull << 1;
+  static constexpr uint64_t kFlagSignalAfter = 1ull << 2;
 
   void* src;
   void* src2;
   void* dst;
+  void* dst2;
   uint64_t bytes;
   int32_t src_rank;
   int32_t dst_rank;
   int32_t src_device;
   int32_t dst_device;
   uint64_t redTypeRaw = static_cast<uint64_t>(ReduceType::None);
+  // Fused-task completion signal tag (device flag write). Separate from
+  // redTypeRaw: CollReduce needs redTypeRaw for the reduction, and the
+  // tag (slot index) can collide with ReduceType::None in its low byte.
+  uint64_t signal_tag = 0;
+  uint64_t taskFlags = 0;
   uint64_t reserved0 = 0;
 
   __host__ __device__ ReduceType red_type() const {
@@ -138,6 +153,18 @@ struct alignas(16) TaskArgs {
     redTypeRaw = static_cast<uint64_t>(type);
   }
 
+  __host__ __device__ bool reduce_3way() const {
+    return (taskFlags & kFlagReduce3Way) != 0;
+  }
+
+  __host__ __device__ bool reduce_copy() const {
+    return (taskFlags & kFlagReduceCopy) != 0;
+  }
+
+  __host__ __device__ bool signal_after() const {
+    return (taskFlags & kFlagSignalAfter) != 0;
+  }
+
   __host__ __device__ bool is_published() const {
     return reserved0 == kPublishedMagic;
   }
@@ -146,23 +173,28 @@ static_assert(sizeof(TaskArgs) % 16 == 0,
               "TaskArgs should be 16B aligned size");
 static_assert(std::is_standard_layout<TaskArgs>::value,
               "TaskArgs must remain a standard-layout ABI struct");
-static_assert(sizeof(TaskArgs) == 64, "TaskArgs ABI size changed");
+static_assert(sizeof(TaskArgs) == 96, "TaskArgs ABI size changed");
 static_assert(alignof(TaskArgs) == 16, "TaskArgs ABI alignment changed");
 static_assert(offsetof(TaskArgs, src) == 0, "TaskArgs.src offset changed");
 static_assert(offsetof(TaskArgs, src2) == 8, "TaskArgs.src2 offset changed");
 static_assert(offsetof(TaskArgs, dst) == 16, "TaskArgs.dst offset changed");
-static_assert(offsetof(TaskArgs, bytes) == 24, "TaskArgs.bytes offset changed");
-static_assert(offsetof(TaskArgs, src_rank) == 32,
+static_assert(offsetof(TaskArgs, dst2) == 24, "TaskArgs.dst2 offset changed");
+static_assert(offsetof(TaskArgs, bytes) == 32, "TaskArgs.bytes offset changed");
+static_assert(offsetof(TaskArgs, src_rank) == 40,
               "TaskArgs.src_rank offset changed");
-static_assert(offsetof(TaskArgs, dst_rank) == 36,
+static_assert(offsetof(TaskArgs, dst_rank) == 44,
               "TaskArgs.dst_rank offset changed");
-static_assert(offsetof(TaskArgs, src_device) == 40,
+static_assert(offsetof(TaskArgs, src_device) == 48,
               "TaskArgs.src_device offset changed");
-static_assert(offsetof(TaskArgs, dst_device) == 44,
+static_assert(offsetof(TaskArgs, dst_device) == 52,
               "TaskArgs.dst_device offset changed");
-static_assert(offsetof(TaskArgs, redTypeRaw) == 48,
+static_assert(offsetof(TaskArgs, redTypeRaw) == 56,
               "TaskArgs.redTypeRaw offset changed");
-static_assert(offsetof(TaskArgs, reserved0) == 56,
+static_assert(offsetof(TaskArgs, signal_tag) == 64,
+              "TaskArgs.signal_tag offset changed");
+static_assert(offsetof(TaskArgs, taskFlags) == 72,
+              "TaskArgs.taskFlags offset changed");
+static_assert(offsetof(TaskArgs, reserved0) == 80,
               "TaskArgs.reserved0 offset changed");
 
 class TaskManager {

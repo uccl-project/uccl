@@ -83,6 +83,24 @@ struct MacroOp {
   // where the peer's data lands (mirrors the peer Put's dst).
   BufRef src = {BufSpace::Input, 0};
   BufRef dst = {BufSpace::Output, 0};
+  // Fused RecvReduce (AllReduceRing, fuse_rs_reduce): src is the PEER's
+  // send-source buffer (resolved through src_rank), src2 is this rank's
+  // local Input contribution for the out-of-place 3-way reduce (dst =
+  // src op src2). In-place fused reduces are 2-way RMW (dst = Input).
+  BufRef src2 = {BufSpace::Input, 0};
+  bool fuse_remote_src = false;
+  uint8_t reduce_mode = 0;  // 0 = RMW dst=op(dst,src); 1 = dst=op(src,src2)
+  // Fused reduce+copy (fuse_reduce_copy): after the reduce, copy dst to
+  // the next rank's accumulation buffer (copy_dst) and device-write the
+  // data-ready signal (pair_id, per tile). The copy and signal target
+  // the peer given by copy_dst's owning rank.
+  bool fuse_copy_to_peer = false;
+  BufRef copy_dst = {BufSpace::Output, 0};
+  int copy_peer = -1;  // fused-copy target rank (ring next)
+  // The matching cross-rank sender emits a standalone Signal (not a
+  // put), so this Recv's WaitSignal must be a plain one-arrival wait —
+  // the lowering skips the put-fused group-count metadata.
+  bool wait_standalone_signal = false;
   // Coordination requirement declared by the builder (the mechanism
   // lives in the lowering):
   // - stage_via_scratch (Put): the data must be staged through scratch

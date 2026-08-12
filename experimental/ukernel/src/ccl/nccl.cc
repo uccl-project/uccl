@@ -319,13 +319,32 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
   }();
   cfg.signal_group_tiles = kSigGroupTiles;
-  if (std::getenv("UK_CCL_CHAIN_DEBUG")) {
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::steady_clock::now().time_since_epoch())
-                  .count();
-    std::fprintf(stderr, "[chain] r%d submit kind=%d t=%lld\n", comm->rank,
-                 (int)cfg.kind, (long long)us);
-  }
+  // Fused reduce-scatter: the receiver's reduce kernel reads the peer's
+  // buffer directly instead of the peer's CE put landing it locally.
+  static bool const kFuseRsReduce = [] {
+    char const* e = std::getenv("UK_CCL_FUSE_RS_REDUCE");
+    return e && std::string(e) != "0";
+  }();
+  cfg.fuse_rs_reduce = kFuseRsReduce;
+  // Fused reduce+copy: the RS RecvReduce task also forwards the reduced
+  // shard to the next rank (device copy + device signal). With device
+  // flags the per-tile signals are counted waits (any G); without them
+  // the host-signal fallback fires one ring signal per tile, which is
+  // only safe at G=1 (a plain wait completes on the first arrival).
+  static bool const kFuseReduceCopy = [] {
+    char const* e = std::getenv("UK_CCL_FUSE_REDUCE_COPY");
+    return e && std::string(e) != "0";
+  }();
+  cfg.fuse_reduce_copy = kFuseReduceCopy;
+  // Device-completion flags for fused tasks (default on; the per-slot
+  // plain-store protocol needs no host-native atomics). Only meaningful
+  // with fuse_reduce_copy (the wait/flag pairing lives in that path).
+  static bool const kDeviceFlags = [] {
+    char const* e = std::getenv("UK_CCL_DEVICE_FLAGS");
+    return !e || std::string(e) != "0";
+  }();
+  cfg.device_flags = kDeviceFlags && kFuseReduceCopy;
+  if (kFuseReduceCopy && !kDeviceFlags) cfg.signal_group_tiles = 1;
   CollectiveOpHandle h = 0;
   try {
     // prepare() is idempotent (deduped on shape + allocations) and

@@ -93,7 +93,7 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
                   transport_adapter_shmring_exchanger.o \
                    transport_adapter_tcp_adapter.o \
-                   transport_adapter_ipc_adapter.o \
+                  transport_adapter_ipc_adapter.o \
                   transport_adapter_rdma_adapter.o \
                   transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \

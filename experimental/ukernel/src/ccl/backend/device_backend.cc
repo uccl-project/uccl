@@ -105,6 +105,10 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   args.src_device = device_idx_;
   args.dst_device = device_idx_;
   bool src_ok = (c.src_buf == 0), dst_ok = (c.dst_buf == 0);
+  // A 3-way reduce must resolve its local Input contribution.
+  bool src2_ok = !(c.flags & kCmdFlagReduce3Way);
+  // A fused reduce+copy must resolve its peer accum target.
+  bool copy_dst_ok = !(c.flags & kCmdFlagReduceCopy);
 
   if (c.src_buf > 0) {
     if (c.src_peer != ~0u && comm_) {
@@ -200,6 +204,28 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       }
     }
   }
+  if (c.flags & kCmdFlagReduce3Way) {
+    // Fused out-of-place reduce: src2 is this rank's local Input
+    // contribution at the same offset as the shard.
+    void* p2 = nullptr;
+    if (c.src2_buf < kMaxLocalBufs && local_ptr_cache_[c.src2_buf]) {
+      p2 = local_ptr_cache_[c.src2_buf];
+    } else if (comm_) {
+      auto ipc = comm_->get_ipc(c.src2_buf);
+      char* base =
+          (char*)(ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr);
+      if (base) {
+        p2 = base + ipc.base_offset;
+        if (c.src2_buf < kMaxLocalBufs)
+          local_ptr_cache_[c.src2_buf] = p2;
+      }
+    }
+    if (p2) {
+      args.src2 = (char*)p2 + c.src_off;
+      args.taskFlags |= Device::TaskArgs::kFlagReduce3Way;
+      src2_ok = true;
+    }
+  }
   args.set_red_type(c.redop == ReductionKind::None  ? Device::ReduceType::None
                     : c.redop == ReductionKind::Sum ? Device::ReduceType::Sum
                                                     : Device::ReduceType::Sum);
@@ -233,11 +259,59 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
     args.redTypeRaw = c.tag;
   }
 
-  if (!src_ok || !dst_ok) {
+  if (c.flags & kCmdFlagReduceCopy) {
+    // Fused reduce+copy: after the reduce, copy dst to the peer's
+    // accumulation buffer. The data-ready signal is a separate
+    // host-written Signal op (the peer signal ring is not GPU-mapped on
+    // B300 — gpuDevAttrHostNativeAtomicSupported is 0).
+    void* pcd = nullptr;
+    int cd_dev = device_idx_;
+    for (auto& e : resolved_remote_cache_) {
+      if (e.remote_rank == (int)c.copy_dst_peer && e.buffer_id == c.copy_dst_buf) {
+        pcd = e.ptr;
+        cd_dev = e.device_idx;
+        break;
+      }
+    }
+    if (!pcd && comm_) {
+      size_t const need = c.copy_dst_off + c.bytes;
+      if (comm_->try_resolve_remote_ipc_pointer(
+              (int)c.copy_dst_peer, c.copy_dst_buf, 0, need, &pcd, &cd_dev)) {
+        resolved_remote_cache_.push_back(
+            {(int)c.copy_dst_peer, c.copy_dst_buf, pcd, cd_dev});
+      }
+    }
+    if (pcd) {
+      args.dst2 = (char*)pcd + c.copy_dst_off;
+      args.taskFlags |= Device::TaskArgs::kFlagReduceCopy;
+      if (c.flag_slot != ~0u) {
+        // Device-completion flag: write the signal tag into the peer's
+        // flag slot (plain store + fence, no atomics) when the task
+        // completes.
+        void* flag_area =
+            comm_ ? comm_->ipc_device_flag_ptr((int)c.copy_dst_peer) : nullptr;
+        if (flag_area) {
+          args.src2 = static_cast<char*>(flag_area) +
+                      static_cast<size_t>(c.flag_slot) * sizeof(uint64_t);
+          args.signal_tag = c.tag;
+          args.taskFlags |= Device::TaskArgs::kFlagSignalAfter;
+          copy_dst_ok = true;
+        }
+      } else {
+        copy_dst_ok = true;
+      }
+    }
+  }
+
+  if (!src_ok || !dst_ok || !src2_ok || !copy_dst_ok) {
     throw std::runtime_error(
         std::string("[DeviceBackend] unresolved buffer ptr src_ok=") +
         std::to_string((int)src_ok) + " dst_ok=" + std::to_string((int)dst_ok) +
+        " src2_ok=" + std::to_string((int)src2_ok) +
+        " copy_dst_ok=" + std::to_string((int)copy_dst_ok) +
         " src_buf=" + std::to_string(c.src_buf) +
+        " src2_buf=" + std::to_string(c.src2_buf) +
+        " copy_dst_buf=" + std::to_string(c.copy_dst_buf) +
         " dst_buf=" + std::to_string(c.dst_buf));
   }
   return true;

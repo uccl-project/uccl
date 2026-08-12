@@ -211,8 +211,9 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                               CollectiveConfig const& config,
                               AlgoBuilder& builder,
                               std::vector<uint32_t>& ready_ops,
-                              bool inplace) {
+                              bool inplace, bool fused) {
   size_t elem_bytes = scalar_type_size(config.dtype);
+  bool const fuse_copy = config.fuse_reduce_copy;
   BufRef const accum =
       inplace ? BufRef{BufSpace::Tmp, 0} : BufRef{BufSpace::Output, 0};
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
@@ -225,7 +226,7 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
     size_t recv_bytes = balanced_shard_size_bytes(
         config.input_bytes, elem_bytes, config.nranks, recv_owner);
 
-    if (send_bytes > 0) {
+    if (send_bytes > 0 && !fused && !fuse_copy) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
@@ -239,19 +240,94 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                      std::move(deps), pair_id,
                      ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
                      accum);
+    } else if (send_bytes > 0 && fuse_copy) {
+      // Fused reduce+copy: the send of shard wrap(rank-s) is done by the
+      // PREVIOUS step's RecvReduce task (which produced that shard) as a
+      // device copy + device signal. Only the step-0 send (the rank's
+      // own shard, from Input) remains a standalone put.
+      if (ring_step == 0) {
+        size_t offset = balanced_shard_offset_bytes(
+            config.input_bytes, elem_bytes, config.nranks, send_owner);
+        uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+        builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
+                       send_peer, {}, pair_id, BufRef{BufSpace::Input, 0},
+                       accum);
+      }
+    } else if (send_bytes > 0) {
+      // Fused send: no data put. The receiver's reduce kernel reads this
+      // rank's buffer directly; signal "data ready" to the next rank.
+      // Step 0 sends the rank's own shard from Input (valid at collective
+      // start, no dep); later steps send the shard the previous step's
+      // RecvReduce produced (dep on that reduce).
+      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+      std::vector<uint32_t> deps;
+      if (ring_step > 0)
+        add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      builder.add_op(AlgoOpKind::Signal, send_bytes, 0, 0, -1, send_peer,
+                     std::move(deps), pair_id);
     }
 
     if (recv_bytes > 0) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
       uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
-      uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
-                                        offset, recv_peer, -1, {}, pair_id,
-                                        BufRef{BufSpace::Input, 0}, accum);
-      uint32_t reduce_op =
-          builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
-                         recv_peer, -1, {recv_op}, pair_id,
-                         BufRef{BufSpace::Input, 0}, accum);
+      uint32_t recv_op;
+      uint32_t reduce_op;
+      if (!fused && !fuse_copy) {
+        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
+                                 recv_peer, -1, {}, pair_id,
+                                 BufRef{BufSpace::Input, 0}, accum);
+        reduce_op =
+            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                           recv_peer, -1, {recv_op}, pair_id,
+                           BufRef{BufSpace::Input, 0}, accum);
+      } else if (fuse_copy) {
+        // Fused reduce+copy: the task reduces accum[off] += Input[off],
+        // copies accum[off] to the NEXT rank's accumulation buffer, and
+        // device-writes the data-ready signal. The copy replaces the
+        // step-(ring_step+1) send put; the last RS reduce (the held
+        // shard, ring_step == nranks-2) does not copy.
+        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
+                                 recv_peer, -1, {}, pair_id,
+                                 BufRef{BufSpace::Input, 0}, accum);
+        if (ring_step > 0)
+          builder.algo.chunks[recv_op].wait_standalone_signal = true;
+        reduce_op =
+            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                           recv_peer, -1, {recv_op}, pair_id,
+                           BufRef{BufSpace::Input, 0}, accum);
+        if (ring_step < config.nranks - 2) {
+          builder.algo.chunks[reduce_op].fuse_copy_to_peer = true;
+          builder.algo.chunks[reduce_op].copy_dst = accum;
+          builder.algo.chunks[reduce_op].copy_peer = send_peer;
+        }
+      } else {
+        // Fused reduce: the kernel reads the peer's send-source buffer
+        // directly. In-place: dst = my Input[off] (RMW — my contribution
+        // already lives there; the peer never clobbers unread local
+        // input because there are no puts into my buffer). Out-of-place:
+        // dst = my Output[off], a 3-way fresh write = peer[off] + my
+        // Input[off] (reduce_mode 1). The peer's source role is Input at
+        // step 0 (its own shard) and its accumulation buffer afterwards.
+        BufRef const recv_accum =
+            inplace ? BufRef{BufSpace::Input, 0} : BufRef{BufSpace::Output, 0};
+        BufRef const peer_src =
+            (inplace || ring_step == 0) ? BufRef{BufSpace::Input, 0}
+                                        : BufRef{BufSpace::Output, 0};
+        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
+                                 recv_peer, -1, {}, pair_id,
+                                 BufRef{BufSpace::Input, 0}, recv_accum);
+        builder.algo.chunks[recv_op].wait_standalone_signal = true;
+        reduce_op =
+            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                           recv_peer, -1, {recv_op}, pair_id, peer_src,
+                           recv_accum);
+        builder.algo.chunks[reduce_op].fuse_remote_src = true;
+        if (!inplace) {
+          builder.algo.chunks[reduce_op].src2 = BufRef{BufSpace::Input, 0};
+          builder.algo.chunks[reduce_op].reduce_mode = 1;
+        }
+      }
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
     }
   }
@@ -268,9 +344,10 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
 void emit_ring_allgather(RingTopology const& ring,
                          CollectiveConfig const& config,
                          AlgoBuilder& builder,
-                         std::vector<uint32_t>& ready_ops, bool inplace) {
+                         std::vector<uint32_t>& ready_ops, bool inplace,
+                         bool fused_rs) {
   size_t elem_bytes = scalar_type_size(config.dtype);
-  if (inplace) {
+  if (inplace && !fused_rs) {
     // Publish the RS-held shard Tmp -> Output[own_offset].
     int own = ring.wrap(config.rank + 1);
     size_t own_bytes = balanced_shard_size_bytes(
@@ -305,7 +382,7 @@ void emit_ring_allgather(RingTopology const& ring,
       // everything else was received into Output.
       builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
                      std::move(deps), pair_id,
-                     (inplace && ring_step == 0)
+                     (inplace && ring_step == 0 && !fused_rs)
                          ? BufRef{BufSpace::Tmp, 0}
                          : BufRef{BufSpace::Output, 0},
                      BufRef{BufSpace::Output, 0});
@@ -331,14 +408,19 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
   algo.kind = CollKind::AllReduceRing;
   // In-place: RS partials accumulate in a full-input-layout Tmp region
   // (same footprint the snapshot staging used, so scratch does not
-  // grow).
-  if (inplace) algo.tmp_bytes = {config.input_bytes};
+  // grow). The fused RS accumulates in the user Input buffer instead
+  // (the reduce writes it only after the value has been consumed by the
+  // ring's earlier reader), so no Tmp region is needed there.
+  if (inplace && !config.fuse_rs_reduce)
+    algo.tmp_bytes = {config.input_bytes};
 
   AlgoBuilder builder(std::move(algo));
   std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
 
-  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace);
-  emit_ring_allgather(ring, config, builder, ready_ops, inplace);
+  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace,
+                           config.fuse_rs_reduce);
+  emit_ring_allgather(ring, config, builder, ready_ops, inplace,
+                      config.fuse_rs_reduce);
 
   return std::move(builder.algo);
 }
@@ -810,14 +892,17 @@ void verify_algo_pairing(CollectiveConfig const& config, bool inplace) {
   std::map<std::tuple<int, int, uint32_t>, size_t> tag_groups;
   for (int r = 0; r < n; ++r) {
     for (auto const& c : algos[static_cast<size_t>(r)].chunks) {
-      if (c.op != AlgoOpKind::Put || c.dst_rank < 0 ||
-          c.pair_id == kNoPairId)
+      bool const is_put = (c.op == AlgoOpKind::Put);
+      bool const is_sig = (c.op == AlgoOpKind::Signal);
+      bool const fused_copy = c.fuse_copy_to_peer;
+      if ((!is_put && !is_sig && !fused_copy) || c.pair_id == kNoPairId)
         continue;
-      int const p = c.dst_rank;
+      int const p = fused_copy ? c.copy_peer : c.dst_rank;
+      if (p < 0) continue;
       auto key = std::make_tuple(r, p, c.pair_id);
       if (tag_groups.count(key))
-        fail("duplicate pair id " + std::to_string(c.pair_id) + " on rank " +
-             std::to_string(r) + " -> " + std::to_string(p));
+        fail("duplicate pair id " + std::to_string(c.pair_id) +
+             " on rank " + std::to_string(r) + " -> " + std::to_string(p));
       size_t tiles = (c.bytes + config.tile_bytes - 1) / config.tile_bytes;
       size_t groups = (tiles + G - 1) / G;
       if (groups > all_ones)
@@ -832,15 +917,22 @@ void verify_algo_pairing(CollectiveConfig const& config, bool inplace) {
         ++matches;
         if (o.bytes != c.bytes)
           fail("pair " + std::to_string(c.pair_id) +
-               " Put/Recv bytes mismatch");
-        if (o.dst.space != c.dst.space || o.dst.index != c.dst.index ||
-            o.dst_off != c.dst_off)
+               " " + (is_put ? "Put" : is_sig ? "Signal" : "FusedReduce") +
+               "/Recv bytes mismatch");
+        // A Put declares where its data lands (mirroring the Recv's
+        // dst); a standalone Signal carries no data, so only bytes and
+        // pairing are checked.
+        if (is_put && (o.dst.space != c.dst.space ||
+                       o.dst.index != c.dst.index || o.dst_off != c.dst_off))
           fail("pair " + std::to_string(c.pair_id) +
                " Put/Recv dst buffer or offset mismatch");
       }
       if (matches != 1)
-        fail("Put rank " + std::to_string(r) + " -> " + std::to_string(p) +
-             " pair " + std::to_string(c.pair_id) + " has " +
+        fail(std::string(is_put ? "Put" : is_sig ? "Signal"
+                                                  : "FusedReduce") +
+             " rank " +
+             std::to_string(r) + " -> " + std::to_string(p) + " pair " +
+             std::to_string(c.pair_id) + " has " +
              std::to_string(matches) + " matching Recv (want exactly 1)");
     }
   }

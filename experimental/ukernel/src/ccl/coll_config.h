@@ -40,6 +40,29 @@ struct CollectiveConfig {
   // make the collective slow at low BLK. Default false: the executor
   // level (spray) keeps the in-plan copy.
   bool external_self_slice = false;
+  // Fused reduce-scatter (AllReduceRing): the receiver's reduce kernel
+  // reads the peer's buffer directly over NVLink (LD/ST) instead of the
+  // peer's CE put landing the data locally first; the sender's signal
+  // fires when the data is ready (after its producing reduce, or at
+  // start for the own shard). Cuts CE traffic in half (RS phase only;
+  // the AG phase keeps the configured put path). Toggle via
+  // UK_CCL_FUSE_RS_REDUCE (default 0).
+  bool fuse_rs_reduce = false;
+  // Fused reduce+copy (AllReduceRing RS phase): each RecvReduce task
+  // also copies its reduced shard to the next rank's accumulation buffer
+  // (device LD/ST write to peer, the alltoall-proven direction) and
+  // writes the data-ready signal from the device when it completes.
+  // This removes the reduce→put→signal host transitions from the ring's
+  // per-hop critical path (the biggest measured latency component).
+  // Toggle via UK_CCL_FUSE_REDUCE_COPY (default 0). Forces G=1 (the
+  // signal fires per tile).
+  bool fuse_reduce_copy = false;
+  // Fused-task completion flags: the fused reduce+copy task writes its
+  // data-ready signal to a per-slot device flag (plain store + fence,
+  // no atomics); the matching WaitSignal polls the slot from the host.
+  // Off: the signal is a separate host-written ring Signal. Defaults on
+  // when fuse_reduce_copy is on (UK_CCL_DEVICE_FLAGS=0 to disable).
+  bool device_flags = false;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

@@ -46,15 +46,34 @@ __device__ __forceinline__ void signal_ring_write(
   __threadfence_system();
 }
 
-// If this task is a fused PutSignal, emit the tag now (copy finished).
+// If this task carries a fused signal (CollPut's PutSignal, or a fused
+// reduce+copy task), emit the tag now that the work is finished.
+__device__ __forceinline__ void signal_flag_write(uint64_t* slot,
+                                                  uint64_t tag) {
+  // Order the task's data writes (including the copy into the peer's
+  // accumulation buffer) before the flag becomes visible to the
+  // receiver's host poll. Plain store + fences — no atomics, so this
+  // works where gpuDevAttrHostNativeAtomicSupported=0.
+  __threadfence_system();
+  *slot = tag;
+  __threadfence_system();
+}
+
 __device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
                                                         TaskArgs const* args) {
-  if (static_cast<TaskType>(task.type_u8()) != TaskType::CollPut ||
-      args == nullptr)
-    return;
-  signal_ring_write(
-      reinterpret_cast<Transport::PeerSignalRingDevice*>(args->src2),
-      args->redTypeRaw);
+  if (args == nullptr) return;
+  TaskType const t = static_cast<TaskType>(task.type_u8());
+  bool const want = (t == TaskType::CollPut) ||
+                    (t == TaskType::CollReduce && args->signal_after());
+  if (!want) return;
+  if (t == TaskType::CollPut) {
+    signal_ring_write(
+        reinterpret_cast<Transport::PeerSignalRingDevice*>(args->src2),
+        args->redTypeRaw);
+  } else {
+    signal_flag_write(reinterpret_cast<uint64_t*>(args->src2),
+                      args->signal_tag);
+  }
 }
 
 }  // namespace
@@ -124,8 +143,30 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                 ? (total_count - block_offset)
                                 : count_per_block;
 
-  read_reduce_store<T>(dst + block_offset, src + block_offset,
-                       static_cast<size_t>(my_count), a.red_type(), smem_buf);
+  if (a.reduce_3way()) {
+    // Fused out-of-place reduce: fresh dst = src op src2. LD/ST only.
+    T const* src2 = reinterpret_cast<T const*>(a.src2);
+    read_two_src_reduce_store<T>(dst + block_offset, src + block_offset,
+                                 src2 + block_offset,
+                                 static_cast<size_t>(my_count), a.red_type());
+  } else if (a.src_rank >= 0) {
+    // Remote-src RMW reduce (fused in-place): cp.async.bulk hangs on
+    // peer-mapped addresses, so force the vector LD/ST path.
+    read_reduce_store<T>(dst + block_offset, src + block_offset,
+                         static_cast<size_t>(my_count), a.red_type(), nullptr);
+  } else {
+    read_reduce_store<T>(dst + block_offset, src + block_offset,
+                         static_cast<size_t>(my_count), a.red_type(),
+                         smem_buf);
+  }
+  if (a.reduce_copy()) {
+    // Fused reduce+copy: forward the just-reduced shard to the next
+    // rank's accumulation buffer (device LD/ST write to peer, the
+    // alltoall-proven direction). Same block partition as the reduce.
+    T* dst2 = reinterpret_cast<T*>(a.dst2);
+    copy<T>(dst2 + block_offset, dst + block_offset,
+            static_cast<size_t>(my_count), smem_buf);
+  }
 }
 
 // Benchmarks

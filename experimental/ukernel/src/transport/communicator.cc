@@ -994,6 +994,10 @@ void* Communicator::ipc_signal_ring_device_ptr(int peer) const {
                       : nullptr;
 }
 
+void* Communicator::ipc_device_flag_ptr(int peer) const {
+  return ipc_adapter_ ? ipc_adapter_->peer_device_flag_ptr(peer) : nullptr;
+}
+
 unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
                                          PeerTransportKind transport) {
   unsigned rid = alloc_rid();
@@ -1003,6 +1007,39 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
     return 0;
   }
   return rid;
+}
+
+bool Communicator::wait_flag_async_with_rid(int peer, uint32_t slot,
+                                            uint64_t tag, unsigned rid,
+                                            uint32_t count) {
+  if (!ensure_path(peer, /*is_put=*/false, PeerTransportKind::Ipc))
+    return false;
+  if (!ipc_adapter_) return false;
+  uint64_t* slots = ipc_adapter_->local_device_flag_slots(peer);
+  if (!slots) return false;
+  if (count == 0) count = 1;
+  if (static_cast<uint64_t>(slot) + count > Transport::kDeviceFlagSlots)
+    return false;
+  uint64_t* s = slots + slot;
+  SignalCompletion ev{rid, tag, peer, false};
+  uint32_t matched = 0;
+  {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    // Count slots that already hold their tag (the device may have
+    // completed before the wait registered).
+    for (uint32_t i = 0; i < count; ++i)
+      if (s[i] == tag + i) ++matched;
+    if (matched < count)
+      pending_flag_waits_.push_back({rid, peer, s, tag, count, matched});
+  }
+  if (matched == count) {
+    if (jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr) !=
+        1) {
+      std::lock_guard<std::mutex> lk(sig_wait_overflow_mu_);
+      sig_wait_overflow_.push_back(ev);
+    }
+  }
+  return true;
 }
 
 bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
@@ -1245,6 +1282,32 @@ size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
 
   drain_ipc_signals();
 
+  // Device-flag waits: poll the per-slot flags written by the peer's
+  // device tasks (plain stores + fence). Single writer and single
+  // consumer per slot, so no claim/clear — the epoch-salted tag
+  // invalidates stale values across runs.
+  if (count < max && !pending_flag_waits_.empty()) {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    for (size_t i = 0; i < pending_flag_waits_.size() && count < max;) {
+      auto& fw = pending_flag_waits_[i];
+      while (fw.matched < fw.count &&
+             fw.base[fw.matched] == fw.expected + fw.matched)
+        ++fw.matched;
+      if (fw.matched == fw.count) {
+        events[count].rid = fw.rid;
+        events[count].tag = fw.expected;
+        events[count].peer = fw.peer;
+        events[count].failed = false;
+        events[count].user_ctx = consume_user_ctx(fw.rid);
+        ++count;
+        pending_flag_waits_[i] = pending_flag_waits_.back();
+        pending_flag_waits_.pop_back();
+      } else {
+        ++i;
+      }
+    }
+  }
+
   // Drain data completion ring for TCP signal completions.
   if (put_completion_ring_ && count < max) {
     CompletionEvent ce;
@@ -1303,7 +1366,7 @@ void Communicator::drain_ipc_signals() {
 
 bool Communicator::has_pending_signal_waits() const {
   std::lock_guard<std::mutex> lk(signal_waits_mu_);
-  return !pending_signal_waits_.empty();
+  return !pending_signal_waits_.empty() || !pending_flag_waits_.empty();
 }
 
 void Communicator::dump_signal_state() const {

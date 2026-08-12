@@ -12,14 +12,6 @@
 namespace UKernel {
 namespace Transport {
 
-// Host timestamp (us) for [tss] diagnostics (UK_CCL_DEBUG>=1): breaks
-// down the put-completion -> signal chain on multi-rank allreduce.
-static inline long long tss_us() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-
 namespace {
 
 constexpr int kIpcControlTimeoutMs = 50000;
@@ -143,7 +135,8 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   pc.shm_name = comp_shm_name(peer_rank);
   shm_unlink(
       pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
-  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing) +
+              sizeof(DeviceFlagArea);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
   if (ftruncate(fd, static_cast<off_t>(sz)) != 0) {
@@ -172,28 +165,22 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
   std::string remote_name =
       Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing) +
+              sizeof(DeviceFlagArea);
   while (true) {
     int fd = shm_open(remote_name.c_str(), O_RDWR, 0666);
     if (fd >= 0) {
       void* ptr = mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (ptr != MAP_FAILED) {
         pc.remote = reinterpret_cast<IpcDataCompletion*>(ptr);
-        // Zero-copy GPU mapping: lets device kernels write fused
-        // PutSignal tags straight into this ring. Optional — failure
-        // only disables device-side fusion for this peer. Requires GPU
-        // system atomics to host memory (the ring claim is an
-        // atomicAdd from the kernel).
-        int atomics_ok = 1;
-#ifndef __HIP_PLATFORM_AMD__
-        atomics_ok = 0;
-        if (gpuDeviceGetAttribute(&atomics_ok,
-                                  gpuDevAttrHostNativeAtomicSupported,
-                                  gpu_id_) != gpuSuccess)
-          atomics_ok = 0;
-#endif
+        // Zero-copy GPU mapping of the whole SHM (completion + ring +
+        // device flag area). The ring's fused-PutSignal claim needs GPU
+        // system atomics (unavailable on B300), but the per-slot
+        // device-flag area is written with PLAIN stores + fences, which
+        // need no atomics — so map unconditionally. Failure only
+        // disables device-side signal writes for this peer.
         int prev_dev = -1;
-        if (atomics_ok && gpuGetDevice(&prev_dev) == gpuSuccess) {
+        if (gpuGetDevice(&prev_dev) == gpuSuccess) {
           if (gpuSetDevice(gpu_id_) == gpuSuccess &&
               gpuHostRegister(ptr, sz, gpuHostRegisterMapped) == gpuSuccess) {
             void* dptr = nullptr;
@@ -204,9 +191,9 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
         }
         if (!pc.remote_device)
           UK_DBG(UK_DBG_LVL_TPT,
-                 "[ipc r%d] peer %d signal ring not GPU-mapped "
-                 "(atomics_ok=%d) — device-side fusion disabled",
-                 comm_->rank(), peer_rank, atomics_ok);
+                 "[ipc r%d] peer %d SHM not GPU-mapped — device-side "
+                 "signal writes disabled",
+                 comm_->rank(), peer_rank);
         return true;
       }
       close(fd);
@@ -397,6 +384,23 @@ void* IpcAdapter::peer_signal_ring_device_ptr(int peer) const {
   auto const& pc = comps_[static_cast<size_t>(peer)];
   if (!pc.remote_device) return nullptr;
   return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion);
+}
+
+void* IpcAdapter::peer_device_flag_ptr(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.remote_device) return nullptr;
+  return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion) +
+         sizeof(PeerSignalRing);
+}
+
+uint64_t* IpcAdapter::local_device_flag_slots(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.local) return nullptr;
+  return reinterpret_cast<uint64_t*>(
+      reinterpret_cast<char*>(pc.local) + sizeof(IpcDataCompletion) +
+      sizeof(PeerSignalRing));
 }
 
 size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
@@ -609,9 +613,6 @@ void IpcAdapter::complete_one(RingElem const* e, bool ok) {
     // Fused PutSignal: the peer observes the tag only after the data
     // has landed, matching a separate Signal op's semantics.
     if (e->type == ReqType::PutSignal) {
-      if (uk_dbg_lvl() >= 1)
-        std::fprintf(stderr, "[tss] r%d sig_send peer=%d tag=%lu t=%lld\n",
-                     comm_->rank(), e->peer, (unsigned long)e->tag, tss_us());
       ok = write_signal_ring(e->peer, e->tag);
     }
   }

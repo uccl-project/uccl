@@ -132,6 +132,56 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
     dst[i] = apply_reduce(dst[i], src[i], op);
 }
 
+// Fused out-of-place reduce: dst[i] = src[i] op src2[i], a FRESH write
+// (no dst read — the accumulate slot holds no previous value in the
+// fused RS; the running sum migrates through the peer's buffer instead).
+// src is the peer's buffer (read over NVLink), src2 this rank's local
+// Input contribution. Same ILP structure as vec_read_reduce_store so the
+// two loads stay in flight together.
+template <typename T, int N, ReduceType op>
+__device__ __forceinline__ void vec_two_src_reduce_store(T* dst, T const* src,
+                                                         T const* src2,
+                                                         size_t count,
+                                                         int tid,
+                                                         int nthread) {
+  using V = TypedVec<T, N>;
+  V const* svp = reinterpret_cast<V const*>(src);
+  V const* s2p = reinterpret_cast<V const*>(src2);
+  V* dvp = reinterpret_cast<V*>(dst);
+  size_t nvec = count / static_cast<size_t>(N);
+  constexpr int kVecInFlight = UK_REDUCE_ILP;
+  size_t stride = static_cast<size_t>(nthread) * kVecInFlight;
+  for (size_t base = static_cast<size_t>(tid); base < nvec;
+       base += stride) {
+    V sv[kVecInFlight];
+    V s2v[kVecInFlight];
+    V dv[kVecInFlight];
+    size_t idx[kVecInFlight];
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      idx[u] = base + static_cast<size_t>(u) * nthread;
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) sv[u] = svp[idx[u]];
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) s2v[u] = s2p[idx[u]];
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) {
+#pragma unroll
+        for (int e = 0; e < N; ++e)
+          dv[u].e[e] = apply_reduce(sv[u].e[e], s2v[u].e[e], op);
+      }
+#pragma unroll
+    for (int u = 0; u < kVecInFlight; ++u)
+      if (idx[u] < nvec) dvp[idx[u]] = dv[u];
+  }
+  size_t base = nvec * static_cast<size_t>(N);
+  for (size_t i = base + tid; i < count; i += nthread)
+    dst[i] = apply_reduce(src[i], src2[i], op);
+}
+
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE
 // Chunked cp.async.bulk reduce for large tasks: per chunk, bulk-load src
 // and dst into shared memory (mbarrier-tracked), reduce in smem, bulk-
@@ -575,6 +625,60 @@ __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
       break;
     default:
       read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
+      break;
+  }
+}
+
+// Fused out-of-place reduce: dst[i] = src[i] op src2[i]. Deliberately
+// LD/ST only (no TMA): the fused reduce reads peer-mapped memory, and
+// cp.async.bulk to/from peer addresses hangs on B300. Also no dst read,
+// so this is cheaper than a RMW reduce when the slot holds no prior
+// value.
+template <typename T, ReduceType op>
+__device__ __forceinline__ void read_two_src_reduce_store_op(
+    void* dst, void const* src, void const* src2, size_t count) {
+  int tid = threadIdx.x;
+  int nthread = blockDim.x;
+  T* dst_ptr = static_cast<T*>(dst);
+  T const* src_ptr = static_cast<T const*>(src);
+  T const* src2_ptr = static_cast<T const*>(src2);
+  constexpr int kVec = 16 / static_cast<int>(sizeof(T));
+  if (kVec > 1 &&
+      (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src_ptr) & 0xF) == 0 &&
+      (reinterpret_cast<uintptr_t>(src2_ptr) & 0xF) == 0) {
+    vec_two_src_reduce_store<T, kVec, op>(dst_ptr, src_ptr, src2_ptr, count,
+                                          tid, nthread);
+  } else {
+    for (size_t i = static_cast<size_t>(tid); i < count;
+         i += static_cast<size_t>(nthread))
+      dst_ptr[i] = apply_reduce(src_ptr[i], src2_ptr[i], op);
+  }
+}
+
+template <typename T>
+__device__ __forceinline__ void read_two_src_reduce_store(
+    void* dst, void const* src, void const* src2, size_t count,
+    ReduceType op) {
+  switch (op) {
+    case ReduceType::Sum:
+      read_two_src_reduce_store_op<T, ReduceType::Sum>(dst, src, src2, count);
+      break;
+    case ReduceType::Prod:
+      read_two_src_reduce_store_op<T, ReduceType::Prod>(dst, src, src2, count);
+      break;
+    case ReduceType::Max:
+      read_two_src_reduce_store_op<T, ReduceType::Max>(dst, src, src2, count);
+      break;
+    case ReduceType::Min:
+      read_two_src_reduce_store_op<T, ReduceType::Min>(dst, src, src2, count);
+      break;
+    case ReduceType::BitwiseAnd:
+      read_two_src_reduce_store_op<T, ReduceType::BitwiseAnd>(dst, src, src2,
+                                                              count);
+      break;
+    default:
+      read_two_src_reduce_store_op<T, ReduceType::Sum>(dst, src, src2, count);
       break;
   }
 }

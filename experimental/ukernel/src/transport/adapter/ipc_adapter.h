@@ -67,6 +67,12 @@ class IpcAdapter final : public TransportAdapter {
   // mapping registered when the peer path was opened), or nullptr when
   // unavailable. Device kernels write fused PutSignal tags through it.
   void* peer_signal_ring_device_ptr(int peer) const;
+  // GPU-visible address of the peer's device-flag area (single-writer
+  // per-slot completion flags, plain stores + fence — no atomics).
+  void* peer_device_flag_ptr(int peer) const;
+  // Host-side pointer to THIS rank's local device-flag area for a peer
+  // (the peer's device tasks write into it; this rank's host polls it).
+  uint64_t* local_device_flag_slots(int peer) const;
 
   void close_comp(int peer_rank);
 

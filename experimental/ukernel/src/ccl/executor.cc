@@ -18,15 +18,6 @@
 namespace UKernel {
 namespace CCL {
 
-// Host timestamp (us) for [tss] diagnostics (UK_CCL_DEBUG>=1): used to
-// break down the per-ring-step signaling/scheduling chain on multi-rank
-// allreduce. Same-process timestamps are comparable.
-static inline long long tss_us() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-
 namespace {
 // SIGUSR2 requests a state dump of all running runs (printed by
 // enqueue_loop, not the handler). Debug aid for distributed stalls:
@@ -147,9 +138,19 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   auto role_dst = op.dst_buf_role;
   c.src_buf = role_to_buf(role_src, input_buf, output_buf, scratch_buf);
   c.dst_buf = role_to_buf(role_dst, input_buf, output_buf, scratch_buf);
+  c.src2_buf = role_to_buf(op.src2_buf_role, input_buf, output_buf,
+                           scratch_buf);
+  c.copy_dst_buf = role_to_buf(op.copy_dst_buf_role, input_buf, output_buf,
+                               scratch_buf);
+  c.copy_dst_peer = op.copy_dst_peer;
+  c.copy_dst_off = op.copy_dst_off;
+  c.flag_slot = op.flag_slot;
+  c.flag_count = op.flag_count;
   c.redop = (op.kind == ExecOpKind::Reduce) ? redop : ReductionKind::None;
   c.put_path = PutPath::None;
+  if (op.reduce_mode == 1) c.flags |= kCmdFlagReduce3Way;
   c.tag = salt_tag(op.tag, tag_epoch);
+  if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
   return c;
 }
 
@@ -171,6 +172,9 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(static_cast<uint64_t>(cfg.dtype));
   add(static_cast<uint64_t>(cfg.reduction));
   add(static_cast<uint64_t>(cfg.signal_group_tiles));
+  add(cfg.fuse_rs_reduce ? 1u : 0u);
+  add(cfg.fuse_reduce_copy ? 1u : 0u);
+  add(cfg.device_flags ? 1u : 0u);
   add(inplace ? 1u : 0u);
   add(cfg.input_split_bytes.size());
   for (size_t v : cfg.input_split_bytes) add(v);
@@ -983,11 +987,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
              rank_or_neg1(), idx, (int)c.kind, c.dst_peer, (int)c.put_path,
              (unsigned long)c.tag, c.bytes);
     }
-    if (uk_dbg_lvl() >= 1)
-      std::fprintf(stderr, "[tss] r%d enq kind=%d tag=%lu t=%lld\n",
-                   rank_or_neg1(), (int)c.kind, (unsigned long)c.tag,
-                   tss_us());
-
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
@@ -1097,28 +1096,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           c.flags |= kCmdFlagPutSignal;
           c.tag = salted_sig_tag;
         }
-        if (uk_dbg_lvl() >= 1)
-          std::fprintf(stderr,
-                       "[tss] r%d put_fuse idx=%u path=%d sig=%d grp=%u "
-                       "fuse=%d t=%lld\n",
-                       rank_or_neg1(), idx, (int)c.put_path, sig_idx, grp,
-                       (int)fuse, tss_us());
       }
     }
 
     if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      if (uk_dbg_lvl() >= 1 && c.kind == ExecOpKind::Signal)
-        std::fprintf(stderr,
-                     "[tss] r%d sig_check idx=%u grp=%u fused=%u accepted=%u "
-                     "t=%lld\n",
-                     rank_or_neg1(), idx,
-                     run.plan->sig_group_size.empty()
-                         ? 0u
-                         : run.plan->sig_group_size[idx],
-                     run.fused_sig_cnt.empty() ? 0u : run.fused_sig_cnt[idx],
-                     run.accepted_sig_cnt.empty() ? 0u
-                                                  : run.accepted_sig_cnt[idx],
-                     tss_us());
       // Fused group accounting: a Signal whose group's puts were ALL
       // accepted WITH the fuse flag completes locally — no backend
       // dispatch. If the group cannot (fully) fuse, it must go
@@ -1132,9 +1113,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           run.plan->sig_group_size[idx] > 0) {
         uint16_t grp = run.plan->sig_group_size[idx];
         if (run.fused_sig_cnt[idx] == grp) {
-          if (uk_dbg_lvl() >= 1)
-            std::fprintf(stderr, "[tss] r%d sig_local idx=%u t=%lld\n",
-                         rank_or_neg1(), idx, tss_us());
           run.submitted[idx] = 1;
           complete_op_local(run, idx);
           ++run.sig_local;
@@ -1280,9 +1258,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
-        if (uk_dbg_lvl() >= 1)
-          std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
-                       rank_or_neg1(), sg, tss_us());
       }
       // Roll back slots whose submission failed, defer the rest
       // (releasing their tentative inflight charges).
@@ -1345,9 +1320,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (sg >= 0) ++run.accepted_sig_cnt[sg];
         if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
           ++run.fused_sig_cnt[sg];
-        if (uk_dbg_lvl() >= 1)
-          std::fprintf(stderr, "[tss] r%d put_acc sg=%d t=%lld\n",
-                       rank_or_neg1(), sg, tss_us());
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
@@ -1398,7 +1370,6 @@ void SprayExecutor::enqueue_loop() {
     return std::chrono::milliseconds(env ? std::stol(env) : 30000);
   }();
   while (!stop_) {
-    long long const loop_t0 = tss_us();
     // Snapshot running runs under the global lock, then process them
     // lock-free — collect_ready/enqueue_to_ring do backend submission
     // work that must not serialize submit/poll/wait behind runs_mutex_.
@@ -1460,13 +1431,7 @@ void SprayExecutor::enqueue_loop() {
       }
 
       collect_ready(*run);
-      if (uk_dbg_lvl() >= 1)
-        std::fprintf(stderr, "[tss] r%d ready n=%zu t=%lld\n",
-                     rank_or_neg1(), run->ready.size(), tss_us());
       enqueue_to_ring(*run);
-      if (uk_dbg_lvl() >= 1)
-        std::fprintf(stderr, "[tss] r%d enq_ring_done t=%lld\n",
-                     rank_or_neg1(), tss_us());
     }
     if (snapshot.empty()) {
       // Nothing running: sleep until submit() publishes a run. The
@@ -1480,10 +1445,6 @@ void SprayExecutor::enqueue_loop() {
                         });
       wake_pending_ = false;
     } else {
-      long long const dt = tss_us() - loop_t0;
-      if (uk_dbg_lvl() >= 1 && dt > 500)
-        std::fprintf(stderr, "[tss] r%d loop_slow dt=%lldus t=%lld\n",
-                     rank_or_neg1(), dt, tss_us());
     }
   }
 }
@@ -1510,9 +1471,6 @@ void SprayExecutor::drain_dev_loop() {
              "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), n, dbg_count);
     }
-    if (n > 0 && uk_dbg_lvl() >= 1)
-      std::fprintf(stderr, "[tss] r%d dev_done n=%zu t=%lld\n",
-                   rank_or_neg1(), n, tss_us());
     if (n == 0) {
       std::this_thread::yield();
       continue;
@@ -1569,9 +1527,6 @@ void SprayExecutor::drain_tpt_loop() {
              "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
              rank_or_neg1(), nd, dbg_count);
     }
-    if (nd > 0 && uk_dbg_lvl() >= 1)
-      std::fprintf(stderr, "[tss] r%d tpt_done n=%zu t=%lld\n",
-                   rank_or_neg1(), nd, tss_us());
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -1611,7 +1566,6 @@ void SprayExecutor::drain_signal_loop() {
   int iter = 0;
   static int dbg_count = 0;
   while (!stop_) {
-    long long const sig_t0 = tss_us();
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(),
              iter);
@@ -1639,15 +1593,8 @@ void SprayExecutor::drain_signal_loop() {
       for (int s = 0; s < burst && !stop_; ++s) machnet_pause();
       if (!waits_pending || stop_.load(std::memory_order_relaxed))
         std::this_thread::yield();
-      long long const dt = tss_us() - sig_t0;
-      if (uk_dbg_lvl() >= 1 && dt > 200)
-        std::fprintf(stderr, "[tss] r%d sig_loop dt=%lldus t=%lld\n",
-                     rank_or_neg1(), dt, tss_us());
       continue;
     }
-    if (uk_dbg_lvl() >= 1)
-      std::fprintf(stderr, "[tss] r%d sig_recv n=%zu t=%lld\n",
-                   rank_or_neg1(), ns, tss_us());
     while (ns > 0) {
       size_t valid = 0;
       for (size_t i = 0; i < ns; ++i) {

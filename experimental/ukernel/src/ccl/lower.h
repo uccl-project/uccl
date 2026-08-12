@@ -15,7 +15,8 @@ namespace CCL {
 // a chunk pair (1 = per-tile). Coordination needs (staging, snapshots)
 // come from MacroOp declarations, not from config switches.
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
-                       uint32_t signal_group_tiles = 1);
+                       uint32_t signal_group_tiles = 1,
+                       bool device_flags = false);
 
 // Plan + lower: build CollAlgo from config, then lower to TiledResult.
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace);

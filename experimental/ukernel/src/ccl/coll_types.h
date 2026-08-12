@@ -21,6 +21,7 @@ enum class AlgoOpKind : uint32_t {
   Put,
   Recv,
   RecvReduce,
+  Signal,  // cross-rank data-ready signal (fused RS: no data put)
 };
 
 // Executor-level op kinds (used in TiledOp, lower output)
@@ -99,12 +100,35 @@ struct TiledOp {
   size_t bytes = 0;
   size_t src_off = 0;
   size_t dst_off = 0;
+  size_t src2_off = 0;  // fused-reduce local contribution offset
   uint32_t src_peer = 0;
   uint32_t dst_peer = 0;
+  // Fused-reduce local contribution (src2). Always local in the fused
+  // RS design; the remote source is carried by src_peer/src_buf_role.
+  CollectiveBufferRole src2_buf_role = CollectiveBufferRole::Input;
+  // Fused reduce+copy: after the reduce, copy dst to the peer's
+  // accumulation buffer (copy_dst_peer + copy_dst_buf_role +
+  // copy_dst_off). The data-ready signal is a separate Signal op
+  // (host-written ring — B300 has no GPU-mapped signal ring).
+  uint32_t copy_dst_peer = ~0u;
+  CollectiveBufferRole copy_dst_buf_role = CollectiveBufferRole::Output;
+  size_t copy_dst_off = 0;
+  bool fused_copy = false;
+  // Device-completion flag slot for the signal of a fused task
+  // (fuse_reduce_copy with UK_CCL_DEVICE_FLAGS): the WaitSignal polls
+  // this slot; the fused Reduce writes it. ~0u = host ring signal.
+  uint32_t flag_slot = ~0u;
+  // WaitSignal: how many consecutive flag slots to poll (G>1 groups the
+  // per-tile signals; the wait completes when ALL match). Fused Reduce:
+  // unused (1).
+  uint32_t flag_count = 1;
   uint64_t tag = 0;
   std::vector<uint32_t> deps;
   CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
   CollectiveBufferRole dst_buf_role = CollectiveBufferRole::Output;
+  // Reduce kernel mode: 0 = dst = dst op src (read-modify-write);
+  // 1 = dst = src op src2 (fresh write, fused out-of-place reduce).
+  uint8_t reduce_mode = 0;
 };
 
 struct TiledResult {

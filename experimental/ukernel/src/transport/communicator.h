@@ -107,6 +107,12 @@ class Communicator {
   bool wait_signal_async_with_rid(int peer, uint64_t tag,
                                   PeerTransportKind transport, unsigned rid,
                                   uint32_t count = 1, bool force_imm = false);
+  // Device-completion flag wait: polls the local flag slot (written by
+  // the peer's device task with a plain store + fence, no atomics) until
+  // it equals `tag`. count > 1 waits for a G-tile group: `count`
+  // consecutive slots at slot..slot+count-1 must equal tag..tag+count-1.
+  bool wait_flag_async_with_rid(int peer, uint32_t slot, uint64_t tag,
+                                unsigned rid, uint32_t count = 1);
 
   // Fused put+signal: once the data lands, the peer observes `tag` as a
   // signal (IPC: peer shm ring; RDMA: write-with-imm). One completion
@@ -125,6 +131,7 @@ class Communicator {
   // mapping), or nullptr when unavailable. Device kernels write fused
   // PutSignal tags through it.
   void* ipc_signal_ring_device_ptr(int peer) const;
+  void* ipc_device_flag_ptr(int peer) const;
 
   // rid encoding: backend-path rids carry a 2-bit tag in the top bits
   // (bit 30 = SignalBackend, bit 31 = TransportBackend); the low 30 bits are
@@ -306,6 +313,17 @@ class Communicator {
   // TCP signal completions go through the data ring; this maps rid → {peer,
   // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
+  // Device-flag waits: {rid, slot pointer, expected tag}. Polled by
+  // try_complete_sig_wait (single writer per slot, single consumer).
+  struct FlagWait {
+    unsigned rid;
+    int peer;
+    uint64_t* base;
+    uint64_t expected;
+    uint32_t count;
+    uint32_t matched;
+  };
+  std::vector<FlagWait> pending_flag_waits_;
   mutable std::mutex signal_waits_mu_;
 
   std::unordered_map<unsigned, uint32_t> rid_to_user_ctx_;

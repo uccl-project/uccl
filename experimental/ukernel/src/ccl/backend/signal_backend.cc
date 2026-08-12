@@ -27,6 +27,15 @@ bool SignalBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
                                              c.tag, tpt, rid);
   }
   if (c.kind == ExecOpKind::WaitSignal) {
+    // Device-completion flag wait: the sender's fused task wrote the tag
+    // into our flag slot(s); poll them directly (no ring, no host
+    // signal). flag_count > 1 waits for a G-tile group: all consecutive
+    // slots must match their base_tag+i.
+    if (c.flag_slot != ~0u) {
+      return comm_->wait_flag_async_with_rid(static_cast<int>(c.src_peer),
+                                             c.flag_slot, c.tag, rid,
+                                             c.flag_count ? c.flag_count : 1u);
+    }
     // kCmdFlagImmWait: the sender fused this group's puts via RDMA
     // write-with-imm, so the arrivals surface on the RDMA adapter even
     // for a same-host peer (UK_CCL_PUT_PATH=rdma) — the usual

@@ -1,5 +1,7 @@
 #include "lower.h"
 #include "utils.h"
+#include "../transport/adapter/ipc_signal_ring.h"
+#include "../../include/util/uk_debug.h"
 #include <algorithm>
 #include <cassert>
 #include <stdexcept>
@@ -153,7 +155,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     uint32_t group_bits,
                                     uint32_t signal_group_tiles,
                                     int rank, int nranks,
-                                    size_t& staging_bytes, FusionMetaOut meta) {
+                                    size_t& staging_bytes, FusionMetaOut meta,
+                                    bool device_flags, size_t max_tiles) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
@@ -281,13 +284,32 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           TiledOp ws;
           ws.kind = ExecOpKind::WaitSignal;
           ws.src_peer = op.src_peer;
-          ws.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
-                            group_bits);
+          if (ch.wait_standalone_signal && device_flags) {
+            // Fused-task signals (fuse_reduce_copy): each tile's task
+            // writes its own slot with its own tag, so the group wait
+            // polls flag_count consecutive slots and completes when ALL
+            // match. Slots are collision-free within a run: pair*K+tile
+            // with K = the plan's tile-count bound.
+            ws.flag_slot = static_cast<uint32_t>(
+                static_cast<uint64_t>(ch.pair_id) * max_tiles +
+                static_cast<uint64_t>(t));
+            ws.flag_count = static_cast<uint32_t>(
+                std::min<size_t>(G, num_tiles - t));
+            // Flag tag == slot index (salted by the executor): slots are
+            // consecutive within a group, so the wait matches
+            // slot[i] == tag+i without any tag-layout arithmetic.
+            ws.tag = ws.flag_slot;
+          } else {
+            ws.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
+                              group_bits);
+          }
           cur_group_ws = static_cast<uint32_t>(out.size());
           out.push_back(ws);
           // When the sender fuses this group, the wait must count one
-          // arrival per tile instead of a single signal.
-          if (ws.tag <= 0xFFFFFFFFu) {
+          // arrival per tile instead of a single signal. A fused-RS Recv
+          // pairs with a standalone Signal (no put), so its wait stays a
+          // plain one-arrival wait.
+          if (ws.tag <= 0xFFFFFFFFu && !ch.wait_standalone_signal) {
             uint32_t grp =
                 static_cast<uint32_t>(std::min<size_t>(G, num_tiles - t));
             meta.wait_groups->emplace_back(cur_group_ws, grp);
@@ -296,24 +318,88 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         old_to_new[old_idx] = cur_group_ws;
 
       } else if (op.kind == AlgoOpKind::RecvReduce) {
-        {
-          old_to_new[old_idx] = static_cast<uint32_t>(out.size());
-          TiledOp red;
-          red.kind = ExecOpKind::Reduce;
-          red.bytes = op.bytes;
-          red.src_off = op.src_off;
-          red.dst_off = op.dst_off;
-          red.src_peer = ~0u;
-          red.dst_peer = ~0u;
+        old_to_new[old_idx] = static_cast<uint32_t>(out.size());
+        TiledOp red;
+        red.kind = ExecOpKind::Reduce;
+        red.bytes = op.bytes;
+        red.src_off = op.src_off;
+        red.dst_off = op.dst_off;
+        red.dst_peer = ~0u;
+        if (ch.fuse_remote_src) {
+          // Fused reduce: src is the PEER's send-source buffer (resolved
+          // through src_peer + the peer's role id); the out-of-place
+          // variant adds this rank's local Input as src2.
+          red.src_peer = op.src_peer;
           auto red_src = resolve_buf(ch.src, tmp_base);
-          auto red_dst = resolve_buf(ch.dst, tmp_base);
           red.src_buf_role = red_src.role;
-          red.dst_buf_role = red_dst.role;
           red.src_off += red_src.base_off;
-          red.dst_off += red_dst.base_off;
-          red.deps = op.deps;
-          out.push_back(red);
+          red.reduce_mode = ch.reduce_mode;
+          if (ch.reduce_mode == 1) {
+            auto red_src2 = resolve_buf(ch.src2, tmp_base);
+            red.src2_buf_role = red_src2.role;
+            red.src2_off = op.src_off + red_src2.base_off;
+          }
+        } else {
+          red.src_peer = ~0u;
+          auto red_src = resolve_buf(ch.src, tmp_base);
+          red.src_buf_role = red_src.role;
+          red.src_off += red_src.base_off;
         }
+        auto red_dst = resolve_buf(ch.dst, tmp_base);
+        red.dst_buf_role = red_dst.role;
+        red.dst_off += red_dst.base_off;
+        if (ch.fuse_copy_to_peer) {
+          // Fused reduce+copy: after the reduce, copy dst to the next
+          // rank's accumulation buffer. The data-ready signal is a
+          // device-completion flag slot (when device_flags) written by
+          // the task itself, or a separate host-written Signal op.
+          auto red_copy = resolve_buf(ch.copy_dst, tmp_base);
+          red.copy_dst_peer = static_cast<uint32_t>(ch.copy_peer);
+          red.copy_dst_buf_role = red_copy.role;
+          red.copy_dst_off = op.dst_off + red_copy.base_off;
+          red.fused_copy = true;
+          if (device_flags) {
+            // Per-tile slot + tag: tile t writes slot pair*K+t with the
+            // slot index as the tag (salted). The receiver's group wait
+            // polls consecutive slots and matches base_tag+i.
+            red.flag_slot = static_cast<uint32_t>(
+                static_cast<uint64_t>(ch.pair_id) * max_tiles +
+                static_cast<uint64_t>(t));
+            red.tag = red.flag_slot;
+          }
+        }
+        red.deps = op.deps;
+        out.push_back(red);
+        if (ch.fuse_copy_to_peer && !device_flags) {
+          TiledOp sig;
+          sig.kind = ExecOpKind::Signal;
+          sig.dst_peer = static_cast<uint32_t>(ch.copy_peer);
+          sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
+                             group_bits);
+          sig.deps.push_back(old_idx);  // remapped to this reduce tile
+          out.push_back(sig);
+        }
+
+      } else if (op.kind == AlgoOpKind::Signal) {
+        // Fused-RS data-ready signal: one standalone Signal per G-tile
+        // group, mirroring the receiver's WaitSignal group structure.
+        // The group fires when its producing reduce tiles complete
+        // (deps were propagated tile-by-tile from the producing chunk).
+        if (t % G == 0) {
+          TiledOp sig;
+          sig.kind = ExecOpKind::Signal;
+          sig.dst_peer = op.dst_peer;
+          sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
+                             group_bits);
+          size_t const gt = std::min<size_t>(G, num_tiles - t);
+          for (size_t k = 0; k < gt; ++k) {
+            Op const& gtile = ops[first_tile[ci] + t + k];
+            for (uint32_t d : gtile.deps) sig.deps.push_back(d);
+          }
+          old_to_new[old_idx] = static_cast<uint32_t>(out.size());
+          out.push_back(sig);
+        }
+
       } else if (op.kind == AlgoOpKind::Put) {
         // Local copy (pairless Put chunk): plain Put tiles with no
         // signal — emitted by the AllGather/ReduceScatter builders for
@@ -395,7 +481,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 }  // namespace
 
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
-                       uint32_t signal_group_tiles) {
+                       uint32_t signal_group_tiles, bool device_flags) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -412,6 +498,28 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
   auto tiled = tile_macro_ops(algo, tile_bytes, first_tile);
   propagate_deps(algo.chunks, first_tile, tiled.tiles_per_op, tiled.ops);
 
+  // Device-flag slot bound: slot = pair*max_tiles + tile is
+  // collision-free within a run when max_tiles >= every chunk's tile
+  // count. The per-peer flag area is fixed-size, so plans that need more
+  // slots fall back to host-written signals (both sides derive the same
+  // bound, so the fallback is consistent).
+  size_t const max_bytes =
+      algo.input_bytes > algo.output_bytes ? algo.input_bytes
+                                           : algo.output_bytes;
+  size_t const max_tiles = (max_bytes + tile_bytes - 1) / tile_bytes;
+  uint32_t max_pair = 0;
+  for (auto const& c : algo.chunks)
+    if (c.pair_id != kNoPairId && c.pair_id > max_pair) max_pair = c.pair_id;
+  bool const flags_ok =
+      (static_cast<uint64_t>(max_pair) + 1) * max_tiles <=
+      Transport::kDeviceFlagSlots;
+  if (device_flags && !flags_ok)
+    UK_DBG(UK_DBG_LVL_EXEC,
+           "[lower] device-flag slots exceed %zu (pairs=%u tiles=%zu) — "
+           "falling back to host signals",
+           Transport::kDeviceFlagSlots, max_pair, max_tiles);
+  if (!flags_ok) device_flags = false;
+
   // Adaptive tag layout (see make_tag): the group field width is the
   // same on every rank because it derives from the rank-independent
   // max-tensor bound.
@@ -424,7 +532,6 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
     // fit in the remaining high bits of the 32-bit (fusion) tag.
     uint32_t const all_ones = (1u << group_bits) - 1;
     size_t max_groups = 0;
-    uint32_t max_pair = 0;
     for (auto const& c : algo.chunks) {
       if (c.pair_id == kNoPairId) continue;
       size_t tiles = (c.bytes + tile_bytes - 1) / tile_bytes;
@@ -457,7 +564,7 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
       lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                      tiled.tiles_per_op, tmp_base, group_bits,
                      signal_group_tiles, algo.rank, algo.nranks,
-                     staging_bytes, meta);
+                     staging_bytes, meta, device_flags, max_tiles);
   result.staging_bytes_required =
       staging_bytes > tmp_total ? staging_bytes : tmp_total;
   return result;
@@ -465,7 +572,8 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
 
 TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
   CollAlgo algo = build_coll_algo(config, inplace);
-  return lower_algo(algo, config.tile_bytes, config.signal_group_tiles);
+  return lower_algo(algo, config.tile_bytes, config.signal_group_tiles,
+                    config.device_flags);
 }
 
 }  // namespace CCL

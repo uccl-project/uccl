@@ -25,6 +25,25 @@ struct PeerSignalRing {
   std::atomic<uint64_t> read_idx{0};
 };
 
+// Device-completion flag area: each signal op owns ONE slot (single
+// writer — the producing device task, single consumer — the matching
+// host wait), so the write needs no atomic claim: a plain store +
+// __threadfence_system. This works even where
+// gpuDevAttrHostNativeAtomicSupported=0 (B300), which disables the
+// shared ring's kernel atomicAdd claim. The slot value is the salted
+// tag; the wait polls until it matches and never clears (the epoch in
+// the tag invalidates stale values across runs).
+inline constexpr size_t kDeviceFlagSlots = 4096;  // power of two
+
+struct DeviceFlagArea {
+  uint64_t slots[kDeviceFlagSlots];
+};
+struct DeviceFlagAreaDevice {
+  uint64_t slots[kDeviceFlagSlots];
+};
+static_assert(sizeof(DeviceFlagAreaDevice) == sizeof(DeviceFlagArea),
+              "DeviceFlagArea layout mismatch");
+
 // POD mirror used by device kernels; layout must match exactly.
 struct SignalSlotDevice {
   bool ready;
