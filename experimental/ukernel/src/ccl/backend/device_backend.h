@@ -47,8 +47,12 @@ class DeviceBackend final : public BatchBackend {
                                    size_t n) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
-  // True when the peer's IPC signal ring is GPU-mapped, so a fused
-  // PutSignal (CollPut task) can write the tag from the kernel.
+  // True when the peer's IPC signal ring is GPU-mapped AND the device
+  // supports system atomics on host memory, so a fused PutSignal
+  // (CollPut task) can write the ring's tag from the kernel
+  // (signal_ring_write uses atomicAdd_system). On B300
+  // HostNativeAtomicSupported=0, the ring write is impossible; the
+  // fused reduce+copy path uses plain-store device flags instead.
   bool can_fuse_put_signal(int peer) const override;
 
  private:
@@ -60,6 +64,7 @@ class DeviceBackend final : public BatchBackend {
 
   DeviceBackendConfig cfg_;
   int sm_count_ = 1;
+  int host_atomic_supported_ = 1;
   int device_idx_ = 0;
 
   bool owns_task_manager_ = false;

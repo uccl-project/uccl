@@ -48,6 +48,9 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuGetDevice(&device_idx_));
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
+  GPU_RT_CHECK(gpuDeviceGetAttribute(&host_atomic_supported_,
+                                     gpuDevAttrHostNativeAtomicSupported,
+                                     device_idx_));
   pending_by_fifo_.resize(cfg_.max_fifos);
   ensure_runtime();
 }
@@ -94,7 +97,8 @@ void DeviceBackend::ensure_runtime() {
   }
 }
 bool DeviceBackend::can_fuse_put_signal(int peer) const {
-  return comm_ && comm_->ipc_signal_ring_device_ptr(peer) != nullptr;
+  return host_atomic_supported_ && comm_ &&
+         comm_->ipc_signal_ring_device_ptr(peer) != nullptr;
 }
 
 bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
