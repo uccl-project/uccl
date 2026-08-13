@@ -269,8 +269,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::unique_ptr<PendingSlot[]> pending_ring_;
 
   // Condition variable for back-pressure
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
 
   Communicator* comm_ = nullptr;
 };

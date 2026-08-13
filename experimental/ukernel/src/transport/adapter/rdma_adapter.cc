@@ -15,7 +15,6 @@ namespace Transport {
 
 namespace {
 
-constexpr auto kCvTimeout = std::chrono::microseconds(1);
 constexpr auto kQpMaxSendWr = 1024;
 constexpr int kQpTimeout = 14;
 constexpr int kQpRetryCnt = 7;
@@ -212,7 +211,6 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
 
 void RdmaTransportAdapter::shutdown_workers() {
   stop_.store(true, std::memory_order_release);
-  cv_.notify_all();
   if (send_worker_.joinable()) send_worker_.join();
   if (poll_thread_.joinable()) poll_thread_.join();
 
@@ -1071,20 +1069,17 @@ void RdmaTransportAdapter::send_worker() {
         uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
         int q = (pin_qp >= 0) ? pin_qp : select_qp(*p, sz);
 
-        // Back-pressure: wait for inflight WRs to drop
+        // Back-pressure: lock-free spin on the per-QP in-flight count.
+        // poll_loop drains the CQs on a separate thread, so the wait is
+        // bounded by completion latency — no mutex/condvar, no context
+        // switch on the sender's critical path.
         while (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 >
                kMaxInflightWrs) {
           if (stop_.load(std::memory_order_acquire)) {
             failed = true;
             break;
           }
-          std::unique_lock<std::mutex> lk(cv_mu_);
-          cv_.wait_for(lk, kCvTimeout, [&] {
-            return p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) +
-                           1 <=
-                       kMaxInflightWrs ||
-                   stop_.load(std::memory_order_acquire);
-          });
+          machnet_pause();
         }
         if (failed) break;
 
@@ -1296,7 +1291,6 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
           slot.send_id.compare_exchange_strong(exp, 0,
                                                std::memory_order_release);
         }
-        cv_.notify_all();
         continue;
       }
 
@@ -1320,7 +1314,6 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
 
       // Verify slot ownership
       if (slot.send_id.load(std::memory_order_acquire) != send_id) {
-        cv_.notify_all();
         continue;
       }
 
@@ -1335,7 +1328,6 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         }
         // If CAS failed, error path or another thread already handled it
       }
-      cv_.notify_all();
     }
   }
   return any;
@@ -1360,7 +1352,6 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
         uint32_t exp = send_id;
         slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
       }
-      cv_.notify_all();
       continue;
     }
 
@@ -1381,7 +1372,6 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
             }
           }
         }
-        cv_.notify_all();
         break;
       }
 
