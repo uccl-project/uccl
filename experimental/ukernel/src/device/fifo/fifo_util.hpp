@@ -171,6 +171,18 @@ MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, T const& val,
   return cuda::atomic_ref<T, Scope>{*ptr}.fetch_add(val, memoryOrder);
 }
 
+template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
+MSCCLPP_HOST_DEVICE_INLINE T atomicOr(T* ptr, T const& val,
+                                      cuda::memory_order memoryOrder) {
+  return cuda::atomic_ref<T, Scope>{*ptr}.fetch_or(val, memoryOrder);
+}
+
+template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
+MSCCLPP_HOST_DEVICE_INLINE T atomicAnd(T* ptr, T const& val,
+                                       cuda::memory_order memoryOrder) {
+  return cuda::atomic_ref<T, Scope>{*ptr}.fetch_and(val, memoryOrder);
+}
+
 #elif defined(MSCCLPP_DEVICE_HIP)
 
 constexpr auto memoryOrderRelaxed = __ATOMIC_RELAXED;
@@ -200,6 +212,18 @@ MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, T const& val,
   return __atomic_fetch_add(ptr, val, memoryOrder);
 }
 
+template <typename T, int scope = scopeSystem>
+MSCCLPP_HOST_DEVICE_INLINE T atomicOr(T* ptr, T const& val,
+                                      int memoryOrder) {
+  return __atomic_fetch_or(ptr, val, memoryOrder);
+}
+
+template <typename T, int scope = scopeSystem>
+MSCCLPP_HOST_DEVICE_INLINE T atomicAnd(T* ptr, T const& val,
+                                       int memoryOrder) {
+  return __atomic_fetch_and(ptr, val, memoryOrder);
+}
+
 #else  // Host-side (non-device) compilation
 
 // For host-side code, provide simple atomic wrappers using GCC built-ins
@@ -225,6 +249,16 @@ inline void atomicStore(T* ptr, T const& val, int memoryOrder) {
 template <typename T, int scope = scopeSystem>
 inline T atomicFetchAdd(T* ptr, T const& val, int memoryOrder) {
   return __atomic_fetch_add(ptr, val, memoryOrder);
+}
+
+template <typename T, int scope = scopeSystem>
+inline T atomicOr(T* ptr, T const& val, int memoryOrder) {
+  return __atomic_fetch_or(ptr, val, memoryOrder);
+}
+
+template <typename T, int scope = scopeSystem>
+inline T atomicAnd(T* ptr, T const& val, int memoryOrder) {
+  return __atomic_fetch_and(ptr, val, memoryOrder);
 }
 
 #endif  // defined(MSCCLPP_DEVICE_HIP)

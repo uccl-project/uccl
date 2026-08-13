@@ -97,6 +97,12 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
     GPU_RT_CHECK(gpuGetDevice(&device));
     GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount,
                                        device));
+    if (numBlocks > 64) {
+      // The exit rendezvous mask is 64-bit; beyond that the worker cannot
+      // safely coordinate block exit. More blocks also defeat the
+      // low-SM-occupancy goal — reject instead of degrading silently.
+      return false;
+    }
     if (numBlocks > static_cast<uint32_t>(sm_count)) {
       return false;
     }
@@ -360,12 +366,10 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
 
   if (worker.h_exited) *worker.h_exited = false;
 
-  // Relaunch after an idle exit must reset the multi-block sync state:
-  // the previous kernel's exit publishes publishedPhase=1 with
-  // command=kCommandExit, so a stale buffer makes the relaunched kernel
-  // see "exit" on its first phase check and return before consuming any
-  // tasks (observed: fifo head>0, tail=0 forever in the shim at
-  // blocks>1). Zero it on the worker stream, ordered before the launch.
+  // Relaunch after an idle exit must reset the multi-block sync state
+  // (per-task completion counter + exit-vote mask), otherwise the fresh
+  // grid inherits a full exit mask and returns before consuming anything.
+  // Zero it on the worker stream, ordered before the launch.
   if (worker.numBlocks > 1 && worker.d_multi_sync) {
     GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
                                 sizeof(MultiBlockSync), worker.stream));
