@@ -5,6 +5,7 @@
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -240,8 +242,21 @@ class Communicator {
     size_t local_len = 0;
     void* remote_base = nullptr;  // remote buffer base; dst_off added per call
   };
-  mutable std::mutex put_cache_mu_;
-  std::unordered_map<PutFastKey, PutFastEntry, PutFastKeyHash> put_cache_;
+  // Lock-free-read cache: a fixed-size open-addressed table guarded by a
+  // seqlock. Readers probe the array without a lock and retry on a torn
+  // read; writers (rare: fill on a miss) serialize on a mutex and bump
+  // the sequence around the in-place update. The table never resizes or
+  // deletes, so the reader's linear probe is safe while a writer mutates
+  // an entry.
+  static constexpr size_t kPutCacheSlots = 64;
+  struct PutCacheSlot {
+    bool valid = false;
+    PutFastKey key{};
+    PutFastEntry entry{};
+  };
+  mutable std::mutex put_cache_write_mu_;
+  std::atomic<uint64_t> put_cache_seq_{0};
+  std::array<PutCacheSlot, kPutCacheSlots> put_cache_slots_{};
   std::atomic<uint64_t> put_cache_gen_{1};
   void put_cache_bump() {
     put_cache_gen_.fetch_add(1, std::memory_order_relaxed);

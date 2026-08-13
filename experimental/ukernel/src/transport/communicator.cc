@@ -885,13 +885,31 @@ bool Communicator::put_cache_hit(int peer, uint32_t src_buf, uint32_t dst_buf,
                                  void** local_ptr, void** remote_ptr) {
   if (bytes == 0) return false;
   uint64_t gen = put_cache_gen_.load(std::memory_order_relaxed);
+  PutFastKey key{peer, src_buf, dst_buf};
+  size_t const start = PutFastKeyHash{}(key) & (kPutCacheSlots - 1);
   PutFastEntry e;
-  {
-    std::lock_guard<std::mutex> lk(put_cache_mu_);
-    auto it = put_cache_.find(PutFastKey{peer, src_buf, dst_buf});
-    if (it == put_cache_.end() || it->second.gen != gen) return false;
-    e = it->second;
+  bool found = false;
+  for (;;) {
+    uint64_t const s0 = put_cache_seq_.load(std::memory_order_acquire);
+    if (s0 & 1) {  // writer in flight — retry
+      std::this_thread::yield();
+      continue;
+    }
+    found = false;
+    for (size_t i = 0; i < kPutCacheSlots; ++i) {
+      auto const& slot =
+          put_cache_slots_[(start + i) & (kPutCacheSlots - 1)];
+      if (!slot.valid) break;  // no deletes: empty terminates the probe
+      if (slot.key == key) {
+        e = slot.entry;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+    if (put_cache_seq_.load(std::memory_order_acquire) == s0) break;
   }
+  if (e.gen != gen) return false;
   // The cache only holds IPC entries, and only matches a request for the
   // same kind — a later explicit RDMA/TCP request for the same
   // (peer, src, dst) must not be silently served over IPC.
@@ -910,10 +928,23 @@ void Communicator::put_cache_fill(int peer, uint32_t src_buf, uint32_t dst_buf,
                                   PeerTransportKind kind,
                                   TransportAdapter* adapter, void* local_base,
                                   size_t local_len, void* remote_base) {
-  std::lock_guard<std::mutex> lk(put_cache_mu_);
-  put_cache_[PutFastKey{peer, src_buf, dst_buf}] =
-      PutFastEntry{put_cache_gen_.load(std::memory_order_relaxed), kind,
-                   adapter, local_base, local_len, remote_base};
+  PutFastKey key{peer, src_buf, dst_buf};
+  size_t const start = PutFastKeyHash{}(key) & (kPutCacheSlots - 1);
+  PutFastEntry entry{put_cache_gen_.load(std::memory_order_relaxed), kind,
+                     adapter, local_base, local_len, remote_base};
+  std::lock_guard<std::mutex> lk(put_cache_write_mu_);
+  put_cache_seq_.fetch_add(1, std::memory_order_release);  // odd: write
+  for (size_t i = 0; i < kPutCacheSlots; ++i) {
+    auto& slot = put_cache_slots_[(start + i) & (kPutCacheSlots - 1)];
+    if (!slot.valid || slot.key == key) {
+      slot.key = key;
+      slot.entry = entry;
+      slot.valid = true;
+      break;
+    }
+    // Table full: drop the insertion (a miss just takes the slow path).
+  }
+  put_cache_seq_.fetch_add(1, std::memory_order_release);  // even: stable
 }
 
 bool Communicator::send_put_async_with_rid(int peer, uint32_t src_buf,
