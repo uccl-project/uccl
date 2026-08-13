@@ -132,6 +132,15 @@ class IpcAdapter final : public TransportAdapter {
   };
   // Per-peer deferred signal ring writes (back-pressure on the
   // receiver's drain cadence). Written by the send worker only.
+  //
+  // Correctness bound: the shared signal ring is 4096 slots, and a
+  // deferred write keeps its slot CLAIMED until written. The ring cannot
+  // wrap onto a deferred slot while the receiver keeps draining each
+  // synchronous collective round (the depth of un-drained slots stays
+  // << 4096). If a future non-round-synchronous path lets the receiver
+  // fall >4096 slots behind while the device kernel also claims slots,
+  // a wrap could double-claim a slot and lose a signal — that path must
+  // re-examine this bound before shipping.
   std::vector<std::deque<DeferredSignal>> deferred_sigs_;
 
   bool connect_to(int rank);

@@ -1041,8 +1041,12 @@ void RdmaTransportAdapter::send_worker() {
           goto next_elem;
         }
         if (++cas_spin > 5000000) {
-          slot.send_id.store(send_id, std::memory_order_release);
-          break;
+          // The ring has been full beyond the in-flight bound for too
+          // long. Fail this send instead of force-writing send_id — the
+          // old code overwrote a live slot, losing the in-flight op's
+          // completion attribution (a data race under extreme pressure).
+          publish_put_completion(e.comm_rid, true);
+          goto next_elem;
         }
         expected = 0;
         std::this_thread::yield();

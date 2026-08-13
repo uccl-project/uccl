@@ -191,11 +191,15 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 
   // Signal completion ring: on_signal_received pushes here,
   // try_complete_sig_wait dequeues. MP/MC for thread safety.
-  ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
+  // Signal completion ring: on_signal_received pushes here,
+  // try_complete_sig_wait dequeues. MP/MC for thread safety. Sized above
+  // the executor's in-flight wait cap (UK_CCL_SIG_INFLIGHT_CAP, default
+  // 4096) so the overflow deque/mutex is not the common path.
+  ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 8192);
   if (ring_sz != (size_t)-1) {
     sig_wait_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
     if (sig_wait_completion_ring_)
-      jring_init(sig_wait_completion_ring_, 2048, sizeof(SignalCompletion), 1,
+      jring_init(sig_wait_completion_ring_, 8192, sizeof(SignalCompletion), 1,
                  1);
   }
 
