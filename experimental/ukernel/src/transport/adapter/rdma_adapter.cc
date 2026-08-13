@@ -1050,38 +1050,56 @@ void RdmaTransportAdapter::send_worker() {
         std::this_thread::yield();
       }
       slot.comm_rid = e.comm_rid;
-      slot.total_chunks = ck.count;
+      // One signaled completion per message: only the last chunk on the
+      // pinned QP is signaled; QP ordering means the whole message's data
+      // has landed when that completion arrives.
+      slot.total_chunks = 1;
       slot.completed_chunks.store(0, std::memory_order_release);
 
       bool failed = false;
       size_t off = 0;
-      // QP pinning: an explicit group affinity wins (all puts of one
-      // signal group share the QP, so the group's trailing imm implies
-      // the whole group landed); a fused PutSignal without affinity pins
-      // only its own chunks; plain puts stripe per chunk as before.
+      // Pin the WHOLE message to one QP so the per-message credit below
+      // is exact. Concurrent messages still stripe across QPs via
+      // select_qp's message-level choice (aggregate striping preserved;
+      // only intra-message striping is traded for the signaled-WR win).
+      // An explicit group affinity always wins (fused groups must be
+      // ordered on one QP).
       int pin_qp = -1;
       if (e.qp_affinity != ~0u)
         pin_qp =
             static_cast<int>(e.qp_affinity % static_cast<uint32_t>(p->num_qps));
-      else if (fused)
+      else
         pin_qp = select_qp(*p, static_cast<uint32_t>(e.len));
+
+      // In-flight credit is message-granularity (one per message). Cap it
+      // so the QP send queue (kQpMaxSendWr) always holds the worst case
+      // (cap x kMaxChunks): small 1-chunk messages keep the old 128-deep
+      // concurrency, large messages step down so they cannot overflow the
+      // queue with unsignaled chunks.
+      int cap = std::min<int>(
+          kMaxInflightWrs,
+          kQpMaxSendWr / std::max<int>(1, static_cast<int>(ck.count)));
+      while (p->qp_state[pin_qp].unacked_wrs.load(std::memory_order_acquire) +
+                 1 >
+             cap) {
+        if (stop_.load(std::memory_order_acquire)) {
+          failed = true;
+          break;
+        }
+        machnet_pause();
+      }
+      if (failed) {
+        continue;
+      }
+      // Mark the message in flight BEFORE posting its WRs (one credit per
+      // message; the single signaled completion in poll_cq_set returns
+      // it). Posting the credit first also keeps the send queue bound
+      // exact even if the first ibv_post_send returns immediately.
+      p->qp_state[pin_qp].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
+
       for (uint32_t ci = 0; ci < ck.count; ++ci) {
         uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
-        int q = (pin_qp >= 0) ? pin_qp : select_qp(*p, sz);
-
-        // Back-pressure: lock-free spin on the per-QP in-flight count.
-        // poll_loop drains the CQs on a separate thread, so the wait is
-        // bounded by completion latency — no mutex/condvar, no context
-        // switch on the sender's critical path.
-        while (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 >
-               kMaxInflightWrs) {
-          if (stop_.load(std::memory_order_acquire)) {
-            failed = true;
-            break;
-          }
-          machnet_pause();
-        }
-        if (failed) break;
+        int q = pin_qp;
 
         // Encode QP index into wr_id (Task 4)
         uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) |
@@ -1097,7 +1115,8 @@ void RdmaTransportAdapter::send_worker() {
         wr.wr_id = wr_id;
         wr.sg_list = &sge;
         wr.num_sge = 1;
-        if (fused && ci + 1 == ck.count) {
+        bool const last = (ci + 1 == ck.count);
+        if (fused && last) {
           wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
           // The immediate intentionally carries only the tag's low 32
           // bits — the unsalted tag (the run epoch lives in the high
@@ -1109,7 +1128,10 @@ void RdmaTransportAdapter::send_worker() {
         } else {
           wr.opcode = IBV_WR_RDMA_WRITE;
         }
-        wr.send_flags = IBV_SEND_SIGNALED;
+        // Only the last chunk is signaled; its completion is ordered
+        // behind the unsignaled chunks on the same QP, so it marks the
+        // whole message complete.
+        wr.send_flags = last ? IBV_SEND_SIGNALED : 0;
         wr.wr.rdma.remote_addr = e.remote_addr + off;
         wr.wr.rdma.rkey = e.remote_rkey;
 
@@ -1125,7 +1147,7 @@ void RdmaTransportAdapter::send_worker() {
                   ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
 
           // Mark slot as complete and free (error path)
-          slot.completed_chunks.store(ck.count, std::memory_order_release);
+          slot.completed_chunks.store(1, std::memory_order_release);
           publish_put_completion(e.comm_rid, true);
           // Only free if we still own the slot
           uint32_t exp = send_id;
@@ -1135,7 +1157,6 @@ void RdmaTransportAdapter::send_worker() {
           break;
         }
 
-        p->qp_state[q].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
         p->qp_state[q].last_send_ns.store(now_ns(), std::memory_order_release);
         off += sz;
       }
