@@ -2208,16 +2208,19 @@ bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
-  // Same-host buffers are usable over IPC with rkey=0; RDMA/MR
-  // registration can fail for small allocations (observed for <4KB
-  // allreduces: 1K/4K/16K resolve failed with mr=0 ipc=1). The IPC item
-  // is sufficient, so only require it here.
+  // Same-host buffers are normally moved over IPC, which needs no rkey.
+  // Resolve the RDMA MR best-effort as well: a forced RDMA put
+  // (UK_CCL_PUT_PATH=rdma) still needs remote_buffer_to_mr_ populated,
+  // otherwise get_mr() throws "remote MR rank cache not found". A failed
+  // MR resolve is tolerated — small allocations can register with rkey=0,
+  // and the RDMA send path then rejects the buffer cleanly instead.
   if (same_host(peer_rank)) {
     if (!wait_ipc(peer_rank, buffer_id, timeout_ms)) {
       std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (ipc)\n",
                    global_rank_, peer_rank, buffer_id);
       return false;
     }
+    (void)wait_mr(peer_rank, buffer_id, timeout_ms);
     return true;
   }
   bool ok_mr = wait_mr(peer_rank, buffer_id, timeout_ms);
