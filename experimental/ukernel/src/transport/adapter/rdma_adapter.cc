@@ -776,9 +776,11 @@ unsigned RdmaTransportAdapter::send_put_signal_async(
     uint32_t remote_buf_id, size_t len, uint64_t tag, uint32_t qp_affinity,
     unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
-  // The immediate is 32 bits; callers must fall back to a separate
-  // put+signal for larger tags.
-  if (tag >> 32) return 0;
+  // The write-with-imm immediate is 32 bits, but the shim salts the tag
+  // with the run epoch in the high 32 bits. The sender uses only the low
+  // 32 bits (low32(salted) == unsalted) and the receiver matches them
+  // per-peer FIFO, so a salted tag must NOT be rejected here — doing so
+  // dropped every fused RDMA put and deadlocked the collective.
 
   // Lock-free local MR lookup (Task 1)
   uint32_t lkey = 0;
