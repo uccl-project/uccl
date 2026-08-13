@@ -1176,11 +1176,12 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
   }
 
   // Fused RDMA PutSignal waits match write-with-imm arrivals, not the
-  // 64-bit tag map: either the caller flagged it (the executor's mirror of
-  // a fused group) or the kind+tag shape says the tag must have travelled
-  // as a 32-bit immediate. Matching is per-peer FIFO in arrival order.
-  bool const imm =
-      force_imm || (kind == PeerTransportKind::Rdma && tag <= 0xFFFFFFFFull);
+  // 64-bit tag map. The ONLY reliable signal is force_imm (the executor's
+  // mirror of a fused group): a small tag value does NOT imply the tag
+  // travelled as a 32-bit immediate — a plain 64-bit signal QP SEND can
+  // carry any tag, including 0. Matching is per-peer FIFO in arrival
+  // order.
+  bool const imm = force_imm;
   if (imm) {
     uint32_t const low32 = static_cast<uint32_t>(tag);
     SignalCompletion ev{};
