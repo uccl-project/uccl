@@ -111,6 +111,52 @@ reduce-bound** (pure reduce at BLK=32 is 640 GB/s). Remaining headroom
 to native is the put path keeping all NVLink lanes busy (native uses 32
 channels; the shim uses a single IPC sliding window).
 
+## Per-SM efficiency ceiling
+
+Device reduce bench (persistent worker, 1 task/round, smem=4096,
+leader-free multi-block kernel, A40, 2026-08-14). GB/s = payload bytes
+reduced per second (read+write DRAM traffic is 2x); GB/s/SM = GB/s ÷
+blocks.
+
+256M payload:
+
+| blocks | 128 thr GB/s | 128 thr GB/s/SM | 256 thr GB/s | 256 thr GB/s/SM |
+|---:|---:|---:|---:|---:|
+| 1 | 10.3 | 10.3 | 19.0 | 19.0 |
+| 2 | 20.4 | 10.2 | 37.3 | 18.7 |
+| 4 | 39.8 | 10.0 | 71.4 | 17.9 |
+| 8 | 75.3 | 9.4 | 129.4 | 16.2 |
+| 16 | 134.2 | 8.4 | 178.9 | 11.2 |
+| 32 | 178.9 | 5.6 | 186.5 | 5.8 |
+| 64 | 185.0 | 2.9 | 182.6 | 2.9 |
+
+16M / 64M reach the same ceilings (±1%), so the table is
+size-independent above ~16M.
+
+Findings:
+
+- **Per-SM ceiling is ~19 GB/s/SM** (256 threads, single block) on A40.
+  The single biggest per-SM lever is threads/block: 128 -> 256 threads
+  nearly doubles per-SM throughput (10.3 -> 19.0 at BLK=1).
+- **Aggregate saturates at 32 blocks (~186 GB/s = ~372 GB/s DRAM
+  traffic, ~53% of A40's 696 GB/s peak for this ILP=4 access pattern)**.
+  16 blocks already reach 96% (178.9) at 11.2 GB/s/SM; 32 blocks are
+  100% at only 5.8 GB/s/SM. Beyond the saturation point, extra blocks
+  add SM scheduling overhead without bandwidth — per-SM efficiency
+  halves every doubling past 16.
+- The limiter is the memory system, not SM compute: at 16-32 blocks the
+  SMs are idle-waiting on DRAM, so the practical target is the fewest
+  blocks that keep ~16 in-flight bytes x 256 threads x ILP in flight —
+  for A40 that is 16 blocks at 256 threads.
+
+B300 (ILP=4, historical bench, 256M): per-SM ceiling is ~8.2 GB/s/SM
+(BLK=1, 256 thr) and drops to ~6.0 at 128 blocks — lower than A40's 19
+because B300's HBM3e latency-bandwidth product starves the ILP=4 loop
+(see "Why ILP"). B300 only saturates (~763 GB/s at 128 blocks, 256M,
+256 thr) by stacking SMs; per-SM throughput at the saturation point is
+~6 GB/s. Raising ILP to 16 (+24%/block) is the lever that lifts the
+B300 per-SM ceiling so the same aggregate can come from fewer blocks.
+
 ## TMA bulk reduce (TMA_REDUCE=1)
 
 Build: `make SM=103 ENABLE_TMA=0 REDUCE_ILP=4 REDUCE_SMEM_KB=224
