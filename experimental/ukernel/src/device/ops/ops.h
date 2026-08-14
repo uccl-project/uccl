@@ -542,8 +542,11 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   size_t bytes = count * sizeof(T);
 
   // cp.async.bulk needs multiple-of-16 size and 16B-aligned addresses;
-  // a 4-byte allreduce used to crash here.
-  if (is_tma_supported() && smem_buf != nullptr && bytes <= 4096 &&
+  // a 4-byte allreduce used to crash here. The mbarrier is carved after
+  // the payload, so the payload must leave room for it inside the actual
+  // dynamic-smem budget (UK_REDUCE_SMEM_BYTES matches the launch config).
+  if (is_tma_supported() && smem_buf != nullptr &&
+      bytes + sizeof(TmaSemaphore) <= UK_REDUCE_SMEM_BYTES &&
       bytes % 16 == 0 &&
       (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
       (reinterpret_cast<uintptr_t>(src) & 0xF) == 0) {

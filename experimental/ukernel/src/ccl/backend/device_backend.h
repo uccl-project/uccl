@@ -54,7 +54,6 @@ class DeviceBackend final : public BatchBackend {
   // HostNativeAtomicSupported=0, the ring write is impossible; the
   // fused reduce+copy path uses plain-store device flags instead.
   bool can_fuse_put_signal(int peer) const override;
-
  private:
   void ensure_runtime();
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds

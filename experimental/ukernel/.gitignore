@@ -6,6 +6,9 @@
 *.a
 *.so
 
+# Build-flag stamps (see mk/arch_defaults.mk)
+.uk_build_flags
+
 # Python build artifacts
 py/build/
 

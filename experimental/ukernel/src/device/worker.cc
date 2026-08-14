@@ -1,11 +1,22 @@
 #include "worker.h"
 #include "persistent_kernel_ops.h"
 #include <algorithm>
+#include <chrono>
+#include <stdexcept>
 
 namespace UKernel {
 namespace Device {
 
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
+  // Fail fast with a clear message if GDR (gdrcopy kernel module) is
+  // unavailable — every fifo head/tail access below depends on it.
+  try {
+    (void)mscclpp::detail::globalGdr();
+  } catch (std::exception const& e) {
+    throw std::runtime_error(
+        std::string("WorkerPool: GDR unavailable, worker fifos need it: ") +
+        e.what());
+  }
   // ~100ns per idle poll (idle_sleep's __nanosleep(1), plus loop +
   // syncthreads overhead ≈ 300-500ns) → 10 polls per us keeps the actual
   // exit latency within a few x of the configured grace. (The old
@@ -321,15 +332,23 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
   }
 }
 
-void WorkerPool::sync(uint64_t taskId, uint32_t fifoId) {
+void WorkerPool::sync(uint64_t taskId, uint32_t fifoId, uint64_t timeout_ms) {
   if (fifoId >= fifos_.size()) return;
   auto& ctx = *fifos_[fifoId];
   // Poll the tail ourselves so a worker that idle-exited after our push
   // (its exit flag becomes visible while we wait) gets relaunched and
   // consumes the task — otherwise a task pushed into the race window is
   // lost forever and the caller hangs.
+  auto const deadline =
+      timeout_ms ? std::chrono::steady_clock::now() +
+                       std::chrono::milliseconds(timeout_ms)
+                 : std::chrono::steady_clock::time_point::max();
   while ((int64_t)(ctx.fifo.currentId() - taskId) <= 0) {
     relaunch_if_exited(fifoId);
+    if (timeout_ms &&
+        std::chrono::steady_clock::now() >= deadline) {
+      return;
+    }
     std::this_thread::yield();
   }
 }
@@ -342,7 +361,13 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   GPU_RT_CHECK(gpuMemcpyAsync(worker.d_fifo_handle, &handle,
                               sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
                               gpuMemcpyHostToDevice, worker.stream));
-  GPU_RT_CHECK(gpuStreamSynchronize(worker.stream));
+  // No host sync: the memcpy, memset and launch are all ordered on
+  // worker.stream, so the new grid runs strictly after the old one. The
+  // kernel clears h_exited at entry (also stream-ordered), so the host
+  // never sees the previous grid's exit flag as a stale "exited" that
+  // would trigger a second relaunch of a live worker. Skipping the sync
+  // removes a multi-ms stall from the enqueue path (the old grid only
+  // terminates after the idle grace elapses).
 
   auto* d_task_args = TaskManager::instance().d_task_args();
 
@@ -363,8 +388,6 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
         kernel, gpuFuncAttributeMaxDynamicSharedMemorySize,
         static_cast<int>(smem_size)));
   }
-
-  if (worker.h_exited) *worker.h_exited = false;
 
   // Relaunch after an idle exit must reset the multi-block sync state
   // (per-task completion counter + exit-vote mask), otherwise the fresh

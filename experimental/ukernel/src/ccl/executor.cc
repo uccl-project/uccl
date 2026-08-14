@@ -1460,6 +1460,12 @@ void SprayExecutor::enqueue_loop() {
 }
 
 void SprayExecutor::drain_dev_loop() {
+  // NOTE: do NOT pin this thread with gpuSetDevice at loop start — a
+  // concurrent context attach from a second thread while the enqueue
+  // thread is mid-launch hangs the worker kernel launch on this driver
+  // (observed locally, GPU idle + launch never returns). do_drain's own
+  // save/restore handles the device, and a failed restore is a warning
+  // (see DeviceBackend::do_drain), which fixes the B300 256M abort.
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
   int iter = 0;

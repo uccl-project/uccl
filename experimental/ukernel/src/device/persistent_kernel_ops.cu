@@ -294,6 +294,16 @@ __global__ void singlePersistentKernel(
   uint32_t idle_ticks = 0;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
 
+  // Clear the host-visible exit flag at kernel entry. The relaunch path
+  // is async (the new grid is stream-ordered behind the exiting one), so
+  // this runs strictly after the old grid's final h_exited write and
+  // stops the host from seeing a stale "exited" and relaunching a live
+  // worker.
+  if (threadIdx.x == 0) {
+    *exited_flag = false;
+    __threadfence_system();
+  }
+
   if (threadIdx.x == 0) {
     cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
         fifo.tail, mscclpp::memoryOrderRelaxed);
@@ -392,6 +402,14 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   uint32_t idle_ticks = 0;
   bool own_idle_vote = false;
 
+  // Clear the host-visible exit flag at kernel entry (see the single
+  // kernel above; the async relaunch queues this grid after the exiting
+  // one, so the old grid's final h_exited write is overwritten here).
+  if (threadIdx.x == 0) {
+    *exited_flag = false;
+    __threadfence_system();
+  }
+
   while (true) {
     // Exit rendezvous: a block leaves only when every block has voted to
     // exit (idle grace elapsed) or the host requests a stop. A block that
@@ -473,83 +491,95 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
       continue;
     }
 
-    // Work present: revoke this block's exit vote (a block that keeps its
-    // bit set while another is mid-task could strand the completion
-    // counter), then read the task + args directly (no leader hand-off).
+    // Work present: revoke this block's exit vote once for the whole
+    // burst (a block that keeps its bit set while another is mid-task
+    // could strand the completion counter), then process every task
+    // already visible in this snapshot without re-polling the fifo
+    // between them. Tasks pushed after the snapshot are picked up by the
+    // next outer iteration.
     if (threadIdx.x == 0) {
       if (own_idle_vote) {
         mscclpp::atomicAnd<uint64_t, mscclpp::scopeDevice>(
             &d_sync->exitReadyMask, ~own_bit, mscclpp::memoryOrderRelease);
         own_idle_vote = false;
       }
-      current_task = fifo.buffer[sh_tail % fifo.size];
-      has_current_args = false;
     }
     __syncthreads();
     idle_ticks = 0;
 
-    const TaskType ttype = static_cast<TaskType>(current_task.type_u8());
-    if (ttype == static_cast<TaskType>(TaskType::Stop)) {
+    while (true) {
+      // Read the task + args directly (no leader hand-off). All blocks
+      // process the same sh_tail sequence; the completion barrier below
+      // keeps them in lockstep across tasks in the burst.
       if (threadIdx.x == 0) {
-        publish_tail_progress(fifo.tail, sh_tail + 1);
-        // Sentinel task: stop immediately (all blocks together).
-        mscclpp::atomicOr<uint64_t, mscclpp::scopeDevice>(
-            &d_sync->exitReadyMask, all_blocks_mask,
-            mscclpp::memoryOrderRelease);
+        current_task = fifo.buffer[sh_tail % fifo.size];
+        has_current_args = false;
       }
       __syncthreads();
-      continue;
-    }
 
-    if (task_uses_args(ttype)) {
-      if (threadIdx.x == 0) {
-        const uint32_t idx = current_task.args_index();
-        if (idx < (1UL << TaskArgsIndexSize)) {
-          *current_args = d_task_args[idx];
-          has_current_args = true;
+      const TaskType ttype = static_cast<TaskType>(current_task.type_u8());
+      if (task_uses_args(ttype)) {
+        if (threadIdx.x == 0) {
+          const uint32_t idx = current_task.args_index();
+          if (idx < (1UL << TaskArgsIndexSize)) {
+            *current_args = d_task_args[idx];
+            has_current_args = true;
+          }
         }
-      }
-      __syncthreads();
-      if (!has_current_args) {
-        // Invalid args index: skip the task (advance tail once).
-        if (threadIdx.x == 0)
-          publish_tail_progress(fifo.tail, sh_tail + 1);
         __syncthreads();
-        continue;
-      }
-    }
-    __syncthreads();
-
-    dispatch_task(current_task, task_uses_args(ttype) ? current_args : nullptr,
-                  bid, gridDim.x, smem_buf);
-    __syncthreads();
-
-    // Completion: every block adds 1. The block that reaches gridDim.x
-    // performs the task's fence + signal + tail publish, then resets the
-    // counter; the others wait for that reset. This is the only cross-
-    // block synchronization — no leader, no phase hand-off.
-    if (threadIdx.x == 0) {
-      uint32_t done =
-          mscclpp::atomicFetchAdd<uint32_t, mscclpp::scopeDevice>(
-              &d_sync->completedBlocks, 1u, mscclpp::memoryOrderAcqRel) +
-          1u;
-      if (done == gridDim.x) {
-        // Same ordering requirement as the single-block path: all blocks'
-        // writes must be visible before the host observes completion.
-        tma_fence_async_global();
-        __threadfence();
-        maybe_signal_ring_write(current_task, current_args);
-        publish_tail_progress(fifo.tail, sh_tail + 1);
-        mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
-            &d_sync->completedBlocks, 0u, mscclpp::memoryOrderRelease);
-      } else {
-        while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-                   &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) !=
-               0u) {
+        if (!has_current_args) {
+          // Invalid args index: skip the task (advance tail once).
+          if (threadIdx.x == 0) {
+            publish_tail_progress(fifo.tail, sh_tail + 1);
+            ++sh_tail;
+          }
+          __syncthreads();
+          if (sh_tail >= sh_head) break;
+          continue;
         }
       }
+      __syncthreads();
+
+      dispatch_task(current_task,
+                    task_uses_args(ttype) ? current_args : nullptr, bid,
+                    gridDim.x, smem_buf);
+      __syncthreads();
+
+      // Completion: every block adds 1. The block that reaches gridDim.x
+      // performs the task's fence + signal + tail publish, then resets
+      // the counter; the others wait for that reset. This is the only
+      // cross-block synchronization — no leader, no phase hand-off.
+      if (threadIdx.x == 0) {
+        uint32_t done =
+            mscclpp::atomicFetchAdd<uint32_t, mscclpp::scopeDevice>(
+                &d_sync->completedBlocks, 1u, mscclpp::memoryOrderAcqRel) +
+            1u;
+        if (done == gridDim.x) {
+          // Same ordering requirement as the single-block path: all
+          // blocks' writes must be visible before the host observes
+          // completion.
+          tma_fence_async_global();
+          __threadfence();
+          maybe_signal_ring_write(current_task, current_args);
+          publish_tail_progress(fifo.tail, sh_tail + 1);
+          mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
+              &d_sync->completedBlocks, 0u, mscclpp::memoryOrderRelease);
+        } else {
+          while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
+                     &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) !=
+                 0u) {
+          }
+        }
+        // Every block advances its OWN shared copy of sh_tail — shared
+        // memory does not cross blocks and only the last block published
+        // the FIFO tail. Without this, non-last blocks re-process the
+        // same task (observed: done=1 forever, host spins on a full FIFO).
+        ++sh_tail;
+      }
+      __syncthreads();
+
+      if (sh_tail >= sh_head) break;
     }
-    __syncthreads();
   }
 }
 

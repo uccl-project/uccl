@@ -58,7 +58,17 @@ class WorkerPool {
   void shutdown_all();
 
   bool is_done(uint64_t taskId, uint32_t fifoId);
-  void sync(uint64_t taskId, uint32_t fifoId);
+  // Block until the fifo tail passes taskId. timeout_ms > 0 bounds the
+  // wait (returns early on timeout); 0 = wait forever. The timeout only
+  // adds a deadline check to the existing poll — no cost when idle.
+  void sync(uint64_t taskId, uint32_t fifoId, uint64_t timeout_ms = 0);
+
+  // NOTE: enqueue / enqueue_batch assume a SINGLE writer per fifo (the
+  // executor's enqueue thread). The head read-modify-write in push is not
+  // CAS-protected; concurrent writers would lose tasks. Multi-writer push
+  // would need a fetch_add slot claim + per-slot ready flag (extra atomic
+  // per task) — deferred until a real multi-writer caller exists.
+  // relaunch_if_exited / sync / is_done are safe from any thread.
 
   // Diagnostic: (head, tail) of a fifo as seen by the host (GDR reads).
   std::pair<uint64_t, uint64_t> fifo_head_tail(uint32_t fifoId) {

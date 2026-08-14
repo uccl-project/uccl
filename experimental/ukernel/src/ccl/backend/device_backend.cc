@@ -85,7 +85,10 @@ void DeviceBackend::ensure_runtime() {
   wc.smemSize = cfg_.smem_size;
   wc.idleExitAfterUs = cfg_.idle_exit_after_us;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
-  // Pre-create all workers
+  // Pre-create all workers. Lazy creation (createWorker from the first
+  // enqueue) was tried and hangs the kernel launch on this driver when
+  // the drain thread concurrently does device work (gpuGet/SetDevice in
+  // do_drain) — revisit together with the drain-thread device design.
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
     if (!worker_pool_->createWorker(i, cfg_.blocks_per_worker)) {
       throw std::runtime_error(
@@ -468,7 +471,20 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
     }
   }
   Device::TaskManager::instance().free_task_args_batch(args_buf, count);
-  if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(prev_device));
+  if (prev_device != device_idx_) {
+    // Restoring the caller's device can fail when its CUDA context cannot
+    // be (re)created under memory pressure (observed on a VLLM-co-resident
+    // B300: cudaSetDevice -> out of memory at 256M). The caller's next
+    // ensure_runtime() re-pins to device_idx_, so degrade to a warning
+    // instead of aborting the drain path.
+    gpuError_t err = gpuSetDevice(prev_device);
+    if (err != gpuSuccess) {
+      std::fprintf(stderr,
+                   "[dev-drain] warning: restore device %d failed (%s); "
+                   "thread left on device %d\n",
+                   prev_device, gpuGetErrorString(err), device_idx_);
+    }
+  }
   return count;
 }
 

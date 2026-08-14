@@ -22,7 +22,6 @@ enum class TaskType : uint64_t {
   CollPut = 2,   // GPU copy + signal ring write (used by CCL fused PutSignal)
   CollReduce,    // 3 — local reduction
   BenchNop,
-  Stop,
 };
 
 enum class DataType : uint64_t {
