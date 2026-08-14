@@ -9,9 +9,12 @@
 #   * SM unset            -> detect the GPU(s) present via nvidia-smi and
 #     build only those archs (the old fixed 4-arch list missed sm_103).
 #     No GPU / no nvidia-smi -> fall back to DEFAULT_SMS.
-#   * Per-arch defaults: sm_100/103 -> REDUCE_ILP=16, sm_90 -> 8, <90 -> 4.
-#     TMA bulk reduce + 224KB smem default on for sm_90+ perf builds only;
-#     VALIDATE=1 forces the fast build (no TMA, 4KB smem).
+#   * Per-arch defaults: sm_100/103 -> REDUCE_ILP=16, sm_90 -> 8, <90 -> 4
+#     on the vector path. TMA bulk reduce + 224KB smem default on for
+#     sm_90+ perf builds, which switch ILP back to 4 (the bulk chunks are
+#     TMA-driven, ILP only feeds the tail/vector fallback — ILP=16+TMA
+#     just quadruples cicc/ptxas time for no large-task gain).
+#     VALIDATE=1 forces the fast build (no TMA, 4KB smem, arch ILP).
 #   * Explicit REDUCE_ILP / TMA_REDUCE / REDUCE_SMEM_KB (command line or
 #     env) win. The legacy ENABLE_TMA knob is honored as an alias for
 #     TMA_REDUCE so old `ENABLE_TMA=0` commands still disable TMA.
@@ -37,9 +40,10 @@ endif
 
 # --- Per-arch reduce-kernel defaults -----------------------------------
 # <90 (Ampere sm_80/86, Ada sm_89): ILP=4, no TMA. sm_90 (Hopper): ILP=8.
-# sm_100/103 (Blackwell): ILP=16 (measured +24%/block over ILP=4 on B300).
-# TMA bulk reduce needs sm_90+ hardware and is only defaulted on for
-# non-VALIDATE builds.
+# sm_100/103 (Blackwell): ILP=16 (measured +24%/block over ILP=4 on B300
+# for the vector path). TMA bulk reduce needs sm_90+ hardware and is only
+# defaulted on for non-VALIDATE builds; TMA builds drop ILP to 4 (the
+# bulk chunks are cp.async.bulk-driven, so ILP only pays for the tail).
 _GE90 := $(filter-out 80 86 89,$(SM_LIST))
 ifeq ($(strip $(_GE90)),)
   _AUTO_ILP := 4
@@ -64,6 +68,16 @@ endif
 ifeq ($(VALIDATE),1)
   _AUTO_TMA := 0
   _AUTO_SMEM_KB := 4
+else
+  # TMA does the bulk work in perf builds, so ILP=4 keeps the sm_103
+  # build in the 15-25min window instead of ~1h (ILP=16+TMA quadruples
+  # cicc/ptxas time for no large-task gain). VALIDATE keeps the arch ILP
+  # because it exercises the vector path that ships without TMA.
+  ifneq ($(strip $(_GE90)),)
+    ifeq ($(words $(SM_LIST)),1)
+      _AUTO_ILP := 4
+    endif
+  endif
 endif
 
 REDUCE_ILP ?= $(_AUTO_ILP)
