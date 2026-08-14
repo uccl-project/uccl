@@ -75,3 +75,10 @@ endif
 TMA_REDUCE ?= $(_AUTO_TMA)
 REDUCE_SMEM_KB ?= $(_AUTO_SMEM_KB)
 TMA_WARPSPEC ?= 0
+
+# Rebuild stamp: make tracks timestamps, not compile flags, so switching
+# VALIDATE <-> perf or ILP/TMA/SMEM values used to silently reuse stale
+# objects. Each Makefile refreshes this file (with the final NVCCFLAGS +
+# CXXFLAGS) after its flag lines; every object rule depends on it, so a
+# flag change rebuilds the affected objects.
+BUILD_FLAGS_STAMP := .uk_build_flags

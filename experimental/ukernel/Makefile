@@ -37,6 +37,12 @@ NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
               -DKITTENS_HOPPER \
               $(NVCC_ARCH_FLAGS) \
               -ccbin $(CXX)
+
+# Rebuild when compile flags change (see mk/arch_defaults.mk).
+$(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
+        cmp -s $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP) || \
+        mv -f $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP); \
+        rm -f $(BUILD_FLAGS_STAMP).tmp)
 #             -I$(TK_ROOT)/include \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
@@ -104,13 +110,13 @@ SHARED_LIB  := libukernel.so
 all: $(STATIC_LIB) $(SHARED_LIB) bench
 
 # Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
-%.o: %.cc
+%.o: %.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-%.o: %.cpp
+%.o: %.cpp $(BUILD_FLAGS_STAMP)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-%.o: %.cu
+%.o: %.cu $(BUILD_FLAGS_STAMP)
 	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)

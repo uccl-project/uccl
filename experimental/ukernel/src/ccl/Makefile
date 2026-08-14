@@ -34,6 +34,11 @@ CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -fPIC
 NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
+# Rebuild when compile flags change (see mk/arch_defaults.mk).
+$(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
+        cmp -s $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP) || \
+        mv -f $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP); \
+        rm -f $(BUILD_FLAGS_STAMP).tmp)
 
 VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
 GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
@@ -188,40 +193,40 @@ test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o executor_factory.o backend
 test/integration/test_perf_spray_allreduce.o: test/integration/test_perf_spray_allreduce.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-%.o: %.cc
+%.o: %.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-transport_%.o: ../transport/%.cc
+transport_%.o: ../transport/%.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-transport_memory_%.o: ../transport/memory/%.cc
+transport_memory_%.o: ../transport/memory/%.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-transport_oob_%.o: ../transport/oob/%.cc
+transport_oob_%.o: ../transport/oob/%.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-transport_adapter_%.o: ../transport/adapter/%.cc
+transport_adapter_%.o: ../transport/adapter/%.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-transport_util_%.o: ../transport/util/%.cc
+transport_util_%.o: ../transport/util/%.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-device_c2d_fifo.o: ../device/fifo/c2d_fifo.cc
+device_c2d_fifo.o: ../device/fifo/c2d_fifo.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-device_d2c_fifo.o: ../device/fifo/d2c_fifo.cpp
+device_d2c_fifo.o: ../device/fifo/d2c_fifo.cpp $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-device_sm_fifo.o: ../device/fifo/sm_fifo.cc
+device_sm_fifo.o: ../device/fifo/sm_fifo.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-device_worker.o: ../device/worker.cc
+device_worker.o: ../device/worker.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-backend/device_backend.o: backend/device_backend.cc
+backend/device_backend.o: backend/device_backend.cc $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
+device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 # NCCL compatibility — driven by top-level `make nccl`.

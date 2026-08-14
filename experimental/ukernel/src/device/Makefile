@@ -30,6 +30,11 @@ NVCCFLAGS += -G
 endif
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
+# Rebuild when compile flags change (see mk/arch_defaults.mk).
+$(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
+        cmp -s $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP) || \
+        mv -f $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP); \
+        rm -f $(BUILD_FLAGS_STAMP).tmp)
 
 UCCL_ROOT := $(abspath ../../../../)
 GCC_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)
@@ -100,16 +105,16 @@ simple: test-integration
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN)
 
-%.o: %.cc
+%.o: %.cc $(BUILD_FLAGS_STAMP)
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-%.o: %.cpp
+%.o: %.cpp $(BUILD_FLAGS_STAMP)
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-%.o: %.cu
+%.o: %.cu $(BUILD_FLAGS_STAMP)
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-$(TEST_ALL_OBJ): $(TEST_ALL_SRC)
+$(TEST_ALL_OBJ): $(TEST_ALL_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_ALL_BIN): $(COMMON_OBJ) $(TEST_ALL_OBJ)
