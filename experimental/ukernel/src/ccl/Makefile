@@ -15,24 +15,14 @@ ifeq ($(wildcard $(NVCC_BIN)),)
   NVCC_BIN := $(shell which nvcc 2>/dev/null)
 endif
 NVCC = $(NVCC_BIN)
-DEFAULT_SMS := 80 86 89 100
 CONDA_LIB_HOME ?= /usr/lib
 UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
 
-ifeq ($(origin SM), undefined)
-NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
-else
-SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
-NVCC_ARCH_FLAGS := -arch=sm_$(SM)
-endif
-
-# NOTE: the old ENABLE_TMA / UKERNEL_ENABLE_TMA knob is a dead leftover —
-# no code reads it. The TMA bulk-reduce path is controlled by TMA_REDUCE
-# (and its warp-specialized variant TMA_WARPSPEC) below. Passing
-# `ENABLE_TMA=...` on the command line is still accepted but ignored.
+# GPU architecture + per-arch reduce-kernel defaults (ILP / TMA / smem).
+include ../../mk/arch_defaults.mk
 
 ifeq ($(DEBUG),1)
 CCL_OPT_FLAGS := -O0 -g
@@ -42,21 +32,6 @@ endif
 
 CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -fPIC
 NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
-REDUCE_ILP ?= 4
-REDUCE_SMEM_KB ?= 4
-TMA_REDUCE ?= 0
-TMA_WARPSPEC ?= 0
-# VALIDATE=1: fast validation build — disables the TMA bulk-reduce and
-# warp-specialized paths (the expensive template instantiations behind
-# the 15-25min kernel compiles). The fused reduce/copy experiments run
-# on the vector LD/ST path, so TMA only matters for the final perf
-# build: `make VALIDATE=1 ... nccl` for quick correctness checks, drop
-# it for measurements.
-ifeq ($(VALIDATE),1)
-REDUCE_SMEM_KB ?= 4
-TMA_REDUCE ?= 0
-TMA_WARPSPEC ?= 0
-endif
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 

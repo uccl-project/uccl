@@ -202,13 +202,14 @@ struct SprayExecutorConfig {
   // per-block register limit for the ILP reduce, so 256 is the sweet
   // spot until launch bounds land.
   int threads_per_block = 256;
-  // 8 blocks: the device kernel splits copy/reduce tasks across them.
-  // Measured vs the old 1-block default on the A40 pair — ReduceScatter
-  // 256MB 8.3ms -> 3.1ms (beats native NCCL's 3.9ms; the output-copy
-  // task was the bottleneck), AllGather 256MB 3.8ms -> 2.8ms, AllReduce
-  // 256MB unchanged (5.5ms), and small messages improve too (256KB
-  // AllReduce 84us -> 77us). 16 blocks gives only marginal RS gains.
-  int blocks_per_worker = 8;
+  // <0 = auto: pick a per-GPU default at init from the device's compute
+  // capability (A40-class 8, Hopper 16, Blackwell 32 — the few-SM-
+  // friendly picks; see executor_factory). Set a positive value to force
+  // (or override with UK_CCL_DEV_BLOCKS). The measured A40 baseline that
+  // motivated the default 8: ReduceScatter 256MB 8.3ms -> 3.1ms (beats
+  // native NCCL's 3.9ms), AllGather 256MB 3.8ms -> 2.8ms, small messages
+  // improve too (256KB AllReduce 84us -> 77us); 16 blocks was marginal.
+  int blocks_per_worker = -1;
   size_t fifo_capacity = 256;
   // Dynamic shared memory for the reduce kernel; follows the build's
   // REDUCE_SMEM_KB (default 4KB) so the launch config always matches the

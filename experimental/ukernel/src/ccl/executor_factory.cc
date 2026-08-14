@@ -4,6 +4,7 @@
 #include "backend/signal_backend.h"
 #include "backend/transport_backend.h"
 #include "executor.h"
+#include "gpu_rt.h"
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -11,6 +12,34 @@
 
 namespace UKernel {
 namespace CCL {
+
+namespace {
+
+// Default device blocks_per_worker from the GPU's compute capability.
+// Measured sweet spots: A40-class (sm_86/89) 8 blocks; Hopper (sm_90)
+// 16; Blackwell (sm_100/103) 32 — with the auto REDUCE_ILP=16 build,
+// 32 blocks reaches ~76% of native on the reduce bench and is the
+// few-SM-friendly pick (64 = ~95%, override via UK_CCL_DEV_BLOCKS).
+// Capped at the SM count.
+uint32_t auto_device_blocks(int gpu_id) {
+  gpuDeviceProp prop{};
+  GPU_RT_CHECK(gpuGetDeviceProperties(&prop, gpu_id));
+  uint32_t blocks = 8;
+  if (prop.major == 9) {
+    blocks = 16;  // Hopper
+  } else if (prop.major == 10) {
+    blocks = 32;  // Blackwell
+  }
+  if (blocks > static_cast<uint32_t>(prop.multiProcessorCount)) {
+    blocks = static_cast<uint32_t>(prop.multiProcessorCount);
+  }
+  std::fprintf(stderr,
+               "[FACTORY] auto device blocks=%u (compute=%u.%u, sm_count=%d)\n",
+               blocks, prop.major, prop.minor, prop.multiProcessorCount);
+  return blocks;
+}
+
+}  // namespace
 
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
@@ -27,7 +56,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       .task_capacity = static_cast<uint32_t>(config.device_task_capacity),
       .max_fifos = static_cast<uint32_t>(config.max_device_fifos),
       .threads_per_block = static_cast<uint32_t>(config.threads_per_block),
-      .blocks_per_worker = static_cast<uint32_t>(config.blocks_per_worker),
+      .blocks_per_worker = 0,  // resolved below (env / config / auto)
       .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
       .smem_size = config.smem_size,
       .idle_exit_after_us = config.device_idle_exit_us,
@@ -38,6 +67,10 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
     dev_cfg.max_fifos = static_cast<uint32_t>(std::stoul(v));
   if (char const* v = std::getenv("UK_CCL_DEV_BLOCKS"))
     dev_cfg.blocks_per_worker = static_cast<uint32_t>(std::stoul(v));
+  else if (config.blocks_per_worker > 0)
+    dev_cfg.blocks_per_worker = static_cast<uint32_t>(config.blocks_per_worker);
+  else
+    dev_cfg.blocks_per_worker = auto_device_blocks(config.gpu_id);
   if (char const* v = std::getenv("UK_CCL_DEV_THREADS"))
     dev_cfg.threads_per_block = static_cast<uint32_t>(std::stoul(v));
   if (char const* v = std::getenv("UK_CCL_DEV_IDLE_EXIT_US"))

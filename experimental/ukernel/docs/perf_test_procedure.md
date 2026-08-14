@@ -20,22 +20,33 @@ nvidia-smi topo -m
 cd <repo>
 git checkout uk-300
 cd experimental/ukernel
-# Build ONLY the target arch: SM=<compute capability> (B300=103, A40=86,
-# L40S=89). The default 4-arch build is slow and sm_103 is not included.
 make clean -f Makefile            # AMD machine: make clean -f Makefile.rocm
-# Perf build (TMA bulk reduce + 224KB smem; ~15-25 min on B300):
-make SM=<arch> REDUCE_ILP=4 REDUCE_SMEM_KB=224 TMA_REDUCE=1 \
-    TMA_WARPSPEC=0 -j8 -f Makefile nccl   # AMD: ... -f Makefile.rocm nccl
-# Fast validation build (C++-only checks, ~1 min relink): drop the TMA
-# paths with VALIDATE=1:
+# Build with per-GPU defaults: SM omitted = auto-detect the archs actually
+# present (via nvidia-smi) and derive the reduce-kernel knobs from them:
+# A40-class (sm_86/89) -> REDUCE_ILP=4, no TMA; Hopper (sm_90) -> ILP=8 +
+# TMA; Blackwell (sm_100/103) -> ILP=16 + TMA (perf build, 15-25 min).
+# Pass SM=<arch> to pin the arch; VALIDATE=1 forces the fast build
+# (no TMA, 4KB smem, ~1 min relink). Explicit REDUCE_ILP / TMA_REDUCE /
+# REDUCE_SMEM_KB override the auto values; the legacy ENABLE_TMA=0 knob
+# still disables TMA.
+make -j8 nccl                     # auto: arch(s) present + per-arch defaults
+make SM=103 -j8 nccl              # B300 perf build (auto ILP=16 + TMA)
 make SM=<arch> VALIDATE=1 -j8 nccl
+# AMD: use -f Makefile.rocm and SM=<arch> (no nvidia-smi auto-detect).
 # artifacts: build/nccl/lib/libnccl.so + build/nccl/include/nccl.h
 ```
 
 The fused reduce+copy work runs on the vector LD/ST path, so validation
 builds can drop TMA; keep `TMA_REDUCE=1 REDUCE_SMEM_KB=224` only for
 final perf builds. See [reduce_kernel.md](reduce_kernel.md) for the
-kernel tuning knobs.
+kernel tuning knobs. At runtime, `blocks_per_worker` also auto-selects
+per GPU when `UK_CCL_DEV_BLOCKS` is unset (A40-class 8, Hopper 16,
+Blackwell 32 — see `executor_factory.cc`).
+
+Note: the auto ILP follows the arch even in VALIDATE builds (B300 -> 16,
+so the validation kernel matches what you will ship). Kernel-only
+iteration on B300 stays faster with an explicit `REDUCE_ILP=4`, since
+U=16 roughly doubles ptxas time on the device file.
 
 ## 3. Get and build nccl-tests
 

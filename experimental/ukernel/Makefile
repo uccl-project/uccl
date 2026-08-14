@@ -15,22 +15,8 @@ DEBUG          ?= 0
 # skip ThunderKittens now
 # TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
 
-# GPU architecture
-# Default test builds target common datacenter GPUs used in this repo.
-DEFAULT_SMS := 80 86 89 100
-ifeq ($(origin SM), undefined)
-NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
-SUBMAKE_SM :=
-else
-SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
-NVCC_ARCH_FLAGS := -arch=sm_$(SM)
-SUBMAKE_SM := SM=$(SM)
-endif
-
-# NOTE: the old ENABLE_TMA / UKERNEL_ENABLE_TMA knob is a dead leftover —
-# no code reads it. The TMA bulk-reduce path is controlled by TMA_REDUCE
-# (and its warp-specialized variant TMA_WARPSPEC) in src/ccl & src/device.
-# Passing `ENABLE_TMA=...` on the command line is still accepted but ignored.
+# GPU architecture + per-arch reduce-kernel defaults (ILP / TMA / smem).
+include mk/arch_defaults.mk
 
 # Base compilation flags
 ifeq ($(DEBUG),1)
@@ -149,7 +135,7 @@ bench: $(BENCH_BINS)
 # Override: make nccl NCCL_PREFIX=/opt/ukernel_nccl
 NCCL_PREFIX ?= $(CURDIR)/build/nccl
 nccl:
-	$(MAKE) -C src/ccl nccl_dev NCCL_PREFIX=$(NCCL_PREFIX)
+	$(MAKE) -C src/ccl nccl_dev NCCL_PREFIX=$(NCCL_PREFIX) $(SUBMAKE_SM)
 
 device_test:
 	$(MAKE) -C src/device test $(SUBMAKE_SM)

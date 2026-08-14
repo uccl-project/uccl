@@ -314,6 +314,9 @@ Other runtime switches:
   the number of workers (one persistent kernel per fifo), BLOCKS is
   `blocks_per_worker` (grid size of each worker kernel, tasks are
   partitioned across its blocks), THREADS is threads per block.
+  When BLOCKS is unset, a per-GPU default is picked from the device's
+  compute capability (A40-class 8, Hopper 16, Blackwell 32); THREADS
+  defaults to 256 (the ILP reduce's sweet spot).
   `test_perf_spray_allreduce` also takes `--dev-fifos=<n>` /
   `--dev-blocks=<n>`.
 - `UK_BAR1_WINDOW_MB=<n>` — fall back to IPC for remote device-put
