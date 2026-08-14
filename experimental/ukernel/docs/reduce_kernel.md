@@ -196,6 +196,25 @@ TMA stays opt-in (`TMA_REDUCE=1`) pending broader validation
 (multi-node RDMA + the put/reduce pipeline work); validation builds use
 `make VALIDATE=1` which forces the vector path for speed.
 
+### Leader-free kernel + TMA status (2026-08-14)
+
+The leader-free multi-block worker was re-validated on the TMA build
+(`make SM=103` auto: ILP=4 + TMA + 224KB smem). AllReduce 1M..128M at
+BLK=8/16/32, LT=8/16/32: wrong=0 — the TMA tail fix holds with the new
+kernel. Throughput under a VLLM-co-resident B300 (262GB/268GB used):
+
+| size | BLK=8 | BLK=16 | BLK=32 |
+|---:|---:|---:|---:|
+| 64M (LT=32) | 176 | 195 | 196 |
+| 128M (LT=8) | 276 | 276 | 291 |
+
+BLK=8 is within ~5% of BLK=32 at 128M — few-SM saturation holds with
+TMA. The 256M anchor is blocked in this environment: the run aborts
+with `out of memory` in `DeviceBackend::do_drain`'s device restore
+(reproducible with ~12GB free per GPU — a CUDA 13.3/VLLM co-residency
+artifact, not buffer exhaustion). Re-measure 256M (expect ~509 GB/s at
+BLK=32, matching the old-kernel TMA number) on a clean B300.
+
 ## Warp-specialized TMA pipeline — parked
 
 A producer/consumer pipeline (producer warp drives TMA loads/stores,
