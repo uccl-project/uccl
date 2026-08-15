@@ -283,14 +283,31 @@ So the reduce-heavy phase is still below native at 32 (64%) and 64 (75%)
 SMs — yet the shim's AllReduce reaches parity (512.8) at BLK=32 because
 the tile pipeline hides the RS deficit behind the put/AG overlap.
 
-Register-pressure finding: our ILP=16 reduce loop compiles to the 255
+Register-pressure finding: our ILP=16 reduce loop compiled to the 255
 register cap with ~6.6KB of spill traffic (ptxas -v), collapsing the
 in-flight bytes the ILP was meant to provide (ILP=8 spills ~2.9KB,
-ILP=4 ~0). NCCL's per-channel reduce kernels fit registers. Fixing the
-spill (standalone register allocation for the reduce loop, or a
-register-frugal loop structure) plus fusing reduce with the NVLink
-receive (NCCL's recvReduceCopy pattern) are the levers to close the
-32-SM gap — not adding SMs.
+ILP=4 ~0). The fix (2026-08-15, commit 880d4892) moved the reduce
+dispatch into its own TU with relocatable device code: the persistent
+kernels now CALL per-dtype dispatch functions instead of inlining them
+(`__noinline__` alone is ignored by nvcc — the PTX had zero calls), so
+the kernels dropped from 255 regs + 6.6KB spills to 33/39 regs + 0
+spills and each reduce instantiation gets clean standalone register
+allocation.
+
+Result — pure reduce (256M, 256 threads, ILP=16 vector) on B300 before
+vs after the spill fix:
+
+| blocks | before (spilled) | after (clean) | per-SM after |
+|---:|---:|---:|---:|
+| 8 | 63.4 | 311.7 | 39.0 |
+| 16 | 126.0 | 603.9 | 37.7 |
+| 32 | 245.6 | 1105.8 | 34.6 |
+| 64 | 471.3 | 1710.7 | 26.7 |
+
+**16 SMs (603.9 GB/s) now feed the 510 GB/s native rate** — down from
+64. The end-to-end shim was already at parity (512.8 @ BLK=32 with the
+TMA build); the remaining ceiling there is the put/NVLink pipeline, not
+the reduce.
 
 ### Compile time (2026-08-15)
 
