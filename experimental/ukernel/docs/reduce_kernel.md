@@ -238,6 +238,29 @@ ILP=4+TMA on B300 is ~6.8 GB/s/SM (single block), consistent with the
 B300 latency-bandwidth analysis — the shim's 32-SM parity comes from
 overlapping put/reduce, not from a higher per-SM reduce rate.
 
+### Minimum SMs to feed native bandwidth (pure reduce, no put)
+
+How many SMs the reduce kernel alone needs to sustain the native
+allreduce bandwidth (510 GB/s on B300), 256M payload, 256 threads:
+
+| config | BLK=32 | BLK=64 |
+|---:|---:|---:|
+| ILP=16 vector (doc, old kernel) | 274.9 | **515.3** |
+| ILP=4 + TMA (new kernel, measured 2026-08-15) | 195.6 | 373.5 |
+| ILP=4 vector (historical) | 220.2 | 418.7 |
+
+Only **ILP=16 at 64 blocks (515.3 GB/s)** feeds the 510 GB/s native
+rate with ≤64 SMs (the multi-block worker caps at 64 blocks). The auto
+TMA build (ILP=4) cannot: 64 blocks = 373.5 GB/s, and the ILP=4 vector
+path needs 128 blocks (763.1, old kernel) — above the cap. So a
+put-free "few-SM" reduce target needs the ILP=16 build; TMA's benefit
+only materializes through the tile pipeline (shim), not the pure
+single-task bench.
+
+Note: the ILP=16 device-bench build is pathologically slow to compile
+on B300 with the burst kernel (cicc >50 min vs ~10 min at ILP=4) —
+revisit the reduce instantiation layout before more ILP=16 iterations.
+
 ## Warp-specialized TMA pipeline — parked
 
 A producer/consumer pipeline (producer warp drives TMA loads/stores,
