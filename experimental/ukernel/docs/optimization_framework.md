@@ -15,6 +15,26 @@ spins on flags (NCCL's LL `readLL`, mscclpp mbarrier waits) are
 deliberately out of scope — the project's motivation is unloading that
 wait from the SMs. Everything below respects this.
 
+### Put + reduce pipeline overlap status (2026-08-15)
+
+With the register-spill fix the reduce is no longer the bottleneck (pure
+reduce 604 GB/s @ 16 SMs, 1106 @ 32), so the remaining AllReduce gap is
+the put/pipeline side. Measured on B300, 256M, 2 ranks, current vector
+build:
+
+- AllReduce 256M LT=8 TM=8M IB=8 BLK=32: 455-502 GB/s across runs
+  (median ~475; native 512) = 93-98% of native. The pipeline overlap is
+  working — the reduce phase is hidden behind the puts.
+- Put engine ceiling is fine: AllGather in-place 256M 2 ranks hits
+  **1017 GB/s** (native 833). The IPC CE path is not bandwidth-limited.
+- All overlap variants regress at 2 ranks: signal aggregation G=2/4/8
+  (448/393/407), fused AG copy (411), device put path (353). The optimal
+  config stays CE + LT=8 + IB=8 + G=1.
+- The residual ~2-7% is the ring's serialized per-tile dependency chain
+  (reduce -> signal -> put -> signal -> next tile) plus run variance,
+  not put/reduce overlap. RS remains the weakest phase (shim RS 521.6
+  algbw vs native 817.5, 64%) — the target for reduce+receive fusion.
+
 ## The three planes
 
 ### 1. Data plane — who moves bytes
