@@ -851,23 +851,30 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
 
     if (send_bytes > 0) {
       if (config.a2a_hybrid && !stage) {
-        // CE+device hybrid: half the per-peer send via CE, half via this
-        // rank's worker (device LD/ST to the peer), overlapping engines.
-        size_t const half = send_bytes / 2;
-        size_t const ce_bytes = half;
-        size_t const dev_bytes = send_bytes - half;
-        uint32_t put_ce =
-            builder.add_op(AlgoOpKind::Put, ce_bytes, send_offset, dst_off, -1,
-                           peer, {}, send_pair * 2,
-                           BufRef{BufSpace::Input, 0},
-                           BufRef{BufSpace::Output, 0});
-        builder.algo.chunks[put_ce].put_path_hint = PutPath::Ipc;
-        uint32_t put_dev =
-            builder.add_op(AlgoOpKind::Put, dev_bytes, send_offset + ce_bytes,
-                           dst_off + ce_bytes, -1, peer, {},
-                           send_pair * 2 + 1, BufRef{BufSpace::Input, 0},
-                           BufRef{BufSpace::Output, 0});
-        builder.algo.chunks[put_dev].put_path_hint = PutPath::Device;
+        // CE+device hybrid: ce_pct of the per-peer send via CE, the rest
+        // via this rank's worker (device LD/ST to the peer), overlapping
+        // engines. The send side previously ignored ce_pct (hardcoded
+        // 50/50), so UK_CCL_A2A_HYBRID_CE_PCT=100 still created device
+        // ops and forced a worker launch.
+        size_t const ce_bytes = send_bytes * config.a2a_hybrid_ce_pct / 100;
+        size_t const dev_bytes = send_bytes - ce_bytes;
+        if (ce_bytes > 0) {
+          uint32_t put_ce =
+              builder.add_op(AlgoOpKind::Put, ce_bytes, send_offset, dst_off,
+                             -1, peer, {}, send_pair * 2,
+                             BufRef{BufSpace::Input, 0},
+                             BufRef{BufSpace::Output, 0});
+          builder.algo.chunks[put_ce].put_path_hint = PutPath::Ipc;
+        }
+        if (dev_bytes > 0) {
+          uint32_t put_dev =
+              builder.add_op(AlgoOpKind::Put, dev_bytes,
+                             send_offset + ce_bytes, dst_off + ce_bytes, -1,
+                             peer, {}, send_pair * 2 + 1,
+                             BufRef{BufSpace::Input, 0},
+                             BufRef{BufSpace::Output, 0});
+          builder.algo.chunks[put_dev].put_path_hint = PutPath::Device;
+        }
       } else {
         uint32_t put_op =
             builder.add_op(AlgoOpKind::Put, send_bytes, send_offset, dst_off,
@@ -881,13 +888,19 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
         size_t const ce_bytes =
             recv_bytes * config.a2a_hybrid_ce_pct / 100;
         size_t const dev_bytes = recv_bytes - ce_bytes;
-        builder.add_op(AlgoOpKind::Recv, ce_bytes, recv_offset, recv_offset,
-                       peer, -1, {}, recv_pair * 2, BufRef{BufSpace::Input, 0},
-                       BufRef{BufSpace::Output, 0});
-        builder.add_op(AlgoOpKind::Recv, dev_bytes,
-                       recv_offset + ce_bytes, recv_offset + ce_bytes, peer,
-                       -1, {}, recv_pair * 2 + 1, BufRef{BufSpace::Input, 0},
-                       BufRef{BufSpace::Output, 0});
+        if (ce_bytes > 0) {
+          builder.add_op(AlgoOpKind::Recv, ce_bytes, recv_offset, recv_offset,
+                         peer, -1, {}, recv_pair * 2,
+                         BufRef{BufSpace::Input, 0},
+                         BufRef{BufSpace::Output, 0});
+        }
+        if (dev_bytes > 0) {
+          builder.add_op(AlgoOpKind::Recv, dev_bytes,
+                         recv_offset + ce_bytes, recv_offset + ce_bytes, peer,
+                         -1, {}, recv_pair * 2 + 1,
+                         BufRef{BufSpace::Input, 0},
+                         BufRef{BufSpace::Output, 0});
+        }
       } else {
         builder.add_op(AlgoOpKind::Recv, recv_bytes, recv_offset, recv_offset,
                        peer, -1, {}, recv_pair, BufRef{BufSpace::Input, 0},
