@@ -126,8 +126,18 @@ struct SprayRun {
     if (nops > RING_SZ_MASK) nops = RING_SZ_MASK;
     while (count <= nops) count <<= 1;
     if (count < 1024) count = 1024;  // floor: avoid overflow under burst
+    // jring slots must be a power of two ≤ RING_SZ_MASK; clamp so the
+    // ready ring stays valid even for degenerate (huge) op counts.
+    if (count > ((RING_SZ_MASK >> 1) + 1)) count = (RING_SZ_MASK >> 1) + 1;
     size_t sz = jring_get_buf_ring_size(sizeof(uint32_t),
                                         static_cast<uint32_t>(count));
+    // jring_get_buf_ring_size returns (size_t)-1 on invalid input; the
+    // clamp above keeps count valid, so this is a real size (guard
+    // doubles as a cheap invariant check).
+    if (sz == static_cast<size_t>(-1)) {
+      std::fprintf(stderr, "[SprayRun] invalid ready-ring size\n");
+      std::abort();
+    }
     ready_ring = static_cast<jring_t*>(calloc(1, sz));
     if (!ready_ring) {
       std::fprintf(stderr, "[SprayRun] calloc ready_ring failed sz=%zu\n", sz);

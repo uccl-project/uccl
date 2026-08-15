@@ -85,10 +85,14 @@ void DeviceBackend::ensure_runtime() {
   wc.smemSize = cfg_.smem_size;
   wc.idleExitAfterUs = cfg_.idle_exit_after_us;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
-  // Pre-create all workers. Lazy creation (createWorker from the first
-  // enqueue) was tried and hangs the kernel launch on this driver when
-  // the drain thread concurrently does device work (gpuGet/SetDevice in
-  // do_drain) — revisit together with the drain-thread device design.
+  // Pre-create all workers at init. Lazy creation (bind on first use)
+  // was tried twice and reverted: (1) the process's FIRST kernel launch
+  // from a busy multi-threaded context hangs CUDA 13.3's cuLaunchKernel
+  // (GPU idle, launch never returns) unless it happens at init while the
+  // context is quiescent; (2) on B300 the lazily created multi-block
+  // worker then stalled with the fifo bound but tail never advancing.
+  // Pre-created workers idle-exit after the grace period, so all-CE
+  // collectives still run with zero device-worker SM occupancy.
   for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
     if (!worker_pool_->createWorker(i, cfg_.blocks_per_worker)) {
       throw std::runtime_error(

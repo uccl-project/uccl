@@ -79,6 +79,9 @@ struct BufSpec {
   size_t bytes;
 };
 
+// Pure abstract backend interface: each backend owns its submission and
+// completion queues; threading and queue management live in
+// SprayExecutor (do_enqueue / do_drain / capacity / supports).
 class BatchBackend {
  public:
   virtual ~BatchBackend() = default;

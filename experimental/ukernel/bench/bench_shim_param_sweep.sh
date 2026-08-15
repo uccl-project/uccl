@@ -12,7 +12,8 @@
 #   LARGE_TILES_VALS       tile-count targets, "-" = unset (default "64 32 16 8 4")
 #   IPC_BATCH_VALS         IPC in-flight sizes, "-" = unset (default "16 24 32 48")
 #   TILE_MIN_VALS          UK_CCL_TILE_MIN_BYTES, "-" = unset (default "- 2097152 4194304 8388608")
-#   DEV_BLOCKS_VALS        UK_CCL_DEV_BLOCKS sweep (default "8 16 32 64 128"),
+#   DEV_BLOCKS_VALS        UK_CCL_DEV_BLOCKS sweep (default "8 16 32 64";
+#                          128+ is unrealistic for the shim's low-SM goal),
 #                          run with BASE_LT / BASE_TM / BASE_IB fixed
 #   BASE_LT / BASE_TM / BASE_IB   config used for the DEV_BLOCKS pass
 #                                 (default 8 / 8388608 / 16)
@@ -44,7 +45,7 @@ WARMUP="${WARMUP:-5}"
 LARGE_TILES_VALS="${LARGE_TILES_VALS:-64 32 16 8 4}"
 IPC_BATCH_VALS="${IPC_BATCH_VALS:-16 24 32 48}"
 TILE_MIN_VALS="${TILE_MIN_VALS:-- 2097152 4194304 8388608}"
-DEV_BLOCKS_VALS="${DEV_BLOCKS_VALS:-8 16 32 64 128}"
+DEV_BLOCKS_VALS="${DEV_BLOCKS_VALS:-8 16 32 64}"
 BASE_LT="${BASE_LT:-8}"
 BASE_TM="${BASE_TM:-8388608}"
 BASE_IB="${BASE_IB:-16}"

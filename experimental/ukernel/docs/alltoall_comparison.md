@@ -91,9 +91,9 @@ ops, and pre-created workers idle-exit after the grace period).
 | 4 | 449.5 GB/s | **533.0** | +19% |
 | 8 | 387.1 | 399.4 | +3% |
 
-4-rank hybrid reaches 84% of native (632); 8-rank 64% (620). Tuning
-levers left: split ratio (currently 50/50), device-half block count,
-tile size.
+4-rank hybrid reaches 84% of native (632); 8-rank 64% (620). The
+post-fix tuning sweep below covers the split ratio and device-half
+block count.
 
 ### Hybrid tuning sweep (2026-08-15, post-fix)
 
@@ -149,13 +149,11 @@ CE copies schedule better) and the CE+device overlap (+5%). Why BLK
 shows up even at pct=100: the worker kernels are pre-created at
 communicator init (BLK idle blocks polling the FIFO) and occupy SMs even
 when no device op runs — the alltoall self-slice is done on the user
-stream via CE (`external_self_slice`), so it is not the cause. Lazy
-worker creation removes the idle-SM occupation: workers are now bound on
-first use by the device drain thread, with a create+destroy warm-up
-launch at init to work around a CUDA 13.3 driver hang on the process's
-first kernel launch from a busy multi-threaded context (see
-optimization_framework.md). All-CE collectives therefore run with zero
-device-worker SM occupancy.
+stream via CE (`external_self_slice`), so it is not the cause. Workers
+stay pre-created (lazy creation was reverted — see
+optimization_framework.md) but idle-exit after the 500us grace, and
+after the send-side pct fix pct=100 emits no device ops at all, so
+all-CE collectives run with zero device-worker SM occupancy.
 
 Small/medium messages are worker/launch-bound on the device path and far
 from native below ~128M; the CE path is better there but was only swept

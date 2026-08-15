@@ -58,7 +58,7 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
       .threads_per_block = static_cast<uint32_t>(config.threads_per_block),
       .blocks_per_worker = 0,  // resolved below (env / config / auto)
       .fifo_capacity = static_cast<uint32_t>(config.fifo_capacity),
-      .smem_size = config.smem_size,
+      .smem_size = static_cast<uint32_t>(config.smem_size),
       .idle_exit_after_us = config.device_idle_exit_us,
   };
   // Optional env overrides for benchmarking (win over config values):
