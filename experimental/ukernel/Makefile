@@ -37,6 +37,9 @@ NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
               -DKITTENS_HOPPER \
               $(NVCC_ARCH_FLAGS) \
               -ccbin $(CXX)
+# Relocatable device code: the persistent kernels call the per-dtype
+# reduce dispatch across TUs; link the .so with nvcc to run nvlink.
+NVCCFLAGS += -rdc=true
 
 # Rebuild when compile flags change (see mk/arch_defaults.mk).
 $(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
@@ -123,7 +126,7 @@ $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
 $(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
-	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
+	$(NVCC) -shared $(NVCCFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
 $(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@

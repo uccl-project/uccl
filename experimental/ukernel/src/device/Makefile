@@ -30,6 +30,11 @@ NVCCFLAGS += -G
 endif
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
+# Relocatable device code: the persistent kernels call the per-dtype
+# reduce dispatch across TUs (see ops/reduce_dispatch.h), so device
+# relocations must be linked by nvcc — hence -rdc=true and nvcc final
+# links below.
+NVCCFLAGS += -rdc=true
 # Rebuild when compile flags change (see mk/arch_defaults.mk).
 $(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
         cmp -s $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP) || \
@@ -56,9 +61,15 @@ CXX_RPATH = -Wl,-rpath,$(CUDA_HOME)/lib64 \
             -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
             -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
             $(GDRCOPY_RPATH)
+# nvcc link invocations need -Xlinker before each linker option
+# (-Xlinker -Wl,... would hand the whole -Wl token to ld, which rejects it).
+NVCC_RPATH = -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
+             -Xlinker -rpath -Xlinker /usr/lib/$(GCC_MACHINE) \
+             -Xlinker -rpath-link -Xlinker /lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
+             $(if $(strip $(GDRCOPY_LIBDIR)),-Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR),)
 
 COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc
-COMMON_CU  := persistent_kernel_ops.cu
+COMMON_CU  := persistent_kernel_ops.cu reduce_dispatch.cu
 WORKER_CPP := worker.cc
 
 TEST_ALL_SRC := test/unit/test_all.cc
@@ -118,37 +129,37 @@ $(TEST_ALL_OBJ): $(TEST_ALL_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_ALL_BIN): $(COMMON_OBJ) $(TEST_ALL_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 $(SIMPLE_COPY_TEST_OBJ): $(SIMPLE_COPY_TEST_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(SIMPLE_COPY_TEST_BIN): $(COMMON_OBJ) $(SIMPLE_COPY_TEST_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 $(BENCH_OBJ): $(BENCH_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 $(BENCH_FULL_OBJ): $(BENCH_FULL_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_FULL_BIN): $(COMMON_OBJ) $(BENCH_FULL_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 $(BENCH_SM_OBJ): $(BENCH_SM_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_SM_BIN): $(COMMON_OBJ) $(BENCH_SM_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 $(BENCH_VS_OBJ): $(BENCH_VS_SRC) $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_VS_BIN): $(COMMON_OBJ) $(BENCH_VS_OBJ)
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(LIBS) $(CXX_RPATH)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(LIBS) $(NVCC_RPATH)
 
 clean:
 	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./ops/*.o \

@@ -1,5 +1,6 @@
 #include "../transport/adapter/ipc_signal_ring.h"
 #include "ops/ops.h"
+#include "ops/reduce_dispatch.h"
 #include "persistent_kernel_ops.h"
 
 namespace UKernel {
@@ -127,71 +128,6 @@ __device__ __forceinline__ void run_typed_copy(TaskArgs const& a,
           smem_buf);
 }
 
-template <typename T>
-__device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
-                                           uint32_t num_blocks,
-                                           void* smem_buf) {
-  T* dst = reinterpret_cast<T*>(a.dst);
-  T const* src = reinterpret_cast<T const*>(a.src);
-  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
-
-  const uint64_t max_threads_per_block = 1024;
-  if (blockDim.x > max_threads_per_block) return;
-
-  const uint64_t count_per_block = total_count / num_blocks;
-  const uint64_t block_offset = block_id * count_per_block;
-  const uint64_t my_count = (block_id + 1 == num_blocks)
-                                ? (total_count - block_offset)
-                                : count_per_block;
-
-  if constexpr (is_fast_reduce_dtype<T>()) {
-    if (a.reduce_3way()) {
-      // Fused out-of-place reduce: fresh dst = src op src2. LD/ST only.
-      T const* src2 = reinterpret_cast<T const*>(a.src2);
-      read_two_src_reduce_store<T>(dst + block_offset, src + block_offset,
-                                   src2 + block_offset,
-                                   static_cast<size_t>(my_count),
-                                   a.red_type());
-    } else if (a.src_rank >= 0) {
-      // Remote-src RMW reduce (fused in-place): cp.async.bulk hangs on
-      // peer-mapped addresses, so force the vector LD/ST path.
-      read_reduce_store<T>(dst + block_offset, src + block_offset,
-                           static_cast<size_t>(my_count), a.red_type(),
-                           nullptr);
-    } else {
-      read_reduce_store<T>(dst + block_offset, src + block_offset,
-                           static_cast<size_t>(my_count), a.red_type(),
-                           smem_buf);
-    }
-    if (a.reduce_copy()) {
-      // Fused reduce+copy: forward the just-reduced shard to the next
-      // rank's accumulation buffer (device LD/ST write to peer, the
-      // alltoall-proven direction). Same block partition as the reduce.
-      T* dst2 = reinterpret_cast<T*>(a.dst2);
-      copy<T>(dst2 + block_offset, dst + block_offset,
-              static_cast<size_t>(my_count), smem_buf);
-    }
-  } else {
-    // dtype outside the fast set: generic scalar reduce (correct for all
-    // ops, no ILP/TMA instantiation).
-    if (a.reduce_3way()) {
-      T const* src2 = reinterpret_cast<T const*>(a.src2);
-      read_two_src_reduce_store_generic<T>(
-          dst + block_offset, src + block_offset, src2 + block_offset,
-          static_cast<size_t>(my_count), a.red_type());
-    } else {
-      read_reduce_store_generic<T>(dst + block_offset, src + block_offset,
-                                   static_cast<size_t>(my_count),
-                                   a.red_type());
-    }
-    if (a.reduce_copy()) {
-      T* dst2 = reinterpret_cast<T*>(a.dst2);
-      copy<T>(dst2 + block_offset, dst + block_offset,
-              static_cast<size_t>(my_count), smem_buf);
-    }
-  }
-}
-
 // Benchmarks
 
 __global__ void benchDispatchNopKernel() {}
@@ -201,7 +137,7 @@ __global__ void benchDispatchCopyFp32Kernel(TaskArgs args) {
 }
 
 __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
-  run_reduce<float>(args, blockIdx.x, gridDim.x, nullptr);
+  dispatch_reduce_fp32(args, blockIdx.x, gridDim.x, nullptr);
 }
 
 // Dispatch
@@ -226,19 +162,19 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
 
 #define RUN_REDUCE_BODY(dtype)                                 \
   if (dtype == DataType::Fp32)                                 \
-    run_reduce<float>(args, block_id, num_blocks, smem_buf);   \
+    dispatch_reduce_fp32(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Fp16)                            \
-    run_reduce<__half>(args, block_id, num_blocks, smem_buf);  \
+    dispatch_reduce_fp16(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Int8)                            \
-    run_reduce<int8_t>(args, block_id, num_blocks, smem_buf);  \
+    dispatch_reduce_int8(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Int32)                           \
-    run_reduce<int32_t>(args, block_id, num_blocks, smem_buf); \
+    dispatch_reduce_int32(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Int64)                           \
-    run_reduce<int64_t>(args, block_id, num_blocks, smem_buf); \
+    dispatch_reduce_int64(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Fp64)                            \
-    run_reduce<double>(args, block_id, num_blocks, smem_buf);  \
+    dispatch_reduce_fp64(args, block_id, num_blocks, smem_buf); \
   else if (dtype == DataType::Bf16)                            \
-  run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf)
+    dispatch_reduce_bf16(args, block_id, num_blocks, smem_buf)
 
 __device__ __forceinline__ void dispatch_task(Task const& task,
                                               TaskArgs const* ready_args,

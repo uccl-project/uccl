@@ -34,6 +34,11 @@ CXXFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Wall -fPIC
 NVCCFLAGS := -std=c++17 $(CCL_OPT_FLAGS) -Xcompiler -Wall -Xcompiler -fPIC $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
+# Relocatable device code: the persistent kernels call the per-dtype
+# reduce dispatch across TUs (see ops/reduce_dispatch.h), so device
+# relocations must be linked by nvcc — hence -rdc=true and the nvcc
+# libnccl.so link below.
+NVCCFLAGS += -rdc=true
 # Rebuild when compile flags change (see mk/arch_defaults.mk).
 $(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
         cmp -s $(BUILD_FLAGS_STAMP).tmp $(BUILD_FLAGS_STAMP) || \
@@ -89,7 +94,7 @@ TRANSPORT_OBJ := transport_communicator.o \
                   transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
                   device_worker.o
-DEVICE_CU_OBJ := device_persistent_kernel_ops.o
+DEVICE_CU_OBJ := device_persistent_kernel_ops.o device_reduce_dispatch.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
 UNIT_TEST_BINS := test_modules test_async test_spray_executor
@@ -229,6 +234,9 @@ backend/device_backend.o: backend/device_backend.cc $(BUILD_FLAGS_STAMP)
 device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu $(BUILD_FLAGS_STAMP)
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
+device_reduce_dispatch.o: ../device/reduce_dispatch.cu $(BUILD_FLAGS_STAMP)
+	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
 # NCCL compatibility — driven by top-level `make nccl`.
 NCCL_PREFIX ?= $(CURDIR)/build/nccl
 NCCL_SO := libnccl.so
@@ -249,9 +257,9 @@ nccl_dev: $(NCCL_SO)
 $(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o \
 		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(INCLUDES) \
+	$(NVCC) -shared -o $@ $^ $(NVCCFLAGS) $(INCLUDES) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread \
-		-Wl,-soname,libnccl.so.2
+		-Xlinker -soname -Xlinker libnccl.so.2
 
 $(NCCL_OBJ): nccl.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
