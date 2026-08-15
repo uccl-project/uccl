@@ -504,11 +504,12 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
         auto ht = worker_pool_->fifo_head_tail(fid);
         std::fprintf(stderr,
                      "[dev-stall] fifo%u pending=%zu front_tid=%llu "
-                     "head=%llu tail=%llu\n",
+                     "head=%llu tail=%llu bound=%d\n",
                      fid, pending_by_fifo_[fid].size(),
                      (unsigned long long)pending_by_fifo_[fid].front().task_id,
                      (unsigned long long)ht.first,
-                     (unsigned long long)ht.second);
+                     (unsigned long long)ht.second,
+                     (int)worker_pool_->isWorkerBound(fid));
       }
     } else if (count > 0) {
       stall_iters = 0;
