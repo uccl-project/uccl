@@ -95,6 +95,47 @@ ops, and pre-created workers idle-exit after the grace period).
 levers left: split ratio (currently 50/50), device-half block count,
 tile size.
 
+### Hybrid tuning sweep (2026-08-15, post-fix)
+
+After the send-side pct fix, the alignment fix (16B copy vector width,
+`coll_algo.cc` + `persistent_kernel_ops.cu` per-block chunk rounding)
+and the signal-map concurrency fix (`communicator.cc` single
+`sig_maps_mu_`), the hybrid is stable at 4/8 ranks (no hangs/segfaults
+across 3×10 8-rank + 3×5 4-rank runs). Median algbw, 256M, `alltoall_perf`,
+LT=4:
+
+8 ranks:
+
+| pct \ blk | 16 | 32 | 64 |
+|---|---:|---:|---:|
+| 100 (CE only) | 366.0 | 376.8 | — |
+| 30 | 361.4 | **402.8** | — |
+| 50 | 378.4 | 374.2 | 388.8 |
+| 70 | 369.2 | 380.3 | 364.5 |
+
+Best 8-rank config: **pct=30, blk=32 → 402.8 GB/s** (65% of native
+620). More device share helps at 8 ranks because CE copy-engine
+contention grows with rank count; the worker's LD/ST path does not
+contend the same way.
+
+4 ranks:
+
+| pct \ blk | 32 | 64 |
+|---|---:|---:|
+| 100 (CE only) | 458.1 | — |
+| 30 | 457.4 | — |
+| 50 | **512.7** | 479.4 |
+| 70 | 481.5 | — |
+
+Best 4-rank config: **pct=50, blk=32 → 512.7 GB/s** (81% of native
+632). At 4 ranks the balanced split wins; the device worker is not
+contended enough to justify a bigger share.
+
+Recommended defaults: 4 ranks `pct=50 blk=32`, 8 ranks `pct=30 blk=32`
+(LT=4). Both beat pure CE and are stable; the remaining gap to native
+is the synchronized CE peak + worker copy efficiency (see
+[ce_contention.md](ce_contention.md)).
+
 Clean 4-rank A/B (median of 3, 256M, LT=4):
 
 | config | algbw | vs single-put CE |
