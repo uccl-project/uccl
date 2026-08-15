@@ -10,10 +10,10 @@
 #     build only those archs (the old fixed 4-arch list missed sm_103).
 #     No GPU / no nvidia-smi -> fall back to DEFAULT_SMS.
 #   * Per-arch defaults: sm_100/103 -> REDUCE_ILP=16, sm_90 -> 8, <90 -> 4
-#     on the vector path. TMA bulk reduce + 224KB smem default on for
-#     sm_90+ perf builds, which switch ILP back to 4 (the bulk chunks are
-#     TMA-driven, ILP only feeds the tail/vector fallback — ILP=16+TMA
-#     just quadruples cicc/ptxas time for no large-task gain).
+#     on the vector path. TMA bulk reduce is OPT-IN (TMA_REDUCE=1) for
+#     now: with -rdc=true (the register-spill fix), the large-chunk TMA
+#     path produces wrong results / crashes on sm_103 (16M+ allreduce;
+#     small-task TMA is fine). Re-enable auto-TMA once that is fixed.
 #     VALIDATE=1 forces the fast build (no TMA, 4KB smem, arch ILP).
 #   * Explicit REDUCE_ILP / TMA_REDUCE / REDUCE_SMEM_KB (command line or
 #     env) win. The legacy ENABLE_TMA knob is honored as an alias for
@@ -69,15 +69,11 @@ ifeq ($(VALIDATE),1)
   _AUTO_TMA := 0
   _AUTO_SMEM_KB := 4
 else
-  # TMA does the bulk work in perf builds, so ILP=4 keeps the sm_103
-  # build in the 15-25min window instead of ~1h (ILP=16+TMA quadruples
-  # cicc/ptxas time for no large-task gain). VALIDATE keeps the arch ILP
-  # because it exercises the vector path that ships without TMA.
-  ifneq ($(strip $(_GE90)),)
-    ifeq ($(words $(SM_LIST)),1)
-      _AUTO_ILP := 4
-    endif
-  endif
+  # Perf builds use the vector path at the arch ILP until the RDC+TMA
+  # interaction is fixed (see above). TMA_REDUCE=1 is still honored when
+  # passed explicitly.
+  _AUTO_TMA := 0
+  _AUTO_SMEM_KB := 4
 endif
 
 REDUCE_ILP ?= $(_AUTO_ILP)
