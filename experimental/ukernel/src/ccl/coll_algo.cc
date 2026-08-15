@@ -850,7 +850,8 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
         static_cast<uint32_t>(peer * config.nranks + config.rank);
 
     if (send_bytes > 0) {
-      if (config.a2a_hybrid && !stage) {
+      if (config.a2a_hybrid && !stage && config.a2a_hybrid_ce_pct > 0 &&
+          config.a2a_hybrid_ce_pct < 100) {
         // CE+device hybrid: ce_pct of the per-peer send via CE, the rest
         // via this rank's worker (device LD/ST to the peer), overlapping
         // engines. The send side previously ignored ce_pct (hardcoded
@@ -884,7 +885,8 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
       }
     }
     if (recv_bytes > 0) {
-      if (config.a2a_hybrid && !stage) {
+      if (config.a2a_hybrid && !stage && config.a2a_hybrid_ce_pct > 0 &&
+          config.a2a_hybrid_ce_pct < 100) {
         size_t const ce_bytes =
             recv_bytes * config.a2a_hybrid_ce_pct / 100;
         size_t const dev_bytes = recv_bytes - ce_bytes;
