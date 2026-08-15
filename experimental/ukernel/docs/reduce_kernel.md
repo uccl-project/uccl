@@ -259,6 +259,39 @@ quite feed native within the 64-block cap on the current kernel; the
 shim reaches parity at 32 blocks only through the tile pipeline
 (tile-sized reduce tasks + put overlap).
 
+### Why NCCL's "667 GB/s reduce" is not a pure-local target (2026-08-15)
+
+Native `reduce_perf` 256M 2 ranks on B300 measures 666-667 GB/s (with and
+without NVLS), but that is a **ring reduce**: rank 0 receives the peer's
+data over NVLink and reduces it in flight (NCCL's `recvReduceCopy`
+pattern) — the src stream arrives from the fabric and is L2-hot, and the
+reduce overlaps the transfer. Our device bench reduces src+dst both in
+local HBM, a different memory pattern; comparing the numbers directly is
+wrong.
+
+The right metric for "can N SMs feed the allreduce's reduce demand" is
+the shim's ReduceScatter phase (current TMA build, 256M, 2 ranks):
+
+| blocks | shim RS algbw | native RS algbw | % of native |
+|---:|---:|---:|---:|
+| 8 | 215.2 | 817.5 | 26% |
+| 16 | 336.0 | 817.5 | 41% |
+| 32 | 521.6 | 817.5 | 64% |
+| 64 | 615.2 | 817.5 | 75% |
+
+So the reduce-heavy phase is still below native at 32 (64%) and 64 (75%)
+SMs — yet the shim's AllReduce reaches parity (512.8) at BLK=32 because
+the tile pipeline hides the RS deficit behind the put/AG overlap.
+
+Register-pressure finding: our ILP=16 reduce loop compiles to the 255
+register cap with ~6.6KB of spill traffic (ptxas -v), collapsing the
+in-flight bytes the ILP was meant to provide (ILP=8 spills ~2.9KB,
+ILP=4 ~0). NCCL's per-channel reduce kernels fit registers. Fixing the
+spill (standalone register allocation for the reduce loop, or a
+register-frugal loop structure) plus fusing reduce with the NVLink
+receive (NCCL's recvReduceCopy pattern) are the levers to close the
+32-SM gap — not adding SMs.
+
 ### Compile time (2026-08-15)
 
 The ILP=16 build used to take >50 min on B300: the reduce dispatch
