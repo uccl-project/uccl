@@ -92,8 +92,12 @@ shows up even at pct=100: the worker kernels are pre-created at
 communicator init (BLK idle blocks polling the FIFO) and occupy SMs even
 when no device op runs — the alltoall self-slice is done on the user
 stream via CE (`external_self_slice`), so it is not the cause. Lazy
-worker creation would remove the idle-SM occupation (reverted earlier:
-the drain-thread device race needs a redesign).
+worker creation removes the idle-SM occupation: workers are now bound on
+first use by the device drain thread, with a create+destroy warm-up
+launch at init to work around a CUDA 13.3 driver hang on the process's
+first kernel launch from a busy multi-threaded context (see
+optimization_framework.md). All-CE collectives therefore run with zero
+device-worker SM occupancy.
 
 Small/medium messages are worker/launch-bound on the device path and far
 from native below ~128M; the CE path is better there but was only swept

@@ -135,6 +135,7 @@ hops via deeper pipelining.
 | Warp-specialized TMA pipeline | ~10% SLOWER per block than single-buffer at full depth; parked WIP. |
 | IPC window size / stream count | not the bottleneck (462-498 GB/s medians regardless of BATCH). |
 | Idle-exit spin fix | removed 25-50ms jitter (was `__nanosleep(100)` = 10us sleeps); stability fix, median unchanged. |
+| Lazy device worker (bind on first use, warm-up launch) | all-CE collectives (alltoall) drop to zero worker SM; the first kernel launch must run at init (create+destroy warm-up) — CUDA 13.3 hangs cuLaunchKernel on the process's first launch from a busy multi-threaded context (verified locally: drain thread blocked in cuLaunchKernel, GPU idle; warm-up fixes it). Shipped. |
 
 ## Forward plan
 

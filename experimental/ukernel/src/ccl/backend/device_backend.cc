@@ -98,11 +98,17 @@ void DeviceBackend::ensure_runtime() {
   // device-worker SM occupancy; the first real device op lazily creates
   // a fresh worker (a post-warm-up launch is safe).
   if (cfg_.max_fifos > 0) {
-    if (!worker_pool_->createWorker(0, cfg_.blocks_per_worker)) {
+    // Warm up with a SINGLE block: the multi-block worker allocates and
+    // frees d_multi_sync (gpuFreeAsync) at destroy, and that
+    // create/destroy cycle intermittently poisons the CUDA context on
+    // CUDA 13.2/13.3 (later CUDA calls hang, observed at 8-rank
+    // alltoall init/teardown). The warm-up only needs to load the
+    // kernel module and exercise the launch path — single-block does
+    // that without the multi-block teardown hazard.
+    if (!worker_pool_->createWorker(0, 1)) {
       throw std::runtime_error(
           "DeviceBackend: failed to warm up worker 0 with "
-          "blocks_per_worker=" +
-          std::to_string(cfg_.blocks_per_worker));
+          "blocks_per_worker=1 (warm-up)");
     }
     worker_pool_->waitWorker(0);
     worker_pool_->destroyWorker(0);
