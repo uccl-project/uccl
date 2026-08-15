@@ -7,6 +7,11 @@
 namespace UKernel {
 namespace Device {
 
+std::mutex& deviceApiMutex() {
+  static std::mutex m;
+  return m;
+}
+
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
   // Fail fast with a clear message if GDR (gdrcopy kernel module) is
   // unavailable — every fifo head/tail access below depends on it.
@@ -159,6 +164,11 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
   return false;
 }
 
+bool WorkerPool::isWorkerBound(uint32_t fifoId) const {
+  if (fifoId >= fifos_.size()) return false;
+  return fifos_[fifoId]->bound_workers.load(std::memory_order_acquire) == 1;
+}
+
 bool WorkerPool::pollWorker(uint32_t fifoId) {
   if (fifoId >= fifos_.size()) {
     return false;
@@ -222,24 +232,11 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   }
 
   auto& ctx = *fifos_[fifoId];
-  int workerId = -1;
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
-      workerId = static_cast<int>(i);
-      break;
-    }
-  }
-  if (workerId < 0) {
-    printf(
-        "[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker "
-        "first\n",
-        fifoId);
-    return kInvalidTaskId;
-  }
-
-  // Relaunch a kernel that exited on the idle grace timer. The new grid
-  // queues behind the exiting one on the same stream, so ordering is
-  // preserved and no task is lost.
+  // Lazy-worker support: the executor's device drain thread binds the
+  // worker when it first sees pending work (do_drain -> ensure_worker),
+  // so an enqueue may legitimately land in a fifo with no worker yet.
+  // The push is a host-side fifo write; the drain thread launches the
+  // persistent kernel afterwards, which consumes from the fifo.
   relaunch_if_exited(fifoId);
 
   // Check if there's space in FIFO without blocking initially
@@ -267,21 +264,6 @@ uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
   }
 
   auto& ctx = *fifos_[fifoId];
-  int workerId = -1;
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
-      workerId = static_cast<int>(i);
-      break;
-    }
-  }
-  if (workerId < 0) {
-    printf(
-        "[ERROR] batch enqueue to fifo %u failed: no worker bound, call "
-        "createWorker first\n",
-        fifoId);
-    return kInvalidTaskId;
-  }
-
   uint64_t tail = ctx.fifo.currentId();
   uint64_t head = ctx.fifo.head();
   if ((int64_t)(head + tasks.size() - tail) > cfg_.fifoCapacity) {
@@ -354,6 +336,7 @@ void WorkerPool::sync(uint64_t taskId, uint32_t fifoId, uint64_t timeout_ms) {
 }
 
 void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
+  std::lock_guard<std::mutex> lk(deviceApiMutex());
   auto& worker = *workers_[workerIndex];
   auto& fifo = fifos_[worker.fifoId]->fifo;
   mscclpp::C2DDeviceHandle<Device::Task> handle = fifo.deviceHandle();

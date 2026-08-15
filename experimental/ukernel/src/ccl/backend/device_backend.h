@@ -38,6 +38,9 @@ class DeviceBackend final : public BatchBackend {
 
   char const* name() const override { return "device"; }
   bool supports(ExecOpKind kind) const override;
+  uint32_t device_idx() const override {
+    return static_cast<uint32_t>(device_idx_);
+  }
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override;
@@ -56,6 +59,11 @@ class DeviceBackend final : public BatchBackend {
   bool can_fuse_put_signal(int peer) const override;
  private:
   void ensure_runtime();
+  // Lazily create + wait the persistent worker for fifo fid on first
+  // enqueue. Safe because ensure_runtime pinned this thread to
+  // device_idx_ and the executor's drain thread is pinned at startup
+  // (no concurrent gpuSetDevice to race a launch).
+  void ensure_worker(uint32_t fid);
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds
   // this backend does not handle (caller skips them, matching the
   // historical behavior). Throws on unresolvable buffer pointers.

@@ -101,6 +101,10 @@ class BatchBackend {
     return false;
   }
 
+  // CUDA device index this backend pins its work to (used by the
+  // executor's device drain thread to pin itself once at startup).
+  virtual uint32_t device_idx() const { return 0; }
+
   // Reserve-then-enqueue API for ops whose completion may arrive
   // synchronously during enqueue (e.g. same-host IPC signals). The
   // executor publishes its slot-table entry between reserve_slot() and

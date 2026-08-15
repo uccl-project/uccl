@@ -70,7 +70,10 @@ bool DeviceBackend::supports(ExecOpKind kind) const {
 void DeviceBackend::ensure_runtime() {
   static thread_local int tls_last_device = -1;
   if (tls_last_device != device_idx_) {
-    GPU_RT_CHECK(gpuSetDevice(device_idx_));
+    {
+      std::lock_guard<std::mutex> lk(Device::deviceApiMutex());
+      GPU_RT_CHECK(gpuSetDevice(device_idx_));
+    }
     tls_last_device = device_idx_;
   }
   if (!Device::TaskManager::instance().inited()) {
@@ -85,19 +88,43 @@ void DeviceBackend::ensure_runtime() {
   wc.smemSize = cfg_.smem_size;
   wc.idleExitAfterUs = cfg_.idle_exit_after_us;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
-  // Pre-create all workers. Lazy creation (createWorker from the first
-  // enqueue) was tried and hangs the kernel launch on this driver when
-  // the drain thread concurrently does device work (gpuGet/SetDevice in
-  // do_drain) — revisit together with the drain-thread device design.
-  for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
-    if (!worker_pool_->createWorker(i, cfg_.blocks_per_worker)) {
+  // Warm-up launch: create (then immediately destroy) worker 0 at init
+  // while the CUDA context is quiescent (no executor threads, no IPC
+  // copies yet). This loads the persistent-kernel module and exercises
+  // the launch path; without it, the process's FIRST kernel launch
+  // happens on the drain thread while the context is busy and hangs the
+  // driver (CUDA 13.3, observed locally — cuLaunchKernel spins with the
+  // GPU idle). Destroying it keeps all-CE collectives at zero
+  // device-worker SM occupancy; the first real device op lazily creates
+  // a fresh worker (a post-warm-up launch is safe).
+  if (cfg_.max_fifos > 0) {
+    if (!worker_pool_->createWorker(0, cfg_.blocks_per_worker)) {
       throw std::runtime_error(
-          "DeviceBackend: failed to create worker " + std::to_string(i) +
-          " with blocks_per_worker=" + std::to_string(cfg_.blocks_per_worker) +
+          "DeviceBackend: failed to warm up worker 0 with "
+          "blocks_per_worker=" +
+          std::to_string(cfg_.blocks_per_worker));
+    }
+    worker_pool_->waitWorker(0);
+    worker_pool_->destroyWorker(0);
+  }
+}
+
+void DeviceBackend::ensure_worker(uint32_t fid) {
+  if (worker_pool_->isWorkerBound(fid)) return;
+  // Runs on the pinned device-drain thread (or a user thread in wait()
+  // that save/restores around do_drain). createWorker is CAS-guarded on
+  // the fifo's bound flag, so concurrent callers are safe: only one
+  // binds, the others observe isWorkerBound and return.
+  if (!worker_pool_->createWorker(fid, cfg_.blocks_per_worker)) {
+    if (!worker_pool_->isWorkerBound(fid)) {
+      throw std::runtime_error(
+          "DeviceBackend: failed to create worker " + std::to_string(fid) +
+          " with blocks_per_worker=" +
+          std::to_string(cfg_.blocks_per_worker) +
           " (exceeds this GPU's SM count, or the FIFO is already bound)");
     }
-    worker_pool_->waitWorker(i);
   }
+  worker_pool_->waitWorker(fid);
 }
 bool DeviceBackend::can_fuse_put_signal(int peer) const {
   return host_atomic_supported_ && comm_ &&
@@ -418,8 +445,14 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   // do_drain may run on user threads (SprayExecutor::wait drives
   // progress); save/restore the caller's CUDA device around it.
   int prev_device = -1;
-  GPU_RT_CHECK(gpuGetDevice(&prev_device));
-  if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(device_idx_));
+  {
+    std::lock_guard<std::mutex> lk(Device::deviceApiMutex());
+    GPU_RT_CHECK(gpuGetDevice(&prev_device));
+  }
+  if (prev_device != device_idx_) {
+    std::lock_guard<std::mutex> lk(Device::deviceApiMutex());
+    GPU_RT_CHECK(gpuSetDevice(device_idx_));
+  }
   size_t count = 0;
   // Args slots to recycle, freed in one batch after pending_mu_ is
   // released. Draining is capped by the buffer; callers loop anyway.
@@ -440,6 +473,11 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
                            count < sizeof(args_buf) / sizeof(args_buf[0]);
          ++fid) {
       auto& q = pending_by_fifo_[fid];
+      // Lazy worker binding: the first device op of a collective (or
+      // process) binds the persistent worker here, on the pinned drain
+      // thread — never on the enqueue thread, whose first-ever kernel
+      // launch hangs this driver (CUDA 13.3, observed locally).
+      if (!q.empty() && !worker_pool_->isWorkerBound(fid)) ensure_worker(fid);
       while (!q.empty() && count < max &&
              count < sizeof(args_buf) / sizeof(args_buf[0]) &&
              worker_pool_->is_done(q.front().task_id, fid)) {
@@ -477,6 +515,7 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
     // B300: cudaSetDevice -> out of memory at 256M). The caller's next
     // ensure_runtime() re-pins to device_idx_, so degrade to a warning
     // instead of aborting the drain path.
+    std::lock_guard<std::mutex> lk(Device::deviceApiMutex());
     gpuError_t err = gpuSetDevice(prev_device);
     if (err != gpuSuccess) {
       std::fprintf(stderr,

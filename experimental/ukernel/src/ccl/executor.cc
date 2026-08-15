@@ -3,6 +3,7 @@
 #include "coll_algo.h"
 #include "backend/backend.h"
 #include "coll_config.h"
+#include "worker.h"
 #include "util/uk_debug.h"
 #include "util/host_prof.h"
 #include "utils.h"
@@ -1478,12 +1479,17 @@ void SprayExecutor::enqueue_loop() {
 }
 
 void SprayExecutor::drain_dev_loop() {
-  // NOTE: do NOT pin this thread with gpuSetDevice at loop start — a
-  // concurrent context attach from a second thread while the enqueue
-  // thread is mid-launch hangs the worker kernel launch on this driver
-  // (observed locally, GPU idle + launch never returns). do_drain's own
-  // save/restore handles the device, and a failed restore is a warning
-  // (see DeviceBackend::do_drain), which fixes the B300 256M abort.
+  // Pin this thread once at startup so do_drain never switches the
+  // CUDA device from under a concurrent enqueue-thread launch. Together
+  // with the DeviceBackend warm-up launch and deviceApiMutex this makes
+  // lazy worker creation safe: the process's first kernel launch runs
+  // at init while the context is quiescent (a first launch on a busy
+  // multi-threaded context hangs CUDA 13.3's cuLaunchKernel), and
+  // attach/launch critical sections are serialized afterwards.
+  if (device_be_) {
+    std::lock_guard<std::mutex> lk(Device::deviceApiMutex());
+    GPU_RT_CHECK(gpuSetDevice(device_be_->device_idx()));
+  }
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
   int iter = 0;

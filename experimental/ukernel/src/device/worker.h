@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -14,6 +15,15 @@ namespace UKernel {
 namespace Device {
 
 struct MultiBlockSync;
+
+// Serializes CUDA context attach (gpuSetDevice) and persistent-worker
+// kernel launches across the executor's threads. A concurrent attach
+// from a second thread while another thread launches the worker kernel
+// hangs the launch on this driver (CUDA 13.3, observed locally and on
+// B300: GPU idle, gpuLaunchKernel never returns). All attach sites and
+// launchWorkerForFifo take this mutex; no caller holds it across a
+// backend lock, so there is no lock-order inversion.
+std::mutex& deviceApiMutex();
 
 class WorkerPool {
  public:
@@ -47,6 +57,8 @@ class WorkerPool {
   bool pollWorker(uint32_t fifoId);
   void waitWorker(uint32_t fifoId);
   void destroyWorker(uint32_t fifoId);
+  // True when a worker is bound (created) for fifoId. Cheap atomic read.
+  bool isWorkerBound(uint32_t fifoId) const;
 
   // Relaunch the worker bound to fifoId if its kernel exited on the
   // idle grace timer. Called on enqueue and on drain (so a task that
