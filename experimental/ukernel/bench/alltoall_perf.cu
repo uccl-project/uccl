@@ -21,10 +21,28 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <csignal>
+#include <execinfo.h>
 #include <string>
 #include <thread>
 #include <vector>
 #include <unistd.h>
+
+// TEMP-DBG: crash backtrace for the pct=70 8-rank intermittent SIGSEGV.
+static void crash_handler(int sig) {
+  void* bt[32];
+  int n = backtrace(bt, 32);
+  fprintf(stderr, "[crash] signal %d, backtrace:\n", sig);
+  backtrace_symbols_fd(bt, n, 2);
+  _exit(128 + sig);
+}
+
+static struct CrashHandlerInstaller {
+  CrashHandlerInstaller() {
+    std::signal(SIGSEGV, crash_handler);
+    std::signal(SIGABRT, crash_handler);
+  }
+} g_crash_installer;
 
 static const char* kIdPath = "/tmp/uk_a2a_id";
 static const char* kFillPath = "/tmp/uk_a2a_fill";

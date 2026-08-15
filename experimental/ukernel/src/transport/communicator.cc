@@ -132,7 +132,6 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       global_rank_(rank),
       world_size_(world_size),
       peer_states_(static_cast<size_t>(world_size)),
-      peer_sig_mu_(static_cast<size_t>(world_size)),
       config_(config) {
   if (!config_) {
     config_ =
@@ -1187,7 +1186,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
     SignalCompletion ev{};
     bool matched = false;
     {
-      std::lock_guard<std::mutex> lk(peer_sig_mu_[peer]);
+      std::lock_guard<std::mutex> lk(sig_maps_mu_);
       auto& buf = buffered_imms_[peer];
       uint32_t remaining = count;
       // Drain buffered arrivals, but only while the OLDEST buffered imm
@@ -1217,7 +1216,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
   SignalCompletion ev{};
   bool matched = false;
   {
-    std::lock_guard<std::mutex> lk(peer_sig_mu_[peer]);
+    std::lock_guard<std::mutex> lk(sig_maps_mu_);
     auto sig_it = pending_signals_.find(peer);
     static int dbg = 0;
     if (dbg++ < 5 && uk_dbg_lvl() >= UK_DBG_LVL_TPT) {
@@ -1487,7 +1486,7 @@ bool Communicator::has_pending_signal_waits() const {
 void Communicator::dump_signal_state() const {
   for (int peer = 0; peer < world_size_; ++peer) {
     if (peer == global_rank_) continue;
-    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
+    std::lock_guard<std::mutex> lk(sig_maps_mu_);
     auto s_it = pending_signals_.find(peer);
     if (s_it != pending_signals_.end()) {
       std::string sample;
@@ -1586,7 +1585,7 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
   SignalCompletion done[64];
   size_t ndone = 0;
   {
-    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
+    std::lock_guard<std::mutex> lk(sig_maps_mu_);
     for (size_t t = 0; t < n; ++t) {
       uint64_t tag = tags[t];
       SignalCompletion ev{};
@@ -1634,7 +1633,7 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
 void Communicator::on_imm_received(int peer, uint32_t low32) {
   std::vector<SignalCompletion> done;
   {
-    std::lock_guard<std::mutex> lk(peer_sig_mu_[static_cast<size_t>(peer)]);
+    std::lock_guard<std::mutex> lk(sig_maps_mu_);
     auto& buf = buffered_imms_[peer];
     // The arrival either matches the head wait or joins the buffer. Never
     // drop it: a wait registered late (or a group continuing) must still

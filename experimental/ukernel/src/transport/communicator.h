@@ -378,6 +378,14 @@ class Communicator {
   std::unordered_map<int, std::deque<ImmWait>> pending_imm_waits_;
   // Immediates that arrived before their wait was registered.
   std::unordered_map<int, std::deque<uint32_t>> buffered_imms_;
+  // Serializes ALL pending_signal_waits_ / pending_signals_ /
+  // pending_imm_waits_ / buffered_imms_ access. The maps are shared
+  // across peers, so per-peer locks do NOT protect their structure:
+  // concurrent insert/erase/rehash from the signal drain thread and a
+  // user-thread progress path (different peers) crashed in
+  // pending_signals_[peer] (unordered_map operator[]) on B300 (8-rank
+  // AllToAll hybrid, intermittent SIGSEGV).
+  mutable std::mutex sig_maps_mu_;
   // TCP signal completions go through the data ring; this maps rid → {peer,
   // tag}.
   std::unordered_map<unsigned, std::pair<int, uint64_t>> tcp_signal_rids_;
@@ -392,11 +400,6 @@ class Communicator {
     uint32_t matched;
   };
   std::vector<FlagWait> pending_flag_waits_;
-  // Per-peer signal matching locks: arrivals/waits for one peer never
-  // block another peer's registration or matching (alltoall fan-out
-  // touches every peer from the same enqueue thread). The global
-  // pending-wait counter stays atomic.
-  mutable std::vector<std::mutex> peer_sig_mu_;
   // Device-flag waits and TCP signal rids are not per-peer-keyed, so
   // they get their own locks.
   mutable std::mutex flag_waits_mu_;
