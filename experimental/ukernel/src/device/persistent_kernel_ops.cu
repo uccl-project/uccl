@@ -491,8 +491,12 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         sh_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
             &d_sync->headHint, mscclpp::memoryOrderAcquire);
       }
-      sh_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
-          fifo.tail, mscclpp::memoryOrderRelaxed);
+      // Tail is written by the GPU (last-finisher publish with a system
+      // fence) and only read back here; the host reads it separately via
+      // GDR. Device-scope is enough for the GPU and avoids 64 system-
+      // scope atomics per task at high block counts.
+      sh_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+          fifo.tail, mscclpp::memoryOrderAcquire);
     }
     __syncthreads();
 
