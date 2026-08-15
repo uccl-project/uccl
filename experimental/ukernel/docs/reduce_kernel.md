@@ -245,17 +245,19 @@ allreduce bandwidth (510 GB/s on B300), 256M payload, 256 threads:
 
 | config | BLK=32 | BLK=64 |
 |---:|---:|---:|
-| ILP=16 vector (doc, old kernel) | 274.9 | **515.3** |
+| ILP=16 vector (new kernel, measured 2026-08-15) | 245.6 | **471.3** |
 | ILP=4 + TMA (new kernel, measured 2026-08-15) | 195.6 | 373.5 |
 | ILP=4 vector (historical) | 220.2 | 418.7 |
 
-Only **ILP=16 at 64 blocks (515.3 GB/s)** feeds the 510 GB/s native
-rate with ≤64 SMs (the multi-block worker caps at 64 blocks). The auto
-TMA build (ILP=4) cannot: 64 blocks = 373.5 GB/s, and the ILP=4 vector
-path needs 128 blocks (763.1, old kernel) — above the cap. So a
-put-free "few-SM" reduce target needs the ILP=16 build; TMA's benefit
-only materializes through the tile pipeline (shim), not the pure
-single-task bench.
+With the current leader-free kernel the pure single-task reduce reaches
+**471.3 GB/s at the 64-block cap — ~92% of the 510 GB/s native rate,
+but not full parity** (the old leader/phase kernel reported 515.3 at 64
+blocks; the new kernel's per-task scheduling costs ~9% at this config).
+The TMA (ILP=4) build reaches 373.5 and the ILP=4 vector path 418.7 at
+64 blocks — both below native. So a put-free "few-SM" reduce cannot
+quite feed native within the 64-block cap on the current kernel; the
+shim reaches parity at 32 blocks only through the tile pipeline
+(tile-sized reduce tasks + put overlap).
 
 ### Compile time (2026-08-15)
 
@@ -268,7 +270,8 @@ loop (one cheap instantiation per dtype), so the knobs only trade peak
 per-SM throughput for compile time, never correctness. Local ILP=16
 compile dropped from ~8.5 min to ~15 s; expect ~50 min -> ~8-10 min on
 B300. Builds needing the full matrix pass
-`UK_REDUCE_FAST_DTYPES=127 UK_REDUCE_FAST_OPS=31`.
+`UK_REDUCE_FAST_DTYPES=127 UK_REDUCE_FAST_OPS=31`. Measured B300 ILP=16
+device-bench build: ~3.5 min (previously >50 min).
 
 ## Warp-specialized TMA pipeline — parked
 
