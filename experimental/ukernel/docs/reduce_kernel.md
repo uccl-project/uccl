@@ -309,6 +309,20 @@ vs after the spill fix:
 TMA build); the remaining ceiling there is the put/NVLink pipeline, not
 the reduce.
 
+### TMA chunk-size cap (2026-08-15)
+
+Isolated with a minimal repro: **`cp.async.bulk` (TMA load to smem with
+`mbarrier::complete_tx::bytes`) on this B300/CUDA combo silently
+truncates transfers above ~47KB** — measured 48640 bytes OK, 49152
+delivers only the first ~256B while the mbarrier completes on the
+partial data (wrong results downstream, crash at 128M). Independent of
+RDC (reproduced in a single TU). `tma_bulk_reduce` used 112KB chunks
+(224KB smem), so its large-task path was never actually correct — the
+historic "TMA 512.8 GB/s" shim number was the ILP=4 vector path, not
+TMA. Chunks are now capped at 32KB for correctness; with the
+spill-fixed vector path at 1106 GB/s (BLK=32) / 604 GB/s (BLK=16), TMA
+is no longer needed for the pure reduce and stays opt-in.
+
 ### Compile time (2026-08-15)
 
 The ILP=16 build used to take >50 min on B300: the reduce dispatch

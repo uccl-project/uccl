@@ -229,9 +229,17 @@ template <typename T, ReduceType op>
 __device__ __forceinline__ void tma_bulk_reduce_chunk(
     T* dst_t, T const* src_t, char* smem, size_t off_bytes, size_t len_bytes,
     int tid, int nthread) {
-  constexpr size_t kChunkBytes =
+  // cp.async.bulk (TMA) on this B300/CUDA combo silently truncates
+  // transfers above ~47KB (measured: 48640 OK, 49152 delivers only the
+  // first ~256B, mbarrier completes on the partial data — wrong results
+  // in the allreduce). Cap the chunk well below that; larger in-flight
+  // bytes then need a multi-slot pipeline, not a bigger single chunk.
+  constexpr size_t kChunkUncapped =
       ((UK_REDUCE_SMEM_BYTES - 2 * sizeof(TmaSemaphore)) / 2) &
       ~static_cast<size_t>(31);
+  constexpr size_t kMaxChunkBytes = 32 * 1024;
+  constexpr size_t kChunkBytes =
+      kChunkUncapped < kMaxChunkBytes ? kChunkUncapped : kMaxChunkBytes;
   T* smem_src = reinterpret_cast<T*>(smem);
   T* smem_dst = reinterpret_cast<T*>(smem + kChunkBytes);
   TmaSemaphore* sem_src = reinterpret_cast<TmaSemaphore*>(
