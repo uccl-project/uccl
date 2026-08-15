@@ -22,6 +22,7 @@
 #define gpuGetDeviceCount cudaGetDeviceCount
 #define gpuGetDeviceProperties cudaGetDeviceProperties
 #define gpuDevAttrMultiProcessorCount cudaDevAttrMultiProcessorCount
+#define gpuDevAttrHostNativeAtomicSupported cudaDevAttrHostNativeAtomicSupported
 #define gpuDeviceGetAttribute cudaDeviceGetAttribute
 #define gpuDeviceGetPCIBusId cudaDeviceGetPCIBusId
 #define gpuDeviceReset cudaDeviceReset
@@ -36,12 +37,19 @@
 #define gpuMallocHost cudaMallocHost
 #define gpuHostAlloc cudaHostAlloc
 #define gpuHostAllocMapped cudaHostAllocMapped
+#define gpuHostRegister cudaHostRegister
+#define gpuHostRegisterMapped cudaHostRegisterMapped
+#define gpuHostUnregister cudaHostUnregister
+#define gpuHostGetDevicePointer cudaHostGetDevicePointer
 #define gpuHostFree cudaFreeHost
 #define gpuFreeHost cudaFreeHost
 #define gpuMalloc cudaMalloc
 #define gpuFree cudaFree
 #define gpuMallocAsync cudaMallocAsync
 #define gpuFreeAsync cudaFreeAsync
+#define gpuFuncSetAttribute cudaFuncSetAttribute
+#define gpuFuncAttributeMaxDynamicSharedMemorySize \
+  cudaFuncAttributeMaxDynamicSharedMemorySize
 #define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
@@ -87,6 +95,16 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
 #define gpuLaunchKernel cudaLaunchKernel
 #define gpuDeviceSynchronize cudaDeviceSynchronize
+// cuFlushGPUDirectRDMAWrites(target, scope) — invalidates all GPU L2 for
+// RDMA writes targeting the given scope (CUDA 11.3+ / driver R495+).
+//   target=0: CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX
+//   scope=1:  CU_FLUSH_GPU_DIRECT_RDMA_WRITES_SCOPE_REMOTE
+// We use raw numeric values rather than the named enum constants because
+// *_SCOPE_LOCAL_SOCKET (scope=2) is not available in all CUDA 11.x headers.
+inline void gpuFlushRDMAWrites() {
+  cuFlushGPUDirectRDMAWrites(static_cast<CUflushGPUDirectRDMAWritesTarget>(0),
+                             static_cast<CUflushGPUDirectRDMAWritesScope>(1));
+}
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t CUresult
 #define gpuDevicePtr_t CUdeviceptr
@@ -98,6 +116,15 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuPointerGetAttributes cudaPointerGetAttributes
 #define gpuMemoryTypeDevice cudaMemoryTypeDevice
 #define gpuMemoryTypeManaged cudaMemoryTypeManaged
+// NCCL-compatible stream-ordered wait on a device memory value.
+#define CU_STREAM_WAIT_VALUE_GEQ 0x0
+inline gpuError_t gpuStreamWaitValue32(gpuStream_t stream, gpuDevicePtr_t addr,
+                                       unsigned int value, unsigned int flags) {
+  CUresult r = cuStreamWaitValue32(reinterpret_cast<CUstream>(stream),
+                                   reinterpret_cast<CUdeviceptr>(addr), value,
+                                   flags);
+  return (r == CUDA_SUCCESS) ? gpuSuccess : static_cast<gpuError_t>(r);
+}
 #define GPU_DRIVER_LIB_NAME "libcuda.so.1"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
@@ -158,11 +185,18 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuHostAlloc hipHostAlloc
 #define gpuHostFree hipHostFree
 #define gpuHostAllocMapped hipHostAllocMapped
+#define gpuHostRegister hipHostRegister
+#define gpuHostRegisterMapped hipHostRegisterMapped
+#define gpuHostUnregister hipHostUnregister
+#define gpuHostGetDevicePointer hipHostGetDevicePointer
 #define gpuFreeHost hipFreeHost
 #define gpuMalloc hipMalloc
 #define gpuFree hipFree
 #define gpuMallocAsync hipMallocAsync
 #define gpuFreeAsync hipFreeAsync
+#define gpuFuncSetAttribute hipFuncSetAttribute
+#define gpuFuncAttributeMaxDynamicSharedMemorySize \
+  hipFuncAttributeMaxDynamicSharedMemorySize
 #define gpuMemcpyHostToDevice hipMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuMemcpy hipMemcpy
@@ -196,6 +230,8 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuLaunchKernel(kernel, ...) \
   hipLaunchKernel(reinterpret_cast<void const*>(kernel), __VA_ARGS__)
 #define gpuDeviceSynchronize hipDeviceSynchronize
+// cuFlushGPUDirectRDMAWrites — CUDA-only. On AMD, a no-op.
+inline void gpuFlushRDMAWrites() {}
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t hipError_t
 #define gpuDevicePtr_t hipDeviceptr_t
@@ -207,6 +243,13 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuPointerGetAttributes hipPointerGetAttributes
 #define gpuMemoryTypeDevice hipMemoryTypeDevice
 #define gpuMemoryTypeManaged hipMemoryTypeManaged
+#define CU_STREAM_WAIT_VALUE_GEQ 0x0
+inline gpuError_t gpuStreamWaitValue32(gpuStream_t stream, gpuDevicePtr_t addr,
+                                       unsigned int value, unsigned int flags) {
+  return hipStreamWaitValue64(stream, reinterpret_cast<void*>(addr),
+                              static_cast<uint64_t>(value),
+                              flags == 0 ? hipStreamWaitValueGte : flags, 0);
+}
 #define GPU_DRIVER_LIB_NAME "libamdhip64.so"
 #define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
 #define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \

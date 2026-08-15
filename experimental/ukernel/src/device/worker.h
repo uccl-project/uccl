@@ -24,6 +24,11 @@ class WorkerPool {
     uint32_t threadsPerBlock = 64;
     uint32_t fifoCapacity = 16;
     uint32_t smemSize = 0;
+    // Grace period (µs) of continuous fifo emptiness after which the
+    // persistent kernel exits; the host relaunches it on the next
+    // enqueue. 0 = always resident. Default short grace so device-wide
+    // syncs work; bursts stay resident (inter-op gaps are µs-scale).
+    uint32_t idleExitAfterUs = 500;
     // Control stream used for host-driven bookkeeping copies such as stop
     // flags. Persistent worker kernels still run on per-worker streams.
     gpuStream_t controlStream = nullptr;
@@ -43,12 +48,33 @@ class WorkerPool {
   void waitWorker(uint32_t fifoId);
   void destroyWorker(uint32_t fifoId);
 
+  // Relaunch the worker bound to fifoId if its kernel exited on the
+  // idle grace timer. Called on enqueue and on drain (so a task that
+  // raced the kernel's exit always gets picked up).
+  void relaunch_if_exited(uint32_t fifoId);
+
   uint64_t enqueue(Task const& task, uint32_t fifoId);
   uint64_t enqueue_batch(std::vector<Task> const& tasks, uint32_t fifoId);
   void shutdown_all();
 
   bool is_done(uint64_t taskId, uint32_t fifoId);
-  void sync(uint64_t taskId, uint32_t fifoId);
+  // Block until the fifo tail passes taskId. timeout_ms > 0 bounds the
+  // wait (returns early on timeout); 0 = wait forever. The timeout only
+  // adds a deadline check to the existing poll — no cost when idle.
+  void sync(uint64_t taskId, uint32_t fifoId, uint64_t timeout_ms = 0);
+
+  // NOTE: enqueue / enqueue_batch assume a SINGLE writer per fifo (the
+  // executor's enqueue thread). The head read-modify-write in push is not
+  // CAS-protected; concurrent writers would lose tasks. Multi-writer push
+  // would need a fetch_add slot claim + per-slot ready flag (extra atomic
+  // per task) — deferred until a real multi-writer caller exists.
+  // relaunch_if_exited / sync / is_done are safe from any thread.
+
+  // Diagnostic: (head, tail) of a fifo as seen by the host (GDR reads).
+  std::pair<uint64_t, uint64_t> fifo_head_tail(uint32_t fifoId) {
+    if (fifoId >= fifos_.size()) return {0, 0};
+    return {fifos_[fifoId]->fifo.head(), fifos_[fifoId]->fifo.currentId()};
+  }
 
   gpuStream_t control_stream() const { return control_stream_; }
 
@@ -82,6 +108,9 @@ class WorkerPool {
     gpuStream_t stream = nullptr;
     mscclpp::C2DDeviceHandle<Task>* d_fifo_handle = nullptr;
     MultiBlockSync* d_multi_sync = nullptr;
+    // Host-mapped flag set by the kernel when it exits on the idle grace
+    // timer; the next enqueue relaunches it. Host reads, kernel writes.
+    bool* h_exited = nullptr;
   };
 
   void launchWorkerForFifo(size_t workerIndex);
@@ -94,6 +123,10 @@ class WorkerPool {
   // the per-worker execution streams stored in WorkerContext.
   gpuStream_t control_stream_ = nullptr;
   bool owns_control_stream_ = false;
+
+  // Idle-grace in ~100ns polls, derived from Config::idleExitAfterUs
+  // (0 = always resident).
+  uint32_t exit_idle_iters_ = 0;
 
   std::vector<bool*> d_stop_flags_;
   std::vector<bool*> h_stop_flags_;

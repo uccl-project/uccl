@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cuda.h>
 #include <unistd.h>
 
 namespace UKernel {
@@ -14,7 +15,6 @@ namespace Transport {
 
 namespace {
 
-constexpr auto kCvTimeout = std::chrono::microseconds(1);
 constexpr auto kQpMaxSendWr = 1024;
 constexpr int kQpTimeout = 14;
 constexpr int kQpRetryCnt = 7;
@@ -101,11 +101,7 @@ int pick_dev_for_gpu(int gpu_idx) {
     char buf[32] = {};
     if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
     fclose(fp);
-    if (port_state != 4) {  // 4 = IBV_PORT_ACTIVE
-      fprintf(stderr, "[pick_dev] skip %s (port state=%d, not active)\n",
-              name.c_str(), port_state);
-      continue;
-    }
+    if (port_state != 4) continue;  // 4 = IBV_PORT_ACTIVE
 
     uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
@@ -113,12 +109,16 @@ int pick_dev_for_gpu(int gpu_idx) {
       best_idx = j;
     }
   }
+  std::string sel_name;
+  if (best_idx >= 0) sel_name = ibv_get_device_name(devs[best_idx]);
   ibv_free_device_list(devs);
 
   if (best_idx < 0) {
     fprintf(stderr, "[pick_dev] no active RDMA port found\n");
     return -1;
   }
+  fprintf(stderr, "[pick_dev] selected %s (pcie_dist=%u) for gpu %d\n",
+          sel_name.c_str(), best_dist, gpu_idx);
   return best_idx;
 }
 
@@ -131,7 +131,7 @@ uint64_t RdmaTransportAdapter::now_ns() {
           .count());
 }
 
-// ── constructor / destructor ────────────────────────────────────────────────
+// Constructor / destructor
 
 RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
                                            RdmaTransportConfig config)
@@ -209,13 +209,24 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx,
   poll_thread_ = std::thread([this] { poll_loop(); });
 }
 
-RdmaTransportAdapter::~RdmaTransportAdapter() {
+void RdmaTransportAdapter::shutdown_workers() {
   stop_.store(true, std::memory_order_release);
-  cv_.notify_all();
   if (send_worker_.joinable()) send_worker_.join();
   if (poll_thread_.joinable()) poll_thread_.join();
 
-  // Destroy peers
+  // Drain remaining CQ entries so dereg doesn't block on inflight WRs
+  for (size_t r = 0; r < peer_capacity_; ++r) {
+    RdmaPeer* p = peer_table_[r].load(std::memory_order_acquire);
+    if (!p) continue;
+    if (p->data_cq) poll_cq_set(*p, static_cast<int>(r));
+    if (p->signal_cq) poll_signal_cq(*p, static_cast<int>(r));
+  }
+}
+
+RdmaTransportAdapter::~RdmaTransportAdapter() {
+  if (send_worker_.joinable()) send_worker_.join();
+  if (poll_thread_.joinable()) poll_thread_.join();
+
   for (size_t r = 0; r < peer_capacity_; ++r) {
     if (peer_owners_[r]) {
       peer_table_[r].store(nullptr, std::memory_order_release);
@@ -223,16 +234,6 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
       peer_owners_[r].reset();
     }
   }
-
-  // Deregister all MRs
-  for (uint32_t id : registered_ids_) {
-    ibv_mr* mr = mr_table_[id].load(std::memory_order_acquire);
-    if (mr) {
-      mr_table_[id].store(nullptr, std::memory_order_release);
-      ibv_dereg_mr(mr);
-    }
-  }
-  registered_ids_.clear();
 
   if (send_ring_) {
     free(send_ring_);
@@ -245,7 +246,7 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   }
 }
 
-// ── table sizing helpers ────────────────────────────────────────────────────
+// Table sizing helpers
 
 std::atomic<RdmaTransportAdapter::RdmaPeer*>&
 RdmaTransportAdapter::ensure_peer_slot(int rank) {
@@ -289,7 +290,7 @@ void RdmaTransportAdapter::ensure_mr_slot(uint32_t id) {
   mr_table_capacity_ = new_cap;
 }
 
-// ── QP helpers ──────────────────────────────────────────────────────────────
+// QP helpers
 
 bool RdmaTransportAdapter::create_qp_set(ibv_qp** qps, ibv_cq** cq, int count,
                                          int cq_size, int max_recv_wr) {
@@ -424,11 +425,38 @@ bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
   return true;
 }
 
-// ── peer init / destroy ─────────────────────────────────────────────────────
+bool RdmaTransportAdapter::post_data_recv(ibv_qp* qp) {
+  // Zero-sge receive: the data payload of a write-with-imm goes straight
+  // to the destination MR; only the 32-bit immediate (the signal tag)
+  // surfaces here as a recv completion.
+  ibv_recv_wr wr = {};
+  wr.wr_id = 0;
+  wr.sg_list = nullptr;
+  wr.num_sge = 0;
+  ibv_recv_wr* bad = nullptr;
+  if (ibv_post_recv(qp, &wr, &bad) != 0) {
+    fprintf(stderr, "[post_data_recv] FAILED errno=%d\n", errno);
+    return false;
+  }
+  return true;
+}
+
+bool RdmaTransportAdapter::post_data_recvs(RdmaPeer& p) {
+  // Posts the full pool on every QP. On partial failure we fail hard:
+  // a retry reposts from scratch and is stopped by the max_recv_wr cap,
+  // so setup cannot continue with a silently under-provisioned pool.
+  for (int i = 0; i < p.num_qps; ++i)
+    for (int k = 0; k < kDataRecvPool; ++k)
+      if (!post_data_recv(p.data_qps[i])) return false;
+  return true;
+}
+
+// Peer init / destroy
 
 bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   int cq_size = kQpMaxSendWr * 2;
-  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size)) return false;
+  if (!create_qp_set(p.data_qps, &p.data_cq, p.num_qps, cq_size, kDataRecvPool))
+    return false;
   if (!qps_to_init(p.data_qps, p.num_qps)) return false;
 
   p.signal_cq = ibv_create_cq(ctx_, 256, nullptr, nullptr, 0);
@@ -482,7 +510,7 @@ void RdmaTransportAdapter::destroy_peer_qps(RdmaPeer& p) {
   p.signal_pool.reset();
 }
 
-// ── connection management ───────────────────────────────────────────────────
+// Connection management
 
 RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
   RdmaPeerConnectSpec init;
@@ -599,6 +627,11 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   if (!qps_to_rtr(p->data_qps, p->num_qps, remote)) return false;
   if (!qps_to_rts(p->data_qps, p->num_qps)) return false;
 
+  // Pre-post receive WQEs on data QPs: write-with-imm signals consume
+  // one per arrival, and a missing recv WQE would RNR the sender.
+  if (!p->data_recvs_posted && !post_data_recvs(*p)) return false;
+  p->data_recvs_posted = true;
+
   {
     ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
@@ -639,7 +672,7 @@ bool RdmaTransportAdapter::setup_peer_path(int rank,
   return true;
 }
 
-// ── QP selection ─────────────────────────────────────────────────────────────
+// QP selection
 
 int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
   if (msize <= kCacheSizeThresh &&
@@ -677,13 +710,23 @@ int RdmaTransportAdapter::select_qp(RdmaPeer& p, uint32_t msize) {
   return chosen;
 }
 
-// ── send path (enqueue to jring) ─────────────────────────────────────────────
+// Send path (enqueue to jring)
 
 unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
                                               uint32_t local_buf_id,
                                               void* remote_ptr,
                                               uint32_t remote_buf_id,
                                               size_t len, unsigned comm_rid) {
+  return send_put_async(rank, local_ptr, local_buf_id, remote_ptr,
+                        remote_buf_id, len, ~0u, comm_rid);
+}
+
+unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
+                                              uint32_t local_buf_id,
+                                              void* remote_ptr,
+                                              uint32_t remote_buf_id,
+                                              size_t len, uint32_t qp_affinity,
+                                              unsigned comm_rid) {
   if (!has_put_path(rank) || len == 0) return 0;
 
   // Lock-free local MR lookup (Task 1)
@@ -714,9 +757,64 @@ unsigned RdmaTransportAdapter::send_put_async(int rank, void* local_ptr,
   }
   if (raddr == 0 || rkey == 0) return 0;
 
-  RingElem e{comm_rid,   rank,         Kind::DataPut, local_ptr,
-             remote_ptr, local_buf_id, remote_buf_id, len,
-             0,          raddr,        rkey,          lkey};
+  RingElem e{comm_rid,     rank,          Kind::DataPut, local_ptr, remote_ptr,
+             local_buf_id, remote_buf_id, len,           0,         raddr,
+             rkey,         lkey,          qp_affinity};
+  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+  return 1;
+}
+
+unsigned RdmaTransportAdapter::send_put_signal_async(
+    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
+    uint32_t remote_buf_id, size_t len, uint64_t tag, unsigned comm_rid) {
+  return send_put_signal_async(rank, local_ptr, local_buf_id, remote_ptr,
+                               remote_buf_id, len, tag, ~0u, comm_rid);
+}
+
+unsigned RdmaTransportAdapter::send_put_signal_async(
+    int rank, void* local_ptr, uint32_t local_buf_id, void* remote_ptr,
+    uint32_t remote_buf_id, size_t len, uint64_t tag, uint32_t qp_affinity,
+    unsigned comm_rid) {
+  if (!has_put_path(rank) || len == 0) return 0;
+  // The write-with-imm immediate is 32 bits, but the shim salts the tag
+  // with the run epoch in the high 32 bits. The sender uses only the low
+  // 32 bits (low32(salted) == unsalted) and the receiver matches them
+  // per-peer FIFO, so a salted tag must NOT be rejected here — doing so
+  // dropped every fused RDMA put and deadlocked the collective.
+
+  // Lock-free local MR lookup (Task 1)
+  uint32_t lkey = 0;
+  if (local_buf_id < mr_table_capacity_) {
+    ibv_mr* mr = mr_table_[local_buf_id].load(std::memory_order_acquire);
+    if (mr) lkey = mr->lkey;
+  }
+  if (lkey == 0) return 0;
+
+  // Lock-free peer + remote buffer lookup (Task 2)
+  RdmaPeer* p =
+      peer_table_[static_cast<size_t>(rank)].load(std::memory_order_acquire);
+  if (!p || !p->put_ready) return 0;
+
+  uint64_t raddr = 0;
+  uint32_t rkey = 0;
+  if (remote_buf_id != 0 && remote_buf_id < p->remote_buf_capacity_) {
+    RemoteBufInfo* info =
+        p->remote_buffer_table_[remote_buf_id].load(std::memory_order_acquire);
+    if (info) {
+      raddr = info->addr;
+      rkey = info->rkey;
+    }
+  }
+  if (remote_ptr && raddr == 0) {
+    raddr = reinterpret_cast<uint64_t>(remote_ptr);
+  }
+  if (raddr == 0 || rkey == 0) return 0;
+
+  RingElem e{comm_rid,      rank,       Kind::PutSignal,
+             local_ptr,     remote_ptr, local_buf_id,
+             remote_buf_id, len,        tag,
+             raddr,         rkey,       lkey,
+             qp_affinity};
   if (!enqueue_elem(send_ring_, e, stop_)) return 0;
   return 1;
 }
@@ -731,18 +829,17 @@ unsigned RdmaTransportAdapter::send_signal_async(int rank, uint64_t tag,
   return 1;
 }
 
-// ── recv path (enqueue to jring) ─────────────────────────────────────────────
+// Recv path (enqueue to jring)
 
 unsigned RdmaTransportAdapter::wait_signal_async(
     int rank, uint64_t /*expected_tag*/, std::optional<WaitTarget> /*target*/,
     unsigned comm_rid) {
   if (!has_wait_path(rank)) return 0;
   // SignalWait path is handled by poll_loop pushing tags to Communicator.
-  publish_completion(comm_rid, true);
   return 1;
 }
 
-// ── memory registration ─────────────────────────────────────────────────────
+// Memory registration
 
 bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
                                            size_t len) {
@@ -750,15 +847,62 @@ bool RdmaTransportAdapter::register_memory(uint32_t buf_id, void* ptr,
 
   ensure_mr_slot(buf_id);
 
-  // Check if already registered (fast path)
+  // Fast path: already registered
   {
     ibv_mr* existing = mr_table_[buf_id].load(std::memory_order_acquire);
     if (existing) return true;
   }
 
-  ibv_mr* mr = ibv_reg_mr(pd_, ptr, len,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_READ);
+  ibv_mr* mr = nullptr;
+
+  // Traditional ibv_reg_mr first: no 64KB alignment requirement (page
+  // alignment suffices), so unaligned user buffers register fine on
+  // hosts with nvidia-peermem. DMA-BUF is the fallback for hosts
+  // without peermem — and it strictly requires a 64KB-aligned address.
+  {
+    mr = ibv_reg_mr(pd_, ptr, len,
+                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                        IBV_ACCESS_REMOTE_READ);
+  }
+
+  // Fallback: DMA-BUF registration (no nvidia-peermem required), but
+  // the address MUST be 64KB-aligned (RDMA dma-buf offset rule).
+  // Refuse loudly instead of silently degrading — the user must align
+  // their buffer (e.g. cudaMalloc with padding + round-up) to use the
+  // DMA-BUF path.
+  if (!mr) {
+    constexpr uint64_t kDmaBufAlign = 65536;
+    if (reinterpret_cast<uint64_t>(ptr) % kDmaBufAlign != 0) {
+      std::fprintf(stderr,
+                   "[rdma-reg] buf=%u ptr=%p len=%zu: ibv_reg_mr failed and "
+                   "DMA-BUF path requires a 64KB-aligned buffer address "
+                   "(ptr %% 64K = %llu). Align the buffer (e.g. pad the "
+                   "allocation and round the pointer up to 64KB) or install "
+                   "nvidia-peermem so ibv_reg_mr can register GPU memory.\n",
+                   buf_id, ptr, len,
+                   (unsigned long long)(reinterpret_cast<uint64_t>(ptr) %
+                                        kDmaBufAlign));
+      return false;
+    }
+    int dmabuf_fd = -1;
+    CUdeviceptr dptr = reinterpret_cast<CUdeviceptr>(ptr);
+    CUresult cu_ret = cuMemGetHandleForAddressRange(
+        &dmabuf_fd, dptr, len, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    if (cu_ret == CUDA_SUCCESS && dmabuf_fd >= 0) {
+      mr = ibv_reg_dmabuf_mr(pd_, 0, len,
+                             reinterpret_cast<uint64_t>(ptr), dmabuf_fd,
+                             IBV_ACCESS_LOCAL_WRITE |
+                                 IBV_ACCESS_REMOTE_WRITE |
+                                 IBV_ACCESS_REMOTE_READ);
+      if (mr) {
+        std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+        dmabuf_fds_[buf_id] = dmabuf_fd;
+      } else {
+        close(dmabuf_fd);
+      }
+    }
+  }
+
   if (!mr) return false;
 
   mr_table_[buf_id].store(mr, std::memory_order_release);
@@ -775,6 +919,18 @@ void RdmaTransportAdapter::deregister_memory(uint32_t buf_id) {
   ibv_mr* mr = mr_table_[buf_id].exchange(nullptr, std::memory_order_acq_rel);
   if (mr) {
     ibv_dereg_mr(mr);
+
+    int dmabuf_fd = -1;
+    {
+      std::lock_guard<std::mutex> lk(dmabuf_fds_mu_);
+      auto it = dmabuf_fds_.find(buf_id);
+      if (it != dmabuf_fds_.end()) {
+        dmabuf_fd = it->second;
+        dmabuf_fds_.erase(it);
+      }
+    }
+    if (dmabuf_fd >= 0) close(dmabuf_fd);
+
     std::lock_guard<std::mutex> lk(mr_reg_mu_);
     registered_ids_.erase(buf_id);
   }
@@ -833,7 +989,7 @@ void RdmaTransportAdapter::register_remote_buffer(int rank, uint32_t buf_id,
   p->remote_buf_owners_[buf_id] = std::move(info);
 }
 
-// ── send_worker ──────────────────────────────────────────────────────────────
+// Send worker
 
 void RdmaTransportAdapter::send_worker() {
   RingElem e;
@@ -843,7 +999,11 @@ void RdmaTransportAdapter::send_worker() {
       continue;
     }
 
-    if (e.kind == Kind::DataPut) {
+    if (e.kind == Kind::DataPut || e.kind == Kind::PutSignal) {
+      // Fused PutSignal: all chunks go through one QP (ordered), and the
+      // last chunk carries the signal tag as a write-with-imm immediate,
+      // so the receiver observes the tag only after all data landed.
+      bool const fused = (e.kind == Kind::PutSignal);
       // Lock-free peer lookup (Task 2)
       RdmaPeer* p = nullptr;
       if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
@@ -851,7 +1011,7 @@ void RdmaTransportAdapter::send_worker() {
             std::memory_order_acquire);
       }
       if (!p || !p->put_ready) {
-        publish_completion(e.comm_rid, true);
+        publish_put_completion(e.comm_rid, true);
         continue;
       }
 
@@ -873,41 +1033,75 @@ void RdmaTransportAdapter::send_worker() {
 
       // CAS-acquire the slot: 0 → send_id
       uint32_t expected = 0;
+      int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
-          publish_completion(e.comm_rid, true);
+          publish_put_completion(e.comm_rid, true);
+          goto next_elem;
+        }
+        if (++cas_spin > 5000000) {
+          // The ring has been full beyond the in-flight bound for too
+          // long. Fail this send instead of force-writing send_id — the
+          // old code overwrote a live slot, losing the in-flight op's
+          // completion attribution (a data race under extreme pressure).
+          publish_put_completion(e.comm_rid, true);
           goto next_elem;
         }
         expected = 0;
         std::this_thread::yield();
       }
       slot.comm_rid = e.comm_rid;
-      slot.total_chunks = ck.count;
+      // One signaled completion per message: only the last chunk on the
+      // pinned QP is signaled; QP ordering means the whole message's data
+      // has landed when that completion arrives.
+      slot.total_chunks = 1;
       slot.completed_chunks.store(0, std::memory_order_release);
 
       bool failed = false;
       size_t off = 0;
+      // Pin the WHOLE message to one QP so the per-message credit below
+      // is exact. Concurrent messages still stripe across QPs via
+      // select_qp's message-level choice (aggregate striping preserved;
+      // only intra-message striping is traded for the signaled-WR win).
+      // An explicit group affinity always wins (fused groups must be
+      // ordered on one QP).
+      int pin_qp = -1;
+      if (e.qp_affinity != ~0u)
+        pin_qp =
+            static_cast<int>(e.qp_affinity % static_cast<uint32_t>(p->num_qps));
+      else
+        pin_qp = select_qp(*p, static_cast<uint32_t>(e.len));
+
+      // In-flight credit is message-granularity (one per message). Cap it
+      // so the QP send queue (kQpMaxSendWr) always holds the worst case
+      // (cap x kMaxChunks): small 1-chunk messages keep the old 128-deep
+      // concurrency, large messages step down so they cannot overflow the
+      // queue with unsignaled chunks.
+      int cap = std::min<int>(
+          kMaxInflightWrs,
+          kQpMaxSendWr / std::max<int>(1, static_cast<int>(ck.count)));
+      while (p->qp_state[pin_qp].unacked_wrs.load(std::memory_order_acquire) +
+                 1 >
+             cap) {
+        if (stop_.load(std::memory_order_acquire)) {
+          failed = true;
+          break;
+        }
+        machnet_pause();
+      }
+      if (failed) {
+        continue;
+      }
+      // Mark the message in flight BEFORE posting its WRs (one credit per
+      // message; the single signaled completion in poll_cq_set returns
+      // it). Posting the credit first also keeps the send queue bound
+      // exact even if the first ibv_post_send returns immediately.
+      p->qp_state[pin_qp].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
+
       for (uint32_t ci = 0; ci < ck.count; ++ci) {
         uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
-        int q = select_qp(*p, sz);
-
-        // Back-pressure: wait for inflight WRs to drop
-        while (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) + 1 >
-               kMaxInflightWrs) {
-          if (stop_.load(std::memory_order_acquire)) {
-            failed = true;
-            break;
-          }
-          std::unique_lock<std::mutex> lk(cv_mu_);
-          cv_.wait_for(lk, kCvTimeout, [&] {
-            return p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) +
-                           1 <=
-                       kMaxInflightWrs ||
-                   stop_.load(std::memory_order_acquire);
-          });
-        }
-        if (failed) break;
+        int q = pin_qp;
 
         // Encode QP index into wr_id (Task 4)
         uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) |
@@ -923,8 +1117,23 @@ void RdmaTransportAdapter::send_worker() {
         wr.wr_id = wr_id;
         wr.sg_list = &sge;
         wr.num_sge = 1;
-        wr.opcode = IBV_WR_RDMA_WRITE;
-        wr.send_flags = IBV_SEND_SIGNALED;
+        bool const last = (ci + 1 == ck.count);
+        if (fused && last) {
+          wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+          // The immediate intentionally carries only the tag's low 32
+          // bits — the unsalted tag (the run epoch lives in the high
+          // bits, and low32(salted) == unsalted). Uniqueness across runs
+          // comes from per-peer FIFO arrival-order matching on the
+          // receiver (Communicator::on_imm_received), not from the tag.
+          // Immediate data travels in network byte order.
+          wr.imm_data = htonl(static_cast<uint32_t>(e.tag));
+        } else {
+          wr.opcode = IBV_WR_RDMA_WRITE;
+        }
+        // Only the last chunk is signaled; its completion is ordered
+        // behind the unsignaled chunks on the same QP, so it marks the
+        // whole message complete.
+        wr.send_flags = last ? IBV_SEND_SIGNALED : 0;
         wr.wr.rdma.remote_addr = e.remote_addr + off;
         wr.wr.rdma.rkey = e.remote_rkey;
 
@@ -940,8 +1149,8 @@ void RdmaTransportAdapter::send_worker() {
                   ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
 
           // Mark slot as complete and free (error path)
-          slot.completed_chunks.store(ck.count, std::memory_order_release);
-          publish_completion(e.comm_rid, true);
+          slot.completed_chunks.store(1, std::memory_order_release);
+          publish_put_completion(e.comm_rid, true);
           // Only free if we still own the slot
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
@@ -950,7 +1159,6 @@ void RdmaTransportAdapter::send_worker() {
           break;
         }
 
-        p->qp_state[q].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
         p->qp_state[q].last_send_ns.store(now_ns(), std::memory_order_release);
         off += sz;
       }
@@ -966,7 +1174,7 @@ void RdmaTransportAdapter::send_worker() {
             std::memory_order_acquire);
       }
       if (!p || !p->put_ready) {
-        publish_completion(e.comm_rid, true);
+        publish_sig_send_completion(e.comm_rid, true);
         continue;
       }
 
@@ -977,11 +1185,16 @@ void RdmaTransportAdapter::send_worker() {
 
       // CAS-acquire slot for signal send
       uint32_t expected = 0;
+      int cas_spin = 0;
       while (!slot.send_id.compare_exchange_weak(expected, send_id,
                                                  std::memory_order_acquire)) {
         if (stop_.load(std::memory_order_acquire)) {
-          publish_completion(e.comm_rid, true);
+          publish_sig_send_completion(e.comm_rid, true);
           goto next_elem;
+        }
+        if (++cas_spin > 5000000) {
+          slot.send_id.store(send_id, std::memory_order_release);
+          break;
         }
         expected = 0;
         std::this_thread::yield();
@@ -1008,14 +1221,14 @@ void RdmaTransportAdapter::send_worker() {
         fprintf(stderr, "[send_worker] SIGNAL_POST_FAILED rank=%d tag=%lu\n",
                 e.peer_rank, (unsigned long)payload);
         slot.completed_chunks.store(1, std::memory_order_release);
-        publish_completion(e.comm_rid, true);
+        publish_sig_send_completion(e.comm_rid, true);
         uint32_t exp = send_id;
         slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
         continue;
       }
     } else {
       // Unknown kind → fail immediately
-      publish_completion(e.comm_rid, true);
+      publish_put_completion(e.comm_rid, true);
     }
   next_elem:;
   }
@@ -1023,10 +1236,10 @@ void RdmaTransportAdapter::send_worker() {
   // Drain remaining on shutdown
   RingElem drain;
   while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
-// ── polling ──────────────────────────────────────────────────────────────────
+// Polling
 
 void RdmaTransportAdapter::poll_loop() {
   while (!stop_.load(std::memory_order_acquire)) {
@@ -1054,6 +1267,32 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
   while ((n = ibv_poll_cq(p.data_cq, 16, wc)) > 0) {
     for (int i = 0; i < n; ++i) {
       any = true;
+
+      // Recv completions (write-with-imm signals) are handled before the
+      // send-side wr_id decoding — their wr_id is a recv WQE id, not a
+      // send_id. The 32-bit immediate carries the unsalted signal tag (in
+      // network byte order), which the NIC surfaces only after the written
+      // data has landed; matching is per-peer FIFO in arrival order.
+      if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        if (wc[i].status == IBV_WC_SUCCESS && comm_)
+          comm_->on_imm_received(rank, ntohl(wc[i].imm_data));
+        // Repost on the QP that consumed the WQE.
+        bool reposted = false;
+        for (int qi = 0; qi < p.num_qps; ++qi) {
+          if (p.data_qps[qi]->qp_num == wc[i].qp_num) {
+            (void)post_data_recv(p.data_qps[qi]);
+            reposted = true;
+            break;
+          }
+        }
+        if (!reposted)
+          fprintf(stderr,
+                  "[poll_cq_set] recv-with-imm on unknown qpn=%u, "
+                  "recv WQE not reposted\n",
+                  wc[i].qp_num);
+        continue;
+      }
+
       uint32_t send_id = static_cast<uint32_t>(wc[i].wr_id >> 32);
 
       // Decode QP index directly from wr_id (Task 4)
@@ -1070,12 +1309,11 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         if (slot.send_id.load(std::memory_order_acquire) == send_id) {
           slot.completed_chunks.store(slot.total_chunks,
                                       std::memory_order_release);
-          publish_completion(slot.comm_rid, true);
+          publish_put_completion(slot.comm_rid, true);
           uint32_t exp = send_id;
           slot.send_id.compare_exchange_strong(exp, 0,
                                                std::memory_order_release);
         }
-        cv_.notify_all();
         continue;
       }
 
@@ -1099,7 +1337,6 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
 
       // Verify slot ownership
       if (slot.send_id.load(std::memory_order_acquire) != send_id) {
-        cv_.notify_all();
         continue;
       }
 
@@ -1110,11 +1347,10 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
         uint32_t expected = send_id;
         if (slot.send_id.compare_exchange_strong(expected, 0,
                                                  std::memory_order_release)) {
-          publish_completion(slot.comm_rid, false);
+          publish_put_completion(slot.comm_rid, false);
         }
         // If CAS failed, error path or another thread already handled it
       }
-      cv_.notify_all();
     }
   }
   return any;
@@ -1135,11 +1371,10 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       if (slot.send_id.load(std::memory_order_acquire) == send_id) {
         slot.completed_chunks.store(slot.total_chunks,
                                     std::memory_order_release);
-        publish_completion(slot.comm_rid, true);
+        publish_sig_send_completion(slot.comm_rid, true);
         uint32_t exp = send_id;
         slot.send_id.compare_exchange_strong(exp, 0, std::memory_order_release);
       }
-      cv_.notify_all();
       continue;
     }
 
@@ -1156,11 +1391,10 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
             uint32_t expected = send_id;
             if (slot.send_id.compare_exchange_strong(
                     expected, 0, std::memory_order_release)) {
-              publish_completion(slot.comm_rid, false);
+              publish_sig_send_completion(slot.comm_rid, false);
             }
           }
         }
-        cv_.notify_all();
         break;
       }
 
@@ -1180,7 +1414,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
   return any;
 }
 
-// ── chunk splitting ──────────────────────────────────────────────────────────
+// Chunk splitting
 
 RdmaTransportAdapter::ChunkResult RdmaTransportAdapter::chunk_split(
     size_t len) const {

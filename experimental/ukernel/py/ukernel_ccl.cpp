@@ -1,24 +1,19 @@
-#include "../include/transport.h"
-#include "../src/ccl/backend/device_backend.h"
-#include "../src/ccl/backend/transport_backend.h"
+#include "../src/ccl/coll_config.h"
 #include "../src/ccl/coll_types.h"
 #include "../src/ccl/executor.h"
-#include "gpu_rt.h"
+#include <c10/cuda/CUDAStream.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/extension.h>
-#include <algorithm>
-#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <utility>
+#include <thread>
 #include <vector>
 
 namespace nb = nanobind;
@@ -36,14 +31,6 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
                                 " must be a torch.Tensor");
   }
   return THPVariable_Unpack(py_obj);
-}
-
-Transport::PreferredTransport parse_transport(std::string const& value) {
-  if (value == "auto") return Transport::PreferredTransport::Auto;
-  if (value == "ipc") return Transport::PreferredTransport::Ipc;
-  if (value == "tcp") return Transport::PreferredTransport::Tcp;
-  if (value == "rdma") return Transport::PreferredTransport::Rdma;
-  throw std::invalid_argument("unsupported transport: " + value);
 }
 
 ScalarType to_scalar_type(torch::ScalarType dtype) {
@@ -74,615 +61,273 @@ ScalarType to_scalar_type(torch::ScalarType dtype) {
   throw std::invalid_argument("unsupported torch dtype for ukernel collective");
 }
 
-void validate_collective_dtype(CollectiveKind collective,
-                               torch::ScalarType dtype) {
-  switch (collective) {
-    case CollectiveKind::AllReduce:
-      switch (dtype) {
-        case torch::kInt8:
-        case torch::kInt32:
-        case torch::kInt64:
-        case torch::kFloat16:
-        case torch::kFloat32:
-        case torch::kFloat64:
-        case torch::kBFloat16:
-          return;
-        default:
-          break;
-      }
-      throw std::invalid_argument(
-          "allreduce currently supports int8/int32/int64/fp16/fp32/fp64/bf16 "
-          "tensors");
-    case CollectiveKind::AllToAll:
-      switch (dtype) {
-        case torch::kInt8:
-        case torch::kInt32:
-        case torch::kInt64:
-        case torch::kFloat16:
-        case torch::kFloat32:
-        case torch::kFloat64:
-        case torch::kBFloat16:
-          return;
-        default:
-          break;
-      }
-      throw std::invalid_argument(
-          "alltoall currently supports int8/int32/int64/fp16/fp32/fp64/bf16 "
-          "tensors");
-  }
-}
-
-ReductionKind parse_reduction_kind(uint32_t value) {
-  switch (static_cast<ReductionKind>(value)) {
+ReductionKind to_reduction(uint32_t v) {
+  auto r = static_cast<ReductionKind>(v);
+  switch (r) {
     case ReductionKind::Sum:
     case ReductionKind::Prod:
     case ReductionKind::Max:
     case ReductionKind::Min:
     case ReductionKind::BitwiseAnd:
-      return static_cast<ReductionKind>(value);
-    case ReductionKind::None:
+      return r;
+    default:
       break;
   }
   throw std::invalid_argument("unsupported reduction kind");
 }
 
-std::vector<size_t> normalize_split_bytes(std::vector<int64_t> const& splits,
-                                          int world_size, size_t elem_size,
-                                          size_t total_elems,
-                                          char const* which) {
-  if (splits.size() != static_cast<size_t>(world_size)) {
-    throw std::invalid_argument(std::string(which) +
-                                " split count must equal world_size");
+void validate_arithmetic_dtype(torch::ScalarType dtype, char const* what) {
+  switch (dtype) {
+    case torch::kInt8:
+    case torch::kInt32:
+    case torch::kInt64:
+    case torch::kFloat16:
+    case torch::kFloat32:
+    case torch::kFloat64:
+    case torch::kBFloat16:
+      return;
+    default:
+      break;
   }
-  std::vector<size_t> out;
-  out.reserve(splits.size());
-  size_t sum_elems = 0;
-  for (int64_t split : splits) {
-    if (split < 0) {
-      throw std::invalid_argument(std::string(which) +
-                                  " split sizes must be non-negative");
-    }
-    size_t elems = static_cast<size_t>(split);
-    sum_elems += elems;
-    out.push_back(elems * elem_size);
-  }
-  if (sum_elems != total_elems) {
-    throw std::invalid_argument(std::string("sum(") + which +
-                                "_split_sizes) must equal tensor numel");
-  }
-  return out;
-}
-
-CollectiveBinding build_collective_memory(
-    int rank, int world_size, void* input_ptr, size_t input_bytes,
-    ScalarType input_dtype, void* output_ptr, size_t output_bytes,
-    ScalarType output_dtype, void* staging_ptr, size_t staging_bytes,
-    CollectiveBufferRoles const& roles, BufferRegistry* registry) {
-  CollectiveBinding binding;
-  binding.registry = registry;
-  registry->local_rank = rank;
-  binding.roles = roles;
-  binding.roles.validate();
-  RegisteredBuffer& input =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
-  input.local_ptr = input_ptr;
-  input.bytes = input_bytes;
-  input.layout.sizes = {
-      static_cast<int64_t>(input_bytes / scalar_type_size(input_dtype))};
-  input.layout.strides = {1};
-  input.layout.dtype = input_dtype;
-  input.peer_views.resize(static_cast<size_t>(world_size));
-
-  RegisteredBuffer& output =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Output));
-  output.local_ptr = output_ptr;
-  output.bytes = output_bytes;
-  output.layout.sizes = {
-      static_cast<int64_t>(output_bytes / scalar_type_size(output_dtype))};
-  output.layout.strides = {1};
-  output.layout.dtype = output_dtype;
-  output.remotely_accessible =
-      binding.buffer_id(CollectiveBufferRole::Output) ==
-              binding.buffer_id(CollectiveBufferRole::Input)
-          ? true
-          : false;
-  output.peer_views.resize(static_cast<size_t>(world_size));
-
-  RegisteredBuffer& staging =
-      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
-  staging.local_ptr = staging_ptr;
-  staging.bytes = staging_bytes;
-  staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
-  staging.layout.strides = {1};
-  staging.layout.dtype = ScalarType::UInt8;
-  staging.peer_views.resize(static_cast<size_t>(world_size));
-
-  for (int peer = 0; peer < world_size; ++peer) {
-    input.peer_views[static_cast<size_t>(peer)].same_node = true;
-    output.peer_views[static_cast<size_t>(peer)].same_node = true;
-    staging.peer_views[static_cast<size_t>(peer)].same_node = true;
-  }
-
-  return binding;
-}
-
-struct WorkTensor {
-  torch::Tensor work_flat;
-};
-
-struct BindingState {
-  void* input_ptr = nullptr;
-  size_t input_bytes = 0;
-  ScalarType input_dtype = ScalarType::UInt8;
-  void* output_ptr = nullptr;
-  size_t output_bytes = 0;
-  ScalarType output_dtype = ScalarType::UInt8;
-  void* staging_ptr = nullptr;
-  size_t staging_bytes = 0;
-  BufferId input_buffer_id = kDefaultInputBufferId;
-  BufferId output_buffer_id = kDefaultOutputBufferId;
-  BufferId scratch_buffer_id = kDefaultScratchBufferId;
-
-  bool matches(void* other_input_ptr, size_t other_input_bytes,
-               ScalarType other_input_dtype, void* other_output_ptr,
-               size_t other_output_bytes, ScalarType other_output_dtype,
-               void* other_staging_ptr, size_t other_staging_bytes,
-               CollectiveBufferRoles const& other_roles) const {
-    return input_ptr == other_input_ptr && input_bytes == other_input_bytes &&
-           input_dtype == other_input_dtype && output_ptr == other_output_ptr &&
-           output_bytes == other_output_bytes &&
-           output_dtype == other_output_dtype &&
-           staging_ptr == other_staging_ptr &&
-           staging_bytes == other_staging_bytes &&
-           input_buffer_id == other_roles.input_buffer_id &&
-           output_buffer_id == other_roles.output_buffer_id &&
-           scratch_buffer_id == other_roles.scratch_buffer_id;
-  }
-};
-
-size_t plan_cache_key(CollectiveKind collective, CollectiveConfig const& config,
-                      bool inplace) {
-  size_t h = 0;
-  auto combine = [&h](auto v) {
-    h ^= std::hash<decltype(v)>{}(v) + 0x9e3779b97f4a7c15ULL + (h << 6) +
-         (h >> 2);
-  };
-  combine(static_cast<uint32_t>(collective));
-  combine(static_cast<uint32_t>(config.algorithm));
-  combine(config.nranks);
-  combine(config.rank);
-  combine(config.num_streams);
-  combine(config.input_bytes);
-  combine(config.output_bytes);
-  combine(config.tile_bytes);
-  combine(static_cast<uint32_t>(config.reduction));
-  combine(config.use_sm_ipc ? 1u : 0u);
-  combine(inplace ? 1u : 0u);
-  for (auto v : config.input_split_bytes) combine(v);
-  for (auto v : config.output_split_bytes) combine(v);
-  return h;
+  throw std::invalid_argument(std::string(what) +
+                              " supports int8/int32/int64/fp16/fp32/fp64/bf16");
 }
 
 }  // namespace
 
+// The async methods mirror the SprayExecutor application API 1:1
+// (submit -> handle, poll / wait / status / error_message, release);
+// the sync collectives are thin submit+wait+release convenience
+// wrappers. Contract for async use: the tensor must stay alive and
+// unmodified until wait() observes completion, and every handle must be
+// released exactly once (releasing a running handle raises, mirroring
+// the C++ logic_error).
 class ProcessGroup {
  public:
-  ProcessGroup(int rank, int world_size, int gpu_id, std::string exchanger_ip,
-               int exchanger_port, std::string transport = "auto",
-               uint32_t device_task_capacity = 4096,
-               uint32_t max_device_fifos = 8, uint32_t threads_per_block = 256,
-               uint32_t fifo_capacity = 64, uint32_t smem_size = 0)
-      : rank_(rank),
-        world_size_(world_size),
-        gpu_id_(gpu_id),
-        transport_backend_(TransportBackendConfig{
-            gpu_id,
-            rank,
-            world_size,
-            std::make_shared<Transport::CommunicatorConfig>(
-                Transport::CommunicatorConfig{
-                    exchanger_ip,
-                    exchanger_port,
-                    rank,
-                    "default",
-                    parse_transport(transport),
-                }),
-        }),
-        device_backend_(DeviceBackendConfig{
-            device_task_capacity,
-            max_device_fifos,
-            threads_per_block,
-            fifo_capacity,
-            smem_size,
-        }),
-        executor_(
-            ExecutorBackends{&transport_backend_, &device_backend_},
-            [this](int remote_rank, uint32_t remote_buffer_id, size_t offset,
-                   size_t bytes, void** out_ptr, int* out_device_idx) {
-              if (out_ptr == nullptr) return false;
-              UKernel::Transport::IPCItem ipc{};
-              try {
-                ipc = transport_backend_.communicator().get_ipc(
-                    remote_rank, remote_buffer_id);
-              } catch (...) {
-                return false;
-              }
-              if (!ipc.valid || ipc.direct_ptr == nullptr) return false;
-              if (offset > ipc.bytes || bytes > ipc.bytes - offset) {
-                return false;
-              }
-              *out_ptr = reinterpret_cast<void*>(
-                  reinterpret_cast<uintptr_t>(ipc.direct_ptr) +
-                  ipc.base_offset + offset);
-              if (out_device_idx != nullptr) {
-                *out_device_idx = ipc.device_idx;
-              }
-              return true;
-            }) {
-    if (world_size_ < 2) {
-      throw std::invalid_argument("world_size must be >= 2");
-    }
-    if (rank_ < 0 || rank_ >= world_size_) {
+  ProcessGroup(int rank, int world_size, int gpu_id,
+               std::string exchanger_ip = "127.0.0.1",
+               int exchanger_port = 16998, int threads_per_block = 64,
+               int blocks_per_worker = 1, size_t smem_size = 4096)
+      : rank_(rank), world_size_(world_size), gpu_id_(gpu_id) {
+    if (world_size_ < 2) throw std::invalid_argument("world_size must be >= 2");
+    if (rank_ < 0 || rank_ >= world_size_)
       throw std::invalid_argument("rank out of range");
+
+    SprayExecutorConfig cfg;
+    cfg.gpu_id = gpu_id;
+    cfg.rank = rank;
+    cfg.world_size = world_size;
+    cfg.exchanger_ip = exchanger_ip;
+    cfg.exchanger_port = exchanger_port;
+    // The exchanger elects a node leader by local_id; per-GPU index is the
+    // per-node ordinal (distinct GPUs same-node, each node leading with 0
+    // cross-node).
+    cfg.local_id = gpu_id;
+    cfg.threads_per_block = threads_per_block;
+    cfg.blocks_per_worker = blocks_per_worker;
+    cfg.smem_size = smem_size;
+    cfg.max_device_fifos = 1;
+    // Torch coexistence: let the persistent worker kernels exit after
+    // 1ms of fifo idleness (relaunched on the next enqueue), so torch's
+    // device-wide syncs (torch.cuda.synchronize(), .item(), D2H) can
+    // pass between collectives. Bursts keep the kernel resident.
+    cfg.device_idle_exit_us = 1000;
+    {
+      // Exchanger connect + peer meta exchange can block for seconds;
+      // let Python handle signals meanwhile.
+      nb::gil_scoped_release release;
+      executor_ = SprayExecutor::create(cfg);
     }
-    GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   }
 
   int rank() const { return rank_; }
   int world_size() const { return world_size_; }
   int gpu_id() const { return gpu_id_; }
 
-  void allreduce(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                 uint32_t num_streams = 2) {
-    allreduce(std::move(tensor), static_cast<uint32_t>(ReductionKind::Sum),
-              tile_bytes, num_streams);
+  uint64_t allreduce_submit(
+      nb::handle tensor_handle,
+      uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
+      size_t tile_bytes = 64ull << 10, uint32_t signal_group_tiles = 1) {
+    return allreduce_submit_tensor(tensor_from_python(tensor_handle, "tensor"),
+                                   reduction, tile_bytes, signal_group_tiles);
   }
 
-  void alltoall(torch::Tensor tensor, size_t tile_bytes = 64ull << 10,
-                uint32_t num_streams = 2) {
-    alltoall_out(std::move(tensor), std::move(tensor), tile_bytes, num_streams);
-  }
+  uint64_t alltoall_submit(nb::handle tensor_handle,
+                           size_t tile_bytes = 64ull << 10,
+                           uint32_t signal_group_tiles = 1) {
+    auto tensor = tensor_from_python(tensor_handle, "tensor");
+    require_cuda_contiguous(tensor, "tensor");
+    validate_arithmetic_dtype(tensor.scalar_type(), "alltoall");
 
-  void alltoall_out(torch::Tensor output, torch::Tensor input,
-                    size_t tile_bytes = 64ull << 10, uint32_t num_streams = 2) {
-    alltoallv_out(std::move(output), std::move(input), {}, {}, tile_bytes,
-                  num_streams);
-  }
-
-  void alltoallv_out(torch::Tensor output, torch::Tensor input,
-                     std::vector<int64_t> output_split_sizes,
-                     std::vector<int64_t> input_split_sizes,
-                     size_t tile_bytes = 64ull << 10,
-                     uint32_t num_streams = 2) {
-    std::lock_guard<std::mutex> lock(mu_);
-    GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-
-    bool require_even_split =
-        input_split_sizes.empty() && output_split_sizes.empty();
-    WorkTensor input_work = prepare_work_tensor(CollectiveKind::AllToAll, input,
-                                                require_even_split);
-    WorkTensor output_work = prepare_work_tensor(CollectiveKind::AllToAll,
-                                                 output, require_even_split);
-    ScalarType input_dtype = to_scalar_type(input.scalar_type());
-    ScalarType output_dtype = to_scalar_type(output.scalar_type());
-    if (input_dtype != output_dtype) {
+    auto flat = tensor.view({-1});
+    ScalarType dtype = to_scalar_type(tensor.scalar_type());
+    size_t elem_bytes = static_cast<size_t>(flat.element_size());
+    size_t bytes = static_cast<size_t>(flat.numel()) * elem_bytes;
+    if (bytes % (static_cast<size_t>(world_size_) * elem_bytes) != 0)
       throw std::invalid_argument(
-          "alltoall output and input must have the same dtype");
-    }
-    size_t input_bytes =
-        static_cast<size_t>(input_work.work_flat.numel()) *
-        static_cast<size_t>(input_work.work_flat.element_size());
-    size_t output_bytes =
-        static_cast<size_t>(output_work.work_flat.numel()) *
-        static_cast<size_t>(output_work.work_flat.element_size());
-    std::vector<size_t> input_split_bytes;
-    std::vector<size_t> output_split_bytes;
-    if (require_even_split) {
-      if (input_bytes != output_bytes) {
-        throw std::invalid_argument(
-            "equal-split alltoall output and input must have the same byte "
-            "size");
-      }
-    } else {
-      size_t elem_size =
-          static_cast<size_t>(input_work.work_flat.element_size());
-      input_split_bytes = normalize_split_bytes(
-          input_split_sizes, world_size_, elem_size,
-          static_cast<size_t>(input_work.work_flat.numel()), "input");
-      output_split_bytes = normalize_split_bytes(
-          output_split_sizes, world_size_, elem_size,
-          static_cast<size_t>(output_work.work_flat.numel()), "output");
-      size_t self_index = static_cast<size_t>(rank_);
-      if (input_split_bytes[self_index] != output_split_bytes[self_index]) {
-        throw std::invalid_argument(
-            "alltoallv requires input_split_sizes[rank] == "
-            "output_split_sizes[rank]");
-      }
-    }
+          "equal-split alltoall requires tensor bytes divisible by "
+          "world_size * dtype_size");
 
-    CollectiveConfig config{};
-    config.nranks = world_size_;
-    config.rank = rank_;
-    config.num_streams = num_streams;
-    config.input_bytes = input_bytes;
-    config.output_bytes = output_bytes;
-    config.input_split_bytes = std::move(input_split_bytes);
-    config.output_split_bytes = std::move(output_split_bytes);
-    config.tile_bytes = tile_bytes;
-    config.algorithm = AlgorithmKind::Pairwise;
-    config.dtype = input_dtype;
-    config.reduction = ReductionKind::None;
+    CollectiveConfig cfg;
+    cfg.nranks = world_size_;
+    cfg.rank = rank_;
+    cfg.input_bytes = bytes;
+    cfg.output_bytes = bytes;
+    cfg.tile_bytes = tile_bytes;
+    cfg.kind = CollKind::AllToAllPairwise;
+    cfg.dtype = dtype;
+    cfg.signal_group_tiles = signal_group_tiles;
 
-    size_t max_bytes = std::max(input_bytes, output_bytes);
-    size_t staging_req = std::max(
-        tile_bytes * (world_size_ - 1),
-        ((max_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) *
-            tile_bytes);
-    void* old_staging_ptr =
-        staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
-    torch::Tensor staging = ensure_staging(staging_req);
-    void* staging_ptr = staging.defined() ? staging.data_ptr() : nullptr;
-    if (old_staging_ptr != nullptr && old_staging_ptr != staging_ptr) {
-      deregister_tensor(old_staging_ptr);
-    }
+    void* ptr = flat.data_ptr();
+    return submit_collective(cfg, ptr, ptr);
+  }
 
-    void* input_ptr = input_work.work_flat.data_ptr();
-    void* output_ptr = output_work.work_flat.data_ptr();
-    bool inplace = (input_ptr == output_ptr);
+  bool poll(uint64_t h) { return executor_->poll(h); }
 
-    BufferId input_id =
-        resolve_or_register_tensor(input_ptr, input_bytes, input_dtype);
-    BufferId output_id = inplace ? input_id
-                                 : resolve_or_register_tensor(
-                                       output_ptr, output_bytes, output_dtype);
-    BufferId staging_id =
-        resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
-    CollectiveBufferRoles roles{input_id, output_id, staging_id};
+  bool wait(uint64_t h, uint64_t timeout_ms = 0) {
+    return wait_collective(h, timeout_ms);
+  }
 
-    size_t key = plan_cache_key(CollectiveKind::AllToAll, config, inplace);
-    CollectivePlan plan;
-    auto cache_it = plan_cache_.find(key);
-    if (cache_it != plan_cache_.end()) {
-      plan = cache_it->second;
-    } else {
-      config.collective = CollectiveKind::AllToAll;
-      plan = build_plan(config, inplace);
-      plan_cache_[key] = plan;
-    }
+  CollectiveOpStatus status(uint64_t h) { return executor_->status(h); }
+  std::string error_message(uint64_t h) { return executor_->error_message(h); }
+  void release(uint64_t h) { executor_->release(h); }
 
-    if (!binding_state_.matches(input_work.work_flat.data_ptr(), input_bytes,
-                                input_dtype, output_work.work_flat.data_ptr(),
-                                output_bytes, output_dtype, staging_ptr,
-                                plan.staging_bytes_required, roles)) {
-      registry_ = std::make_shared<BufferRegistry>();
-      binding_memory_ =
-          std::make_shared<CollectiveBinding>(build_collective_memory(
-              rank_, world_size_, input_work.work_flat.data_ptr(), input_bytes,
-              input_dtype, output_work.work_flat.data_ptr(), output_bytes,
-              output_dtype, staging_ptr, plan.staging_bytes_required, roles,
-              registry_.get()));
-      binding_state_.input_ptr = input_work.work_flat.data_ptr();
-      binding_state_.input_bytes = input_bytes;
-      binding_state_.input_dtype = input_dtype;
-      binding_state_.output_ptr = output_work.work_flat.data_ptr();
-      binding_state_.output_bytes = output_bytes;
-      binding_state_.output_dtype = output_dtype;
-      binding_state_.staging_ptr = staging_ptr;
-      binding_state_.staging_bytes = plan.staging_bytes_required;
-      binding_state_.input_buffer_id = roles.input_buffer_id;
-      binding_state_.output_buffer_id = roles.output_buffer_id;
-      binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
-    }
+  void allreduce(nb::handle tensor_handle,
+                 uint32_t reduction = static_cast<uint32_t>(ReductionKind::Sum),
+                 size_t tile_bytes = 64ull << 10,
+                 uint32_t signal_group_tiles = 1) {
+    wait_and_release(allreduce_submit(tensor_handle, reduction, tile_bytes,
+                                      signal_group_tiles));
+  }
 
-    executor_.run_tiled(plan, *binding_memory_);
+  void alltoall(nb::handle tensor_handle, size_t tile_bytes = 64ull << 10,
+                uint32_t signal_group_tiles = 1) {
+    wait_and_release(
+        alltoall_submit(tensor_handle, tile_bytes, signal_group_tiles));
   }
 
   void barrier() {
     if (!barrier_tensor_.defined()) {
-      barrier_tensor_ = torch::ones(
-          {1}, torch::TensorOptions()
-                   .dtype(torch::kInt32)
-                   .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
-    } else {
-      barrier_tensor_.fill_(1);
+      barrier_tensor_ =
+          torch::ones({static_cast<int64_t>(world_size_)},
+                      torch::TensorOptions()
+                          .dtype(torch::kFloat32)
+                          .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
     }
-    allreduce(barrier_tensor_, static_cast<uint32_t>(ReductionKind::Sum),
-              sizeof(int32_t), 1);
-  }
-
-  bool same_host(int peer_rank) const {
-    return transport_backend_.communicator().same_host(peer_rank);
-  }
-
-  std::string peer_transport(int peer_rank) const {
-    switch (transport_backend_.communicator().peer_transport_kind(peer_rank)) {
-      case Transport::PeerTransportKind::Unknown:
-        return "unknown";
-      case Transport::PeerTransportKind::Ipc:
-        return "ipc";
-      case Transport::PeerTransportKind::Tcp:
-        return "tcp";
-      case Transport::PeerTransportKind::Rdma:
-        return "rdma";
-    }
-    return "unknown";
+    wait_and_release(allreduce_submit_tensor(
+        barrier_tensor_, static_cast<uint32_t>(ReductionKind::Sum),
+        static_cast<size_t>(barrier_tensor_.numel() *
+                            barrier_tensor_.element_size()),
+        1));
   }
 
  private:
-  struct TensorRegEntry {
-    BufferId buffer_id = kInvalidBufferId;
-    size_t bytes = 0;
-    ScalarType dtype = ScalarType::UInt8;
-  };
-
-  BufferId resolve_or_register_tensor(void* ptr, size_t bytes,
-                                      ScalarType dtype) {
-    if (ptr == nullptr || bytes == 0) return kInvalidBufferId;
-    auto it = tensor_registry_.find(ptr);
-    if (it != tensor_registry_.end()) {
-      it->second.bytes = bytes;
-      return it->second.buffer_id;
-    }
-    BufferId id = next_buffer_id_.fetch_add(1, std::memory_order_relaxed);
-    tensor_registry_[ptr] = {id, bytes, dtype};
-    return id;
-  }
-
-  void deregister_tensor(void* ptr) {
-    if (ptr == nullptr) return;
-    auto it = tensor_registry_.find(ptr);
-    if (it == tensor_registry_.end()) return;
-    BufferId id = it->second.buffer_id;
-    if (id != kInvalidBufferId) {
-      transport_backend_.communicator().dereg_mr(id);
-      transport_backend_.communicator().dereg_ipc(id);
-    }
-    tensor_registry_.erase(it);
-  }
-
-  WorkTensor prepare_work_tensor(CollectiveKind collective,
-                                 torch::Tensor const& tensor,
-                                 bool require_even_alltoall_bytes = true) {
-    if (!tensor.defined()) {
-      throw std::invalid_argument("tensor must be defined");
-    }
-    if (!tensor.is_cuda()) {
-      throw std::invalid_argument("tensor must be a CUDA tensor");
-    }
-    if (tensor.device().index() != gpu_id_) {
+  void require_cuda_contiguous(torch::Tensor const& t, char const* name) {
+    if (!t.is_cuda() || t.device().index() != gpu_id_)
+      throw std::invalid_argument(std::string(name) +
+                                  " must be on this process group's GPU");
+    if (!t.is_contiguous())
       throw std::invalid_argument(
-          "tensor device does not match process group gpu_id");
-    }
-    validate_collective_dtype(collective, tensor.scalar_type());
-
-    WorkTensor out;
-    torch::Tensor flat = tensor.view({-1});
-    size_t raw_bytes = static_cast<size_t>(flat.numel()) *
-                       static_cast<size_t>(flat.element_size());
-    size_t alignment = static_cast<size_t>(world_size_) *
-                       static_cast<size_t>(flat.element_size());
-    if (collective == CollectiveKind::AllToAll && require_even_alltoall_bytes &&
-        alignment != 0 && (raw_bytes % alignment) != 0) {
-      throw std::invalid_argument(
-          "alltoall tensor byte size must be divisible by world_size * "
-          "element_size");
-    }
-    out.work_flat = flat;
-    return out;
+          std::string(name) +
+          " must be contiguous (call .contiguous() yourself first — "
+          "collectives run in place and cannot silently copy back)");
   }
 
-  torch::Tensor ensure_staging(size_t staging_bytes) {
-    if (staging_bytes == 0) {
-      staging_tensor_ = torch::Tensor();
-      return staging_tensor_;
-    }
-    if (staging_tensor_.defined() &&
-        staging_tensor_.device().index() == gpu_id_ &&
-        static_cast<size_t>(staging_tensor_.numel()) >= staging_bytes) {
-      return staging_tensor_;
-    }
-    staging_tensor_ =
-        torch::empty({static_cast<int64_t>(staging_bytes)},
-                     torch::TensorOptions()
-                         .dtype(torch::kUInt8)
-                         .device(c10::Device(c10::DeviceType::CUDA, gpu_id_)));
-    return staging_tensor_;
-  }
+  uint64_t allreduce_submit_tensor(torch::Tensor const& tensor,
+                                   uint32_t reduction, size_t tile_bytes,
+                                   uint32_t signal_group_tiles) {
+    require_cuda_contiguous(tensor, "tensor");
+    validate_arithmetic_dtype(tensor.scalar_type(), "allreduce");
 
-  void allreduce(torch::Tensor tensor, uint32_t reduction,
-                 size_t tile_bytes = 64ull << 10, uint32_t num_streams = 2) {
-    std::lock_guard<std::mutex> lock(mu_);
-    GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-
-    WorkTensor work = prepare_work_tensor(CollectiveKind::AllReduce, tensor);
+    auto flat = tensor.view({-1});
     ScalarType dtype = to_scalar_type(tensor.scalar_type());
-    size_t tensor_bytes = static_cast<size_t>(work.work_flat.numel()) *
-                          static_cast<size_t>(work.work_flat.element_size());
+    size_t elem_bytes = static_cast<size_t>(flat.element_size());
+    size_t bytes = static_cast<size_t>(flat.numel()) * elem_bytes;
+    if (bytes % (static_cast<size_t>(world_size_) * elem_bytes) != 0)
+      throw std::invalid_argument(
+          "allreduce tensor bytes must be divisible by world_size * "
+          "dtype_size");
 
-    CollectiveConfig config{};
-    config.nranks = world_size_;
-    config.rank = rank_;
-    config.num_streams = num_streams;
-    config.input_bytes = tensor_bytes;
-    config.output_bytes = tensor_bytes;
-    config.tile_bytes = tile_bytes;
-    size_t staging_req = std::max(
-        tile_bytes * num_streams,
-        ((tensor_bytes / static_cast<size_t>(world_size_) / tile_bytes) + 1) *
-            tile_bytes);
-    config.algorithm = AlgorithmKind::Ring;
-    config.dtype = dtype;
-    config.reduction = static_cast<ReductionKind>(reduction);
+    CollectiveConfig cfg;
+    cfg.nranks = world_size_;
+    cfg.rank = rank_;
+    cfg.input_bytes = bytes;
+    cfg.output_bytes = bytes;
+    cfg.tile_bytes = tile_bytes;
+    cfg.kind = CollKind::AllReduceRing;
+    cfg.dtype = dtype;
+    cfg.reduction = to_reduction(reduction);
+    cfg.signal_group_tiles = signal_group_tiles;
 
-    void* old_staging_ptr =
-        staging_tensor_.defined() ? staging_tensor_.data_ptr() : nullptr;
-    torch::Tensor staging = ensure_staging(staging_req);
-    void* staging_ptr = staging.defined() ? staging.data_ptr() : nullptr;
-    if (old_staging_ptr != nullptr && old_staging_ptr != staging_ptr) {
-      deregister_tensor(old_staging_ptr);
+    void* ptr = flat.data_ptr();
+    return submit_collective(cfg, ptr, ptr);
+  }
+
+  // prepare (deduped inside the executor) + torch stream fence +
+  // executor submit. The executor serializes prepare/submit internally,
+  // so no client-side lock is needed; waits are deliberately NOT locked
+  // so in-flight collectives can overlap.
+  uint64_t submit_collective(CollectiveConfig const& cfg, void* input,
+                             void* output) {
+    {
+      // prepare() does peer setup, MR (re)registration and buffer
+      // resolution on a cold shape, which can block for tens of
+      // seconds; let Python handle signals meanwhile (Ctrl+C is
+      // delivered when the call returns, not mid-call).
+      nb::gil_scoped_release release;
+      executor_->prepare(cfg, input, output);
     }
+    // Stream-ordered deps are handled inside executor: input gated by
+    // cudaEventRecord+Query, output by cuStreamWaitValue32.
+    auto stream = c10::cuda::getCurrentCUDAStream().stream();
+    return executor_->submit(cfg, input, output, stream);
+  }
 
-    void* tensor_ptr = work.work_flat.data_ptr();
-    BufferId input_id =
-        resolve_or_register_tensor(tensor_ptr, tensor_bytes, dtype);
-    BufferId staging_id =
-        resolve_or_register_tensor(staging_ptr, staging_req, ScalarType::UInt8);
-    CollectiveBufferRoles roles{input_id, input_id, staging_id};
-
-    size_t key =
-        plan_cache_key(CollectiveKind::AllReduce, config, /*inplace=*/true);
-    CollectivePlan plan;
-    auto cache_it = plan_cache_.find(key);
-    if (cache_it != plan_cache_.end()) {
-      plan = cache_it->second;
-    } else {
-      config.collective = CollectiveKind::AllReduce;
-      plan = build_plan(config, /*inplace=*/true);
-      plan_cache_[key] = plan;
+  // Wait in 20ms slices: release the GIL and check for pending Python
+  // signals (Ctrl+C → KeyboardInterrupt) between slices, so a long
+  // collective stays interruptible instead of pinning the process.
+  // Mirrors SprayExecutor::wait semantics: returns false only on
+  // Failed; with timeout_ms > 0 it may return true while still Running
+  // (a timeout is not an error — use poll() to test completion). On a
+  // pending signal the handle is NOT released: a Running run cannot be
+  // released (the C++ release throws logic_error), and propagating the
+  // interrupt takes priority.
+  bool wait_collective(uint64_t h, uint64_t timeout_ms) {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    bool const use_deadline = timeout_ms > 0;
+    for (;;) {
+      {
+        nb::gil_scoped_release release;
+        executor_->wait(h, std::chrono::milliseconds(20));
+      }
+      if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      auto st = executor_->status(h);
+      if (st != CollectiveOpStatus::Running)
+        return st != CollectiveOpStatus::Failed;
+      if (use_deadline && std::chrono::steady_clock::now() >= deadline)
+        return true;
     }
+  }
 
-    if (!binding_state_.matches(work.work_flat.data_ptr(), tensor_bytes, dtype,
-                                work.work_flat.data_ptr(), tensor_bytes, dtype,
-                                staging_ptr, plan.staging_bytes_required,
-                                roles)) {
-      registry_ = std::make_shared<BufferRegistry>();
-      binding_memory_ =
-          std::make_shared<CollectiveBinding>(build_collective_memory(
-              rank_, world_size_, work.work_flat.data_ptr(), tensor_bytes,
-              dtype, work.work_flat.data_ptr(), tensor_bytes, dtype,
-              staging_ptr, plan.staging_bytes_required, roles,
-              registry_.get()));
-      binding_state_.input_ptr = work.work_flat.data_ptr();
-      binding_state_.input_bytes = tensor_bytes;
-      binding_state_.input_dtype = dtype;
-      binding_state_.output_ptr = work.work_flat.data_ptr();
-      binding_state_.output_bytes = tensor_bytes;
-      binding_state_.output_dtype = dtype;
-      binding_state_.staging_ptr = staging_ptr;
-      binding_state_.staging_bytes = plan.staging_bytes_required;
-      binding_state_.input_buffer_id = roles.input_buffer_id;
-      binding_state_.output_buffer_id = roles.output_buffer_id;
-      binding_state_.scratch_buffer_id = roles.scratch_buffer_id;
+  void wait_and_release(uint64_t h) {
+    wait_collective(h, 0);
+    auto st = executor_->status(h);
+    if (st != CollectiveOpStatus::Completed) {
+      std::string msg = executor_->error_message(h);
+      executor_->release(h);
+      throw std::runtime_error(
+          "ukernel collective failed" +
+          (msg.empty() ? std::string{} : std::string(": ") + msg));
     }
-
-    executor_.run_tiled(plan, *binding_memory_);
+    executor_->release(h);
   }
 
   int rank_;
   int world_size_;
   int gpu_id_;
-  std::atomic<BufferId> next_buffer_id_{kDefaultScratchBufferId + 2};
-  std::unordered_map<void*, TensorRegEntry> tensor_registry_;
-  std::shared_ptr<CollectiveBinding> binding_memory_;
-  std::shared_ptr<BufferRegistry> registry_;
-  CommunicatorTransportBackend transport_backend_;
-  DeviceBackend device_backend_;
-  Executor executor_;
-  torch::Tensor staging_tensor_;
+  std::unique_ptr<SprayExecutor> executor_;
   torch::Tensor barrier_tensor_;
-  BindingState binding_state_{};
-  std::unordered_map<size_t, CollectivePlan> plan_cache_;
-  std::mutex mu_;
 };
 
 }  // namespace Python
@@ -692,66 +337,80 @@ class ProcessGroup {
 NB_MODULE(TORCH_EXTENSION_NAME, m) {
   using UKernel::CCL::Python::ProcessGroup;
 
+  nb::enum_<UKernel::CCL::CollectiveOpStatus>(m, "CollectiveOpStatus")
+      .value("Queued", UKernel::CCL::CollectiveOpStatus::Queued)
+      .value("Running", UKernel::CCL::CollectiveOpStatus::Running)
+      .value("Completed", UKernel::CCL::CollectiveOpStatus::Completed)
+      .value("Failed", UKernel::CCL::CollectiveOpStatus::Failed)
+      .export_values();
+
   nb::class_<ProcessGroup>(m, "ProcessGroup")
-      .def(nb::init<int, int, int, std::string, int, std::string, uint32_t,
-                    uint32_t, uint32_t, uint32_t, uint32_t>(),
+      .def(nb::init<int, int, int, std::string, int, int, int, size_t>(),
            nb::arg("rank"), nb::arg("world_size"), nb::arg("gpu_id"),
            nb::arg("exchanger_ip") = "127.0.0.1",
-           nb::arg("exchanger_port") = 6979, nb::arg("transport") = "auto",
-           nb::arg("device_task_capacity") = 4096,
-           nb::arg("max_device_fifos") = 8, nb::arg("threads_per_block") = 256,
-           nb::arg("fifo_capacity") = 64, nb::arg("smem_size") = 0)
+           nb::arg("exchanger_port") = 16998, nb::arg("threads_per_block") = 64,
+           nb::arg("blocks_per_worker") = 1, nb::arg("smem_size") = 4096)
       .def_prop_ro("rank", &ProcessGroup::rank)
       .def_prop_ro("world_size", &ProcessGroup::world_size)
       .def_prop_ro("gpu_id", &ProcessGroup::gpu_id)
       .def(
-          "allreduce",
+          "allreduce_submit",
+          [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+             size_t tile_bytes, uint32_t signal_group_tiles) {
+            return self.allreduce_submit(tensor, reduction, tile_bytes,
+                                         signal_group_tiles);
+          },
+          nb::arg("tensor"),
+          nb::arg("reduction") =
+              static_cast<uint32_t>(UKernel::CCL::ReductionKind::Sum),
+          nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
+      .def(
+          "alltoall_submit",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-             uint32_t num_streams) {
-            self.allreduce(
-                UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
-                tile_bytes, num_streams);
+             uint32_t signal_group_tiles) {
+            return self.alltoall_submit(tensor, tile_bytes, signal_group_tiles);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_streams") = 2)
+          nb::arg("signal_group_tiles") = 1)
+      .def(
+          "poll", [](ProcessGroup& self, uint64_t h) { return self.poll(h); },
+          nb::arg("handle"))
+      .def(
+          "wait",
+          [](ProcessGroup& self, uint64_t h, uint64_t timeout_ms) {
+            return self.wait(h, timeout_ms);
+          },
+          nb::arg("handle"), nb::arg("timeout_ms") = 0)
+      .def(
+          "status",
+          [](ProcessGroup& self, uint64_t h) { return self.status(h); },
+          nb::arg("handle"))
+      .def(
+          "error_message",
+          [](ProcessGroup& self, uint64_t h) { return self.error_message(h); },
+          nb::arg("handle"))
+      .def(
+          "release", [](ProcessGroup& self, uint64_t h) { self.release(h); },
+          nb::arg("handle"))
+      .def(
+          "allreduce",
+          [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+             size_t tile_bytes, uint32_t signal_group_tiles) {
+            self.allreduce(tensor, reduction, tile_bytes, signal_group_tiles);
+          },
+          nb::arg("tensor"),
+          nb::arg("reduction") =
+              static_cast<uint32_t>(UKernel::CCL::ReductionKind::Sum),
+          nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("signal_group_tiles") = 1)
       .def(
           "alltoall",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
-             uint32_t num_streams) {
-            self.alltoall(
-                UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
-                tile_bytes, num_streams);
+             uint32_t signal_group_tiles) {
+            self.alltoall(tensor, tile_bytes, signal_group_tiles);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_streams") = 2)
-      .def(
-          "alltoall_out",
-          [](ProcessGroup& self, nb::handle output, nb::handle input,
-             size_t tile_bytes, uint32_t num_streams) {
-            self.alltoall_out(
-                UKernel::CCL::Python::tensor_from_python(output, "output"),
-                UKernel::CCL::Python::tensor_from_python(input, "input"),
-                tile_bytes, num_streams);
-          },
-          nb::arg("output"), nb::arg("input"),
-          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_streams") = 2)
-      .def(
-          "alltoallv_out",
-          [](ProcessGroup& self, nb::handle output, nb::handle input,
-             std::vector<int64_t> output_split_sizes,
-             std::vector<int64_t> input_split_sizes, size_t tile_bytes,
-             uint32_t num_streams) {
-            self.alltoallv_out(
-                UKernel::CCL::Python::tensor_from_python(output, "output"),
-                UKernel::CCL::Python::tensor_from_python(input, "input"),
-                std::move(output_split_sizes), std::move(input_split_sizes),
-                tile_bytes, num_streams);
-          },
-          nb::arg("output"), nb::arg("input"), nb::arg("output_split_sizes"),
-          nb::arg("input_split_sizes"), nb::arg("tile_bytes") = 64ull << 10,
-          nb::arg("num_streams") = 2)
-      .def("barrier", [](ProcessGroup& self) { self.barrier(); })
-      .def("same_host", &ProcessGroup::same_host, nb::arg("peer_rank"))
-      .def("peer_transport", &ProcessGroup::peer_transport,
-           nb::arg("peer_rank"));
+          nb::arg("signal_group_tiles") = 1)
+      .def("barrier", [](ProcessGroup& self) { self.barrier(); });
 }

@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -29,6 +30,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   ~RdmaTransportAdapter() override;
 
   bool is_initialized() const { return ctx_handle_ != nullptr; }
+  void shutdown_workers();
+  void clear_registered_ids() { registered_ids_.clear(); }
   RdmaPeerConnectSpec get_connect_init(int peer_rank);
 
   void set_communicator(Communicator* comm) { comm_ = comm; }
@@ -47,6 +50,23 @@ class RdmaTransportAdapter final : public TransportAdapter {
   unsigned wait_signal_async(int peer_rank, uint64_t expected_tag,
                              std::optional<WaitTarget> target,
                              unsigned comm_rid) override;
+  bool supports_put_signal() const override { return true; }
+  unsigned send_put_signal_async(int peer_rank, void* local_ptr,
+                                 uint32_t local_buffer_id, void* remote_ptr,
+                                 uint32_t remote_buffer_id, size_t len,
+                                 uint64_t tag, unsigned comm_rid) override;
+  // QP-affinity variants (typed, non-virtual): pin the op's chunks to
+  // (qp_affinity % num_qps). Used for puts belonging to one signal
+  // group — see RingElem::qp_affinity.
+  unsigned send_put_async(int peer_rank, void* local_ptr,
+                          uint32_t local_buffer_id, void* remote_ptr,
+                          uint32_t remote_buffer_id, size_t len,
+                          uint32_t qp_affinity, unsigned comm_rid);
+  unsigned send_put_signal_async(int peer_rank, void* local_ptr,
+                                 uint32_t local_buffer_id, void* remote_ptr,
+                                 uint32_t remote_buffer_id, size_t len,
+                                 uint64_t tag, uint32_t qp_affinity,
+                                 unsigned comm_rid);
 
   bool register_memory(uint32_t buffer_id, void* ptr, size_t len);
   void deregister_memory(uint32_t buffer_id);
@@ -66,8 +86,10 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr int kMaxInflightWrs = 128;
 
   static constexpr int kRingSize = 65536;
+  // Receive WQEs pre-posted per data QP for write-with-imm signals.
+  static constexpr int kDataRecvPool = 128;
 
-  enum class Kind : uint8_t { DataPut, Signal };
+  enum class Kind : uint8_t { DataPut, Signal, PutSignal };
 
   struct RingElem {
     unsigned comm_rid;
@@ -82,6 +104,12 @@ class RdmaTransportAdapter final : public TransportAdapter {
     uint64_t remote_addr;  // resolved RDMA remote address
     uint32_t remote_rkey;  // resolved RDMA remote rkey
     uint32_t local_lkey;   // local MR lkey for RDMA WR posting
+    // ~0u = automatic QP selection. Otherwise pins all chunks of this op
+    // to (qp_affinity % num_qps): puts sharing one signal group MUST be
+    // ordered on one QP so the group's trailing write-with-imm implies
+    // the whole group's data landed. Striping across groups is
+    // preserved by giving different groups different affinities.
+    uint32_t qp_affinity = ~0u;
   };
 
   struct RemoteBufInfo {
@@ -141,6 +169,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
     bool put_ready = false;
     bool wait_ready = false;
     bool qps_created = false;
+    bool data_recvs_posted = false;
 
     uint16_t remote_lid = 0;
     union ibv_gid remote_gid = {};
@@ -176,6 +205,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   bool init_signal_pool(RdmaPeer& p);
   bool repost_signal_recv(RdmaPeer& p);
+  // Post one zero-sge receive WQE on a data QP (consumed by
+  // write-with-imm signals; the data itself bypasses the recv queue).
+  bool post_data_recv(ibv_qp* qp);
+  // Pre-post the receive pool on all data QPs (once per peer, after RTS).
+  bool post_data_recvs(RdmaPeer& p);
 
   ChunkResult chunk_split(size_t len) const;
 
@@ -211,6 +245,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::mutex mr_reg_mu_;  // for resize + registration set
   std::unordered_set<uint32_t> registered_ids_;
 
+  // DMA-BUF fds for GPU memory registered via cuMemGetHandleForAddressRange.
+  // Keyed by buffer_id; fd closed on deregistration.
+  std::unordered_map<uint32_t, int> dmabuf_fds_;
+  std::mutex dmabuf_fds_mu_;
+
   // Atomic peer table: sized on demand.
   std::unique_ptr<std::atomic<RdmaPeer*>[]> peer_table_;
   std::unique_ptr<std::unique_ptr<RdmaPeer>[]> peer_owners_;
@@ -230,8 +269,6 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::unique_ptr<PendingSlot[]> pending_ring_;
 
   // Condition variable for back-pressure
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
 
   Communicator* comm_ = nullptr;
 };

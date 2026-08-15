@@ -1,11 +1,28 @@
 #include "worker.h"
 #include "persistent_kernel_ops.h"
 #include <algorithm>
+#include <chrono>
+#include <stdexcept>
 
 namespace UKernel {
 namespace Device {
 
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
+  // Fail fast with a clear message if GDR (gdrcopy kernel module) is
+  // unavailable — every fifo head/tail access below depends on it.
+  try {
+    (void)mscclpp::detail::globalGdr();
+  } catch (std::exception const& e) {
+    throw std::runtime_error(
+        std::string("WorkerPool: GDR unavailable, worker fifos need it: ") +
+        e.what());
+  }
+  // ~100ns per idle poll (idle_sleep's __nanosleep(1), plus loop +
+  // syncthreads overhead ≈ 300-500ns) → 10 polls per us keeps the actual
+  // exit latency within a few x of the configured grace. (The old
+  // __nanosleep(100) slept 10us per poll and made a 500us grace take
+  // ~50ms — see persistent_kernel_ops.cu idle_sleep.)
+  exit_idle_iters_ = cfg_.idleExitAfterUs * 10;
   if (cfg_.controlStream) {
     control_stream_ = cfg_.controlStream;
     owns_control_stream_ = false;
@@ -31,6 +48,8 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
     GPU_RT_CHECK(
         gpuMalloc(&wc->d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
+    GPU_RT_CHECK(gpuHostAlloc(&wc->h_exited, sizeof(bool), gpuHostAllocMapped));
+    *wc->h_exited = false;
     workers_.emplace_back(wc);
 
     bool* d_stop;
@@ -57,7 +76,10 @@ WorkerPool::~WorkerPool() {
       GPU_RT_CHECK(gpuFree(wc->d_fifo_handle));
     }
     if (wc->d_multi_sync) {
-      GPU_RT_CHECK(gpuFree(wc->d_multi_sync));
+      GPU_RT_CHECK(gpuFreeAsync(wc->d_multi_sync, wc->stream));
+    }
+    if (wc->h_exited) {
+      GPU_RT_CHECK(gpuFreeHost(wc->h_exited));
     }
   }
   workers_.clear();
@@ -86,6 +108,12 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
     GPU_RT_CHECK(gpuGetDevice(&device));
     GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount,
                                        device));
+    if (numBlocks > 64) {
+      // The exit rendezvous mask is 64-bit; beyond that the worker cannot
+      // safely coordinate block exit. More blocks also defeat the
+      // low-SM-occupancy goal — reject instead of degrading silently.
+      return false;
+    }
     if (numBlocks > static_cast<uint32_t>(sm_count)) {
       return false;
     }
@@ -109,12 +137,14 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
                                   control_stream_));
       GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
       if (workers_[i]->d_multi_sync) {
-        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        GPU_RT_CHECK(gpuFreeAsync(workers_[i]->d_multi_sync,
+                                  workers_[i]->stream));
         workers_[i]->d_multi_sync = nullptr;
       }
       if (numBlocks > 1) {
-        GPU_RT_CHECK(
-            gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
+        GPU_RT_CHECK(gpuMallocAsync(&workers_[i]->d_multi_sync,
+                                    sizeof(MultiBlockSync),
+                                    workers_[i]->stream));
         GPU_RT_CHECK(gpuMemsetAsync(workers_[i]->d_multi_sync, 0,
                                     sizeof(MultiBlockSync),
                                     workers_[i]->stream));
@@ -145,7 +175,6 @@ void WorkerPool::waitWorker(uint32_t fifoId) {
   int spin = 0;
   while (!pollWorker(fifoId)) {
     if (++spin < 10) {
-      // spin
     } else {
       spin = 0;
       std::this_thread::yield();
@@ -169,7 +198,13 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
       if (workers_[i]->d_multi_sync) {
-        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        // Stream-ordered free: plain cudaFree() of this buffer hung the
+        // context after the multi-block kernel ran on this driver
+        // (CUDA 13.3/610), while the identical path in the spray
+        // benchmark freed it fine — cudaFreeAsync avoids the implicit
+        // context-wide sync that wedged.
+        GPU_RT_CHECK(gpuFreeAsync(workers_[i]->d_multi_sync,
+                                  workers_[i]->stream));
         workers_[i]->d_multi_sync = nullptr;
       }
       workers_[i]->launched = false;
@@ -202,6 +237,11 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
     return kInvalidTaskId;
   }
 
+  // Relaunch a kernel that exited on the idle grace timer. The new grid
+  // queues behind the exiting one on the same stream, so ordering is
+  // preserved and no task is lost.
+  relaunch_if_exited(fifoId);
+
   // Check if there's space in FIFO without blocking initially
   uint64_t tail = ctx.fifo.currentId();
   uint64_t head = ctx.fifo.head();
@@ -212,6 +252,11 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   }
 
   uint64_t taskId = ctx.fifo.push(task);
+  // Post-push relaunch: if the worker's idle-exit raced the push (exit was
+  // decided just before we enqueued), the relaunched kernel starts from
+  // the fifo and picks this task up. sync() below is the final safety net
+  // for the window where the exit flag is not yet visible.
+  relaunch_if_exited(fifoId);
   return taskId;
 }
 
@@ -245,6 +290,7 @@ uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
 
   uint64_t firstTaskId =
       ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
+  relaunch_if_exited(fifoId);
   return firstTaskId;
 }
 
@@ -266,15 +312,45 @@ void WorkerPool::shutdown_all() {
 bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   if (fifoId >= fifos_.size()) return true;
 
+  relaunch_if_exited(fifoId);
   auto& ctx = *fifos_[fifoId];
   uint64_t current = ctx.fifo.currentId();
 
   return (int64_t)(current - taskId) > 0;
 }
 
-void WorkerPool::sync(uint64_t taskId, uint32_t fifoId) {
+void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
+  if (!exit_idle_iters_ || fifoId >= fifos_.size()) return;
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    auto* wc = workers_[i].get();
+    if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
+        // Atomic claim so concurrent enqueue/sync callers relaunch once.
+        __atomic_exchange_n(wc->h_exited, false, __ATOMIC_ACQ_REL)) {
+      launchWorkerForFifo(i);
+      return;
+    }
+  }
+}
+
+void WorkerPool::sync(uint64_t taskId, uint32_t fifoId, uint64_t timeout_ms) {
   if (fifoId >= fifos_.size()) return;
-  fifos_[fifoId]->fifo.sync(taskId);
+  auto& ctx = *fifos_[fifoId];
+  // Poll the tail ourselves so a worker that idle-exited after our push
+  // (its exit flag becomes visible while we wait) gets relaunched and
+  // consumes the task — otherwise a task pushed into the race window is
+  // lost forever and the caller hangs.
+  auto const deadline =
+      timeout_ms ? std::chrono::steady_clock::now() +
+                       std::chrono::milliseconds(timeout_ms)
+                 : std::chrono::steady_clock::time_point::max();
+  while ((int64_t)(ctx.fifo.currentId() - taskId) <= 0) {
+    relaunch_if_exited(fifoId);
+    if (timeout_ms &&
+        std::chrono::steady_clock::now() >= deadline) {
+      return;
+    }
+    std::this_thread::yield();
+  }
 }
 
 void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
@@ -285,7 +361,13 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   GPU_RT_CHECK(gpuMemcpyAsync(worker.d_fifo_handle, &handle,
                               sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
                               gpuMemcpyHostToDevice, worker.stream));
-  GPU_RT_CHECK(gpuStreamSynchronize(worker.stream));
+  // No host sync: the memcpy, memset and launch are all ordered on
+  // worker.stream, so the new grid runs strictly after the old one. The
+  // kernel clears h_exited at entry (also stream-ordered), so the host
+  // never sees the previous grid's exit flag as a stale "exited" that
+  // would trigger a second relaunch of a live worker. Skipping the sync
+  // removes a multi-ms stall from the enqueue path (the old grid only
+  // terminates after the idle grace elapses).
 
   auto* d_task_args = TaskManager::instance().d_task_args();
 
@@ -293,11 +375,36 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   dim3 block(cfg_.threadsPerBlock);
   size_t smem_size = cfg_.smemSize;
 
-  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
-                         &d_stop_flags_[workerIndex]};
+  // TMA bulk reduce needs large dynamic smem (>48KB); opt in explicitly,
+  // otherwise the launch fails with "too much shared memory".
+  if (smem_size > 48 * 1024) {
+    const void* kernel =
+        (worker.numBlocks == 1)
+            ? reinterpret_cast<const void*>(
+                  &UKernel::Device::singlePersistentKernel)
+            : reinterpret_cast<const void*>(
+                  &UKernel::Device::multiPersistentKernel);
+    GPU_RT_CHECK(gpuFuncSetAttribute(
+        kernel, gpuFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(smem_size)));
+  }
 
-  void* args_multi[] = {&worker.d_fifo_handle, &d_task_args,
-                        &d_stop_flags_[workerIndex], &worker.d_multi_sync};
+  // Relaunch after an idle exit must reset the multi-block sync state
+  // (per-task completion counter + exit-vote mask), otherwise the fresh
+  // grid inherits a full exit mask and returns before consuming anything.
+  // Zero it on the worker stream, ordered before the launch.
+  if (worker.numBlocks > 1 && worker.d_multi_sync) {
+    GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
+                                sizeof(MultiBlockSync), worker.stream));
+  }
+
+  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
+                         &d_stop_flags_[workerIndex], &worker.h_exited,
+                         &exit_idle_iters_};
+
+  void* args_multi[] = {
+      &worker.d_fifo_handle, &d_task_args,     &d_stop_flags_[workerIndex],
+      &worker.d_multi_sync,  &worker.h_exited, &exit_idle_iters_};
 
   if (worker.numBlocks == 1) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,

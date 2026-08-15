@@ -409,7 +409,13 @@ class ShmExchanger : public Exchanger {
     static uint64_t hash_key(std::string_view key);
   };
   static constexpr uint32_t kShmMagic = 0x554B4F42;  // "UKOB"
-  static constexpr uint32_t kMaxSlots = 1024;
+  // Slot count must exceed the total keys all ranks publish: 2 keys
+  // (mr+ipc) per registered buffer id per rank, plus meta keys. The NCCL
+  // shim's immutable buffer generations mint ids per (ptr, pow2 bucket),
+  // which hits ~256 ids on a full nccl-tests sweep — 2×256×2 ranks ≈
+  // 1024 exactly, and the overflow manifests as silent "key not found"
+  // wait_mr timeouts (seen at the 8M transition). 16K is ample headroom.
+  static constexpr uint32_t kMaxSlots = 16384;
   static constexpr uint32_t kMaxKeyBytes = 256;
   static constexpr uint32_t kMaxValueBytes = 8192;
   static constexpr uint8_t kSlotEmpty = 0;

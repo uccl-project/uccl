@@ -10,15 +10,10 @@
 #include <stdexcept>
 #include <string>
 
-// ============================================================================
-// GPU Platform Abstraction (from gpu.hpp)
-// ============================================================================
-
+// GPU Platform Abstraction
 #include "gpu_rt.h"
 
-// ============================================================================
-// Device Compilation Macros (from device.hpp)
-// ============================================================================
+// Device Compilation Macros
 #if (defined(__NVCC__) || defined(__HIP_PLATFORM_AMD__))
 
 #define MSCCLPP_DEVICE_COMPILE
@@ -39,18 +34,14 @@
 
 #endif  // !(defined(__NVCC__) || defined(__HIP_PLATFORM_AMD__))
 
-// ============================================================================
 // CUDA Atomic includes (must be outside namespace)
-// ============================================================================
 #if defined(MSCCLPP_DEVICE_CUDA)
 #include <cuda/atomic>
 #endif
 
 namespace mscclpp {
 
-// ============================================================================
-// Error Handling (from errors.hpp)
-// ============================================================================
+// Error Handling
 
 /// Base class for all errors thrown by MSCCL++.
 class BaseError : public std::runtime_error {
@@ -93,9 +84,7 @@ class CuError : public BaseError {
   virtual ~CuError() = default;
 };
 
-// ============================================================================
-// CUDA Error Checking Macros (from gpu_utils.hpp)
-// ============================================================================
+// CUDA Error Checking Macros
 
 /// Throw mscclpp::CudaError if @p cmd does not return cudaSuccess.
 #define MSCCLPP_CUDATHROW(cmd)                                              \
@@ -120,9 +109,7 @@ class CuError : public BaseError {
     }                                                                         \
   } while (false)
 
-// ============================================================================
-// NUMA Functions (from numa.hpp)
-// ============================================================================
+// NUMA Functions
 
 // Convert a logical deviceId index to the NVML device minor number
 static inline std::string const getBusId(int deviceId) {
@@ -153,9 +140,7 @@ inline int getDeviceNumaNode(int deviceId) {
   return numaNode;
 }
 
-// ============================================================================
-// Atomic Operations (from atomic_device.hpp)
-// ============================================================================
+// Atomic Operations
 
 #if defined(MSCCLPP_DEVICE_CUDA)
 
@@ -184,6 +169,18 @@ template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
 MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, T const& val,
                                             cuda::memory_order memoryOrder) {
   return cuda::atomic_ref<T, Scope>{*ptr}.fetch_add(val, memoryOrder);
+}
+
+template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
+MSCCLPP_HOST_DEVICE_INLINE T atomicOr(T* ptr, T const& val,
+                                      cuda::memory_order memoryOrder) {
+  return cuda::atomic_ref<T, Scope>{*ptr}.fetch_or(val, memoryOrder);
+}
+
+template <typename T, cuda::thread_scope Scope = cuda::thread_scope_system>
+MSCCLPP_HOST_DEVICE_INLINE T atomicAnd(T* ptr, T const& val,
+                                       cuda::memory_order memoryOrder) {
+  return cuda::atomic_ref<T, Scope>{*ptr}.fetch_and(val, memoryOrder);
 }
 
 #elif defined(MSCCLPP_DEVICE_HIP)
@@ -215,6 +212,18 @@ MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, T const& val,
   return __atomic_fetch_add(ptr, val, memoryOrder);
 }
 
+template <typename T, int scope = scopeSystem>
+MSCCLPP_HOST_DEVICE_INLINE T atomicOr(T* ptr, T const& val,
+                                      int memoryOrder) {
+  return __atomic_fetch_or(ptr, val, memoryOrder);
+}
+
+template <typename T, int scope = scopeSystem>
+MSCCLPP_HOST_DEVICE_INLINE T atomicAnd(T* ptr, T const& val,
+                                       int memoryOrder) {
+  return __atomic_fetch_and(ptr, val, memoryOrder);
+}
+
 #else  // Host-side (non-device) compilation
 
 // For host-side code, provide simple atomic wrappers using GCC built-ins
@@ -242,11 +251,19 @@ inline T atomicFetchAdd(T* ptr, T const& val, int memoryOrder) {
   return __atomic_fetch_add(ptr, val, memoryOrder);
 }
 
+template <typename T, int scope = scopeSystem>
+inline T atomicOr(T* ptr, T const& val, int memoryOrder) {
+  return __atomic_fetch_or(ptr, val, memoryOrder);
+}
+
+template <typename T, int scope = scopeSystem>
+inline T atomicAnd(T* ptr, T const& val, int memoryOrder) {
+  return __atomic_fetch_and(ptr, val, memoryOrder);
+}
+
 #endif  // defined(MSCCLPP_DEVICE_HIP)
 
-// ============================================================================
-// Device Assertions (from assert_device.hpp)
-// ============================================================================
+// Device Assertions
 
 #if defined(MSCCLPP_DEVICE_COMPILE)
 
@@ -278,9 +295,7 @@ extern "C" __host__ __device__ void __assert_fail(
 
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)
 
-// ============================================================================
-// Polling Macros (from poll_device.hpp)
-// ============================================================================
+// Polling Macros
 
 #if defined(MSCCLPP_DEVICE_COMPILE)
 
@@ -295,9 +310,7 @@ extern "C" __host__ __device__ void __assert_fail(
 
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)
 
-// ============================================================================
-// GPU Memory Management (from gpu_utils.hpp)
-// ============================================================================
+// GPU Memory Management
 
 namespace detail {
 

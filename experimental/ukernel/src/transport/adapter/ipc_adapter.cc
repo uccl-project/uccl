@@ -1,8 +1,10 @@
 #include "ipc_adapter.h"
 #include "../communicator.h"
 #include "../util/utils.h"
+#include "util/uk_debug.h"
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -14,7 +16,17 @@ namespace {
 
 constexpr int kIpcControlTimeoutMs = 50000;
 constexpr size_t kTaskRingSize = 1024;
-constexpr size_t kIpcSizePerEngine = 1ul << 20;
+// Default in-flight put window PER PEER (see IpcAdapter ctor;
+// UK_CCL_IPC_BATCH overrides, 1 = old per-put sync behavior). Each peer
+// owns an independent window + stream pool, so N peers run N x window
+// copies concurrently instead of sharing one global window (which
+// serialized 8-rank alltoall fan-out to 4 in-flight puts). The sliding
+// window keeps up to this many copies per peer in flight and completes
+// each peer FIFO (the receiver matches per-(peer,direction) sequences);
+// different peers complete out of order. B300 allreduce sweep
+// (256M, LT=8/BLK=32) measured window 4-64 all at 462-498 GB/s median —
+// 4 per peer keeps the same host event pressure as before.
+constexpr size_t kIpcSendBatchDefault = 4;
 
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
@@ -28,37 +40,52 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
                        int local_gpu_idx)
-    : seqs_(comm->world_size(), std::array<uint64_t, 2>{1, 1}),
+    : seqs_(comm->world_size()),
       ns_(std::move(ring_namespace)),
       dir_state_(comm->world_size()),
       comps_(comm->world_size()),
       comm_(comm),
       gpu_id_(local_gpu_idx) {
-  send_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
+  for (auto& s : seqs_) {
+    s[0].store(1, std::memory_order_relaxed);
+    s[1].store(1, std::memory_order_relaxed);
+  }
+  send_rings_.resize(comm->world_size(), nullptr);
+  for (int r = 0; r < comm->world_size(); ++r) {
+    if (r == comm->rank()) continue;
+    send_rings_[static_cast<size_t>(r)] =
+        create_ring(sizeof(RingElem), kTaskRingSize);
+  }
   recv_ring_ = create_ring(sizeof(RingElem), kTaskRingSize);
-  if (send_ring_ == nullptr || recv_ring_ == nullptr) {
-    if (send_ring_ != nullptr) {
-      free(send_ring_);
-      send_ring_ = nullptr;
-    }
-    if (recv_ring_ != nullptr) {
-      free(recv_ring_);
-      recv_ring_ = nullptr;
-    }
-    throw std::runtime_error("IpcAdapter failed to allocate task rings");
+  deferred_sigs_.resize(comm->world_size());
+  for (size_t r = 0; r < send_rings_.size(); ++r)
+    if (static_cast<int>(r) != comm->rank() && send_rings_[r] == nullptr)
+      throw std::runtime_error("IpcAdapter failed to allocate send ring");
+  if (recv_ring_ == nullptr) {
+    for (auto* ring : send_rings_)
+      if (ring != nullptr) free(ring);
+    send_rings_.clear();
+    throw std::runtime_error("IpcAdapter failed to allocate recv ring");
   }
 
-  int n_streams = 4;
+  if (char const* v = std::getenv("UK_CCL_IPC_STREAMS_PER_PEER")) {
+    size_t s = static_cast<size_t>(std::stoul(v));
+    if (s > 0 && s <= 16) streams_per_peer_ = s;
+  }
+  size_t n_streams =
+      static_cast<size_t>(std::max(1, comm->world_size())) * streams_per_peer_;
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
   ipc_ctx_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(
-        gpuStreamCreateWithFlags(&ipc_ctx_[i].first, gpuStreamNonBlocking));
-    GPU_RT_CHECK(
-        gpuEventCreateWithFlags(&ipc_ctx_[i].second, gpuEventDisableTiming));
-  }
+  for (int i = 0; i < n_streams; ++i)
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&ipc_ctx_[i], gpuStreamNonBlocking));
 
   stop_.store(false, std::memory_order_release);
+
+  send_batch_ = kIpcSendBatchDefault;
+  if (char const* v = std::getenv("UK_CCL_IPC_BATCH")) {
+    size_t b = static_cast<size_t>(std::stoul(v));
+    if (b > 0) send_batch_ = b;
+  }
 
   // Clean up any stale IPC completion SHM from previous crashed runs
   for (int r = 0; r < comm_->world_size(); ++r) {
@@ -73,28 +100,26 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
 
 IpcAdapter::~IpcAdapter() { shutdown(); }
 
-void IpcAdapter::shutdown() {
-  bool expected = false;
-  if (!stop_.compare_exchange_strong(expected, true)) return;
+void IpcAdapter::stop() { stop_.store(true, std::memory_order_release); }
 
+void IpcAdapter::shutdown() {
   stop_.store(true, std::memory_order_release);
+
   if (send_th_.joinable()) send_th_.join();
   if (recv_th_.joinable()) recv_th_.join();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-  for (auto& ctx : ipc_ctx_) {
-    if (ctx.first != nullptr) GPU_RT_CHECK(gpuStreamDestroy(ctx.first));
-    if (ctx.second != nullptr) GPU_RT_CHECK(gpuEventDestroy(ctx.second));
-  }
+  for (auto& s : ipc_ctx_)
+    if (s != nullptr) GPU_RT_CHECK(gpuStreamDestroy(s));
   ipc_ctx_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
-  if (send_ring_) {
-    free(send_ring_);
-    send_ring_ = nullptr;
+  for (auto* ring : send_rings_) {
+    if (ring != nullptr) free(ring);
   }
+  send_rings_.clear();
   if (recv_ring_) {
     free(recv_ring_);
     recv_ring_ = nullptr;
@@ -102,7 +127,7 @@ void IpcAdapter::shutdown() {
   for (size_t r = 0; r < comps_.size(); ++r) close_comp(static_cast<int>(r));
 }
 
-// ── Data-completion SHM (fast path for IPC GPU data transfers) ───────────
+// Data-completion SHM (fast path for IPC GPU data transfers)
 
 std::string IpcAdapter::comp_shm_name(int peer_rank) const {
   return Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), peer_rank, comm_->rank());
@@ -115,7 +140,8 @@ bool IpcAdapter::ensure_local_comp(int peer_rank) {
   pc.shm_name = comp_shm_name(peer_rank);
   shm_unlink(
       pc.shm_name.c_str());  // Clean up stale SHM from previous crashed run
-  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing) +
+              sizeof(DeviceFlagArea);
   int fd = shm_open(pc.shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   if (fd < 0) return false;
   if (ftruncate(fd, static_cast<off_t>(sz)) != 0) {
@@ -144,13 +170,37 @@ bool IpcAdapter::ensure_remote_comp(int peer_rank) {
   std::string remote_name =
       Format("/uk_cmpl_%s_p%d_p%d", ns_.c_str(), comm_->rank(), peer_rank);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing);
+  size_t sz = sizeof(IpcDataCompletion) + sizeof(PeerSignalRing) +
+              sizeof(DeviceFlagArea);
   while (true) {
     int fd = shm_open(remote_name.c_str(), O_RDWR, 0666);
     if (fd >= 0) {
       void* ptr = mmap(nullptr, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (ptr != MAP_FAILED) {
         pc.remote = reinterpret_cast<IpcDataCompletion*>(ptr);
+        // Zero-copy GPU mapping of the whole SHM (completion + ring +
+        // device flag area). The ring's fused-PutSignal claim needs GPU
+        // system atomics (unavailable on B300), but the per-slot
+        // device-flag area is written with PLAIN stores + fences, which
+        // need no atomics — so map unconditionally. Failure only
+        // disables device-side signal writes for this peer.
+        int prev_dev = -1;
+        if (gpuGetDevice(&prev_dev) == gpuSuccess) {
+      if (gpuSetDevice(gpu_id_) == gpuSuccess &&
+          gpuHostRegister(ptr, sz, gpuHostRegisterMapped) == gpuSuccess) {
+        void* dptr = nullptr;
+        if (gpuHostGetDevicePointer(&dptr, ptr, 0) == gpuSuccess)
+          pc.remote_device = dptr;
+        pc.remote_registered = true;
+      }
+          gpuSetDevice(prev_dev);
+        }
+        if (!pc.remote_device)
+          UK_DBG(UK_DBG_LVL_TPT,
+                 "[ipc r%d] peer %d SHM not GPU-mapped — device-side "
+                 "signal writes disabled",
+                 comm_->rank(), peer_rank);
+        pc.shm_size = sz;  // close_comp unmaps the full remote mapping
         return true;
       }
       close(fd);
@@ -167,8 +217,26 @@ void IpcAdapter::close_comp(int peer_rank) {
     pc.local = nullptr;
   }
   if (pc.remote) {
-    munmap(pc.remote, sizeof(IpcDataCompletion));
+    // Teardown contract: the caller must guarantee no device kernel can
+    // write the flag area after this point. In the shim, ncclCommDestroy
+    // tears down the executor first (DeviceBackend stops the persistent
+    // worker), and only then is the Communicator destroyed — so the
+    // gpuHostUnregister below never races a live writer.
+    // Unregister the CUDA host-mapped region BEFORE unmapping, and unmap
+    // the FULL mapping (the old code unmapped only the leading page —
+    // sizeof(IpcDataCompletion) rounds up to one page — leaking the
+    // signal ring + flag area pages and leaving a stale CUDA mapping).
+    if (pc.remote_registered) {
+      int prev_dev = -1;
+      if (gpuGetDevice(&prev_dev) == gpuSuccess) {
+        gpuSetDevice(gpu_id_);
+        gpuHostUnregister(pc.remote);
+        gpuSetDevice(prev_dev);
+      }
+    }
+    munmap(pc.remote, pc.shm_size);
     pc.remote = nullptr;
+    pc.remote_registered = false;
   }
   if (pc.shm_fd >= 0) {
     close(pc.shm_fd);
@@ -184,7 +252,7 @@ void IpcAdapter::close_comp(int peer_rank) {
   }
 }
 
-// ── Connection / path state ────────────────────────────────────────────────
+// Connection / path state
 
 bool IpcAdapter::connect_to(int rank) { return ensure_remote_comp(rank); }
 
@@ -217,20 +285,22 @@ bool IpcAdapter::ensure_wait_path(PeerConnectSpec const& spec) {
 }
 
 uint64_t IpcAdapter::next_send_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = comm_->rank();
   int dst = rank;
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = seqs_[rank][dir]++;
+  uint64_t counter =
+      seqs_[static_cast<size_t>(rank)][dir].fetch_add(1,
+                                                      std::memory_order_relaxed);
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
 uint64_t IpcAdapter::next_recv_match_seq(int rank) {
-  std::lock_guard<std::mutex> lk(seq_mu_);
   int src = rank;
   int dst = comm_->rank();
   size_t dir = (src < dst) ? 0u : 1u;
-  uint64_t counter = seqs_[rank][dir]++;
+  uint64_t counter =
+      seqs_[static_cast<size_t>(rank)][dir].fetch_add(1,
+                                                      std::memory_order_relaxed);
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
@@ -246,40 +316,85 @@ bool IpcAdapter::has_wait_path(int peer_rank) const {
   return dir_state_[static_cast<size_t>(peer_rank)].second;
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
+// Public API
 
 unsigned IpcAdapter::send_put_async(int peer, void* local_ptr, uint32_t,
                                     void* remote_ptr, uint32_t, size_t bytes,
                                     unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
   RingElem e{
       comm_rid,   peer, ReqType::DataPut, next_send_match_seq(peer), local_ptr,
       remote_ptr, bytes};
-  if (!enqueue_elem(send_ring_, e, stop_)) return 0;
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
   return 1;
+}
+
+bool IpcAdapter::claim_signal_slot(int peer, size_t* out_slot) {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size() ||
+      comps_[static_cast<size_t>(peer)].remote == nullptr) {
+    *out_slot = static_cast<size_t>(~0u);  // path gone — drop the signal
+    return false;  // path torn down; caller should drop the signal
+  }
+  auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
+      reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
+
+  // Claim FIRST (multi-producer: the device kernel's fused PutSignal
+  // path does atomicAdd_system on the same counter), then check the
+  // claimed slot's previous lap.
+  uint64_t w = remote_ring->write_idx.fetch_add(1, std::memory_order_acq_rel);
+  size_t idx = w & (kSignalRingSize - 1);
+  *out_slot = idx;
+  if (remote_ring->slots[idx].ready.load(std::memory_order_acquire))
+    return false;  // previous lap not consumed — caller defers this slot
+  return true;
+}
+
+void IpcAdapter::write_signal_slot(int peer, size_t idx, uint64_t tag) {
+  auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
+      reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
+  remote_ring->slots[idx].tag = tag;
+  remote_ring->slots[idx].ready.store(true, std::memory_order_release);
 }
 
 unsigned IpcAdapter::send_signal_async(int peer, uint64_t tag,
                                        unsigned comm_rid) {
   if (!has_put_path(peer)) return 0;
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
+  // Route the write through the send worker instead of writing the ring
+  // inline on the enqueue thread: the ring's back-pressure (a previous
+  // lap slot the receiver has not drained yet) was observed to stall the
+  // enqueue thread 150-250us at 8 ranks. The worker owns all signal-ring
+  // writes for a peer, which also gives plain signals a total order with
+  // fused PutSignal writes. The op became ready only after its producing
+  // data completed, so the worker may write it immediately on dequeue
+  // (no dependency on in-flight puts to the same peer).
+  RingElem e{comm_rid, peer, ReqType::Signal, 0, nullptr, nullptr, 0, tag};
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
+  return 1;
+}
 
-  // Inline fast path: write tag to remote peer's signal ring in SHM.
-  auto* remote_ring = reinterpret_cast<PeerSignalRing*>(
-      reinterpret_cast<char*>(comps_[peer].remote) + sizeof(IpcDataCompletion));
-  uint64_t w = remote_ring->write_idx.load(std::memory_order_relaxed);
-  uint64_t r = remote_ring->read_idx.load(std::memory_order_acquire);
-
-  // Back-pressure: spin until slot is free.
-  while (w - r >= kSignalRingSize) {
-    r = remote_ring->read_idx.load(std::memory_order_acquire);
-    std::this_thread::yield();
-  }
-
-  size_t idx = w & (kSignalRingSize - 1);
-  remote_ring->slots[idx].tag = tag;
-  remote_ring->slots[idx].ready.store(true, std::memory_order_release);
-  remote_ring->write_idx.store(w + 1, std::memory_order_release);
-  publish_completion(comm_rid, false);
+unsigned IpcAdapter::send_put_signal_async(int peer, void* local_ptr, uint32_t,
+                                           void* remote_ptr, uint32_t,
+                                           size_t len, uint64_t tag,
+                                           unsigned comm_rid) {
+  if (!has_put_path(peer)) return 0;
+  if (peer < 0 || static_cast<size_t>(peer) >= send_rings_.size() ||
+      send_rings_[static_cast<size_t>(peer)] == nullptr)
+    return 0;
+  RingElem e{comm_rid,
+             peer,
+             ReqType::PutSignal,
+             next_send_match_seq(peer),
+             local_ptr,
+             remote_ptr,
+             len,
+             tag};
+  if (!enqueue_elem(send_rings_[static_cast<size_t>(peer)], e, stop_)) return 0;
   return 1;
 }
 
@@ -299,16 +414,51 @@ unsigned IpcAdapter::wait_signal_async(int peer, uint64_t /*tag*/,
 
   // SignalWait: not handled by the IPC adapter inline; Communicator uses
   // drain_signal_tags() to drain incoming signal tags.
-  publish_completion(comm_rid, true);
   return 1;
+}
+
+void* IpcAdapter::peer_signal_ring_device_ptr(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.remote_device) return nullptr;
+  return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion);
+}
+
+void* IpcAdapter::peer_device_flag_ptr(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.remote_device) return nullptr;
+  return static_cast<char*>(pc.remote_device) + sizeof(IpcDataCompletion) +
+         sizeof(PeerSignalRing);
+}
+
+uint64_t* IpcAdapter::local_device_flag_slots(int peer) const {
+  if (peer < 0 || static_cast<size_t>(peer) >= comps_.size()) return nullptr;
+  auto const& pc = comps_[static_cast<size_t>(peer)];
+  if (!pc.local) return nullptr;
+  return reinterpret_cast<uint64_t*>(
+      reinterpret_cast<char*>(pc.local) + sizeof(IpcDataCompletion) +
+      sizeof(PeerSignalRing));
 }
 
 size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
                                      size_t max) {
-  if (!has_wait_path(peer_rank)) return 0;
+  if (!has_wait_path(peer_rank)) {
+    static int once = 0;
+    if (!once++)
+      UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no wait path for p%d",
+             comm_->rank(), peer_rank);
+    return 0;
+  }
   auto& pc = comps_[static_cast<size_t>(peer_rank)];
   PeerSignalRing* ring = pc.signal_ring;
-  if (!ring) return 0;
+  if (!ring) {
+    static int once2 = 0;
+    if (!once2++)
+      UK_DBG(UK_DBG_LVL_TPT, "[drain-sig-tags r%d] no signal_ring for p%d",
+             comm_->rank(), peer_rank);
+    return 0;
+  }
 
   uint64_t r = ring->read_idx.load(std::memory_order_relaxed);
   size_t count = 0;
@@ -327,124 +477,298 @@ size_t IpcAdapter::drain_signal_tags(int peer_rank, uint64_t* tags,
   }
 
   if (count > 0) {
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[drain-sig-tags r%d] got %zu tags from p%d, first=%lu",
+           comm_->rank(), count, peer_rank, (unsigned long)tags[0]);
     ring->read_idx.store(r, std::memory_order_release);
   }
   return count;
 }
 
+bool IpcAdapter::has_signal_arrivals(int peer_rank) const {
+  if (peer_rank < 0 || static_cast<size_t>(peer_rank) >= comps_.size())
+    return false;
+  auto const& pc = comps_[static_cast<size_t>(peer_rank)];
+  if (!pc.signal_ring) return false;
+  return pc.signal_ring->write_idx.load(std::memory_order_relaxed) !=
+         pc.signal_ring->read_idx.load(std::memory_order_relaxed);
+}
+
 void IpcAdapter::send_worker() {
   GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-  RingElem e;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send r%d] worker alive, waiting for ops",
+         comm_->rank());
+  struct PendingPut {
+    RingElem e;
+    size_t evi;
+    bool ok;
+  };
+  // Per-peer event pools (one event per in-flight put per peer). A
+  // peer's events are reused via its own free list only after that
+  // put completed, so a busy peer never steals a slot from an idle one.
+  size_t const window = send_batch_;
+  int const n = comm_->world_size();
+  int const rank = comm_->rank();
+  std::vector<gpuEvent_t> evs(window * static_cast<size_t>(n));
+  for (size_t i = 0; i < evs.size(); ++i)
+    GPU_RT_CHECK(gpuEventCreateWithFlags(&evs[i], gpuEventDisableTiming));
+  std::vector<std::deque<size_t>> free_evs(static_cast<size_t>(n));
+  for (int p = 0; p < n; ++p)
+    for (size_t i = 0; i < window; ++i)
+      free_evs[static_cast<size_t>(p)].push_back(
+          static_cast<size_t>(p) * window + i);
+  std::vector<std::deque<PendingPut>> pending(static_cast<size_t>(n));
+  std::vector<size_t> inflight(static_cast<size_t>(n), 0);
+  std::vector<size_t> launch_serial(static_cast<size_t>(n), 0);
+
   while (!stop_.load(std::memory_order_relaxed)) {
-    if (jring_sc_dequeue_bulk(send_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
-    }
-    if (e.type == ReqType::DataPut) {
-      bool ok = send_one(&e);
-      if (ok) {
-        size_t dir = (comm_->rank() < e.peer) ? 0u : 1u;
-        comps_[e.peer].remote->last_completed[dir].store(
-            e.seq, std::memory_order_release);
+    bool any = false;
+    // Retry deferred signal writes first: a peer whose ring was behind
+    // must not hold up the other peers' launch/completion work below.
+    bool deferred_any = false;
+    for (int p = 0; p < n; ++p) {
+      if (p == rank) continue;
+      auto& dq = deferred_sigs_[static_cast<size_t>(p)];
+      while (!dq.empty()) {
+        // FIFO: claims are in slot order and the receiver consumes in
+        // slot order, so if the front is blocked every later entry is
+        // blocked too — break on the first unwritable.
+        if (comps_[static_cast<size_t>(p)].remote == nullptr) {
+          if (dq.front().publish_sig)
+            publish_sig_send_completion(dq.front().comm_rid, true);
+          dq.pop_front();
+          any = true;
+          continue;
+        }
+        auto* remote_ring =
+            reinterpret_cast<PeerSignalRing*>(
+                reinterpret_cast<char*>(comps_[static_cast<size_t>(p)].remote) +
+                sizeof(IpcDataCompletion));
+        if (!remote_ring->slots[dq.front().slot]
+                 .ready.load(std::memory_order_acquire)) {
+          write_signal_slot(p, dq.front().slot, dq.front().tag);
+          if (dq.front().publish_sig)
+            publish_sig_send_completion(dq.front().comm_rid, false);
+          dq.pop_front();
+          any = true;
+        } else {
+          break;
+        }
       }
-      publish_completion(e.comm_rid, !ok);
+      if (!dq.empty()) deferred_any = true;
+    }
+    // Per-peer loop: complete ready fronts (each peer strictly FIFO —
+    // the receiver matches per-(peer,direction) sequences), then
+    // launch-ahead up to that peer's window. Peers never block each
+    // other, so 7-peer fan-out runs 7 x window copies concurrently.
+    for (int p = 0; p < n; ++p) {
+      if (p == rank) continue;
+      size_t const pidx = static_cast<size_t>(p);
+      auto& pque = pending[pidx];
+      auto& pevs = free_evs[pidx];
+      while (inflight[pidx] > 0) {
+        auto& front = pque.front();
+        gpuError_t st = gpuEventQuery(evs[front.evi]);
+        if (st == gpuSuccess) {
+          complete_one(&front.e, front.ok);
+          pevs.push_back(front.evi);
+          pque.pop_front();
+          --inflight[pidx];
+          any = true;
+        } else if (st == gpuErrorNotReady) {
+          break;  // front still in flight; stream order keeps the rest
+        } else {
+          complete_one(&front.e, false);
+          pevs.push_back(front.evi);
+          pque.pop_front();
+          --inflight[pidx];
+          any = true;
+          std::fprintf(stderr,
+                       "[ipc-send r%d] event query failed p%d st=%d\n",
+                       comm_->rank(), p, static_cast<int>(st));
+        }
+      }
+      while (inflight[pidx] < window) {
+        RingElem e;
+        if (jring_sc_dequeue_bulk(send_rings_[pidx], &e, 1, nullptr) == 1) {
+          if (e.type == ReqType::Signal) {
+            // Plain signal: no copy to launch, no event slot. Write the
+            // ring now (data it refers to already landed — the executor
+            // only enqueues the Signal after the producing op drained);
+            // defer on back-pressure instead of spinning.
+            size_t slot = 0;
+            if (claim_signal_slot(e.peer, &slot)) {
+              write_signal_slot(e.peer, slot, e.tag);
+              publish_sig_send_completion(e.comm_rid, false);
+              any = true;
+            } else if (slot != static_cast<size_t>(~0u)) {
+              deferred_sigs_[pidx].push_back({e.tag, e.comm_rid, slot, true});
+              deferred_any = true;
+            } else {
+              // Path torn down mid-run: fail the signal completion.
+              publish_sig_send_completion(e.comm_rid, true);
+              any = true;
+            }
+            continue;
+          }
+          size_t stream_idx =
+              pidx * streams_per_peer_ +
+              (launch_serial[pidx]++ % streams_per_peer_);
+          bool ok = launch_one(&e, stream_idx);
+          size_t evi = pevs.front();
+          pevs.pop_front();
+          if (ok) GPU_RT_CHECK(gpuEventRecord(evs[evi], ipc_ctx_[stream_idx]));
+          pque.push_back({e, evi, ok});
+          ++inflight[pidx];
+          any = true;
+        } else {
+          break;
+        }
+      }
+    }
+    bool inflight_any = false;
+    for (size_t v : inflight)
+      if (v > 0) {
+        inflight_any = true;
+        break;
+      }
+    if (inflight_any || deferred_any) {
+      // Copies in flight: poll events eagerly with a pause burst instead
+      // of yielding to the scheduler — completion latency is on the
+      // critical path (8-rank alltoall tail).
+      for (int s = 0; s < 16 && !stop_.load(std::memory_order_relaxed); ++s)
+        machnet_pause();
+      if (any) continue;
+      std::this_thread::yield();
     } else {
-      publish_completion(e.comm_rid, true);
+      std::this_thread::yield();
     }
   }
-  RingElem drain;
-  while (jring_mc_dequeue_bulk(send_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+  // Shutdown drain: flush pending puts and the ring (best effort).
+  for (int p = 0; p < n; ++p) {
+    if (p == rank) continue;
+    size_t const pidx = static_cast<size_t>(p);
+    for (auto& ds : deferred_sigs_[pidx])
+      if (ds.publish_sig) publish_sig_send_completion(ds.comm_rid, true);
+    deferred_sigs_[pidx].clear();
+    for (auto const& pp : pending[pidx]) complete_one(&pp.e, false);
+    pending[pidx].clear();
+    RingElem drain;
+    while (jring_mc_dequeue_bulk(send_rings_[pidx], &drain, 1, nullptr) == 1) {
+      if (drain.type == ReqType::Signal)
+        publish_sig_send_completion(drain.comm_rid, true);
+      else
+        publish_put_completion(drain.comm_rid, true);
+    }
+  }
+  for (auto& ev : evs) GPU_RT_CHECK(gpuEventDestroy(ev));
 }
 
 void IpcAdapter::recv_worker() {
-  RingElem e;
+  struct Wait {
+    RingElem e;
+    std::chrono::steady_clock::time_point deadline;
+  };
+  std::vector<Wait> waits;
+  constexpr auto kTimeout = std::chrono::milliseconds(kIpcControlTimeoutMs);
   while (!stop_.load(std::memory_order_relaxed)) {
-    if (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
+    bool any = false;
+    // Accept all pending DataWaits first, then poll them non-blockingly.
+    // A slow peer no longer stalls other peers' DataWaits (the old code
+    // blocked the single worker thread in a 50s spin per wait).
+    RingElem e;
+    while (jring_sc_dequeue_bulk(recv_ring_, &e, 1, nullptr) == 1) {
+      waits.push_back(
+          {e, std::chrono::steady_clock::now() + kTimeout});
+      any = true;
     }
-    bool ok = (e.type == ReqType::DataWait) ? recv_one(&e) : false;
-    publish_completion(e.comm_rid, !ok);
+    auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < waits.size();) {
+      auto& w = waits[i];
+      if (recv_one_poll(&w.e)) {
+        publish_put_completion(w.e.comm_rid, false);
+        waits[i] = waits.back();
+        waits.pop_back();
+        any = true;
+      } else if (now >= w.deadline) {
+        std::cerr << "[ERROR] IPC recv timed out, peer " << w.e.peer
+                  << " match_seq " << w.e.seq << std::endl;
+        publish_put_completion(w.e.comm_rid, true);
+        waits[i] = waits.back();
+        waits.pop_back();
+        any = true;
+      } else {
+        ++i;
+      }
+    }
+    if (!any) std::this_thread::yield();
   }
+  // Shutdown drain: fail everything outstanding.
+  for (auto& w : waits) publish_put_completion(w.e.comm_rid, true);
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_ring_, &drain, 1, nullptr) == 1)
-    publish_completion(drain.comm_rid, true);
+    publish_put_completion(drain.comm_rid, true);
 }
 
-bool IpcAdapter::send_one(RingElem* e) {
-  if (!e || e->type != ReqType::DataPut) return false;
+bool IpcAdapter::launch_one(RingElem* e, size_t stream_idx) {
+  if (!e || (e->type != ReqType::DataPut && e->type != ReqType::PutSignal))
+    return false;
   void* src = e->local_ptr;
   void* dst = e->remote_ptr;
+  UK_DBG(UK_DBG_LVL_TPT, "[ipc-send_one r%d] dst=%p src=%p peer=%d",
+         comm_->rank(), dst, src, e->peer);
   if (!dst) {
     std::cerr << "[ERROR] IPC send_put_async no remote_ptr\n";
     return false;
   }
 
-  int remote_gpu = comm_->peer_gpu_idx(e->peer);
-  if (remote_gpu < 0) remote_gpu = gpu_id_;
-
-  size_t bytes = e->bytes;
-  size_t n_total = ipc_ctx_.size();
-
-  // Adaptive stream count: P2P-style dynamic chunk sizing.
-  // <1MB -> 1 stream; otherwise min(n_total, bytes/1MB).
-  size_t num_streams = n_total;
-  if (bytes < kIpcSizePerEngine) {
-    num_streams = 1;
-  } else {
-    size_t by_size = bytes / kIpcSizePerEngine;
-    if (by_size < num_streams) num_streams = by_size;
-  }
-  if (num_streams == 0) num_streams = 1;
-
-  // Dynamic chunk size: divide bytes evenly, remainder to first chunks.
-  size_t chunk_size = bytes / num_streams;
-  size_t remainder = bytes % num_streams;
-
-  size_t offset = 0;
-  for (size_t i = 0; i < num_streams; ++i) {
-    size_t sz = chunk_size + (i < remainder ? 1 : 0);
-    if (sz == 0) break;
-    char* src_chunk = static_cast<char*>(src) + offset;
-    char* dst_chunk = static_cast<char*>(dst) + offset;
-    gpuStream_t stream = ipc_ctx_[i].first;
-    if (remote_gpu == gpu_id_)
-      GPU_RT_CHECK(gpuMemcpyAsync(dst_chunk, src_chunk, sz,
-                                  gpuMemcpyDeviceToDevice, stream));
-    else
-      GPU_RT_CHECK(gpuMemcpyPeerAsync(dst_chunk, remote_gpu, src_chunk, gpu_id_,
-                                      sz, stream));
-    GPU_RT_CHECK(gpuEventRecord(ipc_ctx_[i].second, stream));
-    offset += sz;
-  }
-
-  for (size_t i = 0; i < num_streams; ++i)
-    GPU_RT_CHECK(gpuEventSynchronize(ipc_ctx_[i].second));
-
+  // One stream per put (per-peer round-robin in send_worker): copies to
+  // different peers overlap while each put keeps one event point.
+  // Use cudaMemcpyAsync with the resolved IPC pointer (NOT
+  // cudaMemcpyPeerAsync): the peer-copy API measured ~450 GB/s on B300
+  // while plain D2D memcpy through the IPC handle reaches ~670 GB/s —
+  // a 1.5x per-copy difference that dominates 8-rank alltoall.
+  gpuStream_t stream = ipc_ctx_[stream_idx];
+  GPU_RT_CHECK(
+      gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice, stream));
   return true;
 }
 
-bool IpcAdapter::recv_one(RingElem* e) {
+void IpcAdapter::complete_one(RingElem const* e, bool ok) {
+  if (ok) {
+    size_t dir = (comm_->rank() < e->peer) ? 0u : 1u;
+    comps_[e->peer].remote->last_completed[dir].store(
+        e->seq, std::memory_order_release);
+  }
+  // Publish the put completion BEFORE the fused-signal ring write: the
+  // signal write can back-pressure on the receiver's drain cadence
+  // (observed ~150-250us stalls at 8 ranks), and the sender's collective
+  // must not wait on it — the receiver completes when IT drains the
+  // signal. Reordering keeps the sender's critical path to just the copy
+  // event; the signal still lands after the data (same thread, same
+  // order).
+  publish_put_completion(e->comm_rid, !ok);
+  if (ok) {
+    // Fused PutSignal: the peer observes the tag only after the data
+    // has landed, matching a separate Signal op's semantics.
+    if (e->type == ReqType::PutSignal) {
+      size_t slot = 0;
+      if (claim_signal_slot(e->peer, &slot)) {
+        write_signal_slot(e->peer, slot, e->tag);
+      } else if (slot != static_cast<size_t>(~0u)) {
+        deferred_sigs_[e->peer].push_back({e->tag, e->comm_rid, slot, false});
+      }
+      // slot == ~0 (path gone): drop — the put completion already fired.
+    }
+  }
+}
+
+bool IpcAdapter::recv_one_poll(RingElem const* e) {
   if (!e || e->type != ReqType::DataWait) return false;
 
   size_t dir = (e->peer < comm_->rank()) ? 0u : 1u;
-  uint64_t expected = e->seq;
-  auto& pc = comps_[e->peer];
-  auto* counter = &pc.local->last_completed[dir];
-
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(kIpcControlTimeoutMs);
-  while (!stop_.load(std::memory_order_acquire) &&
-         std::chrono::steady_clock::now() < deadline) {
-    if (counter->load(std::memory_order_acquire) >= expected) return true;
-    std::this_thread::yield();
-  }
-  if (!stop_.load(std::memory_order_acquire)) {
-    std::cerr << "[ERROR] IPC recv timed out, peer " << e->peer << " match_seq "
-              << e->seq << std::endl;
-  }
-  return false;
+  auto* counter = &comps_[e->peer].local->last_completed[dir];
+  return counter->load(std::memory_order_acquire) >= e->seq;
 }
 
 }  // namespace Transport

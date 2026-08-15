@@ -2,23 +2,39 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
+// Data-movement path for a Put. Defined here (not in backend.h) so
+// plans can carry a per-op hint without a backend include cycle.
+enum class PutPath : uint8_t { Device = 0, Ipc = 1, Rdma = 2, None = 3 };
+
 enum class CollKind : uint32_t {
   AllReduceRing,
   AllToAllPairwise,
+  AllGatherRing,
+  ReduceScatterRing,
+  AllReduceTree,
 };
 
-enum class OpKind : uint32_t {
-  Send,
+// Planner-level op kinds (used in MacroOp DAG)
+
+enum class AlgoOpKind : uint32_t {
+  Put,
   Recv,
-  Copy,
-  Reduce,
   RecvReduce,
-  Signal,  // send_signal_async(peer, tag) — completes via completion_ring_
-  SignalWait,  // wait_signal_async(peer, tag) — completes via signal_ring_
+  Signal,  // cross-rank data-ready signal (fused RS: no data put)
+};
+
+// Executor-level op kinds (used in TiledOp, lower output)
+
+enum class ExecOpKind : uint32_t {
+  Put,
+  Reduce,
+  Signal,
+  WaitSignal,
 };
 
 enum class ScalarType : uint32_t {
@@ -67,6 +83,88 @@ enum class CollectiveBufferRole : uint32_t {
   Input,
   Output,
   Scratch,
+};
+
+// Internal op (planner DAG → lower pipeline)
+
+struct Op {
+  AlgoOpKind kind = AlgoOpKind::Put;
+  size_t bytes = 0;
+  size_t src_off = 0;
+  size_t dst_off = 0;
+  uint32_t src_peer = 0;
+  uint32_t dst_peer = 0;
+  std::vector<uint32_t> deps;
+  // Per-op put path override (None = auto). RS CE+device hybrid.
+  PutPath put_path_hint = PutPath::None;
+};
+
+// Tiled op (lower output → executor input)
+
+struct TiledOp {
+  ExecOpKind kind = ExecOpKind::Put;
+  size_t bytes = 0;
+  size_t src_off = 0;
+  size_t dst_off = 0;
+  size_t src2_off = 0;  // fused-reduce local contribution offset
+  uint32_t src_peer = 0;
+  uint32_t dst_peer = 0;
+  // Fused-reduce local contribution (src2). Always local in the fused
+  // RS design; the remote source is carried by src_peer/src_buf_role.
+  CollectiveBufferRole src2_buf_role = CollectiveBufferRole::Input;
+  // Fused reduce+copy: after the reduce, copy dst to the peer's
+  // accumulation buffer (copy_dst_peer + copy_dst_buf_role +
+  // copy_dst_off). The data-ready signal is a separate Signal op
+  // (host-written ring — B300 has no GPU-mapped signal ring).
+  uint32_t copy_dst_peer = ~0u;
+  CollectiveBufferRole copy_dst_buf_role = CollectiveBufferRole::Output;
+  size_t copy_dst_off = 0;
+  bool fused_copy = false;
+  // Device-completion flag slot for the signal of a fused task
+  // (fuse_reduce_copy with UK_CCL_DEVICE_FLAGS): the WaitSignal polls
+  // this slot; the fused Reduce writes it. ~0u = host ring signal.
+  uint32_t flag_slot = ~0u;
+  // WaitSignal: how many consecutive flag slots to poll (G>1 groups the
+  // per-tile signals; the wait completes when ALL match). Fused Reduce:
+  // unused (1).
+  uint32_t flag_count = 1;
+  uint64_t tag = 0;
+  std::vector<uint32_t> deps;
+  CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
+  CollectiveBufferRole dst_buf_role = CollectiveBufferRole::Output;
+  // Reduce kernel mode: 0 = dst = dst op src (read-modify-write);
+  // 1 = dst = src op src2 (fresh write, fused out-of-place reduce).
+  uint8_t reduce_mode = 0;
+  // Per-op put path override (None = auto). Used by the RS CE+device
+  // hybrid to route half a shard through the CE engine and half through
+  // the device worker.
+  PutPath put_path_hint = PutPath::None;
+};
+
+struct TiledResult {
+  std::vector<TiledOp> ops;
+  size_t staging_bytes_required = 0;
+  size_t input_bytes = 0;
+  size_t output_bytes = 0;
+  int rank = 0;
+  int nranks = 1;
+  ReductionKind reduction = ReductionKind::None;
+  ScalarType dtype = ScalarType::Float32;
+  // Signal-tag layout: low tag_group_bits bits hold the tile-group
+  // index (all-ones reserved for the copies-done handshake), pair_id
+  // sits above. Plan-adaptive, identical on all ranks.
+  uint32_t tag_group_bits = 0;
+  // PutSignal fusion metadata for signal groups whose tag fits the
+  // 32-bit RDMA immediate:
+  // - fused_put_signal: (signal_op_idx, put_op_idx) for EVERY Put of an
+  //   eligible group (G entries per group; each Put may carry the group
+  //   tag as an imm — the receiver then counts G arrivals).
+  // - sig_group_size: (signal_op_idx, group_put_count).
+  // - wait_group_size: (wait_op_idx, group_tile_count) — the expected
+  //   tag arrivals when the sender fuses the group (else 1).
+  std::vector<std::pair<uint32_t, uint32_t>> fused_put_signal;
+  std::vector<std::pair<uint32_t, uint32_t>> sig_group_size;
+  std::vector<std::pair<uint32_t, uint32_t>> wait_group_size;
 };
 
 }  // namespace CCL
