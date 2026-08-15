@@ -80,6 +80,11 @@ struct CollectiveConfig {
   // so the copy engines overlap. Target: 4+ ranks where synchronized CE
   // peaks stall the copy engine (see ce_contention.md).
   bool rs_hybrid = false;
+  // AllToAll CE+device hybrid (UK_CCL_A2A_HYBRID, default 0): split each
+  // per-peer send into a CE half and a device-copy half, overlapping the
+  // CE engine and the worker on pure copies (no reduce to compete with).
+  // Out-of-place only (staging in-place is not split).
+  bool a2a_hybrid = false;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:
