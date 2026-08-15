@@ -210,6 +210,20 @@ contention benchmarks are documented in
   same-host data path (unset = IPC for same-host, RDMA for remote peers).
   Use it to tell apart transport selection vs executor/device-kernel
   slowdowns.
+- **Runtime / diagnostic knobs** (all read once at startup, propagate
+  with `-x`):
+
+  | knob | meaning |
+  |---|---|
+  | `UK_CCL_DEV_BLOCKS` / `UK_CCL_DEV_THREADS` / `UK_CCL_DEV_FIFOS` | persistent-worker geometry (blocks per worker, threads per block, fifo count); auto-selected per GPU when unset |
+  | `UK_CCL_DEV_IDLE_EXIT_US` | worker idle-exit grace (default 500; 0 = always resident) |
+  | `UK_CCL_LARGE_TILES` / `UK_CCL_TILE_MIN_BYTES` | tiling depth / minimum tile size |
+  | `UK_CCL_IPC_BATCH` / `UK_CCL_IPC_STREAMS_PER_PEER` | IPC put window and per-peer stream pool |
+  | `UK_CCL_SIG_GROUP_TILES` / `UK_CCL_SIG_INFLIGHT_CAP` | signal aggregation factor; WaitSignal in-flight cap |
+  | `UK_CCL_FUSE_REDUCE_COPY` / `UK_CCL_FUSE_AG_COPY` / `UK_CCL_DEVICE_FLAGS` | fusion toggles (RS reduce+copy, AG copy, device flags) |
+  | `UK_CCL_A2A_HYBRID` / `UK_CCL_A2A_HYBRID_CE_PCT` / `UK_CCL_RS_HYBRID` / `UK_CCL_RS_CHUNKS` | CE+device hybrid / RS chunking experiments |
+  | `UK_CCL_TREE_THRESHOLD_BYTES` | opt-in binary-tree allreduce crossover (0 = never) |
+  | `UK_CCL_HOST_PROF` / `UK_CCL_PATH_COUNTERS` / `UK_CCL_OP_TRACE` / `UK_CCL_LOG_SIG` / `UK_CCL_RUN_WATCHDOG_MS` | diagnostics (host orchestration profile, path counters, per-op latency, signal log, run watchdog) |
 - **Exchanger hang after a crashed run**: stale shared memory from a
   killed process makes both ranks wait for a leader that never comes:
   ```bash
