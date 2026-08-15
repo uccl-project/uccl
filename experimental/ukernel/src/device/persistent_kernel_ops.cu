@@ -144,29 +144,51 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                 ? (total_count - block_offset)
                                 : count_per_block;
 
-  if (a.reduce_3way()) {
-    // Fused out-of-place reduce: fresh dst = src op src2. LD/ST only.
-    T const* src2 = reinterpret_cast<T const*>(a.src2);
-    read_two_src_reduce_store<T>(dst + block_offset, src + block_offset,
-                                 src2 + block_offset,
-                                 static_cast<size_t>(my_count), a.red_type());
-  } else if (a.src_rank >= 0) {
-    // Remote-src RMW reduce (fused in-place): cp.async.bulk hangs on
-    // peer-mapped addresses, so force the vector LD/ST path.
-    read_reduce_store<T>(dst + block_offset, src + block_offset,
-                         static_cast<size_t>(my_count), a.red_type(), nullptr);
+  if constexpr (is_fast_reduce_dtype<T>()) {
+    if (a.reduce_3way()) {
+      // Fused out-of-place reduce: fresh dst = src op src2. LD/ST only.
+      T const* src2 = reinterpret_cast<T const*>(a.src2);
+      read_two_src_reduce_store<T>(dst + block_offset, src + block_offset,
+                                   src2 + block_offset,
+                                   static_cast<size_t>(my_count),
+                                   a.red_type());
+    } else if (a.src_rank >= 0) {
+      // Remote-src RMW reduce (fused in-place): cp.async.bulk hangs on
+      // peer-mapped addresses, so force the vector LD/ST path.
+      read_reduce_store<T>(dst + block_offset, src + block_offset,
+                           static_cast<size_t>(my_count), a.red_type(),
+                           nullptr);
+    } else {
+      read_reduce_store<T>(dst + block_offset, src + block_offset,
+                           static_cast<size_t>(my_count), a.red_type(),
+                           smem_buf);
+    }
+    if (a.reduce_copy()) {
+      // Fused reduce+copy: forward the just-reduced shard to the next
+      // rank's accumulation buffer (device LD/ST write to peer, the
+      // alltoall-proven direction). Same block partition as the reduce.
+      T* dst2 = reinterpret_cast<T*>(a.dst2);
+      copy<T>(dst2 + block_offset, dst + block_offset,
+              static_cast<size_t>(my_count), smem_buf);
+    }
   } else {
-    read_reduce_store<T>(dst + block_offset, src + block_offset,
-                         static_cast<size_t>(my_count), a.red_type(),
-                         smem_buf);
-  }
-  if (a.reduce_copy()) {
-    // Fused reduce+copy: forward the just-reduced shard to the next
-    // rank's accumulation buffer (device LD/ST write to peer, the
-    // alltoall-proven direction). Same block partition as the reduce.
-    T* dst2 = reinterpret_cast<T*>(a.dst2);
-    copy<T>(dst2 + block_offset, dst + block_offset,
-            static_cast<size_t>(my_count), smem_buf);
+    // dtype outside the fast set: generic scalar reduce (correct for all
+    // ops, no ILP/TMA instantiation).
+    if (a.reduce_3way()) {
+      T const* src2 = reinterpret_cast<T const*>(a.src2);
+      read_two_src_reduce_store_generic<T>(
+          dst + block_offset, src + block_offset, src2 + block_offset,
+          static_cast<size_t>(my_count), a.red_type());
+    } else {
+      read_reduce_store_generic<T>(dst + block_offset, src + block_offset,
+                                   static_cast<size_t>(my_count),
+                                   a.red_type());
+    }
+    if (a.reduce_copy()) {
+      T* dst2 = reinterpret_cast<T*>(a.dst2);
+      copy<T>(dst2 + block_offset, dst + block_offset,
+              static_cast<size_t>(my_count), smem_buf);
+    }
   }
 }
 

@@ -257,9 +257,18 @@ put-free "few-SM" reduce target needs the ILP=16 build; TMA's benefit
 only materializes through the tile pipeline (shim), not the pure
 single-task bench.
 
-Note: the ILP=16 device-bench build is pathologically slow to compile
-on B300 with the burst kernel (cicc >50 min vs ~10 min at ILP=4) —
-revisit the reduce instantiation layout before more ILP=16 iterations.
+### Compile time (2026-08-15)
+
+The ILP=16 build used to take >50 min on B300: the reduce dispatch
+instantiated the full 7-dtype x 5-op matrix of unrolled ILP loops in one
+TU (35+ instantiations). Two knobs now gate the fast set:
+`UK_REDUCE_FAST_DTYPES` (default fp32|fp16|bf16) and `UK_REDUCE_FAST_OPS`
+(default Sum). Everything else falls back to a correct generic scalar
+loop (one cheap instantiation per dtype), so the knobs only trade peak
+per-SM throughput for compile time, never correctness. Local ILP=16
+compile dropped from ~8.5 min to ~15 s; expect ~50 min -> ~8-10 min on
+B300. Builds needing the full matrix pass
+`UK_REDUCE_FAST_DTYPES=127 UK_REDUCE_FAST_OPS=31`.
 
 ## Warp-specialized TMA pipeline — parked
 

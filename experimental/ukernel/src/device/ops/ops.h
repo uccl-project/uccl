@@ -4,6 +4,7 @@
 #include "reduce_ops.h"
 #include "reg_ops.h"
 #include "tma_ops.h"
+#include <type_traits>
 
 // Reduce ILP (16B loads in flight per thread) is a BUILD-TIME knob so the
 // fully-unrolled kernel stays cheap to compile: REDUCE_ILP=4|8|16 (default
@@ -15,6 +16,41 @@
 #if UK_REDUCE_ILP != 4 && UK_REDUCE_ILP != 8 && UK_REDUCE_ILP != 16
 #error "UK_REDUCE_ILP must be 4, 8 or 16"
 #endif
+
+// Fast reduce set: (dtype, op) combos that get the ILP-vectorized kernel.
+// Everything else falls back to a correct scalar loop, so these knobs
+// only trade compile time / peak per-SM throughput, never correctness.
+// The default covers the common ML set (fp32/fp16/bf16 x Sum); builds
+// that need every combo pass UK_REDUCE_FAST_DTYPES=127 UK_REDUCE_FAST_OPS=31.
+// This is the compile-time lever for the sm_103 ILP=16 blowup: the full
+// 7-dtype x 5-op matrix instantiates ~35 unrolled ILP loops per file
+// (50+ min on B300); the default fast set instantiates 3.
+#ifndef UK_REDUCE_FAST_DTYPES  // 1=fp32 2=fp16 4=bf16 8=int32 16=int8 32=int64 64=fp64
+#define UK_REDUCE_FAST_DTYPES 7
+#endif
+#ifndef UK_REDUCE_FAST_OPS  // 1=Sum 2=Prod 4=Max 8=Min 16=BitwiseAnd
+#define UK_REDUCE_FAST_OPS 1
+#endif
+
+template <typename T>
+__device__ constexpr bool is_fast_reduce_dtype() {
+  if constexpr (std::is_same_v<T, float>)
+    return (UK_REDUCE_FAST_DTYPES & 1) != 0;
+  else if constexpr (std::is_same_v<T, __half>)
+    return (UK_REDUCE_FAST_DTYPES & 2) != 0;
+  else if constexpr (std::is_same_v<T, nv_bfloat16>)
+    return (UK_REDUCE_FAST_DTYPES & 4) != 0;
+  else if constexpr (std::is_same_v<T, int32_t>)
+    return (UK_REDUCE_FAST_DTYPES & 8) != 0;
+  else if constexpr (std::is_same_v<T, int8_t>)
+    return (UK_REDUCE_FAST_DTYPES & 16) != 0;
+  else if constexpr (std::is_same_v<T, int64_t>)
+    return (UK_REDUCE_FAST_DTYPES & 32) != 0;
+  else if constexpr (std::is_same_v<T, double>)
+    return (UK_REDUCE_FAST_DTYPES & 64) != 0;
+  else
+    return false;
+}
 
 // Large-task TMA bulk reduce (sm_90+): REDUCE_SMEM_KB is the dynamic
 // shared-memory budget per block (src+dst chunk buffers + mbarriers);
@@ -603,31 +639,74 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   }
 }
 
+// Generic scalar fallbacks for (dtype, op) combos outside the fast set.
+// Correct for every dtype/op; one cheap instantiation per dtype instead
+// of the unrolled ILP/TMA bodies.
+template <typename T>
+__device__ __forceinline__ void read_reduce_store_generic(void* dst,
+                                                          void const* src,
+                                                          size_t count,
+                                                          ReduceType op) {
+  int tid = threadIdx.x;
+  int nthread = blockDim.x;
+  T* dst_ptr = static_cast<T*>(dst);
+  T const* src_ptr = static_cast<T const*>(src);
+  for (size_t i = static_cast<size_t>(tid); i < count;
+       i += static_cast<size_t>(nthread))
+    dst_ptr[i] = apply_reduce(dst_ptr[i], src_ptr[i], op);
+}
+
+template <typename T>
+__device__ __forceinline__ void read_two_src_reduce_store_generic(
+    void* dst, void const* src, void const* src2, size_t count,
+    ReduceType op) {
+  int tid = threadIdx.x;
+  int nthread = blockDim.x;
+  T* dst_ptr = static_cast<T*>(dst);
+  T const* src_ptr = static_cast<T const*>(src);
+  T const* src2_ptr = static_cast<T const*>(src2);
+  for (size_t i = static_cast<size_t>(tid); i < count;
+       i += static_cast<size_t>(nthread))
+    dst_ptr[i] = apply_reduce(src_ptr[i], src2_ptr[i], op);
+}
+
 // dst[i] = dst[i] op src[i] over [0, count). Runtime op dispatched to a
-// compile-time specialization so the vector loop fully unrolls.
+// compile-time specialization so the vector loop fully unrolls. Only the
+// ops in UK_REDUCE_FAST_OPS instantiate the heavy path; the rest fall
+// back to the generic scalar loop.
 template <typename T>
 __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
                                                   size_t count, ReduceType op,
                                                   void* smem_buf) {
   switch (op) {
+#if UK_REDUCE_FAST_OPS & 1
     case ReduceType::Sum:
       read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 2
     case ReduceType::Prod:
       read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, smem_buf);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 4
     case ReduceType::Max:
       read_reduce_store_op<T, ReduceType::Max>(dst, src, count, smem_buf);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 8
     case ReduceType::Min:
       read_reduce_store_op<T, ReduceType::Min>(dst, src, count, smem_buf);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 16
     case ReduceType::BitwiseAnd:
       read_reduce_store_op<T, ReduceType::BitwiseAnd>(dst, src, count,
                                                       smem_buf);
       break;
+#endif
     default:
-      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
+      read_reduce_store_generic<T>(dst, src, count, op);
       break;
   }
 }
@@ -664,24 +743,34 @@ __device__ __forceinline__ void read_two_src_reduce_store(
     void* dst, void const* src, void const* src2, size_t count,
     ReduceType op) {
   switch (op) {
+#if UK_REDUCE_FAST_OPS & 1
     case ReduceType::Sum:
       read_two_src_reduce_store_op<T, ReduceType::Sum>(dst, src, src2, count);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 2
     case ReduceType::Prod:
       read_two_src_reduce_store_op<T, ReduceType::Prod>(dst, src, src2, count);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 4
     case ReduceType::Max:
       read_two_src_reduce_store_op<T, ReduceType::Max>(dst, src, src2, count);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 8
     case ReduceType::Min:
       read_two_src_reduce_store_op<T, ReduceType::Min>(dst, src, src2, count);
       break;
+#endif
+#if UK_REDUCE_FAST_OPS & 16
     case ReduceType::BitwiseAnd:
       read_two_src_reduce_store_op<T, ReduceType::BitwiseAnd>(dst, src, src2,
                                                               count);
       break;
+#endif
     default:
-      read_two_src_reduce_store_op<T, ReduceType::Sum>(dst, src, src2, count);
+      read_two_src_reduce_store_generic<T>(dst, src, src2, count, op);
       break;
   }
 }
