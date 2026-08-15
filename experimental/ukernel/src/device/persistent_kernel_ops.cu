@@ -89,7 +89,13 @@ __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
   const uint64_t max_threads_per_block = 1024;
   if (blockDim.x > max_threads_per_block) return;
 
-  const uint64_t count_per_block = total_count / num_blocks;
+  // Round each block's chunk to the 16B vector width so every block
+  // starts at a 16B-aligned offset. The AllToAll hybrid splits can
+  // produce total counts where total/num_blocks is not a vector
+  // multiple (e.g. pct=70 dev half: 2516584 floats / 32 blocks = 78643
+  // floats), and the misaligned Vec access hangs the worker on B300.
+  const uint64_t count_per_block =
+      (total_count / num_blocks / 16) * 16;  // 16 bytes per Vec
   const uint64_t block_offset = block_id * count_per_block;
 
   char* my_dst = dst + block_offset;
@@ -118,7 +124,9 @@ __device__ __forceinline__ void run_typed_copy(TaskArgs const& a,
   const uint64_t max_threads_per_block = 1024;
   if (blockDim.x > max_threads_per_block) return;
 
-  const uint64_t count_per_block = total_count / num_blocks;
+  constexpr uint64_t kVecElems = 16 / sizeof(T);  // 4 for float
+  const uint64_t count_per_block =
+      (total_count / num_blocks / kVecElems) * kVecElems;
   const uint64_t block_offset = block_id * count_per_block;
   const uint64_t my_count = (block_id + 1 == num_blocks)
                                 ? (total_count - block_offset)
