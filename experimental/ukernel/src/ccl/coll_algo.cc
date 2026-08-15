@@ -230,16 +230,24 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
-      std::vector<uint32_t> deps;
-      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      // First touch of a shard reads Input; afterwards the running sum
-      // in the accumulation buffer. Explicit by ring_step: at step s
-      // this rank sends shard wrap(rank-s), which it received at step
-      // s-1 — only s==0 (its own shard) has no prior receive.
-      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1, send_peer,
-                     std::move(deps), pair_id,
-                     ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
-                     accum);
+      uint32_t const chunks = std::max(1u, config.rs_chunks);
+      size_t const chunk_bytes =
+          (send_bytes + chunks - 1) / chunks;  // ceil; last chunk absorbs
+      for (uint32_t c = 0; c < chunks; ++c) {
+        size_t const co = offset + static_cast<size_t>(c) * chunk_bytes;
+        size_t const cb =
+            std::min(chunk_bytes, send_bytes - static_cast<size_t>(c) * chunk_bytes);
+        std::vector<uint32_t> deps;
+        // First touch of a shard reads Input; afterwards the running sum
+        // in the accumulation buffer. Chunk 0 carries the ring dep (the
+        // shard was produced by the previous step's reduce); later
+        // chunks of the same shard are independent (different offsets).
+        if (c == 0) add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+        builder.add_op(AlgoOpKind::Put, cb, co, co, -1, send_peer,
+                       std::move(deps), pair_id * chunks + c,
+                       ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
+                       accum);
+      }
     } else if (send_bytes > 0 && fuse_copy) {
       // Fused reduce+copy: the send of shard wrap(rank-s) is done by the
       // PREVIOUS step's RecvReduce task (which produced that shard) as a
@@ -271,16 +279,26 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, recv_owner);
       uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
-      uint32_t recv_op;
-      uint32_t reduce_op;
+      uint32_t recv_op = 0;
+      uint32_t reduce_op = 0;
       if (!fused && !fuse_copy) {
-        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
-                                 recv_peer, -1, {}, pair_id,
+        uint32_t const chunks = std::max(1u, config.rs_chunks);
+        size_t const chunk_bytes =
+            (recv_bytes + chunks - 1) / chunks;
+        uint32_t last_reduce = 0;
+        for (uint32_t c = 0; c < chunks; ++c) {
+          size_t const co = offset + static_cast<size_t>(c) * chunk_bytes;
+          size_t const cb = std::min(
+              chunk_bytes, recv_bytes - static_cast<size_t>(c) * chunk_bytes);
+        recv_op = builder.add_op(AlgoOpKind::Recv, cb, co, co, recv_peer, -1,
+                                 {}, pair_id * chunks + c,
                                  BufRef{BufSpace::Input, 0}, accum);
-        reduce_op =
-            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
-                           recv_peer, -1, {recv_op}, pair_id,
-                           BufRef{BufSpace::Input, 0}, accum);
+          last_reduce =
+              builder.add_op(AlgoOpKind::RecvReduce, cb, co, co, recv_peer, -1,
+                             {recv_op}, pair_id * chunks + c,
+                             BufRef{BufSpace::Input, 0}, accum);
+        }
+        reduce_op = last_reduce;
       } else if (fuse_copy) {
         // Fused reduce+copy: the task reduces accum[off] += Input[off],
         // copies accum[off] to the NEXT rank's accumulation buffer, and

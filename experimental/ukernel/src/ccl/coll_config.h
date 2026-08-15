@@ -69,6 +69,12 @@ struct CollectiveConfig {
   // chain from the AG per-hop path. Toggle via UK_CCL_FUSE_AG_COPY
   // (default 0). Requires device_flags (the flag slot mechanism).
   bool fuse_ag_copy = false;
+  // RS chunking (UK_CCL_RS_CHUNKS, default 1): split each ReduceScatter
+  // tile's put/reduce into K chunk ops so the reduce of chunk c can
+  // overlap the put of chunk c+1 within the tile. Experimental — the LT
+  // sweep suggests finer ops regress (per-tile dependency latency), but
+  // this isolates the within-tile overlap from the allreduce phases.
+  uint32_t rs_chunks = 1;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

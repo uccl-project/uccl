@@ -343,6 +343,13 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e && std::string(e) != "0";
   }();
   cfg.fuse_ag_copy = kFuseAgCopy;
+  // RS chunking (experimental): split each RS tile's put/reduce into K
+  // chunk ops for within-tile put->reduce overlap.
+  static uint32_t const kRsChunks = [] {
+    char const* e = std::getenv("UK_CCL_RS_CHUNKS");
+    return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
+  }();
+  cfg.rs_chunks = kRsChunks;
   // Device-completion flags for fused tasks (default on; the per-slot
   // plain-store protocol needs no host-native atomics). Only meaningful
   // with a fused mode (the wait/flag pairing lives there).
