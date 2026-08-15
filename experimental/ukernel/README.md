@@ -413,12 +413,9 @@ Current constraints:
   CE-contention benchmarks (see [docs/benchmarks.md](docs/benchmarks.md))
 - [include/util](include/util/) — shared lock-free jring, pause intrinsic
 - [docs/benchmarks.md](docs/benchmarks.md) — how to build/run the project's benchmarks
-- [docs/put_path_selection.md](docs/put_path_selection.md) — design notes on IPC/device/RDMA path selection
-- [docs/ce_contention.md](docs/ce_contention.md) — copy-engine contention mechanism and verification
-- [docs/fused_rs_reduce.md](docs/fused_rs_reduce.md) — fused reduce+copy / fused AG for AllReduce
 - [docs/reduce_kernel.md](docs/reduce_kernel.md) — reduce kernel tuning (ILP, TMA, tiles, warp-spec)
 - [docs/alltoall_comparison.md](docs/alltoall_comparison.md) — AllToAll design and B300 results
-- [docs/optimization_framework.md](docs/optimization_framework.md) — optimization attempts and forward plan
+- [docs/optimization_framework.md](docs/optimization_framework.md) — optimization attempts/plan + path selection, CE contention, RS/AG fusion appendices
 - [docs/b300_native_nccl_measurements.md](docs/b300_native_nccl_measurements.md) — native NCCL anchors on B300
 - [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native perf tests
 - [docs/nccl_compatibility.md](docs/nccl_compatibility.md) — shim drop-in compatibility
@@ -500,7 +497,8 @@ How the large-message wins were reached (`6ae8d24d..HEAD`):
 ILP-vectorized reduce kernel, pipelined IPC send window, same-host
 puts pinned to IPC (the latency-based path balancer was misrouting onto
 the device/RDMA paths — design notes in
-[docs/put_path_selection.md](docs/put_path_selection.md)), 1MB tile
+[docs/optimization_framework.md](docs/optimization_framework.md),
+Appendix B), 1MB tile
 sweet spot, 256-thread × 8-block device kernels, and a fast-path
 prepare(). Multi-block teardown/relaunch/phase bugs were fixed along
 the way (stream-ordered MultiBlockSync free, d_sync reset before every

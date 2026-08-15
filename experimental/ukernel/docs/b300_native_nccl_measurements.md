@@ -72,7 +72,8 @@ Findings:
 Best config found by the 08-04 sweep: `UK_CCL_LARGE_TILES=8
 UK_CCL_TILE_MIN_BYTES=8M UK_CCL_IPC_BATCH=16`, AllReduce 256M OOP. This
 predates the fused reduce+copy work — see
-[fused_rs_reduce.md](fused_rs_reduce.md) for the current numbers.
+[optimization_framework.md](optimization_framework.md), Appendix C for
+the current numbers.
 
 | shim blocks (`UK_CCL_DEV_BLOCKS`) | 256M time (us) | algbw (GB/s) | vs native |
 |---:|---:|---:|---:|
@@ -106,9 +107,9 @@ results wrong=0.
 
 The shim carries a fixed per-tile host-signal floor (small sizes are
 disproportionately slow) and busbw falls with rank count while native's
-rises. The fused RS/AG work (fused_rs_reduce.md) improved the 256M
-8-rank point from ~2000us to ~1490us; the small-size floor and the ring
-critical path remain the targets.
+rises. The fused RS/AG work (optimization_framework.md, Appendix C)
+improved the 256M 8-rank point from ~2000us to ~1490us; the small-size
+floor and the ring critical path remain the targets.
 
 ### AllToAll (OOP algbw GB/s; shim = device path BLK=64 LT=4 G=4)
 

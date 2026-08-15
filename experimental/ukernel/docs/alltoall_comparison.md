@@ -4,7 +4,7 @@ How the ukernel shim's AllToAll works, how it compares to native
 nccl-tests alltoall, and what the remaining gap is. Full 1M..256M sweep
 data is in [b300_native_nccl_measurements.md](b300_native_nccl_measurements.md);
 the copy-engine contention mechanism behind the gap is analyzed in
-[ce_contention.md](ce_contention.md).
+[optimization_framework.md](optimization_framework.md) (Appendix A).
 
 ## Design
 
@@ -42,7 +42,8 @@ native at 2 ranks; neither reaches native at 4/8 yet.
    *unsynchronized* loops. The shim's collective is synchronized (every
    rank waits for all signals every iteration), so all 56 copies peak on
    the fabric together and the CE cannot reach its raw ceiling. Isolated
-   in the standalone CE contention microbenchmark (see ce_contention.md).
+   in the standalone CE contention microbenchmark (see
+   optimization_framework.md, Appendix A).
 2. **TMA to peer memory is blocked on B300**: `cp.async.bulk`
    store/load to a peer-mapped (IPC) address hangs the kernel's
    bulk-group/mbarrier wait. Local TMA works. Native NCCL does not use
@@ -134,7 +135,7 @@ contended enough to justify a bigger share.
 Recommended defaults: 4 ranks `pct=50 blk=32`, 8 ranks `pct=30 blk=32`
 (LT=4). Both beat pure CE and are stable; the remaining gap to native
 is the synchronized CE peak + worker copy efficiency (see
-[ce_contention.md](ce_contention.md)).
+[optimization_framework.md](optimization_framework.md), Appendix A).
 
 Clean 4-rank A/B (median of 3, 256M, LT=4):
 

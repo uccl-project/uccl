@@ -78,7 +78,7 @@ struct CollectiveConfig {
   // RS CE+device hybrid (UK_CCL_RS_HYBRID, default 0): each tile's send
   // is split half CE put + half device-copy task (per-op put_path_hint),
   // so the copy engines overlap. Target: 4+ ranks where synchronized CE
-  // peaks stall the copy engine (see ce_contention.md).
+  // peaks stall the copy engine (see optimization_framework.md, App. A).
   bool rs_hybrid = false;
   // AllToAll CE+device hybrid (UK_CCL_A2A_HYBRID, default 0): split each
   // per-peer send into a CE half and a device-copy half, overlapping the

@@ -130,7 +130,8 @@ for it. Report uses the nccl-tests convention:
 ## CE contention microbenchmark (`ce_contention.cu`)
 
 Standalone 8-process alltoall that isolates copy-engine contention under
-a synchronized start (see [ce_contention.md](ce_contention.md) for
+a synchronized start (see
+[optimization_framework.md](optimization_framework.md), Appendix A for
 results):
 
 ```bash
