@@ -131,7 +131,37 @@ path, BLK=64) and far from native below ~128M; at 128M+ it closes to
 [alltoall_comparison.md](alltoall_comparison.md) for the recommended
 per-rank config.
 
-## TODO
+## Native AllGather / ReduceScatter baselines (2026-08-15)
 
-- `NCCL_NTHREADS=256` at 32 channels (thread-count sensitivity)
-- Record native AllGather / ReduceScatter baselines the same way
+256MB, nccl-tests, n=20 w=5, all wrong=0. OOP = out-of-place,
+ip = in-place; algbw / busbw in GB/s.
+
+AllGather:
+
+| ranks | oop time (us) | oop algbw | oop busbw | ip time (us) | ip algbw | ip busbw |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 323.1 | 830.8 | 415.4 | 301.8 | 889.5 | 444.8 |
+| 4 | 377.1 | 711.8 | 533.8 | 375.1 | 715.5 | 536.7 |
+| 8 | 402.8 | 666.4 | 583.1 | 399.6 | 671.8 | 587.8 |
+
+ReduceScatter:
+
+| ranks | oop time (us) | oop algbw | oop busbw | ip time (us) | ip algbw | ip busbw |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 330.5 | 812.3 | 406.2 | 325.5 | 824.8 | 412.4 |
+| 4 | 380.2 | 706.1 | 529.6 | 378.1 | 710.0 | 532.5 |
+| 8 | 397.7 | 675.0 | 590.6 | 392.7 | 683.6 | 598.1 |
+
+## NCCL_NTHREADS sensitivity (2026-08-15)
+
+256MB AllReduce, 2 ranks, native, n=20 w=5, all wrong=0. Default is
+512; both 512 and 1024 sit at the sweet spot, 256 loses ~15% and 128
+loses ~40% — thread count is a real lever on the B300 ring kernel, so
+shim comparisons should keep native at its default 512.
+
+| NCCL_NTHREADS | time (us) | algbw (GB/s) |
+|---:|---:|---:|
+| 128 | 887.5 | 302.5 |
+| 256 | 610.7 | 439.6 |
+| 512 (default) | 521.1 | 515.1 |
+| 1024 | 519.2 | 517.0 |
