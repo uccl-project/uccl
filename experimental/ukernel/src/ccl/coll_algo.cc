@@ -230,6 +230,32 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+      if (config.rs_hybrid && config.rs_chunks == 1) {
+        // CE+device hybrid: half the shard goes via the CE copy engine,
+        // half via this rank's device worker (device LD/ST to peer),
+        // overlapping the two engines on the same send.
+        size_t const half = send_bytes / 2;
+        size_t const ce_bytes = half;
+        size_t const dev_bytes = send_bytes - half;
+        std::vector<uint32_t> deps;
+        add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+        uint32_t const put_ce =
+            builder.add_op(AlgoOpKind::Put, ce_bytes, offset, offset, -1,
+                           send_peer, deps, pair_id * 2,
+                           ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
+                           accum);
+        builder.algo.chunks[put_ce].put_path_hint = PutPath::Ipc;
+        std::vector<uint32_t> deps2;
+        add_dep(deps2, ready_ops[static_cast<size_t>(send_owner)]);
+        uint32_t const put_dev =
+            builder.add_op(AlgoOpKind::Put, dev_bytes, offset + ce_bytes,
+                           offset + ce_bytes, -1, send_peer, deps2,
+                           pair_id * 2 + 1,
+                           ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
+                           accum);
+        builder.algo.chunks[put_dev].put_path_hint = PutPath::Device;
+        continue;  // done with this ring step's send side
+      }
       uint32_t const chunks = std::max(1u, config.rs_chunks);
       size_t const chunk_bytes =
           (send_bytes + chunks - 1) / chunks;  // ceil; last chunk absorbs
@@ -282,6 +308,24 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       uint32_t recv_op = 0;
       uint32_t reduce_op = 0;
       if (!fused && !fuse_copy) {
+        if (config.rs_hybrid && config.rs_chunks == 1) {
+          size_t const half = recv_bytes / 2;
+          size_t const ce_bytes = half;
+          size_t const dev_bytes = recv_bytes - half;
+          uint32_t recv_ce =
+              builder.add_op(AlgoOpKind::Recv, ce_bytes, offset, offset,
+                             recv_peer, -1, {}, pair_id * 2,
+                             BufRef{BufSpace::Input, 0}, accum);
+          uint32_t recv_dev =
+              builder.add_op(AlgoOpKind::Recv, dev_bytes, offset + ce_bytes,
+                             offset + ce_bytes, recv_peer, -1, {},
+                             pair_id * 2 + 1, BufRef{BufSpace::Input, 0},
+                             accum);
+          reduce_op =
+              builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                             recv_peer, -1, {recv_ce, recv_dev}, pair_id,
+                             BufRef{BufSpace::Input, 0}, accum);
+        } else {
         uint32_t const chunks = std::max(1u, config.rs_chunks);
         size_t const chunk_bytes =
             (recv_bytes + chunks - 1) / chunks;
@@ -299,6 +343,7 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                              BufRef{BufSpace::Input, 0}, accum);
         }
         reduce_op = last_reduce;
+        }
       } else if (fuse_copy) {
         // Fused reduce+copy: the task reduces accum[off] += Input[off],
         // copies accum[off] to the NEXT rank's accumulation buffer, and

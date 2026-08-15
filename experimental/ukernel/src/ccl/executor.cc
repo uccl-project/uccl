@@ -163,7 +163,7 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   c.flag_slot = op.flag_slot;
   c.flag_count = op.flag_count;
   c.redop = (op.kind == ExecOpKind::Reduce) ? redop : ReductionKind::None;
-  c.put_path = PutPath::None;
+  c.put_path = op.put_path_hint;  // None = auto (pick_put_path below)
   if (op.reduce_mode == 1) c.flags |= kCmdFlagReduce3Way;
   c.tag = salt_tag(op.tag, tag_epoch);
   if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
@@ -1012,7 +1012,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         // the completion flag); never route to CE/RDMA.
         c.put_path = PutPath::Device;
       } else {
-        c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+        // A builder-set hint (RS hybrid halves) wins; otherwise auto.
+        if (c.put_path == PutPath::None)
+          c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
       }
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
              rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);

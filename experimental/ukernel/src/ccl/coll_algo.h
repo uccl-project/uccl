@@ -36,6 +36,7 @@
 // pair_id namespaces per concurrent channel.
 #pragma once
 
+#include "backend/backend.h"
 #include "coll_config.h"
 #include "coll_types.h"
 #include <cstddef>
@@ -83,6 +84,10 @@ struct MacroOp {
   // where the peer's data lands (mirrors the peer Put's dst).
   BufRef src = {BufSpace::Input, 0};
   BufRef dst = {BufSpace::Output, 0};
+  // Per-op put path override (None = auto). The RS hybrid splits a
+  // tile's send into a CE half and a device-copy half so the CE engine
+  // and the peer's worker overlap on the same shard.
+  PutPath put_path_hint = PutPath::None;
   // Fused RecvReduce (AllReduceRing, fuse_rs_reduce): src is the PEER's
   // send-source buffer (resolved through src_rank), src2 is this rank's
   // local Input contribution for the out-of-place 3-way reduce (dst =

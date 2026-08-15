@@ -12,7 +12,7 @@ namespace CCL {
 
 // Put op routing: which backend handles the data transfer.
 // Values match the uint8_t stored in Cmd::put_path.
-enum class PutPath : uint8_t { Device = 0, Ipc = 1, Rdma = 2, None = 3 };
+// PutPath is defined in coll_types.h (plans carry per-op hints).
 
 // Command descriptor
 

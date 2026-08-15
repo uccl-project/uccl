@@ -75,6 +75,11 @@ struct CollectiveConfig {
   // sweep suggests finer ops regress (per-tile dependency latency), but
   // this isolates the within-tile overlap from the allreduce phases.
   uint32_t rs_chunks = 1;
+  // RS CE+device hybrid (UK_CCL_RS_HYBRID, default 0): each tile's send
+  // is split half CE put + half device-copy task (per-op put_path_hint),
+  // so the copy engines overlap. Target: 4+ ranks where synchronized CE
+  // peaks stall the copy engine (see ce_contention.md).
+  bool rs_hybrid = false;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

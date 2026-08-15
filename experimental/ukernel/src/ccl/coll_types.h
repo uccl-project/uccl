@@ -7,6 +7,10 @@
 namespace UKernel {
 namespace CCL {
 
+// Data-movement path for a Put. Defined here (not in backend.h) so
+// plans can carry a per-op hint without a backend include cycle.
+enum class PutPath : uint8_t { Device = 0, Ipc = 1, Rdma = 2, None = 3 };
+
 enum class CollKind : uint32_t {
   AllReduceRing,
   AllToAllPairwise,
@@ -91,6 +95,8 @@ struct Op {
   uint32_t src_peer = 0;
   uint32_t dst_peer = 0;
   std::vector<uint32_t> deps;
+  // Per-op put path override (None = auto). RS CE+device hybrid.
+  PutPath put_path_hint = PutPath::None;
 };
 
 // Tiled op (lower output → executor input)
@@ -129,6 +135,10 @@ struct TiledOp {
   // Reduce kernel mode: 0 = dst = dst op src (read-modify-write);
   // 1 = dst = src op src2 (fresh write, fused out-of-place reduce).
   uint8_t reduce_mode = 0;
+  // Per-op put path override (None = auto). Used by the RS CE+device
+  // hybrid to route half a shard through the CE engine and half through
+  // the device worker.
+  PutPath put_path_hint = PutPath::None;
 };
 
 struct TiledResult {

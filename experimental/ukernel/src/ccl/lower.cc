@@ -46,6 +46,7 @@ TileResult tile_macro_ops(CollAlgo const& algo, size_t tile_bytes,
           (c.src_rank < 0) ? ~0u : static_cast<uint32_t>(c.src_rank);
       tile.dst_peer =
           (c.dst_rank < 0) ? ~0u : static_cast<uint32_t>(c.dst_rank);
+      tile.put_path_hint = c.put_path_hint;
       r.ops.push_back(tile);
       off += tile_bytes;
     }
@@ -116,6 +117,7 @@ TiledOp op_to_tiled(Op const& op) {
   t.src_buf_role = CollectiveBufferRole::Input;
   t.dst_buf_role = CollectiveBufferRole::Output;
   t.deps = std::move(op.deps);
+  t.put_path_hint = op.put_path_hint;
   return t;
 }
 
@@ -249,6 +251,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.dst_peer = op.dst_peer;
           put.src_buf_role = CollectiveBufferRole::Scratch;
           put.dst_buf_role = CollectiveBufferRole::Output;
+          put.put_path_hint = op.put_path_hint;
           old_to_new[old_idx] = static_cast<uint32_t>(out.size());
           out.push_back(put);
           put_indices.push_back(static_cast<uint32_t>(out.size() - 1));

@@ -350,6 +350,11 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
   }();
   cfg.rs_chunks = kRsChunks;
+  static bool const kRsHybrid = [] {
+    char const* e = std::getenv("UK_CCL_RS_HYBRID");
+    return e && std::string(e) != "0";
+  }();
+  cfg.rs_hybrid = kRsHybrid;
   // Device-completion flags for fused tasks (default on; the per-slot
   // plain-store protocol needs no host-native atomics). Only meaningful
   // with a fused mode (the wait/flag pairing lives there).
