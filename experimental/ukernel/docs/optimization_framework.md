@@ -35,6 +35,27 @@ build:
   not put/reduce overlap. RS remains the weakest phase (shim RS 521.6
   algbw vs native 817.5, 64%) — the target for reduce+receive fusion.
 
+### RS chunking experiment — negative (2026-08-15)
+
+`UK_CCL_RS_CHUNKS=K` splits each RS tile's put/reduce into K chunk ops
+with independent pair ids, so chunk c's reduce can overlap chunk c+1's
+put. Measured on B300, 256M RS, BLK=32 LT=8 (best per-config):
+
+| chunks | time | algbw |
+|---:|---:|---:|
+| 1 | 505.7us | **530.8 GB/s** |
+| 2 | 526.8us | 509.5 |
+| 8 | 530.3us | 506.2 |
+
+Chunking regresses — finer ops add per-tile dependency latency without
+overlap gain, confirming the user's intuition that chunking == more
+tiles (the LT sweep already showed LT=32, i.e. 8MB ops, at 370). The RS
+gap is the per-tile dependency chain itself (host profiling: only ~16%
+of the RS time is host dispatch; ~90us/tile is GPU/CE-side put-signal-
+reduce latency), which neither tile size nor chunking addresses. C=4
+failed to produce a result (not investigated — the direction is
+decisive). The knob stays in the code as a measurement tool.
+
 ## The three planes
 
 ### 1. Data plane — who moves bytes
