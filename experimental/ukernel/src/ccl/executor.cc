@@ -23,6 +23,22 @@ namespace {
 // enqueue_loop, not the handler). Debug aid for distributed stalls:
 // kill -USR2 <pid> on the surviving rank after the peer's watchdog fires.
 std::atomic<bool> g_dump_all_requested{false};
+
+// UK_CCL_OP_TRACE=1: print per-op completion latency (now - enqueue_ns)
+// for the first ~40 ops of each kind — isolates the put/reduce/signal
+// dependency-chain latency that aggregate HostProf buckets blur.
+void trace_op(char const* kind, uint64_t enqueue_ns, int rank) {
+  static bool const enabled = std::getenv("UK_CCL_OP_TRACE") != nullptr;
+  if (!enabled) return;
+  static std::atomic<int> tpt_n{0}, dev_n{0}, sig_n{0};
+  std::atomic<int>* c =
+      (kind[0] == 'p') ? &tpt_n : (kind[0] == 'd') ? &dev_n : &sig_n;
+  int const n = c->fetch_add(1, std::memory_order_relaxed);
+  if (n >= 40) return;
+  auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
+  std::fprintf(stderr, "[trace r%d] %s#%d enq->done %.1fus\n", rank, kind, n,
+               (now - static_cast<int64_t>(enqueue_ns)) / 1000.0);
+}
 }  // namespace
 
 static void update_path_metrics(PathMetrics& m, uint64_t enqueue_ns) {
@@ -1638,24 +1654,6 @@ void SprayExecutor::drain_signal_loop() {
 int SprayExecutor::rank_or_neg1() const {
   return owned_comm_ ? owned_comm_->rank() : -1;
 }
-
-namespace {
-// UK_CCL_OP_TRACE=1: print per-op completion latency (now - enqueue_ns)
-// for the first ~40 ops of each kind — isolates the put/reduce/signal
-// dependency-chain latency that aggregate HostProf buckets blur.
-void trace_op(char const* kind, uint64_t enqueue_ns, int rank) {
-  static bool const enabled = std::getenv("UK_CCL_OP_TRACE") != nullptr;
-  if (!enabled) return;
-  static std::atomic<int> tpt_n{0}, dev_n{0}, sig_n{0};
-  std::atomic<int>* c =
-      (kind[0] == 'p') ? &tpt_n : (kind[0] == 'd') ? &dev_n : &sig_n;
-  int const n = c->fetch_add(1, std::memory_order_relaxed);
-  if (n >= 40) return;
-  auto const now = std::chrono::steady_clock::now().time_since_epoch().count();
-  std::fprintf(stderr, "[trace r%d] %s#%d enq->done %.1fus\n", rank, kind, n,
-               (now - static_cast<int64_t>(enqueue_ns)) / 1000.0);
-}
-}  // namespace
 
 void SprayExecutor::finalize_run(SprayRun* run) {
   if (run->status.load(std::memory_order_acquire) !=
