@@ -56,6 +56,24 @@ reduce latency), which neither tile size nor chunking addresses. C=4
 failed to produce a result (not investigated — the direction is
 decisive). The knob stays in the code as a measurement tool.
 
+### RS CE+device hybrid — negative (2026-08-15)
+
+`UK_CCL_RS_HYBRID=1` splits each RS tile's send into a CE half and a
+device-copy half (per-op `put_path_hint`), overlapping the CE engine and
+the peer's worker on the same shard. Measured on B300, 256M RS, BLK=32
+LT=8:
+
+| ranks | CE only | hybrid | delta |
+|---:|---:|---:|---:|
+| 4 | 372.1 GB/s | 345.7 | -7% |
+| 8 | 201.8 | 192.9 | -4% |
+
+The device half competes with the reduce on the same worker, so the
+hybrid loses even at 4/8 ranks. The alltoall device-path win (4/8 ranks)
+was for pure copies (no reduce on the worker); RS's copy+reduce share
+the worker, so splitting the send across engines does not help. The
+`put_path_hint` plumbing stays (useful for future per-op path control).
+
 ## The three planes
 
 ### 1. Data plane — who moves bytes
