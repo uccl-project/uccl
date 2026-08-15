@@ -78,6 +78,23 @@ result. Measured with `bench/alltoall_perf.cu` (direct ncclAllToAll),
 levers left: split ratio (currently 50/50), device-half block count,
 tile size.
 
+Clean 4-rank A/B (median of 3, 256M, LT=4):
+
+| config | algbw | vs single-put CE |
+|---:|---:|---:|
+| single CE put (H=0) | 476 GB/s | — |
+| split 2 CE puts (pct=100) | 507 | +6.5% |
+| hybrid CE+device (pct=50, blk=32) | **534** | +12% |
+
+The hybrid's gain is a combination of the op split (+6.5%, two smaller
+CE copies schedule better) and the CE+device overlap (+5%). Why BLK
+shows up even at pct=100: the worker kernels are pre-created at
+communicator init (BLK idle blocks polling the FIFO) and occupy SMs even
+when no device op runs — the alltoall self-slice is done on the user
+stream via CE (`external_self_slice`), so it is not the cause. Lazy
+worker creation would remove the idle-SM occupation (reverted earlier:
+the drain-thread device race needs a redesign).
+
 Small/medium messages are worker/launch-bound on the device path and far
 from native below ~128M; the CE path is better there but was only swept
 at 256M.
