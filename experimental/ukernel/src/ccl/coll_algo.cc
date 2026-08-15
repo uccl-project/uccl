@@ -857,7 +857,13 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
         // engines. The send side previously ignored ce_pct (hardcoded
         // 50/50), so UK_CCL_A2A_HYBRID_CE_PCT=100 still created device
         // ops and forced a worker launch.
-        size_t const ce_bytes = send_bytes * config.a2a_hybrid_ce_pct / 100;
+        // Round the CE half down to the element size: an unaligned split
+        // (e.g. 30% of a 32MB float partition = 10066329 B) produces a
+        // device-copy task the vectorized kernel cannot handle — the
+        // worker stalls with the fifo head advanced but tail frozen.
+        size_t const elem = 4;
+        size_t ce_bytes =
+            send_bytes * config.a2a_hybrid_ce_pct / 100 / elem * elem;
         size_t const dev_bytes = send_bytes - ce_bytes;
         if (ce_bytes > 0) {
           uint32_t put_ce =
@@ -887,8 +893,9 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
     if (recv_bytes > 0) {
       if (config.a2a_hybrid && !stage && config.a2a_hybrid_ce_pct > 0 &&
           config.a2a_hybrid_ce_pct < 100) {
-        size_t const ce_bytes =
-            recv_bytes * config.a2a_hybrid_ce_pct / 100;
+        size_t const elem = 4;
+        size_t ce_bytes =
+            recv_bytes * config.a2a_hybrid_ce_pct / 100 / elem * elem;
         size_t const dev_bytes = recv_bytes - ce_bytes;
         if (ce_bytes > 0) {
           builder.add_op(AlgoOpKind::Recv, ce_bytes, recv_offset, recv_offset,
