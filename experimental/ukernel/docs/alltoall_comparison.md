@@ -60,6 +60,24 @@ native at 2 ranks; neither reaches native at 4/8 yet.
 - 4+ ranks: device (`UK_CCL_PUT_PATH=device UK_CCL_DEV_BLOCKS=64
   UK_CCL_LARGE_TILES=4 UK_CCL_SIG_GROUP_TILES=4`).
 
+### CE + device hybrid (2026-08-15)
+
+`UK_CCL_A2A_HYBRID=1` splits each per-peer send into a CE half and a
+device-copy half (per-op `put_path_hint`), overlapping the CE engine and
+the worker. Unlike RS there is no reduce on the worker, so the device
+half does not compete with compute — this is the first positive fusion
+result. Measured with `bench/alltoall_perf.cu` (direct ncclAllToAll),
+256M, verify OK:
+
+| ranks | CE only | hybrid | delta |
+|---:|---:|---:|---:|
+| 4 | 449.5 GB/s | **533.0** | +19% |
+| 8 | 387.1 | 399.4 | +3% |
+
+4-rank hybrid reaches 84% of native (632); 8-rank 64% (620). Tuning
+levers left: split ratio (currently 50/50), device-half block count,
+tile size.
+
 Small/medium messages are worker/launch-bound on the device path and far
 from native below ~128M; the CE path is better there but was only swept
 at 256M.
