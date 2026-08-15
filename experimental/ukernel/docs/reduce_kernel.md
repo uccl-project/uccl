@@ -196,24 +196,47 @@ TMA stays opt-in (`TMA_REDUCE=1`) pending broader validation
 (multi-node RDMA + the put/reduce pipeline work); validation builds use
 `make VALIDATE=1` which forces the vector path for speed.
 
-### Leader-free kernel + TMA status (2026-08-14)
+### Leader-free kernel + TMA on a clean B300 (2026-08-15)
 
-The leader-free multi-block worker was re-validated on the TMA build
-(`make SM=103` auto: ILP=4 + TMA + 224KB smem). AllReduce 1M..128M at
-BLK=8/16/32, LT=8/16/32: wrong=0 — the TMA tail fix holds with the new
-kernel. Throughput under a VLLM-co-resident B300 (262GB/268GB used):
+The leader-free multi-block worker (burst dispatch + async relaunch,
+`make SM=103` auto: ILP=4 + TMA + 224KB smem) on a clean B300 (no
+co-tenant). AllReduce 1M..256M at BLK=32 LT=8 TM=8M IB=16: wrong=0 —
+the 256M `out of memory` abort is gone (clean machine + `do_drain`
+restore-failure warning).
 
-| size | BLK=8 | BLK=16 | BLK=32 |
+256M AllReduce, OOP algbw:
+
+| blocks | LT=8 (32MB) | LT=16 (16MB) | LT=32 (8MB) |
 |---:|---:|---:|---:|
-| 64M (LT=32) | 176 | 195 | 196 |
-| 128M (LT=8) | 276 | 276 | 291 |
+| 8 | 327.7 | 331.1 | 261.0 |
+| 16 | 418.7 | **453.9** | 294.9 |
+| 32 | **512.8** | 375.2 | 299.4 |
 
-BLK=8 is within ~5% of BLK=32 at 128M — few-SM saturation holds with
-TMA. The 256M anchor is blocked in this environment: the run aborts
-with `out of memory` in `DeviceBackend::do_drain`'s device restore
-(reproducible with ~12GB free per GPU — a CUDA 13.3/VLLM co-residency
-artifact, not buffer exhaustion). Re-measure 256M (expect ~509 GB/s at
-BLK=32, matching the old-kernel TMA number) on a clean B300.
+**BLK=32 LT=8 = 512.8 GB/s — parity with native (510) and the old
+kernel's TMA anchor (509.5).** BLK=16 LT=16 reaches 453.9 (89% of
+native); BLK=8 tops out ~331 (65%). The remaining few-SM lever at
+8-16 blocks is tile size (LT=16 beats LT=8), then the put pipeline.
+
+4 ranks, 256M, BLK=32 LT=8: 235.4 GB/s (ring hop count dominates).
+
+Device reduce bench (256M, persistent worker, TMA build, GB/s):
+
+| blocks | 128 thr | 256 thr |
+|---:|---:|---:|
+| 1 | 3.9 | 6.8 |
+| 2 | 7.7 | 13.8 |
+| 4 | 15.3 | 26.5 |
+| 8 | 30.4 | 52.4 |
+| 16 | 59.7 | 102.6 |
+| 32 | 117.1 | 195.4 |
+| 64 | 218.5 | 373.3 |
+
+The pure-reduce bench needs ~64 blocks to approach saturation (373
+GB/s); the shim reaches 512.8 at 32 blocks because tile-sized tasks
+keep the reduce fed through the put pipeline. Per-SM ceiling at
+ILP=4+TMA on B300 is ~6.8 GB/s/SM (single block), consistent with the
+B300 latency-bandwidth analysis — the shim's 32-SM parity comes from
+overlapping put/reduce, not from a higher per-SM reduce rate.
 
 ## Warp-specialized TMA pipeline — parked
 
