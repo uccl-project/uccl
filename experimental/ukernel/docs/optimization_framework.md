@@ -135,7 +135,7 @@ hops via deeper pipelining.
 | Warp-specialized TMA pipeline | ~10% SLOWER per block than single-buffer at full depth; parked WIP. |
 | IPC window size / stream count | not the bottleneck (462-498 GB/s medians regardless of BATCH). |
 | Idle-exit spin fix | removed 25-50ms jitter (was `__nanosleep(100)` = 10us sleeps); stability fix, median unchanged. |
-| Lazy device worker (bind on first use, warm-up launch) | all-CE collectives (alltoall) drop to zero worker SM; the first kernel launch must run at init (create+destroy warm-up) — CUDA 13.3 hangs cuLaunchKernel on the process's first launch from a busy multi-threaded context (verified locally: drain thread blocked in cuLaunchKernel, GPU idle; warm-up fixes it). Shipped. |
+| Lazy device worker (bind on first use) | reverted: the lazily created multi-block worker stalls on B300 (fifo bound=1, tail never advances) and hangs alltoall hybrid at 4/8 ranks. The first-launch warm-up also hit a CUDA 13.2/13.3 create/destroy context-poisoning issue. Dead end for now — zero-SM for all-CE is achieved at the plan level instead (pct=100 emits no device ops). |
 
 ## Forward plan
 

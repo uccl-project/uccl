@@ -69,6 +69,23 @@ half does not compete with compute — this is the first positive fusion
 result. Measured with `bench/alltoall_perf.cu` (direct ncclAllToAll),
 256M, verify OK:
 
+**Correction (2026-08-15, later the same day):** the send-side split
+was hardcoded 50/50 while only the recv side honored
+`UK_CCL_A2A_HYBRID_CE_PCT`, so the "CE only (pct=100)" baseline below
+was actually a 50/50 hybrid — it always created device puts and forced
+a worker launch. After the fix (`coll_algo.cc`), pct=100 emits no
+device ops at all (plain IPC puts, zero worker SM), and pct=0 falls
+back to the plain auto path. Degenerate splits (pct at the 0/100
+boundaries) previously produced plan shapes that intermittently
+segfaulted at 8 ranks — the boundary fallback avoids them.
+
+An attempt to make the device worker itself lazy (bind on first use,
+created by the drain thread) stalled the lazily created multi-block
+worker on B300 — fifo bound=1 but tail never advanced, hanging the
+hybrid at 4/8 ranks. Reverted to pre-created workers; the all-CE
+zero-SM goal is met at the plan level instead (pct=100 has no device
+ops, and pre-created workers idle-exit after the grace period).
+
 | ranks | CE only | hybrid | delta |
 |---:|---:|---:|---:|
 | 4 | 449.5 GB/s | **533.0** | +19% |
