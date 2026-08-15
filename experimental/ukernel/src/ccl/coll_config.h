@@ -85,6 +85,11 @@ struct CollectiveConfig {
   // CE engine and the worker on pure copies (no reduce to compete with).
   // Out-of-place only (staging in-place is not split).
   bool a2a_hybrid = false;
+  // AllToAll hybrid CE fraction in percent (UK_CCL_A2A_HYBRID_CE_PCT,
+  // default 50): how much of each per-peer send goes via the CE engine,
+  // the rest via the device worker. Sweep to find where the CE peak
+  // (synchronized copies) vs the worker's copy throughput balance.
+  uint32_t a2a_hybrid_ce_pct = 50;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

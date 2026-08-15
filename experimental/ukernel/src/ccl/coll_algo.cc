@@ -234,9 +234,9 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
         // CE+device hybrid: half the shard goes via the CE copy engine,
         // half via this rank's device worker (device LD/ST to peer),
         // overlapping the two engines on the same send.
-        size_t const half = send_bytes / 2;
-        size_t const ce_bytes = half;
-        size_t const dev_bytes = send_bytes - half;
+        size_t const ce_bytes =
+            send_bytes * config.a2a_hybrid_ce_pct / 100;
+        size_t const dev_bytes = send_bytes - ce_bytes;
         std::vector<uint32_t> deps;
         add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
         uint32_t const put_ce =
@@ -878,9 +878,9 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
     }
     if (recv_bytes > 0) {
       if (config.a2a_hybrid && !stage) {
-        size_t const half = recv_bytes / 2;
-        size_t const ce_bytes = half;
-        size_t const dev_bytes = recv_bytes - half;
+        size_t const ce_bytes =
+            recv_bytes * config.a2a_hybrid_ce_pct / 100;
+        size_t const dev_bytes = recv_bytes - ce_bytes;
         builder.add_op(AlgoOpKind::Recv, ce_bytes, recv_offset, recv_offset,
                        peer, -1, {}, recv_pair * 2, BufRef{BufSpace::Input, 0},
                        BufRef{BufSpace::Output, 0});

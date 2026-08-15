@@ -360,6 +360,12 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e && std::string(e) != "0";
   }();
   cfg.a2a_hybrid = kA2aHybrid;
+  static uint32_t const kA2aHybridCePct = [] {
+    char const* e = std::getenv("UK_CCL_A2A_HYBRID_CE_PCT");
+    uint32_t v = e ? static_cast<uint32_t>(std::max(0L, std::stol(e))) : 50u;
+    return std::min(100u, v);
+  }();
+  cfg.a2a_hybrid_ce_pct = kA2aHybridCePct;
   // Device-completion flags for fused tasks (default on; the per-slot
   // plain-store protocol needs no host-native atomics). Only meaningful
   // with a fused mode (the wait/flag pairing lives there).
