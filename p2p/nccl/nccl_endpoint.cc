@@ -300,15 +300,26 @@ void NCCLEndpoint::control_loop_(Conn* conn) {
 
     // Handle notification messages
     if (msg.type == kNotification) {
-      ::NotifyMsg notification{};
-      if (!recv_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
+      if (msg.size > NOTIFY_MSG_MAX_FRAME_BYTES) {
+        std::cerr << "[nccl] notification frame too large (" << msg.size
+                  << " bytes), closing control connection" << std::endl;
+        break;
+      }
+      std::string payload(msg.size, '\0');
+      if (!recv_all_(conn->sock_fd, payload.data(), payload.size())) {
         std::cerr << "[nccl] failed to receive notification payload"
                   << std::endl;
         break;
       }
+      ::NotifyMsg notification;
+      if (!deserialize_notify_msg(payload, notification)) {
+        std::cerr << "[nccl] malformed notification payload (" << msg.size
+                  << " bytes)" << std::endl;
+        break;
+      }
       {
         std::lock_guard<std::mutex> lock(::notify_mutex);
-        ::notify_list.push_back(notification);
+        ::notify_list.push_back(std::move(notification));
       }
       continue;
     }
@@ -807,10 +818,14 @@ int NCCLEndpoint::send_notification(uint64_t peer_id,
   }
   Conn* conn = it->second.get();
 
-  // Send notification header
+  // Send notification header followed by the serialized payload; the header
+  // carries the payload size so the receiver can size its read exactly. The
+  // frame cap is enforced upstream in uccl_engine_send_notif, the sole caller
+  // path, so the u32 narrowing below cannot truncate.
+  std::string payload = serialize_notify_msg(notification);
   CtrlMsg msg{};
   msg.type = kNotification;
-  msg.size = sizeof(::NotifyMsg);
+  msg.size = static_cast<uint32_t>(payload.size());
   msg.addr = 0;
 
   {
@@ -818,7 +833,7 @@ int NCCLEndpoint::send_notification(uint64_t peer_id,
     if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
       return -1;
     }
-    if (!send_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
+    if (!send_all_(conn->sock_fd, payload.data(), payload.size())) {
       return -1;
     }
   }
