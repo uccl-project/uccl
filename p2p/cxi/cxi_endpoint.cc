@@ -457,12 +457,14 @@ void CxiEndpoint::stop_accept() {
 
 void CxiEndpoint::process_meta(std::string const& input, std::string& output,
                                std::string const& client_ip, int client_port) {
-  if (input.size() >= sizeof(NotifyMsg)) {
-    NotifyMsg const* notify_msg =
-        reinterpret_cast<NotifyMsg const*>(input.data());
-    if (notify_msg->magic == NOTIFY_MSG_MAGIC) {
+  {
+    NotifyMsg notify_msg;
+    if (deserialize_notify_msg(input, notify_msg)) {
+      UCCL_LOG(INFO, UCCL_P2P)
+          << "process_meta: received notification from " << notify_msg.name
+          << " (" << notify_msg.msg.size() << " bytes)";
       std::lock_guard<std::mutex> lock(notify_mutex);
-      notify_list.push_back(*notify_msg);
+      notify_list.push_back(std::move(notify_msg));
       output = "";
       return;
     }
@@ -773,9 +775,8 @@ int CxiEndpoint::send_notification(uint64_t peer_id,
   std::string conn_key = get_oob_conn_key(peer_id);
   if (conn_key.empty() || !oob_client_) return -1;
 
-  std::string payload(reinterpret_cast<char const*>(&notification),
-                      sizeof(NotifyMsg));
-  return oob_client_->send_meta(conn_key, payload) ? sizeof(NotifyMsg) : -1;
+  std::string payload = serialize_notify_msg(notification);
+  return oob_client_->send_meta(conn_key, payload) ? 0 : -1;
 }
 
 void encode_cxi_fifo_metadata(CxiMemoryRegion const& region, FifoItem& item) {
