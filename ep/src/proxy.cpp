@@ -108,6 +108,10 @@ Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
   char const* transport = std::getenv("UCCL_EP_TRANSPORT");
   use_cxi_transport_ = transport && std::string(transport) == "cxi";
 
+  if (get_cpu_affinity_disabled()) {
+    cfg_.pin_thread = false;
+  }
+
   // Unset (-1) device/NIC ranks fall back to local_rank.
   if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
   if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
