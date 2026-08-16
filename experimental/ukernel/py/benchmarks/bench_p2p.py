@@ -1,6 +1,9 @@
 """Benchmark P2P communication: ukernel_p2p vs uccl.p2p vs NCCL send/recv."""
 
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import time
 import torch
 import ukernel_p2p as p2p
@@ -27,15 +30,15 @@ def _poll_signal(comm, peer, tag):
         pass
 
 
-def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
+def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters, size_idx=0):
     """Benchmark ukernel_p2p send/recv bandwidth."""
     rank = comm.rank
     print(f"[rank {rank}] bench_p2p_ukernel start size={size_bytes}", flush=True)
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    send_buffer_id = 1
-    recv_buffer_id = 2
+    send_buffer_id = 100 + size_idx
+    recv_buffer_id = 200 + size_idx
     selected_transport = comm.peer_transport(peer)
     if not comm.reg_rdma(send_buffer_id, send_buf, publish=False):
         raise RuntimeError("reg_rdma(send) failed")
@@ -311,13 +314,13 @@ def main() -> None:
     if rank == 0:
         print(f"[ukernel] selected transport to peer {peer}: {comm.peer_transport(peer)}")
 
-    for size in sizes:
+    for idx, size in enumerate(sizes):
         if size % 4 != 0:
             size = (size // 4) * 4
         if size == 0:
             uk_times.append(None)
             continue
-        uk_times.append(bench_p2p_ukernel(comm, peer, size, warmup, iters))
+        uk_times.append(bench_p2p_ukernel(comm, peer, size, warmup, iters, idx))
 
     del comm
     dist.barrier()

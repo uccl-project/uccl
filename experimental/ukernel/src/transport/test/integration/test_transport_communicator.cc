@@ -15,6 +15,7 @@
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
 using CompletionResult = UKernel::Transport::CompletionResult;
+using SignalCompletion = UKernel::Transport::SignalCompletion;
 using MR = UKernel::Transport::MR;
 
 static constexpr int kWorldSize = 2;
@@ -112,9 +113,23 @@ int run_exchange_client(int gpu, std::string const& exchanger_ip,
   CompletionResult results[16];
   bool found = false;
   while (!found) {
-    size_t n = comm->try_complete(results, 16);
+    size_t n = comm->try_complete_put(results, 16);
     for (size_t i = 0; i < n; ++i) {
       if (results[i].rid == send_rid) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) std::this_thread::yield();
+  }
+
+  unsigned sig_rid = comm->send_signal_async(kServerRank, 0);
+  require(sig_rid != 0, "client send_signal_async failed");
+  found = false;
+  while (!found) {
+    size_t n = comm->try_complete_sig_send(results, 16);
+    for (size_t i = 0; i < n; ++i) {
+      if (results[i].rid == sig_rid) {
         found = true;
         break;
       }
@@ -150,16 +165,11 @@ int run_exchange_server(int gpu, std::string const& exchanger_ip,
 
   unsigned recv_rid = comm->wait_signal_async(kClientRank, /*tag=*/0);
   require(recv_rid != 0, "server wait_signal_async failed");
-  CompletionResult results[16];
+  SignalCompletion sig_ev;
   bool found = false;
   while (!found) {
-    size_t n = comm->try_complete(results, 16);
-    for (size_t i = 0; i < n; ++i) {
-      if (results[i].rid == recv_rid) {
-        found = true;
-        break;
-      }
-    }
+    size_t n = comm->try_complete_sig_wait(&sig_ev, 1);
+    if (n > 0u && sig_ev.rid == recv_rid) found = true;
     if (!found) std::this_thread::yield();
   }
 

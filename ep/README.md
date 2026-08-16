@@ -139,6 +139,7 @@ Notes:
 | UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual `s_waitcnt vmcnt(0)` fences instead of acquire/release semantics. Required on AMD CDNA so the combine receiver actually sees the producer's tail-pointer updates over XGMI; without it the kernel deadlocks at scale. | 1 on AMD, 0 on CUDA |
 | UCCL_EP_DISABLE_CPU_AFFINITY | Skip proxy-thread CPU pinning; inherit parent process affinity | 0 |
 | UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
+| UCCL_UDP_SPORT_BASE | Base UDP source port for RoCEv2 QPs on mlx5 devices. Valid range: 1-65535. | 0 (driver decides) |
 
 ## Results
 

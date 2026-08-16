@@ -51,13 +51,11 @@ __global__ void bench_device_sm_fifo_kernel(mscclpp::SmDeviceHandle<Task> fifo,
 void run_bench(int num_producers, int iters) {
   constexpr int fifo_cap = 4096;
 
-  printf("\n=============================\n");
-  printf("SM FIFO Benchmark\n");
+  printf("\nSM FIFO Benchmark\n");
   printf("Producers : %d\n", num_producers);
   printf("Consumer  : 1\n");
   printf("Tasks/prod: %d\n", iters);
-  printf("Total     : %d\n", num_producers * iters);
-  printf("=============================\n");
+  printf("Total     : %d\n\n", num_producers * iters);
 
   // Allocate FIFO
   mscclpp::SmFifo<Task> fifo(fifo_cap);

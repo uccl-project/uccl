@@ -823,7 +823,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int offset, num_tokens_to_send;
     unpack2(layout, num_tokens_to_send, offset);
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     // TMA stuffs
     constexpr int kNumTMABufferBytes = sizeof(int4) * WARP_SIZE * kNumUnrolls;
     constexpr int kNumStages = 3;
@@ -908,6 +908,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         // TODO:  Simulated cast
         EP_DEVICE_ASSERT(not kUseLogFMT);
+        UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
+                           cpy_src_int4_ptr, ld_nc_global, st_na_global);
+
+#elif defined(DISABLE_SM90_FEATURES)
+        // Non-SM90 NVIDIA path: simple warp copy (no TMA available)
         UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
                            cpy_src_int4_ptr, ld_nc_global, st_na_global);
 
@@ -1022,7 +1027,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #endif
       }
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       // Flush all stores
       tma_store_wait();
       __syncwarp();

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../util/jring.h"
 #include "gpu_rt.h"
 #include "transport_adapter.h"
+#include "util/jring.h"
 #include <atomic>
 #include <chrono>
 #include <cstddef>

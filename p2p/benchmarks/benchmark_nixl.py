@@ -45,7 +45,7 @@ def create_dataset(role, size, num_kvblocks, device, gpu_idx=0):
     if total_bytes < size:
         extra_elems = (size - total_bytes) // element_size
         if extra_elems > 0:
-            extra_block = torch.full((extra_elems,), value, device=device, dtype=dtype)
+            extra_block = torch.full((extra_elems,), value, device=dev, dtype=dtype)
             dataset.append(extra_block)
 
     return dataset

@@ -50,17 +50,25 @@ class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size, std::string exchanger_ip,
                int exchanger_port, std::string transport = "auto",
-               int local_id = -1)
-      : comm_(std::make_shared<UKernel::Transport::Communicator>(
-            gpu_id, rank, world_size,
-            std::make_shared<UKernel::Transport::CommunicatorConfig>(
-                UKernel::Transport::CommunicatorConfig{
-                    exchanger_ip,
-                    exchanger_port,
-                    local_id,
-                    "default",
-                    parse_transport(transport),
-                }))) {
+               int local_id = -1) {
+    auto cfg = std::make_shared<UKernel::Transport::CommunicatorConfig>(
+        UKernel::Transport::CommunicatorConfig{
+            exchanger_ip,
+            exchanger_port,
+            // The exchanger elects a node leader by local_id; default
+            // to the per-node ordinal (gpu id) — rank alone is wrong
+            // cross-node.
+            local_id >= 0 ? local_id : gpu_id,
+            "default",
+            parse_transport(transport),
+        });
+    {
+      // Exchanger connect can block for seconds; let Python handle
+      // signals meanwhile.
+      nb::gil_scoped_release release;
+      comm_ = std::make_shared<UKernel::Transport::Communicator>(
+          gpu_id, rank, world_size, std::move(cfg));
+    }
     GPU_RT_CHECK(gpuSetDevice(gpu_id));
   }
 
@@ -188,13 +196,14 @@ class Communicator {
     uint64_t rid = send_put_async(peer, src_buf, 0, buffer_size(src_buf),
                                   dst_buf, dst_off);
     if (rid == 0) throw std::runtime_error("send_put_async returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    wait_put(static_cast<unsigned>(rid));
   }
 
   void signal(int peer, uint64_t tag) {
     uint64_t rid = send_signal_async(peer, tag);
     if (rid == 0) throw std::runtime_error("send_signal_async returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    // Signal sends complete on the sig-send ring, NOT the put ring.
+    wait_sig_send(static_cast<unsigned>(rid));
   }
 
   void wait_data(int peer, uint64_t tag, uint32_t recv_buf, size_t off = 0,
@@ -203,7 +212,8 @@ class Communicator {
     uint64_t rid = comm_->wait_signal_async(peer, tag, recv_buf, off, len);
     if (rid == 0)
       throw std::runtime_error("wait_signal_async(data) returned 0");
-    wait_one(static_cast<unsigned>(rid));
+    // DataWait completions land on the put ring (IPC recv worker / TCP).
+    wait_put(static_cast<unsigned>(rid));
   }
 
   // ── Inquiry ──
@@ -225,16 +235,51 @@ class Communicator {
 
   bool barrier(std::string const& barrier_namespace = "default",
                int timeout_ms = -1) {
+    // Cannot be sliced safely (each barrier() call is a new seq), but
+    // releasing the GIL lets other Python threads proceed; callers
+    // wanting a hard abort should pass a finite timeout_ms.
+    nb::gil_scoped_release release;
     return comm_->barrier(barrier_namespace, timeout_ms);
   }
 
  private:
-  void wait_one(unsigned rid) {
+  void wait_put(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
     while (true) {
       CompletionResult r[1];
-      size_t n = comm_->try_complete(r, 1);
+      size_t n = comm_->try_complete_put(r, 1);
       if (n == 1 && r[0].rid == rid) return;
-      std::this_thread::yield();
+
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      }
+    }
+  }
+
+  void wait_sig_send(unsigned rid) {
+    nb::gil_scoped_release release;
+    unsigned spins = 0;
+    while (true) {
+      CompletionResult r[1];
+      size_t n = comm_->try_complete_sig_send(r, 1);
+      if (n == 1 && r[0].rid == rid) return;
+
+#if defined(__x86_64__) || defined(_M_X64)
+      __asm__ volatile("pause");
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+      if (++spins % 10000 == 0) {
+        nb::gil_scoped_acquire acquire;
+        if (PyErr_CheckSignals() != 0) throw nb::python_error();
+      }
     }
   }
 
