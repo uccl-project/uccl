@@ -107,7 +107,6 @@ Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
   char const* transport = std::getenv("UCCL_EP_TRANSPORT");
   use_cxi_transport_ = transport && std::string(transport) == "cxi";
 
-  // See get_cpu_affinity_disabled() for UCCL_EP_DISABLE_CPU_AFFINITY details.
   if (get_cpu_affinity_disabled()) {
     cfg_.pin_thread = false;
   }
