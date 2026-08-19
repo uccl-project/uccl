@@ -154,6 +154,12 @@ fi
 echo "=== Cloning latest NIXL ==="
 git clone --depth 1 -b "${NIXL_BRANCH}" "${NIXL_REPO}" "${NIXL_SRC_DIR}"
 
+# UCCL #1037 made notify_msg_t.name/msg std::string. NIXL main still uses
+# strncpy/memcpy/memset on those fields; adapt until upstream matches.
+echo "=== Patching NIXL UCCL plugin for variable-length notify_msg_t ==="
+python3 "${SCRIPT_DIR}/patch_nixl_uccl_notify.py" \
+    "${NIXL_SRC_DIR}/src/plugins/uccl/uccl_backend.cpp"
+
 # ── Build NIXL with UCCL plugin ───────────────────────────────────────────────
 echo "=== Building NIXL (UCCL plugin only) ==="
 cd "${NIXL_SRC_DIR}"
