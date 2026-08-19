@@ -1,7 +1,7 @@
 // Two-process notification test over the real network control path.
-// Exercises uccl_engine_send_notif -> (transport wire) ->
-// uccl_engine_get_notifs with payloads far beyond the old 256-byte and 16 KiB
-// limits.
+// Exercises uccl_engine_send_notif_v -> (transport wire) ->
+// uccl_engine_get_notifs_v with payloads far beyond the old 256-byte and 16 KiB
+// limits. The fixed-size notify_msg_t path remains for NIXL compatibility.
 //
 //   build:  make notif_e2e   (from p2p/)
 //   server: ./notif_e2e server
@@ -59,7 +59,7 @@ int run_server() {
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (got.size() < kSizes.size() &&
          std::chrono::steady_clock::now() < deadline) {
-    for (auto const& n : uccl_engine_get_notifs()) {
+    for (auto const& n : uccl_engine_get_notifs_v()) {
       size_t idx = std::strtoul(n.msg.c_str(), nullptr, 10);
       if (idx >= kSizes.size()) {
         fprintf(stderr, "FAIL: unparseable notif index\n");
@@ -100,12 +100,12 @@ int run_client(char const* ip, int port) {
   if (!conn) return fprintf(stderr, "connect failed\n"), 1;
 
   for (size_t i = 0; i < kSizes.size(); ++i) {
-    notify_msg_t nm;
+    notify_msg_v_t nm;
     nm.name = "notif-e2e-client";
     nm.msg = pattern_msg(i, kSizes[i]);
-    int rc = uccl_engine_send_notif(conn, &nm);
+    int rc = uccl_engine_send_notif_v(conn, &nm);
     if (rc < 0) {
-      fprintf(stderr, "FAIL: send_notif(%zu bytes) rc=%d\n", kSizes[i], rc);
+      fprintf(stderr, "FAIL: send_notif_v(%zu bytes) rc=%d\n", kSizes[i], rc);
       return 1;
     }
     fprintf(stderr, "sent %zu-byte notification (rc=%d)\n", kSizes[i], rc);
