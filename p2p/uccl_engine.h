@@ -251,7 +251,8 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
  * @param notify_msg    Notification message.
  * @return              0 on success, -1 on failure.
  */
-int uccl_engine_send_notif_v(uccl_conn_t* conn, notify_msg_v_t const* notify_msg);
+int uccl_engine_send_notif_v(uccl_conn_t* conn,
+                             notify_msg_v_t const* notify_msg);
 
 /**
  * Prepare FifoItem metadata for a registered memory region (same as advertise).

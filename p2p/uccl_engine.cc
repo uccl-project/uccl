@@ -677,7 +677,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 }
 
 int uccl_engine_send_notif_v(uccl_conn_t* conn,
-                            notify_msg_v_t const* notify_msg) {
+                             notify_msg_v_t const* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
   NotifyMsg oob_msg;
