@@ -579,6 +579,25 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 
   std::vector<notify_msg_t> result;
   result.reserve(notify_list.size());
+  for (auto const& oob_msg : notify_list) {
+    notify_msg_t msg{};
+    std::strncpy(msg.name, oob_msg.name.c_str(), sizeof(msg.name) - 1);
+    msg.name[sizeof(msg.name) - 1] = '\0';
+    size_t const n = std::min(oob_msg.msg.size(), sizeof(msg.msg));
+    std::memcpy(msg.msg, oob_msg.msg.data(), n);
+    result.push_back(msg);
+  }
+
+  notify_list.clear();
+
+  return result;
+}
+
+std::vector<notify_msg_v_t> uccl_engine_get_notifs_v() {
+  std::lock_guard<std::mutex> lock(notify_mutex);
+
+  std::vector<notify_msg_v_t> result;
+  result.reserve(notify_list.size());
   for (auto& oob_msg : notify_list) {
     result.push_back({std::move(oob_msg.name), std::move(oob_msg.msg)});
   }
@@ -588,13 +607,7 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   return result;
 }
 
-int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
-  if (!conn || !notify_msg) return -1;
-
-  NotifyMsg oob_msg;
-  oob_msg.name = notify_msg->name;
-  oob_msg.msg = notify_msg->msg;
-
+static int send_notif_impl(uccl_conn_t* conn, NotifyMsg oob_msg) {
   // Single choke point for the frame cap: every transport (OOB TCP, NCCL
   // control socket, CXI) sends through this function, and both the wire
   // header and the OOB framing prefix carry u32 lengths, so an unchecked
@@ -612,7 +625,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   // list — no network path needed regardless of transport.
   if (conn->same_process) {
     std::lock_guard<std::mutex> lock(notify_mutex);
-    notify_list.push_back(oob_msg);
+    notify_list.push_back(std::move(oob_msg));
     return 0;
   }
 
@@ -649,9 +662,28 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   }
 
   std::string payload = serialize_notify_msg(oob_msg);
-  bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
+  return oob_client->send_meta(conn->oob_conn_key, payload) ? 0 : -1;
+}
 
-  return ok ? 0 : -1;
+int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
+  if (!conn || !notify_msg) return -1;
+
+  NotifyMsg oob_msg;
+  oob_msg.name = notify_msg->name;
+  // NIXL memcpy's a binary blob into msg and reads it back with
+  // sizeof(notify_msg_t::msg), so copy the full fixed buffer.
+  oob_msg.msg.assign(notify_msg->msg, sizeof(notify_msg->msg));
+  return send_notif_impl(conn, std::move(oob_msg));
+}
+
+int uccl_engine_send_notif_v(uccl_conn_t* conn,
+                            notify_msg_v_t const* notify_msg) {
+  if (!conn || !notify_msg) return -1;
+
+  NotifyMsg oob_msg;
+  oob_msg.name = notify_msg->name;
+  oob_msg.msg = notify_msg->msg;
+  return send_notif_impl(conn, std::move(oob_msg));
 }
 
 // Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
