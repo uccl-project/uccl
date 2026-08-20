@@ -4,21 +4,20 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
+#include "util/uk_debug.h"
 
 namespace UKernel {
 namespace CCL {
 
-// Host-side orchestration profiler (UK_CCL_HOST_PROF=1). Aggregates
-// where the per-op host cost goes — enqueue dispatch, signal drain,
-// transport/put completion drain, device completion drain — and prints
-// one summary at executor teardown. Purpose: confirm whether the shim is
-// host-bound (per-op dispatch slower than the GPU's per-tile work) and
-// where the host time is spent at high rank counts.
+// Host-side orchestration profiler (enabled by UK_CCL_DEBUG >= 3).
+// Aggregates where the per-op host cost goes — enqueue dispatch, signal
+// drain, transport/put completion drain, device completion drain — and
+// prints one summary at executor teardown. Purpose: confirm whether the
+// shim is host-bound (per-op dispatch slower than the GPU's per-tile
+// work) and where the host time is spent at high rank counts.
 struct HostProf {
   static bool enabled() {
-    static bool const e = std::getenv("UK_CCL_HOST_PROF") != nullptr;
-    return e;
+    return uk_dbg_lvl() >= UK_DBG_LVL_ALL;
   }
 
   // Accumulated microseconds and op counts per stage.

@@ -338,26 +338,10 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         red.src_off = op.src_off;
         red.dst_off = op.dst_off;
         red.dst_peer = ~0u;
-        if (ch.fuse_remote_src) {
-          // Fused reduce: src is the PEER's send-source buffer (resolved
-          // through src_peer + the peer's role id); the out-of-place
-          // variant adds this rank's local Input as src2.
-          red.src_peer = op.src_peer;
-          auto red_src = resolve_buf(ch.src, tmp_base);
-          red.src_buf_role = red_src.role;
-          red.src_off += red_src.base_off;
-          red.reduce_mode = ch.reduce_mode;
-          if (ch.reduce_mode == 1) {
-            auto red_src2 = resolve_buf(ch.src2, tmp_base);
-            red.src2_buf_role = red_src2.role;
-            red.src2_off = op.src_off + red_src2.base_off;
-          }
-        } else {
-          red.src_peer = ~0u;
-          auto red_src = resolve_buf(ch.src, tmp_base);
-          red.src_buf_role = red_src.role;
-          red.src_off += red_src.base_off;
-        }
+        red.src_peer = ~0u;
+        auto red_src = resolve_buf(ch.src, tmp_base);
+        red.src_buf_role = red_src.role;
+        red.src_off += red_src.base_off;
         auto red_dst = resolve_buf(ch.dst, tmp_base);
         red.dst_buf_role = red_dst.role;
         red.dst_off += red_dst.base_off;

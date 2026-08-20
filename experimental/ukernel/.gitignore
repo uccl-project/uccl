@@ -17,7 +17,6 @@ bench/bench_transport
 bench/bench_gdrcopy
 
 # Benchmarks
-benchmarks/bench_gdrcopy
 src/device/benchmarks/bench_*
 !src/device/benchmarks/*.cu
 !src/device/benchmarks/*.h

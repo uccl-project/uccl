@@ -202,10 +202,11 @@ contention benchmarks are documented in
 - **Propagate env with `-x`.** Setting `UK_CCL_DEBUG=2` (or
   `UK_CCL_PUT_PATH=...`) in the shell does NOT reach the rank processes;
   add `-x UK_CCL_DEBUG` / `-x UK_CCL_PUT_PATH` to mpirun. Debug levels:
-  1 = executor, 2 = +transport, 3 = all. The per-op path is logged as
-  `[pick rN] op[x] peer=y -> path=z` (z: 0=device, 1=IPC, 2=RDMA) —
-  same-host ranks should show 1; anything else means transport selection
-  went wrong.
+  1 = executor events + put-path counters + stall dumps, 2 = +transport/
+  signal logs, 3 = all (per-op trace + host profile). The per-op path is
+  logged as `[pick rN] op[x] peer=y -> path=z` (z: 0=device, 1=IPC,
+  2=RDMA) — same-host ranks should show 1; anything else means transport
+  selection went wrong.
 - **A/B put-path knobs**: `UK_CCL_PUT_PATH=device|ipc|rdma` forces the
   same-host data path (unset = IPC for same-host, RDMA for remote peers).
   Use it to tell apart transport selection vs executor/device-kernel
@@ -221,9 +222,10 @@ contention benchmarks are documented in
   | `UK_CCL_IPC_BATCH` / `UK_CCL_IPC_STREAMS_PER_PEER` | IPC put window and per-peer stream pool |
   | `UK_CCL_SIG_GROUP_TILES` / `UK_CCL_SIG_INFLIGHT_CAP` | signal aggregation factor; WaitSignal in-flight cap |
   | `UK_CCL_FUSE_REDUCE_COPY` / `UK_CCL_FUSE_AG_COPY` / `UK_CCL_DEVICE_FLAGS` | fusion toggles (RS reduce+copy, AG copy, device flags) |
-  | `UK_CCL_A2A_HYBRID` / `UK_CCL_A2A_HYBRID_CE_PCT` / `UK_CCL_RS_HYBRID` / `UK_CCL_RS_CHUNKS` | CE+device hybrid / RS chunking experiments |
+  | `UK_CCL_A2A_HYBRID` / `UK_CCL_A2A_HYBRID_CE_PCT` | AllToAll CE+device hybrid (send split ratio) |
   | `UK_CCL_TREE_THRESHOLD_BYTES` | opt-in binary-tree allreduce crossover (0 = never) |
-  | `UK_CCL_HOST_PROF` / `UK_CCL_PATH_COUNTERS` / `UK_CCL_OP_TRACE` / `UK_CCL_LOG_SIG` / `UK_CCL_RUN_WATCHDOG_MS` | diagnostics (host orchestration profile, path counters, per-op latency, signal log, run watchdog) |
+  | `UK_CCL_DEBUG` | single diagnostics switch: 1 = executor events + put-path counters + stall dumps; 2 = + transport/signal logs; 3 = + per-op trace + host orchestration profile (SIGUSR2 dump also needs >= 1) |
+  | `UK_CCL_RUN_WATCHDOG_MS` | fail runs that stop making progress for this long (0 = off) |
 - **Exchanger hang after a crashed run**: stale shared memory from a
   killed process makes both ranks wait for a leader that never comes:
   ```bash

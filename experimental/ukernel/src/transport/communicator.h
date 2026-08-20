@@ -186,6 +186,13 @@ class Communicator {
   bool wait_ipc(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
   IPCItem get_ipc(uint32_t buffer_id);
   IPCItem get_ipc(int owner_rank, uint32_t buffer_id);
+  // Open a remote IPC mapping under a host-wide mutual-exclusion lock.
+  // Concurrent bidirectional cudaIpcOpenMemHandle calls race on some
+  // dual-GPU platforms (A40: one direction returns a mapping that writes
+  // to the wrong physical memory, the other fails with invalid resource
+  // handle), so all opens are serialized across processes on this host.
+  bool open_remote_ipc_mapping(int owner_rank, uint32_t buffer_id,
+                               IPCItem& item);
   bool try_resolve_remote_ipc_pointer(int remote_rank,
                                       uint32_t remote_buffer_id, size_t offset,
                                       size_t bytes, void** out_ptr,

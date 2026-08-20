@@ -117,18 +117,14 @@ static_assert(sizeof(Task) == 16);
 
 struct alignas(16) TaskArgs {
   static constexpr uint64_t kPublishedMagic = 0x554b544152475331ull;
-  // Fused out-of-place reduce: write dst = src op src2 (fresh) instead
-  // of dst = dst op src. src is the peer's buffer, src2 the local Input
-  // contribution.
-  static constexpr uint64_t kFlagReduce3Way = 1ull << 0;
   // Fused reduce+copy: after the reduce, copy dst -> dst2 (peer's
   // accumulation buffer) and, when kFlagSignalAfter is set, write the
-  // signal tag (redTypeRaw) into the peer's ring (src2).
-  static constexpr uint64_t kFlagReduceCopy = 1ull << 1;
-  static constexpr uint64_t kFlagSignalAfter = 1ull << 2;
+  // signal tag into the peer's ring / flag area (src2).
+  static constexpr uint64_t kFlagReduceCopy = 1ull << 0;
+  static constexpr uint64_t kFlagSignalAfter = 1ull << 1;
 
   void* src;
-  void* src2;
+  void* src2;  // fused-signal target: peer ring / device-flag area
   void* dst;
   void* dst2;
   uint64_t bytes;
@@ -150,10 +146,6 @@ struct alignas(16) TaskArgs {
 
   __host__ __device__ void set_red_type(ReduceType type) {
     redTypeRaw = static_cast<uint64_t>(type);
-  }
-
-  __host__ __device__ bool reduce_3way() const {
-    return (taskFlags & kFlagReduce3Way) != 0;
   }
 
   __host__ __device__ bool reduce_copy() const {
@@ -239,10 +231,6 @@ class TaskManager {
     for (uint32_t i = 0; i < cap_task_; ++i)
       free_task_.push_back(cap_task_ - 1 - i);
 
-#ifndef __CUDA_ARCH__
-    fprintf(stderr, "[TaskManager] init done: cap=%u free=%zu host=%p\n",
-            cap_task_, free_task_.size(), (void*)host_task_);
-#endif
     inited_ = true;
   }
 

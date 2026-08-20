@@ -28,7 +28,7 @@ NVCCFLAGS:= $(DEV_OPT_FLAGS) -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
 ifeq ($(DEBUG),1)
 NVCCFLAGS += -G
 endif
-NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE) -DUK_TMA_WARPSPEC=$(TMA_WARPSPEC)
+NVCCFLAGS += -DUK_REDUCE_ILP=$(REDUCE_ILP) -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB) -DUK_TMA_REDUCE=$(TMA_REDUCE)
 CXXFLAGS += -DUK_REDUCE_SMEM_KB=$(REDUCE_SMEM_KB)
 # Relocatable device code: the persistent kernels call the per-dtype
 # reduce dispatch across TUs (see ops/reduce_dispatch.h), so device

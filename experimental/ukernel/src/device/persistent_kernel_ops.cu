@@ -238,118 +238,16 @@ __device__ __forceinline__ void idle_sleep() {
   // (100) slept 10us per poll, so a 500us idle grace (5000 polls) took
   // ~50ms wall time to actually exit — the worker spun 100x longer than
   // configured, showing up as a ~25ms periodic gap in nsys traces and
-  // relaunch jitter. 1 = 100ns, matching the poll-count derivation in
-  // WorkerPool (idleExitAfterUs * 10 polls, ~300-500ns per poll with the
-  // loop + syncthreads overhead).
+  // relaunch jitter. 1 = 100ns keeps the poll loop cheap; the exit grace
+  // itself is now measured with the wall clock (see multiPersistentKernel).
   __nanosleep(1);
 #endif
-}
-
-__global__ void singlePersistentKernel(
-    mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
-    bool* should_stop, bool* exited_flag, uint32_t exit_idle_iters) {
-  extern __shared__ char smem[];
-  auto& fifo = c2d_fifos[0];
-  void* smem_buf = smem;
-  __shared__ Task current_task;
-  __shared__ __align__(16) unsigned char current_args_storage[sizeof(TaskArgs)];
-  __shared__ bool has_current_args;
-  __shared__ uint32_t command;
-  uint64_t cached_tail = 0;
-  uint64_t cached_head = 0;
-  uint32_t idle_ticks = 0;
-  TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
-
-  // Clear the host-visible exit flag at kernel entry. The relaunch path
-  // is async (the new grid is stream-ordered behind the exiting one), so
-  // this runs strictly after the old grid's final h_exited write and
-  // stops the host from seeing a stale "exited" and relaunching a live
-  // worker.
-  if (threadIdx.x == 0) {
-    *exited_flag = false;
-    __threadfence_system();
-  }
-
-  if (threadIdx.x == 0) {
-    cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
-        fifo.tail, mscclpp::memoryOrderRelaxed);
-    cached_head = cached_tail;
-  }
-
-  while (true) {
-    if (threadIdx.x == 0) {
-      command = kCommandIdle;
-      if (should_stop && *should_stop) {
-        cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
-            fifo.head, mscclpp::memoryOrderAcquire);
-        if (cached_tail != cached_head) {
-          cached_tail = cached_head;
-          publish_tail_progress(fifo.tail, cached_tail);
-        }
-        command = kCommandExit;
-      } else {
-        if (cached_tail >= cached_head) {
-          cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
-              fifo.head, mscclpp::memoryOrderAcquire);
-        }
-        if (cached_tail >= cached_head) {
-          // Fifo is drained. With an idle grace configured, exit after
-          // exit_idle_iters consecutive empty polls so host-side
-          // device-wide syncs (torch etc.) can pass; the host relaunches
-          // us on the next enqueue.
-          if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
-            if (exited_flag) {
-              *exited_flag = true;
-              __threadfence_system();
-            }
-            command = kCommandExit;
-          } else {
-            idle_sleep();
-          }
-        } else {
-          idle_ticks = 0;
-          current_task = fifo.buffer[cached_tail % fifo.size];
-          has_current_args = false;
-          command = kCommandRun;
-        }
-      }
-    }
-    __syncthreads();
-
-    if (command == kCommandExit) break;
-    if (command != kCommandRun) continue;
-
-    const TaskType ttype = static_cast<TaskType>(current_task.type_u8());
-    if (task_uses_args(ttype)) {
-      if (threadIdx.x == 0 && !has_current_args) {
-        const uint32_t idx = current_task.args_index();
-        if (idx < (1UL << TaskArgsIndexSize)) {
-          *current_args = d_task_args[idx];
-          has_current_args = true;
-        }
-      }
-      __syncthreads();
-      if (!has_current_args) continue;
-    }
-    __syncthreads();
-
-    dispatch_task(current_task, task_uses_args(ttype) ? current_args : nullptr,
-                  blockIdx.x, gridDim.x, smem_buf);
-    __syncthreads();
-
-    if (threadIdx.x == 0) {
-      maybe_signal_ring_write(current_task, current_args);
-      ++cached_tail;
-      publish_tail_progress(fifo.tail, cached_tail);
-    }
-    __syncthreads();
-  }
 }
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
                                       MultiBlockSync* d_sync, bool* exited_flag,
-                                      uint32_t exit_idle_iters) {
+                                      uint32_t idle_exit_us) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -365,7 +263,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   __shared__ uint64_t sh_head;
   __shared__ uint64_t sh_tail;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
-  uint32_t idle_ticks = 0;
+  uint64_t idle_deadline = 0;
+  bool idle_deadline_active = false;
   bool own_idle_vote = false;
 
   // Clear the host-visible exit flag at kernel entry (see the single
@@ -448,8 +347,19 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
       // FIFO empty: idle. Once the grace elapses, register this block's
       // exit vote; the mask reaching all-ones triggers the rendezvous.
       if (threadIdx.x == 0) {
-        if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
-          if (!own_idle_vote) {
+        if (idle_exit_us) {
+          // Wall-clock grace: the poll rate varies with block count and
+          // memory traffic, so a poll-count threshold made the effective
+          // grace hardware-dependent (at 64 blocks it shrank to ~100us
+          // and the worker exited between a collective's phases, adding
+          // ~15ms of relaunch churn per op). globaltimer is ns.
+          unsigned long long now = 0;
+          asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
+          if (!idle_deadline_active) {
+            idle_deadline =
+                now + static_cast<uint64_t>(idle_exit_us) * 1000ull;
+            idle_deadline_active = true;
+          } else if (now >= idle_deadline && !own_idle_vote) {
             mscclpp::atomicOr<uint64_t, mscclpp::scopeDevice>(
                 &d_sync->exitReadyMask, own_bit, mscclpp::memoryOrderRelease);
             own_idle_vote = true;
@@ -468,6 +378,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     // between them. Tasks pushed after the snapshot are picked up by the
     // next outer iteration.
     if (threadIdx.x == 0) {
+      idle_deadline_active = false;
+      idle_deadline = 0;
       if (own_idle_vote) {
         mscclpp::atomicAnd<uint64_t, mscclpp::scopeDevice>(
             &d_sync->exitReadyMask, ~own_bit, mscclpp::memoryOrderRelease);
@@ -475,7 +387,6 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
       }
     }
     __syncthreads();
-    idle_ticks = 0;
 
     while (true) {
       // Read the task + args directly (no leader hand-off). All blocks

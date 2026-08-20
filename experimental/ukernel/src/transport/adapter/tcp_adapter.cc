@@ -3,9 +3,13 @@
 #include "gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstring>
+#include <deque>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
 #include <sys/socket.h>
@@ -21,12 +25,14 @@ constexpr auto kConnectRetrySleep = std::chrono::milliseconds(50);
 constexpr auto kDefaultConnectTimeout = std::chrono::seconds(30);
 constexpr auto kAcceptPollSleep = std::chrono::milliseconds(10);
 constexpr size_t kTaskRingSize = 1024;
+constexpr size_t kMaxBufferedFrames = 4096;
 
 enum class FrameType : uint32_t { Data = 1, Signal = 2 };
 
 struct WireHeader {
   uint32_t type = 0;
   uint64_t payload_len = 0;
+  uint64_t tag = 0;  // Signal frames carry the notification tag
 };
 
 bool is_retryable(int e) {
@@ -39,28 +45,6 @@ bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
          jring_mp_enqueue_bulk(ring, &elem, 1, nullptr) != 1)
     std::this_thread::yield();
   return !stop.load(std::memory_order_acquire);
-}
-
-bool recv_discard(int fd, uint64_t len) {
-  constexpr size_t kChunk = 4096;
-  char buf[kChunk];
-  uint64_t remain = len;
-  while (remain > 0) {
-    size_t n = std::min<uint64_t>(remain, kChunk);
-    size_t got = 0;
-    while (got < n) {
-      ssize_t rc = ::recv(fd, buf + got, n - got, 0);
-      if (rc > 0) {
-        got += rc;
-        continue;
-      }
-      if (rc == 0) return false;
-      if (is_retryable(errno)) continue;
-      return false;
-    }
-    remain -= n;
-  }
-  return true;
 }
 
 }  // namespace
@@ -262,7 +246,11 @@ void TcpTransportAdapter::send_worker_loop() {
       std::lock_guard<std::mutex> lk(ctx->send_mu);
       void* ptr = e.ptr;
       void* bounce = nullptr;
-      if (e.len > 0 && ptr) {
+      // Host-only adapters (gpu_id < 0) never need a CUDA pointer probe:
+      // calling into the driver here would force a one-time cuInit on the
+      // worker thread (hundreds of ms on multi-GPU hosts) before the very
+      // first transfer. Treat the pointer as host memory directly.
+      if (e.len > 0 && ptr && gpu_id_ >= 0) {
         gpuPointerAttributes attr{};
         if (gpuPointerGetAttributes(&attr, ptr) == gpuSuccess &&
             attr.type == gpuMemoryTypeDevice) {
@@ -278,65 +266,185 @@ void TcpTransportAdapter::send_worker_loop() {
       hdr.type = static_cast<uint32_t>(
           e.kind == Kind::Signal ? FrameType::Signal : FrameType::Data);
       hdr.payload_len = e.len;
+      hdr.tag = e.tag;
       ok = send_all(ctx->send_fd, &hdr, sizeof(hdr));
       if (ok && e.len > 0) ok = send_all(ctx->send_fd, ptr, e.len);
       if (bounce) bounce_pool_->release(bounce);
     }
-    publish_put_completion(e.comm_rid, !ok);
+    if (e.kind == Kind::Signal)
+      publish_sig_send_completion(e.comm_rid, !ok);
+    else
+      publish_put_completion(e.comm_rid, !ok);
   }
   // Drain remaining
   RingElem drain;
-  while (jring_mc_dequeue_bulk(send_task_ring_, &drain, 1, nullptr) == 1)
-    publish_put_completion(drain.comm_rid, true);
+  while (jring_mc_dequeue_bulk(send_task_ring_, &drain, 1, nullptr) == 1) {
+    if (drain.kind == Kind::Signal)
+      publish_sig_send_completion(drain.comm_rid, true);
+    else
+      publish_put_completion(drain.comm_rid, true);
+  }
 }
 
 void TcpTransportAdapter::recv_worker_loop() {
-  RingElem e;
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &e, 1, nullptr) != 1) {
-      std::this_thread::yield();
-      continue;
+  // Posted waits and received frames are matched by kind (Data) or tag
+  // (Signal) instead of being consumed one-task-per-frame: a Signal may
+  // arrive before its wait is posted (or with no wait at all, when the
+  // receiver only used wait_data), and Data frames must never be left in
+  // the socket — both would desync the stream.
+  struct PendingFrame {
+    Kind kind;      // DataWait or SignalWait (frame type)
+    uint64_t tag;   // Signal frames only
+    void* bounce;   // Data payload, owned until delivered
+    size_t len;
+  };
+  std::deque<RingElem> waits;
+  std::deque<PendingFrame> frames;
+
+  auto release_buf = [this](void* buf) {
+    if (!buf) return;
+    if (bounce_pool_)
+      bounce_pool_->release(buf);
+    else
+      std::free(buf);
+  };
+
+  auto deliver = [this, &release_buf](RingElem const& w, PendingFrame& f) {
+    bool ok = true;
+    if (f.kind == Kind::DataWait && w.ptr && f.bounce && f.len > 0) {
+      bool is_gpu = false;
+      // Host-only adapters (gpu_id < 0) never need a CUDA pointer probe
+      // (see send_worker_loop).
+      if (gpu_id_ >= 0) {
+        gpuPointerAttributes attr{};
+        is_gpu = (gpuPointerGetAttributes(&attr, w.ptr) == gpuSuccess &&
+                  attr.type == gpuMemoryTypeDevice);
+      }
+      if (is_gpu) {
+        GPU_RT_CHECK(gpuSetDevice(gpu_id_));
+        GPU_RT_CHECK(gpuMemcpyAsync(w.ptr, f.bounce, f.len,
+                                    gpuMemcpyHostToDevice, gpu_stream_));
+        GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
+      } else {
+        std::memcpy(w.ptr, f.bounce, f.len);
+      }
     }
-    bool ok = false;
+    release_buf(f.bounce);
+    f.bounce = nullptr;
+    publish_put_completion(w.comm_rid, !ok);
+  };
+
+  auto match_once = [&]() -> bool {
+    for (auto wit = waits.begin(); wit != waits.end(); ++wit) {
+      for (auto fit = frames.begin(); fit != frames.end(); ++fit) {
+        bool match =
+            (wit->kind == Kind::DataWait && fit->kind == Kind::DataWait) ||
+            (wit->kind == Kind::SignalWait && fit->kind == Kind::SignalWait &&
+             fit->tag == wit->tag);
+        if (!match) continue;
+        deliver(*wit, *fit);
+        waits.erase(wit);
+        frames.erase(fit);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  auto fail_peer_waits = [&](int peer) {
+    for (auto it = waits.begin(); it != waits.end();) {
+      if (it->peer == peer) {
+        publish_put_completion(it->comm_rid, true);
+        it = waits.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  };
+
+  while (!stop_.load(std::memory_order_acquire)) {
+    RingElem w;
+    while (jring_sc_dequeue_bulk(recv_task_ring_, &w, 1, nullptr) == 1)
+      waits.push_back(w);
+    while (match_once()) {}
+
+    // Pick a connected peer (round-robin) and read one frame.
     std::shared_ptr<PeerContext> ctx;
+    int ctx_peer = -1;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      auto it = peer_contexts_.find(e.peer);
-      if (it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0)
-        ctx = it->second;
-    }
-    if (ctx) {
-      std::lock_guard<std::mutex> lk(ctx->recv_mu);
-      WireHeader hdr{};
-      ok = recv_all(ctx->recv_fd, &hdr, sizeof(hdr));
-      uint64_t tag = 0;
-      if (ok && hdr.payload_len > 0) {
-        if (e.kind == Kind::SignalWait) {
-          ok = recv_all(ctx->recv_fd, &tag, sizeof(uint64_t));
-        } else if (e.kind == Kind::DataWait && e.ptr) {
-          gpuPointerAttributes attr{};
-          bool is_gpu = (gpuPointerGetAttributes(&attr, e.ptr) == gpuSuccess &&
-                         attr.type == gpuMemoryTypeDevice);
-          if (is_gpu) {
-            GPU_RT_CHECK(gpuSetDevice(gpu_id_));
-            void* bounce = bounce_pool_->acquire(e.len);
-            ok = recv_all(ctx->recv_fd, bounce, e.len);
-            if (ok) {
-              GPU_RT_CHECK(gpuMemcpyAsync(e.ptr, bounce, e.len,
-                                          gpuMemcpyHostToDevice, gpu_stream_));
-              GPU_RT_CHECK(gpuStreamSynchronize(gpu_stream_));
-            }
-            bounce_pool_->release(bounce);
-          } else {
-            ok = recv_all(ctx->recv_fd, e.ptr, e.len);
+      size_t const n = peer_contexts_.size();
+      if (n > 0) {
+        for (size_t i = 0; i < n; ++i) {
+          auto it = std::next(peer_contexts_.begin(),
+                              (rr_peer_idx_ + i) % n);
+          if (it->second && it->second->recv_fd >= 0) {
+            ctx = it->second;
+            ctx_peer = it->first;
+            rr_peer_idx_ = static_cast<int>((rr_peer_idx_ + i + 1) % n);
+            break;
           }
-        } else {
-          ok = recv_discard(ctx->recv_fd, hdr.payload_len);
         }
       }
     }
-    publish_put_completion(e.comm_rid, !ok);
+    if (!ctx) {
+      std::this_thread::yield();
+      continue;
+    }
+
+    // Never block indefinitely on the socket: while no frame is in
+    // flight, posted waits must still be able to match frames that were
+    // buffered earlier (e.g. a Data frame that arrived before its
+    // DataWait). poll() with a short timeout keeps this loop responsive.
+    struct pollfd pfd { ctx->recv_fd, POLLIN, 0 };
+    int const pr = ::poll(&pfd, 1, 10);
+    if (pr <= 0 || (pfd.revents & POLLIN) == 0) continue;
+
+    WireHeader hdr{};
+    bool ok = false;
+    PendingFrame pf;
+    pf.bounce = nullptr;
+    pf.len = 0;
+    {
+      std::lock_guard<std::mutex> lk(ctx->recv_mu);
+      ok = recv_all(ctx->recv_fd, &hdr, sizeof(hdr));
+      if (ok && hdr.payload_len > 0) {
+        pf.len = static_cast<size_t>(hdr.payload_len);
+        pf.bounce = bounce_pool_ ? bounce_pool_->acquire(pf.len)
+                                 : std::malloc(pf.len);
+        ok = recv_all(ctx->recv_fd, pf.bounce, pf.len);
+      }
+    }
+    if (!ok) {
+      release_buf(pf.bounce);
+      pf.bounce = nullptr;
+      ::shutdown(ctx->recv_fd, SHUT_RDWR);
+      ::close(ctx->recv_fd);
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        ctx->recv_fd = -1;
+      }
+      fail_peer_waits(ctx_peer);
+      continue;
+    }
+    pf.kind = (hdr.type == static_cast<uint32_t>(FrameType::Signal))
+                  ? Kind::SignalWait
+                  : Kind::DataWait;
+    pf.tag = hdr.tag;
+    pf.len = static_cast<size_t>(hdr.payload_len);
+    frames.push_back(std::move(pf));
+    while (match_once()) {}
+
+    // Bound the unmatched-signal buffer (Data frames are never dropped;
+    // a missing DataWait is a caller bug and would corrupt the stream).
+    while (frames.size() > kMaxBufferedFrames) {
+      release_buf(frames.front().bounce);
+      frames.pop_front();
+    }
   }
+  // Teardown: fail everything still pending.
+  for (auto& w : waits) publish_put_completion(w.comm_rid, true);
+  for (auto& f : frames) release_buf(f.bounce);
   RingElem drain;
   while (jring_mc_dequeue_bulk(recv_task_ring_, &drain, 1, nullptr) == 1)
     publish_put_completion(drain.comm_rid, true);

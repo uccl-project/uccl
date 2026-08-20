@@ -24,12 +24,12 @@ namespace {
 // kill -USR2 <pid> on the surviving rank after the peer's watchdog fires.
 std::atomic<bool> g_dump_all_requested{false};
 
-// UK_CCL_OP_TRACE=1: print per-op completion latency (now - enqueue_ns)
-// for the first ~40 ops of each kind — isolates the put/reduce/signal
-// dependency-chain latency that aggregate HostProf buckets blur.
+// At UK_CCL_DEBUG >= 3: print per-op completion latency (now -
+// enqueue_ns) for the first ~40 ops of each kind — isolates the
+// put/reduce/signal dependency-chain latency that aggregate HostProf
+// buckets blur.
 void trace_op(char const* kind, uint64_t enqueue_ns, int rank) {
-  static bool const enabled = std::getenv("UK_CCL_OP_TRACE") != nullptr;
-  if (!enabled) return;
+  if (uk_dbg_lvl() < UK_DBG_LVL_ALL) return;
   static std::atomic<int> tpt_n{0}, dev_n{0}, sig_n{0};
   std::atomic<int>* c =
       (kind[0] == 'p') ? &tpt_n : (kind[0] == 'd') ? &dev_n : &sig_n;
@@ -154,8 +154,6 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   auto role_dst = op.dst_buf_role;
   c.src_buf = role_to_buf(role_src, input_buf, output_buf, scratch_buf);
   c.dst_buf = role_to_buf(role_dst, input_buf, output_buf, scratch_buf);
-  c.src2_buf = role_to_buf(op.src2_buf_role, input_buf, output_buf,
-                           scratch_buf);
   c.copy_dst_buf = role_to_buf(op.copy_dst_buf_role, input_buf, output_buf,
                                scratch_buf);
   c.copy_dst_peer = op.copy_dst_peer;
@@ -164,7 +162,6 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   c.flag_count = op.flag_count;
   c.redop = (op.kind == ExecOpKind::Reduce) ? redop : ReductionKind::None;
   c.put_path = op.put_path_hint;  // None = auto (pick_put_path below)
-  if (op.reduce_mode == 1) c.flags |= kCmdFlagReduce3Way;
   c.tag = salt_tag(op.tag, tag_epoch);
   if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
   if (op.kind == ExecOpKind::Put && op.flag_slot != ~0u)
@@ -190,7 +187,6 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(static_cast<uint64_t>(cfg.dtype));
   add(static_cast<uint64_t>(cfg.reduction));
   add(static_cast<uint64_t>(cfg.signal_group_tiles));
-  add(cfg.fuse_rs_reduce ? 1u : 0u);
   add(cfg.fuse_reduce_copy ? 1u : 0u);
   add(cfg.fuse_ag_copy ? 1u : 0u);
   add(cfg.device_flags ? 1u : 0u);
@@ -440,9 +436,7 @@ SprayExecutor::SprayExecutor(BatchBackend* device_be, BatchBackend* tpt_be,
   if (world_size_ > 0)
     tpt_metrics_.reset(new PeerMetrics[static_cast<size_t>(world_size_)]{});
 
-  char const* pc = std::getenv("UK_CCL_PATH_COUNTERS");
-  path_counters_enabled_ =
-      (pc && (strcmp(pc, "1") == 0 || strcmp(pc, "true") == 0));
+  path_counters_enabled_ = uk_dbg_lvl() >= UK_DBG_LVL_EXEC;
 }
 
 void SprayExecutor::start() {
@@ -461,12 +455,14 @@ void SprayExecutor::start() {
   }
 
   // SIGUSR2: dump all running runs from enqueue_loop (see namespace
-  // comment above). One handler per process is enough.
+  // comment above). Installed only when diagnostics are enabled; one
+  // handler per process is enough.
   static std::once_flag sig_once;
   std::call_once(sig_once, [] {
-    std::signal(SIGUSR2, [](int) {
-      g_dump_all_requested.store(true, std::memory_order_relaxed);
-    });
+    if (uk_dbg_lvl() >= UK_DBG_LVL_EXEC)
+      std::signal(SIGUSR2, [](int) {
+        g_dump_all_requested.store(true, std::memory_order_relaxed);
+      });
   });
 
   enqueue_th_ = std::thread(&SprayExecutor::enqueue_loop, this);
@@ -992,20 +988,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
   std::vector<uint32_t> tpt_idx;
   size_t sig_dispatched = 0;
 
-  static int op_kind_print_cnt = 0;
   for (uint32_t idx : run.ready) {
     Cmd c = make_cmd(run.plan->tiled.ops[idx], run.plan->tiled.reduction,
                      run.plan->tiled.dtype, run.input_buf_id,
                      run.output_buf_id, run.scratch_buf_id,
                      run.input_base_off, run.output_base_off,
                      run.scratch_base_off, run.tag_epoch);
-    if (op_kind_print_cnt++ < 20) {
-      UK_DBG(UK_DBG_LVL_EXEC,
-             "[enqueue r%d] op[%u] kind=%d dst_peer=%u put_path=%d tag=%lu "
-             "bytes=%u",
-             rank_or_neg1(), idx, (int)c.kind, c.dst_peer, (int)c.put_path,
-             (unsigned long)c.tag, c.bytes);
-    }
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       if (c.flags & kCmdFlagCopySignal) {
         // Fused AG copy: must run on the device backend (the task writes
@@ -1487,7 +1475,6 @@ void SprayExecutor::drain_dev_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
   int iter = 0;
-  static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-dev r%d] alive iter=%d", rank_or_neg1(),
@@ -1499,12 +1486,6 @@ void SprayExecutor::drain_dev_loop() {
     }
     if (HostProf::enabled() && n > 0)
       HostProf::dev_ops.fetch_add(n, std::memory_order_relaxed);
-    if (n > 0 && dbg_count < 5) {
-      ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC,
-             "[drain-dev r%d] do_drain returned %zu completions (count=%d)",
-             rank_or_neg1(), n, dbg_count);
-    }
     if (n == 0) {
       std::this_thread::yield();
       continue;
@@ -1544,7 +1525,6 @@ void SprayExecutor::drain_tpt_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
   int iter = 0;
-  static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(),
@@ -1556,12 +1536,6 @@ void SprayExecutor::drain_tpt_loop() {
     }
     if (HostProf::enabled() && nd > 0)
       HostProf::tpt_ops.fetch_add(nd, std::memory_order_relaxed);
-    if (nd > 0 && dbg_count < 5) {
-      ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC,
-             "[drain-tpt r%d] do_drain returned %zu completions (count=%d)",
-             rank_or_neg1(), nd, dbg_count);
-    }
     if (nd == 0) {
       for (int s = 0; s < 16 && !stop_; ++s) machnet_pause();
       std::this_thread::yield();
@@ -1600,7 +1574,6 @@ void SprayExecutor::drain_signal_loop() {
   uint32_t be_buf[256];
   BeSlotSnap snap_buf[256];
   int iter = 0;
-  static int dbg_count = 0;
   while (!stop_) {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-sig r%d] alive iter=%d", rank_or_neg1(),
@@ -1612,12 +1585,6 @@ void SprayExecutor::drain_signal_loop() {
     }
     if (HostProf::enabled() && ns > 0)
       HostProf::sig_ops.fetch_add(ns, std::memory_order_relaxed);
-    if (ns > 0 && dbg_count < 5) {
-      ++dbg_count;
-      UK_DBG(UK_DBG_LVL_EXEC,
-             "[drain-sig r%d] do_drain returned %zu completions (count=%d)",
-             rank_or_neg1(), ns, dbg_count);
-    }
     if (ns == 0) {
       // When waits are registered, arrivals are on the critical path:
       // spin on pauses instead of yielding to the scheduler (at 8 ranks

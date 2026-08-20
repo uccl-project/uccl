@@ -737,7 +737,11 @@ int main(int argc, char** argv) {
   }
 
   // 10. Output tables
-  comm->barrier("results_barrier", 30000);
+  // RDMA loopback sustains only ~1.4-2 GB/s, and the size scan moves
+  // tens of GB in the RDMA section; 30s was short enough that rank 1
+  // timed out at the barrier and tore down while rank 0 was still
+  // sending (POST_FAILED flood). Give the section 5 minutes.
+  comm->barrier("results_barrier", 300000);
   if (rank != 0) {
     // Cleanup and exit, only rank 0 prints
     GPU_RT_CHECK(gpuFree(d_local));

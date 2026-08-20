@@ -211,7 +211,7 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                               CollectiveConfig const& config,
                               AlgoBuilder& builder,
                               std::vector<uint32_t>& ready_ops,
-                              bool inplace, bool fused) {
+                              bool inplace) {
   size_t elem_bytes = scalar_type_size(config.dtype);
   bool const fuse_copy = config.fuse_reduce_copy;
   BufRef const accum =
@@ -226,55 +226,17 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
     size_t recv_bytes = balanced_shard_size_bytes(
         config.input_bytes, elem_bytes, config.nranks, recv_owner);
 
-    if (send_bytes > 0 && !fused && !fuse_copy) {
+    if (send_bytes > 0 && !fuse_copy) {
       size_t offset = balanced_shard_offset_bytes(
           config.input_bytes, elem_bytes, config.nranks, send_owner);
       uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
-      if (config.rs_hybrid && config.rs_chunks == 1) {
-        // CE+device hybrid: half the shard goes via the CE copy engine,
-        // half via this rank's device worker (device LD/ST to peer),
-        // overlapping the two engines on the same send.
-        size_t const ce_bytes =
-            send_bytes * config.a2a_hybrid_ce_pct / 100;
-        size_t const dev_bytes = send_bytes - ce_bytes;
-        std::vector<uint32_t> deps;
-        add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-        uint32_t const put_ce =
-            builder.add_op(AlgoOpKind::Put, ce_bytes, offset, offset, -1,
-                           send_peer, deps, pair_id * 2,
-                           ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
-                           accum);
-        builder.algo.chunks[put_ce].put_path_hint = PutPath::Ipc;
-        std::vector<uint32_t> deps2;
-        add_dep(deps2, ready_ops[static_cast<size_t>(send_owner)]);
-        uint32_t const put_dev =
-            builder.add_op(AlgoOpKind::Put, dev_bytes, offset + ce_bytes,
-                           offset + ce_bytes, -1, send_peer, deps2,
-                           pair_id * 2 + 1,
-                           ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
-                           accum);
-        builder.algo.chunks[put_dev].put_path_hint = PutPath::Device;
-        continue;  // done with this ring step's send side
-      }
-      uint32_t const chunks = std::max(1u, config.rs_chunks);
-      size_t const chunk_bytes =
-          (send_bytes + chunks - 1) / chunks;  // ceil; last chunk absorbs
-      for (uint32_t c = 0; c < chunks; ++c) {
-        size_t const co = offset + static_cast<size_t>(c) * chunk_bytes;
-        size_t const cb =
-            std::min(chunk_bytes, send_bytes - static_cast<size_t>(c) * chunk_bytes);
-        std::vector<uint32_t> deps;
-        // First touch of a shard reads Input; afterwards the running sum
-        // in the accumulation buffer. Chunk 0 carries the ring dep (the
-        // shard was produced by the previous step's reduce); later
-        // chunks of the same shard are independent (different offsets).
-        if (c == 0) add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-        builder.add_op(AlgoOpKind::Put, cb, co, co, -1, send_peer,
-                       std::move(deps), pair_id * chunks + c,
-                       ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
-                       accum);
-      }
-    } else if (send_bytes > 0 && fuse_copy) {
+      std::vector<uint32_t> deps;
+      add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
+      builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
+                     send_peer, std::move(deps), pair_id,
+                     ring_step == 0 ? BufRef{BufSpace::Input, 0} : accum,
+                     accum);
+    } else if (send_bytes > 0) {
       // Fused reduce+copy: the send of shard wrap(rank-s) is done by the
       // PREVIOUS step's RecvReduce task (which produced that shard) as a
       // device copy + device signal. Only the step-0 send (the rank's
@@ -287,18 +249,6 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                        send_peer, {}, pair_id, BufRef{BufSpace::Input, 0},
                        accum);
       }
-    } else if (send_bytes > 0) {
-      // Fused send: no data put. The receiver's reduce kernel reads this
-      // rank's buffer directly; signal "data ready" to the next rank.
-      // Step 0 sends the rank's own shard from Input (valid at collective
-      // start, no dep); later steps send the shard the previous step's
-      // RecvReduce produced (dep on that reduce).
-      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
-      std::vector<uint32_t> deps;
-      if (ring_step > 0)
-        add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
-      builder.add_op(AlgoOpKind::Signal, send_bytes, 0, 0, -1, send_peer,
-                     std::move(deps), pair_id);
     }
 
     if (recv_bytes > 0) {
@@ -307,44 +257,15 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
       uint32_t recv_op = 0;
       uint32_t reduce_op = 0;
-      if (!fused && !fuse_copy) {
-        if (config.rs_hybrid && config.rs_chunks == 1) {
-          size_t const half = recv_bytes / 2;
-          size_t const ce_bytes = half;
-          size_t const dev_bytes = recv_bytes - half;
-          uint32_t recv_ce =
-              builder.add_op(AlgoOpKind::Recv, ce_bytes, offset, offset,
-                             recv_peer, -1, {}, pair_id * 2,
-                             BufRef{BufSpace::Input, 0}, accum);
-          uint32_t recv_dev =
-              builder.add_op(AlgoOpKind::Recv, dev_bytes, offset + ce_bytes,
-                             offset + ce_bytes, recv_peer, -1, {},
-                             pair_id * 2 + 1, BufRef{BufSpace::Input, 0},
-                             accum);
-          reduce_op =
-              builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
-                             recv_peer, -1, {recv_ce, recv_dev}, pair_id,
-                             BufRef{BufSpace::Input, 0}, accum);
-        } else {
-        uint32_t const chunks = std::max(1u, config.rs_chunks);
-        size_t const chunk_bytes =
-            (recv_bytes + chunks - 1) / chunks;
-        uint32_t last_reduce = 0;
-        for (uint32_t c = 0; c < chunks; ++c) {
-          size_t const co = offset + static_cast<size_t>(c) * chunk_bytes;
-          size_t const cb = std::min(
-              chunk_bytes, recv_bytes - static_cast<size_t>(c) * chunk_bytes);
-        recv_op = builder.add_op(AlgoOpKind::Recv, cb, co, co, recv_peer, -1,
-                                 {}, pair_id * chunks + c,
+      if (!fuse_copy) {
+        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
+                                 recv_peer, -1, {}, pair_id,
                                  BufRef{BufSpace::Input, 0}, accum);
-          last_reduce =
-              builder.add_op(AlgoOpKind::RecvReduce, cb, co, co, recv_peer, -1,
-                             {recv_op}, pair_id * chunks + c,
-                             BufRef{BufSpace::Input, 0}, accum);
-        }
-        reduce_op = last_reduce;
-        }
-      } else if (fuse_copy) {
+        reduce_op =
+            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
+                           recv_peer, -1, {recv_op}, pair_id,
+                           BufRef{BufSpace::Input, 0}, accum);
+      } else {
         // Fused reduce+copy: the task reduces accum[off] += Input[off],
         // copies accum[off] to the NEXT rank's accumulation buffer, and
         // device-writes the data-ready signal. The copy replaces the
@@ -364,32 +285,6 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
           builder.algo.chunks[reduce_op].copy_dst = accum;
           builder.algo.chunks[reduce_op].copy_peer = send_peer;
         }
-      } else {
-        // Fused reduce: the kernel reads the peer's send-source buffer
-        // directly. In-place: dst = my Input[off] (RMW — my contribution
-        // already lives there; the peer never clobbers unread local
-        // input because there are no puts into my buffer). Out-of-place:
-        // dst = my Output[off], a 3-way fresh write = peer[off] + my
-        // Input[off] (reduce_mode 1). The peer's source role is Input at
-        // step 0 (its own shard) and its accumulation buffer afterwards.
-        BufRef const recv_accum =
-            inplace ? BufRef{BufSpace::Input, 0} : BufRef{BufSpace::Output, 0};
-        BufRef const peer_src =
-            (inplace || ring_step == 0) ? BufRef{BufSpace::Input, 0}
-                                        : BufRef{BufSpace::Output, 0};
-        recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset, offset,
-                                 recv_peer, -1, {}, pair_id,
-                                 BufRef{BufSpace::Input, 0}, recv_accum);
-        builder.algo.chunks[recv_op].wait_standalone_signal = true;
-        reduce_op =
-            builder.add_op(AlgoOpKind::RecvReduce, recv_bytes, offset, offset,
-                           recv_peer, -1, {recv_op}, pair_id, peer_src,
-                           recv_accum);
-        builder.algo.chunks[reduce_op].fuse_remote_src = true;
-        if (!inplace) {
-          builder.algo.chunks[reduce_op].src2 = BufRef{BufSpace::Input, 0};
-          builder.algo.chunks[reduce_op].reduce_mode = 1;
-        }
       }
       ready_ops[static_cast<size_t>(recv_owner)] = reduce_op;
     }
@@ -407,10 +302,9 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
 void emit_ring_allgather(RingTopology const& ring,
                          CollectiveConfig const& config,
                          AlgoBuilder& builder,
-                         std::vector<uint32_t>& ready_ops, bool inplace,
-                         bool fused_rs) {
+                         std::vector<uint32_t>& ready_ops, bool inplace) {
   size_t elem_bytes = scalar_type_size(config.dtype);
-  if (inplace && !fused_rs) {
+  if (inplace) {
     // Publish the RS-held shard Tmp -> Output[own_offset].
     int own = ring.wrap(config.rank + 1);
     size_t own_bytes = balanced_shard_size_bytes(
@@ -446,9 +340,8 @@ void emit_ring_allgather(RingTopology const& ring,
       uint32_t put_op =
           builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
                          send_peer, std::move(deps), pair_id,
-                         (inplace && ring_step == 0 && !fused_rs)
-                             ? BufRef{BufSpace::Tmp, 0}
-                             : BufRef{BufSpace::Output, 0},
+                         (inplace && ring_step == 0) ? BufRef{BufSpace::Tmp, 0}
+                                                     : BufRef{BufSpace::Output, 0},
                          BufRef{BufSpace::Output, 0});
       if (config.fuse_ag_copy)
         builder.algo.chunks[put_op].fuse_copy_flag = true;
@@ -476,19 +369,14 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
   algo.kind = CollKind::AllReduceRing;
   // In-place: RS partials accumulate in a full-input-layout Tmp region
   // (same footprint the snapshot staging used, so scratch does not
-  // grow). The fused RS accumulates in the user Input buffer instead
-  // (the reduce writes it only after the value has been consumed by the
-  // ring's earlier reader), so no Tmp region is needed there.
-  if (inplace && !config.fuse_rs_reduce)
-    algo.tmp_bytes = {config.input_bytes};
+  // grow).
+  if (inplace) algo.tmp_bytes = {config.input_bytes};
 
   AlgoBuilder builder(std::move(algo));
   std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
 
-  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace,
-                           config.fuse_rs_reduce);
-  emit_ring_allgather(ring, config, builder, ready_ops, inplace,
-                      config.fuse_rs_reduce);
+  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace);
+  emit_ring_allgather(ring, config, builder, ready_ops, inplace);
 
   return std::move(builder.algo);
 }

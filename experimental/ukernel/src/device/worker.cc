@@ -17,12 +17,7 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
         std::string("WorkerPool: GDR unavailable, worker fifos need it: ") +
         e.what());
   }
-  // ~100ns per idle poll (idle_sleep's __nanosleep(1), plus loop +
-  // syncthreads overhead ≈ 300-500ns) → 10 polls per us keeps the actual
-  // exit latency within a few x of the configured grace. (The old
-  // __nanosleep(100) slept 10us per poll and made a 500us grace take
-  // ~50ms — see persistent_kernel_ops.cu idle_sleep.)
-  exit_idle_iters_ = cfg_.idleExitAfterUs * 10;
+  idle_exit_us_ = cfg_.idleExitAfterUs;
   if (cfg_.controlStream) {
     control_stream_ = cfg_.controlStream;
     owns_control_stream_ = false;
@@ -141,14 +136,12 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
                                   workers_[i]->stream));
         workers_[i]->d_multi_sync = nullptr;
       }
-      if (numBlocks > 1) {
-        GPU_RT_CHECK(gpuMallocAsync(&workers_[i]->d_multi_sync,
-                                    sizeof(MultiBlockSync),
-                                    workers_[i]->stream));
-        GPU_RT_CHECK(gpuMemsetAsync(workers_[i]->d_multi_sync, 0,
-                                    sizeof(MultiBlockSync),
-                                    workers_[i]->stream));
-      }
+      GPU_RT_CHECK(gpuMallocAsync(&workers_[i]->d_multi_sync,
+                                  sizeof(MultiBlockSync),
+                                  workers_[i]->stream));
+      GPU_RT_CHECK(gpuMemsetAsync(workers_[i]->d_multi_sync, 0,
+                                  sizeof(MultiBlockSync),
+                                  workers_[i]->stream));
       launchWorkerForFifo(i);
       workers_[i]->launched = true;
       return true;
@@ -320,7 +313,7 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
 }
 
 void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
-  if (!exit_idle_iters_ || fifoId >= fifos_.size()) return;
+  if (!idle_exit_us_ || fifoId >= fifos_.size()) return;
   for (size_t i = 0; i < workers_.size(); ++i) {
     auto* wc = workers_[i].get();
     if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
@@ -378,14 +371,10 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   // TMA bulk reduce needs large dynamic smem (>48KB); opt in explicitly,
   // otherwise the launch fails with "too much shared memory".
   if (smem_size > 48 * 1024) {
-    const void* kernel =
-        (worker.numBlocks == 1)
-            ? reinterpret_cast<const void*>(
-                  &UKernel::Device::singlePersistentKernel)
-            : reinterpret_cast<const void*>(
-                  &UKernel::Device::multiPersistentKernel);
     GPU_RT_CHECK(gpuFuncSetAttribute(
-        kernel, gpuFuncAttributeMaxDynamicSharedMemorySize,
+        reinterpret_cast<const void*>(
+            &UKernel::Device::multiPersistentKernel),
+        gpuFuncAttributeMaxDynamicSharedMemorySize,
         static_cast<int>(smem_size)));
   }
 
@@ -393,26 +382,17 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   // (per-task completion counter + exit-vote mask), otherwise the fresh
   // grid inherits a full exit mask and returns before consuming anything.
   // Zero it on the worker stream, ordered before the launch.
-  if (worker.numBlocks > 1 && worker.d_multi_sync) {
+  if (worker.d_multi_sync) {
     GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
                                 sizeof(MultiBlockSync), worker.stream));
   }
 
-  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
-                         &d_stop_flags_[workerIndex], &worker.h_exited,
-                         &exit_idle_iters_};
-
   void* args_multi[] = {
       &worker.d_fifo_handle, &d_task_args,     &d_stop_flags_[workerIndex],
-      &worker.d_multi_sync,  &worker.h_exited, &exit_idle_iters_};
+      &worker.d_multi_sync,  &worker.h_exited, &idle_exit_us_};
 
-  if (worker.numBlocks == 1) {
-    GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,
-                                 block, args_single, smem_size, worker.stream));
-  } else {
-    GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
-                                 block, args_multi, smem_size, worker.stream));
-  }
+  GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
+                               block, args_multi, smem_size, worker.stream));
   GPU_RT_CHECK(gpuGetLastError());
 
   worker.ready = true;

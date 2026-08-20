@@ -84,17 +84,10 @@ struct MacroOp {
   // where the peer's data lands (mirrors the peer Put's dst).
   BufRef src = {BufSpace::Input, 0};
   BufRef dst = {BufSpace::Output, 0};
-  // Per-op put path override (None = auto). The RS hybrid splits a
-  // tile's send into a CE half and a device-copy half so the CE engine
-  // and the peer's worker overlap on the same shard.
+  // Per-op put path override (None = auto). The AllToAll hybrid splits a
+  // per-peer send into a CE half and a device-copy half so the CE engine
+  // and the worker overlap on the same shard.
   PutPath put_path_hint = PutPath::None;
-  // Fused RecvReduce (AllReduceRing, fuse_rs_reduce): src is the PEER's
-  // send-source buffer (resolved through src_rank), src2 is this rank's
-  // local Input contribution for the out-of-place 3-way reduce (dst =
-  // src op src2). In-place fused reduces are 2-way RMW (dst = Input).
-  BufRef src2 = {BufSpace::Input, 0};
-  bool fuse_remote_src = false;
-  uint8_t reduce_mode = 0;  // 0 = RMW dst=op(dst,src); 1 = dst=op(src,src2)
   // Fused reduce+copy (fuse_reduce_copy): after the reduce, copy dst to
   // the next rank's accumulation buffer (copy_dst) and device-write the
   // data-ready signal (pair_id, per tile). The copy and signal target

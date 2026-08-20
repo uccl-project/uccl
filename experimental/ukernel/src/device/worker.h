@@ -124,9 +124,11 @@ class WorkerPool {
   gpuStream_t control_stream_ = nullptr;
   bool owns_control_stream_ = false;
 
-  // Idle-grace in ~100ns polls, derived from Config::idleExitAfterUs
-  // (0 = always resident).
-  uint32_t exit_idle_iters_ = 0;
+  // Idle-exit grace in microseconds (Config::idleExitAfterUs). 0 = always
+  // resident. The kernel measures it with the wall clock (globaltimer),
+  // not with poll counts — the poll rate varies with block count and
+  // memory traffic.
+  uint32_t idle_exit_us_ = 0;
 
   std::vector<bool*> d_stop_flags_;
   std::vector<bool*> h_stop_flags_;

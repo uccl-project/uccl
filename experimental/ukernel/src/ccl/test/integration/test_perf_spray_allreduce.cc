@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
   }
 
   if (rank == 1) {
-    bool show_counters = (std::getenv("UK_CCL_PATH_COUNTERS") != nullptr);
+    bool show_counters = uk_dbg_lvl() >= UK_DBG_LVL_EXEC;
     std::printf("%9s %10s %10s\n", "Size", "Lat(us)", "BW(GB/s)");
     for (int si = 0; si < kSizes; ++si) {
       size_t bytes = sizes[si];

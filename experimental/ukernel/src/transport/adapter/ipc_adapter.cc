@@ -724,10 +724,10 @@ bool IpcAdapter::launch_one(RingElem* e, size_t stream_idx) {
 
   // One stream per put (per-peer round-robin in send_worker): copies to
   // different peers overlap while each put keeps one event point.
-  // Use cudaMemcpyAsync with the resolved IPC pointer (NOT
-  // cudaMemcpyPeerAsync): the peer-copy API measured ~450 GB/s on B300
-  // while plain D2D memcpy through the IPC handle reaches ~670 GB/s —
-  // a 1.5x per-copy difference that dominates 8-rank alltoall.
+  // Plain D2D through the IPC mapping is safe here: the mapping is only
+  // used after Communicator::open_remote_ipc_mapping explicitly enabled
+  // peer access (lazy enablement alone can leave a mapping that accepts
+  // writes without them reaching the owner's pages on A40-class systems).
   gpuStream_t stream = ipc_ctx_[stream_idx];
   GPU_RT_CHECK(
       gpuMemcpyAsync(dst, src, e->bytes, gpuMemcpyDeviceToDevice, stream));

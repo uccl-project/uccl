@@ -54,19 +54,29 @@ static void cp(std::shared_ptr<Communicator> cm, int r, PeerTransportKind tpt) {
 }
 
 static void wait_put_rid(Communicator* comm, unsigned rid) {
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (true) {
     CompletionResult r;
     if (comm->try_complete_put(&r, 1) && r.rid == rid) {
       if (r.failed) printf("  [WARN] put rid=%u completed FAILED\n", rid);
       return;
     }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      printf("  [FAIL] put rid=%u timed out\n", rid);
+      std::exit(2);
+    }
     std::this_thread::yield();
   }
 }
 static void wait_sig_rid(Communicator* comm, unsigned rid) {
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (true) {
     SignalCompletion s;
     if (comm->try_complete_sig_wait(&s, 1) && s.rid == rid) return;
+    if (std::chrono::steady_clock::now() >= deadline) {
+      printf("  [FAIL] sig wait rid=%u timed out\n", rid);
+      std::exit(2);
+    }
     std::this_thread::yield();
   }
 }
@@ -91,6 +101,14 @@ int main(int argc, char** argv) {
   cfg->exchanger_port = port;
   cfg->local_id = gpu;
   auto comm = std::make_shared<Communicator>(gpu, rank, kW, cfg);
+  // RDMA fused puts deliver the tag as a 32-bit write-with-imm, which the
+  // wait must match on the immediate path (force_imm). IPC fused puts go
+  // through the 64-bit shm signal ring (plain wait).
+  auto wait_fused = [&](int peer, uint64_t tag, unsigned rid,
+                        uint32_t count = 1) {
+    return comm->wait_signal_async_with_rid(
+        peer, tag, tpt, rid, count, tpt == PeerTransportKind::Rdma);
+  };
   cp(comm, rank, tpt);
   printf("  peer ok, can_fuse_put_signal=%d\n",
          (int)comm->can_fuse_put_signal(peer, tpt));
@@ -114,6 +132,10 @@ int main(int argc, char** argv) {
     uint64_t const tag_base = 1000 + phase * 1000;
     if (am_sender) {
       GPU_RT_CHECK(gpuMemset(d, pattern, B));
+      // gpuMemset runs on the legacy default stream while IPC copies run
+      // on the adapter's non-blocking streams; sync so the copy sources
+      // are stable before the first put is launched.
+      GPU_RT_CHECK(gpuDeviceSynchronize());
       auto t0 = std::chrono::high_resolution_clock::now();
       for (int i = 0; i < kN; ++i) {
         size_t off = (size_t)i * kChunk;
@@ -134,9 +156,13 @@ int main(int argc, char** argv) {
              std::chrono::duration<double, std::micro>(t1 - t0).count() / kN);
     } else {
       GPU_RT_CHECK(gpuMemset(d, 0, B));
+      // The local pre-fill must be fully visible before any peer copy can
+      // land (the peer's put completion only orders the copy against the
+      // signal, not against this rank's own default-stream memset).
+      GPU_RT_CHECK(gpuDeviceSynchronize());
       for (int i = 0; i < kN; ++i) {
-        unsigned rid = comm->wait_signal_async(peer, tag_base + i, tpt);
-        if (!rid) {
+        unsigned rid = comm->alloc_rid();
+        if (!wait_fused(peer, tag_base + i, rid)) {
           printf("  [FAIL] wait_signal_async i=%d\n", i);
           return 1;
         }
@@ -170,6 +196,7 @@ int main(int argc, char** argv) {
         size_t const base_off = (size_t)batch * kB * kChunk;
         if (am_sender) {
           GPU_RT_CHECK(gpuMemset((char*)d + base_off, bp, kB * kChunk));
+          GPU_RT_CHECK(gpuDeviceSynchronize());
           for (int i = 0; i < kB; ++i) {
             size_t const off = base_off + (size_t)i * kChunk;
             unsigned rid = comm->alloc_rid();
@@ -184,8 +211,8 @@ int main(int argc, char** argv) {
         } else {
           auto* chk = new uint8_t[kChunk];
           for (int i = 0; i < kB; ++i) {
-            unsigned rid = comm->wait_signal_async(peer, xtag + i, tpt);
-            if (!rid) {
+            unsigned rid = comm->alloc_rid();
+            if (!wait_fused(peer, xtag + i, rid)) {
               printf("  [FAIL] xrun wait batch=%d i=%d\n", batch, i);
               return 1;
             }
@@ -217,6 +244,7 @@ int main(int argc, char** argv) {
       uint8_t const cpatt = (uint8_t)(0xC0 + phase);
       if (am_sender) {
         GPU_RT_CHECK(gpuMemset((char*)d + base_off, cpatt, kC * kChunk));
+        GPU_RT_CHECK(gpuDeviceSynchronize());
         for (int i = 0; i < kC; ++i) {
           size_t const off = base_off + (size_t)i * kChunk;
           unsigned rid = comm->alloc_rid();
@@ -230,7 +258,7 @@ int main(int argc, char** argv) {
         }
       } else {
         unsigned rid = comm->alloc_rid();
-        if (!comm->wait_signal_async_with_rid(peer, ctag, tpt, rid, kC)) {
+        if (!wait_fused(peer, ctag, rid, kC)) {
           printf("  [FAIL] counted wait\n");
           return 1;
         }

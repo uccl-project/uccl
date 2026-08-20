@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
     w.cmd.src_peer = ~0u;
     w.cmd.dst_peer = ~0u;
     w.cmd.redop = ReductionKind::Sum;
+    w.cmd.dtype = ScalarType::Float32;
     w.caller_id = 0;
 
     uint32_t be_idx;

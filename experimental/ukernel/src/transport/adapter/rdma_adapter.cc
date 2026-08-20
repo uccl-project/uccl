@@ -1274,8 +1274,9 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       // network byte order), which the NIC surfaces only after the written
       // data has landed; matching is per-peer FIFO in arrival order.
       if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-        if (wc[i].status == IBV_WC_SUCCESS && comm_)
+        if (wc[i].status == IBV_WC_SUCCESS && comm_) {
           comm_->on_imm_received(rank, ntohl(wc[i].imm_data));
+        }
         // Repost on the QP that consumed the WQE.
         bool reposted = false;
         for (int qi = 0; qi < p.num_qps; ++qi) {

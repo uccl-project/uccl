@@ -160,8 +160,8 @@ B300 per-SM ceiling so the same aggregate can come from fewer blocks.
 ## TMA bulk reduce (TMA_REDUCE=1)
 
 Build: `make SM=103 ENABLE_TMA=0 REDUCE_ILP=4 REDUCE_SMEM_KB=224
-TMA_REDUCE=1 TMA_WARPSPEC=0`. Per chunk: `cp.async.bulk` load src+dst
-into smem (mbarrier complete_tx), reduce in smem, bulk-group store back,
+TMA_REDUCE=1`. Per chunk: `cp.async.bulk` load src+dst into smem
+(mbarrier complete_tx), reduce in smem, bulk-group store back,
 `fence.proxy.async.global` at task completion.
 
 Shim AllReduce 256M (`LT=8 TM=8M IB=16`), vs ILP=4 baseline:
@@ -337,33 +337,17 @@ B300. Builds needing the full matrix pass
 `UK_REDUCE_FAST_DTYPES=127 UK_REDUCE_FAST_OPS=31`. Measured B300 ILP=16
 device-bench build: ~3.5 min (previously >50 min).
 
-## Warp-specialized TMA pipeline — parked
+## Warp-specialized TMA pipeline — negative, removed
 
-A producer/consumer pipeline (producer warp drives TMA loads/stores,
-consumer warps reduce) was implemented with the canonical protocol —
-mbarrier init-once + phase toggle per use (DeepEP/ThunderKittens
-pattern; re-init per chunk is unsafe without a full `__syncthreads()`
-fence), named barriers for consumer completion, and
-`fence.proxy.async.shared::cta` before TMA stores. Correctness-verified
-(wrong=0 at 1M/256M, BLK 16/32), but:
-
-- **Warp-spec is ~10% SLOWER per block than single-buffer at full
-  pipeline depth** (device bench 256M @ 32 blocks: 446 GB/s vs 493
-  GB/s). Total in-flight bytes per block are identical (224KB smem cap);
-  the smaller chunks only add per-chunk mbarrier/barrier overhead.
-- The shim's small tiles made it worse: at BLK=32 with 4MB tiles each
-  block gets 128KB/task -> the pipeline never fills.
-- **Per-SM ceiling ≈ 14-15 GB/s payload (42-45 GB/s memory traffic) is
-  a memory/TMA-system property, not pipeline structure.** Fewer-SMs-at-
-  full-rate needs more in-flight bytes per SM: bigger tiles (shim),
-  multicast/NVLS, or cluster-shared smem (2-CTA DSMEM doubles the
-  per-SM budget).
-- An intermittent full-speed wedge at deep pipelines (nfull >= 9) was
-  never pinned down; low priority given the negative result.
-
-Design details (protocol, smem layout, producer/consumer loops) are in
-git history; the canonical mbarrier pattern is the reference for any
-future cluster/multicast work.
+A producer/consumer warp pipeline (producer warp drives TMA loads/
+stores, consumer warps reduce) was implemented and correctness-verified
+(wrong=0 at 1M/256M, BLK 16/32), but measured **~10% slower per block
+than the single-buffer path at full pipeline depth** (device bench 256M
+@ 32 blocks: 446 GB/s vs 493 GB/s) and worse on the shim's small tiles.
+The per-SM ceiling (~14-15 GB/s payload) is a memory/TMA-system
+property, not pipeline structure. The code was removed; protocol and
+design details are in git history as the reference for any future
+cluster/multicast work.
 
 ## IPC window size is not the bottleneck
 
@@ -390,7 +374,6 @@ stability fix, not a peak fix.
 - Default `REDUCE_ILP=4` for fast builds; `REDUCE_ILP=16` for peak
   runs (64 blocks ≈ 95% of native, 32 blocks ≈ 76% on the ILP path).
 - Peak builds: `make SM=103 REDUCE_ILP=4 REDUCE_SMEM_KB=224
-  TMA_REDUCE=1 TMA_WARPSPEC=0 -j8 nccl` (TMA reaches 99% of native at
-  BLK=32).
+  TMA_REDUCE=1 -j8 nccl` (TMA reaches 99% of native at BLK=32).
 - Validation builds: `make SM=103 VALIDATE=1 -j8 nccl`.
 - Run-to-run variance is ±3-10%; compare medians over 3+ runs.

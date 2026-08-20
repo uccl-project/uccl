@@ -319,13 +319,6 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
   }();
   cfg.signal_group_tiles = kSigGroupTiles;
-  // Fused reduce-scatter: the receiver's reduce kernel reads the peer's
-  // buffer directly instead of the peer's CE put landing it locally.
-  static bool const kFuseRsReduce = [] {
-    char const* e = std::getenv("UK_CCL_FUSE_RS_REDUCE");
-    return e && std::string(e) != "0";
-  }();
-  cfg.fuse_rs_reduce = kFuseRsReduce;
   // Fused reduce+copy: the RS RecvReduce task also forwards the reduced
   // shard to the next rank (device copy + device signal). With device
   // flags the per-tile signals are counted waits (any G); without them
@@ -343,18 +336,6 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e && std::string(e) != "0";
   }();
   cfg.fuse_ag_copy = kFuseAgCopy;
-  // RS chunking (experimental): split each RS tile's put/reduce into K
-  // chunk ops for within-tile put->reduce overlap.
-  static uint32_t const kRsChunks = [] {
-    char const* e = std::getenv("UK_CCL_RS_CHUNKS");
-    return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
-  }();
-  cfg.rs_chunks = kRsChunks;
-  static bool const kRsHybrid = [] {
-    char const* e = std::getenv("UK_CCL_RS_HYBRID");
-    return e && std::string(e) != "0";
-  }();
-  cfg.rs_hybrid = kRsHybrid;
   static bool const kA2aHybrid = [] {
     char const* e = std::getenv("UK_CCL_A2A_HYBRID");
     return e && std::string(e) != "0";

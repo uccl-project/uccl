@@ -113,9 +113,17 @@ def run_oneway(comm, rank: int, peer: int, selected: str,
             poll_rid(comm, req)
             comm.signal(peer, tag)
         else:
-            req = comm.wait_signal_async(peer, tag)
-            require(req != 0, f"{case_name}: wait_signal_async failed")
-            poll_rid(comm, req)
+            if selected == "tcp":
+                # TCP needs an explicit DataWait target: the receiver
+                # reads the payload into recv_buf (IPC/RDMA puts write
+                # remote memory directly, so their wait is signal-only).
+                # wait_data is blocking (returns when the payload lands).
+                comm.wait_data(peer, tag, rid,
+                               recv_off_el * eb, payload_el * eb)
+            else:
+                req = comm.wait_signal_async(peer, tag)
+                require(req != 0, f"{case_name}: wait_signal_async failed")
+                poll_rid(comm, req)
             exp = expected_payload(sender_rank, case_id, send_off_el, payload_el)
             verify_segment(recv_buf, recv_off_el, payload_el, exp, guard, case_name)
         require(comm.barrier(f"{case_name}_done", 30000), f"{case_name}: barrier failed")
@@ -149,12 +157,16 @@ def run_bidir(comm, rank: int, peer: int, selected: str):
         poll_rid(comm, put_rid)
         comm.signal(peer, my_tag)
 
-        wait_rid = comm.wait_signal_async(peer, peer_tag)
-        require(wait_rid != 0, "bidir: wait_signal_async failed")
-        poll_rid(comm, wait_rid)
-
         # Peer wrote into our buffer at offset 71 + rank*13.
         my_recv_off_el = 71 + rank * 13
+        if selected == "tcp":
+            comm.wait_data(peer, peer_tag, rid,
+                           my_recv_off_el * eb, payload_el * eb)
+        else:
+            wait_rid = comm.wait_signal_async(peer, peer_tag)
+            require(wait_rid != 0, "bidir: wait_signal_async failed")
+            poll_rid(comm, wait_rid)
+
         exp = expected_payload(peer, case_id, 23 + peer * 11, payload_el)
         verify_segment(recv_buf, my_recv_off_el, payload_el, exp, guard,
                        "bidir_offset")

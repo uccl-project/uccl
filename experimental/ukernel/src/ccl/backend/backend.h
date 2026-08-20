@@ -19,7 +19,6 @@ namespace CCL {
 struct Cmd {
   ExecOpKind kind;      // 4
   uint32_t src_buf;     // 4
-  uint32_t src2_buf;    // 4 — fused-reduce local contribution (Input)
   uint32_t dst_buf;     // 4
   uint32_t bytes;       // 4
   uint32_t src_peer;    // 4
@@ -43,7 +42,7 @@ struct Cmd {
   uint64_t dst_off;  // 8 — byte offset within dst_buf's allocation
   uint64_t copy_dst_off;  // 8 — fused reduce+copy target offset
 };
-// Total: 4*12 + 1 + 1 + 2 + 8*4 = 84 bytes
+// Total: 4*11 + 1 + 1 + 2 + 8*4 = 80 bytes
 
 static_assert(sizeof(Cmd) <= 96, "Cmd too large");
 
@@ -56,18 +55,14 @@ inline constexpr uint8_t kCmdFlagPutSignal = 1u << 0;
 // UNSALTED tag and wait_count counts the group's fused puts (one imm
 // each).
 inline constexpr uint8_t kCmdFlagImmWait = 1u << 1;
-// kCmdFlagReduce3Way: the Reduce writes dst = src op src2 (fresh, no dst
-// read) instead of dst = dst op src. src = the peer's buffer (src_peer),
-// src2 = this rank's local Input at src_off (fused out-of-place reduce).
-inline constexpr uint8_t kCmdFlagReduce3Way = 1u << 2;
 // kCmdFlagReduceCopy: the Reduce task also copies dst to the peer
 // (copy_dst_*). The data-ready signal is a separate host-written Signal
 // op (B300 has no GPU-mapped signal ring, so the kernel cannot write it).
-inline constexpr uint8_t kCmdFlagReduceCopy = 1u << 3;
+inline constexpr uint8_t kCmdFlagReduceCopy = 1u << 2;
 // kCmdFlagCopySignal: the Put is a fused AG copy — a device task that
 // copies to the peer (dst_peer) and device-writes the completion flag
 // (flag_slot, tag) when done. No CE, no host signal op.
-inline constexpr uint8_t kCmdFlagCopySignal = 1u << 4;
+inline constexpr uint8_t kCmdFlagCopySignal = 1u << 3;
 
 struct CmdWithId {
   Cmd cmd;

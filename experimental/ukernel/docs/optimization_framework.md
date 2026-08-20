@@ -54,7 +54,7 @@ gap is the per-tile dependency chain itself (host profiling: only ~16%
 of the RS time is host dispatch; ~90us/tile is GPU/CE-side put-signal-
 reduce latency), which neither tile size nor chunking addresses. C=4
 failed to produce a result (not investigated — the direction is
-decisive). The knob stays in the code as a measurement tool.
+decisive). The knob has been removed; the verdict stands.
 
 ### RS CE+device hybrid — negative (2026-08-15)
 
@@ -72,7 +72,7 @@ The device half competes with the reduce on the same worker, so the
 hybrid loses even at 4/8 ranks. The alltoall device-path win (4/8 ranks)
 was for pure copies (no reduce on the worker); RS's copy+reduce share
 the worker, so splitting the send across engines does not help. The
-`put_path_hint` plumbing stays (useful for future per-op path control).
+knob has been removed; `put_path_hint` stays for the AllToAll hybrid.
 
 ## The three planes
 
@@ -123,7 +123,7 @@ hops via deeper pipelining.
 |---|---|
 | CE contention microbench (sync 56-way vs staggered) | CE sync 2-3x penalty; SM copy ~half as bad. Real, but ring RS is only 8-way. |
 | `cudaMemcpyBatchAsync` batch submission | no effect on the sync peak (~2.1 TB/s both ways); IPC adapter stays per-peer. |
-| Fused remote-read reduce (`UK_CCL_FUSE_RS_REDUCE`) | 1.4-1.5x worse at 2/4/8 ranks; latency-bound. Dead end, kept behind flag. |
+| Fused remote-read reduce (was `UK_CCL_FUSE_RS_REDUCE`) | 1.4-1.5x worse at 2/4/8 ranks; latency-bound. Dead end, removed. |
 | Fused reduce+copy (`UK_CCL_FUSE_REDUCE_COPY`) + device flags | +7.5% (4r), +18.8% (8r); stress-validated wrong=0. Shipped. |
 | Fused AG copy (`UK_CCL_FUSE_AG_COPY`) | neutral at 4r, ~5% at 8r (1560 -> 1487us). Shipped. |
 | AG via standalone device puts (`UK_CCL_PUT_PATH=device` on AG) | regresses (worker serializes copies with reduces). AG fuses instead. |
@@ -132,7 +132,7 @@ hops via deeper pipelining.
 | LT sweep (pipeline depth) | LT=16 best; finer tiles regress — per-tile host cost caps depth. |
 | REDUCE_ILP=16 | +24% per block on reduce bench; shim 95% of native at BLK=64; cannot reach native at <=32 blocks alone. |
 | TMA bulk reduce (TMA_REDUCE=1, 224KB smem) | 99% of native at BLK=32 (509.5 GB/s); tail-chunk bug fixed; opt-in pending broader validation. |
-| Warp-specialized TMA pipeline | ~10% SLOWER per block than single-buffer at full depth; parked WIP. |
+| Warp-specialized TMA pipeline | ~10% SLOWER per block than single-buffer at full depth; removed (details in git history). |
 | IPC window size / stream count | not the bottleneck (462-498 GB/s medians regardless of BATCH). |
 | Idle-exit spin fix | removed 25-50ms jitter (was `__nanosleep(100)` = 10us sleeps); stability fix, median unchanged. |
 | Lazy device worker (bind on first use) | reverted: the lazily created multi-block worker stalls on B300 (fifo bound=1, tail never advances) and hangs alltoall hybrid at 4/8 ranks. The first-launch warm-up also hit a CUDA 13.2/13.3 create/destroy context-poisoning issue. Dead end for now — zero-SM for all-CE is achieved at the plan level instead (pct=100 emits no device ops). |
@@ -382,8 +382,8 @@ Status: **implemented on `uk-300`** — `UK_CCL_FUSE_REDUCE_COPY=1`
 (fused reduce+copy in the reduce-scatter phase) and
 `UK_CCL_FUSE_AG_COPY=1` (fused device copy in the all-gather phase).
 Measured gain: +7.5% at 4 ranks, +18.8% at 8 ranks (256M AllReduce,
-OOP). The earlier remote-read reduce variant is a dead end and is kept
-behind `UK_CCL_FUSE_RS_REDUCE` (default 0) only as a reference.
+OOP). The earlier remote-read reduce variant was a dead end and has
+been removed (details in git history).
 
 ### Motivation
 
@@ -398,7 +398,7 @@ device-written flag that the host polls directly.
 
 ### Design space: two fused-RS shapes
 
-**Remote-read reduce — dead end (UK_CCL_FUSE_RS_REDUCE)**. The
+**Remote-read reduce — dead end (was UK_CCL_FUSE_RS_REDUCE)**. The
 receiver's reduce kernel reads the peer's send-source buffer directly
 over NVLink (NCCL LL-style), and the sender's signal means "data ready"
 instead of "put landed". Measured 1.4-1.5x SLOWER at 2/4/8 ranks: the

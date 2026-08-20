@@ -19,6 +19,9 @@
 #include <thread>
 #include <unordered_set>
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <cerrno>
 #include <unistd.h>
 
 namespace UKernel {
@@ -417,6 +420,8 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
         local_meta.ip, global_rank_, local_gpu_idx_);
     if (put_completion_ring_)
       tcp_adapter_->set_put_completion_ring(put_completion_ring_);
+    if (sig_send_completion_ring_)
+      tcp_adapter_->set_sig_send_completion_ring(sig_send_completion_ring_);
   }
   return *tcp_adapter_;
 }
@@ -1254,8 +1259,7 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
       ev.failed = false;
       matched = true;
     } else {
-      static const bool kLogSig = std::getenv("UK_CCL_LOG_SIG") != nullptr;
-      if (kLogSig)
+      if (uk_dbg_lvl() >= UK_DBG_LVL_TPT)
         std::fprintf(stderr, "[sig-wait r%d] peer=%d tag=%#lx count=%u\n",
                      global_rank_, peer, (unsigned long)tag, remaining);
       pending_signal_waits_[peer][tag].emplace_back(rid, remaining);
@@ -1580,7 +1584,6 @@ void Communicator::on_signal_received(int peer, uint64_t tag) {
 
 void Communicator::on_signals_received(int peer, uint64_t const* tags,
                                        size_t n) {
-  static const bool kLogSig = std::getenv("UK_CCL_LOG_SIG") != nullptr;
   // drain_ipc_signals never passes more than 64 tags per call.
   SignalCompletion done[64];
   size_t ndone = 0;
@@ -1612,7 +1615,7 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
         }
       }
       if (!consumed) pending_signals_[peer].push_back(tag);
-      if (kLogSig)
+      if (uk_dbg_lvl() >= UK_DBG_LVL_TPT)
         std::fprintf(stderr, "[sig-recv r%d] peer=%d tag=%#lx %s\n",
                      global_rank_, peer, (unsigned long)tag,
                      matched ? "matched" : (consumed ? "counted" : "buffered"));
@@ -2024,17 +2027,24 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
     // First-ever resolve, or a newer publish. The initial publish generation
     // (0) equals the default last_gen (0); without the have_last_gen guard a
     // re-resolve of an already-resolved buffer (generation unchanged) would
-    // spin forever. A deregister (invalid) entry is NOT a resolution: keep
-    // waiting for a valid publish without recording its generation —
-    // recording it would let the reuse branch below short-circuit a
-    // later re-publish with the stale cached item.
+    // spin forever. A peer may deliberately publish an INVALID entry
+    // (reg_ipc with nullptr/0) as a marker; on a first-ever wait that is a
+    // resolution — get_ipc() reports the "published but unmappable" state.
+    // Only a NEW-generation invalid entry after a prior resolution is a
+    // deregister tombstone: keep waiting, and never record its generation
+    // (recording it would let the reuse branch below short-circuit a later
+    // re-publish with the stale cached item).
     if (!have_last_gen || info.generation != last_gen) {
       if (!info.valid) {
-        if (timeout_ms >= 0) {
-          elapsed += kPollMs;
-          if (elapsed >= timeout_ms) return false;
+        if (have_last_gen) {
+          if (timeout_ms >= 0) {
+            elapsed += kPollMs;
+            if (elapsed >= timeout_ms) return false;
+          }
+          continue;  // deregister tombstone — wait for a valid re-publish
         }
-        continue;  // deregister entry — wait for the valid publish
+        put_cache_bump();  // remote IPC meta may have changed
+        break;
       }
       put_cache_bump();  // remote IPC meta may have changed
       break;
@@ -2095,6 +2105,97 @@ IPCItem Communicator::get_ipc(uint32_t buffer_id) {
   return it->second;
 }
 
+bool Communicator::open_remote_ipc_mapping(int owner_rank, uint32_t buffer_id,
+                                           IPCItem& item) {
+  if (owner_rank == global_rank_ || item.direct_ptr != nullptr) return true;
+
+  // Serialize every remote IPC mapping open across processes on this
+  // host. Concurrent bidirectional cudaIpcOpenMemHandle calls race on
+  // A40-class dual-GPU systems: one direction can return a mapping that
+  // accepts writes but points at the wrong physical memory, while the
+  // other direction fails with cudaErrorInvalidResourceHandle. flock
+  // auto-releases if a peer dies mid-open, so a crashed rank cannot
+  // deadlock the next run.
+  char lock_path[128];
+  std::snprintf(lock_path, sizeof(lock_path), "/tmp/uk_ccl_ipc_open_%d.lock",
+                static_cast<int>(::getuid()));
+  int lfd = ::open(lock_path, O_CREAT | O_RDWR, 0666);
+  if (lfd < 0) {
+    std::cerr << "[ipc-open r" << global_rank_ << "] lock open failed: "
+              << std::strerror(errno) << std::endl;
+    return false;
+  }
+  struct flock fl {};
+  fl.l_type = F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  if (::fcntl(lfd, F_SETLKW, &fl) != 0) {
+    std::cerr << "[ipc-open r" << global_rank_ << "] lock wait failed: "
+              << std::strerror(errno) << std::endl;
+    ::close(lfd);
+    return false;
+  }
+
+  bool ok = true;
+  int original_device = -1;
+  if (gpuGetDevice(&original_device) != gpuSuccess) {
+    ok = false;
+  } else if (gpuSetDevice(local_gpu_idx_) != gpuSuccess) {
+    ok = false;
+  } else {
+    // Explicitly enable peer access before opening: lazy enablement is
+    // asynchronous and a mapping used before it completes can accept
+    // writes that never reach the owner's pages (observed on A40 pairs).
+    // gpuDeviceSynchronize after open would also work but deadlocks when
+    // the persistent device worker is already running on a non-blocking
+    // stream; enable + open is stable and needs no device-wide sync.
+    // The flock above serializes both directions, so the two peers never
+    // race their enable calls against each other.
+    if (item.device_idx >= 0) {
+      gpuError_t pa = gpuDeviceEnablePeerAccess(item.device_idx, 0);
+      // Consume the sticky error state: when the access is already
+      // enabled, the runtime records cudaErrorPeerAccessAlreadyEnabled
+      // and a later cudaGetLastError (e.g. the device worker's post-launch
+      // check) would abort on it.
+      if (pa != gpuSuccess) (void)gpuGetLastError();
+      if (pa != gpuSuccess && pa != gpuErrorPeerAccessAlreadyEnabled) {
+        std::cerr << "[ipc-open r" << global_rank_
+                  << "] peer enable dev" << item.device_idx << " failed: "
+                  << gpuGetErrorString(pa) << std::endl;
+        ok = false;
+      }
+    }
+    if (ok) {
+      gpuError_t open_err = gpuIpcOpenMemHandle(
+          &item.direct_ptr, item.handle, gpuIpcMemLazyEnablePeerAccess);
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[ipc-open r%d] owner=%d buf=%u handle=%02x%02x%02x%02x "
+             "direct=%p dev=%d err=%d",
+             global_rank_, owner_rank, buffer_id,
+             (unsigned char)item.handle.reserved[0],
+             (unsigned char)item.handle.reserved[1],
+             (unsigned char)item.handle.reserved[2],
+             (unsigned char)item.handle.reserved[3], item.direct_ptr,
+             item.device_idx, static_cast<int>(open_err));
+      if (open_err != gpuSuccess) {
+        std::cerr << "[ERROR] "
+                  << ipc_open_error_message(owner_rank, buffer_id, item,
+                                            open_err)
+                  << std::endl;
+        ok = false;
+      }
+    }
+    if (gpuSetDevice(original_device) != gpuSuccess) ok = false;
+  }
+
+  fl.l_type = F_UNLCK;
+  if (::fcntl(lfd, F_SETLK, &fl) != 0) {
+    std::cerr << "[ipc-open r" << global_rank_ << "] unlock failed: "
+              << std::strerror(errno) << std::endl;
+  }
+  ::close(lfd);
+  return ok && item.direct_ptr != nullptr;
+}
+
 IPCItem Communicator::get_ipc(int owner_rank, uint32_t buffer_id) {
   if (owner_rank == global_rank_) return get_ipc(buffer_id);
   IPCItem item = ipc_manager_.get_ipc(owner_rank, buffer_id);
@@ -2102,17 +2203,9 @@ IPCItem Communicator::get_ipc(int owner_rank, uint32_t buffer_id) {
     throw std::runtime_error("remote IPC not found for buffer_id");
   }
   if (item.direct_ptr == nullptr) {
-    int original_device = -1;
-    GPU_RT_CHECK(gpuGetDevice(&original_device));
-    auto restore = UKernel::Transport::finally(
-        [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-
-    gpuError_t open_err = gpuIpcOpenMemHandle(&item.direct_ptr, item.handle,
-                                              gpuIpcMemLazyEnablePeerAccess);
-    if (open_err != gpuSuccess) {
+    if (!open_remote_ipc_mapping(owner_rank, buffer_id, item)) {
       throw std::runtime_error(
-          ipc_open_error_message(owner_rank, buffer_id, item, open_err));
+          "remote IPC open failed for buffer_id " + std::to_string(buffer_id));
     }
     ipc_manager_.register_remote_ipc(owner_rank, buffer_id, item);
   }
@@ -2151,20 +2244,8 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
   }
 
   if (item.direct_ptr == nullptr) {
-    int original_device = -1;
-    if (gpuGetDevice(&original_device) != gpuSuccess) return false;
-    if (gpuSetDevice(local_gpu_idx_) != gpuSuccess) return false;
-    gpuError_t open_err = gpuIpcOpenMemHandle(&item.direct_ptr, item.handle,
-                                              gpuIpcMemLazyEnablePeerAccess);
-    gpuError_t restore_err = gpuSetDevice(original_device);
-    if (restore_err != gpuSuccess) return false;
-    if (open_err != gpuSuccess || item.direct_ptr == nullptr) {
-      std::cerr << "[ERROR] "
-                << ipc_open_error_message(remote_rank, remote_buffer_id, item,
-                                          open_err)
-                << std::endl;
+    if (!open_remote_ipc_mapping(remote_rank, remote_buffer_id, item))
       return false;
-    }
     if (!ipc_manager_.register_remote_ipc(remote_rank, remote_buffer_id,
                                           item)) {
       return false;

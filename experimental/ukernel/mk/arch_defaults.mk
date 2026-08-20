@@ -84,7 +84,6 @@ ifeq ($(origin TMA_REDUCE), undefined)
 endif
 TMA_REDUCE ?= $(_AUTO_TMA)
 REDUCE_SMEM_KB ?= $(_AUTO_SMEM_KB)
-TMA_WARPSPEC ?= 0
 
 # Rebuild stamp: make tracks timestamps, not compile flags, so switching
 # VALIDATE <-> perf or ILP/TMA/SMEM values used to silently reuse stale

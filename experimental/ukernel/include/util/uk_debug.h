@@ -4,12 +4,15 @@
 #include <cstdlib>
 #include <pthread.h>
 
-// UKernel CCL debug logging.
-//
-// Set UK_CCL_DEBUG to enable:
-//   1 = EXEC  executor / ccl-level events
-//   2 = TPT   + transport-level events
-//   3 = ALL   + verbose heartbeats (alive/drain-spin traces)
+// UKernel CCL diagnostics — one switch (UK_CCL_DEBUG) gates all logging,
+// counters, tracing and profiling:
+//   1 = EXEC  executor/ccl events, put-path counters, stall dumps
+//   2 = TPT   + transport/signal events and signal traffic logs
+//   3 = ALL   + verbose heartbeats, per-op completion trace, host
+//              orchestration profile (printed at executor teardown)
+// SIGUSR2 with level >= 1 dumps all running runs.
+// UK_CCL_RUN_WATCHDOG_MS is the only separate diagnostic: a functional
+// watchdog that fails runs which stop making progress.
 //
 // UK_DBG(lvl, fmt, ...) prints when UK_CCL_DEBUG >= lvl, with a
 // [DBG<lvl>|<tid>] prefix, to stderr.

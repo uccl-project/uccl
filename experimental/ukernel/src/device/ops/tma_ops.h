@@ -43,14 +43,6 @@ __device__ __forceinline__ void tma_expect_bytes(TmaSemaphore& sem,
       "r"(bytes));
 }
 
-__device__ __forceinline__ void tma_arrive(TmaSemaphore& sem,
-                                           uint32_t count = 1) {
-  uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
-  asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0], %1;\n" ::"r"(sem_ptr),
-               "r"(count)
-               : "memory");
-}
-
 __device__ __forceinline__ void tma_wait(TmaSemaphore& sem, int phase) {
   uint32_t sem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&sem));
   asm volatile(
@@ -74,7 +66,6 @@ __device__ __forceinline__ void tma_fence_async() {
 __device__ __forceinline__ void tma_fence_async_global() {
   asm volatile("fence.proxy.async.global;\n" ::: "memory");
 }
-__device__ __forceinline__ void tma_fence() { __threadfence(); }
 
 template <typename T>
 __device__ void tma_load(void* smem_dst, void const* gmem_src, uint64_t bytes,
@@ -106,15 +97,12 @@ __device__ void tma_store(void* gmem_dst, void const* smem_src,
 #else
 __device__ __forceinline__ void tma_expect_bytes(TmaSemaphore& sem,
                                                  uint32_t bytes) {}
-__device__ __forceinline__ void tma_arrive(TmaSemaphore& sem,
-                                           uint32_t count = 1) {}
 __device__ __forceinline__ void tma_wait(TmaSemaphore& sem, int phase) {}
 __device__ __forceinline__ void tma_commit_group() {}
 template <int N = 0>
 __device__ __forceinline__ void tma_wait_group() {}
 __device__ __forceinline__ void tma_fence_async() {}
 __device__ __forceinline__ void tma_fence_async_global() {}
-__device__ __forceinline__ void tma_fence() {}
 
 template <typename T>
 __device__ void tma_load(void* smem_dst, void const* gmem_src, uint64_t bytes,

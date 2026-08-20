@@ -490,7 +490,6 @@ the target workloads:
    `ncclSend`/`ncclRecv` groups, which the shim does not implement. The
    comparison target is user-space MoE implementations (DeepEP); see
    [docs/alltoall_comparison.md](docs/alltoall_comparison.md). Our
-- [docs/perf_test_procedure.md](docs/perf_test_procedure.md) — how to build and run the shim/native perf tests
    native AllToAll (spray) reaches 2.9ms / 93 GB/s at 256MB.
 
 How the large-message wins were reached (`6ae8d24d..HEAD`):

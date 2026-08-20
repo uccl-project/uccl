@@ -33,9 +33,9 @@ uint32_t auto_device_blocks(int gpu_id) {
   if (blocks > static_cast<uint32_t>(prop.multiProcessorCount)) {
     blocks = static_cast<uint32_t>(prop.multiProcessorCount);
   }
-  std::fprintf(stderr,
-               "[FACTORY] auto device blocks=%u (compute=%u.%u, sm_count=%d)\n",
-               blocks, prop.major, prop.minor, prop.multiProcessorCount);
+  UK_DBG(UK_DBG_LVL_EXEC,
+         "[factory] auto device blocks=%u (compute=%u.%u, sm_count=%d)",
+         blocks, prop.major, prop.minor, prop.multiProcessorCount);
   return blocks;
 }
 
@@ -43,15 +43,12 @@ uint32_t auto_device_blocks(int gpu_id) {
 
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
-  fprintf(stderr, "[FACTORY] creating Communicator rank=%d gpu=%d\n",
-          config.rank, config.gpu_id);
   auto comm_cfg = std::make_shared<Transport::CommunicatorConfig>();
   comm_cfg->exchanger_ip = config.exchanger_ip;
   comm_cfg->exchanger_port = config.exchanger_port;
   comm_cfg->local_id = config.local_id;
   auto comm = std::make_shared<UKernel::Transport::Communicator>(
       config.gpu_id, config.rank, config.world_size, comm_cfg);
-  fprintf(stderr, "[FACTORY] Communicator done\n");
   DeviceBackendConfig dev_cfg{
       .task_capacity = static_cast<uint32_t>(config.device_task_capacity),
       .max_fifos = static_cast<uint32_t>(config.max_device_fifos),
@@ -193,7 +190,6 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   };
 
   ex->start();
-  fprintf(stderr, "[FACTORY] done rank=%d\n", config.rank);
   return ex;
 }
 

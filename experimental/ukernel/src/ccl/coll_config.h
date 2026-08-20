@@ -40,14 +40,6 @@ struct CollectiveConfig {
   // make the collective slow at low BLK. Default false: the executor
   // level (spray) keeps the in-plan copy.
   bool external_self_slice = false;
-  // Fused reduce-scatter (AllReduceRing): the receiver's reduce kernel
-  // reads the peer's buffer directly over NVLink (LD/ST) instead of the
-  // peer's CE put landing the data locally first; the sender's signal
-  // fires when the data is ready (after its producing reduce, or at
-  // start for the own shard). Cuts CE traffic in half (RS phase only;
-  // the AG phase keeps the configured put path). Toggle via
-  // UK_CCL_FUSE_RS_REDUCE (default 0).
-  bool fuse_rs_reduce = false;
   // Fused reduce+copy (AllReduceRing RS phase): each RecvReduce task
   // also copies its reduced shard to the next rank's accumulation buffer
   // (device LD/ST write to peer, the alltoall-proven direction) and
@@ -69,17 +61,6 @@ struct CollectiveConfig {
   // chain from the AG per-hop path. Toggle via UK_CCL_FUSE_AG_COPY
   // (default 0). Requires device_flags (the flag slot mechanism).
   bool fuse_ag_copy = false;
-  // RS chunking (UK_CCL_RS_CHUNKS, default 1): split each ReduceScatter
-  // tile's put/reduce into K chunk ops so the reduce of chunk c can
-  // overlap the put of chunk c+1 within the tile. Experimental — the LT
-  // sweep suggests finer ops regress (per-tile dependency latency), but
-  // this isolates the within-tile overlap from the allreduce phases.
-  uint32_t rs_chunks = 1;
-  // RS CE+device hybrid (UK_CCL_RS_HYBRID, default 0): each tile's send
-  // is split half CE put + half device-copy task (per-op put_path_hint),
-  // so the copy engines overlap. Target: 4+ ranks where synchronized CE
-  // peaks stall the copy engine (see optimization_framework.md, App. A).
-  bool rs_hybrid = false;
   // AllToAll CE+device hybrid (UK_CCL_A2A_HYBRID, default 0): split each
   // per-peer send into a CE half and a device-copy half, overlapping the
   // CE engine and the worker on pure copies (no reduce to compete with).

@@ -116,6 +116,7 @@ class TcpTransportAdapter final : public TransportAdapter {
   jring_t* send_task_ring_ = nullptr;
   jring_t* recv_task_ring_ = nullptr;
   std::atomic<bool> stop_{false};
+  int rr_peer_idx_ = 0;  // recv worker round-robin cursor
   std::thread send_worker_;
   std::thread recv_worker_;
   std::unique_ptr<CpuBouncePool> bounce_pool_;

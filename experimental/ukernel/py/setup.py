@@ -1,4 +1,6 @@
+import glob
 import os
+import subprocess
 from pathlib import Path
 
 from setuptools import setup
@@ -69,6 +71,7 @@ sources = [
     rel(ROOT / "src" / "device" / "fifo" / "sm_fifo.cc"),
     rel(ROOT / "src" / "device" / "worker.cc"),
     rel(ROOT / "src" / "device" / "persistent_kernel_ops.cu"),
+    rel(ROOT / "src" / "device" / "reduce_dispatch.cu"),
 ]
 
 p2p_sources = [
@@ -131,6 +134,7 @@ if USE_ROCM:
 cuda_nvcc_args = [
     "-O3",
     "-std=c++20",
+    "-rdc=true",
     "--expt-extended-lambda",
     "--expt-relaxed-constexpr",
     "-DKITTENS_HOPPER",
@@ -227,11 +231,105 @@ p2p_ext = ExtensionCls(
 ext_modules = [ext, p2p_ext]
 
 
+class NvccLinkBuildExtension(BuildExtension):
+    """Build CUDA extensions, then relink them with nvcc.
+
+    torch's BuildExtension links with the host compiler, which leaves the
+    -rdc=true device relocations (__cudaRegisterLinkedBinary_*) unresolved
+    in the final .so. nvcc performs the nvlink pass that resolves them.
+    """
+
+    def build_extensions(self):
+        # Drop stale objects from the pre-rewrite ccl/algo layout; they
+        # reference deleted sources and break any link that picks them up.
+        for stale in glob.glob(
+            os.path.join(self.build_temp, "**", "src", "ccl", "algo", "*.o"),
+            recursive=True,
+        ):
+            os.remove(stale)
+        super().build_extensions()
+        if USE_ROCM:
+            return
+
+        nvcc = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda")) / "bin" / "nvcc"
+        if not nvcc.exists():
+            nvcc = Path("nvcc")
+        torch_lib = Path(torch.__file__).resolve().parent / "lib"
+        libdirs = [
+            "/usr/local/lib",
+            "/usr/lib",
+            "/usr/lib64",
+            "/usr/lib/x86_64-linux-gnu",
+            str(Path(CUDA_HOME) / "lib64"),
+            str(RDMA_STATIC.parent.resolve()),
+            str(torch_lib),
+        ]
+        libs = [
+            "z",
+            "ibverbs",
+            "nl-3",
+            "nl-route-3",
+            "pthread",
+            "numa",
+            "cudart",
+            "cuda",
+            "gdrapi",
+            "rdma",
+            "c10",
+            "torch",
+            "torch_cpu",
+            "torch_python",
+            "c10_cuda",
+            "torch_cuda",
+        ]
+        for ext in self.extensions:
+            if not any(s.endswith((".cu", ".cuh")) for s in ext.sources):
+                continue
+            objs = [
+                os.path.abspath(o)
+                for o in glob.glob(
+                    os.path.join(self.build_temp, "**", "*.o"), recursive=True
+                )
+                if not o.endswith("py/ukernel_p2p.o")
+            ]
+            out = os.path.abspath(self.get_ext_fullpath(ext.name))
+            cmd = [
+                str(nvcc),
+                "-shared",
+                "-o",
+                str(out),
+                *objs,
+                "-rdc=true",
+                "-O3",
+                "-std=c++20",
+                "--expt-extended-lambda",
+                "--expt-relaxed-constexpr",
+                *[
+                    arg
+                    for a in (80, 86, 89)
+                    for arg in ("-gencode", f"arch=compute_{a},code=sm_{a}")
+                ],
+                *[f"-L{d}" for d in libdirs],
+                "-Xlinker",
+                "-rpath",
+                "-Xlinker",
+                str(Path(CUDA_HOME) / "lib64"),
+                *[f"-l{l}" for l in libs],
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    "nvcc relink failed:\n"
+                    + proc.stdout
+                    + proc.stderr
+                )
+
+
 setup(
     name="ukernel-ccl",
     version="0.1.0",
     packages=["ukernel_ccl", "ukernel_p2p"],
     package_dir={"ukernel_ccl": "ukernel_ccl", "ukernel_p2p": "ukernel_p2p"},
     ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": NvccLinkBuildExtension},
 )

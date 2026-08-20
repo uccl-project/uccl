@@ -175,7 +175,7 @@ Environment variables:
 | Variable | Default | Purpose |
 |---|---|---|
 | `EXCHANGER_PORT` | 29620 | Bootstrap exchanger port |
-| `TRANSPORT` | `auto` | Force transport: `auto`, `ipc`, `tcp`, `uccl` |
+| `TRANSPORT` | `auto` | Force transport: `auto`, `ipc`, `tcp`, `rdma` |
 
 ### `test_bidirectional_p2p.py`
 
@@ -196,7 +196,7 @@ CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 tests/test_bidirectional_p2
 ### `run_transport_paths_suite.sh`
 
 Runs `test_transport_paths.py` across all supported transports (ipc, tcp,
-uccl) in sequence. Each transport gets its own exchanger port to avoid
+rdma) in sequence. Each transport gets its own exchanger port to avoid
 collisions.
 
 ```bash

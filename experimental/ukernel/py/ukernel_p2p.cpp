@@ -41,6 +41,7 @@ PreferredTransport parse_transport(std::string const& value) {
   if (value == "ipc") return PreferredTransport::Ipc;
   if (value == "tcp") return PreferredTransport::Tcp;
   if (value == "rdma") return PreferredTransport::Rdma;
+  if (value == "uccl") return PreferredTransport::Uccl;
   throw std::invalid_argument("unsupported transport: " + value);
 }
 

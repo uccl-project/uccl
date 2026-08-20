@@ -116,8 +116,6 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   args.src_device = device_idx_;
   args.dst_device = device_idx_;
   bool src_ok = (c.src_buf == 0), dst_ok = (c.dst_buf == 0);
-  // A 3-way reduce must resolve its local Input contribution.
-  bool src2_ok = !(c.flags & kCmdFlagReduce3Way);
   // A fused reduce+copy must resolve its peer accum target.
   bool copy_dst_ok = !(c.flags & kCmdFlagReduceCopy);
 
@@ -215,28 +213,6 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
       }
     }
   }
-  if (c.flags & kCmdFlagReduce3Way) {
-    // Fused out-of-place reduce: src2 is this rank's local Input
-    // contribution at the same offset as the shard.
-    void* p2 = nullptr;
-    if (c.src2_buf < kMaxLocalBufs && local_ptr_cache_[c.src2_buf]) {
-      p2 = local_ptr_cache_[c.src2_buf];
-    } else if (comm_) {
-      auto ipc = comm_->get_ipc(c.src2_buf);
-      char* base =
-          (char*)(ipc.is_local ? (void*)ipc.base_addr : ipc.direct_ptr);
-      if (base) {
-        p2 = base + ipc.base_offset;
-        if (c.src2_buf < kMaxLocalBufs)
-          local_ptr_cache_[c.src2_buf] = p2;
-      }
-    }
-    if (p2) {
-      args.src2 = (char*)p2 + c.src_off;
-      args.taskFlags |= Device::TaskArgs::kFlagReduce3Way;
-      src2_ok = true;
-    }
-  }
   args.set_red_type(c.redop == ReductionKind::None  ? Device::ReduceType::None
                     : c.redop == ReductionKind::Sum ? Device::ReduceType::Sum
                                                     : Device::ReduceType::Sum);
@@ -328,14 +304,12 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
     }
   }
 
-  if (!src_ok || !dst_ok || !src2_ok || !copy_dst_ok) {
+  if (!src_ok || !dst_ok || !copy_dst_ok) {
     throw std::runtime_error(
         std::string("[DeviceBackend] unresolved buffer ptr src_ok=") +
         std::to_string((int)src_ok) + " dst_ok=" + std::to_string((int)dst_ok) +
-        " src2_ok=" + std::to_string((int)src2_ok) +
         " copy_dst_ok=" + std::to_string((int)copy_dst_ok) +
         " src_buf=" + std::to_string(c.src_buf) +
-        " src2_buf=" + std::to_string(c.src2_buf) +
         " copy_dst_buf=" + std::to_string(c.copy_dst_buf) +
         " dst_buf=" + std::to_string(c.dst_buf));
   }
@@ -454,11 +428,12 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
     }
     pending_total_ -= count;
 
-    // Stall forensics: pending work but nothing drains — dump fifo
-    // head/tail vs the pending queue front to tell "kernel stuck on a
-    // task" from "host accounting bug".
+    // Stall forensics (UK_CCL_DEBUG >= 1): pending work but nothing
+    // drains — dump fifo head/tail vs the pending queue front to tell
+    // "kernel stuck on a task" from "host accounting bug".
     static int stall_iters = 0;
-    if (count == 0 && pending_total_ > 0 && (++stall_iters % 5000) == 0) {
+    if (uk_dbg_lvl() >= UK_DBG_LVL_EXEC && count == 0 && pending_total_ > 0 &&
+        (++stall_iters % 5000) == 0) {
       for (uint32_t fid = 0; fid < cfg_.max_fifos; ++fid) {
         if (pending_by_fifo_[fid].empty()) continue;
         auto ht = worker_pool_->fifo_head_tail(fid);

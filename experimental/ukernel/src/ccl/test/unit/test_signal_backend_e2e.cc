@@ -120,6 +120,7 @@ int main(int argc, char** argv) {
     std::vector<CmdWithId> wt(N);
     for (int i = 0; i < N; i++) {
       wt[i].cmd.kind = ExecOpKind::WaitSignal;
+      wt[i].cmd.flag_slot = ~0u;  // ring signal wait, not a device flag
       wt[i].cmd.src_peer = (uint32_t)peer;
       wt[i].cmd.tag = 200 + i;
       wt[i].caller_id = 100 + i;
@@ -161,6 +162,7 @@ int main(int argc, char** argv) {
     std::vector<CmdWithId> wt(N);
     for (int i = 0; i < N; i++) {
       wt[i].cmd.kind = ExecOpKind::WaitSignal;
+      wt[i].cmd.flag_slot = ~0u;  // ring signal wait, not a device flag
       wt[i].cmd.src_peer = (uint32_t)peer;
       wt[i].cmd.tag = 100 + i;
       wt[i].caller_id = i;

@@ -12,7 +12,10 @@ GPU_IDS="${GPU_IDS:-6,7}"
 
 TRANSPORTS=("${@}")
 if [[ ${#TRANSPORTS[@]} -eq 0 ]]; then
-  TRANSPORTS=("ipc" "tcp" "uccl")
+  # uccl is not wired into the Communicator; the suite covers the three
+  # transports the binding actually implements (rdma needs a working NIC
+  # and P2P-capable GPUs).
+  TRANSPORTS=("ipc" "tcp" "rdma")
 fi
 
 for i in "${!TRANSPORTS[@]}"; do

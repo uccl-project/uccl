@@ -138,6 +138,12 @@ CUDA_VISIBLE_DEVICES=6,7 ./test_put_signal_e2e --role=client --gpu=1 --transport
 Pass criteria: `can_fuse_put_signal=1`, `data-after-signal: verified`,
 `[PASS]` on both sides.
 
+Note: same-host IPC mapping opens are serialized across processes
+(flock) and explicitly enable peer access before `cudaIpcOpenMemHandle`.
+On A40 pairs, lazy-only enablement can return a mapping whose writes
+never reach the owner's pages; the explicit enable + serialized open
+avoids that driver behavior.
+
 ### test_spray_executor_e2e
 
 Full-pipeline integration: DeviceBackend + TransportBackend +
@@ -229,12 +235,12 @@ PutSignal active).
 make test_perf_spray_allreduce
 
 # same-node
-UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
-UK_CCL_PATH_COUNTERS=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall
+UK_CCL_DEBUG=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
+UK_CCL_DEBUG=1 CUDA_VISIBLE_DEVICES=6,7 ./test_perf_spray_allreduce --role=client --gpu=1 --kind=alltoall
 
 # cross-node
-UK_CCL_PATH_COUNTERS=1 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
-UK_CCL_PATH_COUNTERS=1 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP>
+UK_CCL_DEBUG=1 ./test_perf_spray_allreduce --role=server --gpu=0 --kind=alltoall
+UK_CCL_DEBUG=1 ./test_perf_spray_allreduce --role=client --gpu=0 --kind=alltoall --exchanger-ip=<SERVER_IP>
 ```
 
 CLI reference:
@@ -297,17 +303,18 @@ and costs nothing when unset.
 
 ```bash
 UK_CCL_DEBUG=1 ./test_perf_spray_allreduce ...   # executor events (submit/enqueue/drain)
-UK_CCL_DEBUG=2 ./test_perf_spray_allreduce ...   # + transport layer (signal matching, rings)
-UK_CCL_DEBUG=3 ./test_perf_spray_allreduce ...   # everything, incl. high-frequency per-op lines
+UK_CCL_DEBUG=2 ./test_perf_spray_allreduce ...   # + transport layer (signal matching, rings) + signal logs
+UK_CCL_DEBUG=3 ./test_perf_spray_allreduce ...   # everything, incl. per-op trace + host profile
 ```
 
 Other runtime switches:
 
-- `UK_CCL_PATH_COUNTERS=1` — count Put ops per path (Device/IPC/RDMA).
+- `UK_CCL_DEBUG=1` also counts Put ops per path (Device/IPC/RDMA); the
+  perf benchmark prints the counters at the end.
 - `UK_CCL_PUT_PATH=device|ipc|rdma` — force every same-host Put onto one
   path for A/B benchmarking (remote peers are always RDMA). Combine with
-  `UK_CCL_PATH_COUNTERS=1` to verify the forced distribution, and compare
-  against the automatic multi-path LB (unset).
+  `UK_CCL_DEBUG=1` to verify the forced distribution, and compare against
+  the automatic multi-path LB (unset).
 - `UK_CCL_DEV_FIFOS=<n>` / `UK_CCL_DEV_BLOCKS=<n>` /
   `UK_CCL_DEV_THREADS=<n>` — override DeviceBackend parallelism at
   executor creation (win over `SprayExecutorConfig` values): FIFOS is

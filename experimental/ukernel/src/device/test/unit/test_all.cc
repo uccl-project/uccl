@@ -301,6 +301,39 @@ void test_multiple_fifos_copy() {
   pool.shutdown_all();
 }
 
+void test_single_block_reduce() {
+  TaskManagerScope scope(16);
+  WorkerPool pool(default_config(4, 16, 64));
+
+  constexpr size_t kBytes = 4096;
+  DeviceBuffer buf(kBytes);
+  std::vector<float> host(kBytes / 4);
+  for (size_t i = 0; i < host.size(); ++i) host[i] = static_cast<float>(i);
+  upload_vector(buf.ptr, host);
+
+  require(pool.createWorker(0, 1), "single-block reduce worker creation failed");
+  pool.waitWorker(0);
+
+  Task task = TaskManager::instance().create_task(
+      make_reduce_args(buf.ptr, buf.ptr, kBytes, ReduceType::Sum),
+      TaskType::CollReduce, DataType::Fp32, 0);
+  uint64_t task_id = pool.enqueue(task, 0);
+  require(task_id != WorkerPool::kInvalidTaskId, "reduce enqueue failed");
+  wait_until_done(pool, task_id, 0);
+
+  auto res = download_vector<float>(buf.ptr, kBytes);
+  bool ok = true;
+  for (size_t i = 0; i < res.size(); ++i)
+    if (std::fabs(res[i] - static_cast<float>(i) * 2.0f) > 0.01f) {
+      if (ok) std::printf("[device unit] reduce res[%zu]=%f exp=%f\n", i,
+                          res[i], static_cast<float>(i) * 2.0f);
+      ok = false;
+      break;
+    }
+  require(ok, "single-block reduce result mismatch");
+  pool.shutdown_all();
+}
+
 }  // namespace
 
 }  // namespace Device
@@ -325,6 +358,7 @@ int main() {
              test_enqueue_without_worker_fails);
     run_case("device unit", "single-block copy", test_single_block_copy);
     run_case("device unit", "multi-block copy", test_multi_block_copy);
+    run_case("device unit", "single-block reduce", test_single_block_reduce);
     run_case("device unit", "copy supports fp32 and fp16",
              test_copy_supports_fp32_and_fp16);
     run_case("device unit", "multiple fifo copy", test_multiple_fifos_copy);
