@@ -421,7 +421,7 @@ inline int prepare_fifo_metadata(GenericEndpoint const& ep, P2PMhandle* mhandle,
           serialize_fifo_item(remote_mem_info, out_buf);
           return 0;
         } else {
-          FifoItem remote_mem_info;
+          FifoItem remote_mem_info{};
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;
           copy_rkeys_from_mr_array_to_bytes(
