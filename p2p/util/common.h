@@ -405,11 +405,17 @@ typedef struct RegMemBlock {
   // Get MR by context ID
   struct ibv_mr* get_mr_by_context_id(uint32_t context_id) const;
 
-  // Get rkey by channel ID (for backward compatibility)
-  uint32_t get_key_by_channel_id(uint32_t channel_id) const;
+  // Get rkey by channel ID (for remote RDMA access)
+  uint32_t get_rkey_by_channel_id(uint32_t channel_id) const;
 
-  // Get rkey by context ID (for backward compatibility)
-  uint32_t get_key_by_context_id(uint32_t context_id) const;
+  // Get rkey by context ID (for remote RDMA access)
+  uint32_t get_rkey_by_context_id(uint32_t context_id) const;
+
+  // Get lkey by channel ID (for local SGE access, e.g. one-sided read dst)
+  uint32_t get_lkey_by_channel_id(uint32_t channel_id) const;
+
+  // Get lkey by context ID (for local SGE access)
+  uint32_t get_lkey_by_context_id(uint32_t context_id) const;
 
   friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block);
 } RegMemBlock;
@@ -428,10 +434,11 @@ typedef struct RemoteMemInfo {
 
   RemoteMemInfo(std::shared_ptr<RegMemBlock> const block);
 
-  uint32_t get_key_by_channel_id(uint32_t channel_id) const;
+  // Remote memory only carries rkeys (lkey stays local to the owner).
+  uint32_t get_rkey_by_channel_id(uint32_t channel_id) const;
 
   // Get rkey by context ID (direct index access)
-  uint32_t get_key_by_context_id(size_t context_id) const;
+  uint32_t get_rkey_by_context_id(size_t context_id) const;
 
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info);
 } RemoteMemInfo;
