@@ -552,8 +552,10 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
   init.local_gpu_idx = local_gpu_idx_;
 
   if (peer_rank >= 0) {
-    RdmaPeer* p = peer_table_[static_cast<size_t>(peer_rank)].load(
-        std::memory_order_acquire);
+    // Must grow the peer table before indexing; ranks >= kInitPeerCapacity
+    // (8) would otherwise read out of bounds and segfault.
+    auto& slot = ensure_peer_slot(peer_rank);
+    RdmaPeer* p = slot.load(std::memory_order_acquire);
     if (!p || !p->qps_created) {
       // Create a new peer
       auto np = std::make_unique<RdmaPeer>();
@@ -564,7 +566,6 @@ RdmaPeerConnectSpec RdmaTransportAdapter::get_connect_init(int peer_rank) {
           init.remote_data_qpns[i] = np->data_qps[i]->qp_num;
         init.remote_signal_qpn = np->signal_qp ? np->signal_qp->qp_num : 0;
 
-        auto& slot = ensure_peer_slot(peer_rank);
         size_t idx = static_cast<size_t>(peer_rank);
         peer_owners_[idx] = std::move(np);
         slot.store(peer_owners_[idx].get(), std::memory_order_release);
