@@ -164,6 +164,10 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   c.put_path = op.put_path_hint;  // None = auto (pick_put_path below)
   c.tag = salt_tag(op.tag, tag_epoch);
   if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
+  if (op.rdma_fused_proxy) {
+    c.flags |= kCmdFlagRdmaFusedProxy;
+    c.flags &= ~kCmdFlagReduceCopy;
+  }
   if (op.kind == ExecOpKind::Put && op.flag_slot != ~0u)
     c.flags |= kCmdFlagCopySignal;
   return c;
@@ -251,6 +255,24 @@ uintptr_t SprayExecutor::cached_alloc_base(void const* p) {
   if (alloc_base_cache_.size() >= 8192) alloc_base_cache_.clear();
   alloc_base_cache_.emplace(raw, base);
   return base;
+}
+
+bool SprayExecutor::submit_fused_cmd(uint64_t cmd_index) {
+  if (!fused_proxy_) return false;
+  auto const& slot = fused_proxy_->pool().get(cmd_index);
+  uint32_t be_idx = tpt_be_->reserve_slot();
+  auto* run = static_cast<SprayRun*>(slot.run);
+  // Publish the BeSlot BEFORE enqueueing so a fast completion can never
+  // beat the slot publication (same two-phase rule as normal submission).
+  tpt_slots_.write(be_idx, run, slot.op_idx, slot.put_path, stop_);
+  if (!tpt_be_->do_enqueue_reserved(slot.cmd, be_idx)) {
+    tpt_slots_.release(be_idx);
+    return false;
+  }
+  if (run) {
+    run->inflight_ops.fetch_add(1, std::memory_order_release);
+  }
+  return true;
 }
 
 // Build the immutable plan: tiling/lowering plus the successor CSR and
@@ -994,6 +1016,28 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                      run.output_buf_id, run.scratch_buf_id,
                      run.input_base_off, run.output_base_off,
                      run.scratch_base_off, run.tag_epoch);
+    if (c.kind == ExecOpKind::Reduce &&
+        (c.flags & kCmdFlagRdmaFusedProxy)) {
+      // Cross-node RDMA proxy: allocate the synthetic Put's Cmd in the
+      // fused pool now. The device task will write this index into the
+      // D2H ring after reducing to local dst.
+      int32_t pop_idx = run.plan->tiled.ops[idx].fused_proxy_put_idx;
+      if (pop_idx >= 0 && fused_proxy_) {
+        auto const& pop = run.plan->tiled.ops[static_cast<size_t>(pop_idx)];
+        Cmd put = make_cmd(pop, run.plan->tiled.reduction,
+                           run.plan->tiled.dtype, run.input_buf_id,
+                           run.output_buf_id, run.scratch_buf_id,
+                           run.input_base_off, run.output_base_off,
+                           run.scratch_base_off, run.tag_epoch);
+        uint64_t pool_idx =
+            fused_proxy_->pool().alloc(put, &run, static_cast<uint32_t>(pop_idx),
+                                       PutPath::Rdma);
+        if (pool_idx != UINT64_MAX) {
+          c.rdma_fused_ring = fused_proxy_->ring().device_handle();
+          c.rdma_fused_cmd_index = pool_idx;
+        }
+      }
+    }
     if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
       if (c.flags & kCmdFlagCopySignal) {
         // Fused AG copy: must run on the device backend (the task writes
@@ -1231,6 +1275,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           run.deferred_sig.push_back(idx);
         }
       }
+      continue;
+    }
+
+    if (c.kind == ExecOpKind::Put &&
+        (c.flags & kCmdFlagRdmaFusedProxy)) {
+      // Synthetic RDMA proxy Put: submitted by the D2H proxy through
+      // submit_fused_cmd(), not by the normal enqueue path. Keep it
+      // deferred until the device notifies and the proxy publishes a
+      // BeSlot.
+      run.deferred_tpt.push_back(idx);
       continue;
     }
 
@@ -1529,6 +1583,7 @@ void SprayExecutor::drain_tpt_loop() {
     if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++iter % 10000 == 0)
       UK_DBG(UK_DBG_LVL_ALL, "[drain-tpt r%d] alive iter=%d", rank_or_neg1(),
              iter);
+    if (fused_proxy_) fused_proxy_->progress();
     size_t nd;
     {
       HostProf::Scope hps(HostProf::tpt_us);

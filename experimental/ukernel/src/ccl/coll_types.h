@@ -116,6 +116,11 @@ struct TiledOp {
   CollectiveBufferRole copy_dst_buf_role = CollectiveBufferRole::Output;
   size_t copy_dst_off = 0;
   bool fused_copy = false;
+  // Cross-node fused reduce+copy via RDMA proxy: the device reduces to
+  // local dst, then notifies the CCL proxy; the proxy posts the RDMA put
+  // for the synthetic Put op recorded in fused_proxy_put_idx.
+  bool rdma_fused_proxy = false;
+  int32_t fused_proxy_put_idx = -1;
   // Device-completion flag slot for the signal of a fused task
   // (fuse_reduce_copy with UK_CCL_DEVICE_FLAGS): the WaitSignal polls
   // this slot; the fused Reduce writes it. ~0u = host ring signal.

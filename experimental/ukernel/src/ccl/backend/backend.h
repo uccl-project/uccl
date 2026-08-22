@@ -41,10 +41,15 @@ struct Cmd {
   uint64_t src_off;  // 8 — byte offset within src_buf's allocation
   uint64_t dst_off;  // 8 — byte offset within dst_buf's allocation
   uint64_t copy_dst_off;  // 8 — fused reduce+copy target offset
+  // Cross-node fused reduce+copy via RDMA proxy: the device task writes
+  // rdma_fused_cmd_index into the D2H ring after reducing to dst; the
+  // host then posts the RDMA put described by that CmdPool slot.
+  void* rdma_fused_ring = nullptr;
+  uint64_t rdma_fused_cmd_index = UINT64_MAX;
 };
-// Total: 4*11 + 1 + 1 + 2 + 8*4 = 80 bytes
+// Total: 4*11 + 1 + 1 + 2 + 8*6 = 104 bytes
 
-static_assert(sizeof(Cmd) <= 96, "Cmd too large");
+static_assert(sizeof(Cmd) == 104, "Cmd size changed");
 
 // Cmd::flags bits
 inline constexpr uint8_t kCmdFlagPutSignal = 1u << 0;
@@ -63,6 +68,10 @@ inline constexpr uint8_t kCmdFlagReduceCopy = 1u << 2;
 // copies to the peer (dst_peer) and device-writes the completion flag
 // (flag_slot, tag) when done. No CE, no host signal op.
 inline constexpr uint8_t kCmdFlagCopySignal = 1u << 3;
+// kCmdFlagRdmaFusedProxy: the device Reduce task skips the remote IPC
+// copy and instead writes rdma_fused_cmd_index into the D2H ring; the
+// CCL proxy posts the RDMA put.
+inline constexpr uint8_t kCmdFlagRdmaFusedProxy = 1u << 4;
 
 struct CmdWithId {
   Cmd cmd;

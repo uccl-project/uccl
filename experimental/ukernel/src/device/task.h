@@ -122,6 +122,9 @@ struct alignas(16) TaskArgs {
   // signal tag into the peer's ring / flag area (src2).
   static constexpr uint64_t kFlagReduceCopy = 1ull << 0;
   static constexpr uint64_t kFlagSignalAfter = 1ull << 1;
+  // Cross-node fused reduce+copy via the RDMA proxy: dst2 holds the D2H
+  // ring device handle and signal_tag holds the CmdPool index.
+  static constexpr uint64_t kFlagRdmaFusedProxy = 1ull << 2;
 
   void* src;
   void* src2;  // fused-signal target: peer ring / device-flag area
@@ -154,6 +157,10 @@ struct alignas(16) TaskArgs {
 
   __host__ __device__ bool signal_after() const {
     return (taskFlags & kFlagSignalAfter) != 0;
+  }
+
+  __host__ __device__ bool rdma_fused_proxy() const {
+    return (taskFlags & kFlagRdmaFusedProxy) != 0;
   }
 
   __host__ __device__ bool is_published() const {

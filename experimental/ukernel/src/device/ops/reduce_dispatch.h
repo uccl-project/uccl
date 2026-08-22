@@ -36,10 +36,12 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
     read_reduce_store<T>(dst + block_offset, src + block_offset,
                          static_cast<size_t>(my_count), a.red_type(),
                          smem_buf);
-    if (a.reduce_copy()) {
+    if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       // Fused reduce+copy: forward the just-reduced shard to the next
       // rank's accumulation buffer (device LD/ST write to peer, the
       // alltoall-proven direction). Same block partition as the reduce.
+      // RDMA proxy mode skips this: the host will RDMA-put `dst` after
+      // the device notifies it through the D2H ring.
       T* dst2 = reinterpret_cast<T*>(a.dst2);
       copy<T>(dst2 + block_offset, dst + block_offset,
               static_cast<size_t>(my_count), smem_buf);
@@ -50,7 +52,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
     read_reduce_store_generic<T>(dst + block_offset, src + block_offset,
                                  static_cast<size_t>(my_count),
                                  a.red_type());
-    if (a.reduce_copy()) {
+    if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       T* dst2 = reinterpret_cast<T*>(a.dst2);
       copy<T>(dst2 + block_offset, dst + block_offset,
               static_cast<size_t>(my_count), smem_buf);

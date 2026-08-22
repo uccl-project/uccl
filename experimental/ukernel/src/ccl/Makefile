@@ -67,7 +67,7 @@ DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := coll_algo.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc executor_factory.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc backend/rdma_fused_proxy.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -127,17 +127,21 @@ real_backends: $(REAL_BACKEND_OBJ)
 test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-test_async: $(CCL_CORE_OBJ) executor.o backend/signal_backend.o \
+test_rdma_fused_proxy: backend/rdma_fused_proxy.o test/unit/test_rdma_fused_proxy.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda -lpthread
+
+test_async: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/signal_backend.o \
 		$(TRANSPORT_OBJ) test/unit/test_async.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
-test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/signal_backend.o \
-		$(TRANSPORT_OBJ) test/unit/test_spray_executor.o
+test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_spray_executor.o backend/rdma_fused_proxy.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
-test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/device_backend.o backend/transport_backend.o \
+test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/device_backend.o backend/transport_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -145,7 +149,7 @@ test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/device_backend.o backend/
 test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_transport_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/transport_backend.o \
+test_transport_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/transport_backend.o \
 		$(TRANSPORT_OBJ) test/unit/test_transport_backend_e2e.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
@@ -153,7 +157,7 @@ test_transport_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/transport_backend
 test/unit/test_transport_backend_e2e.o: test/unit/test_transport_backend_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/device_backend.o \
+test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/device_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/unit/test_device_backend_e2e.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -161,7 +165,7 @@ test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/device_backend.o \
 test/unit/test_device_backend_e2e.o: test/unit/test_device_backend_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/signal_backend.o \
+test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o backend/signal_backend.o \
 		$(TRANSPORT_OBJ) test/unit/test_signal_backend_e2e.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
@@ -176,7 +180,7 @@ test_put_signal_e2e: $(CCL_CORE_OBJ) $(TRANSPORT_OBJ) test/integration/test_put_
 test/integration/test_put_signal_e2e.o: test/integration/test_put_signal_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_spray_executor_e2e.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -184,7 +188,7 @@ test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/d
 test/integration/test_spray_executor_e2e.o: test/integration/test_spray_executor_e2e.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_rdma_l2_flush: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+test_rdma_l2_flush: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_rdma_l2_flush.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -192,7 +196,7 @@ test_rdma_l2_flush: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/device
 test/integration/test_rdma_l2_flush.o: test/integration/test_rdma_l2_flush.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o executor_factory.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_spray_allreduce.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -256,7 +260,7 @@ nccl_dev: $(NCCL_SO)
 	cp ../../include/gpu_rt.h $(NCCL_PREFIX)/include/
 	@echo "NCCL compat installed to $(NCCL_PREFIX)/"
 
-$(NCCL_SO): $(CCL_CORE_OBJ) executor.o executor_factory.o \
+$(NCCL_SO): $(CCL_CORE_OBJ) executor.o backend/rdma_fused_proxy.o executor_factory.o \
 		backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) $(NCCL_OBJ)
 	$(NVCC) -shared -o $@ $^ $(NVCCFLAGS) $(INCLUDES) \

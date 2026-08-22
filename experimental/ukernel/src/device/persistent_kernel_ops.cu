@@ -2,6 +2,7 @@
 #include "ops/ops.h"
 #include "ops/reduce_dispatch.h"
 #include "persistent_kernel_ops.h"
+#include "rdma_fused_ring_device.cuh"
 
 namespace UKernel {
 namespace Device {
@@ -64,6 +65,7 @@ __device__ __forceinline__ void signal_flag_write(uint64_t* slot,
 __device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
                                                         TaskArgs const* args) {
   if (args == nullptr) return;
+  if (args->rdma_fused_proxy()) return;  // host sends put+signal via RDMA
   TaskType const t = static_cast<TaskType>(task.type_u8());
   bool const want = (t == TaskType::CollPut) ||
                     (t != TaskType::CollPut && args->signal_after());
@@ -76,6 +78,15 @@ __device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
     signal_flag_write(reinterpret_cast<uint64_t*>(args->src2),
                       args->signal_tag);
   }
+}
+
+// Cross-node fused reduce+copy: after all blocks finish reducing into the
+// local staging buffer, notify the CCL proxy through the D2H ring. The
+// proxy will post the RDMA put for `dst` using the referenced Cmd.
+__device__ __forceinline__ void maybe_rdma_fused_push(TaskArgs const* args) {
+  if (args == nullptr || !args->rdma_fused_proxy()) return;
+  auto* ring = reinterpret_cast<RdmaFusedRingDeviceHandle*>(args->dst2);
+  rdma_fused_ring_push(ring, args->signal_tag);
 }
 
 }  // namespace
@@ -442,6 +453,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           tma_fence_async_global();
           __threadfence();
           maybe_signal_ring_write(current_task, current_args);
+          maybe_rdma_fused_push(current_args);
           publish_tail_progress(fifo.tail, sh_tail + 1);
           mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
               &d_sync->completedBlocks, 0u, mscclpp::memoryOrderRelease);

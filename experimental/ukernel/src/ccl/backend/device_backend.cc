@@ -304,6 +304,17 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
     }
   }
 
+  if (c.flags & kCmdFlagRdmaFusedProxy) {
+    // Cross-node fused reduce+copy: the device does NOT copy to a remote
+    // IPC buffer. It reduces into local dst, then notifies the CCL proxy
+    // through the D2H ring. dst2 holds the ring handle; signal_tag holds
+    // the CmdPool index.
+    args.dst2 = c.rdma_fused_ring;
+    args.signal_tag = c.rdma_fused_cmd_index;
+    args.taskFlags |= Device::TaskArgs::kFlagRdmaFusedProxy;
+    copy_dst_ok = true;
+  }
+
   if (!src_ok || !dst_ok || !copy_dst_ok) {
     throw std::runtime_error(
         std::string("[DeviceBackend] unresolved buffer ptr src_ok=") +

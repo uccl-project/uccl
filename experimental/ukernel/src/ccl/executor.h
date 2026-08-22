@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend/backend.h"
+#include "backend/rdma_fused_proxy.h"
 #include "coll_config.h"
 #include "lower.h"
 #include "util/jring.h"
@@ -412,6 +413,11 @@ class SprayExecutor {
   void prepare(CollectiveConfig const& cfg, void* input, void* output);
   uintptr_t cached_alloc_base(void const* p);
 
+  // Submit a fused RDMA command previously written by a device kernel into
+  // the D2H ring. Returns true when the command was accepted by the
+  // TransportBackend and a BeSlot was published for normal completion.
+  bool submit_fused_cmd(uint64_t cmd_index);
+
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);
   bool wait(CollectiveOpHandle h,
@@ -589,6 +595,9 @@ class SprayExecutor {
   std::unique_ptr<BatchBackend> owned_transport_;
   std::unique_ptr<BatchBackend> owned_signal_;
   std::shared_ptr<Transport::Communicator> owned_comm_;
+  // Alternate producer for fused RDMA puts: GPU kernel writes cmd_index
+  // into the D2H ring, progress() feeds the same TransportBackend.
+  std::shared_ptr<RdmaFusedProxy> fused_proxy_;
 
   // Scratch buffers for Tmp regions / lowering staging, ONE PER
   // DISTINCT SIZE (key = staging bytes). Buffers stay allocated and

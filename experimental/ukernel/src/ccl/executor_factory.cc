@@ -139,6 +139,17 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   ex->tpt_be_->set_comm(ex->owned_comm_.get());
   ex->signal_be_->set_comm(ex->owned_comm_.get());
 
+  // Fused RDMA proxy: commands produced by GPU kernels are fed into the
+  // same TransportBackend through SprayExecutor::submit_fused_cmd().
+  {
+    auto* ex_ptr = ex.get();
+    ex->fused_proxy_ = std::make_shared<RdmaFusedProxy>(
+        [ex_ptr](uint64_t cmd_index) {
+          return ex_ptr->submit_fused_cmd(cmd_index);
+        },
+        4096, 4096);
+  }
+
   ex->register_buf_fn_ = [](Transport::Communicator* comm, uint32_t id,
                             void* ptr, size_t len) {
     comm->register_buffer(id, ptr, len);

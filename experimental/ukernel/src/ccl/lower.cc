@@ -4,12 +4,20 @@
 #include "../../include/util/uk_debug.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
+
+// Cross-node fused reduce+copy via the software RDMA proxy.
+static bool const kRdmaFusedProxy = []() {
+  char const* v = std::getenv("UK_CCL_RDMA_FUSED_MODE");
+  return v && std::string(v) == "proxy";
+}();
 
 struct TileResult {
   std::vector<Op> ops;
@@ -331,7 +339,6 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         old_to_new[old_idx] = cur_group_ws;
 
       } else if (op.kind == AlgoOpKind::RecvReduce) {
-        old_to_new[old_idx] = static_cast<uint32_t>(out.size());
         TiledOp red;
         red.kind = ExecOpKind::Reduce;
         red.bytes = op.bytes;
@@ -345,35 +352,65 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         auto red_dst = resolve_buf(ch.dst, tmp_base);
         red.dst_buf_role = red_dst.role;
         red.dst_off += red_dst.base_off;
+        uint32_t red_idx = static_cast<uint32_t>(out.size());
+        uint32_t put_idx = red_idx;
         if (ch.fuse_copy_to_peer) {
-          // Fused reduce+copy: after the reduce, copy dst to the next
-          // rank's accumulation buffer. The data-ready signal is a
-          // device-completion flag slot (when device_flags) written by
-          // the task itself, or a separate host-written Signal op.
           auto red_copy = resolve_buf(ch.copy_dst, tmp_base);
           red.copy_dst_peer = static_cast<uint32_t>(ch.copy_peer);
           red.copy_dst_buf_role = red_copy.role;
           red.copy_dst_off = op.dst_off + red_copy.base_off;
-          red.fused_copy = true;
-          if (device_flags) {
-            // Per-tile slot + tag: tile t writes slot pair*K+t with the
-            // slot index as the tag (salted). The receiver's group wait
-            // polls consecutive slots and matches base_tag+i.
-            red.flag_slot = static_cast<uint32_t>(
-                static_cast<uint64_t>(ch.pair_id) * max_tiles +
-                static_cast<uint64_t>(t));
-            red.tag = red.flag_slot;
+          if (kRdmaFusedProxy) {
+            // Cross-node RDMA proxy: reduce to local dst only; the
+            // synthetic Put below is posted by the proxy after the device
+            // notifies through the D2H ring.
+            red.rdma_fused_proxy = true;
+          } else {
+            // Same-host fused reduce+copy: after the reduce, copy dst to
+            // the peer's accumulation buffer. The data-ready signal is a
+            // device-completion flag slot (when device_flags) written by
+            // the task itself, or a separate host-written Signal op.
+            red.fused_copy = true;
+            if (device_flags) {
+              // Per-tile slot + tag: tile t writes slot pair*K+t with the
+              // slot index as the tag (salted). The receiver's group wait
+              // polls consecutive slots and matches base_tag+i.
+              red.flag_slot = static_cast<uint32_t>(
+                  static_cast<uint64_t>(ch.pair_id) * max_tiles +
+                  static_cast<uint64_t>(t));
+              red.tag = red.flag_slot;
+            }
           }
         }
         red.deps = op.deps;
         out.push_back(red);
+        if (ch.fuse_copy_to_peer && kRdmaFusedProxy) {
+          // Synthetic RDMA Put: depends on the Reduce; all downstream
+          // ops wait for this Put instead of the Reduce.
+          TiledOp put;
+          put.kind = ExecOpKind::Put;
+          put.bytes = red.bytes;
+          put.src_off = red.dst_off;
+          put.dst_off = red.copy_dst_off;
+          put.dst_peer = red.copy_dst_peer;
+          put.src_buf_role = red.dst_buf_role;
+          put.dst_buf_role = red.copy_dst_buf_role;
+          put.put_path_hint = PutPath::Rdma;
+          put.rdma_fused_proxy = true;
+          put.deps.push_back(red_idx);
+          put_idx = static_cast<uint32_t>(out.size());
+          out.push_back(put);
+          red.fused_proxy_put_idx = static_cast<int32_t>(put_idx);
+          old_to_new[old_idx] = put_idx;
+        } else {
+          old_to_new[old_idx] = red_idx;
+        }
         if (ch.fuse_copy_to_peer && !device_flags) {
           TiledOp sig;
           sig.kind = ExecOpKind::Signal;
           sig.dst_peer = static_cast<uint32_t>(ch.copy_peer);
           sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
                              group_bits);
-          sig.deps.push_back(old_idx);  // remapped to this reduce tile
+          sig.deps.push_back(put_idx);  // remapped target (red or put)
           out.push_back(sig);
         }
 
