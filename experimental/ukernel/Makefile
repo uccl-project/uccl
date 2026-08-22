@@ -49,9 +49,10 @@ $(shell printf '%s\n' '$(NVCCFLAGS) $(CXXFLAGS)' > $(BUILD_FLAGS_STAMP).tmp; \
 #             -I$(TK_ROOT)/include \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
-              -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
-              -Wl,-rpath,/usr/lib/$(GCC_MACHINE) \
-              -Wl,-rpath-link,/lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
+              -L$(CUDA_PATH)/lib64 \
+              -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64 \
+              -Xlinker -rpath -Xlinker /usr/lib/$(GCC_MACHINE) \
+              -Xlinker -rpath-link -Xlinker /lib/$(GCC_MACHINE):/usr/lib/$(GCC_MACHINE) \
               -lcudart -lcuda \
               -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 

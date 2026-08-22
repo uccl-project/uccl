@@ -124,6 +124,13 @@ int main(int argc, char** argv) {
   GPU_RT_CHECK(gpuMalloc(&d, B));
   comm->register_buffer(1, d, B);
   comm->resolve_remote_buffer(peer, 1, 30000);
+  // Ensure both sides have finished local buffer setup before either
+  // starts memset/send, otherwise the receiver's zero-fill can race the
+  // sender's first RDMA writes.
+  if (!comm->barrier("put_signal_ready", 30000)) {
+    fprintf(stderr, "[FAIL] barrier before phase loop failed\n");
+    return 1;
+  }
 
   int const sender = 1;  // client sends first, then roles swap
   for (int phase = 0; phase < 2; ++phase) {

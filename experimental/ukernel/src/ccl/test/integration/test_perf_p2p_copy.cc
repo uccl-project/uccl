@@ -206,8 +206,13 @@ int main(int argc, char** argv) {
 
   if (has_ipc) {
   gpuError_t err = gpuDeviceEnablePeerAccess(remote_dev, 0);
-  if (err != gpuSuccess && err != gpuErrorPeerAccessAlreadyEnabled)
+  if (err == gpuErrorPeerAccessAlreadyEnabled) {
+    // Clear the sticky per-thread CUDA error so later gpuGetLastError()
+    // checks (device worker launch) do not abort on the stale status.
+    (void)gpuGetLastError();
+  } else if (err != gpuSuccess) {
     GPU_RT_CHECK(err);
+  }
   std::printf("[p2p-perf] peer access enabled: GPU %d -> %d\n", gpu,
               remote_dev);
 

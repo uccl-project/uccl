@@ -77,8 +77,14 @@ int main(int argc, char** argv) {
     GPU_RT_CHECK(gpuDeviceCanAccessPeer(&ca, gpu, rdev));
     if (ca) {
       gpuError_t e = gpuDeviceEnablePeerAccess(rdev, 0);
-      if (e != gpuSuccess && e != gpuErrorPeerAccessAlreadyEnabled)
+      if (e == gpuErrorPeerAccessAlreadyEnabled) {
+        // Clear the sticky per-thread CUDA error; otherwise a later
+        // gpuGetLastError() (e.g. the device worker's post-launch check)
+        // aborts on the stale "already enabled" status.
+        (void)gpuGetLastError();
+      } else if (e != gpuSuccess) {
         GPU_RT_CHECK(e);
+      }
     }
     printf("  remote dev=%d access=%d\n", rdev, ca);
 

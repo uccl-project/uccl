@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cuda.h>
 #include <unistd.h>
 
@@ -85,6 +86,35 @@ int pick_dev_for_gpu(int gpu_idx) {
   int ndev = 0;
   ibv_device** devs = ibv_get_device_list(&ndev);
   if (!devs) return 0;
+
+  // Optional explicit RDMA device override for debugging/tuning.
+  if (char const* forced = std::getenv("UK_RDMA_DEV")) {
+    for (int j = 0; j < ndev; ++j) {
+      std::string name = ibv_get_device_name(devs[j]);
+      if (name != forced) continue;
+      auto it = std::find_if(nics.begin(), nics.end(),
+                             [&](auto const& p) { return p.first == name; });
+      if (it == nics.end()) continue;
+      char state_path[512];
+      snprintf(state_path, sizeof(state_path),
+               "/sys/class/infiniband/%s/ports/1/state", name.c_str());
+      FILE* fp = fopen(state_path, "r");
+      int port_state = 0;
+      if (fp) {
+        char buf[32] = {};
+        if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
+        fclose(fp);
+      }
+      if (port_state == 4) {
+        fprintf(stderr, "[pick_dev] forced %s for gpu %d\n", name.c_str(),
+                gpu_idx);
+        ibv_free_device_list(devs);
+        return j;
+      }
+    }
+    fprintf(stderr, "[pick_dev] WARN UK_RDMA_DEV=%s not active/available\n",
+            forced);
+  }
 
   for (int j = 0; j < ndev; ++j) {
     std::string name = ibv_get_device_name(devs[j]);

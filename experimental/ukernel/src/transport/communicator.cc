@@ -2272,16 +2272,11 @@ bool Communicator::try_resolve_remote_ipc_pointer(int remote_rank,
 
 bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
   bool ok = reg_mr(buffer_id, ptr, len, true);
-
-  // Only exchange IPC handles if there is at least one IPC-connected peer.
-  bool has_ipc_peer = false;
-  for (int r = 0; r < world_size_; ++r) {
-    if (r != global_rank_ && has_put_path(r, PeerTransportKind::Ipc)) {
-      has_ipc_peer = true;
-      break;
-    }
-  }
-  if (has_ipc_peer) ok = reg_ipc(buffer_id, ptr, len, true) && ok;
+  // Always publish a local IPC handle too. Even in cross-node-only runs
+  // DeviceBackend uses get_ipc() on local buffers to resolve their base
+  // pointer/offset, so skipping IPC registration here would make any
+  // device-side reduce/copy op abort with "local IPC not found".
+  ok = reg_ipc(buffer_id, ptr, len, true) && ok;
 
   return ok;
 }
@@ -2304,10 +2299,9 @@ bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
     return true;
   }
   bool ok_mr = wait_mr(peer_rank, buffer_id, timeout_ms);
-  bool ok_ipc = wait_ipc(peer_rank, buffer_id, timeout_ms);
-  if (!ok_mr || !ok_ipc) {
-    std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (mr=%d ipc=%d)\n",
-                 global_rank_, peer_rank, buffer_id, (int)ok_mr, (int)ok_ipc);
+  if (!ok_mr) {
+    std::fprintf(stderr, "[resolve r%d] TIMEOUT peer=%d buf=%u (mr)\n",
+                 global_rank_, peer_rank, buffer_id);
     return false;
   }
   // Cross-node: RDMA is required, so wait for a nonzero rkey.

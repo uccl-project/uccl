@@ -98,12 +98,13 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 // cuFlushGPUDirectRDMAWrites(target, scope) — invalidates all GPU L2 for
 // RDMA writes targeting the given scope (CUDA 11.3+ / driver R495+).
 //   target=0: CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX
-//   scope=1:  CU_FLUSH_GPU_DIRECT_RDMA_WRITES_SCOPE_REMOTE
-// We use raw numeric values rather than the named enum constants because
-// *_SCOPE_LOCAL_SOCKET (scope=2) is not available in all CUDA 11.x headers.
+//   scope=100: CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER
+//   scope=200: CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_ALL_DEVICES
+// The older comment/raw value 1 was wrong: the actual enum values are
+// 100/200, so the old wrapper passed an invalid scope and was a no-op.
 inline void gpuFlushRDMAWrites() {
   cuFlushGPUDirectRDMAWrites(static_cast<CUflushGPUDirectRDMAWritesTarget>(0),
-                             static_cast<CUflushGPUDirectRDMAWritesScope>(1));
+                             static_cast<CUflushGPUDirectRDMAWritesScope>(100));
 }
 // DMA-BUF / GPU driver types for GPUDirect RDMA
 #define gpuDriverResult_t CUresult
