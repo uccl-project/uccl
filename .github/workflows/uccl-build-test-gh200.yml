@@ -122,12 +122,10 @@ jobs:
           set -euo pipefail
           passwd_b64="$(printf '%s' "$UCCL_GH200_PASSWD" | base64 -w0)"
           for host in gh0 gh1; do
-            ssh -o BatchMode=yes "$host" bash -s << EOF
-              set -euo pipefail
-              UCCL_GH200_PASSWD="\$(printf '%s' "${passwd_b64}" | base64 -d)"
-              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get update
-              printf '%s\n' "\${UCCL_GH200_PASSWD}" | sudo -S -p '' apt-get install -y libfabric-dev libhwloc-dev
-          EOF
+            {
+              echo "export UCCL_SUDO_PASSWORD=\"\$(printf '%s' '${passwd_b64}' | base64 -d)\""
+              cat .github/workflows/install_cxi_apt_deps.sh
+            } | ssh -o BatchMode=yes "$host" bash -s
           done
 
       - name: Sync pushed code to gh200
