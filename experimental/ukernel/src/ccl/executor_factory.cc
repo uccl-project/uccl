@@ -5,15 +5,65 @@
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include "gpu_rt.h"
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <sched.h>
 #include <stdexcept>
+#include <unistd.h>
 #include <vector>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
+
+// ukernel relies on host threads doing tight polling for completion and
+// signal propagation. MPI launchers that bind each rank to a single CPU
+// (or a small subset) can starve those pollers and cause 5-10x slowdowns
+// (observed with OpenMPI 5 even when hwloc binding seemed disabled).
+//
+// This guard does two things:
+//   1. Warns when the process affinity is narrower than the host.
+//   2. If UK_CCL_UNBIND=1 is set, tries to widen the process affinity to
+//      all online CPUs so the same binary works under restrictive MPI
+//      launchers without requiring launcher-specific flags.
+void maybe_handle_cpu_binding() {
+  cpu_set_t cur;
+  CPU_ZERO(&cur);
+  if (sched_getaffinity(0, sizeof(cur), &cur) != 0) return;
+  int cur_count = CPU_COUNT(&cur);
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  if (cur_count <= 0 || online <= 0 || cur_count >= online) return;
+
+  char const* env = std::getenv("UK_CCL_UNBIND");
+  bool unbind = env && std::string(env) != "0";
+  if (unbind) {
+    cpu_set_t all;
+    CPU_ZERO(&all);
+    long max_cpu = online < CPU_SETSIZE ? online : CPU_SETSIZE;
+    for (long i = 0; i < max_cpu; ++i) CPU_SET((int)i, &all);
+    if (sched_setaffinity(0, sizeof(all), &all) == 0) {
+      std::fprintf(
+          stderr,
+          "[ukernel] widened CPU affinity %d -> %ld CPUs (UK_CCL_UNBIND=1)\n",
+          cur_count, online);
+    } else {
+      std::fprintf(stderr,
+                   "[ukernel] WARN UK_CCL_UNBIND=1 but sched_setaffinity "
+                   "failed: %s\n",
+                   std::strerror(errno));
+    }
+  } else {
+    std::fprintf(
+        stderr,
+        "[ukernel] WARN process bound to %d/%ld CPUs; ukernel host polling "
+        "may be very slow. Use --bind-to none (or set UK_CCL_UNBIND=1)\n",
+        cur_count, online);
+  }
+}
 
 // Default device blocks_per_worker from the GPU's compute capability.
 // Measured sweet spots: A40-class (sm_86/89) 8 blocks; Hopper (sm_90)
@@ -43,6 +93,7 @@ uint32_t auto_device_blocks(int gpu_id) {
 
 std::unique_ptr<SprayExecutor> SprayExecutor::create(
     SprayExecutorConfig const& config) {
+  maybe_handle_cpu_binding();
   auto comm_cfg = std::make_shared<Transport::CommunicatorConfig>();
   comm_cfg->exchanger_ip = config.exchanger_ip;
   comm_cfg->exchanger_port = config.exchanger_port;

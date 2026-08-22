@@ -230,6 +230,13 @@ CUDA_VISIBLE_DEVICES=6,7 mpirun --mca hwloc_base_binding_policy none -np 2 \
     -x UK_CCL_DEBUG \
     ../../thirdparty/nccl-tests/build/all_reduce_perf -b 1M -e 4M -f 2 -g 1 -c 1 -n 3
 
+> **CPU binding warning (OpenMPI 5)**: ukernel relies on host threads
+> polling for completion. Some MPI builds still bind ranks to a small CPU
+> subset even with `--mca hwloc_base_binding_policy none`, which can make
+> the shim 5-10x slower. Prefer `--bind-to none --map-by :OVERSUBSCRIBE`
+> on OpenMPI 5, or set `UK_CCL_UNBIND=1` in the rank environment to let
+> ukernel widen the process CPU affinity at startup.
+
 # Single process, multiple GPUs (exercises ncclCommInitAll, which
 # initializes one communicator per device on its own thread):
 LD_LIBRARY_PATH=$(pwd)/build/nccl/lib \
