@@ -657,7 +657,7 @@ int64_t SendConnection::compress_write_request_split_first(
   uint32_t total_uncomp = req->local_mem->size;
   uint64_t user_remote_addr = req->remote_mem->addr;
   uint32_t user_remote_rkey =
-      req->remote_mem->get_key_by_context_id(0);  // diagnostic / logging only
+      req->remote_mem->get_rkey_by_context_id(0);  // diagnostic / logging only
 
   // Reserve space in the peer's decompress_buffer; released on ack receipt.
   uint64_t arena_bytes = static_cast<uint64_t>(total_uncomp);
@@ -916,7 +916,7 @@ void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
   // acked".
   ctrl_channel_->post_ack_write(
       remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
-      remote_ack_ring_.get_key_by_context_id(0), m.ack_slot,
+      remote_ack_ring_.get_rkey_by_context_id(0), m.ack_slot,
       static_cast<uint64_t>(m.wr_id) + 1);
 
   Compressor::get_instance().decompress_async(
