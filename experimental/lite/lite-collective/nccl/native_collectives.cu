@@ -1,4 +1,5 @@
 #include "native_collectives.hpp"
+#include "lite/cpu_switch/cpu_switch.hpp"
 #include "debug.h"
 #include "env.hpp"
 #include "gpu_utils.hpp"
@@ -738,37 +739,6 @@ void ensureReduceScatterLocalScratchIpc(
   ctx.localScratchBuffer = scratchBuffer;
   ctx.localScratchBufferSize = scratchBufferSize;
   ctx.localScratchIpcReady = true;
-}
-
-void reduceFloatShardFromHost(char const* __restrict__ sendSlab,
-                              size_t inputStride, size_t bytesPerRank,
-                              int nRanksPerNode, int targetRank,
-                              size_t recvcount, float* __restrict__ dst) {
-  size_t targetOffset = static_cast<size_t>(targetRank) * bytesPerRank;
-  if (nRanksPerNode == 4) {
-    auto const* __restrict__ src0 =
-        reinterpret_cast<float const*>(sendSlab + targetOffset);
-    auto const* __restrict__ src1 = reinterpret_cast<float const*>(
-        sendSlab + inputStride + targetOffset);
-    auto const* __restrict__ src2 = reinterpret_cast<float const*>(
-        sendSlab + 2 * inputStride + targetOffset);
-    auto const* __restrict__ src3 = reinterpret_cast<float const*>(
-        sendSlab + 3 * inputStride + targetOffset);
-#pragma GCC ivdep
-    for (size_t i = 0; i < recvcount; ++i) {
-      dst[i] = src0[i] + src1[i] + src2[i] + src3[i];
-    }
-    return;
-  }
-
-  auto const* first = reinterpret_cast<float const*>(sendSlab + targetOffset);
-  std::memcpy(dst, first, recvcount * sizeof(float));
-  for (int local = 1; local < nRanksPerNode; ++local) {
-    auto const* src = reinterpret_cast<float const*>(
-        sendSlab + static_cast<size_t>(local) * inputStride + targetOffset);
-#pragma GCC ivdep
-    for (size_t i = 0; i < recvcount; ++i) dst[i] += src[i];
-  }
 }
 
 template <typename T>
@@ -1681,6 +1651,7 @@ ncclResult_t runHostStagedReduceScatter2Node(
     mscclpp::CudaDeviceGuard deviceGuard(cudaDevice);
     auto& ctx = getReduceScatterHostContext(
         comm, bootstrapComm, rank, nRanks, nRanksPerNode, cudaDevice);
+    mscclpp::lite::CpuSwitch<float, mscclpp::lite::Sum<float>> cpuSwitch;
     uint64_t epoch = ++ctx.blockEpoch;
     int localBase = ctx.nodeId * nRanksPerNode;
     int remoteBase = (1 - ctx.nodeId) * nRanksPerNode;
@@ -1689,14 +1660,19 @@ ncclResult_t runHostStagedReduceScatter2Node(
 
     char* localInput =
         ctx.sendSlab() + static_cast<size_t>(ctx.localRank) * ctx.inputCapacity;
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(localInput, sendbuff, inputBytes,
-                                     cudaMemcpyDeviceToHost, stream));
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-    ctx.ctrl->d2hReady[ctx.localRank].store(epoch,
-                                            std::memory_order_release);
+    cpuSwitch
+        .copy<mscclpp::lite::MemoryType::Device,
+              mscclpp::lite::MemoryType::HostMapped, float const>(
+            {static_cast<float const*>(sendbuff), inputBytes / sizeof(float),
+             -1, cudaDevice},
+            {reinterpret_cast<float*>(localInput), inputBytes / sizeof(float),
+             -1, -1},
+            stream)
+        .wait();
+    cpuSwitch.publishEpoch(ctx.ctrl->d2hReady[ctx.localRank], epoch);
 
     for (int i = 0; i < nRanksPerNode; ++i) {
-      waitForEpoch(ctx.ctrl->d2hReady[i], epoch);
+      cpuSwitch.waitEpoch(ctx.ctrl->d2hReady[i], epoch);
     }
 
     auto* localPartial = reinterpret_cast<float*>(
@@ -1705,26 +1681,33 @@ ncclResult_t runHostStagedReduceScatter2Node(
     auto* remotePartial = reinterpret_cast<float*>(
         ctx.sendPartialSlab() +
         static_cast<size_t>(ctx.localRank) * bytesPerRank);
-    reduceFloatShardFromHost(ctx.sendSlab(), ctx.inputCapacity, bytesPerRank,
-                             nRanksPerNode, localBase + ctx.localRank,
-                             recvcount, localPartial);
-    reduceFloatShardFromHost(ctx.sendSlab(), ctx.inputCapacity, bytesPerRank,
-                             nRanksPerNode, remoteBase + ctx.localRank,
-                             recvcount, remotePartial);
-    ctx.ctrl->partialReady[ctx.localRank].store(epoch,
-                                                std::memory_order_release);
+    std::vector<mscclpp::lite::Rows<float const>> localRankRows;
+    localRankRows.reserve(nRanksPerNode);
+    for (int local = 0; local < nRanksPerNode; ++local) {
+      localRankRows.push_back({
+          reinterpret_cast<float const*>(
+              ctx.sendSlab() + static_cast<size_t>(local) * ctx.inputCapacity),
+          static_cast<size_t>(nRanks), recvcount,
+          bytesPerRank / sizeof(float), -1, -1});
+    }
+    cpuSwitch.reduceTwoRows(
+        localRankRows, static_cast<size_t>(localBase + ctx.localRank),
+        {localPartial, recvcount, -1, -1},
+        static_cast<size_t>(remoteBase + ctx.localRank),
+        {remotePartial, recvcount, -1, -1});
+    cpuSwitch.publishEpoch(ctx.ctrl->partialReady[ctx.localRank], epoch);
 
     if (ctx.isLeader) {
       for (int i = 0; i < nRanksPerNode; ++i) {
-        waitForEpoch(ctx.ctrl->partialReady[i], epoch);
+        cpuSwitch.waitEpoch(ctx.ctrl->partialReady[i], epoch);
       }
       if (ctx.pairEpoch > 0) {
         for (int i = 0; i < nRanksPerNode; ++i) {
-          waitForEpoch(ctx.ctrl->pairAckReady[i], ctx.pairEpoch);
+          cpuSwitch.waitEpoch(ctx.ctrl->pairAckReady[i], ctx.pairEpoch);
         }
       }
       if (epoch > 1) {
-        waitForEpoch(ctx.ctrl->ackReady, epoch - 1);
+        cpuSwitch.waitEpoch(ctx.ctrl->ackReady, epoch - 1);
       }
 
       size_t off = 0;
@@ -1741,7 +1724,7 @@ ncclResult_t runHostStagedReduceScatter2Node(
         }
         off += chunk;
       }
-      ctx.ctrl->rdmaSignal.store(epoch, std::memory_order_release);
+      cpuSwitch.publishEpoch(ctx.ctrl->rdmaSignal, epoch);
       ctx.connection.write(
           ctx.remoteCtrlMemory,
           offsetof(NativeReduceScatterHostControl, rdmaReady), ctx.ctrlMemory,
@@ -1749,25 +1732,27 @@ ncclResult_t runHostStagedReduceScatter2Node(
           sizeof(uint64_t));
       ctx.connection.flush();
     }
-    waitForEpoch(ctx.ctrl->rdmaReady, epoch);
+    cpuSwitch.waitEpoch(ctx.ctrl->rdmaReady, epoch);
 
     auto* remoteIncoming = reinterpret_cast<float*>(
         ctx.recvPartialSlab() +
         static_cast<size_t>(ctx.localRank) * bytesPerRank);
-    for (size_t i = 0; i < recvcount; ++i) {
-      localPartial[i] += remoteIncoming[i];
-    }
+    cpuSwitch.reduceInPlace({localPartial, recvcount, -1, -1},
+                            {remoteIncoming, recvcount, -1, -1});
 
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvbuff, localPartial, bytesPerRank,
-                                     cudaMemcpyHostToDevice, stream));
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
-    ctx.ctrl->h2dDone[ctx.localRank].store(epoch, std::memory_order_release);
+    cpuSwitch
+        .copy<mscclpp::lite::MemoryType::HostMapped,
+              mscclpp::lite::MemoryType::Device, float const>(
+            {localPartial, recvcount, -1, -1},
+            {static_cast<float*>(recvbuff), recvcount, -1, cudaDevice}, stream)
+        .wait();
+    cpuSwitch.publishEpoch(ctx.ctrl->h2dDone[ctx.localRank], epoch);
 
     for (int i = 0; i < nRanksPerNode; ++i) {
-      waitForEpoch(ctx.ctrl->h2dDone[i], epoch);
+      cpuSwitch.waitEpoch(ctx.ctrl->h2dDone[i], epoch);
     }
     if (ctx.isLeader) {
-      ctx.ctrl->ackSignal.store(epoch, std::memory_order_release);
+      cpuSwitch.publishEpoch(ctx.ctrl->ackSignal, epoch);
       ctx.connection.write(
           ctx.remoteCtrlMemory,
           offsetof(NativeReduceScatterHostControl, ackReady), ctx.ctrlMemory,
@@ -2853,7 +2838,7 @@ ncclResult_t runSendRecvReduceScatter(void const* sendbuff, void* recvbuff,
                                           return result;
                                         }
 
-                                        result = runHostStagedReduceScatter2Node(
+                                        result = runHostStagedReduceScatter2Node(  // host
                                             sendbuff, recvbuff, recvcount, bytesPerRank, datatype, op, comm, stream,
         rank, nRanks, nRanksPerNode, bootstrapComm, cudaDevice);
     if (result == ncclSuccess) return result;

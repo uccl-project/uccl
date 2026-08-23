@@ -30,10 +30,12 @@ CORE_OBJS     := $(CORE_CC_OBJS) $(CORE_CPP_OBJS) $(CORE_CU_OBJS)
 # --- Collective library (collective/) ---
 COLL_CC_SRCS  := $(wildcard collective/*.cc)
 COLL_CU_SRCS  := $(wildcard collective/*.cu)
+COLL_LITE_CC_SRCS := $(wildcard collective/lite/cpu_switch/*.cc)
 
 COLL_CC_OBJS  := $(patsubst collective/%.cc,$(BUILD_DIR)/collective/%.o,$(COLL_CC_SRCS))
 COLL_CU_OBJS  := $(patsubst collective/%.cu,$(BUILD_DIR)/collective/%.cu.o,$(COLL_CU_SRCS))
-COLL_OBJS     := $(COLL_CC_OBJS) $(COLL_CU_OBJS)
+COLL_LITE_CC_OBJS := $(patsubst collective/%.cc,$(BUILD_DIR)/collective/%.o,$(COLL_LITE_CC_SRCS))
+COLL_OBJS     := $(COLL_CC_OBJS) $(COLL_CU_OBJS) $(COLL_LITE_CC_OBJS)
 
 # --- Targets ---
 LIB_CORE_SO := $(BUILD_DIR)/libmint.so
@@ -63,6 +65,7 @@ $(BUILD_DIR)/core/%.cu.o: core/%.cu | $(BUILD_DIR)/core
 
 # Collective library compilation rules
 $(BUILD_DIR)/collective/%.o: collective/%.cc | $(BUILD_DIR)/collective
+	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFINES) -c $< -o $@
 
 $(BUILD_DIR)/collective/%.cu.o: collective/%.cu | $(BUILD_DIR)/collective

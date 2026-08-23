@@ -2247,7 +2247,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 
   char const* fallbackList = mscclpp::env()->forceNcclFallbackOperation.c_str();
   if (mscclppNcclDlopenSharedLib == true &&
-      mscclppNcclInFallbackList("reducescatter", fallbackList)) {
+      mscclppNcclInFallbackList("reducescatter", fallbackList)) {  // Forced fallback to NCCL
     return mscclppNcclOps.ReduceScatter(
         sendbuff, recvbuff, recvcount, datatype, op,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
@@ -2255,7 +2255,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 
   int rank = comm->comm->bootstrap()->getRank();
   int nRank = comm->comm->bootstrap()->getNranks();
-  if (comm->nRanksPerNode > 0 && nRank != comm->nRanksPerNode) {
+  if (comm->nRanksPerNode > 0 && nRank != comm->nRanksPerNode) {  // Multi-node uccl-lite optimization
     ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
         sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
         nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
@@ -2270,7 +2270,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
          "is disabled for the native ReduceScatter path");
     return nativeResult;
   }
-  if (comm->nRanksPerNode > 0 && nRank == comm->nRanksPerNode) {
+  if (comm->nRanksPerNode > 0 && nRank == comm->nRanksPerNode) {  // Single-node uccl-lite optimization
     ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
         sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
         nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
@@ -2284,7 +2284,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
 
   bool const symmetricMemory = mscclpp::env()->ncclSymmetricMemory;
   mscclpp::DataType dtype;
-  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {
+  if (tryNcclDataTypeToMscclpp(datatype, &dtype)) {  // Mscclpp native algo selector
     mscclpp::CollectiveRequest request = {.worldSize = comm->worldSize,
                                           .nRanksPerNode = comm->nRanksPerNode,
                                           .rank = rank,
@@ -2308,7 +2308,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
     }
   }
 
-  ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(
+  ncclResult_t nativeResult = mscclpp::nccl::runLiteInterReduceScatter(  // Seems redundant
       sendbuff, recvbuff, recvcount, bytes, datatype, op, comm, stream, rank,
       nRank, comm->scratchBuffer_.get(), comm->scratchBufferSize_,
       comm->nRanksPerNode, comm->comm, comm->cudaDevice);
@@ -2318,7 +2318,7 @@ NCCL_API ncclResult_t ncclReduceScatter(void const* sendbuff, void* recvbuff,
     return nativeResult;
   }
 
-  if (mscclppNcclDlopenSharedLib == true) {
+  if (mscclppNcclDlopenSharedLib == true) {  // No matched optimization, fallback to NCCL
     return mscclppNcclOps.ReduceScatter(
         sendbuff, recvbuff, recvcount, datatype, op,
         *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
