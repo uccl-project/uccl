@@ -1,17 +1,8 @@
 /*
- * RDMA fused proxy (CCL layer).
- *
- * This is NOT a new transport. It is an alternate producer that feeds the
- * existing TransportBackend:
- *
- *   GPU kernel writes cmd_index into D2H ring
- *   -> RdmaFusedProxy::progress() pops index
- *   -> looks up Cmd in RdmaFusedCmdPool
- *   -> calls TransportBackend::do_enqueue() (or Communicator send API)
- *   -> TransportBackend / Communicator / RdmaTransportAdapter handle the
- *      actual RDMA put and completion as usual.
- *
- * The transport layer stays generic and unchanged.
+ * RDMA fused proxy: an alternate producer that feeds the existing
+ * TransportBackend. A GPU kernel writes a CmdPool index into the D2H
+ * ring; progress() pops it and posts the RDMA put, with completion
+ * handled by the normal transport drain.
  */
 #pragma once
 
@@ -91,9 +82,8 @@ class RdmaFusedCmdPool {
 
 class RdmaFusedProxy {
  public:
-  // first_attempt == true only for the initial ring pop: the executor
-  // mirrors its normal acceptance accounting exactly once per command.
-  // Retries (post rejected earlier) must skip that accounting.
+  // first_attempt marks the initial ring pop: the executor's acceptance
+  // accounting runs exactly once per command; retries skip it.
   using PostFn = std::function<bool(uint64_t cmd_index, bool first_attempt)>;
 
   RdmaFusedProxy(PostFn post_fn, size_t ring_capacity = 4096,
@@ -110,12 +100,9 @@ class RdmaFusedProxy {
   RdmaFusedRing ring_;
   RdmaFusedCmdPool pool_;
   PostFn post_fn_;
-  // Per-peer FIFO of commands whose post was rejected. The head MUST
-  // succeed before any later command to the same peer is posted:
-  // RDMA write-with-imm arrivals are matched per-peer in issue order, so
-  // posting a later imm first would strand the receiver's FIFO wait.
-  // progress() is only ever called from the drain_tpt_loop thread, so no
-  // locking is needed.
+  // Per-peer FIFO of rejected posts; the head must succeed before later
+  // same-peer posts (imm arrival order). progress() runs only on the
+  // drain_tpt_loop thread, so no locking is needed.
   std::unordered_map<int, std::deque<uint64_t>> pending_;
 };
 

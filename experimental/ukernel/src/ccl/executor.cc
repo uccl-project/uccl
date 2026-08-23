@@ -91,50 +91,34 @@ static inline bool cfg_inplace(CollectiveConfig const& cfg, void* input,
   return cfg.inplace || (input == output);
 }
 
-// Signal-tag epoch salting. Plan-level tags (make_tag) repeat across
-// runs of the same shape, and rank skew (±1 run) lets a future run's
-// arrivals satisfy — or be buffered for — the wrong run's waits:
-// count-conserving but data-unsafe (a wait can fire before its run's
-// data landed). Folding a per-executor monotonic run epoch into the
-// high 32 bits makes cross-run matching impossible. Both ranks derive
-// the same epoch for the k-th submit (rank-symmetric issue order).
-// NOTE: salted tags no longer fit the 32-bit RDMA immediate, so fused
-// RDMA puts send an epoch-encoded 32-bit immediate (see encode_imm), and
-// the receiver matches immediates per-peer FIFO in arrival order.
-// Standalone RDMA signals still carry the full 64-bit tag on the
-// signal QP.
+// Signal-tag epoch salting: plan tags repeat across runs, so fold a
+// per-executor run epoch (rank-symmetric) into the high bits to keep
+// cross-run matching impossible. RDMA immediates instead carry an
+// epoch-encoded value (see encode_imm); standalone signals keep the
+// full 64-bit salted tag.
 static inline uint64_t salt_tag(uint64_t base, uint32_t epoch) {
   return base | (static_cast<uint64_t>(epoch) << 32);
 }
 
-// RDMA write-with-imm payload. The imm path must be unique per
-// (run, tag): consecutive runs reuse the same UNSALTED tags, and the
-// receiver's per-peer FIFO spans runs, so a run skew would otherwise
-// either strand the FIFO (value mismatch at the head) or complete a
-// wait with the wrong run's data. The sender and receiver both derive
-// this value from (unsalted_tag, tag_epoch), so a skewed run's
-// immediates can never be matched against — or block — another run's
-// waits.
+// RDMA write-with-imm payload, unique per (run, tag): unsalted tag in
+// the low 20 bits + run epoch in bits 20..31. Both sides derive it from
+// (unsalted_tag, tag_epoch), so a skewed run can never match — or
+// block — another run's waits.
 static inline uint32_t encode_imm(uint64_t unsalted_tag, uint32_t epoch) {
   return (static_cast<uint32_t>(unsalted_tag) & 0xFFFFFu) |
          ((epoch & 0xFFFu) << 20);
 }
 
-// Fusion gate: the unsalted tag must fit the imm's 20-bit tag field.
-// Tags beyond the field fall back to a standalone 64-bit signal on both
-// sides (the predicate mirrors), so the layout never truncates.
+// Fusion gate: the unsalted tag must fit the imm's 20-bit field;
+// oversized tags fall back to a standalone signal on both sides.
 static inline bool tag_fits_imm_field(uint64_t tag) {
   return tag <= 0xFFFFFu;
 }
 
-// RDMA put-signal fusion predicate — the sender's Put gate and the
-// receiver's WaitSignal mirror both use it, so the two sides always
-// agree on whether a group's tags travel as 32-bit immediates. Fusion
-// requires the UNSALTED tag to fit the immediate and the RDMA path to
-// support fused PutSignal. Same-host RDMA puts are excluded unless
-// UK_CCL_PUT_PATH=rdma forces the path: the receiver cannot otherwise
-// predict whether the load balancer routed a given put via IPC
-// (shm-ring signal) or RDMA (immediate).
+// RDMA put-signal predicate, mirrored by the sender and receiver:
+// fusable iff the unsalted tag fits the imm field and the RDMA path
+// supports it (same-host excluded unless UK_CCL_PUT_PATH=rdma forces
+// the path).
 static bool rdma_imm_fusion_active(Transport::Communicator* comm, int peer,
                                    uint64_t unsalted_tag) {
   static const bool kForceRdma = []() {
@@ -280,16 +264,10 @@ bool SprayExecutor::submit_fused_cmd(uint64_t cmd_index, bool first_attempt) {
   auto const& slot = fused_proxy_->pool().get(cmd_index);
   uint32_t be_idx = tpt_be_->reserve_slot();
   auto* run = static_cast<SprayRun*>(slot.run);
-  // First-attempt accounting mirrors the normal tpt submission path so a
-  // fused Signal can complete locally once its synthetic Put is out. It
-  // MUST happen before the BeSlot is published: wait()'s progress_once()
-  // drains tpt completions on user threads concurrently, and a drain can
-  // otherwise observe the completion before these counters are bumped —
-  // dispatching a duplicate standalone Signal (the peer then sees the tag
-  // twice) or finalizing/releasing the run while this thread still writes
-  // it. Counts are published fused-first, accepted-second (release); the
-  // enqueue thread reads accepted first with acquire, so
-  // accepted == grp always implies fused == grp. Retries skip this block.
+  // First-attempt accounting must precede BeSlot publication: wait()'s
+  // progress_once() drains tpt completions concurrently, and a drain
+  // could otherwise see the completion before these counters are set
+  // (duplicate Signal / run UAF). Retries skip this block.
   if (first_attempt && run) {
     run->inflight_ops.fetch_add(1, std::memory_order_release);
     if (slot.op_idx < run->submitted.size())
@@ -1091,10 +1069,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
              rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);
-      // PutSignal channel encoding (execution decision): the tag rides
-      // the put — RDMA as an epoch-encoded write-with-imm, IPC as the
-      // 64-bit salted tag in the shm ring. The receiver mirrors this in
-      // its wait shaping (see rdma_imm_fusion_active).
+      // PutSignal tag encoding: RDMA → epoch-encoded imm, else salted
+      // 64-bit tag; the receiver mirrors this in its wait shaping.
       if (c.kind == LogicalOpKind::PutSignal && owned_comm_ &&
           !run.plan->tiled.ops[idx].proxy_posted) {
         uint64_t const unsalted = run.plan->tiled.ops[idx].tag;
@@ -1147,16 +1123,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
 
     if (c.kind == LogicalOpKind::Signal || c.kind == LogicalOpKind::Wait) {
-      // Counted/imm wait shaping — the mirror of the sender's PutSignal
-      // channel encoding (same predicates):
-      // - RDMA-fused groups (any size): each put's epoch-encoded signal
-      //   value rides the 32-bit write-with-imm immediate, so the wait
-      //   matches arrivals BY VALUE (kCmdFlagImmWait), counting one imm
-      //   per group put.
-      // - Same-host IPC-fusable groups: one shm-ring arrival per tile,
-      //   counted tag-map wait on the salted tag.
-      // - Otherwise: one standalone 64-bit signal (signal QP / shm
-      //   ring), plain map wait.
+      // Wait channel shaping, mirroring the sender's PutSignal encoding:
+      // RDMA → imm value wait; same-host fusable groups → counted
+      // tag-map wait; otherwise plain 64-bit signal wait.
       if (c.kind == LogicalOpKind::Wait && owned_comm_) {
         uint16_t const grp = run.plan->tiled.ops[idx].wait_count;
         uint64_t const unsalted_tag = run.plan->tiled.ops[idx].tag;
@@ -1173,14 +1142,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           c.wait_count = grp;
         }
       }
-      // Per-run in-flight cap for WaitSignals (UK_CCL_SIG_INFLIGHT_CAP,
-      // default 4096): a WaitSignal holds its signal-backend slot until
-      // the peer's data lands, so an unbounded first wave of waits can
-      // occupy every slot and starve the Signals that would unblock
-      // them (the 128M in-place stall noted in signal_backend.h). Only
-      // WaitSignals are throttled — Signals NEVER defer on this cap,
-      // and this cycle's data puts still go out below: they produce the
-      // arrivals these waits are for (see the 256M deadlock note below).
+      // Cap in-flight WaitSignals so an early wave of waits cannot
+      // occupy every signal slot and starve the Signals that unblock
+      // them; Signals never defer on this cap.
       static const uint32_t kSigInflightCap = []() {
         char const* env = std::getenv("UK_CCL_SIG_INFLIGHT_CAP");
         return env ? static_cast<uint32_t>(std::stoul(env)) : 4096u;
@@ -1193,11 +1157,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
       uint32_t be_idx = signal_be_->reserve_slot();
       if (be_idx != BatchBackend::kInvalidBeIdx) {
-        // Ring full (table wrapped onto an unclaimed slot): defer the op
-        // instead of blocking in write(). The batched dev/tpt puts below
-        // must still go out this cycle — they produce the arrivals these
-        // signals wait for, so spinning here deadlocks both ranks (seen
-        // at 256M: 4096 initially-ready WaitSignals > 2048 slots).
+        // Slot wrapped onto an unclaimed entry: defer; the batched
+        // puts below must still go out this cycle or the waits never
+        // arrive.
         if (sig_slots_.occupied(be_idx)) {
           run.deferred_sig.push_back(idx);
           continue;
@@ -1258,19 +1220,14 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
     }
   }
 
-  // Submit device batch: reserve be_idx range → publish all slots →
-  // submit (two-phase). A completion can therefore never arrive before
-  // its slot is published, so the drain side's try_claim never spins on
-  // this path.
+  // Two-phase submission: reserve → publish ALL slots → submit, so a
+  // completion can never beat its slot publication.
   size_t dev_dispatched = 0;
   if (!run.dev_cmds.empty()) {
     size_t m = run.dev_cmds.size();
-    // Never reserve more be_idx than the slot table holds: the two-phase
-    // below writes ALL slots before submitting ANY op, so a wrap inside
-    // one batch would block write() on a slot whose op has not been
-    // submitted yet — a completion that can never arrive (deadlock seen
-    // at 64M: batch > 512, write(be_idx=512) stuck on unsubmitted
-    // be_idx=0). Ops beyond the cap stay deferred for the next cycle.
+    // Cap the batch at the slot-table size: a wrap inside one batch
+    // would block write() on a slot whose op is not yet submitted — a
+    // completion that never comes. Ops beyond the cap stay deferred.
     size_t capped = std::min(m, dev_slots_.capacity());
     be_idx_scratch_.resize(capped);
     size_t reserved = device_be_->reserve_slots(be_idx_scratch_.data(), capped);
@@ -1823,15 +1780,9 @@ PutPath SprayExecutor::pick_put_path(int peer) {
     fm->inflight.fetch_add(1, std::memory_order_relaxed);
     return forced;
   }
-  // Same-host cross-GPU puts go over IPC: the CPU-side DMA path is the
-  // fast transport (sliding-window puts; measured 67 GB/s aggregate for
-  // 256MB AllGather vs 36 GB/s device and ~2 GB/s RDMA loopback). The
-  // old latency-based balancer misrouted same-host puts onto the
-  // device/RDMA paths — the sliding window inflates the IPC latency
-  // metric (completions burst after a window sync), so IPC lost the
-  // comparison and AllGather dropped from 3.8ms to 15.9ms. Device puts
-  // remain reachable for local ops (reduce is not routed here) and via
-  // UK_CCL_PUT_PATH; remote peers always use RDMA.
+  // Same-host puts go over IPC (CE): measured fastest for same-host
+  // traffic; device/RDMA remain reachable via UK_CCL_PUT_PATH and remote
+  // peers always use RDMA.
   if (!same_host_fn_ || !same_host_fn_(owned_comm_.get(), peer)) {
     tpt_metrics_[peer].rdma.inflight.fetch_add(1, std::memory_order_relaxed);
     return PutPath::Rdma;

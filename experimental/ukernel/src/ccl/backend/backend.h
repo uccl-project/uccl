@@ -31,21 +31,17 @@ struct Cmd {
   ReductionKind redop;  // 4
   ScalarType dtype;     // 4 — element type for device-kernel reduce/copy
   PutPath put_path;     // 1 — Device/IPC/RDMA for ops
-  // Execution-side orthogonals, chosen at enqueue time. The logical op
-  // kind already expresses "carries a signal" (PutSignal /
-  // ReducePutSignal) and "reduce + copy" (ReducePut / ReducePutSignal);
-  // these bits only select the channel / mechanism.
+  // Execution-side orthogonals (channel/mechanism), chosen at enqueue
+  // time; the logical kind already expresses the op's behavior.
   uint8_t flags;
-  // WaitSignal: expected tag arrivals (0/1 = 1). A fused signal group
-  // delivers one arrival per tile, so the wait counts group_size.
+  // Wait: expected tag arrivals (0/1 = 1).
   uint16_t wait_count;
   uint64_t tag;      // 8 — for Signal/SignalWait/PutSignal
   uint64_t src_off;  // 8 — byte offset within src_buf's allocation
   uint64_t dst_off;  // 8 — byte offset within dst_buf's allocation
   uint64_t copy_dst_off;  // 8 — fused reduce+copy target offset
-  // Cross-node fused reduce+copy via RDMA proxy: the device task writes
-  // rdma_fused_cmd_index into the D2H ring after reducing to dst; the
-  // host then posts the RDMA put described by that CmdPool slot.
+  // RDMA proxy: the device writes rdma_fused_cmd_index into the D2H ring
+  // after reducing; the host posts the linked put from the CmdPool.
   void* rdma_fused_ring = nullptr;
   uint64_t rdma_fused_cmd_index = UINT64_MAX;
 };
@@ -53,17 +49,12 @@ struct Cmd {
 
 static_assert(sizeof(Cmd) == 104, "Cmd size changed");
 
-// kCmdFlagImmWait: this WaitSignal expects RDMA write-with-imm arrivals
-// from fused PutSignal puts. Cmd::tag carries the epoch-encoded imm
-// value and wait_count counts the group's fused puts (one imm each).
+// Wait matches RDMA write-with-imm values (epoch-encoded tag).
 inline constexpr uint8_t kCmdFlagImmWait = 1u << 0;
-// kCmdFlagCopySignal: the Put is a fused AG copy — a device task that
-// copies to the peer (dst_peer) and device-writes the completion flag
-// (flag_slot, tag) when done. No CE, no host signal op.
+// Device put also writes the peer completion flag (fused AG copy).
 inline constexpr uint8_t kCmdFlagCopySignal = 1u << 1;
-// kCmdFlagRdmaFusedProxy: the device Reduce task skips the remote IPC
-// copy and instead writes rdma_fused_cmd_index into the D2H ring; the
-// CCL proxy posts the RDMA put.
+// Device reduce notifies the CCL proxy via the D2H ring; the proxy
+// posts the RDMA put.
 inline constexpr uint8_t kCmdFlagRdmaFusedProxy = 1u << 2;
 
 struct CmdWithId {

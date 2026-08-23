@@ -113,9 +113,7 @@ struct TiledOp {
   uint32_t src_peer = 0;
   uint32_t dst_peer = 0;
   // Fused reduce+copy: after the reduce, copy dst to the peer's
-  // accumulation buffer (copy_dst_peer + copy_dst_buf_role +
-  // copy_dst_off). The data-ready signal is a separate Signal op
-  // (host-written ring — B300 has no GPU-mapped signal ring).
+  // accumulation buffer (ReducePut / ReducePutSignal).
   uint32_t copy_dst_peer = ~0u;
   CollectiveBufferRole copy_dst_buf_role = CollectiveBufferRole::Output;
   size_t copy_dst_off = 0;
@@ -124,24 +122,19 @@ struct TiledOp {
   // itself proxy_posted so the executor defers it to the proxy producer.
   int32_t fused_proxy_put_idx = -1;
   bool proxy_posted = false;
-  // Device-completion flag slot for the signal of a fused task
-  // (fuse_reduce_copy with UK_CCL_DEVICE_FLAGS): the WaitSignal polls
-  // this slot; the fused Reduce writes it. ~0u = host ring signal.
+  // Device-completion flag slot (wait polls it, fused task writes it);
+  // ~0u = host ring signal.
   uint32_t flag_slot = ~0u;
-  // WaitSignal: how many consecutive flag slots to poll (G>1 groups the
-  // per-tile signals; the wait completes when ALL match). Fused Reduce:
-  // unused (1).
+  // Wait: how many consecutive flag slots to poll.
   uint32_t flag_count = 1;
-  // Wait: expected tag arrivals (0/1 = 1). A fused signal group delivers
-  // one arrival per tile, so the wait counts group_size.
+  // Wait: expected tag arrivals (0/1 = 1; fused groups count one per
+  // tile).
   uint16_t wait_count = 1;
   uint64_t tag = 0;
   std::vector<uint32_t> deps;
   CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
   CollectiveBufferRole dst_buf_role = CollectiveBufferRole::Output;
-  // Per-op put path override (None = auto). Used by the AllToAll
-  // CE+device hybrid to route half a send through the CE engine and half
-  // through the device worker.
+  // Per-op put path override (None = auto); CE+device hybrid routing.
   PutPath put_path_hint = PutPath::None;
 };
 

@@ -361,10 +361,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         red.dst_off += red_dst.base_off;
         uint32_t red_idx = static_cast<uint32_t>(out.size());
         uint32_t put_idx = red_idx;
-        // Proxy hops are cross-node only: same-host fused reduce+copy
-        // keeps the fast device-direct path (kFlagReduceCopy + device
-        // flags), which is also the only signal/wait layout that matches
-        // the receiver for local peers.
+        // Proxy hops are cross-node only; same-host hops keep the fast
+        // device-direct reduce+copy path.
         bool proxy_hop = false;
         if (ch.fuse_copy_to_peer) {
           auto red_copy = resolve_buf(ch.copy_dst, tmp_base);

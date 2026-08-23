@@ -1688,12 +1688,9 @@ void Communicator::on_imm_received(int peer, uint32_t low32) {
   {
     std::lock_guard<std::mutex> lk(sig_maps_mu_);
     auto& buf = buffered_imms_[peer];
-    // Match BY VALUE against any pending wait. The sender's fused puts
-    // are issued in pipeline-ready order, which differs from the
-    // receiver's DAG-order wait registration on a ring — a strict
-    // per-peer FIFO head match strands the queue. Immediates carry an
-    // epoch-encoded value unique per (run, tag), so a value can only
-    // match the one wait that expects it; arrival order is irrelevant.
+    // Value-based match against any pending wait (values are unique per
+    // run/tag; the sender's issue order differs from the receiver's DAG
+    // wait order, so a strict FIFO head match would strand the queue).
     auto it = pending_imm_waits_.find(peer);
     bool matched = false;
     if (it != pending_imm_waits_.end()) {

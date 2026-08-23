@@ -76,20 +76,17 @@ struct SprayRun {
   std::mutex mtx;
   std::vector<uint8_t> submitted;
   std::vector<uint32_t> ready;
-  // Backpressure: ops rejected by backend are deferred and retried first
-  // on the next enqueue cycle before pulling new ops from the ring.
-  // This preserves priority (FIFO within each backend) and avoids
-  // re-enqueue contention on the lock-free ring.
+  // Rejected ops are deferred and retried before new ready ops each
+  // cycle (preserves per-backend FIFO, avoids ring re-enqueue).
   std::vector<uint32_t> deferred_dev;
   std::vector<uint32_t> deferred_tpt;
   std::vector<uint32_t> deferred_sig;
   std::vector<Cmd> dev_cmds;
   std::vector<Cmd> tpt_cmds;
 
-  // Lock-free drain path (drain threads, no mtx).
-  // Successor graph lives in the shared plan; only the mutable indegree
-  // is per-run.
-  std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
+  // Lock-free drain path (drain threads, no mtx). Successor graph lives
+  // in the shared plan; only indegree is per-run.
+  std::vector<uint32_t> indegree;  // atomic decrement; 0 = ready
 
   // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
   jring_t* ready_ring = nullptr;

@@ -369,19 +369,14 @@ class Communicator {
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.
   std::unordered_map<int, std::deque<uint64_t>> pending_signals_;
-  // RDMA write-with-imm matching (fused PutSignal). Immediates carry an
-  // epoch-encoded value (unsalted tag in the low 20 bits + run epoch in
-  // bits 20..31, see executor.cc encode_imm), so they are unique per
-  // (run, tag). Matching is BY VALUE against any pending wait (oldest
-  // first among equal values): the sender issues fused puts in
-  // pipeline-ready order while the receiver registers waits in DAG order,
-  // which differ on a ring, so a strict FIFO head match would strand the
-  // queue. A value can only match the one wait that expects it, so
-  // arrival order is irrelevant.
+  // RDMA write-with-imm matching: values are epoch-encoded and unique
+  // per (run, tag), so matching is BY VALUE against any pending wait —
+  // arrival order is irrelevant (the sender's issue order differs from
+  // the receiver's DAG wait order on a ring).
   struct ImmWait {
     unsigned rid;
     uint32_t remaining;
-    uint64_t tag;  // unsalted tag reported in the completion event
+    uint64_t tag;  // epoch-encoded value reported in the completion
     uint32_t low32;
   };
   std::unordered_map<int, std::deque<ImmWait>> pending_imm_waits_;
@@ -389,12 +384,9 @@ class Communicator {
   std::unordered_map<int, std::deque<uint32_t>> buffered_imms_;
 
   // Immutable-after-connection topology/capability facts per peer,
-  // cached so the hot paths (put-path selection, signal shaping) avoid
-  // the peer-meta mutex. Fields are written once (or monotonically
-  // false→true for the fuse bits) and read lock-free with GCC atomics.
-  // Extended as new topology dimensions are consumed (numa, rail); the
-  // fill sites in exchange_peer_metas / mark_put_path_ready keep call
-  // sites stable.
+  // cached to keep the hot paths free of the peer-meta mutex; fuse bits
+  // are monotonic false→true. Extended as new topology dimensions are
+  // consumed (numa, rail) without changing call sites.
   struct TopoSnapshot {
     uint8_t same_host = 0;  // 0 = unknown, 1 = same host, 2 = remote
     uint8_t fuse_ipc = 0;   // IPC put-signal fusable (monotonic)
