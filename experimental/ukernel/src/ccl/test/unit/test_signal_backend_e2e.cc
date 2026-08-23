@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
   if (rank == 1) {
     std::vector<CmdWithId> snd(N);
     for (int i = 0; i < N; i++) {
-      snd[i].cmd.kind = ExecOpKind::Signal;
+      snd[i].cmd.kind = LogicalOpKind::Signal;
       snd[i].cmd.dst_peer = (uint32_t)peer;
       snd[i].cmd.tag = 100 + i;
       snd[i].caller_id = i;
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 
     std::vector<CmdWithId> wt(N);
     for (int i = 0; i < N; i++) {
-      wt[i].cmd.kind = ExecOpKind::WaitSignal;
+      wt[i].cmd.kind = LogicalOpKind::Wait;
       wt[i].cmd.flag_slot = ~0u;  // ring signal wait, not a device flag
       wt[i].cmd.src_peer = (uint32_t)peer;
       wt[i].cmd.tag = 200 + i;
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
   } else {
     std::vector<CmdWithId> wt(N);
     for (int i = 0; i < N; i++) {
-      wt[i].cmd.kind = ExecOpKind::WaitSignal;
+      wt[i].cmd.kind = LogicalOpKind::Wait;
       wt[i].cmd.flag_slot = ~0u;  // ring signal wait, not a device flag
       wt[i].cmd.src_peer = (uint32_t)peer;
       wt[i].cmd.tag = 100 + i;
@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
 
     std::vector<CmdWithId> snd(N);
     for (int i = 0; i < N; i++) {
-      snd[i].cmd.kind = ExecOpKind::Signal;
+      snd[i].cmd.kind = LogicalOpKind::Signal;
       snd[i].cmd.dst_peer = (uint32_t)peer;
       snd[i].cmd.tag = 200 + i;
       snd[i].caller_id = 100 + i;

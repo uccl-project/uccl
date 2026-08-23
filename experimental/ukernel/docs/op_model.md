@@ -98,26 +98,21 @@ buffer, so under this model they are `reduceput` / `putsignal`, not
   - User-stream output dependency — `cudaStreamWaitValue` on the
     completion flag (stream-level sync, not SM polling).
 
-## Mapping to the current implementation
+## Implementation status
 
-Today the fused forms are expressed as kind + flags:
+The plan-level DAG (`TiledOp`) and the backend command (`Cmd`) both carry
+`LogicalOpKind` directly; the fused forms are first-class kinds and the
+old kind+flag combinations are gone. The remaining `Cmd` flags are
+execution-side orthogonals chosen at enqueue time:
 
-| logical op | current representation |
-|---|---|
-| `put` (local) | `Put` with local buffer roles (`dst_peer = ~0u`) |
-| `put` (peer) | `Put` with `dst_peer` (IPC / RDMA / proxy) |
-| `putsignal` | `Put` + `kCmdFlagPutSignal` / `Put` + `kCmdFlagCopySignal` |
-| `reduceput` | `Reduce` + `kCmdFlagReduceCopy` |
-| `reduceputsignal` | `Reduce` + `kCmdFlagReduceCopy` + `flag_slot` |
-| `signal` | `Signal` |
-| `wait` | `WaitSignal` (+ `kCmdFlagImmWait` for imm, `flag_slot`/`flag_count` for flag poll) |
-| `wait` → `reduce` etc. | `Recv`/`RecvReduce` lowering into `WaitSignal` + `Reduce` |
+- `kCmdFlagImmWait` — a `wait` matches RDMA write-with-imm values;
+- `kCmdFlagRdmaFusedProxy` — a `reduce` notifies the host proxy via the
+  D2H ring (its linked `putsignal` is posted by the proxy);
+- `kCmdFlagCopySignal` — a device `put` writes the peer completion flag.
 
-Migration target: the DAG node carries the logical kind directly;
-`Cmd::kind` is one of the catalog ops; remaining flags are execution-side
-orthogonals (channel, encoding) chosen at enqueue time. Lowering then
-translates logical ops into execution-ready commands instead of
-re-deriving fusion decisions at runtime.
+Lowering picks the fusion granularity per hop and emits the logical
+kinds; the executor fills channels/encodings (IPC vs RDMA imm vs flag)
+at enqueue time. No per-op fusion metadata (`put_to_sig` etc.) remains.
 
 ## Decisions recorded
 

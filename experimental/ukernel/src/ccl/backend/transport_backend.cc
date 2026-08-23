@@ -24,8 +24,8 @@ TransportBackend::TransportBackend(UKernel::Transport::Communicator* comm) {
   comm_ = comm;
 }
 
-bool TransportBackend::supports(ExecOpKind kind) const {
-  return kind == ExecOpKind::Put;
+bool TransportBackend::supports(LogicalOpKind kind) const {
+  return kind == LogicalOpKind::Put || kind == LogicalOpKind::PutSignal;
 }
 
 uint32_t TransportBackend::reserve_slot() {
@@ -38,9 +38,10 @@ bool TransportBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
   // Communicator::consume_user_ctx), so submission takes no lock and
   // touches no map. On failure the be_idx is simply skipped — a harmless
   // gap; the executor retries the op through its slot table.
-  if (c.kind != ExecOpKind::Put) return false;
+  if (c.kind != LogicalOpKind::Put && c.kind != LogicalOpKind::PutSignal)
+    return false;
   unsigned rid = Transport::Communicator::kRidTagTransport | be_idx;
-  if (c.flags & kCmdFlagPutSignal) {
+  if (c.kind == LogicalOpKind::PutSignal) {
     // No silent fallback: the executor suppresses the partner Signal
     // only for puts accepted with this flag, so a failed fused
     // submission must fail the op (it is retried next cycle).

@@ -17,7 +17,7 @@ int main() {
       64, 64);
 
   Cmd put{};
-  put.kind = ExecOpKind::Put;
+  put.kind = LogicalOpKind::Put;
   put.dst_peer = 1;
   put.bytes = 1024;
   void* fake_run = reinterpret_cast<void*>(0x1234);

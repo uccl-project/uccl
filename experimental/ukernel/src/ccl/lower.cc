@@ -129,14 +129,6 @@ TiledOp op_to_tiled(Op const& op) {
   return t;
 }
 
-// Fusion metadata sinks (filled for signal groups whose tag fits the
-// 32-bit RDMA immediate).
-struct FusionMetaOut {
-  std::vector<std::pair<uint32_t, uint32_t>>* put_signal;
-  std::vector<std::pair<uint32_t, uint32_t>>* sig_groups;
-  std::vector<std::pair<uint32_t, uint32_t>>* wait_groups;
-};
-
 // Executor-flat view of a builder BufRef: Input/Output map 1:1 onto the
 // executor's buffer roles; Tmp(i) maps onto the Scratch role with the
 // tmp region's base offset folded in.
@@ -165,7 +157,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     uint32_t group_bits,
                                     uint32_t signal_group_tiles,
                                     int rank, int nranks,
-                                    size_t& staging_bytes, FusionMetaOut meta,
+                                    size_t& staging_bytes,
                                     bool device_flags, size_t max_tiles,
                                     std::function<bool(int)> same_host) {
   size_t n_old = ops.size();
@@ -193,26 +185,19 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
   // advances by the previous chunk's staging size.
   size_t staging_base = 0;
 
-  // Signal aggregation: one Signal per group of G tiles, fired once
-  // every Put of the group has completed. Shared by the staged and
-  // direct Put paths below.
+  // Signal aggregation: every Put of a G-tile group carries the group
+  // tag (kind PutSignal), so the receiver counts G arrivals. Shared by
+  // the staged and direct Put paths below.
   auto emit_group_signal = [&](std::vector<uint32_t>& group_puts,
                                MacroOp const& ch, uint32_t dst_peer, size_t t,
                                size_t num_tiles) {
     if (t % G != G - 1 && t + 1 != num_tiles) return;
-    TiledOp sig;
-    sig.kind = LogicalOpKind::Signal;
-    sig.dst_peer = dst_peer;
-    sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G), group_bits);
-    uint32_t sig_idx = static_cast<uint32_t>(out.size());
-    for (uint32_t pi : group_puts) new_deps.push_back({sig_idx, pi});
-    out.push_back(sig);
-    // Imm-sized tag: every Put of the group may carry the tag
-    // (receiver counts arrivals); record the whole group.
-    if (sig.tag <= 0xFFFFFFFFu) {
-      for (uint32_t pi : group_puts) meta.put_signal->emplace_back(sig_idx, pi);
-      meta.sig_groups->emplace_back(sig_idx,
-                                    static_cast<uint32_t>(group_puts.size()));
+    uint64_t const tag =
+        make_tag(ch.pair_id, static_cast<uint32_t>(t / G), group_bits);
+    for (uint32_t pi : group_puts) {
+      out[pi].kind = LogicalOpKind::PutSignal;
+      out[pi].tag = tag;
+      (void)dst_peer;
     }
     group_puts.clear();
   };
@@ -343,7 +328,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                     ? 1u
                     : static_cast<uint32_t>(
                           std::min<size_t>(G, num_tiles - t));
-            meta.wait_groups->emplace_back(cur_group_ws, grp);
+            out[cur_group_ws].wait_count = static_cast<uint16_t>(grp);
           }
         }
         old_to_new[old_idx] = cur_group_ws;
@@ -616,14 +601,11 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
   }
 
   size_t staging_bytes = 0;
-  FusionMetaOut meta{&result.fused_put_signal, &result.sig_group_size,
-                     &result.wait_group_size};
   result.ops =
       lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                      tiled.tiles_per_op, tmp_base, group_bits,
                      signal_group_tiles, algo.rank, algo.nranks,
-                     staging_bytes, meta, device_flags, max_tiles,
-                     same_host);
+                     staging_bytes, device_flags, max_tiles, same_host);
   result.staging_bytes_required =
       staging_bytes > tmp_total ? staging_bytes : tmp_total;
   return result;

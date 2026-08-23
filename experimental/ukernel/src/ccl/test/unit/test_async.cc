@@ -26,7 +26,7 @@ class MockBackend final : public BatchBackend {
   MockBackend(bool auto_complete = false) : auto_complete_(auto_complete) {}
 
   char const* name() const override { return "mock"; }
-  bool supports(ExecOpKind) const override { return true; }
+  bool supports(LogicalOpKind) const override { return true; }
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override {

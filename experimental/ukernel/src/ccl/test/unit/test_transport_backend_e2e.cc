@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
       auto sz = sizes[si];
       std::vector<CmdWithId> w(iters);
       for (int i = 0; i < iters; i++) {
-        w[i].cmd.kind = ExecOpKind::Put;
+        w[i].cmd.kind = LogicalOpKind::Put;
         w[i].cmd.src_buf = 1;
         w[i].cmd.dst_buf = 1;
         w[i].cmd.bytes = sz;

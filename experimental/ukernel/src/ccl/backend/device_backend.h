@@ -37,7 +37,7 @@ class DeviceBackend final : public BatchBackend {
   ~DeviceBackend() override;
 
   char const* name() const override { return "device"; }
-  bool supports(ExecOpKind kind) const override;
+  bool supports(LogicalOpKind kind) const override;
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
                     uint32_t* out_indices = nullptr) override;

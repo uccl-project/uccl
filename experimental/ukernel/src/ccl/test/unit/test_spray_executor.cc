@@ -23,13 +23,13 @@ namespace {
 class CtlBackend final : public BatchBackend {
  public:
   explicit CtlBackend(char const* label, size_t cap = 4096,
-                      ExecOpKind accept = ExecOpKind::Put)
+                      LogicalOpKind accept = LogicalOpKind::Put)
       : label_(label), cap_(cap), accept_(accept) {}
 
   char const* name() const override { return label_; }
 
-  bool supports(ExecOpKind kind) const override {
-    return accept_ == static_cast<ExecOpKind>(~0u) || kind == accept_;
+  bool supports(LogicalOpKind kind) const override {
+    return accept_ == static_cast<LogicalOpKind>(~0u) || kind == accept_;
   }
 
   size_t do_enqueue(Cmd const* cmds, size_t n,
@@ -102,7 +102,7 @@ class CtlBackend final : public BatchBackend {
   };
   char const* label_;
   size_t cap_;
-  ExecOpKind accept_;
+  LogicalOpKind accept_;
   mutable std::mutex mtx_;
   std::vector<Cmd> enqueued_;
   std::deque<Item> completed_;
@@ -111,7 +111,7 @@ class CtlBackend final : public BatchBackend {
   uint32_t next_be_ = 1;
 };
 
-static constexpr ExecOpKind kAnyKind = static_cast<ExecOpKind>(~0u);
+static constexpr LogicalOpKind kAnyKind = static_cast<LogicalOpKind>(~0u);
 
 static bool submit_and_wait(SprayExecutor& ex, CollectiveConfig const& cfg,
                             void* in, void* out) {
@@ -133,7 +133,7 @@ void test_path_priority() {
   printf("[test] path priority: IPC > RDMA > DeviceBackend...\n");
   // DeviceBackend accepts all (Reduce needs it), but Put tiles prefer
   // transport.  Count only Put tiles enqueued to transport.
-  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8),
+  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8, kAnyKind),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 4);
   ex->start();
@@ -150,7 +150,7 @@ void test_path_priority() {
 // ── Test 3: Reduce → DeviceBackend only ─────────────────────────────────
 void test_reduce_device_only() {
   printf("[test] reduce: Reduce → DeviceBackend only...\n");
-  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 4),
+  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 4, kAnyKind),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 4);
   ex->start();
@@ -168,7 +168,7 @@ void test_reduce_device_only() {
 // ── Test 4: deferred tiles re-queued ────────────────────────────────────
 void test_deferred_requeue() {
   printf("[test] deferred: tiles re-queued when all paths full...\n");
-  CtlBackend dev("device", 4, kAnyKind), tpt("transport", 0),
+  CtlBackend dev("device", 4, kAnyKind), tpt("transport", 0, kAnyKind),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
   ex->start();
@@ -194,7 +194,7 @@ void test_deferred_requeue() {
 // ── Test 5: multiple concurrent runs ────────────────────────────────────
 void test_concurrent() {
   printf("[test] concurrent: multiple runs with mixed dispatch...\n");
-  CtlBackend dev("device", 4, kAnyKind), tpt("transport", 4),
+  CtlBackend dev("device", 4, kAnyKind), tpt("transport", 4, kAnyKind),
       sig("signal", 16, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
   ex->start();
@@ -220,7 +220,7 @@ void test_concurrent() {
 // ── Test 6: Signal / WaitSignal → SignalBackend ─────────────────────────
 void test_signal_backend() {
   printf("[test] signal: Signal/WaitSignal → SignalBackend only...\n");
-  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8),
+  CtlBackend dev("device", 8, kAnyKind), tpt("transport", 8, kAnyKind),
       sig("signal", 8, kAnyKind);
   auto ex = std::make_unique<SprayExecutor>(&dev, &tpt, &sig, 2);
   ex->start();

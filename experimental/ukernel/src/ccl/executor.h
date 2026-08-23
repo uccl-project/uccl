@@ -54,16 +54,6 @@ struct CollPlan {
   std::vector<uint32_t> successor_data;  // CSR successors
   std::vector<uint32_t> indegree_init;   // deps count per op
   std::vector<uint32_t> initial_ready;   // ops with no deps
-  // PutSignal fusion metadata (from the lowerer), indexed by op idx.
-  // put_to_sig[put] = the signal op whose tag this put may carry (-1 =
-  // none); several puts of one group map to the same signal. A fused
-  // group is fully carried when sig_group_size[sig] of its puts were
-  // accepted with the fusion flag; the Signal op then completes locally.
-  // wait_group_size[ws] = group tiles (0 = not fusion-eligible): the
-  // wait counts that many tag arrivals when the sender fuses the group.
-  std::vector<int32_t> put_to_sig;
-  std::vector<uint16_t> sig_group_size;
-  std::vector<uint16_t> wait_group_size;
 };
 
 struct SprayRun {
@@ -100,11 +90,6 @@ struct SprayRun {
   // Successor graph lives in the shared plan; only the mutable indegree
   // is per-run.
   std::vector<uint32_t> indegree;  // __atomic_fetch_sub decrement, 0 = ready
-
-  // Per signal op: how many of its group's puts were accepted with the
-  // fusion flag (see CollPlan::sig_group_size). The Signal op completes
-  // locally once the count reaches the group size.
-  std::vector<uint16_t> fused_sig_cnt;
 
   // Lock-free ready ring via jring (MP/SC, sized to nops at submit time)
   jring_t* ready_ring = nullptr;
@@ -187,19 +172,9 @@ struct SprayRun {
   // next_run_epoch_); folded into every Signal/WaitSignal/fused tag.
   uint32_t tag_epoch = 0;
 
-  // Debug counters: Signal ops completed locally (fused) vs dispatched
-  // standalone to the signal backend — a run whose puts fused must have
-  // sig_standalone == 0, or the peer sees duplicate arrivals.
-  uint32_t sig_local = 0;
+  // Debug counter: standalone Signal ops dispatched to the signal
+  // backend (fused notifications ride PutSignal and never dispatch).
   uint32_t sig_standalone = 0;
-
-  // Per-signal-group acceptance accounting (indexed by Signal op idx,
-  // like fused_sig_cnt): fused_sig_cnt counts group puts accepted WITH
-  // the fuse flag, accepted_sig_cnt counts ALL accepted group puts.
-  // The Signal op must not be evaluated until accepted == grp — a
-  // point-in-time check against fused only would dispatch a standalone
-  // signal for a put that fuses one cycle later (duplicate arrival).
-  std::vector<uint16_t> accepted_sig_cnt;
 };
 
 struct SprayExecutorConfig {

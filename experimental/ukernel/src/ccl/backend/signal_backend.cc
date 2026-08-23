@@ -5,8 +5,8 @@
 namespace UKernel {
 namespace CCL {
 
-bool SignalBackend::supports(ExecOpKind kind) const {
-  return kind == ExecOpKind::Signal || kind == ExecOpKind::WaitSignal;
+bool SignalBackend::supports(LogicalOpKind kind) const {
+  return kind == LogicalOpKind::Signal || kind == LogicalOpKind::Wait;
 }
 
 uint32_t SignalBackend::reserve_slot() {
@@ -19,14 +19,14 @@ bool SignalBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
   // Communicator::consume_user_ctx), so enqueue takes no lock and touches
   // no map. On failure the be_idx is simply skipped — a harmless gap.
   unsigned rid = Transport::Communicator::kRidTagSignal | be_idx;
-  if (c.kind == ExecOpKind::Signal) {
+  if (c.kind == LogicalOpKind::Signal) {
     auto tpt = comm_->same_host(static_cast<int>(c.dst_peer))
                    ? Transport::PeerTransportKind::Ipc
                    : Transport::PeerTransportKind::Rdma;
     return comm_->send_signal_async_with_rid(static_cast<int>(c.dst_peer),
                                              c.tag, tpt, rid);
   }
-  if (c.kind == ExecOpKind::WaitSignal) {
+  if (c.kind == LogicalOpKind::Wait) {
     // Device-completion flag wait: the sender's fused task wrote the tag
     // into our flag slot(s); poll them directly (no ring, no host
     // signal). flag_count > 1 waits for a G-tile group: all consecutive

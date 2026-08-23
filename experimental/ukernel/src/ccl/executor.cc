@@ -152,24 +152,7 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
                     uint64_t output_off, uint64_t scr_off,
                     uint32_t tag_epoch) {
   Cmd c{};
-  // Logical op kind → backend command kind (execution encoding).
-  switch (op.kind) {
-    case LogicalOpKind::Put:
-    case LogicalOpKind::PutSignal:
-      c.kind = ExecOpKind::Put;
-      break;
-    case LogicalOpKind::Reduce:
-    case LogicalOpKind::ReducePut:
-    case LogicalOpKind::ReducePutSignal:
-      c.kind = ExecOpKind::Reduce;
-      break;
-    case LogicalOpKind::Signal:
-      c.kind = ExecOpKind::Signal;
-      break;
-    case LogicalOpKind::Wait:
-      c.kind = ExecOpKind::WaitSignal;
-      break;
-  }
+  c.kind = op.kind;  // the command's identity is the logical op
   c.bytes = static_cast<uint32_t>(op.bytes);
   c.dtype = dtype;
   // Op offsets are relative to the role's tensor; shift by the tensor's
@@ -198,13 +181,9 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
                 : ReductionKind::None;
   c.put_path = op.put_path_hint;  // None = auto (pick_put_path below)
   c.tag = salt_tag(op.tag, tag_epoch);
-  if (op.kind == LogicalOpKind::ReducePut ||
-      op.kind == LogicalOpKind::ReducePutSignal)
-    c.flags |= kCmdFlagReduceCopy;
   if (op.kind == LogicalOpKind::Reduce && op.fused_proxy_put_idx >= 0)
     c.flags |= kCmdFlagRdmaFusedProxy;
   if (op.kind == LogicalOpKind::PutSignal) {
-    c.flags |= kCmdFlagPutSignal;
     c.tag = op.tag;  // raw signal tag; channel encoding at enqueue time
   }
   if (op.kind == LogicalOpKind::Put && op.flag_slot != ~0u)
@@ -315,12 +294,6 @@ bool SprayExecutor::submit_fused_cmd(uint64_t cmd_index, bool first_attempt) {
     run->inflight_ops.fetch_add(1, std::memory_order_release);
     if (slot.op_idx < run->submitted.size())
       __atomic_store_n(&run->submitted[slot.op_idx], 1, __ATOMIC_RELAXED);
-    int32_t sg = run->plan->put_to_sig[slot.op_idx];
-    if (sg >= 0) {
-      if (slot.cmd.flags & kCmdFlagPutSignal)
-        __atomic_fetch_add(&run->fused_sig_cnt[sg], 1, __ATOMIC_RELAXED);
-      __atomic_fetch_add(&run->accepted_sig_cnt[sg], 1, __ATOMIC_RELEASE);
-    }
   }
   // Publish the BeSlot BEFORE enqueueing so a fast completion can never
   // beat the slot publication (same two-phase rule as normal submission).
@@ -378,16 +351,6 @@ static std::shared_ptr<CollPlan const> build_plan(
   for (uint32_t i = 0; i < nops; ++i)
     if (plan->tiled.ops[i].deps.empty()) plan->initial_ready.push_back(i);
 
-  // PutSignal fusion metadata from the lowerer.
-  plan->put_to_sig.assign(nops, -1);
-  plan->sig_group_size.assign(nops, 0);
-  plan->wait_group_size.assign(nops, 0);
-  for (auto [sig_idx, put_idx] : plan->tiled.fused_put_signal)
-    plan->put_to_sig[put_idx] = static_cast<int32_t>(sig_idx);
-  for (auto [sig_idx, grp] : plan->tiled.sig_group_size)
-    plan->sig_group_size[sig_idx] = static_cast<uint16_t>(grp);
-  for (auto [ws_idx, grp] : plan->tiled.wait_group_size)
-    plan->wait_group_size[ws_idx] = static_cast<uint16_t>(grp);
   return plan;
 }
 
@@ -917,8 +880,6 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   run->tag_epoch = static_cast<uint32_t>(++next_run_epoch_);
   size_t nops = plan->nops;
   run->submitted.resize(nops, 0);
-  run->fused_sig_cnt.assign(nops, 0);
-  run->accepted_sig_cnt.assign(nops, 0);
 
   UK_DBG(UK_DBG_LVL_EXEC, "[submit r%d] %zu ops", cfg.rank, nops);
   run->init_ready_ring(nops);
@@ -1084,7 +1045,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                      run.output_buf_id, run.scratch_buf_id,
                      run.input_base_off, run.output_base_off,
                      run.scratch_base_off, run.tag_epoch);
-    if (c.kind == ExecOpKind::Reduce &&
+    if (c.kind == LogicalOpKind::Reduce &&
         (c.flags & kCmdFlagRdmaFusedProxy)) {
       // Cross-node RDMA proxy: allocate the synthetic Put's Cmd in the
       // fused pool now. The device task will write this index into the
@@ -1116,7 +1077,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         }
       }
     }
-    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u) {
+    if ((c.kind == LogicalOpKind::Put ||
+         c.kind == LogicalOpKind::PutSignal) &&
+        c.dst_peer != ~0u) {
       if (c.flags & kCmdFlagCopySignal) {
         // Fused AG copy: must run on the device backend (the task writes
         // the completion flag); never route to CE/RDMA.
@@ -1128,6 +1091,21 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
              rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);
+      // PutSignal channel encoding (execution decision): the tag rides
+      // the put — RDMA as an epoch-encoded write-with-imm, IPC as the
+      // 64-bit salted tag in the shm ring. The receiver mirrors this in
+      // its wait shaping (see rdma_imm_fusion_active).
+      if (c.kind == LogicalOpKind::PutSignal && owned_comm_ &&
+          !run.plan->tiled.ops[idx].proxy_posted) {
+        uint64_t const unsalted = run.plan->tiled.ops[idx].tag;
+        if (c.put_path == PutPath::Rdma &&
+            rdma_imm_fusion_active(owned_comm_.get(),
+                                   static_cast<int>(c.dst_peer), unsalted)) {
+          c.tag = encode_imm(unsalted, run.tag_epoch);
+        } else {
+          c.tag = salt_tag(unsalted, run.tag_epoch);
+        }
+      }
       // On Nvidia consumer GPUs the PCIe BAR1 window is
       // typically 256 MiB.  Set UK_BAR1_WINDOW_MB to enable the
       // fallback to IPC for remote accesses exceeding that window.
@@ -1149,7 +1127,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
     }
 
-    if (path_counters_enabled_ && c.kind == ExecOpKind::Put &&
+    if (path_counters_enabled_ &&
+        (c.kind == LogicalOpKind::Put ||
+         c.kind == LogicalOpKind::PutSignal) &&
         c.dst_peer != ~0u) {
       switch (c.put_path) {
         case PutPath::Device:
@@ -1166,122 +1146,9 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       }
     }
 
-    // PutSignal fusion: a partner Signal rides this Put when the path
-    // supports it; the Signal op then completes locally once it becomes
-    // ready. The decision is re-derived every cycle, and the per-run
-    // fused_sig_cnt is bumped only when the fused put is actually
-    // accepted by the backend (see the submission loops).
-    //
-    // Groups (grp > 1): every put of the group must fuse — the receiver
-    // counts grp arrivals. Fused channels split into two matching layers:
-    // device-kernel and IPC shm-ring writes share the 64-bit tag map,
-    // RDMA immediates use per-peer FIFO. A group never straddles the two
-    // layers because the fusion predicate is deterministic per peer
-    // within a run: same-host puts reroute to IPC (always fusable) when
-    // their picked path cannot fuse, and remote groups fall back to a
-    // standalone Signal when RDMA cannot fuse — mirrored by the
-    // receiver's wait shaping below.
-    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u && owned_comm_ &&
-        !run.plan->put_to_sig.empty()) {
-      int32_t sig_idx = run.plan->put_to_sig[idx];
-      if (sig_idx >= 0) {
-        uint16_t grp = run.plan->sig_group_size[sig_idx];
-        uint64_t salted_sig_tag =
-            salt_tag(run.plan->tiled.ops[sig_idx].tag, run.tag_epoch);
-        bool fuse = false;
-        if (c.put_path == PutPath::Device) {
-          fuse = device_be_->can_fuse_put_signal(static_cast<int>(c.dst_peer));
-          if (!fuse && grp > 1 &&
-              owned_comm_->same_host(static_cast<int>(c.dst_peer))) {
-            // Device fusion unavailable: reroute to IPC so the group
-            // still fully fuses (move the tentative charge).
-            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-                .device.inflight.fetch_sub(1, std::memory_order_relaxed);
-            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-                .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-            c.put_path = PutPath::Ipc;
-          }
-        }
-        if (!fuse && c.put_path != PutPath::Device) {
-          auto tpt_kind = (c.put_path == PutPath::Rdma)
-                              ? Transport::PeerTransportKind::Rdma
-                              : Transport::PeerTransportKind::Ipc;
-          // RDMA fusion sends the epoch-encoded signal value as the
-          // 32-bit write-with-imm immediate (see encode_imm); the
-          // receiver mirrors the decision via kCmdFlagImmWait (see
-          // rdma_imm_fusion_active).
-          fuse =
-              (tpt_kind == Transport::PeerTransportKind::Rdma)
-                  ? rdma_imm_fusion_active(owned_comm_.get(),
-                                           static_cast<int>(c.dst_peer),
-                                           run.plan->tiled.ops[sig_idx].tag)
-                  : owned_comm_->can_fuse_put_signal(
-                        static_cast<int>(c.dst_peer), tpt_kind);
-          if (!fuse && grp > 1 && c.put_path == PutPath::Rdma &&
-              owned_comm_->same_host(static_cast<int>(c.dst_peer))) {
-            // Same-host group put the RDMA gate rejected: reroute to IPC
-            // so the group still fully fuses (mirrors the receiver's
-            // counted wait, which keys on IPC fusability).
-            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-                .rdma.inflight.fetch_sub(1, std::memory_order_relaxed);
-            tpt_metrics_[static_cast<size_t>(c.dst_peer)]
-                .ipc.inflight.fetch_add(1, std::memory_order_relaxed);
-            c.put_path = PutPath::Ipc;
-            fuse = owned_comm_->can_fuse_put_signal(
-                static_cast<int>(c.dst_peer), Transport::PeerTransportKind::Ipc);
-          }
-        }
-        if (fuse) {
-          c.flags |= kCmdFlagPutSignal;
-          // RDMA carries the epoch-encoded immediate (unique per run);
-          // IPC/device carry the full 64-bit salted tag in the shm ring.
-          c.tag = (c.put_path == PutPath::Rdma)
-                      ? encode_imm(run.plan->tiled.ops[sig_idx].tag,
-                                   run.tag_epoch)
-                      : salted_sig_tag;
-        }
-      }
-    }
-
-    if (c.kind == ExecOpKind::Signal || c.kind == ExecOpKind::WaitSignal) {
-      // Fused group accounting: a Signal whose group's puts were ALL
-      // accepted WITH the fuse flag completes locally — no backend
-      // dispatch. If the group cannot (fully) fuse, it must go
-      // standalone. Crucially, do not judge until every group put has an
-      // acceptance decision: the fused count is bumped at put ACCEPTANCE
-      // (in the dev/tpt batches, which run AFTER this ready loop in the
-      // same cycle), so a point-in-time check would dispatch a
-      // standalone signal for a put that fuses moments later — the peer
-      // then sees the tag twice (duplicate arrival, poisoned counts).
-      if (c.kind == ExecOpKind::Signal && !run.plan->sig_group_size.empty() &&
-          run.plan->sig_group_size[idx] > 0) {
-        uint16_t grp = run.plan->sig_group_size[idx];
-        // Read accepted BEFORE fused, both with acquire: the proxy
-        // thread publishes each fused bump (relaxed) before its accepted
-        // bump (release), so observing accepted == grp guarantees every
-        // fused bump is visible. Reading fused first could dispatch a
-        // standalone Signal for a put whose fused bump is not yet
-        // visible — duplicate arrival on the peer.
-        uint16_t const accepted =
-            __atomic_load_n(&run.accepted_sig_cnt[idx], __ATOMIC_ACQUIRE);
-        uint16_t const fused =
-            __atomic_load_n(&run.fused_sig_cnt[idx], __ATOMIC_ACQUIRE);
-        if (accepted < grp) {
-          // Group puts not all accepted yet: re-evaluate next cycle.
-          run.deferred_sig.push_back(idx);
-          continue;
-        }
-        if (fused == grp) {
-          run.submitted[idx] = 1;
-          complete_op_local(run, idx);
-          ++run.sig_local;
-          ++sig_dispatched;
-          continue;
-        }
-        // All group puts accepted but not all fused: standalone below.
-      }
-      // Counted/imm wait shaping — the exact mirror of the sender's
-      // fusion decision above (same predicates, same order):
+    if (c.kind == LogicalOpKind::Signal || c.kind == LogicalOpKind::Wait) {
+      // Counted/imm wait shaping — the mirror of the sender's PutSignal
+      // channel encoding (same predicates):
       // - RDMA-fused groups (any size): each put's epoch-encoded signal
       //   value rides the 32-bit write-with-imm immediate, so the wait
       //   matches arrivals BY VALUE (kCmdFlagImmWait), counting one imm
@@ -1290,10 +1157,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       //   counted tag-map wait on the salted tag.
       // - Otherwise: one standalone 64-bit signal (signal QP / shm
       //   ring), plain map wait.
-      if (c.kind == ExecOpKind::WaitSignal && owned_comm_ &&
-          !run.plan->wait_group_size.empty() &&
-          run.plan->wait_group_size[idx] > 0) {
-        uint16_t const grp = run.plan->wait_group_size[idx];
+      if (c.kind == LogicalOpKind::Wait && owned_comm_) {
+        uint16_t const grp = run.plan->tiled.ops[idx].wait_count;
         uint64_t const unsalted_tag = run.plan->tiled.ops[idx].tag;
         if (rdma_imm_fusion_active(owned_comm_.get(),
                                    static_cast<int>(c.src_peer),
@@ -1320,7 +1185,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         char const* env = std::getenv("UK_CCL_SIG_INFLIGHT_CAP");
         return env ? static_cast<uint32_t>(std::stoul(env)) : 4096u;
       }();
-      if (c.kind == ExecOpKind::WaitSignal &&
+      if (c.kind == LogicalOpKind::Wait &&
           run.sig_inflight.load(std::memory_order_relaxed) >=
               kSigInflightCap) {
         run.deferred_sig.push_back(idx);
@@ -1343,10 +1208,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         if (signal_be_->do_enqueue_reserved(c, be_idx)) {
           run.be_slots.emplace_back(2, be_idx);
           run.inflight_ops.fetch_add(1, std::memory_order_release);
-          if (c.kind == ExecOpKind::WaitSignal)
+          if (c.kind == LogicalOpKind::Wait)
             run.sig_inflight.fetch_add(1, std::memory_order_release);
           run.submitted[idx] = 1;
-          if (c.kind == ExecOpKind::Signal) ++run.sig_standalone;
+          if (c.kind == LogicalOpKind::Signal) ++run.sig_standalone;
           ++sig_dispatched;
         } else {
           sig_slots_.release(be_idx);
@@ -1361,7 +1226,7 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           sig_slots_.write(gen_idx, &run, idx, PutPath::None, stop_);
           run.be_slots.emplace_back(2, gen_idx);
           run.inflight_ops.fetch_add(1, std::memory_order_release);
-          if (c.kind == ExecOpKind::WaitSignal)
+          if (c.kind == LogicalOpKind::Wait)
             run.sig_inflight.fetch_add(1, std::memory_order_release);
           run.submitted[idx] = 1;
           ++sig_dispatched;
@@ -1372,14 +1237,18 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       continue;
     }
 
-    if (c.kind == ExecOpKind::Put && run.plan->tiled.ops[idx].proxy_posted) {
+    if ((c.kind == LogicalOpKind::Put ||
+         c.kind == LogicalOpKind::PutSignal) &&
+        run.plan->tiled.ops[idx].proxy_posted) {
       // Proxy-posted PutSignal: submitted by the D2H proxy through
       // submit_fused_cmd(), not by the normal enqueue path.
       run.deferred_tpt.push_back(idx);
       continue;
     }
 
-    if (c.kind == ExecOpKind::Put && c.dst_peer != ~0u &&
+    if ((c.kind == LogicalOpKind::Put ||
+         c.kind == LogicalOpKind::PutSignal) &&
+        c.dst_peer != ~0u &&
         c.put_path != PutPath::Device) {
       run.tpt_cmds.push_back(c);
       tpt_idx.push_back(idx);
@@ -1415,10 +1284,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
-        int32_t sg = run.plan->put_to_sig[dev_idx[i]];
-        if (sg >= 0) ++run.accepted_sig_cnt[sg];
-        if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
-          ++run.fused_sig_cnt[sg];
       }
       // Roll back slots whose submission failed, defer the rest
       // (releasing their tentative inflight charges).
@@ -1442,10 +1307,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          stop_);
         run.be_slots.emplace_back(0, be_idx_scratch_[i]);
         run.submitted[dev_idx[i]] = 1;
-        int32_t sg = run.plan->put_to_sig[dev_idx[i]];
-        if (sg >= 0) ++run.accepted_sig_cnt[sg];
-        if (run.dev_cmds[i].flags & kCmdFlagPutSignal)
-          ++run.fused_sig_cnt[sg];
       }
       for (size_t i = ok; i < m; ++i) {
         if (run.dev_cmds[i].dst_peer != ~0u)
@@ -1475,12 +1336,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       for (size_t i = 0; i < ok; ++i) {
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
-        // The fused put was accepted: count it toward its signal group;
-        // the Signal op completes locally once the whole group is out.
-        int32_t sg = run.plan->put_to_sig[tpt_idx[i]];
-        if (sg >= 0) ++run.accepted_sig_cnt[sg];
-        if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
-          ++run.fused_sig_cnt[sg];
       }
       for (size_t i = ok; i < reserved; ++i)
         tpt_slots_.release(be_idx_scratch_[i]);
@@ -1499,10 +1354,6 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                          run.tpt_cmds[i].put_path, stop_);
         run.be_slots.emplace_back(1, be_idx_scratch_[i]);
         run.submitted[tpt_idx[i]] = 1;
-        int32_t sg = run.plan->put_to_sig[tpt_idx[i]];
-        if (sg >= 0) ++run.accepted_sig_cnt[sg];
-        if (run.tpt_cmds[i].flags & kCmdFlagPutSignal)
-          ++run.fused_sig_cnt[sg];
       }
       for (size_t i = ok; i < m; ++i) {
         release_put_inflight(static_cast<int>(run.tpt_cmds[i].dst_peer),
@@ -1822,11 +1673,11 @@ void SprayExecutor::dump_run_state(SprayRun* run, char const* why) {
   }
   std::fprintf(stderr,
                "[dump r%d] %s done=%zu/%zu epoch=%u deferred dev=%zu tpt=%zu "
-               "sig=%zu sig_local=%u sig_standalone=%u\n",
+               "sig=%zu sig_standalone=%u\n",
                rank_or_neg1(), why, run->done_count.load(), nops,
                run->tag_epoch, run->deferred_dev.size(),
                run->deferred_tpt.size(), run->deferred_sig.size(),
-               run->sig_local, run->sig_standalone);
+               run->sig_standalone);
   for (int k = 0; k < 7; ++k)
     std::fprintf(stderr, "[dump r%d] %-10s submitted=%d pending=%d\n",
                  rank_or_neg1(), kNames[k], sub[k], pend[k]);

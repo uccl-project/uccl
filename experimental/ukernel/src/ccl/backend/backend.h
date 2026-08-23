@@ -17,7 +17,7 @@ namespace CCL {
 // Command descriptor
 
 struct Cmd {
-  ExecOpKind kind;      // 4
+  LogicalOpKind kind;   // 4 — logical op; execution details via flags
   uint32_t src_buf;     // 4
   uint32_t dst_buf;     // 4
   uint32_t bytes;       // 4
@@ -31,8 +31,10 @@ struct Cmd {
   ReductionKind redop;  // 4
   ScalarType dtype;     // 4 — element type for device-kernel reduce/copy
   PutPath put_path;     // 1 — Device/IPC/RDMA for ops
-  // kCmdFlagPutSignal: this Put carries its partner Signal's tag (in
-  // Cmd::tag); the transport emits the signal once the data lands.
+  // Execution-side orthogonals, chosen at enqueue time. The logical op
+  // kind already expresses "carries a signal" (PutSignal /
+  // ReducePutSignal) and "reduce + copy" (ReducePut / ReducePutSignal);
+  // these bits only select the channel / mechanism.
   uint8_t flags;
   // WaitSignal: expected tag arrivals (0/1 = 1). A fused signal group
   // delivers one arrival per tile, so the wait counts group_size.
@@ -51,27 +53,18 @@ struct Cmd {
 
 static_assert(sizeof(Cmd) == 104, "Cmd size changed");
 
-// Cmd::flags bits
-inline constexpr uint8_t kCmdFlagPutSignal = 1u << 0;
 // kCmdFlagImmWait: this WaitSignal expects RDMA write-with-imm arrivals
-// from fused PutSignal puts. Immediates carry only the tag's low 32 bits
-// (the run epoch lives in the high bits), which collide across runs, so
-// matching is per-peer FIFO in arrival order — Cmd::tag then carries the
-// UNSALTED tag and wait_count counts the group's fused puts (one imm
-// each).
-inline constexpr uint8_t kCmdFlagImmWait = 1u << 1;
-// kCmdFlagReduceCopy: the Reduce task also copies dst to the peer
-// (copy_dst_*). The data-ready signal is a separate host-written Signal
-// op (B300 has no GPU-mapped signal ring, so the kernel cannot write it).
-inline constexpr uint8_t kCmdFlagReduceCopy = 1u << 2;
+// from fused PutSignal puts. Cmd::tag carries the epoch-encoded imm
+// value and wait_count counts the group's fused puts (one imm each).
+inline constexpr uint8_t kCmdFlagImmWait = 1u << 0;
 // kCmdFlagCopySignal: the Put is a fused AG copy — a device task that
 // copies to the peer (dst_peer) and device-writes the completion flag
 // (flag_slot, tag) when done. No CE, no host signal op.
-inline constexpr uint8_t kCmdFlagCopySignal = 1u << 3;
+inline constexpr uint8_t kCmdFlagCopySignal = 1u << 1;
 // kCmdFlagRdmaFusedProxy: the device Reduce task skips the remote IPC
 // copy and instead writes rdma_fused_cmd_index into the D2H ring; the
 // CCL proxy posts the RDMA put.
-inline constexpr uint8_t kCmdFlagRdmaFusedProxy = 1u << 4;
+inline constexpr uint8_t kCmdFlagRdmaFusedProxy = 1u << 2;
 
 struct CmdWithId {
   Cmd cmd;
@@ -90,7 +83,7 @@ class BatchBackend {
  public:
   virtual ~BatchBackend() = default;
   virtual char const* name() const = 0;
-  virtual bool supports(ExecOpKind kind) const = 0;
+  virtual bool supports(LogicalOpKind kind) const = 0;
   void set_comm(UKernel::Transport::Communicator* comm) { comm_ = comm; }
 
   // Backend API (called directly by SprayExecutor)
@@ -100,9 +93,9 @@ class BatchBackend {
   virtual size_t capacity() const = 0;
   virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
 
-  // Whether this backend can carry a Put's partner signal tag itself
-  // (Cmd::kCmdFlagPutSignal): DeviceBackend's kernels write the tag
-  // into the peer's shm signal ring after the copy. Default: no.
+  // Whether this backend can carry a PutSignal's tag itself:
+  // DeviceBackend's kernels write the tag into the peer's shm signal
+  // ring after the copy. Default: no.
   virtual bool can_fuse_put_signal(int peer) const {
     (void)peer;
     return false;

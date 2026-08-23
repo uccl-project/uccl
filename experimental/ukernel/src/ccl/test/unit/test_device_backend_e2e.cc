@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
       int n = iters[si];
       std::vector<CmdWithId> w(n);
       for (int i = 0; i < n; i++) {
-        w[i].cmd.kind = ExecOpKind::Put;
+        w[i].cmd.kind = LogicalOpKind::Put;
         w[i].cmd.bytes = sz;
         w[i].cmd.src_buf = 1;
         w[i].cmd.dst_buf = 1;
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 1024; i++) rd[i] = (float)i;
     GPU_RT_CHECK(gpuMemcpy(d, rd, 4096, gpuMemcpyHostToDevice));
     CmdWithId w{};
-    w.cmd.kind = ExecOpKind::Reduce;
+    w.cmd.kind = LogicalOpKind::Reduce;
     w.cmd.bytes = 4096;
     w.cmd.src_buf = 1;
     w.cmd.dst_buf = 1;

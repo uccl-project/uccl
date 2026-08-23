@@ -41,15 +41,6 @@ enum class LogicalOpKind : uint32_t {
   ReducePutSignal, // reduce, put to a peer, notify on landing
 };
 
-// Backend command kind — kept for the execution encoding while the
-// logical kinds migrate in; backends dispatch on this.
-enum class ExecOpKind : uint32_t {
-  Put,
-  Reduce,
-  Signal,
-  WaitSignal,
-};
-
 enum class ScalarType : uint32_t {
   UInt8,
   Int8,
@@ -141,6 +132,9 @@ struct TiledOp {
   // per-tile signals; the wait completes when ALL match). Fused Reduce:
   // unused (1).
   uint32_t flag_count = 1;
+  // Wait: expected tag arrivals (0/1 = 1). A fused signal group delivers
+  // one arrival per tile, so the wait counts group_size.
+  uint16_t wait_count = 1;
   uint64_t tag = 0;
   std::vector<uint32_t> deps;
   CollectiveBufferRole src_buf_role = CollectiveBufferRole::Input;
@@ -164,17 +158,6 @@ struct TiledResult {
   // index (all-ones reserved for the copies-done handshake), pair_id
   // sits above. Plan-adaptive, identical on all ranks.
   uint32_t tag_group_bits = 0;
-  // PutSignal fusion metadata for signal groups whose tag fits the
-  // 32-bit RDMA immediate:
-  // - fused_put_signal: (signal_op_idx, put_op_idx) for EVERY Put of an
-  //   eligible group (G entries per group; each Put may carry the group
-  //   tag as an imm — the receiver then counts G arrivals).
-  // - sig_group_size: (signal_op_idx, group_put_count).
-  // - wait_group_size: (wait_op_idx, group_tile_count) — the expected
-  //   tag arrivals when the sender fuses the group (else 1).
-  std::vector<std::pair<uint32_t, uint32_t>> fused_put_signal;
-  std::vector<std::pair<uint32_t, uint32_t>> sig_group_size;
-  std::vector<std::pair<uint32_t, uint32_t>> wait_group_size;
 };
 
 }  // namespace CCL

@@ -63,8 +63,10 @@ DeviceBackend::~DeviceBackend() {
   }
 }
 
-bool DeviceBackend::supports(ExecOpKind kind) const {
-  return kind == ExecOpKind::Put || kind == ExecOpKind::Reduce;
+bool DeviceBackend::supports(LogicalOpKind kind) const {
+  return kind == LogicalOpKind::Put || kind == LogicalOpKind::PutSignal ||
+         kind == LogicalOpKind::Reduce || kind == LogicalOpKind::ReducePut ||
+         kind == LogicalOpKind::ReducePutSignal;
 }
 
 void DeviceBackend::ensure_runtime() {
@@ -117,7 +119,8 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   args.dst_device = device_idx_;
   bool src_ok = (c.src_buf == 0), dst_ok = (c.dst_buf == 0);
   // A fused reduce+copy must resolve its peer accum target.
-  bool copy_dst_ok = !(c.flags & kCmdFlagReduceCopy);
+  bool copy_dst_ok = c.kind != LogicalOpKind::ReducePut &&
+                     c.kind != LogicalOpKind::ReducePutSignal;
 
   if (c.src_buf > 0) {
     if (c.src_peer != ~0u && comm_) {
@@ -218,17 +221,20 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
                                                     : Device::ReduceType::Sum);
 
   switch (c.kind) {
-    case ExecOpKind::Put:
+    case LogicalOpKind::Put:
+    case LogicalOpKind::PutSignal:
       tt = Device::TaskType::CollCopy;
       break;
-    case ExecOpKind::Reduce:
+    case LogicalOpKind::Reduce:
+    case LogicalOpKind::ReducePut:
+    case LogicalOpKind::ReducePutSignal:
       tt = Device::TaskType::CollReduce;
       break;
     default:
       return false;
   }
 
-  if (c.flags & kCmdFlagPutSignal) {
+  if (c.kind == LogicalOpKind::PutSignal) {
     // Fused PutSignal: the kernel writes the tag into the peer's shm
     // signal ring after the copy (same channel as host-sent signals,
     // so the receiver stays a CPU-side poll).
@@ -246,7 +252,8 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
     args.redTypeRaw = c.tag;
   }
 
-  if (c.flags & kCmdFlagReduceCopy) {
+  if (c.kind == LogicalOpKind::ReducePut ||
+      c.kind == LogicalOpKind::ReducePutSignal) {
     // Fused reduce+copy: after the reduce, copy dst to the peer's
     // accumulation buffer. The data-ready signal is a separate
     // host-written Signal op (the peer signal ring is not GPU-mapped on

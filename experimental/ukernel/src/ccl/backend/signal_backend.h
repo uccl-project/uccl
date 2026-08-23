@@ -17,7 +17,7 @@ class SignalBackend final : public BatchBackend {
   ~SignalBackend() override = default;
 
   char const* name() const override { return "signal"; }
-  bool supports(ExecOpKind kind) const override;
+  bool supports(LogicalOpKind kind) const override;
 
   // Reserve a be_idx and communicator rid without submitting.
   // Caller must write the slot table entry BEFORE calling

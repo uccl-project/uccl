@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
 
       for (int iter = 0; iter < kLatencyIters; ++iter) {
         CmdWithId cwi{};
-        cwi.cmd.kind = ExecOpKind::Put;
+        cwi.cmd.kind = LogicalOpKind::Put;
         cwi.cmd.bytes = static_cast<uint32_t>(bytes);
         cwi.cmd.src_buf = 1;
         cwi.cmd.dst_buf = 1;
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
       for (int iter = 0; iter < kThroughputIters; ++iter) {
         CmdWithId cwis[kBatchSize]{};
         for (int b = 0; b < kBatchSize; ++b) {
-          cwis[b].cmd.kind = ExecOpKind::Put;
+          cwis[b].cmd.kind = LogicalOpKind::Put;
           cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
           cwis[b].cmd.src_buf = 1;
           cwis[b].cmd.dst_buf = 1;
@@ -437,7 +437,7 @@ int main(int argc, char** argv) {
 
         for (int iter = 0; iter < kLatencyIters; ++iter) {
           CmdWithId cwi{};
-          cwi.cmd.kind = ExecOpKind::Put;
+          cwi.cmd.kind = LogicalOpKind::Put;
           cwi.cmd.bytes = static_cast<uint32_t>(bytes);
           cwi.cmd.src_buf = 1;  // local d_local
           cwi.cmd.dst_buf = 1;  // peer d_local (registered by peer's init)
@@ -480,7 +480,7 @@ int main(int argc, char** argv) {
         for (int iter = 0; iter < kThroughputIters; ++iter) {
           CmdWithId cwis[kBatchSize]{};
           for (int b = 0; b < kBatchSize; ++b) {
-            cwis[b].cmd.kind = ExecOpKind::Put;
+            cwis[b].cmd.kind = LogicalOpKind::Put;
             cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
             cwis[b].cmd.src_buf = 1;
             cwis[b].cmd.dst_buf = 1;
@@ -553,7 +553,7 @@ int main(int argc, char** argv) {
       bool rdma_ok = false;
       {
         Cmd probe_cmd{};
-        probe_cmd.kind = ExecOpKind::Put;
+        probe_cmd.kind = LogicalOpKind::Put;
         probe_cmd.bytes = 1024;
         probe_cmd.src_buf = 1;
         probe_cmd.dst_buf = 1;
@@ -618,7 +618,7 @@ int main(int argc, char** argv) {
 
           for (int iter = 0; iter < kLatencyIters; ++iter) {
             CmdWithId cwi{};
-            cwi.cmd.kind = ExecOpKind::Put;
+            cwi.cmd.kind = LogicalOpKind::Put;
             cwi.cmd.bytes = static_cast<uint32_t>(bytes);
             cwi.cmd.src_buf = 1;
             cwi.cmd.dst_buf = 1;
@@ -670,7 +670,7 @@ int main(int argc, char** argv) {
           for (int iter = 0; iter < kThroughputIters && !lat_timeout; ++iter) {
             CmdWithId cwis[kBatchSize]{};
             for (int b = 0; b < kBatchSize; ++b) {
-              cwis[b].cmd.kind = ExecOpKind::Put;
+              cwis[b].cmd.kind = LogicalOpKind::Put;
               cwis[b].cmd.bytes = static_cast<uint32_t>(bytes);
               cwis[b].cmd.src_buf = 1;
               cwis[b].cmd.dst_buf = 1;

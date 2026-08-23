@@ -39,14 +39,14 @@ void test_enum_distinct_values() {
   assert(static_cast<uint32_t>(AlgoOpKind::Put) !=
          static_cast<uint32_t>(AlgoOpKind::RecvReduce));
 
-  assert(static_cast<uint32_t>(ExecOpKind::Put) !=
-         static_cast<uint32_t>(ExecOpKind::Reduce));
-  assert(static_cast<uint32_t>(ExecOpKind::Put) !=
-         static_cast<uint32_t>(ExecOpKind::Signal));
-  assert(static_cast<uint32_t>(ExecOpKind::Put) !=
-         static_cast<uint32_t>(ExecOpKind::WaitSignal));
-  assert(static_cast<uint32_t>(ExecOpKind::Reduce) !=
-         static_cast<uint32_t>(ExecOpKind::WaitSignal));
+  assert(static_cast<uint32_t>(LogicalOpKind::Put) !=
+         static_cast<uint32_t>(LogicalOpKind::Reduce));
+  assert(static_cast<uint32_t>(LogicalOpKind::Put) !=
+         static_cast<uint32_t>(LogicalOpKind::Signal));
+  assert(static_cast<uint32_t>(LogicalOpKind::Put) !=
+         static_cast<uint32_t>(LogicalOpKind::Wait));
+  assert(static_cast<uint32_t>(LogicalOpKind::Reduce) !=
+         static_cast<uint32_t>(LogicalOpKind::Wait));
 
   assert(static_cast<uint32_t>(ReductionKind::None) !=
          static_cast<uint32_t>(ReductionKind::Sum));
@@ -581,36 +581,32 @@ void test_lower_algo_ring_basic() {
   assert(tiled.input_bytes > 0);
   assert(!tiled.ops.empty());
   // Ring allreduce with 4 ranks, 1024-byte shards, 512-byte tiles:
-  // Each abstract op → 2 tiles, plus per-tile Signal/WaitSignal.
-  assert(tiled.ops.size() > 30);
+  // Each abstract op → 2 tiles, plus per-tile Wait/Signal/PutSignal.
+  assert(tiled.ops.size() > 10);
 
   // All tiled ops should have bytes <= tile_bytes (signals have 0).
   for (auto const& op : tiled.ops) assert(op.bytes <= 512);
 
-  // Signal and WaitSignal ops should be present with non-zero tags.
-  bool saw_signal = false, saw_waitsig = false;
-  for (auto const& op : tiled.ops) {
-    if (op.kind == LogicalOpKind::Signal) saw_signal = true;
+  // Data-ready notifications ride PutSignal nodes (checked below); the
+  // Wait side must be present.
+  bool saw_waitsig = false;
+  for (auto const& op : tiled.ops)
     if (op.kind == LogicalOpKind::Wait) saw_waitsig = true;
-  }
-  assert(saw_signal);
   assert(saw_waitsig);
 
-  // G=1: every Signal op is a fusion-eligible group of one Put.
-  size_t nsig = 0;
-  for (auto const& op : tiled.ops)
-    if (op.kind == LogicalOpKind::Signal) ++nsig;
-  assert(tiled.fused_put_signal.size() == nsig);
-  for (auto [s, p] : tiled.fused_put_signal) {
-    assert(tiled.ops[s].kind == LogicalOpKind::Signal);
-    assert(tiled.ops[p].kind == LogicalOpKind::Put);
-    assert(tiled.ops[s].deps.size() == 1 && tiled.ops[s].deps[0] == p);
+  // Group-fused puts carry the group tag as PutSignal nodes; their
+  // receiver-side waits carry the expected arrival count.
+  size_t nputsig = 0;
+  for (auto const& op : tiled.ops) {
+    if (op.kind == LogicalOpKind::PutSignal) {
+      ++nputsig;
+      // Group tag must fit the 32-bit imm field (pair 0 / group 0 is a
+      // legitimate zero tag).
+      assert(op.tag <= 0xFFFFFFFFull);
+    }
+    if (op.kind == LogicalOpKind::Wait) assert(op.wait_count >= 1);
   }
-  assert(tiled.sig_group_size.size() == nsig);
-  for (auto [s, g] : tiled.sig_group_size) {
-    assert(tiled.ops[s].kind == LogicalOpKind::Signal);
-    assert(g == 1);
-  }
+  assert(nputsig > 0);
 }
 
 void test_lower_algo_signal_grouping() {
@@ -628,15 +624,16 @@ void test_lower_algo_signal_grouping() {
   TiledResult g1 = lower_algo(algo, 512, /*signal_group_tiles=*/1);
   TiledResult g2 = lower_algo(algo, 512, /*signal_group_tiles=*/2);
 
-  size_t sig1 = count_kind(g1, LogicalOpKind::Signal);
+  size_t ps1 = count_kind(g1, LogicalOpKind::PutSignal);
   size_t ws1 = count_kind(g1, LogicalOpKind::Wait);
-  size_t sig2 = count_kind(g2, LogicalOpKind::Signal);
+  size_t ps2 = count_kind(g2, LogicalOpKind::PutSignal);
   size_t ws2 = count_kind(g2, LogicalOpKind::Wait);
 
-  // 1024-byte shards / 512-byte tiles → exactly 2 tiles per chunk pair,
-  // so G=2 exactly halves the signal/wait counts.
-  assert(sig1 > 0 && sig2 * 2 == sig1);
+  // 1024-byte shards / 512-byte tiles → exactly 2 tiles per chunk pair:
+  // G=2 halves the wait count (one wait per group) while every data put
+  // still carries the group tag (PutSignal count unchanged).
   assert(ws1 > 0 && ws2 * 2 == ws1);
+  assert(ps1 > 0 && ps2 == ps1);
 
   // Data-moving op counts are unaffected by grouping.
   assert(count_kind(g2, LogicalOpKind::Put) ==
@@ -644,23 +641,20 @@ void test_lower_algo_signal_grouping() {
   assert(count_kind(g2, LogicalOpKind::Reduce) ==
          count_kind(g1, LogicalOpKind::Reduce));
 
-  // With G=2 every Signal depends on both Puts of its (full) group.
-  for (auto const& op : g2.ops)
-    if (op.kind == LogicalOpKind::Signal) assert(op.deps.size() == 2);
-
   // 2-tile groups collapse to group index 0 in the tag's low
   // tag_group_bits bits (adaptive layout; all-ones value reserved).
   for (auto const& op : g2.ops) {
-    if (op.kind == LogicalOpKind::Signal || op.kind == LogicalOpKind::Wait)
+    if (op.kind == LogicalOpKind::PutSignal || op.kind == LogicalOpKind::Wait)
       assert((op.tag & ((1ull << g2.tag_group_bits) - 1)) == 0);
   }
 
-  // G=2: each group contributes 2 fusion-carrying puts, group size 2.
-  assert(g2.fused_put_signal.size() == sig2 * 2);
-  assert(!g1.fused_put_signal.empty());
-  for (auto [s, g] : g2.sig_group_size) assert(g == 2);
-  assert(!g2.wait_group_size.empty());
-  for (auto [w, g] : g2.wait_group_size) assert(g == 2);
+  // G=2: every grouped wait expects 2 arrivals; G=1 waits expect 1.
+  size_t counted2 = 0;
+  for (auto const& op : g2.ops)
+    if (op.kind == LogicalOpKind::Wait && op.wait_count == 2) ++counted2;
+  assert(counted2 > 0);
+  for (auto const& op : g1.ops)
+    if (op.kind == LogicalOpKind::Wait) assert(op.wait_count == 1);
 }
 
 void test_lower_algo_reduce_scatter() {
@@ -674,9 +668,9 @@ void test_lower_algo_reduce_scatter() {
   assert(tiled.staging_bytes_required == 4096);
 
   size_t nreduce = 0, copy_tiles = 0;
-  bool saw_signal = false, saw_wait = false;
+  bool saw_psig = false, saw_wait = false;
   for (auto const& op : tiled.ops) {
-    if (op.kind == LogicalOpKind::Signal) saw_signal = true;
+    if (op.kind == LogicalOpKind::PutSignal) saw_psig = true;
     if (op.kind == LogicalOpKind::Wait) saw_wait = true;
     if (op.kind == LogicalOpKind::Reduce) {
       // Reduce: Scratch (peer partial) += Input (my contribution).
@@ -684,7 +678,8 @@ void test_lower_algo_reduce_scatter() {
       assert(op.dst_buf_role == CollectiveBufferRole::Scratch);
       ++nreduce;
     }
-    if (op.kind == LogicalOpKind::Put) {
+    if (op.kind == LogicalOpKind::Put ||
+        op.kind == LogicalOpKind::PutSignal) {
       if (op.dst_peer == ~0u) {
         // Local own-shard copy tiles -> Output[0..shard).
         assert(op.src_buf_role == CollectiveBufferRole::Scratch);
@@ -697,7 +692,7 @@ void test_lower_algo_reduce_scatter() {
       }
     }
   }
-  assert(saw_signal && saw_wait);
+  assert(saw_psig && saw_wait);
   assert(nreduce == 6);    // 3 RecvReduce chunks x 2 tiles
   assert(copy_tiles == 2); // 1024-byte copy / 512-byte tiles
 }
@@ -713,7 +708,9 @@ void test_lower_algo_allgather() {
 
   size_t copy_tiles = 0, remote_puts = 0, in_src_puts = 0;
   for (auto const& op : tiled.ops) {
-    if (op.kind != LogicalOpKind::Put) continue;
+    if (op.kind != LogicalOpKind::Put &&
+        op.kind != LogicalOpKind::PutSignal)
+      continue;
     if (op.dst_peer == ~0u) {
       // Local own-shard copy Input[0] -> Output[offset].
       assert(op.src_buf_role == CollectiveBufferRole::Input);

@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
       dev_be.set_comm(comm.get());
 
       Cmd cmd{};
-      cmd.kind = ExecOpKind::Put;
+      cmd.kind = LogicalOpKind::Put;
       cmd.src_buf = 1;
       cmd.dst_buf = 2;
       cmd.bytes = static_cast<uint32_t>(kBufBytes);
@@ -386,7 +386,7 @@ int main(int argc, char** argv) {
       }
 
       Cmd rcmd{};
-      rcmd.kind = ExecOpKind::Reduce;
+      rcmd.kind = LogicalOpKind::Reduce;
       rcmd.src_buf = 1;
       rcmd.dst_buf = 2;
       rcmd.bytes = static_cast<uint32_t>(kBufBytes);
