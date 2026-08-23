@@ -116,7 +116,7 @@ uint32_t tag_group_bits(CollAlgo const& algo, size_t tile_bytes, uint32_t G) {
 
 TiledOp op_to_tiled(Op const& op) {
   TiledOp t;
-  t.kind = ExecOpKind::Put;
+  t.kind = LogicalOpKind::Put;
   t.bytes = op.bytes;
   t.src_off = op.src_off;
   t.dst_off = op.dst_off;
@@ -201,7 +201,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                size_t num_tiles) {
     if (t % G != G - 1 && t + 1 != num_tiles) return;
     TiledOp sig;
-    sig.kind = ExecOpKind::Signal;
+    sig.kind = LogicalOpKind::Signal;
     sig.dst_peer = dst_peer;
     sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G), group_bits);
     uint32_t sig_idx = static_cast<uint32_t>(out.size());
@@ -238,7 +238,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           chunk_staging += op.bytes;
 
           TiledOp cp;
-          cp.kind = ExecOpKind::Put;
+          cp.kind = LogicalOpKind::Put;
           cp.bytes = op.bytes;
           cp.src_off = op.src_off;
           cp.dst_off = staging_base + staging_off;
@@ -252,7 +252,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           out.push_back(cp);
 
           TiledOp put;
-          put.kind = ExecOpKind::Put;
+          put.kind = LogicalOpKind::Put;
           put.bytes = op.bytes;
           put.src_off = staging_base + staging_off;
           put.dst_off = op.dst_off;
@@ -304,7 +304,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         // the group depend on it via old_to_new remapping.
         if (t % G == 0) {
           TiledOp ws;
-          ws.kind = ExecOpKind::WaitSignal;
+          ws.kind = LogicalOpKind::Wait;
           ws.src_peer = op.src_peer;
           if (ch.wait_standalone_signal && device_flags) {
             // Fused-task signals (fuse_reduce_copy): each tile's task
@@ -350,7 +350,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 
       } else if (op.kind == AlgoOpKind::RecvReduce) {
         TiledOp red;
-        red.kind = ExecOpKind::Reduce;
+        red.kind = LogicalOpKind::Reduce;
         red.bytes = op.bytes;
         red.src_off = op.src_off;
         red.dst_off = op.dst_off;
@@ -378,36 +378,34 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
               kRdmaFusedProxy &&
               !(same_host && same_host(static_cast<int>(ch.copy_peer)));
           if (proxy_hop) {
-            // RDMA proxy: reduce to local dst only; the synthetic Put
-            // below is posted by the proxy after the device notifies
-            // through the D2H ring.
-            red.rdma_fused_proxy = true;
-            // The synthetic Put is appended immediately after this Reduce.
+            // RDMA proxy: reduce to local dst only; the PutSignal below
+            // is posted by the proxy after the device notifies through
+            // the D2H ring. The Reduce keeps kind Reduce; the proxy
+            // linkage is fused_proxy_put_idx.
             red.fused_proxy_put_idx = static_cast<int32_t>(red_idx + 1);
+          } else if (device_flags) {
+            // Device-direct fused reduce+copy with completion flag: one
+            // ReducePutSignal task (reduce + copy + flag write).
+            red.kind = LogicalOpKind::ReducePutSignal;
+            red.flag_slot = static_cast<uint32_t>(
+                static_cast<uint64_t>(ch.pair_id) * max_tiles +
+                static_cast<uint64_t>(t));
+            red.tag = red.flag_slot;
           } else {
-            // Same-host fused reduce+copy: after the reduce, copy dst to
-            // the peer's accumulation buffer. The data-ready signal is a
-            // device-completion flag slot (when device_flags) written by
-            // the task itself, or a separate host-written Signal op.
-            red.fused_copy = true;
-            if (device_flags) {
-              // Per-tile slot + tag: tile t writes slot pair*K+t with the
-              // slot index as the tag (salted). The receiver's group wait
-              // polls consecutive slots and matches base_tag+i.
-              red.flag_slot = static_cast<uint32_t>(
-                  static_cast<uint64_t>(ch.pair_id) * max_tiles +
-                  static_cast<uint64_t>(t));
-              red.tag = red.flag_slot;
-            }
+            // Device-direct fused reduce+copy, host signal: one
+            // ReducePut task; the data-ready signal is a separate
+            // Signal node below.
+            red.kind = LogicalOpKind::ReducePut;
           }
         }
         red.deps = op.deps;
         out.push_back(red);
         if (ch.fuse_copy_to_peer && proxy_hop) {
-          // Synthetic RDMA Put: depends on the Reduce; all downstream
-          // ops wait for this Put instead of the Reduce.
+          // PutSignal posted by the host proxy after the device notify:
+          // carries the data-ready tag as a write-with-imm, so no
+          // separate Signal node is needed.
           TiledOp put;
-          put.kind = ExecOpKind::Put;
+          put.kind = LogicalOpKind::PutSignal;
           put.bytes = red.bytes;
           put.src_off = red.dst_off;
           put.dst_off = red.copy_dst_off;
@@ -415,7 +413,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.src_buf_role = red.dst_buf_role;
           put.dst_buf_role = red.copy_dst_buf_role;
           put.put_path_hint = PutPath::Rdma;
-          put.rdma_fused_proxy = true;
+          put.proxy_posted = true;
+          put.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
+                             group_bits);
           put_idx = static_cast<uint32_t>(out.size());
           out.push_back(put);
           // Must use new_deps: red_idx is a newly created op index and
@@ -427,25 +427,14 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         } else {
           old_to_new[old_idx] = red_idx;
         }
-        if (ch.fuse_copy_to_peer && !device_flags) {
+        if (ch.fuse_copy_to_peer && !device_flags && !proxy_hop) {
           TiledOp sig;
-          sig.kind = ExecOpKind::Signal;
+          sig.kind = LogicalOpKind::Signal;
           sig.dst_peer = static_cast<uint32_t>(ch.copy_peer);
           sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
                              group_bits);
-          if (proxy_hop) {
-            uint32_t sig_idx = static_cast<uint32_t>(out.size());
-            new_deps.push_back({sig_idx, put_idx});
-            out.push_back(sig);
-            // The synthetic Put carries this Signal as an RDMA
-            // write-with-imm, so the receiver can match it without a
-            // separate cross-node Signal round trip.
-            meta.put_signal->emplace_back(sig_idx, put_idx);
-            meta.sig_groups->emplace_back(sig_idx, 1);
-          } else {
-            sig.deps.push_back(old_idx);  // remapped to the reduce tile
-            out.push_back(sig);
-          }
+          sig.deps.push_back(old_idx);  // remapped to the reduce/put node
+          out.push_back(sig);
         }
 
       } else if (op.kind == AlgoOpKind::Signal) {
@@ -455,7 +444,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         // (deps were propagated tile-by-tile from the producing chunk).
         if (t % G == 0) {
           TiledOp sig;
-          sig.kind = ExecOpKind::Signal;
+          sig.kind = LogicalOpKind::Signal;
           sig.dst_peer = op.dst_peer;
           sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
                              group_bits);
@@ -498,7 +487,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       // exactly this send chunk's pair.
       uint64_t sig_tag = make_tag(ch.pair_id, kAllOnesGroup, group_bits);
       TiledOp sig_cd;
-      sig_cd.kind = ExecOpKind::Signal;
+      sig_cd.kind = LogicalOpKind::Signal;
       sig_cd.dst_peer = static_cast<uint32_t>(peer);
       sig_cd.tag = sig_tag;
       uint32_t sig_cd_idx = static_cast<uint32_t>(out.size());
@@ -516,7 +505,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       uint64_t wait_tag =
           make_tag(peer_send_pair, kAllOnesGroup, group_bits);
       TiledOp ws_cd;
-      ws_cd.kind = ExecOpKind::WaitSignal;
+      ws_cd.kind = LogicalOpKind::Wait;
       ws_cd.src_peer = static_cast<uint32_t>(peer);
       ws_cd.tag = wait_tag;
       uint32_t ws_cd_idx = static_cast<uint32_t>(out.size());

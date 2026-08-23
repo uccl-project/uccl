@@ -525,7 +525,7 @@ class SprayExecutor {
       // SprayRun::inflight_ops), regardless of run state.
       run->inflight_ops.fetch_sub(1, std::memory_order_acq_rel);
       uint32_t op_idx = s.op_idx;
-      if (run->plan->tiled.ops[op_idx].kind == ExecOpKind::WaitSignal)
+      if (run->plan->tiled.ops[op_idx].kind == LogicalOpKind::Wait)
         run->sig_inflight.fetch_sub(1, std::memory_order_acq_rel);
       if (run->status.load(std::memory_order_acquire) !=
           CollectiveOpStatus::Running) {

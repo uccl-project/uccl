@@ -152,7 +152,24 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
                     uint64_t output_off, uint64_t scr_off,
                     uint32_t tag_epoch) {
   Cmd c{};
-  c.kind = op.kind;
+  // Logical op kind → backend command kind (execution encoding).
+  switch (op.kind) {
+    case LogicalOpKind::Put:
+    case LogicalOpKind::PutSignal:
+      c.kind = ExecOpKind::Put;
+      break;
+    case LogicalOpKind::Reduce:
+    case LogicalOpKind::ReducePut:
+    case LogicalOpKind::ReducePutSignal:
+      c.kind = ExecOpKind::Reduce;
+      break;
+    case LogicalOpKind::Signal:
+      c.kind = ExecOpKind::Signal;
+      break;
+    case LogicalOpKind::Wait:
+      c.kind = ExecOpKind::WaitSignal;
+      break;
+  }
   c.bytes = static_cast<uint32_t>(op.bytes);
   c.dtype = dtype;
   // Op offsets are relative to the role's tensor; shift by the tensor's
@@ -174,15 +191,23 @@ static Cmd make_cmd(TiledOp const& op, ReductionKind redop, ScalarType dtype,
   c.copy_dst_off = op.copy_dst_off;
   c.flag_slot = op.flag_slot;
   c.flag_count = op.flag_count;
-  c.redop = (op.kind == ExecOpKind::Reduce) ? redop : ReductionKind::None;
+  c.redop = (op.kind == LogicalOpKind::Reduce ||
+             op.kind == LogicalOpKind::ReducePut ||
+             op.kind == LogicalOpKind::ReducePutSignal)
+                ? redop
+                : ReductionKind::None;
   c.put_path = op.put_path_hint;  // None = auto (pick_put_path below)
   c.tag = salt_tag(op.tag, tag_epoch);
-  if (op.fused_copy) c.flags |= kCmdFlagReduceCopy;
-  if (op.rdma_fused_proxy) {
+  if (op.kind == LogicalOpKind::ReducePut ||
+      op.kind == LogicalOpKind::ReducePutSignal)
+    c.flags |= kCmdFlagReduceCopy;
+  if (op.kind == LogicalOpKind::Reduce && op.fused_proxy_put_idx >= 0)
     c.flags |= kCmdFlagRdmaFusedProxy;
-    c.flags &= ~kCmdFlagReduceCopy;
+  if (op.kind == LogicalOpKind::PutSignal) {
+    c.flags |= kCmdFlagPutSignal;
+    c.tag = op.tag;  // raw signal tag; channel encoding at enqueue time
   }
-  if (op.kind == ExecOpKind::Put && op.flag_slot != ~0u)
+  if (op.kind == LogicalOpKind::Put && op.flag_slot != ~0u)
     c.flags |= kCmdFlagCopySignal;
   return c;
 }
@@ -841,7 +866,7 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
       // Tmp, deadlocks on the in-place AllReduce handshake's scratch).
       std::set<int> scratch_peers;
       for (auto const& op : tiled.ops)
-        if (op.kind == ExecOpKind::Put &&
+        if (op.kind == LogicalOpKind::Put &&
             op.dst_buf_role == CollectiveBufferRole::Scratch &&
             op.dst_peer != ~0u)
           scratch_peers.insert(static_cast<int>(op.dst_peer));
@@ -1072,23 +1097,11 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                            run.output_buf_id, run.scratch_buf_id,
                            run.input_base_off, run.output_base_off,
                            run.scratch_base_off, run.tag_epoch);
-        // Mirror the receiver's wait shaping: fuse the data-ready Signal
-        // into the synthetic Put ONLY when the tag actually travels as an
-        // RDMA write-with-imm (cross-node imm path). The imm must carry
-        // the SIGNAL's unsalted tag low 32 bits — the receiver's per-peer
-        // FIFO wait registers exactly that value — so put.tag must be the
-        // salted SIGNAL tag, not the put op's (zero) tag.
-        int32_t sg = run.plan->put_to_sig[pop_idx];
-        if (sg >= 0) {
-          uint64_t const unsalted = run.plan->tiled.ops[sg].tag;
-          if (owned_comm_ &&
-              rdma_imm_fusion_active(owned_comm_.get(),
-                                     static_cast<int>(pop.dst_peer),
-                                     unsalted)) {
-            put.flags |= kCmdFlagPutSignal;
-            put.tag = encode_imm(unsalted, run.tag_epoch);
-          }
-        }
+        // The linked node is a PutSignal (lowered): it already carries
+        // the data-ready tag. The proxy put always travels as an RDMA
+        // write-with-imm, so encode the tag (unique per run) here — the
+        // receiver's wait registers the same value.
+        put.tag = encode_imm(pop.tag, run.tag_epoch);
         uint64_t pool_idx = fused_proxy_->pool().alloc(
             put, &run, static_cast<uint32_t>(pop_idx), PutPath::Rdma);
         if (pool_idx != UINT64_MAX) {
@@ -1359,9 +1372,8 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
       continue;
     }
 
-    if (c.kind == ExecOpKind::Put &&
-        (c.flags & kCmdFlagRdmaFusedProxy)) {
-      // Synthetic RDMA proxy Put: submitted by the D2H proxy through
+    if (c.kind == ExecOpKind::Put && run.plan->tiled.ops[idx].proxy_posted) {
+      // Proxy-posted PutSignal: submitted by the D2H proxy through
       // submit_fused_cmd(), not by the normal enqueue path.
       run.deferred_tpt.push_back(idx);
       continue;
@@ -1638,7 +1650,7 @@ void SprayExecutor::drain_dev_loop() {
       }
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
         auto& op = s.run->plan->tiled.ops[s.op_idx];
-        if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
+        if (op.kind == LogicalOpKind::Put && op.dst_peer != ~0u) {
           int peer = static_cast<int>(op.dst_peer);
           if (peer >= 0 && peer < world_size_)
             update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);
@@ -1797,11 +1809,12 @@ void SprayExecutor::dump_run_state(SprayRun* run, char const* why) {
   // Called from enqueue_loop (run->mtx held). Per-kind submission state
   // plus the first few pending ops — the post-mortem for stalls.
   size_t nops = run->plan->tiled.ops.size();
-  int sub[4] = {0, 0, 0, 0}, pend[4] = {0, 0, 0, 0};
-  static char const* kNames[4] = {"Put", "Reduce", "Signal", "WaitSignal"};
+  int sub[7] = {0, 0, 0, 0, 0, 0, 0}, pend[7] = {0, 0, 0, 0, 0, 0, 0};
+  static char const* kNames[7] = {"Put",      "Reduce", "Signal", "Wait",
+                                  "PutSignal", "ReducePut", "ReducePutSignal"};
   for (size_t i = 0; i < nops; ++i) {
     int k = static_cast<int>(run->plan->tiled.ops[i].kind);
-    if (k < 0 || k > 3) continue;
+    if (k < 0 || k > 6) continue;
     if (__atomic_load_n(&run->submitted[i], __ATOMIC_RELAXED))
       ++sub[k];
     else
@@ -1814,15 +1827,15 @@ void SprayExecutor::dump_run_state(SprayRun* run, char const* why) {
                run->tag_epoch, run->deferred_dev.size(),
                run->deferred_tpt.size(), run->deferred_sig.size(),
                run->sig_local, run->sig_standalone);
-  for (int k = 0; k < 4; ++k)
+  for (int k = 0; k < 7; ++k)
     std::fprintf(stderr, "[dump r%d] %-10s submitted=%d pending=%d\n",
                  rank_or_neg1(), kNames[k], sub[k], pend[k]);
-  int shown_per_kind[4] = {0, 0, 0, 0};
+  int shown_per_kind[7] = {0, 0, 0, 0, 0, 0, 0};
   for (size_t i = 0; i < nops; ++i) {
     if (__atomic_load_n(&run->submitted[i], __ATOMIC_RELAXED)) continue;
     auto const& op = run->plan->tiled.ops[i];
     int k = static_cast<int>(op.kind);
-    if (k < 0 || k > 3 || shown_per_kind[k] >= 6) continue;
+    if (k < 0 || k > 6 || shown_per_kind[k] >= 6) continue;
     ++shown_per_kind[k];
     std::string depinfo;
     for (uint32_t d : op.deps) {
@@ -1888,7 +1901,7 @@ size_t SprayExecutor::progress_once() {
     if (valid) {
       drain_batch(snap_buf, valid, [this](BeSlotSnap& s) {
         auto& op = s.run->plan->tiled.ops[s.op_idx];
-        if (op.kind == ExecOpKind::Put && op.dst_peer != ~0u) {
+        if (op.kind == LogicalOpKind::Put && op.dst_peer != ~0u) {
           int peer = static_cast<int>(op.dst_peer);
           if (peer >= 0 && peer < world_size_)
             update_path_metrics(tpt_metrics_[peer].device, s.enqueue_ns);

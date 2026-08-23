@@ -28,8 +28,21 @@ enum class AlgoOpKind : uint32_t {
   Signal,  // cross-rank data-ready signal (fused RS: no data put)
 };
 
-// Executor-level op kinds (used in TiledOp, lower output)
+// Logical op kinds (used in TiledOp, lower output) — behavior only.
+// Execution details (IPC/RDMA/proxy/imm/flag/device) are chosen below at
+// enqueue time; see docs/op_model.md.
+enum class LogicalOpKind : uint32_t {
+  Put,             // place data into a destination (local role or peer)
+  Reduce,          // local reduction
+  Signal,          // notify a peer (data-ready / handshake)
+  Wait,            // wait for a peer notification
+  PutSignal,       // put to a peer, notify once it lands
+  ReducePut,       // reduce, then put the result
+  ReducePutSignal, // reduce, put to a peer, notify on landing
+};
 
+// Backend command kind — kept for the execution encoding while the
+// logical kinds migrate in; backends dispatch on this.
 enum class ExecOpKind : uint32_t {
   Put,
   Reduce,
@@ -102,7 +115,7 @@ struct Op {
 // Tiled op (lower output → executor input)
 
 struct TiledOp {
-  ExecOpKind kind = ExecOpKind::Put;
+  LogicalOpKind kind = LogicalOpKind::Put;
   size_t bytes = 0;
   size_t src_off = 0;
   size_t dst_off = 0;
@@ -115,12 +128,11 @@ struct TiledOp {
   uint32_t copy_dst_peer = ~0u;
   CollectiveBufferRole copy_dst_buf_role = CollectiveBufferRole::Output;
   size_t copy_dst_off = 0;
-  bool fused_copy = false;
-  // Cross-node fused reduce+copy via RDMA proxy: the device reduces to
-  // local dst, then notifies the CCL proxy; the proxy posts the RDMA put
-  // for the synthetic Put op recorded in fused_proxy_put_idx.
-  bool rdma_fused_proxy = false;
+  // Proxy linkage: a Reduce feeding the RDMA proxy records the index of
+  // its PutSignal node (fused_proxy_put_idx); the PutSignal node marks
+  // itself proxy_posted so the executor defers it to the proxy producer.
   int32_t fused_proxy_put_idx = -1;
+  bool proxy_posted = false;
   // Device-completion flag slot for the signal of a fused task
   // (fuse_reduce_copy with UK_CCL_DEVICE_FLAGS): the WaitSignal polls
   // this slot; the fused Reduce writes it. ~0u = host ring signal.

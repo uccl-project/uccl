@@ -590,8 +590,8 @@ void test_lower_algo_ring_basic() {
   // Signal and WaitSignal ops should be present with non-zero tags.
   bool saw_signal = false, saw_waitsig = false;
   for (auto const& op : tiled.ops) {
-    if (op.kind == ExecOpKind::Signal) saw_signal = true;
-    if (op.kind == ExecOpKind::WaitSignal) saw_waitsig = true;
+    if (op.kind == LogicalOpKind::Signal) saw_signal = true;
+    if (op.kind == LogicalOpKind::Wait) saw_waitsig = true;
   }
   assert(saw_signal);
   assert(saw_waitsig);
@@ -599,16 +599,16 @@ void test_lower_algo_ring_basic() {
   // G=1: every Signal op is a fusion-eligible group of one Put.
   size_t nsig = 0;
   for (auto const& op : tiled.ops)
-    if (op.kind == ExecOpKind::Signal) ++nsig;
+    if (op.kind == LogicalOpKind::Signal) ++nsig;
   assert(tiled.fused_put_signal.size() == nsig);
   for (auto [s, p] : tiled.fused_put_signal) {
-    assert(tiled.ops[s].kind == ExecOpKind::Signal);
-    assert(tiled.ops[p].kind == ExecOpKind::Put);
+    assert(tiled.ops[s].kind == LogicalOpKind::Signal);
+    assert(tiled.ops[p].kind == LogicalOpKind::Put);
     assert(tiled.ops[s].deps.size() == 1 && tiled.ops[s].deps[0] == p);
   }
   assert(tiled.sig_group_size.size() == nsig);
   for (auto [s, g] : tiled.sig_group_size) {
-    assert(tiled.ops[s].kind == ExecOpKind::Signal);
+    assert(tiled.ops[s].kind == LogicalOpKind::Signal);
     assert(g == 1);
   }
 }
@@ -618,7 +618,7 @@ void test_lower_algo_signal_grouping() {
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512);
   CollAlgo algo = build_coll_algo(cfg, /*inplace=*/false);
 
-  auto count_kind = [](TiledResult const& t, ExecOpKind k) {
+  auto count_kind = [](TiledResult const& t, LogicalOpKind k) {
     size_t n = 0;
     for (auto const& op : t.ops)
       if (op.kind == k) ++n;
@@ -628,10 +628,10 @@ void test_lower_algo_signal_grouping() {
   TiledResult g1 = lower_algo(algo, 512, /*signal_group_tiles=*/1);
   TiledResult g2 = lower_algo(algo, 512, /*signal_group_tiles=*/2);
 
-  size_t sig1 = count_kind(g1, ExecOpKind::Signal);
-  size_t ws1 = count_kind(g1, ExecOpKind::WaitSignal);
-  size_t sig2 = count_kind(g2, ExecOpKind::Signal);
-  size_t ws2 = count_kind(g2, ExecOpKind::WaitSignal);
+  size_t sig1 = count_kind(g1, LogicalOpKind::Signal);
+  size_t ws1 = count_kind(g1, LogicalOpKind::Wait);
+  size_t sig2 = count_kind(g2, LogicalOpKind::Signal);
+  size_t ws2 = count_kind(g2, LogicalOpKind::Wait);
 
   // 1024-byte shards / 512-byte tiles → exactly 2 tiles per chunk pair,
   // so G=2 exactly halves the signal/wait counts.
@@ -639,18 +639,19 @@ void test_lower_algo_signal_grouping() {
   assert(ws1 > 0 && ws2 * 2 == ws1);
 
   // Data-moving op counts are unaffected by grouping.
-  assert(count_kind(g2, ExecOpKind::Put) == count_kind(g1, ExecOpKind::Put));
-  assert(count_kind(g2, ExecOpKind::Reduce) ==
-         count_kind(g1, ExecOpKind::Reduce));
+  assert(count_kind(g2, LogicalOpKind::Put) ==
+         count_kind(g1, LogicalOpKind::Put));
+  assert(count_kind(g2, LogicalOpKind::Reduce) ==
+         count_kind(g1, LogicalOpKind::Reduce));
 
   // With G=2 every Signal depends on both Puts of its (full) group.
   for (auto const& op : g2.ops)
-    if (op.kind == ExecOpKind::Signal) assert(op.deps.size() == 2);
+    if (op.kind == LogicalOpKind::Signal) assert(op.deps.size() == 2);
 
   // 2-tile groups collapse to group index 0 in the tag's low
   // tag_group_bits bits (adaptive layout; all-ones value reserved).
   for (auto const& op : g2.ops) {
-    if (op.kind == ExecOpKind::Signal || op.kind == ExecOpKind::WaitSignal)
+    if (op.kind == LogicalOpKind::Signal || op.kind == LogicalOpKind::Wait)
       assert((op.tag & ((1ull << g2.tag_group_bits) - 1)) == 0);
   }
 
@@ -675,15 +676,15 @@ void test_lower_algo_reduce_scatter() {
   size_t nreduce = 0, copy_tiles = 0;
   bool saw_signal = false, saw_wait = false;
   for (auto const& op : tiled.ops) {
-    if (op.kind == ExecOpKind::Signal) saw_signal = true;
-    if (op.kind == ExecOpKind::WaitSignal) saw_wait = true;
-    if (op.kind == ExecOpKind::Reduce) {
+    if (op.kind == LogicalOpKind::Signal) saw_signal = true;
+    if (op.kind == LogicalOpKind::Wait) saw_wait = true;
+    if (op.kind == LogicalOpKind::Reduce) {
       // Reduce: Scratch (peer partial) += Input (my contribution).
       assert(op.src_buf_role == CollectiveBufferRole::Input);
       assert(op.dst_buf_role == CollectiveBufferRole::Scratch);
       ++nreduce;
     }
-    if (op.kind == ExecOpKind::Put) {
+    if (op.kind == LogicalOpKind::Put) {
       if (op.dst_peer == ~0u) {
         // Local own-shard copy tiles -> Output[0..shard).
         assert(op.src_buf_role == CollectiveBufferRole::Scratch);
@@ -712,7 +713,7 @@ void test_lower_algo_allgather() {
 
   size_t copy_tiles = 0, remote_puts = 0, in_src_puts = 0;
   for (auto const& op : tiled.ops) {
-    if (op.kind != ExecOpKind::Put) continue;
+    if (op.kind != LogicalOpKind::Put) continue;
     if (op.dst_peer == ~0u) {
       // Local own-shard copy Input[0] -> Output[offset].
       assert(op.src_buf_role == CollectiveBufferRole::Input);
@@ -744,7 +745,7 @@ void test_lower_algo_alltoall_basic() {
   assert(!tiled.ops.empty());
   bool has_signal = false;
   for (auto const& op : tiled.ops)
-    if (op.kind == ExecOpKind::Signal) has_signal = true;
+    if (op.kind == LogicalOpKind::Signal) has_signal = true;
   assert(has_signal);
 }
 
@@ -756,7 +757,7 @@ void test_full_pipeline_ring_allreduce() {
 
   // Verify all data ops are valid (signals have zero bytes).
   for (auto const& op : tiled.ops) {
-    if (op.kind == ExecOpKind::Signal || op.kind == ExecOpKind::WaitSignal)
+    if (op.kind == LogicalOpKind::Signal || op.kind == LogicalOpKind::Wait)
       continue;
     assert(op.bytes > 0);
   }
