@@ -164,6 +164,19 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
   std::vector<uint32_t> old_to_new(n_old, kNoOp);
+  // Per-peer same-host cache: host topology is fixed for the plan and the
+  // Communicator lookup takes the peer-meta mutex — hoist it out of the
+  // per-tile calls below (a large plan otherwise pays thousands of locks
+  // at build time).
+  std::vector<uint8_t> same_host_cache(static_cast<size_t>(nranks), 0);
+  auto same_host_cached = [&](int peer) -> bool {
+    if (!same_host || peer < 0 ||
+        static_cast<size_t>(peer) >= same_host_cache.size())
+      return false;
+    uint8_t& v = same_host_cache[static_cast<size_t>(peer)];
+    if (v == 0) v = same_host(peer) ? 1u : 2u;
+    return v == 1;
+  };
   // Signal aggregation factor: one Signal/WaitSignal pair per G tiles of
   // a chunk pair. G=1 reproduces the per-tile scheme exactly.
   uint32_t const G = signal_group_tiles ? signal_group_tiles : 1;
@@ -319,8 +332,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           // synthetic Put carries the signal as a write-with-imm, so the
           // wait must use the imm path (one imm per put).
           bool const proxy_hop =
-              kRdmaFusedProxy &&
-              !(same_host && same_host(static_cast<int>(op.src_peer)));
+              kRdmaFusedProxy && !same_host_cached(static_cast<int>(op.src_peer));
           if (ws.tag <= 0xFFFFFFFFu &&
               (!ch.wait_standalone_signal || proxy_hop)) {
             uint32_t grp =
@@ -360,8 +372,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.copy_dst_buf_role = red_copy.role;
           red.copy_dst_off = op.dst_off + red_copy.base_off;
           proxy_hop =
-              kRdmaFusedProxy &&
-              !(same_host && same_host(static_cast<int>(ch.copy_peer)));
+              kRdmaFusedProxy && !same_host_cached(static_cast<int>(ch.copy_peer));
           if (proxy_hop) {
             // RDMA proxy: reduce to local dst only; the PutSignal below
             // is posted by the proxy after the device notifies through

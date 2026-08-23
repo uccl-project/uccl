@@ -464,26 +464,6 @@ class SprayExecutor {
   // Allocate or grow the internal scratch buffer (api_mu_ held).
   void ensure_internal_scratch(size_t bytes);
 
-  // Mark an op completed without a backend completion — used when a
-  // Signal op's tag already rode its partner fused PutSignal. Mirrors
-  // the drain_batch per-op path: bump done_count, release successor
-  // dependencies, and flip the run if this was the last op.
-  void complete_op_local(SprayRun& run, uint32_t op_idx) {
-    uint32_t cur = __atomic_load_n(&run.indegree[op_idx], __ATOMIC_ACQUIRE);
-    if (cur == SprayRun::kIndegreeDone) return;
-    run.done_count.fetch_add(1, std::memory_order_release);
-    uint32_t off = run.plan->successor_off[op_idx];
-    uint32_t end = run.plan->successor_off[op_idx + 1];
-    for (uint32_t j = off; j < end; ++j) {
-      uint32_t succ = run.plan->successor_data[j];
-      if (__atomic_fetch_sub(&run.indegree[succ], 1, __ATOMIC_RELEASE) == 1)
-        run.push_ready(succ);
-    }
-    __atomic_store_n(&run.indegree[op_idx], SprayRun::kIndegreeDone,
-                     __ATOMIC_RELEASE);
-    finalize_run(&run);
-  }
-
   template <typename F>
   void drain_batch(BeSlotSnap* snaps, size_t n, F&& cb) {
     static int dbg_count = 0;

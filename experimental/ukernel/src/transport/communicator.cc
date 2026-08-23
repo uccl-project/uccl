@@ -135,6 +135,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       global_rank_(rank),
       world_size_(world_size),
       peer_states_(static_cast<size_t>(world_size)),
+      topo_(static_cast<size_t>(world_size)),
       config_(config) {
   if (!config_) {
     config_ =
@@ -280,6 +281,11 @@ void Communicator::exchange_peer_metas() {
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
       peer.has_meta = true;
+      // Host topology is immutable once exchanged; snapshot it so the
+      // hot paths never touch peer_mu_ for same-host checks.
+      __atomic_store_n(&topo_[static_cast<size_t>(i)].same_host,
+                       (remote.host_id == local.host_id) ? 1u : 2u,
+                       __ATOMIC_RELEASE);
     } else {
       missing_ranks.push_back(i);
     }
@@ -685,6 +691,14 @@ void Communicator::mark_put_path_ready(int rank, PeerTransportKind kind) {
   if (peer.resolved_kind == PeerTransportKind::Unknown) {
     peer.resolved_kind = kind;
   }
+  // Put-signal fusion capability is a monotonic per-peer fact once the
+  // path is ready (both adapters support put-signal).
+  if (kind == PeerTransportKind::Ipc)
+    __atomic_store_n(&topo_[static_cast<size_t>(rank)].fuse_ipc, 1,
+                     __ATOMIC_RELAXED);
+  else if (kind == PeerTransportKind::Rdma)
+    __atomic_store_n(&topo_[static_cast<size_t>(rank)].fuse_rdma, 1,
+                     __ATOMIC_RELAXED);
   put_cache_bump();  // a new path may resolve to a different adapter
 }
 
@@ -776,6 +790,13 @@ TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
 
 bool Communicator::same_host(int rank) const {
   if (rank == global_rank_) return true;
+  if (static_cast<size_t>(rank) < topo_.size()) {
+    uint8_t v = __atomic_load_n(&topo_[static_cast<size_t>(rank)].same_host,
+                                __ATOMIC_ACQUIRE);
+    if (v != 0) return v == 1;
+  }
+  // Peer meta not exchanged yet: fall back to the locking path (throws
+  // when the peer is not established, preserving the old contract).
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto const& local_peer = peer_states_.at(static_cast<size_t>(global_rank_));
   auto const& remote_peer = peer_states_.at(static_cast<size_t>(rank));
@@ -1096,9 +1117,31 @@ bool Communicator::send_put_signal_async_with_rid(
 }
 
 bool Communicator::can_fuse_put_signal(int peer, PeerTransportKind transport) {
+  // Per-peer monotonic cache: paths only become ready (never unready),
+  // so a cached true is final; false entries recompute until they flip.
+  size_t ci = static_cast<size_t>(~0u);
+  if (transport == PeerTransportKind::Ipc)
+    ci = 0;
+  else if (transport == PeerTransportKind::Rdma)
+    ci = 1;
+  if (ci != static_cast<size_t>(~0u) &&
+      static_cast<size_t>(peer) < topo_.size()) {
+    uint8_t const* p =
+        (ci == 0) ? &topo_[static_cast<size_t>(peer)].fuse_ipc
+                  : &topo_[static_cast<size_t>(peer)].fuse_rdma;
+    if (__atomic_load_n(p, __ATOMIC_ACQUIRE)) return true;
+  }
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
-  return adapter && adapter->supports_put_signal();
+  bool ok = adapter && adapter->supports_put_signal();
+  if (ok && ci != static_cast<size_t>(~0u) &&
+      static_cast<size_t>(peer) < topo_.size()) {
+    uint8_t* p =
+        (ci == 0) ? &topo_[static_cast<size_t>(peer)].fuse_ipc
+                  : &topo_[static_cast<size_t>(peer)].fuse_rdma;
+    __atomic_store_n(p, 1, __ATOMIC_RELEASE);
+  }
+  return ok;
 }
 
 void* Communicator::ipc_signal_ring_device_ptr(int peer) const {

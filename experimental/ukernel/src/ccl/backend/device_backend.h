@@ -53,7 +53,6 @@ class DeviceBackend final : public BatchBackend {
   // (signal_ring_write uses atomicAdd_system). On B300
   // HostNativeAtomicSupported=0, the ring write is impossible; the
   // fused reduce+copy path uses plain-store device flags instead.
-  bool can_fuse_put_signal(int peer) const override;
  private:
   void ensure_runtime();
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds
@@ -63,7 +62,6 @@ class DeviceBackend final : public BatchBackend {
 
   DeviceBackendConfig cfg_;
   int sm_count_ = 1;
-  int host_atomic_supported_ = 1;
   int device_idx_ = 0;
 
   bool owns_task_manager_ = false;
