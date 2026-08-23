@@ -2,8 +2,10 @@
 
 #include "../../device/fifo/fifo_util.hpp"
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -124,11 +126,39 @@ RdmaFusedProxy::~RdmaFusedProxy() = default;
 
 size_t RdmaFusedProxy::progress() {
   size_t done = 0;
+  // Flush blocked peers first. Strict per-peer FIFO: the pending head
+  // must be accepted before any later put to the same peer, otherwise
+  // imm arrivals could be observed out of issue order by the receiver.
+  for (auto it = pending_.begin(); it != pending_.end();) {
+    uint64_t const idx = it->second.front();
+    if (post_fn_(idx, /*first_attempt=*/false)) {
+      pool_.release(idx);
+      it->second.pop_front();
+      if (it->second.empty())
+        it = pending_.erase(it);
+      else
+        ++it;
+      ++done;
+    } else {
+      ++it;  // still blocked; retry on the next progress() call
+    }
+  }
   uint64_t index;
   while (ring_.pop(index)) {
-    if (post_fn_(index)) {
+    auto const& slot = pool_.get(index);
+    int const peer = static_cast<int>(slot.cmd.dst_peer);
+    auto it = pending_.find(peer);
+    if (it != pending_.end()) {
+      // A peer is blocked: queue behind its pending head to preserve
+      // per-peer FIFO instead of posting out of order.
+      it->second.push_back(index);
+      continue;
+    }
+    if (post_fn_(index, /*first_attempt=*/true)) {
       pool_.release(index);
       ++done;
+    } else {
+      pending_[peer].push_back(index);
     }
   }
   return done;

@@ -369,13 +369,15 @@ class Communicator {
   // Buffered signals that arrived before the matching wait was registered.
   // Peer → deque of tag values. Checked first in wait_signal_async.
   std::unordered_map<int, std::deque<uint64_t>> pending_signals_;
-  // RDMA write-with-imm matching (fused PutSignal). Immediates carry only
-  // the tag's low 32 bits, which collide across runs (the epoch lives in
-  // the high bits), so matching is per-peer FIFO in arrival order. This is
-  // sound for the same reason the tag map is: ranks issue fused puts in
-  // symmetric order, all fused puts to one peer are pinned to a single QP
-  // (so arrival order == issue order), and a ±1 run skew still matches the
-  // OLDEST pending wait first — the conservative direction.
+  // RDMA write-with-imm matching (fused PutSignal). Immediates carry an
+  // epoch-encoded value (unsalted tag in the low 20 bits + run epoch in
+  // bits 20..31, see executor.cc encode_imm), so they are unique per
+  // (run, tag). Matching is BY VALUE against any pending wait (oldest
+  // first among equal values): the sender issues fused puts in
+  // pipeline-ready order while the receiver registers waits in DAG order,
+  // which differ on a ring, so a strict FIFO head match would strand the
+  // queue. A value can only match the one wait that expects it, so
+  // arrival order is irrelevant.
   struct ImmWait {
     unsigned rid;
     uint32_t remaining;

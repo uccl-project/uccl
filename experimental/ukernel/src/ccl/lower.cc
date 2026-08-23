@@ -166,7 +166,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
                                     uint32_t signal_group_tiles,
                                     int rank, int nranks,
                                     size_t& staging_bytes, FusionMetaOut meta,
-                                    bool device_flags, size_t max_tiles) {
+                                    bool device_flags, size_t max_tiles,
+                                    std::function<bool(int)> same_host) {
   size_t n_old = ops.size();
   std::vector<TiledOp> out;
   out.reserve(n_old * 2);
@@ -329,10 +330,19 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           // When the sender fuses this group, the wait must count one
           // arrival per tile instead of a single signal. A fused-RS Recv
           // pairs with a standalone Signal (no put), so its wait stays a
-          // plain one-arrival wait.
-          if (ws.tag <= 0xFFFFFFFFu && !ch.wait_standalone_signal) {
+          // plain one-arrival wait. On cross-node RDMA proxy hops the
+          // synthetic Put carries the signal as a write-with-imm, so the
+          // wait must use the imm path (one imm per put).
+          bool const proxy_hop =
+              kRdmaFusedProxy &&
+              !(same_host && same_host(static_cast<int>(op.src_peer)));
+          if (ws.tag <= 0xFFFFFFFFu &&
+              (!ch.wait_standalone_signal || proxy_hop)) {
             uint32_t grp =
-                static_cast<uint32_t>(std::min<size_t>(G, num_tiles - t));
+                proxy_hop
+                    ? 1u
+                    : static_cast<uint32_t>(
+                          std::min<size_t>(G, num_tiles - t));
             meta.wait_groups->emplace_back(cur_group_ws, grp);
           }
         }
@@ -354,16 +364,26 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         red.dst_off += red_dst.base_off;
         uint32_t red_idx = static_cast<uint32_t>(out.size());
         uint32_t put_idx = red_idx;
+        // Proxy hops are cross-node only: same-host fused reduce+copy
+        // keeps the fast device-direct path (kFlagReduceCopy + device
+        // flags), which is also the only signal/wait layout that matches
+        // the receiver for local peers.
+        bool proxy_hop = false;
         if (ch.fuse_copy_to_peer) {
           auto red_copy = resolve_buf(ch.copy_dst, tmp_base);
           red.copy_dst_peer = static_cast<uint32_t>(ch.copy_peer);
           red.copy_dst_buf_role = red_copy.role;
           red.copy_dst_off = op.dst_off + red_copy.base_off;
-          if (kRdmaFusedProxy) {
-            // Cross-node RDMA proxy: reduce to local dst only; the
-            // synthetic Put below is posted by the proxy after the device
-            // notifies through the D2H ring.
+          proxy_hop =
+              kRdmaFusedProxy &&
+              !(same_host && same_host(static_cast<int>(ch.copy_peer)));
+          if (proxy_hop) {
+            // RDMA proxy: reduce to local dst only; the synthetic Put
+            // below is posted by the proxy after the device notifies
+            // through the D2H ring.
             red.rdma_fused_proxy = true;
+            // The synthetic Put is appended immediately after this Reduce.
+            red.fused_proxy_put_idx = static_cast<int32_t>(red_idx + 1);
           } else {
             // Same-host fused reduce+copy: after the reduce, copy dst to
             // the peer's accumulation buffer. The data-ready signal is a
@@ -383,7 +403,7 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
         }
         red.deps = op.deps;
         out.push_back(red);
-        if (ch.fuse_copy_to_peer && kRdmaFusedProxy) {
+        if (ch.fuse_copy_to_peer && proxy_hop) {
           // Synthetic RDMA Put: depends on the Reduce; all downstream
           // ops wait for this Put instead of the Reduce.
           TiledOp put;
@@ -396,9 +416,12 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.dst_buf_role = red.copy_dst_buf_role;
           put.put_path_hint = PutPath::Rdma;
           put.rdma_fused_proxy = true;
-          put.deps.push_back(red_idx);
           put_idx = static_cast<uint32_t>(out.size());
           out.push_back(put);
+          // Must use new_deps: red_idx is a newly created op index and
+          // the final deps remap would otherwise treat it as an old
+          // macro-op index and rewrite it incorrectly.
+          new_deps.push_back({put_idx, red_idx});
           red.fused_proxy_put_idx = static_cast<int32_t>(put_idx);
           old_to_new[old_idx] = put_idx;
         } else {
@@ -410,8 +433,19 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           sig.dst_peer = static_cast<uint32_t>(ch.copy_peer);
           sig.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
                              group_bits);
-          sig.deps.push_back(put_idx);  // remapped target (red or put)
-          out.push_back(sig);
+          if (proxy_hop) {
+            uint32_t sig_idx = static_cast<uint32_t>(out.size());
+            new_deps.push_back({sig_idx, put_idx});
+            out.push_back(sig);
+            // The synthetic Put carries this Signal as an RDMA
+            // write-with-imm, so the receiver can match it without a
+            // separate cross-node Signal round trip.
+            meta.put_signal->emplace_back(sig_idx, put_idx);
+            meta.sig_groups->emplace_back(sig_idx, 1);
+          } else {
+            sig.deps.push_back(old_idx);  // remapped to the reduce tile
+            out.push_back(sig);
+          }
         }
 
       } else if (op.kind == AlgoOpKind::Signal) {
@@ -515,7 +549,8 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
 }  // namespace
 
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
-                       uint32_t signal_group_tiles, bool device_flags) {
+                       uint32_t signal_group_tiles, bool device_flags,
+                       std::function<bool(int)> same_host) {
   if (tile_bytes == 0)
     throw std::invalid_argument("tile_bytes must be positive");
 
@@ -598,16 +633,18 @@ TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
       lower_to_tiled(std::move(tiled.ops), algo.chunks, first_tile,
                      tiled.tiles_per_op, tmp_base, group_bits,
                      signal_group_tiles, algo.rank, algo.nranks,
-                     staging_bytes, meta, device_flags, max_tiles);
+                     staging_bytes, meta, device_flags, max_tiles,
+                     same_host);
   result.staging_bytes_required =
       staging_bytes > tmp_total ? staging_bytes : tmp_total;
   return result;
 }
 
-TiledResult build_tiled(CollectiveConfig const& config, bool inplace) {
+TiledResult build_tiled(CollectiveConfig const& config, bool inplace,
+                        std::function<bool(int)> same_host) {
   CollAlgo algo = build_coll_algo(config, inplace);
   return lower_algo(algo, config.tile_bytes, config.signal_group_tiles,
-                    config.device_flags);
+                    config.device_flags, std::move(same_host));
 }
 
 }  // namespace CCL

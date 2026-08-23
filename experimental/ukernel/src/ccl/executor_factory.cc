@@ -144,8 +144,8 @@ std::unique_ptr<SprayExecutor> SprayExecutor::create(
   {
     auto* ex_ptr = ex.get();
     ex->fused_proxy_ = std::make_shared<RdmaFusedProxy>(
-        [ex_ptr](uint64_t cmd_index) {
-          return ex_ptr->submit_fused_cmd(cmd_index);
+        [ex_ptr](uint64_t cmd_index, bool first_attempt) {
+          return ex_ptr->submit_fused_cmd(cmd_index, first_attempt);
         },
         4096, 4096);
   }

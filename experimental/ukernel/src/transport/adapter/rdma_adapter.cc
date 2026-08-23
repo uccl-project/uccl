@@ -1151,12 +1151,12 @@ void RdmaTransportAdapter::send_worker() {
         bool const last = (ci + 1 == ck.count);
         if (fused && last) {
           wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-          // The immediate intentionally carries only the tag's low 32
-          // bits — the unsalted tag (the run epoch lives in the high
-          // bits, and low32(salted) == unsalted). Uniqueness across runs
-          // comes from per-peer FIFO arrival-order matching on the
-          // receiver (Communicator::on_imm_received), not from the tag.
-          // Immediate data travels in network byte order.
+          // The immediate carries the epoch-encoded signal value (see
+          // executor.cc encode_imm): unsalted tag in the low 20 bits +
+          // run epoch in bits 20..31. The receiver matches BY VALUE
+          // (Communicator::on_imm_received), so the value must be unique
+          // per (run, tag) — it is. Immediate data travels in network
+          // byte order.
           wr.imm_data = htonl(static_cast<uint32_t>(e.tag));
         } else {
           wr.opcode = IBV_WR_RDMA_WRITE;

@@ -5,6 +5,7 @@
 #include "coll_types.h"
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace UKernel {
@@ -16,10 +17,12 @@ namespace CCL {
 // come from MacroOp declarations, not from config switches.
 TiledResult lower_algo(CollAlgo const& algo, size_t tile_bytes,
                        uint32_t signal_group_tiles = 1,
-                       bool device_flags = false);
+                       bool device_flags = false,
+                       std::function<bool(int)> same_host = nullptr);
 
 // Plan + lower: build CollAlgo from config, then lower to TiledResult.
-TiledResult build_tiled(CollectiveConfig const& config, bool inplace);
+TiledResult build_tiled(CollectiveConfig const& config, bool inplace,
+                        std::function<bool(int)> same_host = nullptr);
 
 }  // namespace CCL
 }  // namespace UKernel

@@ -19,9 +19,11 @@
 #include "../../include/transport.h"
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -89,7 +91,10 @@ class RdmaFusedCmdPool {
 
 class RdmaFusedProxy {
  public:
-  using PostFn = std::function<bool(uint64_t cmd_index)>;
+  // first_attempt == true only for the initial ring pop: the executor
+  // mirrors its normal acceptance accounting exactly once per command.
+  // Retries (post rejected earlier) must skip that accounting.
+  using PostFn = std::function<bool(uint64_t cmd_index, bool first_attempt)>;
 
   RdmaFusedProxy(PostFn post_fn, size_t ring_capacity = 4096,
                  size_t pool_capacity = 4096);
@@ -105,6 +110,13 @@ class RdmaFusedProxy {
   RdmaFusedRing ring_;
   RdmaFusedCmdPool pool_;
   PostFn post_fn_;
+  // Per-peer FIFO of commands whose post was rejected. The head MUST
+  // succeed before any later command to the same peer is posted:
+  // RDMA write-with-imm arrivals are matched per-peer in issue order, so
+  // posting a later imm first would strand the receiver's FIFO wait.
+  // progress() is only ever called from the drain_tpt_loop thread, so no
+  // locking is needed.
+  std::unordered_map<int, std::deque<uint64_t>> pending_;
 };
 
 }  // namespace CCL

@@ -28,15 +28,20 @@ __device__ __forceinline__ uint64_t rdma_fused_ring_push(
 
   // Backpressure: wait until the host has consumed this slot.
   uint64_t* rp = h->ready + (slot % static_cast<uint64_t>(h->size));
-  while (atomicAdd_system(reinterpret_cast<unsigned long long*>(rp), 0ull) != 0) {
+  while (*(volatile uint64_t*)rp != 0) {
     // Host clears ready after consuming; spin without waiting on a CUDA
     // event. This is producer backpressure, not a GPU wait-sync on RDMA
     // completion.
+#ifdef __HIP_PLATFORM_AMD__
+    __builtin_amdgcn_s_sleep(2);
+#else
+    __nanosleep(200);
+#endif
   }
 
   h->indices[slot % static_cast<uint64_t>(h->size)] = index;
   __threadfence_system();
-  atomicExch_system(reinterpret_cast<unsigned long long*>(rp), 1ull);
+  *(volatile uint64_t*)rp = 1;
   return slot;
 }
 

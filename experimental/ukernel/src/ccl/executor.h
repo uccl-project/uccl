@@ -416,7 +416,9 @@ class SprayExecutor {
   // Submit a fused RDMA command previously written by a device kernel into
   // the D2H ring. Returns true when the command was accepted by the
   // TransportBackend and a BeSlot was published for normal completion.
-  bool submit_fused_cmd(uint64_t cmd_index);
+  // first_attempt == true only on the initial ring pop: the acceptance
+  // accounting is mirrored exactly once; retries skip it.
+  bool submit_fused_cmd(uint64_t cmd_index, bool first_attempt);
 
   CollectiveOpStatus status(CollectiveOpHandle h) const;
   bool poll(CollectiveOpHandle h);

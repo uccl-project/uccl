@@ -1194,11 +1194,18 @@ bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
       std::lock_guard<std::mutex> lk(sig_maps_mu_);
       auto& buf = buffered_imms_[peer];
       uint32_t remaining = count;
-      // Drain buffered arrivals, but only while the OLDEST buffered imm
-      // matches: an earlier arrival belongs to an earlier wait.
-      while (remaining > 0 && !buf.empty() && buf.front() == low32) {
-        buf.pop_front();
-        --remaining;
+      // Consume buffered arrivals matching THIS value, in arrival order.
+      // Matching is by value, not FIFO head: the sender's fused-put issue
+      // order (pipeline-ready order) and the receiver's wait registration
+      // order (DAG order) differ on a ring, so a strict per-peer FIFO
+      // head match strands the queue.
+      for (auto bit = buf.begin(); remaining > 0 && bit != buf.end();) {
+        if (*bit == low32) {
+          bit = buf.erase(bit);
+          --remaining;
+        } else {
+          ++bit;
+        }
       }
       if (buf.empty()) buffered_imms_.erase(peer);
       if (remaining == 0) {
@@ -1638,32 +1645,29 @@ void Communicator::on_imm_received(int peer, uint32_t low32) {
   {
     std::lock_guard<std::mutex> lk(sig_maps_mu_);
     auto& buf = buffered_imms_[peer];
-    // The arrival either matches the head wait or joins the buffer. Never
-    // drop it: a wait registered late (or a group continuing) must still
-    // be able to consume the arrival. Push to the FRONT when it matches
-    // the head so the drain below consumes it in order.
+    // Match BY VALUE against any pending wait. The sender's fused puts
+    // are issued in pipeline-ready order, which differs from the
+    // receiver's DAG-order wait registration on a ring — a strict
+    // per-peer FIFO head match strands the queue. Immediates carry an
+    // epoch-encoded value unique per (run, tag), so a value can only
+    // match the one wait that expects it; arrival order is irrelevant.
     auto it = pending_imm_waits_.find(peer);
-    if (it != pending_imm_waits_.end() && !it->second.empty() &&
-        it->second.front().low32 == low32) {
-      buf.push_front(low32);
-    } else {
-      buf.push_back(low32);
-    }
-    // Drain buffered arrivals into the head wait while they match. This
-    // also catches up waits that were parked behind a head mismatch.
-    while (true) {
-      auto wit = pending_imm_waits_.find(peer);
-      if (wit == pending_imm_waits_.end() || wit->second.empty()) break;
-      if (buf.empty() || buf.front() != wit->second.front().low32) break;
-      buf.pop_front();
-      ImmWait& h = wit->second.front();
-      if (--h.remaining == 0) {
-        SignalCompletion ev{h.rid, h.tag, peer, false, 0};
-        done.push_back(ev);
-        wit->second.pop_front();
-        if (wit->second.empty()) pending_imm_waits_.erase(wit);
+    bool matched = false;
+    if (it != pending_imm_waits_.end()) {
+      for (auto wit = it->second.begin(); wit != it->second.end(); ++wit) {
+        if (wit->low32 == low32) {
+          if (--wit->remaining == 0) {
+            SignalCompletion ev{wit->rid, wit->tag, peer, false, 0};
+            done.push_back(ev);
+            it->second.erase(wit);
+            if (it->second.empty()) pending_imm_waits_.erase(it);
+          }
+          matched = true;
+          break;
+        }
       }
     }
+    if (!matched) buf.push_back(low32);
     if (buf.empty()) buffered_imms_.erase(peer);
   }
   if (!done.empty())
