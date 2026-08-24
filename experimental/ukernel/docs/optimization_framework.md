@@ -273,6 +273,33 @@ trips, but the transfer scheduling cost remains. Hence:
 
 1. CE contention is real and two-level: per-GPU CE queueing plus
    fabric/interface arbitration overload.
+
+### AllToAll incast vs ring collectives (2026-08-24, L40S)
+
+The alltoall collapse at 4/8 ranks turned out to be a **destination
+incast**: the lowering issued every rank's per-peer copies in ascending
+peer order, so at the synchronized collective start all ranks' first
+copy targeted the same peer. Rotating the send order (rank r sends to
+r+1, r+2, ...; Latin square) spreads the first wave across distinct
+destinations: pure-CE alltoall 256MB went 4 ranks 12.9 -> 15.0-16.8
+GB/s (native 13.9) and 8 ranks 7.1 -> 7.7-7.9 (native 7.5) — the
+zero-SM CE path now beats native at 2/4/8 ranks (see
+[alltoall_comparison.md](alltoall_comparison.md)).
+
+Ring collectives are structurally immune: each step's sends are a
+permutation (rank r -> next(r)), so every destination has fan-in 1 per
+step. Same-node pure-CE 32M busbw confirms it — allreduce 2/4/8 ranks:
+24.1 / 14.9 / 14.6; allgather: 21.8 / 14.5 / 13.9. The 2->4 drop is the
+inherent ring-step scaling; 4->8 is flat, unlike alltoall's continued
+collapse.
+
+After the rotation, alltoall's residual 4->8 drop is **source-side
+fan-out** (each rank concurrently sends n-1 copies from its own
+CE/egress), not destination incast — so per-destination credits are not
+indicated on L40S for either workload. NVSwitch (B300) measured the
+opposite CE-concurrency behavior (more streams hurt), so per-dst caps
+stay a B300-era tuning lever (link_kind-aware defaults), not an L40S
+requirement.
 2. The CE is the main but not the only bottleneck: SM copies under the
    same synchronized peak are clearly better, so the fabric's burst
    start/arbitration has its own cost that the CE amplifies by ~50%.
