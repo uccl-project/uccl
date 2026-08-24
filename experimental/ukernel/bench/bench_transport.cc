@@ -315,7 +315,7 @@ static bool sync_before_bidirectional(
 void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                 size_t msg_size, int num_iterations, int num_warmup,
                 std::string const& local_ip, uint16_t listen_port,
-                PreferredTransport preferred_transport) {
+                PreferredTransport preferred_transport, bool host_send) {
   fprintf(stderr, "[Sender %d] Initializing...\n", rank);
 
   // Create configuration
@@ -351,8 +351,11 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   void* send_buf = nullptr;
   std::vector<void*> recv_slots;
   std::vector<uint32_t> local_recv_buffer_ids;
-  if (gpuMalloc(&send_buf, msg_size) != gpuSuccess || send_buf == nullptr) {
-    fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
+  gpuError_t send_alloc =
+      host_send ? gpuMallocHost(&send_buf, msg_size)
+                : gpuMalloc(&send_buf, msg_size);
+  if (send_alloc != gpuSuccess || send_buf == nullptr) {
+    fprintf(stderr, "[Sender %d] Failed to allocate send buffer\n", rank);
     return;
   }
   if (!allocate_device_slots(throughput_window, msg_size, recv_slots)) {
@@ -363,7 +366,10 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   auto cleanup = [&]() {
     if (send_buf != nullptr) {
       (void)comm.dereg_mr(kBenchSendBufferId);
-      gpuFree(send_buf);
+      if (host_send)
+        gpuFreeHost(send_buf);
+      else
+        gpuFree(send_buf);
     }
     if (transport_kind == PeerTransportKind::Ipc) {
       deregister_slot_ipcs(comm, local_recv_buffer_ids);
@@ -374,7 +380,10 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
 
   std::vector<uint8_t> host_buf = make_pattern(msg_size, 0);
   std::vector<uint8_t> expected_recv = make_pattern(msg_size, 97);
-  gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice);
+  if (host_send)
+    std::memcpy(send_buf, host_buf.data(), msg_size);
+  else
+    gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice);
   for (void* recv_slot : recv_slots) {
     gpuMemset(recv_slot, 0, msg_size);
   }
@@ -1006,10 +1015,13 @@ int main(int argc, char** argv) {
   std::string local_ip = "127.0.0.1";
   uint16_t listen_port = 6979;
   PreferredTransport preferred_transport = PreferredTransport::Auto;
+  bool host_send = false;
 
   // Parse arguments
   for (int i = 1; i < argc; ++i) {
-    if (strcmp(argv[i], "--rank") == 0 && i + 1 < argc) {
+    if (strcmp(argv[i], "--host-send") == 0) {
+      host_send = true;
+    } else if (strcmp(argv[i], "--rank") == 0 && i + 1 < argc) {
       rank = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--peer-rank") == 0 && i + 1 < argc) {
       peer_rank = atoi(argv[++i]);
@@ -1070,7 +1082,8 @@ int main(int argc, char** argv) {
   if (rank < peer_rank) {
     // Lower rank acts as sender
     run_sender(gpu_id, rank, peer_rank, world_size, msg_size, num_iterations,
-               num_warmup, local_ip, listen_port, preferred_transport);
+               num_warmup, local_ip, listen_port, preferred_transport,
+               host_send);
   } else {
     // Higher rank acts as receiver
     run_receiver(gpu_id, rank, peer_rank, world_size, msg_size, num_iterations,

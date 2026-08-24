@@ -1161,6 +1161,14 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
         // A builder-set hint (RS hybrid halves) wins; otherwise auto.
         if (c.put_path == PutPath::None)
           c.put_path = pick_put_path(static_cast<int>(c.dst_peer));
+        // Remote peers are only reachable over RDMA: a Device/IPC hint
+        // (e.g. an alltoall hybrid half) must not leak to a cross-node
+        // peer — the CE/device path has no remote buffer to write.
+        if (c.dst_peer != ~0u && same_host_fn_ &&
+            !same_host_fn_(owned_comm_.get(), static_cast<int>(c.dst_peer)) &&
+            c.put_path != PutPath::Rdma) {
+          c.put_path = PutPath::Rdma;
+        }
       }
       UK_DBG(UK_DBG_LVL_EXEC, "[pick r%d] op[%u] peer=%u -> path=%d",
              rank_or_neg1(), idx, c.dst_peer, (int)c.put_path);
