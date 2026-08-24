@@ -46,17 +46,51 @@
 namespace UKernel {
 namespace CCL {
 
-// Ring neighbor arithmetic used by the ring builders.
+// Ring topology with an explicit order (a rank permutation). The
+// algorithm shape is code; the order is data — produced by a
+// topology/NIC/incast planner (multi-ring / rail-aware ring order).
+// The identity order reproduces the classic rank+1 ring exactly.
 struct RingTopology {
   int nranks = 1;
+  std::vector<int> order;       // the ring sequence (rank permutation)
+  std::vector<int> next_rank_;  // rank -> successor in the ring
+  std::vector<int> prev_rank_;  // rank -> predecessor in the ring
+  std::vector<int> pos_;        // rank -> position in order
 
-  int wrap(int rank) const {
-    if (nranks <= 0) return 0;
-    int value = rank % nranks;
-    return value < 0 ? value + nranks : value;
+  RingTopology() : RingTopology(std::vector<int>{0}) {}
+  explicit RingTopology(int n) : RingTopology(make_identity_ring(n)) {}
+  explicit RingTopology(std::vector<int> ring_order)
+      : nranks(static_cast<int>(ring_order.size())),
+        order(std::move(ring_order)),
+        next_rank_(static_cast<size_t>(nranks)),
+        prev_rank_(static_cast<size_t>(nranks)),
+        pos_(static_cast<size_t>(nranks)) {
+    for (int i = 0; i < nranks; ++i) {
+      pos_[static_cast<size_t>(order[static_cast<size_t>(i)])] = i;
+      next_rank_[static_cast<size_t>(order[static_cast<size_t>(i)])] =
+          order[static_cast<size_t>((i + 1) % nranks)];
+      prev_rank_[static_cast<size_t>(order[static_cast<size_t>(i)])] =
+          order[static_cast<size_t>((i - 1 + nranks) % nranks)];
+    }
   }
-  int next(int rank) const { return wrap(rank + 1); }
-  int prev(int rank) const { return wrap(rank - 1); }
+
+  int next(int rank) const { return next_rank_[static_cast<size_t>(rank)]; }
+  int prev(int rank) const { return prev_rank_[static_cast<size_t>(rank)]; }
+  // Rank at position pos(rank)+delta in the order (mod n) — the chunk
+  // owner a ring step rotates through.
+  int rank_at_offset(int rank, int delta) const {
+    int pos = pos_[static_cast<size_t>(rank)] + delta;
+    pos %= nranks;
+    if (pos < 0) pos += nranks;
+    return order[static_cast<size_t>(pos)];
+  }
+
+ private:
+  static std::vector<int> make_identity_ring(int n) {
+    std::vector<int> v(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) v[static_cast<size_t>(i)] = i;
+    return v;
+  }
 };
 
 // Named buffer spaces a MacroOp can address. Input/Output are the user

@@ -217,8 +217,8 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
   BufRef const accum =
       inplace ? BufRef{BufSpace::Tmp, 0} : BufRef{BufSpace::Output, 0};
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(config.rank - ring_step);
-    int recv_owner = ring.wrap(config.rank - ring_step - 1);
+    int send_owner = ring.rank_at_offset(config.rank, -ring_step);
+    int recv_owner = ring.rank_at_offset(config.rank, -ring_step - 1);
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
@@ -306,7 +306,7 @@ void emit_ring_allgather(RingTopology const& ring,
   size_t elem_bytes = scalar_type_size(config.dtype);
   if (inplace) {
     // Publish the RS-held shard Tmp -> Output[own_offset].
-    int own = ring.wrap(config.rank + 1);
+    int own = ring.rank_at_offset(config.rank, 1);
     size_t own_bytes = balanced_shard_size_bytes(
         config.input_bytes, elem_bytes, config.nranks, own);
     if (own_bytes > 0) {
@@ -320,8 +320,8 @@ void emit_ring_allgather(RingTopology const& ring,
     }
   }
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(config.rank + 1 - ring_step);
-    int recv_owner = ring.wrap(config.rank - ring_step);
+    int send_owner = ring.rank_at_offset(config.rank, 1 - ring_step);
+    int recv_owner = ring.rank_at_offset(config.rank, -ring_step);
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
@@ -405,8 +405,8 @@ CollAlgo build_reduce_scatter_ring_algo(CollectiveConfig const& config) {
   std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
 
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(config.rank - ring_step - 1);
-    int recv_owner = ring.wrap(config.rank - ring_step - 2);
+    int send_owner = ring.rank_at_offset(config.rank, -ring_step - 1);
+    int recv_owner = ring.rank_at_offset(config.rank, -ring_step - 2);
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
@@ -511,8 +511,8 @@ CollAlgo build_allgather_ring_algo(CollectiveConfig const& config,
   }
 
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(config.rank - ring_step);
-    int recv_owner = ring.wrap(config.rank - ring_step - 1);
+    int send_owner = ring.rank_at_offset(config.rank, -ring_step);
+    int recv_owner = ring.rank_at_offset(config.rank, -ring_step - 1);
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
