@@ -81,7 +81,14 @@ int pick_dev_for_gpu(int gpu_idx) {
   auto nics = get_rdma_nics();
   if (nics.empty()) return 0;
 
-  int best_idx = -1;
+  // Collect the nearest fabric-capable tier and spread GPUs across it
+  // round-robin. Several HCAs often sit at the same PCIe distance (and
+  // even the same measured latency), and the old "first in name order"
+  // tie-break piled every GPU onto one port, making concurrent
+  // cross-node flows share a single HCA. Spreading equal-distance
+  // devices keeps concurrent flows on distinct HCAs (deterministic and
+  // rank-symmetric: each process picks from its own GPU index).
+  std::vector<int> best_tier;
   uint32_t best_dist = UINT32_MAX;
   int ndev = 0;
   ibv_device** devs = ibv_get_device_list(&ndev);
@@ -142,9 +149,20 @@ int pick_dev_for_gpu(int gpu_idx) {
     uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
       best_dist = d;
-      best_idx = j;
+      best_tier.clear();
+      best_tier.push_back(j);
+    } else if (d == best_dist) {
+      best_tier.push_back(j);
     }
   }
+  std::sort(best_tier.begin(), best_tier.end(),
+            [&](int a, int b) {
+              return std::strcmp(ibv_get_device_name(devs[a]),
+                                 ibv_get_device_name(devs[b])) < 0;
+            });
+  int best_idx = -1;
+  if (!best_tier.empty())
+    best_idx = best_tier[static_cast<size_t>(gpu_idx) % best_tier.size()];
   std::string sel_name;
   if (best_idx >= 0) sel_name = ibv_get_device_name(devs[best_idx]);
   ibv_free_device_list(devs);
@@ -1294,7 +1312,32 @@ void RdmaTransportAdapter::poll_loop() {
     }
 
     if (!any) {
-      std::this_thread::yield();
+      // Completions (send-side signaled WRs and write-with-imm signals)
+      // can land while the CQ is quiet. A yield would add a scheduler
+      // wake-up to every cross-node send/receive completion; spin on
+      // pauses while any RDMA work is outstanding or waits are
+      // registered, mirroring the executor's signal drain loop.
+      bool busy = (comm_ && comm_->has_pending_signal_waits());
+      if (!busy) {
+        for (size_t r = 0; r < peer_capacity_; ++r) {
+          RdmaPeer* p = peer_table_[r].load(std::memory_order_acquire);
+          if (!p) continue;
+          for (int q = 0; q < p->num_qps; ++q) {
+            if (p->qp_state[q].unacked_wrs.load(std::memory_order_acquire) >
+                0) {
+              busy = true;
+              break;
+            }
+          }
+          if (busy) break;
+        }
+      }
+      int const burst = busy ? 512 : 16;
+      for (int s = 0; s < burst &&
+                       !stop_.load(std::memory_order_acquire);
+           ++s)
+        machnet_pause();
+      if (!busy) std::this_thread::yield();
     }
   }
 }

@@ -48,6 +48,15 @@ Busbw in GB/s.
 | 4M | 587.9 | 13.08 | 1295.9 | 5.93 | 3658.2 | 2.10 |
 | 8M | 1020.9 | 15.06 | 1856.7 | 8.28 | 4944.9 | 3.11 |
 
+With the multi-HCA device spread (2026-08-24, see below):
+
+| size | shim identity | shim identity busbw | shim interleave | shim interleave busbw |
+|---:|---:|---:|---:|---:|
+| 1M | 887.9 | 2.17 | 910.0 | 2.11 |
+| 2M | 1037.8 | 3.70 | 1054.5 | 3.65 |
+| 4M | 1231.1 | 6.25 | 1362.0 | 5.65 |
+| 8M | 1717.8 | 8.95 | 2240.1 | 6.87 |
+
 AllGather / ReduceScatter 8M (avg busbw):
 
 | coll | shim identity | shim interleave |
@@ -97,9 +106,18 @@ Findings:
    back to the 200G port and every block width runs 0 wrong. The ring
    planner additionally validates that both ends of every cross edge
    report an on-fabric NIC and falls back to identity otherwise.
-3. The 16-rank gap (9.9 vs 14.7 GB/s) is per-cross-edge throughput
-   (~4.2 vs native ~7.4 GB/s per edge), not edge count. Fixing it needs
-   better per-edge pipelining / multi-rail splitting, not more edges.
+3. The interleave regression was a **device-selection artifact**:
+   node5's two 200G HCAs (mlx5_0, mlx5_3) sit at the same PCIe
+   distance, and the old name-order tie-break put every GPU on mlx5_0 —
+   which measures slower anyway (p50 143 us, ~15 GB/s vs mlx5_3's
+   71 us / 18.5-25 GB/s). Every concurrent cross flow shared one port,
+   roughly halving per-flow wire bandwidth. `pick_dev_for_gpu` now
+   round-robins GPUs across the nearest-distance fabric tier: interleave
+   8M went 3.06 -> 6.87 GB/s and identity 8.28 -> 8.95 GB/s.
+4. The remaining identity-vs-native gap (8.95 vs 15.06 at 8M, 9.9 vs
+   14.7 at 16 ranks / 32M) is per-cross-edge throughput (~4.5 vs native
+   ~7.4 GB/s per edge). Fixing it needs better per-edge pipelining /
+   multi-rail splitting of each cross chunk, not more edges.
 
 ## Next steps
 
