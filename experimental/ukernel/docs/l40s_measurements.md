@@ -76,7 +76,9 @@ same-node). 2-rank cross-node 32M AR: shim 2511 us / 13.36 GB/s
 
 | block | cross-node edges | result |
 |---:|---:|---|
+| 1 | 12 | 0.87 GB/s, 0 wrong |
 | 3 (default) | 4 | 3.07 GB/s, 0 wrong |
+| 4 | 4 | 2.95 GB/s, 0 wrong |
 | 6 (= identity) | 2 | 8.41 GB/s, 0 wrong |
 
 Findings:
@@ -87,20 +89,23 @@ Findings:
    fixed (~4.2 GB/s), so the shim spends ~2.6x longer in the RDMA
    phases. Both AG and RS degrade together, and HostProf shows host-side
    enqueue/dispatch cost is not the bottleneck (0.01 us/op).
-2. Ring orders that make node5 ranks 1 or 4 cross-node crash at
-   `transport put path is not established`: those GPUs pick the 10G
-   bond ports (LID 0, off-fabric). The planner must be fabric-aware
-   (skip ports with no valid LID / low link rate), not just host-aware.
+2. Ring orders that make node5 ranks 1 or 4 cross-node used to crash at
+   `transport put path is not established`: those GPUs picked the 10G
+   bond ports (LID 0, off-fabric). Fixed 2026-08-24 by filtering
+   off-fabric ports in `pick_dev_for_gpu` (IB ports need an SM LID;
+   RoCE ports need a cluster-grade rate + valid GID) — GPU1/4 now fall
+   back to the 200G port and every block width runs 0 wrong. The ring
+   planner additionally validates that both ends of every cross edge
+   report an on-fabric NIC and falls back to identity otherwise.
 3. The 16-rank gap (9.9 vs 14.7 GB/s) is per-cross-edge throughput
    (~4.2 vs native ~7.4 GB/s per edge), not edge count. Fixing it needs
    better per-edge pipelining / multi-rail splitting, not more edges.
 
 ## Next steps
 
-- Device selection: filter LID-0 / 10G ports in `pick_dev_for_gpu` and
-  expose per-rank NIC capability to the ring planner (the planned
-  `link_kind` extension of the topology snapshot).
 - Push per-cross-edge throughput: inspect WR posting / completion
-  pacing per edge, multi-QP (multi-rail) split of each cross chunk.
+  pacing per edge, multi-QP (multi-rail) split of each cross chunk; and
+  extend the topology snapshot with link kind/speed for per-dst credit
+  tuning once B300 returns (incast control).
 - Re-run 16-rank interleave validation once GPUs 0/3 are free (8
   GPUs/node) to confirm the regression shape holds at 8 ranks/node.

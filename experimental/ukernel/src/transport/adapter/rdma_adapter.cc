@@ -106,6 +106,11 @@ int pick_dev_for_gpu(int gpu_idx) {
         fclose(fp);
       }
       if (port_state == 4) {
+        if (!rdma_port_on_fabric(name.c_str(), 1))
+          fprintf(stderr,
+                  "[pick_dev] WARN forced %s for gpu %d is not on the "
+                  "cluster fabric (LID/rate check failed)\n",
+                  name.c_str(), gpu_idx);
         fprintf(stderr, "[pick_dev] forced %s for gpu %d\n", name.c_str(),
                 gpu_idx);
         ibv_free_device_list(devs);
@@ -132,6 +137,7 @@ int pick_dev_for_gpu(int gpu_idx) {
     if (fgets(buf, sizeof(buf), fp)) port_state = atoi(buf);
     fclose(fp);
     if (port_state != 4) continue;  // 4 = IBV_PORT_ACTIVE
+    if (!rdma_port_on_fabric(name.c_str(), 1)) continue;
 
     uint32_t d = safe_pcie_distance(gpu_cards[gpu_idx], it->second);
     if (d < best_dist) {
@@ -144,7 +150,9 @@ int pick_dev_for_gpu(int gpu_idx) {
   ibv_free_device_list(devs);
 
   if (best_idx < 0) {
-    fprintf(stderr, "[pick_dev] no active RDMA port found\n");
+    fprintf(stderr,
+            "[pick_dev] no active on-fabric RDMA port found (gpu %d)\n",
+            gpu_idx);
     return -1;
   }
   fprintf(stderr, "[pick_dev] selected %s (pcie_dist=%u) for gpu %d\n",

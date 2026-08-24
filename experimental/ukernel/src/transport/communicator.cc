@@ -3,6 +3,7 @@
 #include "adapter/rdma_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "util/jrqueue.h"
+#include "util/topology.h"
 #include "util/uk_debug.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
@@ -123,8 +124,15 @@ bool detect_local_rdma_capable() {
   int count = 0;
   ibv_device** devices = ibv_get_device_list(&count);
   if (!devices) return false;
+  bool on_fabric = false;
+  for (int i = 0; i < count; ++i) {
+    if (rdma_port_on_fabric(ibv_get_device_name(devices[i]), 1)) {
+      on_fabric = true;
+      break;
+    }
+  }
   ibv_free_device_list(devices);
-  return count > 0;
+  return on_fabric;
 }
 
 }  // namespace
@@ -811,6 +819,12 @@ std::string Communicator::peer_host_id(int rank) const {
   auto const& peer = peer_states_.at(static_cast<size_t>(rank));
   if (!peer.has_meta) return std::string();
   return peer.meta.host_id;
+}
+
+bool Communicator::peer_rdma_capable(int rank) const {
+  std::lock_guard<std::mutex> lk(peer_mu_);
+  auto const& peer = peer_states_.at(static_cast<size_t>(rank));
+  return peer.has_meta && peer.meta.rdma_capable;
 }
 
 void Communicator::register_existing_local_mrs_with_rdma() {

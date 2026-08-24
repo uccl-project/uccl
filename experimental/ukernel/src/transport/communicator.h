@@ -67,6 +67,9 @@ class Communicator {
   bool same_host(int rank) const;
   // Host id of a peer (after meta exchange); empty if not established.
   std::string peer_host_id(int rank) const;
+  // Whether a peer's local NIC has an on-fabric RDMA port (after meta
+  // exchange; false if not established).
+  bool peer_rdma_capable(int rank) const;
 
   // Async data / signal / wait (thin wrappers over adapter)
   //

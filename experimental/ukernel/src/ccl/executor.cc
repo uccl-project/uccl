@@ -101,11 +101,13 @@ static std::vector<int> compute_ring_order(Transport::Communicator* comm,
                                            int nranks) {
   std::vector<int> order;
   std::map<std::string, std::vector<int>> by_host;
+  std::vector<std::string> rank_host(static_cast<size_t>(nranks));
   try {
     for (int r = 0; r < nranks; ++r) {
       std::string id = comm->peer_host_id(r);
       if (id.empty()) return order;  // meta not established: identity
-      by_host[std::move(id)].push_back(r);
+      by_host[id].push_back(r);
+      rank_host[static_cast<size_t>(r)] = std::move(id);
     }
   } catch (...) {
     return order;  // identity
@@ -140,6 +142,25 @@ static std::vector<int> compute_ring_order(Transport::Communicator* comm,
     for (auto const& g : groups)
       for (size_t i = blk * block; i < (blk + 1) * block && i < g.size(); ++i)
         order.push_back(g[i]);
+
+  // Every cross-host edge needs an on-fabric NIC on both endpoints;
+  // otherwise the ring would fail path setup at submit time. Fall back
+  // to the identity order (the known-good default) instead of emitting
+  // an order that cannot run.
+  for (size_t i = 0; i < order.size(); ++i) {
+    int a = order[i];
+    int b = order[(i + 1) % order.size()];
+    if (rank_host[static_cast<size_t>(a)] ==
+        rank_host[static_cast<size_t>(b)])
+      continue;
+    if (!comm->peer_rdma_capable(a) || !comm->peer_rdma_capable(b)) {
+      UK_DBG(UK_DBG_LVL_EXEC,
+             "[ring-order r%d] interleave order unusable (rank %d lacks "
+             "on-fabric RDMA); falling back to identity",
+             comm->rank(), a);
+      return {};
+    }
+  }
   return order;
 }
 

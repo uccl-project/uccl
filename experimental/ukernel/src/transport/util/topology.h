@@ -261,5 +261,61 @@ inline std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
   return rdma_nics;
 }
 
+// Whether an RDMA port can carry cross-node QPs on the cluster fabric.
+// IB ports need an SM-assigned LID (LID 0 = off-fabric, e.g. unmanaged
+// management links); RoCE/Ethernet ports need a usable GID and a
+// cluster-grade link rate (excludes 10/20 Gbps management/legacy links
+// that are typically not part of the compute fabric).
+inline bool rdma_port_on_fabric(char const* dev_name, int port) {
+  char path[512];
+  snprintf(path, sizeof(path),
+           "/sys/class/infiniband/%s/ports/%d/link_layer", dev_name, port);
+  FILE* fp = fopen(path, "r");
+  char layer[64] = {};
+  if (fp) {
+    if (!fgets(layer, sizeof(layer), fp)) layer[0] = '\0';
+    fclose(fp);
+  }
+  bool const is_eth = (std::strstr(layer, "Ethernet") != nullptr);
+
+  snprintf(path, sizeof(path), "/sys/class/infiniband/%s/ports/%d/lid",
+           dev_name, port);
+  fp = fopen(path, "r");
+  char buf[32] = {};
+  if (fp) {
+    if (!fgets(buf, sizeof(buf), fp)) buf[0] = '\0';
+    fclose(fp);
+  }
+  unsigned long lid = std::strtoul(buf, nullptr, 0);
+  if (!is_eth) return lid != 0;
+
+  // RoCE: keep only cluster-grade rates with a valid GID entry.
+  snprintf(path, sizeof(path), "/sys/class/infiniband/%s/ports/%d/rate",
+           dev_name, port);
+  fp = fopen(path, "r");
+  char rate[64] = {};
+  if (fp) {
+    if (!fgets(rate, sizeof(rate), fp)) rate[0] = '\0';
+    fclose(fp);
+  }
+  double gbps = 0;
+  if (std::sscanf(rate, "%lf", &gbps) != 1 || gbps < 25.0) return false;
+
+  snprintf(path, sizeof(path), "/sys/class/infiniband/%s/ports/%d/gids",
+           dev_name, port);
+  std::error_code ec;
+  fs::directory_iterator it(path, ec);
+  if (ec) return false;
+  for (; it != fs::directory_iterator(); it.increment(ec)) {
+    if (ec) return false;
+    std::ifstream in(it->path());
+    std::string hex;
+    if (!(in >> hex)) continue;
+    hex.erase(std::remove(hex.begin(), hex.end(), ':'), hex.end());
+    if (hex.find_first_not_of('0') != std::string::npos) return true;
+  }
+  return false;
+}
+
 }  // namespace Transport
 }  // namespace UKernel
