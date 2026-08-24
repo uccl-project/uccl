@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_NCCL_TESTS="${ROOT_DIR}/scripts/run-nccl-tests.sh"
 
 COLLECTIVES_CSV="allreduce,allgather,reducescatter,alltoall"
-TOPOLOGIES_CSV="1nx2g,2nx1g,2nx4g"
+TOPOLOGIES_CSV="1nx2g,1nx4g,2nx1g,2nx2g,2nx4g"
 BACKENDS_CSV="nccl,mscclpp"
 HOSTS="${HOSTS:-10.10.55.1,10.10.55.2}"
 OUTPUT_DIR="${ROOT_DIR}/.tmp/collective-benchmarks/$(date +%Y%m%d-%H%M%S)"
@@ -33,19 +33,25 @@ declare -A TEST_BY_COLLECTIVE=(
 
 declare -A TOPOLOGY_MODE=(
   [1nx2g]="intra"
+  [1nx4g]="intra"
   [2nx1g]="inter"
+  [2nx2g]="inter"
   [2nx4g]="inter"
 )
 
 declare -A TOPOLOGY_GPUS=(
   [1nx2g]="0,1"
+  [1nx4g]="0,1,2,3"
   [2nx1g]="0"
+  [2nx2g]="0,1"
   [2nx4g]="0,1,2,3"
 )
 
 declare -A TOPOLOGY_RANKS=(
   [1nx2g]="2"
+  [1nx4g]="4"
   [2nx1g]="2"
+  [2nx2g]="4"
   [2nx4g]="8"
 )
 
@@ -63,7 +69,7 @@ Options:
   --collectives <csv>       Default: ${COLLECTIVES_CSV}
                              Names: allreduce,allgather,reducescatter,alltoall
   --topologies <csv>        Default: ${TOPOLOGIES_CSV}
-                             Names: 1nx2g,2nx1g,2nx4g
+                             Names: 1nx2g,1nx4g,2nx1g,2nx2g,2nx4g
   --backends <csv>          Default: ${BACKENDS_CSV}
                              Names: nccl,mscclpp
   --hosts <csv>             Two hosts for inter-node runs.
