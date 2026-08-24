@@ -8,6 +8,7 @@
 #include "utils.h"
 #include <algorithm>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -89,6 +90,72 @@ static uint64_t role_to_off(CollectiveBufferRole role, uint64_t in,
 static inline bool cfg_inplace(CollectiveConfig const& cfg, void* input,
                                void* output) {
   return cfg.inplace || (input == output);
+}
+
+// Block-interleave the per-host rank groups so the ring's cross-node
+// edges spread across distinct GPUs/NICs instead of the naive single
+// edge. Rank-symmetric: groups are sorted by min rank, so every rank
+// derives the same permutation. Falls back to identity when peer
+// metadata is not established yet.
+static std::vector<int> compute_ring_order(Transport::Communicator* comm,
+                                           int nranks) {
+  std::vector<int> order;
+  std::map<std::string, std::vector<int>> by_host;
+  try {
+    for (int r = 0; r < nranks; ++r) {
+      std::string id = comm->peer_host_id(r);
+      if (id.empty()) return order;  // meta not established: identity
+      by_host[std::move(id)].push_back(r);
+    }
+  } catch (...) {
+    return order;  // identity
+  }
+  std::vector<std::vector<int>> groups;
+  for (auto& kv : by_host) groups.push_back(std::move(kv.second));
+  std::sort(groups.begin(), groups.end(),
+            [](std::vector<int> const& a, std::vector<int> const& b) {
+              return a.front() < b.front();
+            });
+  size_t min_sz = 0;
+  if (!groups.empty()) {
+    min_sz = groups[0].size();
+    for (auto const& g : groups) min_sz = std::min(min_sz, g.size());
+  }
+  // Experiment knob: override the block-interleave width. The default
+  // (min group / 2) spreads the ring's cross-node edges over distinct
+  // GPUs/NICs; larger blocks approach identity, smaller blocks make the
+  // ring cross more often.
+  size_t const block = [&]() {
+    char const* v = std::getenv("UK_CCL_RING_BLOCK");
+    if (v && *v) {
+      long b = std::strtol(v, nullptr, 10);
+      if (b > 0) return static_cast<size_t>(b);
+    }
+    return std::max<size_t>(1, min_sz / 2);
+  }();
+  size_t nblocks = 0;
+  for (auto const& g : groups)
+    nblocks = std::max(nblocks, (g.size() + block - 1) / block);
+  for (size_t blk = 0; blk < nblocks; ++blk)
+    for (auto const& g : groups)
+      for (size_t i = blk * block; i < (blk + 1) * block && i < g.size(); ++i)
+        order.push_back(g[i]);
+  return order;
+}
+
+// Apply the opt-in NIC-aware ring order (UK_CCL_RING_INTERLEAVE=1) to a
+// config copy. Used by BOTH prepare() and submit() so the peer setup and
+// the plan see the same order.
+static CollectiveConfig with_ring_order(CollectiveConfig cfg,
+                                        Transport::Communicator* comm) {
+  static bool const kInterleave = []() {
+    char const* v = std::getenv("UK_CCL_RING_INTERLEAVE");
+    return v && std::string(v) == "1";
+  }();
+  if (kInterleave && cfg.ring_order.empty() && cfg.nranks > 1 && comm) {
+    cfg.ring_order = compute_ring_order(comm, cfg.nranks);
+  }
+  return cfg;
 }
 
 // Signal-tag epoch salting: plan tags repeat across runs, so fold a
@@ -197,6 +264,8 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(cfg.fuse_ag_copy ? 1u : 0u);
   add(cfg.device_flags ? 1u : 0u);
   add(inplace ? 1u : 0u);
+  add(cfg.ring_order.size());
+  for (int r : cfg.ring_order) add(static_cast<uint64_t>(r));
   add(cfg.input_split_bytes.size());
   for (size_t v : cfg.input_split_bytes) add(v);
   add(cfg.output_split_bytes.size());
@@ -606,12 +675,14 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   add(cfg.input_bytes);
   add(cfg.output_bytes);
   add(inplace ? 1u : 0u);
+  add(cfg.ring_order.size());
+  for (int r : cfg.ring_order) add(static_cast<uint64_t>(r));
   CollAlgo algo;
   auto ait = prepare_algo_cache_.find(skey);
   if (ait != prepare_algo_cache_.end()) {
     algo = ait->second;
   } else {
-    algo = build_coll_algo(cfg, inplace);
+    algo = build_coll_algo(with_ring_order(cfg, owned_comm_.get()), inplace);
     if (prepare_algo_cache_.size() >= 256) prepare_algo_cache_.clear();
     prepare_algo_cache_.emplace(skey, algo);
   }
@@ -750,9 +821,12 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
     return h;
   }
 
+  // Opt-in NIC-aware ring order, shared with prepare().
+  CollectiveConfig cfg_eff = with_ring_order(cfg, owned_comm_.get());
+
   if (owned_comm_ && !prepared_) {
     // Check all peers needed by this algorithm are prepared.
-    CollAlgo algo = build_coll_algo(cfg, cfg_inplace(cfg, input, output));
+    CollAlgo algo = build_coll_algo(cfg_eff, cfg_inplace(cfg, input, output));
     for (auto const& ch : algo.chunks) {
       if (ch.src_rank >= 0 && !prepared_peers_.count(ch.src_rank))
         throw std::runtime_error("prepare() not called for peer " +
@@ -768,14 +842,14 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
   std::shared_ptr<CollPlan const> plan;
   {
     std::lock_guard lock(plan_cache_mu_);
-    std::string key = plan_key(cfg, cfg_inplace(cfg, input, output));
+    std::string key = plan_key(cfg_eff, cfg_inplace(cfg, input, output));
     auto it = plan_cache_.find(key);
     if (it != plan_cache_.end()) {
       plan = it->second;
     } else {
       if (plan_cache_.size() >= kMaxCachedPlans) plan_cache_.clear();
       plan = build_plan(
-          cfg, cfg_inplace(cfg, input, output),
+          cfg_eff, cfg_inplace(cfg, input, output),
           [this](int peer) {
             return same_host_fn_ && same_host_fn_(owned_comm_.get(), peer);
           });

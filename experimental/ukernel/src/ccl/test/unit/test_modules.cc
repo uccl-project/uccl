@@ -499,8 +499,9 @@ void test_build_coll_algo_tree_basic() {
 void test_build_coll_algo_ag_rs_validation() {
   printf("[test] build_coll_algo AG/RS validation...\n");
 
-  // Non-divisible shards: 1025 f32 elements (4100 B) over 4 ranks ->
-  // shard elems 257/256/256/256 = 1028/1024/1024/1024 bytes.
+  // Non-divisible shards: 4100 B over 4 ranks -> 16B-aligned shards
+  // 1024/1024/1024/1028 (the last shard absorbs the residual, keeping
+  // the first n-1 shards CE-copy / vector aligned).
   auto make_rs = [](int rank, size_t out_bytes) {
     CollectiveConfig cfg;
     cfg.kind = CollKind::ReduceScatterRing;
@@ -512,10 +513,18 @@ void test_build_coll_algo_ag_rs_validation() {
     cfg.dtype = ScalarType::Float32;
     return cfg;
   };
-  // Rank 0's shard is 1028 B: accepted.
-  build_coll_algo(make_rs(0, 1028), /*inplace=*/false);
-  // Rank 1's shard is 1024 B: 1028 must be rejected, 1024 accepted.
   bool threw = false;
+  // Rank 0's shard is 1024 B: accepted; 1028 must be rejected.
+  build_coll_algo(make_rs(0, 1024), /*inplace=*/false);
+  threw = false;
+  try {
+    build_coll_algo(make_rs(0, 1028), /*inplace=*/false);
+  } catch (std::invalid_argument const&) {
+    threw = true;
+  }
+  assert(threw);
+  // Rank 1's shard is 1024 B: 1028 must be rejected, 1024 accepted.
+  threw = false;
   try {
     build_coll_algo(make_rs(1, 1028), /*inplace=*/false);
   } catch (std::invalid_argument const&) {
@@ -525,9 +534,10 @@ void test_build_coll_algo_ag_rs_validation() {
   CollAlgo rs1 = build_coll_algo(make_rs(1, 1024), /*inplace=*/false);
   assert(rs1.chunks.back().dst_off == 0 && rs1.chunks.back().bytes == 1024);
 
-  // Non-divisible offsets: rank 3's shard starts at (3*256 + 1) elems.
-  CollAlgo rs3 = build_coll_algo(make_rs(3, 1024), /*inplace=*/false);
-  assert(rs3.chunks.back().src_off == (3 * 256 + 1) * 4);
+  // Non-divisible offsets: rank 3's shard is 1028 B at offset 3*1024.
+  CollAlgo rs3 = build_coll_algo(make_rs(3, 1028), /*inplace=*/false);
+  assert(rs3.chunks.back().src_off == 3 * 1024);
+  assert(rs3.chunks.back().bytes == 1028);
 
   auto make_ag = [](int rank, size_t in_bytes) {
     CollectiveConfig cfg;

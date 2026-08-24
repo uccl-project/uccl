@@ -65,6 +65,8 @@ class Communicator {
               PeerTransportKind transport = PeerTransportKind::Unknown);
   PeerTransportKind peer_transport_kind(int rank) const;
   bool same_host(int rank) const;
+  // Host id of a peer (after meta exchange); empty if not established.
+  std::string peer_host_id(int rank) const;
 
   // Async data / signal / wait (thin wrappers over adapter)
   //

@@ -71,6 +71,11 @@ struct CollectiveConfig {
   // the rest via the device worker. Sweep to find where the CE peak
   // (synchronized copies) vs the worker's copy throughput balance.
   uint32_t a2a_hybrid_ce_pct = 50;
+  // Explicit ring order (a rank permutation). Empty = identity order
+  // (rank+1 ring). When set, the ring collectives run over this order —
+  // the seam the NIC-aware / incast-aware planner feeds. Rank-symmetric:
+  // every rank must derive the same permutation.
+  std::vector<int> ring_order;
 };
 
 // Tile sizing rule, shared by the NCCL shim and the spray benchmarks:

@@ -806,6 +806,13 @@ bool Communicator::same_host(int rank) const {
   return local_peer.meta.host_id == remote_peer.meta.host_id;
 }
 
+std::string Communicator::peer_host_id(int rank) const {
+  std::lock_guard<std::mutex> lk(peer_mu_);
+  auto const& peer = peer_states_.at(static_cast<size_t>(rank));
+  if (!peer.has_meta) return std::string();
+  return peer.meta.host_id;
+}
+
 void Communicator::register_existing_local_mrs_with_rdma() {
   if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {

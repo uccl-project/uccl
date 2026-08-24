@@ -14,24 +14,32 @@ namespace CCL {
 
 namespace {
 
+size_t balanced_shard_size_bytes(size_t bytes, size_t elem_bytes, int nranks,
+                                 int owner_rank);
+
 size_t balanced_shard_offset_bytes(size_t bytes, size_t elem_bytes, int nranks,
                                    int owner_rank) {
-  size_t total_elems = bytes / elem_bytes;
-  size_t base_elems = total_elems / static_cast<size_t>(nranks);
-  size_t extra_elems = total_elems % static_cast<size_t>(nranks);
-  size_t offset_elems = static_cast<size_t>(owner_rank) * base_elems +
-                        std::min(static_cast<size_t>(owner_rank), extra_elems);
-  return offset_elems * elem_bytes;
+  size_t off = 0;
+  for (int r = 0; r < owner_rank; ++r)
+    off += balanced_shard_size_bytes(bytes, elem_bytes, nranks, r);
+  return off;
 }
 
 size_t balanced_shard_size_bytes(size_t bytes, size_t elem_bytes, int nranks,
                                  int owner_rank) {
-  size_t total_elems = bytes / elem_bytes;
-  size_t base_elems = total_elems / static_cast<size_t>(nranks);
-  size_t extra_elems = total_elems % static_cast<size_t>(nranks);
-  size_t shard_elems =
-      base_elems + (static_cast<size_t>(owner_rank) < extra_elems ? 1 : 0);
-  return shard_elems * elem_bytes;
+  // 16B-aligned balanced shard layout: the CE copy engine and the
+  // vectorized kernels require 16-byte alignment for addresses and
+  // sizes. First n-1 shards are multiples of 16; the last shard absorbs
+  // the residual (<16B, zero whenever the tensor is a 16B multiple —
+  // the norm for collectives).
+  size_t const align = 16;
+  size_t base = (bytes / static_cast<size_t>(nranks)) & ~(align - 1);
+  size_t rem = bytes - base * static_cast<size_t>(nranks);
+  size_t extra = rem / align;
+  size_t sz = base + (static_cast<size_t>(owner_rank) < extra ? align : 0);
+  if (owner_rank == nranks - 1) sz += rem % align;
+  (void)elem_bytes;
+  return sz;
 }
 
 std::vector<size_t> equal_alltoall_splits(size_t total_bytes, int nranks) {
@@ -364,7 +372,9 @@ void emit_ring_allgather(RingTopology const& ring,
 
 CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
                                    bool inplace) {
-  RingTopology ring{config.nranks};
+  RingTopology ring = config.ring_order.empty()
+                          ? RingTopology(config.nranks)
+                          : RingTopology(config.ring_order);
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllReduceRing;
   // In-place: RS partials accumulate in a full-input-layout Tmp region
@@ -393,7 +403,9 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
 // (recv_owner == rank) completes the rank's own shard in Scratch; a
 // final local copy moves it to Output[0].
 CollAlgo build_reduce_scatter_ring_algo(CollectiveConfig const& config) {
-  RingTopology ring{config.nranks};
+  RingTopology ring = config.ring_order.empty()
+                          ? RingTopology(config.nranks)
+                          : RingTopology(config.ring_order);
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::ReduceScatterRing;
   // Partial sums live in a declared Tmp region laid out like the full
@@ -489,7 +501,9 @@ CollAlgo build_reduce_scatter_ring_algo(CollectiveConfig const& config) {
 // snapshot handshake is needed.
 CollAlgo build_allgather_ring_algo(CollectiveConfig const& config,
                                    bool inplace) {
-  RingTopology ring{config.nranks};
+  RingTopology ring = config.ring_order.empty()
+                          ? RingTopology(config.nranks)
+                          : RingTopology(config.ring_order);
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllGatherRing;
   size_t elem_bytes = scalar_type_size(config.dtype);
