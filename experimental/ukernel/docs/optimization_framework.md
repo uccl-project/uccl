@@ -282,9 +282,10 @@ peer order, so at the synchronized collective start all ranks' first
 copy targeted the same peer. Rotating the send order (rank r sends to
 r+1, r+2, ...; Latin square) spreads the first wave across distinct
 destinations: pure-CE alltoall 256MB went 4 ranks 12.9 -> 15.0-16.8
-GB/s (native 13.9) and 8 ranks 7.1 -> 7.7-7.9 (native 7.5) — the
-zero-SM CE path now beats native at 2/4/8 ranks (see
-[alltoall_comparison.md](alltoall_comparison.md)).
+GB/s. Against real native (an earlier comparison silently loaded the
+shim through a legacy DT_RPATH — see alltoall_comparison.md), same-node
+is now parity at 2/4/8 ranks; cross-node alltoall remains a gap (2.8
+vs native 4.2 GB/s, RDMA path).
 
 Ring collectives are structurally immune: each step's sends are a
 permutation (rank r -> next(r)), so every destination has fan-in 1 per

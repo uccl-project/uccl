@@ -29,11 +29,19 @@ Same-node `alltoall_perf` (ncclAllToAll), `UK_CCL_PUT_PATH=ipc`
 
 | ranks | shim (before) | shim (rotated order) | native | verdict |
 |---:|---:|---:|---:|---|
-| 2 | 48.2 | 48.1 | 47.6 | shim wins |
-| 4 | 12.9 | 15.0-16.8 | 13.9 | shim wins after fix |
-| 8 | 7.1 | 7.7-7.9 | 7.5 | shim wins after fix |
+| 2 | 48.2 | 48.1 | 47.8 | shim ~tied/+1% |
+| 4 | 12.9 | 16.0-16.2 | 15.3-16.1 | shim ~tied (was losing) |
+| 8 | 7.1 | 7.7 | 7.8 | ~tied |
+| 12 cross-node | — | 2.8 | 4.2 | native +50% (open gap) |
 
-The 4-rank jump (+16-30%) is the **incast signature**: the lowering
+Correction: an earlier "native" comparison used a binary whose legacy
+DT_RPATH silently loaded the shim lib, so those numbers were
+shim-vs-shim. With the standard `ncclAlltoAll` symbol (added to the
+shim as an alias) and an MPI-broadcast unique id, the real native
+comparison above shows parity same-node — the rotation still matters
+(12.9 -> 16, turning a loss into a tie) but does not overtake native.
+
+The 4-rank jump is the **incast signature**: the lowering
 issued every rank's per-peer copies in ascending peer order, so at the
 synchronized collective start all ranks' first copy targeted the same
 peer — overloading that peer's CE/ingress arbitration (the B300
@@ -42,8 +50,8 @@ serial test still aimed every rank's first transfer at the same
 destination). `build_alltoall_pairwise_algo` now rotates the send order
 (rank r sends to r+1, r+2, ...), a Latin square that spreads the first
 wave across distinct destinations. Verify OK at 2/4/8 ranks and 128M.
-The residual 8-rank gap to the unsync ceiling is the remaining CE
-fabric arbitration at the round's completion barrier.
+The cross-node alltoall gap (2.8 vs 4.2 GB/s) is the next open item —
+the RDMA/proxy path rather than the CE path.
 
 ## B300 results (256MB, 2/4/8 ranks, all wrong=0)
 

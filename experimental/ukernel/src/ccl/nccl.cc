@@ -415,7 +415,7 @@ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
   return run_coll(comm, cfg, input, recvbuff, stream);
 }
 
-ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+ncclResult_t ncclAlltoAll(const void* sendbuff, void* recvbuff, size_t count,
                           ncclDataType_t datatype, ncclComm_t comm,
                           gpuStream_t stream) {
   if (!comm || !comm->executor || count == 0) return ncclInvalidArgument;
@@ -451,6 +451,13 @@ ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
     cfg.external_self_slice = true;
   }
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
+}
+
+// Compatibility alias under the historical shim-extension name.
+ncclResult_t ncclAllToAll(const void* sendbuff, void* recvbuff, size_t count,
+                          ncclDataType_t datatype, ncclComm_t comm,
+                          gpuStream_t stream) {
+  return ncclAlltoAll(sendbuff, recvbuff, count, datatype, comm, stream);
 }
 
 static ncclResult_t unsupported(const char* fn) {
