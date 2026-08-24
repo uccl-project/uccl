@@ -732,8 +732,14 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
                    BufRef{BufSpace::Output, 0});
   }
 
-  for (int peer = 0; peer < config.nranks; ++peer) {
-    if (peer == config.rank) continue;
+  // Rotate the per-peer send order (rank r sends to r+1, r+2, ...).
+  // The naive ascending order makes every rank's first copy target the
+  // same peer at the synchronized collective start — an incast into one
+  // destination that overloads its CE/ingress arbitration (measured
+  // 2-3x per-copy penalty at 4/8 ranks). The rotation spreads the first
+  // wave across distinct destinations (Latin square).
+  for (int k = 1; k < config.nranks; ++k) {
+    int peer = (config.rank + k) % config.nranks;
 
     size_t send_offset = input_prefix[static_cast<size_t>(peer)];
     size_t send_bytes = input_splits[static_cast<size_t>(peer)];

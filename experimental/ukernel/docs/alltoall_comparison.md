@@ -22,6 +22,29 @@ the copy-engine contention mechanism behind the gap is analyzed in
 - **Put path** (same-host): IPC copy engine (BLK-independent) or device
   backend vectorized LD/ST (`UK_CCL_PUT_PATH=device`).
 
+## L40S results (2026-08-24, pure CE, 256MB same-node)
+
+Same-node `alltoall_perf` (ncclAllToAll), `UK_CCL_PUT_PATH=ipc`
+(pure CE, zero SM), algbw:
+
+| ranks | shim (before) | shim (rotated order) | native | verdict |
+|---:|---:|---:|---:|---|
+| 2 | 48.2 | 48.1 | 47.6 | shim wins |
+| 4 | 12.9 | 15.0-16.8 | 13.9 | shim wins after fix |
+| 8 | 7.1 | 7.7-7.9 | 7.5 | shim wins after fix |
+
+The 4-rank jump (+16-30%) is the **incast signature**: the lowering
+issued every rank's per-peer copies in ascending peer order, so at the
+synchronized collective start all ranks' first copy targeted the same
+peer — overloading that peer's CE/ingress arbitration (the B300
+"serializing per rank does not help" observation is consistent: its
+serial test still aimed every rank's first transfer at the same
+destination). `build_alltoall_pairwise_algo` now rotates the send order
+(rank r sends to r+1, r+2, ...), a Latin square that spreads the first
+wave across distinct destinations. Verify OK at 2/4/8 ranks and 128M.
+The residual 8-rank gap to the unsync ceiling is the remaining CE
+fabric arbitration at the round's completion barrier.
+
 ## B300 results (256MB, 2/4/8 ranks, all wrong=0)
 
 | ranks | CE path (BLK=1 LT=4 G=4) | device path (BLK=64 LT=4 G=4) | native |
