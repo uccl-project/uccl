@@ -80,6 +80,10 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr int kMaxQPs = 4;
   static constexpr uint32_t kMaxChunks = 128;  // BDP: 64 MB
   static constexpr size_t kSignalRingSize = 4096;
+  // Pre-posted receive WQEs on the per-peer signal QP. A single WQE
+  // serializes standalone signal delivery (each SEND waits for the next
+  // repost), which becomes the per-hop latency on ring collectives.
+  static constexpr int kSignalRecvPool = 64;
 
   static constexpr uint32_t kCacheSizeThresh = 8192;
   static constexpr uint32_t kCacheConsecutiveThresh = 16384;
@@ -128,7 +132,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct RecvPool {
-    uint64_t tag_buf = 0;  // 8-byte aligned, receives signal tag via RDMA
+    // One 8-byte slot per posted receive WQE; the CQE's wr_id selects
+    // the consumed slot.
+    std::vector<uint64_t> tag_bufs;
     ibv_mr* mr = nullptr;
     std::vector<ibv_sge> sges;
     std::vector<ibv_recv_wr> wrs;
@@ -222,7 +228,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void destroy_peer_qps(RdmaPeer& peer);
 
   bool init_signal_pool(RdmaPeer& p);
-  bool repost_signal_recv(RdmaPeer& p);
+  bool repost_signal_recv(RdmaPeer& p, uint32_t slot);
   // Post one zero-sge receive WQE on a data QP (consumed by
   // write-with-imm signals; the data itself bypasses the recv queue).
   bool post_data_recv(ibv_qp* qp);

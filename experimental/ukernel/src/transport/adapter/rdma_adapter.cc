@@ -40,16 +40,17 @@ inline double rdma_trace_ms() {
              std::chrono::system_clock::now().time_since_epoch().count()) /
          1e6;
 }
-// Decoupled-signal mode: when UK_CCL_RDMA_FUSED_PUT=0 the send path
-// stripes a message's chunks across the peer's QPs and delivers the
-// data-ready signal separately after all groups complete (required for
-// cross-QP striping — a single write-with-imm can no longer imply
-// whole-message delivery). Both sides (executor wait shaping and this
-// adapter) read the same knob.
+// Decoupled-signal mode (default): the send path stripes a message's
+// chunks across the peer's QPs and delivers the data-ready signal
+// separately after all groups complete (required for cross-QP striping
+// — a single write-with-imm can no longer imply whole-message
+// delivery). UK_CCL_RDMA_FUSED_PUT=1 restores the legacy write-with-imm
+// fusion. Both sides (executor wait shaping and this adapter) read the
+// same knob.
 inline bool rdma_fusion_enabled() {
   static bool const on = [] {
     char const* v = std::getenv("UK_CCL_RDMA_FUSED_PUT");
-    return !v || *v == '\0' || *v == '1';
+    return v && std::string(v) == "1";
   }();
   return on;
 }
@@ -478,32 +479,40 @@ bool RdmaTransportAdapter::qps_to_rts(ibv_qp** qps, int count) {
 
 bool RdmaTransportAdapter::init_signal_pool(RdmaPeer& p) {
   auto pool = std::make_unique<RecvPool>();
-  // tag_buf is already zero-initialized, no resize needed
-  pool->mr =
-      ibv_reg_mr(pd_, &pool->tag_buf, sizeof(uint64_t), IBV_ACCESS_LOCAL_WRITE);
+  pool->tag_bufs.assign(kSignalRecvPool, 0);
+  pool->mr = ibv_reg_mr(pd_, pool->tag_bufs.data(),
+                        pool->tag_bufs.size() * sizeof(uint64_t),
+                        IBV_ACCESS_LOCAL_WRITE);
   if (!pool->mr) return false;
 
-  pool->sges.resize(1);
-  pool->wrs.resize(1);
-  pool->sges[0].addr = reinterpret_cast<uint64_t>(&pool->tag_buf);
-  pool->sges[0].length = sizeof(uint64_t);
-  pool->sges[0].lkey = pool->mr->lkey;
-  pool->wrs[0].wr_id = 0;
-  pool->wrs[0].sg_list = &pool->sges[0];
-  pool->wrs[0].num_sge = 1;
+  pool->sges.resize(kSignalRecvPool);
+  pool->wrs.resize(kSignalRecvPool);
+  for (int i = 0; i < kSignalRecvPool; ++i) {
+    pool->sges[i].addr =
+        reinterpret_cast<uint64_t>(&pool->tag_bufs[static_cast<size_t>(i)]);
+    pool->sges[i].length = sizeof(uint64_t);
+    pool->sges[i].lkey = pool->mr->lkey;
+    pool->wrs[i].wr_id = static_cast<uint64_t>(i);
+    pool->wrs[i].sg_list = &pool->sges[i];
+    pool->wrs[i].num_sge = 1;
+  }
 
   ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(p.signal_qp, &pool->wrs[0], &bad) != 0) {
-    return false;
+  for (int i = 0; i < kSignalRecvPool; ++i) {
+    if (ibv_post_recv(p.signal_qp, &pool->wrs[i], &bad) != 0) {
+      std::fprintf(stderr, "[init_signal_pool] post_recv %d/%d FAILED\n", i,
+                   kSignalRecvPool);
+      return false;
+    }
   }
   p.signal_pool = std::move(pool);
   return true;
 }
 
-bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p) {
-  if (!p.signal_pool) return false;
+bool RdmaTransportAdapter::repost_signal_recv(RdmaPeer& p, uint32_t slot) {
+  if (!p.signal_pool || slot >= kSignalRecvPool) return false;
   ibv_recv_wr* bad = nullptr;
-  if (ibv_post_recv(p.signal_qp, &p.signal_pool->wrs[0], &bad) != 0) {
+  if (ibv_post_recv(p.signal_qp, &p.signal_pool->wrs[slot], &bad) != 0) {
     fprintf(stderr, "[repost_signal_recv] FAILED errno=%d\n", errno);
     return false;
   }
@@ -552,7 +561,7 @@ bool RdmaTransportAdapter::init_peer_qps(RdmaPeer& p) {
   attr.recv_cq = p.signal_cq;
   attr.qp_type = IBV_QPT_RC;
   attr.cap.max_send_wr = kQpMaxSendWr;
-  attr.cap.max_recv_wr = 1;
+  attr.cap.max_recv_wr = kSignalRecvPool;
   attr.cap.max_send_sge = 1;
   attr.cap.max_recv_sge = 1;
   attr.cap.max_inline_data = 16;
@@ -1577,7 +1586,7 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       continue;
     if (wc.status != IBV_WC_SUCCESS) {
       if (wc.opcode == IBV_WC_RECV) {
-        (void)repost_signal_recv(p);
+        (void)repost_signal_recv(p, static_cast<uint32_t>(wc.wr_id));
       }
       uint32_t send_id = static_cast<uint32_t>(wc.wr_id >> 32);
       uint32_t slot_idx = send_id % kRingSize;
@@ -1613,8 +1622,12 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
       }
 
       case IBV_WC_RECV: {
-        (void)repost_signal_recv(p);
-        uint64_t tag = p.signal_pool->tag_buf;
+        uint32_t const slot = static_cast<uint32_t>(wc.wr_id);
+        (void)repost_signal_recv(p, slot);
+        uint64_t tag =
+            (slot < kSignalRecvPool)
+                ? p.signal_pool->tag_bufs[slot]
+                : p.signal_pool->tag_bufs[0];
 
         // Push directly to Communicator for tag matching.
         if (comm_) comm_->on_signal_received(rank, tag);

@@ -209,13 +209,14 @@ static inline bool tag_fits_imm_field(uint64_t tag) {
 // the path).
 static bool rdma_imm_fusion_active(Transport::Communicator* comm, int peer,
                                    uint64_t unsalted_tag) {
-  // UK_CCL_RDMA_FUSED_PUT=0 switches to decoupled-signal mode: the
-  // adapter stripes message chunks across the peer's QPs and sends the
-  // data-ready signal separately (see rdma_adapter.cc). Waits must then
-  // use the plain signal path, mirrored by the sender.
+  // Decoupled-signal mode is the default: the adapter stripes message
+  // chunks across the peer's QPs and sends the data-ready signal
+  // separately (see rdma_adapter.cc); waits use the plain signal path,
+  // mirrored by the sender. UK_CCL_RDMA_FUSED_PUT=1 restores the legacy
+  // write-with-imm fusion.
   static bool const kFusedPut = []() {
     char const* v = std::getenv("UK_CCL_RDMA_FUSED_PUT");
-    return !v || *v == '\0' || *v == '1';
+    return v && std::string(v) == "1";
   }();
   if (!kFusedPut) return false;
   static const bool kForceRdma = []() {
@@ -361,6 +362,17 @@ uintptr_t SprayExecutor::cached_alloc_base(void const* p) {
 bool SprayExecutor::submit_fused_cmd(uint64_t cmd_index, bool first_attempt) {
   if (!fused_proxy_) return false;
   auto const& slot = fused_proxy_->pool().get(cmd_index);
+  if (uk_dbg_lvl() >= UK_DBG_LVL_TPT)
+    std::fprintf(stderr,
+                 "[fused-submit r%d] idx=%llu peer=%d at=%.3fms first=%d\n",
+                 rank_or_neg1(), (unsigned long long)cmd_index,
+                 static_cast<int>(slot.cmd.dst_peer),
+                 static_cast<double>(
+                     std::chrono::system_clock::now()
+                         .time_since_epoch()
+                         .count()) /
+                     1e6,
+                 first_attempt ? 1 : 0);
   uint32_t be_idx = tpt_be_->reserve_slot();
   auto* run = static_cast<SprayRun*>(slot.run);
   // First-attempt accounting must precede BeSlot publication: wait()'s
