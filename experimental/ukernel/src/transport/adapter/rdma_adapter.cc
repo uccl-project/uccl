@@ -1545,6 +1545,11 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
                 stderr,
                 "[poll_cq_set] post-data signal failed peer=%d tag=%lu\n",
                 slot.signal_peer, (unsigned long)payload);
+          else if (rdma_trace_enabled())
+            std::fprintf(stderr,
+                         "[rdma-trace] sig-post peer=%d tag=%lu at=%.3fms\n",
+                         slot.signal_peer, (unsigned long)payload,
+                         rdma_trace_ms());
         }
         // Try to claim completion: CAS send_id back to 0
         uint32_t expected = send_id;

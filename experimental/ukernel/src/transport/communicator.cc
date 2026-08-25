@@ -383,6 +383,13 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
   (void)local_meta;
   if (!rdma_adapter_) {
     RdmaTransportConfig rdma_cfg;
+    // UK_CCL_RDMA_CHUNK_KB overrides the RDMA WR chunk size (default
+    // 512KB). Larger chunks mean fewer WRs per message; smaller chunks
+    // spread a message more evenly across QPs under striping.
+    char const* chunk_env = std::getenv("UK_CCL_RDMA_CHUNK_KB");
+    if (chunk_env && *chunk_env)
+      rdma_cfg.chunk_size_kb =
+          std::max(1, std::min(16384, std::atoi(chunk_env)));
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                            std::move(rdma_cfg));
     if (put_completion_ring_)
@@ -1687,8 +1694,13 @@ void Communicator::on_signals_received(int peer, uint64_t const* tags,
       }
       if (!consumed) pending_signals_[peer].push_back(tag);
       if (uk_dbg_lvl() >= UK_DBG_LVL_TPT)
-        std::fprintf(stderr, "[sig-recv r%d] peer=%d tag=%#lx %s\n",
+        std::fprintf(stderr, "[sig-recv r%d] peer=%d tag=%#lx at=%.3fms %s\n",
                      global_rank_, peer, (unsigned long)tag,
+                     static_cast<double>(
+                         std::chrono::system_clock::now()
+                             .time_since_epoch()
+                             .count()) /
+                         1e6,
                      matched ? "matched" : (consumed ? "counted" : "buffered"));
       if (matched) done[ndone++] = ev;
     }
