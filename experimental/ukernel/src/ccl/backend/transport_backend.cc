@@ -45,12 +45,13 @@ bool TransportBackend::do_enqueue_reserved(Cmd const& c, uint32_t be_idx) {
     // No silent fallback: the executor suppresses the partner Signal
     // only for puts accepted with this flag, so a failed fused
     // submission must fail the op (it is retried next cycle).
-    // RDMA fused puts pin to one fixed QP per peer so that immediates
-    // arrive in issue order — the receiver matches them per-peer FIFO
-    // (kCmdFlagImmWait), which cross-QP reordering would break. IPC
-    // ignores the affinity.
-    uint32_t const qp_affinity =
-        (c.put_path == PutPath::Rdma) ? c.dst_peer : ~0u;
+    // RDMA fused puts let the adapter stripe each message across the
+    // peer's QPs (select_qp). The receiver's imm matching is value-based
+    // (Communicator::on_imm_received), so cross-QP reordering of
+    // immediates is safe; per-message data ordering is preserved because
+    // all chunks of one message share the chosen QP. IPC ignores the
+    // affinity.
+    uint32_t const qp_affinity = ~0u;
     return comm_->send_put_signal_async_with_rid(
         static_cast<int>(c.dst_peer), c.src_buf, c.src_off, c.dst_buf,
         c.dst_off, c.bytes, to_peer_transport(c.put_path), c.tag, rid,

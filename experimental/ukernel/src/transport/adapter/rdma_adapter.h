@@ -88,6 +88,10 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static constexpr int kRingSize = 65536;
   // Receive WQEs pre-posted per data QP for write-with-imm signals.
   static constexpr int kDataRecvPool = 128;
+  // wr_id marker for the standalone data-ready signal posted by the
+  // poll thread after a striped message's data groups all complete
+  // (see PendingSlot::needs_signal). poll_signal_cq skips these CQEs.
+  static constexpr uint16_t kSignalAfterDataMarker = 0xFE;
 
   enum class Kind : uint8_t { DataPut, Signal, PutSignal };
 
@@ -147,6 +151,20 @@ class RdmaTransportAdapter final : public TransportAdapter {
     unsigned comm_rid = 0;
     uint32_t total_chunks = 0;
     std::atomic<uint32_t> completed_chunks{0};
+    // Debug-trace fields (UK_CCL_RDMA_TRACE=1): written by the send
+    // worker before posting, read by the poll thread at completion.
+    int trace_peer = -1;
+    uint32_t trace_tag = 0;
+    uint32_t trace_bytes = 0;
+    int64_t trace_post_ns = 0;
+    // Decoupled-signal mode (UK_CCL_RDMA_FUSED_PUT=0): the message's
+    // data chunks are striped across QPs, so the write-with-imm cannot
+    // imply full-message delivery. Instead the poll thread posts a
+    // standalone signal on the per-peer signal QP after every data
+    // group's completion is observed.
+    bool needs_signal = false;
+    uint64_t signal_tag = 0;
+    int signal_peer = -1;
   };
 
   struct SignalSlot {

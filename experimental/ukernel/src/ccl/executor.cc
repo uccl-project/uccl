@@ -209,6 +209,15 @@ static inline bool tag_fits_imm_field(uint64_t tag) {
 // the path).
 static bool rdma_imm_fusion_active(Transport::Communicator* comm, int peer,
                                    uint64_t unsalted_tag) {
+  // UK_CCL_RDMA_FUSED_PUT=0 switches to decoupled-signal mode: the
+  // adapter stripes message chunks across the peer's QPs and sends the
+  // data-ready signal separately (see rdma_adapter.cc). Waits must then
+  // use the plain signal path, mirrored by the sender.
+  static bool const kFusedPut = []() {
+    char const* v = std::getenv("UK_CCL_RDMA_FUSED_PUT");
+    return !v || *v == '\0' || *v == '1';
+  }();
+  if (!kFusedPut) return false;
   static const bool kForceRdma = []() {
     char const* v = std::getenv("UK_CCL_PUT_PATH");
     return v && std::string(v) == "rdma";
@@ -1238,10 +1247,10 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
           c.wait_count = grp;
           c.flags |= kCmdFlagImmWait;
           c.tag = encode_imm(unsalted_tag, run.tag_epoch);
-        } else if (grp > 1 &&
-                   owned_comm_->can_fuse_put_signal(
-                       static_cast<int>(c.src_peer),
-                       Transport::PeerTransportKind::Ipc)) {
+        } else if (grp > 1) {
+          // Plain signal path: a G-tile group sends one standalone
+          // signal per tile (RDMA decoupled mode or IPC), so the wait
+          // counts G arrivals of the same tag.
           c.wait_count = grp;
         }
       }

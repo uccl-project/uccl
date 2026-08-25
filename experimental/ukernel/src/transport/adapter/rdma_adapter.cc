@@ -25,6 +25,35 @@ constexpr size_t kTaskRingSize = 1024;
 constexpr size_t kInitMrCapacity = 256;
 constexpr size_t kInitPeerCapacity = 8;
 
+// Debug trace gated by UK_CCL_RDMA_TRACE=1: per-message post/CQE/imm
+// timestamps plus per-QP in-flight depth. Off by default so the hot
+// path stays clean.
+inline bool rdma_trace_enabled() {
+  static bool const on = [] {
+    char const* v = std::getenv("UK_CCL_RDMA_TRACE");
+    return v && *v != '\0' && *v != '0';
+  }();
+  return on;
+}
+inline double rdma_trace_ms() {
+  return static_cast<double>(
+             std::chrono::system_clock::now().time_since_epoch().count()) /
+         1e6;
+}
+// Decoupled-signal mode: when UK_CCL_RDMA_FUSED_PUT=0 the send path
+// stripes a message's chunks across the peer's QPs and delivers the
+// data-ready signal separately after all groups complete (required for
+// cross-QP striping — a single write-with-imm can no longer imply
+// whole-message delivery). Both sides (executor wait shaping and this
+// adapter) read the same knob.
+inline bool rdma_fusion_enabled() {
+  static bool const on = [] {
+    char const* v = std::getenv("UK_CCL_RDMA_FUSED_PUT");
+    return !v || *v == '\0' || *v == '1';
+  }();
+  return on;
+}
+
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
   while (!stop.load(std::memory_order_acquire) &&
@@ -1057,10 +1086,13 @@ void RdmaTransportAdapter::send_worker() {
     }
 
     if (e.kind == Kind::DataPut || e.kind == Kind::PutSignal) {
-      // Fused PutSignal: all chunks go through one QP (ordered), and the
-      // last chunk carries the signal tag as a write-with-imm immediate,
-      // so the receiver observes the tag only after all data landed.
-      bool const fused = (e.kind == Kind::PutSignal);
+      // Fused PutSignal (default): all chunks go through one QP
+      // (ordered), and the last chunk carries the signal tag as a
+      // write-with-imm immediate, so the receiver observes the tag only
+      // after all data landed. With UK_CCL_RDMA_FUSED_PUT=0 the message
+      // is striped across the peer's QPs and the data-ready signal is
+      // delivered separately after every data group completes.
+      bool const fused = (e.kind == Kind::PutSignal) && rdma_fusion_enabled();
       // Lock-free peer lookup (Task 2)
       RdmaPeer* p = nullptr;
       if (static_cast<size_t>(e.peer_rank) < peer_capacity_) {
@@ -1109,36 +1141,54 @@ void RdmaTransportAdapter::send_worker() {
         std::this_thread::yield();
       }
       slot.comm_rid = e.comm_rid;
-      // One signaled completion per message: only the last chunk on the
-      // pinned QP is signaled; QP ordering means the whole message's data
-      // has landed when that completion arrives.
-      slot.total_chunks = 1;
+      // Signaled completions per message: fused mode signals only the
+      // last chunk (one QP, ordered — one completion implies the whole
+      // message landed); striped mode signals the last chunk on every
+      // QP group, so the put completes only when all groups landed.
+      uint32_t const n_signaled =
+          fused ? 1u : std::min<uint32_t>(ck.count, p->num_qps);
+      slot.total_chunks = n_signaled;
       slot.completed_chunks.store(0, std::memory_order_release);
+      slot.needs_signal = !fused && e.kind == Kind::PutSignal;
+      slot.signal_tag = e.tag;
+      slot.signal_peer = e.peer_rank;
+      if (rdma_trace_enabled()) {
+        slot.trace_peer = e.peer_rank;
+        slot.trace_tag = static_cast<uint32_t>(e.tag);
+        slot.trace_bytes = static_cast<uint32_t>(e.len);
+      }
 
       bool failed = false;
       size_t off = 0;
-      // Pin the WHOLE message to one QP so the per-message credit below
-      // is exact. Concurrent messages still stripe across QPs via
-      // select_qp's message-level choice (aggregate striping preserved;
-      // only intra-message striping is traded for the signaled-WR win).
-      // An explicit group affinity always wins (fused groups must be
-      // ordered on one QP).
-      int pin_qp = -1;
+      // Chunk-level QP striping: the message's chunks round-robin across
+      // the peer's QPs (base_qp + ci) % num_qps, so every QP shares each
+      // message instead of one QP serializing it. The completion credit
+      // is attributed to the QP that carries the signaled last chunk,
+      // keeping the per-QP send-queue depth bounded. An explicit group
+      // affinity still wins and pins to one QP.
+      int base_qp = -1;
       if (e.qp_affinity != ~0u)
-        pin_qp =
+        base_qp =
             static_cast<int>(e.qp_affinity % static_cast<uint32_t>(p->num_qps));
       else
-        pin_qp = select_qp(*p, static_cast<uint32_t>(e.len));
+        base_qp = select_qp(*p, static_cast<uint32_t>(e.len));
+      int last_qp =
+          fused
+              ? base_qp
+              : (base_qp + static_cast<int>(ck.count) - 1) % p->num_qps;
+      if (last_qp < 0) last_qp += p->num_qps;
 
       // In-flight credit is message-granularity (one per message). Cap it
       // so the QP send queue (kQpMaxSendWr) always holds the worst case
-      // (cap x kMaxChunks): small 1-chunk messages keep the old 128-deep
-      // concurrency, large messages step down so they cannot overflow the
-      // queue with unsignaled chunks.
-      int cap = std::min<int>(
-          kMaxInflightWrs,
-          kQpMaxSendWr / std::max<int>(1, static_cast<int>(ck.count)));
-      while (p->qp_state[pin_qp].unacked_wrs.load(std::memory_order_acquire) +
+      // (cap x chunks per QP per message): small messages keep the old
+      // deep concurrency, large messages step down so they cannot
+      // overflow the queue with unsignaled chunks.
+      int chunks_per_qp =
+          (static_cast<int>(ck.count) + p->num_qps - 1) / p->num_qps;
+      int cap = std::min<int>(kMaxInflightWrs,
+                              kQpMaxSendWr / std::max<int>(1, chunks_per_qp));
+      int64_t credit_wait_start = static_cast<int64_t>(now_ns());
+      while (p->qp_state[last_qp].unacked_wrs.load(std::memory_order_acquire) +
                  1 >
              cap) {
         if (stop_.load(std::memory_order_acquire)) {
@@ -1147,18 +1197,31 @@ void RdmaTransportAdapter::send_worker() {
         }
         machnet_pause();
       }
+      if (rdma_trace_enabled()) {
+        int64_t waited = static_cast<int64_t>(now_ns()) - credit_wait_start;
+        if (waited > 50000)
+          std::fprintf(stderr,
+                       "[rdma-trace] credit-wait qp=%d peer=%d cap=%d "
+                       "waited=%.1fus\n",
+                       last_qp, e.peer_rank, cap, waited / 1000.0);
+      }
       if (failed) {
         continue;
       }
-      // Mark the message in flight BEFORE posting its WRs (one credit per
-      // message; the single signaled completion in poll_cq_set returns
-      // it). Posting the credit first also keeps the send queue bound
-      // exact even if the first ibv_post_send returns immediately.
-      p->qp_state[pin_qp].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
+      if (rdma_trace_enabled())
+        std::fprintf(stderr,
+                     "[rdma-trace] inflight qp=%d peer=%d unacked=%u\n",
+                     last_qp, e.peer_rank,
+                     p->qp_state[last_qp].unacked_wrs.load(
+                         std::memory_order_relaxed));
 
       for (uint32_t ci = 0; ci < ck.count; ++ci) {
         uint32_t sz = (ci + 1 == ck.count) ? ck.last_size : ck.chunk_size;
-        int q = pin_qp;
+        int q = fused ? base_qp
+                      : (p->num_qps > 1)
+                            ? (base_qp + static_cast<int>(ci)) % p->num_qps
+                            : base_qp;
+        if (q < 0) q += p->num_qps;
 
         // Encode QP index into wr_id (Task 4)
         uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) |
@@ -1175,6 +1238,13 @@ void RdmaTransportAdapter::send_worker() {
         wr.sg_list = &sge;
         wr.num_sge = 1;
         bool const last = (ci + 1 == ck.count);
+        // Striped mode: the last chunk on each QP group is the group's
+        // signaled completion; the message's data is fully landed only
+        // when all groups complete (see poll_cq_set).
+        bool const group_last =
+            last || (!fused &&
+                     static_cast<int>(ci) + p->num_qps >=
+                         static_cast<int>(ck.count));
         if (fused && last) {
           wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
           // The immediate carries the epoch-encoded signal value (see
@@ -1187,10 +1257,9 @@ void RdmaTransportAdapter::send_worker() {
         } else {
           wr.opcode = IBV_WR_RDMA_WRITE;
         }
-        // Only the last chunk is signaled; its completion is ordered
-        // behind the unsignaled chunks on the same QP, so it marks the
-        // whole message complete.
-        wr.send_flags = last ? IBV_SEND_SIGNALED : 0;
+        wr.send_flags = (fused ? last : group_last) ? IBV_SEND_SIGNALED : 0;
+        if (wr.send_flags)
+          p->qp_state[q].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
         wr.wr.rdma.remote_addr = e.remote_addr + off;
         wr.wr.rdma.rkey = e.remote_rkey;
 
@@ -1206,7 +1275,8 @@ void RdmaTransportAdapter::send_worker() {
                   ci, q, p->data_qps[q]->qp_num, qattr.qp_state, errno);
 
           // Mark slot as complete and free (error path)
-          slot.completed_chunks.store(1, std::memory_order_release);
+          slot.completed_chunks.store(slot.total_chunks,
+                                      std::memory_order_release);
           publish_put_completion(e.comm_rid, true);
           // Only free if we still own the slot
           uint32_t exp = send_id;
@@ -1218,6 +1288,16 @@ void RdmaTransportAdapter::send_worker() {
 
         p->qp_state[q].last_send_ns.store(now_ns(), std::memory_order_release);
         off += sz;
+      }
+
+      if (rdma_trace_enabled()) {
+        slot.trace_post_ns = static_cast<int64_t>(now_ns());
+        std::fprintf(stderr,
+                     "[rdma-trace] post peer=%d tag=%u base=%d nq=%d "
+                     "bytes=%u chunks=%u at=%.3fms\n",
+                     e.peer_rank, static_cast<uint32_t>(e.tag), base_qp,
+                     p->num_qps,
+                     static_cast<uint32_t>(e.len), ck.count, rdma_trace_ms());
       }
 
       if (failed) {
@@ -1356,6 +1436,11 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       // network byte order), which the NIC surfaces only after the written
       // data has landed; matching is per-peer FIFO in arrival order.
       if (wc[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        if (rdma_trace_enabled())
+          std::fprintf(stderr,
+                       "[rdma-trace] imm qpn=%u peer=%d tag=%u at=%.3fms\n",
+                       wc[i].qp_num, rank, ntohl(wc[i].imm_data),
+                       rdma_trace_ms());
         if (wc[i].status == IBV_WC_SUCCESS && comm_) {
           comm_->on_imm_received(rank, ntohl(wc[i].imm_data));
         }
@@ -1426,6 +1511,41 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       uint32_t done =
           slot.completed_chunks.fetch_add(1, std::memory_order_acq_rel) + 1;
       if (done == slot.total_chunks) {
+        if (rdma_trace_enabled())
+          std::fprintf(stderr,
+                       "[rdma-trace] send-cqe peer=%d tag=%u bytes=%u qp=%d "
+                       "post->cqe=%.1fus at=%.3fms\n",
+                       slot.trace_peer, slot.trace_tag, slot.trace_bytes, qp,
+                       (static_cast<double>(
+                            static_cast<int64_t>(now_ns()) -
+                            slot.trace_post_ns)) /
+                           1000.0,
+                       rdma_trace_ms());
+        // Decoupled-signal mode: all data groups have landed. Post the
+        // data-ready signal on the per-peer signal QP now (the receiver
+        // matches it by tag), then publish the put completion.
+        if (slot.needs_signal && p.signal_qp) {
+          uint64_t payload = slot.signal_tag;
+          ibv_sge sge = {};
+          sge.addr = reinterpret_cast<uint64_t>(&payload);
+          sge.length = sizeof(payload);
+          ibv_send_wr wr = {};
+          // Marker 0xFE: poll_signal_cq skips this CQE (no sig-send
+          // slot bookkeeping — the put completion above is the op's
+          // completion).
+          wr.wr_id = 0ULL | (static_cast<uint64_t>(kSignalAfterDataMarker)
+                             << 16);
+          wr.sg_list = &sge;
+          wr.num_sge = 1;
+          wr.opcode = IBV_WR_SEND;
+          wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
+          ibv_send_wr* bad = nullptr;
+          if (ibv_post_send(p.signal_qp, &wr, &bad) != 0)
+            std::fprintf(
+                stderr,
+                "[poll_cq_set] post-data signal failed peer=%d tag=%lu\n",
+                slot.signal_peer, (unsigned long)payload);
+        }
         // Try to claim completion: CAS send_id back to 0
         uint32_t expected = send_id;
         if (slot.send_id.compare_exchange_strong(expected, 0,
@@ -1444,6 +1564,12 @@ bool RdmaTransportAdapter::poll_signal_cq(RdmaPeer& p, int rank) {
   bool any = false;
   while (ibv_poll_cq(p.signal_cq, 1, &wc) > 0) {
     any = true;
+    // Skip the poll-thread-posted data-ready signal (posted after a
+    // striped message's data groups completed); its completion is not a
+    // user-visible signal-send completion.
+    if (static_cast<uint16_t>((wc.wr_id >> 16) & 0xFFFF) ==
+        kSignalAfterDataMarker)
+      continue;
     if (wc.status != IBV_WC_SUCCESS) {
       if (wc.opcode == IBV_WC_RECV) {
         (void)repost_signal_recv(p);
