@@ -1141,10 +1141,16 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                            run.input_base_off, run.output_base_off,
                            run.scratch_base_off, run.tag_epoch);
         // The linked node is a PutSignal (lowered): it already carries
-        // the data-ready tag. The proxy put always travels as an RDMA
-        // write-with-imm, so encode the tag (unique per run) here — the
-        // receiver's wait registers the same value.
-        put.tag = encode_imm(pop.tag, run.tag_epoch);
+        // the data-ready tag. In fused mode the proxy put travels as an
+        // RDMA write-with-imm carrying the epoch-encoded tag; in
+        // decoupled mode it is sent as plain writes plus a standalone
+        // signal carrying the salted tag. The receiver's wait registers
+        // the matching value.
+        put.tag =
+            rdma_imm_fusion_active(owned_comm_.get(),
+                                   static_cast<int>(put.dst_peer), pop.tag)
+                ? encode_imm(pop.tag, run.tag_epoch)
+                : salt_tag(pop.tag, run.tag_epoch);
         uint64_t pool_idx = fused_proxy_->pool().alloc(
             put, &run, static_cast<uint32_t>(pop_idx), PutPath::Rdma);
         if (pool_idx != UINT64_MAX) {
