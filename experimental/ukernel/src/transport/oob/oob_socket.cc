@@ -421,8 +421,13 @@ bool ShmExchanger::init_shared_store() {
     return false;
   }
 
-  if (created &&
-      ::ftruncate(shm_fd_, static_cast<off_t>(sizeof(KvShmHeader))) != 0) {
+  // The store file is created at size 0. A peer can shm_open + flock it
+  // before the creator's ftruncate runs, and mmap of a 0-length file
+  // SIGBUSes on first access (observed intermittently on multi-rank
+  // starts: init_shared_store bus error). Size the file under the lock
+  // regardless of who created it; ftruncate to the same size is
+  // idempotent for an existing store.
+  if (::ftruncate(shm_fd_, static_cast<off_t>(sizeof(KvShmHeader))) != 0) {
     (void)::flock(shm_fd_, LOCK_UN);
     ::close(shm_fd_);
     shm_fd_ = -1;
