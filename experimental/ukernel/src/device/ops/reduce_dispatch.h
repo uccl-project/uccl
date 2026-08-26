@@ -26,16 +26,30 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
   const uint64_t max_threads_per_block = 1024;
   if (blockDim.x > max_threads_per_block) return;
 
-  const uint64_t count_per_block = total_count / num_blocks;
+  // Round each block's chunk to the 16B vector width so every block
+  // starts at a 16B-aligned offset. Shard counts like 16MB/12 ranks =
+  // 349,524 floats / 8 blocks = 43,690 (not a multiple of 4) put odd
+  // blocks at 16B-misaligned addresses, and the vectorized reduce/copy
+  // (TypedVec/Vec, 16B-aligned types) faults the SM with a misaligned
+  // address (NVRM Xid 13). Mirrors run_typed_copy's partition.
+  constexpr uint64_t kVecElems = 16 / sizeof(T);  // 4 for float
+  const uint64_t count_per_block =
+      (total_count / num_blocks / kVecElems) * kVecElems;
   const uint64_t block_offset = block_id * count_per_block;
   const uint64_t my_count = (block_id + 1 == num_blocks)
                                 ? (total_count - block_offset)
                                 : count_per_block;
 
+  // Same-host fused reduce+copy: the accumulator (dst) was written by
+  // the peer GPU over IPC, so reads must bypass the destination L2
+  // (ld.global.cv) to see the peer's contribution. Cross-node proxy
+  // tasks and plain reduces read locally-written data and keep the
+  // cached path.
+  bool const peer_dst = a.reduce_copy() && !a.rdma_fused_proxy();
   if constexpr (is_fast_reduce_dtype<T>()) {
     read_reduce_store<T>(dst + block_offset, src + block_offset,
                          static_cast<size_t>(my_count), a.red_type(),
-                         smem_buf);
+                         smem_buf, peer_dst);
     if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       // Fused reduce+copy: forward the just-reduced shard to the next
       // rank's accumulation buffer (device LD/ST write to peer, the
@@ -51,7 +65,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
     // ops, no ILP/TMA instantiation).
     read_reduce_store_generic<T>(dst + block_offset, src + block_offset,
                                  static_cast<size_t>(my_count),
-                                 a.red_type());
+                                 a.red_type(), peer_dst);
     if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       T* dst2 = reinterpret_cast<T*>(a.dst2);
       copy<T>(dst2 + block_offset, dst + block_offset,

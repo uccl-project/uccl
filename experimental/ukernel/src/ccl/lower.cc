@@ -300,11 +300,18 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       } else if (op.kind == AlgoOpKind::Recv) {
         // One WaitSignal per group of G tiles; ops consuming any tile in
         // the group depend on it via old_to_new remapping.
+        // Cross-node fused reduce+copy hops go through the RDMA proxy:
+        // their data-ready signal travels with the proxy put (imm or
+        // standalone signal), so the wait must be a tag wait — never a
+        // device-flag wait (wait_flag_async requires an IPC path, which
+        // a remote peer does not have).
+        bool const proxy_hop =
+            kRdmaFusedProxy && !same_host_cached(static_cast<int>(op.src_peer));
         if (t % G == 0) {
           TiledOp ws;
           ws.kind = LogicalOpKind::Wait;
           ws.src_peer = op.src_peer;
-          if (ch.wait_standalone_signal && device_flags) {
+          if (ch.wait_standalone_signal && device_flags && !proxy_hop) {
             // Fused-task signals (fuse_reduce_copy): each tile's task
             // writes its own slot with its own tag, so the group wait
             // polls flag_count consecutive slots and completes when ALL
@@ -326,13 +333,11 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           cur_group_ws = static_cast<uint32_t>(out.size());
           out.push_back(ws);
           // When the sender fuses this group, the wait must count one
-          // arrival per tile instead of a single signal. A fused-RS Recv
-          // pairs with a standalone Signal (no put), so its wait stays a
-          // plain one-arrival wait. On cross-node RDMA proxy hops the
-          // synthetic Put carries the signal as a write-with-imm, so the
-          // wait must use the imm path (one imm per put).
-          bool const proxy_hop =
-              kRdmaFusedProxy && !same_host_cached(static_cast<int>(op.src_peer));
+            // arrival per tile instead of a single signal. A fused-RS Recv
+            // pairs with a standalone Signal (no put), so its wait stays a
+            // plain one-arrival wait. On cross-node RDMA proxy hops the
+            // synthetic Put carries the signal as a write-with-imm, so the
+            // wait must use the imm path (one imm per put).
           if (ws.tag <= 0xFFFFFFFFu &&
               (!ch.wait_standalone_signal || proxy_hop)) {
             uint32_t grp =

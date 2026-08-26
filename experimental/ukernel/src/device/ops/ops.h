@@ -89,21 +89,37 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
                    // destinations and gains nothing over the vectorized
                    // loop for local ones.
 
-  // Vectorized copy (kVEC_BYTES-byte loads through read-only cache)
-  constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
-  size_t nvec = count / NELTS_PER_VEC;
+  // The vectorized path needs both pointers 16B-aligned (Vec is a
+  // 16B-aligned type; on SM80+ it is 32 bytes wide but still only
+  // requires 16B alignment). Misaligned inputs — e.g. a fused
+  // reduce+copy block offset when shard/num_blocks is not a vector
+  // multiple — fault the SM with a misaligned address (NVRM Xid 13),
+  // so fall back to a coalesced scalar loop.
+  if (((reinterpret_cast<uintptr_t>(dst) |
+        reinterpret_cast<uintptr_t>(src)) &
+       0xF) == 0) {
+    // Vectorized copy (kVEC_BYTES-byte loads through read-only cache)
+    constexpr int NELTS_PER_VEC = kVEC_BYTES / (int)sizeof(T);
+    size_t nvec = count / NELTS_PER_VEC;
 
-  Vec const* src_v = reinterpret_cast<Vec const*>(src);
-  Vec* dst_v = reinterpret_cast<Vec*>(dst);
+    Vec const* src_v = reinterpret_cast<Vec const*>(src);
+    Vec* dst_v = reinterpret_cast<Vec*>(dst);
 
-  for (size_t vi = tid; vi < nvec; vi += nthread) dst_v[vi] = src_v[vi];
+    for (size_t vi = tid; vi < nvec; vi += nthread) dst_v[vi] = src_v[vi];
 
-  // Scalar tail
-  if constexpr (NELTS_PER_VEC > 1) {
-    size_t base = nvec * NELTS_PER_VEC;
+    // Scalar tail
+    if constexpr (NELTS_PER_VEC > 1) {
+      size_t base = nvec * NELTS_PER_VEC;
+      T* dst_t = static_cast<T*>(dst);
+      T const* src_t = static_cast<T const*>(src);
+      for (size_t i = base + tid; i < count; i += nthread)
+        dst_t[i] = src_t[i];
+    }
+  } else {
     T* dst_t = static_cast<T*>(dst);
     T const* src_t = static_cast<T const*>(src);
-    for (size_t i = base + tid; i < count; i += nthread) dst_t[i] = src_t[i];
+    for (size_t i = static_cast<size_t>(tid); i < count; i += nthread)
+      dst_t[i] = src_t[i];
   }
 }
 
@@ -115,6 +131,22 @@ struct alignas(16) TypedVec {
   T e[N];
 };
 
+// 16B volatile load (ld.global.cv, bypasses L2). A fused reduce+copy
+// accumulator is written by the peer GPU over IPC; on PCIe systems the
+// destination GPU's L2 can hold stale lines of it, so normal cached
+// reads miss the peer's contribution (observed on L40S: ~2% sparse
+// wrong sums, run-varying). NVLink/Blackwell systems are coherent, so
+// this only bites PCIe setups.
+template <typename T, int N>
+__device__ __forceinline__ TypedVec<T, N> typedvec_ld_cv(
+    TypedVec<T, N> const* p) {
+  static_assert(sizeof(TypedVec<T, N>) == 16);
+  TypedVec<T, N> v;
+  uint4 tmp = __ldcv(reinterpret_cast<uint4 const*>(p));
+  *reinterpret_cast<uint4*>(&v) = tmp;
+  return v;
+}
+
 // Bulk vectorized dst[i] = dst[i] op src[i], compile-time op so the
 // element loop fully unrolls and memory traffic stays 16B wide per
 // thread (NCCL-style wide reduce; the previous scalar loop was neither
@@ -122,7 +154,8 @@ struct alignas(16) TypedVec {
 template <typename T, int N, ReduceType op>
 __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
                                                       size_t count, int tid,
-                                                      int nthread) {
+                                                      int nthread,
+                                                      bool peer_dst = false) {
   using V = TypedVec<T, N>;
   V const* svp = reinterpret_cast<V const*>(src);
   V* dvp = reinterpret_cast<V*>(dst);
@@ -150,7 +183,7 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
 #pragma unroll
     for (int u = 0; u < kVecInFlight; ++u)
       if (idx[u] < nvec) {
-        dv[u] = dvp[idx[u]];
+        dv[u] = peer_dst ? typedvec_ld_cv(&dvp[idx[u]]) : dvp[idx[u]];
 #pragma unroll
         for (int e = 0; e < N; ++e)
           dv[u].e[e] = apply_reduce(dv[u].e[e], sv[u].e[e], op);
@@ -161,7 +194,7 @@ __device__ __forceinline__ void vec_read_reduce_store(T* dst, T const* src,
   }
   size_t base = nvec * static_cast<size_t>(N);
   for (size_t i = base + tid; i < count; i += nthread)
-    dst[i] = apply_reduce(dst[i], src[i], op);
+    dst[i] = apply_reduce(peer_dst ? __ldcv(&dst[i]) : dst[i], src[i], op);
 }
 
 #if __CUDA_ARCH__ >= 900 && UK_TMA_REDUCE
@@ -306,7 +339,8 @@ __device__ __forceinline__ void tma_bulk_reduce(void* dst, void const* src,
 template <typename T, ReduceType op>
 __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
                                                      size_t count,
-                                                     void* smem_buf) {
+                                                     void* smem_buf,
+                                                     bool peer_dst = false) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   size_t bytes = count * sizeof(T);
@@ -315,7 +349,7 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   // a 4-byte allreduce used to crash here. The mbarrier is carved after
   // the payload, so the payload must leave room for it inside the actual
   // dynamic-smem budget (UK_REDUCE_SMEM_BYTES matches the launch config).
-  if (is_tma_supported() && smem_buf != nullptr &&
+  if (!peer_dst && is_tma_supported() && smem_buf != nullptr &&
       bytes + sizeof(TmaSemaphore) <= UK_REDUCE_SMEM_BYTES &&
       bytes % 16 == 0 &&
       (reinterpret_cast<uintptr_t>(dst) & 0xF) == 0 &&
@@ -365,11 +399,13 @@ __device__ __forceinline__ void read_reduce_store_op(void* dst, void const* src,
   if (kVec > 1 &&
       (reinterpret_cast<uintptr_t>(dst_ptr) & 0xF) == 0 &&
       (reinterpret_cast<uintptr_t>(src_ptr) & 0xF) == 0) {
-    vec_read_reduce_store<T, kVec, op>(dst_ptr, src_ptr, count, tid, nthread);
+    vec_read_reduce_store<T, kVec, op>(dst_ptr, src_ptr, count, tid, nthread,
+                                       peer_dst);
   } else {
     // Unaligned pointers (odd tile/block offsets): coalesced scalar path.
     for (size_t i = tid; i < count; i += nthread)
-      dst_ptr[i] = apply_reduce(dst_ptr[i], src_ptr[i], op);
+      dst_ptr[i] = apply_reduce(peer_dst ? __ldcv(&dst_ptr[i]) : dst_ptr[i],
+                                src_ptr[i], op);
   }
 }
 
@@ -380,14 +416,16 @@ template <typename T>
 __device__ __forceinline__ void read_reduce_store_generic(void* dst,
                                                           void const* src,
                                                           size_t count,
-                                                          ReduceType op) {
+                                                          ReduceType op,
+                                                          bool peer_dst = false) {
   int tid = threadIdx.x;
   int nthread = blockDim.x;
   T* dst_ptr = static_cast<T*>(dst);
   T const* src_ptr = static_cast<T const*>(src);
   for (size_t i = static_cast<size_t>(tid); i < count;
        i += static_cast<size_t>(nthread))
-    dst_ptr[i] = apply_reduce(dst_ptr[i], src_ptr[i], op);
+    dst_ptr[i] = apply_reduce(peer_dst ? __ldcv(&dst_ptr[i]) : dst_ptr[i],
+                              src_ptr[i], op);
 }
 
 // dst[i] = dst[i] op src[i] over [0, count). Runtime op dispatched to a
@@ -397,26 +435,31 @@ __device__ __forceinline__ void read_reduce_store_generic(void* dst,
 template <typename T>
 __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
                                                   size_t count, ReduceType op,
-                                                  void* smem_buf) {
+                                                  void* smem_buf,
+                                                  bool peer_dst = false) {
   switch (op) {
 #if UK_REDUCE_FAST_OPS & 1
     case ReduceType::Sum:
-      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf);
+      read_reduce_store_op<T, ReduceType::Sum>(dst, src, count, smem_buf,
+                                               peer_dst);
       break;
 #endif
 #if UK_REDUCE_FAST_OPS & 2
     case ReduceType::Prod:
-      read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, smem_buf);
+      read_reduce_store_op<T, ReduceType::Prod>(dst, src, count, smem_buf,
+                                                peer_dst);
       break;
 #endif
 #if UK_REDUCE_FAST_OPS & 4
     case ReduceType::Max:
-      read_reduce_store_op<T, ReduceType::Max>(dst, src, count, smem_buf);
+      read_reduce_store_op<T, ReduceType::Max>(dst, src, count, smem_buf,
+                                               peer_dst);
       break;
 #endif
 #if UK_REDUCE_FAST_OPS & 8
     case ReduceType::Min:
-      read_reduce_store_op<T, ReduceType::Min>(dst, src, count, smem_buf);
+      read_reduce_store_op<T, ReduceType::Min>(dst, src, count, smem_buf,
+                                               peer_dst);
       break;
 #endif
 #if UK_REDUCE_FAST_OPS & 16
