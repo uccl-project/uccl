@@ -14,9 +14,9 @@ commands reproducible, append new runs with a date section.
   are *not* on the fabric: cross-node QPs over them fail to establish.
   On node5, GPU1/GPU4 pick these ports, so ranks 1/4 cannot carry
   cross-node RDMA in any ring order.
-- GPUs 0/3 on both nodes are occupied by k8s pods (vLLM + distkv);
-  benchmarks run on `CUDA_VISIBLE_DEVICES=1,2,4,5,6,7` → 6 GPUs/node,
-  12 ranks cross-node.
+- k8s pods (vLLM) occupy GPU1 on node5 and GPU6 on node6 (moved over
+  time; check `nvidia-smi` before runs). Benchmarks use 6 free GPUs per
+  node, e.g. `CUDA_VISIBLE_DEVICES=0,2,3,4,5,7` → 12 ranks cross-node.
 - Shim: `experimental/ukernel` build (`libukernel.so` + NCCL compat);
   nccl-tests MPI build under `thirdparty/nccl-tests/build`.
 
@@ -28,7 +28,7 @@ export LD_LIBRARY_PATH=/root/uccl/uccl/experimental/ukernel/build/nccl/lib:/usr/
 mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 12 \
   --host 10.31.154.11:6,10.31.154.12:6 \
   -x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1 -x UK_CCL_RDMA_FUSED_MODE=proxy \
-  -x CUDA_VISIBLE_DEVICES=1,2,4,5,6,7 \
+  -x CUDA_VISIBLE_DEVICES=0,2,3,4,5,7 \
   -x UK_CCL_RUN_WATCHDOG_MS=30000 \
   ./all_reduce_perf -b 1M -e 8M -f 2 -g 1 -c 1 -n 10 -w 2
 ```
@@ -119,11 +119,122 @@ Findings:
    ~7.4 GB/s per edge). Fixing it needs better per-edge pipelining /
    multi-rail splitting of each cross chunk, not more edges.
 
+## Platform quirks discovered on this pair (2026-08-26)
+
+Two platform-level characteristics shape how the shim must be written on
+these L40S boxes:
+
+1. **`HostNativeAtomicSupported=0`** (measured; B300 reports the same).
+   The GPU cannot do native atomics on host-pinned memory, so a device
+   kernel must never `atomicAdd_system` a host signal ring. Device
+   completion signals use the per-slot **plain-store device flag**
+   protocol (`signal_flag_write`: `__threadfence_system` + store +
+   fence). The old signal-ring producer (`signal_ring_write`) was removed
+   in `08d4f381`.
+2. **Copy-engine `cudaMemset` writes do not reliably drain before a
+   resident worker kernel's read-modify-write.** `cudaMemset` returns
+   (host-side) while the CE's zero-writes are still in flight; the
+   worker's reduce then reads 0, writes 1, and a late CE write lands
+   after it, silently reverting the element to 0. The first reduce
+   round loses ~1.8M elements (sparse 128B cache lines, 64MB-segment
+   pattern, run-varying). It survives a full driver reload (firmware-
+   level behavior), is unrelated to gdrcopy, and is avoided by:
+   - **kernel-zero** the buffer instead of `cudaMemset` (kernel
+     completion orders the writes) — committed for benches/tests
+     (`8c4f9740`, `08d4f381`), or
+   - a ~200ms delay after `cudaMemset`, or
+   - launching the persistent worker *after* the memset+sync (the launch
+     boundary is the ordering point; verified wrong=0 5/5).
+
+## 12 ranks cross-node, post-fix (2026-08-26)
+
+After the worker barrier + counter-anchor fixes (see below), the
+cross-node AllReduce ring completes with 0 wrong (was a permanent
+deadlock). 6 GPUs/node, `UK_CCL_RDMA_FUSED_MODE=proxy`, validation on:
+
+| size | shim time (us) | shim busbw | native busbw (08-24) |
+|---:|---:|---:|---:|
+| 1M | 983.7 | 1.95 | 6.48 |
+| 2M | 1075.3 | 3.58 | 10.71 |
+| 4M | 1253.1 | 6.14 | 13.08 |
+| 8M | 1694.4 | 9.08 | 15.06 |
+
+The remaining gap is per-cross-edge throughput (~4.5 vs native ~7.4
+GB/s/edge), not deadlock.
+
+### Worker completion barrier (commit `33c5b812`, `864239ce`)
+
+The persistent worker's per-task multi-block barrier was a
+reset-to-0 counter; a slow block arriving after the reset leaked its +1
+into the next task's count, releasing barriers early and re-processing
+tasks (wrong reduce results, and a permanent worker hang in the real
+path). Fixes:
+- **Monotonic completion counter** keyed to the absolute task index:
+  task N's barrier completes at `gridDim.x * (N+1)`, never reset, so a
+  late block's add is absorbed into the correct task.
+- **Tail-visible release**: blocks also wait for the leader's FIFO-tail
+  publish before advancing (releasing on the counter alone let a block
+  race ahead of the publish and re-process the task).
+- **Device-side counter anchor**: the counter is zeroed by the host on
+  every (re)launch, but a relaunched grid (worker idle-exits between
+  ops) must start from `gridDim.x * tail`. A host-side anchor is
+  unreliable — the host's GDR read of the tail can lag (measured 10
+  tasks behind) — so block 0 re-anchors at kernel entry from its own
+  device-scope tail read and publishes an anchor-ready flag the other
+  blocks wait on.
+
+Symptom the anchor fixed: `[dev-stall] fifo0 pending=1 head=2 tail=1`
+with the worker spinning in the barrier's counter wait (`stuck=3`,
+count 448 vs tail 66 → anchor 10 tasks stale).
+
+### Same-host IPC test invocation gotcha
+
+`test_spray_executor_e2e` needs both ranks to see **both** GPUs
+(`CUDA_VISIBLE_DEVICES=0,1` with `--gpu=0/--gpu=1`). Restricting each
+rank to one visible device breaks the peer device numbering — the peer's
+published `device_idx` then points at the caller's own GPU, so
+`cudaDeviceEnablePeerAccess` fails with "peer access is not supported"
+and every IPC put is rejected forever (looks like an executor
+deadlock). `cudaDeviceCanAccessPeer(0,1)=1` here; P2P enable works when
+the device numbering is consistent across ranks.
+
+## Copy engine (CE) bandwidth
+
+`/tmp/run_ingress2.sh` on node5:
+
+| test | GB/s |
+|---:|---:|
+| ce_d2d_same | 10.8 |
+| ce_peer_1to1 (gpu1→gpu0) | 0.9 |
+| ce_peer_5to1 aggregate into gpu0 | 20.9 |
+| ce_h2d_pinned | 0.8 |
+
+Identical before and after a full reboot + driver reload — treat these
+as the stable baseline for this pair, not a recoverable degradation.
+The collectives' core bandwidth uses SM loads/stores, not the CE, so CE
+throughput does not limit the measured collectives.
+
+## Worker reduce peak bandwidth (launch path, 256MB fp32 sum)
+
+| blocks | GB/s |
+|---:|---:|
+| 8 | 87.3 |
+| 16 | 150 |
+| 32 | 211 (saturation ~92%) |
+| 64 | 230.3 (peak) |
+
+~32 SMs saturate; 64 takes the full bandwidth. The worker default of 8
+blocks comfortably feeds the NIC/CE ingress rates, so
+`blocks_per_worker=8` remains a sensible default.
+
 ## Next steps
 
 - Push per-cross-edge throughput: inspect WR posting / completion
   pacing per edge, multi-QP (multi-rail) split of each cross chunk; and
   extend the topology snapshot with link kind/speed for per-dst credit
   tuning once B300 returns (incast control).
-- Re-run 16-rank interleave validation once GPUs 0/3 are free (8
-  GPUs/node) to confirm the regression shape holds at 8 ranks/node.
+- Re-run 16-rank interleave validation once all 8 GPUs per node are
+  free to confirm the regression shape holds at 8 ranks/node.
+- Keep the CE baseline in mind when reading any test that resets
+  buffers with `cudaMemset` before a worker op; prefer the kernel-zero
+  helper (`UKernel::Device::zero_device_buffer`).
