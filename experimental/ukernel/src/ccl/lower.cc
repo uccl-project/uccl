@@ -280,10 +280,16 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.dst_buf_role = put_dst.role;
           put.src_off += put_src.base_off;
           put.dst_off += put_dst.base_off;
-          bool const fused_flag = ch.fuse_copy_flag && device_flags;
-          if (ch.fuse_copy_flag && device_flags) {
-            // Fused AG copy: the device task copies to the peer and
-            // writes the completion flag itself — no host signal op.
+          // Fused AG copy: the device task copies to the peer and
+          // writes the completion flag itself — no host signal op. On
+          // PCIe the device LD/ST peer copy is not arrival-ordered, so
+          // in host-mediated (proxy) mode the AG copy falls back to the
+          // normal transport put (CE/IPC same-host, RDMA remote) with a
+          // host-acknowledged signal; the receiver's wait uses the tag
+          // path (proxy_hop) to match.
+          bool const fused_flag =
+              ch.fuse_copy_flag && device_flags && !kRdmaFusedProxy;
+          if (ch.fuse_copy_flag && device_flags && !kRdmaFusedProxy) {
             put.flag_slot = static_cast<uint32_t>(
                 static_cast<uint64_t>(ch.pair_id) * max_tiles +
                 static_cast<uint64_t>(t));
