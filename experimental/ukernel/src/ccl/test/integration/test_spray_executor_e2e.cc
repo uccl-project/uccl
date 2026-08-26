@@ -42,7 +42,11 @@ int main(int argc, char** argv) {
   if (role != "server" && role != "client") {
     std::fprintf(stderr,
                  "Usage: --role=server|client [--gpu GPU] [--exchanger-ip IP] "
-                 "[--exchanger-port PORT]\n");
+                 "[--exchanger-port PORT]\n"
+                 "NOTE: same-host IPC needs both ranks to see BOTH GPUs, e.g. "
+                 "CUDA_VISIBLE_DEVICES=0,1 with --gpu=0 / --gpu=1 (restricting "
+                 "each rank to one visible device breaks the peer device "
+                 "numbering and the IPC path fails to open).\n");
     return 1;
   }
 
