@@ -54,6 +54,17 @@ inline bool rdma_fusion_enabled() {
   }();
   return on;
 }
+// Streaming mode: per-QP in-flight chunk window. 0 = off (burst-post
+// every chunk of a message). >0 signals every chunk's WR and paces the
+// send worker to at most this many uncompleted chunks per QP, refilling
+// as completions drain — a closer match to NCCL's flag-paced pipeline.
+inline int rdma_stream_depth() {
+  static int const d = [] {
+    char const* v = std::getenv("UK_CCL_RDMA_STREAM_DEPTH");
+    return v ? std::max(0, std::min(256, std::atoi(v))) : 0;
+  }();
+  return d;
+}
 
 template <typename T>
 bool enqueue_elem(jring_t* ring, T const& elem, std::atomic<bool> const& stop) {
@@ -1154,9 +1165,12 @@ void RdmaTransportAdapter::send_worker() {
       // last chunk (one QP, ordered — one completion implies the whole
       // message landed); striped mode signals the last chunk on every
       // QP group, so the put completes only when all groups landed.
+      bool const streaming = rdma_stream_depth() > 0;
       uint32_t const n_signaled =
           fused ? 1u : std::min<uint32_t>(ck.count, p->num_qps);
-      slot.total_chunks = n_signaled;
+      // Streaming signals every chunk, so the message completes only
+      // when all chunks' completions land.
+      slot.total_chunks = streaming ? ck.count : n_signaled;
       slot.completed_chunks.store(0, std::memory_order_release);
       slot.needs_signal = !fused && e.kind == Kind::PutSignal;
       slot.signal_tag = e.tag;
@@ -1231,6 +1245,23 @@ void RdmaTransportAdapter::send_worker() {
                             ? (base_qp + static_cast<int>(ci)) % p->num_qps
                             : base_qp;
         if (q < 0) q += p->num_qps;
+        // Streaming: wait for a free window slot on this chunk's QP so
+        // at most rdma_stream_depth() chunks are in flight per QP; the
+        // poll thread releases slots as completions drain.
+        if (streaming) {
+          while (p->qp_state[q].inflight_chunks.load(
+                     std::memory_order_acquire) >=
+                 static_cast<uint32_t>(rdma_stream_depth())) {
+            if (stop_.load(std::memory_order_acquire)) {
+              failed = true;
+              break;
+            }
+            machnet_pause();
+          }
+          if (failed) break;
+          p->qp_state[q].inflight_chunks.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        }
 
         // Encode QP index into wr_id (Task 4)
         uint64_t wr_id = (static_cast<uint64_t>(send_id) << 32) |
@@ -1266,7 +1297,10 @@ void RdmaTransportAdapter::send_worker() {
         } else {
           wr.opcode = IBV_WR_RDMA_WRITE;
         }
-        wr.send_flags = (fused ? last : group_last) ? IBV_SEND_SIGNALED : 0;
+        wr.send_flags =
+            streaming
+                ? IBV_SEND_SIGNALED
+                : (fused ? last : group_last) ? IBV_SEND_SIGNALED : 0;
         if (wr.send_flags)
           p->qp_state[q].unacked_wrs.fetch_add(1, std::memory_order_relaxed);
         wr.wr.rdma.remote_addr = e.remote_addr + off;
@@ -1478,6 +1512,9 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       if (wc[i].status != IBV_WC_SUCCESS) {
         if (qp >= 0 && qp < p.num_qps)
           p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
+        if (rdma_stream_depth() > 0 && qp >= 0 && qp < p.num_qps)
+          p.qp_state[qp].inflight_chunks.fetch_sub(1,
+                                                  std::memory_order_relaxed);
 
         // Error path: mark slot as complete
         uint32_t slot_idx = send_id % kRingSize;
@@ -1507,6 +1544,8 @@ bool RdmaTransportAdapter::poll_cq_set(RdmaPeer& p, int rank) {
       }
       if (qp >= 0 && qp < p.num_qps)
         p.qp_state[qp].unacked_wrs.fetch_sub(1, std::memory_order_relaxed);
+      if (rdma_stream_depth() > 0 && qp >= 0 && qp < p.num_qps)
+        p.qp_state[qp].inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
 
       // Track chunk completion via lock-free ring buffer (Task 3)
       uint32_t slot_idx = send_id % kRingSize;

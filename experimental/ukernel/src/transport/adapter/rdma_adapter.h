@@ -145,6 +145,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
     std::atomic<uint64_t> last_send_ns{0};
     double ewma_rtt_ns = 1'000'000.0;
     std::atomic<uint32_t> unacked_wrs{0};
+    // Streaming mode (UK_CCL_RDMA_STREAM_DEPTH>0): every chunk's WR is
+    // signaled and this counter tracks the QP's in-flight chunks, so the
+    // send worker paces posting to a bounded per-QP window (native-like
+    // refill) instead of bursting the whole message at once.
+    std::atomic<uint32_t> inflight_chunks{0};
   };
 
   struct ChunkTracker {
