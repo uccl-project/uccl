@@ -700,6 +700,31 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
   if (cfg.nranks <= 1) return;
   if (!owned_comm_ || !peer_setup_fn_) return;
 
+  // Defensive budget for the whole prepare phase (peer setup, MR
+  // registration, buffer resolution). A wedged CUDA driver cannot be
+  // interrupted from this thread, but every blocking step that does
+  // return (OOB exchanges, buffer resolves, transport setup) is bounded
+  // so a slow/hung path fails loudly with a named stage instead of
+  // silently hanging or cascading into the run. The driver-ioctl hang
+  // itself is addressed at the source (fused reduce alignment fix);
+  // this is the net for everything else.
+  static std::chrono::milliseconds const kPrepareTimeout = [] {
+    char const* v = std::getenv("UK_CCL_PREPARE_TIMEOUT_MS");
+    return std::chrono::milliseconds(
+        v ? std::max<long>(1000, std::atol(v)) : 60000);
+  }();
+  auto const prepare_deadline =
+      std::chrono::steady_clock::now() + kPrepareTimeout;
+  auto check_prepare_deadline = [&](char const* stage) {
+    if (std::chrono::steady_clock::now() > prepare_deadline) {
+      throw std::runtime_error(std::string(
+          "prepare timeout at stage '") + stage + "' after " +
+          std::to_string(kPrepareTimeout.count()) +
+          "ms (UK_CCL_PREPARE_TIMEOUT_MS; rank " +
+          std::to_string(cfg.rank) + ")");
+    }
+  };
+
   // Fast path: the algorithm DAG is shape-determined (kind, ranks, byte
   // counts, in-place) and does not depend on buffer pointers, so cache
   // it keyed by shape. Rebuilding it per call plus two driver
@@ -762,10 +787,13 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
     UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] peers=%s  -> peer_setup_fn start",
            cfg.rank, plist.c_str());
   }
+  check_prepare_deadline("peer_setup start");
   peer_setup_fn_(owned_comm_.get(), cfg.rank, peers);
+  check_prepare_deadline("peer_setup done");
   UK_DBG(UK_DBG_LVL_EXEC,
          "[prepare r%d] peer_setup_fn done  -> re_register_all_mrs", cfg.rank);
   owned_comm_->re_register_all_mrs();
+  check_prepare_deadline("re_register_all_mrs");
   UK_DBG(UK_DBG_LVL_EXEC,
          "[prepare r%d] re_register_all_mrs done  -> register bufs", cfg.rank);
   prepared_peers_.insert(peers.begin(), peers.end());
@@ -773,26 +801,32 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
 
   // Register and resolve user buffers.
   uint32_t in_id = get_or_register_buf(input, cfg.input_bytes, nullptr, "prep-in");
+  check_prepare_deadline("register input buf");
   UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] in_id=%u registered  -> resolve bufs",
          cfg.rank, in_id);
   uint32_t out_id =
       get_or_register_buf(output, cfg.output_bytes, nullptr, "prep-out");
+  check_prepare_deadline("register output buf");
   UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] out_id=%u registered", cfg.rank,
          out_id);
   for (int p : peers) {
     if (in_id && resolve_buf_fn_) {
+      check_prepare_deadline("resolve input buf");
       UK_DBG(UK_DBG_LVL_EXEC, "[prepare r%d] resolve in_id=%u from peer %d ...",
              cfg.rank, in_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, in_id);
+      check_prepare_deadline("resolve input buf done");
       UK_DBG(UK_DBG_LVL_EXEC,
              "[prepare r%d] resolve in_id=%u from peer %d done", cfg.rank,
              in_id, p);
     }
     if (out_id && out_id != in_id && resolve_buf_fn_) {
+      check_prepare_deadline("resolve output buf");
       UK_DBG(UK_DBG_LVL_EXEC,
              "[prepare r%d] resolve out_id=%u from peer %d ...", cfg.rank,
              out_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, out_id);
+      check_prepare_deadline("resolve output buf done");
       UK_DBG(UK_DBG_LVL_EXEC,
              "[prepare r%d] resolve out_id=%u from peer %d done", cfg.rank,
              out_id, p);
@@ -817,10 +851,12 @@ void SprayExecutor::prepare(CollectiveConfig const& cfg, void* input,
           ch.dst_rank >= 0)
         scratch_peers.insert(ch.dst_rank);
     for (int p : scratch_peers) {
+      check_prepare_deadline("resolve scratch buf");
       UK_DBG(UK_DBG_LVL_EXEC,
              "[prepare r%d] resolve scr_id=%u from peer %d ...", cfg.rank,
              scr_id, p);
       resolve_buf_fn_(owned_comm_.get(), p, world_size_, scr_id);
+      check_prepare_deadline("resolve scratch buf done");
       UK_DBG(UK_DBG_LVL_EXEC,
              "[prepare r%d] resolve scr_id=%u from peer %d done", cfg.rank,
              scr_id, p);
