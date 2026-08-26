@@ -258,9 +258,10 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   if (c.kind == LogicalOpKind::ReducePut ||
       c.kind == LogicalOpKind::ReducePutSignal) {
     // Fused reduce+copy: after the reduce, copy dst to the peer's
-    // accumulation buffer. The data-ready signal is a separate
-    // host-written Signal op (the peer signal ring is not GPU-mapped on
-    // B300 — gpuDevAttrHostNativeAtomicSupported is 0).
+    // accumulation buffer. The data-ready signal is written by the
+    // device into the peer's flag slot (kFlagSignalAfter, plain store
+    // + fence) when the plan allocates one; without a flag slot the
+    // signal stays a separate host-written Signal op.
     void* pcd = nullptr;
     int cd_dev = device_idx_;
     for (auto& e : resolved_remote_cache_) {
