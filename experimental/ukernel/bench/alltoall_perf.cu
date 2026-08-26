@@ -28,6 +28,16 @@
 
 static const char* kFillPath = "/tmp/uk_a2a_fill";
 
+// Zero a device buffer with a kernel instead of cudaMemset: on the L40S
+// nodes the copy-engine memset's writes can still be draining when the
+// shim's worker reduce/put reads the buffer, so the first round silently
+// loses elements. Kernel-zero is ordered by kernel completion.
+__global__ void zero_f32(float* p, size_t n) {
+  size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+  size_t stride = (size_t)gridDim.x * blockDim.x;
+  for (; i < n; i += stride) p[i] = 0.0f;
+}
+
 // Uses the standard ncclAlltoAll (NCCL >= 2.19; the shim implements it
 // too). Same count semantics (count = elements per rank pair;
 // partition r of rank x is sent to rank r and partition r is received
@@ -179,7 +189,14 @@ int main(int argc, char** argv) {
   void* recvbuf = nullptr;
   CUDACHK(cudaMalloc(&sendbuf, total_bytes));
   CUDACHK(cudaMalloc(&recvbuf, total_bytes));
-  CUDACHK(cudaMemset(recvbuf, 0, total_bytes));
+  {
+    size_t n = total_bytes / sizeof(float);
+    unsigned blocks = static_cast<unsigned>((n + 255) / 256);
+    if (blocks == 0) blocks = 1;
+    zero_f32<<<blocks, 256>>>(static_cast<float*>(recvbuf), n);
+    CUDACHK(cudaGetLastError());
+    CUDACHK(cudaDeviceSynchronize());
+  }
   fprintf(stderr, "[r%d] send=%p recv=%p total=%zu\n", rank, sendbuf,
           recvbuf, total_bytes);
 

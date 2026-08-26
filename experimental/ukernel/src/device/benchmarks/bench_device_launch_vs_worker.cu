@@ -19,6 +19,29 @@ using UKernel::Device::TaskManager;
 using UKernel::Device::TaskType;
 using UKernel::Device::WorkerPool;
 
+// Zero a device buffer with a kernel instead of cudaMemset. On the L40S
+// nodes the copy-engine memset's writes do not reliably drain before a
+// subsequent worker reduce's read-modify-write: residual 0-writes land
+// after the reduce's store and the first round silently loses those
+// elements (measured ~2% sparse 128B-line losses, 64MB-segment pattern).
+// A kernel's writes are ordered by kernel completion, so zeroing this
+// way is race-free. If you must use cudaMemset here, insert a short
+// delay (~200ms) after it before running the worker.
+__global__ void zero_f32_kernel(float* p, size_t n) {
+  size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+  size_t stride = (size_t)gridDim.x * blockDim.x;
+  for (; i < n; i += stride) p[i] = 0.0f;
+}
+
+void zero_buffer(void* ptr, size_t bytes) {
+  size_t n = bytes / sizeof(float);
+  unsigned blocks = static_cast<unsigned>((n + 255) / 256);
+  if (blocks == 0) blocks = 1;
+  zero_f32_kernel<<<blocks, 256>>>(static_cast<float*>(ptr), n);
+  GPU_RT_CHECK(gpuGetLastError());
+  GPU_RT_CHECK(gpuDeviceSynchronize());
+}
+
 enum class BenchOp {
   Nop,
   Copy,
@@ -110,7 +133,7 @@ DeviceBuffers make_buffers(size_t bytes) {
 
   std::vector<float> host(bytes / sizeof(float), 1.0f);
   GPU_RT_CHECK(gpuMemcpy(bufs.src, host.data(), bytes, gpuMemcpyHostToDevice));
-  GPU_RT_CHECK(gpuMemset(bufs.dst, 0, bytes));
+  zero_buffer(bufs.dst, bytes);
   return bufs;
 }
 
@@ -118,7 +141,7 @@ void reset_buffers(BenchOp op, DeviceBuffers const& bufs) {
   if (op == BenchOp::Nop) {
     return;
   }
-  GPU_RT_CHECK(gpuMemset(bufs.dst, 0, bufs.bytes));
+  zero_buffer(bufs.dst, bufs.bytes);
 }
 
 void launch_one_kernel(BenchOp op, TaskArgs const& args, uint32_t num_blocks,

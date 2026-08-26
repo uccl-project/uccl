@@ -92,6 +92,12 @@ inline void upload_vector(void* dst, std::vector<T> const& values) {
 }
 
 inline void zero_buffer(void* dst, size_t bytes) {
+  // NOTE: on the L40S nodes cudaMemset (copy engine) writes can still be
+  // draining when a worker reduce subsequently read-modify-writes the
+  // buffer, silently losing the first round. If this buffer feeds a
+  // worker task, zero it with a kernel instead (or delay ~200ms after
+  // this call). See bench_device_launch_vs_worker.cu for the kernel
+  // pattern.
   GPU_RT_CHECK(gpuMemset(dst, 0, bytes));
 }
 
