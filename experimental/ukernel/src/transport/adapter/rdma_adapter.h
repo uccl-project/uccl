@@ -20,6 +20,7 @@ namespace Transport {
 class Communicator;
 
 struct RdmaTransportConfig {
+  static constexpr int kMaxNumQps = 4;
   int num_qps = 4;
   int chunk_size_kb = 512;
 };

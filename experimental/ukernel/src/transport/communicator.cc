@@ -390,6 +390,15 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     if (chunk_env && *chunk_env)
       rdma_cfg.chunk_size_kb =
           std::max(1, std::min(16384, std::atoi(chunk_env)));
+    // UK_CCL_RDMA_NUM_QPS overrides the per-peer data QP count (default
+    // 4). Fewer QPs reduce the HCA's per-QP scheduling overhead but
+    // shrink chunk-striping parallelism; the optimum is
+    // platform-dependent.
+    char const* qps_env = std::getenv("UK_CCL_RDMA_NUM_QPS");
+    if (qps_env && *qps_env)
+      rdma_cfg.num_qps =
+          std::max(1, std::min(RdmaTransportConfig::kMaxNumQps,
+                               std::atoi(qps_env)));
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                            std::move(rdma_cfg));
     if (put_completion_ring_)
