@@ -300,13 +300,13 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
       } else if (op.kind == AlgoOpKind::Recv) {
         // One WaitSignal per group of G tiles; ops consuming any tile in
         // the group depend on it via old_to_new remapping.
-        // Cross-node fused reduce+copy hops go through the RDMA proxy:
-        // their data-ready signal travels with the proxy put (imm or
-        // standalone signal), so the wait must be a tag wait — never a
-        // device-flag wait (wait_flag_async requires an IPC path, which
-        // a remote peer does not have).
-        bool const proxy_hop =
-            kRdmaFusedProxy && !same_host_cached(static_cast<int>(op.src_peer));
+        // Fused reduce+copy hops go through the host proxy (D2H ring):
+        // cross-node over RDMA, same-host over IPC/CE. Their data-ready
+        // signal travels with the proxy put, so the wait must be a tag
+        // wait — never a device-flag wait (wait_flag_async requires an
+        // IPC path, which a remote peer does not have, and a device
+        // LD/ST peer copy is not arrival-ordered on PCIe).
+        bool const proxy_hop = kRdmaFusedProxy;
         if (t % G == 0) {
           TiledOp ws;
           ws.kind = LogicalOpKind::Wait;
@@ -374,13 +374,14 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           red.copy_dst_peer = static_cast<uint32_t>(ch.copy_peer);
           red.copy_dst_buf_role = red_copy.role;
           red.copy_dst_off = op.dst_off + red_copy.base_off;
-          proxy_hop =
-              kRdmaFusedProxy && !same_host_cached(static_cast<int>(ch.copy_peer));
+          proxy_hop = kRdmaFusedProxy;
           if (proxy_hop) {
-            // RDMA proxy: reduce to local dst only; the PutSignal below
+            // Host proxy: reduce to local dst only; the PutSignal below
             // is posted by the proxy after the device notifies through
-            // the D2H ring. The Reduce keeps kind Reduce; the proxy
-            // linkage is fused_proxy_put_idx.
+            // the D2H ring (CE/IPC for same-host, RDMA for cross-node —
+            // both host-acknowledged, unlike the device LD/ST peer
+            // copy). The Reduce keeps kind Reduce; the proxy linkage is
+            // fused_proxy_put_idx.
             red.fused_proxy_put_idx = static_cast<int32_t>(red_idx + 1);
           } else if (device_flags) {
             // Device-direct fused reduce+copy with completion flag: one
@@ -411,7 +412,9 @@ std::vector<TiledOp> lower_to_tiled(std::vector<Op>&& ops,
           put.dst_peer = red.copy_dst_peer;
           put.src_buf_role = red.dst_buf_role;
           put.dst_buf_role = red.copy_dst_buf_role;
-          put.put_path_hint = PutPath::Rdma;
+          // Auto path: the executor routes the proxy put over IPC (CE)
+          // for same-host peers and RDMA for remote ones.
+          put.put_path_hint = PutPath::None;
           put.proxy_posted = true;
           put.tag = make_tag(ch.pair_id, static_cast<uint32_t>(t / G),
                              group_bits);

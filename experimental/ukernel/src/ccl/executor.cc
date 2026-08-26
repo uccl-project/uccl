@@ -1141,9 +1141,12 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                      run.scratch_base_off, run.tag_epoch);
     if (c.kind == LogicalOpKind::Reduce &&
         (c.flags & kCmdFlagRdmaFusedProxy)) {
-      // Cross-node RDMA proxy: allocate the synthetic Put's Cmd in the
-      // fused pool now. The device task will write this index into the
-      // D2H ring after reducing to local dst.
+      // Host proxy: allocate the synthetic Put's Cmd in the fused pool
+      // now. The device task writes this index into the D2H ring after
+      // reducing to local dst; the proxy then posts the put — over IPC
+      // (CE, host-acknowledged) for same-host peers and RDMA for remote
+      // ones. The device-direct LD/ST peer copy is not arrival-ordered
+      // on PCIe, so same-host fused copies must use the host path too.
       int32_t pop_idx = run.plan->tiled.ops[idx].fused_proxy_put_idx;
       if (pop_idx >= 0 && fused_proxy_) {
         auto const& pop = run.plan->tiled.ops[static_cast<size_t>(pop_idx)];
@@ -1163,8 +1166,15 @@ void SprayExecutor::enqueue_to_ring(SprayRun& run) {
                                    static_cast<int>(put.dst_peer), pop.tag)
                 ? encode_imm(pop.tag, run.tag_epoch)
                 : salt_tag(pop.tag, run.tag_epoch);
+        PutPath const put_path =
+            same_host_fn_ &&
+                    same_host_fn_(owned_comm_.get(),
+                                  static_cast<int>(put.dst_peer))
+                ? PutPath::Ipc
+                : PutPath::Rdma;
+        put.put_path = put_path;
         uint64_t pool_idx = fused_proxy_->pool().alloc(
-            put, &run, static_cast<uint32_t>(pop_idx), PutPath::Rdma);
+            put, &run, static_cast<uint32_t>(pop_idx), put_path);
         if (pool_idx != UINT64_MAX) {
           c.rdma_fused_ring = fused_proxy_->ring().device_handle();
           c.rdma_fused_cmd_index = pool_idx;
