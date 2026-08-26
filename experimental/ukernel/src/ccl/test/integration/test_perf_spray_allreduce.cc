@@ -2,6 +2,7 @@
 
 #include "coll_config.h"
 #include "executor.h"
+#include "backend/device_backend.h"
 #include "gpu_rt.h"
 #include "transport.h"
 #include "util/uk_debug.h"
@@ -70,15 +71,6 @@ int main(int argc, char** argv) {
   cfg.blocks_per_worker = (size_t)dev_blocks;
   auto ex = SprayExecutor::create(cfg);
 
-  // Synchronous memset helper — avoids async gpuMemset racing with RDMA writes.
-  auto sync_memset = [](void* ptr, int val, size_t bytes) {
-    gpuStream_t s;
-    GPU_RT_CHECK(gpuStreamCreate(&s));
-    GPU_RT_CHECK(gpuMemsetAsync(ptr, val, bytes, s));
-    GPU_RT_CHECK(gpuStreamSynchronize(s));
-    GPU_RT_CHECK(gpuStreamDestroy(s));
-  };
-
   size_t sizes[] = {262144,   1048576,   4194304,  16777216,
                     67108864, 268435456, 536870912};
   constexpr int kSizes = sizeof(sizes) / sizeof(sizes[0]);
@@ -115,8 +107,8 @@ int main(int argc, char** argv) {
     hs.output_bytes = 65536;
     hs.tile_bytes = 65536;
     hs.kind = CollKind::AllReduceRing;
-    sync_memset(d_in, 0, 65536);
-    sync_memset(d_out, 0, 65536);
+    UKernel::Device::zero_device_buffer(d_in, 65536);
+    UKernel::Device::zero_device_buffer(d_out, 65536);
     UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] before submit", rank);
     auto h = ex->submit(hs, d_in, d_out);
     UK_DBG(UK_DBG_LVL_EXEC, "[handshake r%d] after submit", rank);
@@ -146,8 +138,8 @@ int main(int argc, char** argv) {
       ar.signal_group_tiles = (uint32_t)sig_group;
 
       for (int w = 0; w < kWarmup; ++w) {
-        sync_memset(d_in, 0, bytes);
-        sync_memset(d_out, 0, bytes);
+        UKernel::Device::zero_device_buffer(d_in, bytes);
+        UKernel::Device::zero_device_buffer(d_out, bytes);
         auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
           std::this_thread::yield();
@@ -157,8 +149,8 @@ int main(int argc, char** argv) {
       if (show_counters) before = ex->get_path_counters();
       double total_us = 0;
       for (int iter = 0; iter < kIters; ++iter) {
-        sync_memset(d_in, 0, bytes);
-        sync_memset(d_out, 0, bytes);
+        UKernel::Device::zero_device_buffer(d_in, bytes);
+        UKernel::Device::zero_device_buffer(d_out, bytes);
         auto t0 = std::chrono::high_resolution_clock::now();
         auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
@@ -209,8 +201,8 @@ int main(int argc, char** argv) {
       ar.kind = coll_kind;
       ar.signal_group_tiles = (uint32_t)sig_group;
       for (int i = 0; i < kWarmup + kIters; ++i) {
-        sync_memset(d_in, 0, bytes);
-        sync_memset(d_out, 0, bytes);
+        UKernel::Device::zero_device_buffer(d_in, bytes);
+        UKernel::Device::zero_device_buffer(d_out, bytes);
         auto h = ex->submit(ar, d_in, d_out);
         while (ex->status(h) != CollectiveOpStatus::Completed)
           std::this_thread::yield();

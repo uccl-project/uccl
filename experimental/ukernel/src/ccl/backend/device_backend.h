@@ -13,6 +13,13 @@ namespace Device {
 class WorkerPool;
 struct TaskArgs;
 enum class TaskType : uint64_t;
+// Zero a device buffer with a kernel instead of cudaMemset. The
+// copy-engine memset's writes can still be draining when the persistent
+// worker reduce read-modify-writes the buffer right after, silently
+// losing the first round on some platforms (L40S); kernel completion
+// orders the writes, so this is the race-free buffer reset. Defined in
+// device_backend.cc (compiled with nvcc).
+void zero_device_buffer(void* ptr, size_t bytes);
 }  // namespace Device
 namespace CCL {
 
@@ -47,12 +54,6 @@ class DeviceBackend final : public BatchBackend {
                                    size_t n) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
-  // True when the peer's IPC signal ring is GPU-mapped AND the device
-  // supports system atomics on host memory, so a fused PutSignal
-  // (CollPut task) can write the ring's tag from the kernel
-  // (signal_ring_write uses atomicAdd_system). On B300
-  // HostNativeAtomicSupported=0, the ring write is impossible; the
-  // fused reduce+copy path uses plain-store device flags instead.
  private:
   void ensure_runtime();
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds

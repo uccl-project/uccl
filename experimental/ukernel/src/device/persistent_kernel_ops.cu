@@ -1,4 +1,3 @@
-#include "../transport/adapter/ipc_signal_ring.h"
 #include "ops/ops.h"
 #include "ops/reduce_dispatch.h"
 #include "persistent_kernel_ops.h"
@@ -24,60 +23,31 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
   *reinterpret_cast<uint64_t volatile*>(tail) = next_tail;
 }
 
-// Fused PutSignal: write the tag into the peer's shared-memory signal
-// ring (zero-copy host mapping). Shares the producer protocol with the
-// host IPC send worker (IpcAdapter::claim_signal_slot): both claim the
-// same atomic write_idx (device: atomicAdd_system, host: fetch_add),
-// then check their claimed slot's per-slot ready flag. The receiver
-// always polls from the CPU — nothing ever waits on the GPU.
-__device__ __forceinline__ void signal_ring_write(
-    Transport::PeerSignalRingDevice* ring, uint64_t tag) {
-  unsigned long long w = atomicAdd_system(
-      reinterpret_cast<unsigned long long*>(&ring->write_idx), 1ull);
-  size_t idx = static_cast<size_t>(w) & (Transport::kSignalRingSize - 1);
-  // Back-pressure: wait for this slot's previous lap to be consumed.
-  while (*reinterpret_cast<bool volatile*>(&ring->slots[idx].ready)) {
-#ifdef __HIP_PLATFORM_AMD__
-    __builtin_amdgcn_s_sleep(2);
-#else
-    __nanosleep(200);
-#endif
-  }
-  ring->slots[idx].tag = tag;
-  __threadfence_system();
-  *reinterpret_cast<bool volatile*>(&ring->slots[idx].ready) = true;
-  __threadfence_system();
-}
-
-// If this task carries a fused signal (CollPut's PutSignal, or a fused
-// reduce+copy task), emit the tag now that the work is finished.
+// Write the completion tag into the peer's device flag slot. Plain
+// store + fences — no atomics, so this works where
+// gpuDevAttrHostNativeAtomicSupported=0.
 __device__ __forceinline__ void signal_flag_write(uint64_t* slot,
                                                   uint64_t tag) {
   // Order the task's data writes (including the copy into the peer's
   // accumulation buffer) before the flag becomes visible to the
-  // receiver's host poll. Plain store + fences — no atomics, so this
-  // works where gpuDevAttrHostNativeAtomicSupported=0.
+  // receiver's host poll.
   __threadfence_system();
   *slot = tag;
   __threadfence_system();
 }
 
-__device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
-                                                        TaskArgs const* args) {
+// If this task carries a fused completion signal (device flag slot, set
+// by build_task for PutSignal / ReducePutSignal / fused AG copy), emit
+// the salted tag now that the work is finished. The old signal-ring
+// producer (atomicAdd_system on host memory) is gone: it is unusable
+// where HostNativeAtomicSupported=0 (B300, L40S), and the per-slot
+// plain-store flag protocol works everywhere.
+__device__ __forceinline__ void maybe_signal_flag_write(TaskArgs const* args) {
   if (args == nullptr) return;
   if (args->rdma_fused_proxy()) return;  // host sends put+signal via RDMA
-  TaskType const t = static_cast<TaskType>(task.type_u8());
-  bool const want = (t == TaskType::CollPut) ||
-                    (t != TaskType::CollPut && args->signal_after());
-  if (!want) return;
-  if (t == TaskType::CollPut) {
-    signal_ring_write(
-        reinterpret_cast<Transport::PeerSignalRingDevice*>(args->src2),
-        args->redTypeRaw);
-  } else {
-    signal_flag_write(reinterpret_cast<uint64_t*>(args->src2),
-                      args->signal_tag);
-  }
+  if (!args->signal_after()) return;
+  signal_flag_write(reinterpret_cast<uint64_t*>(args->src2),
+                    args->signal_tag);
 }
 
 // Cross-node fused reduce+copy: after all blocks finish reducing into the
@@ -209,8 +179,8 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
   switch (ttype) {
     case TaskType::CollCopy:
     case TaskType::CollPut:
-      // CollPut: copy first; the signal ring write happens at task
-      // completion time (maybe_signal_ring_write), after all blocks.
+      // CollPut: copy first; any completion signal (device flag slot)
+      // is emitted after all blocks finish.
       RUN_COPY_BODY(dtype, run_typed_copy);
       break;
     case TaskType::CollReduce:
@@ -496,7 +466,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           // completion.
           tma_fence_async_global();
           __threadfence();
-          maybe_signal_ring_write(current_task, current_args);
+          maybe_signal_flag_write(current_args);
           maybe_rdma_fused_push(current_args);
           publish_tail_progress(fifo.tail, sh_tail + 1);
         }

@@ -227,21 +227,32 @@ bool DeviceBackend::build_task(Cmd const& c, Device::TaskArgs& args,
   }
 
   if (c.kind == LogicalOpKind::PutSignal) {
-    // Fused PutSignal: the kernel writes the tag into the peer's shm
-    // signal ring after the copy (same channel as host-sent signals,
-    // so the receiver stays a CPU-side poll).
-    void* ring =
-        comm_ ? comm_->ipc_signal_ring_device_ptr(static_cast<int>(c.dst_peer))
-              : nullptr;
-    if (!ring) {
+    // Fused PutSignal: the kernel writes the salted tag into the peer's
+    // device flag slot after the copy (plain store + fence, no atomics).
+    // The old signal-ring producer used atomicAdd_system on host memory,
+    // which is unusable where HostNativeAtomicSupported=0 (B300, L40S).
+    // A flag slot is required; without one the device cannot signal the
+    // peer, so fail loudly instead of silently dropping the op.
+    if (c.flag_slot == ~0u) {
       throw std::runtime_error(
-          "[DeviceBackend] PutSignal flagged but peer signal ring is not "
+          "[DeviceBackend] PutSignal to device backend without a flag "
+          "slot (dst_peer=" +
+          std::to_string(c.dst_peer) +
+          ") — the device flag protocol needs a per-op slot");
+    }
+    void* flag_area =
+        comm_ ? comm_->ipc_device_flag_ptr(static_cast<int>(c.dst_peer))
+              : nullptr;
+    if (!flag_area) {
+      throw std::runtime_error(
+          "[DeviceBackend] PutSignal flagged but peer flag area is not "
           "GPU-mapped (dst_peer=" +
           std::to_string(c.dst_peer) + ")");
     }
-    tt = Device::TaskType::CollPut;
-    args.src2 = ring;
-    args.redTypeRaw = c.tag;
+    args.src2 = static_cast<char*>(flag_area) +
+                static_cast<size_t>(c.flag_slot) * sizeof(uint64_t);
+    args.signal_tag = c.tag;
+    args.taskFlags |= Device::TaskArgs::kFlagSignalAfter;
   }
 
   if (c.kind == LogicalOpKind::ReducePut ||
@@ -482,4 +493,27 @@ size_t DeviceBackend::capacity() const {
 }
 
 }  // namespace CCL
+}  // namespace UKernel
+
+namespace UKernel {
+namespace Device {
+
+namespace {
+__global__ void zero_f32_kernel(float* p, size_t n) {
+  size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+  size_t stride = (size_t)gridDim.x * blockDim.x;
+  for (; i < n; i += stride) p[i] = 0.0f;
+}
+}  // namespace
+
+void zero_device_buffer(void* ptr, size_t bytes) {
+  size_t n = bytes / sizeof(float);
+  unsigned blocks = static_cast<unsigned>((n + 255) / 256);
+  if (blocks == 0) blocks = 1;
+  zero_f32_kernel<<<blocks, 256>>>(static_cast<float*>(ptr), n);
+  GPU_RT_CHECK(gpuGetLastError());
+  GPU_RT_CHECK(gpuDeviceSynchronize());
+}
+
+}  // namespace Device
 }  // namespace UKernel

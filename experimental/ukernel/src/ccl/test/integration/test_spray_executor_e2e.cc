@@ -1,5 +1,6 @@
 #include "coll_config.h"
 #include "executor.h"
+#include "backend/device_backend.h"
 #include "gpu_rt.h"
 #include <chrono>
 #include <cmath>
@@ -72,15 +73,10 @@ int main(int argc, char** argv) {
   std::vector<float> host_in(kBufBytes / sizeof(float), (float)(rank + 1));
   GPU_RT_CHECK(
       gpuMemcpy(d_in, host_in.data(), kBufBytes, gpuMemcpyHostToDevice));
-  // Synchronously zero output buffer to avoid gpuMemset racing with
-  // subsequent RDMA writes and overwriting received data.
-  {
-    gpuStream_t zs;
-    GPU_RT_CHECK(gpuStreamCreate(&zs));
-    GPU_RT_CHECK(gpuMemsetAsync(d_out, 0, kBufBytes, zs));
-    GPU_RT_CHECK(gpuStreamSynchronize(zs));
-    GPU_RT_CHECK(gpuStreamDestroy(zs));
-  }
+  // Zero the output buffer with a kernel (not cudaMemset): the worker is
+  // already resident, and the copy-engine memset's writes can still be
+  // draining when the worker reduce read-modify-writes the buffer.
+  UKernel::Device::zero_device_buffer(d_out, kBufBytes);
 
   CollectiveConfig ar;
   ar.nranks = 2;
