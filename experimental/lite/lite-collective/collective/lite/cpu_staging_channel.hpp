@@ -28,6 +28,7 @@
 #pragma once
 
 #include "lite_common.h"
+#include "cpu_switch/cpu_switch.hpp"
 // Note: debug.h and WARN/INFO macros provided by the including TU (nccl.cu).
 #include <atomic>
 #include <cstring>
@@ -290,9 +291,11 @@ inline void CpuStagingChannel::put(cudaStream_t stream,
                                    uint64_t tag) const {
   char* dst = slab_ + static_cast<size_t>(slot) * slotStride_
                     + static_cast<size_t>(rank_) * bytesPerRank_ + offset;
-  MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst,
-                                    static_cast<char const*>(devSrc) + offset,
-                                    size, cudaMemcpyDeviceToHost, stream));
+  mscclpp::lite::CpuSwitch<char>{}
+      .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                   mscclpp::lite::MemoryType::HostPinned, char const>(
+          {static_cast<char const*>(devSrc) + offset, size}, {dst, size},
+          stream);
   streamWrite64_(stream, readyFlagCuAddr_(ctrlDevice_, slot, chunkId, rank_), tag);
 }
 
@@ -314,15 +317,18 @@ inline void CpuStagingChannel::get(cudaStream_t stream,
                     + static_cast<size_t>(firstRank) * bytesPerRank_;
   if (size == bytesPerRank_) {
     // Full-rank contiguous copy (no chunk offset, all nCopy ranks consecutive).
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, src, nCopy * bytesPerRank_,
-                                      cudaMemcpyHostToDevice, stream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                     mscclpp::lite::MemoryType::Device, char const>(
+            {static_cast<char const*>(src), nCopy * bytesPerRank_},
+            {dst, nCopy * bytesPerRank_}, stream);
   } else {
     // Partial-rank (chunked) strided copy: height=nCopy ranks, width=size bytes.
-    MSCCLPP_CUDATHROW(cudaMemcpy2DAsync(
-        dst + offset, bytesPerRank_,      // dst: stride=bytesPerRank between rows
-        src + offset, bytesPerRank_,      // src: stride=bytesPerRank between rows
-        size, nCopy,                       // width × height
-        cudaMemcpyHostToDevice, stream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopyRows<mscclpp::lite::MemoryType::HostPinned,
+                         mscclpp::lite::MemoryType::Device, char const>(
+            {src + offset, nCopy, size, bytesPerRank_},
+            {dst + offset, nCopy, size, bytesPerRank_}, stream);
   }
 }
 

@@ -33,6 +33,7 @@
 #include "ib.hpp"
 #include "logger.hpp"
 #include "lite_common.h"
+#include "lite/cpu_switch/cpu_switch.hpp"
 #include "memory_channel.hpp"
 #include "native_collectives.hpp"
 #include "nccl.h"
@@ -691,7 +692,8 @@ inline ncclResult_t mapMscclppException(std::exception const& ex) {
     }
   }
   if (dynamic_cast<mscclpp::CudaError const*>(&ex) != nullptr ||
-      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr) {
+      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr ||
+      dynamic_cast<mscclpp::lite::CudaOperationError const*>(&ex) != nullptr) {
     return ncclUnhandledCudaError;
   }
   return ncclInternalError;

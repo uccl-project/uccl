@@ -531,8 +531,11 @@ ncclResult_t runIntraNodeShmAllGather(
             sendBytes, static_cast<char*>(selfOutput), bytesPerRank);
         MSCCLPP_CUDATHROW(cudaGetLastError());
       } else {
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(selfOutput, sendbuff, bytesPerRank,
-                                          cudaMemcpyDeviceToDevice, stream));
+        mscclpp::lite::CpuSwitch<char>{}
+            .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                         mscclpp::lite::MemoryType::Device, char const>(
+                {static_cast<char const*>(sendbuff), bytesPerRank},
+                {static_cast<char*>(selfOutput), bytesPerRank}, stream);
       }
     }
 
@@ -965,8 +968,11 @@ static ncclResult_t runIntraNodeGpuKernelAllGather(
       void* selfOutput = static_cast<char*>(recvbuff)
                          + static_cast<size_t>(rank) * bytesPerRank;
       if (sendbuff != selfOutput) {
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(selfOutput, sendbuff, bytesPerRank,
-                                          cudaMemcpyDeviceToDevice, stream));
+        mscclpp::lite::CpuSwitch<char>{}
+            .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                         mscclpp::lite::MemoryType::Device, char const>(
+                {static_cast<char const*>(sendbuff), bytesPerRank},
+                {static_cast<char*>(selfOutput), bytesPerRank}, stream);
       }
 
       // Phase 1: GPU posts D2H ring commands (or CPU fallback if ring unavailable).
@@ -1178,8 +1184,11 @@ static ncclResult_t runIntraNodeCudaIpcAllGather(
     MSCCLPP_CUDATHROW(cudaStreamWaitEvent(nextCtx.ipcStream, inputReady, 0));
 
     if (sendbuff != selfOutput) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(selfOutput, sendbuff, bytesPerRank,
-                                        cudaMemcpyDeviceToDevice, stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {static_cast<char const*>(sendbuff), bytesPerRank},
+              {static_cast<char*>(selfOutput), bytesPerRank}, stream);
     }
 
     for (int step = 0; step < nRanks - 1; ++step) {
@@ -1199,9 +1208,11 @@ static ncclResult_t runIntraNodeCudaIpcAllGather(
           peerRecvAddrs[static_cast<size_t>(next)] +
           static_cast<uintptr_t>(sendBlock) * bytesPerRank;
       void* remoteDst = nextCtx.mapPeerPtr(peerSlot);
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(remoteDst, src, bytesPerRank,
-                                        cudaMemcpyDeviceToDevice,
-                                        nextCtx.ipcStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {static_cast<char const*>(src), bytesPerRank},
+              {static_cast<char*>(remoteDst), bytesPerRank}, nextCtx.ipcStream);
       MSCCLPP_CUDATHROW(
           cudaEventRecord(nextCtx.ipcAllGatherDoneEvent, nextCtx.ipcStream));
       nextCtx.ipcShmSemaphore->signalAllGatherEventRecorded();

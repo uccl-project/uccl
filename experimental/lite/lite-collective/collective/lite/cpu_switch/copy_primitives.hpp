@@ -44,6 +44,24 @@ class CopyPrimitives {
   template <MemoryType Src, MemoryType Dst, typename SrcT>
   Completion copy(Span<SrcT> source, Span<T> destination,
                   cudaStream_t stream = nullptr) const {
+    enqueueCopy<Src, Dst>(source, destination, stream);
+    if constexpr (copy_detail::IsHostMemory<Src> &&
+                  copy_detail::IsHostMemory<Dst>) {
+      return {};
+    } else {
+      return Completion::record(stream);
+    }
+  }
+
+  /**
+  Submit a copy without allocating a completion event. Host-to-host copies
+  finish before returning; CUDA copies are only enqueued on the given stream.
+  The caller must keep buffers alive and use its existing stream/event/flag
+  protocol before reading the result or reusing either buffer.
+  */
+  template <MemoryType Src, MemoryType Dst, typename SrcT>
+  void enqueueCopy(Span<SrcT> source, Span<T> destination,
+                   cudaStream_t stream = nullptr) const {
     static_assert(std::is_same_v<std::remove_const_t<SrcT>, T>,
                   "CpuSwitch copy element types must match");
     checkCopy(source, destination);
@@ -51,19 +69,30 @@ class CopyPrimitives {
     if constexpr (copy_detail::IsHostMemory<Src> &&
                   copy_detail::IsHostMemory<Dst>) {
       std::memmove(destination.data, source.data, bytes);
-      return {};
     } else {
       throwCudaError(cudaMemcpyAsync(destination.data, source.data, bytes,
                                      copy_detail::cudaCopyKind<Src, Dst>(),
                                      stream),
                      "CpuSwitch copy");
-      return Completion::record(stream);
     }
   }
 
   template <MemoryType Src, MemoryType Dst, typename SrcT>
   Completion copyRows(Rows<SrcT> source, Rows<T> destination,
                       cudaStream_t stream = nullptr) const {
+    enqueueCopyRows<Src, Dst>(source, destination, stream);
+    if constexpr (copy_detail::IsHostMemory<Src> &&
+                  copy_detail::IsHostMemory<Dst>) {
+      return {};
+    } else {
+      return Completion::record(stream);
+    }
+  }
+
+  /* Same completion/lifetime contract as enqueueCopy; strides are in elements. */
+  template <MemoryType Src, MemoryType Dst, typename SrcT>
+  void enqueueCopyRows(Rows<SrcT> source, Rows<T> destination,
+                       cudaStream_t stream = nullptr) const {
     static_assert(std::is_same_v<std::remove_const_t<SrcT>, T>,
                   "CpuSwitch row-copy element types must match");
     checkRows(source);
@@ -79,7 +108,6 @@ class CopyPrimitives {
         std::memmove(destination.data + row * destination.stride,
                      source.data + row * source.stride, width);
       }
-      return {};
     } else {
       throwCudaError(
           cudaMemcpy2DAsync(destination.data, destination.stride * sizeof(T),
@@ -87,7 +115,6 @@ class CopyPrimitives {
                             source.rowCount,
                             copy_detail::cudaCopyKind<Src, Dst>(), stream),
           "CpuSwitch row copy");
-      return Completion::record(stream);
     }
   }
 

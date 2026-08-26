@@ -61,6 +61,12 @@ $(OUT_DIR)/allgather.cu.o: allgather.hpp
 
 $(OUT_DIR)/nccl.cu.o: $(LITE_COLL_DIR)/allgather_intranode.cu $(LITE_COLL_DIR)/host_staging_buffer.hpp allgather.hpp lite_common.h
 
+# CpuSwitch is header-based; rebuild its consumers after primitive/channel edits.
+CPU_SWITCH_HEADERS := $(wildcard $(LITE_COLL_DIR)/cpu_switch/*.hpp)
+$(CU_OBJS): $(CPU_SWITCH_HEADERS)
+$(OUT_DIR)/nccl.cu.o: $(LITE_COLL_DIR)/cpu_staging_channel.hpp $(LITE_COLL_DIR)/gpu_staging_channel.hpp
+$(OUT_DIR)/$(LITE_COLL_DIR)/allgather_multinode.cu.o: lite_common.h
+
 $(OUT_DIR)/$(LITE_COLL_DIR)/allgather_multinode.cu.o: $(LITE_COLL_DIR)/allgather_multinode.cu $(LITE_COLL_DIR)/node_exchange_buffer.hpp | $(OUT_DIR)
 	mkdir -p $(@D)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) -I. $(DEFINES) -c $< -o $@

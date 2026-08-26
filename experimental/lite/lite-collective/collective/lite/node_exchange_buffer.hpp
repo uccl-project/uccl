@@ -26,6 +26,8 @@
 
 #pragma once
 
+#include "cpu_switch/cpu_switch.hpp"
+
 #include "lite_common.h"
 #include <cstring>
 #include <memory>
@@ -172,8 +174,11 @@ inline void NodeExchangeBuffer::push(
     cudaStream_t stream,
     void const* src, size_t slabOffset, size_t size,
     int rank, uint64_t tag) const {
-  MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-      sendSlab_ + slabOffset, src, size, cudaMemcpyDeviceToHost, stream));
+  mscclpp::lite::CpuSwitch<char>{}
+      .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                   mscclpp::lite::MemoryType::HostPinned, char const>(
+          {static_cast<char const*>(src), size}, {sendSlab_ + slabOffset, size},
+          stream);
   if (ctrlDevice_ != nullptr) {
     CUdeviceptr flagAddr = reinterpret_cast<CUdeviceptr>(ctrlDevice_)
                           + static_cast<size_t>(rank) * sizeof(uint64_t);

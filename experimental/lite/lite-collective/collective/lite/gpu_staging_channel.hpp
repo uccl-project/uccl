@@ -243,9 +243,10 @@ inline int GpuStagingChannel::service(cudaStream_t stream, int maxCmds) {
       // D2H put command.
       char* dst = csc_.rankSlabHost(e.slot, e.rank) + e.offset;
       auto* src = reinterpret_cast<void const*>(e.srcDevPtr);
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst, static_cast<char const*>(src),
-                                        e.size, cudaMemcpyDeviceToHost,
-                                        stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::HostPinned, char const>(
+              {static_cast<char const*>(src), e.size}, {dst, e.size}, stream);
       streamWrite64_(stream, readyFlagAddr_(e.slot, e.chunkId, e.rank), e.tag);
     } else {
       // slotDone signal.

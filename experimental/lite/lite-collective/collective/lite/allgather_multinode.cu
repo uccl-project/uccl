@@ -2,6 +2,7 @@
 #include "lite_common.h"
 #include "debug.h"
 #include "lite/node_exchange_buffer.hpp"
+#include "lite/cpu_switch/cpu_switch.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1319,13 +1320,16 @@ ncclResult_t copyOneRankPerNodeChunkToOutput(
       static_cast<size_t>(remoteRank) * bytesPerRank + chunkOffset;
 
   if (send + chunkOffset != recv + selfOffset) {
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + selfOffset, send + chunkOffset, chunkBytes,
-        cudaMemcpyDeviceToDevice, stream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                     mscclpp::lite::MemoryType::Device, char const>(
+            {send + chunkOffset, chunkBytes}, {recv + selfOffset, chunkBytes},
+            stream);
   }
-  MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv + remoteOffset, remoteChunk,
-                                    chunkBytes, cudaMemcpyHostToDevice,
-                                    stream));
+  mscclpp::lite::CpuSwitch<char>{}
+      .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                   mscclpp::lite::MemoryType::Device, char const>(
+          {remoteChunk, chunkBytes}, {recv + remoteOffset, chunkBytes}, stream);
   return ncclSuccess;
 }
 
@@ -1349,9 +1353,12 @@ ncclResult_t copyGroupChunkToOutput(
                                  recvBlockOffset(node, slotBlockBytes);
     bool localSelfBlock = directSelfCopy && node == ctx.nodeId;
     if (wholeRankChunk && !localSelfBlock) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          recv + static_cast<size_t>(rankBase) * bytesPerRank, src,
-          blockBytes, cudaMemcpyHostToDevice, stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {static_cast<char const*>(src), blockBytes},
+              {recv + static_cast<size_t>(rankBase) * bytesPerRank, blockBytes},
+              stream);
     } else {
       for (int i = 0; i < ctx.groupSize; ++i) {
         int peer = rankBase + i;
@@ -1360,13 +1367,17 @@ ncclResult_t copyGroupChunkToOutput(
         if (localSelfBlock && peer == ctx.rank) {
           char const* selfSrc = send + chunkOffset;
           if (!selfPreCopied && selfSrc != dst) {
-            MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-                dst, selfSrc, chunkBytes, cudaMemcpyDeviceToDevice, stream));
+            mscclpp::lite::CpuSwitch<char>{}
+                .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                             mscclpp::lite::MemoryType::Device, char const>(
+                    {selfSrc, chunkBytes}, {dst, chunkBytes}, stream);
           }
         } else {
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-              dst, src + static_cast<size_t>(i) * chunkBytes, chunkBytes,
-              cudaMemcpyHostToDevice, stream));
+          mscclpp::lite::CpuSwitch<char>{}
+              .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                           mscclpp::lite::MemoryType::Device, char const>(
+                  {src + static_cast<size_t>(i) * chunkBytes, chunkBytes},
+                  {dst, chunkBytes}, stream);
         }
       }
     }
@@ -1445,9 +1456,11 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
       auto* recvBytes = static_cast<char*>(recvbuff);
       size_t selfOffset =
           static_cast<size_t>(ctx.rank) * bytesPerRank + chunkOffset;
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          recvBytes + selfOffset, sendBytes + chunkOffset, chunkBytes,
-          cudaMemcpyDeviceToDevice, h2dStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {sendBytes + chunkOffset, chunkBytes},
+              {recvBytes + selfOffset, chunkBytes}, h2dStream);
     }
   }
 
@@ -1500,11 +1513,13 @@ ncclResult_t exchangeGroupChunk(AgContext& ctx,
       int remoteRank = (1 - ctx.nodeId) * ctx.nRanksPerNode;
       size_t remoteOffset =
           static_cast<size_t>(remoteRank) * bytesPerRank + chunkOffset;
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          recvBytes + remoteOffset,
-          ctx.recvSlab + recvBase +
-              recvBlockOffset(1 - ctx.nodeId, slotBlockBytes),
-          chunkBytes, cudaMemcpyHostToDevice, h2dStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {ctx.recvSlab + recvBase +
+                   recvBlockOffset(1 - ctx.nodeId, slotBlockBytes),
+               chunkBytes},
+              {recvBytes + remoteOffset, chunkBytes}, h2dStream);
     } else if (oneRankDirectCopy) {
       result = copyOneRankPerNodeChunkToOutput(
           ctx, sendbuff, recvbuff, bytesPerRank, chunkOffset, chunkBytes,
@@ -1579,9 +1594,11 @@ ncclResult_t runOneRankChunkPipeline(
   size_t peerRemoteBase = recvBase + recvBlockOffset(ctx.nodeId, bytesPerRank);
 
   if (send != recv + selfOffset) {
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv + selfOffset, send, bytesPerRank,
-                                      cudaMemcpyDeviceToDevice,
-                                      ctx.h2dStream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                     mscclpp::lite::MemoryType::Device, char const>(
+            {send, bytesPerRank}, {recv + selfOffset, bytesPerRank},
+            ctx.h2dStream);
   }
 
   size_t chunkCount =
@@ -1594,10 +1611,11 @@ ncclResult_t runOneRankChunkPipeline(
   for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
     size_t off = chunk * kOneRankPipelineChunkBytes;
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(ctx.sendSlab + sendBase + off,
-                                      send + off, bytes,
-                                      cudaMemcpyDeviceToHost,
-                                      ctx.d2hStream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                     mscclpp::lite::MemoryType::HostPinned, char const>(
+            {send + off, bytes}, {ctx.sendSlab + sendBase + off, bytes},
+            ctx.d2hStream);
     MSCCLPP_CUDATHROW(cudaEventRecord(ctx.d2hChunkEvents[chunk],
                                       ctx.d2hStream));
   }
@@ -1637,9 +1655,11 @@ ncclResult_t runOneRankChunkPipeline(
     size_t bytes = std::min(kOneRankPipelineChunkBytes, bytesPerRank - off);
     uint64_t readyValue = epoch * kPipeValueStride + chunk + 1;
     waitForEpoch(ctx.ctrl->pipeReady[1 - ctx.nodeId], readyValue);
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        recv + remoteOutputOffset + off, ctx.recvSlab + localRemoteBase + off,
-        bytes, cudaMemcpyHostToDevice, ctx.h2dStream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                     mscclpp::lite::MemoryType::Device, char const>(
+            {ctx.recvSlab + localRemoteBase + off, bytes},
+            {recv + remoteOutputOffset + off, bytes}, ctx.h2dStream);
     if (nextSend < chunkCount) {
       sendChunk(nextSend++);
     }
@@ -1697,9 +1717,12 @@ ncclResult_t runSingleSlab(
     bool selfPreCopied = false;
     if (!selfInPlace && nRanksPerNode > 1 &&
         bytesPerRank >= kDirectSelfCopyMinBytes) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          recv + static_cast<size_t>(rank) * bytesPerRank, send, bytesPerRank,
-          cudaMemcpyDeviceToDevice, ctx.h2dStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {send, bytesPerRank},
+              {recv + static_cast<size_t>(rank) * bytesPerRank, bytesPerRank},
+              ctx.h2dStream);
       selfPreCopied = true;
     }
     if (ctx.nodeCount == 2 && ctx.nRanksPerNode == 1 &&
@@ -1751,13 +1774,21 @@ ncclResult_t copySmallFallbackOutput(AgContext& ctx,
   int localBase = ctx.nodeId * ctx.nRanksPerNode;
   int remoteBase = (1 - ctx.nodeId) * ctx.nRanksPerNode;
   int remoteNode = 1 - ctx.nodeId;
-  std::memcpy(scratch + static_cast<size_t>(localBase) * bytesPerRank,
-              ctx.sendSlab, blockBytes);
-  std::memcpy(scratch + static_cast<size_t>(remoteBase) * bytesPerRank,
-              ctx.recvSlab + recvBlockOffset(remoteNode, blockBytes),
-              blockBytes);
-  MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvbuff, scratch, fullBytes,
-                                    cudaMemcpyHostToDevice, stream));
+  /* Assemble node blocks in global-rank order before the existing H2D. */
+  mscclpp::lite::CpuSwitch<char> cpuSwitch;
+  cpuSwitch.copy<mscclpp::lite::MemoryType::HostPinned,
+                 mscclpp::lite::MemoryType::HostPinned, char const>(
+      {ctx.sendSlab, blockBytes},
+      {scratch + static_cast<size_t>(localBase) * bytesPerRank, blockBytes});
+  cpuSwitch.copy<mscclpp::lite::MemoryType::HostPinned,
+                 mscclpp::lite::MemoryType::HostPinned, char const>(
+      {ctx.recvSlab + recvBlockOffset(remoteNode, blockBytes), blockBytes},
+      {scratch + static_cast<size_t>(remoteBase) * bytesPerRank, blockBytes});
+  mscclpp::lite::CpuSwitch<char>{}
+      .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                   mscclpp::lite::MemoryType::Device, char const>(
+          {scratch, fullBytes}, {static_cast<char*>(recvbuff), fullBytes},
+          stream);
   return ncclSuccess;
 }
 
@@ -1794,9 +1825,13 @@ ncclResult_t runSmallFallback(
 
     uint64_t epoch = ++ctx.epoch;
     auto const* send = static_cast<char const*>(sendbuff);
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        ctx.sendSlab + static_cast<size_t>(ctx.localRank) * bytesPerRank, send,
-        bytesPerRank, cudaMemcpyDeviceToHost, stream));
+    mscclpp::lite::CpuSwitch<char>{}
+        .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                     mscclpp::lite::MemoryType::HostPinned, char const>(
+            {send, bytesPerRank},
+            {ctx.sendSlab + static_cast<size_t>(ctx.localRank) * bytesPerRank,
+             bytesPerRank},
+            stream);
     MSCCLPP_CUDATHROW(cudaStreamSynchronize(stream));
     ctx.ctrl->d2hReady[ctx.localRank].store(epoch, std::memory_order_release);
 
@@ -1885,8 +1920,10 @@ ncclResult_t runOneRankGpuDirect(
     waitForCudaEvent(ctx.inputReadyEvent);
 
     if (send != recv + selfOffset) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv + selfOffset, send, bytesPerRank,
-                                        cudaMemcpyDeviceToDevice, stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {send, bytesPerRank}, {recv + selfOffset, bytesPerRank}, stream);
     }
     if (!writeGpuDirectOneRank(ctx, bytesPerRank, epoch)) {
       return ncclInvalidUsage;
@@ -2040,9 +2077,13 @@ ncclResult_t runSmallOrdered(
           d2hReadyOffset(ctx.localRank), epoch);
       MSCCLPP_CUDATHROW(cudaGetLastError());
     } else {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          ctx.sendSlab + slotOffset + static_cast<size_t>(rank) * bytesPerRank,
-          send, bytesPerRank, cudaMemcpyDeviceToHost, stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::HostPinned, char const>(
+              {send, bytesPerRank},
+              {ctx.sendSlab + slotOffset + static_cast<size_t>(rank) * bytesPerRank,
+               bytesPerRank},
+              stream);
     }
     if (useTwoRankRecvKernel) {
       if (!useTwoRankTinyPack && !useTwoRankRegisterPack) {
@@ -2118,9 +2159,10 @@ ncclResult_t runSmallOrdered(
       if (result != ncclSuccess) return result;
     } else {
       auto* recv = static_cast<char*>(recvbuff);
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(recv, ctx.sendSlab + slotOffset,
-                                        fullBytes, cudaMemcpyHostToDevice,
-                                        stream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::HostPinned,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {ctx.sendSlab + slotOffset, fullBytes}, {recv, fullBytes}, stream);
     }
     return ncclSuccess;
   } catch (std::exception const& ex) {
@@ -2178,9 +2220,12 @@ ncclResult_t runNumaSplit(
         send == recv + static_cast<size_t>(rank) * bytesPerRank;
     bool selfPreCopied = false;
     if (!selfInPlace && bytesPerRank >= kDirectSelfCopyMinBytes) {
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          recv + static_cast<size_t>(rank) * bytesPerRank, send, bytesPerRank,
-          cudaMemcpyDeviceToDevice, own.h2dStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::Device, char const>(
+              {send, bytesPerRank},
+              {recv + static_cast<size_t>(rank) * bytesPerRank, bytesPerRank},
+              own.h2dStream);
       selfPreCopied = true;
     }
 
@@ -2226,11 +2271,14 @@ ncclResult_t runNumaSplit(
       }
 
       int ownSlot = own.localRank - own.groupBase;
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          own.sendSlab + sendBases[ownGroupId] +
-              static_cast<size_t>(ownSlot) * chunkBytes,
-          send + chunkOffset, chunkBytes, cudaMemcpyDeviceToHost,
-          own.d2hStream));
+      mscclpp::lite::CpuSwitch<char>{}
+          .enqueueCopy<mscclpp::lite::MemoryType::Device,
+                       mscclpp::lite::MemoryType::HostPinned, char const>(
+              {send + chunkOffset, chunkBytes},
+              {own.sendSlab + sendBases[ownGroupId] +
+                   static_cast<size_t>(ownSlot) * chunkBytes,
+               chunkBytes},
+              own.d2hStream);
       waitForCudaStream(own.d2hStream);
       own.ctrl->d2hReady[own.localRank].store(epochs[ownGroupId],
                                               std::memory_order_release);

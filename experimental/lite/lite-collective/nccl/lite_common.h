@@ -5,6 +5,7 @@
 #include "gpu_utils.hpp"
 #include "ib.hpp"
 #include "native_collectives.hpp"
+#include "lite/cpu_switch/cuda_utils.hpp"
 #include "numa.hpp"
 #include <algorithm>
 #include <atomic>
@@ -97,7 +98,8 @@ inline ncclResult_t mapException(std::exception const& ex) {
     }
   }
   if (dynamic_cast<mscclpp::CudaError const*>(&ex) != nullptr ||
-      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr) {
+      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr ||
+      dynamic_cast<mscclpp::lite::CudaOperationError const*>(&ex) != nullptr) {
     return ncclUnhandledCudaError;
   }
   return ncclInternalError;
