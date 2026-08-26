@@ -9,12 +9,20 @@ namespace UKernel {
 namespace Device {
 
 struct alignas(16) MultiBlockSync {
-  // Per-task completion counter. Every block adds 1 after its slice; the
-  // block that observes gridDim.x is the "last block" and performs the
-  // task's fence + signal + tail publish, then resets this to 0. Other
-  // blocks wait for the reset (the only cross-block synchronization on the
-  // task path — no leader, no phase hand-off).
-  uint32_t completedBlocks;
+  // Monotonic per-task completion counter, never reset. Every block adds
+  // 1 after its slice of a task (and also for skipped invalid-args tasks,
+  // keeping the count aligned with the FIFO tail). Task N's barrier is
+  // complete once the counter reaches gridDim.x * (N+1); the block whose
+  // add crosses that threshold is the "last block" and performs the task's
+  // fence + signal + tail publish, and everyone else waits for the
+  // threshold before advancing to the next task.
+  //
+  // Unlike a reset-to-0 counter, a slow block can never leak its +1 into
+  // the next task's barrier: task N's threshold cannot be reached until
+  // every block has added for N, so a late block is absorbed into the
+  // correct task's count (with the old counter, repeated-task worker
+  // reduce produced wrong results). Zeroed by the host on every (re)launch.
+  uint64_t completionCount;
   // Exit rendezvous mask (bit i belongs to block i). A block sets its bit
   // once its idle grace has elapsed and clears it whenever it sees work.
   // The mask can therefore only become all-ones when the FIFO is

@@ -423,6 +423,11 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           // Invalid args index: skip the task (advance tail once).
           if (threadIdx.x == 0) {
             publish_tail_progress(fifo.tail, sh_tail + 1);
+            // Keep the monotonic completion counter aligned with the FIFO
+            // tail so later tasks' thresholds (gridDim.x * tail) line up.
+            mscclpp::atomicFetchAdd<uint64_t, mscclpp::scopeDevice>(
+                &d_sync->completionCount, 1ull,
+                mscclpp::memoryOrderRelaxed);
             ++sh_tail;
           }
           __syncthreads();
@@ -437,16 +442,28 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                     gridDim.x, smem_buf);
       __syncthreads();
 
-      // Completion: every block adds 1. The block that reaches gridDim.x
-      // performs the task's fence + signal + tail publish, then resets
-      // the counter; the others wait for that reset. This is the only
-      // cross-block synchronization — no leader, no phase hand-off.
+      // Completion: every block adds 1 to the monotonic counter. Task
+      // sh_tail's barrier is complete once the counter reaches
+      // gridDim.x * (sh_tail + 1) AND the leader's tail publish is
+      // visible; the block whose add crosses that threshold performs the
+      // task's fence + signal + tail publish, and everyone else waits for
+      // the threshold and the tail (a block released on the counter alone
+      // can race ahead of the publish and re-process the task from a
+      // stale tail read, skewing every later threshold). The counter is
+      // never reset, so a slow block arriving late for a task is absorbed
+      // into that task's count instead of polluting the next barrier
+      // (with a reset-to-0 counter, repeated-task worker reduce produced
+      // wrong results). This is the only cross-block synchronization — no
+      // leader, no phase hand-off.
       if (threadIdx.x == 0) {
-        uint32_t done =
-            mscclpp::atomicFetchAdd<uint32_t, mscclpp::scopeDevice>(
-                &d_sync->completedBlocks, 1u, mscclpp::memoryOrderAcqRel) +
-            1u;
-        if (done == gridDim.x) {
+        const uint64_t threshold =
+            static_cast<uint64_t>(gridDim.x) * (sh_tail + 1);
+        const uint64_t count =
+            mscclpp::atomicFetchAdd<uint64_t, mscclpp::scopeDevice>(
+                &d_sync->completionCount, 1ull,
+                mscclpp::memoryOrderAcqRel) +
+            1ull;
+        if (count == threshold) {
           // Same ordering requirement as the single-block path: all
           // blocks' writes must be visible before the host observes
           // completion.
@@ -455,13 +472,23 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           maybe_signal_ring_write(current_task, current_args);
           maybe_rdma_fused_push(current_args);
           publish_tail_progress(fifo.tail, sh_tail + 1);
-          mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
-              &d_sync->completedBlocks, 0u, mscclpp::memoryOrderRelease);
-        } else {
-          while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
-                     &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) !=
-                 0u) {
-          }
+        }
+        while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+                   &d_sync->completionCount, mscclpp::memoryOrderAcquire) <
+               threshold) {
+        }
+        // Do not advance past this task until the leader's tail publish is
+        // visible. Releasing on the counter alone lets a block race ahead
+        // of the publish, re-read the OLD tail at the outer loop, and
+        // re-process the same task; the duplicate adds then skew every
+        // later threshold, so leaders fire early and publish tails for
+        // tasks only one block has reached (observed as a permanent worker
+        // reduce hang with tasks cycling forever). The tail is monotonic,
+        // so a block that is delayed past the publish simply observes it
+        // already satisfied.
+        while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+                   fifo.tail, mscclpp::memoryOrderAcquire) <
+               sh_tail + 1) {
         }
         // Every block advances its OWN shared copy of sh_tail — shared
         // memory does not cross blocks and only the last block published
