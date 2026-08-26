@@ -38,6 +38,11 @@ struct alignas(16) MultiBlockSync {
   // the IPC put engine (measured: 16-block allreduce dropped to ~15 GB/s
   // vs ~48 GB/s with a single head reader).
   uint64_t headHint;
+  // Set by block 0 at kernel entry once the completion counter has been
+  // re-anchored to the FIFO tail (gridDim.x * tail); all other blocks
+  // wait for it before processing tasks. The host zeroes this on every
+  // (re)launch, so a fresh grid always re-anchors.
+  uint64_t anchorReady;
 };
 
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,

@@ -286,6 +286,33 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     __threadfence_system();
   }
 
+  // Anchor the monotonic completion counter to the FIFO tail at kernel
+  // start. The counter is keyed to the absolute task index (task N's
+  // barrier completes at gridDim.x * (N+1)), so a grid that starts with
+  // tasks already consumed (tail > 0) — a relaunch after an idle exit —
+  // must begin from gridDim.x * tail or its first barrier can never
+  // reach the threshold. The host cannot anchor reliably (its GDR read
+  // of the tail can lag the device's own view; observed as a permanent
+  // barrier wait on the cross-node allreduce), so block 0 reads the tail
+  // itself and publishes an anchor-ready flag the other blocks wait on.
+  if (threadIdx.x == 0) {
+    if (bid == 0) {
+      uint64_t tail0 = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+          fifo.tail, mscclpp::memoryOrderAcquire);
+      mscclpp::atomicStore<uint64_t, mscclpp::scopeDevice>(
+          &d_sync->completionCount,
+          static_cast<uint64_t>(gridDim.x) * tail0,
+          mscclpp::memoryOrderRelaxed);
+      mscclpp::atomicStore<uint64_t, mscclpp::scopeDevice>(
+          &d_sync->anchorReady, 1ull, mscclpp::memoryOrderRelease);
+    } else {
+      while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+                 &d_sync->anchorReady, mscclpp::memoryOrderAcquire) == 0) {
+      }
+    }
+  }
+  __syncthreads();
+
   while (true) {
     // Exit rendezvous: a block leaves only when every block has voted to
     // exit (idle grace elapsed) or the host requests a stop. A block that

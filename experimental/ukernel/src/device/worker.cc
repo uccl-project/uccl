@@ -381,7 +381,10 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   // Relaunch after an idle exit must reset the multi-block sync state
   // (per-task completion counter + exit-vote mask), otherwise the fresh
   // grid inherits a full exit mask and returns before consuming anything.
-  // Zero it on the worker stream, ordered before the launch.
+  // Zero it on the worker stream, ordered before the launch. The kernel
+  // re-anchors the completion counter to the FIFO tail itself at entry
+  // (the host's GDR view of the tail can lag the device's, so a host-side
+  // anchor is not reliable).
   if (worker.d_multi_sync) {
     GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
                                 sizeof(MultiBlockSync), worker.stream));
