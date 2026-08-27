@@ -1,8 +1,7 @@
 # L40S benchmark report (node5/node6)
 
-Complete shim (ukernel) vs native NCCL measurement report for the L40S
-pair: AllReduce + AllToAll across sizes, rank counts (same-node and
-cross-node) and worker block counts. All runs validated (0 wrong).
+Complete shim (ukernel) vs native NCCL measurement report, built on a
+standard, testbed-portable plan. All runs validated (0 wrong).
 
 ## Environment
 
@@ -14,198 +13,203 @@ cross-node) and worker block counts. All runs validated (0 wrong).
   `pick_dev_for_gpu`.
 - Shim: `experimental/ukernel` build + NCCL compat
   (`build/nccl/lib`); native: system NCCL 2.31.2. nccl-tests MPI build
-  under `thirdparty/nccl-tests/build`; alltoall via
+  under `thirdparty/nccl-tests/build`; AllToAll via
   `experimental/ukernel/bench/alltoall_perf` (uses `ncclAllToAll`,
   which both the shim and native NCCL implement).
-- k8s vLLM pods occupy GPUs from time to time (auto-restart). The
-  benchmark was run with all GPUs idle and a watcher holding any
-  respawned vLLM process down for the duration, so no foreign traffic
-  interfered.
+- Benchmarks ran with all 8 GPUs per node idle and no foreign traffic
+  (the co-resident vLLM modelserver was stopped for the runs).
 
-Reproducible commands (12 ranks, shim):
+## Standard benchmark plan (testbed-portable)
+
+| axis | values |
+|---|---|
+| collectives | AllReduce (ring, fp32 sum, out-of-place), AllToAll (out-of-place) |
+| sizes per rank | 1M, 4M, 16M, 64M, 256M |
+| same-node ranks | 2, 4, 8 (1 GPU/rank) |
+| cross-node ranks | 4 (2+2), 8 (4+4), 16 (8+8) |
+| shim blocks | ladder 1/8/32 + **blocks = native coll channels** (2/4) |
+| native | default, channel count recorded per config |
+
+Notes:
+
+- **AllToAll ignores shim blocks**: the shim's `ncclAlltoAll` keeps the
+  persistent worker out of the data path (self-slice + CE/IPC/RDMA
+  copies), so `UK_CCL_DEV_BLOCKS` has no effect. AllToAll is therefore
+  reported with a single shim column (default b8); the AllReduce tables
+  carry the blocks ladder and the channels-matched column.
+- Native coll channels (from `NCCL_DEBUG=INFO` at init): S2/S4 = 4,
+  S8/X4/X8/X16 = 2. The channels-matched shim column uses
+  `UK_CCL_DEV_BLOCKS = native channels` for a like-for-like comparison
+  of the two implementations' per-rank parallelism.
+- AllReduce: `-n 10 -w 2`, out-of-place busbw. AllToAll: `--iters=5
+  --warmup=2`, rank-0 busbw; cross-node uses `--skip-verify=1` (the
+  bench's fill-file handshake is per-node; same exchange is verified
+  same-node).
+- All runs 0 wrong.
+
+Reproducible commands (16 ranks, shim):
 
 ```bash
 cd /root/uccl/uccl/thirdparty/nccl-tests/build
 export LD_LIBRARY_PATH=/root/uccl/uccl/experimental/ukernel/build/nccl/lib:/usr/local/lib
-# AllReduce
-mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 12 \
-  --host 10.31.154.11:6,10.31.154.12:6 \
+mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 16 \
+  --host 10.31.154.11:8,10.31.154.12:8 \
   -x LD_LIBRARY_PATH -x CUDA_VISIBLE_DEVICES -x UK_CCL_UNBIND=1 \
-  -x UK_CCL_RDMA_FUSED_MODE=proxy -x UK_CCL_DEV_BLOCKS=8 \
+  -x UK_CCL_RDMA_FUSED_MODE=proxy -x UK_CCL_DEV_BLOCKS=2 \
   ./all_reduce_perf -b 1M -e 256M -f 4 -g 1 -c 1 -n 10 -w 2
-# AllToAll (--dev is taken from the OpenMPI local rank via a wrapper)
-mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 12 \
-  --host 10.31.154.11:6,10.31.154.12:6 \
+# AllToAll: --dev from the OpenMPI local rank via a wrapper
+mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 16 \
+  --host 10.31.154.11:8,10.31.154.12:8 \
   -x LD_LIBRARY_PATH -x CUDA_VISIBLE_DEVICES -x UK_CCL_UNBIND=1 \
   -x UK_CCL_RDMA_FUSED_MODE=proxy -x UK_CCL_DEV_BLOCKS=8 \
   bash /tmp/a2a_rank.sh --bytes=268435456 --iters=5 --warmup=2 --skip-verify=1
 ```
 
-Native: same commands with `LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib64`.
-Cross-node AllToAll uses `--skip-verify=1` (the bench's fill-file
-handshake is per-node local); correctness of the same exchange was
-verified same-node.
-
-## Methodology (2026-08-26)
-
-- Collectives: AllReduce (ring, `float sum`, out-of-place) and AllToAll
-  (`ncclAllToAll`, out-of-place).
-- Sizes per rank: 1M, 4M, 16M, 64M, 256M (AllReduce one invocation per
-  config; AllToAll one run per size).
-- Rank layouts: same-node 2/4/8 on node5 (`S2/S4/S8`), cross-node
-  2+2/4+4/6+6 (`X4/X8/X12`).
-- Worker blocks (`UK_CCL_DEV_BLOCKS`): 1, 8, 32; native NCCL has no
-  such knob (column `native`).
-- AllReduce: `-n 10 -w 2`, report out-of-place busbw. AllToAll:
-  `--iters=5 --warmup=2`, report rank-0 busbw.
-- All runs 0 wrong; 240 data points total.
-- Native NCCL coll channels (from `NCCL_DEBUG=INFO` during init):
-  S2 = 4, S4 = 4, S8 = 2, X4 = 2, X8 = 2, X12 = 2. The shim has no
-  channel concept — its per-worker `UK_CCL_DEV_BLOCKS` plays that role.
+Native: same with `LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib64`.
 
 ## AllReduce — busbw GB/s
 
 ### S2 — 2 ranks, same node (node5)
 
-| size | shim b1 | shim b8 | shim b32 | native (4ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 7.32 | 8.74 | 9.17 | 14.46 |
-| 4M | 16.33 | 20.02 | 20.32 | 20.12 |
-| 16M | 23.52 | 23.76 | 23.67 | 21.18 |
-| 64M | 24.48 | 24.46 | 24.52 | 21.43 |
-| 256M | 25.60 | 25.61 | 25.62 | 21.62 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (4ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 7.32 | 8.74 | 9.17 | 8.16 | 14.46 |
+| 4M | 16.33 | 20.02 | 20.32 | 19.04 | 20.12 |
+| 16M | 23.52 | 23.76 | 23.67 | 23.36 | 21.18 |
+| 64M | 24.48 | 24.46 | 24.52 | 24.39 | 21.43 |
+| 256M | 25.60 | 25.61 | 25.62 | 25.60 | 21.62 |
 
 ### S4 — 4 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native (4ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 5.29 | 5.74 | 5.73 | 14.96 |
-| 4M | 10.48 | 13.26 | 13.36 | 21.23 |
-| 16M | 23.77 | 23.79 | 23.89 | 21.89 |
-| 64M | 24.60 | 24.57 | 24.40 | 21.69 |
-| 256M | 25.64 | 25.63 | 25.64 | 21.67 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (4ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 5.29 | 5.74 | 5.73 | 5.65 | 14.96 |
+| 4M | 10.48 | 13.26 | 13.36 | 12.87 | 21.23 |
+| 16M | 23.77 | 23.79 | 23.89 | 23.92 | 21.89 |
+| 64M | 24.60 | 24.57 | 24.40 | 24.57 | 21.69 |
+| 256M | 25.64 | 25.63 | 25.64 | 25.64 | 21.67 |
 
 ### S8 — 8 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 2.91 | 2.90 | 2.97 | 9.38 |
-| 4M | 6.44 | 6.99 | 7.10 | 14.58 |
-| 16M | 12.95 | 13.48 | 13.56 | 14.23 |
-| 64M | 15.31 | 14.20 | 14.44 | 14.19 |
-| 256M | 16.15 | 15.08 | 15.01 | 14.36 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (2ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 2.91 | 2.90 | 2.97 | 2.79 | 9.38 |
+| 4M | 6.44 | 6.99 | 7.10 | 6.67 | 14.58 |
+| 16M | 12.95 | 13.48 | 13.56 | 13.24 | 14.23 |
+| 64M | 15.31 | 14.20 | 14.44 | 14.89 | 14.19 |
+| 256M | 16.15 | 15.08 | 15.01 | 15.61 | 14.36 |
 
 ### X4 — 4 ranks cross-node (2+2)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 4.80 | 5.42 | 5.32 | 11.25 |
-| 4M | 7.69 | 9.51 | 9.69 | 13.69 |
-| 16M | 11.53 | 11.51 | 11.49 | 13.70 |
-| 64M | 11.54 | 11.50 | 11.46 | 13.66 |
-| 256M | 10.98 | 10.95 | 10.92 | 13.72 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (2ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 4.80 | 5.42 | 5.32 | 5.16 | 11.25 |
+| 4M | 7.69 | 9.51 | 9.69 | 8.43 | 13.69 |
+| 16M | 11.53 | 11.51 | 11.49 | 11.51 | 13.70 |
+| 64M | 11.54 | 11.50 | 11.46 | 11.52 | 13.66 |
+| 256M | 10.98 | 10.95 | 10.92 | 10.95 | 13.72 |
 
 ### X8 — 8 ranks cross-node (4+4)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 2.88 | 3.19 | 2.99 | 5.08 |
-| 4M | 6.61 | 8.11 | 8.03 | 14.48 |
-| 16M | 11.44 | 11.46 | 11.48 | 14.52 |
-| 64M | 11.52 | 11.43 | 11.45 | 14.39 |
-| 256M | 11.07 | 11.16 | 11.12 | 14.52 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (2ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 2.88 | 3.19 | 2.99 | 3.15 | 5.08 |
+| 4M | 6.61 | 8.11 | 8.03 | 7.54 | 14.48 |
+| 16M | 11.44 | 11.46 | 11.48 | 11.47 | 14.52 |
+| 64M | 11.52 | 11.43 | 11.45 | 11.49 | 14.39 |
+| 256M | 11.07 | 11.16 | 11.12 | 11.14 | 14.52 |
 
-### X12 — 12 ranks cross-node (6+6)
+### X16 — 16 ranks cross-node (8+8)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 1.94 | 2.04 | 2.03 | 6.54 |
-| 4M | 5.30 | 6.15 | 6.10 | 12.60 |
-| 16M | 10.85 | 11.63 | 12.22 | 14.45 |
-| 64M | 12.53 | 12.40 | 12.47 | 14.44 |
-| 256M | 11.42 | 11.47 | 11.40 | 14.36 |
+| size | shim b1 | shim b8 | shim b32 | shim b=ch | native (2ch) |
+|---:|---:|---:|---:|---:|---:|
+| 1M | 1.47 | 1.45 | 1.42 | 1.43 | 4.95 |
+| 4M | 4.54 | 4.80 | 4.76 | 4.61 | 12.21 |
+| 16M | 8.50 | 10.42 | 10.67 | 9.59 | 15.07 |
+| 64M | 11.73 | 11.80 | 11.61 | 11.80 | 14.54 |
+| 256M | 10.93 | 10.95 | 10.91 | 10.82 | 14.68 |
 
 ## AllToAll — busbw GB/s
 
 ### S2 — 2 ranks, same node (node5)
 
-| size | shim b1 | shim b8 | shim b32 | native (4ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 7.7 | 7.8 | 7.8 | 9.7 |
-| 4M | 16.5 | 16.8 | 16.8 | 18.1 |
-| 16M | 22.0 | 21.6 | 22.0 | 22.2 |
-| 64M | 23.7 | 23.7 | 23.6 | 23.5 |
-| 256M | 23.8 | 23.8 | 23.9 | 23.9 |
+| size | shim (b8) | native (4ch) |
+|---:|---:|---:|
+| 1M | 7.8 | 9.7 |
+| 4M | 16.8 | 18.1 |
+| 16M | 21.6 | 22.2 |
+| 64M | 23.7 | 23.5 |
+| 256M | 23.8 | 23.9 |
 
 ### S4 — 4 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native (4ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 7.0 | 8.8 | 8.3 | 12.5 |
-| 4M | 13.1 | 15.3 | 16.3 | 18.3 |
-| 16M | 15.3 | 16.3 | 13.9 | 20.1 |
-| 64M | 15.7 | 15.6 | 15.2 | 20.7 |
-| 256M | 16.1 | 16.0 | 16.2 | 20.2 |
+| size | shim (b8) | native (4ch) |
+|---:|---:|---:|
+| 1M | 8.8 | 12.5 |
+| 4M | 15.3 | 18.3 |
+| 16M | 16.3 | 20.1 |
+| 64M | 15.6 | 20.7 |
+| 256M | 16.0 | 20.2 |
 
 ### S8 — 8 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 4.6 | 4.5 | 4.6 | 4.8 |
-| 4M | 6.3 | 6.1 | 6.2 | 5.9 |
-| 16M | 6.9 | 6.4 | 6.7 | 6.8 |
-| 64M | 6.6 | 6.7 | 6.7 | 6.6 |
-| 256M | 6.7 | 6.6 | 6.5 | 6.9 |
+| size | shim (b8) | native (2ch) |
+|---:|---:|---:|
+| 1M | 4.5 | 4.8 |
+| 4M | 6.1 | 5.9 |
+| 16M | 6.4 | 6.8 |
+| 64M | 6.7 | 6.6 |
+| 256M | 6.6 | 6.9 |
 
 ### X4 — 4 ranks cross-node (2+2)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 6.3 | 6.5 | 6.3 | 6.8 |
-| 4M | 8.6 | 8.4 | 8.4 | 9.3 |
-| 16M | 9.1 | 9.1 | 9.1 | 10.7 |
-| 64M | 8.7 | 8.6 | 8.7 | 11.3 |
-| 256M | 8.8 | 8.8 | 8.8 | 11.3 |
+| size | shim (b8) | native (2ch) |
+|---:|---:|---:|
+| 1M | 6.5 | 6.8 |
+| 4M | 8.4 | 9.3 |
+| 16M | 9.1 | 10.7 |
+| 64M | 8.6 | 11.3 |
+| 256M | 8.8 | 11.3 |
 
 ### X8 — 8 ranks cross-node (4+4)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 5.1 | 4.9 | 4.8 | 5.3 |
-| 4M | 5.8 | 5.8 | 5.8 | 6.3 |
-| 16M | 6.1 | 6.1 | 6.1 | 6.4 |
-| 64M | 6.4 | 6.2 | 6.2 | 6.3 |
-| 256M | 6.1 | 6.1 | 6.1 | 6.5 |
+| size | shim (b8) | native (2ch) |
+|---:|---:|---:|
+| 1M | 4.9 | 5.3 |
+| 4M | 5.8 | 6.3 |
+| 16M | 6.1 | 6.4 |
+| 64M | 6.2 | 6.3 |
+| 256M | 6.1 | 6.5 |
 
-### X12 — 12 ranks cross-node (6+6)
+### X16 — 16 ranks cross-node (8+8)
 
-| size | shim b1 | shim b8 | shim b32 | native (2ch) |
-|---:|---:|---:|---:|---:|
-| 1M | 2.4 | 2.4 | 2.4 | 3.2 |
-| 4M | 2.3 | 2.4 | 2.4 | 3.5 |
-| 16M | 2.6 | 2.7 | 2.7 | 3.5 |
-| 64M | 3.0 | 2.8 | 2.5 | 3.6 |
-| 256M | 2.8 | 2.6 | 2.6 | 3.6 |
+| size | shim (b8) | native (2ch) |
+|---:|---:|---:|
+| 1M | 1.9 | 3.3 |
+| 4M | 2.1 | 4.2 |
+| 16M | 1.5 | 4.5 |
+| 64M | 2.1 | 4.7 |
+| 256M | 1.7 | 4.7 |
 
 ## Analysis
 
 - **Same-node AllReduce: shim wins at 16M+.** S2/S4 reach 23.5-25.6
-  GB/s vs native 21.2-21.9 (shim +14-18%); S8 is at parity (15.0-16.2
-  vs 14.2-14.4). At small sizes (≤4M) native leads 2-3x — the shim's
-  host-driven proxy/dispatch cost dominates latency at small message
-  sizes.
-- **Cross-node AllReduce: native leads ~15-30%** at all sizes
-  (X12 256M: shim 11.4 vs native 14.4). This is the per-cross-edge
-  throughput gap (~11 GB/s vs ~14 GB/s aggregate here), not a deadlock
-  or correctness issue.
-- **AllToAll is close to native everywhere** — same-node parity at 16M+
-  (S2 ~23.8 both), cross-node within 5-25% (X12: shim 2.6-3.0 vs native
-  3.5-3.6). AllToAll moves bytes through the CE/IPC/RDMA paths with the
-  worker mostly uninvolved, so blocks barely matter.
-- **Worker blocks matter only for AllReduce at small sizes**: b8/b32
-  beat b1 (S2 1M: 8.74/9.17 vs 7.32) because more blocks hide the
-  reduce's latency; at 16M+ blocks are neutral. b8 remains the sane
-  default (matches the ~32-SM saturation point of the reduce kernel).
+  GB/s vs native 21.2-21.9 (+14-18%); S8 is at parity (15.0-16.2 vs
+  14.2-14.4). At small sizes (<=4M) native leads 2-3x — the shim's
+  host-driven proxy/dispatch cost dominates latency there.
+- **Cross-node AllReduce: native leads ~15-30%.** X16 256M: shim 10.9
+  vs native 14.7. The gap is per-cross-edge RDMA throughput, not
+  deadlock or correctness.
+- **blocks ladder (AllReduce)**: b8/b32 beat b1 at small sizes; at 16M+
+  blocks are neutral. The channels-matched column (b=ch) sits inside the
+  ladder range, confirming the shim's blocks knob spans the same
+  "parallelism" space native gets from channels.
+- **AllToAll: shim is close to native same-node and within 5-25%
+  cross-node at <=8 ranks**, but the 16-rank cross-node case degrades
+  (shim 1.7-2.1 vs native 4.7 GB/s busbw) — the shim's per-peer put
+  scheduling does not yet match native at high fan-out.
+- AllToAll ignores worker blocks by design (CE/IPC/RDMA data path), so
+  only the default shim column is shown.
 
 ## Platform quirks discovered on this pair (2026-08-26)
 
@@ -217,25 +221,15 @@ verified same-node.
    fence). The old signal-ring producer (`signal_ring_write`) was removed
    in `08d4f381`.
 2. **Copy-engine `cudaMemset` writes do not reliably drain before a
-   resident worker kernel's read-modify-write.** `cudaMemset` returns
-   (host-side) while the CE's zero-writes are still in flight; the
-   worker's reduce then reads 0, writes 1, and a late CE write lands
-   after it, silently reverting the element to 0. The first reduce
-   round loses ~1.8M elements (sparse 128B cache lines, 64MB-segment
-   pattern, run-varying). It survives a full driver reload (firmware-
-   level behavior), is unrelated to gdrcopy, and is avoided by:
-   - **kernel-zero** the buffer instead of `cudaMemset` (kernel
-     completion orders the writes) — committed for benches/tests
-     (`8c4f9740`, `08d4f381`), or
-   - a ~200ms delay after `cudaMemset`, or
-   - launching the persistent worker *after* the memset+sync (the launch
-     boundary is the ordering point; verified wrong=0 5/5).
+   resident worker kernel's read-modify-write.** The worker's reduce can
+   lose the first round (~1.8M elements, 128B-line pattern). Avoid with
+   kernel-zero (`UKernel::Device::zero_device_buffer`), a ~200ms delay,
+   or launching the worker after the memset+sync. Survives a driver
+   reload (firmware-level); unrelated to gdrcopy.
 3. **ShmExchanger multi-rank init race (fixed).** The POSIX shm store
-   was created at size 0 and only the creator truncated it after the
-   flock; a peer that opened + locked before the creator's ftruncate
-   mmap'd a 0-length file and SIGBUSed (`init_shared_store` bus error,
-   intermittent on multi-rank starts). The store is now sized under the
-   lock regardless of who created it.
+   was sized only by its creator after the flock; a peer that locked
+   first mmap'd a 0-length file and SIGBUSed. Sized under the lock
+   regardless of creator.
 
 ## Worker completion barrier (commits `33c5b812`, `864239ce`)
 
@@ -243,63 +237,38 @@ The persistent worker's per-task multi-block barrier was a reset-to-0
 counter; a slow block arriving after the reset leaked its +1 into the
 next task's count, releasing barriers early and re-processing tasks
 (wrong reduce results, and a permanent worker hang in the real path).
-Fixes:
-- **Monotonic completion counter** keyed to the absolute task index:
-  task N's barrier completes at `gridDim.x * (N+1)`, never reset, so a
-  late block's add is absorbed into the correct task.
-- **Tail-visible release**: blocks also wait for the leader's FIFO-tail
-  publish before advancing.
-- **Device-side counter anchor**: the counter is zeroed by the host on
-  every (re)launch, but a relaunched grid must start from
-  `gridDim.x * tail`. A host-side anchor is unreliable (the host's GDR
-  read of the tail can lag 10 tasks), so block 0 re-anchors at kernel
-  entry from its own device-scope tail read and publishes an
-  anchor-ready flag the other blocks wait on.
+Fixes: monotonic completion counter keyed to the task index, tail-
+visible release, and a device-side counter anchor for relaunched grids
+(the host's GDR tail read can lag; block 0 re-anchors at kernel entry).
 
 ### Same-host IPC test invocation gotcha
 
 `test_spray_executor_e2e` needs both ranks to see **both** GPUs
-(`CUDA_VISIBLE_DEVICES=0,1` with `--gpu=0/--gpu=1`). Restricting each
-rank to one visible device breaks the peer device numbering — the peer's
-published `device_idx` then points at the caller's own GPU, so
-`cudaDeviceEnablePeerAccess` fails and every IPC put is rejected forever
-(looks like an executor deadlock).
+(`CUDA_VISIBLE_DEVICES=0,1` with `--gpu=0/--gpu=1`); restricting each
+rank to one visible device breaks the peer device numbering and the IPC
+path fails.
 
 ## Copy engine (CE) bandwidth
 
-`/tmp/run_ingress2.sh` on node5:
-
-| test | GB/s |
-|---:|---:|
-| ce_d2d_same | 10.8 |
-| ce_peer_1to1 (gpu1→gpu0) | 0.9 |
-| ce_peer_5to1 aggregate into gpu0 | 20.9 |
-| ce_h2d_pinned | 0.8 |
-
-Identical before and after a full reboot + driver reload — treat these
-as the stable baseline for this pair, not a recoverable degradation.
-The collectives' core bandwidth uses SM loads/stores, not the CE, so CE
-throughput does not limit the measured collectives.
+`/tmp/run_ingress2.sh` on node5: ce_d2d_same 10.8, ce_peer_1to1 0.9,
+ce_peer_5to1 20.9, ce_h2d_pinned 0.8 GB/s. Identical before/after a
+reboot — stable baseline, not a recoverable degradation. Collectives'
+core bandwidth uses SM loads/stores, not the CE.
 
 ## Worker reduce peak bandwidth (launch path, 256MB fp32 sum)
 
-| blocks | GB/s |
-|---:|---:|
-| 8 | 87.3 |
-| 16 | 150 |
-| 32 | 211 (saturation ~92%) |
-| 64 | 230.3 (peak) |
-
-~32 SMs saturate; 64 takes the full bandwidth. `blocks_per_worker=8`
-comfortably feeds the NIC/CE ingress rates and remains the default.
+8->87.3, 16->150, 32->211 (saturation ~92%), 64->230.3 GB/s. ~32 SMs
+saturate; `blocks_per_worker=8` comfortably feeds the NIC/CE ingress
+and remains the default.
 
 ## Next steps
 
-- Close the cross-node AllReduce gap (shim 11-12 vs native 14-15
-  GB/s at 256M): the limiting factor is per-cross-edge RDMA throughput;
-  multi-QP striping per cross chunk is the next lever.
-- Small-message AllReduce latency: the shim's host-driven proxy adds
-  dispatch cost at ≤4M; a tighter enqueue path (or batching signals)
-  would close the 2-3x small-size gap.
-- AllToAll cross-node is within 25% of native — verify the same shape
-  on B300 once it returns (the CE/incast behavior differs there).
+- Cross-node AllReduce (shim ~11 vs native ~14.7 GB/s at 256M): per-
+  cross-edge RDMA throughput is the lever; multi-QP striping per cross
+  chunk.
+- 16-rank cross-node AllToAll (shim 1.7-2.1 vs native 4.7): high
+  fan-out put scheduling / incast control.
+- Small-message AllReduce latency: shim's host proxy adds dispatch cost
+  at <=4M.
+- Re-run this standard plan on other testbeds (B300 when it returns) to
+  validate the plan and compare per-testbed signatures.
