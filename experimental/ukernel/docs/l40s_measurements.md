@@ -59,12 +59,15 @@ verified same-node.
 - AllReduce: `-n 10 -w 2`, report out-of-place busbw. AllToAll:
   `--iters=5 --warmup=2`, report rank-0 busbw.
 - All runs 0 wrong; 240 data points total.
+- Native NCCL coll channels (from `NCCL_DEBUG=INFO` during init):
+  S2 = 4, S4 = 4, S8 = 2, X4 = 2, X8 = 2, X12 = 2. The shim has no
+  channel concept — its per-worker `UK_CCL_DEV_BLOCKS` plays that role.
 
 ## AllReduce — busbw GB/s
 
 ### S2 — 2 ranks, same node (node5)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (4ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 7.32 | 8.74 | 9.17 | 14.46 |
 | 4M | 16.33 | 20.02 | 20.32 | 20.12 |
@@ -74,7 +77,7 @@ verified same-node.
 
 ### S4 — 4 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (4ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 5.29 | 5.74 | 5.73 | 14.96 |
 | 4M | 10.48 | 13.26 | 13.36 | 21.23 |
@@ -84,7 +87,7 @@ verified same-node.
 
 ### S8 — 8 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 2.91 | 2.90 | 2.97 | 9.38 |
 | 4M | 6.44 | 6.99 | 7.10 | 14.58 |
@@ -94,7 +97,7 @@ verified same-node.
 
 ### X4 — 4 ranks cross-node (2+2)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 4.80 | 5.42 | 5.32 | 11.25 |
 | 4M | 7.69 | 9.51 | 9.69 | 13.69 |
@@ -104,7 +107,7 @@ verified same-node.
 
 ### X8 — 8 ranks cross-node (4+4)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 2.88 | 3.19 | 2.99 | 5.08 |
 | 4M | 6.61 | 8.11 | 8.03 | 14.48 |
@@ -114,7 +117,7 @@ verified same-node.
 
 ### X12 — 12 ranks cross-node (6+6)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 1.94 | 2.04 | 2.03 | 6.54 |
 | 4M | 5.30 | 6.15 | 6.10 | 12.60 |
@@ -126,7 +129,7 @@ verified same-node.
 
 ### S2 — 2 ranks, same node (node5)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (4ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 7.7 | 7.8 | 7.8 | 9.7 |
 | 4M | 16.5 | 16.8 | 16.8 | 18.1 |
@@ -136,7 +139,7 @@ verified same-node.
 
 ### S4 — 4 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (4ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 7.0 | 8.8 | 8.3 | 12.5 |
 | 4M | 13.1 | 15.3 | 16.3 | 18.3 |
@@ -146,7 +149,7 @@ verified same-node.
 
 ### S8 — 8 ranks, same node
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 4.6 | 4.5 | 4.6 | 4.8 |
 | 4M | 6.3 | 6.1 | 6.2 | 5.9 |
@@ -156,7 +159,7 @@ verified same-node.
 
 ### X4 — 4 ranks cross-node (2+2)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 6.3 | 6.5 | 6.3 | 6.8 |
 | 4M | 8.6 | 8.4 | 8.4 | 9.3 |
@@ -166,7 +169,7 @@ verified same-node.
 
 ### X8 — 8 ranks cross-node (4+4)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 5.1 | 4.9 | 4.8 | 5.3 |
 | 4M | 5.8 | 5.8 | 5.8 | 6.3 |
@@ -176,7 +179,7 @@ verified same-node.
 
 ### X12 — 12 ranks cross-node (6+6)
 
-| size | shim b1 | shim b8 | shim b32 | native |
+| size | shim b1 | shim b8 | shim b32 | native (2ch) |
 |---:|---:|---:|---:|---:|
 | 1M | 2.4 | 2.4 | 2.4 | 3.2 |
 | 4M | 2.3 | 2.4 | 2.4 | 3.5 |
