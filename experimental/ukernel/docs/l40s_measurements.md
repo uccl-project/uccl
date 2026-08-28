@@ -257,9 +257,22 @@ core bandwidth uses SM loads/stores, not the CE.
 
 ## Worker reduce peak bandwidth (launch path, 256MB fp32 sum)
 
-8->87.3, 16->150, 32->211 (saturation ~92%), 64->230.3 GB/s. ~32 SMs
-saturate; `blocks_per_worker=8` comfortably feeds the NIC/CE ingress
-and remains the default.
+| blocks | 30 x 256MB total | per-launch | GB/s |
+|---:|---:|---:|---:|
+| 1 | 0.634 s | 21.1 ms | **12.1** |
+| 8 | 0.091 s | 3.05 ms | 84.0 |
+| 32 | 0.038 s | 1.27 ms | 201 |
+| 64 | 0.036 s | 1.20 ms | 214 |
+
+~32 SMs saturate; 64 takes the full bandwidth. `blocks_per_worker=8`
+comfortably feeds the NIC/CE ingress and remains the default.
+
+Note on the numbers: the single-SM reduce ceiling is **~12 GB/s of
+data rate** (1 block). A b1 AllReduce's 25.6 GB/s busbw at 256M is
+nccl-tests' ring-exchange metric, not SM reduce throughput: with 2
+ranks the worker's critical path reduces one 128M shard at ~12 GB/s
+(~10.6ms, matching the measured ~10.5ms), while busbw counts the full
+2x data exchanged.
 
 ## Next steps
 
