@@ -83,6 +83,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
+        enable_shrink: bool = False,
         is_intranode: Optional[bool] = None,
     ) -> None:
         """
@@ -103,9 +104,15 @@ class Buffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
+            enable_shrink: whether to enable shrink mode. UCCL EP does not currently support shrink mode.
             is_intranode: whether to force intranode-only proxy mode. If set to `None`, infer it from the
                 process-group topology automatically. Explicit `True` is rejected when the group spans multiple nodes.
         """
+        if enable_shrink:
+            raise NotImplementedError(
+                "UCCL EP does not currently support enable_shrink=True"
+            )
+
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
