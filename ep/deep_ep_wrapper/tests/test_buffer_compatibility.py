@@ -6,6 +6,25 @@ from types import ModuleType
 import pytest
 
 
+@pytest.fixture
+def isolated_deep_ep_import(monkeypatch):
+    def is_deep_ep_module(name):
+        return name == "deep_ep" or name.startswith("deep_ep.")
+
+    previous_modules = {
+        name: module for name, module in sys.modules.items() if is_deep_ep_module(name)
+    }
+    for name in previous_modules:
+        sys.modules.pop(name)
+
+    yield monkeypatch
+
+    for name in list(sys.modules):
+        if is_deep_ep_module(name):
+            sys.modules.pop(name)
+    sys.modules.update(previous_modules)
+
+
 class _StubTorch(ModuleType):
     def __getattr__(self, name):
         placeholder = type(name, (), {})
@@ -45,7 +64,9 @@ def _load_deep_ep_wrapper(monkeypatch, current_device):
     return importlib.import_module("deep_ep"), torch.cuda
 
 
-def test_enable_shrink_compatibility(monkeypatch):
+def test_enable_shrink_compatibility(isolated_deep_ep_import):
+    monkeypatch = isolated_deep_ep_import
+
     def fail_if_cuda_is_queried():
         raise AssertionError("enable_shrink=True reached CUDA initialization")
 
