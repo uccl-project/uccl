@@ -157,6 +157,100 @@ any wrong data.
   rank counts, so the channels-matched column coincides with the ladder
   top. The knob spans the same parallelism space as native's channels.
 
+## Blocks-ladder saturation sweep (AllReduce)
+
+`bench/sweep_ar_blocks.sh` reruns the same AllReduce matrix over a fine
+blocks ladder (2,4,...,40,44,48,52,56,60,64; the worker caps blocks at
+64 — the 64-bit exit-rendezvous mask — and at the SM count) for ranks
+2/4/8, plus a native baseline. Single run per config; every row checked
+0 wrong (one known exception below). Full CSV:
+`/tmp/uk_single_node/logs/sweep_ar_blocks.csv` on the testbed.
+
+### Saturation summary (first blocks reaching ≥95% of the observed max)
+
+| ranks | size | shim max GB/s | 95%-sat blocks | native GB/s | max/native |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 16M | 61.8 | 28 | 284.3 | 0.22 |
+| 2 | 64M | 93.2 | 24 | 432.2 | 0.22 |
+| 2 | 256M | 309.4 | 28 | 508.8 | 0.61 |
+| 4 | 16M | 34.6 | 8 | 243.8 | 0.14 |
+| 4 | 64M | 66.0 | 60 | 539.7 | 0.12 |
+| 4 | 256M | 236.2 | 60 | 598.9 | 0.39 |
+| 8 | 16M | 20.8 | 18 | 267.1 | 0.08 |
+| 8 | 64M | 48.6 | 14 | 421.1 | 0.12 |
+| 8 | 256M | 183.0 | 48 | 654.4 | 0.28 |
+
+### 256M curve (representative points, GB/s)
+
+| blocks | np2 | np4 | np8 |
+|---:|---:|---:|---:|
+| 2 | 57 | 57 | 60 |
+| 8 | 183 | 147 | 131 |
+| 16 | 210 | 178 | 153 |
+| 20 | 207 | 202 | 158 |
+| 24 | 289 | 194 | 151 |
+| 28 | 306 | 199 | 162 |
+| 32 | 267 | 200 | 172 |
+| 40 | 256 | 186 | 170 |
+| 48 | 183 | 197 | 177 |
+| 56 | 231 | 181 | 175 |
+| 64 | 211 | 199 | 183 |
+
+Notes:
+
+- **No block count reaches native on B300.** The best shim/native ratios
+  at 256M are 0.61 (2 ranks) / 0.39 (4) / 0.28 (8); native's NVLink P2P
+  bandwidth is not reachable through the CE/IPC data path. The L40S
+  "shim wins at 16M+" story does not carry to an NVSwitch node.
+- **blocks matter most at 256M** (b1 30-34 → b28+ 180-310 GB/s); at
+  64M and below the ladder is mostly neutral, and 1-4M stays
+  latency-bound. So the shim's sweet spot is 24-32 blocks on B300 (the
+  auto default is 32), not 64 — 64 buys nothing but noise.
+- **Noise caveat:** single-run values at 256M fluctuate ±20-30%
+  run-to-run (e.g. np2 b32 measured 211 GB/s in the main suite vs 267
+  here), so the saturation block is indicative, not exact; use medians
+  of ≥3 runs for a paper figure.
+- **Known correctness bug found by the sweep:** np=8 + 1M + blocks≥33
+  produces flaky wrong sums (bad elements vary per run, up to thousands;
+  `bench/ar_check.cu` shows missing peer contributions). It is a worker
+  multi-block barrier/completion race that only manifests at the
+  smallest size — 2M and up are clean at every block count. The sweep
+  records these rows as wrong and continues; the race needs a separate
+  debugging pass on the worker barrier.
+
+## AllToAll: rotation A/B and CE contention on B300
+
+The L40S incast fix rotates each rank's per-peer send order (Latin
+square) so the synchronized collective start spreads across
+destinations. A `UK_CCL_A2A_ROTATE` knob (default 1) was added to
+`src/ccl` to A/B it on B300 (medians of 3, rank-0 busbw GB/s):
+
+| ranks | size | rotate=1 | rotate=0 (ascending) |
+|---:|---:|---:|---:|
+| 2 | 16M | 38.4 | 35.4 |
+| 2 | 64M | 61.0 | 54.8 |
+| 2 | 256M | 195.6 | 218.0 |
+| 4 | 16M | 35.8 | 37.1 |
+| 4 | 64M | 47.6 | 46.7 |
+| 4 | 256M | **186.7** | **228.9** |
+| 8 | 16M | 38.4 | 35.2 |
+| 8 | 64M | 44.7 | 46.7 |
+| 8 | 256M | 185.6 | 188.3 |
+
+**Rotation does not help on B300; at np4/256M ascending is ~23% faster**
+(228.9 vs 186.7, consistent across all three reps). Other configs are
+within noise. The L40S incast fix targets a PCIe CE/ingress arbitration
+problem that NVSwitch handles differently (the framework doc already
+flagged "NVSwitch measured the opposite CE-concurrency behavior"); the
+knob should become link-kind-aware or default off on NVSwitch nodes.
+
+`bench/ce_contention` microbench on B300: synchronized vs staggered
+start at 64MB/copy shows only ~1% penalty, but at 256MB/copy the sync
+penalty is 2-3x for some ranks (r3/r7 per-copy 82 → 30 GB/s). So CE
+synchronized-start contention exists on B300 at large copies, yet it
+does not translate into a benefit for the rotation ordering in
+`ncclAllToAll`.
+
 ## Testbed notes (B300 bring-up)
 
 1. **CUDA 13.2 is required for sm_103.** The conda nvcc 12.8 on this box
