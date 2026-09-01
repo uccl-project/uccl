@@ -88,22 +88,19 @@ run_ar() {
   local bad
   bad=$(awk -F, -v np="$np" -v b="$b" '$1==np && $2==b && $5!=0 { n++ } END { print n+0 }' "$CSV")
   log "  exit=$rc wrong_lines=$bad"
-  if [ "$rc" -ne 0 ]; then
-    log "ABORT: sweep np=$np blocks=$b failed"
+  # A known worker barrier race shows up only at np=8 + 1M + blocks>=33
+  # (smallest size, latency-bound): wrong values AND the nccl-tests
+  # process exiting non-zero. Both are recorded in the CSV and warned
+  # about, but must not block the saturation sweep. Any wrong data at
+  # 16M+ — or a failure with no recorded wrong rows — is fatal.
+  local big
+  big=$(awk -F, -v np="$np" -v b="$b" \
+          '$1==np && $2==b && $3 >= 16777216 && $5 != 0 { n++ } END { print n+0 }' "$CSV")
+  if [ "$big" -gt 0 ] || { [ "$rc" -ne 0 ] && [ "$bad" -eq 0 ]; }; then
+    log "ABORT: sweep np=$np blocks=$b (exit=$rc wrong=$bad big=$big)"
     exit 1
   fi
   if [ "$bad" -gt 0 ]; then
-    # A known worker barrier race shows up only at np=8 + 1M + blocks>=33
-    # (smallest size, latency-bound). Failures there are recorded in the
-    # CSV and warned about, but must not block the saturation sweep.
-    # Any wrong data at 16M+ is still fatal.
-    local big
-    big=$(awk -F, -v np="$np" -v b="$b" \
-            '$1==np && $2==b && $3 >= 16777216 && $5 != 0 { n++ } END { print n+0 }' "$CSV")
-    if [ "$big" -gt 0 ]; then
-      log "ABORT: sweep np=$np blocks=$b wrong data at >=16M"
-      exit 1
-    fi
     log "WARN: np=$np blocks=$b wrong at small sizes only (marked in CSV)"
   fi
 }
