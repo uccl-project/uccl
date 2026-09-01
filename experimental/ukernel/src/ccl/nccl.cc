@@ -347,6 +347,13 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return std::min(100u, v);
   }();
   cfg.a2a_hybrid_ce_pct = kA2aHybridCePct;
+  // AllToAll per-peer send rotation (Latin square). Default on; 0
+  // restores the ascending peer order (incast A/B on NVSwitch).
+  static bool const kA2aRotate = [] {
+    char const* e = std::getenv("UK_CCL_A2A_ROTATE");
+    return !e || std::string(e) != "0";
+  }();
+  cfg.a2a_rotate_order = kA2aRotate;
   // Device-completion flags for fused tasks (default on; the per-slot
   // plain-store protocol needs no host-native atomics). Only meaningful
   // with a fused mode (the wait/flag pairing lives there).

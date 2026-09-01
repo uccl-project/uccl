@@ -739,7 +739,8 @@ CollAlgo build_alltoall_pairwise_algo(CollectiveConfig const& config,
   // 2-3x per-copy penalty at 4/8 ranks). The rotation spreads the first
   // wave across distinct destinations (Latin square).
   for (int k = 1; k < config.nranks; ++k) {
-    int peer = (config.rank + k) % config.nranks;
+    int peer =
+        config.a2a_rotate_order ? (config.rank + k) % config.nranks : k;
 
     size_t send_offset = input_prefix[static_cast<size_t>(peer)];
     size_t send_bytes = input_splits[static_cast<size_t>(peer)];

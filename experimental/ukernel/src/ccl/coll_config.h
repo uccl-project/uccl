@@ -71,6 +71,13 @@ struct CollectiveConfig {
   // the rest via the device worker. Sweep to find where the CE peak
   // (synchronized copies) vs the worker's copy throughput balance.
   uint32_t a2a_hybrid_ce_pct = 50;
+  // AllToAll per-peer send rotation (UK_CCL_A2A_ROTATE, default 1): rank
+  // r sends to r+1, r+2, ... (Latin square) instead of ascending peer
+  // order, so the synchronized collective start's first wave spreads
+  // across distinct destinations instead of incasting into one peer.
+  // Set 0 to restore ascending order (A/B validation / CE-contention
+  // study on NVSwitch testbeds).
+  bool a2a_rotate_order = true;
   // Explicit ring order (a rank permutation). Empty = identity order
   // (rank+1 ring). When set, the ring collectives run over this order —
   // the seam the NIC-aware / incast-aware planner feeds. Rank-symmetric:
