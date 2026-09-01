@@ -109,7 +109,7 @@ get_ch() { grep "^$1 " "$LOGDIR/channels.txt" | tail -1 | awk '{print $2}'; }
 run_ar() {
   local label=$1 ld=$2 np=$3 blocks=$4
   local envs=(-x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1)
-  local f bad
+  local f bad wcols
   f="$LOGDIR/ar_${label}_np${np}_b${blocks}.txt"
   [ "$blocks" != "native" ] && envs+=(-x UK_CCL_DEV_BLOCKS="$blocks")
   wait_idle
@@ -121,7 +121,22 @@ run_ar() {
       -n "$ITERS" -w "$WARMUP" \
       > "$f" 2>&1
   local rc=$?
-  bad=$(awk '/^ *[0-9]+/ { if ($10 != 0) n++ } END { print n+0 }' "$f")
+  # Locate the #wrong column(s) from the header: NCCL >= 2.31 prints
+  # "error wrong" (15 cols), older prints "#wrong" (13 cols).
+  wcols=$(awk '/^#/ && /busbw/ {
+               sub(/^#/, "", $0)
+               for (i = 1; i <= NF; i++)
+                 if ($i ~ /wrong/) printf "%s ", i
+               exit
+             }' "$f")
+  bad=$(awk -v c="$wcols" '
+          BEGIN { split(c, a, " "); for (i in a) ci[a[i]] = 1 }
+          /^ *[0-9]+/ {
+            # array indices are strings; compare numerically
+            for (i in ci) if (i + 0 <= NF && $i != 0) { n++; break }
+          }
+          END { print n + 0 }
+        ' "$f")
   log "  exit=$rc wrong_lines=$bad"
   if [ "$rc" -ne 0 ] || [ "$bad" -gt 0 ]; then
     log "ABORT: allreduce $label np=$np blocks=$blocks failed"
