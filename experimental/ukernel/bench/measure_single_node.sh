@@ -78,7 +78,7 @@ bytes_of() {
 }
 
 capture_channels() {
-  local np=$1 ch
+  local np=$1 ch rc
   wait_idle
   log "== native channels np=$np =="
   env LD_LIBRARY_PATH="$NATIVE_LD" NCCL_DEBUG=INFO \
@@ -86,17 +86,25 @@ capture_channels() {
       -x LD_LIBRARY_PATH -x NCCL_DEBUG=INFO \
       "$NCCTESTS_DIR/all_reduce_perf" -b 1M -e 1M -f 4 -g 1 -c 1 -n 1 \
       > "$LOGDIR/channels_np${np}.txt" 2>&1
+  rc=$?
   ch=$(grep -oE 'nchannels [0-9]+' "$LOGDIR/channels_np${np}.txt" \
          | head -1 | awk '{print $2}')
   if [ -z "$ch" ]; then
-    log "  FAILED to capture channels (exit=$?)"
+    # NCCL < 2.31 prints per-channel topology lines ("Channel N/0 : ...")
+    # instead of an nchannels summary; the count is max id + 1.
+    ch=$(grep -oE 'Channel [0-9]+/' "$LOGDIR/channels_np${np}.txt" \
+           | sed -E 's/Channel ([0-9]+)\//\1/' | sort -n | tail -1 \
+           | awk '{print $1 + 1}')
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$ch" ]; then
+    log "  FAILED to capture channels (exit=$rc)"
     ch=0
   fi
   printf '%s %s\n' "$np" "$ch" >> "$LOGDIR/channels.txt"
   log "  native channels(np=$np)=$ch"
 }
 
-get_ch() { grep "^$1 " "$LOGDIR/channels.txt" | awk '{print $2}'; }
+get_ch() { grep "^$1 " "$LOGDIR/channels.txt" | tail -1 | awk '{print $2}'; }
 
 run_ar() {
   local label=$1 ld=$2 np=$3 blocks=$4
