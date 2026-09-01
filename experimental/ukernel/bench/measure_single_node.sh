@@ -101,6 +101,8 @@ get_ch() { grep "^$1 " "$LOGDIR/channels.txt" | awk '{print $2}'; }
 run_ar() {
   local label=$1 ld=$2 np=$3 blocks=$4
   local envs=(-x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1)
+  local f bad
+  f="$LOGDIR/ar_${label}_np${np}_b${blocks}.txt"
   [ "$blocks" != "native" ] && envs+=(-x UK_CCL_DEV_BLOCKS="$blocks")
   wait_idle
   log "== allreduce $label np=$np blocks=$blocks =="
@@ -109,13 +111,21 @@ run_ar() {
       "${envs[@]}" \
       "$NCCTESTS_DIR/all_reduce_perf" -b 1M -e 256M -f 4 -g 1 -c 1 \
       -n "$ITERS" -w "$WARMUP" \
-      > "$LOGDIR/ar_${label}_np${np}_b${blocks}.txt" 2>&1
-  log "  exit=$?  $(tail -1 "$LOGDIR/ar_${label}_np${np}_b${blocks}.txt")"
+      > "$f" 2>&1
+  local rc=$?
+  bad=$(awk '/^ *[0-9]+/ { if ($10 != 0) n++ } END { print n+0 }' "$f")
+  log "  exit=$rc wrong_lines=$bad"
+  if [ "$rc" -ne 0 ] || [ "$bad" -gt 0 ]; then
+    log "ABORT: allreduce $label np=$np blocks=$blocks failed"
+    exit 1
+  fi
 }
 
 run_a2a() {
   local label=$1 ld=$2 np=$3 bytes=$4
   local envs=(-x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1)
+  local f
+  f="$LOGDIR/a2a_${label}_np${np}_${bytes}.txt"
   [ "$label" = "shim" ] && envs+=(-x UK_CCL_DEV_BLOCKS=8)
   wait_idle
   log "== alltoall $label np=$np bytes=$bytes =="
@@ -125,8 +135,13 @@ run_a2a() {
       "${envs[@]}" \
       "$A2A_BIN" --bytes="$bytes" --iters="$A2A_ITERS" --warmup="$A2A_WARMUP" \
       $A2A_EXTRA \
-      > "$LOGDIR/a2a_${label}_np${np}_${bytes}.txt" 2>&1
-  log "  exit=$?  $(grep -m1 'busbw' "$LOGDIR/a2a_${label}_np${np}_${bytes}.txt" || tail -1 "$LOGDIR/a2a_${label}_np${np}_${bytes}.txt")"
+      > "$f" 2>&1
+  local rc=$?
+  log "  exit=$rc  $(grep -m1 'busbw' "$f" || tail -1 "$f")"
+  if [ "$rc" -ne 0 ] || grep -q "verify FAIL" "$f"; then
+    log "ABORT: alltoall $label np=$np bytes=$bytes failed"
+    exit 1
+  fi
 }
 
 main() {
