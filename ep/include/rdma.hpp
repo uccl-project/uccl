@@ -32,7 +32,7 @@ struct RDMAConnectionInfo {
   uintptr_t addr;  // Buffer address
   uint64_t len;
   uint16_t lid;     // Local ID
-  uint8_t gid[16];  // Global ID for RoCE (optional)
+  uint8_t gid[16];  // Global ID for GRH routes
 
   // Atomic buffer info (separate from main GPU buffer)
   uint32_t atomic_buffer_rkey = 0;   // Atomic buffer memory region key
