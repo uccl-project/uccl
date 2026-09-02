@@ -50,6 +50,14 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
     read_reduce_store<T>(dst + block_offset, src + block_offset,
                          static_cast<size_t>(my_count), a.red_type(),
                          smem_buf, peer_dst);
+    // The forward copy below reads the accumulator this block just
+    // reduced. The reduce's 16B TypedVec stores are strided by nthread,
+    // while the copy's 32B Vec loads span 8 floats written by different
+    // threads — without a block barrier a fast thread can forward the
+    // pre-reduce accumulator and the next rank misses this peer's
+    // contribution (observed: np4 64M wrong sums, ~19% of elements on
+    // L40S / ~1% on B300, all ranks missing the same peer).
+    __syncthreads();
     if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       // Fused reduce+copy: forward the just-reduced shard to the next
       // rank's accumulation buffer (device LD/ST write to peer, the
@@ -66,6 +74,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
     read_reduce_store_generic<T>(dst + block_offset, src + block_offset,
                                  static_cast<size_t>(my_count),
                                  a.red_type(), peer_dst);
+    __syncthreads();
     if (a.reduce_copy() && !a.rdma_fused_proxy()) {
       T* dst2 = reinterpret_cast<T*>(a.dst2);
       copy<T>(dst2 + block_offset, dst + block_offset,

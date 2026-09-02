@@ -251,6 +251,62 @@ synchronized-start contention exists on B300 at large copies, yet it
 does not translate into a benefit for the rotation ordering in
 `ncclAllToAll`.
 
+## Fused RS/AG AllReduce at b32 (fused@b32 matrix, 2026-09-01)
+
+The fused reduce+copy path (`UK_CCL_FUSE_REDUCE_COPY=1` +
+`UK_CCL_FUSE_AG_COPY=1`) at `UK_CCL_DEV_BLOCKS=32`, with the fused-path
+tile config (LT=16 TM=8M IB=16, the Appendix C optimum), across ranks
+2/4/8 and sizes 1M..256M (f4), n=10 w=2, OOP/In-place busbw. Native =
+system NCCL 2.29.7, 32 channels = 32 SMs (native's exact SM count is its
+channel count), so fused@b32 is the SM-matched comparison. All runs 0
+wrong (this matrix previously could not be completed — see the bug
+below).
+
+### AllReduce — busbw GB/s (fused@b32 tuned vs native)
+
+| size | fused np2 | native np2 | fused np4 | native np4 | fused np8 | native np8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 6.8 | 58.3 | 5.1 | 38.3 | 2.9 | 54.1 |
+| 4M | 26.0 | 94.6 | 19.1 | 97.5 | 11.4 | 123.7 |
+| 16M | 85.1 | 288.0 | 65.3 | 205.8 | 38.8 | 268.4 |
+| 64M | 212.2 | 432.4 | 186.5 | 479.8 | 114.7 | 419.6 |
+| 256M | 336.1 | 508.7 | 311.8 | 597.0 | 286.5 | 651.7 |
+
+256M medians of 3 (busbw GB/s): fused 345.0 / 313.9 / 269.5 vs native
+509.7 / 598.8 / 651.7 for np2/4/8. Fusion keeps the 256M shim/native
+ratio near 0.66-0.52 from 2 to 8 ranks (vs the unfused b32 0.29-0.42 in
+the main matrix above), and 64M+ now scales with rank count instead of
+flatlining — the fused path removes the per-hop host transitions that
+capped the unfused ring.
+
+Note: the np4 native 256M cell above is a re-run confirmation (~597,
+3×); the in-matrix run measured 516.6 while a co-tenant job had grabbed
+the GPUs mid-run. Other cells ran on idle GPUs.
+
+### Correctness bug found and fixed (blocks the pre-fix matrix)
+
+Pre-fix, fused reduce+copy produced **wrong sums at np≥4** in a
+size/block-dependent window: np4 + default 1M tiles wrong at ~17M up,
+np4 + tuned tiles clean, np8 + tuned wrong at 16M/32M (deterministic),
+np8 + b64 wrong even at 64M/256M. Fused RS alone reproduced; fused AG
+alone was clean; `UK_CCL_DEVICE_FLAGS=0` did not change it (not the
+flag protocol). `ar_check` showed missing peer contributions (np4 dev =
+-1/4 × expected = one rank's share absent; all ranks wrong on the same
+indices; segments 512B-aligned; totals varied run to run → race, not
+determinism). Same signature on L40S but ~19% of elements wrong vs ~1%
+on B300 (PCIe timing window is wider).
+
+Root cause: in `run_reduce`, the reduce writes the accumulator with
+16B `TypedVec` stores strided by `nthread`, then the forward copy reads
+it back with 32B `Vec` loads that span 8 floats written by *different*
+threads — with no `__syncthreads()` between reduce and copy, a fast
+thread forwarded the pre-reduce accumulator, so the next ring rank
+missed this peer's contribution. Fix: block barrier between the reduce
+and the forward copy in both the fast and generic dtype paths
+(`reduce_dispatch.h`). Post-fix: np4/64M, np4/256M, np8/16M, np8/32M,
+np8/64M, np8/256M all 0 wrong on B300; L40S np4/64M default and tuned
+configs 0 wrong (fused RS-only, AG-only, and RS+AG).
+
 ## Testbed notes (B300 bring-up)
 
 1. **CUDA 13.2 is required for sm_103.** The conda nvcc 12.8 on this box
