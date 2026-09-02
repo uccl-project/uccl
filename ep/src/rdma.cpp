@@ -393,6 +393,11 @@ char const* rdma_hca_filter_from_env() {
   return ib_hca;
 }
 
+bool dedicated_nic_per_gpu_enabled() {
+  char const* env = getenv("UCCL_EP_DEDICATED_NIC_PER_GPU");
+  return env && std::atoi(env) != 0;
+}
+
 bool rdma_device_matches_filter(char const* name, int port,
                                 char const* ib_hca) {
   struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
@@ -568,6 +573,12 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         use_ll_sl = true;
       }
 #endif
+      if (dedicated_nic_per_gpu_enabled()) {
+        auto const& dedicated_candidates =
+            numa_candidates.empty() ? candidates : numa_candidates;
+        selected_nic_name = dedicated_candidates[nic_affinity_rank %
+                                                 dedicated_candidates.size()];
+      }
     }
   }
 
