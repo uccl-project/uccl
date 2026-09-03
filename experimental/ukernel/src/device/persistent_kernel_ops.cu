@@ -305,15 +305,57 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         uint64_t mask = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
             &d_sync->exitReadyMask, mscclpp::memoryOrderAcquire);
         if (mask == all_blocks_mask) {
-          // The grid is actually leaving now: publish the host-visible
-          // flag only here, so the host's relaunch never races a grid
-          // that is still busy processing (it would block its stream
-          // sync until termination that never comes).
-          if (exited_flag) {
-            *exited_flag = true;
-            __threadfence_system();
+          if (bid == 0) {
+            // Coordinator: the vote mask being all-ones only means every
+            // block was idle long enough to vote — the host can push a
+            // task in the same window. If we exit while another block
+            // then sees that task, clears its vote and processes it, the
+            // grid is left with fewer than gridDim.x blocks and the
+            // task's completion barrier can never be reached (permanent
+            // stall; the host's relaunch waits on this never-terminating
+            // grid). Re-check the FIFO: commit the exit only when it is
+            // truly empty; otherwise cancel by clearing the mask so every
+            // block falls through to the work branch below.
+            uint64_t h =
+                mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+                    fifo.head, mscclpp::memoryOrderAcquire);
+            uint64_t t =
+                mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+                    fifo.tail, mscclpp::memoryOrderAcquire);
+            if (h == t) {
+              mscclpp::atomicStore<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitGo, 1ull, mscclpp::memoryOrderRelease);
+              if (exited_flag) {
+                *exited_flag = true;
+                __threadfence_system();
+              }
+              do_exit = true;
+            } else {
+              // New work arrived in the exit window: cancel the exit so
+              // no block leaves. Clearing the mask makes every other
+              // block fall through to the work branch below.
+              mscclpp::atomicStore<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitReadyMask, 0ull,
+                  mscclpp::memoryOrderRelease);
+              own_idle_vote = false;
+              idle_deadline_active = false;
+              idle_deadline = 0;
+            }
+          } else {
+            // Non-coordinator: never exit on our own. Wait for block 0's
+            // decision — exitGo set (leave together) or the vote mask
+            // cleared (work arrived; fall through and process it).
+            uint64_t go = 0;
+            uint64_t m = mask;
+            while (go == 0 && m == all_blocks_mask) {
+              go = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitGo, mscclpp::memoryOrderAcquire);
+              m = mscclpp::atomicLoad<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitReadyMask, mscclpp::memoryOrderAcquire);
+              if (go == 0 && m == all_blocks_mask) idle_sleep();
+            }
+            if (go != 0) do_exit = true;
           }
-          do_exit = true;
         }
       }
     }

@@ -469,13 +469,16 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
       for (uint32_t fid = 0; fid < cfg_.max_fifos; ++fid) {
         if (pending_by_fifo_[fid].empty()) continue;
         auto ht = worker_pool_->fifo_head_tail(fid);
+        // Host-visible exit flag: distinguishes "worker idle-exited and
+        // needs a relaunch" from "worker alive but stuck on a task".
+        bool exited = worker_pool_->worker_exited(fid);
         std::fprintf(stderr,
                      "[dev-stall] fifo%u pending=%zu front_tid=%llu "
-                     "head=%llu tail=%llu\n",
+                     "head=%llu tail=%llu exited=%d\n",
                      fid, pending_by_fifo_[fid].size(),
                      (unsigned long long)pending_by_fifo_[fid].front().task_id,
                      (unsigned long long)ht.first,
-                     (unsigned long long)ht.second);
+                     (unsigned long long)ht.second, (int)exited);
       }
     } else if (count > 0) {
       stall_iters = 0;

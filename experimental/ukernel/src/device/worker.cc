@@ -1,5 +1,6 @@
 #include "worker.h"
 #include "persistent_kernel_ops.h"
+#include "../../include/util/uk_debug.h"
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
@@ -320,6 +321,10 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
     if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
         // Atomic claim so concurrent enqueue/sync callers relaunch once.
         __atomic_exchange_n(wc->h_exited, false, __ATOMIC_ACQ_REL)) {
+      static int relaunch_count = 0;
+      if (uk_dbg_lvl() >= UK_DBG_LVL_EXEC && (++relaunch_count % 100) <= 5)
+        std::fprintf(stderr, "[relaunch] fifo%u relaunch #%d\n", fifoId,
+                     relaunch_count);
       launchWorkerForFifo(i);
       return;
     }

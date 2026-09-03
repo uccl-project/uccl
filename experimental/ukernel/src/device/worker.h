@@ -85,6 +85,14 @@ class WorkerPool {
     return {fifos_[fifoId]->fifo.head(), fifos_[fifoId]->fifo.currentId()};
   }
 
+  // Diagnostic: host-visible exit flag for the worker bound to fifoId.
+  bool worker_exited(uint32_t fifoId) const {
+    for (auto const& wc : workers_)
+      if (wc->fifoId == fifoId && wc->launched && wc->h_exited)
+        return *wc->h_exited;
+    return false;
+  }
+
   gpuStream_t control_stream() const { return control_stream_; }
 
   uint32_t num_fifos() const { return static_cast<uint32_t>(fifos_.size()); }

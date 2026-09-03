@@ -43,6 +43,18 @@ struct alignas(16) MultiBlockSync {
   // wait for it before processing tasks. The host zeroes this on every
   // (re)launch, so a fresh grid always re-anchors.
   uint64_t anchorReady;
+  // Exit decision gate (0 = undecided / cancel, 1 = commit exit). The
+  // exit vote mask reaching all-ones means every block is idle, but the
+  // host can push a task in the same window: if one block exits while
+  // another sees the task, clears its vote and processes it, the grid is
+  // left with fewer than gridDim.x blocks and that task's completion
+  // barrier can never be reached (permanent stall; the host's relaunch
+  // waits on this never-terminating grid). One block (the coordinator,
+  // winner of the CAS below) re-checks the FIFO and commits a single
+  // decision: exitGo=1 makes EVERY block leave together (host relaunch
+  // picks up any task pushed in the window), or it cancels by clearing
+  // the vote mask so all blocks fall through to the work branch.
+  uint64_t exitGo;
 };
 
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
