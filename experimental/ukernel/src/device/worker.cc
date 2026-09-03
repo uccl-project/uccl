@@ -57,6 +57,7 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     d_stop_flags_.push_back(d_stop);
     h_stop_flags_.push_back(h_stop);
   }
+  fifo_task_args_.assign(cfg_.numMaxWorkers, nullptr);
   GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
 }
 
@@ -362,7 +363,18 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   // removes a multi-ms stall from the enqueue path (the old grid only
   // terminates after the idle grace elapses).
 
-  auto* d_task_args = TaskManager::instance().d_task_args();
+  auto* d_task_args =
+      worker.fifoId < fifo_task_args_.size()
+          ? fifo_task_args_[worker.fifoId]
+          : nullptr;
+  if (d_task_args == nullptr) {
+    // Should never happen: DeviceBackend registers a per-fifo pool before
+    // the first launch. Fail loudly instead of launching a kernel whose
+    // args reads would fault.
+    throw std::runtime_error(
+        "WorkerPool: no TaskArgs pool registered for fifo " +
+        std::to_string(worker.fifoId));
+  }
 
   dim3 grid(worker.numBlocks);
   dim3 block(cfg_.threadsPerBlock);

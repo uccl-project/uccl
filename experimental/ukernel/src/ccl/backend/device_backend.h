@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../device/task.h"
 #include "backend.h"
 #include <atomic>
 #include <cstdint>
@@ -65,9 +66,14 @@ class DeviceBackend final : public BatchBackend {
   int sm_count_ = 1;
   int device_idx_ = 0;
 
-  bool owns_task_manager_ = false;
-
   std::unique_ptr<UKernel::Device::WorkerPool> worker_pool_;
+  // Per-fifo TaskArgs pools (one per worker). Each worker kernel reads
+  // args only from its own pool, so two concurrent workers never share a
+  // single args array (the old shared singleton raced under multi-fifo
+  // load). Pools are sized task_capacity/max_fifos; a fifo may momentarily
+  // hold more than its share only if the executor over-commits, which the
+  // per-fifo capacity check below already prevents.
+  std::vector<std::unique_ptr<UKernel::Device::TaskManager>> args_pools_;
 
   // FIFO management
   uint32_t next_fifo_ = 0;

@@ -49,15 +49,16 @@ DeviceBackend::DeviceBackend(DeviceBackendConfig const& cfg) : cfg_(cfg) {
   GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount,
                                      device_idx_));
   pending_by_fifo_.resize(cfg_.max_fifos);
+  args_pools_.reserve(cfg_.max_fifos);
+  for (uint32_t i = 0; i < cfg_.max_fifos; ++i)
+    args_pools_.push_back(std::make_unique<UKernel::Device::TaskManager>());
   ensure_runtime();
 }
 
 DeviceBackend::~DeviceBackend() {
   worker_pool_.reset();
-  if (owns_task_manager_) {
-    Device::TaskManager::instance().release();
-    owns_task_manager_ = false;
-  }
+  for (auto& pool : args_pools_) pool->release();
+  args_pools_.clear();
 }
 
 bool DeviceBackend::supports(LogicalOpKind kind) const {
@@ -72,10 +73,6 @@ void DeviceBackend::ensure_runtime() {
     GPU_RT_CHECK(gpuSetDevice(device_idx_));
     tls_last_device = device_idx_;
   }
-  if (!Device::TaskManager::instance().inited()) {
-    Device::TaskManager::instance().init(cfg_.task_capacity);
-    owns_task_manager_ = true;
-  }
   if (worker_pool_) return;
   Device::WorkerPool::Config wc;
   wc.numMaxWorkers = cfg_.max_fifos;
@@ -84,6 +81,14 @@ void DeviceBackend::ensure_runtime() {
   wc.smemSize = cfg_.smem_size;
   wc.idleExitAfterUs = cfg_.idle_exit_after_us;
   worker_pool_ = std::make_unique<Device::WorkerPool>(wc);
+  // Init one args pool per fifo and register each pool with its worker so
+  // no two workers share a TaskArgs array.
+  size_t per_pool = (cfg_.task_capacity + cfg_.max_fifos - 1) /
+                    cfg_.max_fifos;
+  for (uint32_t i = 0; i < cfg_.max_fifos; ++i) {
+    args_pools_[i]->init(static_cast<uint32_t>(per_pool));
+    worker_pool_->set_fifo_task_args(i, args_pools_[i]->d_task_args());
+  }
   // Pre-create all workers at init. Lazy creation (bind on first use)
   // was tried twice and reverted: (1) the process's FIRST kernel launch
   // from a busy multi-threaded context hangs CUDA 13.3's cuLaunchKernel
@@ -379,8 +384,9 @@ size_t DeviceBackend::do_enqueue_reserved_batch(Cmd const* cmds,
       next_fifo_ = (next_fifo_ + 1) % cfg_.max_fifos;
     }
 
-    auto task = Device::TaskManager::instance().create_task(
-        args, tt, to_device_dtype(cmds[accepted].dtype), 0);
+    auto task =
+        args_pools_[fid]->create_task(
+            args, tt, to_device_dtype(cmds[accepted].dtype), 0);
     if (task.type_u8() == 0) {
       UK_DBG(UK_DBG_LVL_EXEC, "[dev-enq] create_task failed (pool empty?)");
       break;
@@ -421,9 +427,13 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   GPU_RT_CHECK(gpuGetDevice(&prev_device));
   if (prev_device != device_idx_) GPU_RT_CHECK(gpuSetDevice(device_idx_));
   size_t count = 0;
-  // Args slots to recycle, freed in one batch after pending_mu_ is
-  // released. Draining is capped by the buffer; callers loop anyway.
-  uint32_t args_buf[256];
+  // Args slots to recycle, freed after pending_mu_ is released. Records
+  // carry their fifo so each slot returns to its own pool.
+  struct RecycleRec {
+    uint32_t fifo_id;
+    uint32_t args_id;
+  };
+  RecycleRec args_buf[256];
   {
     std::lock_guard<std::mutex> lk(pending_mu_);
     // A task that raced the kernel's idle exit gets its worker
@@ -443,7 +453,7 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
       while (!q.empty() && count < max &&
              count < sizeof(args_buf) / sizeof(args_buf[0]) &&
              worker_pool_->is_done(q.front().task_id, fid)) {
-        args_buf[count] = q.front().args_id;
+        args_buf[count] = {fid, q.front().args_id};
         completed[count++] = q.front().cmd_idx;
         q.pop_front();
       }
@@ -471,7 +481,14 @@ size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
       stall_iters = 0;
     }
   }
-  Device::TaskManager::instance().free_task_args_batch(args_buf, count);
+  // Group recyclable slots by fifo and hand each batch to its pool.
+  for (uint32_t f = 0; f < cfg_.max_fifos; ++f) {
+    uint32_t ids[256];
+    size_t n = 0;
+    for (size_t i = 0; i < count; ++i)
+      if (args_buf[i].fifo_id == f) ids[n++] = args_buf[i].args_id;
+    if (n) args_pools_[f]->free_task_args_batch(ids, n);
+  }
   if (prev_device != device_idx_) {
     // Restoring the caller's device can fail when its CUDA context cannot
     // be (re)created under memory pressure (observed on a VLLM-co-resident

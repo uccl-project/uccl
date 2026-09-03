@@ -70,6 +70,15 @@ class WorkerPool {
   // per task) — deferred until a real multi-writer caller exists.
   // relaunch_if_exited / sync / is_done are safe from any thread.
 
+  // Per-fifo TaskArgs pool base pointer. Each worker kernel reads args
+  // only from its own pool (never the shared singleton), so concurrent
+  // workers on different fifos do not race on one args array. Must be set
+  // before createWorker()/relaunch; a worker launched with a null pool
+  // faults on its first task.
+  void set_fifo_task_args(uint32_t fifoId, TaskArgs* pool) {
+    if (fifoId < fifo_task_args_.size()) fifo_task_args_[fifoId] = pool;
+  }
+
   // Diagnostic: (head, tail) of a fifo as seen by the host (GDR reads).
   std::pair<uint64_t, uint64_t> fifo_head_tail(uint32_t fifoId) {
     if (fifoId >= fifos_.size()) return {0, 0};
@@ -118,6 +127,9 @@ class WorkerPool {
   Config cfg_;
   std::vector<std::unique_ptr<FifoContext>> fifos_;
   std::vector<std::unique_ptr<WorkerContext>> workers_;
+  // Args pool base per fifo (owned by DeviceBackend; WorkerPool only
+  // forwards it into each launch).
+  std::vector<TaskArgs*> fifo_task_args_;
 
   // Control stream for host-driven runtime coordination. This is distinct from
   // the per-worker execution streams stored in WorkerContext.

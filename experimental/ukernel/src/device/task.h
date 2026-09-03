@@ -202,6 +202,11 @@ class TaskManager {
     static TaskManager inst;
     return inst;
   }
+  // Per-fifo args pools: each worker kernel reads TaskArgs only from the
+  // pool its fifo was launched with (see WorkerPool/DeviceBackend), so
+  // two concurrent workers never share or race on a single args array.
+  // Plain construction is allowed; call init() before create_task().
+  TaskManager() = default;
   // forbid copy/move
   TaskManager(TaskManager const&) = delete;
   TaskManager& operator=(TaskManager const&) = delete;
@@ -338,8 +343,6 @@ class TaskManager {
   TaskArgs* d_task_args() const { return d_task_; }
 
  private:
-  TaskManager() = default;
-
   void release_nolock_() {
 #ifndef __CUDA_ARCH__
     gdr_task_.reset();
