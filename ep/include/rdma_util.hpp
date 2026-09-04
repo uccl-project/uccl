@@ -2,6 +2,7 @@
 #define RDMA_UTIL_HPP
 
 #include "rdma.hpp"
+#include "rdma_addressing.hpp"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -32,54 +33,20 @@ static inline void fill_local_gid(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     exit(1);
   }
 
-  // For RoCE (Ethernet), we need to fill the GID
-  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
-      port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED) {
-    union ibv_gid local_gid;
-    int gid_index = S.gid_index;
-    // EFA:
-    if (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED) gid_index = 0;
-
-    if (ibv_query_gid(S.context, 1, gid_index, &local_gid)) {
+  // Advertise the GID selected for this port so a peer that requires a global
+  // route receives the matching destination GID. EFA uses its fixed GID index.
+  union ibv_gid local_gid;
+  int const gid_index = rdma_gid_index_for_port(port_attr, S.gid_index);
+  if (ibv_query_gid(S.context, 1, gid_index, &local_gid)) {
+    if (rdma_port_requires_gid(port_attr)) {
       perror("Failed to query GID");
       exit(1);
     }
-
-    // Copy the GID to the connection info
-    memcpy(local_info->gid, &local_gid, 16);
-    // printf(
-    //     "[RDMA] Local GID filled for RoCE (Ethernet) connection: "
-    //     "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%"
-    //     "02x\n",
-    //     local_info->gid[0], local_info->gid[1], local_info->gid[2],
-    //     local_info->gid[3], local_info->gid[4], local_info->gid[5],
-    //     local_info->gid[6], local_info->gid[7], local_info->gid[8],
-    //     local_info->gid[9], local_info->gid[10], local_info->gid[11],
-    //     local_info->gid[12], local_info->gid[13], local_info->gid[14],
-    //     local_info->gid[15]);
-  } else {
-    // For InfiniBand, GID is not strictly required, but we can still fill it
-    union ibv_gid local_gid;
-    if (ibv_query_gid(S.context, 1, 0, &local_gid) == 0) {
-      memcpy(local_info->gid, &local_gid, 16);
-      // printf(
-      //     "[RDMA] Local GID filled for InfiniBand connection: "
-      //     "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%"
-      //     "02x\n",
-      //     local_info->gid[0], local_info->gid[1], local_info->gid[2],
-      //     local_info->gid[3], local_info->gid[4], local_info->gid[5],
-      //     local_info->gid[6], local_info->gid[7], local_info->gid[8],
-      //     local_info->gid[9], local_info->gid[10], local_info->gid[11],
-      //     local_info->gid[12], local_info->gid[13], local_info->gid[14],
-      //     local_info->gid[15]);
-    } else {
-      // If GID query fails for InfiniBand, zero it out
-      memset(local_info->gid, 0, 16);
-      // printf(
-      //     "[RDMA] GID zeroed for InfiniBand connection (GID query
-      //     failed)\n");
-    }
+    memset(local_info->gid, 0, 16);
+    return;
   }
+
+  memcpy(local_info->gid, &local_gid, 16);
 }
 
 // Helper functions for ncclIbGetGidIndex
