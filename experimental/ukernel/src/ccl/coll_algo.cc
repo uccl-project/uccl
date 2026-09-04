@@ -383,9 +383,14 @@ void emit_ring_allgather(RingTopology const& ring,
 
 CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
                                    bool inplace) {
-  RingTopology ring = config.ring_order.empty()
-                          ? RingTopology(config.nranks)
-                          : RingTopology(config.ring_order);
+  std::vector<int> base_order;
+  if (config.ring_order.empty()) {
+    base_order.resize(static_cast<size_t>(config.nranks));
+    for (int i = 0; i < config.nranks; ++i)
+      base_order[static_cast<size_t>(i)] = i;
+  } else {
+    base_order = config.ring_order;
+  }
   CollAlgo algo = make_empty_algo(config);
   algo.kind = CollKind::AllReduceRing;
   // In-place: RS partials accumulate in a full-input-layout Tmp region
@@ -407,6 +412,7 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
   if (base_seg == 0 ||
       base_seg * channels != config.input_bytes ||
       (base_seg % static_cast<size_t>(config.nranks)) != 0) {
+    RingTopology ring(base_order);
     std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks),
                                     kNoOp);
     emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace,
@@ -417,6 +423,16 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
   }
   uint32_t const pair_stride = static_cast<uint32_t>(2 * config.nranks);
   for (uint32_t c = 0; c < channels; ++c) {
+    // Rotate the ring order per channel so channel c's step k hops are
+    // on a different rank pair than channel 0's. With a shared order,
+    // every channel's step k is the same (rank k -> k+1) transfer, so
+    // parallel channels still serialize onto one NIC pair; rotation
+    // spreads concurrent hops across distinct ranks (and their NICs).
+    std::vector<int> corder = base_order;
+    size_t const rot = static_cast<size_t>(c) % corder.size();
+    if (rot > 0)
+      std::rotate(corder.begin(), corder.begin() + rot, corder.end());
+    RingTopology ring(corder);
     // Each channel runs the full RS/AG circulation over its own byte
     // interval with an isolated ready set and pair namespace.
     std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks),
