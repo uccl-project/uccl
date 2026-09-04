@@ -504,6 +504,17 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t count,
   cfg.output_bytes = out_bytes;
   cfg.tile_bytes = adaptive_tile_bytes(out_bytes);
   cfg.dtype = to_scalar(datatype);
+  if (!inplace) {
+    // AllGather is data-only: publish the own shard with the copy engine
+    // on the user stream (AllToAll-style) so the persistent worker stays
+    // out of the standalone AllGather data path (0 worker SMs).
+    size_t off = static_cast<size_t>(comm->rank) * count * elem_sz;
+    if (gpuMemcpyAsync(static_cast<char*>(recvbuff) + off, sendbuff,
+                       count * elem_sz, gpuMemcpyDeviceToDevice, stream) !=
+        gpuSuccess)
+      return ncclUnhandledCudaError;
+    cfg.external_self_slice = true;
+  }
   return run_coll(comm, cfg, const_cast<void*>(sendbuff), recvbuff, stream);
 }
 

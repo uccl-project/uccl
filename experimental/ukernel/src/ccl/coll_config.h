@@ -39,12 +39,12 @@ struct CollectiveConfig {
   // for AllReduce/AllToAll the executor also accepts input==output as
   // the implicit form.
   bool inplace = false;
-  // Out-of-place AllToAll: the caller (nccl.cc shim) performs the
-  // self-slice Input->Output copy itself (cudaMemcpyAsync on the user
-  // stream), so the plan must NOT emit the pairless local copy op —
-  // which would otherwise run on the persistent worker (SM copy) and
-  // make the collective slow at low BLK. Default false: the executor
-  // level (spray) keeps the in-plan copy.
+  // Out-of-place AllToAll/AllGather: the caller (nccl.cc shim) performs
+  // the self-slice / own-shard Input->Output publish copy itself
+  // (cudaMemcpyAsync on the user stream), so the plan must NOT emit the
+  // pairless local copy op — which would otherwise run on the persistent
+  // worker (SM copy) and make the data-only collective SM-resident.
+  // Default false: the executor level (spray) keeps the in-plan copy.
   bool external_self_slice = false;
   // Fused reduce+copy (AllReduceRing RS phase): each RecvReduce task
   // also copies its reduced shard to the next rank's accumulation buffer

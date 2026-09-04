@@ -570,9 +570,13 @@ CollAlgo build_allgather_ring_algo(CollectiveConfig const& config,
   // Local copy of the own shard into the output layout. Independent of
   // the send path; only run completion orders it before the user read.
   // In-place: the shard is already at Output[offset(rank)] — no copy.
+  // Out-of-place with external_self_slice: nccl.cc already published the
+  // own shard with a user-stream copy-engine memcpy, so the plan must
+  // not add the worker copy (standalone AllGather then runs 0 worker
+  // SMs, the same rule as AllToAll).
   size_t own_bytes = balanced_shard_size_bytes(
       config.output_bytes, elem_bytes, config.nranks, config.rank);
-  if (!inplace && own_bytes > 0) {
+  if (!inplace && own_bytes > 0 && !config.external_self_slice) {
     size_t offset = balanced_shard_offset_bytes(
         config.output_bytes, elem_bytes, config.nranks, config.rank);
     builder.add_op(AlgoOpKind::Put, own_bytes, 0, offset, -1, -1, {},

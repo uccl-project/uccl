@@ -32,13 +32,16 @@ Measured budgets: `B = 32` coll channels at S2/S4/S8
 |---|---:|---:|---:|
 | AllReduce (fused) | 32 | 32 | 28 |
 | ReduceScatter | 32 | 28 | 32 |
-| AllGather | 28 | 32 | 24 |
+| AllGather | CE (0 SM) | CE (0 SM) | CE (0 SM) |
 | AllToAll | CE (0 SM) | CE (0 SM) | CE (0 SM) |
 
 AllReduce fused env: `UK_CCL_FUSE_REDUCE_COPY=1 UK_CCL_FUSE_AG_COPY=1
 UK_CCL_DEV_BLOCKS=b UK_CCL_LARGE_TILES=16 UK_CCL_TILE_MIN_BYTES=8M
-UK_CCL_IPC_BATCH=16`. ReduceScatter/AllGather run with `DEV_BLOCKS=b`
-only (standalone RS/AG have no reduce+copy composition to fuse).
+UK_CCL_IPC_BATCH=16`. ReduceScatter runs with `DEV_BLOCKS=b`; standalone
+AllGather is data-only and the shim publishes its own shard with a
+user-stream copy-engine memcpy (AllToAll-style, 2026-09-04 change), so
+the AllGather plan has no worker ops and is measured at **0 worker SMs**
+(`DEV_BLOCKS=1` keeps the pre-created worker minimal).
 
 ## AllReduce (fused) — busbw GB/s (median of 3), shim vs native 32ch
 
@@ -65,19 +68,20 @@ SMs than native's 32**).
 
 256M ratio to native: 0.33 / 0.27 / 0.25.
 
-## AllGather — busbw GB/s (median of 3), shim vs native 32ch
+## AllGather — busbw GB/s (median of 3), shim CE path (0 SM) vs native 32ch
 
 | size | sh2 | nat2 | sh4 | nat4 | sh8 | nat8 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1M | 4.68 | 32.17 | 3.27 | 44.57 | 1.78 | 35.98 |
-| 4M | 17.97 | 72.05 | 14.24 | 108.45 | 7.59 | 108.24 |
-| 16M | 36.73 | 201.20 | 37.19 | 205.46 | 20.76 | 283.94 |
-| 64M | 42.87 | 335.65 | 42.13 | 451.35 | 44.51 | 411.24 |
-| 256M | 193.20 | 414.36 | 172.31 | 534.01 | 170.66 | 585.63 |
+| 1M | 5.68 | 33.27 | 4.10 | 43.64 | 2.03 | 39.04 |
+| 4M | 21.64 | 72.63 | 17.27 | 108.89 | 7.04 | 112.51 |
+| 16M | 42.20 | 201.31 | 40.94 | 202.11 | 26.67 | 287.46 |
+| 64M | 60.01 | 335.81 | 52.27 | 449.87 | 48.75 | 413.62 |
+| 256M | 226.40 | 413.91 | 205.15 | 533.45 | 215.69 | 584.94 |
 
-256M ratio to native: 0.47 / 0.32 / 0.29. AllGather ring hops ride
-CE/IPC; only the local publish copy touches the worker, which is why
-256M still needs 24-28 blocks but stays inside the budget.
+256M ratio to native: 0.55 / 0.38 / 0.37. Ring hops ride CE/IPC and the
+own-shard publish copy is externalized to the user-stream copy engine,
+so standalone AllGather uses no worker SMs — and is 10-26% faster at
+256M than the earlier worker-local-copy variant (193/172/171 GB/s).
 
 ## AllToAll — busbw GB/s (median of 3), shim pure CE path (0 SM)
 
@@ -126,8 +130,9 @@ count in the host drain paths (signal + device), not in dispatch.
   341→317→247 while native rises 509→596→652.
 - Blocks: fused AllReduce at 256M keeps rising to the 32-block budget
   (best = b*), so the NVLink large-message regime has no "fewer SMs"
-  margin except the np8 cell (28 < 32); the 0-SM AllToAll path is where
-  the SM savings are largest.
+  margin except the np8 cell (28 < 32); AllGather and AllToAll are both
+  pure CE paths at 0 worker SMs, which is where the SM savings are
+  largest.
 - Fusion ablation (fixed b32, prior medians): fused/unfused 256M ratio
   to native 0.65/0.52/0.41 vs 0.42/0.42/0.26; fusion win is largest at
   16-64M (removes per-hop host transitions).

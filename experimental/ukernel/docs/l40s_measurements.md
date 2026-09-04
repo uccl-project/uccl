@@ -36,7 +36,9 @@ Measured budgets (native coll channels, `NCCL_DEBUG=INFO`):
 | B | 4 | 4 | 2 | 2 | 2 | 2 |
 
 Best `b*` (256 MiB basis): AllReduce 1 everywhere; ReduceScatter S2=4,
-S4=2, S8/X4/X8=1, X16=2; AllGather 1 everywhere.
+S4=2, S8/X4/X8=1, X16=2; AllGather and AllToAll are pure CE paths at
+**0 worker SMs** (the shim publishes AllGather's own shard with a
+user-stream copy-engine memcpy, so no worker op exists in the plan).
 
 ## AllReduce — busbw GB/s (median of 3), shim (unfused CE/IPC) vs native
 
@@ -64,15 +66,18 @@ at 256M and `b=2` at 16-64M). Native rows are unchanged across sizes.
 
 Shim blocks: S2=4, S4=2, S8/X4/X8=1 (≤4M uses 2 on S8/X*), X16=2.
 
-## AllGather — busbw GB/s (median of 3), shim b=1 (CE + local publish copy)
+## AllGather — busbw GB/s (median of 3), shim CE path (0 SM) vs native
 
 | size | S2 sh/nat | S4 sh/nat | S8 sh/nat | X4 sh/nat | X8 sh/nat | X16 sh/nat |
 |---|---:|---|---:|---|---:|---|---:|---|---:|
-| 1M | 8.42/10.92 | 6.11/12.22 | 3.18/8.49 | 5.75/9.37 | 3.60/7.96 | 1.74/5.82 |
-| 4M | 17.48/17.90 | 14.46/19.59 | 8.01/13.95 | 9.84/12.67 | 8.77/13.95 | 5.71/11.70 |
-| 16M | 21.83/19.98 | 21.11/21.36 | 13.40/14.29 | 11.19/13.25 | 11.29/14.65 | 11.44/15.22 |
-| 64M | 23.00/20.55 | 23.82/21.41 | 14.42/14.29 | 11.46/13.18 | 11.33/14.56 | 11.69/14.88 |
-| 256M | 25.20/20.75 | 25.47/21.49 | 15.37/14.39 | 10.99/13.16 | 11.30/14.52 | 11.21/14.86 |
+| 1M | 9.61/11.09 | 6.59/12.53 | 3.53/8.55 | 5.89/9.50 | 3.62/7.82 | 1.83/5.74 |
+| 4M | 17.65/18.12 | 14.75/19.71 | 8.57/13.82 | 10.19/12.78 | 8.51/13.90 | 5.90/11.87 |
+| 16M | 21.81/20.07 | 23.05/21.39 | 14.39/14.30 | 11.38/13.23 | 11.52/14.68 | 11.45/14.97 |
+| 64M | 23.14/20.56 | 24.15/21.38 | 14.77/14.27 | 11.60/13.16 | 11.34/14.55 | 11.61/14.88 |
+| 256M | 23.84/20.79 | 25.10/21.50 | 15.65/14.36 | 10.92/13.16 | 11.26/14.52 | 11.20/14.83 |
+
+The CE-external AllGather matches the previous worker-local-copy numbers
+within noise at 0 worker SMs.
 
 ## AllToAll — busbw GB/s (median of 3), shim pure CE path (0 SM)
 
@@ -119,9 +124,9 @@ stays unfused CE/IPC; fusion is a B300/NVLink story.
   (native 1.5-3× ahead, 4M S4 13.0 vs 21.3).
 - Cross-node 16M+ is 65-84% of native; X16 at 16M uses `b=2` (9.7 vs
   native 15.0 GB/s). The shortfall tracks the software RDMA fused proxy.
-- AllGather is data-only: ring hops ride CE/IPC and only the local
-  publish copy touches the worker, so `b=1` suffices and results match
-  the AllReduce same-node story.
+- AllGather is data-only and 0-SM: ring hops ride CE/IPC and the own
+  shard is published by the user-stream copy engine, matching the
+  AllReduce same-node story without worker SMs.
 - AllToAll CE is 0-SM by construction; the 16-rank cross-node fan-out
   case (2.0-2.1 vs 4.4-4.7 GB/s) remains the open gap.
 - Blocks are otherwise neutral at 256M (b1 vs b8-64 within ~1-3%),
