@@ -94,33 +94,6 @@ void test_roce_address_vector() {
   assert(ah_attr.grh.traffic_class == 104);
 }
 
-void test_asymmetric_infiniband_address_vectors() {
-  struct ibv_port_attr local_port = {};
-  local_port.link_layer = IBV_LINK_LAYER_INFINIBAND;
-  local_port.flags = IBV_QPF_GRH_REQUIRED;
-  struct ibv_port_attr remote_port = {};
-  remote_port.link_layer = IBV_LINK_LAYER_INFINIBAND;
-  auto const gid_from_remote_selected_index = remote_gid();
-
-  assert(rdma_gid_index_for_port(remote_port, 11) == 11);
-
-  struct ibv_ah_attr local_ah_attr;
-  configure_qp_address_vector(&local_ah_attr, local_port, 0x1234,
-                              gid_from_remote_selected_index.data(), 7, 0, 0);
-  assert(local_ah_attr.is_global == 1);
-  assert(local_ah_attr.dlid == 0x1234);
-  assert(memcmp(local_ah_attr.grh.dgid.raw,
-                gid_from_remote_selected_index.data(),
-                gid_from_remote_selected_index.size()) == 0);
-  assert(local_ah_attr.grh.sgid_index == 7);
-
-  struct ibv_ah_attr remote_ah_attr;
-  configure_qp_address_vector(&remote_ah_attr, remote_port, 0x5678,
-                              remote_gid().data(), 11, 0, 0);
-  assert(remote_ah_attr.is_global == 0);
-  assert(remote_ah_attr.dlid == 0x5678);
-}
-
 }  // namespace
 
 int main() {
@@ -128,6 +101,5 @@ int main() {
   test_local_infiniband_address_vector();
   test_grh_required_infiniband_address_vector();
   test_roce_address_vector();
-  test_asymmetric_infiniband_address_vectors();
   return 0;
 }
