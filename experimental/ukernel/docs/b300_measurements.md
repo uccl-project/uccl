@@ -1,131 +1,148 @@
-# B300 benchmark report (current uk-300)
+# B300 benchmark report — SM-budget revision (2026-09-04)
 
-Shim (ukernel) vs native NCCL on one 8-GPU B300 node, built from `uk-300` HEAD (three fixes since the last report: fused-RS thread sync, per-fifo TaskArgs pools, single-coordinator idle exit). All runs validated 0 wrong / AllToAll verify OK; medians of 3.
+Shim (ukernel) vs native NCCL on one 8-GPU B300 node, built from
+`uk-300` (HEAD `14391f89`; fused-RS thread sync, per-fifo TaskArgs pools,
+single-coordinator idle exit). Medians of 3, nccl-tests `-n 10 -w 2`,
+validation on, all cells 0 wrong.
 
 ## Environment
 
-- Host `mi-sky-b300`, 8× NVIDIA B300 SXM6 AC (sm_103), NVSwitch NVLink mesh, driver 610.57.04.
-- Shim: `experimental/ukernel` (`build/nccl/lib`, ILP=16, TMA_REDUCE=0). Native: system NCCL 2.29.7+cuda13.2, 32 channels.
-- nccl-tests MPI build; AllToAll via `bench/alltoall_perf` (ncclAllToAll). Sizes 1M..256M, ranks 2/4/8, n=5 w=1, 3 reps, median OOP busbw.
+- Host `mi-sky-b300`, 8× NVIDIA B300 SXM6 AC (sm_103), NVSwitch NVLink
+  mesh, driver 610.57.04.
+- Shim: `experimental/ukernel` (`build/nccl/lib`, ILP=16, TMA_REDUCE=0).
+  Native: system NCCL 2.29.7+cuda13.2.
+- nccl-tests MPI build; AllToAll via `bench/alltoall_perf`
+  (`ncclAllToAll`). Sizes 1M..256M, ranks 2/4/8, OOP busbw.
+- Raw logs: `/tmp/b300_final`, `/tmp/b300_rotation`,
+  `/tmp/b300_hostprof`, `/tmp/b300_sweep`, `/tmp/b300_confirm`.
 
-## Configs
+## SM-budget design rule
 
-| config | env |
-|---|---|
-| shim unfused | `UK_CCL_DEV_BLOCKS=32` |
-| shim fused | + `FUSE_REDUCE_COPY=1 FUSE_AG_COPY=1 LARGE_TILES=16 TILE_MIN_BYTES=8M IPC_BATCH=16` |
-| native | system NCCL |
+Shim blocks `b` must be `<=` native coll channels `B` at the same
+placement; every cell reports the best measured `b` in that budget
+(selected at 256 MiB, ties go to fewer SMs). AllToAll is a pure CE/IPC
+path and is reported at **0 worker SMs** (no device-path AllToAll is
+measured; a device-path variant exists in the code base but is not part
+of the reported system).
 
-## AllReduce — busbw GB/s (median of 3)
+Measured budgets: `B = 32` coll channels at S2/S4/S8
+(`NCCL_DEBUG=INFO`). Best block counts `b*`:
 
-### S2
+| collective | np2 | np4 | np8 |
+|---|---:|---:|---:|
+| AllReduce (fused) | 32 | 32 | 28 |
+| ReduceScatter | 32 | 28 | 32 |
+| AllGather | 28 | 32 | 24 |
+| AllToAll | CE (0 SM) | CE (0 SM) | CE (0 SM) |
 
-| size | shim unfused | shim fused | native | fused/unfused | native/fused |
-|---:|---:|---:|---:|---:|---:|
-| 1M | 5.2 | 6.5 | 48.6 | 1.26 | 7.46 |
-| 4M | 19.8 | 24.7 | 94.9 | 1.24 | 3.84 |
-| 16M | 41.8 | 84.7 | 282.7 | 2.03 | 3.34 |
-| 64M | 55.9 | 202.2 | 435.3 | 3.62 | 2.15 |
-| 256M | 211.9 | 329.6 | 509.8 | 1.55 | 1.55 |
+AllReduce fused env: `UK_CCL_FUSE_REDUCE_COPY=1 UK_CCL_FUSE_AG_COPY=1
+UK_CCL_DEV_BLOCKS=b UK_CCL_LARGE_TILES=16 UK_CCL_TILE_MIN_BYTES=8M
+UK_CCL_IPC_BATCH=16`. ReduceScatter/AllGather run with `DEV_BLOCKS=b`
+only (standalone RS/AG have no reduce+copy composition to fuse).
 
-### S4
+## AllReduce (fused) — busbw GB/s (median of 3), shim vs native 32ch
 
-| size | shim unfused | shim fused | native | fused/unfused | native/fused |
-|---:|---:|---:|---:|---:|---:|
-| 1M | 3.8 | 4.9 | 61.4 | 1.31 | 12.48 |
-| 4M | 12.5 | 19.2 | 139.3 | 1.54 | 7.24 |
-| 16M | 37.4 | 63.8 | 242.2 | 1.71 | 3.80 |
-| 64M | 68.3 | 178.3 | 537.8 | 2.61 | 3.02 |
-| 256M | 251.5 | 308.0 | 596.4 | 1.22 | 1.94 |
+| size | sh2 | nat2 | sh4 | nat4 | sh8 | nat8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 6.61 | 53.97 | 5.02 | 65.72 | 2.83 | 53.78 |
+| 4M | 27.15 | 96.81 | 17.54 | 141.38 | 11.19 | 124.62 |
+| 16M | 81.95 | 288.24 | 62.42 | 246.96 | 38.84 | 270.05 |
+| 64M | 219.46 | 434.51 | 180.53 | 539.79 | 109.87 | 419.74 |
+| 256M | 341.14 | 508.64 | 317.23 | 596.40 | 247.10 | 651.84 |
 
-### S8
+256M ratio to native: 0.67 / 0.53 / 0.38 (np8 uses 28 blocks, **fewer
+SMs than native's 32**).
 
-| size | shim unfused | shim fused | native | fused/unfused | native/fused |
-|---:|---:|---:|---:|---:|---:|
-| 1M | 1.3 | 2.7 | 49.9 | 2.08 | 18.28 |
-| 4M | 5.5 | 10.8 | 122.1 | 1.99 | 11.28 |
-| 16M | 18.7 | 37.8 | 273.0 | 2.03 | 7.22 |
-| 64M | 46.7 | 116.7 | 417.1 | 2.50 | 3.57 |
-| 256M | 171.8 | 270.0 | 654.9 | 1.57 | 2.43 |
+## ReduceScatter — busbw GB/s (median of 3), shim vs native 32ch
 
-## AllToAll — busbw GB/s (rank-0 median)
+| size | sh2 | nat2 | sh4 | nat4 | sh8 | nat8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 3.36 | 30.75 | 1.97 | 42.12 | 1.18 | 37.33 |
+| 4M | 10.77 | 68.19 | 7.42 | 94.29 | 3.63 | 97.21 |
+| 16M | 25.04 | 199.37 | 21.20 | 212.30 | 13.77 | 242.56 |
+| 64M | 48.56 | 331.61 | 48.09 | 444.99 | 43.34 | 413.19 |
+| 256M | 133.54 | 406.92 | 143.82 | 529.19 | 146.46 | 593.09 |
 
-### S2
+256M ratio to native: 0.33 / 0.27 / 0.25.
 
-| size | shim | native | shim/native |
-|---:|---:|---:|---:|
-| 1M | 5.4 | 14.4 | 0.38 |
-| 4M | 21.8 | 51.1 | 0.43 |
-| 16M | 39.0 | 121.5 | 0.32 |
-| 64M | 50.1 | 237.3 | 0.21 |
-| 256M | 237.2 | 306.4 | 0.77 |
+## AllGather — busbw GB/s (median of 3), shim vs native 32ch
 
-### S4
+| size | sh2 | nat2 | sh4 | nat4 | sh8 | nat8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 4.68 | 32.17 | 3.27 | 44.57 | 1.78 | 35.98 |
+| 4M | 17.97 | 72.05 | 14.24 | 108.45 | 7.59 | 108.24 |
+| 16M | 36.73 | 201.20 | 37.19 | 205.46 | 20.76 | 283.94 |
+| 64M | 42.87 | 335.65 | 42.13 | 451.35 | 44.51 | 411.24 |
+| 256M | 193.20 | 414.36 | 172.31 | 534.01 | 170.66 | 585.63 |
 
-| size | shim | native | shim/native |
-|---:|---:|---:|---:|
-| 1M | 4.7 | 19.7 | 0.24 |
-| 4M | 25.3 | 73.3 | 0.35 |
-| 16M | 35.3 | 183.2 | 0.19 |
-| 64M | 49.1 | 350.8 | 0.14 |
-| 256M | 217.4 | 456.2 | 0.48 |
+256M ratio to native: 0.47 / 0.32 / 0.29. AllGather ring hops ride
+CE/IPC; only the local publish copy touches the worker, which is why
+256M still needs 24-28 blocks but stays inside the budget.
 
-### S8
+## AllToAll — busbw GB/s (median of 3), shim pure CE path (0 SM)
 
-| size | shim | native | shim/native |
-|---:|---:|---:|---:|
-| 1M | 3.6 | 21.2 | 0.17 |
-| 4M | 22.8 | 79.5 | 0.29 |
-| 16M | 38.1 | 206.9 | 0.18 |
-| 64M | 44.4 | 373.9 | 0.12 |
-| 256M | 182.0 | 510.2 | 0.36 |
+| size | sh2 | nat2 | sh4 | nat4 | sh8 | nat8 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1M | 4.7 | 14.3 | 5.6 | 19.7 | 4.3 | 20.5 |
+| 4M | 22.7 | 53.4 | 25.0 | 71.7 | 22.3 | 82.8 |
+| 16M | 47.4 | 127.7 | 41.6 | 189.9 | 38.2 | 204.3 |
+| 64M | 48.6 | 231.8 | 52.6 | 343.7 | 47.9 | 368.2 |
+| 256M | 229.6 | 312.4 | 212.8 | 456.2 | 188.7 | 516.6 |
+
+256M ratio to native: 0.73 / 0.47 / 0.37. The CE path's per-transfer
+overhead is worst at 64M (0.13-0.21).
+
+### Rotation A/B at 256M (CE path, 0 SM), medians
+
+| np | rot0 (ascending) | rot1 (default rotated) |
+|---:|---:|---:|
+| 2 | 264.5 | 211.7 |
+| 4 | 215.6 | 192.7 |
+| 8 | 187.8 | 206.6 |
+
+NVSwitch is mixed: rotation (default on) hurts np2/np4 (-20%/-11%) and
+helps np8 (+10%); no default change is warranted.
+
+## Host orchestration decomposition (1M AllReduce fused@b*, n=30/w=10)
+
+HostProf per-collective medians (µs/collective, stage totals / 40 iters):
+
+| ranks | enq | signal drain | transport drain | device drain |
+|---:|---:|---:|---:|---:|
+| 2 | 0.2 | 6.8 | 2.1 | 5.7 |
+| 4 | 0.4 | 19.5 | 7.7 | 45.0 |
+| 8 | 0.6 | 53.5 | 23.3 | 109.4 |
+
+Enqueue/dispatch is negligible; the small-message floor grows with rank
+count in the host drain paths (signal + device), not in dispatch.
 
 ## Factor analysis
 
-### Effect of message size
+- Message size: both sides grow with size; the shim is dispatch/latency
+  bound at 1-4M (native 8-19× ahead on AllReduce at 1M) and flattens
+  above 64M.
+- Ranks: native AllReduce *gains* with ranks (NVLink fan-out), the shim
+  loses busbw as hop count grows; at 256M fused shim drops
+  341→317→247 while native rises 509→596→652.
+- Blocks: fused AllReduce at 256M keeps rising to the 32-block budget
+  (best = b*), so the NVLink large-message regime has no "fewer SMs"
+  margin except the np8 cell (28 < 32); the 0-SM AllToAll path is where
+  the SM savings are largest.
+- Fusion ablation (fixed b32, prior medians): fused/unfused 256M ratio
+  to native 0.65/0.52/0.41 vs 0.42/0.42/0.26; fusion win is largest at
+  16-64M (removes per-hop host transitions).
 
-Both shim configs and native grow with size; the shim's growth is steeper below 64M (dispatch/latency-bound at 1-4M), then flattens. The fused path removes per-hop host transitions, which shows at 16M+ (fused/unfused climbs from ~1.3 at 1M to ~2-3.6 at 64M).
-
-### Effect of rank count
-
-Native AllReduce *gains* with ranks (256M: 510/596/655 GB/s at np2/4/8), scaling with the NVLink fan-out. The shim's busbw *drops* with ranks (fused 256M: 330/308/270), consistent with a ring whose per-hop host/CE cost grows with hop count. Unfused is noisier (212/252/172 — np4 measured above np2) but np8 still falls ~32% below np2. AllToAll shows the same rank penalty on the shim side (256M: 237/217/182) while native scales up (306/456/510).
-
-### Effect of shim blocks (256M unfused AllReduce)
-
-| blocks | np2 | np4 | np8 |
-|---:|---:|---:|---:|
-| 8 | 175 | 145 | 135 |
-| 16 | 211 | 175 | 153 |
-| 32 | 212 | 252 | 172 |
-| 48 | 233 | 205 | 169 |
-| 64 | 226 | 184 | 172 |
-
-Blocks matter only at large sizes: b8 (~131-184) to b16-64 (~150-252) is
-a ~1.2-1.7x lift; the biggest jump is b8→b16, and beyond ~32 blocks the
-gain is flat or reverses (worker coordination overhead).
-
-### Fused vs unfused
-
-Fusion gives the largest single win on B300: 64M AllReduce is 2.5-3.6x better fused than unfused, 256M ~1.2-1.6x. The fused path keeps 256M shim/native at 0.41-0.65 (np8 worst, np2 best). The remaining gap is native's NVLink P2P/CUMEM transport: the shim's same-node data path is CE/IPC + worker copies by design.
-
-### AllToAll: size and ranks
-
-AllToAll shim rises to a ~44-50 GB/s plateau at 64M, then jumps to
-182-237 GB/s at 256M (per-peer copies amortize the CE/worker overhead
-only at the largest size), while native grows through the whole range
-(306-510 at 256M). The shim/native ratio is therefore worst at 64M
-(0.12-0.21) and best at 256M (0.36-0.77). Small sizes (1-4M) are
-latency-bound on both sides (shim/native 0.17-0.43).
-
-### Reproducible commands
+## Reproducible commands
 
 ```bash
 cd ~/jinyao/uccl/thirdparty/nccl-tests/build
 export LD_LIBRARY_PATH=~/jinyao/uccl/experimental/ukernel/build/nccl/lib:/usr/local/lib:/home/uccl/cuda132/lib64
 mpirun --bind-to none -np 8 -x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1 \
-  -x UK_CCL_FUSE_REDUCE_COPY=1 -x UK_CCL_FUSE_AG_COPY=1 -x UK_CCL_DEV_BLOCKS=32 \
-  -x UK_CCL_LARGE_TILES=16 -x UK_CCL_TILE_MIN_BYTES=8388608 -x UK_CCL_IPC_BATCH=16 \
-  ./all_reduce_perf -b 1M -e 256M -f 4 -g 1 -c 1 -n 5 -w 1
+  -x UK_CCL_DEV_BLOCKS=28 -x UK_CCL_FUSE_REDUCE_COPY=1 \
+  -x UK_CCL_FUSE_AG_COPY=1 -x UK_CCL_LARGE_TILES=16 \
+  -x UK_CCL_TILE_MIN_BYTES=8388608 -x UK_CCL_IPC_BATCH=16 \
+  ./all_reduce_perf -b 1M -e 256M -f 4 -g 1 -c 1 -n 10 -w 2
 ```
 
-Raw logs: `/tmp/uk_full_matrix/` on the testbed; runner: `bench/run_full_matrix.sh`.
+AllToAll (CE, 0 SM): `/tmp/alltoall_perf --bytes=268435456 --iters=10
+--warmup=2` under the shim `LD_LIBRARY_PATH` with `UK_CCL_DEV_BLOCKS=1`.

@@ -1,44 +1,105 @@
-# L40S benchmark report (current uk-300)
+# L40S benchmark report — SM-budget revision (2026-09-04)
 
-Shim (ukernel) vs native NCCL on the two-node L40S cluster, built from `uk-300` HEAD (fused-RS thread sync, per-fifo TaskArgs pools, single-coordinator idle exit). All runs validated 0 wrong / AllToAll verify OK; medians of 3.
+Shim (ukernel) vs native NCCL on the two-node L40S cluster, built from
+`uk-300` (HEAD `14391f89`; fused-RS thread sync, per-fifo TaskArgs pools,
+single-coordinator idle exit). Medians of 3, nccl-tests `-n 10 -w 2`,
+validation on, all cells 0 wrong.
 
 ## Environment
 
-- node5 `10.31.154.11`, node6 `10.31.154.12`: 8× NVIDIA L40S each (PCIe Gen5 x16, no NVLink), ConnectX-6 HDR dual-port 200G, driver 610.57.04.
-- Shim: `experimental/ukernel` (`build/nccl/lib`). Native: system NCCL 2.31.2+cuda13.3.
-- nccl-tests MPI build; AllToAll via `bench/alltoall_perf` (ncclAllToAll) with per-rank device wrapper. Sizes 1M..256M, n=5 w=1, 3 reps, median OOP busbw.
-- Same-node ranks 2/4/8 on node5; cross-node 4/8/16 split evenly (2+2 / 4+4 / 8+8). Cross-node shim adds `UK_CCL_RDMA_FUSED_MODE=proxy`.
+- node5 `10.31.154.11`, node6 `10.31.154.12`: 8× NVIDIA L40S each (PCIe
+  Gen5 x16, no NVLink), ConnectX-6 HDR dual-port 200G, driver 610.57.04.
+- Shim: `experimental/ukernel` (`build/nccl/lib`). Native: system NCCL
+  2.31.2+cuda13.3.
+- nccl-tests MPI build; AllToAll via `bench/alltoall_perf`
+  (`ncclAllToAll`) with per-node local device wrapper (shim keys its OOB
+  leader election on the CUDA device id, so cross-node ranks must use
+  device 0..3 of their own node).
+- Same-node S2/S4/S8 on node5; cross-node X4/X8/X16 split 2+2/4+4/8+8.
+  Cross-node shim adds `UK_CCL_RDMA_FUSED_MODE=proxy`.
+- Raw logs: `/tmp/l40s_final`, `/tmp/l40s_small_final`,
+  `/tmp/l40s_rotation`, `/tmp/l40s_sweep`, `/tmp/l40s_confirm`.
 
-## AllReduce — busbw GB/s (median of 3)
+## SM-budget design rule
 
-### Same-node
+Shim blocks `b` must be `<=` native coll channels `B` at the same
+placement; every cell reports the best measured `b` in that budget
+(selected at 256 MiB, ties go to fewer SMs). AllToAll is a pure CE/IPC
+path and is reported at **0 worker SMs**. Small messages (1M/4M) on this
+platform need the budget maximum for AllReduce/ReduceScatter
+(`b=4` on S2/S4, `b=2` on S8/X*), so the tables below list per-size `b`.
 
-| size | np2 shim/native | np4 shim/native | np8 shim/native |
-|---|---|---|---|
-| 1M | 9.2/14.2 | 5.8/14.9 | 3.0/9.2 |
-| 4M | 20.1/20.1 | 13.3/21.2 | 7.3/14.7 |
-| 16M | 23.5/21.1 | 23.8/21.9 | 14.0/14.4 |
-| 64M | 24.4/21.5 | 24.5/21.7 | 14.9/14.2 |
-| 256M | 25.6/21.7 | 25.6/21.8 | 15.6/14.4 |
+Measured budgets (native coll channels, `NCCL_DEBUG=INFO`):
 
-### Cross-node
+| placement | S2 | S4 | S8 | X4 | X8 | X16 |
+|---:|---:|---:|---:|---:|---:|---:|
+| B | 4 | 4 | 2 | 2 | 2 | 2 |
 
-| size | np4 shim/native | np8 shim/native | np16 shim/native |
-|---|---|---|---|
-| 1M | 5.3/11.1 | 3.2/5.1 | 1.5/5.1 |
-| 4M | 9.7/13.6 | 8.1/14.6 | 5.0/12.4 |
-| 16M | 11.5/13.9 | 11.5/14.6 | 10.6/15.1 |
-| 64M | 11.5/13.7 | 11.6/14.4 | 11.7/14.6 |
-| 256M | 11.0/13.7 | 11.3/14.4 | 11.2/14.6 |
+Best `b*` (256 MiB basis): AllReduce 1 everywhere; ReduceScatter S2=4,
+S4=2, S8/X4/X8=1, X16=2; AllGather 1 everywhere.
 
-### Same-node fused vs unfused (2026-09-04)
+## AllReduce — busbw GB/s (median of 3), shim (unfused CE/IPC) vs native
 
-Fusion ablation closeout on the PCIe platform. Fused =
+| size | S2 sh/nat | S4 sh/nat | S8 sh/nat | X4 sh/nat | X8 sh/nat | X16 sh/nat |
+|---|---:|---|---:|---|---:|---|---:|---|---:|
+| 1M | 8.31/14.48 | 5.68/15.13 | 2.92/9.37 | 4.99/11.19 | 3.09/5.11 | 1.41/5.06 |
+| 4M | 19.96/20.18 | 13.03/21.27 | 6.77/14.53 | 8.73/13.54 | 7.49/14.41 | 4.62/12.07 |
+| 16M | 23.45/21.14 | 23.91/21.85 | 12.90/14.27 | 11.49/13.73 | 11.49/14.49 | 9.70/15.01 |
+| 64M | 24.46/21.39 | 24.61/21.68 | 15.22/14.16 | 11.53/13.60 | 11.52/14.31 | 11.77/14.46 |
+| 256M | 25.61/21.48 | 25.64/21.72 | 16.02/14.43 | 10.97/13.67 | 11.06/14.43 | 10.96/14.64 |
+
+Per-size shim blocks: ≤4M uses budget max (4 on S2/S4, 2 elsewhere);
+16M uses `b=1` (X16 uses `b=2`); 64M/256M use `b=1` (X16 uses `b=1`
+at 256M and `b=2` at 16-64M). Native rows are unchanged across sizes.
+
+## ReduceScatter — busbw GB/s (median of 3), shim vs native
+
+| size | S2 sh/nat | S4 sh/nat | S8 sh/nat | X4 sh/nat | X8 sh/nat | X16 sh/nat |
+|---|---:|---|---:|---|---:|---|---:|---|---:|
+| 1M | 6.05/11.18 | 4.38/12.71 | 2.33/8.95 | 3.97/9.65 | 2.41/8.27 | 1.23/5.92 |
+| 4M | 12.90/17.33 | 10.55/19.53 | 5.66/13.78 | 7.51/12.45 | 6.37/13.61 | 3.94/12.44 |
+| 16M | 20.21/19.13 | 20.68/21.10 | 10.66/13.52 | 11.10/12.82 | 11.30/13.88 | 8.20/14.22 |
+| 64M | 23.30/19.60 | 23.62/21.08 | 14.56/13.57 | 11.30/12.70 | 11.50/13.77 | 11.60/14.07 |
+| 256M | 24.98/19.87 | 24.97/21.21 | 15.77/13.62 | 10.99/12.79 | 11.08/13.76 | 11.09/13.98 |
+
+Shim blocks: S2=4, S4=2, S8/X4/X8=1 (≤4M uses 2 on S8/X*), X16=2.
+
+## AllGather — busbw GB/s (median of 3), shim b=1 (CE + local publish copy)
+
+| size | S2 sh/nat | S4 sh/nat | S8 sh/nat | X4 sh/nat | X8 sh/nat | X16 sh/nat |
+|---|---:|---|---:|---|---:|---|---:|---|---:|
+| 1M | 8.42/10.92 | 6.11/12.22 | 3.18/8.49 | 5.75/9.37 | 3.60/7.96 | 1.74/5.82 |
+| 4M | 17.48/17.90 | 14.46/19.59 | 8.01/13.95 | 9.84/12.67 | 8.77/13.95 | 5.71/11.70 |
+| 16M | 21.83/19.98 | 21.11/21.36 | 13.40/14.29 | 11.19/13.25 | 11.29/14.65 | 11.44/15.22 |
+| 64M | 23.00/20.55 | 23.82/21.41 | 14.42/14.29 | 11.46/13.18 | 11.33/14.56 | 11.69/14.88 |
+| 256M | 25.20/20.75 | 25.47/21.49 | 15.37/14.39 | 10.99/13.16 | 11.30/14.52 | 11.21/14.86 |
+
+## AllToAll — busbw GB/s (median of 3), shim pure CE path (0 SM)
+
+| size | S2 sh/nat | S4 sh/nat | S8 sh/nat | X4 sh/nat | X8 sh/nat | X16 sh/nat |
+|---|---:|---|---:|---|---:|---|---:|---|---:|
+| 1M | 8.1/10.2 | 8.4/12.7 | 4.6/4.6 | 6.3/6.8 | 4.9/4.9 | 1.9/3.4 |
+| 4M | 16.4/18.1 | 16.7/17.9 | 6.0/5.9 | 8.4/9.4 | 5.8/6.5 | 2.0/4.3 |
+| 16M | 21.8/22.3 | 14.2/20.3 | 6.5/6.8 | 9.2/10.8 | 6.2/6.6 | 2.1/4.4 |
+| 64M | 23.7/23.6 | 15.4/20.3 | 6.7/6.6 | 8.6/11.3 | 6.2/6.4 | 2.0/4.6 |
+| 256M | 23.8/24.0 | 15.6/20.0 | 6.6/7.0 | 9.0/11.3 | 6.1/6.4 | 2.0/4.7 |
+
+### Rotation A/B at 256M (CE path, 0 SM), medians
+
+| np | rot0 (ascending) | rot1 (default rotated) |
+|---:|---:|---:|
+| 2 | 23.8 | 23.8 |
+| 4 | 15.2 | 15.6 |
+| 8 | 6.5 | 6.7 |
+
+Rotation is neutral at np2 and +2-3% at np4/np8; keep default on.
+
+## Fusion ablation (2026-09-04)
+
+Fusion is **negative on L40S**. Fused config =
 `UK_CCL_DEV_BLOCKS=32` + `FUSE_REDUCE_COPY=1 FUSE_AG_COPY=1
 LARGE_TILES=16 TILE_MIN_BYTES=8M IPC_BATCH=16`; unfused = `DEV_BLOCKS=32`
-only. nccl-tests AllReduce, OOP, medians of 3, all 0 wrong.
-
-AllReduce busbw (GB/s), unfused / fused:
+only. AllReduce OOP busbw (GB/s), unfused / fused, medians of 3:
 
 | size | np2 | np4 | np8 |
 |---|---:|---:|---:|
@@ -46,70 +107,22 @@ AllReduce busbw (GB/s), unfused / fused:
 | 64M | 24.4 / 22.2 | 24.6 / 17.9 | 14.7 / 10.1 |
 | 256M | 25.6 / 22.9 | 25.5 / 19.7 | 15.6 / 10.2 |
 
-Fusion is **negative on L40S**: 11-13% slower at 2 ranks and 20-46%
-slower at 4-8 ranks. With PCIe the bottleneck the CE/IPC path beats the
-fused device-copy path (SM LD/ST to peer), so the shipped L40S shim
-column stays unfused; fusion is a B300/NVLink story.
-
-## AllToAll — busbw GB/s (rank-0 median)
-
-### Same-node
-
-| size | np2 shim/native | np4 shim/native | np8 shim/native |
-|---|---|---|---|
-| 1M | 7.7/9.8 | 7.7/12.6 | 4.6/4.8 |
-| 4M | 17.0/18.0 | 14.2/17.7 | 6.2/5.8 |
-| 16M | 21.9/22.3 | 15.2/20.5 | 6.7/6.7 |
-| 64M | 23.7/23.6 | 15.1/20.3 | 6.6/6.7 |
-| 256M | 23.8/24.0 | 15.8/20.0 | 6.6/7.6 |
-
-### Cross-node
-
-| size | np4 shim/native | np8 shim/native | np16 shim/native |
-|---|---|---|---|
-| 1M | 6.2/6.9 | 4.9/4.9 | 1.9/3.4 |
-| 4M | 8.4/9.5 | 5.8/6.5 | 2.0/4.2 |
-| 16M | 9.1/10.8 | 6.1/6.6 | 2.1/4.4 |
-| 64M | 8.7/11.3 | 6.1/6.4 | 2.3/4.6 |
-| 256M | 8.7/11.3 | 6.1/6.5 | 2.1/4.7 |
+Fused@32 is 11-13% slower at 2 ranks and 20-46% slower at 4-8 ranks.
+With PCIe as the bottleneck the CE/IPC copy path beats the fused
+device-copy path (SM LD/ST to peer), so the shipped L40S AllReduce column
+stays unfused CE/IPC; fusion is a B300/NVLink story.
 
 ## Factor analysis
 
-### Effect of message size (same-node AllReduce)
-
-The shim is latency-bound at 1M (np2 ratio 0.65) and reaches parity by 4M (np2: 1.00), then *beats* native at 16M+ on 2-4 ranks (1.12-1.18 at 16-256M). At np8 both saturate the PCIe bus near ~14-16 GB/s and are within noise (0.97-1.08). Native also plateaus around 21-22 GB/s at np2/4, so the shim's absolute ceiling (~25 GB/s) is slightly above native on this platform — the L40S story is the opposite of B300: no NVLink means the CE/IPC path is competitive.
-
-### Effect of ranks (same-node)
-
-Both sides lose busbw as ranks grow (np2 25.6/21.7 → np8 15.6/14.4 GB/s at 256M), because more ring hops over the same PCIe switch add serialization. The shim/native ratio stays ~1.1 at np2/4 but converges to ~1.0 at np8. AllToAll same-node shows a sharper shim drop at np4 (0.74-0.79 of native) while np2/np8 are near parity.
-
-### Cross-node: RDMA proxy overhead
-
-Cross-node AllReduce shim/native is 0.48-0.84 (small sizes worst, 16M+ ~0.77-0.84) — the software RDMA fused proxy costs ~20-25% vs native at large sizes and more at 1-4M. AllToAll cross-node: np4/8 near parity (0.77-1.00) but np16 shim drops to ~0.45-0.56 (2.0-2.3 vs 4.2-4.7 GB/s), consistent with per-peer incast or proxy throughput limits at 8 ranks per node.
-
-### Effect of shim blocks (256M same-node unfused AllReduce)
-
-| blocks | np2 | np4 | np8 |
-|---:|---:|---:|---:|
-| 8 | 25.6 | 25.4 | 15.9 |
-| 16 | 25.6 | 25.4 | 15.5 |
-| 32 | 25.6 | 25.6 | 15.6 |
-| 64 | 25.6 | 25.4 | 15.4 |
-
-Blocks are neutral on L40S: 25.3-25.6 GB/s at np2/4 and 15.4-16.2 at np8 across b8..b64. The bottleneck is PCIe, not worker parallelism — this is why the multi-fifo hang (fixed this cycle) had no perf impact here.
-
-### Reproducible commands
-
-```bash
-cd /root/uccl/uccl/thirdparty/nccl-tests/build
-export LD_LIBRARY_PATH=/root/uccl/uccl/experimental/ukernel/build/nccl/lib:/usr/local/lib
-mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 4 \
-  -x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1 \
-  ./all_reduce_perf -b 1M -e 256M -f 4 -g 1 -c 1 -n 5 -w 1
-# cross-node:
-mpirun --allow-run-as-root --bind-to none --map-by :OVERSUBSCRIBE -np 8 \
-  --host 10.31.154.11:4,10.31.154.12:4 -x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1 \
-  -x UK_CCL_RDMA_FUSED_MODE=proxy ./all_reduce_perf -b 1M -e 256M -f 4 -g 1 -c 1 -n 5 -w 1
-```
-
-Raw logs: `/tmp/uk_l40s_matrix/` on node5; runner: `bench/run_l40s_matrix.sh`.
+- Same-node AllReduce at 16M+ is 9-19% above native on S2/S4, near
+  parity/above on S8 (PCIe-bound); 1M-4M is host-dispatch-floor-bound
+  (native 1.5-3× ahead, 4M S4 13.0 vs 21.3).
+- Cross-node 16M+ is 65-84% of native; X16 at 16M uses `b=2` (9.7 vs
+  native 15.0 GB/s). The shortfall tracks the software RDMA fused proxy.
+- AllGather is data-only: ring hops ride CE/IPC and only the local
+  publish copy touches the worker, so `b=1` suffices and results match
+  the AllReduce same-node story.
+- AllToAll CE is 0-SM by construction; the 16-rank cross-node fan-out
+  case (2.0-2.1 vs 4.4-4.7 GB/s) remains the open gap.
+- Blocks are otherwise neutral at 256M (b1 vs b8-64 within ~1-3%),
+  because PCIe, not worker parallelism, is the bottleneck.
