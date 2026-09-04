@@ -31,6 +31,26 @@ Shim (ukernel) vs native NCCL on the two-node L40S cluster, built from `uk-300` 
 | 64M | 11.5/13.7 | 11.6/14.4 | 11.7/14.6 |
 | 256M | 11.0/13.7 | 11.3/14.4 | 11.2/14.6 |
 
+### Same-node fused vs unfused (2026-09-04)
+
+Fusion ablation closeout on the PCIe platform. Fused =
+`UK_CCL_DEV_BLOCKS=32` + `FUSE_REDUCE_COPY=1 FUSE_AG_COPY=1
+LARGE_TILES=16 TILE_MIN_BYTES=8M IPC_BATCH=16`; unfused = `DEV_BLOCKS=32`
+only. nccl-tests AllReduce, OOP, medians of 3, all 0 wrong.
+
+AllReduce busbw (GB/s), unfused / fused:
+
+| size | np2 | np4 | np8 |
+|---|---:|---:|---:|
+| 16M | 23.5 / 20.5 | 24.0 / 12.9 | 13.8 / 7.4 |
+| 64M | 24.4 / 22.2 | 24.6 / 17.9 | 14.7 / 10.1 |
+| 256M | 25.6 / 22.9 | 25.5 / 19.7 | 15.6 / 10.2 |
+
+Fusion is **negative on L40S**: 11-13% slower at 2 ranks and 20-46%
+slower at 4-8 ranks. With PCIe the bottleneck the CE/IPC path beats the
+fused device-copy path (SM LD/ST to peer), so the shipped L40S shim
+column stays unfused; fusion is a B300/NVLink story.
+
 ## AllToAll — busbw GB/s (rank-0 median)
 
 ### Same-node
