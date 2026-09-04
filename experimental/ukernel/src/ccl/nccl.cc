@@ -319,6 +319,14 @@ static ncclResult_t run_coll(ncclComm_t comm, CollectiveConfig& cfg,
     return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
   }();
   cfg.signal_group_tiles = kSigGroupTiles;
+  // Multi-ring channel count: split AllReduce into independent rings
+  // over disjoint byte intervals so the executor can feed several hops
+  // in parallel (more RDMA QPs / NVLink channels in flight).
+  static uint32_t const kChannels = [] {
+    char const* e = std::getenv("UK_CCL_CHANNELS");
+    return e ? static_cast<uint32_t>(std::max(1L, std::stol(e))) : 1u;
+  }();
+  cfg.channels = kChannels;
   // Fused reduce+copy: the RS RecvReduce task also forwards the reduced
   // shard to the next rank (device copy + device signal). With device
   // flags the per-tile signals are counted waits (any G); without them

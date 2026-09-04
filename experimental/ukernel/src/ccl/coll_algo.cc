@@ -219,9 +219,19 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
                               CollectiveConfig const& config,
                               AlgoBuilder& builder,
                               std::vector<uint32_t>& ready_ops,
-                              bool inplace) {
+                              bool inplace, size_t seg_bytes,
+                              size_t channel_base,
+                              uint32_t pair_base) {
   size_t elem_bytes = scalar_type_size(config.dtype);
   bool const fuse_copy = config.fuse_reduce_copy;
+  // Shard offsets are relative to this channel's byte interval, then
+  // shifted by the interval's base so different channels touch disjoint
+  // regions of the same Input/Output buffers.
+  auto off = [&](int owner) {
+    return channel_base +
+           balanced_shard_offset_bytes(seg_bytes, elem_bytes, config.nranks,
+                                       owner);
+  };
   BufRef const accum =
       inplace ? BufRef{BufSpace::Tmp, 0} : BufRef{BufSpace::Output, 0};
   for (int ring_step = 0; ring_step < config.nranks - 1; ++ring_step) {
@@ -230,14 +240,13 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
-        config.input_bytes, elem_bytes, config.nranks, send_owner);
+        seg_bytes, elem_bytes, config.nranks, send_owner);
     size_t recv_bytes = balanced_shard_size_bytes(
-        config.input_bytes, elem_bytes, config.nranks, recv_owner);
+        seg_bytes, elem_bytes, config.nranks, recv_owner);
 
     if (send_bytes > 0 && !fuse_copy) {
-      size_t offset = balanced_shard_offset_bytes(
-          config.input_bytes, elem_bytes, config.nranks, send_owner);
-      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+      size_t offset = off(send_owner);
+      uint32_t pair_id = pair_base + static_cast<uint32_t>(send_owner * 2);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
       builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
@@ -250,9 +259,8 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
       // device copy + device signal. Only the step-0 send (the rank's
       // own shard, from Input) remains a standalone put.
       if (ring_step == 0) {
-        size_t offset = balanced_shard_offset_bytes(
-            config.input_bytes, elem_bytes, config.nranks, send_owner);
-        uint32_t pair_id = static_cast<uint32_t>(send_owner * 2);
+        size_t offset = off(send_owner);
+        uint32_t pair_id = pair_base + static_cast<uint32_t>(send_owner * 2);
         builder.add_op(AlgoOpKind::Put, send_bytes, offset, offset, -1,
                        send_peer, {}, pair_id, BufRef{BufSpace::Input, 0},
                        accum);
@@ -260,9 +268,8 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
     }
 
     if (recv_bytes > 0) {
-      size_t offset = balanced_shard_offset_bytes(
-          config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2);
+      size_t offset = off(recv_owner);
+      uint32_t pair_id = pair_base + static_cast<uint32_t>(recv_owner * 2);
       uint32_t recv_op = 0;
       uint32_t reduce_op = 0;
       if (!fuse_copy) {
@@ -310,16 +317,22 @@ void emit_ring_reduce_scatter(RingTopology const& ring,
 void emit_ring_allgather(RingTopology const& ring,
                          CollectiveConfig const& config,
                          AlgoBuilder& builder,
-                         std::vector<uint32_t>& ready_ops, bool inplace) {
+                         std::vector<uint32_t>& ready_ops, bool inplace,
+                         size_t seg_bytes, size_t channel_base,
+                         uint32_t pair_base) {
   size_t elem_bytes = scalar_type_size(config.dtype);
+  auto off = [&](int owner) {
+    return channel_base +
+           balanced_shard_offset_bytes(seg_bytes, elem_bytes, config.nranks,
+                                       owner);
+  };
   if (inplace) {
     // Publish the RS-held shard Tmp -> Output[own_offset].
     int own = ring.rank_at_offset(config.rank, 1);
     size_t own_bytes = balanced_shard_size_bytes(
-        config.input_bytes, elem_bytes, config.nranks, own);
+        seg_bytes, elem_bytes, config.nranks, own);
     if (own_bytes > 0) {
-      size_t offset = balanced_shard_offset_bytes(
-          config.input_bytes, elem_bytes, config.nranks, own);
+      size_t offset = off(own);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(own)]);
       builder.add_op(AlgoOpKind::Put, own_bytes, offset, offset, -1, -1,
@@ -333,14 +346,13 @@ void emit_ring_allgather(RingTopology const& ring,
     int send_peer = ring.next(config.rank);
     int recv_peer = ring.prev(config.rank);
     size_t send_bytes = balanced_shard_size_bytes(
-        config.input_bytes, elem_bytes, config.nranks, send_owner);
+        seg_bytes, elem_bytes, config.nranks, send_owner);
     size_t recv_bytes = balanced_shard_size_bytes(
-        config.input_bytes, elem_bytes, config.nranks, recv_owner);
+        seg_bytes, elem_bytes, config.nranks, recv_owner);
 
     if (send_bytes > 0) {
-      size_t offset = balanced_shard_offset_bytes(
-          config.input_bytes, elem_bytes, config.nranks, send_owner);
-      uint32_t pair_id = static_cast<uint32_t>(send_owner * 2 + 1);
+      size_t offset = off(send_owner);
+      uint32_t pair_id = pair_base + static_cast<uint32_t>(send_owner * 2 + 1);
       std::vector<uint32_t> deps;
       add_dep(deps, ready_ops[static_cast<size_t>(send_owner)]);
       // In-place: the RS-held shard (sent at step 0) lives in Tmp(0);
@@ -356,9 +368,8 @@ void emit_ring_allgather(RingTopology const& ring,
     }
 
     if (recv_bytes > 0) {
-      size_t offset = balanced_shard_offset_bytes(
-          config.input_bytes, elem_bytes, config.nranks, recv_owner);
-      uint32_t pair_id = static_cast<uint32_t>(recv_owner * 2 + 1);
+      size_t offset = off(recv_owner);
+      uint32_t pair_id = pair_base + static_cast<uint32_t>(recv_owner * 2 + 1);
       uint32_t recv_op = builder.add_op(AlgoOpKind::Recv, recv_bytes, offset,
                                         offset, recv_peer, -1, {}, pair_id,
                                         BufRef{BufSpace::Input, 0},
@@ -383,11 +394,40 @@ CollAlgo build_allreduce_ring_algo(CollectiveConfig const& config,
   if (inplace) algo.tmp_bytes = {config.input_bytes};
 
   AlgoBuilder builder(std::move(algo));
-  std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks), kNoOp);
-
-  emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace);
-  emit_ring_allgather(ring, config, builder, ready_ops, inplace);
-
+  uint32_t const channels = std::max<uint32_t>(1u, config.channels);
+  size_t const elem_bytes = scalar_type_size(config.dtype);
+  // Split the tensor into `channels` contiguous byte intervals. Each
+  // interval is an independent ring (own pair_id namespace, no cross-
+  // channel dependencies), so the executor sees `channels` parallel
+  // ready ops per phase. Require an even split at 16B granularity;
+  // non-divisible tensors fall back to a single ring (collectives are
+  // normally multiples of 16B and of the rank count).
+  size_t const align = 16;
+  size_t const base_seg = (config.input_bytes / channels) & ~(align - 1);
+  if (base_seg == 0 ||
+      base_seg * channels != config.input_bytes ||
+      (base_seg % static_cast<size_t>(config.nranks)) != 0) {
+    std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks),
+                                    kNoOp);
+    emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace,
+                             config.input_bytes, 0, 0);
+    emit_ring_allgather(ring, config, builder, ready_ops, inplace,
+                        config.input_bytes, 0, 0);
+    return std::move(builder.algo);
+  }
+  uint32_t const pair_stride = static_cast<uint32_t>(2 * config.nranks);
+  for (uint32_t c = 0; c < channels; ++c) {
+    // Each channel runs the full RS/AG circulation over its own byte
+    // interval with an isolated ready set and pair namespace.
+    std::vector<uint32_t> ready_ops(static_cast<size_t>(config.nranks),
+                                    kNoOp);
+    size_t const base = static_cast<size_t>(c) * base_seg;
+    uint32_t const pair_base = c * pair_stride;
+    emit_ring_reduce_scatter(ring, config, builder, ready_ops, inplace,
+                             base_seg, base, pair_base);
+    emit_ring_allgather(ring, config, builder, ready_ops, inplace,
+                        base_seg, base, pair_base);
+  }
   return std::move(builder.algo);
 }
 

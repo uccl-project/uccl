@@ -291,6 +291,7 @@ static std::string plan_key(CollectiveConfig const& cfg, bool inplace) {
   add(static_cast<uint64_t>(cfg.dtype));
   add(static_cast<uint64_t>(cfg.reduction));
   add(static_cast<uint64_t>(cfg.signal_group_tiles));
+  add(static_cast<uint64_t>(cfg.channels));
   add(cfg.fuse_reduce_copy ? 1u : 0u);
   add(cfg.fuse_ag_copy ? 1u : 0u);
   add(cfg.device_flags ? 1u : 0u);

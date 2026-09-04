@@ -20,6 +20,12 @@ struct CollectiveConfig {
   std::vector<size_t> output_split_bytes;
   ScalarType dtype = ScalarType::Float32;
   ReductionKind reduction = ReductionKind::Sum;
+  // Multi-ring channel count (AllReduce). The collective is split into
+  // `channels` independent rings over disjoint byte intervals, each with
+  // its own pair_id namespace and no cross-channel dependencies, so the
+  // executor sees `channels` parallel ready ops per phase instead of one
+  // serialized hop. Default 1 = single ring. Toggle via UK_CCL_CHANNELS.
+  uint32_t channels = 1;
   // Signal aggregation: one Signal/WaitSignal pair per this many tiles
   // (per chunk pair) instead of per tile. 1 = per-tile (finest pipeline),
   // larger values cut signal-op counts at the cost of coarser pipelining
