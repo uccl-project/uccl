@@ -165,3 +165,86 @@ measured justification for the per-size `b` used in the headline tables.
   case (2.0-2.1 vs 4.4-4.7 GB/s) remains the open gap.
 - Blocks are otherwise neutral at 256M (b1 vs b8-64 within ~1-3%),
   because PCIe, not worker parallelism, is the bottleneck.
+
+## G1: concurrent collectives across CUDA streams (2026-09-05)
+
+Validation for the FSDP backward-prefetch shape: AllGather of the next
+layer's parameters and ReduceScatter of the current layer's gradients
+issued on two CUDA streams. Harness `bench/stream_concurrent.cu`;
+runners `bench/run_g1.sh` / `bench/retest_g1.sh`. Medians of 3, all
+cells 0 wrong. Raw logs: `/tmp/g1_final`, `/tmp/g1_retest2`,
+`/tmp/g1_s2k` (node5).
+
+Method: `W` = per-rank full layer tensor (AG input/RS output = `W/n`);
+per iteration the harness launches the scenario's ops back-to-back
+(AG before RS, each inside its own `ncclGroupStart/End`, i.e. the
+launch pattern of ProcessGroupNCCL). `--sync-every K` syncs the device
+every K batches: K=1 is end-to-end wall per batch (host cannot run
+ahead), K=30 is fully pipelined (host dispatch overlaps device work).
+Busbw uses nccl-tests factors (AG/RS `(n-1)/n*W`, AR `2(n-1)/n*W`).
+Shim blocks per the SM-budget rule (RS `b`: S2=4, S8=2 at 1M / 1 at
+256M, X16=2); AG stays 0-SM CE. Cross-node adds
+`UK_CCL_RDMA_FUSED_MODE=proxy`.
+
+Wall per batch (µs), shim / native NCCL 2.31.2:
+
+| placement | W | scenario / comm | K1 shim/nat | K30 shim/nat |
+|---|---|---|---|---|
+| S2 | 1M | fsdp2 shared | 380 / 113 | 97 / 99 |
+| S2 | 1M | fsdp2 per-op | 389 / 84 | 117 / 72 |
+| S2 | 1M | seqfsdp shared | 409 / 116 | 165 / 99 |
+| S2 | 256M | fsdp2 shared | 10,400 / 13,328 | 10,542 / 13,355 |
+| S2 | 256M | fsdp2 per-op | 10,748 / 12,412 | 10,696 / 12,364 |
+| S2 | 256M | seqfsdp shared | 11,008 / 13,431 | 11,014 / 13,300 |
+| S8 | 1M | fsdp2 shared | 704 / 226 | 356 / 217 |
+| S8 | 1M | fsdp2 per-op | 25,259 / 222 | 4,420 / 150 |
+| S8 | 1M | seqfsdp shared | 927 / 226 | 743 / 219 |
+| S8 | 256M | fsdp2 shared | 29,535 / 34,102 | 29,221 / 33,686 |
+| S8 | 256M | fsdp2 per-op | 53,597 / 32,250 | 41,411 / 32,416 |
+| S8 | 256M | seqfsdp shared | 30,565 / 33,675 | 29,799 / 33,765 |
+| X16 | 1M | fsdp2 shared | 1,126 / 480 | 684 / 354 |
+| X16 | 1M | fsdp2 per-op | 70,959 / 251 | 72,532 / 234 |
+| X16 | 1M | seqfsdp shared | 1,374 / 366 | 1,500 / 358 |
+| X16 | 256M | fsdp2 shared | 46,021 / 36,601 | 49,563 / 36,949 |
+| X16 | 256M | fsdp2 per-op | 106,115 / 35,971 | 94,086 / 35,441 |
+| X16 | 256M | seqfsdp shared | 49,982 / 36,686 | 49,065 / 36,772 |
+
+Readings:
+
+- **Native, same comm (`shared`), does not overlap.** fsdp2-shared wall
+  equals seqfsdp wall at every placement/size (ratio 0.98-1.01), i.e.
+  NCCL 2.31.2 serializes two group-launched collectives on one comm.
+- **Native, separate comms per op (`per-op`), overlaps at 1M.**
+  K30 wall drops 27-35% vs seqfsdp (S2 72 vs 99 µs, S8 150 vs 219 µs,
+  X16 234 vs 358 µs); at 256M the gain is 4-7%. This is the FSDP2 /
+  comm-split reference the shim would need to chase for small layers.
+- **Shim (`shared`) already overlaps its own concurrent ops.** K30
+  fsdp2-shared is 1.7-2.2× faster than its own seqfsdp at 1M (S2
+  97/165, S8 356/743, X16 684/1500 µs). The single shared executor
+  feeds both streams' runs into one worker FIFO and CE path; host
+  dispatch of the second op hides behind the first op's device work.
+- **Shim host floor is a run-ahead story.** SyncK sweep at S2/1M/fsdp2
+  shared (medians of 3): shim 378 → 340 (K2) → 221 (K4) → 92 µs
+  (K30); native stays 101-117 µs. A real prefetch depth of 1-2 layers
+  (K=2-4) still leaves shim 1.9-2.9× behind native at 1M; only deep
+  pipelining reaches parity.
+- **Shim vs native under concurrency.** Same-node large messages shim
+  wins (S2 256M 0.78-0.87×, S8 256M 0.87×); X16 loses 1.26-1.37×
+  (proxy/network critical path). Small messages at K1 lose 2.3-4.1×;
+  at K30, S2 reaches parity (0.98×) while S8/X16 still lose 1.6-1.9×.
+- **Shim multi-comm (`per-op`) is pathologically slow.** 1M AG has a
+  ~17 ms (S8) / ~28 ms (X16) per-op floor and X16 RS ~39 ms (clean
+  rerun reproduced the numbers; not co-tenant noise). 256M per-op is
+  ~1.3-2.9× worse than shared instead of better. The per-comm executor
+  path needs work before FSDP2-style separate comms are a viable shim
+  target.
+- **Data quality note.** vLLM co-tenant driver resets during the first
+  matrix aborted/contaminated three cells (failures all logged
+  `driver shutting down`); every affected cell was re-measured on a
+  clean window and shared/seq numbers reproduced. One X16 seqfsdp 256M
+  shim run livelocked (16 procs spinning at ~100% CPU, GPU idle)
+  waiting on a device flag after a co-tenant reset; the cell completed
+  cleanly on rerun (50.0 / 49.1 ms K1/K30).
+
+See `concurrent_collectives_plan.md` §G1 for the gate verdict and
+implementation routing.

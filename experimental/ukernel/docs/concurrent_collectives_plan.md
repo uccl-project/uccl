@@ -1,6 +1,7 @@
 # Concurrent collectives across streams — problem statement and solution route
 
-Date: 2026-09-05. Status: analysis/plan (no measurements yet).
+Date: 2026-09-05. Status: G1 measured on L40S (concurrent-stream
+matrix below); Phase A complete, Phase B/C routing decided.
 
 ## 1. Motivation
 
@@ -139,6 +140,61 @@ Decision gates:
   dispatch at c=2/4? If yes at small/mid sizes → implement fusion for
   the common FSDP/TP patterns.
 - G3: does concurrency help X16? If not → parallel proxy/QP route.
+
+## G1 results (2026-09-05, L40S S2/S8/X16, full matrix in
+`l40s_measurements.md` §G1)
+
+Measured with `bench/stream_concurrent.cu` (medians of 3, 0 wrong).
+`W` = full layer bytes; scenario = AG (next-layer params) + RS
+(current-layer grads) on two streams (`fsdp2`), sequential reference
+on one stream (`seqfsdp`), and an AR-pair control (`ar2`, not yet
+run). `K` = batches between device syncs (K=1 host-bound, K=30 fully
+pipelined).
+
+Gate answers:
+
+- **G1 (does current shim concurrency beat sequential shim and
+  native-concurrent?): partial yes.** vs its own sequential workload,
+  K30 fsdp2-shared is 1.7-2.2× faster at 1M and 1.0-1.1× at 256M — the
+  shared single-comm executor already overlaps two streams. vs native
+  under the same comm/drop-in pattern: parity at S2/1M/K30, wins S2/S8
+  256M (0.78-0.87× of native wall), loses 1.6-1.9× at S8/X16 1M and
+  1.3× at X16 256M (proxy-bound, same as single-op X16). The host floor
+  is real: K1 shim loses 2.3-4.1×; the floor only disappears at deep
+  run-ahead (K≈8-30), and a realistic prefetch depth of 1-2 layers
+  (K=2-4) recovers only 10-41% of it.
+- **Native overlap semantics measured.** Same-comm native does *not*
+  overlap two collectives (fsdp2-shared ≡ seqfsdp within 2%). Separate
+  comms per op (FSDP2 style) overlap at 1M for -27% (S2) to -35% (X16)
+  wall, and -4-7% at 256M. Native-concurrent's best cells are the
+  per-op-comm small-message ones; the shim's per-op-comm path is
+  currently pathological (17-39 ms fixed per small op — see
+  `l40s_measurements.md`), so the FSDP2-style gap is an implementation
+  gap, not a fundamental one.
+- **G3 (does concurrency help X16?) — not yet.** Shim X16 gains from
+  its own concurrency (684 vs 1500 µs at 1M) but stays 1.9× behind
+  native-concurrent and 1.3× behind at 256M; the RDMA fused proxy is
+  the serialization point, unchanged by stream count.
+
+Decision:
+
+- Keep single-comm (drop-in) as the default shim semantics; proceed
+  **Phase B** (parallel dispatch / per-stream dispatchers into the
+  shared executor and shared `B`-block device worker) to convert the
+  K=1-4 host floor into background cost, targeting the FSDP two-stream
+  pattern first.
+- Add a **Phase B sub-task for multi-comm executors**: diagnose the
+  ~17-39 ms per-op floor in `per-op` mode (AG CE path most affected;
+  reproduced on clean machine). FSDP2/comm-split workloads need this
+  before they can adopt the shim.
+- X16 stays on the **Phase D** proxy/QP parallelism route; stream
+  concurrency alone does not fix it.
+- Revisit **G2** (plan-level fusion) after Phase B lands; fusion is
+  expected to matter at K=1-4 where the remaining shim floor lives.
+
+Open item: rerun the `ar2`/`ar4` controls and a staggered-start
+overlap-quality measurement, plus the B300 NVLink matrix when GPUs are
+free (NVLink aggregate is the strongest case for CE/SM overlap).
 
 ## 7. Implementation route
 

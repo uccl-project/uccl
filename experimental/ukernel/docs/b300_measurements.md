@@ -172,6 +172,17 @@ Result table to fill (busbw GB/s, medians of 3; mark `b*`):
 After filling: one line on whether adding blocks beyond `b*` (inside the
 budget) still buys bandwidth, per collective × np.
 
+## TODO (2026-09-05) — G1 concurrent-stream matrix (B300)
+
+Same L40S G1 validation (`bench/stream_concurrent.cu`, see
+`l40s_measurements.md` §G1) is still open on B300: fused
+AllGather/ReduceScatter pairs on two streams × np2/4/8 × {1M,16M,256M}
+× syncK {1,30} × shim/native (medians of 3). NVLink aggregate is the
+strongest case for CE/SM overlap across concurrent ops (B300 worker
+blocks per fused RS config: use the fused `b*` from the blocks table
+above once filled; native channels = 32). **Do not run while the
+co-tenant holds the GPUs** — resume when the node shows free.
+
 ## Reproducible commands
 
 ```bash
