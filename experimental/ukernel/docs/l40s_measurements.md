@@ -117,6 +117,40 @@ With PCIe as the bottleneck the CE/IPC copy path beats the fused
 device-copy path (SM LD/ST to peer), so the shipped L40S AllReduce column
 stays unfused CE/IPC; fusion is a B300/NVLink story.
 
+## Blocks sensitivity (formal table, medians of 3, 2026-09-05)
+
+AllReduce/ReduceScatter at 256M (b\* selection) and 4M (small-message
+justification for the budget maximum). Raw logs: `/tmp/l40s_blocks`.
+
+### AllReduce — busbw GB/s
+
+| placement | size | b=1 | b=2 | b=4 |
+|---|---:|---:|---:|---:|
+| S2 | 256M | **25.60** | 25.61 | 25.61 |
+| S2 | 4M | 16.58 | 18.53 | **19.56** |
+| S4 | 256M | **25.64** | 25.49 | 25.64 |
+| S4 | 4M | 10.60 | 11.96 | **12.84** |
+| S8 | 256M | **15.79** | 15.56 | — |
+| S8 | 4M | 6.37 | **6.79** | — |
+
+### ReduceScatter — busbw GB/s
+
+| placement | size | b=1 | b=2 | b=4 |
+|---|---:|---:|---:|---:|
+| S2 | 256M | 22.69 | **24.64** | 24.98 |
+| S2 | 4M | 9.59 | 11.67 | **13.17** |
+| S4 | 256M | 23.64 | **24.64** | 25.19 |
+| S4 | 4M | 7.51 | 9.14 | **10.53** |
+| S8 | 256M | **15.83** | 15.28 | — |
+| S8 | 4M | 5.05 | **5.59** | — |
+
+`b*` is bold. Reading: at 256M the PCIe ceiling is reached at `b=1`
+(AllReduce) or `b=2` (ReduceScatter, within 1-2% of `b=4`), so adding
+blocks inside the budget buys nothing at large messages. At 4M the
+small-message regime measurably needs the budget maximum (AllReduce
+S2/S4 +18-21% at `b=4` vs `b=1`; ReduceScatter +29-40%), which is the
+measured justification for the per-size `b` used in the headline tables.
+
 ## Factor analysis
 
 - Same-node AllReduce at 16M+ is 9-19% above native on S2/S4, near

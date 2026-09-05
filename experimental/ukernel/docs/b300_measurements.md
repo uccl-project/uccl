@@ -137,6 +137,41 @@ count in the host drain paths (signal + device), not in dispatch.
   to native 0.65/0.52/0.41 vs 0.42/0.42/0.26; fusion win is largest at
   16-64M (removes per-hop host transitions).
 
+## TODO (2026-09-05) — formal blocks-sensitivity table (B300)
+
+`b*` inside the budget currently rests on the qualitative "keeps rising
+to ~32" statement; the reviewer-facing multi-scale blocks curve is still
+missing. **Do not run while the co-tenant holds the GPUs** — resume when
+`nvidia-smi` shows the node free.
+
+Config (same SM-budget rule, medians of 3, 0 wrong):
+
+- fused AllReduce + ReduceScatter × np2/4/8 × 256 MiB (plus optional
+  64 MiB column for size sensitivity) × blocks {1,2,4,8,16,24,28,32};
+- runner already staged on B300: `/tmp/b300_blocks.sh` (skips finished
+  cells, so it resumes where it stopped); partial raw logs in
+  `/tmp/b300_blocks/` — do not transcribe partial cells as final.
+
+Result table to fill (busbw GB/s, medians of 3; mark `b*`):
+
+| collective | np | size | b1 | b2 | b4 | b8 | b16 | b24 | b28 | b32 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| AllReduce | 2 | 256M |  |  |  |  |  |  |  |  |
+| AllReduce | 2 | 64M |  |  |  |  |  |  |  |  |
+| AllReduce | 4 | 256M |  |  |  |  |  |  |  |  |
+| AllReduce | 4 | 64M |  |  |  |  |  |  |  |  |
+| AllReduce | 8 | 256M |  |  |  |  |  |  |  |  |
+| AllReduce | 8 | 64M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 2 | 256M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 2 | 64M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 4 | 256M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 4 | 64M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 8 | 256M |  |  |  |  |  |  |  |  |
+| ReduceScatter | 8 | 64M |  |  |  |  |  |  |  |  |
+
+After filling: one line on whether adding blocks beyond `b*` (inside the
+budget) still buys bandwidth, per collective × np.
+
 ## Reproducible commands
 
 ```bash
