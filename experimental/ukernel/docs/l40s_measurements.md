@@ -173,7 +173,8 @@ layer's parameters and ReduceScatter of the current layer's gradients
 issued on two CUDA streams. Harness `bench/stream_concurrent.cu`;
 runners `bench/run_g1.sh` / `bench/retest_g1.sh`. Medians of 3, all
 cells 0 wrong. Raw logs: `/tmp/g1_final`, `/tmp/g1_retest2`,
-`/tmp/g1_s2k` (node5).
+`/tmp/g1_s2k`, `/tmp/g1_x8`, `/tmp/g1_s4`, `/tmp/g1_confirm_free`
+(node5).
 
 Method: `W` = per-rank full layer tensor (AG input/RS output = `W/n`);
 per iteration the harness launches the scenario's ops back-to-back
@@ -209,6 +210,22 @@ Wall per batch (µs), shim / native NCCL 2.31.2:
 | X16 | 256M | fsdp2 per-op | 106,115 / 35,971 | 94,086 / 35,441 |
 | X16 | 256M | seqfsdp shared | 49,982 / 36,686 | 49,065 / 36,772 |
 
+Clean-GPU follow-up (all GPUs idle; X8 = 4+4 across nodes, S4 = 4 GPUs
+on node5, no occupied card in the set), medians of 3:
+
+| placement | W | scenario / comm | K1 shim/nat | K30 shim/nat |
+|---|---|---|---|---|
+| X8 | 1M | fsdp2 shared | 685 / 254 | 316 / 237 |
+| X8 | 1M | fsdp2 per-op | 720 / 202 | 470 / 165 |
+| X8 | 1M | seqfsdp shared | 898 / 251 | 686 / 243 |
+| X8 | 256M | fsdp2 shared | 42,611 / 33,646 | 42,833 / 33,616 |
+| X8 | 256M | fsdp2 per-op | 43,082 / 32,277 | 42,422 / 31,972 |
+| X8 | 256M | seqfsdp shared | 43,121 / 33,786 | 43,088 / 33,558 |
+| S4 | 1M | fsdp2 per-op | 503 / 119 | 229 / 98 |
+| S4 | 1M | fsdp2 shared | — | 170 / 135 |
+| S4 | 256M | fsdp2 per-op | 18,196 / 18,701 | 16,020 / 18,710 |
+| S4 | 256M | fsdp2 shared | — | 15,760 / 18,907 |
+
 Readings:
 
 - **Native, same comm (`shared`), does not overlap.** fsdp2-shared wall
@@ -232,12 +249,16 @@ Readings:
   wins (S2 256M 0.78-0.87×, S8 256M 0.87×); X16 loses 1.26-1.37×
   (proxy/network critical path). Small messages at K1 lose 2.3-4.1×;
   at K30, S2 reaches parity (0.98×) while S8/X16 still lose 1.6-1.9×.
-- **Shim multi-comm (`per-op`) is pathologically slow.** 1M AG has a
-  ~17 ms (S8) / ~28 ms (X16) per-op floor and X16 RS ~39 ms (clean
-  rerun reproduced the numbers; not co-tenant noise). 256M per-op is
-  ~1.3-2.9× worse than shared instead of better. The per-comm executor
-  path needs work before FSDP2-style separate comms are a viable shim
-  target.
+- **Shim multi-comm (`per-op`) hits a real 8-local-GPU bug.** At S8 and
+  X16 (8 GPUs per node participating), 1M per-op shim shows a 4-70 ms
+  per-batch floor (AG worst; fixed ~17 ms at S8 / ~28 ms at X16) and
+  ~2-3× penalty at 256M, plus intermittent all-bad ReduceScatter output
+  and a teardown abort (`cudart` unloading race, rc=134). Reproduced
+  with every GPU idle, so it is not co-tenant noise. The same runs are
+  healthy at S2/S4 (1-4 local GPUs) and at X8 (4+4: 720/470 µs at 1M,
+  ~43 ms at 256M ≈ shared). The trigger is 2 comms × 8 local IPC peers
+  in one process — a Phase B debug item, not a fundamental FSDP2-shape
+  blocker (see `concurrent_collectives_plan.md`).
 - **Data quality note.** vLLM co-tenant driver resets during the first
   matrix aborted/contaminated three cells (failures all logged
   `driver shutting down`); every affected cell was re-measured on a

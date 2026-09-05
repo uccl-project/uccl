@@ -167,10 +167,14 @@ Gate answers:
   overlap two collectives (fsdp2-shared ≡ seqfsdp within 2%). Separate
   comms per op (FSDP2 style) overlap at 1M for -27% (S2) to -35% (X16)
   wall, and -4-7% at 256M. Native-concurrent's best cells are the
-  per-op-comm small-message ones; the shim's per-op-comm path is
-  currently pathological (17-39 ms fixed per small op — see
-  `l40s_measurements.md`), so the FSDP2-style gap is an implementation
-  gap, not a fundamental one.
+  per-op-comm small-message ones.
+- **Shim per-op comms: healthy at ≤4 local GPUs, buggy at 8.** S2/S4
+  and clean X8 (4+4) per-op runs are healthy (X8 1M K30 470 vs native
+  165 µs; X8 256M ≈ shared at 42-43 ms). S8/X16 (8 local GPUs × 2
+  comms) show a fixed 17-39 ms small-op floor plus intermittent wrong
+  output and a teardown abort, reproduced with all GPUs idle — a real
+  multi-comm executor/IPC bug at 8 local peers, not vLLM interference
+  (details in `l40s_measurements.md` §G1).
 - **G3 (does concurrency help X16?) — not yet.** Shim X16 gains from
   its own concurrency (684 vs 1500 µs at 1M) but stays 1.9× behind
   native-concurrent and 1.3× behind at 256M; the RDMA fused proxy is
@@ -184,9 +188,10 @@ Decision:
   K=1-4 host floor into background cost, targeting the FSDP two-stream
   pattern first.
 - Add a **Phase B sub-task for multi-comm executors**: diagnose the
-  ~17-39 ms per-op floor in `per-op` mode (AG CE path most affected;
-  reproduced on clean machine). FSDP2/comm-split workloads need this
-  before they can adopt the shim.
+  8-local-GPU `per-op` bug (17-39 ms floor + intermittent wrong output;
+  2 comms × 7 local IPC peers per process). FSDP2/comm-split workloads
+  need this before they can adopt the shim at 8-GPU nodes; 2-4-GPU
+  nodes and 4+4 cross-node are already usable.
 - X16 stays on the **Phase D** proxy/QP parallelism route; stream
   concurrency alone does not fix it.
 - Revisit **G2** (plan-level fusion) after Phase B lands; fusion is

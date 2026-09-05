@@ -37,8 +37,12 @@ S8|seqfsdp|shared|1048576|30|shim"}
 rs_b() { # placement bytes
   case "$1:$2" in
     S2:*) echo 4;;
+    S4:1048576) echo 4;;
+    S4:*) echo 2;;
     S8:1048576) echo 2;;
     S8:*) echo 1;;
+    X8:1048576) echo 2;;
+    X8:*) echo 1;;
     X16:*) echo 2;;
     *) echo 1;;
   esac
@@ -63,7 +67,9 @@ run_cell() {
   local np host
   case "$placement" in
     S2) np=2; host="";;
+    S4) np=4; host="";;
     S8) np=8; host="";;
+    X8) np=8; host="$NODE5:4,$NODE6:4";;
     X16) np=16; host="$NODE5:8,$NODE6:8";;
   esac
   local -a xargs=()
@@ -72,7 +78,7 @@ run_cell() {
     export UK_CCL_UNBIND=1
     export UK_CCL_DEV_BLOCKS=$(rs_b "$placement" "$W")
     xargs=(-x LD_LIBRARY_PATH -x UK_CCL_UNBIND=1 -x UK_CCL_DEV_BLOCKS)
-    if [ "$placement" = X16 ]; then
+    if [ "$placement" = X8 ] || [ "$placement" = X16 ]; then
       export UK_CCL_RDMA_FUSED_MODE=proxy
       xargs+=(-x UK_CCL_RDMA_FUSED_MODE)
     fi
