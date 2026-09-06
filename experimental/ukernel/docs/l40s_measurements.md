@@ -187,6 +187,12 @@ Shim blocks per the SM-budget rule (RS `b`: S2=4, S8=2 at 1M / 1 at
 256M, X16=2); AG stays 0-SM CE. Cross-node adds
 `UK_CCL_RDMA_FUSED_MODE=proxy`.
 
+Architecture note: the product target is the `shared` column — one
+communicator (one executor group) receiving submissions on multiple
+streams, with runs overlapped inside the executor. The `per-op`
+column (a separate communicator per op) is a **native NCCL reference**
+(what comm-split buys) and a shim stress case, not the target shape.
+
 Wall per batch (µs), shim / native NCCL 2.31.2:
 
 | placement | W | scenario / comm | K1 shim/nat | K30 shim/nat |
@@ -227,6 +233,12 @@ on node5, no occupied card in the set), medians of 3:
 | S4 | 256M | fsdp2 shared | — | 15,760 / 18,907 |
 
 Readings:
+
+- The mainline reading is the **fsdp2-shared** rows: the current
+  single-comm shim already overlaps two streams at 1M when the host
+  runs ahead (K30), and the remaining gap is the host floor at shallow
+  pipelining plus the X16 proxy path. `per-op` rows quantify the
+  comm-split ceiling for native and are not a shim acceptance target.
 
 - **Native, same comm (`shared`), does not overlap.** fsdp2-shared wall
   equals seqfsdp wall at every placement/size (ratio 0.98-1.01), i.e.

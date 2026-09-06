@@ -52,6 +52,16 @@ throughput may match or beat native even where each individual op loses.
   collective while signal/device drain grows to 50-110us per collective
   at 8 ranks — the cost that concurrency could hide.
 
+Target execution model (user-confirmed 2026-09-06): the application
+holds **one communicator = one executor group** and submits collectives
+to multiple CUDA streams; the executor processes plan runs
+asynchronously and may overlap runs that arrive on *different* streams.
+Runs on the *same* stream stay serialized (stream-order semantics, as
+required). Separate-communicator (`per-op` / comm-split) execution is
+**not** the product architecture — it is measured only as a native NCCL
+reference (what independent comms buy) and as a shim stress case.
+Multi-comm support in the shim is optional, not a gate.
+
 ## 3. Two distinct interpretations of "CCL-level fusion"
 
 ### 3a. Parallel orchestration (software pipelining)
@@ -191,7 +201,9 @@ Decision:
   8-local-GPU `per-op` bug (17-39 ms floor + intermittent wrong output;
   2 comms × 7 local IPC peers per process). FSDP2/comm-split workloads
   need this before they can adopt the shim at 8-GPU nodes; 2-4-GPU
-  nodes and 4+4 cross-node are already usable.
+  nodes and 4+4 cross-node are already usable. **De-prioritized**: per-op
+  is a reference/stress axis, not the target architecture; the mainline
+  Phase B work is single-comm multi-stream run dispatch (above).
 - X16 stays on the **Phase D** proxy/QP parallelism route; stream
   concurrency alone does not fix it.
 - Revisit **G2** (plan-level fusion) after Phase B lands; fusion is
