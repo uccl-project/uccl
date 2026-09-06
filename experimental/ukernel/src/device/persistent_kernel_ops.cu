@@ -228,7 +228,7 @@ __device__ __forceinline__ void idle_sleep() {
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
                                       MultiBlockSync* d_sync, bool* exited_flag,
-                                      uint32_t idle_exit_us) {
+                                      uint32_t idle_exit_us, bool* exit_now) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -397,22 +397,36 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
       // FIFO empty: idle. Once the grace elapses, register this block's
       // exit vote; the mask reaching all-ones triggers the rendezvous.
       if (threadIdx.x == 0) {
-        if (idle_exit_us) {
+        // Host-driven proactive exit (executor quiescent): skip the idle
+        // grace and vote immediately, so a device-wide sync does not wait
+        // out the full 500us grace. The flag only takes effect while the
+        // FIFO is truly empty (checked below before the exit commits), so
+        // bursts that keep tasks coming never exit — they are recycled.
+        bool force_exit = exit_now && *exit_now;
+        if (force_exit || idle_exit_us) {
           // Wall-clock grace: the poll rate varies with block count and
           // memory traffic, so a poll-count threshold made the effective
           // grace hardware-dependent (at 64 blocks it shrank to ~100us
           // and the worker exited between a collective's phases, adding
           // ~15ms of relaunch churn per op). globaltimer is ns.
-          unsigned long long now = 0;
-          asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
-          if (!idle_deadline_active) {
-            idle_deadline =
-                now + static_cast<uint64_t>(idle_exit_us) * 1000ull;
-            idle_deadline_active = true;
-          } else if (now >= idle_deadline && !own_idle_vote) {
-            mscclpp::atomicOr<uint64_t, mscclpp::scopeDevice>(
-                &d_sync->exitReadyMask, own_bit, mscclpp::memoryOrderRelease);
-            own_idle_vote = true;
+          if (force_exit) {
+            if (!own_idle_vote) {
+              mscclpp::atomicOr<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitReadyMask, own_bit, mscclpp::memoryOrderRelease);
+              own_idle_vote = true;
+            }
+          } else {
+            unsigned long long now = 0;
+            asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
+            if (!idle_deadline_active) {
+              idle_deadline =
+                  now + static_cast<uint64_t>(idle_exit_us) * 1000ull;
+              idle_deadline_active = true;
+            } else if (now >= idle_deadline && !own_idle_vote) {
+              mscclpp::atomicOr<uint64_t, mscclpp::scopeDevice>(
+                  &d_sync->exitReadyMask, own_bit, mscclpp::memoryOrderRelease);
+              own_idle_vote = true;
+            }
           }
         }
         idle_sleep();

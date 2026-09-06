@@ -420,6 +420,14 @@ size_t DeviceBackend::do_enqueue(Cmd const* cmds, size_t n,
   return accepted;
 }
 
+void DeviceBackend::request_idle_exit() {
+  if (worker_pool_) worker_pool_->request_idle_exit_all();
+}
+
+void DeviceBackend::cancel_idle_exit() {
+  if (worker_pool_) worker_pool_->cancel_idle_exit_all();
+}
+
 size_t DeviceBackend::do_drain(uint32_t* completed, size_t max) {
   // do_drain may run on user threads (SprayExecutor::wait drives
   // progress); save/restore the caller's CUDA device around it.

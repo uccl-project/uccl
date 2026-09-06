@@ -197,6 +197,17 @@ Decision:
   shared executor and shared `B`-block device worker) to convert the
   K=1-4 host floor into background cost, targeting the FSDP two-stream
   pattern first.
+
+First Phase B change landed (2026-09-05): proactive worker exit. When
+the executor has no runs left it asks the worker to exit at the next
+quiescence (instead of the app's device-wide sync waiting out the
+500 µs idle grace); the next submit cancels the request, so continuing
+bursts auto-recycle and never churn exits at internal task gaps.
+Same-node K1 (per-batch device-sync) 1M batches drop ~700 → ~500 µs;
+K30 (async/run-ahead) and 256M unchanged; nccl-tests sanity clean.
+Env `UK_CCL_DEV_PROACTIVE_EXIT=0` restores the old idle-grace
+behavior. Remaining Phase B work: per-stream dispatchers for the
+K=1-4 floor, and a relaunch-race look at the X16 fused-proxy path.
 - Add a **Phase B sub-task for multi-comm executors**: diagnose the
   8-local-GPU `per-op` bug (17-39 ms floor + intermittent wrong output;
   2 comms × 7 local IPC peers per process). FSDP2/comm-split workloads

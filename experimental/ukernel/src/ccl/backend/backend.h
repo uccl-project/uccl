@@ -83,6 +83,15 @@ class BatchBackend {
   virtual size_t do_drain(uint32_t* completed, size_t max) = 0;
   virtual size_t capacity() const = 0;
   virtual void release(uint32_t cmd_idx) { (void)cmd_idx; }
+  // Ask the backend to wind down its device-side workers at the next
+  // quiescence point (no queued work), so host-wide device syncs do not
+  // wait out an idle-exit grace. Backends without persistent workers
+  // (or without work pending) no-op. Safe from any thread; idempotent.
+  virtual void request_idle_exit() {}
+  // Cancel a pending request_idle_exit() (a new burst is starting, so
+  // the worker should stay resident and recycle instead of exiting at
+  // the burst's internal gaps). Safe from any thread; idempotent.
+  virtual void cancel_idle_exit() {}
 
   // Reserve-then-enqueue API for ops whose completion may arrive
   // synchronously during enqueue (e.g. same-host IPC signals). The

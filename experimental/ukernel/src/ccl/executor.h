@@ -619,6 +619,11 @@ class SprayExecutor {
   // Backpressure
   size_t max_concurrent_runs_ = 16;
   std::atomic<size_t> active_runs_{0};
+  // True between "last run finalized" (exit requested so device-wide
+  // syncs do not wait out the worker idle grace) and the next submit
+  // (exit cancelled so the fresh burst's internal fifo gaps do not
+  // churn worker exits). Guards the request/cancel memcpys.
+  std::atomic<bool> exit_requested_{false};
 
   // shared_ptr so the enqueue loop can snapshot running runs and process
   // them without holding runs_mutex_ (lifetime stays safe even if the

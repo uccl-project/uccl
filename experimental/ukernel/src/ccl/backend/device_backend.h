@@ -55,6 +55,8 @@ class DeviceBackend final : public BatchBackend {
                                    size_t n) override;
   size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override;
+  void request_idle_exit() override;
+  void cancel_idle_exit() override;
  private:
   void ensure_runtime();
   // Fill TaskArgs/TaskType for a device op; returns false for op kinds

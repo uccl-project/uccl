@@ -34,6 +34,7 @@
 #include <cstring>
 #include <numeric>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define CUDACHK(c)                                                       \
@@ -126,6 +127,7 @@ int main(int argc, char** argv) {
   // prefetch regime), K=iters is fully pipelined. Average wall per
   // batch is reported either way.
   int sync_every = (int)get_long_arg(argc, argv, "--sync-every", 1);
+  int timeline = (int)get_long_arg(argc, argv, "--timeline", 0);
 
   int dev = mpi_rank;
   if (const char* lr = std::getenv("OMPI_COMM_WORLD_LOCAL_RANK"))
@@ -280,9 +282,40 @@ int main(int argc, char** argv) {
   int K = sync_every;
   if (K < 1) K = 1;
   if (K > iters) K = iters;
+  std::vector<double> t_launch, t_done, t_tail;
+  bool do_tl = timeline != 0 && K == 1;
+  if (do_tl) {
+    t_launch.reserve((size_t)iters);
+    t_done.reserve((size_t)iters);
+    t_tail.reserve((size_t)iters);
+  }
   auto t0 = std::chrono::steady_clock::now();
   for (int i = 0; i < iters; ++i) {
+    auto s = std::chrono::steady_clock::now();
     launch_batch(starts, stops);
+    if (do_tl) {
+      auto ta = std::chrono::steady_clock::now();
+      t_launch.push_back(std::chrono::duration<double, std::micro>(ta - s)
+                             .count());
+      // Host-observed completion: poll stop events without device sync.
+      for (;;) {
+        bool all = true;
+        for (size_t k = 0; k < ops.size(); ++k)
+          if (cudaEventQuery(stops[k]) == cudaErrorNotReady) {
+            all = false;
+            break;
+          }
+        if (all) break;
+        std::this_thread::yield();
+      }
+      auto tb = std::chrono::steady_clock::now();
+      t_done.push_back(std::chrono::duration<double, std::micro>(tb - s)
+                           .count());
+      CUDACHK(cudaDeviceSynchronize());
+      auto tc = std::chrono::steady_clock::now();
+      t_tail.push_back(std::chrono::duration<double, std::micro>(tc - s)
+                           .count());
+    }
     if ((i + 1) % K == 0) CUDACHK(cudaDeviceSynchronize());
   }
   if (iters % K != 0) CUDACHK(cudaDeviceSynchronize());
@@ -310,6 +343,17 @@ int main(int argc, char** argv) {
             "syncK=%d wall_us=%.1f agg_busbw=%.2fGB/s\n",
             scenario, comm_mode, group_mode, n, W >> 20, iters, K, wall_med_us,
             agg_busbw);
+    if (do_tl) {
+      auto med = [](std::vector<double>& v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+      };
+      double ml = med(t_launch), md = med(t_done), mt = med(t_tail);
+      fprintf(stderr,
+              "  timeline p50: launch_us=%.1f events_done_us=%.1f "
+              "sync_done_us=%.1f (tail_after_events=%.1f)\n",
+              ml, md, mt, mt - md);
+    }
     for (size_t i = 0; i < ops.size(); ++i) {
       fprintf(stderr,
               "  op%zu kind=%d lat_ms p50=%.3f p99=%.3f mean=%.3f\n", i,

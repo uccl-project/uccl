@@ -997,6 +997,12 @@ CollectiveOpHandle SprayExecutor::submit(CollectiveConfig const& cfg,
 
   auto run = std::make_shared<SprayRun>();
   active_runs_.fetch_add(1, std::memory_order_release);
+  // A new burst is starting: cancel any pending proactive worker exit so
+  // the worker stays resident through this run (its internal fifo-empty
+  // gaps must not trigger exits); it recycles normally and only exits at
+  // a true quiescence (see finalize_run).
+  if (device_be_ && exit_requested_.exchange(false, std::memory_order_acq_rel))
+    device_be_->cancel_idle_exit();
   run->status.store(CollectiveOpStatus::Running, std::memory_order_release);
   run->plan = plan;
   run->input_buf_id = in_id;
@@ -1768,7 +1774,25 @@ void SprayExecutor::finalize_run(SprayRun* run) {
   if (run->status.compare_exchange_strong(
           expected, CollectiveOpStatus::Completed, std::memory_order_release,
           std::memory_order_relaxed)) {
-    active_runs_.fetch_sub(1, std::memory_order_release);
+    size_t prev_active = active_runs_.fetch_sub(1, std::memory_order_release);
+    // Last run of this executor completed: ask the device backend to
+    // retire its persistent workers at the next quiescence instead of
+    // letting a device-wide sync (cudaDeviceSynchronize / stream sync
+    // that reaches the worker stream) wait out the full idle-exit grace.
+    // The next submit cancels the request (exit_requested_ flip), so a
+    // burst that follows does not churn worker exits at task-boundary
+    // gaps — workers are auto-recycled while runs continue.
+    // UK_CCL_DEV_PROACTIVE_EXIT=0 disables the host-driven exit (falls
+    // back to the kernel's idle grace). Diagnostic knob for measuring
+    // the exit/relaunch tradeoff (same-node sync-heavy loops win; the
+    // cross-node fused-proxy path showed per-batch relaunch races).
+    static bool const kProactiveExit = [] {
+      char const* e = std::getenv("UK_CCL_DEV_PROACTIVE_EXIT");
+      return !e || std::string(e) != "0";
+    }();
+    if (prev_active == 1 && device_be_ && kProactiveExit &&
+        !exit_requested_.exchange(true, std::memory_order_acq_rel))
+      device_be_->request_idle_exit();
     // Output dependency: publish completion to the mapped done_flag the
     // user stream's WaitValue polls. Monotonic MAX write: several
     // drain/wait threads can finalize different runs concurrently and

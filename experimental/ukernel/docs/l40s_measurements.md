@@ -281,3 +281,36 @@ Readings:
 
 See `concurrent_collectives_plan.md` §G1 for the gate verdict and
 implementation routing.
+
+## Proactive worker exit (2026-09-05, first Phase B change landed)
+
+`cudaDeviceSynchronize` / any device-wide sync waits for the shim's
+persistent worker kernel to exit, and the worker's idle-exit grace
+defaults to 500 µs — so a sync-heavy loop (K=1 harness) paid roughly
+the full grace after every batch. Timeline probe (S8/1M/fsdp2-shared):
+events done at ~494 µs but `cudaDeviceSynchronize` returned at
+~990 µs; native's sync tail was ~1 µs.
+
+Change (executor + WorkerPool, env `UK_CCL_DEV_PROACTIVE_EXIT=0` to
+disable): when the executor's last run finalizes (no runs left), it
+asks the device backend to set a host-driven `exit_now` flag; the
+worker kernel skips the idle grace and exits at its next true
+quiescence through the normal idle-exit rendezvous (so the existing
+`relaunch_if_exited` path brings it back cheaply). The very next
+submit cancels the request — bursts that keep runs coming never exit
+at internal task-boundary gaps; the worker is auto-recycled as before.
+
+Measured (S8, fsdp2-shared, medians of 3, 0 wrong):
+
+| cell | before | after |
+|---|---:|---:|
+| 1M K1 wall/batch | ~700 µs | ~500 µs (-28%) |
+| 1M K30 wall/batch | ~356 µs | ~333-343 µs (no change) |
+| 256M K1/K30 | ~29.5 / ~29.2 ms | ~29.0 / ~30.3 ms (no change) |
+
+nccl-tests AR/AG/RS sanity (rc=0, 0 wrong) unchanged. X16 (fused
+proxy) per-batch-sync cells are noisy (load-dependent, ~1.1-1.4 ms
+either way); K30 X16 unchanged (~680 µs). Same-node sync-heavy loops
+are the clear win; the K=1 `cudaDeviceSynchronize` harness remains a
+pessimistic stress mode for the shim (real FSDP prefetch is
+run-ahead/async, i.e. the K30 regime).

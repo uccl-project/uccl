@@ -69,6 +69,21 @@ class WorkerPool {
   // would need a fetch_add slot claim + per-slot ready flag (extra atomic
   // per task) — deferred until a real multi-writer caller exists.
   // relaunch_if_exited / sync / is_done are safe from any thread.
+  // Ask every launched worker to exit at its next FIFO-empty poll
+  // (instead of waiting out the full idle grace). Workers with tasks in
+  // flight / queued do not exit — the flag only takes effect at a true
+  // quiescence point, so bursts (multi-stream run-ahead) keep the worker
+  // resident and are "auto recycled" as usual. After an exit the next
+  // enqueue relaunches the kernel via relaunch_if_exited(); the relaunch
+  // clears the flag, so a fresh grid never exits early. Safe from any
+  // thread; idempotent.
+  void request_idle_exit_all();
+  // Cancel a pending request_idle_exit_all(): clear the host flag and
+  // push the clear to the device, so a worker about to receive a new
+  // burst does not exit at the burst's internal fifo-empty gaps (a
+  // sticky force-exit would churn relaunches at every dependent-task
+  // boundary). Safe from any thread; idempotent.
+  void cancel_idle_exit_all();
 
   // Per-fifo TaskArgs pool base pointer. Each worker kernel reads args
   // only from its own pool (never the shared singleton), so concurrent
@@ -152,6 +167,14 @@ class WorkerPool {
 
   std::vector<bool*> d_stop_flags_;
   std::vector<bool*> h_stop_flags_;
+  // Host-driven "exit at next quiescence" flags (d_ = device copy the
+  // kernel polls, h_ = host-mapped write source). Mirrors the stop-flag
+  // plumbing but keeps the worker bound: exit goes through the normal
+  // idle-exit rendezvous (sets h_exited), so relaunch_if_exited() can
+  // bring it back cheaply without a full createWorker/destroyWorker
+  // cycle. Reset to false on every (re)launch.
+  std::vector<bool*> d_exit_now_flags_;
+  std::vector<bool*> h_exit_now_flags_;
 };
 
 }  // namespace Device

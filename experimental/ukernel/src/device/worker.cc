@@ -57,6 +57,16 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
                                 gpuMemcpyHostToDevice, control_stream_));
     d_stop_flags_.push_back(d_stop);
     h_stop_flags_.push_back(h_stop);
+
+    bool* d_exit;
+    bool* h_exit;
+    GPU_RT_CHECK(gpuMalloc(&d_exit, sizeof(bool)));
+    GPU_RT_CHECK(gpuHostAlloc(&h_exit, sizeof(bool), gpuHostAllocMapped));
+    *h_exit = false;
+    GPU_RT_CHECK(gpuMemcpyAsync(d_exit, h_exit, sizeof(bool),
+                                gpuMemcpyHostToDevice, control_stream_));
+    d_exit_now_flags_.push_back(d_exit);
+    h_exit_now_flags_.push_back(h_exit);
   }
   fifo_task_args_.assign(cfg_.numMaxWorkers, nullptr);
   GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
@@ -89,6 +99,15 @@ WorkerPool::~WorkerPool() {
   }
   d_stop_flags_.clear();
   h_stop_flags_.clear();
+
+  for (auto* d : d_exit_now_flags_) {
+    GPU_RT_CHECK(gpuFree(d));
+  }
+  for (auto* h : h_exit_now_flags_) {
+    GPU_RT_CHECK(gpuFreeHost(h));
+  }
+  d_exit_now_flags_.clear();
+  h_exit_now_flags_.clear();
 
   if (owns_control_stream_ && control_stream_) {
     GPU_RT_CHECK(gpuStreamDestroy(control_stream_));
@@ -315,7 +334,7 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
 }
 
 void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
-  if (!idle_exit_us_ || fifoId >= fifos_.size()) return;
+  if (fifoId >= fifos_.size()) return;
   for (size_t i = 0; i < workers_.size(); ++i) {
     auto* wc = workers_[i].get();
     if (wc->fifoId == fifoId && wc->launched && wc->h_exited &&
@@ -328,6 +347,32 @@ void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
       launchWorkerForFifo(i);
       return;
     }
+  }
+}
+
+void WorkerPool::request_idle_exit_all() {
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    auto* wc = workers_[i].get();
+    if (!wc->launched || wc->fifoId == UINT32_MAX) continue;
+    // Idempotent: only push another device copy when the host value
+    // changed (false -> true). The relaunch path clears it again.
+    if (*h_exit_now_flags_[i]) continue;
+    *h_exit_now_flags_[i] = true;
+    GPU_RT_CHECK(gpuMemcpyAsync(d_exit_now_flags_[i], h_exit_now_flags_[i],
+                                sizeof(bool), gpuMemcpyHostToDevice,
+                                control_stream_));
+  }
+}
+
+void WorkerPool::cancel_idle_exit_all() {
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    auto* wc = workers_[i].get();
+    if (!wc->launched || wc->fifoId == UINT32_MAX) continue;
+    if (!*h_exit_now_flags_[i]) continue;
+    *h_exit_now_flags_[i] = false;
+    GPU_RT_CHECK(gpuMemcpyAsync(d_exit_now_flags_[i], h_exit_now_flags_[i],
+                                sizeof(bool), gpuMemcpyHostToDevice,
+                                control_stream_));
   }
 }
 
@@ -406,10 +451,21 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
     GPU_RT_CHECK(gpuMemsetAsync(worker.d_multi_sync, 0,
                                 sizeof(MultiBlockSync), worker.stream));
   }
+  // Clear any pending host-driven exit request on the worker stream so
+  // the fresh grid never exits at its first quiescence; stream-ordered
+  // before the launch (the exiting grid may still be polling the old
+  // value — it is leaving anyway).
+  if (workerIndex < h_exit_now_flags_.size()) {
+    *h_exit_now_flags_[workerIndex] = false;
+    GPU_RT_CHECK(gpuMemcpyAsync(d_exit_now_flags_[workerIndex],
+                                h_exit_now_flags_[workerIndex], sizeof(bool),
+                                gpuMemcpyHostToDevice, worker.stream));
+  }
 
   void* args_multi[] = {
       &worker.d_fifo_handle, &d_task_args,     &d_stop_flags_[workerIndex],
-      &worker.d_multi_sync,  &worker.h_exited, &idle_exit_us_};
+      &worker.d_multi_sync,  &worker.h_exited, &idle_exit_us_,
+      &d_exit_now_flags_[workerIndex]};
 
   GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
                                block, args_multi, smem_size, worker.stream));

@@ -69,7 +69,8 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
                                       MultiBlockSync* d_sync, bool* exited_flag,
-                                      uint32_t exit_idle_iters);
+                                      uint32_t exit_idle_iters,
+                                      bool* exit_now);
 
 __global__ void benchDispatchNopKernel();
 __global__ void benchDispatchCopyFp32Kernel(TaskArgs args);
