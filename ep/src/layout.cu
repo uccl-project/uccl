@@ -220,16 +220,17 @@ void get_dispatch_layout(int64_t const* topk_idx, int* num_tokens_per_rank,
                          int num_tokens, int num_topk, int num_ranks,
                          int num_experts, cudaStream_t stream) {
   constexpr int kNumThreads = 256, kNumExpertsPerSM = 4, kNumRanksPerSM = 8;
-  // The token histogram amortizes its second launch on prefill-sized inputs.
+  // The token histogram amortizes its second launch for prefill batches
+  // with at least eight routing slots per token.
   // These bounds keep the histogram below 5 KiB and rank membership in two
   // words.
   bool valid_rdma_layout =
       num_tokens_per_rdma_rank == nullptr ||
       (num_ranks > NUM_MAX_NVL_PEERS && num_ranks % NUM_MAX_NVL_PEERS == 0);
-  if (NUM_MAX_NVL_PEERS == 8 && num_tokens >= 4096 && num_experts >= 256 &&
-      num_experts <= kMaxHistogramExperts && num_ranks >= 8 &&
-      num_ranks <= kMaxHistogramRanks && num_experts % num_ranks == 0 &&
-      valid_rdma_layout) {
+  if (NUM_MAX_NVL_PEERS == 8 && num_tokens >= 4096 && num_topk >= 8 &&
+      num_experts >= 256 && num_experts <= kMaxHistogramExperts &&
+      num_ranks >= 8 && num_ranks <= kMaxHistogramRanks &&
+      num_experts % num_ranks == 0 && valid_rdma_layout) {
     int num_rdma_ranks =
         num_tokens_per_rdma_rank ? num_ranks / NUM_MAX_NVL_PEERS : 0;
     clear_dispatch_layout_counts<<<(num_experts + kNumThreads - 1) /
