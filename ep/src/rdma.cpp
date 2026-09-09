@@ -1350,27 +1350,13 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   attr.max_dest_rd_atomic = 1;
   attr.min_rnr_timer = 12;
 
-  if (is_roce) {
-    attr.ah_attr.is_global = 1;
-    attr.ah_attr.port_num = 1;
-    char const* sl_env = getenv("UCCL_IB_SL");
-    attr.ah_attr.sl = sl_env ? atoi(sl_env) : 3;
-    attr.ah_attr.src_path_bits = 0;
-    char const* tc_env = getenv("UCCL_IB_TC");
-    attr.ah_attr.grh.traffic_class = tc_env ? atoi(tc_env) : 104;
-    attr.ah_attr.grh.hop_limit = 255;
-    // Fill GID from remote_info
-    memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
-    attr.ah_attr.grh.sgid_index = S.gid_index;
-  } else {
-    attr.ah_attr.is_global = 0;
-    attr.ah_attr.dlid = remote->lid;
-    attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 0;
-    attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.static_rate = 0;
-    memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));  // Safe
-  }
+  char const* sl_env = getenv("UCCL_IB_SL");
+  int const service_level = is_roce ? (sl_env ? atoi(sl_env) : 3) : 0;
+  char const* tc_env = getenv("UCCL_IB_TC");
+  int const traffic_class = is_roce ? (tc_env ? atoi(tc_env) : 104) : 0;
+  configure_qp_address_vector(&attr.ah_attr, port_attr, remote->lid,
+                              remote->gid, S.gid_index, service_level,
+                              traffic_class);
 
   int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
               IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
