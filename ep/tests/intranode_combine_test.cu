@@ -110,7 +110,9 @@ void run(int nranks, int tokens, int hidden, int channels, int pattern,
       for (int h = 0; h < hidden; ++h) {
         float v = float((t * 3 + h + r * 7) % 17 - 8) / 8;
         x[size_t(t) * hidden + h] = __float2bfloat16(v);
-        expected[r][size_t(t) * hidden + h] = __float2bfloat16(v * copies);
+        float combined = 0.0f;
+        for (int i = 0; i < copies; ++i) combined += v;
+        expected[r][size_t(t) * hidden + h] = __float2bfloat16(combined);
       }
     }
     state.counts = state.put(counts);
