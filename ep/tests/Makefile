@@ -21,6 +21,7 @@ COMMON_OBJ := ../src/common.o
 # Binaries
 CUDA_BIN := pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench
 HOST_TEST_BIN := rdma_addressing_test
+INTRANODE_TEST_BIN := intranode_combine_test
 
 all: $(CUDA_BIN)
 
@@ -38,6 +39,9 @@ gpu_to_cpu_bench: gpu_to_cpu_bench.cu $(COMMON_OBJ)
 batched_gpu_to_cpu_bench: batched_gpu_to_cpu_bench.cu $(COMMON_OBJ)
 	$(NVCC) $(CUDAFLAGS) $(CXXFLAGS) batched_gpu_to_cpu_bench.cu $(COMMON_OBJ) -o $@ $(LDFLAGS)
 
+$(INTRANODE_TEST_BIN): intranode_combine_test.cu ../src/intranode.cu $(wildcard ../include/*.cuh) $(wildcard ../include/*.hpp) ../../include/util/gpu_rt.h
+	$(NVCC) $(CUDAFLAGS) $(CXXFLAGS) --expt-relaxed-constexpr intranode_combine_test.cu ../src/intranode.cu -o $@ $(LDFLAGS)
+
 $(HOST_TEST_BIN): rdma_addressing_test.cpp ../include/rdma_addressing.hpp
 	$(CXX) $(HOST_TEST_CXXFLAGS) $< -o $@
 
@@ -45,6 +49,6 @@ test: $(HOST_TEST_BIN)
 	./$(HOST_TEST_BIN)
 
 clean:
-	rm -f $(CUDA_BIN) $(HOST_TEST_BIN) $(COMMON_OBJ)
+	rm -f $(CUDA_BIN) $(HOST_TEST_BIN) $(INTRANODE_TEST_BIN) $(COMMON_OBJ)
 
 .PHONY: all clean test
