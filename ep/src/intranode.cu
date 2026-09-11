@@ -683,15 +683,18 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
           (token_idx >= token_start_idx)
               ? __ldg(send_head + token_idx * kNumRanks + rank_id)
               : -1;
-      for (int i = 0; i < min(WARP_SIZE, token_idx_tail - token_start_idx + 1);
-           ++i) {
-        int const head = __shfl_sync(WARP_MASK, current_head, i);
-        if (head < 0) {
-          if (lane_id == i) expected_head = -last_head - 1;
-        } else {
-          last_head = head;
-        }
-      }
+      // Reverse token order makes the nearest later head a lane predecessor.
+      auto const head_mask = __ballot_sync(WARP_MASK, current_head >= 0);
+      auto const preceding_heads =
+          static_cast<unsigned long long>(head_mask) & ((1ull << lane_id) - 1);
+      int const preceding_lane = 63 - __clzll(preceding_heads);
+      int const preceding_head =
+          __shfl_sync(WARP_MASK, current_head, max(preceding_lane, 0));
+      int const next_head = preceding_heads ? preceding_head : last_head;
+      expected_head = -next_head - 1;
+      last_head =
+          __shfl_sync(WARP_MASK, current_head >= 0 ? current_head : next_head,
+                      WARP_SIZE - 1);
       if (current_head < 0 and token_idx >= token_start_idx)
         send_head[token_idx * kNumRanks + rank_id] = expected_head;
     }
