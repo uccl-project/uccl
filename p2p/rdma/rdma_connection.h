@@ -144,8 +144,11 @@ class SendConnection : public RDMAConnection {
   std::mutex send_routine_mu_;
 
   uccl::cc::CongestionControlState cc_;
+  // The poller updates CC state; senders only read this window snapshot.
+  std::atomic<size_t> cc_window_bytes_{0};
   std::atomic<uint32_t> chunk_tsc_counter_{0};
-  // Per-WR byte lengths, protected by send_routine_mu_.
+  // Keep byte bookkeeping independent of CQ polling and CC updates.
+  std::mutex cc_send_mu_;
   std::unordered_map<uint32_t, size_t> cc_send_bytes_;
 
   // Compressed-write state

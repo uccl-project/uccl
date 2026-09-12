@@ -137,7 +137,8 @@ void RDMAConnection::build_fast_channel_cache() {
 
 SendConnection::SendConnection(double link_bandwidth_bps)
     : cc_(uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC"),
-          uccl::freq_ghz, link_bandwidth_bps) {
+          uccl::freq_ghz, link_bandwidth_bps),
+      cc_window_bytes_(cc_.getWindowBytes()) {
   tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
 }
 
@@ -450,10 +451,8 @@ void SendConnection::flush_batches() {
 // ── SendConnection: Congestion control ───────────────────────────────────────
 
 size_t SendConnection::current_inflight_limit_bytes() {
-  if (!cc_.enabled()) return kInFlightMaxSizeKB * 1024;
-  // Serialize with the poller's CC updates.
-  std::lock_guard<std::mutex> guard(send_routine_mu_);
-  return cc_.getWindowBytes();
+  return cc_.enabled() ? cc_window_bytes_.load(std::memory_order_relaxed)
+                       : kInFlightMaxSizeKB * 1024;
 }
 
 size_t SendConnection::current_inflight_bytes() {
@@ -470,7 +469,7 @@ int64_t SendConnection::submit_request(
   uint32_t tsc_id;
   size_t bytes = req->get_local_len();
   {
-    std::lock_guard<std::mutex> guard(send_routine_mu_);
+    std::lock_guard<std::mutex> guard(cc_send_mu_);
     do {
       tsc_id = chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
     } while (cc_send_bytes_.count(tsc_id));
@@ -487,7 +486,7 @@ int64_t SendConnection::submit_request(
   int ret = channel->post_request(req);
   req->wr_id = saved_wr_id;
   if (ret != 0) {
-    std::lock_guard<std::mutex> guard(send_routine_mu_);
+    std::lock_guard<std::mutex> guard(cc_send_mu_);
     cc_send_bytes_.erase(tsc_id);
     cc_inflight_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
   }
@@ -763,16 +762,22 @@ void SendConnection::poll_data_channels() {
             // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
             msg_seq = static_cast<uint32_t>(wid);
             uint32_t tsc_id = static_cast<uint32_t>(wid >> 32);
-            auto it = cc_send_bytes_.find(tsc_id);
-            if (it == cc_send_bytes_.end()) {
-              UCCL_LOG(WARN)
-                  << "SendConnection: Unknown CC completion id " << tsc_id;
-              continue;
+            size_t bytes;
+            {
+              std::lock_guard<std::mutex> guard(cc_send_mu_);
+              auto it = cc_send_bytes_.find(tsc_id);
+              if (it == cc_send_bytes_.end()) {
+                UCCL_LOG(WARN)
+                    << "SendConnection: Unknown CC completion id " << tsc_id;
+                continue;
+              }
+              bytes = it->second;
+              cc_send_bytes_.erase(it);
             }
-            size_t bytes = it->second;
-            cc_send_bytes_.erase(it);
-            cc_inflight_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
             cc_.onAck(tsc_id, bytes);
+            cc_window_bytes_.store(cc_.getWindowBytes(),
+                                   std::memory_order_relaxed);
+            cc_inflight_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
             tracker_->acknowledge(msg_seq);
           } else {
             msg_seq = static_cast<uint32_t>(wid);
