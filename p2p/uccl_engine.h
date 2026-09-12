@@ -198,7 +198,8 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
  * Check the status of a transfer.
  * @param conn          Connection handle.
  * @param transfer_id   Transfer ID.
- * @return              True if the transfer is done, false otherwise.
+ * @return              True if the transfer is done (including failure),
+ *                      false otherwise. Transfer failures are logged.
  */
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id);
 /**

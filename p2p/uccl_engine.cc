@@ -477,7 +477,9 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
   bool is_done;
-  conn->engine->endpoint->poll_async(transfer_id, &is_done);
+  if (!conn->engine->endpoint->poll_async(transfer_id, &is_done)) {
+    UCCL_LOG(ERROR) << "Transfer failed: " << transfer_id;
+  }
   return is_done;
 }
 
