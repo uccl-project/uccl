@@ -205,8 +205,11 @@ bool IBDataChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                        << ", CQE error, wr_id=" << wr_id
                        << ", status=" << status << " ("
                        << ibv_wc_status_str(status) << ")"
-                       << ", vendor_err=0x" << std::hex << wc->vendor_err
-                       << ", qp_num=0x" << wc->qp_num << std::dec;
+                       << ", opcode=" << wc->opcode
+                       << ", byte_len=" << wc->byte_len << ", vendor_err=0x"
+                       << std::hex << wc->vendor_err << ", qp_num=0x"
+                       << wc->qp_num << ", wc_flags=0x" << wc->wc_flags
+                       << std::dec;
       }
     } else {
       CQMeta cq_data{};

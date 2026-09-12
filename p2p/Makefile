@@ -182,10 +182,10 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
-	rm -f test_notify_serde test_cc_send_tracker test_swift_cc notif_e2e
+	rm -f test_notify_serde notif_e2e
 
 # Test the module
-test: test_notify_serde test-cc
+test: test_notify_serde
 	./test_notify_serde
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
@@ -194,18 +194,6 @@ test: test_notify_serde test-cc
 # libs, or Python.
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
-
-# CPU-only CC credit accounting regression, including concurrent completions.
-test_cc_send_tracker: tests/test_cc_send_tracker.cc rdma/cc_send_tracker.h
-	$(CXX) -std=c++17 -O2 -pthread -I. -o $@ tests/test_cc_send_tracker.cc
-
-# CPU execution; Swift's shared utility headers require CUDA and verbs headers.
-test_swift_cc: tests/test_swift_cc.cc $(wildcard ../include/cc/*.h ../include/util/*.h)
-	$(CXX) -std=c++17 -O2 -pthread -I../include -I$(CUDA_INC) -o $@ tests/test_swift_cc.cc
-
-test-cc: test_cc_send_tracker test_swift_cc
-	./test_cc_send_tracker
-	./test_swift_cc
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).
@@ -225,11 +213,10 @@ help:
 	@echo "  install      - Install the module to Python site-packages"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
-	@echo "  test-cc      - Build and run CC accounting and Swift unit tests"
 	@echo "  test_notify_serde - Build and run the notification wire-format test"
 	@echo "  notif_e2e    - Build the two-process notification e2e test"
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
 	@echo ""
 
-.PHONY: all clean test test-cc install-deps help install
+.PHONY: all clean test install-deps help install

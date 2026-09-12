@@ -451,15 +451,13 @@ void SendConnection::flush_batches() {
 
 size_t SendConnection::current_inflight_limit_bytes() {
   if (!cc_.enabled()) return kInFlightMaxSizeKB * 1024;
-  // The CC algorithm is updated by the send poller. Direct async callers can
-  // post concurrently with that poller, so reading its window needs the same
-  // serialization as onAck().
+  // Serialize with the poller's CC updates.
   std::lock_guard<std::mutex> guard(send_routine_mu_);
   return cc_.getWindowBytes();
 }
 
 size_t SendConnection::current_inflight_bytes() {
-  return cc_.enabled() ? cc_sends_.inflight_bytes()
+  return cc_.enabled() ? cc_inflight_bytes_.load(std::memory_order_relaxed)
                        : tracker_->get_total_inflight_bytes();
 }
 
@@ -469,21 +467,29 @@ int64_t SendConnection::submit_request(
     RDMADataChannel* channel, std::shared_ptr<RDMASendRequest> const& req) {
   if (!cc_.enabled()) return channel->submit_request(req);
 
-  uint32_t tsc_id = cc_sends_.record(req->get_local_len());
+  uint32_t tsc_id;
+  size_t bytes = req->get_local_len();
+  {
+    std::lock_guard<std::mutex> guard(send_routine_mu_);
+    do {
+      tsc_id = chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
+    } while (cc_send_bytes_.count(tsc_id));
+    cc_send_bytes_.emplace(tsc_id, bytes);
+    cc_inflight_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+  }
   int64_t saved_wr_id = req->wr_id;
   req->wr_id = static_cast<int64_t>((static_cast<uint64_t>(tsc_id) << 32) |
                                     static_cast<uint32_t>(saved_wr_id));
   cc_.recordSendTsc(tsc_id);
 
-  // Bypass deferred batching for CC. Besides delaying the RTT start, queuing
-  // this shared request would allow the restored wr_id below to overwrite its
-  // CC identifier before the batch is posted. Each CC WR needs its own CQE.
+  // Post immediately: a deferred batch would observe the restored wr_id.
+  // Each CC WR also needs its own completion and send timestamp.
   int ret = channel->post_request(req);
   req->wr_id = saved_wr_id;
   if (ret != 0) {
-    // Verbs reports positive errno values as well as negative failures.
-    cc_sends_.complete(tsc_id);
-    cc_.cancelSend(tsc_id);
+    std::lock_guard<std::mutex> guard(send_routine_mu_);
+    cc_send_bytes_.erase(tsc_id);
+    cc_inflight_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
   }
   return ret;
 }
@@ -499,12 +505,6 @@ bool SendConnection::post_request_on_channel(
 
   int64_t send_ret = submit_request(channel.get(), req);
   if (send_ret != 0) {
-    if (cc_.enabled()) {
-      // Earlier chunks may already be posted. Do not continue as if the
-      // entire message can complete after a chunk was rejected.
-      UCCL_LOG(FATAL) << "SendConnection: CC chunk post failed, status="
-                      << send_ret;
-    }
     UCCL_LOG(WARN) << "SendConnection: Failed to send on channel_id "
                    << req->channel_id;
     return false;
@@ -763,13 +763,16 @@ void SendConnection::poll_data_channels() {
             // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
             msg_seq = static_cast<uint32_t>(wid);
             uint32_t tsc_id = static_cast<uint32_t>(wid >> 32);
-            auto bytes = cc_sends_.complete(tsc_id);
-            if (!bytes) {
+            auto it = cc_send_bytes_.find(tsc_id);
+            if (it == cc_send_bytes_.end()) {
               UCCL_LOG(WARN)
                   << "SendConnection: Unknown CC completion id " << tsc_id;
               continue;
             }
-            cc_.onAck(tsc_id, *bytes);
+            size_t bytes = it->second;
+            cc_send_bytes_.erase(it);
+            cc_inflight_bytes_.fetch_sub(bytes, std::memory_order_relaxed);
+            cc_.onAck(tsc_id, bytes);
             tracker_->acknowledge(msg_seq);
           } else {
             msg_seq = static_cast<uint32_t>(wid);
