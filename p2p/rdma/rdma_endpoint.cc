@@ -776,6 +776,7 @@ int64_t RDMAEndpoint::write_or_read(std::shared_ptr<RDMASendRequest> req) {
     // "
     //           << peer_id;
     wr_id = send_group->post_write_or_read(req);
+    if (wr_id == SendConnection::kPostError) return wr_id;
 
     if (wr_id < 0) {
       std::this_thread::sleep_for(std::chrono::microseconds(10));

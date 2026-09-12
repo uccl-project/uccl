@@ -74,7 +74,9 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
 
   auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
 
-  ureq->engine_idx = obj->write_or_read(req);
+  int64_t wr_id = obj->write_or_read(req);
+  if (wr_id == SendConnection::kPostError) return SendConnection::kPostError;
+  ureq->engine_idx = wr_id;
   ureq->peer_id = conn->uccl_conn_id_.peer_id;
   return ureq->engine_idx;
 }
@@ -113,6 +115,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
   int64_t wr_id = -1;
   while (wr_id < 0) {
     wr_id = send_group->post_write_or_read(req);
+    if (wr_id == SendConnection::kPostError) return SendConnection::kPostError;
     if (wr_id < 0) std::this_thread::sleep_for(std::chrono::microseconds(10));
   }
   ureq->engine_idx = static_cast<int>(wr_id);

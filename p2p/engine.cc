@@ -130,6 +130,10 @@ static inline bool is_retryable_post_failure(int rc) {
   return rc == -1;
 }
 
+static inline bool is_terminal_post_failure(int rc) {
+  return rc == SendConnection::kPostError || (is_cxi_transport() && rc < 0);
+}
+
 static inline bool raw_one_sided_batch_eligible(
     std::vector<size_t> const& size_v, size_t num_iovs) {
   for (size_t i = 0; i < num_iovs; ++i) {
@@ -725,7 +729,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   do {
     rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
   } while (is_retryable_post_failure(rc));
-  if (is_cxi_transport() && rc < 0) {
+  if (is_terminal_post_failure(rc)) {
     UCCL_LOG(ERROR) << "read failed to post: rc=" << rc;
     return false;
   }
@@ -745,6 +749,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+  *transfer_id = 0;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -766,7 +771,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
       rc =
           uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
     } while (is_retryable_post_failure(rc));
-    if (is_cxi_transport() && rc < 0) {
+    if (is_terminal_post_failure(rc)) {
       UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
       return false;
     }
@@ -845,9 +850,11 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
+  bool post_failed = false;
 
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
+  while ((!post_failed && num_completed < num_iovs) || num_inflight > 0) {
+    while (!post_failed && next_iov < num_iovs &&
+           num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -871,10 +878,12 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
         break;
       }
-      if (is_cxi_transport() && rc < 0) {
+      if (is_terminal_post_failure(rc)) {
         UCCL_LOG(ERROR) << "readv failed to post iov " << next_iov
                         << ": rc=" << rc;
-        return false;
+        // Drain earlier iovs before callers can reuse their buffers.
+        post_failed = true;
+        break;
       }
       active[slot] = true;
       next_iov++;
@@ -912,7 +921,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     }
   }
 
-  return true;
+  return !post_failed;
 }
 
 bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -1054,7 +1063,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                                 &ureq);
   } while (is_retryable_post_failure(rc));
-  if (is_cxi_transport() && rc < 0) {
+  if (is_terminal_post_failure(rc)) {
     UCCL_LOG(ERROR) << "write failed to post: rc=" << rc;
     return false;
   }
@@ -1073,6 +1082,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
+  *transfer_id = 0;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -1094,7 +1104,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
       rc = uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                             &ureq);
     } while (is_retryable_post_failure(rc));
-    if (is_cxi_transport() && rc < 0) {
+    if (is_terminal_post_failure(rc)) {
       UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
       return false;
     }
@@ -1175,9 +1185,11 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
+  bool post_failed = false;
 
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
+  while ((!post_failed && num_completed < num_iovs) || num_inflight > 0) {
+    while (!post_failed && next_iov < num_iovs &&
+           num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -1201,10 +1213,12 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
         break;
       }
-      if (is_cxi_transport() && rc < 0) {
+      if (is_terminal_post_failure(rc)) {
         UCCL_LOG(ERROR) << "writev failed to post iov " << next_iov
                         << ": rc=" << rc;
-        return false;
+        // Drain earlier iovs before callers can reuse their buffers.
+        post_failed = true;
+        break;
       }
       active[slot] = true;
       next_iov++;
@@ -1242,7 +1256,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     }
   }
 
-  return true;
+  return !post_failed;
 }
 
 bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -2273,7 +2287,9 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   }
   *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
+    bool success = status->success;
     delete status;
+    return success;
   }
   return true;
 }
@@ -2425,15 +2441,17 @@ void Endpoint::send_proxy_thread_func() {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+      bool success = false;
       switch (task->type) {
         case TaskType::WRITE_NET:
-          write(task->conn_id, task->mr_id, task->data, task->size,
-                task->slot_item());
+          success = write(task->conn_id, task->mr_id, task->data, task->size,
+                          task->slot_item());
           break;
         case TaskType::WRITEV: {
           TaskBatch const& batch = task->task_batch();
-          writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
-                 *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
+          success =
+              writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                     *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         default:
@@ -2442,6 +2460,7 @@ void Endpoint::send_proxy_thread_func() {
           break;
       }
       auto* status = task->status_ptr;
+      status->success = success;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       send_proxy_adaptive_sleeper_.update_timer();
@@ -2463,15 +2482,17 @@ void Endpoint::recv_proxy_thread_func() {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+      bool success = false;
       switch (task->type) {
         case TaskType::READ_NET:
-          read(task->conn_id, task->mr_id, task->data, task->size,
-               task->slot_item());
+          success = read(task->conn_id, task->mr_id, task->data, task->size,
+                         task->slot_item());
           break;
         case TaskType::READV: {
           TaskBatch const& batch = task->task_batch();
-          readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
-                *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
+          success =
+              readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                    *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         case TaskType::WRITE_NET:
@@ -2481,6 +2502,7 @@ void Endpoint::recv_proxy_thread_func() {
           break;
       }
       auto* status = task->status_ptr;
+      status->success = success;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       recv_proxy_adaptive_sleeper_.update_timer();

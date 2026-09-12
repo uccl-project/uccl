@@ -125,12 +125,14 @@ class SwiftCC {
 
     if (swift_cwnd_ < kMinCwnd) swift_cwnd_ = kMinCwnd;
     if (swift_cwnd_ > kMaxCwnd) swift_cwnd_ = kMaxCwnd;
+    // Allow at most one decrease per RTT.
+    if (swift_cwnd_ < prev_cwnd_) last_decrease_tsc_ = rdtsc();
   }
 
   uint32_t get_wnd() const { return swift_cwnd_; }
 
   bool can_decrease() const {
-    return to_usec((rdtsc() - last_decrease_tsc_), freq_ghz) >= rtt_;
+    return to_usec((rdtsc() - last_decrease_tsc_), freq_ghz_) >= rtt_;
   }
 
   double get_target_delay() const {

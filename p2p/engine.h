@@ -173,6 +173,7 @@ struct UnifiedTask;
 
 struct TransferStatus {
   std::atomic<bool> done{false};
+  bool success{true};  // Published by the release store to done.
   std::shared_ptr<UnifiedTask> task_ptr;
   bool poll_net_ureq{false};
   UcclRequest ureq{};
