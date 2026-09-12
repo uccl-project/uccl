@@ -80,11 +80,11 @@ class CongestionControlState {
     if (mode_ == Mode::kTimely) {
       timely_.update_rate(now, sample_rtt_tsc, ::kEwmaAlpha);
     } else if (mode_ == Mode::kSwift) {
-      double delay_us = to_usec(sample_rtt_tsc, freq_ghz);
+      double delay_us = to_usec(sample_rtt_tsc, swift_.freq_ghz_);
       uint32_t bytes = acked_bytes > 0
                            ? static_cast<uint32_t>(acked_bytes)
                            : static_cast<uint32_t>(swift::SwiftCC::kMSS);
-      swift_.adjust_wnd(delay_us, bytes);
+      swift_.adjust_wnd(delay_us, bytes, now);
     }
     send_tsc_[wr_id % kTscWindowSize].store(0, std::memory_order_relaxed);
   }

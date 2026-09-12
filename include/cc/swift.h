@@ -104,9 +104,10 @@ class SwiftCC {
     min_rtt_ = std::min(min_rtt_, delay);
   }
 
-  void adjust_wnd(double delay, uint32_t acked_bytes) {
+  void adjust_wnd(double delay, uint32_t acked_bytes,
+                  uint64_t now_tsc = rdtsc()) {
     prev_cwnd_ = swift_cwnd_;
-    bool cand = can_decrease();
+    bool cand = can_decrease(now_tsc);
 
     update_rtt(delay);
 
@@ -125,12 +126,16 @@ class SwiftCC {
 
     if (swift_cwnd_ < kMinCwnd) swift_cwnd_ = kMinCwnd;
     if (swift_cwnd_ > kMaxCwnd) swift_cwnd_ = kMaxCwnd;
+
+    // Gate the next decrease on this one, not on connection creation. ACKs
+    // arriving within one RTT must not repeatedly reduce the window.
+    if (swift_cwnd_ < prev_cwnd_) last_decrease_tsc_ = now_tsc;
   }
 
   uint32_t get_wnd() const { return swift_cwnd_; }
 
-  bool can_decrease() const {
-    return to_usec((rdtsc() - last_decrease_tsc_), freq_ghz) >= rtt_;
+  bool can_decrease(uint64_t now_tsc = rdtsc()) const {
+    return to_usec(now_tsc - last_decrease_tsc_, freq_ghz_) >= rtt_;
   }
 
   double get_target_delay() const {

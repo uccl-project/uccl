@@ -19,6 +19,16 @@ This checks unequal and out-of-order completions, duplicate/unknown IDs,
 rejected-post rollback, ID wrap, and concurrent posting/completion.
 `make test_cc_send_tracker` also builds the test in a configured build environment.
 
+## Swift decrease interval (no GPU execution required)
+
+In a Linux build environment with CUDA and verbs headers, run `make test-cc`
+from `p2p/`. It runs the accounting test and `test_swift_cc`, which supplies
+explicit timestamps and checks that a burst of high-delay ACKs causes only one
+window reduction within an RTT. A later ACK can reduce it again. Increases and
+updates clamped at the minimum window must not reset the decrease timestamp.
+The test uses the frequency passed to the controller, rather than relying on
+wall-clock waits or the host's measured TSC frequency.
+
 ## Two-node CUDA RDMA regression
 
 Build the P2P extension on both nodes. Configure each node's local GPU and RDMA
