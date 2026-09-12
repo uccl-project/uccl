@@ -59,6 +59,12 @@ class CongestionControlState {
     send_tsc_[wr_id % kTscWindowSize].store(rdtsc(), std::memory_order_release);
   }
 
+  /// Forget a send which was rejected before it reached the device.
+  void cancelSend(uint64_t wr_id) {
+    if (mode_ == Mode::kNone) return;
+    send_tsc_[wr_id % kTscWindowSize].store(0, std::memory_order_relaxed);
+  }
+
   /// Update CC state on ACK.  Call once per completed WR.
   void onAck(uint64_t wr_id, size_t acked_bytes) {
     if (mode_ == Mode::kNone) return;

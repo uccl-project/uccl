@@ -182,11 +182,12 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
-	rm -f test_notify_serde notif_e2e
+	rm -f test_notify_serde test_cc_send_tracker notif_e2e
 
 # Test the module
-test: test_notify_serde
+test: test_notify_serde test_cc_send_tracker
 	./test_notify_serde
+	./test_cc_send_tracker
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 
@@ -194,6 +195,10 @@ test: test_notify_serde
 # libs, or Python.
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
+
+# CPU-only CC credit accounting regression, including concurrent completions.
+test_cc_send_tracker: tests/test_cc_send_tracker.cc rdma/cc_send_tracker.h
+	$(CXX) -std=c++17 -O2 -pthread -I. -o $@ tests/test_cc_send_tracker.cc
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).

@@ -189,6 +189,7 @@ int64_t SendConnection::post_write_or_read(
   if (cc_.enabled()) {
     size_t inflight_limit_bytes = current_inflight_limit_bytes();
     while (current_inflight_bytes() > inflight_limit_bytes) {
+      send_routine();
       std::this_thread::yield();
       inflight_limit_bytes = current_inflight_limit_bytes();
     }
@@ -229,21 +230,10 @@ int64_t SendConnection::post_write_or_read(
                  req->local_mem->size) == 1)) {
     req->imm_data.set_chunk_count(1);
 
-    int64_t saved_wr_id = req->wr_id;
-    if (cc_.enabled()) {
-      uint32_t tsc_id =
-          chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
-      req->wr_id = (static_cast<int64_t>(tsc_id) << 32) |
-                   static_cast<uint32_t>(req->wr_id);
-      cc_.recordSendTsc(tsc_id);
-    }
-
-    int64_t send_ret = ch_ptr->submit_request(req);
-    req->wr_id = saved_wr_id;
-
-    if (send_ret >= 0 && cc_.enabled()) {
-      cc_inflight_bytes_.fetch_add(req->get_local_len(),
-                                   std::memory_order_relaxed);
+    if (submit_request(ch_ptr, req) != 0) {
+      // Nothing was posted. Retire the unused tracker slot before retrying.
+      tracker_->acknowledge(wr_id);
+      return -1;
     }
     return wr_id;
   }
@@ -255,6 +245,7 @@ int64_t SendConnection::post_write_or_read(
   // and returns immediately.
   // Draining them here.
   while (!drain_pending_chunks()) {
+    send_routine();
     std::this_thread::yield();
   }
 
@@ -459,15 +450,43 @@ void SendConnection::flush_batches() {
 // ── SendConnection: Congestion control ───────────────────────────────────────
 
 size_t SendConnection::current_inflight_limit_bytes() {
-  return cc_.enabled() ? cc_.getWindowBytes() : kInFlightMaxSizeKB * 1024;
+  if (!cc_.enabled()) return kInFlightMaxSizeKB * 1024;
+  // The CC algorithm is updated by the send poller. Direct async callers can
+  // post concurrently with that poller, so reading its window needs the same
+  // serialization as onAck().
+  std::lock_guard<std::mutex> guard(send_routine_mu_);
+  return cc_.getWindowBytes();
 }
 
 size_t SendConnection::current_inflight_bytes() {
-  return cc_.enabled() ? cc_inflight_bytes_.load(std::memory_order_relaxed)
+  return cc_.enabled() ? cc_sends_.inflight_bytes()
                        : tracker_->get_total_inflight_bytes();
 }
 
 // ── SendConnection: Internal posting ─────────────────────────────────────────
+
+int64_t SendConnection::submit_request(
+    RDMADataChannel* channel, std::shared_ptr<RDMASendRequest> const& req) {
+  if (!cc_.enabled()) return channel->submit_request(req);
+
+  uint32_t tsc_id = cc_sends_.record(req->get_local_len());
+  int64_t saved_wr_id = req->wr_id;
+  req->wr_id = static_cast<int64_t>((static_cast<uint64_t>(tsc_id) << 32) |
+                                    static_cast<uint32_t>(saved_wr_id));
+  cc_.recordSendTsc(tsc_id);
+
+  // Bypass deferred batching for CC. Besides delaying the RTT start, queuing
+  // this shared request would allow the restored wr_id below to overwrite its
+  // CC identifier before the batch is posted. Each CC WR needs its own CQE.
+  int ret = channel->post_request(req);
+  req->wr_id = saved_wr_id;
+  if (ret != 0) {
+    // Verbs reports positive errno values as well as negative failures.
+    cc_sends_.complete(tsc_id);
+    cc_.cancelSend(tsc_id);
+  }
+  return ret;
+}
 
 bool SendConnection::post_request_on_channel(
     std::shared_ptr<RDMASendRequest> req) {
@@ -478,27 +497,14 @@ bool SendConnection::post_request_on_channel(
     return false;
   }
 
-  // Per-chunk CC: assign a unique TSC ID and record send timestamp
-  // close to the actual ibv_post_send.  The TSC ID is encoded in the
-  // upper 32 bits of wr_id; the lower 32 bits keep the message seq
-  // used by the tracker.  We save/restore req->wr_id so that callers
-  // (e.g. update_expected_ack_count) still see the original message seq.
-  int64_t saved_wr_id = req->wr_id;
-  if (cc_.enabled()) {
-    uint32_t tsc_id =
-        chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
-    req->wr_id = (static_cast<int64_t>(tsc_id) << 32) |
-                 static_cast<uint32_t>(req->wr_id);
-    cc_.recordSendTsc(tsc_id);
-  }
-
-  int64_t send_ret = channel->submit_request(req);
-  req->wr_id = saved_wr_id;
-  if (send_ret >= 0 && cc_.enabled()) {
-    cc_inflight_bytes_.fetch_add(req->get_local_len(),
-                                 std::memory_order_relaxed);
-  }
-  if (send_ret < 0) {
+  int64_t send_ret = submit_request(channel.get(), req);
+  if (send_ret != 0) {
+    if (cc_.enabled()) {
+      // Earlier chunks may already be posted. Do not continue as if the
+      // entire message can complete after a chunk was rejected.
+      UCCL_LOG(FATAL) << "SendConnection: CC chunk post failed, status="
+                      << send_ret;
+    }
     UCCL_LOG(WARN) << "SendConnection: Failed to send on channel_id "
                    << req->channel_id;
     return false;
@@ -757,11 +763,14 @@ void SendConnection::poll_data_channels() {
             // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
             msg_seq = static_cast<uint32_t>(wid);
             uint32_t tsc_id = static_cast<uint32_t>(wid >> 32);
+            auto bytes = cc_sends_.complete(tsc_id);
+            if (!bytes) {
+              UCCL_LOG(WARN)
+                  << "SendConnection: Unknown CC completion id " << tsc_id;
+              continue;
+            }
+            cc_.onAck(tsc_id, *bytes);
             tracker_->acknowledge(msg_seq);
-            cc_.onAck(tsc_id, cq_data.len);
-            size_t prev = cc_inflight_bytes_.load(std::memory_order_relaxed);
-            size_t sub = std::min(prev, static_cast<size_t>(cq_data.len));
-            cc_inflight_bytes_.fetch_sub(sub, std::memory_order_relaxed);
           } else {
             msg_seq = static_cast<uint32_t>(wid);
             tracker_->acknowledge(msg_seq);

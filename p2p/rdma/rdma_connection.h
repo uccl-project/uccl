@@ -1,4 +1,5 @@
 #pragma once
+#include "cc_send_tracker.h"
 #include "common.h"
 #include "compression.h"
 #include "rdma_ctrl_channel.h"
@@ -144,7 +145,7 @@ class SendConnection : public RDMAConnection {
   std::mutex send_routine_mu_;
 
   uccl::cc::CongestionControlState cc_;
-  std::atomic<uint32_t> chunk_tsc_counter_{0};
+  CcSendTracker cc_sends_;
 
   // Compressed-write state
   std::shared_ptr<RegMemBlock> ack_ring_;
@@ -160,11 +161,6 @@ class SendConnection : public RDMAConnection {
   std::mutex pending_compressed_mu_;
   std::unordered_map<int64_t, PendingCompressed> pending_compressed_;
   std::atomic<size_t> pending_compressed_count_{0};
-
-  // Per-chunk inflight byte counter for CC window checks.
-  // Unlike tracker_->get_total_inflight_bytes() which only decreases when ALL
-  // chunks of a message are acked, this counter decreases on each chunk CQE.
-  std::atomic<size_t> cc_inflight_bytes_{0};
 
   // Pending chunked request state for per-chunk CC pacing.
   struct PendingChunkedState {
@@ -196,6 +192,11 @@ class SendConnection : public RDMAConnection {
   size_t current_inflight_bytes();
 
   // ── Internal posting ───────────────────────────────────────────────────────
+  // CC sends are posted immediately, with credits and timestamps reserved
+  // before the provider can expose a completion. Returns the provider status.
+  int64_t submit_request(RDMADataChannel* channel,
+                         std::shared_ptr<RDMASendRequest> const& req);
+
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
   bool post_request_on_channel(std::shared_ptr<RDMASendRequest> req);
