@@ -745,6 +745,23 @@ class Buffer:
         return table[dtype]
 
     @staticmethod
+    def _config_from_env(name: str) -> Optional[Config]:
+        value = os.getenv(name)
+        if not value:
+            return None
+        try:
+            parts = [int(part.strip()) for part in value.split(",")]
+        except ValueError as exc:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            ) from exc
+        if len(parts) != 5:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            )
+        return Config(*parts)
+
+    @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
         """
         Get a recommended dispatch config.
@@ -755,6 +772,10 @@ class Buffer:
         Returns:
             config: the recommended config.
         """
+
+        env_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
+        if env_config is not None:
+            return env_config
 
         # TODO: automatically tune
         config_map = {
@@ -783,6 +804,10 @@ class Buffer:
         Returns:
             config: the recommended config.
         """
+
+        env_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
+        if env_config is not None:
+            return env_config
 
         # TODO: automatically tune
         config_map = {
