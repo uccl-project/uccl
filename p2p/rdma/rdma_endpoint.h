@@ -64,7 +64,9 @@ class RDMAEndpoint {
 
   /* True once stop_accept() was requested. Callers waiting for accept
    * progress poll this so shutdown stays observable. */
-  bool accept_stopped() const { return stop_accept_.load(std::memory_order_acquire); }
+  bool accept_stopped() const {
+    return stop_accept_.load(std::memory_order_acquire);
+  }
 
   // ── Memory registration ────────────────────────────────────────────────────
   int uccl_regmr(void* const data, size_t const len, MRArray& mr_array,

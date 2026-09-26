@@ -128,7 +128,9 @@ class NCCLEndpoint {
   void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
   /* See RDMAEndpoint::accept_stopped(). */
-  bool accept_stopped() const { return stop_accept_.load(std::memory_order_acquire); }
+  bool accept_stopped() const {
+    return stop_accept_.load(std::memory_order_acquire);
+  }
 
  private:
   struct Conn;

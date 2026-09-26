@@ -541,6 +541,14 @@ ConnID RDMAEndpoint::uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     // Wait before checking again
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+  if (peer_id == UINT64_MAX) {
+    ConnID conn_id;
+    conn_id.context = nullptr;
+    conn_id.peer_id = UINT64_MAX;
+    conn_id.sock_fd = -1;
+    conn_id.dev = 0;
+    return conn_id;
+  }
   UCCL_LOG(INFO, UCCL_RDMA)
       << "Done Accepted connection: peer_id=" << peer_id
       << ", ip=" << accepted.ip << ", port=" << accepted.port
@@ -553,13 +561,6 @@ ConnID RDMAEndpoint::uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
 
   // Create and return ConnID
   ConnID conn_id;
-  if (peer_id == UINT64_MAX) {
-    conn_id.context = nullptr;
-    conn_id.peer_id = UINT64_MAX;
-    conn_id.sock_fd = -1;
-    conn_id.dev = 0;
-    return conn_id;
-  }
   conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(peer_id));
   conn_id.peer_id = peer_id;
   conn_id.sock_fd = 0;
