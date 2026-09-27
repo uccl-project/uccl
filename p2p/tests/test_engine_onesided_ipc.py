@@ -19,6 +19,7 @@ Run with:
 """
 
 import struct
+import ctypes
 import sys
 import torch
 import torch.distributed as dist
@@ -84,12 +85,24 @@ def _unpack_info_blobs(packed: bytes, num_iovs: int):
 # ── buffer allocation helpers ─────────────────────────────────────────────────
 
 
+# Every GPU tensor in this file must land on the endpoint's GPU. `_device()`
+# resolves to the process-local ordinal the endpoint was constructed with, so the
+# binding also holds when a launcher makes more than one GPU visible per process,
+# where a bare "cuda:0" would silently mean the wrong physical GPU.
+_LOCAL_GPU_IDX = None
+
+
+def _device() -> str:
+    assert _LOCAL_GPU_IDX is not None, "_device() used before main() set it"
+    return f"cuda:{_LOCAL_GPU_IDX}"
+
+
 def _make_client_buf(fill_val: float, use_cpu: bool) -> tuple:
     """Return (tensor, data_ptr) filled with fill_val on the client's device."""
     if use_cpu:
         t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32).pin_memory()
     else:
-        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device="cuda:0")
+        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device=_device())
     return t, t.data_ptr()
 
 
@@ -107,7 +120,7 @@ def _expected(fill_val: float, use_cpu: bool) -> torch.Tensor:
     """Reference tensor on the same device as the client buffer."""
     if use_cpu:
         return torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32)
-    return torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device="cuda:0")
+    return torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device=_device())
 
 
 # ── scalar write_ipc (sync) ───────────────────────────────────────────────────
@@ -120,7 +133,7 @@ def test_write_ipc(ep, conn_id, rank, use_cpu: bool):
     """
     size = BUF_ELEMS * 4
     if rank == 0:  # server — GPU destination
-        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device=_device())
         ok, info_blob = ep.advertise_ipc(conn_id, dst.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
@@ -144,7 +157,7 @@ def test_write_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_write_ipc but uses the async API + poll_async."""
     size = BUF_ELEMS * 4
     if rank == 0:
-        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device=_device())
         ok, info_blob = ep.advertise_ipc(conn_id, dst.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
@@ -172,7 +185,7 @@ def test_read_ipc(ep, conn_id, rank, use_cpu: bool):
     """
     size = BUF_ELEMS * 4
     if rank == 0:  # server — GPU source
-        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device=_device())
         ok, info_blob = ep.advertise_ipc(conn_id, src.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
@@ -197,7 +210,7 @@ def test_read_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_read_ipc but uses the async API + poll_async."""
     size = BUF_ELEMS * 4
     if rank == 0:
-        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device=_device())
         ok, info_blob = ep.advertise_ipc(conn_id, src.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
@@ -228,7 +241,7 @@ def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
     size_per = BUF_ELEMS * 4
     if rank == 0:  # server — GPU destinations
         dsts = [
-            torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+            torch.zeros(BUF_ELEMS, dtype=torch.float32, device=_device())
             for _ in range(NUM_IOVS)
         ]
         ptrs = [t.data_ptr() for t in dsts]
@@ -239,7 +252,7 @@ def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
         _recv_int(src=1)
         for i, dst in enumerate(dsts):
             expected = torch.full(
-                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0"
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
             )
             assert dst.allclose(
                 expected
@@ -264,7 +277,7 @@ def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
     size_per = BUF_ELEMS * 4
     if rank == 0:
         dsts = [
-            torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+            torch.zeros(BUF_ELEMS, dtype=torch.float32, device=_device())
             for _ in range(NUM_IOVS)
         ]
         ptrs = [t.data_ptr() for t in dsts]
@@ -275,7 +288,7 @@ def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
         _recv_int(src=1)
         for i, dst in enumerate(dsts):
             expected = torch.full(
-                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0"
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
             )
             assert dst.allclose(
                 expected
@@ -307,7 +320,9 @@ def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
     size_per = BUF_ELEMS * 4
     if rank == 0:  # server — GPU sources
         srcs = [
-            torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
+            torch.full(
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
+            )
             for i in range(NUM_IOVS)
         ]
         ptrs = [t.data_ptr() for t in srcs]
@@ -343,7 +358,9 @@ def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
     size_per = BUF_ELEMS * 4
     if rank == 0:
         srcs = [
-            torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
+            torch.full(
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device=_device()
+            )
             for i in range(NUM_IOVS)
         ]
         ptrs = [t.data_ptr() for t in srcs]
@@ -377,13 +394,65 @@ def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
+def _normalize_bdf(bdf: str) -> str:
+    """Canonicalize case and domain padding without merging distinct devices."""
+    domain, bus, device = bdf.strip().rsplit(":", 2)
+    slot, function = device.split(".")
+    return f"{int(domain, 16):04x}:{int(bus, 16):02x}:{int(slot, 16):02x}.{int(function, 16):x}"
+
+
+def _runtime_bdf(local_gpu_idx: int) -> str:
+    """Query the active CUDA/HIP runtime with the process-local ordinal."""
+    runtime = ctypes.CDLL(torch._C.__file__)
+    query = (
+        runtime.hipDeviceGetPCIBusId
+        if torch.version.hip
+        else runtime.cudaDeviceGetPCIBusId
+    )
+    query.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    query.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(32)
+    status = query(buffer, len(buffer), local_gpu_idx)
+    assert status == 0, f"GPU runtime PCI query failed: status={status}"
+    return _normalize_bdf(buffer.value.decode())
+
+
+def _assert_device_binding(ep, local_gpu_idx: int) -> str:
+    """Fail loudly when the payload device is not the endpoint's device.
+
+    Without this check a launcher that leaves the tensors on a different GPU
+    still produces a green run, because one side of every transfer then sits on
+    the process-local device 0.
+    """
+    _, _, endpoint_bdf = p2p.Endpoint.parse_metadata(bytes(ep.get_metadata()))
+    endpoint_bdf = _normalize_bdf(endpoint_bdf)
+
+    payload_bdf = _runtime_bdf(local_gpu_idx)
+
+    assert payload_bdf == endpoint_bdf, (
+        f"device binding mismatch: endpoint is on {endpoint_bdf} but payload "
+        f"tensors are on {payload_bdf}; set the device to local_gpu_idx and "
+        f"allocate tensors there"
+    )
+    return payload_bdf
+
+
 def main():
     dist.init_process_group("gloo")
     rank = dist.get_rank()
     assert dist.get_world_size() == 2, "This test requires exactly 2 processes"
 
-    torch.cuda.set_device(0)
-    ep = p2p.Endpoint(local_gpu_idx=rank)
+    global _LOCAL_GPU_IDX
+    local_gpu_idx = rank
+    _LOCAL_GPU_IDX = local_gpu_idx
+    torch.cuda.set_device(local_gpu_idx)
+    ep = p2p.Endpoint(local_gpu_idx=local_gpu_idx)
+    payload_bdf = _assert_device_binding(ep, local_gpu_idx)
+    print(
+        f"[rank {rank}] endpoint and payload on {payload_bdf} "
+        f"(local_gpu_idx={local_gpu_idx})",
+        flush=True,
+    )
 
     print(f"=== UCCL One-Sided IPC Tests (rank {rank}) ===")
 
@@ -423,8 +492,18 @@ def main():
             fn(ep, conn_id, rank, use_cpu)
 
     dist.barrier()
+
+    # A "two GPU" test that resolves both ranks to the same physical GPU is not a
+    # cross-GPU test; reject it instead of reporting a green run.
+    gathered = [None, None]
+    dist.all_gather_object(gathered, payload_bdf)
+    assert gathered[0] != gathered[1], (
+        f"both ranks resolved to the same physical GPU ({gathered[0]}); "
+        f"this is not a cross-GPU test"
+    )
+
     if rank == 0:
-        print("\nAll one-sided IPC tests passed!")
+        print(f"\nAll one-sided IPC tests passed! GPUs: {gathered}")
 
     dist.destroy_process_group()
 
