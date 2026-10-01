@@ -209,12 +209,14 @@ void EpollServer::handle_read(int fd) {
       Connection& conn = it->second;
       conn.in_buf.insert(conn.in_buf.end(), buf, buf + count);
       // try to parse messages (maybe multiple)
-      parse_messages(conn);
+      if (!parse_messages(conn)) return;
     }
   }
 }
 
-void EpollServer::parse_messages(Connection& conn) {
+// Called with conns_mtx_ held. Returns false if the connection was closed and
+// `conn` is no longer valid.
+bool EpollServer::parse_messages(Connection& conn) {
   // We expect frames of the form: uint32_t len (network byte order) + payload
   while (true) {
     if (conn.expected_len == 0) {
@@ -252,12 +254,12 @@ void EpollServer::parse_messages(Connection& conn) {
           handler_(payload, response, std::string(client_ip), client_port);
         } catch (std::exception const& e) {
           std::cerr << "Handler exception: " << e.what() << "\n";
-          remove_connection(conn.fd);
-          return;
+          remove_connection_locked(conn.fd);
+          return false;
         } catch (...) {
           std::cerr << "Handler exception (unknown)\n";
-          remove_connection(conn.fd);
-          return;
+          remove_connection_locked(conn.fd);
+          return false;
         }
 
         // Send response back to client with length header
@@ -273,8 +275,8 @@ void EpollServer::parse_messages(Connection& conn) {
           if (s < 0) {
             // fatal send error -> close connection
             UCCL_LOG(ERROR) << "Error sending response on fd=" << conn.fd;
-            remove_connection(conn.fd);
-            return;
+            remove_connection_locked(conn.fd);
+            return false;
           } else if ((size_t)s < pkt.size()) {
             // partial send -> buffer remainder and ensure EPOLLOUT monitored
             conn.out_buf.insert(conn.out_buf.end(), pkt.data() + s,
@@ -288,6 +290,7 @@ void EpollServer::parse_messages(Connection& conn) {
       }
     }
   }
+  return true;
 }
 
 void EpollServer::handle_write(int fd) {
@@ -298,7 +301,7 @@ void EpollServer::handle_write(int fd) {
   while (!conn.out_buf.empty()) {
     ssize_t n = try_send(fd, conn.out_buf.data(), conn.out_buf.size());
     if (n < 0) {
-      remove_connection(fd);
+      remove_connection_locked(fd);
       return;
     } else if (n == 0) {
       // would block
@@ -326,6 +329,10 @@ void EpollServer::modify_epoll_out(int fd, bool enable) {
 
 void EpollServer::remove_connection(int fd) {
   std::lock_guard<std::mutex> lk(conns_mtx_);
+  remove_connection_locked(fd);
+}
+
+void EpollServer::remove_connection_locked(int fd) {
   auto it = conns_.find(fd);
   if (it == conns_.end()) return;
   ::close(it->second.fd);
