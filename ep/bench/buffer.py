@@ -762,6 +762,27 @@ class Buffer:
         return Config(*parts)
 
     @staticmethod
+    def _configs_from_env() -> Tuple[Optional[Config], Optional[Config]]:
+        dispatch_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
+        combine_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
+
+        dispatch_sms = (
+            dispatch_config.num_sms if dispatch_config is not None else Buffer.num_sms
+        )
+        combine_sms = (
+            combine_config.num_sms if combine_config is not None else Buffer.num_sms
+        )
+        if dispatch_sms != combine_sms:
+            raise ValueError(
+                "Dispatch and combine need to use the same SM count (as they share the channel count computation): "
+                f"dispatch={dispatch_sms}, combine={combine_sms}. "
+                "Set UCCL_EP_DISPATCH_CONFIG and UCCL_EP_COMBINE_CONFIG "
+                "with matching first values."
+            )
+
+        return dispatch_config, combine_config
+
+    @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
         """
         Get a recommended dispatch config.
@@ -773,7 +794,7 @@ class Buffer:
             config: the recommended config.
         """
 
-        env_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
+        env_config, _ = Buffer._configs_from_env()
         if env_config is not None:
             return env_config
 
@@ -805,7 +826,7 @@ class Buffer:
             config: the recommended config.
         """
 
-        env_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
+        _, env_config = Buffer._configs_from_env()
         if env_config is not None:
             return env_config
 
