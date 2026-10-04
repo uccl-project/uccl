@@ -25,7 +25,7 @@ def load_buffer_config_methods():
     )
     methods = {
         "_config_from_env",
-        "_configs_from_env",
+        "_validated_env_configs",
         "get_dispatch_config",
         "get_combine_config",
     }

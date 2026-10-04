@@ -762,7 +762,7 @@ class Buffer:
         return Config(*parts)
 
     @staticmethod
-    def _configs_from_env() -> Tuple[Optional[Config], Optional[Config]]:
+    def _validated_env_configs() -> Tuple[Optional[Config], Optional[Config]]:
         dispatch_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
         combine_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
 
@@ -794,7 +794,7 @@ class Buffer:
             config: the recommended config.
         """
 
-        env_config, _ = Buffer._configs_from_env()
+        env_config, _ = Buffer._validated_env_configs()
         if env_config is not None:
             return env_config
 
@@ -826,7 +826,7 @@ class Buffer:
             config: the recommended config.
         """
 
-        _, env_config = Buffer._configs_from_env()
+        _, env_config = Buffer._validated_env_configs()
         if env_config is not None:
             return env_config
 
