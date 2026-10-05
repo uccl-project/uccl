@@ -568,8 +568,16 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  // Wait until engine is intialized to get the correct local_gpu_idx_
+  // initialize_engine() runs from reg(), so accept may legitimately arrive
+  // first. The wait must also observe stop_accept(): an endpoint that never
+  // registers memory would otherwise spin here forever while ~Endpoint()
+  // blocks in join().
   while (!engine_initialized_) {
+    if (stop_.load(std::memory_order_acquire) ||
+        passive_accept_stop_.load(std::memory_order_acquire) ||
+        uccl_accept_stopped(ep_)) {
+      return false;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   std::future<ConnID> uccl_conn_id_future =
