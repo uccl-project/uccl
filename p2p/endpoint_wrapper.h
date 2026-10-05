@@ -191,6 +191,10 @@ inline void uccl_stop_accept(GenericEndpoint const& ep) {
   std::visit([](auto const& s) { s->stop_accept(); }, ep);
 }
 
+inline bool uccl_accept_stopped(GenericEndpoint const& ep) {
+  return std::visit([](auto const& s) { return s->accept_stopped(); }, ep);
+}
+
 inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
                        struct P2PMhandle* mhandle) {
   return std::visit(
