@@ -39,6 +39,9 @@ class EpollClient {
   // Returns connection key (server_ip:port)
   std::string connect_to_server(std::string const& server_ip, int server_port);
 
+  // Close one connection (locks conns_mtx_). No-op for an unknown key.
+  void close(std::string const& conn_key);
+
   // Send serialized payload to server with callback for response
   bool send_meta(std::string const& conn_key, std::string const& payload,
                  ResponseCallback callback = nullptr);

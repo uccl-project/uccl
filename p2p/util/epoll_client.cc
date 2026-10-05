@@ -287,6 +287,11 @@ void EpollClient::handle_write(std::string const& conn_key) {
   }
 }
 
+void EpollClient::close(std::string const& conn_key) {
+  std::lock_guard<std::mutex> lk(conns_mtx_);
+  close_connection(conn_key);
+}
+
 void EpollClient::close_connection(std::string const& conn_key) {
   // Note: this should be called with conns_mtx_ locked or from event_loop
   auto it = conns_.find(conn_key);

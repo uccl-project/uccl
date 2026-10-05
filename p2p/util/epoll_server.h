@@ -62,6 +62,11 @@ class EpollServer {
 
   EpollServer(int port, MetaHandler handler, int max_events = 1024);
 
+  // Called from the event loop, without conns_mtx_ held, with the address of
+  // each client connection that was closed (peer hangup or error).
+  using DisconnectHandler = std::function<void(std::string const&, int)>;
+  void set_disconnect_handler(DisconnectHandler h);
+
   ~EpollServer();
 
   int get_listen_fd() const;
@@ -104,5 +109,9 @@ class EpollServer {
   std::thread worker_thread_;
   std::atomic<bool> running_;
   std::mutex conns_mtx_;
+  DisconnectHandler disconnect_handler_;
+  // Filled under conns_mtx_ by remove_connection_locked(), drained by
+  // event_loop() so the handler never runs with the lock held.
+  std::vector<std::pair<std::string, int>> pending_disconnects_;
   std::map<int, Connection> conns_;
 };

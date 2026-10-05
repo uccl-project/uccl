@@ -606,7 +606,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // Store the connection ID.
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
-    conn_id_to_conn_[conn_id] = new Conn{conn_id, uccl_conn_id, ip_addr, 0, ""};
+    Conn* conn = new Conn{conn_id, uccl_conn_id, ip_addr, 0, ""};
+    conn->accepted_ = true;
+    conn_id_to_conn_[conn_id] = conn;
   }
 
   return true;
@@ -2249,6 +2251,13 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
 
   Conn* conn = it->second;
   uint64_t loopback_conn_id = conn->rdma_loopback_conn_id_;
+
+  // Release the network transport state (QPs, CQs, control rings, OOB socket)
+  // for this peer; deleting the Conn alone left all of it allocated.
+  if (!conn->is_local_ && conn->uccl_conn_id_.peer_id != UINT64_MAX &&
+      !uccl_remove_peer(ep_, conn->uccl_conn_id_.peer_id, conn->accepted_)) {
+    return false;
+  }
 
   // Detach shared memory if this was a local connection
   if (conn->shm_attached_) {

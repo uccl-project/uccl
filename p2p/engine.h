@@ -74,6 +74,7 @@ struct Conn {
   uint16_t remote_port_ = 0;
   std::string remote_gpu_bdf_;  // PCI Bus ID of the remote GPU
   bool is_local_ = false;
+  bool accepted_ = false;  // created by accept(): peer_id is a recv peer id
   uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
   ShmRingHandle remote_inbox_;

@@ -98,6 +98,13 @@ class RDMAEndpoint {
   // completions without re-acquiring the mutex + map lookup per check.
   SendConnection* get_send_group_raw(uint64_t peer_id);
 
+  // Free everything held for one connected (send) peer: its channel group
+  // (QPs, CQs, control ring), OOB metadata and OOB socket. Refuses, freeing
+  // nothing, while the peer still has bytes in flight.
+  bool remove_send_peer(uint64_t peer_id);
+  // Same for one accepted (recv) peer, including its reverse OOB socket.
+  void remove_recv_peer(uint64_t peer_id);
+
   // ── Polling and batching ───────────────────────────────────────────────────
   // Driven by the engine proxy threads or by explicit poll calls.
   void recv_routine();
@@ -164,8 +171,12 @@ class RDMAEndpoint {
   std::unordered_map<uint64_t, std::shared_ptr<SendConnection>>
       send_channel_groups_;
 
+  mutable std::mutex peer_oob_meta_mutex_;
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> peer_oob_meta_;
   mutable std::shared_mutex peer_oob_conn_keys_mutex_;
+  // EpollClient keys sockets by server ip:port, so peers to the same server
+  // share one. Count users so a peer's teardown only closes the last one.
+  std::unordered_map<std::string, int> oob_conn_users_;
   std::unordered_map<uint64_t, std::string> peer_oob_conn_keys_;
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
@@ -174,8 +185,19 @@ class RDMAEndpoint {
   std::shared_ptr<RegMemBlock> write_meta_ring_;
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
+  // OOB client address each accepted (recv) peer arrived from. Unlike
+  // accepted_meta_ (a pending-accept queue that uccl_accept drains), this
+  // lives until the peer is removed; guarded by accepted_meta_mutex_.
+  std::unordered_map<uint64_t, std::pair<std::string, uint16_t>>
+      recv_peer_oob_addr_;
   std::atomic<int32_t> next_send_peer_id_;
   std::atomic<int32_t> next_recv_peer_id_;
 
   std::atomic<bool> stop_accept_{false};
+
+  // OOB server callback: a client's metadata connection closed, so free the
+  // accepted peers that came in over it.
+  void on_oob_disconnect(std::string const& ip, int port);
+  // Drop one peer's use of its OOB socket (closing it after the last user).
+  void release_oob_conn(uint64_t peer_id);
 };

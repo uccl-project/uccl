@@ -550,6 +550,11 @@ void uccl_engine_stop_accept(uccl_engine_t* engine) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
+    // Free the endpoint-side connection (and its RDMA resources) too; only
+    // deleting the wrapper leaked them on every disconnect/reconnect.
+    if (conn->engine && conn->engine->endpoint) {
+      conn->engine->endpoint->remove_remote_endpoint(conn->conn_id);
+    }
     delete conn;
   }
 }

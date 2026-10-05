@@ -136,6 +136,16 @@ void EpollServer::event_loop() {
         if (ev.events & EPOLLOUT) handle_write(ev.data.fd);
       }
     }
+    std::vector<std::pair<std::string, int>> closed;
+    DisconnectHandler handler;
+    {
+      std::lock_guard<std::mutex> lk(conns_mtx_);
+      closed.swap(pending_disconnects_);
+      handler = disconnect_handler_;
+    }
+    if (handler) {
+      for (auto const& [ip, port] : closed) handler(ip, port);
+    }
   }
 }
 
@@ -332,9 +342,19 @@ void EpollServer::remove_connection(int fd) {
   remove_connection_locked(fd);
 }
 
+void EpollServer::set_disconnect_handler(DisconnectHandler h) {
+  std::lock_guard<std::mutex> lk(conns_mtx_);
+  disconnect_handler_ = std::move(h);
+}
+
 void EpollServer::remove_connection_locked(int fd) {
   auto it = conns_.find(fd);
   if (it == conns_.end()) return;
+  if (disconnect_handler_) {
+    char ip[INET_ADDRSTRLEN] = {0};
+    inet_ntop(AF_INET, &it->second.addr.sin_addr, ip, sizeof(ip));
+    pending_disconnects_.emplace_back(ip, ntohs(it->second.addr.sin_port));
+  }
   ::close(it->second.fd);
   conns_.erase(it);
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {

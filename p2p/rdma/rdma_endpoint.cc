@@ -15,6 +15,8 @@ RDMAEndpoint::RDMAEndpoint(int gpu_index, uint64_t port,
       port, [this](std::string const& input, std::string& output,
                    std::string const& ip,
                    int port) { this->process_meta(input, output, ip, port); });
+  oob_server_->set_disconnect_handler(
+      [this](std::string const& ip, int port) { on_oob_disconnect(ip, port); });
   oob_client_ = std::make_shared<EpollClient>();
 
   allocator_ = std::make_shared<MemoryAllocator>();
@@ -294,6 +296,7 @@ void RDMAEndpoint::uccl_deregmr(
 void RDMAEndpoint::add_peer_oob_meta(
     std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> const&
         new_meta) {
+  std::lock_guard<std::mutex> lock(peer_oob_meta_mutex_);
   for (auto const& [peer_id, meta_ptr] : new_meta) {
     peer_oob_meta_[peer_id] = meta_ptr;
   }
@@ -347,8 +350,11 @@ int RDMAEndpoint::build_connect(uint64_t peer_id, bool sync, int timeout_ms) {
 }
 
 std::string const RDMAEndpoint::build_oob_connect(uint64_t peer_id) {
-  auto const& item = peer_oob_meta_.find(peer_id);
-  std::shared_ptr<OOBMetaData> ip_port_ptr = item->second;
+  std::shared_ptr<OOBMetaData> ip_port_ptr;
+  {
+    std::lock_guard<std::mutex> lock(peer_oob_meta_mutex_);
+    ip_port_ptr = peer_oob_meta_.at(peer_id);
+  }
   std::string oob_con;
   while (true) {
     oob_con = oob_client_->connect_to_server(ip_port_ptr->server_ip,
@@ -361,6 +367,7 @@ std::string const RDMAEndpoint::build_oob_connect(uint64_t peer_id) {
   // Store conn_key for later use (e.g., notifications)
   std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
   peer_oob_conn_keys_[peer_id] = oob_con;
+  ++oob_conn_users_[oob_con];
   return oob_con;
 }
 
@@ -635,6 +642,7 @@ void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
       accepted.gpu_id = meta.gpu_id;
       accepted.peer_id = actual_peer_id;
       accepted_meta_[actual_peer_id] = accepted;
+      recv_peer_oob_addr_[actual_peer_id] = {accepted.ip, accepted.port};
       UCCL_LOG(INFO, UCCL_RDMA)
           << "Stored accepted connection: peer_id=" << actual_peer_id
           << ", ip=" << client_ip << ", port=" << client_port
@@ -647,6 +655,7 @@ void RDMAEndpoint::process_meta(std::string const& input, std::string& output,
       if (!rev_conn_key.empty()) {
         std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
         peer_oob_conn_keys_[actual_peer_id] = rev_conn_key;
+        ++oob_conn_users_[rev_conn_key];
         UCCL_LOG(INFO, UCCL_RDMA)
             << "Established reverse connection to " << client_ip << ":"
             << meta.oob_port << " for peer_id=" << actual_peer_id
@@ -837,6 +846,83 @@ SendConnection* RDMAEndpoint::get_send_group_raw(uint64_t peer_id) {
   auto it = send_channel_groups_.find(peer_id);
   if (it == send_channel_groups_.end()) return nullptr;
   return it->second.get();
+}
+
+// ── Peer teardown ────────────────────────────────────────────────────────────
+// Erasing the maps drops the last shared_ptr references, so the existing
+// destructors destroy the QPs/CQs, deregister MRs and return the control
+// rings to the allocator. Without this, every reconnect kept them forever.
+bool RDMAEndpoint::remove_send_peer(uint64_t peer_id) {
+  std::shared_ptr<SendConnection> group;
+  {
+    std::unique_lock<std::shared_mutex> lock(send_channel_mutex_);
+    auto it = send_channel_groups_.find(peer_id);
+    if (it != send_channel_groups_.end()) {
+      if (it->second->has_inflight()) {
+        UCCL_LOG(WARN) << "remove_send_peer: peer " << peer_id
+                       << " still has bytes in flight; keeping it";
+        return false;
+      }
+      group = std::move(it->second);
+      send_channel_groups_.erase(it);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(peer_oob_meta_mutex_);
+    peer_oob_meta_.erase(peer_id);
+  }
+  // Closing our metadata socket is what tells the peer to free its side.
+  release_oob_conn(peer_id);
+  return true;
+}
+
+void RDMAEndpoint::remove_recv_peer(uint64_t peer_id) {
+  std::shared_ptr<RecvConnection> group;
+  {
+    std::unique_lock<std::shared_mutex> lock(recv_channel_mutex_);
+    auto it = recv_channel_groups_.find(peer_id);
+    if (it != recv_channel_groups_.end()) {
+      group = std::move(it->second);
+      recv_channel_groups_.erase(it);
+    }
+  }
+  {
+    std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
+    accepted_meta_.erase(peer_id);
+    recv_peer_oob_addr_.erase(peer_id);
+  }
+  release_oob_conn(peer_id);
+}
+
+void RDMAEndpoint::release_oob_conn(uint64_t peer_id) {
+  std::string conn_key;
+  {
+    std::unique_lock<std::shared_mutex> lock(peer_oob_conn_keys_mutex_);
+    auto it = peer_oob_conn_keys_.find(peer_id);
+    if (it == peer_oob_conn_keys_.end()) return;
+    conn_key = std::move(it->second);
+    peer_oob_conn_keys_.erase(it);
+    auto u = oob_conn_users_.find(conn_key);
+    if (u != oob_conn_users_.end() && --u->second > 0) return;
+    if (u != oob_conn_users_.end()) oob_conn_users_.erase(u);
+  }
+  oob_client_->close(conn_key);
+}
+
+void RDMAEndpoint::on_oob_disconnect(std::string const& ip, int port) {
+  std::vector<uint64_t> peers;
+  {
+    std::shared_lock<std::shared_mutex> lock(accepted_meta_mutex_);
+    for (auto const& [peer_id, addr] : recv_peer_oob_addr_) {
+      if (addr.first == ip && addr.second == static_cast<uint16_t>(port))
+        peers.push_back(peer_id);
+    }
+  }
+  for (uint64_t peer_id : peers) {
+    UCCL_LOG(INFO, UCCL_RDMA) << "OOB connection from " << ip << ":" << port
+                              << " closed; freeing accepted peer " << peer_id;
+    remove_recv_peer(peer_id);
+  }
 }
 
 // ── Polling and batching ─────────────────────────────────────────────────────

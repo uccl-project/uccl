@@ -81,6 +81,9 @@ class SendConnection : public RDMAConnection {
 
   ~SendConnection();
 
+  // True while the tracker still counts unacknowledged bytes (teardown guard).
+  bool has_inflight() { return current_inflight_bytes() > 0; }
+
   // ── Channel registry ───────────────────────────────────────────────────────
   void add_channel(uint32_t channel_id,
                    std::shared_ptr<RDMADataChannel> channel) override;

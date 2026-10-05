@@ -267,6 +267,27 @@ inline void uccl_flush_send(GenericEndpoint const& ep) {
 // Resolve the SendConnection for a peer_id once. Returns nullptr on the
 // NCCL path or if not found. Callers can then use uccl_check_wr_fast() to
 // avoid the per-call mutex + map lookup in check_send_complete_once().
+// Free the transport state behind one connection. `accepted` selects the
+// recv-side (accept) or send-side (connect) peer-id space. Returns false only
+// when the peer is still busy and was kept.
+inline bool uccl_remove_peer(GenericEndpoint const& ep, uint64_t peer_id,
+                             bool accepted) {
+  bool removed = true;
+  std::visit(
+      [&](auto const& s) {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, RDMAEndpoint>) {
+          if (accepted) {
+            s->remove_recv_peer(peer_id);
+          } else {
+            removed = s->remove_send_peer(peer_id);
+          }
+        }
+      },
+      ep);
+  return removed;
+}
+
 inline SendConnection* uccl_resolve_send_group(GenericEndpoint const& ep,
                                                uint64_t peer_id) {
   SendConnection* result = nullptr;
