@@ -745,6 +745,21 @@ class Buffer:
         return table[dtype]
 
     @staticmethod
+    def _get_x_scales_metadata(
+        x_scales: Optional[torch.Tensor],
+    ) -> Tuple[int, int, int]:
+        """Return the scale count and element strides expected by UCCL kernels."""
+        if x_scales is None:
+            return 0, 0, 0
+        if x_scales.dim() == 1:
+            return 1, int(x_scales.stride(0)), 0
+        return (
+            x_scales.size(1),
+            int(x_scales.stride(0)),
+            int(x_scales.stride(1)),
+        )
+
+    @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
         """
         Get a recommended dispatch config.
@@ -1004,13 +1019,9 @@ class Buffer:
                 send_head,
             ) = handle
             num_topk = 0
-            num_scales = (
-                0
-                if x_scales is None
-                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            num_scales, scale_token_stride, scale_hidden_stride = (
+                self._get_x_scales_metadata(x_scales)
             )
-            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
@@ -1123,13 +1134,9 @@ class Buffer:
                     self._ll_compute_stream_ptr(x.device),
                 )
             )
-            num_scales = (
-                0
-                if x_scales is None
-                else (1 if x_scales.dim() == 1 else x_scales.size(1))
+            num_scales, scale_token_stride, scale_hidden_stride = (
+                self._get_x_scales_metadata(x_scales)
             )
-            scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-            scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
             alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
@@ -1435,11 +1442,9 @@ class Buffer:
         assert config is not None
 
         x, x_scales = x if isinstance(x, tuple) else (x, None)
-        num_scales = (
-            0 if x_scales is None else (1 if x_scales.dim() == 1 else x_scales.size(1))
+        num_scales, scale_token_stride, scale_hidden_stride = (
+            self._get_x_scales_metadata(x_scales)
         )
-        scale_token_stride = 0 if x_scales is None else int(x_scales.stride(0))
-        scale_hidden_stride = 0 if x_scales is None else int(x_scales.stride(1))
         num_topk = 0 if topk_idx is None else int(topk_idx.size(1))
         num_rdma_ranks = self.runtime.get_num_rdma_ranks()
         num_channels = int(getattr(config, "num_sms", Buffer.num_sms)) // 2
