@@ -5,9 +5,6 @@
 #include <cstdlib>
 #include <string>
 
-// PCIe relaxed ordering on data MRs (as UCX_IB_PCI_RELAXED_ORDERING does).
-// Without it GPUDirect RDMA on IOMMU-remapped VMs caps near 86 Gb/s.
-// UCCL_P2P_RDMA_RELAXED_ORDERING=0 disables it.
 static int relaxed_ordering_access_flag() {
   static int const flag = [] {
     char const* env = std::getenv("UCCL_P2P_RDMA_RELAXED_ORDERING");
