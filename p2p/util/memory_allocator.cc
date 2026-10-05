@@ -24,24 +24,28 @@ std::shared_ptr<RegMemBlock> MemoryAllocator::allocate(
     throw std::runtime_error("Failed to allocate memory");
   }
 
-  // Create RegMemBlock with custom deleter
-  auto deleter = [this, type](RegMemBlock* block) {
-    if (block) {
-      if (block->addr) deallocate_raw(block->addr, type);
-      delete block;
-    }
-  };
-
   auto block = new RegMemBlock(addr, size, type);
   if (ctx) {
     mr = ctx->reg_mem(addr, size);
 
     if (!mr) {
       deallocate_raw(addr, type);
+      delete block;
       throw std::runtime_error("Failed to register memory with RDMA");
     }
     block->set_mr_by_context_id(ctx->get_context_id(), mr);
   }
+
+  // Deregister the MR this allocator created before freeing the buffer.
+  // Freeing alone left it registered (pinned, and pointing at freed memory)
+  // each time a peer's control ring was released.
+  auto deleter = [this, type, mr](RegMemBlock* block) {
+    if (block) {
+      if (mr) RdmaContext::dereg_mem(mr);
+      if (block->addr) deallocate_raw(block->addr, type);
+      delete block;
+    }
+  };
 
   return std::shared_ptr<RegMemBlock>(block, deleter);
 }
