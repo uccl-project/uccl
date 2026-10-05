@@ -14,6 +14,7 @@
 #include "util/util.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -251,6 +252,9 @@ class Endpoint {
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
   static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
+  // How often connect()/accept() check for completion, Python signals and
+  // stop_accept while the handshake runs.
+  static constexpr std::chrono::milliseconds kConnPollInterval{10};
 
   static uccl::UCCLLogLevel parse_log_level_from_env();
   static size_t max_one_sided_inflight_ops();

@@ -454,10 +454,11 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
-  while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
+  // Wait in short slices so the result is picked up as soon as it is ready
+  // (a 1 s sleep here rounded every connect up to the next second).
+  while (uccl_conn_id_future.wait_for(kConnPollInterval) !=
          std::future_status::ready) {
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 
@@ -586,7 +587,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
-  while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
+  while (uccl_conn_id_future.wait_for(kConnPollInterval) !=
          std::future_status::ready) {
     if (passive_accept_ &&
         passive_accept_stop_.load(std::memory_order_acquire)) {
@@ -594,7 +595,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
       uccl_stop_accept(ep_);
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 

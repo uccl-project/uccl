@@ -350,9 +350,12 @@ std::string const RDMAEndpoint::build_oob_connect(uint64_t peer_id) {
   auto const& item = peer_oob_meta_.find(peer_id);
   std::shared_ptr<OOBMetaData> ip_port_ptr = item->second;
   std::string oob_con;
-  while (oob_con.empty()) {
+  while (true) {
     oob_con = oob_client_->connect_to_server(ip_port_ptr->server_ip,
                                              ip_port_ptr->server_port);
+    if (!oob_con.empty()) break;
+    // Back off only between failed attempts; sleeping after a successful
+    // connect added a fixed 1 s to every connection.
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   }
   // Store conn_key for later use (e.g., notifications)
