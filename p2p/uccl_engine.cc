@@ -212,9 +212,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
                                    conn_id);
     if (ok) {
-      conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
       if (!is_nccl_transport()) {
+        // RDMA notifications use the OOB key; its ConnID sock_fd is 0, not a
+        // socket we own, and stop_listener() would close fd 0 (stdin).
+        conn->sock_fd = -1;
         conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+      } else {
+        conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
       }
     }
   }
@@ -250,9 +254,11 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   std::strncpy(ip_addr_buf, ip_addr.c_str(), ip_addr_buf_len);
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
-  conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
   if (!is_nccl_transport()) {
+    conn->sock_fd = -1;  // see uccl_engine_connect
     conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+  } else {
+    conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
   }
   conn->engine = engine;
   conn->listener_thread = nullptr;
