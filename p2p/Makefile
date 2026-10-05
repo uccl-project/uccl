@@ -182,11 +182,12 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
-	rm -f test_notify_serde notif_e2e
+	rm -f test_notify_serde test_epoll_server notif_e2e
 
 # Test the module
-test: test_notify_serde
+test: test_notify_serde test_epoll_server
 	./test_notify_serde
+	./test_epoll_server
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 
@@ -194,6 +195,10 @@ test: test_notify_serde
 # libs, or Python.
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
+
+# Regression test for the OOB metadata server; needs no GPU or RDMA device.
+test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
+	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).
