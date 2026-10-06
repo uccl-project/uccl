@@ -28,11 +28,11 @@
 #include "../transport/d2h_queue_device.cuh"
 #include "../transport/ring_buffer.cuh"
 #include "platform.cuh"  // UCCL_GIN_TRAP() — CUDA/HIP device trap shim
+#include "resources.cuh"
 #include <cstdint>
 
 namespace uccl_gin {
 
-static constexpr uint32_t kAtomicOffMask = 0x1FFFu;
 static constexpr int kAtomicValueMin = -(1 << 14);
 static constexpr int kAtomicValueMax = (1 << 14) - 1;
 

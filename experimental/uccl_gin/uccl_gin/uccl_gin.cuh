@@ -226,16 +226,25 @@ struct UCCLGin {
       quiet_on_queue(res.d2h_queues[i], static_cast<int>(i));
     }
   }
-  // NCCL-GIN's flush(coop) is one cooperative flush per group (elected thread
-  // + group sync). Without the coop API here, forwarding to flush() would
-  // silently run a full per-thread drain (CTA of 512 => 512 x num_queues
-  // QUIET round trips). Keep the gap loud until the cooperative version is
-  // implemented at DeepEP-integration time.
+  // Publish every member's prior puts, divide all queues among the members,
+  // then observe every queue's completion before reusing source buffers.
   template <typename coop_t>
-  __device__ __forceinline__ void flush(coop_t) const {
+  __device__ __forceinline__ void flush(coop_t coop) const {
+#if UCCL_GIN_HAVE_NCCL_DEVICE
+    static_assert(std::is_same_v<coop_t, ncclCoopThread> ||
+                      std::is_same_v<coop_t, ncclCoopWarp>,
+                  "UCCL-GIN: cooperative flush supports ncclCoopThread and "
+                  "ncclCoopWarp only");
+    coop.sync();
+    for (uint32_t i = coop.thread_rank(); i < res.num_queues;
+         i += coop.size()) {
+      quiet_on_queue(res.d2h_queues[i], static_cast<int>(i));
+    }
+    coop.sync();
+#else
     static_assert(sizeof(coop_t) == 0,
-                  "UCCL-GIN: cooperative flush(coop) is not implemented; call "
-                  "flush() from a single thread");
+                  "UCCL-GIN: cooperative flush requires NCCL device headers");
+#endif
   }
 };
 

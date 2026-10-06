@@ -55,6 +55,9 @@
 #include <thread>
 #include <vector>
 #include <cuda_runtime.h>
+#if UCCL_GIN_WITH_NCCL_GIN
+#include "coop_flush_gate.cuh"
+#endif
 
 #define CUDA_OK(x)                                             \
   do {                                                         \
@@ -503,6 +506,49 @@ static bool verify_uccl_put_quiet(uccl_gin::Context& c, size_t bytes, int peer,
   return ok;
 }
 
+#if UCCL_GIN_WITH_NCCL_GIN
+static bool verify_uccl_coop_flush(uccl_gin::Context& c, size_t bytes, int peer,
+                                   int rank, cudaStream_t stream) {
+  if (bytes == 0 || bytes > UINT32_MAX ||
+      bytes % (kCoopFlushGateThreads * sizeof(int)) != 0) {
+    fprintf(stderr,
+            "[verify] coop-flush size must fit uint32_t and be a positive "
+            "multiple of %zu\n",
+            kCoopFlushGateThreads * sizeof(int));
+    return false;
+  }
+  auto* send = static_cast<int*>(c.send_ptr());
+  auto* recv = static_cast<int*>(c.recv_ptr());
+  size_t const words = bytes / sizeof(int);
+  fill_pattern_kernel<<<(words + 255) / 256, 256, 0, stream>>>(send, words,
+                                                               rank);
+  CUDA_OK(cudaMemsetAsync(recv, 0xff, bytes, stream));
+  CUDA_OK(cudaStreamSynchronize(stream));
+  auto* completions = reinterpret_cast<std::atomic<int64_t>*>(
+      static_cast<char*>(c.counter_ptr()) + kCoopFlushGateTail);
+  for (int i = 0; i < kCoopFlushGateThreads; ++i)
+    completions[i].store(0, std::memory_order_release);
+  MPI_Barrier(MPI_COMM_WORLD);
+  uccl_gin_coop_flush_gate<<<1, kCoopFlushGateThreads, 0, stream>>>(
+      c.resources(), peer, send, recv, static_cast<uint32_t>(bytes));
+  CUDA_OK(cudaStreamSynchronize(stream));
+  auto const deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  for (int i = 0; i < kCoopFlushGateThreads; ++i) {
+    while (completions[i].load(std::memory_order_acquire) < 1) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        fprintf(stderr,
+                "[verify] coop-flush receiver timeout slot=%d bytes=%zu\n", i,
+                bytes);
+        return false;
+      }
+    }
+    if (completions[i].load(std::memory_order_acquire) != 1) return false;
+  }
+  return verify_recv(recv, bytes, peer);
+}
+#endif
+
 // Tests red_add_rel counter correctness: each lane posts `iters` ordered atomic
 // adds of delta=1 to its own counter slot. The peer waits for all slots to
 // reach exactly `iters`. This validates the counter add itself (no payload data
@@ -710,6 +756,9 @@ int main(int argc, char** argv) {
   // -------- correctness + ordering pass (must pass before any BW number) -----
   {
     bool all_ok = true;
+    bool const run_coop_flush =
+        args.run_uccl && (args.only == "coop-flush" ||
+                          (UCCL_GIN_WITH_NCCL_GIN && args.only == "all"));
     // red_add counter-only test (no payload, size-independent)
     {
       int a_ok = 1;
@@ -741,7 +790,7 @@ int main(int argc, char** argv) {
              "UCCL-tail/q", "UCCL-put+q");
     }
     for (size_t bytes : args.sizes) {
-      int n_ok = 1, u_ok = 1, t_ok = 1, q_ok = 1;
+      int n_ok = 1, u_ok = 1, t_ok = 1, q_ok = 1, c_ok = 1;
       if (args.run_nccl && selected(args, "put-add"))
         n_ok = verify_nccl(comm, devComm, sendwin, recvwin, d_send, d_recv,
                            bytes, peer, rank, stream)
@@ -758,11 +807,22 @@ int main(int argc, char** argv) {
             verify_uccl_put_quiet(*uctx, bytes, peer, rank, stream, max_bytes)
                 ? 1
                 : 0;
+      if (run_coop_flush) {
+#if UCCL_GIN_WITH_NCCL_GIN
+        c_ok = verify_uccl_coop_flush(*uctx, bytes, peer, rank, stream) ? 1 : 0;
+#else
+        c_ok = 0;
+        if (rank == 0)
+          fprintf(stderr, "coop-flush requires NCCL device headers\n");
+#endif
+      }
       int gn = 1, gu = 1, gt = 1, gq = 1;
       MPI_Allreduce(&n_ok, &gn, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       MPI_Allreduce(&u_ok, &gu, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       MPI_Allreduce(&t_ok, &gt, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       MPI_Allreduce(&q_ok, &gq, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+      int gc = 1;
+      MPI_Allreduce(&c_ok, &gc, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
       if (rank == 0) {
         printf(
             "%-12zu %-8s %-14s %-14s %-14s\n", bytes,
@@ -781,8 +841,11 @@ int main(int argc, char** argv) {
         if (args.run_uccl && selected(args, "quiet"))
           printf("UCCL-put+q source-reuse bytes=%zu: %s\n", bytes,
                  gq ? "PASS" : "FAIL");
+        if (run_coop_flush)
+          printf("UCCL-coop-flush source-reuse bytes=%zu: %s\n", bytes,
+                 gc ? "PASS" : "FAIL");
       }
-      all_ok = all_ok && gn && gu && gt && gq;
+      all_ok = all_ok && gn && gu && gt && gq && gc;
     }
     if (!all_ok) {
       if (rank == 0) printf("CORRECTNESS FAILED -- not reporting BW\n");
