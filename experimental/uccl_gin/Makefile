@@ -114,7 +114,7 @@ NVCC_RPATH := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
               -Xlinker -rpath -Xlinker $(NCCL_LIB) \
               -Xlinker -rpath -Xlinker $(MPI_PREFIX)/lib
 
-LDFLAGS := -L$(CUDA_HOME)/lib64 $(NVCC_RPATH) \
+LDFLAGS := -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs $(NVCC_RPATH) \
            -L$(EFA_HOME)/lib -L$(NCCL_LIB) \
            -L$(MPI_PREFIX)/lib -lmpi -l:$(NCCL_SO) -lefa -libverbs -lnl-3 -lnl-route-3 \
            -lnuma -lcudart -lcuda -lpthread

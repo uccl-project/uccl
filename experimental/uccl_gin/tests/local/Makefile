@@ -13,7 +13,7 @@ INCLUDES := -I$(GIN) -I$(ROOT)/include -I$(CUDA_HOME)/include $(if $(NUMA_INCLUD
 HOSTFLAGS := -O3 -std=c++17 -pthread -Wall $(INCLUDES)
 DEVFLAGS := -O3 -std=c++17 -arch=sm_$(SM) -ccbin=$(CXX) --expt-relaxed-constexpr $(INCLUDES) -Xcompiler=-pthread,-Wall
 DEVFLAGS += $(EXTRA_DEVFLAGS)
-LIBS := -L$(CUDA_HOME)/lib64 -Xlinker=-rpath -Xlinker=$(CUDA_HOME)/lib64 $(if $(NUMA_LIBRARY_DIR),-L$(NUMA_LIBRARY_DIR) -Xlinker=-rpath -Xlinker=$(NUMA_LIBRARY_DIR)) -lnuma -lcuda
+LIBS := -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs -Xlinker=-rpath -Xlinker=$(CUDA_HOME)/lib64 $(if $(NUMA_LIBRARY_DIR),-L$(NUMA_LIBRARY_DIR) -Xlinker=-rpath -Xlinker=$(NUMA_LIBRARY_DIR)) -lnuma -lcuda
 
 .PHONY: all clean coop-tests adapter-tests adapter-compile-fail compile-fail model-tests ht-tests
 all: $(BUILD_DIR)/capabilities $(BUILD_DIR)/queue_smoke
