@@ -3,8 +3,8 @@
 // handle::UCCLGin (standalone) — the UCCL-GIN device abstraction. Mirrors the
 // method surface of DeepEP's `deep_ep::elastic::handle::NCCLGin`
 // (`deep_ep/common/handle.cuh`) so the SAME kernel call sites
-// (`gin.put<Team>(...)`, `gin.red_add_rel<Team>(...)`) work by just swapping the
-// gin type:
+// (`gin.put<Team>(...)`, `gin.red_add_rel<Team>(...)`) work by just swapping
+// the gin type:
 //
 //   Team == ncclTeamTagRail (scale-out / inter-node) -> UCCL D2H + proxy + EFA
 //   Team == ncclTeamTagLsa  (scale-up / NVLink)       -> forward to NCCL/NVLink
@@ -15,10 +15,10 @@
 // (which composes an NCCLGin for the Lsa/World branches) is a separate header.
 //
 // SCOPE: the Rail branch of put / red_add_rel / put_tail_add (piggyback) /
-// quiet is implemented. The Lsa branch and the remaining NCCLGin surface trap so
-// gaps are loud, not silent.
+// quiet is implemented. The Lsa branch and the remaining NCCLGin surface trap
+// so gaps are loud, not silent.
 
-#include "platform.cuh"   // UCCL_GIN_TRAP, UCCL_GIN_HAVE_NCCL_DEVICE
+#include "platform.cuh"  // UCCL_GIN_TRAP, UCCL_GIN_HAVE_NCCL_DEVICE
 #include "resources.cuh"
 #include "uccl_gin_rail.cuh"
 #include <type_traits>
@@ -42,10 +42,11 @@ static constexpr unsigned long long kUCCLGinQuietPrintCycles = 20000000000ull;
 struct UCCLGin {
   UCCLGinResources res;
 
-  __device__ __forceinline__ explicit UCCLGin(const UCCLGinResources& r) : res(r) {}
+  __device__ __forceinline__ explicit UCCLGin(UCCLGinResources const& r)
+      : res(r) {}
 
-  // Choose a D2H lane. NCCLGin hides lane behind qp/context; here the caller may
-  // pass a hint (e.g. channel idx); default round-robins on the hint.
+  // Choose a D2H lane. NCCLGin hides lane behind qp/context; here the caller
+  // may pass a hint (e.g. channel idx); default round-robins on the hint.
   __device__ __forceinline__ d2hq::D2HHandle* lane(int hint) const {
     if (res.d2h_queues == nullptr || res.num_queues == 0) {
       UCCL_GIN_TRAP();
@@ -94,19 +95,19 @@ struct UCCLGin {
       if (num_bytes == 0) {
         return;
       }
-      const uint32_t loff = window_off(reinterpret_cast<uint64_t>(send_sym_ptr),
-                                       res.window_base, res.window_bytes,
-                                       static_cast<uint32_t>(num_bytes));
-      const uint32_t roff = window_off(reinterpret_cast<uint64_t>(recv_sym_ptr),
-                                       res.window_base, res.window_bytes,
-                                       static_cast<uint32_t>(num_bytes));
+      const uint32_t loff =
+          window_off(reinterpret_cast<uint64_t>(send_sym_ptr), res.window_base,
+                     res.window_bytes, static_cast<uint32_t>(num_bytes));
+      const uint32_t roff =
+          window_off(reinterpret_cast<uint64_t>(recv_sym_ptr), res.window_base,
+                     res.window_bytes, static_cast<uint32_t>(num_bytes));
       auto* q = lane(lane_hint);
       uint32_t remaining = static_cast<uint32_t>(num_bytes);
       uint32_t byte_offset = 0;
       while (remaining != 0) {
-        const uint32_t chunk =
-            remaining > kTransferCmdMaxBytes ? kTransferCmdMaxAlignedBytes
-                                             : remaining;
+        const uint32_t chunk = remaining > kTransferCmdMaxBytes
+                                   ? kTransferCmdMaxAlignedBytes
+                                   : remaining;
         rail_put(q, dst_rank, chunk, add_window_off(loff, byte_offset),
                  add_window_off(roff, byte_offset));
         remaining -= chunk;
@@ -120,27 +121,26 @@ struct UCCLGin {
 
   // ---- put_tail_add (WRITE + piggyback count) --------------------------
   // One payload WRITE that also advances a receiver tail counter (1..255). The
-  // tail offset is a RAW byte offset into the receiver atomic buffer and must be
-  // non-zero (slot 0 reserved) so the proxy's piggyback trigger fires under the
-  // V1-compatible (atomic_offset>0 && atomic_val>0) rule.
+  // tail offset is a RAW byte offset into the receiver atomic buffer and must
+  // be non-zero (slot 0 reserved) so the proxy's piggyback trigger fires under
+  // the V1-compatible (atomic_offset>0 && atomic_val>0) rule.
   template <typename team_t>
-  __device__ __forceinline__ void put_tail_add(void* recv_sym_ptr,
-                                               void* send_sym_ptr, int num_bytes,
-                                               int dst_rank, int count_delta,
-                                               uint32_t atomic_byte_off,
-                                               int lane_hint = 0) const {
+  __device__ __forceinline__ void put_tail_add(
+      void* recv_sym_ptr, void* send_sym_ptr, int num_bytes, int dst_rank,
+      int count_delta, uint32_t atomic_byte_off, int lane_hint = 0) const {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
       validate_rail_dst(res, dst_rank);
       if (num_bytes < 0 || count_delta <= 0 || count_delta > 0xFF ||
           atomic_byte_off == 0) {
-        UCCL_GIN_TRAP();  // tail slots are 1-based; slot 0 is reserved (see header).
+        UCCL_GIN_TRAP();  // tail slots are 1-based; slot 0 is reserved (see
+                          // header).
       }
-      const uint32_t loff = window_off(reinterpret_cast<uint64_t>(send_sym_ptr),
-                                       res.window_base, res.window_bytes,
-                                       static_cast<uint32_t>(num_bytes));
-      const uint32_t roff = window_off(reinterpret_cast<uint64_t>(recv_sym_ptr),
-                                       res.window_base, res.window_bytes,
-                                       static_cast<uint32_t>(num_bytes));
+      const uint32_t loff =
+          window_off(reinterpret_cast<uint64_t>(send_sym_ptr), res.window_base,
+                     res.window_bytes, static_cast<uint32_t>(num_bytes));
+      const uint32_t roff =
+          window_off(reinterpret_cast<uint64_t>(recv_sym_ptr), res.window_base,
+                     res.window_bytes, static_cast<uint32_t>(num_bytes));
       auto* q = lane(lane_hint);
       const uint32_t bytes = static_cast<uint32_t>(num_bytes);
       if (bytes <= kTransferCmdMaxBytes) {
@@ -157,9 +157,9 @@ struct UCCLGin {
       uint32_t remaining = bytes;
       uint32_t byte_offset = 0;
       while (remaining != 0) {
-        const uint32_t chunk =
-            remaining > kTransferCmdMaxBytes ? kTransferCmdMaxAlignedBytes
-                                             : remaining;
+        const uint32_t chunk = remaining > kTransferCmdMaxBytes
+                                   ? kTransferCmdMaxAlignedBytes
+                                   : remaining;
         rail_put(q, dst_rank, chunk, add_window_off(loff, byte_offset),
                  add_window_off(roff, byte_offset));
         remaining -= chunk;
@@ -181,7 +181,8 @@ struct UCCLGin {
   // or a higher-level protocol.
   template <typename team_t>
   __device__ __forceinline__ void red_add_rel(void* sym_ptr, int value,
-                                              int dst_rank, int lane_hint = 0) const {
+                                              int dst_rank,
+                                              int lane_hint = 0) const {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
       validate_rail_dst(res, dst_rank);
       const uint32_t off = static_cast<uint32_t>(
@@ -208,12 +209,13 @@ struct UCCLGin {
   // lifetime race.
   template <typename team_t>
   __device__ __forceinline__ void put_value(void* sym_ptr, int value,
-                                            int dst_rank, int lane_hint = 0) const {
+                                            int dst_rank,
+                                            int lane_hint = 0) const {
     if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
       validate_rail_dst(res, dst_rank);
-      const uint32_t roff = window_off(reinterpret_cast<uint64_t>(sym_ptr),
-                                       res.window_base, res.window_bytes,
-                                       static_cast<uint32_t>(sizeof(int)));
+      const uint32_t roff =
+          window_off(reinterpret_cast<uint64_t>(sym_ptr), res.window_base,
+                     res.window_bytes, static_cast<uint32_t>(sizeof(int)));
       rail_write_value(lane(lane_hint), dst_rank, value, roff);
     } else {
       UCCL_GIN_TRAP();  // Lsa

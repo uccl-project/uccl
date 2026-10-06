@@ -15,7 +15,7 @@ struct ContextConfig {
   int world_size = 1;
   int local_world_size = 8;
   std::size_t max_message_bytes = 0;
-  const char* ifname = "enp71s0";
+  char const* ifname = "enp71s0";
 };
 
 class Context {

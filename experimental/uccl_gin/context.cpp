@@ -1,13 +1,8 @@
 #include "context.hpp"
-
 #include "transport/uccl_proxy.hpp"
 #include "util/gpu_rt.h"  // gpu* runtime shim (CUDA on NV, HIP on AMD)
-#include <mpi.h>
-
 #include <arpa/inet.h>
-#include <ifaddrs.h>
 #include <netinet/in.h>
-
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,20 +10,22 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <ifaddrs.h>
+#include <mpi.h>
 
 namespace {
 
-#define UCCL_GIN_CUDA_OK(x)                                                \
-  do {                                                                     \
-    gpuError_t e = (x);                                                   \
-    if (e != gpuSuccess) {                                                \
+#define UCCL_GIN_CUDA_OK(x)                                                 \
+  do {                                                                      \
+    gpuError_t e = (x);                                                     \
+    if (e != gpuSuccess) {                                                  \
       throw std::runtime_error(std::string("[UCCL-GIN CUDA] ") + __FILE__ + \
-                               ":" + std::to_string(__LINE__) + " " +     \
-                               gpuGetErrorString(e));                     \
-    }                                                                      \
+                               ":" + std::to_string(__LINE__) + " " +       \
+                               gpuGetErrorString(e));                       \
+    }                                                                       \
   } while (0)
 
-std::string iface_ip(const char* ifname) {
+std::string iface_ip(char const* ifname) {
   struct ifaddrs* ifa = nullptr;
   getifaddrs(&ifa);
   std::string out;
@@ -71,13 +68,14 @@ void Context::setup(ContextConfig cfg) {
   }
   if (cfg.max_message_bytes == 0 ||
       cfg.max_message_bytes > std::numeric_limits<size_t>::max() / 2) {
-    throw std::invalid_argument("max_message_bytes must fit a non-empty 2x window");
+    throw std::invalid_argument(
+        "max_message_bytes must fit a non-empty 2x window");
   }
 
   try {
-    const int local_rank = cfg.rank % cfg.local_world_size;
-    const int node_idx = cfg.rank / cfg.local_world_size;
-    const int num_nodes = cfg.world_size / cfg.local_world_size;
+    int const local_rank = cfg.rank % cfg.local_world_size;
+    int const node_idx = cfg.rank / cfg.local_world_size;
+    int const num_nodes = cfg.world_size / cfg.local_world_size;
 
     UCCL_GIN_CUDA_OK(gpuSetDevice(local_rank));
     max_message_bytes_ = cfg.max_message_bytes;
@@ -93,7 +91,8 @@ void Context::setup(ContextConfig cfg) {
     for (int t = 0; t < kNumProxyThs; ++t) {
       auto p = std::make_unique<UcclProxy>(
           /*thread_idx=*/t, /*gpu_buffer_addr=*/(uintptr_t)d_window_,
-          /*total_size=*/window_bytes_, /*rank=*/cfg.rank, /*node_idx=*/node_idx,
+          /*total_size=*/window_bytes_, /*rank=*/cfg.rank,
+          /*node_idx=*/node_idx,
           /*local_rank=*/local_rank, /*num_experts=*/0,
           /*num_ranks=*/cfg.world_size, /*num_nodes=*/num_nodes,
           /*use_normal_mode=*/true, /*is_intranode=*/(num_nodes <= 1),
@@ -156,8 +155,8 @@ void Context::setup(ContextConfig cfg) {
     UCCL_GIN_CUDA_OK(
         gpuMalloc(&d_handles_, num_queues_ * sizeof(d2hq::D2HHandle*)));
     UCCL_GIN_CUDA_OK(gpuMemcpy(d_handles_, h_handles.data(),
-                                num_queues_ * sizeof(d2hq::D2HHandle*),
-                                gpuMemcpyHostToDevice));
+                               num_queues_ * sizeof(d2hq::D2HHandle*),
+                               gpuMemcpyHostToDevice));
 
     uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
     for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);

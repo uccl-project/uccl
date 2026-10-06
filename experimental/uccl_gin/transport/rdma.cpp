@@ -1518,7 +1518,7 @@ static void post_rdma_async_batched_normal_mode(
       for (size_t j = 0; j < idxs.size(); ++j) {
         size_t i = idxs[j];
         auto const& cmd = cmds_to_post[i];
-        const bool is_write_value =
+        bool const is_write_value =
             get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE;
         const uint32_t write_bytes =
             is_write_value ? static_cast<uint32_t>(sizeof(int)) : cmd.bytes;
@@ -2171,12 +2171,12 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx,
-                             bool use_normal_mode, int ranks_per_node) {
+                             int my_rank, int thread_idx, bool use_normal_mode,
+                             int ranks_per_node) {
   if (use_normal_mode) {
-    post_rdma_async_batched_normal_mode(
-        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx,
-        ranks_per_node);
+    post_rdma_async_batched_normal_mode(S, buf, num_wrs, wrs_to_post,
+                                        cmds_to_post, ctxs, my_rank, thread_idx,
+                                        ranks_per_node);
   } else {
     post_rdma_async_batched_fast_mode(S, buf, num_wrs, wrs_to_post,
                                       cmds_to_post, ctxs, my_rank, thread_idx);

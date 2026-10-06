@@ -1,14 +1,11 @@
 #define PY_SSIZE_T_CLEAN
-#include <Python.h>
-
 #include "context.hpp"
-
-#include <mpi.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <new>
+#include <Python.h>
+#include <mpi.h>
 
 namespace uccl_gin {
 // Defined in tests/put_quiet_smoke.cu (compiled into this extension).
@@ -29,8 +26,7 @@ void ensure_mpi_initialized() {
 }
 
 struct PyUcclGinContext {
-  PyObject_HEAD
-  uccl_gin::Context* ctx;
+  PyObject_HEAD uccl_gin::Context* ctx;
 };
 
 void PyUcclGinContext_dealloc(PyUcclGinContext* self) {
@@ -45,8 +41,9 @@ PyObject* PyUcclGinContext_new(PyTypeObject* type, PyObject*, PyObject*) {
   return reinterpret_cast<PyObject*>(self);
 }
 
-int PyUcclGinContext_init(PyUcclGinContext* self, PyObject* args, PyObject* kwargs) {
-  static const char* kwlist[] = {
+int PyUcclGinContext_init(PyUcclGinContext* self, PyObject* args,
+                          PyObject* kwargs) {
+  static char const* kwlist[] = {
       "max_message_bytes",
       "local_world_size",
       "ifname",
@@ -54,11 +51,10 @@ int PyUcclGinContext_init(PyUcclGinContext* self, PyObject* args, PyObject* kwar
   };
   unsigned long long max_message_bytes = 1 << 20;
   int local_world_size = 8;
-  const char* ifname = "enp71s0";
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Kis",
-                                   const_cast<char**>(kwlist),
-                                   &max_message_bytes, &local_world_size,
-                                   &ifname)) {
+  char const* ifname = "enp71s0";
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "|Kis", const_cast<char**>(kwlist), &max_message_bytes,
+          &local_world_size, &ifname)) {
     return -1;
   }
 
@@ -77,10 +73,10 @@ int PyUcclGinContext_init(PyUcclGinContext* self, PyObject* args, PyObject* kwar
 
   try {
     self->ctx = new uccl_gin::Context(cfg);
-  } catch (const std::bad_alloc&) {
+  } catch (std::bad_alloc const&) {
     PyErr_NoMemory();
     return -1;
-  } catch (const std::exception& e) {
+  } catch (std::exception const& e) {
     PyErr_SetString(PyExc_RuntimeError, e.what());
     return -1;
   } catch (...) {
@@ -106,12 +102,9 @@ PyObject* PyUcclGinContext_put_quiet_smoke(PyUcclGinContext* self,
   int bytes = 0;
   if (!PyArg_ParseTuple(args, "ii", &peer, &bytes)) return nullptr;
   bool ok;
-  Py_BEGIN_ALLOW_THREADS
-  ok = uccl_gin::run_put_quiet_smoke(*self->ctx, peer, bytes);
-  Py_END_ALLOW_THREADS
-  if (ok) {
-    Py_RETURN_TRUE;
-  }
+  Py_BEGIN_ALLOW_THREADS ok =
+      uccl_gin::run_put_quiet_smoke(*self->ctx, peer, bytes);
+  Py_END_ALLOW_THREADS if (ok) { Py_RETURN_TRUE; }
   Py_RETURN_FALSE;
 }
 
@@ -129,11 +122,9 @@ PyObject* PyUcclGinContext_put_bench(PyUcclGinContext* self, PyObject* args) {
                         &bench_lanes))
     return nullptr;
   double gbps;
-  Py_BEGIN_ALLOW_THREADS
-  gbps = uccl_gin::run_put_bench(*self->ctx, peer, bytes, iters, warmup,
-                                 bench_lanes);
-  Py_END_ALLOW_THREADS
-  return PyFloat_FromDouble(gbps);
+  Py_BEGIN_ALLOW_THREADS gbps = uccl_gin::run_put_bench(
+      *self->ctx, peer, bytes, iters, warmup, bench_lanes);
+  Py_END_ALLOW_THREADS return PyFloat_FromDouble(gbps);
 }
 
 PyObject* PyUcclGinContext_num_queues(PyUcclGinContext* self, void*) {
@@ -167,17 +158,17 @@ PyObject* PyUcclGinContext_resources(PyUcclGinContext* self, PyObject*) {
     PyErr_SetString(PyExc_RuntimeError, "Context is closed");
     return nullptr;
   }
-  const auto& r = self->ctx->resources();
+  auto const& r = self->ctx->resources();
   PyObject* d = PyDict_New();
   if (d == nullptr) return nullptr;
-  auto set_u64 = [&](const char* key, unsigned long long value) {
+  auto set_u64 = [&](char const* key, unsigned long long value) {
     PyObject* v = PyLong_FromUnsignedLongLong(value);
     if (v == nullptr) return -1;
     int rc = PyDict_SetItemString(d, key, v);
     Py_DECREF(v);
     return rc;
   };
-  auto set_i64 = [&](const char* key, long value) {
+  auto set_i64 = [&](char const* key, long value) {
     PyObject* v = PyLong_FromLong(value);
     if (v == nullptr) return -1;
     int rc = PyDict_SetItemString(d, key, v);
@@ -200,13 +191,15 @@ PyObject* PyUcclGinContext_resources(PyUcclGinContext* self, PyObject*) {
 }
 
 PyMethodDef PyUcclGinContext_methods[] = {
-    {"close", reinterpret_cast<PyCFunction>(PyUcclGinContext_close), METH_NOARGS,
-     "Stop proxy threads and release registered resources."},
+    {"close", reinterpret_cast<PyCFunction>(PyUcclGinContext_close),
+     METH_NOARGS, "Stop proxy threads and release registered resources."},
     {"resources", reinterpret_cast<PyCFunction>(PyUcclGinContext_resources),
      METH_NOARGS, "Return a debug dict for the device resource bundle."},
     {"put_quiet_smoke",
-     reinterpret_cast<PyCFunction>(PyUcclGinContext_put_quiet_smoke), METH_VARARGS,
-     "run_put_quiet_smoke(peer, bytes) -> bool. put+quiet correctness across the "
+     reinterpret_cast<PyCFunction>(PyUcclGinContext_put_quiet_smoke),
+     METH_VARARGS,
+     "run_put_quiet_smoke(peer, bytes) -> bool. put+quiet correctness across "
+     "the "
      "paired-remote peer; returns True if recv matches the peer's pattern."},
     {"put_bench", reinterpret_cast<PyCFunction>(PyUcclGinContext_put_bench),
      METH_VARARGS,
@@ -216,18 +209,17 @@ PyMethodDef PyUcclGinContext_methods[] = {
 };
 
 PyGetSetDef PyUcclGinContext_getset[] = {
-    {"num_queues", reinterpret_cast<getter>(PyUcclGinContext_num_queues), nullptr,
-     "Number of D2H queues visible to kernels.", nullptr},
-    {"window_bytes", reinterpret_cast<getter>(PyUcclGinContext_window_bytes), nullptr,
-     "Registered GPU window size in bytes.", nullptr},
-    {"max_message_bytes", reinterpret_cast<getter>(PyUcclGinContext_max_message_bytes),
-     nullptr, "Maximum single-message payload size.", nullptr},
+    {"num_queues", reinterpret_cast<getter>(PyUcclGinContext_num_queues),
+     nullptr, "Number of D2H queues visible to kernels.", nullptr},
+    {"window_bytes", reinterpret_cast<getter>(PyUcclGinContext_window_bytes),
+     nullptr, "Registered GPU window size in bytes.", nullptr},
+    {"max_message_bytes",
+     reinterpret_cast<getter>(PyUcclGinContext_max_message_bytes), nullptr,
+     "Maximum single-message payload size.", nullptr},
     {nullptr, nullptr, nullptr, nullptr, nullptr},
 };
 
-PyTypeObject PyUcclGinContextType = {
-    PyVarObject_HEAD_INIT(nullptr, 0)
-};
+PyTypeObject PyUcclGinContextType = {PyVarObject_HEAD_INIT(nullptr, 0)};
 
 PyObject* mpi_rank(PyObject*, PyObject*) {
   ensure_mpi_initialized();
@@ -277,8 +269,10 @@ PyMODINIT_FUNC PyInit__uccl_gin() {
   PyUcclGinContextType.tp_itemsize = 0;
   PyUcclGinContextType.tp_flags = Py_TPFLAGS_DEFAULT;
   PyUcclGinContextType.tp_new = PyUcclGinContext_new;
-  PyUcclGinContextType.tp_init = reinterpret_cast<initproc>(PyUcclGinContext_init);
-  PyUcclGinContextType.tp_dealloc = reinterpret_cast<destructor>(PyUcclGinContext_dealloc);
+  PyUcclGinContextType.tp_init =
+      reinterpret_cast<initproc>(PyUcclGinContext_init);
+  PyUcclGinContextType.tp_dealloc =
+      reinterpret_cast<destructor>(PyUcclGinContext_dealloc);
   PyUcclGinContextType.tp_methods = PyUcclGinContext_methods;
   PyUcclGinContextType.tp_getset = PyUcclGinContext_getset;
   PyUcclGinContextType.tp_doc = "Standalone UCCL-GIN host context.";
@@ -288,7 +282,8 @@ PyMODINIT_FUNC PyInit__uccl_gin() {
   if (m == nullptr) return nullptr;
   Py_INCREF(&PyUcclGinContextType);
   if (PyModule_AddObject(m, "Context",
-                         reinterpret_cast<PyObject*>(&PyUcclGinContextType)) < 0) {
+                         reinterpret_cast<PyObject*>(&PyUcclGinContextType)) <
+      0) {
     Py_DECREF(&PyUcclGinContextType);
     Py_DECREF(m);
     return nullptr;

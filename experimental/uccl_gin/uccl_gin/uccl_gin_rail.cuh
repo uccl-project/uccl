@@ -5,11 +5,12 @@
 // Minimal device-side ops for the EFA `Rail` (scale-out / inter-node) path of
 // the planned `handle::UCCLGin`. They push the old 16B `TransferCmd` into a
 // host-pinned D2H ring (`d2hq::D2HHandle`); the UCCL CPU proxy drains the ring
-// and posts EFA verbs. This header is intentionally lean (only D2H ring + cstdint)
-// so it can later be #included by the JIT-compiled DeepEP kernels too.
+// and posts EFA verbs. This header is intentionally lean (only D2H ring +
+// cstdint) so it can later be #included by the JIT-compiled DeepEP kernels too.
 //
 // Covered now (per the standalone microbench scope): put + red_add_rel + the
-// piggyback tail add. Not yet: signal / wait / coalescing (see uccl_gin_plan.md).
+// piggyback tail add. Not yet: signal / wait / coalescing (see
+// uccl_gin_plan.md).
 //
 // Offset conventions (must match this standalone backend's src/rdma.cpp):
 //   * put (WRITE): req_lptr/req_rptr are window offsets shifted right by
@@ -24,9 +25,9 @@
 //     as an ordered WRITE_WITH_IMM only when atomic_offset > 0, so tail slots
 //     are 1-based (slot 0 reserved) to stay compatible with the V1 trigger.
 
-#include "platform.cuh"  // UCCL_GIN_TRAP() — CUDA/HIP device trap shim
-#include "../transport/ring_buffer.cuh"
 #include "../transport/d2h_queue_device.cuh"
+#include "../transport/ring_buffer.cuh"
+#include "platform.cuh"  // UCCL_GIN_TRAP() — CUDA/HIP device trap shim
 #include <cstdint>
 
 namespace uccl_gin {
@@ -49,7 +50,8 @@ __device__ __forceinline__ uint32_t add_window_off(uint32_t base_shifted,
 }
 
 // Window offset (4-byte shifted) for a payload pointer relative to window base.
-__device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_base,
+__device__ __forceinline__ uint32_t window_off(uint64_t addr,
+                                               uint64_t window_base,
                                                uint64_t window_bytes,
                                                uint32_t bytes = 0) {
   if (addr < window_base ||
@@ -66,9 +68,9 @@ __device__ __forceinline__ uint32_t window_off(uint64_t addr, uint64_t window_ba
   return static_cast<uint32_t>(shifted);
 }
 
-// Rail put: one-sided WRITE of `bytes` from local window offset -> remote window
-// offset on global rank `dst_rank`. Both offsets are already 4-byte shifted
-// (use window_off()). Returns the D2H ring slot it landed in.
+// Rail put: one-sided WRITE of `bytes` from local window offset -> remote
+// window offset on global rank `dst_rank`. Both offsets are already 4-byte
+// shifted (use window_off()). Returns the D2H ring slot it landed in.
 __device__ __forceinline__ uint64_t rail_put(d2hq::D2HHandle* q, int dst_rank,
                                              uint32_t bytes,
                                              uint32_t local_off_shifted,
@@ -89,8 +91,7 @@ __device__ __forceinline__ uint64_t rail_put(d2hq::D2HHandle* q, int dst_rank,
 }
 
 __device__ __forceinline__ uint64_t rail_write_value(
-    d2hq::D2HHandle* q, int dst_rank, int value,
-    uint32_t remote_off_shifted) {
+    d2hq::D2HHandle* q, int dst_rank, int value, uint32_t remote_off_shifted) {
   TransferCmd cmd{};
   cmd.cmd_type = make_cmd_type(CmdType::WRITE_VALUE, /*is_combine=*/false,
                                /*low_latency=*/false);
@@ -108,13 +109,13 @@ __device__ __forceinline__ uint64_t rail_write_value(
 // a chunk payload WR also advances the channel tail, avoiding a separate tiny
 // WRITE_WITH_IMM for the count update.
 //
-// The 16B TransferCmd stores the piggyback delta in `atomic_val`, an 8-bit field
-// sharing the bytes word, so this helper is intentionally chunk-count only
-// (1..255).  Larger finish/control deltas still use rail_red_add.
-__device__ __forceinline__ uint64_t rail_put_tail_add(
-    d2hq::D2HHandle* q, int dst_rank, uint32_t bytes,
-    uint32_t local_off_shifted, uint32_t remote_off_shifted, uint32_t count_delta,
-    uint32_t atomic_byte_off) {
+// The 16B TransferCmd stores the piggyback delta in `atomic_val`, an 8-bit
+// field sharing the bytes word, so this helper is intentionally chunk-count
+// only (1..255).  Larger finish/control deltas still use rail_red_add.
+__device__ __forceinline__ uint64_t
+rail_put_tail_add(d2hq::D2HHandle* q, int dst_rank, uint32_t bytes,
+                  uint32_t local_off_shifted, uint32_t remote_off_shifted,
+                  uint32_t count_delta, uint32_t atomic_byte_off) {
   if (bytes == 0 || bytes > kTransferCmdMaxBytes || count_delta == 0 ||
       count_delta > 0xFFu || atomic_byte_off > kAtomicOffMask ||
       (atomic_byte_off & 0x7u)) {
@@ -134,12 +135,12 @@ __device__ __forceinline__ uint64_t rail_put_tail_add(
   return slot;
 }
 
-// Rail red_add_rel: ordered remote atomic add of `delta` to the int64 counter at
-// `atomic_byte_off` inside the receiver's atomic buffer on global rank `dst_rank`.
-// The proxy applies it in seq order (PackAtomicWithSeq) so a stream of adds to
-// the same counter cannot be reordered. `delta` must fit 15 bits.
-__device__ __forceinline__ uint64_t rail_red_add(d2hq::D2HHandle* q, int dst_rank,
-                                                 int delta,
+// Rail red_add_rel: ordered remote atomic add of `delta` to the int64 counter
+// at `atomic_byte_off` inside the receiver's atomic buffer on global rank
+// `dst_rank`. The proxy applies it in seq order (PackAtomicWithSeq) so a stream
+// of adds to the same counter cannot be reordered. `delta` must fit 15 bits.
+__device__ __forceinline__ uint64_t rail_red_add(d2hq::D2HHandle* q,
+                                                 int dst_rank, int delta,
                                                  uint32_t atomic_byte_off) {
   if (delta < kAtomicValueMin || delta > kAtomicValueMax ||
       atomic_byte_off > kAtomicOffMask || (atomic_byte_off & 0x7u)) {
@@ -152,9 +153,10 @@ __device__ __forceinline__ uint64_t rail_red_add(d2hq::D2HHandle* q, int dst_ran
   cmd.cmd_type = make_cmd_type(CmdType::ATOMIC, /*is_combine=*/false,
                                /*low_latency=*/false);
   cmd.dst_rank = static_cast<uint8_t>(dst_rank);
-  cmd.value = delta;               // unions with req_lptr; proxy reads cmd.value
-  cmd.req_rptr = atomic_byte_off;  // RAW byte offset into receiver atomic buffer
-  cmd.atomic_offset = 1;           // non-zero => ordered (PackAtomicWithSeq) path
+  cmd.value = delta;  // unions with req_lptr; proxy reads cmd.value
+  cmd.req_rptr =
+      atomic_byte_off;    // RAW byte offset into receiver atomic buffer
+  cmd.atomic_offset = 1;  // non-zero => ordered (PackAtomicWithSeq) path
   uint64_t slot = 0;
   q->atomic_set_and_commit(cmd, &slot, kUCCLGinMaxInflightNormal);
   return slot;

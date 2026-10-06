@@ -21,7 +21,7 @@ inline void require(bool condition, char const* message) {
 
 #define CUDA_CHECK(call)                                                 \
   do {                                                                   \
-    const auto error = (call);                                           \
+    auto const error = (call);                                           \
     if (error != cudaSuccess) {                                          \
       std::fprintf(stderr, "%s:%d: %s: %s\n", __FILE__, __LINE__, #call, \
                    cudaGetErrorString(error));                           \

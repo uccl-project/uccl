@@ -4,10 +4,10 @@
 // and AMD (HIP/ROCm). Keep this header tiny and dependency-free; it is included
 // by resources.cuh and uccl_gin_rail.cuh before any device code.
 //
-// NOTE: this header deliberately does NOT pull in <nccl_device.h>. resources.cuh
-// is reached from host translation units (context.cpp via context.hpp), so the
-// NCCL device header must stay out of this path. Team-tag types live in
-// uccl_gin.cuh, the only header that actually needs them.
+// NOTE: this header deliberately does NOT pull in <nccl_device.h>.
+// resources.cuh is reached from host translation units (context.cpp via
+// context.hpp), so the NCCL device header must stay out of this path. Team-tag
+// types live in uccl_gin.cuh, the only header that actually needs them.
 
 // ---- device trap ----------------------------------------------------------
 // __trap() is a CUDA-only PTX intrinsic; HIP device code uses __builtin_trap().
@@ -36,7 +36,8 @@
 #endif
 
 // True when the NCCL device API (and its team-tag types) is available.
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || !UCCL_GIN_WITH_NCCL_GIN
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || \
+    !UCCL_GIN_WITH_NCCL_GIN
 #define UCCL_GIN_HAVE_NCCL_DEVICE 0
 #else
 #define UCCL_GIN_HAVE_NCCL_DEVICE 1

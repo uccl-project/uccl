@@ -167,7 +167,8 @@ class Proxy {
   // UCCL-GIN payload-before-tail dependency tracking.
   std::deque<PendingAtomicBatch> pending_atomic_batches_;
   std::unordered_map<uint64_t, PendingAtomicBatch*> atomic_dep_by_wr_;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> atomic_completion_aliases_;
+  std::unordered_map<uint64_t, std::vector<uint64_t>>
+      atomic_completion_aliases_;
   std::vector<uint64_t> atomic_dependency_wrs_;
   std::vector<uint64_t> coalesced_atomic_wrs_;
   std::vector<TransferCmd> coalesced_atomic_cmds_;

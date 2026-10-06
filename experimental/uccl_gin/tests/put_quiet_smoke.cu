@@ -6,8 +6,8 @@
 //   gin.put<Rail>()  -> plain RDMA WRITE
 //   gin.quiet()      -> drain the lane's WRITE CQEs (source reusable)
 //
-// No atomics: red_add_rel / put_tail_add / put_value are EFA-shaped and unusable
-// on non-EFA. Completion is proven structurally, not by a counter:
+// No atomics: red_add_rel / put_tail_add / put_value are EFA-shaped and
+// unusable on non-EFA. Completion is proven structurally, not by a counter:
 //   each rank fills its send window with a rank-tagged pattern, poisons recv,
 //   put()s to its paired-remote peer, quiet()s (CQE drained => data landed at
 //   the remote NIC for reliable RC), then an MPI barrier orders both ranks'
@@ -15,17 +15,16 @@
 //   pattern. A lost/torn/early write leaves poison -> FAIL.
 //
 // Raw cuda* calls here are intentional: nvcc compiles them natively (NVIDIA
-// Makefile path) and torch's hipify translates them to hip* (AMD setup.py path).
+// Makefile path) and torch's hipify translates them to hip* (AMD setup.py
+// path).
 
 #include "../context.hpp"
 #include "../uccl_gin/uccl_gin.cuh"
-
-#include <mpi.h>
-#include <cuda_runtime.h>
-
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <cuda_runtime.h>
+#include <mpi.h>
 
 namespace uccl_gin {
 
@@ -47,8 +46,8 @@ __global__ void smoke_put_quiet(UCCLGinResources res, int peer, void* send_ptr,
 }
 
 // Bandwidth: stream `iters` puts to the peer, fanned round-robin across the
-// first `bench_lanes` D2H lanes, then quiet those lanes so the timed region ends
-// when all WRITE CQEs have drained. per-rank BW = bytes*iters / elapsed.
+// first `bench_lanes` D2H lanes, then quiet those lanes so the timed region
+// ends when all WRITE CQEs have drained. per-rank BW = bytes*iters / elapsed.
 //
 // NOTE: bench_lanes > 1 currently hangs in quiet (a proxy-thread quiet drains
 // all of that thread's inflight writes; under multi-lane fan-out some WRITE CQE
@@ -105,7 +104,7 @@ bool run_put_quiet_smoke(Context& ctx, int peer, int bytes) {
     return false;
   }
   for (size_t i = 0; i < n; ++i) {
-    const int expect = peer * 1000003 + static_cast<int>(i);
+    int const expect = peer * 1000003 + static_cast<int>(i);
     if (h[i] != expect) {
       std::fprintf(stderr,
                    "[put_quiet_smoke] rank %d word %zu: got %d want %d\n", rank,
@@ -127,7 +126,7 @@ double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup,
   }
   void* send = ctx.send_ptr();
   void* recv = ctx.recv_ptr();
-  const int max_lanes = ctx.num_queues();
+  int const max_lanes = ctx.num_queues();
   if (bench_lanes < 1) bench_lanes = 1;
   if (bench_lanes > max_lanes) bench_lanes = max_lanes;
 
@@ -137,14 +136,14 @@ double run_put_bench(Context& ctx, int peer, int bytes, int iters, int warmup,
   MPI_Barrier(MPI_COMM_WORLD);
 
   MPI_Barrier(MPI_COMM_WORLD);
-  const double t0 = MPI_Wtime();
+  double const t0 = MPI_Wtime();
   smoke_put_bench<<<1, 32>>>(ctx.resources(), peer, send, recv,
                              static_cast<uint32_t>(bytes), iters, bench_lanes);
   if (cudaDeviceSynchronize() != cudaSuccess) return -1.0;
-  const double t1 = MPI_Wtime();
+  double const t1 = MPI_Wtime();
   MPI_Barrier(MPI_COMM_WORLD);
 
-  const double secs = t1 - t0;
+  double const secs = t1 - t0;
   if (secs <= 0.0) return -1.0;
   return (static_cast<double>(bytes) * iters) / secs / 1e9;
 }

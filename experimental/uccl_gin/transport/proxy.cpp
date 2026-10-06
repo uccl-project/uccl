@@ -281,8 +281,7 @@ void Proxy::init_common() {
     int rc = posix_memalign(&p, /*alignment=*/64, bounce_bytes);
     if (rc != 0 || !p) {
       fprintf(stderr,
-              "posix_memalign failed for write_value_bounce_buf (rc=%d)\n",
-              rc);
+              "posix_memalign failed for write_value_bounce_buf (rc=%d)\n", rc);
       std::abort();
     }
     std::memset(p, 0, bounce_bytes);
@@ -675,7 +674,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
       retire_inflight_write(front_wr);
-      pend.pop_front();            // retire pending entry
+      pend.pop_front();  // retire pending entry
 
       if (front_bytes) {
         current_inflight_bytes.fetch_sub(front_bytes,
@@ -772,7 +771,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
-      const auto base_cmd = get_base_cmd(cmd.cmd_type);
+      auto const base_cmd = get_base_cmd(cmd.cmd_type);
       fifo_pending_[rb_idx].push_back(
           std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
       if ((base_cmd == CmdType::WRITE || base_cmd == CmdType::WRITE_VALUE) &&
@@ -1228,7 +1227,7 @@ void Proxy::post_gpu_commands_mixed(
   };
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    const auto base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
+    auto const base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
     switch (base_cmd) {
       case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
@@ -1373,9 +1372,9 @@ void Proxy::wait_for_cq(std::vector<uint64_t> release_wrs,
          it != pending_release_wrs.end();) {
       if (acked_wrs_.find(*it) != acked_wrs_.end()) {
         // Keep the inflight set bounded: a completed write must leave
-        // inflight_write_wrs_, otherwise the set grows without bound and a later
-        // quiet_cq can dead-wait on a WR whose ack was already drained from
-        // acked_wrs_.
+        // inflight_write_wrs_, otherwise the set grows without bound and a
+        // later quiet_cq can dead-wait on a WR whose ack was already drained
+        // from acked_wrs_.
         retire_inflight_write(*it);
         it = pending_release_wrs.erase(it);
       } else {
@@ -1712,7 +1711,7 @@ void Proxy::barrier_check() {
         ++ctx_.barrier_arrival_count;
       }
     } else {
-      const int local_world = ranks_per_node(cfg_);
+      int const local_world = ranks_per_node(cfg_);
       int rank = cfg_.rank - cfg_.node_idx * local_world;
       if (rank < 0 || rank >= local_world) {
         printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
@@ -1728,7 +1727,7 @@ void Proxy::barrier_check() {
     if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
       std::unordered_map<std::string, int> leader_for_ip;
       for (int r = 0; r < (int)peers_.size(); ++r) {
-        const int local_world = ranks_per_node(cfg_);
+        int const local_world = ranks_per_node(cfg_);
         if (r >= local_world && (r - cfg_.rank) % local_world == 0) {
           leader_for_ip[peers_[r].ip] = r;
         }

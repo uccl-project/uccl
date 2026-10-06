@@ -242,7 +242,8 @@ struct ProxyCtx {
   // the ordered-atomic sequence/reorder state can be indexed by the int64-tail
   // slot alone. Direct arrays replace the prior (dst_rank, index) hash maps.
   std::array<uint8_t, kOrderedAtomicSeqSlots> next_seq_per_index{};
-  std::array<OrderedAtomicSeqBuf, kOrderedAtomicSeqSlots> ordered_atomic_seqbufs{};
+  std::array<OrderedAtomicSeqBuf, kOrderedAtomicSeqSlots>
+      ordered_atomic_seqbufs{};
   inline uint8_t take_next_atomic_seq(size_t index) {
     assert(index < next_seq_per_index.size());
     uint8_t const seq = next_seq_per_index[index];

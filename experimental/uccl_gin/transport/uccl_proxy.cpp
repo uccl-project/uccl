@@ -46,8 +46,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     d2h_channel_addrs_.push_back(addr);
   }
 
-  // Materialize one device-resident d2hq::D2HHandle per channel so a kernel that
-  // holds a UCCLGinResources can push commands into the rings directly.
+  // Materialize one device-resident d2hq::D2HHandle per channel so a kernel
+  // that holds a UCCLGinResources can push commands into the rings directly.
   CUDA_CHECK(cudaMallocManaged(&d2h_device_handle_objs_,
                                kChannelPerProxy * sizeof(d2hq::D2HHandle)));
   auto* d2h_device_handles =
@@ -70,24 +70,25 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
     d2h_device_handle_addrs_.push_back(
         reinterpret_cast<uint64_t>(d2h_device_handles + i));
   }
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && CUDA_VERSION >= 12000
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && \
+    CUDA_VERSION >= 12000
   {
     int device = 0;
     CUDA_CHECK(cudaGetDevice(&device));
     cudaMemLocation loc;
     loc.type = cudaMemLocationTypeDevice;
     loc.id = device;
-    CUDA_CHECK(cudaMemPrefetchAsync(
-        d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle), loc,
-        0));
+    CUDA_CHECK(cudaMemPrefetchAsync(d2h_device_handle_objs_,
+                                    kChannelPerProxy * sizeof(d2hq::D2HHandle),
+                                    loc, 0));
   }
 #else
   {
     int device = 0;
     CUDA_CHECK(cudaGetDevice(&device));
-    CUDA_CHECK(cudaMemPrefetchAsync(
-        d2h_device_handle_objs_, kChannelPerProxy * sizeof(d2hq::D2HHandle),
-        device, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(d2h_device_handle_objs_,
+                                    kChannelPerProxy * sizeof(d2hq::D2HHandle),
+                                    device, 0));
   }
 #endif
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -191,8 +192,8 @@ std::vector<uint64_t> UcclProxy::get_d2h_channel_device_addrs() const {
     void* dev_ptr = reinterpret_cast<void*>(addr);
 #else
     void* dev_ptr = nullptr;
-    CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&dev_ptr), reinterpret_cast<void*>(addr), 0));
+    CUDA_CHECK(cudaHostGetDevicePointer(reinterpret_cast<void**>(&dev_ptr),
+                                        reinterpret_cast<void*>(addr), 0));
 #endif
     addrs.push_back(reinterpret_cast<uint64_t>(dev_ptr));
   }

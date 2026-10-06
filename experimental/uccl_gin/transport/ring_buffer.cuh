@@ -25,11 +25,11 @@ struct ibv_mr;
 #endif
 
 enum class CmdType : uint8_t {
-  EMPTY = 0,    // 000
-  WRITE = 1,    // 001
-  ATOMIC = 2,   // 010
-  QUIET = 3,    // 011
-  BARRIER = 4,  // 100
+  EMPTY = 0,        // 000
+  WRITE = 1,        // 001
+  ATOMIC = 2,       // 010
+  QUIET = 3,        // 011
+  BARRIER = 4,      // 100
   WRITE_VALUE = 5,  // 101, inline 32-bit value carried in TransferCmd::value
   // Bits layout:
   // [7]     = low_latency_buffer_idx
@@ -442,7 +442,8 @@ struct alignas(128) RingBuffer {
       T const& item, uint64_t* out_slot = nullptr,
       uint64_t max_inflight = Capacity) {
     const uint64_t inflight_limit =
-        (max_inflight == 0 || max_inflight > Capacity) ? Capacity : max_inflight;
+        (max_inflight == 0 || max_inflight > Capacity) ? Capacity
+                                                       : max_inflight;
     uint64_t slot;
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
