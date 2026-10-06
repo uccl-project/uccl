@@ -30,4 +30,6 @@ NCCL communicator, model forward or HTTP concurrency is exercised. Thor/RTX
 
 Original lock inodes were reacquired after every child and controller exited;
 all logs and command receipts were collected. Changes after the tested commit
-in this branch are documentation and clang-format 14 formatting only.
+in this branch are documentation, clang-format 14 formatting, and restoring
+the shared GPU runtime header exactly to official main. The local device/FIFO
+operations exercised here do not use its DMA-BUF function-pointer typedef.
