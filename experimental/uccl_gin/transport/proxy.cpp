@@ -5,6 +5,7 @@
 #include "rdma.hpp"
 #include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -85,8 +86,22 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 }
 #endif
 
+static int ranks_per_node(Proxy::Config const& cfg) {
+  if (cfg.num_nodes <= 0 || cfg.num_ranks <= 0 ||
+      cfg.num_ranks % cfg.num_nodes != 0) {
+    fprintf(stderr, "Invalid topology: num_ranks=%d num_nodes=%d\n",
+            cfg.num_ranks, cfg.num_nodes);
+    std::abort();
+  }
+  return cfg.num_ranks / cfg.num_nodes;
+}
+
+static bool skip_normal_mode_peer(Proxy::Config const& cfg, int peer) {
+  return cfg.use_normal_mode &&
+         std::abs(peer - cfg.rank) % ranks_per_node(cfg) != 0;
+}
+
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
-  // Unset (-1) device/NIC ranks fall back to local_rank.
   if (cfg_.device_index < 0) cfg_.device_index = cfg_.local_rank;
   if (cfg_.nic_local_rank < 0) cfg_.nic_local_rank = cfg_.local_rank;
   // Initialize state tracking for each ring buffer
@@ -258,6 +273,30 @@ void Proxy::init_common() {
     }
   }
 
+  if (!ctx_.write_value_bounce_buf || !ctx_.write_value_bounce_mr) {
+    const size_t bounce_count =
+        std::max<size_t>(cfg_.d2h_queues.size(), 1) * kQueueSize;
+    const size_t bounce_bytes = bounce_count * sizeof(int);
+    void* p = nullptr;
+    int rc = posix_memalign(&p, /*alignment=*/64, bounce_bytes);
+    if (rc != 0 || !p) {
+      fprintf(stderr,
+              "posix_memalign failed for write_value_bounce_buf (rc=%d)\n",
+              rc);
+      std::abort();
+    }
+    std::memset(p, 0, bounce_bytes);
+    ctx_.write_value_bounce_buf = static_cast<int*>(p);
+    ctx_.write_value_bounce_count = bounce_count;
+    ctx_.write_value_bounce_mr =
+        ibv_reg_mr(ctx_.pd, ctx_.write_value_bounce_buf, bounce_bytes,
+                   IBV_ACCESS_LOCAL_WRITE);
+    if (!ctx_.write_value_bounce_mr) {
+      perror("Failed to register write_value_bounce_buf MR");
+      std::abort();
+    }
+  }
+
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -275,8 +314,7 @@ void Proxy::init_common() {
     for (int p = 0; p < num_ranks; ++p) {
       if (p == my_rank) continue;
       if (peers_[p].ip == peers_[my_rank].ip) continue;
-      if (cfg_.use_normal_mode && std::abs(p - my_rank) % MAX_NUM_GPUS != 0)
-        continue;
+      if (skip_normal_mode_peer(cfg_, p)) continue;
       ++num_active_peers;
     }
     int const ack_depth =
@@ -316,8 +354,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
 #ifdef EFA
     // Alias the shared SRD QPs from ctx_; dst_ah/dst_qpn (set later in
     // modify_qp_to_rtr) routes per WR via ibv_wr_set_ud_addr.
@@ -344,8 +381,7 @@ void Proxy::init_common() {
     for (int peer = 0; peer < num_ranks; ++peer) {
       // Skip rdma connection for intra-node.
       if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          (cfg_.use_normal_mode &&
-           std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+          skip_normal_mode_peer(cfg_, peer))
         continue;
       int actual_peer;
       recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
@@ -356,7 +392,7 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        skip_normal_mode_peer(cfg_, peer))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
@@ -370,7 +406,7 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        skip_normal_mode_peer(cfg_, peer))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
@@ -387,8 +423,7 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
@@ -544,6 +579,7 @@ void Proxy::run_sender() {
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, acked_wrs_, cfg_.thread_idx, ctx_by_tag_);
     notify_gpu_completion(my_tail);
+    progress_pending_atomics();
     post_gpu_command(my_tail, seen);
   }
 }
@@ -571,8 +607,7 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
-      continue;
+    if (skip_normal_mode_peer(cfg_, peer)) continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
 #ifndef EFA
@@ -597,6 +632,7 @@ void Proxy::run_dual() {
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
                  adaptive_sleeper_, cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
+    progress_pending_atomics();
     post_gpu_command(my_tail, seen);
 #ifdef USE_RECEIVER_BARRIER
     if (!cfg_.use_normal_mode) {
@@ -624,6 +660,7 @@ void Proxy::run_dual() {
 }
 
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
+  expand_atomic_completion_aliases();
   if (acked_wrs_.empty()) return;
 
     // Mark all acked command slots in each ring's bitmask
@@ -637,6 +674,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
       auto [front_wr, front_bytes] = pend.front();
       if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
+      retire_inflight_write(front_wr);
       pend.pop_front();            // retire pending entry
 
       if (front_bytes) {
@@ -659,6 +697,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   }
 #else
   for (auto wr_id : acked_wrs_) {
+    retire_inflight_write(wr_id);
     size_t const rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
     size_t const cmd_idx = wr_id & 0xFFFFFFFF;
 
@@ -668,6 +707,10 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     }
 
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
+    if (ctx_.quiet_wr != -1 && wr_id == static_cast<uint64_t>(ctx_.quiet_wr)) {
+      ctx_.quiet_inflight = false;
+      ctx_.quiet_wr = -1;
+    }
     h->volatile_clear_cmd_type(cmd_idx);
     h->mark_acked(cmd_idx % h->capacity());
   }
@@ -729,20 +772,21 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
+      const auto base_cmd = get_base_cmd(cmd.cmd_type);
       fifo_pending_[rb_idx].push_back(
           std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
-      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
+      if ((base_cmd == CmdType::WRITE || base_cmd == CmdType::WRITE_VALUE) &&
+          cmd.bytes > 0) {
         current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
                                          std::memory_order_release);
       }
 
-      if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
-          get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
-        if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER) {
+      if (base_cmd == CmdType::BARRIER || base_cmd == CmdType::QUIET) {
+        if (base_cmd == CmdType::BARRIER) {
           assert(!ctx_.barrier_inflight);
           assert(ctx_.barrier_wr == -1);
           ctx_.barrier_inflight = true;
-        } else if (get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
+        } else if (base_cmd == CmdType::QUIET) {
           assert(!ctx_.quiet_inflight);
           assert(ctx_.quiet_wr == -1);
           ctx_.quiet_inflight = true;
@@ -783,6 +827,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       if (cmd_entry.cmd_type == CmdType::EMPTY) break;
 
       if (get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE ||
+          get_base_cmd(cmd_entry.cmd_type) == CmdType::WRITE_VALUE ||
           get_base_cmd(cmd_entry.cmd_type) == CmdType::ATOMIC) {
         if (static_cast<int>(cmd_entry.dst_rank) == cfg_.rank) {
           fprintf(stderr,
@@ -940,15 +985,251 @@ void Proxy::run_local() {
          cfg_.thread_idx, total_seen, cfg_.d2h_queues.size());
 }
 
+void Proxy::retire_inflight_write(uint64_t wr_id) {
+  if (inflight_write_wrs_.erase(wr_id) == 0) return;
+  auto it = atomic_dep_by_wr_.find(wr_id);
+  if (it == atomic_dep_by_wr_.end()) return;
+  PendingAtomicBatch* batch = it->second;
+  if (batch != nullptr && batch->pending_writes > 0) {
+    --batch->pending_writes;
+  }
+  atomic_dep_by_wr_.erase(it);
+}
+
+void Proxy::clear_atomic_batch_deps(PendingAtomicBatch& batch) {
+  if (batch.dep_wrs.empty()) {
+    batch.pending_writes = 0;
+    return;
+  }
+  for (uint64_t wr_id : batch.dep_wrs) {
+    auto it = atomic_dep_by_wr_.find(wr_id);
+    if (it != atomic_dep_by_wr_.end() && it->second == &batch) {
+      atomic_dep_by_wr_.erase(it);
+    }
+  }
+  batch.dep_wrs.clear();
+  batch.pending_writes = 0;
+}
+
+void Proxy::enqueue_pending_atomics(std::vector<uint64_t>& wrs,
+                                    std::vector<TransferCmd>& cmds,
+                                    std::vector<uint64_t>& deps) {
+  if (wrs.empty()) return;
+  // pending_atomic_batches_ is a std::deque so &batch stays valid across later
+  // push_back/pop_front, which atomic_dep_by_wr_ relies on.
+  pending_atomic_batches_.emplace_back();
+  PendingAtomicBatch& batch = pending_atomic_batches_.back();
+  batch.wrs.swap(wrs);
+  batch.cmds.swap(cmds);
+  batch.pending_writes = 0;
+  for (uint64_t wr_id : deps) {
+    if (inflight_write_wrs_.find(wr_id) == inflight_write_wrs_.end()) continue;
+    ++batch.pending_writes;
+    batch.dep_wrs.push_back(wr_id);
+    atomic_dep_by_wr_[wr_id] = &batch;
+  }
+  deps.clear();
+}
+
+void Proxy::coalesce_atomic_batch(PendingAtomicBatch& batch) {
+  if (batch.wrs.size() <= 1) return;
+  coalesced_atomic_wrs_.clear();
+  coalesced_atomic_cmds_.clear();
+  coalesced_atomic_wrs_.reserve(batch.wrs.size());
+  coalesced_atomic_cmds_.reserve(batch.cmds.size());
+  std::vector<std::vector<uint64_t>> alias_groups;
+  alias_groups.reserve(batch.wrs.size());
+
+  auto same_target = [](uint64_t lhs_wr, TransferCmd const& lhs,
+                        uint64_t rhs_wr, TransferCmd const& rhs) {
+    if (get_base_cmd(lhs.cmd_type) != CmdType::ATOMIC ||
+        get_base_cmd(rhs.cmd_type) != CmdType::ATOMIC) {
+      return false;
+    }
+    if (get_low_latency(lhs.cmd_type) || get_low_latency(rhs.cmd_type)) {
+      return false;
+    }
+    if (lhs.atomic_offset == 0 || rhs.atomic_offset == 0) {
+      return false;
+    }
+    return ((lhs_wr >> 32) == (rhs_wr >> 32)) && lhs.dst_rank == rhs.dst_rank &&
+           lhs.cmd_type == rhs.cmd_type && lhs.req_rptr == rhs.req_rptr &&
+           lhs.atomic_offset == rhs.atomic_offset;
+  };
+
+  for (size_t i = 0; i < batch.wrs.size(); ++i) {
+    uint64_t const next_wr = batch.wrs[i];
+    TransferCmd const& next_cmd = batch.cmds[i];
+    bool merged = false;
+    for (size_t j = 0; j < coalesced_atomic_wrs_.size(); ++j) {
+      int64_t const merged_value =
+          static_cast<int64_t>(coalesced_atomic_cmds_[j].value) +
+          static_cast<int64_t>(next_cmd.value);
+      if (!same_target(coalesced_atomic_wrs_[j], coalesced_atomic_cmds_[j],
+                       next_wr, next_cmd) ||
+          merged_value < -kMaxSendAtomicValue ||
+          merged_value > kMaxSendAtomicValue) {
+        continue;
+      }
+      alias_groups[j].push_back(coalesced_atomic_wrs_[j]);
+      coalesced_atomic_wrs_[j] = next_wr;
+      coalesced_atomic_cmds_[j] = next_cmd;
+      coalesced_atomic_cmds_[j].value = static_cast<int>(merged_value);
+      merged = true;
+      break;
+    }
+    if (!merged) {
+      coalesced_atomic_wrs_.push_back(next_wr);
+      coalesced_atomic_cmds_.push_back(next_cmd);
+      alias_groups.emplace_back();
+    }
+  }
+
+  for (size_t i = 0; i < coalesced_atomic_wrs_.size(); ++i) {
+    if (!alias_groups[i].empty()) {
+      auto& dst = atomic_completion_aliases_[coalesced_atomic_wrs_[i]];
+      dst.insert(dst.end(), alias_groups[i].begin(), alias_groups[i].end());
+    }
+  }
+
+  if (coalesced_atomic_wrs_.size() == batch.wrs.size()) return;
+  batch.wrs.swap(coalesced_atomic_wrs_);
+  batch.cmds.swap(coalesced_atomic_cmds_);
+}
+
+void Proxy::expand_atomic_completion_aliases() {
+  if (acked_wrs_.empty() || atomic_completion_aliases_.empty()) return;
+  std::vector<uint64_t> aliases_to_ack;
+  for (uint64_t wr_id : acked_wrs_) {
+    auto it = atomic_completion_aliases_.find(wr_id);
+    if (it == atomic_completion_aliases_.end()) continue;
+    aliases_to_ack.insert(aliases_to_ack.end(), it->second.begin(),
+                          it->second.end());
+    atomic_completion_aliases_.erase(it);
+  }
+  for (uint64_t alias_wr : aliases_to_ack) {
+    acked_wrs_.insert(alias_wr);
+  }
+}
+
+void Proxy::progress_pending_atomics(bool force) {
+  while (!pending_atomic_batches_.empty()) {
+    PendingAtomicBatch& batch = pending_atomic_batches_.front();
+    if (!force && batch.pending_writes != 0) break;
+    if (force) {
+      clear_atomic_batch_deps(batch);
+    }
+    coalesce_atomic_batch(batch);
+    post_atomic_operations(ctx_, batch.wrs, batch.cmds, ctxs_for_all_ranks_,
+                           cfg_.rank, cfg_.thread_idx, acked_wrs_,
+                           cfg_.use_normal_mode);
+    clear_atomic_batch_deps(batch);
+    pending_atomic_batches_.pop_front();
+  }
+}
+
+void Proxy::drain_pending_atomics() {
+  uint64_t dummy_tail = 0;
+  ibv_wc wc[kMaxOutstandingSends];
+  std::set<PendingUpdate> pending_atomic_updates;
+  using clock = std::chrono::steady_clock;
+  auto last_log = clock::now();
+  while (!pending_atomic_batches_.empty()) {
+    progress_pending_atomics();
+    if (pending_atomic_batches_.empty()) break;
+    int ne = poll_cq_once(get_cq(ctx_), wc, kMaxOutstandingSends);
+    if (ne > 0) {
+      local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
+                                ctx_by_tag_);
+      remote_process_completions(
+          ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
+          cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
+          cfg_.num_nodes, cfg_.use_normal_mode);
+#ifdef USE_RECEIVER_BARRIER
+      if (!cfg_.use_normal_mode) {
+        apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
+                              cfg_.num_experts, cfg_.num_ranks);
+      }
+#endif
+      notify_gpu_completion(dummy_tail);
+      progress_pending_atomics();
+    } else {
+      cpu_relax();
+    }
+    auto now = clock::now();
+    if (now - last_log > std::chrono::milliseconds(1000)) {
+      fprintf(stderr,
+              "[pending atomics] waiting... batches=%zu deps_front=%zu "
+              "inflight_writes=%zu\n",
+              pending_atomic_batches_.size(),
+              pending_atomic_batches_.empty()
+                  ? 0
+                  : pending_atomic_batches_.front().pending_writes,
+              inflight_write_wrs_.size());
+      last_log = now;
+    }
+  }
+}
+
 void Proxy::post_gpu_commands_mixed(
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post) {
-  // Separate atomic operations from regular RDMA writes
-  std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
-  std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
+  if (cmds_to_post.empty()) return;
+  rdma_wrs.clear();
+  rdma_cmds.clear();
+  atomic_wrs.clear();
+  atomic_cmds.clear();
+
+  // Preserve D2H command order around control commands.  UCCL-GIN relies on
+  // WRITE ... QUIET ... ATOMIC, so the tail ATOMIC must not be moved before
+  // the device-issued QUIET.
+  auto flush_writes = [&]() {
+    if (rdma_wrs.empty()) return;
+    assert(rdma_wrs.size() == rdma_cmds.size());
+    if (atomic_dependency_wrs_.size() > 4096 &&
+        atomic_dependency_wrs_.size() > inflight_write_wrs_.size() * 2) {
+      atomic_dependency_wrs_.erase(
+          std::remove_if(atomic_dependency_wrs_.begin(),
+                         atomic_dependency_wrs_.end(),
+                         [&](uint64_t wr) {
+                           return inflight_write_wrs_.find(wr) ==
+                                  inflight_write_wrs_.end();
+                         }),
+          atomic_dependency_wrs_.end());
+    }
+    post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
+                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+                            cfg_.thread_idx, cfg_.use_normal_mode,
+                            ranks_per_node(cfg_));
+    inflight_write_wrs_.insert(rdma_wrs.begin(), rdma_wrs.end());
+    // A WRITE_WITH_IMM piggyback count and a later ordered finish ATOMIC use
+    // the same per-(dst, tail word) sequence. The receiver applies the finish
+    // only after those payload counts, and each count arrives with its payload
+    // WRITE completion. Only plain WRITEs lack that ordering and must remain
+    // sender-side completion dependencies.
+    for (size_t i = 0; i < rdma_wrs.size(); ++i) {
+      if (get_base_cmd(rdma_cmds[i].cmd_type) == CmdType::WRITE_VALUE ||
+          rdma_cmds[i].atomic_val == 0) {
+        atomic_dependency_wrs_.push_back(rdma_wrs[i]);
+      }
+    }
+    rdma_wrs.clear();
+    rdma_cmds.clear();
+  };
+
+  auto enqueue_atomics_ordered = [&]() {
+    if (atomic_wrs.empty()) return;
+    // Keep NCCL-GIN's payload-before-tail semantics without stopping the WRITE
+    // pipeline.  Each tail batch records the payload WRs posted before it; the
+    // main proxy loop posts the ATOMIC only after those WRs complete, while
+    // later WRITE commands may keep flowing.
+    enqueue_pending_atomics(atomic_wrs, atomic_cmds, atomic_dependency_wrs_);
+    progress_pending_atomics();
+  };
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
+    const auto base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
+    switch (base_cmd) {
       case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
         if (!cfg_.use_normal_mode) {
@@ -982,6 +1263,7 @@ void Proxy::post_gpu_commands_mixed(
         }
 #endif
 
+        flush_writes();
         atomic_wrs.push_back(wrs_to_post[i]);
         atomic_cmds.push_back(cmds_to_post[i]);
 
@@ -1008,19 +1290,34 @@ void Proxy::post_gpu_commands_mixed(
 #endif
         break;
       }
-      case (CmdType::WRITE): {
+      case (CmdType::WRITE):
+      case (CmdType::WRITE_VALUE): {
+        enqueue_atomics_ordered();
         rdma_wrs.push_back(wrs_to_post[i]);
         rdma_cmds.push_back(cmds_to_post[i]);
         break;
       }
       case (CmdType::QUIET): {
-        quiet_cmds.push_back(cmds_to_post[i]);
-        quiet_wrs.push_back(wrs_to_post[i]);
+        flush_writes();
+        enqueue_atomics_ordered();
+        drain_pending_atomics();
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+        assert(ctx_.quiet_wr == -1);
+#endif
+        ctx_.quiet_wr = wrs_to_post[i];
+        quiet({wrs_to_post[i]}, {cmds_to_post[i]}, {});
+        atomic_dependency_wrs_.clear();
         break;
       }
       case (CmdType::BARRIER): {
-        barrier_cmds.push_back(cmds_to_post[i]);
-        barrier_wrs.push_back(wrs_to_post[i]);
+        flush_writes();
+        enqueue_atomics_ordered();
+        drain_pending_atomics();
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+        assert(ctx_.barrier_wr == -1);
+#endif
+        send_barrier(wrs_to_post[i]);
+        atomic_dependency_wrs_.clear();
         break;
       }
       default: {
@@ -1030,61 +1327,35 @@ void Proxy::post_gpu_commands_mixed(
       }
     }
   }
-  if (rdma_wrs.size() + atomic_wrs.size() + barrier_cmds.size() +
-          quiet_cmds.size() ==
-      0) {
-    return;
-  }
-  // Handle regular RDMA writes
-  if (!rdma_wrs.empty()) {
-    post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
-                            rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, cfg_.use_normal_mode);
-    rdma_wrs.clear();
-    rdma_cmds.clear();
-  }
-
-  if (!atomic_wrs.empty()) {
-    post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
-                           cfg_.rank, cfg_.thread_idx, acked_wrs_,
-                           cfg_.use_normal_mode);
-    atomic_wrs.clear();
-    atomic_cmds.clear();
-  }
-
-  if (!barrier_cmds.empty()) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
-#endif
-    assert(quiet_wrs.empty() && "quiet_wrs should be empty");
-    send_barrier(barrier_wrs[0]);
-    barrier_wrs.clear();
-    barrier_cmds.clear();
-  }
-
-  if (!quiet_cmds.empty()) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
-#endif
-    ctx_.quiet_wr = quiet_wrs[0];
-    quiet(quiet_wrs, quiet_cmds);
-    quiet_wrs.clear();
-    quiet_cmds.clear();
-  }
+  flush_writes();
+  enqueue_atomics_ordered();
 }
 
-void Proxy::quiet_cq() {
-  auto outstanding_batches = [&]() -> size_t { return 0; };
-  constexpr int kConsecutiveEmptyToExit = 3;
-  int empty_iters = 0;
+void Proxy::wait_for_cq(std::vector<uint64_t> release_wrs,
+                        bool include_all_writes) {
+  std::unordered_set<uint64_t> pending_release_wrs;
+  pending_release_wrs.reserve(release_wrs.size() + inflight_write_wrs_.size());
+  for (uint64_t wr_id : release_wrs) {
+    if (inflight_write_wrs_.find(wr_id) != inflight_write_wrs_.end()) {
+      pending_release_wrs.insert(wr_id);
+    }
+  }
+  if (include_all_writes) {
+    pending_release_wrs.insert(inflight_write_wrs_.begin(),
+                               inflight_write_wrs_.end());
+  }
+  if (pending_release_wrs.empty()) return;
+  auto outstanding_batches = [&]() -> size_t {
+    return pending_release_wrs.size();
+  };
   ibv_wc wc[kMaxOutstandingSends];
   using clock = std::chrono::steady_clock;
   auto last_log = clock::now();
   std::set<PendingUpdate> pending_atomic_updates;
+  uint64_t dummy_tail = 0;
   for (;;) {
     int ne = poll_cq_once(get_cq(ctx_), wc, kMaxOutstandingSends);
     if (ne > 0) {
-      empty_iters = 0;
       local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
                                 ctx_by_tag_);
       remote_process_completions(
@@ -1097,10 +1368,22 @@ void Proxy::quiet_cq() {
                               cfg_.num_experts, cfg_.num_ranks);
       }
 #endif
-    } else {
-      ++empty_iters;
     }
-    if (outstanding_batches() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
+    for (auto it = pending_release_wrs.begin();
+         it != pending_release_wrs.end();) {
+      if (acked_wrs_.find(*it) != acked_wrs_.end()) {
+        // Keep the inflight set bounded: a completed write must leave
+        // inflight_write_wrs_, otherwise the set grows without bound and a later
+        // quiet_cq can dead-wait on a WR whose ack was already drained from
+        // acked_wrs_.
+        retire_inflight_write(*it);
+        it = pending_release_wrs.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    notify_gpu_completion(dummy_tail);
+    if (outstanding_batches() == 0) {
       break;
     }
     auto now = clock::now();
@@ -1112,10 +1395,17 @@ void Proxy::quiet_cq() {
   }
 }
 
-void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
+void Proxy::quiet_cq(std::vector<uint64_t> release_wrs) {
+  wait_for_cq(std::move(release_wrs), /*include_all_writes=*/true);
+}
+
+void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds,
+                  std::vector<uint64_t> release_wrs) {
   assert(cmds.size() == 1 && "quiet size must be 1");
-  quiet_cq();
+  quiet_cq(std::move(release_wrs));
   acked_wrs_.insert(wrs[0]);
+  uint64_t dummy_tail = 0;
+  notify_gpu_completion(dummy_tail);
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
@@ -1248,6 +1538,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
 #endif
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
+  dereg(ctx_.write_value_bounce_mr);
   dereg(ctx_.atomic_buffer_mr);
 
 #ifdef USE_DMABUF
@@ -1273,6 +1564,11 @@ void Proxy::destroy(bool free_gpu_buffer) {
   if (ctx_.atomic_old_values_buf) {
     free(ctx_.atomic_old_values_buf);
     ctx_.atomic_old_values_buf = nullptr;
+  }
+  if (ctx_.write_value_bounce_buf) {
+    free(ctx_.write_value_bounce_buf);
+    ctx_.write_value_bounce_buf = nullptr;
+    ctx_.write_value_bounce_count = 0;
   }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {
@@ -1416,12 +1712,13 @@ void Proxy::barrier_check() {
         ++ctx_.barrier_arrival_count;
       }
     } else {
-      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
-      if (rank < 0 || rank >= MAX_NUM_GPUS) {
+      const int local_world = ranks_per_node(cfg_);
+      int rank = cfg_.rank - cfg_.node_idx * local_world;
+      if (rank < 0 || rank >= local_world) {
         printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
                cfg_.node_idx);
       }
-      assert(rank >= 0 && rank < MAX_NUM_GPUS);
+      assert(rank >= 0 && rank < local_world);
       post_barrier_msg(/*dst=*/rank,
                        /*ack=*/false, seq);
     }
@@ -1431,7 +1728,8 @@ void Proxy::barrier_check() {
     if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
       std::unordered_map<std::string, int> leader_for_ip;
       for (int r = 0; r < (int)peers_.size(); ++r) {
-        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+        const int local_world = ranks_per_node(cfg_);
+        if (r >= local_world && (r - cfg_.rank) % local_world == 0) {
           leader_for_ip[peers_[r].ip] = r;
         }
       }
@@ -1511,7 +1809,7 @@ void Proxy::barrier_check() {
           for (int r = 0; r < (int)peers_.size(); ++r) {
             auto it = leader_for_ip.find(peers_[r].ip);
             if (it == leader_for_ip.end() || r < it->second) {
-              assert(r % MAX_NUM_GPUS == 0);
+              assert(r % ranks_per_node(cfg_) == 0);
               leader_for_ip[peers_[r].ip] = r;
             }
           }

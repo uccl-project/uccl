@@ -289,8 +289,10 @@ typedef int gpuMemRangeHandleType;
 #endif
 
 // Function pointer type for DMA-BUF handle export (loaded via dlsym)
+#ifdef USE_DMABUF
 typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
     void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
+#endif
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \

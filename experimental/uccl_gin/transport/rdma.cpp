@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <regex>
@@ -1139,8 +1140,20 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
             (size_t)local_info->atomic_buffer_len,
             local_info->atomic_buffer_rkey);
   } else {
-    // TODO(MaoZiming): Only for non-EFA case.
+#ifdef EFA
+    // UCCL-GIN normal mode applies ordered atomics on the CPU proxy into a
+    // host-mapped buffer rather than via NIC RDMA atomics, so there is no
+    // atomic MR to register/advertise on EFA. Advertise an empty atomic region.
+    if (use_normal_mode) {
+      local_info->atomic_buffer_rkey = 0;
+      local_info->atomic_buffer_addr = 0;
+      local_info->atomic_buffer_len = 0;
+    } else {
+      assert(false && "Atomic buffer is not registered");
+    }
+#else
     assert(false && "Atomic buffer is not registered");
+#endif
   }
 
   fill_local_gid(S, local_info);
@@ -1435,7 +1448,8 @@ static void post_rdma_async_batched_normal_mode(
     ProxyCtx& S, void* buf, size_t num_wrs,
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
-    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx) {
+    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx,
+    int ranks_per_node) {
   if (num_wrs == 0) return;
   if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
     fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
@@ -1450,9 +1464,10 @@ static void post_rdma_async_batched_normal_mode(
       printf("Posting rdma to itself\n");
       std::abort();
       continue;
-    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
-               0) {
+    } else if (ranks_per_node <= 0 ||
+               std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
+                       ranks_per_node !=
+                   0) {
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to a different rank\n");
       std::abort();
@@ -1503,6 +1518,10 @@ static void post_rdma_async_batched_normal_mode(
       for (size_t j = 0; j < idxs.size(); ++j) {
         size_t i = idxs[j];
         auto const& cmd = cmds_to_post[i];
+        const bool is_write_value =
+            get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE;
+        const uint32_t write_bytes =
+            is_write_value ? static_cast<uint32_t>(sizeof(int)) : cmd.bytes;
 
         qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
@@ -1513,11 +1532,11 @@ static void post_rdma_async_batched_normal_mode(
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
-            remote_addr + cmd.bytes > remote_end) {
+            remote_addr + write_bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), offset: 0x%llx\n",
-                  (unsigned long long)remote_addr, cmd.bytes,
+                  (unsigned long long)remote_addr, write_bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                   (unsigned long long)decode_write_offset(cmd.req_rptr, false));
           cudaError_t err = cudaDeviceSynchronize();
@@ -1536,15 +1555,7 @@ static void post_rdma_async_batched_normal_mode(
           }
           size_t index =
               static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-          // Initialize missing entries lazily
-          auto key = ctx->seq_key(dst_rank, index);
-          if (ctx->next_seq_per_index.find(key) ==
-              ctx->next_seq_per_index.end())
-            ctx->next_seq_per_index[key] = 0;
-
-          uint8_t seq = ctx->next_seq_per_index[key];
-          ctx->next_seq_per_index[key] =
-              (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
+          uint8_t seq = ctx->take_next_atomic_seq(index);
           uint32_t imm =
               AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                   .GetImmData();
@@ -1566,11 +1577,30 @@ static void post_rdma_async_batched_normal_mode(
           ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
         }
 
-        uintptr_t laddr = decode_write_offset(cmd.req_lptr, false) +
-                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = 0;
+        uint32_t lkey = 0;
+        if (is_write_value) {
+          const size_t ring_idx =
+              static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
+          const size_t slot_idx =
+              static_cast<size_t>(wrs_to_post[i] & kQueueMask);
+          const size_t bounce_idx = ring_idx * kQueueSize + slot_idx;
+          if (!S.write_value_bounce_buf || !S.write_value_bounce_mr ||
+              bounce_idx >= S.write_value_bounce_count) {
+            fprintf(stderr, "[ERROR] WRITE_VALUE bounce buffer missing/OOB\n");
+            std::abort();
+          }
+          S.write_value_bounce_buf[bounce_idx] = cmd.value;
+          laddr = reinterpret_cast<uintptr_t>(
+              &S.write_value_bounce_buf[bounce_idx]);
+          lkey = S.write_value_bounce_mr->lkey;
+        } else {
+          laddr = decode_write_offset(cmd.req_lptr, false) +
+                  reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          lkey = ctx->mr->lkey;
+        }
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
-        ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
-                       static_cast<uint32_t>(cmd.bytes));
+        ibv_wr_set_sge(qpx, lkey, laddr, write_bytes);
 
         ring_wrids.push_back(wrs_to_post[i]);
       }
@@ -1599,6 +1629,15 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE) {
+            // WRITE_VALUE's inline payload unions with req_lptr; this branch
+            // would decode it as a local offset. Only the EFA branch
+            // implements the host bounce slot.
+            fprintf(stderr,
+                    "[ERROR] WRITE_VALUE is only supported on the EFA "
+                    "normal-mode path\n");
+            std::abort();
+          }
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1682,15 +1721,7 @@ static void post_rdma_async_batched_normal_mode(
             }
             size_t index =
                 static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
-            // Initialize missing entries lazily
-            auto key = ctx->seq_key(dst_rank, index);
-            if (ctx->next_seq_per_index.find(key) ==
-                ctx->next_seq_per_index.end())
-              ctx->next_seq_per_index[key] = 0;
-
-            uint8_t seq = ctx->next_seq_per_index[key];
-            ctx->next_seq_per_index[key] =
-                (seq + 1) % kReorderingBufferSize;  // 4-bit wrap (0–15)
+            uint8_t seq = ctx->take_next_atomic_seq(index);
             uint32_t imm =
                 AtomicsImm::PackAtomicWithSeq(v, cmd.atomic_offset, seq, true)
                     .GetImmData();
@@ -1746,6 +1777,15 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE_VALUE) {
+            // WRITE_VALUE's inline payload unions with req_lptr; this branch
+            // would decode it as a local offset. Only the EFA branch
+            // implements the host bounce slot.
+            fprintf(stderr,
+                    "[ERROR] WRITE_VALUE is only supported on the EFA "
+                    "normal-mode path\n");
+            std::abort();
+          }
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1883,6 +1923,13 @@ static void post_rdma_async_batched_fast_mode(
 
   std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
   for (size_t i = 0; i < num_wrs; ++i) {
+    if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE_VALUE) {
+      // WRITE_VALUE's inline payload unions with req_lptr; this path would
+      // decode it as a local offset. Only the normal-mode EFA path implements
+      // the host bounce slot.
+      fprintf(stderr, "[ERROR] WRITE_VALUE is not supported in fast mode\n");
+      std::abort();
+    }
     if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to itself\n");
@@ -2125,10 +2172,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx,
-                             bool use_normal_mode) {
+                             bool use_normal_mode, int ranks_per_node) {
   if (use_normal_mode) {
     post_rdma_async_batched_normal_mode(
-        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx);
+        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx,
+        ranks_per_node);
   } else {
     post_rdma_async_batched_fast_mode(S, buf, num_wrs, wrs_to_post,
                                       cmds_to_post, ctxs, my_rank, thread_idx);
@@ -2342,15 +2390,15 @@ void remote_process_completions_normal_mode(
         assert(false &&
                "Reorderable atomic operations should not be triggered");
 #endif
-        struct SeqBuf {
-          uint8_t expected = 0;       // next seq expected
-          uint16_t present_mask = 0;  // bitmask of buffered seqs
-          int vals[kReorderingBufferSize] = {0};
-        };
-
-        // Thread-local map to maintain per-index state
-        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
-        auto& sb = seqbufs[index];
+        // Per-(int64 tail slot) reorder state. ProxyCtx is single-peer, so the
+        // tail-slot index alone keys the buffer; the directly indexed array
+        // replaces the prior thread-local map.
+        if (index >= S.ordered_atomic_seqbufs.size()) {
+          fprintf(stderr, "Error: ordered atomic index %zu out of range\n",
+                  index);
+          std::abort();
+        }
+        auto& sb = S.ordered_atomic_seqbufs[index];
 
         auto commit = [&](int delta) {
           addr64->fetch_add(delta, std::memory_order_release);
@@ -2404,7 +2452,7 @@ void remote_process_completions_normal_mode(
       // First node.
       // TODO(MaoZiming): pass node_idx instead.
 #ifdef USE_SUBSET_BARRIER
-      if (my_rank < MAX_NUM_GPUS) {
+      if (my_rank < num_ranks / num_nodes) {
 #else
       if (my_rank == 0) {
 #endif

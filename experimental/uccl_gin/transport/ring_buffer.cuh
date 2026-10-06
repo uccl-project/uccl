@@ -3,13 +3,15 @@
 
 #include "common.hpp"
 #include "util/gpu_rt.h"
-#include <infiniband/verbs.h>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+
+struct ibv_qp;
+struct ibv_mr;
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -28,6 +30,7 @@ enum class CmdType : uint8_t {
   ATOMIC = 2,   // 010
   QUIET = 3,    // 011
   BARRIER = 4,  // 100
+  WRITE_VALUE = 5,  // 101, inline 32-bit value carried in TransferCmd::value
   // Bits layout:
   // [7]     = low_latency_buffer_idx
   // [6]     = is_combine
@@ -131,6 +134,13 @@ __host__ __device__ inline uint32_t unpack_ll_num_tokens(uint16_t slot,
 // while preserving the alignment each mode already guarantees.
 static constexpr int kWriteAddrShiftNormal = 2;
 static constexpr int kWriteAddrShiftLowLatency = 4;
+static constexpr uint32_t kTransferCmdBytesBits = 24;
+static constexpr uint32_t kTransferCmdMaxBytes =
+    (1u << kTransferCmdBytesBits) - 1u;
+// Chunk boundaries must preserve the 4-byte-shifted local/remote offsets used
+// by normal-mode WRITE commands.
+static constexpr uint32_t kTransferCmdMaxAlignedBytes =
+    kTransferCmdMaxBytes & ~((1u << kWriteAddrShiftNormal) - 1u);
 
 __host__ __device__ inline int get_write_addr_shift(bool low_latency) {
   return low_latency ? kWriteAddrShiftLowLatency : kWriteAddrShiftNormal;
@@ -429,13 +439,16 @@ struct alignas(128) RingBuffer {
   }
 
   __host__ __device__ inline bool atomic_set_and_commit(
-      T const& item, uint64_t* out_slot = nullptr) {
+      T const& item, uint64_t* out_slot = nullptr,
+      uint64_t max_inflight = Capacity) {
+    const uint64_t inflight_limit =
+        (max_inflight == 0 || max_inflight > Capacity) ? Capacity : max_inflight;
     uint64_t slot;
     while (true) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
       uint64_t h = ld_volatile(&head);
       uint64_t t = ld_volatile(&tail);
-      if (h - t == Capacity) {
+      if (h - t >= inflight_limit) {
         __nanosleep(64);
         continue;
       }
@@ -449,7 +462,7 @@ struct alignas(128) RingBuffer {
 #else
       uint64_t h = __atomic_load_n(&head, __ATOMIC_RELAXED);
       uint64_t t = __atomic_load_n(&tail, __ATOMIC_RELAXED);
-      if (h - t == Capacity) {
+      if (h - t >= inflight_limit) {
         cpu_relax();
         continue;
       }
