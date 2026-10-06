@@ -59,8 +59,8 @@ regression check, not a rail optimization gain.
 | 1 | 64/128 | 0 | 0.564256 | 0.567296 | 0.995× | identical |
 | 1 | 64/128 | 124 | 0.559104 | 0.560160 | 0.998× | identical |
 
-The GPU programs link no NCCL runtime and initialize no communicator. Complete
-host/proxy and NCCL-EP library linkage is a separate CUDA CPU CI gate. Distributed
+The single-rank HT programs link no NCCL runtime and initialize no communicator.
+Complete host/proxy and NCCL-EP library linkage is a separate CUDA CPU CI gate. Distributed
 EFA operation and original Thor/RTX 5080 model E2E remain unqualified.
 
 All logs, command receipts, binary hashes and controller/source packet digests
@@ -106,3 +106,50 @@ contract rejection gates and NCCL-EP shared libraries with both native NCCL and
 UCCL backends (LSA1, nodes1/2) all build against NCCL 2.30.4 and pinned RDMA SDK
 `bd3282a1`. Upstream format/addressing checks passed; L4/GH200 execution jobs
 were skipped.
+
+## Full Granite model, high batch and concurrency
+
+Device source `0fc87bf756f5d01d6d4d2d5da603a9a3db2b3190`, physical GPU1 on the
+Max-Q workstation described above. Model:
+`ibm-granite/granite-3.1-1b-a400m-base`, revision
+`408b6e90baab8cf24f4aa9f8e19703ffa0a53b29`, 24 layers, 32 experts, hidden 1024,
+BF16. Runtime: PyTorch 2.13.0+cu130, Transformers 4.57.1. All eight snapshot files
+(2,671,359,655 bytes) were verified against pinned SHA256 values.
+
+All **12 fresh model processes and the scalar build exited 0**; all **36 waves**
+passed every generated token and full batch-logits hash against each process's
+untimed native reference. Each process also passed seven tensor gates. Every
+payload byte, source-overwrite check and WRITE/signal/QUIET count passed. The
+controller and every child were absent before collection.
+
+C128 asynchronous clients enter the finite queue before actual B32/B64 batches
+drain serially. Each request uses 64 prompt tokens and generates 4 tokens, with
+unmodified pretrained attention, router, experts and KV cache. Three fresh
+trials alternate scalar/warp, warp/scalar, scalar/warp. Each process runs three
+waves, excluding only its first warmup: **six measured waves per arm/case**.
+
+| B/C | Scalar median seconds/wave | Warp median seconds/wave | Speedup | Scalar output tokens/s | Warp output tokens/s | Paired trial speedup range |
+|---|---:|---:|---:|---:|---:|---|
+| 32/128 | 70.391 | 56.276 | 1.251× | 7.274 | 9.098 | 1.204–1.368× |
+| 64/128 | 84.796 | 44.236 | 1.917× | 6.038 | 11.574 | 1.913–1.955× |
+
+| Per wave (both B32/B64) | Scalar | Warp |
+|---|---:|---:|
+| WRITE commands | 786,432 | 786,432 |
+| Ordered signal commands | 24,576 | 24,576 |
+| QUIET commands | 25,165,824 | 786,432 |
+| Verified payload bytes | 843,055,104 | 843,055,104 |
+
+Both builds use the same typed put/signal prerequisite. This table compares
+scalar completion with production cooperative warp completion; it does not
+compare elected completion. Timed waves include real inference, staging,
+CPU payload verification and completion waits. The receiver is test-only and
+uses local CUDA copies; these are **single-device full-model measurements**,
+not HTTP throughput or distributed RDMA results. GPU0 ran another task and
+NUMA mempolicy calls were denied by the container. All slow rounds are retained
+in [raw timing rows](MAIN_MODEL_ROUNDS.md); absolute times varied substantially.
+Reproduction commands are in [README](README.md#full-model-comparison).
+
+Collected archive SHA256: `3acbe6461883aadc8723e1db0f638e12ef0f69f98f0269f4d4e627be6f9485b2`.
+scalar C ABI SHA256: `362c4d7a82a8c5fcf8401ff382d7b78902951c81ee7a59aedd198ae1f31a460d`.
+v2 C ABI SHA256: `7c39a177b4cadf420c4f850cc7de11c36069ec9c20ad52878799c6b86b005518`.

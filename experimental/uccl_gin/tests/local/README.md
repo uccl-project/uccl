@@ -44,6 +44,40 @@ finite queued requests; the batches execute serially on each device. This is not
 HTTP concurrency or a pretrained model forward. Both backend builds must produce
 the same complete output hash. The tensor/model C ABI fixture is optional.
 
+## Full-model comparison
+
+Use a private CUDA PyTorch environment with Transformers **4.57.1** and the
+public `ibm-granite/granite-3.1-1b-a400m-base` snapshot at
+`408b6e90baab8cf24f4aa9f8e19703ffa0a53b29`. `model_e2e.py` reads this snapshot
+offline. Native NCCL 2.30.4 device headers are required to build its C ABI.
+
+```sh
+TESTS=experimental/uccl_gin/tests/local
+make -C "$TESTS" SM=120 NCCL_INCLUDE_DIR=/path/to/nccl/include \
+  EXTRA_DEVFLAGS=-DNCCL_GIN_GDAKI_ENABLE=0 model-tests -j2
+make -C "$TESTS" SM=120 NCCL_INCLUDE_DIR=/path/to/nccl/include \
+  BUILD_DIR=build/scalar-model-sm120 \
+  EXTRA_DEVFLAGS='-DNCCL_GIN_GDAKI_ENABLE=0 -DMODEL_EXPECT_SCALAR_FLUSH=1' \
+  model-tests -j2
+python "$TESTS/model_e2e.py" --library "$TESTS/build/sm120/libmodel_transport.so" \
+  --arm v2 --weights /path/to/verified-granite --device 0 --queues 32 \
+  --batch-size 64 --concurrency 128 --prompt-tokens 64 --new-tokens 4 \
+  --rounds 3 --warmup 1
+```
+
+For scalar, select `build/scalar-model-sm120/libmodel_transport.so` and
+`--arm scalar`. Run both B32/B64 in fresh processes, alternating scalar/warp,
+warp/scalar, scalar/warp across three trials. Retain both post-warmup waves per
+process. Each process first checks seven tensor cases, runs an untimed native
+model reference and then verifies every generated token, full logits hash,
+payload byte and WRITE/signal/QUIET count. Scalar and warp use the same typed
+put/signal prerequisite.
+
+This exercises the pretrained 24-layer MoE model through a single-device test
+receiver. All C128 requests enter a finite asynchronous queue before serial
+B32/B64 model batches execute. Wave timing includes inference, staging and the
+CPU payload/source-reuse oracle; the receiver supplies local CUDA copies.
+
 See [integration results](MAIN_INTEGRATION_RESULTS.md) and
-[combined fix results](MAIN_FIX_RESULTS.md). Full distributed RDMA and model E2E
-need their own actual-hardware campaign.
+[combined fix results](MAIN_FIX_RESULTS.md). Distributed RDMA and model E2E on
+additional device types need their own actual-hardware campaigns.
