@@ -11,7 +11,7 @@ NVCC := $(CUDA_HOME)/bin/nvcc
 INCLUDES := -I$(GIN) -I$(ROOT)/include -I$(CUDA_HOME)/include $(if $(NUMA_INCLUDE_DIR),-I$(NUMA_INCLUDE_DIR))
 HOSTFLAGS := -O3 -std=c++17 -pthread -Wall $(INCLUDES)
 DEVFLAGS := -O3 -std=c++17 -arch=sm_$(SM) -ccbin=$(CXX) --expt-relaxed-constexpr $(INCLUDES) -Xcompiler=-pthread,-Wall
-LIBS := -L$(CUDA_HOME)/lib64 -Xlinker=-rpath -Xlinker=$(CUDA_HOME)/lib64 $(if $(NUMA_LIBRARY_DIR),-L$(NUMA_LIBRARY_DIR) -Xlinker=-rpath -Xlinker=$(NUMA_LIBRARY_DIR)) -lnuma -lcuda
+LIBS := -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs -Xlinker=-rpath -Xlinker=$(CUDA_HOME)/lib64 $(if $(NUMA_LIBRARY_DIR),-L$(NUMA_LIBRARY_DIR) -Xlinker=-rpath -Xlinker=$(NUMA_LIBRARY_DIR)) -lnuma -lcuda
 
 .PHONY: all clean
 all: $(BUILD_DIR)/capabilities $(BUILD_DIR)/queue_smoke
