@@ -45,6 +45,11 @@ flowchart TD
 
 ## Build
 
+EFA requires a recent RDMA SDK exposing `efadv_qp_init_attr.sl`, `.flags` and
+`EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV`; Ubuntu's older headers are insufficient.
+The build CI pins [rdma-core bd3282a1](https://github.com/linux-rdma/rdma-core/tree/bd3282a1cf1025c7869a8664c2d54266a4dded44)
+and passes its installed prefix as `EFA_HOME`.
+
 Network execution requires CUDA, libnuma, ibverbs, libnl, MPI and an appropriate
 RDMA device. EFA is the CUDA Makefile transport default. NCCL 2.30+ device headers
 are needed for the NCCL reference microbench. Select the actual GPU architecture:

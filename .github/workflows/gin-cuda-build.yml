@@ -22,16 +22,22 @@ jobs:
       - name: Install host build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake \
+          apt-get install -y --no-install-recommends build-essential cmake curl pkg-config libudev-dev \
             python3-dev python3-pip libnuma-dev libibverbs-dev ibverbs-providers \
             libnl-3-dev libnl-route-3-dev libopenmpi-dev
+          curl -fsSL https://codeload.github.com/linux-rdma/rdma-core/tar.gz/bd3282a1cf1025c7869a8664c2d54266a4dded44 | tar -xz -C /tmp
+          cmake -S /tmp/rdma-core-bd3282a1cf1025c7869a8664c2d54266a4dded44 -B /tmp/gin-rdma-build \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/gin-rdma \
+            -DCMAKE_INSTALL_LIBDIR=lib -DIN_PLACE=0 -DNO_MAN_PAGES=1 -DNO_PYVERBS=1
+          cmake --build /tmp/gin-rdma-build -j2
+          cmake --install /tmp/gin-rdma-build
           python3 -m pip install --no-cache-dir --target /tmp/gin-nccl nvidia-nccl-cu13==2.30.4
       - name: Build standalone host transport and SM120 device API
         run: |
           /usr/local/cuda/bin/nvcc --version
           make -C experimental/uccl_gin -j2 SM=120 CUDA_HOME=/usr/local/cuda \
             NCCL_INC=/tmp/gin-nccl/nvidia/nccl/include \
-            NCCL_LIB=/tmp/gin-nccl/nvidia/nccl/lib EFA_HOME=/usr \
+            NCCL_LIB=/tmp/gin-nccl/nvidia/nccl/lib EFA_HOME=/tmp/gin-rdma \
             MPI_PREFIX=/usr/lib/x86_64-linux-gnu/openmpi
           make -C experimental/uccl_gin/tests/local -j2 SM=120
           make -C experimental/uccl_gin/tests/local -j2 SM=90
@@ -46,7 +52,7 @@ jobs:
               cmake -S thirdparty/nccl-ep -B /tmp/ep-$gin_backend \
                 -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
                 -DCMAKE_CUDA_ARCHITECTURES=120 \
-                -DNCCL_DIR=/tmp/gin-nccl/nvidia/nccl \
+                -DNCCL_DIR=/tmp/gin-nccl/nvidia/nccl -DCMAKE_PREFIX_PATH=/tmp/gin-rdma \
                 -DNCCL_EP_USE_UCCL_GIN=$gin_backend \
                 -D_NCCL_EP_LSA_TEAM_SIZE_MIN=1 -D_NCCL_EP_LSA_TEAM_SIZE_MAX=1 \
                 '-D_NCCL_EP_NUM_LSA_TEAMS_LIST=1;2'

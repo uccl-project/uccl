@@ -111,6 +111,7 @@ DEVFLAGS  := -O3 -std=c++17 -arch=sm_$(SM) --expt-relaxed-constexpr $(DEFS) $(IN
              -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden"
 
 NVCC_RPATH := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
+              -Xlinker -rpath -Xlinker $(EFA_HOME)/lib \
               -Xlinker -rpath -Xlinker $(NCCL_LIB) \
               -Xlinker -rpath -Xlinker $(MPI_PREFIX)/lib
 
