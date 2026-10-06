@@ -15,6 +15,7 @@
 PLATFORM ?= cuda
 PYTHON    ?= python3
 NUM_PROXY_THS ?= 4
+MPI_C_DEFS := -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
 
 BUILD_DIR := build
 TEST_DIR  := tests
@@ -57,7 +58,7 @@ MPI_LIB    := $(shell $(MPICXX) --showme:link 2>/dev/null)
 # No EFA, no SOFTWARE_ORDERING => the plain RC ibv_post_send WRITE path.
 # -D__HIP_PLATFORM_AMD__ must be set explicitly so headers that branch on it
 # (util/gpu_rt.h) pick the HIP path even before any <hip/...> include is seen.
-DEFS := -D__HIP_PLATFORM_AMD__ -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
+DEFS := $(MPI_C_DEFS) -D__HIP_PLATFORM_AMD__ -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
         -DUCCL_GIN_WITH_NCCL_GIN=$(UCCL_GIN_WITH_NCCL_GIN)
 INCLUDES := -I. -Itransport -I../../include -I$(ROCM_HOME)/include -I$(PYTHON_INC) \
             $(MPI_INC)
@@ -101,7 +102,7 @@ NCCL_INC ?= $(shell $(PYTHON) -c "import nvidia.nccl,pathlib;print(pathlib.Path(
 NCCL_LIB ?= $(shell $(PYTHON) -c "import nvidia.nccl,pathlib;print(pathlib.Path(nvidia.nccl.__path__[0])/'lib')")
 NCCL_SO  := $(notdir $(firstword $(wildcard $(NCCL_LIB)/libnccl.so $(NCCL_LIB)/libnccl.so.*)))
 
-DEFS := -DEFA -DNCCL_CHECK_CUDACC=1 -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
+DEFS := $(MPI_C_DEFS) -DEFA -DNCCL_CHECK_CUDACC=1 -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
         -DUCCL_GIN_WITH_NCCL_GIN=$(UCCL_GIN_WITH_NCCL_GIN)
 INCLUDES := -I. -Itransport -I$(NCCL_INC) -I../../include -I$(CUDA_HOME)/include -I$(PYTHON_INC) \
             -I$(EFA_HOME)/include $(MPI_INC)
