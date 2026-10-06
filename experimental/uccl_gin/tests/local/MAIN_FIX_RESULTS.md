@@ -69,3 +69,40 @@ human-authorized task subsequently acquired GPU0/heavy IO; collection was
 read-only and is not a resource handoff. The original canonical lock inodes
 remain unchanged. Subsequent source changes restore the mainline shared typedef
 and add build-only stub search paths; they do not alter the tested device path.
+
+## Max-Q supplemental native campaign
+
+Source `0fc87bf756f5d01d6d4d2d5da603a9a3db2b3190` was tested on physical GPU1 of
+**2×RTX PRO 6000 Blackwell Max-Q Workstation Edition**, 96 GB/GPU, driver
+595.104.02 and CUDA 13.0.88. All 34 children exited 0: SM120/compile-rejection
+builds, 1024-producer queue, 24 signal cases, 14 cooperation processes, seven
+tensor cases, 42 HT rounds and nine fresh drain-comparison processes. Their
+controller and every child were absent before the logs were collected.
+
+The B2048/hidden2048/G64/Q32 experiment uses the same three-arm oracle and
+three alternating trials described above, with all nine post-warmup rounds
+per arm retained. GPU1 was leased independently while another task downloaded
+a checkpoint. The container rejected NUMA mempolicy calls; this is a shared-host
+measurement rather than an isolated-node performance qualification.
+
+| Physical GPU | Scalar ms | Elected ms | Warp ms | Speedup vs scalar | Speedup vs elected | Paired elected speedup range |
+|---|---:|---:|---:|---:|---:|---|
+| 1 (Max-Q) | 3452.305 | 2259.253 | 1964.263 | 1.758× | 1.150× | 1.025–1.491× |
+
+| B/C | Token tail | NCCL median GPU ms | UCCL median GPU ms | NCCL/UCCL | Complete hashes |
+|---|---:|---:|---:|---:|---|
+| 32/128 | 0 | 0.655936 | 0.670176 | 0.979× | identical |
+| 64/128 | 0 | 0.586784 | 0.581664 | 1.009× | identical |
+| 64/128 | 124 | 0.575424 | 0.584704 | 0.984× | identical |
+
+The HT cases still issue zero network commands. Archive SHA256:
+`e8e427b3c49128fc753ca37341701d8c39e3217090a6242d776032de71058e82`.
+
+## Complete library/build gate
+
+[CUDA CPU CI](https://github.com/0z5a/uccl/actions/runs/37477449458) passed at
+`0fc87bf7`: the full standalone executable/extension, SM120/SM90 compilation,
+contract rejection gates and NCCL-EP shared libraries with both native NCCL and
+UCCL backends (LSA1, nodes1/2) all build against NCCL 2.30.4 and pinned RDMA SDK
+`bd3282a1`. Upstream format/addressing checks passed; L4/GH200 execution jobs
+were skipped.

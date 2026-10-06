@@ -50,6 +50,36 @@ not divisible by 32. The adapter preserves acquire completion ordering. Typed
 64-bit reads/waits use system acquire ordering and rolling comparisons. CTA
 cooperation is rejected at compilation.
 
+The full-model fixture connects the same FIFO encoding and completion contract
+to both boundaries of each Granite MoE layer. Its CPU receiver copies every
+payload and verifies source lifetime before acknowledging completion. The
+model retains its pretrained router, experts, attention and KV cache.
+
+```mermaid
+flowchart TD
+  C[128 asynchronous clients] --> S[One executor: batches of 32 or 64]
+  S --> A[Attention and KV cache]
+  A --> I[GIN copy before MoE]
+  I --> M[Pretrained router and 32 experts]
+  M --> O[GIN copy after MoE]
+  O --> L[24 layers, 4 generated tokens]
+  I --> F[Production WRITE / signal / QUIET encoding]
+  O --> F
+  F --> T[Test CPU receiver on the same device]
+  T --> V[Check each byte before source overwrite]
+  V --> H[Complete signal and FIFO acknowledgement]
+  H --> I
+  H --> O
+  L --> R[Compare every token and full logits hash]
+  N[Untimed native model reference] --> R
+```
+
+All 128 clients are admitted before batches drain; model batches execute
+serially on one GPU. Measured waves include complete inference, copies, CPU
+payload verification and queue completion. The receiver supplies local CUDA
+copies instead of RDMA. The production NCCL-EP ownership diagram above and
+this test path have separate validation scopes.
+
 [Validation and speed tables](tests/local/MAIN_FIX_RESULTS.md) distinguish native
 GPU/host command fixtures, single-rank HT and full distributed/model execution.
 The CPU CI builds the complete standalone host transport, NCCL-EP libraries for
