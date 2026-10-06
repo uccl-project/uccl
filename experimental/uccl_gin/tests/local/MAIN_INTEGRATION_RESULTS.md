@@ -33,3 +33,12 @@ all logs and command receipts were collected. Changes after the tested commit
 in this branch are documentation, clang-format 14 formatting, and restoring
 the shared GPU runtime header exactly to official main. The local device/FIFO
 operations exercised here do not use its DMA-BUF function-pointer typedef.
+
+## Complete integration build
+
+CUDA CPU CI passed at `5082a28d81c2a82c6663ed2606491abfd5b2bee6`:
+[build log](https://github.com/0z5a/uccl/actions/runs/37477449523).
+The full standalone host/proxy executable and Python extension link against MPI
+C APIs, NCCL 2.30.4 and pinned RDMA SDK `bd3282a1`. Device objects compile for
+SM120 and SM90. Upstream Python/C++ format checks and RDMA addressing tests
+passed. These CI jobs execute no CUDA programs; upstream L4/GH200 jobs were skipped.
