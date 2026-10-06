@@ -90,6 +90,8 @@ def main():
     libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"] + mpi_libs
 
     common_defs = [
+        "-DOMPI_SKIP_MPICXX=1",
+        "-DMPICH_SKIP_MPICXX=1",
         f"-DUCCL_NUM_PROXY_THS={NUM_PROXY_THS}",
     ]
 
