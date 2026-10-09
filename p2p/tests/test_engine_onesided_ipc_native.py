@@ -6,7 +6,7 @@ write_ipc / read_ipc against them. The control plane uses multiprocessing.Pipe
 and buffers are allocated via ctypes, so torch is never imported.
 
 Runtime backend is auto-detected: Hygon DCU / HIP by default, Cambricon MLU /
-CNRT when neuware is present. Force it with UCCL_GPU_RT=hip|cnrt, or point at a
+CNRT when neuware is present. Force it with UCCL_GPU_RT=hip|cnrt|musa, or point at a
 specific shared library with UCCL_GPU_RT_LIB.
 
 Requirements (Hygon): build uccl.p2p with `make -f Makefile.dtk`, and
@@ -32,7 +32,9 @@ def _detect_backend():
     kind = os.environ.get("UCCL_GPU_RT", "").lower()
     lib = os.environ.get("UCCL_GPU_RT_LIB", "")
     if not kind:
-        if lib:
+        if "musart" in lib:
+            kind = "musa"
+        elif lib:
             kind = "cnrt" if "cnrt" in lib else "hip"
         elif os.path.isdir("/usr/local/neuware") and not os.path.exists(
             "/opt/dtk/lib/libamdhip64.so"
@@ -40,6 +42,10 @@ def _detect_backend():
             kind = "cnrt"
         else:
             kind = "hip"
+    if not lib and kind == "musa":
+        lib = os.path.join(
+            os.environ.get("MUSA_HOME", "/usr/local/musa"), "lib", "libmusart.so"
+        )
     if not lib:
         lib = (
             "/usr/local/neuware/lib64/libcnrt.so"
@@ -50,7 +56,7 @@ def _detect_backend():
 
 
 class Rt:
-    """Minimal GPU-runtime shim over HIP (hip*) or Cambricon CNRT (cnrt*)."""
+    """Minimal GPU-runtime shim over HIP, CNRT or MUSA."""
 
     def __init__(self):
         self.kind, path = _detect_backend()
@@ -59,6 +65,10 @@ class Rt:
             self._h2d, self._d2h = 0, 2  # cnrtMemTransDir_t
             self._malloc, self._memcpy = self.lib.cnrtMalloc, self.lib.cnrtMemcpy
             self._set = self.lib.cnrtSetDevice
+        elif self.kind == "musa":
+            self._h2d, self._d2h = 1, 2  # musaMemcpyKind
+            self._malloc, self._memcpy = self.lib.musaMalloc, self.lib.musaMemcpy
+            self._set = self.lib.musaSetDevice
         else:
             self.lib.hipInit(ctypes.c_uint(0))
             self._h2d, self._d2h = 1, 2  # hipMemcpyKind

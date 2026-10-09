@@ -1,6 +1,14 @@
 #pragma once
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#if defined(UCCL_USE_MUSA) &&                                                \
+    (defined(__HIP_PLATFORM_AMD__) || defined(__CAMBRICON_PLATFORM_MLU__) || \
+     defined(USE_CUDA) || defined(__CUDACC__))
+#error "UCCL_USE_MUSA conflicts with another GPU backend"
+#endif
+
+#if defined(UCCL_USE_MUSA)
+#include "gpu_rt_musa.h"
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
 // Cambricon MLU: map the gpu* abstraction onto CNRT (cnrt*) / CNDRV (cn*);
 // direct macros where signatures match, inline wrappers where they differ.
 #include <climits>  // CNRT headers do not pull in PATH_MAX like cuda_runtime.h
@@ -288,9 +296,12 @@ typedef int gpuMemRangeHandleType;
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
+// MUSA DMA-BUF export requires a separately validated driver contract.
+#if !defined(UCCL_USE_MUSA)
 // Function pointer type for DMA-BUF handle export (loaded via dlsym)
 typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
     void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
+#endif
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \
