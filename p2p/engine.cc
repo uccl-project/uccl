@@ -1956,11 +1956,17 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
   std::array<size_t, kNumGpuRtStreams> last_iov{};
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
     size_t sz = size_v[iov];
     auto num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
-    std::fill_n(last_iov.begin(), num_streams, iov);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
   }
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
@@ -2057,11 +2063,17 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
   std::array<size_t, kNumGpuRtStreams> last_iov{};
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
     size_t sz = size_v[iov];
     auto num_streams = std::min(
         streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
-    std::fill_n(last_iov.begin(), num_streams, iov);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
   }
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
