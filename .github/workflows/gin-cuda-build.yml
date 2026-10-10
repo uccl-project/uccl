@@ -1,7 +1,7 @@
 name: GIN CUDA build
 on:
   push:
-    branches: [gin-native-sm120-main, gin-cooperative-ht-fix-main]
+    branches: [main]
   pull_request:
     paths:
       - 'experimental/uccl_gin/**'
