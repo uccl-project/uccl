@@ -69,6 +69,11 @@ class RDMAEndpoint {
   }
 
   // ── Memory registration ────────────────────────────────────────────────────
+  // Prepare the split-compression context for a user buffer. Does not register
+  // any MR.
+  void prepare_compress_ctx(void* const data, size_t const len,
+                            CompressCtx compress_ctx);
+
   int uccl_regmr(void* const data, size_t const len, MRArray& mr_array,
                  std::vector<MrCacheHandleRef>& cache_refs,
                  CompressCtx compress_ctx = nullptr);

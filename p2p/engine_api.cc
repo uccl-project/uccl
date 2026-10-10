@@ -293,6 +293,22 @@ NB_MODULE(p2p, m) {
           "Register a data buffer", nb::arg("ptr"), nb::arg("size"),
           nb::arg("floatType") = FloatType::kUndefined)
       .def(
+          "reg_compress_only",
+          [](Endpoint& self, uint64_t ptr, size_t size, FloatType floatType) {
+            uint64_t mr_id;
+            bool success;
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              success = self.reg_compress_only(
+                  reinterpret_cast<void const*>(ptr), size, mr_id, floatType);
+            }
+            return nb::make_tuple(success, mr_id);
+          },
+          "Prepare compression context only (no user MR registered)",
+          nb::arg("ptr"), nb::arg("size"),
+          nb::arg("floatType") = FloatType::kFloat32)
+      .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
              std::vector<size_t> const& sizes) {
