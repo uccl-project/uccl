@@ -271,7 +271,10 @@ bool EpollServer::parse_messages(Connection& conn) {
           pkt.append(reinterpret_cast<char const*>(&len), sizeof(len));
           pkt.append(response);
 
-          ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
+          ssize_t s = 0;
+          if (conn.out_buf.empty()) {
+            s = try_send(conn.fd, pkt.data(), pkt.size());
+          }
           if (s < 0) {
             // fatal send error -> close connection
             UCCL_LOG(ERROR) << "Error sending response on fd=" << conn.fd;

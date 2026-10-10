@@ -1955,6 +1955,20 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
+
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
   op->raw_ptrs_v.resize(num_iovs);
@@ -1999,10 +2013,13 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
 #endif
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 
@@ -2044,6 +2061,20 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
                                                             : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
+
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
@@ -2089,10 +2120,13 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
 #endif
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 

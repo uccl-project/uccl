@@ -15,8 +15,10 @@
 #include <unistd.h>
 
 // The two socket helpers below normally come from util/common.cc, which pulls
-// in the whole verbs stack. Same behaviour, defined here to keep this test
-// standalone.
+// in the whole verbs stack. Keep this test standalone and inject short writes
+// or EAGAIN at the same send boundary.
+static std::atomic<int> next_send_limit{-1};
+
 int make_socket_non_blocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags == -1) return -1;
@@ -24,6 +26,9 @@ int make_socket_non_blocking(int fd) {
 }
 
 ssize_t try_send(int fd, char const* buf, size_t len) {
+  int limit = next_send_limit.exchange(-1);
+  if (limit >= 0) len = std::min(len, static_cast<size_t>(limit));
+  if (len == 0) return 0;
   ssize_t n = ::send(fd, buf, len, MSG_NOSIGNAL);
   if (n < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
   return n;
@@ -90,6 +95,7 @@ int main() {
                              std::string const&, int) {
       if (in == "boom") throw std::runtime_error("bad meta");
       if (in == "boom-unknown") throw 42;
+      if (in == "no-reply") return;
       if (in == "wait-for-reset") {
         // Reply only after the client has reset the connection, so the
         // response send fails.
@@ -138,6 +144,41 @@ int main() {
       ++failures;
     }
     close(d);
+
+    for (int first_send_limit : {-1, 2, 0}) {
+      int fd = connect_to(server.get_port());
+      std::string requests, expected;
+      for (std::string const payload : {"first", "no-reply", "second"}) {
+        uint32_t len = htonl(static_cast<uint32_t>(payload.size()));
+        requests.append(reinterpret_cast<char const*>(&len), sizeof(len));
+        requests.append(payload);
+        if (payload == "no-reply") continue;
+        std::string response = "pong:" + payload;
+        len = htonl(static_cast<uint32_t>(response.size()));
+        expected.append(reinterpret_cast<char const*>(&len), sizeof(len));
+        expected.append(response);
+      }
+      // Queue both replies before draining a short write or an EAGAIN result.
+      next_send_limit = first_send_limit;
+      if (send(fd, requests.data(), requests.size(), MSG_NOSIGNAL) !=
+          static_cast<ssize_t>(requests.size())) {
+        std::printf("FAIL: could not send pipelined requests\n");
+        ++failures;
+      } else {
+        std::string actual(expected.size(), '\0');
+        if (!recv_all(fd, actual.data(), actual.size()) || actual != expected) {
+          std::printf("FAIL: response order after first send limit %d\n",
+                      first_send_limit);
+          ++failures;
+        }
+        send_frame(fd, "ping");
+        if (!recv_frame(fd, &reply) || reply != "pong:ping") {
+          std::printf("FAIL: connection unusable after pipelined replies\n");
+          ++failures;
+        }
+      }
+      close(fd);
+    }
     server.stop();
   }
   if (failures == 0) std::printf("OK\n");
