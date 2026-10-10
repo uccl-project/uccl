@@ -14,8 +14,12 @@
 // GPU Platform Abstraction (from gpu.hpp)
 // ============================================================================
 
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#else
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 
 // ============================================================================
 // Device Compilation Macros (from device.hpp)
