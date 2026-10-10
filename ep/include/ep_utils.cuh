@@ -905,7 +905,7 @@ __forceinline__ __device__ int atomic_exch_cta_release(int* addr, int x) {
 template <int kNumRanks, bool kSyncOnly = false>
 __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
                                               int rank) {
-  auto thread_id = static_cast<int>(threadIdx.x);
+  auto const thread_id = static_cast<int>(threadIdx.x);
 
   // For non-sync-only cases, the memory operations by other threads in the
   // block must be visible to the `sys` scope
@@ -914,30 +914,41 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
     __syncthreads();
   }
 
-  // Add self-ranks, sub other ranks
+  EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
+  EP_DEVICE_ASSERT(kNumRanks <= WARP_SIZE);
+
+  // One tag in each cell, including our own. Nothing is ever subtracted, so a
+  // late addition for a future round can only push a cell past an older round
+  // target and can never make a cell look released early.
   if (thread_id < kNumRanks) {
     atomicAdd_system(barrier_signal_ptrs[rank] + thread_id, FINISHED_SUM_TAG);
-    atomicSub_system(barrier_signal_ptrs[thread_id] + rank, FINISHED_SUM_TAG);
   }
-  EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
 
-  // Check timeout
+  // Our own cell only ever receives other ranks tags, so after this rounds tag
+  // it holds exactly rounds_done * kNumRanks * FINISHED_SUM_TAG. Releasing once
+  // the row minimum has caught up therefore requires every rank to have arrived
+  // at this round, which keeps the barrier correct when rounds from different
+  // dispatch epochs overlap (uccl-project/uccl#986).
   auto start_time = clock64();
   while (true) {
-    auto value = thread_id < kNumRanks
-                     ? ld_volatile_global(barrier_signal_ptrs[rank] + thread_id)
-                     : 0;
-    if (__all_sync(WARP_MASK, value <= 0)) break;
+    auto const own = thread_id < kNumRanks
+                         ? ld_volatile_global(barrier_signal_ptrs[rank] + thread_id)
+                         : 0;
+    auto const row = thread_id < kNumRanks
+                         ? ld_volatile_global(barrier_signal_ptrs[rank] + thread_id)
+                         : 0x7fffffff;
+    auto const min_value = __reduce_min_sync(WARP_MASK, row);
+    if (__all_sync(WARP_MASK, min_value >= own)) break;
 
     if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
       printf(
           "DeepEP timeout check failed: rank = %d, thread = %d, value = "
           "%d)\n",
-          rank, thread_id, value);
+          rank, thread_id, own);
       trap();
     }
+    __syncwarp();
   }
-  __syncthreads();
 }
 
 __forceinline__ __device__ void get_channel_task_range(int num_tokens,

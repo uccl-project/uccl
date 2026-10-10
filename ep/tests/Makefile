@@ -19,7 +19,7 @@ COMMON_SRC := ../src/common.cpp
 COMMON_OBJ := ../src/common.o
 
 # Binaries
-CUDA_BIN := pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench
+CUDA_BIN := pcie_bench gpu_to_cpu_bench batched_gpu_to_cpu_bench barrier_concurrent
 HOST_TEST_BIN := rdma_addressing_test
 INTRANODE_TEST_BIN := intranode_combine_test
 
@@ -39,6 +39,13 @@ gpu_to_cpu_bench: gpu_to_cpu_bench.cu $(COMMON_OBJ)
 batched_gpu_to_cpu_bench: batched_gpu_to_cpu_bench.cu $(COMMON_OBJ)
 	$(NVCC) $(CUDAFLAGS) $(CXXFLAGS) batched_gpu_to_cpu_bench.cu $(COMMON_OBJ) -o $@ $(LDFLAGS)
 
+# Regression test for concurrent barrier usage (uccl-project/uccl#986).
+# Header-only: it exercises ep/include/ep_utils.cuh barrier_block directly.
+# Build for the local GPU, e.g.
+#   make barrier_concurrent CUDAFLAGS=-arch=sm_89
+barrier_concurrent: barrier_concurrent.cu ../include/ep_utils.cuh
+	$(NVCC) $(CUDAFLAGS) -I../include -std=c++17 -O2 $< -o $@
+
 $(INTRANODE_TEST_BIN): intranode_combine_test.cu ../src/intranode.cu $(wildcard ../include/*.cuh) $(wildcard ../include/*.hpp) ../../include/util/gpu_rt.h
 	$(NVCC) $(CUDAFLAGS) $(CXXFLAGS) --expt-relaxed-constexpr intranode_combine_test.cu ../src/intranode.cu -o $@ $(LDFLAGS)
 
@@ -49,6 +56,6 @@ test: $(HOST_TEST_BIN)
 	./$(HOST_TEST_BIN)
 
 clean:
-	rm -f $(CUDA_BIN) $(HOST_TEST_BIN) $(INTRANODE_TEST_BIN) $(COMMON_OBJ)
+	rm -f $(CUDA_BIN) $(HOST_TEST_BIN) $(INTRANODE_TEST_BIN) barrier_concurrent $(COMMON_OBJ)
 
 .PHONY: all clean test
