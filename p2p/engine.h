@@ -229,7 +229,7 @@ struct alignas(64) UnifiedTask {
 
 // Tracks an in-flight IPC async copy (used by Endpoint).
 struct IpcInflightOp {
-  std::vector<gpuEvent_t> events;  // flattened events (all iovs × all streams)
+  std::vector<gpuEvent_t> events;  // completion after the last copy per stream
   void* raw_ptr;                   // non-null for scalar ops
   TransferStatus* status;
   int gpu_idx;  // used for scalar ops
