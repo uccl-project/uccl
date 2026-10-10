@@ -215,27 +215,30 @@ int main() {
     def test_musa_makefile_isolated_rdma_build(self):
         makefile = ROOT / "p2p/Makefile.musa"
         self.assertTrue(makefile.is_file(), "MUSA native Makefile is missing")
-        result = subprocess.run(
-            [
-                "make",
-                "-n",
-                "-f",
-                str(makefile),
-                "all",
-                "PYTHON=true",
-                "PYTHON_CONFIG=true",
-                "NB_DIR=/fake/nanobind",
-                "MUSA_HOME=/fake/musa",
-                "NB_OBJECTS=",
-            ],
-            cwd=ROOT / "p2p",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            build_dir = Path(directory) / "isolated-build"
+            result = subprocess.run(
+                [
+                    "make",
+                    "-n",
+                    "-f",
+                    str(makefile),
+                    "all",
+                    f"BUILD_DIR={build_dir}",
+                    "PYTHON=true",
+                    "PYTHON_CONFIG=true",
+                    "NB_DIR=/fake/nanobind",
+                    "MUSA_HOME=/fake/musa",
+                    "NB_OBJECTS=",
+                ],
+                cwd=ROOT / "p2p",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-DUCCL_USE_MUSA", result.stdout)
-        self.assertIn(".build/musa/", result.stdout)
+        self.assertIn(f"{build_dir}/", result.stdout)
         self.assertIn("-lmusart", result.stdout)
         self.assertIn("-lmusa", result.stdout)
         self.assertIn("rdma/ibverbs_dl.cc", result.stdout)
