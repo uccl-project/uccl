@@ -223,6 +223,11 @@ bool RdmaContext::is_gpu_pointer(void* ptr) {
 }
 
 struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
+#if defined(UCCL_USE_MUSA)
+  UCCL_LOG(ERROR) << "MUSA DMA-BUF export is not enabled; use a validated "
+                     "peer-memory NIC instead of a DMA-BUF-only NIC";
+  return nullptr;
+#else
   // GPU page granularity for DMA-BUF export (2 MiB on modern GPUs).
   static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
 
@@ -307,6 +312,7 @@ struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
       << ", rkey=0x" << std::hex << mr->rkey << std::dec
       << ") via DMA-BUF GPUDirect RDMA";
   return mr;
+#endif
 }
 
 struct ibv_mr* RdmaContext::reg_mem(void* addr, size_t size) const {
