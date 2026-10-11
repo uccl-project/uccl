@@ -18,12 +18,47 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <Python.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 thread_local bool inside_python = false;
+
+namespace {
+
+// Keys borrow immutable handles from this call's IpcTransferInfo vector.
+struct IpcMappings {
+  explicit IpcMappings(size_t max_handles) { raw_ptrs.reserve(max_handles); }
+
+  std::string_view first_handle;
+  std::vector<void*> raw_ptrs;
+  std::unordered_map<std::string_view, void*> other_handles;
+};
+
+void* open_ipc_mapping(IpcMappings& mappings, gpuIpcMemHandle_t const& handle) {
+  std::string_view key(reinterpret_cast<char const*>(&handle), sizeof(handle));
+  if (mappings.raw_ptrs.empty()) {
+    void* raw_ptr = nullptr;
+    GPU_RT_CHECK(
+        gpuIpcOpenMemHandle(&raw_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+    mappings.first_handle = key;
+    mappings.raw_ptrs.push_back(raw_ptr);
+    return raw_ptr;
+  }
+  if (key == mappings.first_handle) return mappings.raw_ptrs.front();
+  auto [it, inserted] = mappings.other_handles.try_emplace(key, nullptr);
+  if (inserted) {
+    GPU_RT_CHECK(gpuIpcOpenMemHandle(&it->second, handle,
+                                     gpuIpcMemLazyEnablePeerAccess));
+    mappings.raw_ptrs.push_back(it->second);
+  }
+  return it->second;
+}
+
+}  // namespace
 
 std::size_t VectorUint8Hash::operator()(std::vector<uint8_t> const& vec) const {
   std::size_t hash = vec.size();
@@ -1647,14 +1682,13 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
   // Open all handles and issue all memcpys before syncing any stream.
-  std::vector<void*> raw_ptrs(num_iovs, nullptr);
+  IpcMappings mappings(num_iovs);
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
+    void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
     void* dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
+        reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
     bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     auto memcpy_kind =
@@ -1690,8 +1724,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   for (auto& stream : streams) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptrs[iov]));
+  for (void* raw_ptr : mappings.raw_ptrs) {
+    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
   }
 
   return true;
@@ -1727,14 +1761,13 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
   // Open all handles and issue all memcpys before syncing any stream.
-  std::vector<void*> raw_ptrs(num_iovs, nullptr);
+  IpcMappings mappings(num_iovs);
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "readv_ipc: data_v[" << iov << "] is null";
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
+    void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
     void* src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
+        reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
     bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
     auto memcpy_kind =
@@ -1770,8 +1803,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   for (auto& stream : streams) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptrs[iov]));
+  for (void* raw_ptr : mappings.raw_ptrs) {
+    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
   }
 
   return true;
@@ -1971,19 +2004,16 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
-  op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, target_gpu);
+  IpcMappings mappings(num_iovs);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* dst_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       dst_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                       gpuIpcMemLazyEnablePeerAccess));
-      dst_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
-          info_v[iov].offset);
+      void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+      dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
+                                        info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
@@ -2022,6 +2052,9 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       }
     }
   }
+
+  op->raw_ptrs_v = std::move(mappings.raw_ptrs);
+  op->gpu_idxs_v.assign(op->raw_ptrs_v.size(), target_gpu);
 
   auto* status = new TransferStatus();
   op->status = status;
@@ -2078,19 +2111,16 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
-  op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, target_gpu);
+  IpcMappings mappings(num_iovs);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* src_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       src_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                       gpuIpcMemLazyEnablePeerAccess));
-      src_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
-          info_v[iov].offset);
+      void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+      src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
+                                        info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
@@ -2129,6 +2159,9 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       }
     }
   }
+
+  op->raw_ptrs_v = std::move(mappings.raw_ptrs);
+  op->gpu_idxs_v.assign(op->raw_ptrs_v.size(), target_gpu);
 
   auto* status = new TransferStatus();
   op->status = status;
