@@ -16,6 +16,7 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -31,32 +32,40 @@ namespace {
 
 // Keys borrow immutable handles from this call's IpcTransferInfo vector.
 struct IpcMappings {
-  explicit IpcMappings(size_t max_handles) { raw_ptrs.reserve(max_handles); }
+  explicit IpcMappings(size_t num_iovs) : num_iovs(num_iovs) {
+    raw_ptrs.reserve(num_iovs);
+  }
 
-  std::string_view first_handle;
-  std::vector<void*> raw_ptrs;
-  std::unordered_map<std::string_view, void*> other_handles;
-};
+  void prepare(size_t iov, gpuIpcMemHandle_t const& handle) {
+    std::string_view key(reinterpret_cast<char const*>(&handle),
+                         sizeof(handle));
+    if (raw_ptrs.empty()) {
+      first_handle = key;
+      raw_ptrs.push_back(nullptr);
+      return;
+    }
+    if (key == first_handle) return;
+    if (iov_slots.empty()) iov_slots.resize(num_iovs);
+    auto [it, inserted] = other_handles.try_emplace(key, raw_ptrs.size());
+    if (inserted) raw_ptrs.push_back(nullptr);
+    iov_slots[iov] = it->second;
+  }
 
-void* open_ipc_mapping(IpcMappings& mappings, gpuIpcMemHandle_t const& handle) {
-  std::string_view key(reinterpret_cast<char const*>(&handle), sizeof(handle));
-  if (mappings.raw_ptrs.empty()) {
-    void* raw_ptr = nullptr;
-    GPU_RT_CHECK(
-        gpuIpcOpenMemHandle(&raw_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
-    mappings.first_handle = key;
-    mappings.raw_ptrs.push_back(raw_ptr);
+  void* open(size_t iov, gpuIpcMemHandle_t const& handle) {
+    auto& raw_ptr = raw_ptrs[iov_slots.empty() ? 0 : iov_slots[iov]];
+    if (raw_ptr == nullptr) {
+      GPU_RT_CHECK(
+          gpuIpcOpenMemHandle(&raw_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+    }
     return raw_ptr;
   }
-  if (key == mappings.first_handle) return mappings.raw_ptrs.front();
-  auto [it, inserted] = mappings.other_handles.try_emplace(key, nullptr);
-  if (inserted) {
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&it->second, handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    mappings.raw_ptrs.push_back(it->second);
-  }
-  return it->second;
-}
+
+  size_t num_iovs;
+  std::string_view first_handle;
+  std::vector<void*> raw_ptrs;
+  std::vector<size_t> iov_slots;
+  std::unordered_map<std::string_view, size_t> other_handles;
+};
 
 }  // namespace
 
@@ -1681,12 +1690,15 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
-  // Open all handles and issue all memcpys before syncing any stream.
+  // Finish host allocations before submitting any copies.
   IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    mappings.prepare(iov, info_v[iov].handle);
+  }
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
-    void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+    void* raw_ptr = mappings.open(iov, info_v[iov].handle);
     void* dst_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
@@ -1760,12 +1772,15 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
-  // Open all handles and issue all memcpys before syncing any stream.
+  // Finish host allocations before submitting any copies.
   IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    mappings.prepare(iov, info_v[iov].handle);
+  }
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "readv_ipc: data_v[" << iov << "] is null";
-    void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+    void* raw_ptr = mappings.open(iov, info_v[iov].handle);
     void* src_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
@@ -2002,16 +2017,26 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
     }
   }
 
-  // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
-  auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
+  // Finish host allocations before submitting any copies.
   IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    if (info_v[iov].direct_addr == 0) {
+      mappings.prepare(iov, info_v[iov].handle);
+    }
+  }
+  // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = -1;
+  op->gpu_idxs_v.assign(mappings.raw_ptrs.size(), target_gpu);
+  op->events.reserve(active_streams);
+  auto status = std::make_unique<TransferStatus>();
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* dst_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       dst_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+      void* raw_ptr = mappings.open(iov, info_v[iov].handle);
       dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
                                         info_v[iov].offset);
     }
@@ -2054,13 +2079,12 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   }
 
   op->raw_ptrs_v = std::move(mappings.raw_ptrs);
-  op->gpu_idxs_v.assign(op->raw_ptrs_v.size(), target_gpu);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
@@ -2109,16 +2133,26 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
     }
   }
 
-  // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
-  auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
+  // Finish host allocations before submitting any copies.
   IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    if (info_v[iov].direct_addr == 0) {
+      mappings.prepare(iov, info_v[iov].handle);
+    }
+  }
+  // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = -1;
+  op->gpu_idxs_v.assign(mappings.raw_ptrs.size(), target_gpu);
+  op->events.reserve(active_streams);
+  auto status = std::make_unique<TransferStatus>();
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* src_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       src_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      void* raw_ptr = open_ipc_mapping(mappings, info_v[iov].handle);
+      void* raw_ptr = mappings.open(iov, info_v[iov].handle);
       src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
                                         info_v[iov].offset);
     }
@@ -2161,13 +2195,12 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   }
 
   op->raw_ptrs_v = std::move(mappings.raw_ptrs);
-  op->gpu_idxs_v.assign(op->raw_ptrs_v.size(), target_gpu);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
