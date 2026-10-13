@@ -961,6 +961,11 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
              size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
             std::vector<char*> serialized_vec(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               serialized_vec[i] = new char[sizeof(FifoItem)];
