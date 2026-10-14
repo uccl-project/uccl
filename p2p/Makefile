@@ -182,12 +182,13 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
-	rm -f test_notify_serde test_epoll_server notif_e2e
+	rm -f test_notify_serde test_epoll_server test_gpu_topology notif_e2e
 
 # Test the module
-test: test_notify_serde test_epoll_server
+test: test_notify_serde test_epoll_server test_gpu_topology
 	./test_notify_serde
 	./test_epoll_server
+	./test_gpu_topology
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 
@@ -199,6 +200,10 @@ test_notify_serde: tests/test_notify_serde.cc util/common.h
 # Regression test for the OOB metadata server; needs no GPU or RDMA device.
 test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
+
+# Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
+test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
+	$(CXX) -std=c++17 -O2 -I../include/util -o $@ ../include/util/gpu_topology_test.cc
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).
@@ -219,6 +224,7 @@ help:
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
 	@echo "  test_notify_serde - Build and run the notification wire-format test"
+	@echo "  test_gpu_topology - Build the CPU runtime topology regression test"
 	@echo "  notif_e2e    - Build the two-process notification e2e test"
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
