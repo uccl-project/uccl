@@ -745,6 +745,44 @@ class Buffer:
         return table[dtype]
 
     @staticmethod
+    def _config_from_env(name: str) -> Optional[Config]:
+        value = os.getenv(name)
+        if not value:
+            return None
+        try:
+            parts = [int(part.strip()) for part in value.split(",")]
+        except ValueError as exc:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            ) from exc
+        if len(parts) != 5:
+            raise ValueError(
+                f"{name} must be five comma-separated integers, got {value!r}"
+            )
+        return Config(*parts)
+
+    @staticmethod
+    def _validated_env_configs() -> Tuple[Optional[Config], Optional[Config]]:
+        dispatch_config = Buffer._config_from_env("UCCL_EP_DISPATCH_CONFIG")
+        combine_config = Buffer._config_from_env("UCCL_EP_COMBINE_CONFIG")
+
+        dispatch_sms = (
+            dispatch_config.num_sms if dispatch_config is not None else Buffer.num_sms
+        )
+        combine_sms = (
+            combine_config.num_sms if combine_config is not None else Buffer.num_sms
+        )
+        if dispatch_sms != combine_sms:
+            raise ValueError(
+                "Dispatch and combine need to use the same SM count (as they share the channel count computation): "
+                f"dispatch={dispatch_sms}, combine={combine_sms}. "
+                "Set UCCL_EP_DISPATCH_CONFIG and UCCL_EP_COMBINE_CONFIG "
+                "with matching first values."
+            )
+
+        return dispatch_config, combine_config
+
+    @staticmethod
     def get_dispatch_config(num_ranks: int) -> Config:
         """
         Get a recommended dispatch config.
@@ -755,6 +793,10 @@ class Buffer:
         Returns:
             config: the recommended config.
         """
+
+        env_config, _ = Buffer._validated_env_configs()
+        if env_config is not None:
+            return env_config
 
         # TODO: automatically tune
         config_map = {
@@ -783,6 +825,10 @@ class Buffer:
         Returns:
             config: the recommended config.
         """
+
+        _, env_config = Buffer._validated_env_configs()
+        if env_config is not None:
+            return env_config
 
         # TODO: automatically tune
         config_map = {

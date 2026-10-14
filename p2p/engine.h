@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -235,7 +236,7 @@ struct alignas(64) UnifiedTask {
 
 // Tracks an in-flight IPC async copy (used by Endpoint).
 struct IpcInflightOp {
-  std::vector<gpuEvent_t> events;  // flattened events (all iovs × all streams)
+  std::vector<gpuEvent_t> events;  // completion after the last copy per stream
   void* raw_ptr;                   // non-null for scalar ops
   TransferStatus* status;
   int gpu_idx;  // used for scalar ops
@@ -450,6 +451,8 @@ class Endpoint {
   std::unordered_map<std::string, ShmRingHandle> inbox_rings_;
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
+  std::mutex ipc_streams_mu_;
+  std::vector<gpuStream_t>& get_ipc_streams(int dev);
   /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
   jring_t* recv_unified_task_ring_ = nullptr;

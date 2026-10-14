@@ -236,15 +236,12 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
             << " (bus_id: " << gpu_bus_id_ << ")" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
+  // IPC streams are created per device on first use (get_ipc_streams):
+  // creating them eagerly here initialized a ~0.5 GiB CUDA context on every
+  // visible GPU from every process (7 foreign contexts per GPU on an 8-rank
+  // node).
   ipc_streams_.resize(ngpus);
-  for (int i = 0; i < ngpus; ++i) {
-    GPU_RT_CHECK(gpuSetDevice(i));
-    ipc_streams_[i].resize(n_streams);
-    for (int j = 0; j < n_streams; ++j) {
-      GPU_RT_CHECK(
-          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
-    }
-  }
+  (void)n_streams;
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
@@ -297,6 +294,22 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
+std::vector<gpuStream_t>& Endpoint::get_ipc_streams(int dev) {
+  std::lock_guard<std::mutex> lock(ipc_streams_mu_);
+  auto& streams = ipc_streams_[dev];
+  if (streams.empty()) {
+    int cur_dev = 0;
+    GPU_RT_CHECK(gpuGetDevice(&cur_dev));
+    GPU_RT_CHECK(gpuSetDevice(dev));
+    streams.resize(std::max(1, (int)kNumGpuRtStreams));
+    for (auto& st : streams) {
+      GPU_RT_CHECK(gpuStreamCreateWithFlags(&st, gpuStreamNonBlocking));
+    }
+    GPU_RT_CHECK(gpuSetDevice(cur_dev));
+  }
+  return streams;
+}
+
 Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
@@ -310,15 +323,12 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   int cur_dev = 0;
   GPU_RT_CHECK(gpuGetDevice(&cur_dev));
 
+  // IPC streams are created per device on first use (get_ipc_streams):
+  // creating them eagerly here initialized a ~0.5 GiB CUDA context on every
+  // visible GPU from every process (7 foreign contexts per GPU on an 8-rank
+  // node).
   ipc_streams_.resize(ngpus);
-  for (int i = 0; i < ngpus; ++i) {
-    GPU_RT_CHECK(gpuSetDevice(i));
-    ipc_streams_[i].resize(n_streams);
-    for (int j = 0; j < n_streams; ++j) {
-      GPU_RT_CHECK(
-          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
-    }
-  }
+  (void)n_streams;
   GPU_RT_CHECK(gpuSetDevice(cur_dev));
 
   // Get the current GPU's BDF for metadata (needed before lazy engine init).
@@ -558,8 +568,16 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  // Wait until engine is intialized to get the correct local_gpu_idx_
+  // initialize_engine() runs from reg(), so accept may legitimately arrive
+  // first. The wait must also observe stop_accept(): an endpoint that never
+  // registers memory would otherwise spin here forever while ~Endpoint()
+  // blocks in join().
   while (!engine_initialized_) {
+    if (stop_.load(std::memory_order_acquire) ||
+        passive_accept_stop_.load(std::memory_order_acquire) ||
+        uccl_accept_stopped(ep_)) {
+      return false;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   std::future<ConnID> uccl_conn_id_future =
@@ -1577,7 +1595,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& dst_streams = ipc_streams_[ipc_dev];
+  std::vector<gpuStream_t>& dst_streams = get_ipc_streams(ipc_dev);
   int num_streams =
       std::min(dst_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1652,7 +1670,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& src_streams = ipc_streams_[ipc_dev];
+  std::vector<gpuStream_t>& src_streams = get_ipc_streams(ipc_dev);
   int num_streams =
       std::min(src_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1719,7 +1737,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   int ipc_dev_w = local_gpu_idx_;
 #endif
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
-  std::vector<gpuStream_t>& streams = ipc_streams_[ipc_dev_w];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1799,7 +1817,7 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   int ipc_dev_r = local_gpu_idx_;
 #endif
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
-  std::vector<gpuStream_t>& streams = ipc_streams_[ipc_dev_r];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1885,7 +1903,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1959,7 +1977,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -2028,7 +2046,21 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
                                                             : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
+
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
@@ -2074,10 +2106,13 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
 #endif
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 
@@ -2118,7 +2153,21 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
                                                             : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
+
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
@@ -2164,10 +2213,13 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
                                   streams[i]));
 #endif
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 

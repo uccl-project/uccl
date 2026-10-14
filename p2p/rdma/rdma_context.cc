@@ -2,6 +2,16 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/util.h"
+#include <cstdlib>
+#include <string>
+
+static int relaxed_ordering_access_flag() {
+  static int const flag = [] {
+    char const* env = std::getenv("UCCL_P2P_RDMA_RELAXED_ORDERING");
+    return (env && std::string(env) == "0") ? 0 : IBV_ACCESS_RELAXED_ORDERING;
+  }();
+  return flag;
+}
 
 RdmaContext::RdmaContext(std::shared_ptr<RdmaDevice> dev, uint64_t context_id)
     : gid_index_(-1) {
@@ -233,8 +243,8 @@ struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
     return nullptr;
   }
 
-  int access_flags =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | relaxed_ordering_access_flag();
 
   // The DMA-BUF export API requires the address to be at the start of a
   // GPU allocation and the size aligned to GPU page granularity. The caller
@@ -406,7 +416,9 @@ struct ibv_mr* RdmaContext::reg_mem_impl(void* addr, size_t size,
     return reg_mem_gpu_dmabuf(addr, size);
   }
 
-  int access_flags =
-      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
-  return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | relaxed_ordering_access_flag();
+  // Parenthesized to bypass verbs.h's macro, which reroutes non-constant
+  // (optional-flag) access to ibv_reg_mr_iova2 -- not in the dlsym wrapper set.
+  return (ibv_reg_mr)(pd_.get(), addr, size, access_flags);
 }
