@@ -12,6 +12,9 @@
 #pragma once
 #include "common.hpp"
 #include "hybridep_configs.cuh"
+#include "ht_scheduler.hpp"
+#include <vector>
+#include <mutex>
 #include <assert.h>
 #include <cooperative_groups.h>
 #include <cuda_bf16.h>
@@ -46,6 +49,53 @@
 #endif
 
 namespace hybrid_ep{
+
+// CUDA function attributes are shared by host threads on the current device.
+template<class Kernel>
+void ensure_dynamic_smem(Kernel kernel, int bytes) {
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock(mutex);
+  cudaFuncAttributes attributes;
+  CUDA_CHECK(cudaFuncGetAttributes(&attributes, kernel));
+  if (bytes > attributes.maxDynamicSharedSizeBytes)
+    CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, bytes));
+}
+
+template<class Kernel>
+nccl_ep::hybridep::KernelResources query_kernel_resources(
+    Kernel kernel, int device, int smem, int threads, int blocks) {
+  cudaDeviceProp prop;
+  cudaFuncAttributes attr;
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
+  CUDA_CHECK(cudaFuncGetAttributes(&attr, kernel));
+  int resident = 0;
+  if (size_t(smem) + attr.sharedSizeBytes <= prop.sharedMemPerBlockOptin) {
+    ensure_dynamic_smem(kernel, smem);
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&resident, kernel, threads, smem));
+  }
+  return {device, prop.multiProcessorCount, attr.numRegs, threads, blocks,
+          resident, attr.sharedSizeBytes, size_t(smem),
+          prop.sharedMemPerMultiprocessor, prop.sharedMemPerBlockOptin};
+}
+
+// S2D rows are compact per-node arrays. With LSA=1, a legal token tail can
+// make either the node base or the byte count non-16B-aligned. Bulk async
+// copies require both. The elected S2G producer copies those words directly
+// and completes the same one-arrival barrier without a transaction count.
+__device__ __forceinline__ void copy_s2d_map_to_shared(
+    void* dst, const int32_t* src, uint32_t bytes, uint64_t* barrier) {
+  if (((reinterpret_cast<uintptr_t>(src) | reinterpret_cast<uintptr_t>(dst) | bytes) & 15u) == 0) {
+    cuda::ptx::cp_async_bulk(cuda::ptx::space_shared, cuda::ptx::space_global,
+                           dst, static_cast<const void*>(src), bytes, barrier);
+    cuda::ptx::mbarrier_arrive_expect_tx(cuda::ptx::sem_release,
+        cuda::ptx::scope_cta, cuda::ptx::space_shared, barrier, bytes);
+  } else {
+    int32_t* out = static_cast<int32_t*>(dst);
+    for (uint32_t word = 0; word < bytes / sizeof(int32_t); ++word) out[word] = src[word];
+    cuda::ptx::fence_proxy_async(cuda::ptx::space_shared);
+    (void)cuda::ptx::mbarrier_arrive(barrier);
+  }
+}
 
 
 // Register head size for combine (BF16 tokens). Tail (if any) accumulates in shared memory.
@@ -831,6 +881,7 @@ struct dispatch_kernel_param_t{
   const bool* attn_to_rdma_map;
   const int32_t* sparse_to_dense_map;
   uint64_t expected_rdma_flag_value;
+  const uint64_t* expected_signal_generations;
   uint32_t expected_intra_node_flag_value;
   int local_rank;
   int node_rank;
@@ -883,6 +934,7 @@ struct combine_kernel_param_t{
   const bool* attn_to_rdma_map;
   const int32_t* sparse_to_dense_map;
   uint64_t expected_rdma_flag_value;
+  const uint64_t* expected_signal_generations;
   uint32_t expected_intra_node_flag_value;
   int local_rank;
   int node_rank;
@@ -1085,6 +1137,7 @@ __forceinline__ __device__ void G2S_warp_group_device_function(const int local_r
                                                       const int num_of_tokens_per_rank,
                                                       const int num_of_ranks_per_node,
                                                       const uint64_t expected_flag_value,
+                                                      const uint64_t* expected_signal_generations,
                                                       const int HIDDEN_DIM,
                                                       const bool* rdma_to_attn_map,
                                                       const TOKEN_DATA_TYPE* attn_input_token,
@@ -1148,7 +1201,8 @@ __forceinline__ __device__ void G2S_warp_group_device_function(const int local_r
           int comm_idx, ctx_idx;
           get_comm_ctx(signal_channel, num_ctx_per_comm, comm_idx, ctx_idx);
           NCCL_EP_NET_CREATE(comm_idx, ctx_idx, signal_channel);
-          net.waitSignal(ncclCoopThread(), tail_signal_id, expected_flag_value);
+          net.waitSignal(ncclCoopThread(), tail_signal_id,
+                         expected_signal_generations ? expected_signal_generations[i] : expected_flag_value);
         }
         const rdma_to_attn_map_load_t* rdma_to_attn_map_load_base_addr = reinterpret_cast<const rdma_to_attn_map_load_t*>(rdma_to_attn_map +
                                                                          (node_id * rdma_to_attn_map_size_per_node + i * NUM_OF_TOKENS_PER_CHUNK));
@@ -1345,17 +1399,9 @@ __forceinline__ __device__ void S2G_warp_group_device_function(const int local_r
             current_chunk_size = NUM_OF_TOKENS_PER_CHUNK;
           }
           const int32_t* s2d_base = sparse_to_dense_map + (node_rank * num_of_tokens_per_rank + i * NUM_OF_TOKENS_PER_CHUNK) * num_of_ranks_per_node;
-          cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
-                                   cuda::ptx::space_global,
-                                   reinterpret_cast<void*>(smem_buffer_ptr->get_s2d_map_buffer_base(pipeline_rank, sparse_to_dense_map_stage)),
-                                   reinterpret_cast<const void*>(s2d_base),
-                                   (uint32_t)(current_chunk_size * num_of_ranks_per_node * sizeof(int32_t)),
-                                   smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage));
-          cuda::ptx::mbarrier_arrive_expect_tx(cuda::ptx::sem_release,
-                                               cuda::ptx::scope_cta,
-                                               cuda::ptx::space_shared,
-                                               smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage),
-                                               (uint32_t)(current_chunk_size * num_of_ranks_per_node * sizeof(int32_t)));
+          copy_s2d_map_to_shared(smem_buffer_ptr->get_s2d_map_buffer_base(pipeline_rank, sparse_to_dense_map_stage), s2d_base,
+              (uint32_t)(current_chunk_size * num_of_ranks_per_node * sizeof(int32_t)),
+              smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage));
           break;
         }
       }
@@ -1408,17 +1454,9 @@ __forceinline__ __device__ void S2G_warp_group_device_function(const int local_r
               next_chunk_size = NUM_OF_TOKENS_PER_CHUNK;
             }
             const int32_t* s2d_base = sparse_to_dense_map + (next_node_id * num_of_tokens_per_rank + next_chunk_id * NUM_OF_TOKENS_PER_CHUNK) * num_of_ranks_per_node;
-            cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,
-                                     cuda::ptx::space_global,
-                                     reinterpret_cast<void*>(smem_buffer_ptr->get_s2d_map_buffer_base(pipeline_rank, sparse_to_dense_map_stage ^ 1)),
-                                     reinterpret_cast<const void*>(s2d_base),
-                                     (uint32_t)(next_chunk_size * num_of_ranks_per_node * sizeof(int32_t)),
-                                     smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage ^ 1));
-            cuda::ptx::mbarrier_arrive_expect_tx(cuda::ptx::sem_release,
-                                                 cuda::ptx::scope_cta,
-                                                 cuda::ptx::space_shared,
-                                                 smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage ^ 1),
-                                                 (uint32_t)(next_chunk_size * num_of_ranks_per_node * sizeof(int32_t)));
+            copy_s2d_map_to_shared(smem_buffer_ptr->get_s2d_map_buffer_base(pipeline_rank, sparse_to_dense_map_stage ^ 1), s2d_base,
+                (uint32_t)(next_chunk_size * num_of_ranks_per_node * sizeof(int32_t)),
+                smem_buffer_ptr->get_s2d_map_mbar(pipeline_rank, sparse_to_dense_map_stage ^ 1));
           }
         }
 
@@ -2457,6 +2495,7 @@ __forceinline__ __device__ void inter_node_G2S_warp_group_device_function(const 
                                                                  const int num_of_tokens_per_rank,
                                                                  const int num_of_ranks_per_node,
                                                                  const uint64_t expected_flag_value,
+                                                      const uint64_t* expected_signal_generations,
                                                                  const bool* rdma_to_attn_map,
                                                                  const bool* attn_to_rdma_map,
                                                                  const int32_t* sparse_to_dense_map,
@@ -2693,7 +2732,8 @@ __forceinline__ __device__ void inter_node_G2S_warp_group_device_function(const 
             unsigned signal_id = signals_base + combine_signal_offset
                 + local_rank * (NUM_LSA_TEAMS * MAX_CHUNKS_PER_RANK)
                 + node_id_for_signal * MAX_CHUNKS_PER_RANK + i;
-            net.waitSignal(ncclCoopThread(), signal_id, expected_flag_value);
+            net.waitSignal(ncclCoopThread(), signal_id,
+                           expected_signal_generations ? expected_signal_generations[i] : expected_flag_value);
           }
         }
         __syncwarp(0xffffffff);
@@ -3718,7 +3758,7 @@ __global__ void dispatch_kernel(const __grid_constant__ dispatch_kernel_param_t<
     G2S_warp_group_device_function
     <INTRA_NODE_G2S_GROUP, TOKEN_DATA_TYPE, cur_smem_t, NUM_OF_STAGES, NUM_OF_TOKENS_PER_CHUNK,
      MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS, FORWARD_DISPATCH, NUM_PIPELINES>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.hidden_dim, param.rdma_to_attn_map, param.attn_input_token,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.expected_signal_generations, param.hidden_dim, param.rdma_to_attn_map, param.attn_input_token,
     param.attn_input_prob, param.attn_input_token_scaling_factor,
     param.rdma_inter_node_group_flags, param.dcomms, param.signals_base, param.num_gin_comms, param.num_ctx_per_comm,
     param.gin_base_ptr, &param.mr_info, smem_buffer_ptr, param.experts_per_rank NCCL_EP_UCCL_ARG);
@@ -3929,7 +3969,7 @@ __global__ void combine_kernel(const __grid_constant__ combine_kernel_param_t<LS
     inter_node_G2S_warp_group_device_function
     <cur_smem_t, INTER_NODE_G2S_GROUP, NUM_OF_STAGES_G2S, NUM_OF_TOKENS_PER_CHUNK, MAX_NUM_OF_TOKENS_PER_RANK, NUM_LSA_TEAMS, NUM_OF_BLOCKS,
     NUM_OF_TOKENS_PER_GROUP, BACKWARD_COMBINE>
-    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.rdma_to_attn_map, param.attn_to_rdma_map, param.sparse_to_dense_map, param.expert_input_token, param.expert_input_prob,
+    (param.local_rank, param.node_rank, param.num_of_tokens_per_rank, param.num_of_ranks_per_node, param.expected_rdma_flag_value, param.expected_signal_generations, param.rdma_to_attn_map, param.attn_to_rdma_map, param.sparse_to_dense_map, param.expert_input_token, param.expert_input_prob,
     param.rdma_inter_node_group_token, param.rdma_inter_node_group_prob, param.dcomms, param.signals_base, param.combine_signal_offset, param.num_gin_comms, param.num_ctx_per_comm, param.rdma_inter_node_group_flags, smem_buffer_ptr, param.hidden_dim, param.experts_per_rank NCCL_EP_UCCL_ARG);
   }else if(threadIdx_x_int < INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size()){
     // Inter-node rdma warp group.
@@ -3980,12 +4020,13 @@ static __device__ __forceinline__ bool bitmap_range_has_set_bit(
 
 template<int LSA_TEAM_SIZE>
 static __device__ __forceinline__ uint8_t bitmap_row_to_rank_mask(
-    const uint8_t* bitmap_row, int num_of_ranks_per_node, int experts_per_rank) {
+    const uint8_t* bitmap_row, int num_of_ranks_per_node, int experts_per_rank,
+    int node_bit_offset = 0) {
   uint8_t rank_mask = 0;
   #pragma unroll
   for (int rank = 0; rank < LSA_TEAM_SIZE; rank++) {
     if (rank < num_of_ranks_per_node) {
-      const int bit_begin = rank * experts_per_rank;
+      const int bit_begin = node_bit_offset + rank * experts_per_rank;
       if (bitmap_range_has_set_bit(bitmap_row, bit_begin, experts_per_rank)) {
         rank_mask |= static_cast<uint8_t>(1u << rank);
       }
@@ -4037,8 +4078,9 @@ __global__ void scan(const uint8_t* input_routing_map,
   // Bitmap routing map constants: each expert is 1 bit, packed 8 per byte.
   // Any experts_per_rank is supported; last byte may have unused high bits (always 0).
   const int experts_per_node = experts_per_rank * num_of_ranks_per_node;
-  const int experts_per_node_packed = (experts_per_node + 7) / 8;  // bytes per node section (ceil)
-  const int packed_row_bytes = experts_per_node_packed * NUM_LSA_TEAMS; // full bitmap row width
+  // Expert bits are packed globally, including sub-byte node boundaries.
+  // This is the same ceil(total_experts / 8) row width used by the adapter.
+  const int packed_row_bytes = (experts_per_node * NUM_LSA_TEAMS + 7) / 8;
 
   // For each token, calculate how many bytes need to be store to sparse_to_dense_map.
   // Use maximum value for compile-time type selection
@@ -4109,10 +4151,10 @@ __global__ void scan(const uint8_t* input_routing_map,
     int current_token_rdma_to_attn_map_id = current_token_node_rank * rdma_to_attn_map_size_per_node + current_token_local_id;
     // Load bitmap for this token's local-node section.
     const uint8_t* bitmap_row = input_routing_map +
-                                current_token_id * packed_row_bytes +
-                                node_rank * experts_per_node_packed;
+                                current_token_id * packed_row_bytes;
     // Decode bitmap row once into compact per-token rank mask.
-    uint8_t rank_mask = bitmap_row_to_rank_mask<LSA_TEAM_SIZE>(bitmap_row, num_of_ranks_per_node, experts_per_rank);
+    uint8_t rank_mask = bitmap_row_to_rank_mask<LSA_TEAM_SIZE>(bitmap_row, num_of_ranks_per_node,
+        experts_per_rank, node_rank * experts_per_node);
 
     // Accumulate per-rank sums from rank_mask bits.
     #pragma unroll
@@ -4285,13 +4327,12 @@ __global__ void scan(const uint8_t* input_routing_map,
       const uint8_t* local_rank_bitmap_row = nullptr;
       if (lane_participates) {
         local_rank_bitmap_row = input_routing_map +
-                                current_token_id * packed_row_bytes +
-                                node_rank * experts_per_node_packed;
+                                current_token_id * packed_row_bytes;
         local_expert_routing_map_store_base_addr =
             local_expert_routing_map + (final_ex_scan[local_rank] * experts_per_rank);
       }
 
-      const int local_expert_bit_base = local_rank * experts_per_rank;
+      const int local_expert_bit_base = node_rank * experts_per_node + local_rank * experts_per_rank;
       for (int k = 0; k < experts_per_rank; k++) {
         int expert_bit = local_expert_bit_base + k;
         bool routed_to_expert = false;
@@ -4362,13 +4403,12 @@ __global__ void scan(const uint8_t* input_routing_map,
       // Load bitmap for this token's remote-node section (current_token_node_id, not node_rank).
       const uint8_t* bitmap_row = input_routing_map +
                                   ((node_rank * num_of_ranks_per_node + local_rank) * num_of_tokens_per_rank + current_token_local_id) *
-                                  packed_row_bytes +
-                                  current_token_node_id * experts_per_node_packed;
+                                  packed_row_bytes;
 
       bool* attn_to_rdma_map_base_addr = attn_to_rdma_map + (current_token_local_id * (NUM_LSA_TEAMS - 1) + current_token_attn_to_rdma_map_node_id);
 
       // Any bit set in this remote-node section means this token must be sent via RDMA.
-      bool token_needed_by_this_node = bitmap_range_has_set_bit(bitmap_row, 0, experts_per_node);
+      bool token_needed_by_this_node = bitmap_range_has_set_bit(bitmap_row, current_token_node_id * experts_per_node, experts_per_node);
       *attn_to_rdma_map_base_addr = token_needed_by_this_node;
     }
   }
@@ -4470,7 +4510,8 @@ public:
            int NUM_OF_BLOCKS,
            // Whether the dispatch kernel is used in forward process.
            bool FORWARD_DISPATCH>
-  static void dispatch(dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param, cudaStream_t stream)
+  static void dispatch(dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE> param, cudaStream_t stream,
+                       nccl_ep::hybridep::KernelResources* resources = nullptr)
   {
     constexpr bool multinode_layout = (NUM_LSA_TEAMS != 1);
     constexpr int NUM_PIPELINES = HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK;
@@ -4514,13 +4555,20 @@ public:
     model.num_of_ranks_per_node = param.num_of_ranks_per_node;
     model.num_of_nodes = NUM_LSA_TEAMS;
     const int SMEM_SIZE = calculate_dispatch_smem_layout_size(config, model);
-    static int configured_smem = 0;
-    if(SMEM_SIZE > configured_smem){
-      CUDA_CHECK(cudaFuncSetAttribute(dispatch_kernel_ptr, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_SIZE));
-      configured_smem = SMEM_SIZE;
+    int device;
+    CUDA_CHECK(cudaGetDevice(&device));
+    constexpr int BLOCK_DIM = INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size();
+    if (resources) {
+      *resources = query_kernel_resources(dispatch_kernel_ptr, device, SMEM_SIZE, BLOCK_DIM, NUM_OF_BLOCKS);
+      return;
+    }
+    static thread_local std::vector<int> configured_smem;
+    if (configured_smem.size() <= size_t(device)) configured_smem.resize(device + 1);
+    if(SMEM_SIZE > configured_smem[device]){
+      ensure_dynamic_smem(dispatch_kernel_ptr, SMEM_SIZE);
+      configured_smem[device] = SMEM_SIZE;
     }
 
-    constexpr int BLOCK_DIM = INTER_NODE_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTRA_NODE_S2G_GROUP::size();
 #ifdef HYBRIDEP_ENABLE_WARP_TIMING
     using warp_timing_entry_t = typename dispatch_kernel_param_t<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>::warp_timing_entry_t;
     constexpr int WT_WARPS_PER_BLOCK = BLOCK_DIM / 32;
@@ -4581,7 +4629,8 @@ public:
            int NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
            // Whether the combine kernel is used in backward process.
            bool BACKWARD_COMBINE>
-  static void combine(combine_kernel_param_t<LSA_TEAM_SIZE> param, cudaStream_t stream)
+  static void combine(combine_kernel_param_t<LSA_TEAM_SIZE> param, cudaStream_t stream,
+                      nccl_ep::hybridep::KernelResources* resources = nullptr)
   {
     // The warp groups data type for combine kernel, must match the warp groups layout required by the combine kernel.
     constexpr bool multinode_layout = (NUM_LSA_TEAMS != 1);
@@ -4623,16 +4672,23 @@ public:
                                                                   NUM_LSA_TEAMS,
                                                                   BACKWARD_COMBINE>(model);
     // Configure dynamic shared memory; reconfigure if size grows.
-    static int configured_smem = 0;
-    if(SMEM_SIZE > configured_smem){
+    int device;
+    CUDA_CHECK(cudaGetDevice(&device));
+    constexpr int BLOCK_DIM = INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size();
+    if (resources) {
+      *resources = query_kernel_resources(combine_kernel_ptr, device, SMEM_SIZE, BLOCK_DIM, NUM_OF_BLOCKS);
+      return;
+    }
+    static thread_local std::vector<int> configured_smem;
+    if (configured_smem.size() <= size_t(device)) configured_smem.resize(device + 1);
+    if(SMEM_SIZE > configured_smem[device]){
       // If the dynamic shared memory requested is too large, we may need to modify the carveout.
       //CUDA_CHECK(cudaFuncSetAttribute(combine_kernel_ptr, cudaFuncAttributePreferredSharedMemoryCarveout, 100));
-      CUDA_CHECK(cudaFuncSetAttribute(combine_kernel_ptr, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_SIZE));
-      configured_smem = SMEM_SIZE;
+      ensure_dynamic_smem(combine_kernel_ptr, SMEM_SIZE);
+      configured_smem[device] = SMEM_SIZE;
     }
 
     // Launch combine kernel (device_sync is fused into combine kernel head).
-    constexpr int BLOCK_DIM = INTRA_NODE_RED_GROUP::size() + INTER_NODE_RED_GROUP::size() + INTRA_NODE_G2S_GROUP::size() + INTER_NODE_G2S_GROUP::size() + INTER_NODE_RDMA_GROUP::size();
     combine_kernel_ptr<<<NUM_OF_BLOCKS, BLOCK_DIM, SMEM_SIZE, stream>>>(param);
 
     // Check if there is any CUDA error.

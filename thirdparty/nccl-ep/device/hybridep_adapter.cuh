@@ -104,10 +104,10 @@ void dense_to_sparse_prob(
 // ============================================================================
 // Used for combine backward pass output. Converts kernel's dense output back to
 // sparse format with GLOBAL expert indices (matching original dispatch input format).
-// Uses local_routing_map (original tokens → global experts) for the conversion.
+// Uses the original top-k indices to preserve slot order and masked entries.
 void dense_to_sparse_prob_combine(
     const float* dense_prob,              // [num_tokens, num_experts] - from kernel output
-    const uint8_t* routing_bitmap,        // [num_tokens, ceil(num_experts / 8)] - bitmap routing map
+    const int64_t* original_topk_idx,     // [num_tokens, topk] - original GLOBAL expert indices
     float* combined_topk_weights,         // [num_tokens, topk] - output sparse weights
     int64_t* combined_topk_idx,           // [num_tokens, topk] - output GLOBAL expert indices (optional, can be nullptr)
     int num_tokens,
@@ -342,6 +342,7 @@ struct DispatchParams {
 
     // Sync state (group-level monotonic counters, computed on host)
     uint64_t expected_rdma_flag_value;
+    const uint64_t* expected_signal_generations = nullptr;
     uint32_t expected_intra_node_flag_value;
     uint64_t* rdma_inter_node_group_flags;
     uint32_t* intra_node_write_completion_flags;
@@ -408,6 +409,7 @@ struct CombineParams {
 
     // Sync state (group-level monotonic counters, computed on host)
     uint64_t combine_expected_rdma_flag_value;
+    const uint64_t* expected_signal_generations = nullptr;
     uint32_t combine_expected_intra_node_flag_value;
     uint64_t* combine_rdma_inter_node_group_flags;
     uint32_t* combine_intra_node_write_completion_flags;

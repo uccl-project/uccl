@@ -1,4 +1,5 @@
 #include "proxy.hpp"
+#include "affinity.hpp"
 #include "bench_utils.hpp"
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
@@ -125,8 +126,22 @@ double Proxy::avg_wr_latency_us() const {
 
 uint64_t Proxy::completed_wr() const { return completion_count_; }
 
+static bool pin_to_taskset_if_requested() {
+  char const* mode = std::getenv("UCCL_PROXY_USE_TASKSET");
+  if (!mode || (strcmp(mode, "1") != 0 && strcmp(mode, "2") != 0)) return false;
+  bool reserve_submit_cpu = strcmp(mode, "2") == 0;
+  if (!pin_thread_to_allowed_cpu(reserve_submit_cpu)) {
+    fprintf(stderr, "Unable to pin proxy inside inherited CPU affinity\n");
+    std::abort();
+  }
+  printf("CPU_PROXY_AFFINITY taskset cpu=%d reserved_submit=%d\n",
+         sched_getcpu(), reserve_submit_cpu);
+  return true;
+}
+
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
+    if (pin_to_taskset_if_requested()) return;
     // TODO(MaoZiming): improves pinning.
     // Offset LL-mode proxies onto a separate CPU range so a high-throughput
     // Buffer and an LL-mode Buffer running in the same process don't fight
@@ -151,6 +166,7 @@ void Proxy::pin_thread_to_cpu_wrapper() {
 
 void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
+    if (pin_to_taskset_if_requested()) return;
     assert(ctx_.numa_node != -1);
     int const cpu_local_rank = cfg_.nic_local_rank;
     pin_thread_unique(ctx_.numa_node, cpu_local_rank, cfg_.thread_idx,

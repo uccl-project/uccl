@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <new>
@@ -27,6 +28,14 @@
 #ifdef NCCL_EP_USE_UCCL_GIN
 #include "adapter/uccl_gin_context.hpp"
 #endif
+
+struct ChunkSignalGenerations {
+    uint64_t* host = nullptr;
+    uint64_t* device = nullptr;
+    cudaEvent_t copied = nullptr;
+    size_t capacity = 0;
+    bool copy_pending = false;
+};
 
 // Internal definition of the opaque ncclNDTensor type
 struct ncclNDTensor {
@@ -257,6 +266,9 @@ struct ncclEpGroup {
         // Host-side expected flag counters (replaces device-side update_expected_value_kernel)
         uint64_t host_dispatch_expected_rdma = 0;
         uint32_t host_dispatch_expected_intra = 0;
+        bool use_chunk_generations = true;
+        ChunkSignalGenerations dispatch_generations;
+        ChunkSignalGenerations combine_generations;
         uint64_t host_combine_expected_rdma = 0;
         uint32_t host_combine_expected_intra = 0;
 
@@ -371,6 +383,66 @@ static void batchAllGatherIpcHandles(
     }
 }
 
+#define CHUNK_CUDA_CHECK(call) do { \
+    cudaError_t chunk_status = (call); \
+    if (chunk_status != cudaSuccess) { \
+        fprintf(stderr, "chunk generation CUDA error: %s\n", cudaGetErrorString(chunk_status)); \
+        return ncclUnhandledCudaError; \
+    } \
+} while (0)
+// Pinned staging is private to this group. Before changing a host table,
+// wait only for its previous copy event, never for the whole device. Stream
+// order protects the device table from overwriting a preceding kernel's reads.
+static ncclResult_t init_chunk_generations(ncclEpGroup_t group,
+                                           ChunkSignalGenerations& state,
+                                           cudaStream_t stream) {
+    state.capacity = (group->config.max_tokens_per_rank + HT_OF_NUM_TOKENS_PER_CHUNK - 1) /
+                     HT_OF_NUM_TOKENS_PER_CHUNK;
+    size_t bytes = state.capacity * sizeof(uint64_t);
+    CHUNK_CUDA_CHECK(group->alloc_fn(reinterpret_cast<void**>(&state.device), bytes));
+    CHUNK_CUDA_CHECK(cudaHostAlloc(reinterpret_cast<void**>(&state.host), bytes, cudaHostAllocDefault));
+    memset(state.host, 0, bytes);
+    CHUNK_CUDA_CHECK(cudaMemsetAsync(state.device, 0, bytes, stream));
+    CHUNK_CUDA_CHECK(cudaEventCreateWithFlags(&state.copied, cudaEventDisableTiming));
+    return ncclSuccess;
+}
+static ncclResult_t advance_chunk_generations(ncclEpGroup_t group,
+                                              ChunkSignalGenerations& state,
+                                              int tokens, uint64_t epoch,
+                                              const char* kind, cudaStream_t stream) {
+    if (tokens <= 0 || tokens > static_cast<int>(group->config.max_tokens_per_rank))
+        return ncclInvalidUsage;
+    size_t active = (tokens + HT_OF_NUM_TOKENS_PER_CHUNK - 1) / HT_OF_NUM_TOKENS_PER_CHUNK;
+    assert(active <= state.capacity);
+    if (state.copy_pending) CHUNK_CUDA_CHECK(cudaEventSynchronize(state.copied));
+    for (size_t i = 0; i < active; ++i) ++state.host[i];
+    CHUNK_CUDA_CHECK(cudaMemcpyAsync(state.device, state.host, state.capacity * sizeof(uint64_t),
+                                 cudaMemcpyHostToDevice, stream));
+    CHUNK_CUDA_CHECK(cudaEventRecord(state.copied, stream));
+    state.copy_pending = true;
+    const char* trace = std::getenv("NCCL_EP_TRACE_CHUNK_GENERATIONS");
+    if (trace && strcmp(trace, "1") == 0) {
+        fprintf(stdout, "EP_CHUNK_GENERATIONS rank=%d group=%p kind=%s tokens=%d epoch=%llu enabled=%d active=%zu values=",
+                group->rank, static_cast<void*>(group), kind, tokens,
+                static_cast<unsigned long long>(epoch), group->ht_buffers.use_chunk_generations, active);
+        for (size_t i = 0; i < state.capacity; ++i)
+            fprintf(stdout, "%s%llu", i ? "," : "", static_cast<unsigned long long>(state.host[i]));
+        fprintf(stdout, "\n"); fflush(stdout);
+    }
+    return ncclSuccess;
+}
+static ncclResult_t destroy_chunk_generations(ncclEpGroup_t group,
+                                              ChunkSignalGenerations& state) {
+    if (state.copy_pending) CHUNK_CUDA_CHECK(cudaEventSynchronize(state.copied));
+    if (state.copied) CHUNK_CUDA_CHECK(cudaEventDestroy(state.copied));
+    if (state.host) CHUNK_CUDA_CHECK(cudaFreeHost(state.host));
+    if (state.device) CHUNK_CUDA_CHECK(group->free_fn(state.device));
+    state = {};
+    return ncclSuccess;
+}
+
+#undef CHUNK_CUDA_CHECK
+
 // HT Intranode Initialization (adapted for public NCCL APIs)
 static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
                                     const ncclEpGroupConfig_t* in_config,
@@ -403,7 +475,10 @@ static ncclResult_t init_hybridep_intranode(ncclEpGroup_t ep_group,
         CUDA_CHECK(cudaDeviceCanAccessPeer(&can_p2p, rank_in_node, i));
         if (can_p2p) {
             cudaError_t err = cudaDeviceEnablePeerAccess(i, 0);
-            if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+            if (err == cudaErrorPeerAccessAlreadyEnabled) {
+                // Peer access persists across groups; consume the expected repeat-enable status.
+                cudaGetLastError();
+            } else if (err != cudaSuccess) {
                 fprintf(stderr, "HT: Failed to enable P2P from GPU %d to GPU %d\n", rank_in_node, i);
             }
         }
@@ -891,6 +966,8 @@ static ncclResult_t init_hybridep_internode(ncclEpGroup_t ep_group,
 
 #endif
 
+    NCCLCHECK(init_chunk_generations(ep_group, ep_group->ht_buffers.dispatch_generations, stream));
+    NCCLCHECK(init_chunk_generations(ep_group, ep_group->ht_buffers.combine_generations, stream));
     ep_group->ht_buffers.internode_initialized = true;
     return ncclSuccess;
 }
@@ -961,6 +1038,8 @@ static ncclResult_t destroy_hybridep_internode(ncclEpGroup_t ep_group){
     }
     ep_group->gin_config.num_comms = 0;
 
+    NCCLCHECK(destroy_chunk_generations(ep_group, ep_group->ht_buffers.dispatch_generations));
+    NCCLCHECK(destroy_chunk_generations(ep_group, ep_group->ht_buffers.combine_generations));
     ep_group->ht_buffers.internode_initialized = false;
     return ncclSuccess;
 }
@@ -1003,6 +1082,10 @@ ncclResult_t ncclEpCreateGroup(
                "ncclEpCreateGroup: HT requires nRanks divisible by lsa_team_size");
     }
 
+    const char* chunk_mode = std::getenv("NCCL_EP_CHUNK_GENERATIONS");
+    if (chunk_mode && strcmp(chunk_mode, "0") != 0 && strcmp(chunk_mode, "1") != 0)
+        return ncclInvalidArgument;
+
     // Allocate EP group structure
     void* raw_memory = malloc(sizeof(ncclEpGroup));
     assert(raw_memory != nullptr && "Failed to malloc for ncclEpGroup");
@@ -1012,6 +1095,7 @@ ncclResult_t ncclEpCreateGroup(
     // Store configuration
     ep_group->comm = comm;
     ep_group->config = *in_config;
+    ep_group->ht_buffers.use_chunk_generations = !chunk_mode || strcmp(chunk_mode, "1") == 0;
     // C-style cast required: cudaMalloc/cudaFree are overloaded and reinterpret_cast
     // cannot disambiguate overloaded functions.
     ep_group->alloc_fn = alloc_fn ? alloc_fn : (ncclEpAllocFn_t)cudaMalloc;
@@ -1160,6 +1244,16 @@ ncclResult_t ncclEpGroupDestroy(
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    // HT close is collective on this EP group. A locally finished rank must
+    // keep its IPC window and CPU receiver/proxy alive while peers drain their
+    // final work. This group-local rendezvous is outside invocation timing;
+    // it does not broaden quiet/flush or affect unrelated communicators.
+    if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
+        ep_group->nRanks > 1 && ep_group->ht_buffers.initialized) {
+        NCCL_CHECK_RESULT(ncclBarrier(ep_group->comm, stream, ep_group->ep_workspace));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
 
     // Clean up HT intranode resources
     if (ep_group->config.algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT &&
@@ -2069,6 +2163,13 @@ ncclResult_t ncclEpDispatch(
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.sparse_to_dense_map = handle->hybridep.sparse_to_dense_map;
         group->ht_buffers.host_dispatch_expected_rdma += 1;
+        params.expected_signal_generations = nullptr;
+        if (!is_single_node) {
+            NCCLCHECK(advance_chunk_generations(group, group->ht_buffers.dispatch_generations,
+                         handle->num_tokens, group->ht_buffers.host_dispatch_expected_rdma, "dispatch", stream));
+            if (group->ht_buffers.use_chunk_generations)
+                params.expected_signal_generations = group->ht_buffers.dispatch_generations.device;
+        }
         group->ht_buffers.host_dispatch_expected_intra += group->lsa_rank_count;
         params.expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_dispatch_expected_rdma;
         params.rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.rdma_inter_node_group_flags;
@@ -2363,6 +2464,10 @@ ncclResult_t ncclEpCombine(
         bool backward_combine = (topk_weights != nullptr);
 
         if (backward_combine) {
+            if (topk_weights->ndim != 2 || topk_weights->datatype != ncclFloat32 ||
+                topk_weights->sizes[0] != x->sizes[0] ||
+                topk_weights->sizes[1] != handle->num_topk || !tensor_is_contiguous(topk_weights))
+                return ncclInvalidArgument;
             num_topk = static_cast<int>(topk_weights->sizes[1]);
 
             assert(combined_topk_weights != nullptr);
@@ -2449,6 +2554,13 @@ ncclResult_t ncclEpCombine(
         params.attn_to_rdma_map = handle->hybridep.attn_to_rdma_map;
         params.local_expert_routing_map = handle->hybridep.local_expert_routing_map;
         group->ht_buffers.host_combine_expected_rdma += 1;
+        params.expected_signal_generations = nullptr;
+        if (!is_single_node) {
+            NCCLCHECK(advance_chunk_generations(group, group->ht_buffers.combine_generations,
+                         handle->num_tokens, group->ht_buffers.host_combine_expected_rdma, "combine", stream));
+            if (group->ht_buffers.use_chunk_generations)
+                params.expected_signal_generations = group->ht_buffers.combine_generations.device;
+        }
         group->ht_buffers.host_combine_expected_intra += group->lsa_rank_count;
         params.combine_expected_rdma_flag_value = is_single_node ? 0 : group->ht_buffers.host_combine_expected_rdma;
         params.combine_rdma_inter_node_group_flags = is_single_node ? nullptr : group->ht_buffers.combine_rdma_inter_node_group_flags;
@@ -2492,7 +2604,7 @@ ncclResult_t ncclEpCombine(
         if (backward_combine && combined_topk_weights != nullptr) {
             nccl_ep::hybridep::dense_to_sparse_prob_combine(
                 dense_output_prob,
-                handle->hybridep.global_routing_map + (num_combined_tokens * ((group->config.num_experts + 7) / 8))*group->rank,
+                static_cast<const int64_t*>(handle->topk_idx->data),
                 static_cast<float*>(combined_topk_weights->data),
                 nullptr,  // No need to output topk_idx for combine
                 num_combined_tokens,

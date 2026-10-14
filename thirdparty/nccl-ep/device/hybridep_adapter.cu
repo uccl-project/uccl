@@ -18,6 +18,33 @@
 namespace nccl_ep {
 namespace hybridep {
 
+static thread_local LaunchPolicy launch_policy;
+
+bool set_launch_policy(LaunchPolicy policy) {
+    if (!(policy.stages == 0 || policy.stages == 4 || policy.stages == 8 || policy.stages == 12) ||
+        !(policy.blocks == 4 || policy.blocks == 8 || policy.blocks == 16)) return false;
+    launch_policy = policy;
+    return true;
+}
+
+template<int Stages, class Function>
+void select_blocks(Function const& function) {
+    switch (launch_policy.blocks) {
+        case 4: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 4>{}); break;
+        case 8: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 8>{}); break;
+        case 16: function(std::integral_constant<int, Stages>{}, std::integral_constant<int, 16>{}); break;
+    }
+}
+
+template<class Function>
+void select_candidate(int stages, Function const& function) {
+    switch (stages) {
+        case 4: select_blocks<4>(function); break;
+        case 8: select_blocks<8>(function); break;
+        case 12: select_blocks<12>(function); break;
+    }
+}
+
 // ============================================================================
 // Kernel: Convert sparse topk_idx to dense routing map
 // ============================================================================
@@ -219,7 +246,7 @@ __global__ void dense_to_sparse_prob_kernel(
 // Each thread handles one token.
 __global__ void dense_to_sparse_prob_combine_kernel(
     const float* __restrict__ dense_prob,         // [num_tokens, num_experts]
-    const uint8_t* __restrict__ routing_bitmap,   // [num_tokens, ceil(num_experts / 8)]
+    const int64_t* __restrict__ original_topk_idx, // [num_tokens, topk]
     float* __restrict__ combined_topk_weights,    // [num_tokens, topk]
     int64_t* __restrict__ combined_topk_idx,      // [num_tokens, topk] (optional, can be nullptr)
     int num_tokens,
@@ -229,29 +256,13 @@ __global__ void dense_to_sparse_prob_combine_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    int packed_cols = (num_experts + 7) / 8;
-    int k_out = 0;
-
-    // Scan all experts in order (matches original dispatch input order)
-    for (int e = 0; e < num_experts && k_out < topk; e++) {
-        if ((routing_bitmap[token * packed_cols + e / 8] >> (e % 8)) & 1) {
-            // This expert is active for this token
-            float weight = dense_prob[token * num_experts + e];
-
-            combined_topk_weights[token * topk + k_out] = weight;
-            if (combined_topk_idx != nullptr) {
-                combined_topk_idx[token * topk + k_out] = static_cast<int64_t>(e);  // GLOBAL expert ID
-            }
-            k_out++;
-        }
-    }
-
-    // Zero-fill remaining topk slots
-    for (; k_out < topk; k_out++) {
-        combined_topk_weights[token * topk + k_out] = 0.0f;
-        if (combined_topk_idx != nullptr) {
-            combined_topk_idx[token * topk + k_out] = -1;
-        }
+    // Restore each original slot, including masked entries, without sorting.
+    for (int k = 0; k < topk; ++k) {
+        int slot = token * topk + k;
+        int64_t expert = original_topk_idx[slot];
+        bool valid = expert >= 0 && expert < num_experts;
+        combined_topk_weights[slot] = valid ? dense_prob[token * num_experts + expert] : 0.0f;
+        if (combined_topk_idx != nullptr) combined_topk_idx[slot] = valid ? expert : -1;
     }
 }
 
@@ -260,7 +271,7 @@ __global__ void dense_to_sparse_prob_combine_kernel(
 // ============================================================================
 void dense_to_sparse_prob_combine(
     const float* dense_prob,
-    const uint8_t* routing_bitmap,
+    const int64_t* original_topk_idx,
     float* combined_topk_weights,
     int64_t* combined_topk_idx,
     int num_tokens,
@@ -272,7 +283,7 @@ void dense_to_sparse_prob_combine(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     dense_to_sparse_prob_combine_kernel<<<grid_size, block_size, 0, stream>>>(
-        dense_prob, routing_bitmap, combined_topk_weights, combined_topk_idx,
+        dense_prob, original_topk_idx, combined_topk_weights, combined_topk_idx,
         num_tokens, topk, num_experts);
 }
 
@@ -396,6 +407,7 @@ build_dispatch_param(const DispatchParams& params) {
     kp.attn_to_rdma_map = params.attn_to_rdma_map;
     kp.sparse_to_dense_map = params.sparse_to_dense_map;
     kp.expected_rdma_flag_value = params.expected_rdma_flag_value;
+    kp.expected_signal_generations = params.expected_signal_generations;
     kp.expected_intra_node_flag_value = params.expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.intra_node_write_completion_flags;
@@ -441,7 +453,8 @@ void dispatch_impl(
     int max_tokens_per_rank,
     int num_nodes,
     bool use_fp8,
-    cudaStream_t stream
+    cudaStream_t stream,
+    KernelResources* resources = nullptr
 ) {
     HYBRIDEP_SWITCH_DATATYPE(use_fp8, {
         HYBRIDEP_SWITCH_NUM_LSA_TEAMS(num_nodes, {
@@ -459,13 +472,14 @@ void dispatch_impl(
 
                 auto kp = build_dispatch_param<TOKEN_DATA_TYPE, LSA_TEAM_SIZE>(params);
 
-                HybridEPType::template dispatch<
-                    TOKEN_DATA_TYPE,
-                    HYBRIDEP_DISPATCH_NUM_OF_STAGES,
-                    HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_DISPATCH_NUM_OF_BLOCKS,
-                    FORWARD_DISPATCH>(kp, stream);
+                int stages = launch_policy.stages ? launch_policy.stages : HYBRIDEP_DISPATCH_NUM_OF_STAGES;
+                select_candidate(stages, [&](auto stage, auto blocks) {
+                    constexpr int count = decltype(stage)::value;
+                    HybridEPType::template dispatch<
+                        TOKEN_DATA_TYPE, count, count < 12 ? count / 2 - 1 : 4,
+                        HT_OF_NUM_TOKENS_PER_CHUNK, decltype(blocks)::value,
+                        FORWARD_DISPATCH>(kp, stream, resources);
+                });
             });
         });
     });
@@ -532,6 +546,7 @@ build_combine_param(const CombineParams& params) {
 
     // Sync flags
     kp.expected_rdma_flag_value = params.combine_expected_rdma_flag_value;
+    kp.expected_signal_generations = params.expected_signal_generations;
     kp.expected_intra_node_flag_value = params.combine_expected_intra_node_flag_value;
     kp.rdma_inter_node_group_flags = params.combine_rdma_inter_node_group_flags;
     kp.intra_node_write_completion_flags = params.combine_intra_node_write_completion_flags;
@@ -569,7 +584,8 @@ void combine_impl(
     const CombineParams& params,
     int max_tokens_per_rank,
     int num_nodes,
-    cudaStream_t stream
+    cudaStream_t stream,
+    KernelResources* resources = nullptr
 ) {
     // HT combine doesn't support FP8, only BF16
     using TOKEN_DATA_TYPE = uint16_t;
@@ -596,14 +612,14 @@ void combine_impl(
                     ? HYBRIDEP_COMBINE_SINGLENODE_NUM_OF_STAGES_S2G
                     : HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G;
 
-                HybridEPType::template combine<
-                    num_stages_g2s,
-                    num_stages_s2g,
-                    HT_OF_NUM_TOKENS_PER_CHUNK,
-                    HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
-                    HYBRIDEP_COMBINE_NUM_OF_BLOCKS,
-                    HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
-                    BACKWARD_COMBINE>(kp, stream);
+                int stages = launch_policy.stages ? launch_policy.stages : num_stages_g2s;
+                select_candidate(stages, [&](auto stage, auto blocks) {
+                    HybridEPType::template combine<
+                        decltype(stage)::value, num_stages_s2g,
+                        HT_OF_NUM_TOKENS_PER_CHUNK, HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP,
+                        decltype(blocks)::value, HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G,
+                        BACKWARD_COMBINE>(kp, stream, resources);
+                });
             });
         });
 }
@@ -624,6 +640,30 @@ void call_combine(
             params, max_tokens_per_rank,
             num_nodes, stream);
     }
+}
+
+void query_schedule_resources(int hidden, int experts_per_rank, int local_ranks,
+                              int nodes, ScheduleResources& resources, bool backward_combine) {
+    void* dispatch_pointers[32]{};
+    uint16_t* combine_pointers[32]{};
+    DispatchParams dispatch{};
+    dispatch.hidden_dim = hidden;
+    dispatch.experts_per_rank = experts_per_rank;
+    dispatch.num_ranks_per_node = local_ranks;
+    dispatch.expert_output_token_ptrs = dispatch_pointers;
+    dispatch_impl<true>(dispatch, MAX_SUPPORTED_TOKENS_PER_RANK, nodes, false,
+                        nullptr, &resources.dispatch);
+    CombineParams combine{};
+    combine.hidden_dim = hidden;
+    combine.experts_per_rank = experts_per_rank;
+    combine.num_ranks_per_node = local_ranks;
+    combine.expert_input_token_ptrs = combine_pointers;
+    if (backward_combine)
+        combine_impl<true>(combine, MAX_SUPPORTED_TOKENS_PER_RANK, nodes,
+                           nullptr, &resources.combine);
+    else
+        combine_impl<false>(combine, MAX_SUPPORTED_TOKENS_PER_RANK, nodes,
+                            nullptr, &resources.combine);
 }
 
 } // namespace hybridep
