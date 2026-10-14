@@ -11,6 +11,10 @@ It is applied to official UCCL main, preserving the mainline CUDA-device/NIC
 selection and the shared CUDA, ROCm, Hygon and Cambricon runtime mappings.
 The optional NCCL-EP adapter and cooperative/signal fixes are a separate change.
 
+For the SM100-family expert kernels, complete Qwen model reproduction and
+measured HT scheduling results, see [the MoE implementation](moe/README.md) and
+[qualification results](moe/SM100_RESULTS.md).
+
 ```mermaid
 flowchart LR
   K[GPU kernel] --> A[UCCLGin device API]
