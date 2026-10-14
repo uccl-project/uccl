@@ -646,8 +646,8 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
   return true;
 }
 
-bool Endpoint::reg_compress_only(void const* data, size_t size,
-                                 uint64_t& mr_id, FloatType float_type) {
+bool Endpoint::reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
+                                 FloatType float_type) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {

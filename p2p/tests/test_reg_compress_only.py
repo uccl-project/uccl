@@ -40,7 +40,9 @@ _BFLOAT16_ITEM_SIZE = torch.tensor(0, dtype=torch.bfloat16).element_size()
 
 def make_fill_tensor(n_bytes: int, value: float) -> torch.Tensor:
     n_elems = max(1, (n_bytes + _BFLOAT16_ITEM_SIZE - 1) // _BFLOAT16_ITEM_SIZE)
-    return torch.full((n_elems,), value, dtype=torch.bfloat16, device="cuda").contiguous()
+    return torch.full(
+        (n_elems,), value, dtype=torch.bfloat16, device="cuda"
+    ).contiguous()
 
 
 def gloo_send(value: int, dst: int) -> None:
@@ -158,7 +160,9 @@ def main():
         print(f"[Receiver] accepted from {r_ip}")
 
         dst = make_fill_tensor(MIN_COMPRESS, 0.0)
-        ok, mr_id = ep.reg(dst.data_ptr(), dst.nbytes, floatType=p2p.FloatType.kBFloat16)
+        ok, mr_id = ep.reg(
+            dst.data_ptr(), dst.nbytes, floatType=p2p.FloatType.kBFloat16
+        )
         assert ok
 
         ok, fifo_blob = ep.advertise(mr_id, dst.data_ptr(), dst.nbytes)
@@ -182,7 +186,9 @@ def main():
             dist.destroy_process_group()
             sys.exit(1)
 
-        print(f"[Receiver] positive case OK -- {dst.nbytes // 1024 // 1024} MB all == 1.0")
+        print(
+            f"[Receiver] positive case OK -- {dst.nbytes // 1024 // 1024} MB all == 1.0"
+        )
         gloo_send(0, dst=0)
 
         # Nothing else to check: the negative case is rejected client-side on
