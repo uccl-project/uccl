@@ -6,7 +6,7 @@ the mscclpp FIFO layer that is full of raw cuda* calls — compiles on AMD witho
 hand-written hipify step.
 
 Scope on ROCm (RoCE, non-EFA): only put + quiet are functional; the inter-node
-atomic primitives are EFA-shaped and not supported yet. See AMD_SUPPORT_PLAN.md.
+atomic primitives are EFA-shaped and not supported yet. See DESIGN.md.
 
 Usage:
     # NVIDIA: prefer the Makefile (also builds the standalone microbench exe).

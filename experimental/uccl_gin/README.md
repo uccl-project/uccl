@@ -62,7 +62,7 @@ make -C experimental/uccl_gin CUDA_HOME=/usr/local/cuda SM=120 \
 
 `PLATFORM=rocm GFX=gfx942` selects the HIP/RoCE build. Only put/quiet are supported
 on that path; the CUDA EFA ordered-atomic protocol is not a RoCE atomic backend.
-See [AMD support notes](AMD_SUPPORT_PLAN.md) for the reused implementation's scope.
+See [the platform and topology limits](DESIGN.md#platform-and-topology-limits).
 
 For GPU/host command validation without an RDMA NIC, MPI or NCCL runtime:
 
@@ -79,4 +79,4 @@ scalar QUIET per round. Its consumer supplies completions. These checks do not
 qualify network receiver visibility or model E2E.
 
 See [local test instructions](tests/local/README.md),
-[architecture](ARCHITECTURE.md) and [source guide](CODE_GUIDE.md).
+[ownership, completion and platform limits](DESIGN.md).

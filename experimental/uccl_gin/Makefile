@@ -10,7 +10,7 @@
 #   PLATFORM=rocm           -> AMD/ROCm + RoCE, hipcc, NCCL-GIN reference off.
 # On ROCm the inter-node atomic primitives (red_add_rel/put_tail_add/put_value)
 # are NOT supported yet (EFA-shaped software-seq atomics); only put + quiet work.
-# See AMD_SUPPORT_PLAN.md.
+# See DESIGN.md.
 
 PLATFORM ?= cuda
 PYTHON    ?= python3
