@@ -9,6 +9,18 @@ on:
       - main
 
 jobs:
+  runtime-gpu-topology-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Test runtime GPU ordinals without GPU hardware
+      run: |
+        g++ -std=c++17 -O2 include/util/gpu_topology_test.cc -o "$RUNNER_TEMP/uccl-gpu-topology-test"
+        "$RUNNER_TEMP/uccl-gpu-topology-test"
+
   rdma-addressing-test:
     runs-on: ubuntu-latest
 
