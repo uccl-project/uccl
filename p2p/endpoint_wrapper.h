@@ -475,6 +475,7 @@ inline int uccl_send_notification(GenericEndpoint const& ep, uint64_t peer_id,
                                   NotifyMsg const& notification) {
   return std::visit(
       [&](auto const& s) -> int {
+        if (!s) return -1;
         using T = std::decay_t<decltype(*s)>;
         if constexpr (std::is_same_v<T, NCCLEndpoint> ||
                       std::is_same_v<T, CxiEndpoint>) {
