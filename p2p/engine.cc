@@ -252,10 +252,8 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 #if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
   } else {
 #endif
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
@@ -271,10 +269,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-  if (!is_nccl_transport() && !is_cxi_transport()) {
-    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-  }
+  numa_node_ = uccl_get_numa_node(ep_, local_gpu_idx_);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -2388,19 +2383,7 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (peer_id == UINT64_MAX) {
     return -1;
   }
-#if !defined(UCCL_USE_MUSA)
-  if (is_nccl_transport()) {
-    auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
-    if (!nccl_ep || !*nccl_ep) return -1;
-    return (*nccl_ep)->send_notification(peer_id, notification);
-  }
-  if (is_cxi_transport()) {
-    auto* cxi_ep = std::get_if<std::shared_ptr<CxiEndpoint>>(&ep_);
-    if (!cxi_ep || !*cxi_ep) return -1;
-    return (*cxi_ep)->send_notification(peer_id, notification);
-  }
-#endif
-  return -1;
+  return uccl_send_notification(ep_, peer_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2435,18 +2418,7 @@ void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-#if !defined(UCCL_USE_MUSA)
-  if (is_nccl_transport()) {
-    numa_node_ = get_numa_node_from_iface();
-  } else if (is_cxi_transport()) {
-    numa_node_ = get_numa_node_from_iface();
-  } else {
-#endif
-    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-#if !defined(UCCL_USE_MUSA)
-  }
-#endif
+  numa_node_ = uccl_get_numa_node(ep_, local_gpu_idx_);
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
