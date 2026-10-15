@@ -55,7 +55,10 @@ def fp8_roundtrip(x, round_scale=False):
         scale_inv = torch.exp2(torch.ceil(torch.log2(amax * (1.0 / 448.0))))
         scale = 1.0 / scale_inv
     else:
-        scale, scale_inv = 448.0 / amax, amax * (1.0 / 448.0)
+        # One rounded division, as the kernel does: `448.0 / amax` would be
+        # reciprocal(amax) * 448 in torch, a scale that can differ by one ulp
+        # and round BF16 inputs that sit exactly on an FP8 tie the other way.
+        scale, scale_inv = torch.full_like(amax, 448.0) / amax, amax * (1.0 / 448.0)
     q = (xf * scale).to(torch.float8_e4m3fn)
     return (q.float() * scale_inv).view_as(x).to(torch.bfloat16)
 
