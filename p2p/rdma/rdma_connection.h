@@ -287,7 +287,6 @@ class RecvConnection : public RDMAConnection {
 
   void handle_compressed_write_arrival(WriteReqMeta const& m);
 
-  // Context for the async-decompress callback path (currently unused).
   struct AsyncAckCtx {
     int64_t wr_id;
     uint32_t ack_slot;
