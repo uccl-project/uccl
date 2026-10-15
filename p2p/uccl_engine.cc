@@ -287,26 +287,19 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   entry.size = size;
 
   // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
-  // can look it up without a per-transfer gpuIpcGetMemHandle call.
+  // can look it up without a per-transfer IPC export.
   int dev_idx = uccl::get_dev_idx((void*)data);
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
-#if defined(UCCL_USE_MUSA)
-    gpuError_t err =
-        gpuExportIpcRange(&entry.ipc_info.handle, &entry.ipc_info.offset,
-                          reinterpret_cast<void*>(data), size);
-#else
-    static constexpr size_t kIpcAlignment = 1ul << 20;
-    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
-    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
-                                        reinterpret_cast<void*>(aligned));
-#endif
+    GpuIpcExport exported;
+    gpuError_t err = engine->endpoint->export_ipc_range(
+        reinterpret_cast<void*>(data), size, &exported);
     if (err == gpuSuccess) {
-#if !defined(UCCL_USE_MUSA)
-      entry.ipc_info.offset = data - aligned;
-#endif
+      entry.ipc_info.handle = exported.handle;
+      entry.ipc_info.offset = exported.offset;
       entry.ipc_info.size = size;
-      entry.ipc_info.gpu_idx = dev_idx;
+      entry.ipc_info.gpu_idx =
+          exported.owner_device >= 0 ? exported.owner_device : dev_idx;
       entry.has_ipc = true;
     }
   }

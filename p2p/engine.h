@@ -248,7 +248,6 @@ struct IpcInflightOp {
 
 class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
-  static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   static constexpr int kMaxInflightOps =
       256;  // Max 256 concurrent Ops across all channels
@@ -416,6 +415,8 @@ class Endpoint {
 
   GenericEndpoint get_endpoint() const;
 
+  gpuError_t export_ipc_range(void* ptr, size_t size, GpuIpcExport* result);
+
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
   std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
@@ -444,6 +445,7 @@ class Endpoint {
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
   std::mutex ipc_streams_mu_;
+  GpuIpcExportContext ipc_export_context_;
   std::vector<gpuStream_t>& get_ipc_streams(int dev);
   /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;

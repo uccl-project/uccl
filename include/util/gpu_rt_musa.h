@@ -6,6 +6,7 @@
 
 #define gpuSuccess musaSuccess
 #define gpuError_t musaError_t
+#define gpuErrorInvalidValue musaErrorInvalidValue
 #define gpuGetErrorString musaGetErrorString
 #define gpuGetLastError musaGetLastError
 #define gpuErrorNotReady musaErrorNotReady
@@ -83,26 +84,5 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
   if (result != MUSA_SUCCESS) return musaErrorInvalidValue;
   *base_ptr = reinterpret_cast<void*>(base);
   *size = bytes;
-  return gpuSuccess;
-}
-
-// IPC exports allocations, not arbitrary aligned addresses or tensor views.
-inline gpuError_t gpuExportIpcRange(gpuIpcMemHandle_t* handle,
-                                    uintptr_t* offset, void* ptr, size_t size) {
-  if (!handle || !offset || !ptr) return musaErrorInvalidValue;
-  void* base = nullptr;
-  size_t allocation_size = 0;
-  auto err = gpuMemGetAddressRange(&base, &allocation_size, ptr);
-  if (err != gpuSuccess) return err;
-  auto address = reinterpret_cast<uintptr_t>(ptr);
-  auto allocation = reinterpret_cast<uintptr_t>(base);
-  if (address < allocation || size > allocation_size ||
-      address - allocation > allocation_size - size)
-    return musaErrorInvalidValue;
-  gpuIpcMemHandle_t exported{};
-  err = gpuIpcGetMemHandle(&exported, base);
-  if (err != gpuSuccess) return err;
-  *handle = exported;
-  *offset = address - allocation;
   return gpuSuccess;
 }
