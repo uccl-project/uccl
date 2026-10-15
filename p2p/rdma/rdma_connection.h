@@ -111,6 +111,12 @@ class SendConnection : public RDMAConnection {
   static constexpr int kPostError = -3;
   int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
 
+  // True iff a write of msg_size bytes with this ctx would take the
+  // split-first compression path in post_write_or_read().
+  bool will_compress_write(SendType send_type, size_t msg_size,
+                           CompressCtx const& compress_ctx) const;
+  bool will_compress_write(std::shared_ptr<RDMASendRequest> const& req) const;
+
   // max_iov_bytes: largest iov in the batch. Small write batches below
   // kMinCompressBytes can stay on the raw path even when compression is
   // enabled.
