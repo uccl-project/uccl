@@ -1553,8 +1553,10 @@ static void post_rdma_async_batched_normal_mode(
       std::abort();
       continue;
     } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
+                   (S.num_local_ranks > 0 ? S.num_local_ranks : MAX_NUM_GPUS) !=
                0) {
+      // Normal mode only crosses nodes to the same local GPU index; ranks per
+      // node is the node's local rank count (not always MAX_NUM_GPUS).
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to a different rank\n");
       std::abort();

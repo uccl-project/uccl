@@ -444,7 +444,11 @@ class Buffer {
       }
     }
 
-    int64_t const barrier_signal_bytes = max_nvl_peers * sizeof(int);
+    // The pointer arrays behind the barrier signals hold 8-byte pointers;
+    // pad the signals so they stay aligned for an odd number of NVL peers
+    // (one GPU per node would otherwise put them at a 4-byte offset).
+    int64_t const barrier_signal_bytes =
+        (max_nvl_peers * sizeof(int) + 15) / 16 * 16;
     int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
     int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
 
