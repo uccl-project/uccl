@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "compression.h"
 #include "endpoint_wrapper.h"
+#include "transport_factory.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/pause.h"
@@ -249,17 +250,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-#if !defined(UCCL_USE_MUSA)
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
-  } else {
-#endif
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
-#if !defined(UCCL_USE_MUSA)
-  }
-#endif
+  ep_ = uccl_create_endpoint(local_gpu_idx_);
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -341,17 +332,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-#if !defined(UCCL_USE_MUSA)
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
-  } else {
-#endif
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
-#if !defined(UCCL_USE_MUSA)
-  }
-#endif
+  ep_ = uccl_create_endpoint(INVALID_GPU);
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }

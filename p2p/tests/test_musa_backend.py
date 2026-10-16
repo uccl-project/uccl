@@ -208,6 +208,25 @@ int main() {
         initialization = engine[engine.index("void Endpoint::initialize_engine") :]
         self.assertNotIn("get_numa_node_from_iface", initialization)
 
+    def test_shared_endpoint_factory_owns_constructor_selection(self):
+        factory = ROOT / "p2p/transport_factory.h"
+        self.assertTrue(factory.is_file(), "shared endpoint factory is missing")
+        source = factory.read_text()
+        self.assertIn("uccl_create_endpoint", source)
+        self.assertIn("GenericEndpoint", source)
+
+        engine = (ROOT / "p2p/engine.cc").read_text()
+        first = engine[engine.index("Endpoint::Endpoint(uint32_t") :]
+        first = first[: first.index("Endpoint::Endpoint()")]
+        second = engine[engine.index("Endpoint::Endpoint()") :]
+        second = second[: second.index("Endpoint::~Endpoint")]
+        self.assertNotIn("make_shared<NCCLEndpoint>", first)
+        self.assertNotIn("make_shared<CxiEndpoint>", first)
+        self.assertNotIn("make_shared<RDMAEndpoint>", first)
+        self.assertNotIn("make_shared<NCCLEndpoint>", second)
+        self.assertNotIn("make_shared<CxiEndpoint>", second)
+        self.assertNotIn("make_shared<RDMAEndpoint>", second)
+
     def test_transport_selection_is_fail_closed(self):
         source = r"""
 #include <iostream>
