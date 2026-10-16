@@ -120,6 +120,9 @@ std::vector<size_t> RdmaDeviceManager::get_best_dev_idx(int gpu_idx) {
 
   // Ranked by GPU idx
   auto gpu_cards = uccl::get_gpu_cards();
+  UCCL_CHECK(gpu_idx >= 0 && static_cast<size_t>(gpu_idx) < gpu_cards.size())
+      << "GPU index " << gpu_idx << " out of range for " << gpu_cards.size()
+      << " runtime-visible devices";
   // Ranked by RDMA NIC name (not the ibv_get_device_list order)
   auto ib_nics = uccl::get_rdma_nics();
   // Get GPU pcie path
