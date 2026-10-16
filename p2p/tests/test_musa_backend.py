@@ -196,6 +196,18 @@ int main() {
             self.assertNotIn("gpuIpcGetMemHandle", source)
         self.assertIn("export_ipc_range", (ROOT / "p2p/engine_api.cc").read_text())
 
+    def test_endpoint_wrapper_owns_numa_and_notification_dispatch(self):
+        wrapper = (ROOT / "p2p/endpoint_wrapper.h").read_text()
+        self.assertIn("uccl_get_numa_node", wrapper)
+        self.assertIn("uccl_send_notification", wrapper)
+
+        engine = (ROOT / "p2p/engine.cc").read_text()
+        notification = engine[engine.index("int Endpoint::send_notification") :]
+        notification = notification[: notification.index("MR* Endpoint::get_mr")]
+        self.assertNotIn("is_nccl_transport", notification)
+        initialization = engine[engine.index("void Endpoint::initialize_engine") :]
+        self.assertNotIn("get_numa_node_from_iface", initialization)
+
     def test_transport_selection_is_fail_closed(self):
         source = r"""
 #include <iostream>

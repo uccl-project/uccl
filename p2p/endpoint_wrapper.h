@@ -456,6 +456,37 @@ inline void uccl_deregmr(GenericEndpoint const& ep, P2PMhandle* mhandle) {
       ep);
 }
 
+inline int uccl_get_numa_node(GenericEndpoint const& ep, int gpu_idx) {
+  return std::visit(
+      [&](auto const& s) -> int {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, NCCLEndpoint> ||
+                      std::is_same_v<T, CxiEndpoint>) {
+          return get_numa_node_from_iface();
+        } else {
+          return RdmaDeviceManager::instance().get_numa_node(
+              RdmaDeviceManager::instance().get_best_dev_idx(gpu_idx)[0]);
+        }
+      },
+      ep);
+}
+
+inline int uccl_send_notification(GenericEndpoint const& ep, uint64_t peer_id,
+                                  NotifyMsg const& notification) {
+  return std::visit(
+      [&](auto const& s) -> int {
+        if (!s) return -1;
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, NCCLEndpoint> ||
+                      std::is_same_v<T, CxiEndpoint>) {
+          return s->send_notification(peer_id, notification);
+        } else {
+          return -1;
+        }
+      },
+      ep);
+}
+
 inline bool initialize_rdma_ctx_for_gpu(GenericEndpoint const& ep, int dev) {
   return std::visit(
       [&](auto const& s) -> bool {
