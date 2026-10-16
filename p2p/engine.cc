@@ -2138,33 +2138,15 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   transfer_info.size = len;
   transfer_info.operation = 1;  // response
 
-#if defined(UCCL_USE_MUSA)
-  auto err = gpuExportIpcRange(&transfer_info.handle, &transfer_info.offset,
-                               addr, len);
+  GpuIpcExport exported;
+  auto err = export_ipc_range(addr, len, &exported);
   if (err != gpuSuccess) {
-    UCCL_LOG(ERROR) << "MUSA IPC export failed: " << gpuGetErrorString(err);
+    UCCL_LOG(ERROR) << "IPC export failed: " << gpuGetErrorString(err);
     return false;
   }
-  transfer_info.gpu_idx = local_gpu_idx_;
-#elif defined(__CAMBRICON_PLATFORM_MLU__)
-  // CNRT requires the exact allocation base, not a mask-aligned address.
-  void* base_ptr = nullptr;
-  size_t base_sz = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr));
-  transfer_info.offset =
-      reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(base_ptr);
-  UCCL_CHECK(mlu_acquire_ipc_handle(base_ptr, &transfer_info.handle))
-      << "advertise_ipc: acquire ipc handle failed";
-  transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
-#else
-  // Calculate aligned address and offset
-  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
-  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
-  transfer_info.offset = addr_offset;
-
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                  reinterpret_cast<void*>(addr_aligned)));
-#endif
+  transfer_info.handle = exported.handle;
+  transfer_info.offset = exported.offset;
+  transfer_info.gpu_idx = exported.owner_device;
 
   // Copy the transfer info to output buffer
   std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
@@ -2197,35 +2179,15 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
     transfer_info.size = len_v[i];
     transfer_info.operation = 1;  // response
 
-#if defined(UCCL_USE_MUSA)
-    auto err = gpuExportIpcRange(&transfer_info.handle, &transfer_info.offset,
-                                 addr_v[i], len_v[i]);
+    GpuIpcExport exported;
+    auto err = export_ipc_range(addr_v[i], len_v[i], &exported);
     if (err != gpuSuccess) {
-      UCCL_LOG(ERROR) << "MUSA IPC vector export failed: "
-                      << gpuGetErrorString(err);
+      UCCL_LOG(ERROR) << "IPC vector export failed: " << gpuGetErrorString(err);
       return false;
     }
-    transfer_info.gpu_idx = local_gpu_idx_;
-#elif defined(__CAMBRICON_PLATFORM_MLU__)
-    // CNRT requires the exact allocation base, not a mask-aligned address.
-    void* base_ptr = nullptr;
-    size_t base_sz = 0;
-    GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr_v[i]));
-    transfer_info.offset = reinterpret_cast<uintptr_t>(addr_v[i]) -
-                           reinterpret_cast<uintptr_t>(base_ptr);
-    UCCL_CHECK(mlu_acquire_ipc_handle(base_ptr, &transfer_info.handle))
-        << "advertisev_ipc: acquire ipc handle failed";
-    transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
-#else
-    // Calculate aligned address and offset
-    auto addr_aligned =
-        reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
-    auto addr_offset = reinterpret_cast<uintptr_t>(addr_v[i]) - addr_aligned;
-    transfer_info.offset = addr_offset;
-
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                    reinterpret_cast<void*>(addr_aligned)));
-#endif
+    transfer_info.handle = exported.handle;
+    transfer_info.offset = exported.offset;
+    transfer_info.gpu_idx = exported.owner_device;
 
     // Copy the transfer info to output buffer
     std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));
@@ -2430,6 +2392,11 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
 }
 
 GenericEndpoint Endpoint::get_endpoint() const { return ep_; }
+
+gpuError_t Endpoint::export_ipc_range(void* ptr, size_t size,
+                                      GpuIpcExport* result) {
+  return gpuExportIpcRange(&ipc_export_context_, ptr, size, result);
+}
 
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);

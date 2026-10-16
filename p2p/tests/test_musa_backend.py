@@ -140,30 +140,61 @@ int main() {
 #include <cstdint>
 #include "util/gpu_rt.h"
 int main() {
-  musaIpcMemHandle_t handle{};
-  uintptr_t offset = 99;
+  GpuIpcExportContext context;
+  GpuIpcExport exported{};
   void* ptr = reinterpret_cast<void*>(0x12341234);
-  assert(gpuExportIpcRange(&handle, &offset, ptr, 64) == gpuSuccess);
+  assert(gpuExportIpcRange(&context, ptr, 64, &exported) == gpuSuccess);
   assert(last_ipc_export_ptr == reinterpret_cast<void*>(0x12341000));
-  assert(offset == 0x234 && handle.reserved[0] == 42);
+  assert(exported.offset == 0x234 && exported.handle.reserved[0] == 42);
+  assert(exported.owner_device == 3);
   assert(ipc_export_calls == 1);
-  offset = 99;
-  handle.reserved[0] = 7;
-  assert(gpuExportIpcRange(&handle, &offset, ptr, 4096) != gpuSuccess);
-  assert(gpuExportIpcRange(&handle, &offset, ptr, SIZE_MAX) != gpuSuccess);
-  assert(ipc_export_calls == 1 && offset == 99 && handle.reserved[0] == 7);
+  exported.offset = 99;
+  exported.handle.reserved[0] = 7;
+  assert(gpuExportIpcRange(&context, ptr, 4096, &exported) != gpuSuccess);
+  assert(gpuExportIpcRange(&context, ptr, SIZE_MAX, &exported) != gpuSuccess);
+  assert(ipc_export_calls == 1 && exported.offset == 99 &&
+         exported.handle.reserved[0] == 7);
   range_result = MUSA_ERROR_INVALID_VALUE;
-  assert(gpuExportIpcRange(&handle, &offset, ptr, 64) != gpuSuccess);
-  assert(ipc_export_calls == 1 && offset == 99);
+  assert(gpuExportIpcRange(&context, ptr, 64, &exported) != gpuSuccess);
+  assert(ipc_export_calls == 1 && exported.offset == 99);
   range_result = MUSA_SUCCESS;
   ipc_export_result = musaErrorUnknown;
-  assert(gpuExportIpcRange(&handle, &offset, ptr, 64) == musaErrorUnknown);
-  assert(offset == 99 && handle.reserved[0] == 7);
+  assert(gpuExportIpcRange(&context, ptr, 64, &exported) == musaErrorUnknown);
+  assert(exported.offset == 99 && exported.handle.reserved[0] == 7);
+  ipc_export_result = musaSuccess;
+  pointer_result = musaErrorUnknown;
+  assert(gpuExportIpcRange(&context, ptr, 64, &exported) == musaErrorUnknown);
+  assert(exported.offset == 99 && exported.handle.reserved[0] == 7);
 }
 """,
             "-DUCCL_USE_MUSA",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_common_ipc_export_contract(self):
+        result = self.compile(
+            r"""
+#include <cassert>
+#include "util/gpu_rt.h"
+int main() {
+  GpuIpcExportContext context;
+  GpuIpcExport exported{};
+  void* ptr = reinterpret_cast<void*>(0x12341234);
+  assert(gpuExportIpcRange(&context, ptr, 64, &exported) == gpuSuccess);
+  assert(exported.handle.reserved[0] == 42);
+  assert(exported.offset == 0x234);
+  assert(exported.owner_device == 3);
+}
+""",
+            "-DUCCL_USE_MUSA",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_all_ipc_registration_paths_use_common_export(self):
+        for name in ("engine.cc", "engine_api.cc", "uccl_engine.cc"):
+            source = (ROOT / "p2p" / name).read_text()
+            self.assertNotIn("gpuIpcGetMemHandle", source)
+        self.assertIn("export_ipc_range", (ROOT / "p2p/engine_api.cc").read_text())
 
     def test_transport_selection_is_fail_closed(self):
         source = r"""

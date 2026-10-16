@@ -48,11 +48,11 @@ int main(int argc, char** argv) {
   GPU_RT_CHECK(gpuEventSynchronize(event));
   GPU_RT_CHECK(gpuMemcpy(output, ptr, bytes, gpuMemcpyDeviceToHost));
   assert(std::memcmp(input, output, bytes) == 0);
-  gpuIpcMemHandle_t handle;
-  uintptr_t ipc_offset = 0;
+  GpuIpcExportContext context;
+  GpuIpcExport exported;
   GPU_RT_CHECK(gpuExportIpcRange(
-      &handle, &ipc_offset, static_cast<unsigned char*>(ptr) + 17, bytes - 17));
-  assert(ipc_offset == 17);
+      &context, static_cast<unsigned char*>(ptr) + 17, bytes - 17, &exported));
+  assert(exported.offset == 17 && exported.owner_device == device);
   GPU_RT_CHECK(gpuEventDestroy(event));
   GPU_RT_CHECK(gpuStreamDestroy(stream));
   GPU_RT_CHECK(gpuFree(ptr));

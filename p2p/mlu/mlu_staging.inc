@@ -29,7 +29,3 @@ bool mlu_staged_write(uint64_t conn_id, void* src, size_t size,
 bool mlu_staged_read(uint64_t conn_id, void* dst, size_t size,
                      FifoItem const& staging_item);
 void mlu_poller_func();
-// cnrtAcquireMemHandle succeeds only once per allocation; cache by base ptr.
-std::mutex mlu_ipc_handle_mu_;
-std::unordered_map<void*, gpuIpcMemHandle_t> mlu_ipc_handle_cache_;
-bool mlu_acquire_ipc_handle(void* base_ptr, gpuIpcMemHandle_t* out);
