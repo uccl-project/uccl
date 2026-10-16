@@ -849,8 +849,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // A transfer splits only where a local or a remote MR chunk ends; with
     // single-chunk MRs on both sides every command is one WR.
     auto const* c = ctxs_for_all_ranks_[dst].get();
-    bool const single_chunk = c && c->gpu_mr_chunks.size() <= 1 &&
-                              c->remote_mr_chunks.size() <= 1;
+    bool const single_chunk =
+        c && c->gpu_mr_chunks.size() <= 1 && c->remote_mr_chunks.size() <= 1;
     size_t const wrs_per_cmd = single_chunk ? 1 : 3;
 #else
     size_t const wrs_per_cmd = 1;

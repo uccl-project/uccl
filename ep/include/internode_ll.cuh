@@ -50,23 +50,20 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 // (internode_ll_dedup.cu). Dispatch takes the top-k weights, which combine
 // applies on the expert side.
 namespace internode_ll_dedup {
-void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
-              int* packed_recv_src_info, int64_t* packed_recv_layout_range,
-              int* packed_recv_count, void* dedup_hdr, int* dedup_pos,
-              int* dedup_count, void* rdma_recv_x, int* rdma_recv_count,
-              int64_t* rdma_recv_count_internode, void* rdma_x, void const* x,
-              int64_t const* topk_idx, float const* topk_weights,
-              int* next_clean, int64_t* next_clean_second,
-              int num_next_clean_int, int num_tokens, int hidden,
-              int num_max_dispatch_tokens_per_rank, int num_topk,
-              int num_experts, int rank, int num_ranks, bool use_fp8,
-              bool round_scale, bool use_ue8m0, void* workspace,
-              int num_device_sms, cudaStream_t stream, int phases,
-              uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
-              int max_nvl_peers, int low_latency_buffer_idx,
-              void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
-              void* atomic_buffer_ptr, uint8_t* ce_stage = nullptr,
-              int* ce_counts = nullptr);
+void dispatch(
+    void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
+    int64_t* packed_recv_layout_range, int* packed_recv_count, void* dedup_hdr,
+    int* dedup_pos, int* dedup_count, void* rdma_recv_x, int* rdma_recv_count,
+    int64_t* rdma_recv_count_internode, void* rdma_x, void const* x,
+    int64_t const* topk_idx, float const* topk_weights, int* next_clean,
+    int64_t* next_clean_second, int num_next_clean_int, int num_tokens,
+    int hidden, int num_max_dispatch_tokens_per_rank, int num_topk,
+    int num_experts, int rank, int num_ranks, bool use_fp8, bool round_scale,
+    bool use_ue8m0, void* workspace, int num_device_sms, cudaStream_t stream,
+    int phases, uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    int max_nvl_peers, int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
+    void* rdma_buffer_ptr, void* atomic_buffer_ptr, uint8_t* ce_stage = nullptr,
+    int* ce_counts = nullptr);
 
 // Count channels per destination rank of the dedup kernels
 int num_channels(int num_d2h_channel_addrs, int num_experts, int num_ranks);

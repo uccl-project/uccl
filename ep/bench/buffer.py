@@ -116,8 +116,14 @@ class Buffer:
         # NUM_MAX_NVL_PEERS and assume full nodes; with fewer GPUs per node the
         # RDMA buffer hint is 0 bytes and setup crashes later. Fail here.
         local_world = int(os.environ.get("LOCAL_WORLD_SIZE", -1))
-        max_nvl_peers = ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else 8
-        if not low_latency_mode and 0 < local_world < group.size() and local_world != max_nvl_peers:
+        max_nvl_peers = (
+            ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else 8
+        )
+        if (
+            not low_latency_mode
+            and 0 < local_world < group.size()
+            and local_world != max_nvl_peers
+        ):
             raise RuntimeError(
                 f"this build's high-throughput kernels assume {max_nvl_peers} GPUs per node "
                 f"(LOCAL_WORLD_SIZE={local_world}); rebuild with NUM_MAX_NVL_PEERS={local_world} "
@@ -671,7 +677,11 @@ class Buffer:
         packed_recv_x_scales_ptr = 0
         if use_fp8:
             packed_recv_x_scales_storage = torch.empty(
-                (num_local_experts, x.size(1) // (512 if use_ue8m0 else 128), num_recv_tokens),
+                (
+                    num_local_experts,
+                    x.size(1) // (512 if use_ue8m0 else 128),
+                    num_recv_tokens,
+                ),
                 device=x.device,
                 dtype=torch.int32 if use_ue8m0 else torch.float32,
             )

@@ -403,10 +403,9 @@ struct LowLatencyDedupLayout {
 inline size_t dedup_data_offset(size_t num_rdma_bytes,
                                 int num_max_dispatch_tokens_per_rank,
                                 int hidden, int num_ranks, int num_experts) {
-  size_t const def =
-      LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
-                       num_ranks, num_experts, nullptr)
-          .total_bytes;
+  size_t const def = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
+                                      hidden, num_ranks, num_experts, nullptr)
+                         .total_bytes;
   size_t const both =
       LowLatencyDedupLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
                             num_ranks, num_experts, nullptr, def)
@@ -430,10 +429,9 @@ size_t get_low_latency_dedup_rdma_size_hint(
 size_t get_low_latency_ab_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
                                          int hidden, int num_ranks,
                                          int num_experts) {
-  size_t const def =
-      LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
-                       num_ranks, num_experts, nullptr)
-          .total_bytes;
+  size_t const def = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
+                                      hidden, num_ranks, num_experts, nullptr)
+                         .total_bytes;
   auto num_bytes =
       LowLatencyDedupLayout(nullptr, num_max_dispatch_tokens_per_rank, hidden,
                             num_ranks, num_experts, nullptr, def)

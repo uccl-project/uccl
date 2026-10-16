@@ -36,7 +36,9 @@ from utils import (
 
 
 def unpack_range(layout_range):
-    return (layout_range & 0xFFFFFFFF).to(torch.int64), (layout_range >> 32).to(torch.int64)
+    return (layout_range & 0xFFFFFFFF).to(torch.int64), (layout_range >> 32).to(
+        torch.int64
+    )
 
 
 def expert_scale(global_expert):
@@ -70,7 +72,9 @@ def zip_bytes(rows):
     n, h = rows.shape
     e = (rows.view(torch.int16).to(torch.int32) >> 7) & 0xFF
     cnt = (e != 0).sum(dim=1, keepdim=True)
-    base = ((e.sum(dim=1, keepdim=True) + cnt // 2) // cnt.clamp_min(1) - 4).clamp(0, 255 - 6)
+    base = ((e.sum(dim=1, keepdim=True) + cnt // 2) // cnt.clamp_min(1) - 4).clamp(
+        0, 255 - 6
+    )
     base = torch.where(cnt == 0, torch.zeros_like(base), base)
     esc = ((e < base) | (e > base + 6)).sum(dim=1)
     words = ((h // 256 + 3) // 4) * 3 * 32 * 4
@@ -167,7 +171,9 @@ def graph_measure(fn, iters=50):
             g.replay()
         torch.cuda.synchronize()
         dist.barrier()
-        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(
+            enable_timing=True
+        )
         start.record()
         for _ in range(iters):
             g.replay()
@@ -179,11 +185,19 @@ def graph_measure(fn, iters=50):
 
 
 NIC_COUNTERS = (
-    "hw_counters/out_of_buffer", "hw_counters/out_of_sequence", "hw_counters/packet_seq_err",
-    "hw_counters/local_ack_timeout_err", "hw_counters/duplicate_request",
-    "hw_counters/implied_nak_seq_err", "hw_counters/rnr_nak_retry_err",
-    "hw_counters/req_transport_retries_exceeded", "counters/port_xmit_data", "counters/port_rcv_data",
-    "counters/port_xmit_wait", "counters/port_xmit_discards", "counters/port_rcv_errors",
+    "hw_counters/out_of_buffer",
+    "hw_counters/out_of_sequence",
+    "hw_counters/packet_seq_err",
+    "hw_counters/local_ack_timeout_err",
+    "hw_counters/duplicate_request",
+    "hw_counters/implied_nak_seq_err",
+    "hw_counters/rnr_nak_retry_err",
+    "hw_counters/req_transport_retries_exceeded",
+    "counters/port_xmit_data",
+    "counters/port_rcv_data",
+    "counters/port_xmit_wait",
+    "counters/port_xmit_discards",
+    "counters/port_rcv_errors",
 )
 
 
@@ -247,8 +261,13 @@ def sustain(name, fn, seconds, period_s=0.0):
     c1 = nic_counters()
     dist.barrier()
     return {
-        "phase": name, "wall_start": w0, "wall_end": w1, "steps": n, "paced_us": period_s * 1e6,
-        "step_us": (t1 - t0) / n * 1e6, "free_step_us": step_s * 1e6,
+        "phase": name,
+        "wall_start": w0,
+        "wall_end": w1,
+        "steps": n,
+        "paced_us": period_s * 1e6,
+        "step_us": (t1 - t0) / n * 1e6,
+        "free_step_us": step_s * 1e6,
         "nic_delta": {k: c1[k] - c0[k] for k in c0 if k in c1},
     }
 
@@ -377,7 +396,10 @@ def interference_measure(fn, steps=20):
             gemms()
             g_alone = min(timed(gemms) for _ in range(3))
             out["gemm_alone_carveout_us"] = g_alone
-            for name, run in (("carveout", both), ("carveout_ep_first", variants["ep_first"])):
+            for name, run in (
+                ("carveout", both),
+                ("carveout_ep_first", variants["ep_first"]),
+            ):
                 t = min(timed(run) for _ in range(3))
                 out[f"together_{name}_us"] = t
                 out[f"overlap_saving_{name}"] = 1 - t / (g_alone + ep_alone)
@@ -387,7 +409,9 @@ def interference_measure(fn, steps=20):
     # partition: the GEMM runs on (all SMs - budget), the EP kernels keep the rest.
     gcs = getattr(torch.cuda, "green_contexts", None)
     if budget > 0 and gcs is not None and gcs.SUPPORTED:
-        total = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+        total = torch.cuda.get_device_properties(
+            torch.cuda.current_device()
+        ).multi_processor_count
         green = gcs.GreenContext.create(total - budget, torch.cuda.current_device())
 
         def gemms_green():
@@ -422,16 +446,20 @@ def interference_measure(fn, steps=20):
             with torch.cuda.stream(gemm_stream):
                 gemms_green()
 
-        for name, run in (("green", lambda: (gemms_green(), ep_steps())),
-                          ("green_ep_first", lambda: (ep_steps(), gemms_green())),
-                          ("green_split", lambda: (gemms_green_split(), ep_on(ep_stream))),
-                          ("green_split_ep_first", lambda: (ep_on(ep_stream), gemms_green_split()))):
+        for name, run in (
+            ("green", lambda: (gemms_green(), ep_steps())),
+            ("green_ep_first", lambda: (ep_steps(), gemms_green())),
+            ("green_split", lambda: (gemms_green_split(), ep_on(ep_stream))),
+            ("green_split_ep_first", lambda: (ep_on(ep_stream), gemms_green_split())),
+        ):
             t = min(timed_green(run) for _ in range(3))
             out[f"together_{name}_us"] = t
             out[f"overlap_saving_{name}"] = 1 - t / (g_alone + ep_alone)
         # EP's own time while the partner runs on the other SMs (events on
         # the EP stream), against EP alone
-        e0, e1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        e0, e1 = torch.cuda.Event(enable_timing=True), torch.cuda.Event(
+            enable_timing=True
+        )
         timed_green(lambda: None)
         gemms_green_split()
         e0.record(ep_stream)
@@ -480,9 +508,18 @@ def main(args):
         return x, topk_idx, topk_weights
 
     # Correctness over several routings
-    results = {"rank": rank, "tokens": T, "hidden": H, "experts": E, "topk": K, "fp8": use_fp8, "skew": args.skew,
-               "rdma_bytes_default_hint": default_bytes, "rdma_bytes_dedup_hint": dedup_bytes,
-               "dedup_only": args.dedup_only}
+    results = {
+        "rank": rank,
+        "tokens": T,
+        "hidden": H,
+        "experts": E,
+        "topk": K,
+        "fp8": use_fp8,
+        "skew": args.skew,
+        "rdma_bytes_default_hint": default_bytes,
+        "rdma_bytes_dedup_hint": dedup_bytes,
+        "dedup_only": args.dedup_only,
+    }
     worst_diff, worst_ref, count_bad, row_bad = 0.0, 0.0, 0, 0
     worst_row, rows_bad, zip_mismatch = 0.0, 0, 0
     seed_diag = []
@@ -494,7 +531,14 @@ def main(args):
         dist.all_gather_into_tensor(all_x, x, group=group)
         dist.all_gather_into_tensor(all_topk, topk_idx, group=group)
         rb, cb, hb, _, _ = buffer.low_latency_dispatch_dedup(
-            x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0
+            x,
+            topk_idx,
+            topk_weights,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
         )
         torch.cuda.synchronize()
         num_b, begin_b = unpack_range(hb[1])
@@ -512,7 +556,9 @@ def main(args):
                 got, order = torch.sort(hb[0][e, b0 : b0 + n].to(torch.int64))
                 row_bad += int((got != want).sum().item())
                 if n:
-                    d = calc_diff(data[b0 : b0 + n][order].float(), all_x[src, want].float())
+                    d = calc_diff(
+                        data[b0 : b0 + n][order].float(), all_x[src, want].float()
+                    )
                     row_bad += int(d > 1e-3)
         yb = simulated_expert_out(rb, H, use_fp8, rank)
         out_b, _, _ = buffer.low_latency_combine_dedup(yb, topk_idx, hb)
@@ -524,7 +570,15 @@ def main(args):
         rows_bad += int((rows > ROW_TOL).sum().item())
     for seed in range(0 if args.dedup_only else args.num_checks):
         x, topk_idx, topk_weights = make_inputs(seed)
-        ra, ca, ha, _, _ = buffer.low_latency_dispatch(x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0)
+        ra, ca, ha, _, _ = buffer.low_latency_dispatch(
+            x,
+            topk_idx,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
+        )
         a = (
             tuple(t.clone() for t in ra) if use_fp8 else ra.clone(),
             ca.clone(),
@@ -535,7 +589,14 @@ def main(args):
         out_a, _, _ = buffer.low_latency_combine(ya, topk_idx, topk_weights, ha)
         out_a = out_a.clone()
         rb, cb, hb, _, _ = buffer.low_latency_dispatch_dedup(
-            x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0
+            x,
+            topk_idx,
+            topk_weights,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
         )
         b = (
             tuple(t.clone() for t in rb) if use_fp8 else rb.clone(),
@@ -547,26 +608,37 @@ def main(args):
         out_b, _, _ = buffer.low_latency_combine_dedup(yb, topk_idx, hb)
         out_b = out_b.clone()
         if args.compress:
-            out_z, _, _ = buffer.low_latency_combine_dedup(yb, topk_idx, hb, compress=True)
+            out_z, _, _ = buffer.low_latency_combine_dedup(
+                yb, topk_idx, hb, compress=True
+            )
             torch.cuda.synchronize()
-            zip_mismatch += int((out_z.view(torch.int16) != out_b.view(torch.int16)).any(dim=1).sum().item())
+            zip_mismatch += int(
+                (out_z.view(torch.int16) != out_b.view(torch.int16))
+                .any(dim=1)
+                .sum()
+                .item()
+            )
         torch.cuda.synchronize()
         cm, rm = check_dispatch(a, b, num_ranks, use_fp8)
         count_bad += cm
         row_bad += rm
         worst_diff = max(worst_diff, calc_diff(out_a.float(), out_b.float()))
         ref = combine_reference(x, topk_idx, topk_weights, use_fp8, args.round_scale)
-        worst_ref = max(worst_ref, calc_diff(ref, out_a.float()), calc_diff(ref, out_b.float()))
-        seed_diag.append({
-            "seed": seed,
-            "ref_vs_default": calc_diff(ref, out_a.float()),
-            "ref_vs_dedup": calc_diff(ref, out_b.float()),
-            "nonfinite_default": int((~torch.isfinite(out_a.float())).sum().item()),
-            "nonfinite_dedup": int((~torch.isfinite(out_b.float())).sum().item()),
-            "nonfinite_ref": int((~torch.isfinite(ref)).sum().item()),
-            "absmax_default": out_a.float().abs().max().item(),
-            "absmax_dedup": out_b.float().abs().max().item(),
-        })
+        worst_ref = max(
+            worst_ref, calc_diff(ref, out_a.float()), calc_diff(ref, out_b.float())
+        )
+        seed_diag.append(
+            {
+                "seed": seed,
+                "ref_vs_default": calc_diff(ref, out_a.float()),
+                "ref_vs_dedup": calc_diff(ref, out_b.float()),
+                "nonfinite_default": int((~torch.isfinite(out_a.float())).sum().item()),
+                "nonfinite_dedup": int((~torch.isfinite(out_b.float())).sum().item()),
+                "nonfinite_ref": int((~torch.isfinite(ref)).sum().item()),
+                "absmax_default": out_a.float().abs().max().item(),
+                "absmax_dedup": out_b.float().abs().max().item(),
+            }
+        )
         rows = torch.maximum(row_errors(out_b, ref), row_errors(out_b, out_a))
         worst_row = max(worst_row, rows.max().item())
         rows_bad += int((rows > ROW_TOL).sum().item())
@@ -581,7 +653,8 @@ def main(args):
             "combine_rows_bad": rows_bad,
             "seed_diag": seed_diag,
             "zip_rows_not_bit_identical": zip_mismatch if args.compress else None,
-            "combine_pass": worst_diff < ((9e-4 if use_fp8 else 1e-5) if args.dedup_only else 1e-5),
+            "combine_pass": worst_diff
+            < ((9e-4 if use_fp8 else 1e-5) if args.dedup_only else 1e-5),
         }
     )
 
@@ -595,7 +668,15 @@ def main(args):
         x, topk_idx, topk_weights = make_inputs(10_000 + it)
         hooks = it % 2 == 1
         rb, _, hb, _, hook = buffer.low_latency_dispatch_dedup(
-            x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0, return_recv_hook=hooks
+            x,
+            topk_idx,
+            topk_weights,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
+            return_recv_hook=hooks,
         )
         if hooks:
             hook()
@@ -610,9 +691,20 @@ def main(args):
             # Positive control: one token off by 3%, one token lost
             out_b[0] *= 1.03
             out_b[1] = 0
-        rows = row_errors(out_b, combine_reference(x, topk_idx, topk_weights, use_fp8, args.round_scale))
+        rows = row_errors(
+            out_b,
+            combine_reference(x, topk_idx, topk_weights, use_fp8, args.round_scale),
+        )
         if not args.dedup_only:
-            ra, _, ha, _, _ = buffer.low_latency_dispatch(x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0)
+            ra, _, ha, _, _ = buffer.low_latency_dispatch(
+                x,
+                topk_idx,
+                T,
+                E,
+                use_fp8=use_fp8,
+                round_scale=args.round_scale,
+                use_ue8m0=args.ue8m0,
+            )
             out_a, _, _ = buffer.low_latency_combine(
                 simulated_expert_out(ra, H, use_fp8, rank), topk_idx, topk_weights, ha
             )
@@ -620,11 +712,17 @@ def main(args):
             stress_oracle_worst = max(stress_oracle_worst, oracle.max().item())
             rows = torch.maximum(rows, oracle)
         stress_worst = max(stress_worst, rows.max().item())
-        stress_bad += int((rows > ROW_TOL).sum().item()) + int(torch.isnan(out_b).any().item())
+        stress_bad += int((rows > ROW_TOL).sum().item()) + int(
+            torch.isnan(out_b).any().item()
+        )
     if args.stress:
-        results.update(stress_steps=args.stress, stress_bad_rows=stress_bad,
-                       stress_row_err_max=stress_worst, stress_oracle_row_err_max=stress_oracle_worst,
-                       stress_oracle="default" if not args.dedup_only else "none")
+        results.update(
+            stress_steps=args.stress,
+            stress_bad_rows=stress_bad,
+            stress_row_err_max=stress_worst,
+            stress_oracle_row_err_max=stress_oracle_worst,
+            stress_oracle="default" if not args.dedup_only else "none",
+        )
 
     # Two micro-batches interleaved as in two-batch overlap: dispatch A,
     # dispatch B, combine A, combine B, each with compute between its send and
@@ -638,7 +736,15 @@ def main(args):
         disp = []
         for xm, tm, wm in mb:
             d = buffer.low_latency_dispatch_dedup(
-                xm, tm, wm, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0, return_recv_hook=True
+                xm,
+                tm,
+                wm,
+                T,
+                E,
+                use_fp8=use_fp8,
+                round_scale=args.round_scale,
+                use_ue8m0=args.ue8m0,
+                return_recv_hook=True,
             )
             filler @ filler
             d[4]()
@@ -646,18 +752,27 @@ def main(args):
         outs = []
         for d, (xm, tm, wm) in zip(disp, mb):
             c = buffer.low_latency_combine_dedup(
-                simulated_expert_out(d[0], H, use_fp8, rank), tm, d[2], return_recv_hook=True,
+                simulated_expert_out(d[0], H, use_fp8, rank),
+                tm,
+                d[2],
+                return_recv_hook=True,
                 compress=args.compress,
             )
             filler @ filler
             c[2]()
             outs.append(c[0])
         for out, (xm, tm, wm) in zip(outs, mb):
-            rows = row_errors(out, combine_reference(xm, tm, wm, use_fp8, args.round_scale))
+            rows = row_errors(
+                out, combine_reference(xm, tm, wm, use_fp8, args.round_scale)
+            )
             dbo_worst = max(dbo_worst, rows.max().item())
-            dbo_bad += int((rows > ROW_TOL).sum().item()) + int(torch.isnan(out).any().item())
+            dbo_bad += int((rows > ROW_TOL).sum().item()) + int(
+                torch.isnan(out).any().item()
+            )
     if args.stress_dbo:
-        results.update(dbo_pairs=args.stress_dbo, dbo_bad_rows=dbo_bad, dbo_row_err_max=dbo_worst)
+        results.update(
+            dbo_pairs=args.stress_dbo, dbo_bad_rows=dbo_bad, dbo_row_err_max=dbo_worst
+        )
 
     # Bytes that cross to other ranks per step
     x, topk_idx, topk_weights = make_inputs(1000)
@@ -689,9 +804,17 @@ def main(args):
             ti, tw = all_t[src], all_w[src]
             mine = (ti >= 0) & (ti // num_local_experts == rank)
             sel = mine.any(dim=1)
-            x_hat = fp8_roundtrip(all_x[src][sel], args.round_scale) if use_fp8 else all_x[src][sel]
+            x_hat = (
+                fp8_roundtrip(all_x[src][sel], args.round_scale)
+                if use_fp8
+                else all_x[src][sel]
+            )
             sc = expert_scale(ti[sel].clamp_min(0)).float()
-            y = (x_hat.float().unsqueeze(1) * sc.unsqueeze(-1)).to(torch.bfloat16).float()
+            y = (
+                (x_hat.float().unsqueeze(1) * sc.unsqueeze(-1))
+                .to(torch.bfloat16)
+                .float()
+            )
             w = tw[sel].masked_fill(~mine[sel], 0)
             part = (y * w.unsqueeze(-1)).sum(dim=1).to(torch.bfloat16)
             raw_b += part.shape[0] * (16 + 2 * H)
@@ -700,10 +823,25 @@ def main(args):
 
     ya = None
     if not args.dedup_only:
-        ra, _, ha, _, _ = buffer.low_latency_dispatch(x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0)
+        ra, _, ha, _, _ = buffer.low_latency_dispatch(
+            x,
+            topk_idx,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
+        )
         ya = simulated_expert_out(ra, H, use_fp8, rank)
     rb, _, hb, _, _ = buffer.low_latency_dispatch_dedup(
-        x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0
+        x,
+        topk_idx,
+        topk_weights,
+        T,
+        E,
+        use_fp8=use_fp8,
+        round_scale=args.round_scale,
+        use_ue8m0=args.ue8m0,
     )
     yb = simulated_expert_out(rb, H, use_fp8, rank)
     torch.cuda.synchronize()
@@ -715,15 +853,32 @@ def main(args):
 
     def run_default(hooks):
         _, _, h, _, hook = buffer.low_latency_dispatch(
-            x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0, return_recv_hook=hooks
+            x,
+            topk_idx,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
+            return_recv_hook=hooks,
         )
         gemm_then(hook) if hooks else None
-        _, _, hook = buffer.low_latency_combine(ya, topk_idx, topk_weights, h, return_recv_hook=hooks)
+        _, _, hook = buffer.low_latency_combine(
+            ya, topk_idx, topk_weights, h, return_recv_hook=hooks
+        )
         gemm_then(hook) if hooks else None
 
     def run_dedup(hooks, compress=False):
         _, _, h, _, hook = buffer.low_latency_dispatch_dedup(
-            x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0, return_recv_hook=hooks
+            x,
+            topk_idx,
+            topk_weights,
+            T,
+            E,
+            use_fp8=use_fp8,
+            round_scale=args.round_scale,
+            use_ue8m0=args.ue8m0,
+            return_recv_hook=hooks,
         )
         gemm_then(hook) if hooks else None
         _, _, hook = buffer.low_latency_combine_dedup(
@@ -760,10 +915,25 @@ def main(args):
         for _ in range(steps):
             t0 = time.perf_counter_ns()
             if name == "default":
-                _, _, h, _, _ = buffer.low_latency_dispatch(x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0)
+                _, _, h, _, _ = buffer.low_latency_dispatch(
+                    x,
+                    topk_idx,
+                    T,
+                    E,
+                    use_fp8=use_fp8,
+                    round_scale=args.round_scale,
+                    use_ue8m0=args.ue8m0,
+                )
             else:
                 _, _, h, _, _ = buffer.low_latency_dispatch_dedup(
-                    x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0
+                    x,
+                    topk_idx,
+                    topk_weights,
+                    T,
+                    E,
+                    use_fp8=use_fp8,
+                    round_scale=args.round_scale,
+                    use_ue8m0=args.ue8m0,
                 )
             t1 = time.perf_counter_ns()
             if name == "default":
@@ -779,8 +949,22 @@ def main(args):
         return {
             "host_dispatch_call_us": d_ns / steps / 1e3,
             "host_combine_call_us": c_ns / steps / 1e3,
-            "host_runtime_dispatch_us": rt.get("low_latency_dispatch_dedup" if name == "dedup" else "low_latency_dispatch", 0.0),
-            "host_runtime_combine_us": rt.get("low_latency_combine_dedup" if name == "dedup" else "low_latency_combine", 0.0),
+            "host_runtime_dispatch_us": rt.get(
+                (
+                    "low_latency_dispatch_dedup"
+                    if name == "dedup"
+                    else "low_latency_dispatch"
+                ),
+                0.0,
+            ),
+            "host_runtime_combine_us": rt.get(
+                (
+                    "low_latency_combine_dedup"
+                    if name == "dedup"
+                    else "low_latency_combine"
+                ),
+                0.0,
+            ),
         }
 
     def profile_host(name, steps=20):
@@ -791,28 +975,67 @@ def main(args):
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
             for _ in range(steps):
                 if name == "default":
-                    _, _, h, _, _ = buffer.low_latency_dispatch(x, topk_idx, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0)
+                    _, _, h, _, _ = buffer.low_latency_dispatch(
+                        x,
+                        topk_idx,
+                        T,
+                        E,
+                        use_fp8=use_fp8,
+                        round_scale=args.round_scale,
+                        use_ue8m0=args.ue8m0,
+                    )
                     buffer.low_latency_combine(ya, topk_idx, topk_weights, h)
                 else:
                     _, _, h, _, _ = buffer.low_latency_dispatch_dedup(
-                        x, topk_idx, topk_weights, T, E, use_fp8=use_fp8, round_scale=args.round_scale, use_ue8m0=args.ue8m0
+                        x,
+                        topk_idx,
+                        topk_weights,
+                        T,
+                        E,
+                        use_fp8=use_fp8,
+                        round_scale=args.round_scale,
+                        use_ue8m0=args.ue8m0,
                     )
                     buffer.low_latency_combine_dedup(yb, topk_idx, h)
             torch.cuda.synchronize()
         if rank == 0:
-            print(f"PROFILE {name}\n" + prof.key_averages().table(
-                sort_by="self_cpu_time_total", row_limit=14), flush=True)
+            print(
+                f"PROFILE {name}\n"
+                + prof.key_averages().table(
+                    sort_by="self_cpu_time_total", row_limit=14
+                ),
+                flush=True,
+            )
             # Host op sequence of a few steps in the middle of the window
             evs = sorted(
-                (e for e in prof.events() if e.device_type.name == "CPU" and e.name != "Activity Buffer Request"),
+                (
+                    e
+                    for e in prof.events()
+                    if e.device_type.name == "CPU"
+                    and e.name != "Activity Buffer Request"
+                ),
                 key=lambda e: e.time_range.start,
             )
-            slow = sorted(range(len(evs)), key=lambda i: -evs[i].time_range.elapsed_us())[:12]
-            print(f"SLOWEST {name} n={len(evs)} " + " | ".join(
-                f"#{i}:{evs[i].name}:{evs[i].time_range.elapsed_us():.0f}" for i in sorted(slow)), flush=True)
+            slow = sorted(
+                range(len(evs)), key=lambda i: -evs[i].time_range.elapsed_us()
+            )[:12]
+            print(
+                f"SLOWEST {name} n={len(evs)} "
+                + " | ".join(
+                    f"#{i}:{evs[i].name}:{evs[i].time_range.elapsed_us():.0f}"
+                    for i in sorted(slow)
+                ),
+                flush=True,
+            )
             mid = len(evs) // 2
-            print(f"SEQUENCE {name} " + " | ".join(
-                f"{e.name}:{e.time_range.elapsed_us():.0f}" for e in evs[mid : mid + 40]), flush=True)
+            print(
+                f"SEQUENCE {name} "
+                + " | ".join(
+                    f"{e.name}:{e.time_range.elapsed_us():.0f}"
+                    for e in evs[mid : mid + 40]
+                ),
+                flush=True,
+            )
 
     order = [("default", run_default), ("dedup", run_dedup)]
     if args.sustain > 0:
@@ -824,8 +1047,12 @@ def main(args):
             time.sleep(args.sustain)
             c1, w1 = nic_counters(), time.time()
             dist.barrier()
-            return {"phase": name, "wall_start": w0, "wall_end": w1,
-                    "nic_delta": {k: c1[k] - c0[k] for k in c0 if k in c1}}
+            return {
+                "phase": name,
+                "wall_start": w0,
+                "wall_end": w1,
+                "nic_delta": {k: c1[k] - c0[k] for k in c0 if k in c1},
+            }
 
         dz = partial(run_dedup, compress=True)
         phases = [idle_phase("idle0")]
@@ -835,12 +1062,20 @@ def main(args):
         dist.all_reduce(period, op=dist.ReduceOp.MAX)
         period_s = float(period.item()) / 1e6
         phases.append(idle_phase("idle1"))
-        phases.append(sustain("dedupz_paced", partial(dz, False), args.sustain, period_s))
-        phases.append(sustain("dedup_paced", partial(run_dedup, False), args.sustain, period_s))
+        phases.append(
+            sustain("dedupz_paced", partial(dz, False), args.sustain, period_s)
+        )
+        phases.append(
+            sustain("dedup_paced", partial(run_dedup, False), args.sustain, period_s)
+        )
         phases.append(sustain("dedupz_free", partial(dz, False), args.sustain))
         phases.append(idle_phase("idle2"))
         for ph in phases:
-            print("SUSTAIN " + json.dumps(dict(ph, rank=rank, tokens=T, hidden=args.hidden)), flush=True)
+            print(
+                "SUSTAIN "
+                + json.dumps(dict(ph, rank=rank, tokens=T, hidden=args.hidden)),
+                flush=True,
+            )
         dist.barrier()
         buffer.destroy()
         dist.destroy_process_group()
@@ -926,22 +1161,40 @@ if __name__ == "__main__":
         "--stress", type=int, default=0, help="checked dedup steps with fresh routings"
     )
     parser.add_argument(
-        "--stress-dbo", type=int, default=0, help="checked pairs of interleaved micro-batches (two-batch overlap order)"
+        "--stress-dbo",
+        type=int,
+        default=0,
+        help="checked pairs of interleaved micro-batches (two-batch overlap order)",
     )
     parser.add_argument(
         "--compress", action="store_true", help="also run the compressed dedup combine"
     )
-    parser.add_argument("--round-scale", action="store_true", help="power-of-2 FP8 scales")
-    parser.add_argument("--ue8m0", action="store_true", help="UE8M0 scales (needs --round-scale)")
     parser.add_argument(
-        "--inject-fault", action="store_true", help="corrupt two tokens per stress step (checker control)"
+        "--round-scale", action="store_true", help="power-of-2 FP8 scales"
+    )
+    parser.add_argument(
+        "--ue8m0", action="store_true", help="UE8M0 scales (needs --round-scale)"
+    )
+    parser.add_argument(
+        "--inject-fault",
+        action="store_true",
+        help="corrupt two tokens per stress step (checker control)",
     )
     parser.add_argument("--reverse", action="store_true", help="time dedup first")
-    parser.add_argument("--graph", action="store_true", help="also time CUDA graph replay")
-    parser.add_argument("--profile-host", action="store_true", help="print host op/API profile")
-    parser.add_argument("--py-profile", action="store_true", help="print a cProfile of 50 eager steps")
     parser.add_argument(
-        "--skew", type=float, default=0.0, help="fraction of tokens routed entirely to rank 0's experts (incast)"
+        "--graph", action="store_true", help="also time CUDA graph replay"
+    )
+    parser.add_argument(
+        "--profile-host", action="store_true", help="print host op/API profile"
+    )
+    parser.add_argument(
+        "--py-profile", action="store_true", help="print a cProfile of 50 eager steps"
+    )
+    parser.add_argument(
+        "--skew",
+        type=float,
+        default=0.0,
+        help="fraction of tokens routed entirely to rank 0's experts (incast)",
     )
     parser.add_argument(
         "--dedup-only",
@@ -952,9 +1205,15 @@ if __name__ == "__main__":
         "--interference", action="store_true", help="also time a concurrent BF16 GEMM"
     )
     parser.add_argument(
-        "--sustain", type=int, default=0, help="seconds per phase of the congestion run (idle / default / dedup paced / free)"
+        "--sustain",
+        type=int,
+        default=0,
+        help="seconds per phase of the congestion run (idle / default / dedup paced / free)",
     )
     parser.add_argument(
-        "--dispatch-use-fp8", type=bool, default=True, action=argparse.BooleanOptionalAction
+        "--dispatch-use-fp8",
+        type=bool,
+        default=True,
+        action=argparse.BooleanOptionalAction,
     )
     main(parser.parse_args())

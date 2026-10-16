@@ -1943,7 +1943,7 @@ __global__ void cached_notify(
             for (int token_idx = batch_end_idx - 1;
                  token_idx >= batch_start_idx; --token_idx) {
               if (lane_id < NUM_MAX_NVL_PEERS) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || \
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) ||   \
     (defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
      !defined(UCCL_EP_NOTIFY_TMA))
                 auto current_head =

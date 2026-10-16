@@ -161,13 +161,14 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             reinterpret_cast<float*>(msg + kHeaderBytes + kHiddenBytes);
 
         int const e = lane_id < num_topk
-                          ? static_cast<int>(
-                                __ldg(topk_idx + token_idx * num_topk + lane_id))
+                          ? static_cast<int>(__ldg(
+                                topk_idx + token_idx * num_topk + lane_id))
                           : -1;
         int const dst_rank = e >= 0 ? e / num_local_experts : -1;
         if (lane_id < kMaxTopK) {
           float const w =
-              e >= 0 ? __ldg(topk_weights + token_idx * num_topk + lane_id) : 0.f;
+              e >= 0 ? __ldg(topk_weights + token_idx * num_topk + lane_id)
+                     : 0.f;
           reinterpret_cast<int16_t*>(msg + sizeof(int4))[lane_id] =
               static_cast<int16_t>(e);
           reinterpret_cast<float*>(msg + 2 * sizeof(int4))[lane_id] = w;
@@ -181,7 +182,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             auto bf16_values = reinterpret_cast<nv_bfloat16*>(&int4_value);
             float fp32_values[kNumElemsPerRead];
             float amax = kFP8Margin, scale, scale_inv;
-  #pragma unroll
+#pragma unroll
             for (int j = 0; j < kNumElemsPerRead; ++j) {
               fp32_values[j] = static_cast<float>(bf16_values[j]);
               amax = fmaxf(amax, fabsf(fp32_values[j]));
@@ -193,7 +194,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             vec_t int2_value;
             auto fp8x2_values =
                 reinterpret_cast<__nv_fp8x2_storage_t*>(&int2_value);
-  #pragma unroll
+#pragma unroll
             for (int j = 0; j < kNumElemsPerRead; j += 2) {
               float2 fp32x2 = {fp32_values[j] * scale,
                                fp32_values[j + 1] * scale};
@@ -210,7 +211,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
         // One send per distinct destination rank, in top-k order
         bool leader = dst_rank >= 0;
-  #pragma unroll
+#pragma unroll
         for (int k = 0; k < kMaxTopK; ++k) {
           int const other = __shfl_sync(WARP_MASK, dst_rank, k);
           if (k < lane_id and other == dst_rank) leader = false;
@@ -229,11 +230,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           // Copy-engine mode: stage per destination locally; the host
           // copies each destination's run to the peer after this launch.
           auto const dst_p2p_ptr =
-              ce_stage and r != rank ? reinterpret_cast<uint64_t>(
-                             ce_stage + (static_cast<size_t>(r) *
-                                             num_max_dispatch_tokens_per_rank +
-                                         slot) *
-                                            kMsgBytes)
+              ce_stage and r != rank
+                  ? reinterpret_cast<uint64_t>(
+                        ce_stage + (static_cast<size_t>(r) *
+                                        num_max_dispatch_tokens_per_rank +
+                                    slot) *
+                                       kMsgBytes)
               : ipc_rdma_base_ptrs
                   ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_rdma_base_ptrs, rank, r,
                                           max_nvl_peers, 0)
@@ -248,10 +250,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 d2h_channel_addrs, num_d2h_channel_addrs, false,
                 low_latency_buffer_idx);
           } else {
-            UNROLLED_WARP_COPY(8, lane_id, kMsgInt4,
-                               reinterpret_cast<int4*>(dst_p2p_ptr),
-                               reinterpret_cast<int4 const*>(msg),
-                               ld_staged, st_na_global);
+            UNROLLED_WARP_COPY(
+                8, lane_id, kMsgInt4, reinterpret_cast<int4*>(dst_p2p_ptr),
+                reinterpret_cast<int4 const*>(msg), ld_staged, st_na_global);
           }
           __syncwarp();
         }
@@ -323,8 +324,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           for (int k = 0; k < warp_id; ++k)
             leader &= s_dst_rank[buf][k] != dst_rank;
           if (leader) {
-            int slot =
-                lane_id == 0 ? atomicAdd(slot_counter + dst_rank, 1) : 0;
+            int slot = lane_id == 0 ? atomicAdd(slot_counter + dst_rank, 1) : 0;
             slot = __shfl_sync(WARP_MASK, slot, 0);
             int const channel = slot % C;
             auto const dst_ptr =
@@ -430,14 +430,15 @@ DEDUP_DISPATCH_RECV:
       if (lane_id < C) {
         int value = 0;
         if (same_node) {
-          while ((value = ld_acquire_sys_global(rdma_recv_count +
-                                                src_rank * C + lane_id)) == 0)
+          while ((value = ld_acquire_sys_global(rdma_recv_count + src_rank * C +
+                                                lane_id)) == 0)
             ;
         } else {
-          while ((value = static_cast<int>(ld_acquire_sys_global(
-                      reinterpret_cast<uint64_t const*>(
-                          rdma_recv_count_internode + src_rank * C +
-                          lane_id)))) == 0)
+          while (
+              (value = static_cast<int>(
+                   ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(
+                       rdma_recv_count_internode + src_rank * C + lane_id)))) ==
+              0)
             ;
         }
         num = -value - 1;
@@ -470,7 +471,8 @@ DEDUP_DISPATCH_RECV:
       num_hits += v;
     }
     if (sub_warp_id == 0 and lane_id == 0) {
-      int const begin = atomicAdd(packed_recv_count + local_expert_idx, num_hits);
+      int const begin =
+          atomicAdd(packed_recv_count + local_expert_idx, num_hits);
       s_begin[warp_group_id] = begin;
       packed_recv_layout_range[local_expert_idx * num_ranks + src_rank] =
           pack2<int, int64_t>(num_hits, begin);
@@ -486,20 +488,19 @@ DEDUP_DISPATCH_RECV:
         packed_recv_src_info + local_expert_idx * num_recv_per_expert;
     auto const num_aligned_scales =
         align<int>(kNumScales, sizeof(float) / sizeof(scale_t));
-    auto const recv_x_scales =
-        static_cast<scale_t*>(packed_recv_x_scales) +
-        static_cast<size_t>(local_expert_idx) * num_recv_per_expert *
-            num_aligned_scales;
+    auto const recv_x_scales = static_cast<scale_t*>(packed_recv_x_scales) +
+                               static_cast<size_t>(local_expert_idx) *
+                                   num_recv_per_expert * num_aligned_scales;
     int pos = s_begin[warp_group_id] + warp_offset;
     for (int i0 = sub_warp_id * WARP_SIZE; i0 < num_recv;
          i0 += num_warps_per_group * WARP_SIZE) {
       int const i = i0 + lane_id;
       int slot_k = -1;
       if (i < num_recv)
-        slot_k = find_expert(ld_nc_global(reinterpret_cast<int4 const*>(
-                                              src_base + i * kMsgBytes) +
-                                          1),
-                             global_expert_idx);
+        slot_k = find_expert(
+            ld_nc_global(
+                reinterpret_cast<int4 const*>(src_base + i * kMsgBytes) + 1),
+            global_expert_idx);
       auto mask = __ballot_sync(WARP_MASK, slot_k >= 0);
       while (mask) {
         int const l = __ffs(mask) - 1;
@@ -513,8 +514,7 @@ DEDUP_DISPATCH_RECV:
                         kMaxTopK +
                     k] = local_expert_idx * num_recv_per_expert + pos;
         }
-        auto const src_data =
-            reinterpret_cast<int4 const*>(msg + kHeaderBytes);
+        auto const src_data = reinterpret_cast<int4 const*>(msg + kHeaderBytes);
         UNROLLED_WARP_COPY(7, lane_id, kHiddenInt4,
                            recv_x_int4 + static_cast<size_t>(pos) * kHiddenInt4,
                            src_data, ld_nc_global, st_na_global);
@@ -539,9 +539,8 @@ DEDUP_DISPATCH_RECV:
 
     // One unit per source rank keeps the headers for combine
     if (local_expert_idx == 0) {
-      auto const dst =
-          dedup_hdr + static_cast<size_t>(src_rank) *
-                          num_max_dispatch_tokens_per_rank * 4;
+      auto const dst = dedup_hdr + static_cast<size_t>(src_rank) *
+                                       num_max_dispatch_tokens_per_rank * 4;
       for (int i = sub_warp_id * WARP_SIZE + lane_id; i < num_recv * 4;
            i += num_warps_per_group * WARP_SIZE)
         dst[i] = ld_nc_global(
@@ -594,26 +593,24 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   }();
   if (forced >= 0) warp_per_token = forced == 1;
 
-#define DEDUP_DISPATCH_LAUNCH_CASE(hidden)                                  \
-  {                                                                         \
-    auto dispatch_func = dispatch<false, false, hidden>;                    \
-    if (use_fp8 and not use_ue8m0) dispatch_func = dispatch<true, false, hidden>; \
-    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>; \
-    LAUNCH_KERNEL(&cfg, dispatch_func, packed_recv_x, packed_recv_x_scales, \
-                  packed_recv_src_info, packed_recv_layout_range,           \
-                  packed_recv_count, static_cast<int4*>(dedup_hdr),         \
-                  dedup_pos, dedup_count, rdma_recv_x, rdma_recv_count,     \
-                  rdma_recv_count_internode, rdma_x, x, topk_idx,           \
-                  topk_weights, ws, next_clean, next_clean_second,          \
-                  num_next_clean_int, num_tokens,                           \
-                  num_max_dispatch_tokens_per_rank, num_topk, num_experts,  \
-                  rank, num_ranks, C, num_warp_groups, num_warps_per_group, \
-                  round_scale, phases, d2h_channel_addrs,                   \
-                  num_d2h_channel_addrs, max_nvl_peers,                     \
-                  low_latency_buffer_idx, ipc_rdma_base_ptrs,               \
-                  rdma_buffer_ptr, atomic_buffer_ptr, warp_per_token,       \
-                  ce_stage, ce_counts);                                     \
-  }                                                                         \
+#define DEDUP_DISPATCH_LAUNCH_CASE(hidden)                                     \
+  {                                                                            \
+    auto dispatch_func = dispatch<false, false, hidden>;                       \
+    if (use_fp8 and not use_ue8m0)                                             \
+      dispatch_func = dispatch<true, false, hidden>;                           \
+    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;   \
+    LAUNCH_KERNEL(                                                             \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,              \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,     \
+        static_cast<int4*>(dedup_hdr), dedup_pos, dedup_count, rdma_recv_x,    \
+        rdma_recv_count, rdma_recv_count_internode, rdma_x, x, topk_idx,       \
+        topk_weights, ws, next_clean, next_clean_second, num_next_clean_int,   \
+        num_tokens, num_max_dispatch_tokens_per_rank, num_topk, num_experts,   \
+        rank, num_ranks, C, num_warp_groups, num_warps_per_group, round_scale, \
+        phases, d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,       \
+        low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,           \
+        atomic_buffer_ptr, warp_per_token, ce_stage, ce_counts);               \
+  }                                                                            \
   break
 
   DEDUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
@@ -641,9 +638,10 @@ struct ZipLayout {
   static constexpr int kWords = kGroups * 3;              // code words per lane
   static constexpr int kCodeOffset = kZipHeader + kHidden;
   static constexpr int kEscOffset = kCodeOffset + kWords * WARP_SIZE * 4;
-  static constexpr int kStride = kZipHeader + kHidden * 2;  // a raw row fits
+  static constexpr int kStride = kZipHeader + kHidden * 2;   // a raw row fits
   static constexpr int kMaxEsc = kStride - 16 - kEscOffset;  // packed < raw
-  static_assert(kHidden % (8 * WARP_SIZE) == 0, "row must be whole int4 per lane");
+  static_assert(kHidden % (8 * WARP_SIZE) == 0,
+                "row must be whole int4 per lane");
 };
 
 __device__ __forceinline__ int warp_exclusive_sum_int(int v, int& total) {
@@ -669,8 +667,9 @@ __device__ int zip_encode_row(int4 const* raw, uint8_t* msg, int lane_id) {
   int esum = 0, ecnt = 0;
   for (int it = 0; it < L::kIters; ++it) {
     int4 const v = raw[it * WARP_SIZE + lane_id];
-    uint32_t const w[4] = {static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
-                           static_cast<uint32_t>(v.z), static_cast<uint32_t>(v.w)};
+    uint32_t const w[4] = {
+        static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
+        static_cast<uint32_t>(v.z), static_cast<uint32_t>(v.w)};
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
       int const lo = (w[j] >> 7) & 0xFF, hi = (w[j] >> 23) & 0xFF;
@@ -683,7 +682,8 @@ __device__ int zip_encode_row(int4 const* raw, uint8_t* msg, int lane_id) {
     esum += __shfl_xor_sync(WARP_MASK, esum, d);
     ecnt += __shfl_xor_sync(WARP_MASK, ecnt, d);
   }
-  int const base = ecnt == 0 ? 0 : min(max((esum + ecnt / 2) / ecnt - 4, 0), 255 - 6);
+  int const base =
+      ecnt == 0 ? 0 : min(max((esum + ecnt / 2) / ecnt - 4, 0), 255 - 6);
 
   auto const sm_out = reinterpret_cast<uint2*>(msg + kZipHeader);
   auto const code_out = reinterpret_cast<uint32_t*>(msg + L::kCodeOffset);
@@ -700,11 +700,13 @@ __device__ int zip_encode_row(int4 const* raw, uint8_t* msg, int lane_id) {
 #pragma unroll
         for (int k = 0; k < 8; ++k) {
           int const e = (h[k] >> 7) & 0xFF;
-          uint32_t const code =
-              static_cast<uint32_t>(e - base) <= 6u ? static_cast<uint32_t>(e - base) : 7u;
+          uint32_t const code = static_cast<uint32_t>(e - base) <= 6u
+                                    ? static_cast<uint32_t>(e - base)
+                                    : 7u;
           c24 |= code << (3 * k);
-          sm[k / 4] |= static_cast<uint32_t>(((h[k] >> 8) & 0x80) | (h[k] & 0x7F))
-                       << (8 * (k % 4));
+          sm[k / 4] |=
+              static_cast<uint32_t>(((h[k] >> 8) & 0x80) | (h[k] & 0x7F))
+              << (8 * (k % 4));
         }
         nesc += count_escapes24(c24);
         sm_out[it * WARP_SIZE + lane_id] = make_uint2(sm[0], sm[1]);
@@ -726,13 +728,15 @@ __device__ int zip_encode_row(int4 const* raw, uint8_t* msg, int lane_id) {
 #pragma unroll
       for (int k = 0; k < 8; ++k) {
         int const e = (h[k] >> 7) & 0xFF;
-        if (static_cast<uint32_t>(e - base) > 6u) *esc++ = static_cast<uint8_t>(e);
+        if (static_cast<uint32_t>(e - base) > 6u)
+          *esc++ = static_cast<uint8_t>(e);
       }
     }
   }
   int const bytes = (L::kEscOffset + total + 15) & ~15;
   if (lane_id == 0)
-    *reinterpret_cast<int4*>(msg) = make_int4(kZipPacked | (base << 8), total, bytes, 0);
+    *reinterpret_cast<int4*>(msg) =
+        make_int4(kZipPacked | (base << 8), total, bytes, 0);
   return bytes;
 }
 
@@ -753,12 +757,16 @@ __device__ __forceinline__ ZipRow zip_open_row(uint8_t const* msg) {
     auto const words = reinterpret_cast<uint32_t const*>(msg + L::kCodeOffset);
     int nesc = 0;
     for (int g = 0; g < L::kGroups; ++g) {
-      uint32_t const w0 = ld_nc_global(words + (g * 3 + 0) * WARP_SIZE + get_lane_id());
-      uint32_t const w1 = ld_nc_global(words + (g * 3 + 1) * WARP_SIZE + get_lane_id());
-      uint32_t const w2 = ld_nc_global(words + (g * 3 + 2) * WARP_SIZE + get_lane_id());
+      uint32_t const w0 =
+          ld_nc_global(words + (g * 3 + 0) * WARP_SIZE + get_lane_id());
+      uint32_t const w1 =
+          ld_nc_global(words + (g * 3 + 1) * WARP_SIZE + get_lane_id());
+      uint32_t const w2 =
+          ld_nc_global(words + (g * 3 + 2) * WARP_SIZE + get_lane_id());
       nesc += count_escapes24(w0 & 0xFFFFFF) +
               count_escapes24((w0 >> 24) | ((w1 & 0xFFFF) << 8)) +
-              count_escapes24((w1 >> 16) | ((w2 & 0xFF) << 16)) + count_escapes24(w2 >> 8);
+              count_escapes24((w1 >> 16) | ((w2 & 0xFF) << 16)) +
+              count_escapes24(w2 >> 8);
     }
     int total;
     r.esc = msg + L::kEscOffset + warp_exclusive_sum_int(nesc, total);
@@ -768,7 +776,8 @@ __device__ __forceinline__ ZipRow zip_open_row(uint8_t const* msg) {
 
 // Add rows `it0 .. it0 + 3` of one received row (lane-major) into `acc`
 template <int kHidden>
-__device__ __forceinline__ void zip_accumulate_group(ZipRow& r, int g, float (&acc)[4][8],
+__device__ __forceinline__ void zip_accumulate_group(ZipRow& r, int g,
+                                                     float (&acc)[4][8],
                                                      int lane_id) {
   using L = ZipLayout<kHidden>;
   if (not r.packed) {
@@ -801,7 +810,8 @@ __device__ __forceinline__ void zip_accumulate_group(ZipRow& r, int g, float (&a
 #pragma unroll
       for (int k = 0; k < 8; ++k) {
         uint32_t const code = (c[q] >> (3 * k)) & 7;
-        uint32_t const e = code == 7 ? *r.esc++ : static_cast<uint32_t>(r.base) + code;
+        uint32_t const e =
+            code == 7 ? *r.esc++ : static_cast<uint32_t>(r.base) + code;
         uint32_t const b = (sm[k / 4] >> (8 * (k % 4))) & 0xFF;
         uint32_t const bits = ((b & 0x80) << 8) | (e << 7) | (b & 0x7F);
         acc[q][k] += __uint_as_float(bits << 16);
@@ -816,10 +826,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int64_t* rdma_recv_flag_internode, void* rdma_send_x, void const* x,
     int64_t const* topk_idx, int4 const* dedup_hdr, int const* dedup_pos,
     int const* dedup_count, int* workspace, int* next_clean,
-    int64_t* next_clean_second, int num_next_clean_int,
-    int num_combined_tokens, int num_max_dispatch_tokens_per_rank,
-    int num_topk, int num_experts, int rank, int num_ranks, int num_channels,
-    int phases, uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
+    int64_t* next_clean_second, int num_next_clean_int, int num_combined_tokens,
+    int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
+    int rank, int num_ranks, int num_channels, int phases,
+    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int max_nvl_peers, int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
     void* rdma_buffer_ptr, void* atomic_buffer_ptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
@@ -833,8 +843,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
   auto const num_global_warps = num_sms * num_warps;
   auto const num_local_experts = num_experts / num_ranks;
   auto const C = num_channels;
-  int* finish_counter = workspace;                 // [num_ranks * C]
-  int* clean_flag = workspace + num_ranks * C;     // [1]
+  int* finish_counter = workspace;              // [num_ranks * C]
+  int* clean_flag = workspace + num_ranks * C;  // [1]
 
   constexpr int kNumElemsPerInt4 = sizeof(int4) / sizeof(nv_bfloat16);
   constexpr int kRowBytes = kHidden * sizeof(nv_bfloat16);
@@ -850,7 +860,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
   auto const row_chunks = [&](int r) {
     return (ipc_rdma_base_ptrs != nullptr and
             uccl::get_ipc_p2p_ptr(reinterpret_cast<uint64_t>(rdma_recv_x),
-                                  ipc_rdma_base_ptrs, rank, r, max_nvl_peers, 0) != 0)
+                                  ipc_rdma_base_ptrs, rank, r, max_nvl_peers,
+                                  0) != 0)
                ? kChunks
                : 1;
   };
@@ -880,14 +891,15 @@ __global__ __launch_bounds__(1024, 1) void combine(
     if (flat >= num_items) break;
     {
       int src_rank = 0, i = flat;
-      for (int n; i >= (n = __ldg(dedup_count + src_rank) * row_chunks(src_rank)); ++src_rank)
+      for (int n;
+           i >= (n = __ldg(dedup_count + src_rank) * row_chunks(src_rank));
+           ++src_rank)
         i -= n;
       int const chunks = row_chunks(src_rank);
       int const chunk = i % chunks;
       i /= chunks;
-      size_t const row = static_cast<size_t>(src_rank) *
-                             num_max_dispatch_tokens_per_rank +
-                         i;
+      size_t const row =
+          static_cast<size_t>(src_rank) * num_max_dispatch_tokens_per_rank + i;
       int4 const h0 = __ldg(dedup_hdr + row * 4);
       int4 const h1 = __ldg(dedup_hdr + row * 4 + 1);
       int4 const h2 = __ldg(dedup_hdr + row * 4 + 2);
@@ -933,8 +945,10 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // kUnroll independent loads per source row in flight per lane; a
       // chunked row covers one pass only
       int const base_begin = lane_id + (chunks > 1 ? chunk * kChunkInt4 : 0);
-      int const base_end = chunks > 1 ? min(kRowInt4, (chunk + 1) * kChunkInt4) : kRowInt4;
-      for (int base = base_begin; base < base_end; base += WARP_SIZE * kUnroll) {
+      int const base_end =
+          chunks > 1 ? min(kRowInt4, (chunk + 1) * kChunkInt4) : kRowInt4;
+      for (int base = base_begin; base < base_end;
+           base += WARP_SIZE * kUnroll) {
         float acc[kUnroll][kNumElemsPerInt4] = {};
         for (int k = 0; k < num_src; ++k) {
           auto const src = static_cast<int4 const*>(x) +
@@ -943,7 +957,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #pragma unroll
           for (int u = 0; u < kUnroll; ++u) {
             int const idx = base + u * WARP_SIZE;
-            v[u] = idx < kRowInt4 ? ld_nc_global(src + idx) : make_int4(0, 0, 0, 0);
+            v[u] = idx < kRowInt4 ? ld_nc_global(src + idx)
+                                  : make_int4(0, 0, 0, 0);
           }
 #pragma unroll
           for (int u = 0; u < kUnroll; ++u) {
@@ -973,10 +988,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
         uint8_t const* send_msg = stage;
         int send_bytes = kSlotBytes;
         if constexpr (kCompress) {
-          auto const zstage =
-              static_cast<uint8_t*>(rdma_send_x) +
-              (static_cast<size_t>(num_ranks) * num_max_dispatch_tokens_per_rank + row) *
-                  kSlotBytes;
+          auto const zstage = static_cast<uint8_t*>(rdma_send_x) +
+                              (static_cast<size_t>(num_ranks) *
+                                   num_max_dispatch_tokens_per_rank +
+                               row) *
+                                  kSlotBytes;
           int const bytes = zip_encode_row<kHidden>(out_row, zstage, lane_id);
           if (bytes > 0) send_msg = zstage, send_bytes = bytes;
           __syncwarp();
@@ -1001,8 +1017,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
     if (lane_id == 0) {
       int const dst_rank = u / C, channel = u % C;
       int const num_recv = __ldg(dedup_count + dst_rank);
-      int const num_sent =
-          (num_recv / C + (channel < num_recv % C ? 1 : 0)) * row_chunks(dst_rank);
+      int const num_sent = (num_recv / C + (channel < num_recv % C ? 1 : 0)) *
+                           row_chunks(dst_rank);
       while (ld_acquire_global(finish_counter + u) != num_sent)
         ;
       while (ld_acquire_global(clean_flag) == 0)
@@ -1055,7 +1071,8 @@ DEDUP_COMBINE_RECV:
        token_idx += num_global_warps) {
     uint64_t rank_mask = 0;
     for (int k = 0; k < num_topk; ++k) {
-      auto const e = static_cast<int>(__ldg(topk_idx + token_idx * num_topk + k));
+      auto const e =
+          static_cast<int>(__ldg(topk_idx + token_idx * num_topk + k));
       if (e >= 0) rank_mask |= 1ull << (e / num_local_experts);
     }
     auto const out_row = static_cast<int4*>(combined_x) +
@@ -1069,7 +1086,8 @@ DEDUP_COMBINE_RECV:
         int const r = __ffsll(static_cast<long long>(m)) - 1;
         rows[num_rows++] = zip_open_row<kHidden>(
             static_cast<uint8_t const*>(rdma_recv_x) +
-            (static_cast<size_t>(r) * num_max_dispatch_tokens_per_rank + token_idx) *
+            (static_cast<size_t>(r) * num_max_dispatch_tokens_per_rank +
+             token_idx) *
                 kSlotBytes);
       }
       for (int g = 0; g < Zip::kGroups; ++g) {
@@ -1083,7 +1101,8 @@ DEDUP_COMBINE_RECV:
             int4 packed;
             auto const packed_bf16 = reinterpret_cast<nv_bfloat16*>(&packed);
 #pragma unroll
-            for (int k = 0; k < 8; ++k) packed_bf16[k] = static_cast<nv_bfloat16>(acc[q][k]);
+            for (int k = 0; k < 8; ++k)
+              packed_bf16[k] = static_cast<nv_bfloat16>(acc[q][k]);
             out_row[it * WARP_SIZE + lane_id] = packed;
           }
         }
@@ -1103,7 +1122,8 @@ DEDUP_COMBINE_RECV:
 #pragma unroll
         for (int u = 0; u < kUnroll; ++u) {
           int const idx = base + u * WARP_SIZE;
-          v[u] = idx < kRowInt4 ? ld_nc_global(src + idx) : make_int4(0, 0, 0, 0);
+          v[u] =
+              idx < kRowInt4 ? ld_nc_global(src + idx) : make_int4(0, 0, 0, 0);
         }
 #pragma unroll
         for (int u = 0; u < kUnroll; ++u) {
@@ -1148,20 +1168,20 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   EP_HOST_ASSERT(num_topk <= kMaxTopK and num_ranks <= 64);
   int* ws = dedup_workspace(workspace);
 
-#define DEDUP_COMBINE_LAUNCH_CASE(hidden)                                    \
-  {                                                                          \
-    auto combine_func = compress ? combine<hidden, true> : combine<hidden, false>; \
-    LAUNCH_KERNEL(&cfg, combine_func, combined_x, rdma_recv_x,               \
-                  rdma_recv_flag, rdma_recv_flag_internode, rdma_send_x, x,  \
-                  topk_idx, static_cast<int4 const*>(dedup_hdr), dedup_pos,  \
-                  dedup_count, ws, next_clean, next_clean_second,            \
-                  num_next_clean_int, num_combined_tokens,                   \
-                  num_max_dispatch_tokens_per_rank, num_topk, num_experts,   \
-                  rank, num_ranks, C, phases, d2h_channel_addrs,             \
-                  num_d2h_channel_addrs, max_nvl_peers,                      \
-                  low_latency_buffer_idx, ipc_rdma_base_ptrs,                \
-                  rdma_buffer_ptr, atomic_buffer_ptr);                       \
-  }                                                                          \
+#define DEDUP_COMBINE_LAUNCH_CASE(hidden)                                      \
+  {                                                                            \
+    auto combine_func =                                                        \
+        compress ? combine<hidden, true> : combine<hidden, false>;             \
+    LAUNCH_KERNEL(&cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag, \
+                  rdma_recv_flag_internode, rdma_send_x, x, topk_idx,          \
+                  static_cast<int4 const*>(dedup_hdr), dedup_pos, dedup_count, \
+                  ws, next_clean, next_clean_second, num_next_clean_int,       \
+                  num_combined_tokens, num_max_dispatch_tokens_per_rank,       \
+                  num_topk, num_experts, rank, num_ranks, C, phases,           \
+                  d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,     \
+                  low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr, \
+                  atomic_buffer_ptr);                                          \
+  }                                                                            \
   break
 
   DEDUP_LAUNCH_CONFIG(num_sms, kNumMaxWarpGroups * WARP_SIZE, stream);

@@ -367,7 +367,8 @@ class Buffer {
           "ep.Buffer: this build's high-throughput kernels assume " +
           std::to_string(NUM_MAX_NVL_PEERS) + " GPUs per node (got " +
           std::to_string(num_local_ranks) +
-          "); rebuild with NUM_MAX_NVL_PEERS=" + std::to_string(num_local_ranks) +
+          "); rebuild with NUM_MAX_NVL_PEERS=" +
+          std::to_string(num_local_ranks) +
           " or use the low-latency (dedup) path");
     {
       cudaGetDevice(&device_index);
@@ -1393,10 +1394,10 @@ class Buffer {
           buffer.dispatch_rdma_send_buffer, x, topk_idx, ptr0, ptr_internode0,
           count0, num_tokens, hidden, num_max_dispatch_tokens_per_rank,
           num_topk, num_experts, rank, num_ranks, use_fp8, round_scale,
-          use_ue8m0, workspace, ll_num_sms(), launch_stream, phases,
-          d_handles, num_d2h_channel_addrs, max_nvl_peers,
-          low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr, buffer.dispatch_rdma_recv_count_buffer_internode);
+          use_ue8m0, workspace, ll_num_sms(), launch_stream, phases, d_handles,
+          num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
+          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+          buffer.dispatch_rdma_recv_count_buffer_internode);
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1546,8 +1547,8 @@ class Buffer {
       int num_experts, bool use_fp8, bool round_scale, bool use_ue8m0,
       bool async, bool return_recv_hook) {
     EP_HOST_ASSERT(low_latency_mode);
-    EP_HOST_ASSERT(x_rows == 0 || (x_ptr != 0 && topk_idx_ptr != 0 &&
-                                   topk_weights_ptr != 0));
+    EP_HOST_ASSERT(x_rows == 0 ||
+                   (x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0));
     EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
     EP_HOST_ASSERT(dedup_hdr_ptr != 0 && dedup_pos_ptr != 0 &&
                    dedup_count_ptr != 0);
@@ -1593,39 +1594,40 @@ class Buffer {
         static_cast<uint8_t*>(buffer.dispatch_rdma_send_buffer) +
         static_cast<size_t>(num_max_dispatch_tokens_per_rank) * msg_bytes;
     auto const ce_counts = reinterpret_cast<int*>(
-        ce_stage + uccl::align<size_t>(static_cast<size_t>(num_ranks) *
-                                     num_max_dispatch_tokens_per_rank * msg_bytes,
-                                 16));
+        ce_stage +
+        uccl::align<size_t>(static_cast<size_t>(num_ranks) *
+                                num_max_dispatch_tokens_per_rank * msg_bytes,
+                            16));
     if (ce_mode)
-      EP_HOST_ASSERT(reinterpret_cast<uint8_t*>(ce_counts + num_ranks * num_ce_channels) <=
-                     static_cast<uint8_t*>(buffer.dispatch_rdma_send_buffer) +
-                         layout.send_buffer_bytes);
+      EP_HOST_ASSERT(
+          reinterpret_cast<uint8_t*>(ce_counts + num_ranks * num_ce_channels) <=
+          static_cast<uint8_t*>(buffer.dispatch_rdma_send_buffer) +
+              layout.send_buffer_bytes);
     auto launcher = [=](int phases) {
       auto const launch = [&](int launch_phases, uint8_t* stage, int* counts) {
-      uccl::internode_ll_dedup::dispatch(
-          reinterpret_cast<void*>(packed_recv_x_ptr),
-          packed_recv_x_scales_ptr == 0
-              ? nullptr
-              : reinterpret_cast<void*>(packed_recv_x_scales_ptr),
-          reinterpret_cast<int*>(packed_recv_src_info_ptr),
-          reinterpret_cast<int64_t*>(packed_recv_layout_range_ptr),
-          reinterpret_cast<int*>(packed_recv_count_ptr),
-          reinterpret_cast<void*>(dedup_hdr_ptr),
-          reinterpret_cast<int*>(dedup_pos_ptr),
-          reinterpret_cast<int*>(dedup_count_ptr),
-          buffer.dispatch_rdma_recv_data_buffer,
-          buffer.dispatch_rdma_recv_count_buffer,
-          buffer.dispatch_rdma_recv_count_buffer_internode,
-          buffer.dispatch_rdma_send_buffer, reinterpret_cast<void*>(x_ptr),
-          reinterpret_cast<int64_t const*>(topk_idx_ptr),
-          reinterpret_cast<float const*>(topk_weights_ptr), ptr0,
-          ptr_internode0, count0, x_rows, x_cols,
-          num_max_dispatch_tokens_per_rank, topk_cols, num_experts, rank,
-          num_ranks, use_fp8, round_scale, use_ue8m0, workspace,
-          ll_num_sms(), launch_stream, launch_phases, d_handles,
-          num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
-          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr, stage,
-          counts);
+        uccl::internode_ll_dedup::dispatch(
+            reinterpret_cast<void*>(packed_recv_x_ptr),
+            packed_recv_x_scales_ptr == 0
+                ? nullptr
+                : reinterpret_cast<void*>(packed_recv_x_scales_ptr),
+            reinterpret_cast<int*>(packed_recv_src_info_ptr),
+            reinterpret_cast<int64_t*>(packed_recv_layout_range_ptr),
+            reinterpret_cast<int*>(packed_recv_count_ptr),
+            reinterpret_cast<void*>(dedup_hdr_ptr),
+            reinterpret_cast<int*>(dedup_pos_ptr),
+            reinterpret_cast<int*>(dedup_count_ptr),
+            buffer.dispatch_rdma_recv_data_buffer,
+            buffer.dispatch_rdma_recv_count_buffer,
+            buffer.dispatch_rdma_recv_count_buffer_internode,
+            buffer.dispatch_rdma_send_buffer, reinterpret_cast<void*>(x_ptr),
+            reinterpret_cast<int64_t const*>(topk_idx_ptr),
+            reinterpret_cast<float const*>(topk_weights_ptr), ptr0,
+            ptr_internode0, count0, x_rows, x_cols,
+            num_max_dispatch_tokens_per_rank, topk_cols, num_experts, rank,
+            num_ranks, use_fp8, round_scale, use_ue8m0, workspace, ll_num_sms(),
+            launch_stream, launch_phases, d_handles, num_d2h_channel_addrs,
+            max_nvl_peers, low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs,
+            rdma_buffer_ptr, atomic_buffer_ptr, stage, counts);
       };
       if (not ce_mode or not(phases & LOW_LATENCY_SEND_PHASE)) {
         launch(phases, nullptr, nullptr);
@@ -1636,7 +1638,8 @@ class Buffer {
       // fork from and join back into the launch stream with events.
       ensure_ce_streams(num_ranks);
       CUDA_CHECK(cudaEventRecord(ce_fork_event, launch_stream));
-      auto const run_bytes = static_cast<size_t>(num_max_dispatch_tokens_per_rank) * msg_bytes;
+      auto const run_bytes =
+          static_cast<size_t>(num_max_dispatch_tokens_per_rank) * msg_bytes;
       auto const recv_off =
           static_cast<uint8_t*>(buffer.dispatch_rdma_recv_data_buffer) -
           static_cast<uint8_t*>(rdma_buffer_ptr) + rank * run_bytes;
@@ -1645,21 +1648,25 @@ class Buffer {
           static_cast<uint8_t*>(rdma_buffer_ptr) +
           static_cast<size_t>(rank) * num_ce_channels * sizeof(int);
       for (int dst = 0; dst < num_ranks; ++dst) {
-        if (dst == rank) continue;  // the send launch wrote its own rank directly
-        auto const peer = static_cast<uint8_t*>(ipc_rdma_base_ptrs[dst % max_nvl_peers]);
+        if (dst == rank)
+          continue;  // the send launch wrote its own rank directly
+        auto const peer =
+            static_cast<uint8_t*>(ipc_rdma_base_ptrs[dst % max_nvl_peers]);
         EP_HOST_ASSERT(peer != nullptr);
         auto const st = ce_streams[dst];
         CUDA_CHECK(cudaStreamWaitEvent(st, ce_fork_event, 0));
         if (x_rows > 0)
-          CUDA_CHECK(cudaMemcpyAsync(peer + recv_off, ce_stage + dst * run_bytes,
-                                     static_cast<size_t>(x_rows) * msg_bytes,
-                                     cudaMemcpyDefault, st));
-        CUDA_CHECK(cudaMemcpyAsync(peer + count_off, ce_counts + dst * num_ce_channels,
-                                   num_ce_channels * sizeof(int), cudaMemcpyDefault, st));
+          CUDA_CHECK(cudaMemcpyAsync(
+              peer + recv_off, ce_stage + dst * run_bytes,
+              static_cast<size_t>(x_rows) * msg_bytes, cudaMemcpyDefault, st));
+        CUDA_CHECK(cudaMemcpyAsync(
+            peer + count_off, ce_counts + dst * num_ce_channels,
+            num_ce_channels * sizeof(int), cudaMemcpyDefault, st));
         CUDA_CHECK(cudaEventRecord(ce_join_events[dst], st));
         CUDA_CHECK(cudaStreamWaitEvent(launch_stream, ce_join_events[dst], 0));
       }
-      if (phases & LOW_LATENCY_RECV_PHASE) launch(LOW_LATENCY_RECV_PHASE, nullptr, nullptr);
+      if (phases & LOW_LATENCY_RECV_PHASE)
+        launch(LOW_LATENCY_RECV_PHASE, nullptr, nullptr);
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1988,7 +1995,8 @@ class Buffer {
   void ensure_ce_streams(int n) {
     if (static_cast<int>(ce_streams.size()) >= n) return;
     if (ce_fork_event == nullptr)
-      CUDA_CHECK(cudaEventCreateWithFlags(&ce_fork_event, cudaEventDisableTiming));
+      CUDA_CHECK(
+          cudaEventCreateWithFlags(&ce_fork_event, cudaEventDisableTiming));
     while (static_cast<int>(ce_streams.size()) < n) {
       cudaStream_t st;
       cudaEvent_t ev;
@@ -2003,16 +2011,16 @@ class Buffer {
   // measurable host time on slow-clocked hosts.
   std::optional<uccl::LowLatencyDedupLayout> dedup_layout_;
   std::tuple<void*, int, int, int> dedup_layout_key_{nullptr, -1, -1, -1};
-  uccl::LowLatencyDedupLayout const& dedup_layout(int num_max_tokens, int hidden,
-                                                  int num_experts) {
+  uccl::LowLatencyDedupLayout const& dedup_layout(int num_max_tokens,
+                                                  int hidden, int num_experts) {
     auto const key =
         std::make_tuple(rdma_buffer_ptr, num_max_tokens, hidden, num_experts);
     if (not dedup_layout_ or key != dedup_layout_key_) {
-      dedup_layout_.emplace(rdma_buffer_ptr, num_max_tokens, hidden, num_ranks,
-                            num_experts, atomic_buffer_ptr,
-                            uccl::dedup_data_offset(num_rdma_bytes, num_max_tokens,
-                                                    hidden, num_ranks,
-                                                    num_experts));
+      dedup_layout_.emplace(
+          rdma_buffer_ptr, num_max_tokens, hidden, num_ranks, num_experts,
+          atomic_buffer_ptr,
+          uccl::dedup_data_offset(num_rdma_bytes, num_max_tokens, hidden,
+                                  num_ranks, num_experts));
       EP_HOST_ASSERT(dedup_layout_->total_bytes <=
                      static_cast<std::size_t>(num_rdma_bytes));
       dedup_layout_key_ = key;
@@ -2191,8 +2199,9 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
-  m.def("num_max_nvl_peers", []() { return NUM_MAX_NVL_PEERS; },
-        "GPUs per node the high-throughput kernels were built for");
+  m.def(
+      "num_max_nvl_peers", []() { return NUM_MAX_NVL_PEERS; },
+      "GPUs per node the high-throughput kernels were built for");
   m.def(
       "get_physical_gpu_rank",
       [](int device_index) {
@@ -2627,20 +2636,19 @@ NB_MODULE(ep, m) {
            nb::arg("packed_recv_layout_range_ptr"), nb::arg("dedup_hdr_ptr"),
            nb::arg("dedup_pos_ptr"), nb::arg("dedup_count_ptr"),
            nb::arg("compute_stream_ptr"),
-           nb::arg("num_max_dispatch_tokens_per_rank"),
-           nb::arg("num_experts"), nb::arg("use_fp8") = true,
-           nb::arg("round_scale") = false, nb::arg("use_ue8m0") = false,
-           nb::arg("is_async") = false, nb::arg("return_recv_hook") = false)
+           nb::arg("num_max_dispatch_tokens_per_rank"), nb::arg("num_experts"),
+           nb::arg("use_fp8") = true, nb::arg("round_scale") = false,
+           nb::arg("use_ue8m0") = false, nb::arg("is_async") = false,
+           nb::arg("return_recv_hook") = false)
       .def("low_latency_combine_dedup", &Buffer::low_latency_combine_dedup,
            nb::arg("x_ptr"), nb::arg("x_dim0"), nb::arg("x_dim1"),
            nb::arg("x_dim2"), nb::arg("topk_idx_ptr"), nb::arg("topk_rows"),
            nb::arg("topk_cols"), nb::arg("dedup_hdr_ptr"),
            nb::arg("dedup_pos_ptr"), nb::arg("dedup_count_ptr"),
            nb::arg("compute_stream_ptr"),
-           nb::arg("num_max_dispatch_tokens_per_rank"),
-           nb::arg("num_experts"), nb::arg("is_async") = false,
-           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"),
-           nb::arg("compress") = false)
+           nb::arg("num_max_dispatch_tokens_per_rank"), nb::arg("num_experts"),
+           nb::arg("is_async") = false, nb::arg("return_recv_hook") = false,
+           nb::arg("out_ptr"), nb::arg("compress") = false)
       .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer,
            nb::arg("num_max_dispatch_tokens_per_rank"), nb::arg("hidden"),
            nb::arg("num_experts"), nb::arg("stream_ptr"))
