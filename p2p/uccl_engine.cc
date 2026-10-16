@@ -27,6 +27,13 @@
 
 using Endpoint = ::Endpoint;
 
+#if defined(UCCL_USE_MUSA)
+static_assert(sizeof(gpuIpcMemHandle_t) + sizeof(uintptr_t) + sizeof(size_t) +
+                      sizeof(int) <=
+                  IPC_INFO_SIZE,
+              "MUSA IPC handle does not fit the existing C API wire format");
+#endif
+
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
   std::thread local_accept_thread;
@@ -123,6 +130,14 @@ static bool ipc_disabled() {
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+#if defined(UCCL_USE_MUSA)
+  try {
+    (void)get_transport_type();
+  } catch (std::invalid_argument const& error) {
+    std::cerr << error.what() << std::endl;
+    return nullptr;
+  }
+#endif
   (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -276,12 +291,20 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   int dev_idx = uccl::get_dev_idx((void*)data);
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
+#if defined(UCCL_USE_MUSA)
+    gpuError_t err =
+        gpuExportIpcRange(&entry.ipc_info.handle, &entry.ipc_info.offset,
+                          reinterpret_cast<void*>(data), size);
+#else
     static constexpr size_t kIpcAlignment = 1ul << 20;
     uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
     gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
                                         reinterpret_cast<void*>(aligned));
+#endif
     if (err == gpuSuccess) {
+#if !defined(UCCL_USE_MUSA)
       entry.ipc_info.offset = data - aligned;
+#endif
       entry.ipc_info.size = size;
       entry.ipc_info.gpu_idx = dev_idx;
       entry.has_ipc = true;

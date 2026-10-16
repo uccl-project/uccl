@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "compression.h"
 #include "endpoint_wrapper.h"
+#include "transport_factory.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/pause.h"
@@ -218,6 +219,9 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
 // -----------------------------------------------------------------------------
 
 Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
+#if defined(UCCL_USE_MUSA)
+  (void)get_transport_type();  // Reject unsupported paths before GPU setup.
+#endif
   // gpu_idx is always a local CUDA device ordinal.
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
@@ -246,15 +250,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
-  } else {
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
-  }
+  ep_ = uccl_create_endpoint(local_gpu_idx_);
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -268,6 +264,11 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
   }
+#if !defined(UCCL_USE_MUSA)
+  if (is_nccl_transport() || is_cxi_transport()) {
+    numa_node_ = get_numa_node_from_iface();
+  }
+#endif
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -311,6 +312,9 @@ std::vector<gpuStream_t>& Endpoint::get_ipc_streams(int dev) {
 }
 
 Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
+#if defined(UCCL_USE_MUSA)
+  (void)get_transport_type();
+#endif
   std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -336,13 +340,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
-  } else {
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
-  }
+  ep_ = uccl_create_endpoint(INVALID_GPU);
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -2251,7 +2249,15 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   transfer_info.size = len;
   transfer_info.operation = 1;  // response
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#if defined(UCCL_USE_MUSA)
+  auto err = gpuExportIpcRange(&transfer_info.handle, &transfer_info.offset,
+                               addr, len);
+  if (err != gpuSuccess) {
+    UCCL_LOG(ERROR) << "MUSA IPC export failed: " << gpuGetErrorString(err);
+    return false;
+  }
+  transfer_info.gpu_idx = local_gpu_idx_;
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
   // CNRT requires the exact allocation base, not a mask-aligned address.
   void* base_ptr = nullptr;
   size_t base_sz = 0;
@@ -2302,7 +2308,16 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
     transfer_info.size = len_v[i];
     transfer_info.operation = 1;  // response
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#if defined(UCCL_USE_MUSA)
+    auto err = gpuExportIpcRange(&transfer_info.handle, &transfer_info.offset,
+                                 addr_v[i], len_v[i]);
+    if (err != gpuSuccess) {
+      UCCL_LOG(ERROR) << "MUSA IPC vector export failed: "
+                      << gpuGetErrorString(err);
+      return false;
+    }
+    transfer_info.gpu_idx = local_gpu_idx_;
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
     // CNRT requires the exact allocation base, not a mask-aligned address.
     void* base_ptr = nullptr;
     size_t base_sz = 0;
@@ -2484,6 +2499,7 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (peer_id == UINT64_MAX) {
     return -1;
   }
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
     if (!nccl_ep || !*nccl_ep) return -1;
@@ -2494,6 +2510,7 @@ int Endpoint::send_notification(uint64_t conn_id,
     if (!cxi_ep || !*cxi_ep) return -1;
     return (*cxi_ep)->send_notification(peer_id, notification);
   }
+#endif
   return -1;
 }
 
@@ -2529,14 +2546,18 @@ void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else if (is_cxi_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else {
+#endif
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
+#if !defined(UCCL_USE_MUSA)
   }
+#endif
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
