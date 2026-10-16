@@ -40,6 +40,23 @@ struct RdmaDeviceManager {
   std::vector<int> get_best_dev_idx(int gpu) { return {gpu + 10}; }
   int get_numa_node(int device) { return device + 20; }
 };
+int uccl_get_numa_node(GenericEndpoint const& ep, int gpu_idx) {
+  return std::visit([&](auto const& endpoint) -> int {
+    using T = std::decay_t<decltype(*endpoint)>;
+#if defined(UCCL_USE_MUSA)
+    (void)sizeof(T);
+    return RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_idx)[0]);
+#else
+    if constexpr (std::is_same_v<T, NCCLEndpoint> ||
+                  std::is_same_v<T, CxiEndpoint>)
+      return get_numa_node_from_iface();
+    else
+      return RdmaDeviceManager::instance().get_numa_node(
+          RdmaDeviceManager::instance().get_best_dev_idx(gpu_idx)[0]);
+#endif
+  }, ep);
+}
 """
 
 
@@ -120,7 +137,7 @@ int main() {
         stop = engine.index("  send_proxy_thread_ =", start)
         block = engine[start:stop]
         source = (
-            '#include <cassert>\n#include "transport_factory.h"\n'
+            '#include <cassert>\n#include <type_traits>\n#include "transport_factory.h"\n'
             + NUMA
             + """
 int main() {
