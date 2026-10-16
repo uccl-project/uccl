@@ -45,10 +45,30 @@ struct PooledSendBundle {
       : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
 };
 
+// A compress_only handle has no user MR: it may only be used as the exact
+// registered source of a write.
+static inline bool compress_only_send_rejected(P2PMhandle const* local_mh,
+                                               void const* src, size_t size,
+                                               UcclRequest const* ureq) {
+  if (likely(!local_mh->compress_only)) return false;
+  if (ureq->type == ReqType::ReqRead) {
+    UCCL_LOG(ERROR) << "compress_only handle cannot be a read destination";
+    return true;
+  }
+  if (src != local_mh->registered_addr || size != local_mh->registered_len) {
+    UCCL_LOG(ERROR) << "compress_only handle must send exactly the buffer "
+                       "passed to reg_compress_only";
+    return true;
+  }
+  return false;
+}
+
 static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
                               UcclRequest* ureq) {
+  if (compress_only_send_rejected(local_mh, src, size, ureq))
+    return SendConnection::kPostError;
   auto bundle = std::make_shared<PooledSendBundle>();
 
   bundle->remote_mem_obj.addr = slot_item.addr;
@@ -67,6 +87,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
   bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
@@ -88,6 +109,8 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
                                        P2PMhandle* local_mh, void* src,
                                        size_t size, FifoItem const& slot_item,
                                        UcclRequest* ureq) {
+  if (compress_only_send_rejected(local_mh, src, size, ureq))
+    return SendConnection::kPostError;
   auto bundle = std::make_shared<PooledSendBundle>();
 
   bundle->remote_mem_obj.addr = slot_item.addr;
@@ -105,6 +128,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
   bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
@@ -210,6 +234,29 @@ inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
         } else {
           return s->uccl_regmr(data, len, mhandle->mr_array,
                                mhandle->cache_refs, mhandle->compress_ctx) >= 0;
+        }
+      },
+      ep);
+}
+
+// Prepare only the compression context for `data`; no user MR is registered.
+// Supported on RDMA endpoints only.
+inline bool uccl_prepare_compress_ctx(GenericEndpoint const& ep, void* data,
+                                      size_t len, CompressCtx compress_ctx) {
+  return std::visit(
+      [&](auto const& s) -> bool {
+        using T = std::decay_t<decltype(*s)>;
+        if constexpr (std::is_same_v<T, NCCLEndpoint> ||
+                      std::is_same_v<T, CxiEndpoint>) {
+          (void)s;
+          (void)data;
+          (void)len;
+          (void)compress_ctx;
+          return false;
+        } else {
+          if (!data) return false;
+          s->prepare_compress_ctx(data, len, compress_ctx);
+          return true;
         }
       },
       ep);
