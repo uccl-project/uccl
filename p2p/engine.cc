@@ -218,6 +218,9 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
 // -----------------------------------------------------------------------------
 
 Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
+#if defined(UCCL_USE_MUSA)
+  (void)get_transport_type();  // Reject unsupported paths before GPU setup.
+#endif
   // gpu_idx is always a local CUDA device ordinal.
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
@@ -246,6 +249,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
@@ -253,8 +257,11 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
     ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
     numa_node_ = get_numa_node_from_iface();
   } else {
+#endif
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
+#if !defined(UCCL_USE_MUSA)
   }
+#endif
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -311,6 +318,9 @@ std::vector<gpuStream_t>& Endpoint::get_ipc_streams(int dev) {
 }
 
 Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
+#if defined(UCCL_USE_MUSA)
+  (void)get_transport_type();
+#endif
   std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -336,13 +346,17 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
   } else if (is_cxi_transport()) {
     ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
   } else {
+#endif
     ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
+#if !defined(UCCL_USE_MUSA)
   }
+#endif
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -2251,25 +2265,15 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   transfer_info.size = len;
   transfer_info.operation = 1;  // response
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-  // CNRT requires the exact allocation base, not a mask-aligned address.
-  void* base_ptr = nullptr;
-  size_t base_sz = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr));
-  transfer_info.offset =
-      reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(base_ptr);
-  UCCL_CHECK(mlu_acquire_ipc_handle(base_ptr, &transfer_info.handle))
-      << "advertise_ipc: acquire ipc handle failed";
-  transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
-#else
-  // Calculate aligned address and offset
-  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
-  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
-  transfer_info.offset = addr_offset;
-
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                  reinterpret_cast<void*>(addr_aligned)));
-#endif
+  GpuIpcExport exported;
+  auto err = export_ipc_range(addr, len, &exported);
+  if (err != gpuSuccess) {
+    UCCL_LOG(ERROR) << "IPC export failed: " << gpuGetErrorString(err);
+    return false;
+  }
+  transfer_info.handle = exported.handle;
+  transfer_info.offset = exported.offset;
+  transfer_info.gpu_idx = exported.owner_device;
 
   // Copy the transfer info to output buffer
   std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
@@ -2302,26 +2306,15 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
     transfer_info.size = len_v[i];
     transfer_info.operation = 1;  // response
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-    // CNRT requires the exact allocation base, not a mask-aligned address.
-    void* base_ptr = nullptr;
-    size_t base_sz = 0;
-    GPU_RT_CHECK(gpuMemGetAddressRange(&base_ptr, &base_sz, addr_v[i]));
-    transfer_info.offset = reinterpret_cast<uintptr_t>(addr_v[i]) -
-                           reinterpret_cast<uintptr_t>(base_ptr);
-    UCCL_CHECK(mlu_acquire_ipc_handle(base_ptr, &transfer_info.handle))
-        << "advertisev_ipc: acquire ipc handle failed";
-    transfer_info.gpu_idx = local_gpu_idx_;  // owner GPU for owner-context open
-#else
-    // Calculate aligned address and offset
-    auto addr_aligned =
-        reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
-    auto addr_offset = reinterpret_cast<uintptr_t>(addr_v[i]) - addr_aligned;
-    transfer_info.offset = addr_offset;
-
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                    reinterpret_cast<void*>(addr_aligned)));
-#endif
+    GpuIpcExport exported;
+    auto err = export_ipc_range(addr_v[i], len_v[i], &exported);
+    if (err != gpuSuccess) {
+      UCCL_LOG(ERROR) << "IPC vector export failed: " << gpuGetErrorString(err);
+      return false;
+    }
+    transfer_info.handle = exported.handle;
+    transfer_info.offset = exported.offset;
+    transfer_info.gpu_idx = exported.owner_device;
 
     // Copy the transfer info to output buffer
     std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));
@@ -2484,6 +2477,7 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (peer_id == UINT64_MAX) {
     return -1;
   }
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
     if (!nccl_ep || !*nccl_ep) return -1;
@@ -2494,6 +2488,7 @@ int Endpoint::send_notification(uint64_t conn_id,
     if (!cxi_ep || !*cxi_ep) return -1;
     return (*cxi_ep)->send_notification(peer_id, notification);
   }
+#endif
   return -1;
 }
 
@@ -2525,18 +2520,27 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
 
 GenericEndpoint Endpoint::get_endpoint() const { return ep_; }
 
+gpuError_t Endpoint::export_ipc_range(void* ptr, size_t size,
+                                      GpuIpcExport* result) {
+  return gpuExportIpcRange(&ipc_export_context_, ptr, size, result);
+}
+
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+#if !defined(UCCL_USE_MUSA)
   if (is_nccl_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else if (is_cxi_transport()) {
     numa_node_ = get_numa_node_from_iface();
   } else {
+#endif
     numa_node_ = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
+#if !defined(UCCL_USE_MUSA)
   }
+#endif
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);

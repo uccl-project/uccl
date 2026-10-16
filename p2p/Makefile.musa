@@ -1,0 +1,89 @@
+# Native host-only MUSA P2P build. RDMA/IPC only; no NCCL/MCCL or CXI transport.
+# Common endpoint headers still require libfabric development headers.
+MUSA_HOME ?= /usr/local/musa
+MUSA_LIBDIR ?= $(MUSA_HOME)/lib
+LIBFABRIC_HOME ?= /opt/libfabric
+BUILD_DIR ?= .build/musa
+PYTHON ?= python3
+PYTHON_CONFIG ?= $(PYTHON)-config
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib
+INCDIR ?= $(PREFIX)/include
+
+NB_DIR ?= $(shell $(PYTHON) -c "import nanobind, os; print(os.path.dirname(nanobind.__file__))")
+NB_SRC_DIR := $(NB_DIR)/src
+NB_INCLUDES := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include \
+	-I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+PY_STABLE_ABI_OK := $(shell $(PYTHON) -c "import sys, sysconfig; print(int(sys.version_info >= (3, 12) and not sysconfig.get_config_var('Py_GIL_DISABLED')))")
+ifeq ($(PY_STABLE_ABI_OK),1)
+NB_ABI_FLAGS := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+PYEXT := .abi3.so
+else
+NB_ABI_FLAGS :=
+PYEXT := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+endif
+PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
+PYTHON_EMBED_LDFLAGS := $(shell $(PYTHON_CONFIG) --embed --ldflags)
+INSTALL_DIR ?= $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/uccl
+
+override CPPFLAGS += -DUCCL_USE_MUSA \
+	-I. -I./util -I./rdma -I./rdma/providers -I./nccl -I../include \
+	-I$(MUSA_HOME)/include -I$(LIBFABRIC_HOME)/include
+override CXXFLAGS += -O3 -std=c++17 -fPIC -MMD -MP \
+	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable
+IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
+	-Wl,--wrap=ibv_query_port -Wl,--wrap=ibv_reg_mr \
+	-Wl,--wrap=ibv_reg_dmabuf_mr -Wl,--wrap=ibv_create_cq \
+	-Wl,--wrap=ibv_create_qp -Wl,--wrap=ibv_qp_to_qp_ex
+override LDLIBS += -L$(MUSA_LIBDIR) -lmusart -lmusa \
+	-Wl,-rpath,$(MUSA_LIBDIR) -lz -lelf -lpthread -ldl
+override LDFLAGS += -shared -Wl,-Bsymbolic-functions $(IBV_WRAP_FLAGS)
+
+P2P_PYTHON_EXT := p2p$(PYEXT)
+P2P_SHARED_LIB := libuccl_p2p.so
+CORE_SOURCES := engine.cc \
+	util/adaptive_sleeper.cc util/common.cc util/epoll_client.cc \
+	util/epoll_server.cc util/memory_allocator.cc util/seq_num.cc \
+	rdma/compression.cc rdma/rdma_context.cc rdma/rdma_connection.cc \
+	rdma/rdma_ctrl_channel.cc rdma/rdma_data_channel.cc \
+	rdma/rdma_device.cc rdma/rdma_endpoint.cc \
+	rdma/providers/efa_data_channel_impl.cc rdma/providers/ib_data_channel_impl.cc \
+	rdma/ibverbs_dl.cc rdma/efadv_dl.cc
+CORE_OBJECTS := $(addprefix $(BUILD_DIR)/,$(CORE_SOURCES:.cc=.o))
+API_OBJECTS := $(BUILD_DIR)/engine_api.o $(BUILD_DIR)/uccl_engine.o
+NB_SRCS := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp nb_ndarray.cpp \
+	nb_static_property.cpp common.cpp error.cpp trampoline.cpp implicit.cpp
+NB_OBJECTS := $(addprefix $(BUILD_DIR)/nanobind/,$(NB_SRCS:.cpp=.o))
+
+# Shared artifact names can contain a newer CUDA/ROCm build. Always relink
+# them from this backend's isolated objects when this Makefile is selected.
+.PHONY: all clean install $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
+all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
+
+$(P2P_PYTHON_EXT): $(CORE_OBJECTS) $(BUILD_DIR)/engine_api.o $(NB_OBJECTS)
+	$(CXX) $(LDFLAGS) $^ -o $@ $(LDLIBS) $(PYTHON_LDFLAGS)
+
+$(P2P_SHARED_LIB): $(CORE_OBJECTS) $(BUILD_DIR)/uccl_engine.o
+	$(CXX) $(LDFLAGS) -Wl,--no-undefined $^ -o $@ $(LDLIBS) $(PYTHON_EMBED_LDFLAGS)
+
+$(BUILD_DIR)/%.o: %.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/nanobind/%.o: $(NB_SRC_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -fvisibility=hidden -c $< -o $@
+
+-include $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d)
+
+install: all
+	install -d $(INSTALL_DIR) $(LIBDIR) $(INCDIR)
+	rm -f $(INSTALL_DIR)/p2p.so $(INSTALL_DIR)/p2p.abi3.so $(INSTALL_DIR)/p2p.cpython-*.so
+	install -m 755 $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
+	install -m 644 uccl_engine.h util/common.h $(INCDIR)/
+
+clean:
+	rm -f $(CORE_OBJECTS) $(API_OBJECTS) $(NB_OBJECTS)
+	rm -f $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d)
+	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
