@@ -1,13 +1,28 @@
 #pragma once
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#include <cstddef>
+#include <cstdint>
+
+#if defined(UCCL_USE_MUSA) &&                                                \
+    (defined(__HIP_PLATFORM_AMD__) || defined(__CAMBRICON_PLATFORM_MLU__) || \
+     defined(USE_CUDA) || defined(__CUDACC__))
+#error "UCCL_USE_MUSA conflicts with another GPU backend"
+#endif
+
+#if defined(UCCL_USE_MUSA)
+#include "gpu_rt_musa.h"
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
 // Cambricon MLU: map the gpu* abstraction onto CNRT (cnrt*) / CNDRV (cn*);
 // direct macros where signatures match, inline wrappers where they differ.
 #include <climits>  // CNRT headers do not pull in PATH_MAX like cuda_runtime.h
+#include <map>
+#include <mutex>
+#include <utility>
 #include <cn_api.h>
 #include <cnrt.h>
 #define gpuSuccess cnrtSuccess
 #define gpuError_t cnrtRet_t
+#define gpuErrorInvalidValue cnrtErrorArgsInvalid
 #define gpuGetErrorString cnrtGetErrorStr
 #define gpuGetLastError cnrtGetLastError
 #define gpuErrorNotReady cnrtErrorNotReady
@@ -101,6 +116,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #include <cuda_runtime.h>
 #define gpuSuccess cudaSuccess
 #define gpuError_t cudaError_t
+#define gpuErrorInvalidValue cudaErrorInvalidValue
 #define gpuGetErrorString cudaGetErrorString
 #define gpuStream_t cudaStream_t
 #define gpuStreamNonBlocking cudaStreamNonBlocking
@@ -192,6 +208,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #include <hip/hip_runtime_api.h>
 #define gpuSuccess hipSuccess
 #define gpuError_t hipError_t
+#define gpuErrorInvalidValue hipErrorInvalidValue
 #define gpuGetErrorString hipGetErrorString
 #define gpuStream_t hipStream_t
 #define gpuStreamNonBlocking hipStreamNonBlocking
@@ -288,9 +305,82 @@ typedef int gpuMemRangeHandleType;
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
+struct GpuIpcExport {
+  gpuIpcMemHandle_t handle{};
+  uintptr_t offset = 0;
+  int owner_device = -1;
+};
+
+struct GpuIpcExportContext {
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  // CNRT acquisition is cached for the owning Endpoint's lifetime.
+  std::mutex cache_mu;
+  std::map<std::pair<int, uintptr_t>, gpuIpcMemHandle_t> handle_cache;
+#endif
+};
+
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+inline gpuError_t gpuIpcGetMemHandleForExport(GpuIpcExportContext* context,
+                                              gpuIpcMemHandle_t* handle,
+                                              void* base, int device) {
+  if (context == nullptr) return gpuErrorInvalidValue;
+  std::lock_guard<std::mutex> lock(context->cache_mu);
+  auto key = std::make_pair(device, reinterpret_cast<uintptr_t>(base));
+  auto it = context->handle_cache.find(key);
+  if (it != context->handle_cache.end()) {
+    *handle = it->second;
+    return gpuSuccess;
+  }
+  gpuError_t err = gpuIpcGetMemHandle(handle, base);
+  if (err == gpuSuccess) context->handle_cache.emplace(key, *handle);
+  return err;
+}
+#else
+inline gpuError_t gpuIpcGetMemHandleForExport(GpuIpcExportContext*,
+                                              gpuIpcMemHandle_t* handle,
+                                              void* base, int) {
+  return gpuIpcGetMemHandle(handle, base);
+}
+#endif
+
+inline gpuError_t gpuExportIpcRange(GpuIpcExportContext* context, void* ptr,
+                                    size_t size, GpuIpcExport* result) {
+  if (context == nullptr || ptr == nullptr || result == nullptr)
+    return gpuErrorInvalidValue;
+
+  void* base = nullptr;
+  size_t allocation_size = 0;
+  gpuError_t err = gpuMemGetAddressRange(&base, &allocation_size, ptr);
+  if (err != gpuSuccess) return err;
+
+  uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+  uintptr_t allocation = reinterpret_cast<uintptr_t>(base);
+  if (address < allocation || size > allocation_size ||
+      address - allocation > allocation_size - size) {
+    return gpuErrorInvalidValue;
+  }
+
+  GpuIpcExport exported;
+#if defined(UCCL_USE_MUSA) || defined(__CAMBRICON_PLATFORM_MLU__)
+  gpuPointerAttribute_t attributes{};
+  err = gpuPointerGetAttributes(&attributes, ptr);
+  if (err != gpuSuccess) return err;
+  exported.owner_device = attributes.device;
+#endif
+  err = gpuIpcGetMemHandleForExport(context, &exported.handle, base,
+                                    exported.owner_device);
+  if (err != gpuSuccess) return err;
+  exported.offset = address - allocation;
+  *result = exported;
+  return gpuSuccess;
+}
+
+// MUSA DMA-BUF export requires a separately validated driver contract.
+#if !defined(UCCL_USE_MUSA)
 // Function pointer type for DMA-BUF handle export (loaded via dlsym)
 typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
     void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
+#endif
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \

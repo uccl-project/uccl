@@ -459,19 +459,17 @@ struct alignas(64) WriteReqMeta {
   int64_t wr_id;
 };
 
-// A small on-host ack slot. Receiver writes |wr_id| (or wr_id|kAckErrBit) once
-// decompress completes. Sender polls the value to determine completion.
+// Receiver writes wr_id + 1 after decompression. Zero denotes a pending ACK.
 static constexpr uint64_t kAckErrBit = 1ull << 63;
 
 struct alignas(64) AckSlot {
   std::atomic<uint64_t> value;
 };
 
-// Ring sizes for the WriteReqMeta channel and the ack ring. Must be ≥ max
-// in-flight compressed writes so the monotonic-modulo allocators don't
-// wrap onto a still-pending entry.
+// Matching capacities give ACK and metadata entries the same slot index.
+// The slot stays reserved until its request's decompression ACK arrives.
 constexpr size_t kWriteMetaRingCapacity = 4096;
-constexpr size_t kAckRingDepth = 4096;
+constexpr size_t kAckRingDepth = kWriteMetaRingCapacity;
 constexpr size_t kWriteMetaRingBytes =
     sizeof(WriteReqMeta) * kWriteMetaRingCapacity;
 constexpr size_t kAckRingBytes = sizeof(AckSlot) * kAckRingDepth;
@@ -491,6 +489,8 @@ struct RDMASendRequest {
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
   CompressCtx compress_ctx;
+  // Set when the source handle has no user MR; must take the compression path.
+  bool compress_only = false;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
                   std::shared_ptr<RemoteMemInfo> remote,

@@ -64,7 +64,10 @@ struct ANSWarpState {
   ANSStateT warpState[kWarpSize];
 };
 
-struct __align__(32) ANSCoalescedHeader {
+// The float codec places this header at offsets that are only 16-byte
+// aligned. Declaring it __align__(32) lets SM100+ emit 256-bit loads, which
+// fault on those offsets.
+struct __align__(16) ANSCoalescedHeader {
   static __host__ __device__ uint32_t getCompressedOverhead(
       uint32_t numBlocks) {
     constexpr int kAlignment = kBlockAlignment / sizeof(uint2) == 0
@@ -229,5 +232,7 @@ struct __align__(32) ANSCoalescedHeader {
 static_assert(sizeof(ANSCoalescedHeader) == 32, "");
 
 static_assert(isEvenDivisor(sizeof(ANSCoalescedHeader), sizeof(uint4)), "");
+
+static_assert(sizeof(ANSCoalescedHeader) == 32, "ANS header layout");
 
 } // namespace dietgpu

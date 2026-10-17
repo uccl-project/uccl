@@ -3,6 +3,10 @@
 #include "util/util.h"
 #include <cerrno>
 
+static constexpr uint32_t compressed_write_slot(int64_t wr_id) {
+  return static_cast<uint64_t>(wr_id) % kAckRingDepth;
+}
+
 // ── RDMAConnection: Lifecycle ────────────────────────────────────────────────
 
 RDMAConnection::RDMAConnection() : last_channel_id_(0) {}
@@ -178,12 +182,44 @@ SendConnection::channels() const {
 
 // ── SendConnection: One-sided transfer ───────────────────────────────────────
 
+bool SendConnection::will_compress_write(
+    SendType send_type, size_t msg_size,
+    CompressCtx const& compress_ctx) const {
+  // Size gate first: small messages must not touch compression state or call
+  // Compressor helpers even when compression is configured for the connection.
+  if (msg_size < kMinCompressBytes || send_type != SendType::Write)
+    return false;
+  bool const c_ack = static_cast<bool>(ack_ring_);
+  bool const c_rdb = remote_decompress_buf_.length > 0;
+  bool const c_ctx = static_cast<bool>(compress_ctx);
+  bool const c_ft =
+      c_ctx && (compress_ctx->get_float_type() != FloatType::kUndefined);
+  bool const c_fit =
+      static_cast<uint64_t>(msg_size) <= remote_decompress_buf_.length;
+  return c_ack && c_rdb && c_ctx && c_ft && c_fit &&
+         Compressor::get_instance().should_compress_and_split_first(msg_size);
+}
+
+bool SendConnection::will_compress_write(
+    std::shared_ptr<RDMASendRequest> const& req) const {
+  return will_compress_write(req->send_type, req->local_mem->size,
+                             req->compress_ctx);
+}
+
 int64_t SendConnection::post_write_or_read(
     std::shared_ptr<RDMASendRequest> req) {
   if (unlikely(req->send_type != SendType::Write &&
                req->send_type != SendType::Read)) {
     UCCL_LOG(ERROR) << "SendConnection::write - Invalid send_type, expected "
                        "SendType::Write";
+    return kPostError;
+  }
+
+  // A compress_only request has no user MR, so it must never reach the
+  // uncompressed path below.
+  if (unlikely(req->compress_only && !will_compress_write(req))) {
+    UCCL_LOG(ERROR) << "SendConnection::post_write_or_read - compress_only "
+                       "request would not be compressed";
     return kPostError;
   }
 
@@ -200,21 +236,8 @@ int64_t SendConnection::post_write_or_read(
   int64_t wr_id = tracker_->send_packet(req->get_local_len());
   req->wr_id = wr_id;
 
-  // Size gate first: small messages must not touch compression state or call
-  // Compressor helpers even when compression is configured for the connection.
-  size_t const msg_size = req->local_mem->size;
-  if (msg_size >= kMinCompressBytes && req->send_type == SendType::Write) {
-    bool const c_ack = static_cast<bool>(ack_ring_);
-    bool const c_rdb = remote_decompress_buf_.length > 0;
-    bool const c_ctx = static_cast<bool>(req->compress_ctx);
-    bool const c_ft =
-        c_ctx && (req->compress_ctx->get_float_type() != FloatType::kUndefined);
-    bool const c_fit =
-        static_cast<uint64_t>(msg_size) <= remote_decompress_buf_.length;
-    if (c_ack && c_rdb && c_ctx && c_ft && c_fit &&
-        Compressor::get_instance().should_compress_and_split_first(msg_size)) {
-      return compress_write_request_split_first(req);
-    }
+  if (will_compress_write(req)) {
+    return compress_write_request_split_first(req);
   }
 
   // Lock-free channel selection + direct pointer.
@@ -521,8 +544,8 @@ void SendConnection::drain_failed_request(int64_t wr_id, size_t posted_chunks) {
   std::optional<uint64_t> arena_offset;
   {
     std::lock_guard<std::mutex> guard(pending_compressed_mu_);
-    auto it = pending_compressed_.find(wr_id);
-    if (it != pending_compressed_.end()) {
+    auto it = pending_compressed_.find(compressed_write_slot(wr_id));
+    if (it != pending_compressed_.end() && it->second.meta.wr_id == wr_id) {
       arena_offset = it->second.arena_offset;
       pending_compressed_.erase(it);
       pending_compressed_count_.fetch_sub(1, std::memory_order_relaxed);
@@ -740,12 +763,37 @@ int64_t SendConnection::compress_write_request_split_first(
     send_routine();
     std::this_thread::yield();
   }
-  uint32_t ack_slot = static_cast<uint32_t>(
-      next_ack_slot_.fetch_add(1, std::memory_order_relaxed) % kAckRingDepth);
-  static_cast<AckSlot*>(ack_ring_->addr)[ack_slot].value.store(
-      0, std::memory_order_relaxed);
-  uint64_t slot_base = remote_decompress_buf_.addr + arena_offset;
+  uint32_t ack_slot = compressed_write_slot(wr_id);
+  PendingCompressed entry{};
+  entry.arena_offset = arena_offset;
+  entry.arena_bytes = arena_bytes;
+  entry.meta.user_remote_addr = user_remote_addr;
+  entry.meta.user_rkey = user_remote_rkey;
+  entry.meta.total_uncomp_size = total_uncomp;
+  entry.meta.decompress_offset = arena_offset;
+  entry.meta.float_type = static_cast<uint32_t>(
+      req->compress_ctx ? req->compress_ctx->get_float_type()
+                        : FloatType::kUndefined);
+  entry.meta.ack_slot = ack_slot;
+  entry.meta.wr_id = wr_id;
+  // Retain the ACK and metadata slot until this request's decompression ACK.
+  for (;;) {
+    {
+      std::lock_guard<std::mutex> lk(pending_compressed_mu_);
+      if (pending_compressed_.try_emplace(ack_slot, entry).second) {
+        static_cast<AckSlot*>(ack_ring_->addr)[ack_slot].value.store(
+            0, std::memory_order_relaxed);
+        pending_compressed_count_.fetch_add(1, std::memory_order_relaxed);
+        break;
+      }
+    }
+    send_routine();
+    std::this_thread::yield();
+  }
+  tracker_->update_expected_ack_count(wr_id,
+                                      std::numeric_limits<uint32_t>::max());
 
+  uint64_t slot_base = remote_decompress_buf_.addr + arena_offset;
   // Phase 1: split into compress_buffer, post to slot_base.
   Compressor::get_instance().compress_split_one_batch(req);
   uint32_t first_seg = req->local_mem->size;
@@ -761,26 +809,6 @@ int64_t SendConnection::compress_write_request_split_first(
   size_t first_chunks = std::min<size_t>(
       num_channels * 2, static_cast<size_t>(ChunkSplitStrategy::kMaxSplitNum));
   if (first_chunks > first_seg) first_chunks = first_seg > 0 ? 1 : 0;
-  PendingCompressed entry{};
-  entry.ack_slot = ack_slot;
-  entry.arena_offset = arena_offset;
-  entry.arena_bytes = arena_bytes;
-  entry.meta.user_remote_addr = user_remote_addr;
-  entry.meta.user_rkey = user_remote_rkey;
-  entry.meta.total_uncomp_size = total_uncomp;
-  entry.meta.decompress_offset = arena_offset;
-  entry.meta.float_type = static_cast<uint32_t>(
-      req->compress_ctx ? req->compress_ctx->get_float_type()
-                        : FloatType::kUndefined);
-  entry.meta.ack_slot = ack_slot;
-  entry.meta.wr_id = wr_id;
-  {
-    std::lock_guard<std::mutex> lk(pending_compressed_mu_);
-    pending_compressed_.emplace(wr_id, entry);
-    pending_compressed_count_.fetch_add(1, std::memory_order_relaxed);
-  }
-  tracker_->update_expected_ack_count(wr_id,
-                                      std::numeric_limits<uint32_t>::max());
 
   // Per-chunk auto-flush gives the round-robin interleaving required on
   // Broadcom bnxt_re (batching causes LOC_QP_OP_ERR vendor=0x3).
@@ -798,7 +826,7 @@ int64_t SendConnection::compress_write_request_split_first(
 
   {
     std::lock_guard<std::mutex> lk(pending_compressed_mu_);
-    pending_compressed_[wr_id].meta.compressed_size = compressed_size;
+    pending_compressed_.at(ack_slot).meta.compressed_size = compressed_size;
   }
 
   // Advance past phase-1 channels so phase-2 lands on the next one.
@@ -866,9 +894,10 @@ void SendConnection::poll_ack_ring() {
     std::lock_guard<std::mutex> lk(pending_compressed_mu_);
     for (auto it = pending_compressed_.begin();
          it != pending_compressed_.end();) {
-      uint32_t ack_slot = it->second.ack_slot;
+      uint32_t ack_slot = it->first;
       uint64_t v = slots[ack_slot].value.load(std::memory_order_acquire);
-      if (v == 0) {
+      if (!it->second.meta_pushed ||
+          v != static_cast<uint64_t>(it->second.meta.wr_id) + 1) {
         ++it;
         continue;
       }
@@ -887,13 +916,14 @@ void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   uint32_t push_slot = 0;
   {
     std::lock_guard<std::mutex> lk(pending_compressed_mu_);
-    auto it = pending_compressed_.find(wr_id);
-    if (it == pending_compressed_.end() || it->second.meta_pushed) return;
+    auto it = pending_compressed_.find(compressed_write_slot(wr_id));
+    if (it == pending_compressed_.end() || it->second.meta.wr_id != wr_id ||
+        it->second.meta_pushed)
+      return;
     if (!tracker_->is_acknowledged(wr_id)) return;
     it->second.meta_pushed = true;
     meta_to_push = it->second.meta;
-    push_slot = static_cast<uint32_t>(static_cast<uint64_t>(wr_id) %
-                                      kWriteMetaRingCapacity);
+    push_slot = it->first;
   }
   UCCL_LOG(INFO, UCCL_RDMA)
       << "SendConnection::maybe_push_compressed_meta - pushing wr_id=" << wr_id
@@ -993,18 +1023,13 @@ void RecvConnection::handle_compressed_write_arrival(WriteReqMeta const& m) {
   RegMemBlock out(reinterpret_cast<void*>(m.user_remote_addr),
                   m.total_uncomp_size, MemoryType::GPU);
 
-  // Ack immediately: meta arrival implies data is already in
-  // decompress_buffer (sender posts meta only after all chunk WCs). wr_id+1
-  // avoids writing the zero sentinel that poll_ack_ring uses to mean "not yet
-  // acked".
-  ctrl_channel_->post_ack_write(
-      remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
-      remote_ack_ring_.get_rkey_by_context_id(0), m.ack_slot,
-      static_cast<uint64_t>(m.wr_id) + 1);
+  // Keep the arena range reserved until the decompressor has consumed it.
+  auto* ack = new AsyncAckCtx{
+      m.wr_id, m.ack_slot, remote_ack_ring_.addr + m.ack_slot * sizeof(AckSlot),
+      remote_ack_ring_.get_rkey_by_context_id(0), ctrl_channel_};
 
   Compressor::get_instance().decompress_async(
-      in, out, static_cast<FloatType>(m.float_type),
-      /*on_done=*/nullptr, /*user_data=*/nullptr);
+      in, out, static_cast<FloatType>(m.float_type), post_ack_host_fn, ack);
 }
 
 void RecvConnection::post_ack_host_fn(void* user_data) {
