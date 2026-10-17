@@ -9,6 +9,14 @@
 // #include "ibgda_device.cuh"
 #include "internode.cuh"
 
+// cached_notify moves NUM_MAX_NVL_PEERS ints per token with TMA, which needs
+// 16-byte multiples; builds for fewer than 4 GPUs per node use plain global
+// loads and stores instead.
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+    (NUM_MAX_NVL_PEERS * 4) % 16 == 0
+#define UCCL_EP_NOTIFY_TMA 1
+#endif
+
 namespace uccl {
 
 namespace internode {
@@ -1874,10 +1882,12 @@ __global__ void cached_notify(
         constexpr int num_bytes_per_token = sizeof(int) * NUM_MAX_NVL_PEERS;
         constexpr int num_tokens_per_batch =
             tma_batch_size / num_bytes_per_token;
+#ifdef UCCL_EP_NOTIFY_TMA
         EP_STATIC_ASSERT(num_bytes_per_token % 16 == 0,
                          "num_bytes_per_token should be divisible by 16");
+#endif
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
         // TMA stuffs
         extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
         auto tma_buffer = smem_tma_buffer + warp_id * kNumTMABytesPerWarp;
@@ -1915,7 +1925,7 @@ __global__ void cached_notify(
             auto batch_start_idx =
                 max(token_start_idx, batch_end_idx - num_tokens_per_batch);
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
             if (lane_id == 0) {
               tma_load_1d(
                   tma_buffer,
@@ -1933,17 +1943,18 @@ __global__ void cached_notify(
             for (int token_idx = batch_end_idx - 1;
                  token_idx >= batch_start_idx; --token_idx) {
               if (lane_id < NUM_MAX_NVL_PEERS) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) ||   \
+    (defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+     !defined(UCCL_EP_NOTIFY_TMA))
                 auto current_head =
-                    __ldg(combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS +
-                          lane_id);
+                    combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id];
                 if (current_head < 0) {
                   combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id] =
                       -last_head - 1;
                 } else {
                   last_head = current_head;
                 }
-#elif !defined(DISABLE_SM90_FEATURES)
+#elif defined(UCCL_EP_NOTIFY_TMA)
               auto current_head = reinterpret_cast<int*>(tma_buffer)
                   [(token_idx - batch_start_idx) * NUM_MAX_NVL_PEERS + lane_id];
               if (current_head < 0) {
@@ -1958,7 +1969,7 @@ __global__ void cached_notify(
               }
             }
 
-#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+#ifdef UCCL_EP_NOTIFY_TMA
             tma_store_fence();
             __syncwarp();
 
