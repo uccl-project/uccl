@@ -3,6 +3,7 @@
 #include "util/gpu_rt.h"
 #include "util/util.h"
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 static int relaxed_ordering_access_flag() {
@@ -406,8 +407,14 @@ bool RdmaContext::contains_range(uintptr_t outer_addr, size_t outer_size,
 RdmaContext::RegistrationMode RdmaContext::get_registration_mode(
     void* addr) const {
   bool is_gpu = is_gpu_pointer(addr);
-  // Intel RDMA NICs use DMA-BUF for GPU memory registration.
-  bool use_dmabuf = (is_intel_vendor(vendor_id_) && is_gpu);
+  // Intel RDMA NICs use DMA-BUF for GPU memory registration. Other NICs can
+  // opt in, e.g. hosts without nvidia_peermem where ibv_reg_mr on device
+  // memory fails with EFAULT.
+  static bool const force_dmabuf = [] {
+    char const* env = std::getenv("UCCL_P2P_RDMA_DMABUF");
+    return env != nullptr && std::strcmp(env, "1") == 0;
+  }();
+  bool use_dmabuf = (is_intel_vendor(vendor_id_) || force_dmabuf) && is_gpu;
   if (use_dmabuf) {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
