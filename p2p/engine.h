@@ -52,6 +52,13 @@ struct P2PMhandle {
   CompressCtx compress_ctx;
   std::vector<MrCacheHandleRef> cache_refs;
   std::shared_ptr<CxiMemoryRegion> cxi_region;
+  // True when only the compression context was prepared and no user-buffer MR
+  // was registered (mr_array/cache_refs are empty).
+  bool compress_only = false;
+  // Buffer passed to reg_compress_only(); sends on a compress_only handle must
+  // use exactly this address and length.
+  void const* registered_addr = nullptr;
+  size_t registered_len = 0;
 };
 
 struct MR {
@@ -301,6 +308,11 @@ class Endpoint {
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
            FloatType float_type = FloatType::kFloat32);
+
+  /* Prepare only the compression context for `data` (RDMA only); no user MR is
+   * registered. The returned mr_id refers to a compress_only P2PMhandle. */
+  bool reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
+                         FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
