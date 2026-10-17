@@ -156,9 +156,10 @@ class GpuIpcExportTests(unittest.TestCase):
             ),
             ("cnrt", "__CAMBRICON_PLATFORM_MLU__", ("cn_api.h", "cnrt.h")),
         ):
-            with self.subTest(
-                backend=backend
-            ), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(backend=backend),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 directory = Path(directory)
                 (directory / "runtime.h").write_text(RUNTIME)
                 for header in headers:
