@@ -162,16 +162,14 @@ class SendConnection : public RDMAConnection {
   // Compressed-write state
   std::shared_ptr<RegMemBlock> ack_ring_;
   RemoteMemInfo remote_decompress_buf_;
-  std::atomic<uint64_t> next_ack_slot_{0};
   struct PendingCompressed {
     WriteReqMeta meta;
-    uint32_t ack_slot = 0;
     uint64_t arena_offset = 0;
     uint64_t arena_bytes = 0;
     bool meta_pushed = false;
   };
   std::mutex pending_compressed_mu_;
-  std::unordered_map<int64_t, PendingCompressed> pending_compressed_;
+  std::unordered_map<uint32_t, PendingCompressed> pending_compressed_;
   std::atomic<size_t> pending_compressed_count_{0};
 
   // Per-chunk inflight byte counter for CC window checks.
@@ -293,7 +291,6 @@ class RecvConnection : public RDMAConnection {
 
   void handle_compressed_write_arrival(WriteReqMeta const& m);
 
-  // Context for the async-decompress callback path (currently unused).
   struct AsyncAckCtx {
     int64_t wr_id;
     uint32_t ack_slot;
