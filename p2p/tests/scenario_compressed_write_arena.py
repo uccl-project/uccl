@@ -7,7 +7,7 @@ Run on two RDMA-connected GPU processes with USE_DIETGPU=1:
       tests/scenario_compressed_write_arena.py --bytes=16777216
 
 The receiver retains every destination until the whole batch is verified.
-For dispatch diagnostics, set UCCL_DEBUG=INFO and UCCL_DEBUG_SUBSYS=RDMA;
+For dispatch diagnostics, set UCCL_P2P_LOG_LEVEL=INFO and UCCL_DEBUG_SUBSYS=RDMA;
 compressed reception logs include handle_compressed_write_arrival. A raw-path
 run alone does not establish compression coverage.
 Reported bandwidth includes the receiver's exact-byte checks and Gloo reply.

@@ -469,7 +469,7 @@ struct alignas(64) AckSlot {
 // Matching capacities give ACK and metadata entries the same slot index.
 // The slot stays reserved until its request's decompression ACK arrives.
 constexpr size_t kWriteMetaRingCapacity = 4096;
-constexpr size_t kAckRingDepth = 4096;
+constexpr size_t kAckRingDepth = kWriteMetaRingCapacity;
 constexpr size_t kWriteMetaRingBytes =
     sizeof(WriteReqMeta) * kWriteMetaRingCapacity;
 constexpr size_t kAckRingBytes = sizeof(AckSlot) * kAckRingDepth;

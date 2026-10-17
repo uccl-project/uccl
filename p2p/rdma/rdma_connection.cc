@@ -3,6 +3,10 @@
 #include "util/util.h"
 #include <cerrno>
 
+static constexpr uint32_t compressed_write_slot(int64_t wr_id) {
+  return static_cast<uint64_t>(wr_id) % kAckRingDepth;
+}
+
 // ── RDMAConnection: Lifecycle ────────────────────────────────────────────────
 
 RDMAConnection::RDMAConnection() : last_channel_id_(0) {}
@@ -540,8 +544,7 @@ void SendConnection::drain_failed_request(int64_t wr_id, size_t posted_chunks) {
   std::optional<uint64_t> arena_offset;
   {
     std::lock_guard<std::mutex> guard(pending_compressed_mu_);
-    auto it =
-        pending_compressed_.find(static_cast<uint64_t>(wr_id) % kAckRingDepth);
+    auto it = pending_compressed_.find(compressed_write_slot(wr_id));
     if (it != pending_compressed_.end() && it->second.meta.wr_id == wr_id) {
       arena_offset = it->second.arena_offset;
       pending_compressed_.erase(it);
@@ -760,8 +763,7 @@ int64_t SendConnection::compress_write_request_split_first(
     send_routine();
     std::this_thread::yield();
   }
-  uint32_t ack_slot =
-      static_cast<uint32_t>(static_cast<uint64_t>(wr_id) % kAckRingDepth);
+  uint32_t ack_slot = compressed_write_slot(wr_id);
   PendingCompressed entry{};
   entry.arena_offset = arena_offset;
   entry.arena_bytes = arena_bytes;
@@ -914,16 +916,14 @@ void SendConnection::maybe_push_compressed_meta(int64_t wr_id) {
   uint32_t push_slot = 0;
   {
     std::lock_guard<std::mutex> lk(pending_compressed_mu_);
-    auto it =
-        pending_compressed_.find(static_cast<uint64_t>(wr_id) % kAckRingDepth);
+    auto it = pending_compressed_.find(compressed_write_slot(wr_id));
     if (it == pending_compressed_.end() || it->second.meta.wr_id != wr_id ||
         it->second.meta_pushed)
       return;
     if (!tracker_->is_acknowledged(wr_id)) return;
     it->second.meta_pushed = true;
     meta_to_push = it->second.meta;
-    push_slot = static_cast<uint32_t>(static_cast<uint64_t>(wr_id) %
-                                      kWriteMetaRingCapacity);
+    push_slot = it->first;
   }
   UCCL_LOG(INFO, UCCL_RDMA)
       << "SendConnection::maybe_push_compressed_meta - pushing wr_id=" << wr_id
