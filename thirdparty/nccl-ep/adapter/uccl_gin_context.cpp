@@ -141,6 +141,11 @@ void UcclGinContext::setup(Config cfg) {
   }
   for (auto& p : proxies_) p->set_peers_meta(peers);
 
+  // Every proxy thread registers the shared atomic buffer and advertises it
+  // to its peers when it starts, so it must be set before start_dual().
+  uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
+  for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
+
   for (auto& p : proxies_) p->start_dual();
 
   // Collect D2H ring handles into device array
@@ -160,10 +165,6 @@ void UcclGinContext::setup(Config cfg) {
   ADAPTER_CUDA_OK(cudaMemcpy(d_handles_, h_handles.data(),
                               num_queues_ * sizeof(d2hq::D2HHandle*),
                               cudaMemcpyHostToDevice));
-
-  // Set up shared atomic buffer and resources
-  uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
-  for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
 
   resources_.d2h_queues = d_handles_;
   resources_.num_queues = static_cast<uint32_t>(num_queues_);
