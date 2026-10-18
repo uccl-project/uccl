@@ -25,29 +25,38 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+
+// The kernels assume 32-lane warps (32-bit ballot masks, launches of
+// kNumMaxWarpGroups * WARP_SIZE threads) and the NVIDIA FP8 conversions, so
+// ROCm builds get host entry points that reject the call (end of this file).
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
+#endif
 
 namespace uccl {
 namespace internode_ll_dedup {
+
+constexpr int kMaxChannels = 32;
+
+int num_channels(int num_d2h_channel_addrs, int num_experts, int num_ranks) {
+  int c = std::min(num_d2h_channel_addrs, num_experts / num_ranks);
+  return std::max(1, std::min(c, kMaxChannels));
+}
+
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
 
 constexpr int kNumMaxWarpGroups = 32;
 constexpr int kMaxTopK = 8;
 // Message header: int4 {src token, 0, 0, 0} | int16 expert ids[8] |
 // float weights[8].
 constexpr int kHeaderBytes = 4 * sizeof(int4);
-constexpr int kMaxChannels = 32;
 
 // Dedup counters live in the upper half of the LL workspace so they never
 // overlap the default kernels' counters. All of them return to zero at the
 // end of every call.
 __host__ __device__ inline int* dedup_workspace(void* workspace) {
   return static_cast<int*>(workspace) + NUM_WORKSPACE_BYTES / 2 / sizeof(int);
-}
-
-int num_channels(int num_d2h_channel_addrs, int num_experts, int num_ranks) {
-  int c = std::min(num_d2h_channel_addrs, num_experts / num_ranks);
-  return std::max(1, std::min(c, kMaxChannels));
 }
 
 // Cooperative launch without the thread-block cluster attribute that
@@ -1188,6 +1197,29 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   SWITCH_HIDDEN(DEDUP_COMBINE_LAUNCH_CASE);
 #undef DEDUP_COMBINE_LAUNCH_CASE
 }
+
+#else  // ROCm
+
+void dispatch(void*, void*, int*, int64_t*, int*, void*, int*, int*, void*,
+              int*, int64_t*, void*, void const*, int64_t const*, float const*,
+              int*, int64_t*, int, int, int, int, int, int, int, int, bool,
+              bool, bool, void*, int, cudaStream_t, int, uint64_t const*, int,
+              int, int, void**, void*, void*, uint8_t*, int*) {
+  throw EPException("EP", __FILE__, __LINE__,
+                    "low_latency_dispatch_dedup is not supported on ROCm; "
+                    "use low_latency_dispatch");
+}
+
+void combine(void*, void*, int*, int64_t*, void*, void const*, int64_t const*,
+             void const*, int const*, int const*, int*, int64_t*, int, int, int,
+             int, int, int, int, int, void*, int, cudaStream_t, int,
+             uint64_t const*, int, int, int, void**, void*, void*, bool) {
+  throw EPException("EP", __FILE__, __LINE__,
+                    "low_latency_combine_dedup is not supported on ROCm; "
+                    "use low_latency_combine");
+}
+
+#endif
 
 }  // namespace internode_ll_dedup
 }  // namespace uccl
