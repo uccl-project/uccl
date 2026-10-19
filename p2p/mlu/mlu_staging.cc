@@ -257,19 +257,3 @@ void Endpoint::mlu_poller_func() {
   }
 }
 #endif
-
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-// cnrtAcquireMemHandle succeeds only once per allocation; cache so repeat
-// advertise reuses it.
-bool Endpoint::mlu_acquire_ipc_handle(void* base_ptr, gpuIpcMemHandle_t* out) {
-  std::lock_guard<std::mutex> lk(mlu_ipc_handle_mu_);
-  auto it = mlu_ipc_handle_cache_.find(base_ptr);
-  if (it != mlu_ipc_handle_cache_.end()) {
-    *out = it->second;
-    return true;
-  }
-  if (gpuIpcGetMemHandle(out, base_ptr) != gpuSuccess) return false;
-  mlu_ipc_handle_cache_[base_ptr] = *out;
-  return true;
-}
-#endif
