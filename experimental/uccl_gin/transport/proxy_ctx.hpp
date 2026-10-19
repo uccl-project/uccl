@@ -217,10 +217,12 @@ struct ProxyCtx {
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
   uint64_t barrier_seq = 0;
-  int barrier_wr = -1;
+  // FIFO WR ids carry the D2H queue index in the high 32 bits; keep them whole
+  // so QUIET/BARRIER on queues other than 0 are matched when they complete.
+  int64_t barrier_wr = -1;
 
   bool quiet_inflight = false;
-  int quiet_wr = -1;
+  int64_t quiet_wr = -1;
 
   // Rank-0 bookkeeping
   std::vector<uint8_t> barrier_arrived;  // size = num_ranks; 1 if arrival seen

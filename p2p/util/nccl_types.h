@@ -6,7 +6,10 @@
 // These definitions must match the NCCL ABI. They are stable across
 // NCCL 2.x versions.
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#if defined(UCCL_USE_MUSA)
+#include <musa_runtime.h>
+typedef musaStream_t cudaStream_t;
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
 #include <cnrt.h>
 typedef cnrtQueue_t cudaStream_t;
 #elif defined(__HIP_PLATFORM_AMD__)

@@ -383,23 +383,22 @@ NB_MODULE(p2p, m) {
                 }
                 // Also generate IPC handle for intra-node transfers
                 {
-                  constexpr size_t kIpcAlign = 1ul << 20;
                   IpcTransferInfo ipc_info = {};
                   ipc_info.size = sizes[i];
                   ipc_info.operation = 1;
-                  auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
-                  auto addr_aligned = addr_val & ~(kIpcAlign - 1);
-                  ipc_info.offset = addr_val - addr_aligned;
                   bool is_host =
                       (uccl::get_dev_idx(const_cast<void*>(ptrs[i])) == -1);
                   ipc_info.is_host = is_host;
                   if (!is_host) {
-                    auto err = gpuIpcGetMemHandle(
-                        &ipc_info.handle,
-                        reinterpret_cast<void*>(addr_aligned));
+                    GpuIpcExport exported;
+                    auto err = self.export_ipc_range(const_cast<void*>(ptrs[i]),
+                                                     sizes[i], &exported);
                     if (err != gpuSuccess) {
                       throw std::runtime_error(gpuGetErrorString(err));
                     }
+                    ipc_info.handle = exported.handle;
+                    ipc_info.offset = exported.offset;
+                    ipc_info.gpu_idx = exported.owner_device;
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
