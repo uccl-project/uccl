@@ -6,7 +6,7 @@
 # dependency boundary is already local to experimental/uccl_gin.
 #
 # Two platforms:
-#   PLATFORM=cuda (default) -> NVIDIA + EFA, nvcc, NCCL-GIN reference path on.
+#   PLATFORM=cuda (default) -> NVIDIA + EFA or RC/IB, nvcc, NCCL-GIN reference on.
 #   PLATFORM=rocm           -> AMD/ROCm + RoCE, hipcc, NCCL-GIN reference off.
 # On ROCm the inter-node atomic primitives (red_add_rel/put_tail_add/put_value)
 # are NOT supported yet (EFA-shaped software-seq atomics); only put + quiet work.
@@ -80,6 +80,10 @@ else
 # --------------------------- NVIDIA / CUDA / EFA ---------------------------
 CUDA_HOME ?= /usr/local/cuda
 EFA_HOME  ?= /opt/amazon/efa
+TRANSPORT ?= efa
+ifneq ($(filter $(TRANSPORT),efa ib),$(TRANSPORT))
+$(error TRANSPORT must be efa or ib)
+endif
 SM ?= 90
 UCCL_GIN_WITH_NCCL_GIN ?= 1
 
@@ -102,23 +106,23 @@ NCCL_INC ?= $(shell $(PYTHON) -c "import nvidia.nccl,pathlib;print(pathlib.Path(
 NCCL_LIB ?= $(shell $(PYTHON) -c "import nvidia.nccl,pathlib;print(pathlib.Path(nvidia.nccl.__path__[0])/'lib')")
 NCCL_SO  := $(notdir $(firstword $(wildcard $(NCCL_LIB)/libnccl.so $(NCCL_LIB)/libnccl.so.*)))
 
-DEFS := $(MPI_C_DEFS) -DEFA -DNCCL_CHECK_CUDACC=1 -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
+DEFS := $(MPI_C_DEFS) $(if $(filter efa,$(TRANSPORT)),-DEFA) -DNCCL_CHECK_CUDACC=1 -DUCCL_NUM_PROXY_THS=$(NUM_PROXY_THS) \
         -DUCCL_GIN_WITH_NCCL_GIN=$(UCCL_GIN_WITH_NCCL_GIN)
 INCLUDES := -I. -Itransport -I$(NCCL_INC) -I../../include -I$(CUDA_HOME)/include -I$(PYTHON_INC) \
-            -I$(EFA_HOME)/include $(MPI_INC)
+            $(if $(filter efa,$(TRANSPORT)),-I$(EFA_HOME)/include) $(MPI_INC)
 
 HOSTFLAGS := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden $(DEFS) $(INCLUDES)
 DEVFLAGS  := -O3 -std=c++17 -arch=sm_$(SM) --expt-relaxed-constexpr $(DEFS) $(INCLUDES) \
              -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden"
 
 NVCC_RPATH := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
-              -Xlinker -rpath -Xlinker $(EFA_HOME)/lib \
+             $(if $(filter efa,$(TRANSPORT)),-Xlinker -rpath -Xlinker $(EFA_HOME)/lib) \
               -Xlinker -rpath -Xlinker $(NCCL_LIB) \
               -Xlinker -rpath -Xlinker $(MPI_PREFIX)/lib
 
 LDFLAGS := -L$(CUDA_HOME)/lib64 -L$(CUDA_HOME)/lib64/stubs $(NVCC_RPATH) \
-           -L$(EFA_HOME)/lib -L$(NCCL_LIB) \
-           -L$(MPI_PREFIX)/lib -lmpi -l:$(NCCL_SO) -lefa -libverbs -lnl-3 -lnl-route-3 \
+           $(if $(filter efa,$(TRANSPORT)),-L$(EFA_HOME)/lib) -L$(NCCL_LIB) \
+           -L$(MPI_PREFIX)/lib -lmpi -l:$(NCCL_SO) $(if $(filter efa,$(TRANSPORT)),-lefa) -libverbs -lnl-3 -lnl-route-3 \
            -lnuma -lcudart -lcuda -lpthread
 
 COMPILE_HOST = $(CXX) $(HOSTFLAGS) -MMD -MP -c $< -o $@

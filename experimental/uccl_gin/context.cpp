@@ -137,6 +137,12 @@ void Context::setup(ContextConfig cfg) {
     }
     for (auto& p : proxies_) p->set_peers_meta(peers);
 
+    // Proxy construction allocates the signal buffer on lane zero. Set the
+    // shared address before starting workers: registration and QP bootstrap
+    // read it in those threads, so a later assignment races with startup.
+    uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
+    for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
+
     MPI_Barrier(MPI_COMM_WORLD);
     for (auto& p : proxies_) p->start_dual();
     MPI_Barrier(MPI_COMM_WORLD);
@@ -157,9 +163,6 @@ void Context::setup(ContextConfig cfg) {
     UCCL_GIN_CUDA_OK(gpuMemcpy(d_handles_, h_handles.data(),
                                num_queues_ * sizeof(d2hq::D2HHandle*),
                                gpuMemcpyHostToDevice));
-
-    uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
-    for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
 
     resources_.d2h_queues = d_handles_;
     resources_.num_queues = static_cast<uint32_t>(num_queues_);
