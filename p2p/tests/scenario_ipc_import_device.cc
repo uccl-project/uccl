@@ -8,7 +8,9 @@
 #include "uccl_engine.h"
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -254,28 +256,64 @@ int main(int argc, char** argv) {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets))
       throw std::runtime_error("socketpair failed");
-    pid_t children[2];
+    pid_t children[2] = {-1, -1};
+    bool passed = true;
     for (int peer = 0; peer < 2; ++peer) {
       children[peer] = fork();
-      if (children[peer] < 0) throw std::runtime_error("fork failed");
+      if (children[peer] < 0) {
+        std::perror("fork");
+        passed = false;
+        break;
+      }
       if (children[peer] == 0) {
         close(sockets[1 - peer]);
-        setenv("CUDA_VISIBLE_DEVICES", argv[1 + 2 * peer], 1);
-        setenv("UCCL_P2P_COMPRESS_STRATEGY", "none", 1);
+        if (setenv("CUDA_VISIBLE_DEVICES", argv[1 + 2 * peer], 1) ||
+            setenv("UCCL_P2P_COMPRESS_STRATEGY", "none", 1)) {
+          std::perror("setenv");
+          _exit(127);
+        }
         std::string fd = std::to_string(sockets[peer]);
         execl(argv[0], argv[0], "--peer", peer == 0 ? "exporter" : "importer",
               argv[2 + 2 * peer], fd.c_str(), nullptr);
+        std::perror("exec");
         _exit(127);
       }
     }
     close(sockets[0]);
     close(sockets[1]);
-    bool passed = true;
-    for (auto child : children) {
-      int status = 0;
-      if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
-          WEXITSTATUS(status) != 0)
+    // Bound connection setup and stalled peers, including a failed sibling.
+    auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(100);
+    while (passed) {
+      bool running = false;
+      for (auto& child : children) {
+        if (child < 0) continue;
+        int status = 0;
+        pid_t result = waitpid(child, &status, WNOHANG);
+        if (result == child) {
+          child = -1;
+          if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) passed = false;
+        } else if (result < 0 && errno != EINTR) {
+          if (errno == ECHILD) child = -1;
+          std::perror("waitpid");
+          passed = false;
+        } else {
+          running = true;
+        }
+      }
+      if (!running || !passed) break;
+      if (std::chrono::steady_clock::now() >= deadline) {
+        std::fprintf(stderr, "IPC peers timed out\n");
         passed = false;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    for (auto child : children) {
+      if (child < 0) continue;
+      kill(child, SIGKILL);
+      while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+      }
     }
     return passed ? 0 : 1;
   } catch (std::exception const& error) {
