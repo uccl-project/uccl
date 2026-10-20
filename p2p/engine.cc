@@ -1929,6 +1929,18 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
+  int num_streams =
+      std::min(streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  // Finish host allocations before opening a mapping or submitting copies.
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = target_gpu;
+  op->events.resize(num_streams);
+  auto status = std::make_unique<TransferStatus>();
+
   void* raw_dst_ptr = nullptr;
   void* dst_ptr = nullptr;
   if (info.direct_addr != 0) {
@@ -1941,14 +1953,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
-  int num_streams =
-      std::min(streams.size(),
-               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
-  size_t chunk_size = size / num_streams;
-
-  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, target_gpu};
-  op->events.resize(num_streams);
+  op->raw_ptr = raw_dst_ptr;
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_data = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
@@ -1972,11 +1977,12 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
   }
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
@@ -2004,6 +2010,18 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
+  int num_streams =
+      std::min(streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  // Finish host allocations before opening a mapping or submitting copies.
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = target_gpu;
+  op->events.resize(num_streams);
+  auto status = std::make_unique<TransferStatus>();
+
   void* raw_src_ptr = nullptr;
   void* src_ptr = nullptr;
   if (info.direct_addr != 0) {
@@ -2015,14 +2033,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
-  int num_streams =
-      std::min(streams.size(),
-               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
-  size_t chunk_size = size / num_streams;
-
-  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, target_gpu};
-  op->events.resize(num_streams);
+  op->raw_ptr = raw_src_ptr;
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_src = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
@@ -2046,11 +2057,12 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
   }
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
