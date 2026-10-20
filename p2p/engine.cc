@@ -464,7 +464,9 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 
-  if (uccl_conn_id.sock_fd < 0 || uccl_conn_id.peer_id == UINT64_MAX) {
+  // RDMA connect does not populate sock_fd; only peer_id indicates rejection
+  // across transports (including NCCL protocol-version mismatches).
+  if (uccl_conn_id.peer_id == UINT64_MAX) {
     return false;
   }
 
