@@ -71,7 +71,10 @@ CHECKS = r"""
 #include <cassert>
 #include "util/gpu_rt.h"
 #include "device/ipc.h"
+#include "util/nccl_types.h"
 int main() {
+  using NcclSend = ncclResult_t (*)(void const*, size_t, ncclDataType_t, int, ncclComm_t, gpuStream_t);
+  static_assert(std::is_same_v<decltype(&ncclSend), NcclSend>);
   GpuIpcExportContext context;
   GpuIpcExport out;
   void* ptr = reinterpret_cast<void*>(0x12341234);

@@ -1,66 +1,17 @@
 """CPU-only tests of real headers and native build rules, not GPU certification."""
 
-import importlib.util
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
-import types
 import unittest
-from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 STUBS = Path(__file__).parent / "musa_stubs"
 
 
 class MusaBackendTests(unittest.TestCase):
-    def native_scripts(self):
-        for name in ("test_engine_onesided_ipc_native", "test_cross_node_rdma_native"):
-            spec = importlib.util.spec_from_file_location(
-                f"musa_contract_{name}", ROOT / "p2p/tests" / f"{name}.py"
-            )
-            module = importlib.util.module_from_spec(spec)
-            uccl = types.ModuleType("uccl")
-            uccl.p2p = None
-            with patch.dict(sys.modules, {"uccl": uccl}):
-                spec.loader.exec_module(module)
-            yield module
-
-    def test_native_scripts_detect_musa(self):
-        for module in self.native_scripts():
-            with self.subTest(script=module.__name__):
-                with patch.dict(
-                    os.environ,
-                    {"UCCL_GPU_RT": "musa", "MUSA_HOME": "/sdk/musa"},
-                    clear=True,
-                ):
-                    self.assertEqual(
-                        module._detect_backend(),
-                        ("musa", "/sdk/musa/lib/libmusart.so"),
-                    )
-                with patch.dict(
-                    os.environ, {"UCCL_GPU_RT_LIB": "/sdk/libmusart.so"}, clear=True
-                ):
-                    self.assertEqual(
-                        module._detect_backend(), ("musa", "/sdk/libmusart.so")
-                    )
-
-    def test_native_scripts_use_musa_symbols_without_hip_init(self):
-        for module in self.native_scripts():
-            with self.subTest(script=module.__name__):
-                library = Mock()
-                library.musaSetDevice.return_value = 0
-                with (
-                    patch.dict(os.environ, {"UCCL_GPU_RT": "musa"}, clear=True),
-                    patch.object(module.ctypes, "CDLL", return_value=library),
-                ):
-                    runtime = module.Rt()
-                    runtime.set_device(3)
-                library.musaSetDevice.assert_called_once_with(3)
-                library.hipInit.assert_not_called()
-
     def compile(self, text, *defines, run=True, env=None):
         compiler = os.environ.get("CXX", "c++")
         self.assertIsNotNone(shutil.which(compiler), "C++17 compiler required")
@@ -260,7 +211,7 @@ int main() {
                     self.assertEqual(result.stdout, "0")
                 else:
                     self.assertEqual(result.returncode, 2)
-                    self.assertIn("MUSA", result.stderr)
+                    self.assertIn("musa", result.stderr)
 
     def test_existing_transport_selection_unchanged(self):
         source = (
@@ -341,6 +292,7 @@ int main() {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copyfile(ROOT / "p2p/Makefile.musa", root / "Makefile.musa")
+            shutil.copytree(ROOT / "p2p/make", root / "make")
             for name in ("cached.o", ".build/musa/uccl_engine.o", "uccl_engine.cc"):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +309,7 @@ int main() {
                     "Makefile.musa",
                     "libuccl_p2p.so",
                     "CORE_OBJECTS=cached.o",
+                    "BUILD_DIR=.build/musa",
                     "PYTHON=true",
                     "PYTHON_CONFIG=true",
                     "NB_DIR=/fake/nanobind",

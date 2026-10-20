@@ -2,9 +2,8 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
-#include "cxi/cxi_endpoint.h"  // needs libfabric headers
-#include "nccl_endpoint.h"
-#include "rdma_endpoint.h"
+#include "device/staging.h"
+#include "transport/endpoint.h"
 #include "transport_type.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
@@ -28,17 +27,8 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint.
-#if defined(UCCL_USE_MUSA)
-using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>>;
-#else
-using GenericEndpoint =
-    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
-                 std::shared_ptr<CxiEndpoint>>;
-#endif
-
 // Use the RDMA-native request types as the common currency.
-// The NCCL shim functions in endpoint_wrapper.h convert as needed.
+// The transport adapters convert native request layouts as needed.
 enum ReqType { ReqRead, ReqWrite };
 
 struct UcclRequest {
@@ -479,9 +469,8 @@ class Endpoint {
   P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-#include "mlu/mlu_staging.inc"  // Cambricon Plan A staging members/methods
-#endif
+  friend class uccl::device::NetworkStaging;
+  uccl::device::NetworkStaging staging_{*this};
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
