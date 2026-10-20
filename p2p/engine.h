@@ -29,9 +29,13 @@
 extern thread_local bool inside_python;
 
 // Runtime-polymorphic endpoint.
+#if defined(UCCL_USE_MUSA)
+using GenericEndpoint = std::variant<std::shared_ptr<RDMAEndpoint>>;
+#else
 using GenericEndpoint =
     std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
                  std::shared_ptr<CxiEndpoint>>;
+#endif
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.
@@ -52,6 +56,13 @@ struct P2PMhandle {
   CompressCtx compress_ctx;
   std::vector<MrCacheHandleRef> cache_refs;
   std::shared_ptr<CxiMemoryRegion> cxi_region;
+  // True when only the compression context was prepared and no user-buffer MR
+  // was registered (mr_array/cache_refs are empty).
+  bool compress_only = false;
+  // Buffer passed to reg_compress_only(); sends on a compress_only handle must
+  // use exactly this address and length.
+  void const* registered_addr = nullptr;
+  size_t registered_len = 0;
 };
 
 struct MR {
@@ -244,7 +255,6 @@ struct IpcInflightOp {
 
 class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
-  static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   static constexpr int kMaxInflightOps =
       256;  // Max 256 concurrent Ops across all channels
@@ -301,6 +311,11 @@ class Endpoint {
   /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id,
            FloatType float_type = FloatType::kFloat32);
+
+  /* Prepare only the compression context for `data` (RDMA only); no user MR is
+   * registered. The returned mr_id refers to a compress_only P2PMhandle. */
+  bool reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
+                         FloatType float_type = FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
@@ -412,6 +427,8 @@ class Endpoint {
 
   GenericEndpoint get_endpoint() const;
 
+  gpuError_t export_ipc_range(void* ptr, size_t size, GpuIpcExport* result);
+
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
   std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
@@ -440,6 +457,7 @@ class Endpoint {
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
   std::mutex ipc_streams_mu_;
+  GpuIpcExportContext ipc_export_context_;
   std::vector<gpuStream_t>& get_ipc_streams(int dev);
   /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;

@@ -1183,7 +1183,14 @@ inline void checkMemoryLocation(void* ptr) {
 #endif
 
 inline int get_dev_idx(void* ptr) {
-#if defined(__CAMBRICON_PLATFORM_MLU__)
+#if defined(UCCL_USE_MUSA)
+  gpuPointerAttribute_t attributes{};
+  if (gpuPointerGetAttributes(&attributes, ptr) == gpuSuccess &&
+      gpuMemTypeOf(attributes) == gpuMemoryTypeDevice) {
+    return attributes.device;
+  }
+  return -1;
+#elif defined(__CAMBRICON_PLATFORM_MLU__)
   cnrtPointerAttributes_t attributes;
   if (cnrtPointerGetAttributes(&attributes, ptr) == cnrtSuccess &&
       attributes.type == cnrtMemTypeDevice) {
@@ -1614,7 +1621,8 @@ static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
   }
 #endif
 
-#if !defined(__CAMBRICON_PLATFORM_MLU__) && !defined(__HIP_PLATFORM_AMD__)
+#if !defined(__CAMBRICON_PLATFORM_MLU__) && !defined(__HIP_PLATFORM_AMD__) && \
+    !defined(UCCL_USE_MUSA)
   // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
   fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
   if (fs::exists(nvidia_gpus)) {
@@ -1644,6 +1652,17 @@ static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
     }
   }
 
+#if defined(UCCL_USE_MUSA)
+  // Retain runtime-visible devices even when DRM nodes are unavailable.
+  int count = 0;
+  if (gpuGetDeviceCount(&count) == gpuSuccess) {
+    char bdf[64];
+    for (int i = 0; i < count; ++i) {
+      if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+        all_bdfs.push_back(normalize_pci_bus_id(bdf));
+    }
+  }
+#endif
   std::sort(all_bdfs.begin(), all_bdfs.end());
   all_bdfs.erase(std::unique(all_bdfs.begin(), all_bdfs.end()), all_bdfs.end());
   return all_bdfs;

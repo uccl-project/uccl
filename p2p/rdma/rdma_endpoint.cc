@@ -223,6 +223,11 @@ bool RDMAEndpoint::dereg_mem(std::shared_ptr<RegMemBlock> reg_block) {
   return true;
 }
 
+void RDMAEndpoint::prepare_compress_ctx(void* const data, size_t const len,
+                                        CompressCtx compress_ctx) {
+  Compressor::get_instance().prepare_split_context(data, len, compress_ctx);
+}
+
 int RDMAEndpoint::uccl_regmr(void* const data, size_t const len,
                              MRArray& mr_array,
                              std::vector<MrCacheHandleRef>& cache_refs,
@@ -231,7 +236,7 @@ int RDMAEndpoint::uccl_regmr(void* const data, size_t const len,
     UCCL_LOG(ERROR) << "Error: uccl_regmr called with null data";
     return -1;
   }
-  Compressor::get_instance().prepare_split_context(data, len, compress_ctx);
+  prepare_compress_ctx(data, len, compress_ctx);
   // Register once per unique RdmaContext to avoid redundant MR
   // registrations: with DMA-BUF each duplicate consumes a GPU DMA mapping
   // VA slot; with nvidia_peermem each duplicate re-pins pages under a
