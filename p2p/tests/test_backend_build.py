@@ -76,6 +76,31 @@ class BackendBuildTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, output)
 
+    def test_native_link_does_not_require_python_embedding_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "python-config"
+            calls = Path(str(config) + ".calls")
+            config.write_text(
+                "#!/usr/bin/env python3\nimport sys\n"
+                "with open(__file__ + '.calls', 'a') as f:\n"
+                "    f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+                "print('-lpython-contract' if '--embed' in sys.argv else '')\n"
+            )
+            config.chmod(0o755)
+            for profile in ("cuda", "rocm", "dtk", "therock", "cnrt", "musa"):
+                with self.subTest(profile=profile):
+                    output = self.make(
+                        ROOT / "p2p",
+                        "-n",
+                        f"PROFILE={profile}",
+                        f"PYTHON_CONFIG={config}",
+                        "libuccl_p2p.so",
+                    )
+                    self.assertNotIn("-lpython", output)
+                    self.assertIn("--no-undefined", output)
+                    self.assertEqual(calls.read_text(), "--ldflags\n")
+                    calls.unlink()
+
     def test_same_config_reuses_object_but_changed_flags_rebuild(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

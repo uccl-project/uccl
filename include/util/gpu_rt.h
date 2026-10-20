@@ -79,9 +79,9 @@ inline gpuError_t gpuExportIpcRange(GpuIpcExportContext* context, void* ptr,
   return gpuSuccess;
 }
 
-// Only adapters with a DMA-BUF export ABI provide this driver function.
-#if UCCL_DEVICE_HAS_DMABUF
-// Function pointer type for DMA-BUF handle export (loaded via dlsym)
+// Keep the driver ABI available to EP/GIN even when P2P cannot export DMA-BUF.
+// DTK provides these types but uses an empty symbol name for runtime fallback.
+#ifdef GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME
 typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
     void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
 #endif

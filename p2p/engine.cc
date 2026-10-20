@@ -6,6 +6,7 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/pause.h"
+#include "util/python_signal.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
@@ -24,7 +25,6 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
-#include <Python.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -162,14 +162,6 @@ bool UnifiedTask::is_batch_task() const {
 UnifiedTask::SpecificData::SpecificData() : base{} {}
 
 UnifiedTask::SpecificData::~SpecificData() {}
-
-static inline void check_python_signals() {
-  PyGILState_STATE gstate = PyGILState_Ensure();
-  if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL) << "Python signal caught, exiting...";
-  }
-  PyGILState_Release(gstate);
-}
 
 static inline bool is_retryable_post_failure(int rc) {
   if (is_cxi_transport()) return rc == UCCL_POST_TRANSIENT;

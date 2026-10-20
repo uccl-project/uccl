@@ -29,11 +29,6 @@ NB_ABI_FLAGS :=
 PYEXT := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
 endif
 PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
-PYTHON_EMBED_LDFLAGS := $(shell $(PYTHON_CONFIG) --embed --ldflags)
-PYTHON_LIBDIR := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') or '')")
-ifneq ($(PYTHON_LIBDIR),)
-PYTHON_EMBED_RPATH := -Wl,-rpath,$(PYTHON_LIBDIR)
-endif
 INSTALL_DIR ?= $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")/uccl
 
 # Isolate device, optional features and Python ABI. A config stamp below also
@@ -104,7 +99,7 @@ $(P2P_PYTHON_EXT): $(CORE_OBJECTS) $(BUILD_DIR)/engine_api.o $(NB_OBJECTS)
 	$(CXX) $(LDFLAGS) $^ -o $@ $(LDLIBS) $(PYTHON_LDFLAGS)
 
 $(P2P_SHARED_LIB): $(CORE_OBJECTS) $(BUILD_DIR)/uccl_engine.o
-	$(CXX) $(LDFLAGS) -Wl,--no-undefined $^ -o $@ $(LDLIBS) $(PYTHON_EMBED_LDFLAGS) $(PYTHON_EMBED_RPATH)
+	$(CXX) $(LDFLAGS) -Wl,--no-undefined $^ -o $@ $(LDLIBS)
 
 $(BUILD_DIR)/%.o: %.cc $(BUILD_DIR)/config
 	@mkdir -p $(dir $@)

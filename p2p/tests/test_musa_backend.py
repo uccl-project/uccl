@@ -266,28 +266,6 @@ int main() {
         ):
             self.assertNotIn(unwanted, result.stdout)
 
-    def test_c_api_links_embedded_python(self):
-        result = subprocess.run(
-            [
-                "make",
-                "-n",
-                "-f",
-                "Makefile.musa",
-                "libuccl_p2p.so",
-                "PYTHON=true",
-                "PYTHON_CONFIG=true",
-                "NB_DIR=/fake/nanobind",
-                "PYTHON_EMBED_LDFLAGS=-lpython-contract",
-            ],
-            cwd=ROOT / "p2p",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("-lpython-contract", result.stdout)
-        self.assertIn("--no-undefined", result.stdout)
-
     def test_newer_foreign_backend_artifact_cannot_skip_musa_link(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -62,6 +62,7 @@ inline void uccl_drive_recv(int) {}
 inline int prepare_fifo_metadata(int, P2PMhandle*, void*, size_t, char*) { return 0; }
 #define UCCL_LOG(...) std::cerr
 using PyGILState_STATE = int;
+inline int Py_IsInitialized() { return 1; }
 inline int PyGILState_Ensure() { return 0; }
 inline int PyErr_CheckSignals() { return 0; }
 inline void PyGILState_Release(int) {}

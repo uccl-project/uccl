@@ -2,19 +2,11 @@
 #include "engine.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
+#include "util/python_signal.h"
 #include "util/util.h"
 #include <chrono>
 #include <thread>
-#include <Python.h>
 
-// Local copy of engine.cc's helper to keep this TU self-contained.
-static inline void check_python_signals() {
-  PyGILState_STATE gstate = PyGILState_Ensure();
-  if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL) << "Python signal caught, exiting...";
-  }
-  PyGILState_Release(gstate);
-}
 namespace uccl::device {
 NetworkStaging::~NetworkStaging() { shutdown(); }
 

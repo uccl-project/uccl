@@ -54,6 +54,64 @@ int main(int argc, char** argv) {
 
 
 class DmaBufExportTests(unittest.TestCase):
+    def test_dtk_keeps_shared_driver_abi_without_enabling_p2p_export(self):
+        source = r"""
+#include <cassert>
+#include <type_traits>
+#include "device/dmabuf.h"
+using DriverExport = gpuDriverResult_t (*)(
+    void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
+static_assert(std::is_same_v<gpuMemGetHandleForAddressRange_fn, DriverExport>);
+static_assert(UCCL_DEVICE_HAS_DMABUF == 0);
+int main() {
+  // EP/GIN can still declare the function pointer and fall back when the
+  // runtime symbol is unavailable. P2P must not try to call an export API.
+  gpuMemGetHandleForAddressRange_fn export_fn = nullptr;
+  assert(export_fn == nullptr);
+  assert(GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME[0] == '\0');
+  uccl::device::DmaBuf exported;
+  assert(!exported.open(reinterpret_cast<void*>(0x12341234), 64));
+  assert(exported.fd == -1);
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            (directory / "runtime.h").write_text(RUNTIME)
+            (directory / "hip").mkdir()
+            for name in ("hip_runtime.h", "hip_runtime_api.h"):
+                (directory / "hip" / name).write_text(runtime_header("hip"))
+            (directory / "util").mkdir()
+            (directory / "util/debug.h").write_text(
+                "#pragma once\n#include <iostream>\n#define UCCL_LOG(...) std::cerr\n"
+            )
+            exe = str(directory / "test")
+            result = subprocess.run(
+                [
+                    os.environ.get("CXX", "c++"),
+                    "-std=c++17",
+                    "-D__HIP_PLATFORM_AMD__",
+                    "-D__UCCL_DTK__",
+                    "-I",
+                    str(directory),
+                    "-I",
+                    str(ROOT / "include"),
+                    "-I",
+                    str(ROOT / "p2p"),
+                    "-x",
+                    "c++",
+                    "-",
+                    "-o",
+                    exe,
+                ],
+                input=source,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([exe], text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_export_subrange_errors_and_fd_ownership(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)

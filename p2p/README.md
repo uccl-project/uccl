@@ -125,6 +125,11 @@ or SDK paths invalidates the selected configuration. Shared output filenames
 are always relinked from the selected profile. Keep `PYTHON_CONFIG` consistent
 with `PYTHON` when selecting a non-default Python installation.
 
+`libuccl_p2p.so` does not link against `libpython`, including in manylinux
+builds. Python-facing waits resolve signal-checking functions from the active
+interpreter; native callers use `in_python=false`. Python development headers
+are still required to build the extension and compile the signal API types.
+
 ```python
 from uccl import p2p
 print(p2p.backend_info())
