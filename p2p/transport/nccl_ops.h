@@ -28,7 +28,7 @@ static inline ConnID to_conn_id(NcclConnID const& in) {
 }
 
 template <>
-struct EndpointOps<NCCLEndpoint> : CommonEndpointOps<NCCLEndpoint> {
+struct EndpointOps<NCCLEndpoint> {
   static ConnID uccl_connect(std::shared_ptr<NCCLEndpoint> const& s,
                              int remote_gpuidx, std::string const& remote_ip,
                              uint16_t remote_port) {
@@ -94,10 +94,7 @@ struct EndpointOps<NCCLEndpoint> : CommonEndpointOps<NCCLEndpoint> {
 
   static bool uccl_check_ureq_once(std::shared_ptr<NCCLEndpoint> const& s,
                                    UcclRequest* ureq) {
-    NcclRequest nreq = to_nccl_req(*ureq);
-    bool ret = s->uccl_poll_ureq_once(&nreq);
-    from_nccl_req(nreq, ureq);
-    return ret;
+    return uccl_poll_ureq_once(s, ureq);
   }
 
   static int uccl_read_async(std::shared_ptr<NCCLEndpoint> const& s, Conn* conn,

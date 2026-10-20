@@ -12,7 +12,6 @@ struct BackendDefaults {
   static constexpr bool cache_ipc_exports = false;
   static constexpr bool ipc_export_owner = false;
   static constexpr bool staged_network = false;
-  static constexpr bool dmabuf = false;
   static constexpr size_t dmabuf_granularity = 2ULL << 20;
   static constexpr bool scan_nvidia_proc = false;
   static constexpr bool visible_nvidia_fallback = false;

@@ -154,7 +154,7 @@ NB_MODULE(p2p, m) {
         info["runtime_init"] = Backend::runtime_init;
         info["memcpy_h2d"] = static_cast<int>(gpuMemcpyHostToDevice);
         info["memcpy_d2h"] = static_cast<int>(gpuMemcpyDeviceToHost);
-        info["dmabuf_export_compiled"] = Backend::dmabuf;
+        info["dmabuf_export_compiled"] = bool(UCCL_DEVICE_HAS_DMABUF);
         info["staged_network"] = Backend::staged_network;
         nb::list transports;
         transports.append("rdma");

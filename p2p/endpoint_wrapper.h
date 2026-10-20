@@ -10,7 +10,8 @@
 #endif
 
 // One variant dispatch per call. Transport adapters own signature and request
-// conversions; the RDMA group fast paths below still bypass this dispatch.
+// conversions; identical endpoint APIs are called directly. The RDMA group
+// fast paths below still bypass this dispatch.
 inline ConnID uccl_connect(GenericEndpoint const& ep, int remote_gpuidx,
                            std::string remote_ip, uint16_t remote_port) {
   return std::visit(
@@ -51,21 +52,11 @@ inline ConnID uccl_accept(GenericEndpoint const& ep, std::string& remote_ip,
 }
 
 inline void uccl_stop_accept(GenericEndpoint const& ep) {
-  return std::visit(
-      [&](auto const& s) {
-        using T = std::decay_t<decltype(*s)>;
-        return EndpointOps<T>::uccl_stop_accept(s);
-      },
-      ep);
+  std::visit([](auto const& s) { s->stop_accept(); }, ep);
 }
 
 inline bool uccl_accept_stopped(GenericEndpoint const& ep) {
-  return std::visit(
-      [&](auto const& s) -> bool {
-        using T = std::decay_t<decltype(*s)>;
-        return EndpointOps<T>::uccl_accept_stopped(s);
-      },
-      ep);
+  return std::visit([](auto const& s) { return s->accept_stopped(); }, ep);
 }
 
 inline bool uccl_regmr(GenericEndpoint const& ep, void* data, size_t len,
@@ -249,20 +240,11 @@ inline void create_unified_p2p_socket(GenericEndpoint const& ep) {
 }
 
 inline std::shared_ptr<EpollClient> get_oob_client(GenericEndpoint const& ep) {
-  return std::visit(
-      [&](auto const& s) -> std::shared_ptr<EpollClient> {
-        using T = std::decay_t<decltype(*s)>;
-        return EndpointOps<T>::get_oob_client(s);
-      },
-      ep);
+  return std::visit([](auto const& s) { return s->get_oob_client(); }, ep);
 }
 
 inline std::string get_oob_conn_key(GenericEndpoint const& ep,
                                     uint64_t peer_id) {
-  return std::visit(
-      [&](auto const& s) -> std::string {
-        using T = std::decay_t<decltype(*s)>;
-        return EndpointOps<T>::get_oob_conn_key(s, peer_id);
-      },
-      ep);
+  return std::visit([&](auto const& s) { return s->get_oob_conn_key(peer_id); },
+                    ep);
 }

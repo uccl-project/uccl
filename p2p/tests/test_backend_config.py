@@ -14,8 +14,7 @@ SOURCE = r"""
 int main() {
   using B = uccl::device::Backend;
   assert(std::string(B::name) == EXPECT_NAME);
-  static_assert(B::dmabuf == bool(UCCL_DEVICE_HAS_DMABUF));
-  assert(B::dmabuf == EXPECT_DMABUF);
+  static_assert(UCCL_DEVICE_HAS_DMABUF == EXPECT_DMABUF);
   assert(B::staged_network == EXPECT_STAGING);
   assert(transport_available(TransportType::RDMA));
   assert(transport_available(TransportType::NCCL) == bool(UCCL_P2P_ENABLE_NCCL));

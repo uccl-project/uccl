@@ -4,7 +4,6 @@
 
 namespace uccl::device {
 struct Backend : BackendDefaults {
-  static constexpr bool dmabuf = true;
   static constexpr bool scan_nvidia_proc = true;
   static constexpr bool visible_nvidia_fallback = true;
   static constexpr bool filter_pci_vendor = true;

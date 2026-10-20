@@ -9,11 +9,6 @@ struct Backend : BackendDefaults {
   static constexpr char const* runtime_prefix = "hip";
   static constexpr char const* runtime_library = "libamdhip64.so";
   static constexpr bool filter_pci_vendor = true;
-#ifdef __UCCL_DTK__
-  static constexpr bool dmabuf = false;
-#else
-  static constexpr bool dmabuf = true;
-#endif
 };
 }  // namespace uccl::device
 

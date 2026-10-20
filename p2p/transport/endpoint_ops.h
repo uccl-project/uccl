@@ -6,27 +6,7 @@
 template <typename T>
 struct EndpointOps;
 template <typename T>
-struct CommonEndpointOps {
-  static void uccl_stop_accept(std::shared_ptr<T> const& s) {
-    s->stop_accept();
-  }
-
-  static bool uccl_accept_stopped(std::shared_ptr<T> const& s) {
-    return s->accept_stopped();
-  }
-
-  static std::shared_ptr<EpollClient> get_oob_client(
-      std::shared_ptr<T> const& s) {
-    return s->get_oob_client();
-  }
-
-  static std::string get_oob_conn_key(std::shared_ptr<T> const& s,
-                                      uint64_t peer_id) {
-    return s->get_oob_conn_key(peer_id);
-  }
-};
-template <typename T>
-struct DirectEndpointOps : CommonEndpointOps<T> {
+struct DirectEndpointOps {
   static ConnID uccl_connect(std::shared_ptr<T> const& s, int remote_gpuidx,
                              std::string const& remote_ip,
                              uint16_t remote_port) {
