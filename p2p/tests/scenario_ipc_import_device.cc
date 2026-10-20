@@ -155,6 +155,8 @@ static void run_peer(bool exporter, int device, int fd) {
             cuda_ok(cudaMemcpy(local, initial.data(), slab_size,
                                cudaMemcpyHostToDevice));
           int reply = 0;
+          int caller_device =
+              !exporter && devices > 1 ? (device + 1) % devices : device;
           if (exporter) {
             send_bytes(fd, &reply, sizeof(reply));
             receive_bytes(fd, &reply, sizeof(reply));
@@ -178,6 +180,7 @@ static void run_peer(bool exporter, int device, int fd) {
             }
             uint64_t transfer = 0;
             std::vector<uccl_mr_t> ids(count, host ? host_mr : gpu_mr);
+            cuda_ok(cudaSetDevice(caller_device));
             int result = reading ? uccl_engine_read_vector(
                                        connection, ids, pointers, lengths, fifo,
                                        count, &transfer, blob_ptrs)
@@ -187,7 +190,7 @@ static void run_peer(bool exporter, int device, int fd) {
             if (result) throw std::runtime_error("IPC submission failed");
             int restored = -1;
             cuda_ok(cudaGetDevice(&restored));
-            if (restored != device)
+            if (restored != caller_device)
               throw std::runtime_error("caller device was not restored");
             auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::seconds(20);
@@ -199,6 +202,7 @@ static void run_peer(bool exporter, int device, int fd) {
             send_bytes(fd, &reply, sizeof(reply));
           }
           std::vector<unsigned char> actual(slab_size);
+          cuda_ok(cudaSetDevice(device));
           if (!exporter && host)
             std::memcpy(actual.data(), local, slab_size);
           else
@@ -213,10 +217,11 @@ static void run_peer(bool exporter, int device, int fd) {
           std::printf(
               "{\"peer\":\"%s\",\"case\":%d,\"round\":%d,\"read\":%s,"
               "\"pinned\":%s,\"iovs\":%zu,\"visible_devices\":%d,"
-              "\"local_device\":%d,\"payload_and_guards_correct\":true}\n",
+              "\"local_device\":%d,\"caller_device\":%d,"
+              "\"payload_and_guards_correct\":true}\n",
               exporter ? "exporter" : "importer", case_id, round,
               reading ? "true" : "false", host ? "true" : "false", count,
-              devices, device);
+              devices, device, caller_device);
           std::fflush(stdout);
         }
       }
