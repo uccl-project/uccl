@@ -464,6 +464,10 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 
+  if (uccl_conn_id.sock_fd < 0 || uccl_conn_id.peer_id == UINT64_MAX) {
+    return false;
+  }
+
   // Store the connection ID.
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
@@ -1575,8 +1579,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev =
-      uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx, is_host);
+  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
@@ -1636,8 +1639,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev =
-      uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx, is_host);
+  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
   void* raw_src_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
@@ -1697,13 +1699,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev_w = local_gpu_idx_;
-  if constexpr (uccl::device::Backend::ipc_owner_context) {
-    if (num_iovs > 0)
-      ipc_dev_w = uccl::device::ipc_open_device(
-          local_gpu_idx_, info_v[0].gpu_idx,
-          uccl::get_dev_idx(const_cast<void*>(data_v[0])) == -1);
-  }
+  int ipc_dev_w = uccl::device::ipc_open_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
@@ -1769,13 +1766,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev_r = local_gpu_idx_;
-  if constexpr (uccl::device::Backend::ipc_owner_context) {
-    if (num_iovs > 0)
-      ipc_dev_r = uccl::device::ipc_open_device(
-          local_gpu_idx_, info_v[0].gpu_idx,
-          uccl::get_dev_idx(const_cast<void*>(data_v[0])) == -1);
-  }
+  int ipc_dev_r = uccl::device::ipc_open_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 

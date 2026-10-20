@@ -35,6 +35,8 @@ struct UcclRequest {
   enum ReqType type;
   uint32_t peer_id;
   uint32_t engine_idx;
+  // Transport-owned completion state, released when polling completes.
+  void* context = nullptr;
 };
 
 struct Mhandle {

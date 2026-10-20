@@ -29,7 +29,8 @@ inline void serialize_nccl_fifo_item(NcclFifoItem const& item, char* buf) {
 }
 // Control-plane handshake constants.
 constexpr uint32_t kMagic = 0x4e43434c;  // "NCCL"
-constexpr uint32_t kVersion = 1;
+// Version 2 acknowledges remote write completion; reject peers without it.
+constexpr uint32_t kVersion = 2;
 
 struct ClientHello {
   uint32_t magic;
@@ -45,12 +46,18 @@ struct ServerHello {
   ncclUniqueId uid_rank1;
 };
 
-enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2, kNotification = 3 };
+enum CtrlMsgType : uint8_t {
+  kWriteReq = 1,
+  kReadReq = 2,
+  kNotification = 3,
+  kWriteDone = 4
+};
 
 struct CtrlMsg {
   // type: kWriteReq => peer should recv into addr; kReadReq => peer should send
   // from addr. addr is the peer-local pointer from the FIFO descriptor.
   // type: kNotification => notification message follows
+  // type: kWriteDone => addr is the cumulative completed write sequence.
   uint8_t type;
   uint8_t reserved[3];
   uint32_t size;
@@ -144,6 +151,8 @@ struct NCCLEndpoint::Conn {
   std::atomic<bool> stop{false};
   // Serialize control messages (read/write requests).
   std::mutex ctrl_send_mu;
+  uint64_t writes_submitted = 0;  // Protected by ctrl_send_mu.
+  std::atomic<uint64_t> writes_completed{0};
   // Dedicated control-plane thread for this connection.
   std::thread ctrl_thread;
 };
@@ -151,6 +160,9 @@ struct NCCLEndpoint::Conn {
 struct NCCLEndpoint::AsyncHandle {
   // Completion event for a single NCCL op.
   gpuEvent_t event = nullptr;
+  // Writes also wait for the peer's receive event before reporting completion.
+  Conn* conn = nullptr;
+  uint64_t write_seq = 0;
 };
 
 NCCLEndpoint::NCCLEndpoint(int gpu_index, uint16_t port)
@@ -289,6 +301,7 @@ bool NCCLEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
 
 void NCCLEndpoint::control_loop_(Conn* conn) {
   if (!conn) return;
+  uint64_t writes_received = 0;
   // Control thread: handle one-sided read/write requests and notifications from
   // the peer.
   while (!conn->stop.load(std::memory_order_acquire)) {
@@ -297,6 +310,11 @@ void NCCLEndpoint::control_loop_(Conn* conn) {
       break;
     }
     if (conn->stop.load(std::memory_order_acquire)) break;
+
+    if (msg.type == kWriteDone) {
+      conn->writes_completed.store(msg.addr, std::memory_order_release);
+      continue;
+    }
 
     // Handle notification messages
     if (msg.type == kNotification) {
@@ -353,6 +371,13 @@ void NCCLEndpoint::control_loop_(Conn* conn) {
     // Block until the NCCL op completes before processing the next request.
     while (!uccl_poll_ureq_once(&ureq)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (msg.type == kWriteReq) {
+      CtrlMsg done{};
+      done.type = kWriteDone;
+      done.addr = ++writes_received;
+      std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
+      if (!send_all_(conn->sock_fd, &done, sizeof(done))) return;
     }
   }
 }
@@ -519,6 +544,8 @@ NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
     return make_invalid_conn();
   }
   if (sh.magic != kMagic || sh.version != kVersion) {
+    std::cerr << "[nccl] incompatible control protocol version " << sh.version
+              << " (expected " << kVersion << ")" << std::endl;
     ::close(fd);
     return make_invalid_conn();
   }
@@ -604,6 +631,8 @@ NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     return make_invalid_conn();
   }
   if (ch.magic != kMagic || ch.version != kVersion) {
+    std::cerr << "[nccl] incompatible control protocol version " << ch.version
+              << " (expected " << kVersion << ")" << std::endl;
     ::close(conn_fd);
     return make_invalid_conn();
   }
@@ -720,11 +749,10 @@ int NCCLEndpoint::uccl_read_async(NcclFlow* flow, NcclMhandle* mh, void* dst,
   msg.type = kReadReq;
   msg.size = static_cast<uint32_t>(xfer_size);
   msg.addr = slot_item.addr;
-  {
-    std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
-    if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
-      return -1;
-    }
+  // Keep control-message order consistent with the NCCL operations.
+  std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
+  if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
+    return -1;
   }
 
   int comm_index = comm_index_for_send_(*conn);
@@ -752,15 +780,17 @@ int NCCLEndpoint::uccl_write_async(NcclFlow* flow, NcclMhandle* mh, void* src,
   msg.type = kWriteReq;
   msg.size = static_cast<uint32_t>(xfer_size);
   msg.addr = slot_item.addr;
-  {
-    std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
-    if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
-      return -1;
-    }
+  std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
+  if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
+    return -1;
   }
 
   int comm_index = comm_index_for_send_(*conn);
-  return send_internal_(*conn, src, xfer_size, comm_index, ureq) ? 0 : -1;
+  if (!send_internal_(*conn, src, xfer_size, comm_index, ureq)) return -1;
+  auto* handle = static_cast<AsyncHandle*>(ureq->context);
+  handle->conn = conn;
+  handle->write_seq = ++conn->writes_submitted;
+  return 0;
 }
 
 bool NCCLEndpoint::uccl_poll_ureq_once(NcclRequest* ureq) {
@@ -770,6 +800,9 @@ bool NCCLEndpoint::uccl_poll_ureq_once(NcclRequest* ureq) {
   // Poll CUDA event for completion.
   gpuError_t rc = gpuEventQuery(handle->event);
   if (rc == gpuSuccess) {
+    if (handle->conn && handle->conn->writes_completed.load(
+                            std::memory_order_acquire) < handle->write_seq)
+      return false;
     gpuEventDestroy(handle->event);
     delete handle;
     ureq->context = nullptr;

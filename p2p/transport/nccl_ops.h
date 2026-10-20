@@ -1,12 +1,12 @@
 #pragma once
 #include "transport/endpoint_ops.h"
 // Convert between the global UcclRequest and NcclRequest.
-// They have different layouts (NCCL version has an extra context pointer).
+// Preserve the completion handle across submission and subsequent polls.
 static inline NcclRequest to_nccl_req(UcclRequest const& r) {
   NcclRequest out{};
   out.type = static_cast<NcclReqType>(static_cast<int>(r.type));
   out.peer_id = r.peer_id;
-  out.context = nullptr;
+  out.context = r.context;
   out.engine_idx = r.engine_idx;
   return out;
 }
@@ -15,6 +15,7 @@ static inline void from_nccl_req(NcclRequest const& in, UcclRequest* out) {
   out->type = static_cast<ReqType>(static_cast<int>(in.type));
   out->peer_id = in.peer_id;
   out->engine_idx = in.engine_idx;
+  out->context = in.context;
 }
 
 // Convert NCCL ConnID to the common ConnID used by Endpoint.

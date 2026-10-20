@@ -4,9 +4,9 @@
 
 namespace uccl::device {
 // Synchronous imports normally use the local device. Some runtimes require
-// the allocation owner's context for device-to-device IPC copies.
-inline int ipc_open_device(int local, int owner, bool host) {
-  return Backend::ipc_owner_context && !host && owner >= 0 ? owner : local;
+// the allocation owner's context, including copies to/from host buffers.
+inline int ipc_open_device(int local, int owner) {
+  return Backend::ipc_owner_context && owner >= 0 ? owner : local;
 }
 
 // Keep the engine's existing async import policy independent of the sync

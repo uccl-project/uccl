@@ -112,9 +112,8 @@ int main() {
   assert(gpuExportIpcRange(&fresh, ptr, 64, &out) == unknown);
   assert(out.offset == 99 && out.owner_device == 42 && out.handle.reserved[0] == 7);
   using namespace uccl::device;
-  assert(ipc_open_device(0, -1, false) == 0);
-  assert(ipc_open_device(0, 3, true) == 0);
-  assert(ipc_open_device(0, 3, false) == (Backend::ipc_owner_context ? 3 : 0));
+  assert(ipc_open_device(0, -1) == 0);
+  assert(ipc_open_device(0, 3) == (Backend::ipc_owner_context ? 3 : 0));
   assert(ipc_async_device(0, 3) == 3 && ipc_async_device(0, -1) == 0);
   auto* dst = reinterpret_cast<void*>(0x5000);
   auto* src = reinterpret_cast<void*>(0x7000);
