@@ -54,6 +54,49 @@ int main(int argc, char** argv) {
 
 
 class DmaBufExportTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        (self.directory / "runtime.h").write_text(RUNTIME)
+        (self.directory / "util").mkdir()
+        (self.directory / "util/debug.h").write_text(
+            "#pragma once\n#include <iostream>\n#define UCCL_LOG(...) std::cerr\n"
+        )
+
+    def compile_and_run(self, source, *defines, modes=((),)):
+        exe = str(self.directory / "test")
+        result = subprocess.run(
+            [
+                os.environ.get("CXX", "c++"),
+                "-std=c++17",
+                "-pthread",
+                *defines,
+                "-I",
+                str(self.directory),
+                "-I",
+                str(ROOT / "include"),
+                "-I",
+                str(ROOT / "p2p"),
+                "-x",
+                "c++",
+                "-",
+                "-o",
+                exe,
+            ],
+            input=source,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for mode in modes:
+            with self.subTest(args=mode):
+                result = subprocess.run(
+                    [exe, *mode], text=True, capture_output=True, timeout=10
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dtk_keeps_shared_driver_abi_without_enabling_p2p_export(self):
         source = r"""
 #include <cassert>
@@ -74,84 +117,19 @@ int main() {
   assert(exported.fd == -1);
 }
 """
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            (directory / "runtime.h").write_text(RUNTIME)
-            (directory / "hip").mkdir()
-            for name in ("hip_runtime.h", "hip_runtime_api.h"):
-                (directory / "hip" / name).write_text(runtime_header("hip"))
-            (directory / "util").mkdir()
-            (directory / "util/debug.h").write_text(
-                "#pragma once\n#include <iostream>\n#define UCCL_LOG(...) std::cerr\n"
-            )
-            exe = str(directory / "test")
-            result = subprocess.run(
-                [
-                    os.environ.get("CXX", "c++"),
-                    "-std=c++17",
-                    "-D__HIP_PLATFORM_AMD__",
-                    "-D__UCCL_DTK__",
-                    "-I",
-                    str(directory),
-                    "-I",
-                    str(ROOT / "include"),
-                    "-I",
-                    str(ROOT / "p2p"),
-                    "-x",
-                    "c++",
-                    "-",
-                    "-o",
-                    exe,
-                ],
-                input=source,
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([exe], text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, result.stderr)
+        (self.directory / "hip").mkdir()
+        for name in ("hip_runtime.h", "hip_runtime_api.h"):
+            (self.directory / "hip" / name).write_text(runtime_header("hip"))
+        self.compile_and_run(source, "-D__HIP_PLATFORM_AMD__", "-D__UCCL_DTK__")
 
     def test_export_subrange_errors_and_fd_ownership(self):
-        with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            (directory / "runtime.h").write_text(RUNTIME)
-            (directory / "util").mkdir()
-            (directory / "util/debug.h").write_text(
-                "#pragma once\n#include <iostream>\n#define UCCL_LOG(...) std::cerr\n"
-            )
-            header = runtime_header("cuda") + """
+        header = runtime_header("cuda") + """
 #define CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 1
 inline char const* cudaGetErrorString(Error) { return "runtime error"; }
 """
-            (directory / "cuda.h").write_text("#pragma once\n" + header)
-            (directory / "cuda_runtime.h").write_text('#include "cuda.h"\n')
-            exe = str(directory / "test")
-            command = [
-                os.environ.get("CXX", "c++"),
-                "-std=c++17",
-                "-pthread",
-                "-I",
-                str(directory),
-                "-I",
-                str(ROOT / "include"),
-                "-I",
-                str(ROOT / "p2p"),
-                "-x",
-                "c++",
-                "-",
-                "-o",
-                exe,
-            ]
-            result = subprocess.run(
-                command, input=SOURCE, text=True, capture_output=True, timeout=30
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            for mode in ("success", "missing", "failure"):
-                result = subprocess.run(
-                    [exe, mode], text=True, capture_output=True, timeout=10
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
+        (self.directory / "cuda.h").write_text("#pragma once\n" + header)
+        (self.directory / "cuda_runtime.h").write_text('#include "cuda.h"\n')
+        self.compile_and_run(SOURCE, modes=(("success",), ("missing",), ("failure",)))
 
 
 if __name__ == "__main__":

@@ -85,50 +85,24 @@ Compression also applies to one-sided `write`/`writev` when `UCCL_P2P_COMPRESS_S
 ## Device and transport backends
 
 The device runtime is selected at **build time**; network transport is selected
-at runtime with `UCCL_P2P_TRANSPORT`. These are separate extension points:
-
-- `include/util/device/<backend>/config.h` describes device policies without
-  including an SDK. Its `runtime.h` implements the existing `gpu*` API.
-  `include/util/gpu_rt.h` remains the compatibility entry point for P2P, EP,
-  and GIN.
-- `device/ipc.h` owns IPC context and copy policy. The engine retains stream,
-  event, and mapping lifetimes. `device/dmabuf.h` owns device memory export;
-  RDMA still owns verbs MR registration. Export availability at build time
-  does not guarantee that a driver/device/NIC combination supports DMA-BUF.
-- `device/cnrt/staging.*` owns CNRT's staging buffers, registrations and poller.
-  The engine requests shutdown before joining its threads and releases
-  staging registrations before destroying the transport. Other backends have
-  no staging state. This preserves the existing synchronous staging paths;
-  it does not add staging to the asynchronous API.
-- `transport/*_ops.h` adapts each transport's signatures and requests.
-  `endpoint_wrapper.h` dispatches through the endpoint variant. Pre-resolved
-  RDMA send groups and batched posting continue to bypass this dispatch.
-
-All existing Makefile entry points include `make/common.mk`:
+at runtime with `UCCL_P2P_TRANSPORT`. The Makefile entry points share
+`make/common.mk` and select a profile from `make/profiles/`:
 
 | Entry point | Runtime | Toolchain profile |
 | --- | --- | --- |
 | `Makefile` | CUDA | CUDA Toolkit |
 | `Makefile.rocm` | HIP | ROCm |
 | `Makefile.dtk` | HIP | DTK, without DMA-BUF export |
-| `Makefile.therock` | HIP | TheRock; same in-tree P2P transport sources as ROCm |
+| `Makefile.therock` | HIP | TheRock |
 | `Makefile.cnrt` | CNRT | Neuware, with network staging |
 | `Makefile.musa` | MUSA | MUSA, RDMA/IPC only, without DMA-BUF export |
 
 Optional transports can be excluded with `ENABLE_NCCL=0`, `ENABLE_CXI=0`,
 or `ENABLE_EFA=0`. Disabling NCCL/CXI also removes their sources and SDK header
-requirements. EFA shares the RDMA provider implementation; disabling it rejects
-runtime selection while retaining the common provider build. Unsupported
-selections fail before device initialization. Objects are isolated by profile,
-transport options, compression setting and Python ABI; changing compiler flags
-or SDK paths invalidates the selected configuration. Shared output filenames
-are always relinked from the selected profile. Keep `PYTHON_CONFIG` consistent
-with `PYTHON` when selecting a non-default Python installation.
-
-`libuccl_p2p.so` does not link against `libpython`, including in manylinux
-builds. Python-facing waits resolve signal-checking functions from the active
-interpreter; native callers use `in_python=false`. Python development headers
-are still required to build the extension and compile the signal API types.
+requirements; EFA shares the RDMA provider build, so its flag only disables
+runtime selection. Unsupported selections fail before device initialization.
+Keep `PYTHON_CONFIG` consistent with `PYTHON` for non-default Python installs.
+Native callers use `in_python=false`; `libuccl_p2p.so` requires no `libpython`.
 
 ```python
 from uccl import p2p
@@ -136,27 +110,25 @@ print(p2p.backend_info())
 # Reports the compiled runtime and selectable transports; does not probe hardware.
 ```
 
-Native ctypes tests use this identity instead of guessing from installed SDKs
-or `UCCL_GPU_RT`. `UCCL_GPU_RT_LIB` remains an optional test library path override.
+Native ctypes tests use this identity; `UCCL_GPU_RT_LIB` optionally overrides
+the runtime library path. Compiled capabilities do not guarantee hardware support.
 
 To add a device backend:
 
-1. Add its SDK-free config and runtime adapter under `include/util/device/`.
-   Specify IPC ownership/cache policy, discovery policy, and export support
-   explicitly. Defaults avoid vendor-specific discovery and optional exports.
-2. Add a small `make/profiles/<name>.mk` with `DEVICE_BACKEND`, SDK flags/libraries,
-   and any device-specific sources. Build with `make PROFILE=<name>`; a
-   compatibility Makefile is optional. Add a legacy selector in
-   `util/device/backend.h` only if other consumers need a legacy define.
-3. Supply a staging component only when required. Its header is selected by
-   `UCCL_DEVICE_STAGING_HEADER`; keep vendor details out of `engine.cc`.
-4. Extend the CPU contract tests and run native IPC/RDMA checks on the target
-   hardware. Preserve IPC metadata layout, allocation-relative offsets,
-   completion ownership, and registration failure behavior.
+1. Add `include/util/device/<name>/config.h` (SDK-free policies) and `runtime.h`
+   (the `gpu*` API). Keep `util/gpu_rt.h` as the shared P2P/EP/GIN entry point.
+   Set IPC, discovery and DMA-BUF policies in the config.
+2. Add `make/profiles/<name>.mk` with `DEVICE_BACKEND`, SDK flags/libraries and
+   device-specific sources; build with `make PROFILE=<name>`. Add a selector in
+   `util/device/backend.h` only if consumers also need a legacy define.
+3. Reuse `device/ipc.h` and `device/dmabuf.h`. If network staging is required,
+   provide `UCCL_DEVICE_STAGING_HEADER` (see `device/cnrt/`).
+4. Extend the CPU contract tests and validate IPC/RDMA on the target hardware,
+   including allocation offsets, completion ownership and registration failures.
 
-To add a transport, implement its endpoint adapter, register its type/factory
-and availability in the transport boundary, and add its sources to the shared
-build. Common engine operations should not gain device or transport type tests.
+To add a transport, implement `transport/<name>_ops.h`, register its type,
+factory and availability, and add its build sources. Keep device/transport
+specific branches out of common engine operations.
 
 ## Performance Benchmarks
 

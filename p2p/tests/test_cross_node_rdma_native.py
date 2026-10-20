@@ -19,7 +19,6 @@ Run on the "initiator" machine, pointing at the acceptor's rendezvous IP:
 from __future__ import annotations
 import argparse
 import ctypes
-import os
 import socket
 import struct
 import sys
@@ -43,24 +42,13 @@ from native_runtime import Rt as NativeRuntime
 class Rt(NativeRuntime):
     def alloc_filled(self, value: float) -> ctypes.c_void_p:
         host_buf = (ctypes.c_float * NUM_FLOATS)(*([value] * NUM_FLOATS))
-        ptr = ctypes.c_void_p(0)
-        self._chk(self._malloc(ctypes.byref(ptr), ctypes.c_size_t(NBYTES)), "malloc")
-        self._chk(
-            self._memcpy(
-                ptr, host_buf, ctypes.c_size_t(NBYTES), ctypes.c_int(self._h2d)
-            ),
-            "memcpy H->D",
-        )
+        ptr = self.malloc(NBYTES)
+        self.memcpy_h2d(ptr, host_buf, NBYTES)
         return ptr
 
     def read_first8(self, ptr: ctypes.c_void_p) -> list:
         host_buf = (ctypes.c_float * 8)()
-        self._chk(
-            self._memcpy(
-                host_buf, ptr, ctypes.c_size_t(8 * 4), ctypes.c_int(self._d2h)
-            ),
-            "memcpy D->H",
-        )
+        self.memcpy_d2h(host_buf, ptr, ctypes.sizeof(host_buf))
         return list(host_buf)
 
 
