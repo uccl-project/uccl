@@ -143,6 +143,29 @@ std::pair<void const*, size_t> get_tensor_info(nb::object tensor_obj) {
 NB_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
+  m.def(
+      "backend_info",
+      [] {
+        nb::dict info;
+        using Backend = uccl::device::Backend;
+        info["device"] = Backend::name;
+        info["runtime_library"] = Backend::runtime_library;
+        info["runtime_prefix"] = Backend::runtime_prefix;
+        info["runtime_init"] = Backend::runtime_init;
+        info["memcpy_h2d"] = static_cast<int>(gpuMemcpyHostToDevice);
+        info["memcpy_d2h"] = static_cast<int>(gpuMemcpyDeviceToHost);
+        info["dmabuf_export_compiled"] = Backend::dmabuf;
+        info["staged_network"] = Backend::staged_network;
+        nb::list transports;
+        transports.append("rdma");
+        if (transport_available(TransportType::NCCL)) transports.append("nccl");
+        if (transport_available(TransportType::EFA)) transports.append("efa");
+        if (transport_available(TransportType::CXI)) transports.append("cxi");
+        info["compiled_transports"] = transports;
+        return info;
+      },
+      "Compiled device/runtime and transport capabilities (no hardware probe)");
+
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
   // Register XferHandle type

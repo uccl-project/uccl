@@ -62,13 +62,10 @@ class DmaBufExportTests(unittest.TestCase):
             (directory / "util/debug.h").write_text(
                 "#pragma once\n#include <iostream>\n#define UCCL_LOG(...) std::cerr\n"
             )
-            header = (
-                runtime_header("cuda")
-                + """
+            header = runtime_header("cuda") + """
 #define CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD 1
 inline char const* cudaGetErrorString(Error) { return "runtime error"; }
 """
-            )
             (directory / "cuda.h").write_text("#pragma once\n" + header)
             (directory / "cuda_runtime.h").write_text('#include "cuda.h"\n')
             exe = str(directory / "test")

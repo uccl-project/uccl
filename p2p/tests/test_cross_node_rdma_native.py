@@ -4,9 +4,8 @@ Cross-node test for UCCL P2P Engine — torch-free variant.
 
 Buffers are allocated via ctypes against the platform GPU runtime, so torch is
 never imported (avoids dual-runtime conflicts with a native-linked uccl.p2p).
-Runtime backend is auto-detected: Hygon DCU / HIP by default, Cambricon MLU /
-CNRT when neuware is present. Force it with UCCL_GPU_RT=hip|cnrt|musa, or point at a
-specific shared library with UCCL_GPU_RT_LIB.
+Runtime selection comes from uccl.p2p.backend_info(). UCCL_GPU_RT_LIB can
+optionally override the runtime library path in a test installation.
 
 Run on the "acceptor" machine (owns the buffer being written to / read from):
     python3 test_cross_node_rdma_native.py --role acceptor --mode write
@@ -33,69 +32,15 @@ except ImportError as e:
     sys.stderr.write(f"Failed to import p2p: {e}\n")
     raise
 
-RT_SUCCESS = 0
 DEFAULT_RENDEZVOUS_PORT = 29500
 NUM_FLOATS = 1024
 NBYTES = NUM_FLOATS * 4
 
 
-def _detect_backend():
-    kind = os.environ.get("UCCL_GPU_RT", "").lower()
-    lib = os.environ.get("UCCL_GPU_RT_LIB", "")
-    if not kind:
-        if "musart" in lib:
-            kind = "musa"
-        elif lib:
-            kind = "cnrt" if "cnrt" in lib else "hip"
-        elif os.path.isdir("/usr/local/neuware") and not os.path.exists(
-            "/opt/dtk/lib/libamdhip64.so"
-        ):
-            kind = "cnrt"
-        else:
-            kind = "hip"
-    if not lib and kind == "musa":
-        lib = os.path.join(
-            os.environ.get("MUSA_HOME", "/usr/local/musa"), "lib", "libmusart.so"
-        )
-    if not lib:
-        lib = (
-            "/usr/local/neuware/lib64/libcnrt.so"
-            if kind == "cnrt"
-            else "/opt/dtk/lib/libamdhip64.so"
-        )
-    return kind, lib
+from native_runtime import Rt as NativeRuntime
 
 
-class Rt:
-    """Minimal GPU-runtime shim over HIP, CNRT or MUSA."""
-
-    def __init__(self):
-        self.kind, path = _detect_backend()
-        try:
-            self.lib = ctypes.CDLL(path)
-        except OSError as e:
-            sys.exit(f"Cannot load {path}: {e}")
-        if self.kind == "cnrt":
-            self._h2d, self._d2h = 0, 2  # cnrtMemTransDir_t
-            self._malloc, self._memcpy = self.lib.cnrtMalloc, self.lib.cnrtMemcpy
-            self._free, self._set = self.lib.cnrtFree, self.lib.cnrtSetDevice
-        elif self.kind == "musa":
-            self._h2d, self._d2h = 1, 2  # musaMemcpyKind
-            self._malloc, self._memcpy = self.lib.musaMalloc, self.lib.musaMemcpy
-            self._free, self._set = self.lib.musaFree, self.lib.musaSetDevice
-        else:
-            self.lib.hipInit(ctypes.c_uint(0))
-            self._h2d, self._d2h = 1, 2  # hipMemcpyKind
-            self._malloc, self._memcpy = self.lib.hipMalloc, self.lib.hipMemcpy
-            self._free, self._set = self.lib.hipFree, self.lib.hipSetDevice
-
-    def _chk(self, err, name):
-        if err != RT_SUCCESS:
-            sys.exit(f"[FAIL] {name} returned error code {err}")
-
-    def set_device(self, idx):
-        self._chk(self._set(idx), f"set_device({idx})")
-
+class Rt(NativeRuntime):
     def alloc_filled(self, value: float) -> ctypes.c_void_p:
         host_buf = (ctypes.c_float * NUM_FLOATS)(*([value] * NUM_FLOATS))
         ptr = ctypes.c_void_p(0)
@@ -117,9 +62,6 @@ class Rt:
             "memcpy D->H",
         )
         return list(host_buf)
-
-    def free(self, ptr):
-        self._free(ptr)
 
 
 def parse_endpoint_meta(meta: bytes) -> Tuple[str, int, str]:
