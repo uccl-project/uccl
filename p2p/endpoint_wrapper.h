@@ -86,7 +86,8 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
       std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
+  if (src == local_mh->registered_addr && size == local_mh->registered_len)
+    bundle->req.compress_ctx = local_mh->compress_ctx;
   bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
@@ -127,7 +128,8 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
       std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
+  if (src == local_mh->registered_addr && size == local_mh->registered_len)
+    bundle->req.compress_ctx = local_mh->compress_ctx;
   bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =

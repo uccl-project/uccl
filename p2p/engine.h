@@ -59,8 +59,7 @@ struct P2PMhandle {
   // True when only the compression context was prepared and no user-buffer MR
   // was registered (mr_array/cache_refs are empty).
   bool compress_only = false;
-  // Buffer passed to reg_compress_only(); sends on a compress_only handle must
-  // use exactly this address and length.
+  // The prepared compression context describes exactly this registered range.
   void const* registered_addr = nullptr;
   size_t registered_len = 0;
 };
