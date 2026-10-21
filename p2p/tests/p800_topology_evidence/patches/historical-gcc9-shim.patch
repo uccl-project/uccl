@@ -1,0 +1,33 @@
+--- a/include/util/util.h
++++ b/include/util/util.h
+@@ -1344,6 +1344,12 @@
+   return std::regex_match(s, re);
+ }
+ 
++// Private GCC 9 compatibility: libstdc++ has hash_value(path), but no
++// std::hash<filesystem::path> specialization. Preserve path equality semantics.
++struct PathHashCompat {
++  size_t operator()(fs::path const& p) const noexcept { return fs::hash_value(p); }
++};
++
+ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
+   auto devA_parent = devA.parent_path();
+   auto devB_parent = devB.parent_path();
+@@ -1363,7 +1369,7 @@
+ 
+   // thread-safe cache
+   static std::mutex cache_mutex;
+-  static std::unordered_map<fs::path, std::vector<std::string>>
++  static std::unordered_map<fs::path, std::vector<std::string>, PathHashCompat>
+       dev_to_chain_cache;
+ 
+   std::vector<std::string> chainA, chainB;
+@@ -1465,7 +1471,7 @@
+   // 2) Map each BDF -> canonical sysfs PCI path
+   std::vector<fs::path> gpu_cards;
+   gpu_cards.reserve(num_gpus);
+-  std::unordered_map<fs::path, int> rank_map;
++  std::unordered_map<fs::path, int, PathHashCompat> rank_map;
+ 
+   for (int rank = 0; rank < (int)gpu_bdfs_ranked.size(); ++rank) {
+     std::string const& bdf_lower = gpu_bdfs_ranked[rank];

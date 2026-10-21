@@ -1,0 +1,4 @@
+cudaRuntimeGetVersion rc=0 value=12090
+cuDriverGetVersion rc=0 value=10020
+cudaGetDeviceCount rc=0 count=1
+ordinal=0 bdf_rc=0 bdf=0000:E3:00.0

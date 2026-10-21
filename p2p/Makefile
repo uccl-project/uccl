@@ -47,6 +47,10 @@ endif
 
 CXXFLAGS += $(DIETGPU_INC)
 
+# The standalone topology test needs neither Python nor nanobind. Keep
+# discovery enabled for the default build and any invocation with other goals.
+HOST_TEST_TARGETS := test_gpu_topology
+ifneq ($(filter-out $(HOST_TEST_TARGETS),$(or $(MAKECMDGOALS),all)),)
 # Python and nanobind configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
@@ -72,6 +76,7 @@ PYTHON_LIB      := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' 
 # Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
+endif
 PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
@@ -203,7 +208,7 @@ test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_se
 
 # Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
 test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
-	$(CXX) -std=c++17 -O2 -I../include/util -o $@ ../include/util/gpu_topology_test.cc
+	$(CXX) -std=c++17 -O2 -o $@ ../include/util/gpu_topology_test.cc
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).

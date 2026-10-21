@@ -1,0 +1,22 @@
+--- a/include/util/util.h
++++ b/include/util/util.h
+@@ -1352,6 +1352,10 @@
+   return std::regex_match(s, re);
+ }
+ 
++struct PathHashCompat {
++  size_t operator()(fs::path const& p) const noexcept { return fs::hash_value(p); }
++};
++
+ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
+   auto devA_parent = devA.parent_path();
+   auto devB_parent = devB.parent_path();
+@@ -1371,7 +1375,7 @@
+ 
+   // thread-safe cache
+   static std::mutex cache_mutex;
+-  static std::unordered_map<fs::path, std::vector<std::string>>
++  static std::unordered_map<fs::path, std::vector<std::string>, PathHashCompat>
+       dev_to_chain_cache;
+ 
+   std::vector<std::string> chainA, chainB;

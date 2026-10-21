@@ -1,0 +1,13 @@
+#include "util/util.h"
+#include <cstdio>
+
+int main() {
+  int count = -1;
+  auto rc = gpuGetDeviceCount(&count);
+  auto cards = uccl::get_gpu_cards();
+  std::printf("runtime_count_rc=%d runtime_count=%d topology_count=%zu\n",
+              int(rc), count, cards.size());
+  for (size_t i = 0; i < cards.size(); ++i)
+    std::printf("ordinal=%zu sysfs=%s\n", i, cards[i].c_str());
+  return rc == gpuSuccess ? 0 : 1;
+}

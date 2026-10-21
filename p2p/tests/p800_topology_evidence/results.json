@@ -1,0 +1,140 @@
+{
+  "date": "2026-10-21",
+  "baseline_commit": "27a0abb2744c7d3f2b6391760eae1217b07b31b4",
+  "candidate_commit": "c912f851a53b4ee0b86affdc9d9b249a4543b886",
+  "libraries_sha256": {
+    "baseline": "9f4bbbe0ef23fb8a2aa68862328c434275d3ac4454cae2fb2740a461fbf8e170",
+    "candidate": "f506414002fbac1eccc92cf709b6b3510ac04f0954b85f3f99351872828c9307"
+  },
+  "device": {
+    "runtime_ordinal": 0,
+    "bdf": "0000:E3:00.0",
+    "vendor": "0x1d22"
+  },
+  "cases": [
+    {
+      "name": "1-baseline-automatic",
+      "rc": 134,
+      "arm": "baseline",
+      "mode": "automatic",
+      "repeat": 1,
+      "cleanup_pass": false,
+      "registration_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "1-candidate-automatic",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "automatic",
+      "repeat": 1,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "1-baseline-explicit",
+      "rc": 0,
+      "arm": "baseline",
+      "mode": "explicit",
+      "repeat": 1,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "1-candidate-explicit",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "explicit",
+      "repeat": 1,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "2-baseline-automatic",
+      "rc": 134,
+      "arm": "baseline",
+      "mode": "automatic",
+      "repeat": 2,
+      "cleanup_pass": false,
+      "registration_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "2-candidate-automatic",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "automatic",
+      "repeat": 2,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "2-baseline-explicit",
+      "rc": 0,
+      "arm": "baseline",
+      "mode": "explicit",
+      "repeat": 2,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "2-candidate-explicit",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "explicit",
+      "repeat": 2,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "3-baseline-automatic",
+      "rc": 134,
+      "arm": "baseline",
+      "mode": "automatic",
+      "repeat": 3,
+      "cleanup_pass": false,
+      "registration_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "3-candidate-automatic",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "automatic",
+      "repeat": 3,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "3-baseline-explicit",
+      "rc": 0,
+      "arm": "baseline",
+      "mode": "explicit",
+      "repeat": 3,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "3-candidate-explicit",
+      "rc": 0,
+      "arm": "candidate",
+      "mode": "explicit",
+      "repeat": 3,
+      "cleanup_pass": true,
+      "registration_pass": true,
+      "metadata_pass": true
+    }
+  ],
+  "model_requests": 0,
+  "service_restarts": 0,
+  "initial_retest": "Preserved separately: expected historical exit139 but observed exit134; not relabeled as PASS.",
+  "native_scope": "One visible accelerator, 1MiB HOST registration, metadata, deregistration and destruction. No data-transfer or GPU-direct claim."
+}

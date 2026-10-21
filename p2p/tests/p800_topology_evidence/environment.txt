@@ -1,0 +1,17 @@
+Historical SMI header from component-03.json:
+Thu Oct 15 04:25:20 2026       
++-----------------------------------------------------------------------------+
+| XPU-SMI               Driver Version: 5.24.0.0     XPU-RT Version: 5.24.0   |
+
+2026-10-21 environment excerpts:
+g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0
+PRETTY_NAME="Ubuntu 20.04.6 LTS"
+| XPU-SMI               Driver Version: 5.24.0.0     XPU-RT Version: 5.24.0   |
+
+Runtime compatibility APIs:
+cudaRuntimeGetVersion rc=0 value=12090
+cuDriverGetVersion rc=0 value=10020
+cudaGetDeviceCount rc=0 count=1
+ordinal=0 bdf_rc=0 bdf=0000:E3:00.0
+
+The CUDA API integers are compatibility-interface values. They do not replace XPU driver/runtime versions.

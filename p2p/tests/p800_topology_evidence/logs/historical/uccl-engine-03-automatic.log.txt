@@ -1,0 +1,13 @@
+create_begin
+Creating Engine
+System assigned port: 32835
+Endpoint initialized successfully
+create_pass
+RdmaDeviceManager: Found 5 RDMA device(s)
+  [0] mlx5_0
+  [1] mlx5_1
+  [2] mlx5_2
+  [3] mlx5_3
+  [4] mlx5_4
+RdmaDeviceManager: Initialization complete
+timeout: the monitored command dumped core

@@ -1,0 +1,43 @@
+make: Entering directory '<BUILD_ROOT>/candidate/p2p'
+make: <DEPENDENCIES>/.venv/bin/python-config: Command not found
+/bin/sh: 1: <DEPENDENCIES>/.venv/bin/python-config: not found
+g++ -std=c++17 -O2 -I../include/util -o test_gpu_topology ../include/util/gpu_topology_test.cc
+In file included from /usr/include/c++/9/bits/ios_base.h:41,
+                 from /usr/include/c++/9/iomanip:40,
+                 from ../include/util/endian.h:4,
+                 from /usr/include/x86_64-linux-gnu/sys/types.h:176,
+                 from /usr/include/stdlib.h:394,
+                 from /usr/include/c++/9/cstdlib:75,
+                 from /usr/include/c++/9/ext/string_conversions.h:41,
+                 from /usr/include/c++/9/bits/basic_string.h:6496,
+                 from /usr/include/c++/9/string:55,
+                 from /usr/include/c++/9/stdexcept:39,
+                 from /usr/include/c++/9/system_error:41,
+                 from /usr/include/c++/9/bits/fs_fwd.h:35,
+                 from /usr/include/c++/9/filesystem:36,
+                 from ../include/util/gpu_topology.h:3,
+                 from ../include/util/gpu_topology_test.cc:1:
+/usr/include/c++/9/bits/locale_classes.h:77:5: error: template with C linkage
+   77 |     template<typename _Facet>
+      |     ^~~~~~~~
+In file included from /usr/include/features.h:461,
+                 from /usr/include/x86_64-linux-gnu/c++/9/bits/os_defines.h:39,
+                 from /usr/include/x86_64-linux-gnu/c++/9/bits/c++config.h:528,
+                 from /usr/include/c++/9/system_error:38,
+                 from /usr/include/c++/9/bits/fs_fwd.h:35,
+                 from /usr/include/c++/9/filesystem:36,
+                 from ../include/util/gpu_topology.h:3,
+                 from ../include/util/gpu_topology_test.cc:1:
+/usr/include/x86_64-linux-gnu/sys/types.h:27:1: note: 'extern "C"' linkage started here
+   27 | __BEGIN_DECLS
+      | ^~~~~~~~~~~~~
+In file included from /usr/include/c++/9/bits/ios_base.h:41,
+                 from /usr/include/c++/9/iomanip:40,
+                 from ../include/util/endian.h:4,
+                 from /usr/include/x86_64-linux-gnu/sys/types.h:176,
+                 from /usr/include/stdlib.h:394,
+                 from /usr/include/c++/9/cstdlib:75,
+                 from /usr/include/c++/9/ext/string_conversions.h:41,
+                 from /usr/include/c++/9/bits/basic_string.h:6496,
+                 from /usr/include/c++/9/string:55,
+[Excerpt ends; complete original retained in private raw archive.]
