@@ -3,6 +3,7 @@
 #include "util/gpu_rt.h"
 #include "util/net.h"
 #include <arpa/inet.h>
+#include <linux/tcp.h>
 #include <netinet/in.h>
 #include <cerrno>
 #include <chrono>
@@ -514,6 +515,13 @@ NcclConnID NCCLEndpoint::uccl_connect(int dev, int local_gpuidx, int remote_dev,
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return make_invalid_conn();
 
+  // Control requests and completion ACKs must not wait for Nagle's buffering.
+  int nodelay = 1;
+  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) < 0) {
+    ::close(fd);
+    return make_invalid_conn();
+  }
+
   struct timeval tv;
   tv.tv_sec = 1;
   tv.tv_usec = 0;
@@ -609,6 +617,13 @@ NcclConnID NCCLEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
   if (stop_accept_.load(std::memory_order_acquire)) {
     if (conn_fd >= 0) ::close(conn_fd);
+    return make_invalid_conn();
+  }
+
+  int nodelay = 1;
+  if (setsockopt(conn_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) <
+      0) {
+    ::close(conn_fd);
     return make_invalid_conn();
   }
 
