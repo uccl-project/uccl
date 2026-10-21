@@ -1,3 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${ROOT:?Set ROOT to the prepared two-arm build directory}"
+: "${LAB:?Set LAB to the existing dependency installation}"
+
 # Recorded build commands, with paths normalized. Run inside the P800 container.
 # ROOT contains baseline/ and candidate/. LAB contains the existing headers and Python environment.
 
