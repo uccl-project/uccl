@@ -48,7 +48,9 @@ empty enumeration and equivalent path keys. The Python tests exercise protocol
 completion, full-buffer corruption rejection, staging directions and cleanup
 using host-memory doubles; they are not device/RDMA validation. Injected faults
 include swapped, repeated and rotated blocks, stale payloads, dropped writes
-and a corrupted final byte. Each must fail without a PASS result on either path.
+and a corrupted final byte. They also cover writes into either guard, ignored
+source/destination offsets, and omitted staging copies. Each must fail without
+a PASS result on either applicable path.
 
 ## Cross-node device test
 
@@ -87,6 +89,13 @@ the destination device before acknowledging success. The pattern varies across
 block positions, so swapping or repeating whole blocks is also detectable.
 The rendezvous plan includes the protocol version; both peers must use the
 same version of this probe.
+Each registered allocation includes 256-byte guards on both sides of the
+payload, and only the interior range is advertised and transferred. Distinct
+source/destination guards and poisoned payloads are reset each iteration. The
+probe verifies the entire device allocation on both peers and, for staging,
+the host allocation too. This detects writes outside the requested range and
+incorrect use of a registration's base address. Staging copies move only the
+payload; the guards are excluded from the transferred byte count.
 JSON results include the verified count and decimal GB/s. `transport_GBps`
 times serial blocking UCCL writes; `device_path_GBps` also includes source D2H
 and destination H2D for staging. Allocation, registration, initialization,

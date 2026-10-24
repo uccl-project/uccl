@@ -16,6 +16,8 @@ import socket
 import struct
 import time
 
+GUARD_BYTES = 256
+
 
 def require(ok, message):
     if not ok:
@@ -27,6 +29,12 @@ def payload(size, sequence):
     # whole digest-sized blocks must change the expected destination bytes.
     seed = f"uccl-p800-payload-v2:{size}:{sequence}".encode()
     return hashlib.shake_256(seed).digest(size)
+
+
+def guarded(data, sequence, role):
+    seed = f"uccl-p800-guards-v3:{len(data)}:{sequence}:{role}".encode()
+    guards = hashlib.shake_256(seed).digest(2 * GUARD_BYTES)
+    return guards[:GUARD_BYTES] + data + guards[GUARD_BYTES:]
 
 
 def verify(actual, expected):
@@ -99,7 +107,7 @@ class Runtime:
 
 def run_pair(args, sock, rt, ep, p2p):
     plan = json.dumps(
-        [2, args.path, args.sizes, args.warmup, args.iterations],
+        [3, args.path, args.sizes, args.warmup, args.iterations, GUARD_BYTES],
         separators=(",", ":"),
     ).encode()
     send(sock, plan)
@@ -114,11 +122,18 @@ def run_pair(args, sock, rt, ep, p2p):
         require(ep.accept()[0], "endpoint accept failed")
 
     for size in args.sizes:
-        device = rt.alloc(size)
+        allocation_size = size + 2 * GUARD_BYTES
+        device = rt.alloc(allocation_size)
+        device_payload = ctypes.c_void_p(device.value + GUARD_BYTES)
         # This is ordinary host memory registered by UCCL, not pinned CUDA memory.
-        host = ctypes.create_string_buffer(size) if args.path == "host-staged" else None
-        address = ctypes.addressof(host) if host is not None else device.value
-        ok, mr = ep.reg(address, size)
+        host = (
+            ctypes.create_string_buffer(allocation_size)
+            if args.path == "host-staged"
+            else None
+        )
+        base = ctypes.addressof(host) if host is not None else device.value
+        address = base + GUARD_BYTES
+        ok, mr = ep.reg(base, allocation_size)
         require(ok, f"{args.path} registration failed; no automatic fallback")
         if sender:
             descriptor = receive(sock)
@@ -130,12 +145,19 @@ def run_pair(args, sock, rt, ep, p2p):
         transport_total = path_total = 0.0
         for sequence in range(args.warmup + args.iterations):
             expected = payload(size, sequence)
+            source_expected = guarded(expected, sequence, "sender")
+            destination_expected = guarded(expected, sequence, "receiver")
             if sender:
-                rt.fill(device, expected)
+                rt.fill(device, source_expected)
+                if host is not None:
+                    source_poison = guarded(
+                        bytes(b ^ 255 for b in expected), sequence, "sender"
+                    )
+                    ctypes.memmove(host, source_poison, allocation_size)
                 require(receive(sock) == b"ready", "receiver not ready")
                 start = time.perf_counter()
                 if host is not None:
-                    rt.copy(host, device, size, 2)
+                    rt.copy(address, device_payload, size, 2)
                 transfer_start = time.perf_counter()
                 require(
                     ep.write(conn_id, mr, address, size, descriptor),
@@ -147,26 +169,36 @@ def run_pair(args, sock, rt, ep, p2p):
                 receipt = json.loads(receive(sock))
                 require(receipt["sequence"] == sequence, "stale completion")
                 require(
-                    receipt["sha256"] == hashlib.sha256(expected).hexdigest(),
+                    receipt["sha256"]
+                    == hashlib.sha256(destination_expected).hexdigest(),
                     "peer verification failed",
                 )
+                verify(rt.read(device, allocation_size), source_expected)
+                if host is not None:
+                    verify(host.raw, source_expected)
                 if sequence >= args.warmup:
                     transport_total += transfer_seconds
                     path_total += local_seconds + receipt["staging_seconds"]
             else:
                 # Poison all destination bytes before every transfer.
-                rt.fill(device, bytes(b ^ 255 for b in expected))
+                poisoned = guarded(
+                    bytes(b ^ 255 for b in expected), sequence, "receiver"
+                )
+                rt.fill(device, poisoned)
                 if host is not None:
-                    ctypes.memset(host, sequence & 255, size)
+                    ctypes.memmove(host, poisoned, allocation_size)
                 send(sock, b"ready")
                 require(receive(sock) == b"written", "missing write completion")
+                if host is not None:
+                    # Check staging guards before copying only the payload.
+                    verify(host.raw, destination_expected)
                 start = time.perf_counter()
                 if host is not None:
-                    rt.copy(device, host, size, 1)
+                    rt.copy(device_payload, address, size, 1)
                 staging_seconds = (
                     time.perf_counter() - start if host is not None else 0.0
                 )
-                digest = verify(rt.read(device, size), expected)
+                digest = verify(rt.read(device, allocation_size), destination_expected)
                 send(
                     sock,
                     json.dumps(
@@ -192,6 +224,8 @@ def run_pair(args, sock, rt, ep, p2p):
                         status="PASS",
                         path=args.path,
                         bytes=size,
+                        allocation_bytes=allocation_size,
+                        guard_bytes_per_side=GUARD_BYTES,
                         verified_transfers=args.warmup + args.iterations,
                         measured_transfers=args.iterations,
                         transport_seconds=transport_total,

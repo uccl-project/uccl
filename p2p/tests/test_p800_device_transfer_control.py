@@ -14,9 +14,10 @@ import p800_device_transfer as probe
 
 
 class HostRuntime:
-    def __init__(self):
+    def __init__(self, drop_copy=None):
         self.buffers = {}
         self.copies = []
+        self.drop_copy = drop_copy
 
     def alloc(self, size):
         buf = ctypes.create_string_buffer(size)
@@ -32,7 +33,8 @@ class HostRuntime:
 
     def copy(self, dst, src, size, direction):
         self.copies.append(direction)
-        ctypes.memmove(dst, src, size)
+        if direction != self.drop_copy:
+            ctypes.memmove(dst, src, size)
 
     def free(self, ptr):
         del self.buffers[ptr.value]
@@ -68,6 +70,10 @@ class HostEndpoint:
 
     def write(self, conn, mr, address, size, descriptor):
         destination = struct.unpack("!Q", descriptor[:8])[0]
+        if self.fault == "ignore-source-offset":
+            address = mr
+        elif self.fault == "ignore-destination-offset":
+            destination -= probe.GUARD_BYTES
         data = ctypes.string_at(address, size)
         if self.fault == "swap-blocks":
             data = data[32:64] + data[:32] + data[64:]
@@ -83,6 +89,14 @@ class HostEndpoint:
         if self.corrupt:
             tail = ctypes.c_ubyte.from_address(destination + size - 1)
             tail.value ^= 1
+        if self.fault in ("overwrite-prefix", "overwrite-suffix"):
+            offset = -1 if self.fault == "overwrite-prefix" else size
+            guard = ctypes.c_ubyte.from_address(destination + offset)
+            guard.value ^= 1
+        if self.fault in ("source-prefix", "source-suffix"):
+            offset = -1 if self.fault == "source-prefix" else size
+            guard = ctypes.c_ubyte.from_address(address + offset)
+            guard.value ^= 1
         return True
 
     def dereg(self, mr):
@@ -94,10 +108,16 @@ class HostEndpoint:
 
 class ProtocolTests(unittest.TestCase):
     def run_pair(
-        self, path, corrupt=False, mismatch=False, fail_cleanup=False, fault=None
+        self,
+        path,
+        corrupt=False,
+        mismatch=False,
+        fail_cleanup=False,
+        fault=None,
+        drop_copy=None,
     ):
         errors = []
-        runtimes = [HostRuntime(), HostRuntime()]
+        runtimes = [HostRuntime(drop_copy), HostRuntime(drop_copy)]
         endpoints = [
             HostEndpoint(corrupt, fault=fault),
             HostEndpoint(fail_cleanup=fail_cleanup),
@@ -153,6 +173,11 @@ class ProtocolTests(unittest.TestCase):
                 for result in results:
                     self.assertEqual(result["verified_transfers"], 4)
                     self.assertEqual(result["measured_transfers"], 3)
+                    self.assertEqual(result["guard_bytes_per_side"], probe.GUARD_BYTES)
+                    self.assertEqual(
+                        result["allocation_bytes"],
+                        result["bytes"] + 2 * probe.GUARD_BYTES,
+                    )
                     self.assertGreater(result["transport_GBps"], 0)
                     self.assertGreaterEqual(
                         result["device_path_seconds"], result["transport_seconds"]
@@ -201,6 +226,46 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(errors), 2)
         self.assertTrue(any("deregistration failed" in str(e) for e in errors))
         self.assertEqual(results, [])
+
+    def test_guard_overwrites_and_ignored_offsets_fail(self):
+        for path in ["direct", "host-staged"]:
+            for fault in [
+                "overwrite-prefix",
+                "overwrite-suffix",
+                "source-prefix",
+                "source-suffix",
+                "ignore-source-offset",
+                "ignore-destination-offset",
+            ]:
+                with self.subTest(path=path, fault=fault):
+                    errors, results, _, _ = self.run_pair(path, fault=fault)
+                    self.assertEqual(len(errors), 2)
+                    self.assertTrue(any("mismatch" in str(e) for e in errors))
+                    self.assertEqual(results, [])
+
+    def test_staging_copies_cannot_be_skipped(self):
+        for direction in [1, 2]:
+            with self.subTest(direction=direction):
+                errors, results, _, _ = self.run_pair(
+                    "host-staged", drop_copy=direction
+                )
+                self.assertEqual(len(errors), 2)
+                self.assertTrue(any("mismatch" in str(e) for e in errors))
+                self.assertEqual(results, [])
+
+    def test_unguarded_protocol_rejected_before_allocation(self):
+        args = types.SimpleNamespace(
+            role="sender", path="direct", sizes=[1024], warmup=1, iterations=3
+        )
+        runtime, endpoint = HostRuntime(), HostEndpoint()
+        a, b = socket.socketpair()
+        with a, b:
+            a.settimeout(2)
+            probe.send(b, b'[2,"direct",[1024],1,3]')
+            with self.assertRaisesRegex(RuntimeError, "plans differ"):
+                probe.run_pair(args, a, runtime, endpoint, None)
+        self.assertEqual(runtime.buffers, {})
+        self.assertEqual(endpoint.registered, set())
 
     def test_payload_changes_and_full_tail_check(self):
         expected = probe.payload(1025, 4)
