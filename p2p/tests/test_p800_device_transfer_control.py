@@ -39,10 +39,12 @@ class HostRuntime:
 
 
 class HostEndpoint:
-    def __init__(self, corrupt=False, fail_cleanup=False):
+    def __init__(self, corrupt=False, fail_cleanup=False, fault=None):
         self.registered = set()
         self.corrupt = corrupt
         self.fail_cleanup = fail_cleanup
+        self.fault = fault
+        self.previous = None
 
     def get_metadata(self):
         return b"host-test"
@@ -66,7 +68,18 @@ class HostEndpoint:
 
     def write(self, conn, mr, address, size, descriptor):
         destination = struct.unpack("!Q", descriptor[:8])[0]
-        ctypes.memmove(destination, address, size)
+        data = ctypes.string_at(address, size)
+        if self.fault == "swap-blocks":
+            data = data[32:64] + data[:32] + data[64:]
+        elif self.fault == "repeat-block":
+            data = (data[:32] * ((size + 31) // 32))[:size]
+        elif self.fault == "rotate-blocks":
+            data = data[32:] + data[:32]
+        elif self.fault == "stale" and self.previous is not None:
+            data = self.previous
+        self.previous = ctypes.string_at(address, size)
+        if self.fault != "drop":
+            ctypes.memmove(destination, data, size)
         if self.corrupt:
             tail = ctypes.c_ubyte.from_address(destination + size - 1)
             tail.value ^= 1
@@ -80,10 +93,15 @@ class HostEndpoint:
 
 
 class ProtocolTests(unittest.TestCase):
-    def run_pair(self, path, corrupt=False, mismatch=False, fail_cleanup=False):
+    def run_pair(
+        self, path, corrupt=False, mismatch=False, fail_cleanup=False, fault=None
+    ):
         errors = []
         runtimes = [HostRuntime(), HostRuntime()]
-        endpoints = [HostEndpoint(corrupt), HostEndpoint(fail_cleanup=fail_cleanup)]
+        endpoints = [
+            HostEndpoint(corrupt, fault=fault),
+            HostEndpoint(fail_cleanup=fail_cleanup),
+        ]
         pair = socket.socketpair()
         for sock in pair:
             sock.settimeout(2)
@@ -163,6 +181,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(all(not rt.buffers for rt in runtimes))
         self.assertTrue(all(not ep.registered for ep in endpoints))
 
+    def test_old_protocol_rejected_before_allocation(self):
+        args = types.SimpleNamespace(
+            role="sender", path="direct", sizes=[1024], warmup=1, iterations=3
+        )
+        runtime, endpoint = HostRuntime(), HostEndpoint()
+        a, b = socket.socketpair()
+        with a, b:
+            a.settimeout(2)
+            # Version 1 peers sent an unversioned plan and repeated 32-byte data.
+            probe.send(b, b'["direct",[1024],1,3]')
+            with self.assertRaisesRegex(RuntimeError, "plans differ"):
+                probe.run_pair(args, a, runtime, endpoint, None)
+        self.assertEqual(runtime.buffers, {})
+        self.assertEqual(endpoint.registered, set())
+
     def test_cleanup_failure_prevents_success_report(self):
         errors, results, _, _ = self.run_pair("host-staged", fail_cleanup=True)
         self.assertEqual(len(errors), 2)
@@ -174,6 +207,38 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotEqual(expected, probe.payload(1025, 5))
         with self.assertRaisesRegex(RuntimeError, "mismatch"):
             probe.verify(expected[:-1] + bytes([expected[-1] ^ 1]), expected)
+
+    def test_block_reordering_repetition_stale_and_dropped_writes_fail(self):
+        for path in ["direct", "host-staged"]:
+            for fault in [
+                "swap-blocks",
+                "repeat-block",
+                "rotate-blocks",
+                "stale",
+                "drop",
+            ]:
+                with self.subTest(path=path, fault=fault):
+                    errors, results, _, _ = self.run_pair(path, fault=fault)
+                    self.assertEqual(len(errors), 2)
+                    self.assertTrue(any("mismatch" in str(e) for e in errors))
+                    self.assertEqual(results, [])
+
+    def test_payload_depends_on_size_sequence_and_block_position(self):
+        # Block-sized addressing errors must not preserve the expected bytes.
+        for size in [1024, 1048576]:
+            original = probe.payload(size, 4)
+            self.assertEqual(original, probe.payload(size, 4))
+            self.assertNotEqual(original, probe.payload(size + 1, 4)[:size])
+            self.assertNotEqual(original, probe.payload(size, 5))
+            for width in [32, 256, 512]:
+                with self.subTest(size=size, block_bytes=width):
+                    swapped = (
+                        original[width : 2 * width]
+                        + original[:width]
+                        + original[2 * width :]
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "mismatch"):
+                        probe.verify(swapped, original)
 
     def test_oversize_control_frame_rejected(self):
         a, b = socket.socketpair()

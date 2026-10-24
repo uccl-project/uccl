@@ -46,7 +46,9 @@ python3 -m unittest discover -s p2p/tests -p test_p800_device_transfer_control.p
 The C++ test covers mixed PCI vendors, reordered visibility, missing sysfs,
 empty enumeration and equivalent path keys. The Python tests exercise protocol
 completion, full-buffer corruption rejection, staging directions and cleanup
-using host-memory doubles; they are not device/RDMA validation.
+using host-memory doubles; they are not device/RDMA validation. Injected faults
+include swapped, repeated and rotated blocks, stale payloads, dropped writes
+and a corrupted final byte. Each must fail without a PASS result on either path.
 
 ## Cross-node device test
 
@@ -79,8 +81,12 @@ Repeat with `--path direct` on both peers to test that separate path, then swap
 sender/receiver to cover both directions. Native calls require the outer timeout.
 
 Defaults are 1 KiB, 1 MiB and 16 MiB, with two warmups and 20 measured transfers
-per size. Each transfer changes the pattern, poisons the destination and checks
-every byte copied back from the destination device before acknowledging success.
+per size. Each transfer uses a deterministic SHAKE256 byte stream keyed by size
+and sequence, poisons the destination and checks every byte copied back from
+the destination device before acknowledging success. The pattern varies across
+block positions, so swapping or repeating whole blocks is also detectable.
+The rendezvous plan includes the protocol version; both peers must use the
+same version of this probe.
 JSON results include the verified count and decimal GB/s. `transport_GBps`
 times serial blocking UCCL writes; `device_path_GBps` also includes source D2H
 and destination H2D for staging. Allocation, registration, initialization,

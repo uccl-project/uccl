@@ -23,9 +23,10 @@ def require(ok, message):
 
 
 def payload(size, sequence):
-    # Changing, nonuniform bytes expose stale buffers and partial writes.
-    block = hashlib.sha256(str(sequence).encode()).digest()
-    return (block * ((size + len(block) - 1) // len(block)))[:size]
+    # Use an extendable stream, not a repeated digest: moving or duplicating
+    # whole digest-sized blocks must change the expected destination bytes.
+    seed = f"uccl-p800-payload-v2:{size}:{sequence}".encode()
+    return hashlib.shake_256(seed).digest(size)
 
 
 def verify(actual, expected):
@@ -98,7 +99,8 @@ class Runtime:
 
 def run_pair(args, sock, rt, ep, p2p):
     plan = json.dumps(
-        [args.path, args.sizes, args.warmup, args.iterations], separators=(",", ":")
+        [2, args.path, args.sizes, args.warmup, args.iterations],
+        separators=(",", ":"),
     ).encode()
     send(sock, plan)
     require(receive(sock) == plan, "peer test plans differ")
