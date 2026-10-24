@@ -11,15 +11,15 @@ USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
 
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
-CUDA_INC  := $(CUDA_HOME)/include
-CUDA_LIB  := $(CUDA_HOME)/lib64
+CUDA_INC  ?= $(CUDA_HOME)/include
+CUDA_LIB  ?= $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
 LIBFABRIC_HOME ?= /opt/libfabric
 
 # Building with the following settings:
 # NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
-INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
+INC = -I./ -I$(CUDA_INC)
+LIBS = -L$(CUDA_LIB) -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
@@ -47,6 +47,10 @@ endif
 
 CXXFLAGS += $(DIETGPU_INC)
 
+# The standalone topology test needs neither Python nor nanobind. Keep
+# discovery enabled for the default build and any invocation with other goals.
+HOST_TEST_TARGETS := test_gpu_topology
+ifneq ($(filter-out $(HOST_TEST_TARGETS),$(or $(MAKECMDGOALS),all)),)
 # Python and nanobind configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
@@ -72,6 +76,7 @@ PYTHON_LIB      := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' 
 # Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
+endif
 PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
@@ -182,12 +187,13 @@ clean:
 	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/*.o rdma/providers/*.d util/*.o util/*.d
 	rm -f cxi/*.o cxi/*.d
 	rm -f $(P2P_PYTHON_EXT)
-	rm -f test_notify_serde test_epoll_server notif_e2e
+	rm -f test_notify_serde test_epoll_server test_gpu_topology notif_e2e
 
 # Test the module
-test: test_notify_serde test_epoll_server
+test: test_notify_serde test_epoll_server test_gpu_topology
 	./test_notify_serde
 	./test_epoll_server
+	./test_gpu_topology
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 
@@ -199,6 +205,10 @@ test_notify_serde: tests/test_notify_serde.cc util/common.h
 # Regression test for the OOB metadata server; needs no GPU or RDMA device.
 test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
+
+# Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
+test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
+	$(CXX) -std=c++17 -O2 -o $@ ../include/util/gpu_topology_test.cc
 
 # Two-process end-to-end notification test; build-only (needs a GPU and two
 # processes to run — see the header comment in tests/test_notify_e2e.cc).
@@ -219,6 +229,7 @@ help:
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
 	@echo "  test_notify_serde - Build and run the notification wire-format test"
+	@echo "  test_gpu_topology - Build the CPU runtime topology regression test"
 	@echo "  notif_e2e    - Build the two-process notification e2e test"
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"

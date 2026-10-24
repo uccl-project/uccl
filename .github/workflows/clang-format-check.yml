@@ -16,11 +16,13 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Set up Python for the pinned formatter
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
     - name: Install clang-format 14
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-format-14
-        sudo ln -sf /usr/bin/clang-format-14 /usr/bin/clang-format
+      run: python -m pip install clang-format==14.0.6
 
     - name: Show clang-format version
       run: clang-format --version

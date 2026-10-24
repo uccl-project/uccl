@@ -1,4 +1,5 @@
 #pragma once
+#include "gpu_topology.h"
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
@@ -1370,7 +1371,8 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 
   // thread-safe cache
   static std::mutex cache_mutex;
-  static std::unordered_map<fs::path, std::vector<std::string>>
+  static std::unordered_map<fs::path, std::vector<std::string>,
+                            TopologyPathHash>
       dev_to_chain_cache;
 
   std::vector<std::string> chainA, chainB;
@@ -1469,97 +1471,7 @@ static inline std::vector<fs::path> get_gpu_cards() {
     gpu_bdfs_ranked.emplace_back(normalize_pci_bus_id(bdf));
   }
 
-  // 2) Map each BDF -> canonical sysfs PCI path
-  std::vector<fs::path> gpu_cards;
-  gpu_cards.reserve(num_gpus);
-  std::unordered_map<fs::path, int> rank_map;
-
-  for (int rank = 0; rank < (int)gpu_bdfs_ranked.size(); ++rank) {
-    std::string const& bdf_lower = gpu_bdfs_ranked[rank];
-    fs::path pci_path = sysfs_pci_path_from_bdf(bdf_lower);
-
-    // MUSA BDFs come from the runtime; do not filter them by other vendors.
-#if !defined(UCCL_USE_MUSA)
-    // Optional sanity check: ensure it's actually a GPU (NVIDIA=0x10de,
-    // AMD=0x1002)
-    bool ok = true;
-    try {
-      std::ifstream vf(pci_path / "vendor");
-      std::string vs;
-      if (vf >> vs) {
-        // vs may be "0x10de" or "0x1002"
-        uint32_t vendor = std::stoul(vs, nullptr, 0);
-        // NVIDIA=0x10de, AMD=0x1002, Cambricon MLU=0xcabc
-        if (!(vendor == 0x10de || vendor == 0x1002 || vendor == 0xcabc))
-          ok = false;
-      }
-    } catch (...) {
-      // If vendor check fails due to restricted sysfs, keep going.
-    }
-    if (!ok) continue;
-#endif
-
-    rank_map[pci_path] = rank;
-    gpu_cards.push_back(pci_path);
-  }
-
-  // 3) Fallbacks (only if needed): DRM class (cardX) or
-  // /proc/driver/nvidia/gpus
-  if (gpu_cards.empty()) {
-    fs::path const drm_class{"/sys/class/drm"};
-    std::regex const card_re(R"(card(\d+))");
-    if (fs::exists(drm_class)) {
-      for (auto const& entry : fs::directory_iterator(drm_class)) {
-        std::string const name = entry.path().filename().string();
-        std::smatch m;
-        if (!std::regex_match(name, m, card_re)) continue;
-        fs::path dev_path;
-        try {
-          dev_path = fs::canonical(entry.path() / "device");
-        } catch (...) {
-          continue;
-        }
-        // Extract BDF and try to match ranks
-        std::string bdf_name = dev_path.filename().string();
-        std::string nbdf = normalize_pci_bus_id(bdf_name);
-        auto it =
-            std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-        if (it == gpu_bdfs_ranked.end()) continue;
-        rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
-        gpu_cards.push_back(dev_path);
-      }
-    }
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(UCCL_USE_MUSA)
-    if (gpu_cards.empty()) {
-      fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
-      if (fs::exists(nvidia_gpus)) {
-        for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-          fs::path dev_path;
-          try {
-            dev_path = fs::canonical(entry.path());
-          } catch (...) {
-            continue;
-          }
-          std::string bdf_name = dev_path.filename().string();  // already BDF
-          std::string nbdf = normalize_pci_bus_id(bdf_name);
-          auto it =
-              std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-          if (it == gpu_bdfs_ranked.end()) continue;
-          rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
-          gpu_cards.push_back(dev_path);
-        }
-      }
-    }
-#endif
-  }
-
-  // 4) Sort by original runtime rank
-  std::sort(gpu_cards.begin(), gpu_cards.end(),
-            [&rank_map](fs::path const& a, fs::path const& b) {
-              return rank_map[a] < rank_map[b];
-            });
-
-  return gpu_cards;
+  return gpu_paths_from_runtime_bdfs(gpu_bdfs_ranked);
 }
 
 static inline std::vector<std::pair<std::string, fs::path>> get_rdma_nics() {
