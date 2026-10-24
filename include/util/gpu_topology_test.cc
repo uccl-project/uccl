@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -17,6 +18,7 @@ int main() {
        std::to_string(
            std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(root / "sysfs");
+  root = fs::canonical(root);
   try {
     std::vector<std::string> bdfs = {"0000:e3:00.0", "0000:23:00.0",
                                      "0000:63:00.0", "0000:a3:00.0"};
@@ -45,6 +47,10 @@ int main() {
             "restricted sysfs changed an ordinal");
     require(uccl::gpu_paths_from_runtime_bdfs({}, root / "sysfs").empty(),
             "empty enumeration must stay empty");
+    std::unordered_map<fs::path, int, uccl::TopologyPathHash> cache;
+    cache.emplace(fs::path("/sys//devices/pci0000:00"), 7);
+    require(cache.at(fs::path("/sys/devices/pci0000:00")) == 7,
+            "equivalent filesystem paths must find the same cache entry");
     fs::remove_all(root);
     std::cout << "runtime GPU topology: PASS\n";
   } catch (...) {

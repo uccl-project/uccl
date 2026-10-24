@@ -7,6 +7,13 @@
 
 namespace uccl {
 
+// libstdc++ 9 has filesystem::hash_value but no hash<filesystem::path>.
+struct TopologyPathHash {
+  size_t operator()(std::filesystem::path const& path) const noexcept {
+    return std::filesystem::hash_value(path);
+  }
+};
+
 // Runtime enumeration defines device ordinals, including visibility remapping.
 // Filtering PCI vendors here would change those ordinals for CUDA-compatible
 // accelerators and may leave callers indexing an empty or shortened vector.

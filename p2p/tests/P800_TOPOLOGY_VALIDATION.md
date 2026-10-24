@@ -1,91 +1,101 @@
-# Runtime-visible accelerator topology regression
+# P800 topology, build and device-transfer qualification
 
-`get_gpu_cards()` must preserve the GPU runtime's ordinal-to-PCI mapping.
-On a P800 CUDA-compatible runtime, the runtime enumerated a device with PCI
-vendor `0x1d22`, but the vendor filter discarded it. Automatic P2P NIC selection
-then indexed an empty vector and terminated with SIGSEGV. Selecting a NIC with
-`UCCL_P2P_RDMA_DEV` bypassed that path.
+The P800 CUDA-compatible runtime reports PCI vendor `0x1d22`. Resolve each
+runtime-returned BDF directly to preserve device ordinals, including visibility
+remapping and restricted sysfs. P2P checks the ordinal before indexing; NIC
+distance ranking and `UCCL_P2P_RDMA_DEV` overrides retain their existing behavior.
+The topology cache uses `filesystem::hash_value` for GCC 9 compatibility.
 
-The fix resolves each runtime-returned BDF directly, retaining its ordinal even
-when sysfs resolution is restricted. P2P also checks the ordinal before indexing.
-It changes neither the distance strategy nor the explicit NIC override.
+## Build
 
-## CPU regression
+Use the P800 vendor's matching CUDA-compatible **headers and libraries**, not
+NVIDIA runtime libraries. The tested layout has headers under `/usr/local/cuda`
+and runtime libraries under `/usr/local/xcudart/lib`. Keep that library directory
+first at build and run time. Other installations can override `CUDA_INC` and
+`CUDA_LIB` independently. No separate native XPU backend is introduced here.
+
+Install the normal P2P prerequisites: C++17 compiler, Python development headers,
+`nanobind`, RDMA/verbs and EFA headers, libfabric headers, zlib and libelf
+development packages. Some Mellanox development packages omit `efadv.h`, and
+Ubuntu 20.04's libfabric headers predate the APIs used by the current CXI code.
+The qualification build uses EFA headers from rdma-core v47.0 and libfabric
+v1.22.0 headers in a separate prefix. `EFA_HOME` and `LIBFABRIC_HOME` select that
+prefix; do not replace the host's driver libraries or a running environment.
+If the Python environment lacks `python-config`, set `PYTHON_CONFIG` to the
+matching interpreter's `python3-config`.
 
 ```sh
-make -C p2p test_gpu_topology
-./p2p/test_gpu_topology
+: "${UCCL_BUILD_DEPS:?Prefix containing include/infiniband/efadv.h and include/rdma/fabric.h}"
+export LD_LIBRARY_PATH=/usr/local/xcudart/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+make -C p2p -j2 all PYTHON=python3 \
+  CUDA_HOME=/usr/local/cuda CUDA_LIB=/usr/local/xcudart/lib \
+  EFA_HOME="$UCCL_BUILD_DEPS" LIBFABRIC_HOME="$UCCL_BUILD_DEPS"
+# Install into the isolated Python environment used for the test.
+make -C p2p install PYTHON=python3 CUDA_LIB=/usr/local/xcudart/lib \
+  EFA_HOME="$UCCL_BUILD_DEPS" LIBFABRIC_HOME="$UCCL_BUILD_DEPS"
 ```
 
-The test creates temporary sysfs fixtures for P800, NVIDIA, AMD and Cambricon
-vendors. It checks mixed vendors, visibility reordering, a missing sysfs entry,
-and an empty runtime enumeration. It requires C++17 and no GPU or NIC.
+Standalone CPU checks need no accelerator, SDK or Python package installation:
 
-The exact formatted test source passed with GCC 9.4 on 2026-10-14. The modified
-C++ files were formatted with clang-format 14.0.6.
+```sh
+make -C p2p test_gpu_topology PYTHON=/nonexistent/python
+./p2p/test_gpu_topology
+python3 -m unittest discover -s p2p/tests -p test_p800_device_transfer_control.py
+```
 
-The 2026-10-21 retest found that the Makefile's `-I../include/util` caused
-system `<endian.h>` to resolve to the project's C++ header on GCC 9/glibc,
-producing `template with C linkage` errors. The target now relies on the test
-source's quoted local include instead. Standalone topology-test builds skip
-Python/nanobind discovery, and CI runs the Makefile command above, including a
-forced rebuild with an unavailable Python executable. The repaired command and
-test passed on GCC 9.4 with empty stderr; default, shared-library and mixed-goal
-native build commands were unchanged in a before/after dry-run comparison.
+The C++ test covers mixed PCI vendors, reordered visibility, missing sysfs,
+empty enumeration and equivalent path keys. The Python tests exercise protocol
+completion, full-buffer corruption rejection, staging directions and cleanup
+using host-memory doubles; they are not device/RDMA validation.
 
-## Native comparison on P800
+## Cross-node device test
 
-Base: `0578e0b819831f35c4ad17008e65e2159746ef80`. Both builds used the same
-environment and a separate GCC 9 build compatibility shim that supplies a
-`filesystem::path` hasher using `filesystem::hash_value`. That shim is outside
-this topology change. The runtime provided CUDA device enumeration, BDF lookup
-and host/device copy interfaces; the NIC was Mellanox mlx5.
+Run only on available, assigned devices. Select one local device on each of two
+nodes using the vendor runtime's visibility settings. Both peers must use the
+same build, runtime library and test options. Set `UCCL_P2P_TRANSPORT=rdma` and,
+if desired, `UCCL_P2P_RDMA_DEV` to a routable data NIC on each node. The probe uses
+network `Endpoint.connect`/`write`, not the intra-node IPC shortcut. Provide XPU
+and RDMA device permissions, readable PCI sysfs, a sufficient locked-memory
+limit, and network reachability for the rendezvous and UCCL-selected ports.
 
-The same native probe called `uccl_engine_create`, registered a 1 MiB **host**
-buffer, obtained engine metadata, deregistered it, and destroyed the engine.
-One physical accelerator was exposed as runtime ordinal zero in each run.
+Start the receiver, then the sender (replace `RECEIVER_IP`):
 
-| Build | NIC selection | Result |
-| --- | --- | --- |
-| Base plus common build shim | Automatic | SIGSEGV, exit 139, before registration completed |
-| Base plus common build shim | Explicit RDMA NIC | Registration, metadata and cleanup passed, exit 0 |
-| Topology fix plus common build shim | Automatic | Registration, metadata and cleanup passed, exit 0 |
+```sh
+# Receiver node
+UCCL_P2P_TRANSPORT=rdma timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
+  --role receiver --gpu 0 --path host-staged \
+  --runtime-lib /usr/local/xcudart/lib/libcudart.so
+# Sender node
+UCCL_P2P_TRANSPORT=rdma timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
+  --role sender --peer RECEIVER_IP --gpu 0 --path host-staged \
+  --runtime-lib /usr/local/xcudart/lib/libcudart.so
+```
 
-An additional two-node test using an explicit identical NIC choice completed
-nine host-memory writes with the topology build: 1 KiB, 1 MiB and 16 MiB, with
-three changing payloads per size and receiver-side SHA256 verification.
-Both processes exited zero. This is a finite transport correctness check, not a
-bandwidth measurement.
+`host-staged` explicitly copies **device -> host -> UCCL RDMA -> host -> device**
+in the probe. It is application staging, not transparent engine support or
+GPU-direct RDMA. `direct` registers device allocations on both nodes and fails
+if device registration/transfer is unsupported; it never silently stages.
+Repeat with `--path direct` on both peers to test that separate path, then swap
+sender/receiver to cover both directions. Native calls require the outer timeout.
 
-The native comparison establishes automatic topology discovery on the tested
-P800 runtime. Direct GPU-memory RDMA, CUDA IPC on NVIDIA/AMD hardware, Graph
-replay, NIXL plugin integration and model-level acceleration require their own
-qualification. A separate blocking C API accept race was observed during later
-transfer tests; this change does not alter the accept implementation.
+Defaults are 1 KiB, 1 MiB and 16 MiB, with two warmups and 20 measured transfers
+per size. Each transfer changes the pattern, poisons the destination and checks
+every byte copied back from the destination device before acknowledging success.
+JSON results include the verified count and decimal GB/s. `transport_GBps`
+times serial blocking UCCL writes; `device_path_GBps` also includes source D2H
+and destination H2D for staging. Allocation, registration, initialization,
+verification and TCP control messages are excluded. This is basic single-flow
+bandwidth, not a saturated or concurrent throughput measurement.
 
-## Current-head retest and reproduction details (2026-10-21)
+## Qualification status
 
-The new native libraries compare main parent
-`27a0abb2744c7d3f2b6391760eae1217b07b31b4` with PR merge head
-`c912f851a53b4ee0b86affdc9d9b249a4543b886`, using the same GCC 9 path-hash shim.
-They predate the Makefile/CI-only follow-up described above.
+Historical native tests establish runtime ordinal discovery and host-buffer
+registration/writes. Detailed environment information and original evidence are
+linked in [PR #1072's discussion](https://github.com/uccl-project/uccl/pull/1072).
+Raw logs, old patches and manifests are intentionally outside the source tree.
 
-| Probe, three repetitions per cell | Baseline | Topology candidate |
-| --- | --- | --- |
-| Automatic NIC, 1 MiB host registration | 3/3 abort before registration, exit 134 | 3/3 registration, metadata and cleanup, exit 0 |
-| Explicit `mlx5_1`, same probe | 3/3 pass, exit 0 | 3/3 pass, exit 0 |
-| Isolated mapping diagnostic | Runtime count 1, topology count 0 | Runtime count 1, topology count 1 |
-
-The baseline now reports `std::bad_alloc`; the historical exit 139 and new
-exit 134 are distinct observations. The initial retest that stopped on this
-unexpected exit code is preserved. A native backtrace was not collected, so
-the new abort is not attributed beyond the observed empty topology and failed
-registration path. The mapping diagnostic was run once per build, separately
-from the three-repeat C API matrix.
-
-The [reproduction supplement](p800_topology_evidence/README.md) includes driver
-and runtime versions, original probe sources, exact build commands, separate
-GCC 9 shim patches, historical and current logs, library resolution, and a
-SHA256 manifest. Internal IP redactions and excerpts are explicit. No K3
-requests or service restarts were issued by this retest; it adds no model
-performance, GPU-direct RDMA, or NIXL qualification.
+P800 device-buffer transfer correctness and bandwidth remain **pending**. The
+probe and CPU checks do not establish platform support. GPU-direct RDMA,
+DMA-BUF device registration, intra-node IPC/XPULink, graphs, NIXL and real-model
+concurrency/performance are also unqualified. Publish actual device results and
+the observed transfer path before expanding the PR's supported-platform claim.

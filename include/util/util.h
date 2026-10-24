@@ -1371,7 +1371,8 @@ static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
 
   // thread-safe cache
   static std::mutex cache_mutex;
-  static std::unordered_map<fs::path, std::vector<std::string>>
+  static std::unordered_map<fs::path, std::vector<std::string>,
+                            TopologyPathHash>
       dev_to_chain_cache;
 
   std::vector<std::string> chainA, chainB;

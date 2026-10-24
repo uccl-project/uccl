@@ -11,15 +11,15 @@ USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
 
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
-CUDA_INC  := $(CUDA_HOME)/include
-CUDA_LIB  := $(CUDA_HOME)/lib64
+CUDA_INC  ?= $(CUDA_HOME)/include
+CUDA_LIB  ?= $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
 LIBFABRIC_HOME ?= /opt/libfabric
 
 # Building with the following settings:
 # NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
-INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
+INC = -I./ -I$(CUDA_INC)
+LIBS = -L$(CUDA_LIB) -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC \
