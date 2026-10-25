@@ -10,7 +10,9 @@ on:
 
 jobs:
   clang-format-check:
-    runs-on: ubuntu-latest
+    # clang-format-14 is available in Ubuntu 22.04. Keep this job pinned
+    # because ubuntu-latest may advance to a release without that package.
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout code
