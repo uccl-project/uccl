@@ -17,11 +17,7 @@
 #include <unordered_map>
 #include <vector>
 #include <sys/mman.h>
-#ifndef __HIP_PLATFORM_AMD__
-#include <cuda_runtime.h>
-#else
-#include <hip/hip_runtime.h>
-#endif
+#include "util/gpu_rt.h"
 
 namespace uccl {
 typedef uint64_t FlowID;
