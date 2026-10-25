@@ -5,9 +5,8 @@ two GPUs on one node: rank 0 (GPU 0) advertises buffers, rank 1 (GPU 1) runs
 write_ipc / read_ipc against them. The control plane uses multiprocessing.Pipe
 and buffers are allocated via ctypes, so torch is never imported.
 
-Runtime backend is auto-detected: Hygon DCU / HIP by default, Cambricon MLU /
-CNRT when neuware is present. Force it with UCCL_GPU_RT=hip|cnrt, or point at a
-specific shared library with UCCL_GPU_RT_LIB.
+Runtime selection comes from uccl.p2p.backend_info(). UCCL_GPU_RT_LIB can
+optionally override the runtime library path in a test installation.
 
 Requirements (Hygon): build uccl.p2p with `make -f Makefile.dtk`, and
   LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib
@@ -19,75 +18,14 @@ Run:
 
 import ctypes
 import multiprocessing
-import os
 import sys
 import traceback
 
-RT_SUCCESS = 0
 BUF_ELEMS = 1024
 SIZE = BUF_ELEMS * 4  # float32 bytes
 
 
-def _detect_backend():
-    kind = os.environ.get("UCCL_GPU_RT", "").lower()
-    lib = os.environ.get("UCCL_GPU_RT_LIB", "")
-    if not kind:
-        if lib:
-            kind = "cnrt" if "cnrt" in lib else "hip"
-        elif os.path.isdir("/usr/local/neuware") and not os.path.exists(
-            "/opt/dtk/lib/libamdhip64.so"
-        ):
-            kind = "cnrt"
-        else:
-            kind = "hip"
-    if not lib:
-        lib = (
-            "/usr/local/neuware/lib64/libcnrt.so"
-            if kind == "cnrt"
-            else "/opt/dtk/lib/libamdhip64.so"
-        )
-    return kind, lib
-
-
-class Rt:
-    """Minimal GPU-runtime shim over HIP (hip*) or Cambricon CNRT (cnrt*)."""
-
-    def __init__(self):
-        self.kind, path = _detect_backend()
-        self.lib = ctypes.CDLL(path)
-        if self.kind == "cnrt":
-            self._h2d, self._d2h = 0, 2  # cnrtMemTransDir_t
-            self._malloc, self._memcpy = self.lib.cnrtMalloc, self.lib.cnrtMemcpy
-            self._set = self.lib.cnrtSetDevice
-        else:
-            self.lib.hipInit(ctypes.c_uint(0))
-            self._h2d, self._d2h = 1, 2  # hipMemcpyKind
-            self._malloc, self._memcpy = self.lib.hipMalloc, self.lib.hipMemcpy
-            self._set = self.lib.hipSetDevice
-
-    def _chk(self, err, name):
-        if err != RT_SUCCESS:
-            raise RuntimeError(f"{name} failed err={err}")
-
-    def set_device(self, idx):
-        self._chk(self._set(idx), f"set_device({idx})")
-
-    def malloc(self, nbytes):
-        ptr = ctypes.c_void_p(0)
-        self._chk(self._malloc(ctypes.byref(ptr), ctypes.c_size_t(nbytes)), "malloc")
-        return ptr
-
-    def memcpy_h2d(self, dst, host, nbytes):
-        self._chk(
-            self._memcpy(dst, host, ctypes.c_size_t(nbytes), ctypes.c_int(self._h2d)),
-            "memcpy H2D",
-        )
-
-    def memcpy_d2h(self, host, src, nbytes):
-        self._chk(
-            self._memcpy(host, src, ctypes.c_size_t(nbytes), ctypes.c_int(self._d2h)),
-            "memcpy D2H",
-        )
+from native_runtime import Rt
 
 
 def alloc_fill(rt, val):

@@ -1,8 +1,10 @@
 #include "rdma_context.h"
+#include "device/dmabuf.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/util.h"
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 static int relaxed_ordering_access_flag() {
@@ -223,74 +225,15 @@ bool RdmaContext::is_gpu_pointer(void* ptr) {
 }
 
 struct ibv_mr* RdmaContext::reg_mem_gpu_dmabuf(void* addr, size_t size) const {
-  // GPU page granularity for DMA-BUF export (2 MiB on modern GPUs).
-  static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
-
-  static gpuMemGetHandleForAddressRange_fn gpuGetHandleForRange_func = nullptr;
-  static std::once_flag init_flag;
-
-  std::call_once(init_flag, []() {
-    void* handle = dlopen(GPU_DRIVER_LIB_NAME, RTLD_LAZY);
-    if (!handle) handle = dlopen(GPU_DRIVER_LIB_NAME_FALLBACK, RTLD_LAZY);
-    if (handle) {
-      gpuGetHandleForRange_func = (gpuMemGetHandleForAddressRange_fn)dlsym(
-          handle, GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME);
-    }
-  });
-
-  if (!gpuGetHandleForRange_func) {
-    UCCL_LOG(ERROR) << "GPU Driver API not available for DMA-BUF";
-    return nullptr;
-  }
-
+  uccl::device::DmaBuf exported;
+  if (!exported.open(addr, size)) return nullptr;
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_REMOTE_READ | relaxed_ordering_access_flag();
-
-  // The DMA-BUF export API requires the address to be at the start of a
-  // GPU allocation and the size aligned to GPU page granularity. The caller
-  // may pass a sub-region, so we find the allocation base and compute offset.
-  void* alloc_base_ptr = nullptr;
-  size_t alloc_size = 0;
-  gpuError_t gpu_err =
-      gpuMemGetAddressRange(&alloc_base_ptr, &alloc_size, addr);
-  if (gpu_err != gpuSuccess) {
-    UCCL_LOG(ERROR) << "gpuMemGetAddressRange failed ("
-                    << gpuGetErrorString(gpu_err) << ")";
-    return nullptr;
-  }
-
-  gpuDevicePtr_t alloc_base = (gpuDevicePtr_t)(uintptr_t)alloc_base_ptr;
-  size_t offset_in_alloc = (uintptr_t)addr - (uintptr_t)alloc_base;
-
-  // Export the entire allocation as a DMA-BUF fd (aligned to granularity).
-  size_t export_size =
-      ((alloc_size + kDmabufGranularity - 1) / kDmabufGranularity) *
-      kDmabufGranularity;
-
-  UCCL_LOG(INFO, UCCL_RDMA)
-      << "DMA-BUF: gpu_buf=" << addr << " bytes=" << size << " alloc_base=0x"
-      << std::hex << (uintptr_t)alloc_base << std::dec
-      << " alloc_size=" << alloc_size << " offset=" << offset_in_alloc
-      << " export_size=" << export_size;
-
-  // Export DMA-BUF fd from the allocation base.
-  int dmabuf_fd = -1;
-  gpuDriverResult_t drv_err =
-      gpuGetHandleForRange_func(&dmabuf_fd, alloc_base, export_size,
-                                GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
-
-  if (drv_err != gpuDriverSuccess) {
-    UCCL_LOG(ERROR) << "gpuMemGetHandleForAddressRange failed (error="
-                    << (int)drv_err << "), DMA-BUF unavailable";
-    return nullptr;
-  }
-
   // Register only the sub-region we need using fd_offset.
   uint64_t iova = (uint64_t)addr;
-  ibv_mr* mr = ibv_reg_dmabuf_mr(pd_.get(), offset_in_alloc, size, iova,
-                                 dmabuf_fd, access_flags);
+  ibv_mr* mr = ibv_reg_dmabuf_mr(pd_.get(), exported.offset, size, iova,
+                                 exported.fd, access_flags);
   int saved_errno = errno;
-  close(dmabuf_fd);  // fd can be closed after registration
 
   if (!mr) {
     UCCL_LOG(ERROR) << "ibv_reg_dmabuf_mr failed (errno=" << saved_errno << ": "
@@ -400,8 +343,14 @@ bool RdmaContext::contains_range(uintptr_t outer_addr, size_t outer_size,
 RdmaContext::RegistrationMode RdmaContext::get_registration_mode(
     void* addr) const {
   bool is_gpu = is_gpu_pointer(addr);
-  // Intel RDMA NICs use DMA-BUF for GPU memory registration.
-  bool use_dmabuf = (is_intel_vendor(vendor_id_) && is_gpu);
+  // Intel RDMA NICs use DMA-BUF for GPU memory registration. Other NICs can
+  // opt in, e.g. hosts without nvidia_peermem where ibv_reg_mr on device
+  // memory fails with EFAULT.
+  static bool const force_dmabuf = [] {
+    char const* env = std::getenv("UCCL_P2P_RDMA_DMABUF");
+    return env != nullptr && std::strcmp(env, "1") == 0;
+  }();
+  bool use_dmabuf = (is_intel_vendor(vendor_id_) || force_dmabuf) && is_gpu;
   if (use_dmabuf) {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "GPU memory detected on irdma NIC (vendor=0x" << std::hex

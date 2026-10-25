@@ -82,6 +82,54 @@ DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tens
 
 Compression also applies to one-sided `write`/`writev` when `UCCL_P2P_COMPRESS_STRATEGY=split_only`. Only the `split_only` strategy is supported for the write path (not `encode`/`full`). The mechanism is transparent: the sender compresses float data in two GPU kernel phases and writes the result directly into a pre-allocated GPU buffer on the receiver side; once all data arrives, the receiver decompresses into the advertised destination address and sends a small RDMA ack to release the sender's buffer slot. Both sides must be built with `USE_DIETGPU=1`.
 
+## Device and transport backends
+
+The device runtime is selected at **build time**; network transport is selected
+at runtime with `UCCL_P2P_TRANSPORT`. The Makefile entry points share
+`make/common.mk` and select a profile from `make/profiles/`:
+
+| Entry point | Runtime | Toolchain profile |
+| --- | --- | --- |
+| `Makefile` | CUDA | CUDA Toolkit |
+| `Makefile.rocm` | HIP | ROCm |
+| `Makefile.dtk` | HIP | DTK, without DMA-BUF export |
+| `Makefile.therock` | HIP | TheRock |
+| `Makefile.cnrt` | CNRT | Neuware, with network staging |
+| `Makefile.musa` | MUSA | MUSA, RDMA/IPC only, without DMA-BUF export |
+
+Optional transports can be excluded with `ENABLE_NCCL=0`, `ENABLE_CXI=0`,
+or `ENABLE_EFA=0`. Disabling NCCL/CXI also removes their sources and SDK header
+requirements; EFA shares the RDMA provider build, so its flag only disables
+runtime selection. Unsupported selections fail before device initialization.
+Keep `PYTHON_CONFIG` consistent with `PYTHON` for non-default Python installs.
+Native callers use `in_python=false`; `libuccl_p2p.so` requires no `libpython`.
+
+```python
+from uccl import p2p
+print(p2p.backend_info())
+# Reports the compiled runtime and selectable transports; does not probe hardware.
+```
+
+Native ctypes tests use this identity; `UCCL_GPU_RT_LIB` optionally overrides
+the runtime library path. Compiled capabilities do not guarantee hardware support.
+
+To add a device backend:
+
+1. Add `include/util/device/<name>/config.h` (SDK-free policies) and `runtime.h`
+   (the `gpu*` API). Keep `util/gpu_rt.h` as the shared P2P/EP/GIN entry point.
+   Set IPC, discovery and DMA-BUF policies in the config.
+2. Add `make/profiles/<name>.mk` with `DEVICE_BACKEND`, SDK flags/libraries and
+   device-specific sources; build with `make PROFILE=<name>`. Add a selector in
+   `util/device/backend.h` only if consumers also need a legacy define.
+3. Reuse `device/ipc.h` and `device/dmabuf.h`. If network staging is required,
+   provide `UCCL_DEVICE_STAGING_HEADER` (see `device/cnrt/`).
+4. Extend the CPU contract tests and validate IPC/RDMA on the target hardware,
+   including allocation offsets, completion ownership and registration failures.
+
+To add a transport, implement `transport/<name>_ops.h`, register its type,
+factory and availability, and add its build sources. Keep device/transport
+specific branches out of common engine operations.
+
 ## Performance Benchmarks
 
 ### Running UCCL P2P

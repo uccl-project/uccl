@@ -2,9 +2,8 @@
 
 #include "adaptive_sleeper.h"
 #include "common.h"
-#include "cxi/cxi_endpoint.h"  // needs libfabric headers
-#include "nccl_endpoint.h"
-#include "rdma_endpoint.h"
+#include "device/staging.h"
+#include "transport/endpoint.h"
 #include "transport_type.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
@@ -28,19 +27,16 @@
 
 extern thread_local bool inside_python;
 
-// Runtime-polymorphic endpoint.
-using GenericEndpoint =
-    std::variant<std::shared_ptr<RDMAEndpoint>, std::shared_ptr<NCCLEndpoint>,
-                 std::shared_ptr<CxiEndpoint>>;
-
 // Use the RDMA-native request types as the common currency.
-// The NCCL shim functions in endpoint_wrapper.h convert as needed.
+// The transport adapters convert native request layouts as needed.
 enum ReqType { ReqRead, ReqWrite };
 
 struct UcclRequest {
   enum ReqType type;
   uint32_t peer_id;
   uint32_t engine_idx;
+  // Transport-owned completion state, released when polling completes.
+  void* context = nullptr;
 };
 
 struct Mhandle {
@@ -251,7 +247,6 @@ struct IpcInflightOp {
 
 class Endpoint {
   static constexpr int kMaxNumGPUs = 8;
-  static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   static constexpr int kMaxInflightOps =
       256;  // Max 256 concurrent Ops across all channels
@@ -424,6 +419,8 @@ class Endpoint {
 
   GenericEndpoint get_endpoint() const;
 
+  gpuError_t export_ipc_range(void* ptr, size_t size, GpuIpcExport* result);
+
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
   std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
@@ -452,6 +449,7 @@ class Endpoint {
   std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
   std::mutex ipc_streams_mu_;
+  GpuIpcExportContext ipc_export_context_;
   std::vector<gpuStream_t>& get_ipc_streams(int dev);
   /* For net read/write and IPC tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
@@ -473,9 +471,8 @@ class Endpoint {
   P2PAdaptiveSleeper recv_proxy_adaptive_sleeper_;
   P2PAdaptiveSleeper ipc_proxy_adaptive_sleeper_;
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-#include "mlu/mlu_staging.inc"  // Cambricon Plan A staging members/methods
-#endif
+  friend class uccl::device::NetworkStaging;
+  uccl::device::NetworkStaging staging_{*this};
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();

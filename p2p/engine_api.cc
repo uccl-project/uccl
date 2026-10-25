@@ -143,6 +143,29 @@ std::pair<void const*, size_t> get_tensor_info(nb::object tensor_obj) {
 NB_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
+  m.def(
+      "backend_info",
+      [] {
+        nb::dict info;
+        using Backend = uccl::device::Backend;
+        info["device"] = Backend::name;
+        info["runtime_library"] = Backend::runtime_library;
+        info["runtime_prefix"] = Backend::runtime_prefix;
+        info["runtime_init"] = Backend::runtime_init;
+        info["memcpy_h2d"] = static_cast<int>(gpuMemcpyHostToDevice);
+        info["memcpy_d2h"] = static_cast<int>(gpuMemcpyDeviceToHost);
+        info["dmabuf_export_compiled"] = bool(UCCL_DEVICE_HAS_DMABUF);
+        info["staged_network"] = Backend::staged_network;
+        nb::list transports;
+        transports.append("rdma");
+        if (transport_available(TransportType::NCCL)) transports.append("nccl");
+        if (transport_available(TransportType::EFA)) transports.append("efa");
+        if (transport_available(TransportType::CXI)) transports.append("cxi");
+        info["compiled_transports"] = transports;
+        return info;
+      },
+      "Compiled device/runtime and transport capabilities (no hardware probe)");
+
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
   // Register XferHandle type
@@ -383,23 +406,22 @@ NB_MODULE(p2p, m) {
                 }
                 // Also generate IPC handle for intra-node transfers
                 {
-                  constexpr size_t kIpcAlign = 1ul << 20;
                   IpcTransferInfo ipc_info = {};
                   ipc_info.size = sizes[i];
                   ipc_info.operation = 1;
-                  auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
-                  auto addr_aligned = addr_val & ~(kIpcAlign - 1);
-                  ipc_info.offset = addr_val - addr_aligned;
                   bool is_host =
                       (uccl::get_dev_idx(const_cast<void*>(ptrs[i])) == -1);
                   ipc_info.is_host = is_host;
                   if (!is_host) {
-                    auto err = gpuIpcGetMemHandle(
-                        &ipc_info.handle,
-                        reinterpret_cast<void*>(addr_aligned));
+                    GpuIpcExport exported;
+                    auto err = self.export_ipc_range(const_cast<void*>(ptrs[i]),
+                                                     sizes[i], &exported);
                     if (err != gpuSuccess) {
                       throw std::runtime_error(gpuGetErrorString(err));
                     }
+                    ipc_info.handle = exported.handle;
+                    ipc_info.offset = exported.offset;
+                    ipc_info.gpu_idx = exported.owner_device;
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),

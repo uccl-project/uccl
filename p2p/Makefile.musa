@@ -1,0 +1,3 @@
+# Compatibility entry point; backend settings live in make/profiles/.
+PROFILE := musa
+include make/common.mk
