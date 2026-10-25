@@ -127,7 +127,14 @@ int main() {
             r"""
 #include <cassert>
 #include "util/gpu_rt.h"
+#include "device/ipc.h"
 int main() {
+  using namespace uccl::device;
+  assert(ipc_open_device(0, 3) == 0);
+  assert(ipc_async_device(0, 3, false) == 3);
+  assert(ipc_async_device(0, 3, true) == 3);
+  assert(ipc_async_device(2, -1, false) == 2);
+  assert(ipc_async_device(2, -1, true) == 2);
   GpuIpcExportContext context;
   GpuIpcExport exported{};
   void* ptr = reinterpret_cast<void*>(0x12341234);

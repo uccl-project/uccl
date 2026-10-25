@@ -8,6 +8,7 @@ struct Backend : BackendDefaults {
   static constexpr char const* runtime_prefix = "cnrt";
   static constexpr char const* runtime_library = "libcnrt.so";
   static constexpr bool ipc_owner_context = true;
+  static constexpr bool ipc_async_owner_context = true;
   static constexpr bool ipc_export_owner = true;
   static constexpr bool cache_ipc_exports = true;
   static constexpr bool staged_network = true;

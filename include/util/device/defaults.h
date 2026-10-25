@@ -9,6 +9,7 @@ enum class RuntimeDiscovery { None, First, Supplement };
 struct BackendDefaults {
   static constexpr char const* runtime_init = "";
   static constexpr bool ipc_owner_context = false;
+  static constexpr bool ipc_async_owner_context = false;
   static constexpr bool cache_ipc_exports = false;
   static constexpr bool ipc_export_owner = false;
   static constexpr bool staged_network = false;

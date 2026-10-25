@@ -1835,7 +1835,8 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx);
+  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
+                                                  info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_dst_ptr = nullptr;
@@ -1901,7 +1902,8 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx);
+  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
+                                                  info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_src_ptr = nullptr;
@@ -1973,7 +1975,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
@@ -2080,7 +2083,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 

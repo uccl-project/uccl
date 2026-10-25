@@ -9,10 +9,12 @@ inline int ipc_open_device(int local, int owner) {
   return Backend::ipc_owner_context && owner >= 0 ? owner : local;
 }
 
-// Keep the engine's existing async import policy independent of the sync
-// policy: async mappings and completion events stay owned by this context.
-inline int ipc_async_device(int local, int owner) {
-  return owner >= 0 ? owner : local;
+// CUDA/HIP handles map into the importer's local context; exporter ordinals
+// belong to its own visible devices. Direct addresses are in the same process.
+inline int ipc_async_device(int local, int owner, bool direct_address) {
+  return (Backend::ipc_async_owner_context || direct_address) && owner >= 0
+             ? owner
+             : local;
 }
 
 template <typename CopyKind>

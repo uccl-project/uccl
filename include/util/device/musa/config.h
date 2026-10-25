@@ -7,6 +7,7 @@ struct Backend : BackendDefaults {
   static constexpr char const* name = "musa";
   static constexpr char const* runtime_prefix = "musa";
   static constexpr char const* runtime_library = "libmusart.so";
+  static constexpr bool ipc_async_owner_context = true;
   static constexpr bool ipc_export_owner = true;
   static constexpr RuntimeDiscovery runtime_discovery =
       RuntimeDiscovery::Supplement;

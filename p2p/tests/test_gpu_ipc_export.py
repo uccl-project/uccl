@@ -114,7 +114,16 @@ int main() {
   using namespace uccl::device;
   assert(ipc_open_device(0, -1) == 0);
   assert(ipc_open_device(0, 3) == (Backend::ipc_owner_context ? 3 : 0));
-  assert(ipc_async_device(0, 3) == 3 && ipc_async_device(0, -1) == 0);
+  // Cross-process exporter ordinals are not local CUDA/HIP ordinals.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  assert(ipc_async_device(0, 3, false) == 3);
+#else
+  assert(ipc_async_device(0, 3, false) == 0);
+#endif
+  // Same-process direct addresses still use the allocation owner's context.
+  assert(ipc_async_device(0, 3, true) == 3);
+  assert(ipc_async_device(2, -1, false) == 2);
+  assert(ipc_async_device(2, -1, true) == 2);
   auto* dst = reinterpret_cast<void*>(0x5000);
   auto* src = reinterpret_cast<void*>(0x7000);
   auto* stream = reinterpret_cast<void*>(0x9000);
