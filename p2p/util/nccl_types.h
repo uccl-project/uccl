@@ -6,15 +6,7 @@
 // These definitions must match the NCCL ABI. They are stable across
 // NCCL 2.x versions.
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-#include <cnrt.h>
-typedef cnrtQueue_t cudaStream_t;
-#elif defined(__HIP_PLATFORM_AMD__)
-#include <hip/hip_runtime_api.h>
-typedef hipStream_t cudaStream_t;
-#else
-#include <cuda_runtime_api.h>
-#endif
+#include "util/gpu_rt.h"
 
 #define NCCL_UNIQUE_ID_BYTES 128
 
@@ -66,9 +58,9 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId commId,
 ncclResult_t ncclCommDestroy(ncclComm_t comm);
 ncclResult_t ncclSend(void const* sendbuff, size_t count,
                       ncclDataType_t datatype, int peer, ncclComm_t comm,
-                      cudaStream_t stream);
+                      gpuStream_t stream);
 ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
-                      int peer, ncclComm_t comm, cudaStream_t stream);
+                      int peer, ncclComm_t comm, gpuStream_t stream);
 char const* ncclGetErrorString(ncclResult_t result);
 
 #ifdef __cplusplus

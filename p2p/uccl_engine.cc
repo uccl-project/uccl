@@ -27,6 +27,11 @@
 
 using Endpoint = ::Endpoint;
 
+static_assert(sizeof(gpuIpcMemHandle_t) + sizeof(uintptr_t) + sizeof(size_t) +
+                      sizeof(int) <=
+                  IPC_INFO_SIZE,
+              "Device IPC handle does not fit the existing C API wire format");
+
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
   std::thread local_accept_thread;
@@ -123,6 +128,12 @@ static bool ipc_disabled() {
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+  try {
+    (void)get_transport_type();
+  } catch (std::invalid_argument const& error) {
+    std::cerr << error.what() << std::endl;
+    return nullptr;
+  }
   (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -272,18 +283,19 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   entry.size = size;
 
   // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
-  // can look it up without a per-transfer gpuIpcGetMemHandle call.
+  // can look it up without a per-transfer IPC export.
   int dev_idx = uccl::get_dev_idx((void*)data);
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
-    static constexpr size_t kIpcAlignment = 1ul << 20;
-    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
-    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
-                                        reinterpret_cast<void*>(aligned));
+    GpuIpcExport exported;
+    gpuError_t err = engine->endpoint->export_ipc_range(
+        reinterpret_cast<void*>(data), size, &exported);
     if (err == gpuSuccess) {
-      entry.ipc_info.offset = data - aligned;
+      entry.ipc_info.handle = exported.handle;
+      entry.ipc_info.offset = exported.offset;
       entry.ipc_info.size = size;
-      entry.ipc_info.gpu_idx = dev_idx;
+      entry.ipc_info.gpu_idx =
+          exported.owner_device >= 0 ? exported.owner_device : dev_idx;
       entry.has_ipc = true;
     }
   }
