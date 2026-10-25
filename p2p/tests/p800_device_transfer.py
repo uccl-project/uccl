@@ -17,6 +17,7 @@ import struct
 import time
 
 GUARD_BYTES = 256
+PROTOCOL_VERSION = 4
 
 
 def require(ok, message):
@@ -68,6 +69,7 @@ class Runtime:
             "cudaSetDevice": [ctypes.c_int],
             "cudaMalloc": [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t],
             "cudaFree": [ctypes.c_void_p],
+            "cudaDeviceSynchronize": [],
             "cudaMemcpy": [
                 ctypes.c_void_p,
                 ctypes.c_void_p,
@@ -91,6 +93,10 @@ class Runtime:
 
     def copy(self, dst, src, size, direction):
         self.check(self.lib.cudaMemcpy(dst, src, size, direction), "cudaMemcpy")
+        if direction == 1:
+            # Pageable H2D may return after host staging, before device completion.
+            # Finish initialization before RDMA and include H2D completion in timing.
+            self.check(self.lib.cudaDeviceSynchronize(), "cudaDeviceSynchronize")
 
     def read(self, ptr, size):
         host = ctypes.create_string_buffer(size)
@@ -107,7 +113,14 @@ class Runtime:
 
 def run_pair(args, sock, rt, ep, p2p):
     plan = json.dumps(
-        [3, args.path, args.sizes, args.warmup, args.iterations, GUARD_BYTES],
+        [
+            PROTOCOL_VERSION,
+            args.path,
+            args.sizes,
+            args.warmup,
+            args.iterations,
+            GUARD_BYTES,
+        ],
         separators=(",", ":"),
     ).encode()
     send(sock, plan)
@@ -222,6 +235,7 @@ def run_pair(args, sock, rt, ep, p2p):
                 json.dumps(
                     dict(
                         status="PASS",
+                        protocol_version=PROTOCOL_VERSION,
                         path=args.path,
                         bytes=size,
                         allocation_bytes=allocation_size,

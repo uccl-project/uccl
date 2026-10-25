@@ -9,6 +9,7 @@ import struct
 import threading
 import types
 import unittest
+from unittest import mock
 
 import p800_device_transfer as probe
 
@@ -38,6 +39,92 @@ class HostRuntime:
 
     def free(self, ptr):
         del self.buffers[ptr.value]
+
+
+class DeferredCopyLibrary:
+    """Model pageable H2D returning after staging, before device completion."""
+
+    def __init__(self, sync_error=0):
+        self.host = HostRuntime()
+        self.pending = []
+        self.sync_error = sync_error
+        self.completed_copies = 0
+        # ctypes function objects accept signature attributes; bound methods do not.
+        for name in ("SetDevice", "Malloc", "Free", "Memcpy", "DeviceSynchronize"):
+            setattr(
+                self,
+                "cuda" + name,
+                lambda *args, method=name: getattr(self, method)(*args),
+            )
+
+    def SetDevice(self, device):
+        return 0
+
+    def Malloc(self, output, size):
+        ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = self.host.alloc(size)
+        return 0
+
+    def Free(self, ptr):
+        self.host.free(ptr)
+        return 0
+
+    def Memcpy(self, dst, src, size, direction):
+        if direction == 1:
+            # Snapshot the pageable source just as a runtime staging copy would.
+            self.pending.append((dst, ctypes.string_at(src, size)))
+        else:
+            # A later blocking D2H can hide a missing H2D completion wait.
+            self.complete()
+            ctypes.memmove(dst, src, size)
+        return 0
+
+    def complete(self):
+        for dst, data in self.pending:
+            ctypes.memmove(dst, data, len(data))
+            self.completed_copies += 1
+        self.pending.clear()
+
+    def DeviceSynchronize(self):
+        if not self.sync_error:
+            self.complete()
+        return self.sync_error
+
+
+def deferred_runtime(library=None):
+    library = library or DeferredCopyLibrary()
+    with mock.patch.object(probe.ctypes, "CDLL", return_value=library):
+        runtime = probe.Runtime("cpu-test-library", 0)
+    return runtime
+
+
+class RuntimeCompletionTests(unittest.TestCase):
+    def test_pageable_h2d_completes_before_copy_returns(self):
+        library = DeferredCopyLibrary()
+        runtime = deferred_runtime(library)
+        source = ctypes.create_string_buffer(b"copy-done", 9)
+        destination = ctypes.create_string_buffer(9)
+        runtime.copy(destination, source, 9, 1)
+        self.assertEqual(destination.raw, b"copy-done")
+        self.assertEqual(library.pending, [])
+        self.assertEqual(library.completed_copies, 1)
+
+    def test_fill_finishes_before_external_device_write(self):
+        runtime = deferred_runtime()
+        device = runtime.alloc(8)
+        try:
+            runtime.fill(device, b"poisoned")
+            # Simulate RDMA writing only after initialization has returned.
+            ctypes.memmove(device, b"received", 8)
+            self.assertEqual(runtime.read(device, 8), b"received")
+        finally:
+            runtime.free(device)
+
+    def test_completion_error_is_not_a_successful_copy(self):
+        runtime = deferred_runtime(DeferredCopyLibrary(sync_error=13))
+        source = ctypes.create_string_buffer(b"data", 4)
+        destination = ctypes.create_string_buffer(4)
+        with self.assertRaisesRegex(RuntimeError, "cudaDeviceSynchronize.*13"):
+            runtime.copy(destination, source, 4, 1)
 
 
 class HostEndpoint:
@@ -115,9 +202,13 @@ class ProtocolTests(unittest.TestCase):
         fail_cleanup=False,
         fault=None,
         drop_copy=None,
+        runtime_factory=None,
     ):
         errors = []
-        runtimes = [HostRuntime(drop_copy), HostRuntime(drop_copy)]
+        runtimes = [
+            runtime_factory() if runtime_factory else HostRuntime(drop_copy)
+            for _ in range(2)
+        ]
         endpoints = [
             HostEndpoint(corrupt, fault=fault),
             HostEndpoint(fail_cleanup=fail_cleanup),
@@ -171,6 +262,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual([r["bytes"] for r in results], [257, 1024, 65536])
                 for result in results:
+                    self.assertEqual(result["protocol_version"], probe.PROTOCOL_VERSION)
                     self.assertEqual(result["verified_transfers"], 4)
                     self.assertEqual(result["measured_transfers"], 3)
                     self.assertEqual(result["guard_bytes_per_side"], probe.GUARD_BYTES)
@@ -190,6 +282,18 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(
                     runtimes[1].copies, [1] * 12 if path == "host-staged" else []
                 )
+
+    def test_both_paths_with_deferred_pageable_copies(self):
+        for path in ["direct", "host-staged"]:
+            with self.subTest(path=path):
+                errors, results, runtimes, endpoints = self.run_pair(
+                    path, runtime_factory=deferred_runtime
+                )
+                self.assertEqual(errors, [])
+                self.assertEqual([r["bytes"] for r in results], [257, 1024, 65536])
+                self.assertTrue(all(not rt.lib.host.buffers for rt in runtimes))
+                self.assertTrue(all(not rt.lib.pending for rt in runtimes))
+                self.assertTrue(all(not ep.registered for ep in endpoints))
 
     def test_tail_corruption_fails_both_peers(self):
         for path in ["direct", "host-staged"]:
@@ -253,19 +357,20 @@ class ProtocolTests(unittest.TestCase):
                 self.assertTrue(any("mismatch" in str(e) for e in errors))
                 self.assertEqual(results, [])
 
-    def test_unguarded_protocol_rejected_before_allocation(self):
+    def test_unguarded_or_unsynchronized_protocol_rejected_before_allocation(self):
         args = types.SimpleNamespace(
             role="sender", path="direct", sizes=[1024], warmup=1, iterations=3
         )
-        runtime, endpoint = HostRuntime(), HostEndpoint()
-        a, b = socket.socketpair()
-        with a, b:
-            a.settimeout(2)
-            probe.send(b, b'[2,"direct",[1024],1,3]')
-            with self.assertRaisesRegex(RuntimeError, "plans differ"):
-                probe.run_pair(args, a, runtime, endpoint, None)
-        self.assertEqual(runtime.buffers, {})
-        self.assertEqual(endpoint.registered, set())
+        for plan in (b'[2,"direct",[1024],1,3]', b'[3,"direct",[1024],1,3,256]'):
+            runtime, endpoint = HostRuntime(), HostEndpoint()
+            a, b = socket.socketpair()
+            with a, b:
+                a.settimeout(2)
+                probe.send(b, plan)
+                with self.assertRaisesRegex(RuntimeError, "plans differ"):
+                    probe.run_pair(args, a, runtime, endpoint, None)
+            self.assertEqual(runtime.buffers, {})
+            self.assertEqual(endpoint.registered, set())
 
     def test_payload_changes_and_full_tail_check(self):
         expected = probe.payload(1025, 4)

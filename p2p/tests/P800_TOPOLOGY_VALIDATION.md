@@ -51,6 +51,8 @@ include swapped, repeated and rotated blocks, stale payloads, dropped writes
 and a corrupted final byte. They also cover writes into either guard, ignored
 source/destination offsets, and omitted staging copies. Each must fail without
 a PASS result on either applicable path.
+The runtime tests also model pageable H2D copies that return before device
+completion, checking initialization ordering and completion-error propagation.
 
 ## Cross-node device test
 
@@ -101,6 +103,14 @@ times serial blocking UCCL writes; `device_path_GBps` also includes source D2H
 and destination H2D for staging. Allocation, registration, initialization,
 verification and TCP control messages are excluded. This is basic single-flow
 bandwidth, not a saturated or concurrent throughput measurement.
+Every H2D copy explicitly waits with `cudaDeviceSynchronize`: pageable host
+memory can be staged before the final device copy has completed under the
+[CUDA-compatible API contract](https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html).
+This ensures initialization finishes before buffers are used by RDMA. The
+destination H2D completion wait is inside `device_path_seconds`; it is not
+deferred to the later verification read. Protocol v4 rejects earlier peers,
+and each result includes its protocol version. These CPU regression checks do
+not establish the P800 runtime's native synchronization behavior.
 
 ## Qualification status
 
