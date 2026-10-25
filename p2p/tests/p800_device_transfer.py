@@ -17,7 +17,17 @@ import struct
 import time
 
 GUARD_BYTES = 256
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
+
+
+class PointerAttributes(ctypes.Structure):
+    # CUDA-compatible runtime pointer attributes (CUDA 10 and later).
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("device", ctypes.c_int),
+        ("devicePointer", ctypes.c_void_p),
+        ("hostPointer", ctypes.c_void_p),
+    ]
 
 
 def require(ok, message):
@@ -110,6 +120,22 @@ class Runtime:
     def free(self, ptr):
         self.check(self.lib.cudaFree(ptr), "cudaFree")
 
+    def mapped_alias(self, ptr, gpu):
+        query = self.lib.cudaPointerGetAttributes
+        query.argtypes = [ctypes.POINTER(PointerAttributes), ctypes.c_void_p]
+        query.restype = ctypes.c_int
+        attrs = PointerAttributes()
+        self.check(query(ctypes.byref(attrs), ptr), "cudaPointerGetAttributes")
+        require(
+            attrs.type == 2 and attrs.device == gpu,
+            "not the assigned device allocation",
+        )
+        require(
+            attrs.hostPointer and attrs.hostPointer != ptr.value,
+            "missing distinct vendor alias",
+        )
+        return attrs.hostPointer
+
 
 def run_pair(args, sock, rt, ep, p2p):
     plan = json.dumps(
@@ -145,6 +171,10 @@ def run_pair(args, sock, rt, ep, p2p):
             else None
         )
         base = ctypes.addressof(host) if host is not None else device.value
+        if args.path == "mapped-alias":
+            # Explicit vendor alias experiment, never a fallback from direct.
+            # Initialization and verification still use the device allocation.
+            base = rt.mapped_alias(device, args.gpu)
         address = base + GUARD_BYTES
         ok, mr = ep.reg(base, allocation_size)
         require(ok, f"{args.path} registration failed; no automatic fallback")
@@ -263,7 +293,9 @@ def main():
     parser.add_argument(
         "--runtime-lib", required=True, help="Same libcudart used to link uccl.p2p"
     )
-    parser.add_argument("--path", choices=["direct", "host-staged"], required=True)
+    parser.add_argument(
+        "--path", choices=["direct", "host-staged", "mapped-alias"], required=True
+    )
     parser.add_argument(
         "--sizes", type=int, nargs="+", default=[1024, 1048576, 16777216]
     )

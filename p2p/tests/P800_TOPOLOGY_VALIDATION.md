@@ -94,6 +94,16 @@ if device registration/transfer is unsupported; it never silently stages.
 Repeat with `--path direct` on both peers to test that separate path, then swap
 sender/receiver to cover both directions. Native calls require the outer timeout.
 
+`mapped-alias` is a third, explicit vendor-runtime experiment. It queries
+`cudaPointerGetAttributes` for the allocated device pointer, requires device
+memory on the selected ordinal and a distinct, non-null `hostPointer`, and
+uses that alias for registration, advertisement and RDMA addresses. Buffer
+initialization and full verification still use the original device allocation.
+There are no application D2H/H2D staging copies in the measured transfer path.
+This is not an automatic fallback, a change to UCCL's address handling, or proof
+of the runtime's internal physical data path. Run it with `--path mapped-alias`
+on both peers; missing aliases or attribute-query failures fail the test.
+
 Defaults are 1 KiB, 1 MiB and 16 MiB, with two warmups and 20 measured transfers
 per size. Each transfer uses a deterministic SHAKE256 byte stream keyed by size
 and sequence, poisons the destination and checks every byte copied back from
@@ -118,10 +128,11 @@ memory can be staged before the final device copy has completed under the
 [CUDA-compatible API contract](https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html).
 This ensures initialization finishes before buffers are used by RDMA. The
 destination H2D completion wait is inside `device_path_seconds`; it is not
-deferred to the later verification read. Protocol v5 requires both peers to
+deferred to the later verification read. Protocol v6 requires both peers to
 enforce the uncompressed path and rejects earlier peers. Each result includes
-its protocol version, `transport=rdma` and `compression=none`. These CPU checks do
-not establish the P800 runtime's native synchronization behavior.
+its protocol version, `transport=rdma` and `compression=none`. CPU checks alone do
+not establish the runtime's native synchronization behavior; see the bounded
+native observations below.
 
 ## Qualification status
 
@@ -130,8 +141,62 @@ registration/writes. Detailed environment information and original evidence are
 linked in [PR #1072's discussion](https://github.com/uccl-project/uccl/pull/1072).
 Raw logs, old patches and manifests are intentionally outside the source tree.
 
-P800 device-buffer transfer correctness and bandwidth remain **pending**. The
-probe and CPU checks do not establish platform support. GPU-direct RDMA,
-DMA-BUF device registration, intra-node IPC/XPULink, graphs, NIXL and real-model
-concurrency/performance are also unqualified. Publish actual device results and
-the observed transfer path before expanding the PR's supported-platform claim.
+Native device-buffer results now distinguish explicit host staging, the original
+device-address registration failure, and a vendor mapped-alias path. They do not
+establish general P800 platform support. Hardware-direct RDMA, DMA-BUF device
+registration, intra-node IPC/XPULink, graphs, NIXL and real-model concurrency remain
+unqualified. The PR retains its topology scope.
+
+### Native device-buffer observation, 2026-10-25
+
+Two P800 OAM nodes, one assigned device per node (`ordinal 0`, PCI `0000:23:00.0`),
+XPU driver/runtime `5.24.0.0` / `5.24.0`, vendor CUDA-compatible libraries,
+`mlx5_1` RoCE v2, GID index 3, MTU 4096. Both peers used the same extension
+(SHA256 `9f59206f816baeebb4c5ceb8feb998d19584177de82e8a9095622f70f4dbe22b`).
+The 103 non-test files under `p2p/` and `include/` matched
+`6a91aa0292a17236846a7f2e176dd8f3f39de16c`; later changes are probe/tests/docs only.
+
+Each row below passed 22 complete device-allocation/guard checks (2 warmups,
+20 measured). This gives **132 verified transfers per path, 264 total**.
+All eight peers exited 0, deregistered/freed their buffers, and were removed.
+Results are single-flow serial timing with verification excluded, not saturated
+bandwidth or model throughput. A and B denote the two physical hosts.
+
+| Path | Direction | Payload | UCCL transport GB/s | Device path GB/s |
+| --- | --- | --- | ---: | ---: |
+| host-staged | A → B | 1 KiB | 0.04976 | 0.01514 |
+| host-staged | A → B | 1 MiB | 15.77564 | 2.95510 |
+| host-staged | A → B | 16 MiB | 25.58361 | 2.94164 |
+| host-staged | B → A | 1 KiB | 0.04731 | 0.01382 |
+| host-staged | B → A | 1 MiB | 15.68690 | 2.94705 |
+| host-staged | B → A | 16 MiB | 26.79201 | 2.94036 |
+| mapped-alias | A → B | 1 KiB | 0.04975 | 0.04869 |
+| mapped-alias | A → B | 1 MiB | 16.11146 | 15.97898 |
+| mapped-alias | A → B | 16 MiB | 25.53461 | 25.43198 |
+| mapped-alias | B → A | 1 KiB | 0.04888 | 0.04781 |
+| mapped-alias | B → A | 1 MiB | 15.30240 | 15.14439 |
+| mapped-alias | B → A | 16 MiB | 25.39466 | 25.28660 |
+
+Host staging used protocol v5 (probe SHA256
+`68ef45182e9f29937b655b669b6a6adf6d49e8309aa58c5dce43a376bde0a767`).
+Mapped-alias results are from the protocol v6 probe in this tree (SHA256
+`afaeaf7b54c3d8a876d96f23ddfa0254ad40e33f46de3872790ef1c2c4150cdc`).
+An earlier private alias prototype also passed 132 transfers; it is excluded
+from this table and count. Full original logs and independent SHA/member
+readback receipts are retained outside the source tree.
+
+The original `direct` path failed on **both nodes before any transfer**:
+registration of the first 1536-byte allocation returned `EFAULT / Bad address`.
+A subsequent one-node registration-only diagnostic also failed at 64 KiB and
+2 MiB. `kunlun_peermem` was loaded on both nodes. The runtime reported device
+memory on ordinal 0 with distinct device and host-alias addresses; registering
+the latter succeeded. This does not establish the root cause or justify
+transparent address substitution in the engine. The reverse direct run and
+larger direct transfers were not executed after this registration gate failed.
+No direct-path bandwidth is reported.
+
+To reproduce the mapped-alias rows, use the commands above with
+`--path mapped-alias`, `UCCL_P2P_RDMA_DEV=mlx5_1`,
+`UCCL_P2P_RDMA_GID_INDEX=3`, and the same socket interface/visible device on each
+assigned node. This validates the explicit alias path only: the runtime may
+have internal mappings or copies that this probe does not instrument.

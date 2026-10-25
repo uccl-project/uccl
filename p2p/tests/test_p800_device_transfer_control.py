@@ -42,6 +42,58 @@ class HostRuntime:
         del self.buffers[ptr.value]
 
 
+class AliasRuntime(HostRuntime):
+    """Separate device identifiers from host storage used by the fake endpoint."""
+
+    def alloc(self, size):
+        pointer = ctypes.c_void_p(0x4000000000 + len(self.buffers) * 0x100000)
+        self.buffers[pointer.value] = ctypes.create_string_buffer(size)
+        return pointer
+
+    def mapped_alias(self, ptr, gpu):
+        return ctypes.addressof(self.buffers[ptr.value])
+
+    def fill(self, ptr, data):
+        ctypes.memmove(self.mapped_alias(ptr, 0), data, len(data))
+
+    def read(self, ptr, size):
+        return ctypes.string_at(self.mapped_alias(ptr, 0), size)
+
+
+class MappedAliasTests(unittest.TestCase):
+    def query(self, memory_type=2, gpu=0, alias=0x2000, error=0):
+        def query(output, pointer):
+            attrs = ctypes.cast(output, ctypes.POINTER(probe.PointerAttributes))[0]
+            attrs.type, attrs.device = memory_type, gpu
+            attrs.devicePointer, attrs.hostPointer = pointer.value, alias
+            return error
+
+        runtime = object.__new__(probe.Runtime)
+        runtime.lib = types.SimpleNamespace(cudaPointerGetAttributes=query)
+        return runtime.mapped_alias(ctypes.c_void_p(0x1000), 0)
+
+    def test_device_alias_is_explicit(self):
+        self.assertEqual(self.query(), 0x2000)
+
+    def test_missing_or_identical_alias_rejected(self):
+        for alias in (None, 0x1000):
+            with self.subTest(alias=alias):
+                with self.assertRaisesRegex(
+                    RuntimeError, "missing distinct vendor alias"
+                ):
+                    self.query(alias=alias)
+
+    def test_wrong_memory_type_or_device_rejected(self):
+        for memory_type, gpu in ((1, 0), (2, 1)):
+            with self.subTest(memory_type=memory_type, gpu=gpu):
+                with self.assertRaisesRegex(RuntimeError, "not the assigned device"):
+                    self.query(memory_type=memory_type, gpu=gpu)
+
+    def test_query_error_propagates(self):
+        with self.assertRaisesRegex(RuntimeError, "cudaPointerGetAttributes.*13"):
+            self.query(error=13)
+
+
 class DeferredCopyLibrary:
     """Model pageable H2D returning after staging, before device completion."""
 
@@ -244,7 +296,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_compression_rejected_before_runtime_or_endpoint(self):
         # In DietGPU builds, unknown values also select split+encode.
-        for path in ["direct", "host-staged"]:
+        for path in ["direct", "host-staged", "mapped-alias"]:
             for strategy in [
                 "split",
                 "split_only",
@@ -281,6 +333,8 @@ class ProtocolTests(unittest.TestCase):
         runtime_factory=None,
     ):
         errors = []
+        if runtime_factory is None and path == "mapped-alias":
+            runtime_factory = AliasRuntime
         runtimes = [
             runtime_factory() if runtime_factory else HostRuntime(drop_copy)
             for _ in range(2)
@@ -297,6 +351,7 @@ class ProtocolTests(unittest.TestCase):
             args = types.SimpleNamespace(
                 role="sender" if index == 0 else "receiver",
                 path=path,
+                gpu=0,
                 sizes=[257, 1024, 65536],
                 warmup=1,
                 iterations=3 + int(mismatch and index == 1),
@@ -331,8 +386,8 @@ class ProtocolTests(unittest.TestCase):
             endpoints,
         )
 
-    def test_both_paths_complete_and_release(self):
-        for path in ["direct", "host-staged"]:
+    def test_all_paths_complete_and_release(self):
+        for path in ["direct", "host-staged", "mapped-alias"]:
             with self.subTest(path=path):
                 errors, results, runtimes, endpoints = self.run_pair(path)
                 self.assertEqual(errors, [])
@@ -374,7 +429,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertTrue(all(not ep.registered for ep in endpoints))
 
     def test_tail_corruption_fails_both_peers(self):
-        for path in ["direct", "host-staged"]:
+        for path in ["direct", "host-staged", "mapped-alias"]:
             errors, results, _, _ = self.run_pair(path, corrupt=True)
             self.assertEqual(len(errors), 2)
             self.assertTrue(any("mismatch" in str(e) for e in errors))
@@ -410,7 +465,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(results, [])
 
     def test_guard_overwrites_and_ignored_offsets_fail(self):
-        for path in ["direct", "host-staged"]:
+        for path in ["direct", "host-staged", "mapped-alias"]:
             for fault in [
                 "overwrite-prefix",
                 "overwrite-suffix",
@@ -443,6 +498,7 @@ class ProtocolTests(unittest.TestCase):
             b'[2,"direct",[1024],1,3]',
             b'[3,"direct",[1024],1,3,256]',
             b'[4,"direct",[1024],1,3,256]',
+            b'[5,"direct",[1024],1,3,256]',
         ):
             runtime, endpoint = HostRuntime(), HostEndpoint()
             a, b = socket.socketpair()
@@ -461,7 +517,7 @@ class ProtocolTests(unittest.TestCase):
             probe.verify(expected[:-1] + bytes([expected[-1] ^ 1]), expected)
 
     def test_block_reordering_repetition_stale_and_dropped_writes_fail(self):
-        for path in ["direct", "host-staged"]:
+        for path in ["direct", "host-staged", "mapped-alias"]:
             for fault in [
                 "swap-blocks",
                 "repeat-block",
