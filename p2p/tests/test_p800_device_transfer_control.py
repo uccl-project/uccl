@@ -6,6 +6,7 @@ import io
 import json
 import socket
 import struct
+import sys
 import threading
 import types
 import unittest
@@ -193,6 +194,81 @@ class HostEndpoint:
         return True
 
 
+class ConfigurationTests(unittest.TestCase):
+    def run_main(self, path, strategy):
+        argv = [
+            "p800_device_transfer.py",
+            "--role",
+            "sender",
+            "--peer",
+            "127.0.0.1",
+            "--runtime-lib",
+            "unused-cpu-test-library",
+            "--path",
+            path,
+        ]
+        endpoint = mock.Mock()
+        module = types.SimpleNamespace(p2p=types.SimpleNamespace(Endpoint=endpoint))
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.dict(sys.modules, {"uccl": module}),
+            mock.patch.dict(
+                probe.os.environ,
+                {
+                    "UCCL_P2P_TRANSPORT": "rdma",
+                    "UCCL_P2P_COMPRESS_STRATEGY": strategy,
+                },
+            ),
+            mock.patch.object(probe, "Runtime") as runtime,
+            mock.patch.object(probe.socket, "create_connection") as connection,
+            mock.patch.object(probe, "run_pair") as run,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            try:
+                probe.main()
+            except SystemExit as exc:
+                return (
+                    exc.code,
+                    stderr.getvalue(),
+                    runtime.call_count,
+                    endpoint.call_count,
+                    run.call_count,
+                )
+        return (
+            0,
+            stderr.getvalue(),
+            runtime.call_count,
+            endpoint.call_count,
+            run.call_count,
+        )
+
+    def test_compression_rejected_before_runtime_or_endpoint(self):
+        # In DietGPU builds, unknown values also select split+encode.
+        for path in ["direct", "host-staged"]:
+            for strategy in [
+                "split",
+                "split_only",
+                "encode",
+                "split_encode",
+                "full",
+                "1",
+                "SPLIT",
+                "typo",
+            ]:
+                with self.subTest(path=path, strategy=strategy):
+                    code, error, runtime, endpoint, run = self.run_main(path, strategy)
+                    self.assertEqual(code, 2)
+                    self.assertIn("uncompressed RDMA", error)
+                    self.assertEqual((runtime, endpoint, run), (0, 0, 0))
+
+    def test_disabled_compression_spellings_reach_protocol(self):
+        for strategy in ["", "none", "off", "0", "NONE", "Off"]:
+            with self.subTest(strategy=strategy):
+                code, _, runtime, endpoint, run = self.run_main("direct", strategy)
+                self.assertEqual(code, 0)
+                self.assertEqual((runtime, endpoint, run), (1, 1, 1))
+
+
 class ProtocolTests(unittest.TestCase):
     def run_pair(
         self,
@@ -263,6 +339,8 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual([r["bytes"] for r in results], [257, 1024, 65536])
                 for result in results:
                     self.assertEqual(result["protocol_version"], probe.PROTOCOL_VERSION)
+                    self.assertEqual(result["transport"], "rdma")
+                    self.assertEqual(result["compression"], "none")
                     self.assertEqual(result["verified_transfers"], 4)
                     self.assertEqual(result["measured_transfers"], 3)
                     self.assertEqual(result["guard_bytes_per_side"], probe.GUARD_BYTES)
@@ -357,11 +435,15 @@ class ProtocolTests(unittest.TestCase):
                 self.assertTrue(any("mismatch" in str(e) for e in errors))
                 self.assertEqual(results, [])
 
-    def test_unguarded_or_unsynchronized_protocol_rejected_before_allocation(self):
+    def test_earlier_qualification_protocols_rejected_before_allocation(self):
         args = types.SimpleNamespace(
             role="sender", path="direct", sizes=[1024], warmup=1, iterations=3
         )
-        for plan in (b'[2,"direct",[1024],1,3]', b'[3,"direct",[1024],1,3,256]'):
+        for plan in (
+            b'[2,"direct",[1024],1,3]',
+            b'[3,"direct",[1024],1,3,256]',
+            b'[4,"direct",[1024],1,3,256]',
+        ):
             runtime, endpoint = HostRuntime(), HostEndpoint()
             a, b = socket.socketpair()
             with a, b:

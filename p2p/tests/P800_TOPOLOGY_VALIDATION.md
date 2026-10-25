@@ -33,6 +33,9 @@ make -C p2p -j2 all PYTHON=python3 \
 # Install into the isolated Python environment used for the test.
 make -C p2p install PYTHON=python3 CUDA_LIB=/usr/local/xcudart/lib \
   EFA_HOME="$UCCL_BUILD_DEPS" LIBFABRIC_HOME="$UCCL_BUILD_DEPS"
+# Check immediate dynamic-symbol resolution in the same isolated environment.
+# Importing the extension does not construct an endpoint or run a device test.
+LD_BIND_NOW=1 python3 -c 'from uccl import p2p; print(p2p.__file__)'
 ```
 
 Standalone CPU checks need no accelerator, SDK or Python package installation:
@@ -63,16 +66,23 @@ if desired, `UCCL_P2P_RDMA_DEV` to a routable data NIC on each node. The probe u
 network `Endpoint.connect`/`write`, not the intra-node IPC shortcut. Provide XPU
 and RDMA device permissions, readable PCI sysfs, a sufficient locked-memory
 limit, and network reachability for the rendezvous and UCCL-selected ports.
+Set `UCCL_P2P_COMPRESS_STRATEGY=none` on both peers. The probe rejects enabled
+or unknown compression settings before importing UCCL or initializing the
+runtime: DietGPU builds can otherwise select a different data path and allocate
+compression buffers. Unset/empty, `none`, `off` and `0` are accepted (case
+insensitive). This qualification measures uncompressed RDMA payload bytes.
 
 Start the receiver, then the sender (replace `RECEIVER_IP`):
 
 ```sh
 # Receiver node
-UCCL_P2P_TRANSPORT=rdma timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
+UCCL_P2P_TRANSPORT=rdma UCCL_P2P_COMPRESS_STRATEGY=none \
+  timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
   --role receiver --gpu 0 --path host-staged \
   --runtime-lib /usr/local/xcudart/lib/libcudart.so
 # Sender node
-UCCL_P2P_TRANSPORT=rdma timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
+UCCL_P2P_TRANSPORT=rdma UCCL_P2P_COMPRESS_STRATEGY=none \
+  timeout -k 5s 600s python3 p2p/tests/p800_device_transfer.py \
   --role sender --peer RECEIVER_IP --gpu 0 --path host-staged \
   --runtime-lib /usr/local/xcudart/lib/libcudart.so
 ```
@@ -108,8 +118,9 @@ memory can be staged before the final device copy has completed under the
 [CUDA-compatible API contract](https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html).
 This ensures initialization finishes before buffers are used by RDMA. The
 destination H2D completion wait is inside `device_path_seconds`; it is not
-deferred to the later verification read. Protocol v4 rejects earlier peers,
-and each result includes its protocol version. These CPU regression checks do
+deferred to the later verification read. Protocol v5 requires both peers to
+enforce the uncompressed path and rejects earlier peers. Each result includes
+its protocol version, `transport=rdma` and `compression=none`. These CPU checks do
 not establish the P800 runtime's native synchronization behavior.
 
 ## Qualification status

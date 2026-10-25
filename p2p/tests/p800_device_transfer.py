@@ -17,7 +17,7 @@ import struct
 import time
 
 GUARD_BYTES = 256
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 
 def require(ok, message):
@@ -236,6 +236,8 @@ def run_pair(args, sock, rt, ep, p2p):
                     dict(
                         status="PASS",
                         protocol_version=PROTOCOL_VERSION,
+                        transport="rdma",
+                        compression="none",
                         path=args.path,
                         bytes=size,
                         allocation_bytes=allocation_size,
@@ -281,6 +283,17 @@ def main():
         parser.error("sender requires --peer")
     if os.environ.get("UCCL_P2P_TRANSPORT", "rdma") != "rdma":
         parser.error("this test requires UCCL_P2P_TRANSPORT=rdma")
+    # DietGPU builds also enable compression for unknown nonempty values.
+    # Reject inherited settings before native initialization can allocate buffers.
+    if os.environ.get("UCCL_P2P_COMPRESS_STRATEGY", "").lower() not in (
+        "",
+        "none",
+        "off",
+        "0",
+    ):
+        parser.error(
+            "this test requires uncompressed RDMA; set UCCL_P2P_COMPRESS_STRATEGY=none"
+        )
     from uccl import p2p
 
     rt = Runtime(args.runtime_lib, args.gpu)
