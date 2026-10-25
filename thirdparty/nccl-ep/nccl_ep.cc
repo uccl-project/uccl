@@ -2363,6 +2363,10 @@ ncclResult_t ncclEpCombine(
         bool backward_combine = (topk_weights != nullptr);
 
         if (backward_combine) {
+            if (topk_weights->ndim != 2 || topk_weights->datatype != ncclFloat32 ||
+                topk_weights->sizes[0] != x->sizes[0] ||
+                topk_weights->sizes[1] != handle->num_topk || !tensor_is_contiguous(topk_weights))
+                return ncclInvalidArgument;
             num_topk = static_cast<int>(topk_weights->sizes[1]);
 
             assert(combined_topk_weights != nullptr);
@@ -2492,7 +2496,7 @@ ncclResult_t ncclEpCombine(
         if (backward_combine && combined_topk_weights != nullptr) {
             nccl_ep::hybridep::dense_to_sparse_prob_combine(
                 dense_output_prob,
-                handle->hybridep.global_routing_map + (num_combined_tokens * ((group->config.num_experts + 7) / 8))*group->rank,
+                static_cast<const int64_t*>(handle->topk_idx->data),
                 static_cast<float*>(combined_topk_weights->data),
                 nullptr,  // No need to output topk_idx for combine
                 num_combined_tokens,

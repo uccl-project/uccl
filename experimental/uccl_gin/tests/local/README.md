@@ -30,6 +30,7 @@ BIN=experimental/uccl_gin/tests/local/build/sm120
 "$BIN/ht_single_rank-uccl" --batch 64 --concurrency 128 --rounds 7
 "$BIN/ht_single_rank-nccl" --batch 64 --concurrency 128 --rounds 7
 "$BIN/routing_bitmap"
+"$BIN/probability_order"
 ```
 
 `coop_flush-scalar` and `coop_flush-elected` are test-only controls. All three
@@ -48,7 +49,8 @@ the same complete output hash. The tensor/model C ABI fixture is optional.
 `routing_bitmap` runs the two- and three-node metadata scan on one GPU for
 every node and local rank. Its bitmap comes from the production top-k
 converter, with node sections that start inside a byte, and every scan output
-is compared with a CPU oracle.
+is compared with a CPU oracle. `probability_order` checks that backward
+combine returns weights in the original top-k slots, including masked ones.
 
 ## Full-model comparison
 

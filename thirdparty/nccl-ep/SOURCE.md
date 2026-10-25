@@ -8,8 +8,9 @@ NVIDIA and DeepSeek copyright notices, Apache-2.0 licensing and third-party
 notices are retained. Local changes wire host resources through kernel parameters,
 fix cooperative completion and typed signals, add single-rank HT validation and
 make the build work outside an NCCL source checkout. HT metadata preprocessing
-decodes the globally packed expert bitmap. The imported Python ctypes wrapper is
-omitted; this integration builds the native C/CUDA library.
+decodes the globally packed expert bitmap, and backward combine returns weights
+in the original top-k slots. The imported Python ctypes wrapper is omitted; this
+integration builds the native C/CUDA library.
 
 `NCCL_EP_USE_UCCL_GIN=ON` selects UCCL for HT rail operations; intra-node work
 retains NCCL/CUDA primitives. The host adapter bootstraps over the EP NCCL

@@ -219,7 +219,7 @@ __global__ void dense_to_sparse_prob_kernel(
 // Each thread handles one token.
 __global__ void dense_to_sparse_prob_combine_kernel(
     const float* __restrict__ dense_prob,         // [num_tokens, num_experts]
-    const uint8_t* __restrict__ routing_bitmap,   // [num_tokens, ceil(num_experts / 8)]
+    const int64_t* __restrict__ original_topk_idx, // [num_tokens, topk]
     float* __restrict__ combined_topk_weights,    // [num_tokens, topk]
     int64_t* __restrict__ combined_topk_idx,      // [num_tokens, topk] (optional, can be nullptr)
     int num_tokens,
@@ -229,29 +229,13 @@ __global__ void dense_to_sparse_prob_combine_kernel(
     int token = blockIdx.x * blockDim.x + threadIdx.x;
     if (token >= num_tokens) return;
 
-    int packed_cols = (num_experts + 7) / 8;
-    int k_out = 0;
-
-    // Scan all experts in order (matches original dispatch input order)
-    for (int e = 0; e < num_experts && k_out < topk; e++) {
-        if ((routing_bitmap[token * packed_cols + e / 8] >> (e % 8)) & 1) {
-            // This expert is active for this token
-            float weight = dense_prob[token * num_experts + e];
-
-            combined_topk_weights[token * topk + k_out] = weight;
-            if (combined_topk_idx != nullptr) {
-                combined_topk_idx[token * topk + k_out] = static_cast<int64_t>(e);  // GLOBAL expert ID
-            }
-            k_out++;
-        }
-    }
-
-    // Zero-fill remaining topk slots
-    for (; k_out < topk; k_out++) {
-        combined_topk_weights[token * topk + k_out] = 0.0f;
-        if (combined_topk_idx != nullptr) {
-            combined_topk_idx[token * topk + k_out] = -1;
-        }
+    // Restore each original slot, including masked entries, without sorting.
+    for (int k = 0; k < topk; ++k) {
+        int slot = token * topk + k;
+        int64_t expert = original_topk_idx[slot];
+        bool valid = expert >= 0 && expert < num_experts;
+        combined_topk_weights[slot] = valid ? dense_prob[token * num_experts + expert] : 0.0f;
+        if (combined_topk_idx != nullptr) combined_topk_idx[slot] = valid ? expert : -1;
     }
 }
 
@@ -260,7 +244,7 @@ __global__ void dense_to_sparse_prob_combine_kernel(
 // ============================================================================
 void dense_to_sparse_prob_combine(
     const float* dense_prob,
-    const uint8_t* routing_bitmap,
+    const int64_t* original_topk_idx,
     float* combined_topk_weights,
     int64_t* combined_topk_idx,
     int num_tokens,
@@ -272,7 +256,7 @@ void dense_to_sparse_prob_combine(
     int grid_size = (num_tokens + block_size - 1) / block_size;
 
     dense_to_sparse_prob_combine_kernel<<<grid_size, block_size, 0, stream>>>(
-        dense_prob, routing_bitmap, combined_topk_weights, combined_topk_idx,
+        dense_prob, original_topk_idx, combined_topk_weights, combined_topk_idx,
         num_tokens, topk, num_experts);
 }
 
