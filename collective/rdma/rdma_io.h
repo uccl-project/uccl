@@ -6,6 +6,7 @@
 #include "transport_config.h"
 #include "util/debug.h"
 #include "util/endian.h"
+#include "util/gpu_rt.h"
 #include "util/list.h"
 #include "util/util.h"
 #include "util_buffpool.h"
@@ -17,7 +18,6 @@
 #include <unordered_map>
 #include <vector>
 #include <sys/mman.h>
-#include "util/gpu_rt.h"
 
 namespace uccl {
 typedef uint64_t FlowID;

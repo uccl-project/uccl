@@ -3094,11 +3094,10 @@ void RDMAContext::uc_rx_rtx_chunk(T* wc_or_cq_ex, uint64_t chunk_addr) {
          reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
-  UCCL_CHECK(gpuMemcpy(
-                 reinterpret_cast<void*>(hdr->remote_addr),
-                 reinterpret_cast<void*>(chunk_addr +
-                                         sizeof(struct retr_chunk_hdr)),
-                 chunk_len, gpuMemcpyHostToDevice) == gpuSuccess);
+  UCCL_CHECK(gpuMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
+                       reinterpret_cast<void*>(chunk_addr +
+                                               sizeof(struct retr_chunk_hdr)),
+                       chunk_len, gpuMemcpyHostToDevice) == gpuSuccess);
 #endif
 
   subflow->pcb.stats_accept_retr++;

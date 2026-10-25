@@ -37,12 +37,13 @@ typedef enum {
   MCCL_LOG_TRACE = 5,
 } mcclDebugLogLevel;
 
-typedef void (*mcclDebugLogger_t)(mcclDebugLogLevel level,
-                                  unsigned long flags, const char* file,
-                                  int line, const char* fmt, ...);
+typedef void (*mcclDebugLogger_t)(mcclDebugLogLevel level, unsigned long flags,
+                                  char const* file, int line, char const* fmt,
+                                  ...);
 
-typedef mcclResult_t (*mcclProfilerCallback_t)(
-    void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);
+typedef mcclResult_t (*mcclProfilerCallback_t)(void** eHandle, int type,
+                                               void* pHandle, int64_t pluginId,
+                                               void* extData);
 
 typedef enum {
   MCCL_NET_DEVICE_HOST = 0,
@@ -104,7 +105,7 @@ typedef struct {
 } mcclNetAttr_v11_t;
 
 typedef struct {
-  const char* name;
+  char const* name;
   mcclResult_t (*init)(void** ctx, uint64_t commId,
                        mcclNetCommConfig_v11_t* config,
                        mcclDebugLogger_t logFunction,

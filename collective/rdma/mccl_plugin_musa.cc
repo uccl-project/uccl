@@ -4,26 +4,24 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util_rdma.h"
-
 #include <arpa/inet.h>
-#include <climits>
-#include <cstdlib>
-#include <limits>
-#include <limits.h>
-#include <memory>
-#include <mutex>
 #include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <limits.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 using namespace uccl;
 
@@ -101,7 +99,7 @@ mcclResult_t initialize_device(McclContext* context, int* dev) {
 
   int gpu = 0;
   if (gpuGetDevice(&gpu) != gpuSuccess) return mcclUnhandledMusaError;
-  const int best_dev = context->endpoint->get_best_dev_idx(gpu);
+  int const best_dev = context->endpoint->get_best_dev_idx(gpu);
   if (*dev != best_dev) *dev = best_dev;
   context->endpoint->initialize_engine_by_dev(*dev, false);
   return mcclSuccess;
@@ -126,7 +124,7 @@ bool can_register_musa(RDMAEndpoint* endpoint_ptr, int dev) {
   return supported;
 }
 
-mcclResult_t pci_path(const char* ib_name, char** path) {
+mcclResult_t pci_path(char const* ib_name, char** path) {
   if (ib_name == nullptr || path == nullptr) return mcclInvalidArgument;
   char device_path[PATH_MAX];
   snprintf(device_path, sizeof(device_path), "/sys/class/infiniband/%s/device",
@@ -139,13 +137,14 @@ mcclResult_t register_mr(McclBaseComm* base, void* data, size_t size, int type,
                          void** mhandle) {
   if (base == nullptr || mhandle == nullptr || data == nullptr || size == 0)
     return mcclInvalidArgument;
-  if (type != MCCL_PTR_HOST && type != MCCL_PTR_MUSA) return mcclInvalidArgument;
+  if (type != MCCL_PTR_HOST && type != MCCL_PTR_MUSA)
+    return mcclInvalidArgument;
   if (type == MCCL_PTR_MUSA &&
       !can_register_musa(base->context->endpoint.get(), base->dev))
     return mcclUnhandledMusaError;
 
   Mhandle* registered = nullptr;
-  const int ret = base->context->endpoint->uccl_regmr(
+  int const ret = base->context->endpoint->uccl_regmr(
       static_cast<UcclFlow*>(base->conn_id.context), data, size, type,
       &registered);
   if (ret != 0 || registered == nullptr) return mcclSystemError;
@@ -244,8 +243,9 @@ extern "C" mcclResult_t mcclPluginGetProperties(
   return mcclSuccess;
 }
 
-extern "C" mcclResult_t mcclPluginListen(void* ctx, int dev, void* opaque_handle,
-                                           void** listen_comm) {
+extern "C" mcclResult_t mcclPluginListen(void* ctx, int dev,
+                                         void* opaque_handle,
+                                         void** listen_comm) {
   if (ctx == nullptr || opaque_handle == nullptr || listen_comm == nullptr)
     return mcclInvalidArgument;
   auto* context = static_cast<McclContext*>(ctx);
@@ -376,23 +376,25 @@ extern "C" mcclResult_t mcclPluginAccept(
 }
 
 extern "C" mcclResult_t mcclPluginRegMr(void* comm, void* data, size_t size,
-                                          int type, void** mhandle) {
+                                        int type, void** mhandle) {
   return register_mr(static_cast<McclBaseComm*>(comm), data, size, type,
                      mhandle);
 }
 
-extern "C" mcclResult_t mcclPluginRegMrDmaBuf(
-    void* comm, void* data, size_t size, int type, uint64_t offset, int fd,
-    void** mhandle) {
+extern "C" mcclResult_t mcclPluginRegMrDmaBuf(void* comm, void* data,
+                                              size_t size, int type,
+                                              uint64_t offset, int fd,
+                                              void** mhandle) {
   auto* base = static_cast<McclBaseComm*>(comm);
   if (base == nullptr || mhandle == nullptr || offset > INT_MAX || fd < 0)
     return mcclInvalidArgument;
-  if (type != MCCL_PTR_HOST && type != MCCL_PTR_MUSA) return mcclInvalidArgument;
+  if (type != MCCL_PTR_HOST && type != MCCL_PTR_MUSA)
+    return mcclInvalidArgument;
   if (type == MCCL_PTR_MUSA &&
       !can_register_musa(base->context->endpoint.get(), base->dev))
     return mcclUnhandledMusaError;
   Mhandle* registered = nullptr;
-  const int ret = base->context->endpoint->uccl_regmr_dmabuf(
+  int const ret = base->context->endpoint->uccl_regmr_dmabuf(
       static_cast<UcclFlow*>(base->conn_id.context), data, size, type,
       static_cast<int>(offset), fd, &registered);
   if (ret != 0 || registered == nullptr || registered->mr == nullptr)
@@ -408,9 +410,9 @@ extern "C" mcclResult_t mcclPluginDeregMr(void* comm, void* mhandle) {
   return mcclSuccess;
 }
 
-extern "C" mcclResult_t mcclPluginIsend(
-    void* send_comm, void* data, size_t size, int /*tag*/, void* mhandle,
-    void* /*p_handle*/, void** request) {
+extern "C" mcclResult_t mcclPluginIsend(void* send_comm, void* data,
+                                        size_t size, int /*tag*/, void* mhandle,
+                                        void* /*p_handle*/, void** request) {
   auto* comm = static_cast<McclSendComm*>(send_comm);
   if (comm == nullptr || request == nullptr || size > INT_MAX)
     return mcclInvalidArgument;
@@ -428,9 +430,10 @@ extern "C" mcclResult_t mcclPluginIsend(
   return mcclSuccess;
 }
 
-extern "C" mcclResult_t mcclPluginIrecv(
-    void* recv_comm, int n, void** data, size_t* sizes, int* /*tags*/,
-    void** mhandles, void** /*p_handles*/, void** request) {
+extern "C" mcclResult_t mcclPluginIrecv(void* recv_comm, int n, void** data,
+                                        size_t* sizes, int* /*tags*/,
+                                        void** mhandles, void** /*p_handles*/,
+                                        void** request) {
   auto* comm = static_cast<McclRecvComm*>(recv_comm);
   if (comm == nullptr || request == nullptr || n <= 0 || data == nullptr ||
       sizes == nullptr || mhandles == nullptr)
@@ -455,9 +458,9 @@ extern "C" mcclResult_t mcclPluginIrecv(
   return mcclSuccess;
 }
 
-extern "C" mcclResult_t mcclPluginIflush(
-    void* recv_comm, int n, void** data, int* sizes, void** mhandles,
-    void** request) {
+extern "C" mcclResult_t mcclPluginIflush(void* recv_comm, int n, void** data,
+                                         int* sizes, void** mhandles,
+                                         void** request) {
   auto* comm = static_cast<McclRecvComm*>(recv_comm);
   if (comm == nullptr || request == nullptr || n <= 0 || data == nullptr ||
       sizes == nullptr || mhandles == nullptr)
@@ -477,7 +480,7 @@ extern "C" mcclResult_t mcclPluginIflush(
 }
 
 extern "C" mcclResult_t mcclPluginTest(void* opaque_request, int* done,
-                                         int* sizes) {
+                                       int* sizes) {
   if (opaque_request == nullptr || done == nullptr) return mcclInvalidArgument;
   auto* request = static_cast<ucclRequest*>(opaque_request);
   auto ep = endpoint();
@@ -491,8 +494,7 @@ extern "C" mcclResult_t mcclPluginTest(void* opaque_request, int* done,
     if (request->type == ReqTx || request->type == ReqTxRC) {
       sizes[0] = request->send.data_len;
     } else if (request->type == ReqRx || request->type == ReqRxRC) {
-      for (int i = 0; i < request->n; ++i)
-        sizes[i] = request->recv.data_len[i];
+      for (int i = 0; i < request->n; ++i) sizes[i] = request->recv.data_len[i];
     }
   }
   release_request(request);
@@ -537,7 +539,7 @@ extern "C" mcclResult_t mcclPluginIrecvConsumed(void*, int, void*) {
 }
 
 extern "C" mcclResult_t mcclPluginMakeVDevice(int*,
-                                                mcclNetVDeviceProps_v11_t*) {
+                                              mcclNetVDeviceProps_v11_t*) {
   return mcclInternalError;
 }
 

@@ -1,5 +1,4 @@
 #include "mccl_plugin_probe.h"
-
 #include <iostream>
 
 int main(int argc, char** argv) {
@@ -8,7 +7,7 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const auto result = uccl::probe_mccl_net_plugin(argv[1]);
+  auto const result = uccl::probe_mccl_net_plugin(argv[1]);
   if (!result.loaded) {
     std::cerr << "MCCL net plugin probe failed: " << result.error << "\n";
     return 1;
