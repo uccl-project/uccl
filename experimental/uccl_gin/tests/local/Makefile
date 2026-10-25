@@ -27,9 +27,22 @@ model-tests: $(BUILD_DIR)/libmodel_transport.so
 EP := $(ROOT)/thirdparty/nccl-ep
 HTFLAGS := -I$(ROOT) -I$(EP) -I$(EP)/include -I$(NCCL_INCLUDE_DIR) -I$(CUDA_HOME)/include/cccl -DNCCL_CHECK_CUDACC=1 -DUCCL_GIN_WITH_NCCL_GIN=1 -D_NCCL_EP_LSA_TEAM_SIZE_MIN=1 -D_NCCL_EP_LSA_TEAM_SIZE_MAX=1 -D_NCCL_EP_NUM_LSA_TEAMS_1=1
 
-ht-tests: $(BUILD_DIR)/ht_single_rank-nccl $(BUILD_DIR)/ht_single_rank-uccl
+ht-tests: $(BUILD_DIR)/ht_single_rank-nccl $(BUILD_DIR)/ht_single_rank-uccl \
+	$(BUILD_DIR)/routing_bitmap
 
 .SECONDARY: $(BUILD_DIR)/ht_adapter-nccl.o $(BUILD_DIR)/ht_adapter-uccl.o
+
+# Single-GPU NCCL-EP routing regression; it needs no communicator or network.
+# It runs the two- and three-node metadata scan with one and four ranks per
+# node, so its adapter object instantiates those layouts.
+ROUTINGFLAGS := $(filter-out -D_NCCL_EP_LSA_TEAM_SIZE_MAX=1 -D_NCCL_EP_NUM_LSA_TEAMS_1=1,$(HTFLAGS)) \
+	-D_NCCL_EP_LSA_TEAM_SIZE_MAX=4 -D_NCCL_EP_NUM_LSA_TEAMS_2=1 -D_NCCL_EP_NUM_LSA_TEAMS_3=1
+
+$(BUILD_DIR)/ht_adapter-routing.o: $(EP)/device/hybridep_adapter.cu | $(BUILD_DIR)
+	$(NVCC) $(DEVFLAGS) $(ROUTINGFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/routing_bitmap: $(EP)/tests/routing_bitmap.cu $(BUILD_DIR)/ht_adapter-routing.o
+	$(NVCC) $(DEVFLAGS) $(ROUTINGFLAGS) -MMD -MP $< $(BUILD_DIR)/ht_adapter-routing.o $(LIBS) -o $@
 
 $(BUILD_DIR)/ht_adapter-%.o: $(EP)/device/hybridep_adapter.cu | $(BUILD_DIR)
 	$(NVCC) $(DEVFLAGS) $(HTFLAGS) $(if $(filter uccl,$*),-DNCCL_EP_USE_UCCL_GIN=1) -MMD -MP -c $< -o $@

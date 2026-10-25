@@ -29,6 +29,7 @@ BIN=experimental/uccl_gin/tests/local/build/sm120
 "$BIN/adapter_signal" --device 0
 "$BIN/ht_single_rank-uccl" --batch 64 --concurrency 128 --rounds 7
 "$BIN/ht_single_rank-nccl" --batch 64 --concurrency 128 --rounds 7
+"$BIN/routing_bitmap"
 ```
 
 `coop_flush-scalar` and `coop_flush-elected` are test-only controls. All three
@@ -43,6 +44,11 @@ result. B denotes requests grouped into a batch, each with 128 tokens. C denotes
 finite queued requests; the batches execute serially on each device. This is not
 HTTP concurrency or a pretrained model forward. Both backend builds must produce
 the same complete output hash. The tensor/model C ABI fixture is optional.
+
+`routing_bitmap` runs the two- and three-node metadata scan on one GPU for
+every node and local rank. Its bitmap comes from the production top-k
+converter, with node sections that start inside a byte, and every scan output
+is compared with a CPU oracle.
 
 ## Full-model comparison
 

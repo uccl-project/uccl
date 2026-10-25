@@ -3980,12 +3980,13 @@ static __device__ __forceinline__ bool bitmap_range_has_set_bit(
 
 template<int LSA_TEAM_SIZE>
 static __device__ __forceinline__ uint8_t bitmap_row_to_rank_mask(
-    const uint8_t* bitmap_row, int num_of_ranks_per_node, int experts_per_rank) {
+    const uint8_t* bitmap_row, int num_of_ranks_per_node, int experts_per_rank,
+    int node_bit_offset = 0) {
   uint8_t rank_mask = 0;
   #pragma unroll
   for (int rank = 0; rank < LSA_TEAM_SIZE; rank++) {
     if (rank < num_of_ranks_per_node) {
-      const int bit_begin = rank * experts_per_rank;
+      const int bit_begin = node_bit_offset + rank * experts_per_rank;
       if (bitmap_range_has_set_bit(bitmap_row, bit_begin, experts_per_rank)) {
         rank_mask |= static_cast<uint8_t>(1u << rank);
       }
@@ -4037,8 +4038,9 @@ __global__ void scan(const uint8_t* input_routing_map,
   // Bitmap routing map constants: each expert is 1 bit, packed 8 per byte.
   // Any experts_per_rank is supported; last byte may have unused high bits (always 0).
   const int experts_per_node = experts_per_rank * num_of_ranks_per_node;
-  const int experts_per_node_packed = (experts_per_node + 7) / 8;  // bytes per node section (ceil)
-  const int packed_row_bytes = experts_per_node_packed * NUM_LSA_TEAMS; // full bitmap row width
+  // Expert bits are packed globally, including sub-byte node boundaries.
+  // This is the same ceil(total_experts / 8) row width used by the adapter.
+  const int packed_row_bytes = (experts_per_node * NUM_LSA_TEAMS + 7) / 8;
 
   // For each token, calculate how many bytes need to be store to sparse_to_dense_map.
   // Use maximum value for compile-time type selection
@@ -4109,10 +4111,10 @@ __global__ void scan(const uint8_t* input_routing_map,
     int current_token_rdma_to_attn_map_id = current_token_node_rank * rdma_to_attn_map_size_per_node + current_token_local_id;
     // Load bitmap for this token's local-node section.
     const uint8_t* bitmap_row = input_routing_map +
-                                current_token_id * packed_row_bytes +
-                                node_rank * experts_per_node_packed;
+                                current_token_id * packed_row_bytes;
     // Decode bitmap row once into compact per-token rank mask.
-    uint8_t rank_mask = bitmap_row_to_rank_mask<LSA_TEAM_SIZE>(bitmap_row, num_of_ranks_per_node, experts_per_rank);
+    uint8_t rank_mask = bitmap_row_to_rank_mask<LSA_TEAM_SIZE>(bitmap_row, num_of_ranks_per_node,
+        experts_per_rank, node_rank * experts_per_node);
 
     // Accumulate per-rank sums from rank_mask bits.
     #pragma unroll
@@ -4285,13 +4287,12 @@ __global__ void scan(const uint8_t* input_routing_map,
       const uint8_t* local_rank_bitmap_row = nullptr;
       if (lane_participates) {
         local_rank_bitmap_row = input_routing_map +
-                                current_token_id * packed_row_bytes +
-                                node_rank * experts_per_node_packed;
+                                current_token_id * packed_row_bytes;
         local_expert_routing_map_store_base_addr =
             local_expert_routing_map + (final_ex_scan[local_rank] * experts_per_rank);
       }
 
-      const int local_expert_bit_base = local_rank * experts_per_rank;
+      const int local_expert_bit_base = node_rank * experts_per_node + local_rank * experts_per_rank;
       for (int k = 0; k < experts_per_rank; k++) {
         int expert_bit = local_expert_bit_base + k;
         bool routed_to_expert = false;
@@ -4362,13 +4363,12 @@ __global__ void scan(const uint8_t* input_routing_map,
       // Load bitmap for this token's remote-node section (current_token_node_id, not node_rank).
       const uint8_t* bitmap_row = input_routing_map +
                                   ((node_rank * num_of_ranks_per_node + local_rank) * num_of_tokens_per_rank + current_token_local_id) *
-                                  packed_row_bytes +
-                                  current_token_node_id * experts_per_node_packed;
+                                  packed_row_bytes;
 
       bool* attn_to_rdma_map_base_addr = attn_to_rdma_map + (current_token_local_id * (NUM_LSA_TEAMS - 1) + current_token_attn_to_rdma_map_node_id);
 
       // Any bit set in this remote-node section means this token must be sent via RDMA.
-      bool token_needed_by_this_node = bitmap_range_has_set_bit(bitmap_row, 0, experts_per_node);
+      bool token_needed_by_this_node = bitmap_range_has_set_bit(bitmap_row, current_token_node_id * experts_per_node, experts_per_node);
       *attn_to_rdma_map_base_addr = token_needed_by_this_node;
     }
   }
