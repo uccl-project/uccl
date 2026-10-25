@@ -31,6 +31,17 @@ thread_local bool inside_python = false;
 
 namespace {
 
+int ipc_async_device(int local_device, IpcTransferInfo const& info) {
+#if defined(__CAMBRICON_PLATFORM_MLU__) || defined(UCCL_USE_MUSA)
+  return info.gpu_idx >= 0 ? info.gpu_idx : local_device;
+#else
+  // Imported handles map into a local context; exporter ordinals are private
+  // to the exporting process's visible devices.
+  return info.direct_addr != 0 && info.gpu_idx >= 0 ? info.gpu_idx
+                                                    : local_device;
+#endif
+}
+
 // Keys borrow immutable handles from this call's IpcTransferInfo vector.
 struct IpcMappings {
   explicit IpcMappings(size_t num_iovs) : num_iovs(num_iovs) {
@@ -1928,7 +1939,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+  int target_gpu = ipc_async_device(local_gpu_idx_, info);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_dst_ptr = nullptr;
@@ -2003,7 +2014,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+  int target_gpu = ipc_async_device(local_gpu_idx_, info);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_src_ptr = nullptr;
@@ -2083,8 +2094,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
-                                                            : local_gpu_idx_;
+  int target_gpu = num_iovs > 0 ? ipc_async_device(local_gpu_idx_, info_v[0])
+                                : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
@@ -2199,8 +2210,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
-                                                            : local_gpu_idx_;
+  int target_gpu = num_iovs > 0 ? ipc_async_device(local_gpu_idx_, info_v[0])
+                                : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
