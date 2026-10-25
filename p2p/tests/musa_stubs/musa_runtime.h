@@ -22,6 +22,8 @@ struct musaPointerAttributes {
 };
 struct musaStream;
 using musaStream_t = musaStream*;
+musaError_t musaMemcpyPeerAsync(void*, int, void const*, int, size_t,
+                                musaStream_t);
 struct musaIpcMemHandle_t {
   char reserved[64];
 };
