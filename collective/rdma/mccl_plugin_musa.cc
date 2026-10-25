@@ -238,7 +238,9 @@ extern "C" mcclResult_t mcclPluginGetProperties(
     props->ptrSupport |= MCCL_PTR_MUSA;
     props->forceFlush = 1;
   }
-  if (factory_dev->dma_buf_support) props->ptrSupport |= MCCL_PTR_DMABUF;
+  // The dmabuf pointer capability stays unadvertised: the MUSA dmabuf export
+  // path is not implemented/verified, so it must not be inferred from the
+  // NIC attribute alone.
   return mcclSuccess;
 }
 

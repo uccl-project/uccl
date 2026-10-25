@@ -9,7 +9,7 @@ INSTALL_DIR ?= $(ABS_REPO_ROOT)/uccl/lib
 
 INC := -I./ -I$(ABS_REPO_ROOT)/include -I$(ABS_REPO_ROOT)/collective/mccl \
 	-I$(MUSA_HOME)/include
-LIBS_SHARED := -lgflags -lz -lelf -libverbs -lpthread -ldl \
+LIBS_SHARED := -lz -lelf -libverbs -lpthread -ldl \
 	-L$(MUSA_LIBDIR) -lmusart -lmusa \
 	-Wl,-rpath,$(MUSA_LIBDIR)
 

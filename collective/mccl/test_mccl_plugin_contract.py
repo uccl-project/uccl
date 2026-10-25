@@ -29,6 +29,11 @@ def main():
     assert "NCCL_PTR_CUDA" not in source
     assert "libmccl-net-uccl.so" in makefile
     assert "-DUCCL_USE_MUSA" in makefile
+    # MCCL_PTR_DMABUF must not be advertised from the NIC dma_buf_support
+    # attribute alone; the MUSA dmabuf export path is not verified, so the
+    # capability stays closed (manual §7.5).
+    assert "MCCL_PTR_DMABUF" not in source
+    assert "dma_buf_support" not in source
 
     subprocess.run(
         (
