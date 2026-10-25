@@ -144,8 +144,9 @@ Raw logs, old patches and manifests are intentionally outside the source tree.
 Native device-buffer results now distinguish explicit host staging, the original
 device-address registration failure, and a vendor mapped-alias path. They do not
 establish general P800 platform support. Hardware-direct RDMA, DMA-BUF device
-registration, intra-node IPC/XPULink, graphs, NIXL and real-model concurrency remain
-unqualified. The PR retains its topology scope.
+registration, intra-node IPC/XPULink, graphs and real-model concurrency remain
+unqualified. The NIXL host-staged component observations below do not establish
+those capabilities.
 
 ### Native device-buffer observation, 2026-10-25
 
@@ -200,3 +201,38 @@ To reproduce the mapped-alias rows, use the commands above with
 `UCCL_P2P_RDMA_GID_INDEX=3`, and the same socket interface/visible device on each
 assigned node. This validates the explicit alias path only: the runtime may
 have internal mappings or copies that this probe does not instrument.
+
+### Caller device preservation and NIXL PP component, 2026-10-25
+
+With two visible devices and current device 1, creating the NIXL UCCL agent
+preserved device 1, but its first pinned-host-memory registration changed the
+calling thread to device 0. The same effect stopped 14 of 16 actual vLLM TP8/PP2
+workers at the device-preservation assertion. Lazy `Endpoint::initialize_engine`
+selects device 0 for host registration; it now restores the caller's device on
+scope exit. The device assertion remains enabled in the private integration.
+
+The native regression `test_host_registration_device.py` checks both `reg` and
+`regv` with a lazy endpoint, verifies the current device, and performs an
+implicit-device tensor allocation and value readback. Both subcases passed on
+P800. A separate NIXL 1.3.1 probe confirmed device 1 after agent creation,
+registration, deregistration and destruction. The baseline library SHA256 was
+`1bcbf4085fb20cdb31ae58152c3004a7c3de157e2c54de7fd0c8b60b4d583a2a`;
+the candidate was
+`2a86a591153774ed61c93a2fab34605547a3ed150363656df4337742af7861e6`.
+
+The repaired library then passed an actual 16-rank vLLM GroupCoordinator
+component run across two P800 nodes: TP8 native all-reduce before and after,
+8 UCCL PP rank pairs, and native TP all-gather of received shards. Hidden and
+residual BF16 tensors of shapes `(9, 4096)` and `(33, 4096)` produced **32 matched
+sender/receiver GPU-payload SHA256 pairs, 688,128 unique bytes**. Every worker
+preserved its device, all 16 channels closed, and the owned containers and
+original GPU locks were released. Full raw outputs, failures and independent
+archive readbacks were retained. Sender/receiver archives have SHA256
+`2c67cd299e618ba6488c8c01f980f22673b388845da05556f4c9913d6ae91b8e` and
+`f1f297150a6d85301b0ac24e88f11f9927a6e1a61f613164e80aed6fb507d229`.
+
+This was an opt-in private host-staged PP adapter with synchronizing GPU-payload
+checksums and task-generated tensors, without model weights. It is neither a
+GPUDirect result nor a model E2E or bandwidth qualification. The production TP
+collective stayed on the vendor backend; the unused vendor PP communicator was
+disabled only when the private UCCL PP route was explicitly selected.
