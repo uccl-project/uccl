@@ -27,8 +27,9 @@ Run multi-node via run_multinode.sh:
       TEST_ARGS="--num-tokens-list 1,4,16,64,128 --num-iters 30" \
       bash run_multinode.sh
 
-If a previous run was killed mid-flight, clean up leaked SHM segments before
-re-running:
+The shared-window SHM names are unlinked once all local ranks have mapped
+them, so they only leak if a run is killed during buffer initialization. In
+that case, clean them up before re-running:
 
     ls /dev/shm/ | grep uccl_deepepv2_ | xargs -I {} rm -f /dev/shm/{}
 """
