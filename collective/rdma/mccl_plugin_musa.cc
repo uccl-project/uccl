@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <limits.h>
 #include <sys/socket.h>
@@ -52,13 +53,45 @@ enum class ConnectionState : uint8_t {
   kConnected,
 };
 
+struct McclPendingConnection {
+  McclBaseComm base{};
+  std::string remote_ip;
+  int remote_dev = -1;
+  mcclResult_t result = mcclSuccess;
+  std::atomic<bool> ready{false};
+  std::thread worker;
+
+  ~McclPendingConnection() {
+    if (worker.joinable()) worker.join();
+  }
+
+  template <typename Connect>
+  void start(Connect connect) {
+    worker = std::thread([this, connect = std::move(connect)] {
+      try {
+        connect();
+      } catch (...) {
+        result = mcclSystemError;
+      }
+      ready.store(true, std::memory_order_release);
+    });
+  }
+
+  bool complete() {
+    if (!ready.load(std::memory_order_acquire)) return false;
+    worker.join();
+    return true;
+  }
+};
+
 struct McclHandle {
   uint32_t ip_addr_u32;
   uint16_t listen_port;
   int remote_dev;
   int remote_gpuidx;
   ConnectionState state;
-  McclBaseComm* pending_state;
+  // Local polling state, never accessed by the connection worker.
+  McclPendingConnection* pending_state;
 };
 static_assert(sizeof(McclHandle) <= MCCL_NET_HANDLE_MAXSIZE,
               "MCCL handle exceeds MCCL_NET_HANDLE_MAXSIZE");
@@ -68,10 +101,7 @@ struct McclListenComm {
   int dev;
   int listen_fd;
   int gpuidx;
-  ConnectionState state = ConnectionState::kInit;
-  McclBaseComm accept_base;
-  std::string remote_ip;
-  int remote_dev = -1;
+  std::unique_ptr<McclPendingConnection> pending_state;
 };
 
 struct McclSendComm {
@@ -300,6 +330,7 @@ extern "C" mcclResult_t mcclPluginConnect(
     mcclNetDeviceHandle_v11_t** send_dev_comm) {
   if (ctx == nullptr || opaque_handle == nullptr || send_comm == nullptr)
     return mcclInvalidArgument;
+  *send_comm = nullptr;
   if (send_dev_comm != nullptr) *send_dev_comm = nullptr;
   auto* context = static_cast<McclContext*>(ctx);
   auto* handle = static_cast<McclHandle*>(opaque_handle);
@@ -308,33 +339,40 @@ extern "C" mcclResult_t mcclPluginConnect(
   int gpu = 0;
   if (gpuGetDevice(&gpu) != gpuSuccess) return mcclUnhandledMusaError;
   if (handle->state == ConnectionState::kInit) {
+    try {
+      auto pending = std::make_unique<McclPendingConnection>();
+      auto* state = pending.get();
+      state->base.context = context;
+      state->base.dev = dev;
+      // Copy bootstrap fields; the worker must not access the opaque handle
+      // or dereference a context that finalize could release.
+      auto ep = context->endpoint;
+      auto remote_ip = ip_to_str(handle->ip_addr_u32);
+      int remote_dev = handle->remote_dev;
+      int remote_gpu = handle->remote_gpuidx;
+      auto port = handle->listen_port;
+      pending->start([state, ep, dev, gpu, remote_dev, remote_gpu, remote_ip,
+                      port] {
+        state->base.request_pool = std::make_shared<McclRequestPool>();
+        state->base.conn_id =
+            ep->uccl_connect(dev, gpu, remote_dev, remote_gpu, remote_ip, port);
+      });
+      handle->pending_state = pending.release();
+    } catch (...) {
+      return mcclSystemError;
+    }
     handle->state = ConnectionState::kConnecting;
-    std::thread([context, dev, gpu, handle] {
-      auto* state = new McclBaseComm{};
-      state->context = context;
-      state->dev = dev;
-      state->conn_id = context->endpoint->uccl_connect(
-          dev, gpu, handle->remote_dev, handle->remote_gpuidx,
-          ip_to_str(handle->ip_addr_u32), handle->listen_port);
-      state->request_pool = std::make_shared<McclRequestPool>();
-      handle->state = ConnectionState::kConnected;
-      handle->remote_dev = state->dev;
-      handle->pending_state = state;
-    }).detach();
-    *send_comm = nullptr;
     return mcclSuccess;
   }
-  if (handle->state == ConnectionState::kConnecting) {
-    *send_comm = nullptr;
-    return mcclSuccess;
-  }
+  if (handle->pending_state == nullptr) return mcclInvalidUsage;
+  if (!handle->pending_state->complete()) return mcclSuccess;
 
-  McclBaseComm* state = handle->pending_state;
+  std::unique_ptr<McclPendingConnection> state(handle->pending_state);
   handle->pending_state = nullptr;
-  if (state == nullptr) return mcclSystemError;
+  handle->state = ConnectionState::kConnected;
+  if (state->result != mcclSuccess) return state->result;
   auto* comm = new McclSendComm{};
-  comm->base = *state;
-  delete state;
+  comm->base = std::move(state->base);
   *send_comm = comm;
   return mcclSuccess;
 }
@@ -344,33 +382,39 @@ extern "C" mcclResult_t mcclPluginAccept(
     mcclNetDeviceHandle_v11_t** recv_dev_comm) {
   if (opaque_listen_comm == nullptr || recv_comm == nullptr)
     return mcclInvalidArgument;
+  *recv_comm = nullptr;
   if (recv_dev_comm != nullptr) *recv_dev_comm = nullptr;
   auto* listen_comm = static_cast<McclListenComm*>(opaque_listen_comm);
-  if (listen_comm->state == ConnectionState::kInit) {
-    listen_comm->state = ConnectionState::kConnecting;
-    std::thread([listen_comm] {
-      auto* state = &listen_comm->accept_base;
-      int remote_gpu = -1;
-      state->context = listen_comm->context;
-      state->dev = listen_comm->dev;
-      state->conn_id = listen_comm->context->endpoint->uccl_accept(
-          listen_comm->dev, listen_comm->listen_fd, listen_comm->gpuidx,
-          listen_comm->remote_ip, &listen_comm->remote_dev, &remote_gpu);
-      state->request_pool = std::make_shared<McclRequestPool>();
-      listen_comm->state = ConnectionState::kConnected;
-    }).detach();
-    *recv_comm = nullptr;
+  if (!listen_comm->pending_state) {
+    try {
+      auto pending = std::make_unique<McclPendingConnection>();
+      auto* state = pending.get();
+      state->base.context = listen_comm->context;
+      state->base.dev = listen_comm->dev;
+      auto ep = listen_comm->context->endpoint;
+      int dev = listen_comm->dev;
+      int fd = listen_comm->listen_fd;
+      int gpu = listen_comm->gpuidx;
+      pending->start([state, ep, dev, fd, gpu] {
+        int remote_gpu = -1;
+        state->base.request_pool = std::make_shared<McclRequestPool>();
+        state->base.conn_id = ep->uccl_accept(dev, fd, gpu, state->remote_ip,
+                                              &state->remote_dev, &remote_gpu);
+      });
+      listen_comm->pending_state = std::move(pending);
+    } catch (...) {
+      return mcclSystemError;
+    }
     return mcclSuccess;
   }
-  if (listen_comm->state == ConnectionState::kConnecting) {
-    *recv_comm = nullptr;
-    return mcclSuccess;
-  }
+  if (!listen_comm->pending_state->complete()) return mcclSuccess;
 
+  auto state = std::move(listen_comm->pending_state);
+  if (state->result != mcclSuccess) return state->result;
   auto* comm = new McclRecvComm{};
-  comm->base = listen_comm->accept_base;
-  comm->remote_ip = listen_comm->remote_ip;
-  comm->remote_dev = listen_comm->remote_dev;
+  comm->base = std::move(state->base);
+  comm->remote_ip = std::move(state->remote_ip);
+  comm->remote_dev = state->remote_dev;
   *recv_comm = comm;
   return mcclSuccess;
 }
@@ -520,6 +564,10 @@ extern "C" mcclResult_t mcclPluginCloseRecv(void* comm) {
 extern "C" mcclResult_t mcclPluginCloseListen(void* comm) {
   if (comm == nullptr) return mcclInvalidArgument;
   auto* listen = static_cast<McclListenComm*>(comm);
+  // Do not close/recycle the fd while an accept worker is still using it.
+  if (listen->pending_state && !listen->pending_state->complete())
+    return mcclInvalidUsage;
+  listen->pending_state.reset();
   close(listen->listen_fd);
   delete listen;
   return mcclSuccess;
