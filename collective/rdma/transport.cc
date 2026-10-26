@@ -1697,6 +1697,7 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
 int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
                              void** data, int* size, int n,
                              struct ucclRequest* ureq) {
+  ureq->context = flow;
   ureq->type = ReqFlush;
   ureq->rc_or_flush_done = true;
   flow->poll_flow_cq();
@@ -1705,6 +1706,7 @@ int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
   if (last == -1) return 0;
 
 #ifndef __HIP_PLATFORM_AMD__
+  ureq->rc_or_flush_done = false;
   flow->post_flush(mhandles, data, size, n, &ureq->rc_or_flush_done, last);
 #else
   ureq->rc_or_flush_done = true;

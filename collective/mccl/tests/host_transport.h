@@ -1,23 +1,84 @@
 #pragma once
 
+#include <arpa/inet.h>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 // Only the external SDK/transport boundary is substituted. BuffPool and all
 // MCCL callback bodies are compiled from their production sources.
 struct ibv_mr {
   void* addr;
   uint32_t lkey;
+  uint32_t rkey;
 };
+struct ibv_sge {
+  uint64_t addr;
+  uint32_t length;
+  uint32_t lkey;
+};
+struct ibv_send_wr {
+  uint64_t wr_id;
+  struct {
+    struct {
+      uint64_t remote_addr;
+      uint32_t rkey;
+    } rdma;
+  } wr;
+  ibv_sge* sg_list;
+  int num_sge;
+  int opcode;
+  int send_flags;
+};
+struct ibv_wc {
+  int opcode;
+  uint64_t wr_id;
+  uint32_t imm_data;
+  uint32_t qp_num;
+};
+struct ibv_cq {
+  std::deque<ibv_wc> completions;
+  int polls = 0;
+};
+struct ibv_qp {
+  uint32_t qp_num = 1;
+  std::vector<ibv_send_wr> pending;
+  bool pending_at_post = false;
+};
+constexpr int IBV_WC_RDMA_WRITE = 1;
+constexpr int IBV_WC_RECV_RDMA_WITH_IMM = 2;
+constexpr int IBV_WC_RDMA_READ = 3;
+constexpr int IBV_WR_RDMA_READ = 4;
+constexpr int IBV_SEND_SIGNALED = 1;
+inline int ibv_poll_cq(ibv_cq* cq, int count, ibv_wc* wcs) {
+  ++cq->polls;
+  int n = 0;
+  while (n < count && !cq->completions.empty()) {
+    wcs[n++] = cq->completions.front();
+    cq->completions.pop_front();
+  }
+  return n;
+}
+inline int ibv_post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr**) {
+  assert(wr->opcode == IBV_WR_RDMA_READ);
+  qp->pending_at_post = *reinterpret_cast<uint64_t*>(wr->wr_id) == 0;
+  qp->pending.push_back(*wr);
+  return 0;
+}
 #define UCCL_INIT_CHECK(condition, message) assert(condition)
+#define UCCL_CHECK(condition) assert(condition)
+inline std::ostringstream host_log;
+#define UCCL_LOG_EP host_log
 #include "util_buffpool.h"
 
 class ConnectionGate {
@@ -62,26 +123,48 @@ inline std::string ip_to_str(uint32_t) { return "127.0.0.1"; }
 
 namespace uccl {
 constexpr int kMaxReq = 8;
-enum ReqType { ReqTx, ReqRx, ReqFlush, ReqTxRC, ReqRxRC };
-struct ucclRequest {
-  ReqType type;
-  void* req_pool;
-  void* context;
-  int n;
-  struct {
-    int data_len;
-  } send;
-  struct {
-    int data_len[1];
-  } recv;
+constexpr int kMaxRecv = 1;
+constexpr int kMaxBatchCQ = 16;
+constexpr int kRCSize = 0;
+constexpr int NCCL_MIN_POST_RECV = 65536;
+constexpr int kEngineLBPolicy = 1;
+constexpr int ENGINE_POLICY_LOAD = 3;
+struct PollCtx {
+  bool done;
 };
-struct UcclFlow {};
+#include "request.inc"
 struct ConnID {
   void* context = nullptr;
   int sock_fd = -1;
 };
 struct Mhandle {
   ibv_mr* mr = nullptr;
+};
+struct UcclFlow {
+  ibv_cq cq;
+  ibv_qp qp;
+  struct {
+    struct {
+      ibv_cq* flow_cq;
+      ibv_qp* rc_qp;
+    } base;
+    ibv_sge gpu_flush_sge;
+    ibv_qp* gpu_flush_qp;
+  } recv_comm_{{&cq, &qp}, {}, &qp};
+  int flow_cq_cnt_ = 0;
+  void poll_flow_cq();
+  void post_flush(Mhandle**, void**, int*, int, uint64_t*, int);
+  void dec_outstanding_reqs() {}
+  void set_last_rc_size(int) {}
+  int get_last_rc_size() { return 0; }
+#include "flush_check.inc"
+
+  void deliver_completions() {
+    for (auto const& wr : qp.pending) {
+      cq.completions.push_back({IBV_WC_RDMA_READ, wr.wr_id, 0, qp.qp_num});
+    }
+    qp.pending.clear();
+  }
 };
 struct FactoryDevice {
   struct {
@@ -134,9 +217,11 @@ class RDMAEndpoint {
   int uccl_recv_async(UcclFlow*, Mhandle**, void**, int*, int, ucclRequest*) {
     return -1;
   }
-  int uccl_flush(UcclFlow*, Mhandle**, void**, int*, int, ucclRequest*) {
-    return -1;
-  }
-  bool uccl_poll_ureq_once(ucclRequest*) { return false; }
+  int uccl_flush(UcclFlow*, Mhandle**, void**, int*, int, ucclRequest*);
+  bool uccl_poll_ureq_once(ucclRequest*);
+  bool uccl_poll_once(PollCtx* ctx) { return ctx->done; }
+  void dec_load_on_engine(uint32_t) {}
 };
+#include "endpoint_completion.inc"
+#include "flow_completion.inc"
 }  // namespace uccl
