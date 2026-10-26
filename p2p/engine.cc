@@ -69,6 +69,29 @@ struct IpcMappings {
   std::unordered_map<std::string_view, size_t> other_handles;
 };
 
+// Ordinal in this process of the GPU with PCI bus id `bdf`, or -1.
+int visible_ordinal_of_bdf(std::string const& bdf) {
+  int count = 0;
+  if (gpuGetDeviceCount(&count) != gpuSuccess) return -1;
+  char buf[64];
+  for (int i = 0; i < count; ++i) {
+    if (gpuDeviceGetPCIBusId(buf, sizeof(buf), i) != gpuSuccess) continue;
+    if (uccl::normalize_pci_bus_id(buf) == bdf) return i;
+  }
+  return -1;
+}
+
+// Device whose context imports an IPC handle from `conn`. The exporter reports
+// an owner only on runtimes that need it (`advertised`); otherwise CUDA/HIP
+// import into the local context, which needs peer access to the owner GPU.
+// Without it, fall back to the owner's context when that GPU is visible here.
+int ipc_owner_device(int local, Conn const* conn, int advertised) {
+  if (advertised >= 0 || conn == nullptr) return advertised;
+  int owner = conn->remote_gpu_ordinal_;
+  if (owner < 0 || uccl::device::peer_accessible(local, owner)) return -1;
+  return owner;
+}
+
 }  // namespace
 
 std::size_t VectorUint8Hash::operator()(std::vector<uint8_t> const& vec) const {
@@ -1447,6 +1470,7 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
 
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
 
   if (same_process) {
     // Same process: use inbox_rings_ directly, no shm attach needed.
@@ -1534,6 +1558,7 @@ got:
   Conn* conn = new Conn;
   conn->conn_id_ = conn_id;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
+  conn->remote_gpu_ordinal_ = visible_ordinal_of_bdf(remote_gpu_bdf);
 
   if (remote_gpu_bdf == gpu_bus_id_) {
     // same GPU: no attach, bind inbox directly
@@ -1581,7 +1606,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
+  int ipc_dev = uccl::device::ipc_open_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx));
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
@@ -1641,7 +1667,8 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
+  int ipc_dev = uccl::device::ipc_open_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx));
   void* raw_src_ptr = nullptr;
   GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
@@ -1702,7 +1729,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_w = uccl::device::ipc_open_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn,
+                                       num_iovs > 0 ? info_v[0].gpu_idx : -1));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
@@ -1769,7 +1797,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int ipc_dev_r = uccl::device::ipc_open_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn,
+                                       num_iovs > 0 ? info_v[0].gpu_idx : -1));
   GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
   std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
@@ -1835,8 +1864,9 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
-                                                  info.direct_addr != 0);
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx),
+      info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_dst_ptr = nullptr;
@@ -1902,8 +1932,9 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
-                                                  info.direct_addr != 0);
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, ipc_owner_device(local_gpu_idx_, conn, info.gpu_idx),
+      info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_src_ptr = nullptr;
@@ -1975,7 +2006,9 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn,
+                       num_iovs > 0 ? info_v[0].gpu_idx : -1),
       num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
@@ -2083,7 +2116,9 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   int target_gpu = uccl::device::ipc_async_device(
-      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      local_gpu_idx_,
+      ipc_owner_device(local_gpu_idx_, conn,
+                       num_iovs > 0 ? info_v[0].gpu_idx : -1),
       num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
