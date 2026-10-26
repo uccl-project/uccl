@@ -175,6 +175,7 @@ void EpollClient::event_loop() {
 
       if ((ev.events & EPOLLERR) || (ev.events & EPOLLHUP)) {
         UCCL_LOG(WARN) << "Error/HUP on connection: " << conn_key;
+        std::lock_guard<std::mutex> lk(conns_mtx_);
         close_connection(conn_key);
         continue;
       }
@@ -288,7 +289,7 @@ void EpollClient::handle_write(std::string const& conn_key) {
 }
 
 void EpollClient::close_connection(std::string const& conn_key) {
-  // Note: this should be called with conns_mtx_ locked or from event_loop
+  // Caller must hold conns_mtx_.
   auto it = conns_.find(conn_key);
   if (it == conns_.end()) return;
 
