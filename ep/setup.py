@@ -245,6 +245,11 @@ if __name__ == "__main__":
 
         # GH200 (Grace Hopper) Detection
         has_gh200 = cpu_is_arm64 and gpu_is_hopper
+        # UCCL_EP_DISABLE_GH200=1: build the generic Hopper + RDMA path. The GH200
+        # path allocates the atomic buffer with cudaMallocManaged, which plain
+        # ibv_reg_mr cannot register on IB without ODP ("Bad address").
+        if os.getenv("UCCL_EP_DISABLE_GH200", "0") == "1":
+            has_gh200 = False
         if has_gh200:
             print(
                 f"GH200 detected (GPU: {gpu_name}, CPU: {arch}), building with GH200 support"

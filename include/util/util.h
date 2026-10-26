@@ -1183,41 +1183,12 @@ inline void checkMemoryLocation(void* ptr) {
 #endif
 
 inline int get_dev_idx(void* ptr) {
-#if defined(UCCL_USE_MUSA)
   gpuPointerAttribute_t attributes{};
   if (gpuPointerGetAttributes(&attributes, ptr) == gpuSuccess &&
       gpuMemTypeOf(attributes) == gpuMemoryTypeDevice) {
     return attributes.device;
   }
   return -1;
-#elif defined(__CAMBRICON_PLATFORM_MLU__)
-  cnrtPointerAttributes_t attributes;
-  if (cnrtPointerGetAttributes(&attributes, ptr) == cnrtSuccess &&
-      attributes.type == cnrtMemTypeDevice) {
-    return attributes.device;
-  }
-  return -1;
-#elif !defined(__HIP_PLATFORM_AMD__)
-  cudaPointerAttributes attributes;
-  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
-  if (err == cudaSuccess) {
-    if (attributes.type == cudaMemoryTypeDevice) {
-      return attributes.device;
-    }
-    return -1;
-  }
-  return -1;
-#else
-  hipPointerAttribute_t attributes;
-  hipError_t err = hipPointerGetAttributes(&attributes, ptr);
-  if (err == hipSuccess) {
-    if (gpuMemTypeOf(attributes) == hipMemoryTypeDevice) {
-      return attributes.device;
-    }
-    return -1;
-  }
-  return -1;
-#endif
 }
 
 inline int get_dev_numa_node(char const* dev_name) {
@@ -1610,29 +1581,29 @@ static inline std::string sanitize_bdf(std::string const& bdf) {
 static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
   std::vector<std::string> all_bdfs;
 
-#if defined(__CAMBRICON_PLATFORM_MLU__)
-  // Cambricon: enumerate every visible MLU's BDF via CNRT.
-  int mlu_count = 0;
-  if (gpuGetDeviceCount(&mlu_count) == gpuSuccess) {
-    char bdf[64];
-    for (int i = 0; i < mlu_count; ++i) {
-      if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
-        all_bdfs.push_back(normalize_pci_bus_id(bdf));
+  if constexpr (uccl::device::Backend::runtime_discovery ==
+                uccl::device::RuntimeDiscovery::First) {
+    // Supplement system discovery with runtime-visible device BDFs.
+    int device_count = 0;
+    if (gpuGetDeviceCount(&device_count) == gpuSuccess) {
+      char bdf[64];
+      for (int i = 0; i < device_count; ++i) {
+        if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+          all_bdfs.push_back(normalize_pci_bus_id(bdf));
+      }
     }
   }
-#endif
 
-#if !defined(__CAMBRICON_PLATFORM_MLU__) && !defined(__HIP_PLATFORM_AMD__) && \
-    !defined(UCCL_USE_MUSA)
-  // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
-  fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
-  if (fs::exists(nvidia_gpus)) {
-    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      all_bdfs.push_back(
-          normalize_pci_bus_id(entry.path().filename().string()));
+  if constexpr (uccl::device::Backend::scan_nvidia_proc) {
+    // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
+    fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
+    if (fs::exists(nvidia_gpus)) {
+      for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
+        all_bdfs.push_back(
+            normalize_pci_bus_id(entry.path().filename().string()));
+      }
     }
   }
-#endif
 
   // DRM class (works on AMD and as a fallback when procfs is unavailable).
   if (all_bdfs.empty()) {
@@ -1653,17 +1624,18 @@ static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
     }
   }
 
-#if defined(UCCL_USE_MUSA)
-  // Retain runtime-visible devices even when DRM nodes are unavailable.
-  int count = 0;
-  if (gpuGetDeviceCount(&count) == gpuSuccess) {
-    char bdf[64];
-    for (int i = 0; i < count; ++i) {
-      if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
-        all_bdfs.push_back(normalize_pci_bus_id(bdf));
+  if constexpr (uccl::device::Backend::runtime_discovery ==
+                uccl::device::RuntimeDiscovery::Supplement) {
+    // Retain runtime-visible devices even when DRM nodes are unavailable.
+    int count = 0;
+    if (gpuGetDeviceCount(&count) == gpuSuccess) {
+      char bdf[64];
+      for (int i = 0; i < count; ++i) {
+        if (gpuDeviceGetPCIBusId(bdf, sizeof(bdf), i) == gpuSuccess)
+          all_bdfs.push_back(normalize_pci_bus_id(bdf));
+      }
     }
   }
-#endif
   std::sort(all_bdfs.begin(), all_bdfs.end());
   all_bdfs.erase(std::unique(all_bdfs.begin(), all_bdfs.end()), all_bdfs.end());
   return all_bdfs;

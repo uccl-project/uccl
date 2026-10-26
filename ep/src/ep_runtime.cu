@@ -59,6 +59,9 @@ __global__ void barrier(int** barrier_signal_ptrs, int rank) {
 
 void barrier(int** barrier_signal_ptrs, int rank, int num_ranks,
              cudaStream_t stream) {
+  // One GPU per node (NUM_MAX_NVL_PEERS = 1): no local peer to wait for.
+  if (num_ranks == 1) return;
+
 #define BARRIER_LAUNCH_CASE(ranks)                                \
   LAUNCH_KERNEL(&cfg, barrier<ranks>, barrier_signal_ptrs, rank); \
   break
