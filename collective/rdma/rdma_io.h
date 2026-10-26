@@ -340,9 +340,10 @@ class TXTracking {
       void* subflow_context, RDMAContext* rdma_ctx, UINT_CSN csn, uint64_t now,
       uint32_t* flow_unacked_bytes, uint32_t* engine_outstanding_bytes);
 
+  // Returns zero when the ACK does not provide a valid RTT sample.
   uint64_t ack_transmitted_chunks(void* subflow_context, RDMAContext* rdma_ctx,
                                   uint32_t num_acked_chunks, uint64_t t5,
-                                  uint64_t t6, uint64_t remote_queueing_tsc,
+                                  uint64_t t6, uint64_t remote_queueing_us,
                                   uint32_t* flow_unacked_bytes);
 
   inline void track_chunk(struct ucclRequest* ureq, struct wr_ex* wr_ex,
@@ -451,6 +452,7 @@ class SubUcclFlow {
   }
 
   inline void update_scoreboard_rtt(uint64_t newrtt_tsc, uint32_t qpidx) {
+    if (!newrtt_tsc) return;
     scoreboard_rtt_[qpidx] = (1 - kPPEwmaAlpha) * scoreboard_rtt_[qpidx] +
                              kPPEwmaAlpha * to_usec(newrtt_tsc, freq_ghz);
   }
