@@ -21,7 +21,7 @@
 #include "ep_util.hpp"
 #include "ep_utils.cuh"
 #include "internode_ll.cuh"
-#include "uccl_ibgda.cuh"
+#include "uccl_transfer_device.cuh"
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -251,7 +251,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                   : 0;
           if (dst_p2p_ptr == 0) {
             __threadfence_system();
-            uccl::nvshmemi_ibgda_put_nbi_warp(
+            uccl::put_nbi_warp(
                 dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
                 reinterpret_cast<uint64_t>(msg) -
                     reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -354,7 +354,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                     : 0;
             if (dst_p2p_ptr == 0) {
               __threadfence_system();
-              uccl::nvshmemi_ibgda_put_nbi_warp(
+              uccl::put_nbi_warp(
                   dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
                   reinterpret_cast<uint64_t>(msg) -
                       reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -399,7 +399,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           // Copied to the peer after this launch, behind the data
           ce_counts[dst_rank * C + channel] = -num_sent - 1;
         } else if (dst_p2p_ptr == 0) {
-          uccl::nvshmemi_ibgda_amo_nonfetch_add(
+          uccl::atomic_nonfetch_add(
               dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
               -num_sent - 1, dst_rank, /*channel=*/channel, false,
               d2h_channel_addrs, num_d2h_channel_addrs, false,
@@ -1007,7 +1007,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
           __syncwarp();
         }
         __threadfence_system();
-        uccl::nvshmemi_ibgda_put_nbi_warp(
+        uccl::put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             reinterpret_cast<uint64_t>(send_msg) -
                 reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -1044,7 +1044,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       if (dst_p2p_ptr != 0) {
         st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
       } else {
-        uccl::nvshmemi_ibgda_amo_nonfetch_add(
+        uccl::atomic_nonfetch_add(
             dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr), 1,
             dst_rank, /*channel=*/channel, false, d2h_channel_addrs,
             num_d2h_channel_addrs, true, low_latency_buffer_idx);

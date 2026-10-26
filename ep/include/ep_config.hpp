@@ -74,11 +74,9 @@ struct Config {
         num_channels * num_nvl_ranks * (2 * num_rdma_ranks + 3) * sizeof(int);
     num_bytes += num_channels * num_nvl_ranks *
                  num_max_nvl_chunked_recv_tokens * hidden_bytes;
-#ifndef DISABLE_NVSHMEM
     num_bytes += num_channels * num_nvl_ranks *
                  num_max_nvl_chunked_recv_tokens *
                  uccl::internode::get_source_meta_bytes();
-#endif
     num_bytes += num_channels * num_nvl_ranks *
                  num_max_nvl_chunked_recv_tokens * kNumMaxTopK *
                  sizeof(int64_t);
@@ -92,7 +90,6 @@ struct Config {
   }
 
   size_t get_rdma_buffer_size_hint(int64_t hidden_bytes, int num_ranks) const {
-#ifndef DISABLE_NVSHMEM
     // Legacy mode
     if (num_ranks <= NUM_MAX_NVL_PEERS) return 0;
 
@@ -126,9 +123,6 @@ struct Config {
                  num_max_rdma_chunked_recv_tokens * sizeof(int4) * 2;
     num_bytes = ((num_bytes + 127) / 128) * 128;
     return num_bytes;
-#else
-    EP_HOST_ASSERT(false and "NVSHMEM is disable during compilation");
-#endif
   }
 };
 

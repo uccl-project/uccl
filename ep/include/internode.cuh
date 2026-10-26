@@ -8,8 +8,6 @@
 namespace uccl {
 namespace internode {
 
-// extern nvshmem_team_t cpu_rdma_team;
-
 struct SourceMeta;
 
 int get_source_meta_bytes();
