@@ -76,6 +76,10 @@ class TransportFactoryTests(unittest.TestCase):
                 str(directory),
                 "-I",
                 str(ROOT / "p2p/util"),
+                "-I",
+                str(ROOT / "p2p"),
+                "-I",
+                str(ROOT / "include"),
                 "-x",
                 "c++",
                 "-",
@@ -157,6 +161,105 @@ int main() {
         )
         for musa in (False, True):
             self.check_program(source, musa)
+
+    def test_connect_uses_peer_id_instead_of_transport_specific_socket(self):
+        engine = (ROOT / "p2p/engine.cc").read_text()
+        start = engine.index("bool Endpoint::connect(")
+        connect = engine[start : engine.index("\n}\n", start) + 3]
+        common = (ROOT / "p2p/util/common.h").read_text()
+        start = common.index("struct ConnID {")
+        conn_id = common[start : common.index("};", start) + 2]
+        source = (
+            r"""
+#include <atomic>
+#include <cassert>
+#include <chrono>
+#include <cstdint>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+using PeerID = uint64_t;
+"""
+            + conn_id
+            + r"""
+constexpr int INVALID_GPU = -1;
+bool inside_python = false;
+void check_python_signals() { assert(false); }
+struct Conn {
+  uint64_t id;
+  ConnID transport;
+  std::string ip;
+  uint16_t port;
+  std::string extra;
+};
+ConnID next_result{};
+ConnID uccl_connect(int, int, std::string const&, int) { return next_result; }
+struct Endpoint {
+  int local_gpu_idx_ = 0, ep_ = 0;
+  std::atomic<uint64_t> next_conn_id_{0};
+  std::shared_mutex conn_mu_;
+  std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  bool connect(std::string, int, int, uint64_t&);
+  ~Endpoint() {
+    for (auto const& item : conn_id_to_conn_) delete item.second;
+  }
+};
+"""
+            + connect
+            + r"""
+int main() {
+  Endpoint endpoint;
+  // RDMA identifies its first peer as zero and encodes it as a null context.
+  // Its socket field is not a connection-validity indicator. A negative value
+  // deterministically exposes the regression without reading uninitialized data.
+  for (int fd : {-12345, -1, 0, 42}) {
+    next_result = {nullptr, fd, 0, 0};
+    uint64_t id = UINT64_MAX;
+    assert(endpoint.connect("127.0.0.1", 0, 1234, id));
+    auto* saved = endpoint.conn_id_to_conn_.at(id);
+    assert(saved->transport.peer_id == 0);
+    assert(saved->port == 1234);
+  }
+  // NCCL/CXI rejection uses the invalid peer ID. Never publish a failed
+  // connection, even if its socket field happens to be nonnegative.
+  auto count = endpoint.conn_id_to_conn_.size();
+  for (int fd : {-1, 0, 42}) {
+    next_result = {nullptr, fd, -1, UINT64_MAX};
+    uint64_t id = UINT64_MAX;
+    assert(!endpoint.connect("127.0.0.1", 0, 1234, id));
+    assert(endpoint.conn_id_to_conn_.size() == count);
+    assert(endpoint.conn_id_to_conn_.count(id) == 0);
+  }
+}
+"""
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            exe = Path(directory) / "test"
+            result = subprocess.run(
+                [
+                    os.environ.get("CXX", "c++"),
+                    "-std=c++17",
+                    "-pthread",
+                    "-x",
+                    "c++",
+                    "-",
+                    "-o",
+                    str(exe),
+                ],
+                input=source,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                [str(exe)], capture_output=True, text=True, timeout=20
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

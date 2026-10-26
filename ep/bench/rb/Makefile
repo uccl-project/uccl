@@ -201,7 +201,7 @@ ifeq ($(HAS_EFA),1)
     SRC_CPP += ../src/uccl_bench.cpp ../src/fifo.cpp
 
     SRC_CU := ../src/bench_kernel.cu
-    SRC_CU += ../src/internode_ll.cu ../src/internode.cu ../src/layout.cu
+    SRC_CU += ../src/internode_ll.cu ../src/internode_ll_dedup.cu ../src/internode.cu ../src/layout.cu
     SRC_CU += ../src/intranode.cu ../src/ep_runtime.cu
 
     OBJ_CPP := $(SRC_CPP:.cpp=.o)

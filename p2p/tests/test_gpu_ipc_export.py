@@ -45,12 +45,36 @@ inline Error runtime_range(void** base, size_t* size, void*) {
   return success;
 }
 inline Error unused_api(...) { return success; }
+inline int copy_calls = 0, peer_calls = 0, last_dst_device = -1, last_src_device = -1;
+inline void* last_dst = nullptr;
+inline void const* last_src = nullptr;
+inline size_t last_size = 0;
+inline void* last_stream = nullptr;
+inline int last_kind = -1;
+inline Error copy_error = success;
+inline Error copy(void* dst, void const* src, size_t size, int kind, void* stream) {
+  ++copy_calls; last_dst = dst; last_src = src; last_size = size;
+  last_kind = kind; last_stream = stream; return copy_error;
+}
+inline Error cnrt_copy(void* dst, void* src, size_t size, void* stream, int kind) {
+  return copy(dst, src, size, kind, stream);
+}
+inline Error peer_copy(void* dst, int dst_device, void const* src,
+                       int src_device, size_t size, void* stream) {
+  ++peer_calls; last_dst = dst; last_src = src; last_size = size;
+  last_dst_device = dst_device; last_src_device = src_device;
+  last_stream = stream; return copy_error;
+}
 """
 
 CHECKS = r"""
 #include <cassert>
 #include "util/gpu_rt.h"
+#include "device/ipc.h"
+#include "util/nccl_types.h"
 int main() {
+  using NcclSend = ncclResult_t (*)(void const*, size_t, ncclDataType_t, int, ncclComm_t, gpuStream_t);
+  static_assert(std::is_same_v<decltype(&ncclSend), NcclSend>);
   GpuIpcExportContext context;
   GpuIpcExport out;
   void* ptr = reinterpret_cast<void*>(0x12341234);
@@ -87,6 +111,38 @@ int main() {
   export_error = unknown;
   assert(gpuExportIpcRange(&fresh, ptr, 64, &out) == unknown);
   assert(out.offset == 99 && out.owner_device == 42 && out.handle.reserved[0] == 7);
+  using namespace uccl::device;
+  assert(ipc_open_device(0, -1) == 0);
+  assert(ipc_open_device(0, 3) == (Backend::ipc_owner_context ? 3 : 0));
+  // Cross-process exporter ordinals are not local CUDA/HIP ordinals.
+#if defined(__CAMBRICON_PLATFORM_MLU__)
+  assert(ipc_async_device(0, 3, false) == 3);
+#else
+  assert(ipc_async_device(0, 3, false) == 0);
+#endif
+  // Same-process direct addresses still use the allocation owner's context.
+  assert(ipc_async_device(0, 3, true) == 3);
+  assert(ipc_async_device(2, -1, false) == 2);
+  assert(ipc_async_device(2, -1, true) == 2);
+  auto* dst = reinterpret_cast<void*>(0x5000);
+  auto* src = reinterpret_cast<void*>(0x7000);
+  auto* stream = reinterpret_cast<void*>(0x9000);
+  assert(ipc_copy_async(dst, 3, src, 0, 128, false, 2, stream) == success);
+  assert(peer_calls == int(Backend::ipc_owner_context));
+  assert(copy_calls == int(!Backend::ipc_owner_context));
+  assert(last_dst == dst && last_src == src && last_size == 128 && last_stream == stream);
+  if (Backend::ipc_owner_context) assert(last_dst_device == 3 && last_src_device == 0);
+  assert(ipc_copy_async(dst, 0, src, 3, 128, false, 2, stream) == success);
+  if (Backend::ipc_owner_context) assert(last_dst_device == 0 && last_src_device == 3);
+  int peers = peer_calls;
+  // Host and same-device transfers must always use the regular copy API.
+  assert(ipc_copy_async(dst, 3, src, 0, 128, true, 1, stream) == success);
+  assert(last_kind == 1 && peer_calls == peers);
+  assert(ipc_copy_async(dst, 0, src, 0, 128, false, 2, stream) == success);
+  assert(last_kind == 2 && peer_calls == peers);
+  copy_error = unknown;
+  assert(ipc_copy_async(dst, 3, src, 0, 128, false, 2, stream) == unknown);
+
 }
 """
 
@@ -112,7 +168,6 @@ def runtime_header(backend):
             "cnrtQueueCreate",
             "cnrtNotifierCreate",
             "cnrtQueueWaitNotifier",
-            "cnrtMemcpyAsync",
             "cnrtGetPeerAccessibility",
             "cnrtGetDeviceCount",
         ):
@@ -138,6 +193,13 @@ def runtime_header(backend):
             "CUDA_SUCCESS": "success",
             "cuMemGetAddressRange": "driver_range",
         }
+    aliases.update(
+        {
+            f"{backend}Stream_t": "void*",
+            f"{backend}MemcpyAsync": "cnrt_copy" if backend == "cnrt" else "copy",
+            f"{backend}MemcpyPeerAsync": "peer_copy",
+        }
+    )
     return '#include "runtime.h"\n' + "\n".join(
         f"#define {name} {value}" for name, value in aliases.items()
     )
@@ -177,6 +239,8 @@ class GpuIpcExportTests(unittest.TestCase):
                         str(directory),
                         "-I",
                         str(ROOT / "include"),
+                        "-I",
+                        str(ROOT / "p2p"),
                         "-x",
                         "c++",
                         "-",
