@@ -79,7 +79,25 @@ class EndpointWrapperTests(unittest.TestCase):
         wrapper = (ROOT / "p2p/endpoint_wrapper.h").read_text()
         start = wrapper.index("inline int uccl_get_numa_node(")
         stop = wrapper.index("inline bool initialize_rdma_ctx_for_gpu(", start)
-        source = STUBS + wrapper[start:stop] + CHECKS
+        adapters = "template <typename T> struct EndpointOps;\n"
+        for name, typ in (
+            ("rdma", "RDMAEndpoint"),
+            ("nccl", "NCCLEndpoint"),
+            ("cxi", "CxiEndpoint"),
+        ):
+            text = (ROOT / "p2p/transport" / f"{name}_ops.h").read_text()
+            methods = ""
+            for method in ("uccl_get_numa_node", "uccl_send_notification"):
+                first = text.index(f"static int {method}(")
+                opening = text.index("{", first)
+                depth = 1
+                end = opening + 1
+                while depth:
+                    depth += (text[end] == "{") - (text[end] == "}")
+                    end += 1
+                methods += text[first:end] + "\n"
+            adapters += f"template <> struct EndpointOps<{typ}> {{\n{methods}}};\n"
+        source = STUBS + adapters + wrapper[start:stop] + CHECKS
         compiler = os.environ.get("CXX", "c++")
         self.assertIsNotNone(shutil.which(compiler))
         for musa in (False, True):
