@@ -112,3 +112,6 @@ thirdparty/gdrcopy/
 worktrees/
 *.csv
 *.egg-info/
+
+# Pinned checkpoint metadata for the MoE reproduction driver.
+!experimental/uccl_gin/moe/checkpoint_manifest.json

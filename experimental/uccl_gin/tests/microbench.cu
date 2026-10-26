@@ -625,8 +625,10 @@ __global__ void uccl_gin_put_value_kernel(uccl_gin::UCCLGinResources res,
       lane);
 }
 
-static bool verify_uccl_put_value(uccl_gin::Context& c, int peer, int rank,
-                                  cudaStream_t stream, size_t max_bytes) {
+[[maybe_unused]] static bool verify_uccl_put_value(uccl_gin::Context& c,
+                                                   int peer, int rank,
+                                                   cudaStream_t stream,
+                                                   size_t max_bytes) {
   (void)max_bytes;
   int* recv = (int*)c.recv_ptr();
   int const iters = 8;
@@ -772,7 +774,20 @@ int main(int argc, char** argv) {
                selected(args, "red-add") ? (ga ? "PASS" : "FAIL") : "-");
       }
     }
-    // put_value test (size-independent).
+    // put_value test (size-independent). WRITE_VALUE is implemented only on
+    // the EFA normal-mode path; RC/IB proxies abort on it, so the default
+    // "all" run skips it there and an explicit request reports it as
+    // unsupported.
+#ifndef EFA
+    if (selected(args, "put-value") && args.run_uccl) {
+      bool const explicit_request = args.only == "put-value";
+      all_ok = all_ok && !explicit_request;
+      if (rank == 0) {
+        printf("UCCL-put_value: %s (WRITE_VALUE is EFA-only)\n",
+               explicit_request ? "UNSUPPORTED" : "SKIP");
+      }
+    }
+#else
     if (selected(args, "put-value")) {
       int v_ok = 1;
       if (args.run_uccl)
@@ -785,6 +800,7 @@ int main(int argc, char** argv) {
         printf("UCCL-put_value: %s\n", gv ? "PASS" : "FAIL");
       }
     }
+#endif
     if (rank == 0) {
       printf("%-12s %-8s %-14s %-14s %-14s\n", "bytes", "NCCL", "UCCL-put/add",
              "UCCL-tail/q", "UCCL-put+q");
