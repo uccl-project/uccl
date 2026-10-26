@@ -10,6 +10,7 @@ on:
 
 jobs:
   clang-format-check:
+    # Ubuntu 26.04 no longer packages the formatter version used by this repo.
     runs-on: ubuntu-24.04
 
     steps:

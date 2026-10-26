@@ -51,6 +51,11 @@ endif
 ifeq ($(and $(CPU_IS_ARM64),$(GPU_IS_HOPPER)),0)
   $(warning GH200 not detected, building without GH200)
   GH_CFLAGS :=
+else ifeq ($(UCCL_EP_DISABLE_GH200),1)
+  # Same switch as setup.py: the generic Hopper + RDMA path (InfiniBand
+  # without ODP cannot register the GH200 path's managed atomic buffer).
+  $(info GH200 detected, UCCL_EP_DISABLE_GH200=1: building the generic path)
+  GH_CFLAGS :=
 else
   $(info GH200 detected, building with GH200)
   GH_CFLAGS := -DUSE_GRACE_HOPPER
@@ -126,7 +131,7 @@ LDFLAGS   += $(EFA_LDFLAGS) $(CXI_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(DMABUF_CFLAGS) $(CXI_CFLAGS) $(NORMAL_CFLAGS)
 
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/fifo.cpp src/cxi_transport.cpp
-SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
+SRC_CU  := src/bench_kernel.cu src/internode_ll.cu src/internode_ll_dedup.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
 # Non-binding .cc translation units linked into the shared library.
 SRC_CC_LIB := src/adaptive_sleeper.cc
 

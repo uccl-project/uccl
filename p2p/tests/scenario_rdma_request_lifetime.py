@@ -134,12 +134,11 @@ def main():
     parser.add_argument(
         "--source",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "endpoint_wrapper.h",
+        default=Path(__file__).resolve().parents[1] / "transport" / "rdma_request.h",
     )
     args = parser.parse_args()
     source = args.source.read_text()
     start = source.index("// RDMA-only:")
-    end = source.index("// ── Dispatch functions", start)
     with tempfile.TemporaryDirectory() as directory:
         executable = Path(directory) / "request-lifetime"
         subprocess.run(
@@ -155,7 +154,7 @@ def main():
                 "-o",
                 str(executable),
             ],
-            input=STUBS + source[start:end] + SCENARIOS,
+            input=STUBS + source[start:] + SCENARIOS,
             text=True,
             check=True,
             timeout=60,
