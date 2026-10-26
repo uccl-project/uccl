@@ -121,7 +121,7 @@ install: all
 clean:
 	rm -f $(CORE_OBJECTS) $(API_OBJECTS) $(NB_OBJECTS)
 	rm -f $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d) $(BUILD_DIR)/config
-	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server notif_e2e
+	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server test_epoll_client notif_e2e
 
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
@@ -129,20 +129,24 @@ test_notify_serde: tests/test_notify_serde.cc util/common.h
 test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
 
+test_epoll_client: tests/test_epoll_client.cc util/epoll_client.cc util/epoll_client.h
+	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_client.cc util/epoll_client.cc -lpthread
+
 notif_e2e: tests/test_notify_e2e.cc $(P2P_SHARED_LIB)
 	$(CXX) -std=c++17 -O2 $(CPPFLAGS) -o $@ tests/test_notify_e2e.cc \
 	  -L. -luccl_p2p $(DEVICE_LDLIBS) -Wl,-rpath,'$$ORIGIN'
 
-test: test_notify_serde test_epoll_server all
+test: test_notify_serde test_epoll_server test_epoll_client all
 	./test_notify_serde
 	./test_epoll_server
+	./test_epoll_client
 	$(PYTHON) tests/test_engine_write.py
 
 install-deps:
 	$(PYTHON) -m pip install nanobind
 
 help:
-	@echo 'Targets: all install clean test test_notify_serde test_epoll_server notif_e2e install-deps'
+	@echo 'Targets: all install clean test test_notify_serde test_epoll_server test_epoll_client notif_e2e install-deps'
 	@echo 'Profiles: Makefile (CUDA), Makefile.rocm, Makefile.dtk, Makefile.therock, Makefile.cnrt, Makefile.musa'
 	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1'
 .PHONY: test install-deps help
