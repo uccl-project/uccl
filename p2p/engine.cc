@@ -643,6 +643,8 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
 
   P2PMhandle* mhandle = new P2PMhandle();
   mhandle->compress_ctx = make_compress_ctx(float_type);
+  mhandle->registered_addr = data;
+  mhandle->registered_len = size;
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     delete mhandle;
     return false;

@@ -2,16 +2,11 @@
 #include "engine.h"
 // RDMA-only: build a one-sided request from FifoItem metadata.
 //
-// To minimize per-iov allocations on hot paths (writev/readv), the three
-// objects (RemoteMemInfo, RegMemBlock, RDMASendRequest) are co-allocated in
-// a single control block via std::make_shared, and aliased shared_ptrs are
-// handed out via the aliasing constructor — sharing one refcount.
-struct PooledSendBundle {
+// The request owns a shared pair of memory descriptors. Keeping the request
+// outside their allocation avoids a shared_ptr cycle during raw transfers.
+struct SendRequestMemory {
   RegMemBlock local_mem_obj;
   RemoteMemInfo remote_mem_obj;
-  RDMASendRequest req;
-  PooledSendBundle()
-      : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
 };
 
 // A compress_only handle has no user MR: it may only be used as the exact
@@ -38,31 +33,28 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
                               UcclRequest* ureq) {
   if (compress_only_send_rejected(local_mh, src, size, ureq))
     return SendConnection::kPostError;
-  auto bundle = std::make_shared<PooledSendBundle>();
+  auto memory = std::make_shared<SendRequestMemory>();
 
-  bundle->remote_mem_obj.addr = slot_item.addr;
-  bundle->remote_mem_obj.length = slot_item.size;
-  bundle->remote_mem_obj.type = MemoryType::GPU;
-  bundle->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
+  memory->remote_mem_obj.addr = slot_item.addr;
+  memory->remote_mem_obj.length = slot_item.size;
+  memory->remote_mem_obj.type = MemoryType::GPU;
+  memory->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
 
-  bundle->local_mem_obj.addr = src;
-  bundle->local_mem_obj.size = size;
-  bundle->local_mem_obj.type = MemoryType::GPU;
-  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+  memory->local_mem_obj.addr = src;
+  memory->local_mem_obj.size = size;
+  memory->local_mem_obj.type = MemoryType::GPU;
+  memory->local_mem_obj.mr_array = local_mh->mr_array;
 
-  // Aliasing constructor: shares ownership/control-block with `bundle`.
-  bundle->req.local_mem =
-      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
-  bundle->req.remote_mem =
-      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
-  bundle->req.compress_only = local_mh->compress_only;
-  bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
-  bundle->req.send_type =
+  auto req = std::make_shared<RDMASendRequest>(
+      std::shared_ptr<RegMemBlock>(memory, &memory->local_mem_obj),
+      std::shared_ptr<RemoteMemInfo>(memory, &memory->remote_mem_obj));
+  if (src == local_mh->registered_addr && size == local_mh->registered_len)
+    req->compress_ctx = local_mh->compress_ctx;
+  req->compress_only = local_mh->compress_only;
+  req->to_peer_id = conn->uccl_conn_id_.peer_id;
+  req->send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
-  bundle->req.need_signaled = true;
-
-  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
+  req->need_signaled = true;
 
   int64_t wr_id = obj->write_or_read(req);
   if (wr_id == SendConnection::kPostError) return SendConnection::kPostError;
@@ -80,30 +72,28 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
                                        UcclRequest* ureq) {
   if (compress_only_send_rejected(local_mh, src, size, ureq))
     return SendConnection::kPostError;
-  auto bundle = std::make_shared<PooledSendBundle>();
+  auto memory = std::make_shared<SendRequestMemory>();
 
-  bundle->remote_mem_obj.addr = slot_item.addr;
-  bundle->remote_mem_obj.length = slot_item.size;
-  bundle->remote_mem_obj.type = MemoryType::GPU;
-  bundle->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
+  memory->remote_mem_obj.addr = slot_item.addr;
+  memory->remote_mem_obj.length = slot_item.size;
+  memory->remote_mem_obj.type = MemoryType::GPU;
+  memory->remote_mem_obj.rkey_array.copy_from(slot_item.padding);
 
-  bundle->local_mem_obj.addr = src;
-  bundle->local_mem_obj.size = size;
-  bundle->local_mem_obj.type = MemoryType::GPU;
-  bundle->local_mem_obj.mr_array = local_mh->mr_array;
+  memory->local_mem_obj.addr = src;
+  memory->local_mem_obj.size = size;
+  memory->local_mem_obj.type = MemoryType::GPU;
+  memory->local_mem_obj.mr_array = local_mh->mr_array;
 
-  bundle->req.local_mem =
-      std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
-  bundle->req.remote_mem =
-      std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
-  bundle->req.compress_only = local_mh->compress_only;
-  bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
-  bundle->req.send_type =
+  auto req = std::make_shared<RDMASendRequest>(
+      std::shared_ptr<RegMemBlock>(memory, &memory->local_mem_obj),
+      std::shared_ptr<RemoteMemInfo>(memory, &memory->remote_mem_obj));
+  if (src == local_mh->registered_addr && size == local_mh->registered_len)
+    req->compress_ctx = local_mh->compress_ctx;
+  req->compress_only = local_mh->compress_only;
+  req->to_peer_id = conn->uccl_conn_id_.peer_id;
+  req->send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
-  bundle->req.need_signaled = true;
-
-  auto req = std::shared_ptr<RDMASendRequest>(bundle, &bundle->req);
+  req->need_signaled = true;
 
   int64_t wr_id = -1;
   while (wr_id < 0) {
