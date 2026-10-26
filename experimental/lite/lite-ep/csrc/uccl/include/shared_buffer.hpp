@@ -34,7 +34,7 @@ struct SharedBuffer {
   int local_world_size = 0;
   std::string shm_name;
   int fd = -1;
-  bool is_creator = false;  // rank 0 creates, others open
+  bool is_creator = false;     // rank 0 creates, others open
   bool name_unlinked = false;  // creator already removed the /dev/shm name
 
   // Host pointer to a specific local rank's slice.
