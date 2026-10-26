@@ -75,6 +75,8 @@ struct Conn {
   std::string ip_addr_;
   uint16_t remote_port_ = 0;
   std::string remote_gpu_bdf_;  // PCI Bus ID of the remote GPU
+  // Ordinal of that GPU in this process, or -1 when it is not visible here.
+  int remote_gpu_ordinal_ = -1;
   bool is_local_ = false;
   uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
