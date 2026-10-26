@@ -10,9 +10,8 @@ on:
 
 jobs:
   clang-format-check:
-    # clang-format-14 is available in Ubuntu 22.04. Keep this job pinned
-    # because ubuntu-latest may advance to a release without that package.
-    runs-on: ubuntu-22.04
+    # Ubuntu 26.04 no longer packages the formatter version used by this repo.
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout code

@@ -15,6 +15,8 @@
 
 namespace uccl_gin {
 
+inline constexpr uint32_t kAtomicOffMask = 0x1FFFu;
+
 struct UCCLGinResources {
   // Rail (EFA) transport.
   d2hq::D2HHandle** d2h_queues =
