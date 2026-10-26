@@ -7,8 +7,10 @@ match that pinned snapshot; the guide is linked from [README.md](README.md).
 NVIDIA and DeepSeek copyright notices, Apache-2.0 licensing and third-party
 notices are retained. Local changes wire host resources through kernel parameters,
 fix cooperative completion and typed signals, add single-rank HT validation and
-make the build work outside an NCCL source checkout. The imported Python ctypes
-wrapper is omitted; this integration builds the native C/CUDA library.
+make the build work outside an NCCL source checkout. HT metadata preprocessing
+decodes the globally packed expert bitmap, and backward combine returns weights
+in the original top-k slots. The imported Python ctypes wrapper is omitted; this
+integration builds the native C/CUDA library.
 
 Further local correctness fixes handle unaligned S2D maps with the existing
 barrier protocol, decode globally packed expert bitmaps, drain an HT group

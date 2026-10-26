@@ -137,9 +137,8 @@ void Context::setup(ContextConfig cfg) {
     }
     for (auto& p : proxies_) p->set_peers_meta(peers);
 
-    // Proxy construction allocates the signal buffer on lane zero. Set the
-    // shared address before starting workers: registration and QP bootstrap
-    // read it in those threads, so a later assignment races with startup.
+    // Every proxy thread registers the shared atomic buffer and advertises it
+    // to its peers when it starts, so it must be set before start_dual().
     uintptr_t atomic_base = proxies_[0]->get_atomic_buffer_addr();
     for (auto& p : proxies_) p->set_atomic_buffer_addr(atomic_base);
 
