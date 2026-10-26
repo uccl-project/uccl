@@ -259,13 +259,15 @@ def _run_server_write_ipc(args, ep):
         size_per_block = size
 
         if num_iovs == 1:
-            buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+            buf, ptr = _make_buffer(
+                size_per_block, args.advertised_device, args.local_gpu_idx
+            )
             ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
             assert ok, "[Server] advertise_ipc failed"
             _send_bytes_dist(bytes(info_blob), dst=0)
         else:
             bufs_ptrs = [
-                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                _make_buffer(size_per_block, args.advertised_device, args.local_gpu_idx)
                 for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
@@ -292,7 +294,10 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.sender_device,
+                args.local_gpu_idx,
+                args.pinned,
             )
             info_blob = _recv_bytes_dist(src=1)
 
@@ -329,7 +334,10 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
         else:
             bufs_ptrs = [
                 _make_buffer(
-                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                    size_per_block,
+                    args.sender_device,
+                    args.local_gpu_idx,
+                    args.pinned,
                 )
                 for _ in range(num_iovs)
             ]
@@ -395,13 +403,15 @@ def _run_server_read_ipc(args, ep):
         size_per_block = size
 
         if num_iovs == 1:
-            buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+            buf, ptr = _make_buffer(
+                size_per_block, args.advertised_device, args.local_gpu_idx
+            )
             ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
             assert ok, "[Server] advertise_ipc failed"
             _send_bytes_dist(bytes(info_blob), dst=0)
         else:
             bufs_ptrs = [
-                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                _make_buffer(size_per_block, args.advertised_device, args.local_gpu_idx)
                 for _ in range(num_iovs)
             ]
             ptrs = [p for _, p in bufs_ptrs]
@@ -428,7 +438,10 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
 
         if num_iovs == 1:
             buf, ptr = _make_buffer(
-                size_per_block, args.device, args.local_gpu_idx, args.pinned
+                size_per_block,
+                args.receiver_device,
+                args.local_gpu_idx,
+                args.pinned,
             )
             info_blob = _recv_bytes_dist(src=1)
 
@@ -465,7 +478,10 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
         else:
             bufs_ptrs = [
                 _make_buffer(
-                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                    size_per_block,
+                    args.receiver_device,
+                    args.local_gpu_idx,
+                    args.pinned,
                 )
                 for _ in range(num_iovs)
             ]
@@ -629,11 +645,46 @@ def main():
     )
     args = p.parse_args()
 
-    # Default sender/receiver device to --device if not specified
-    if args.sender_device is None:
-        args.sender_device = args.device
-    if args.receiver_device is None:
-        args.receiver_device = args.device
+    is_ipc_mode = args.write_ipc or args.read_ipc
+
+    # --device names the client's own buffer. For IPC that buffer is the sender
+    # for write_ipc and the receiver for read_ipc; the other end is always a GPU
+    # buffer advertised by the server, because the CUDA IPC handle used by
+    # advertise_ipc only exports GPU memory. Resolve that role split, let the
+    # explicit flags override it, and reject a direction the API cannot do
+    # instead of quietly allocating something else.
+    if not is_ipc_mode:
+        if args.sender_device is None:
+            args.sender_device = args.device
+        if args.receiver_device is None:
+            args.receiver_device = args.device
+    else:
+        advertised_role = "receiver" if args.write_ipc else "sender"
+        plan = {
+            "sender": args.device if args.write_ipc else "gpu",
+            "receiver": "gpu" if args.write_ipc else args.device,
+        }
+        if args.sender_device is not None:
+            plan["sender"] = args.sender_device
+        if args.receiver_device is not None:
+            plan["receiver"] = args.receiver_device
+        if plan[advertised_role] != "gpu":
+            print(
+                f"Error: the {advertised_role} buffer is advertised by the "
+                f"server and must stay on the GPU; the IPC API does not export "
+                f"CPU memory (got --{advertised_role}-device="
+                f"{plan[advertised_role]})."
+            )
+            sys.exit(1)
+        if "cpu" in plan.values() and not args.pinned:
+            print(
+                "Error: a CPU-side IPC buffer must be pinned; pass --pinned "
+                "(pageable CPU memory cannot be registered for IPC)."
+            )
+            sys.exit(1)
+        args.sender_device = plan["sender"]
+        args.receiver_device = plan["receiver"]
+        args.advertised_device = plan[advertised_role]
 
     # Check for incompatible options
     mode_flags = sum([args.write_ipc, args.read_ipc])
@@ -646,7 +697,6 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    is_ipc_mode = args.write_ipc or args.read_ipc
     if args.write_ipc:
         mode = "write_ipc"
     elif args.read_ipc:
@@ -668,17 +718,18 @@ def main():
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     if not is_ipc_mode:
         print("Float type:", args.float_type)
-    pinned_str = " (pinned)" if args.pinned else ""
     if is_ipc_mode:
-        iovs_str = (
-            f" | IOVs per call: {args.num_iovs}"
-            if (args.write_ipc or args.read_ipc)
-            else ""
-        )
+        iovs_str = f" | IOVs per call: {args.num_iovs}"
         print(
-            f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}{iovs_str}"
+            f"Sender device: {args.sender_device}"
+            f"{' (pinned)' if args.sender_device == 'cpu' else ''}"
+            f" | Receiver device: {args.receiver_device}"
+            f"{' (pinned)' if args.receiver_device == 'cpu' else ''}"
+            f" | Local GPU idx: {args.local_gpu_idx}"
+            f" | Iterations: {args.iters}{iovs_str}"
         )
     else:
+        pinned_str = " (pinned)" if args.pinned else ""
         print(
             f"Device: {args.device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
         )

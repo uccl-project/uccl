@@ -366,7 +366,9 @@ auditwheel repair dist/uccl-*.whl \
   --exclude "libtorch*.so" \
   --exclude "libc10*.so" \
   --exclude "libibverbs.so.1" \
+  --exclude "libnuma.so.1" \
   --exclude "libcudart.so.12" \
+  --exclude "libcudart.so.13" \
   --exclude "libamdhip64.so.*" \
   --exclude "libcuda.so.1" \
   --exclude "libefa.so.1" \

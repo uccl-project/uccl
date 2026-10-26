@@ -48,7 +48,7 @@ NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
               -lcudart -lcuda \
-              -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
+              -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
 # Local includes must come first to avoid conflicts with UCCL headers
 LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
@@ -73,28 +73,9 @@ NVCCFLAGS  += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
 LDFLAGS    += $(REDIS_LIBS)
 endif
 
-# UCCL collective support
-UCCL_ROOT := $(abspath ../../)
-UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
-UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
-UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
-UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs
-
-CXXFLAGS += $(UCCL_CFLAGS)
-NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
-LDFLAGS += $(UCCL_LDFLAGS)
-
 # Source files - exclude module-local tests and device-only helper trees that
 # are built by their module Makefiles.
-#
-# NOTE: keep a hard deny-list for legacy transport implementations so they
-# never get linked alongside the new adapter-based transport sources.
-RAW_SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
-LEGACY_TRANSPORT_CPP := \
-	src/transport/ipc_channel.cc \
-	src/transport/tcp_transport_adapter.cc \
-	src/transport/uccl_transport_adapter.cc
-SRC_CPP := $(filter-out $(LEGACY_TRANSPORT_CPP),$(RAW_SRC_CPP))
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | grep -v 'uccl_adapter' | sort)
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)
@@ -131,31 +112,19 @@ all: $(STATIC_LIB) $(SHARED_LIB) bench
 %.o: %.cu
 	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-ensure-uccl-rdma:
-	@if [ ! -f "$(UCCL_RDMA_STATIC)" ]; then \
-		echo "[ukernel] building collective/rdma..."; \
-		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
-	fi
-
-# Static library
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
-# Shared library
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-# Benchmark build rules
-$(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
-	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
 $(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
 	$(CXX) $(BENCH_GDRCOPY_CXXFLAGS) $(BENCH_GDRCOPY_INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-uccl-rdma
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ)
 	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
 
 bench: $(BENCH_BINS)
@@ -196,6 +165,6 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
+.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench
 
 transport_bench: $(BENCH_TRANSPORT_BIN)

@@ -41,4 +41,10 @@ char const* fi_strerror(int errnum) {
   return fn(errnum);
 }
 
+uint32_t fi_version(void) {
+  using FnType = uint32_t (*)(void);
+  static FnType fn = reinterpret_cast<FnType>(fabric_resolve("fi_version"));
+  return fn();
+}
+
 }  // extern "C"

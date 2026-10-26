@@ -1,3 +1,4 @@
+#include "../transport/adapter/ipc_signal_ring.h"
 #include "ops/ops.h"
 #include "persistent_kernel_ops.h"
 
@@ -12,14 +13,48 @@ constexpr uint32_t kCommandExit = 2;
 
 __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
   return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce ||
-         ttype == TaskType::CollSend || ttype == TaskType::CollRecvReduce ||
-         ttype == TaskType::CollRecv;
+         ttype == TaskType::CollPut;
 }
 
 __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
                                                       uint64_t next_tail) {
   __threadfence_system();
   *reinterpret_cast<uint64_t volatile*>(tail) = next_tail;
+}
+
+// Fused PutSignal: write the tag into the peer's shared-memory signal
+// ring (zero-copy host mapping). Same producer protocol as the host
+// side (IpcAdapter::write_signal_ring): atomic claim, per-slot ready
+// flag, so GPU workers and host producers can share the ring. The
+// receiver always polls from the CPU — nothing ever waits on the GPU.
+__device__ __forceinline__ void signal_ring_write(
+    Transport::PeerSignalRingDevice* ring, uint64_t tag) {
+  unsigned long long w = atomicAdd_system(
+      reinterpret_cast<unsigned long long*>(&ring->write_idx), 1ull);
+  size_t idx = static_cast<size_t>(w) & (Transport::kSignalRingSize - 1);
+  // Back-pressure: wait for this slot's previous lap to be consumed.
+  while (*reinterpret_cast<bool volatile*>(&ring->slots[idx].ready)) {
+#ifdef __HIP_PLATFORM_AMD__
+    __builtin_amdgcn_s_sleep(2);
+#else
+    __nanosleep(200);
+#endif
+  }
+  ring->slots[idx].tag = tag;
+  __threadfence_system();
+  *reinterpret_cast<bool volatile*>(&ring->slots[idx].ready) = true;
+  __threadfence_system();
+}
+
+// If this task is a fused PutSignal, emit the tag now (copy finished).
+__device__ __forceinline__ void maybe_signal_ring_write(Task const& task,
+                                                        TaskArgs const* args) {
+  if (static_cast<TaskType>(task.type_u8()) != TaskType::CollPut ||
+      args == nullptr)
+    return;
+  signal_ring_write(
+      reinterpret_cast<Transport::PeerSignalRingDevice*>(args->src2),
+      args->redTypeRaw);
 }
 
 }  // namespace
@@ -93,66 +128,7 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
-// ── SM IPC completion buffer helpers ─────────────────────────────────
-
-struct GpuComp {
-  uint64_t last[2];
-};
-
-__device__ __forceinline__ void sm_write_seq(TaskArgs const& a) {
-  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
-  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
-  cmp->last[dir] = a.redTypeRaw >> 8;
-  __threadfence_system();
-}
-
-__device__ __forceinline__ void sm_wait_seq(TaskArgs const& a) {
-  auto* cmp = reinterpret_cast<GpuComp*>(a.src2);
-  size_t dir = (a.src_rank < a.dst_rank) ? 0u : 1u;
-  uint64_t target = a.redTypeRaw >> 8;
-  for (int spin = 0; spin < 16; ++spin)
-    if (cmp->last[dir] >= target) return;
-  while (cmp->last[dir] < target)
-#ifdef __HIP_PLATFORM_AMD__
-    __builtin_amdgcn_s_sleep(2);
-#else
-    __nanosleep(200);
-#endif
-}
-
-// ── SM IPC kernel functions ──────────────────────────────────────────
-
-template <typename T>
-__device__ __forceinline__ void run_send(TaskArgs const& a, uint32_t block_id,
-                                         uint32_t num_blocks, void* smem_buf) {
-  run_typed_copy<T>(a, block_id, num_blocks, smem_buf);
-  sm_write_seq(a);
-}
-
-template <typename T>
-__device__ __forceinline__ void run_recv_reduce(TaskArgs const& a,
-                                                uint32_t block_id,
-                                                uint32_t num_blocks,
-                                                void* smem_buf) {
-  sm_wait_seq(a);
-  ReduceType red = static_cast<ReduceType>(a.redTypeRaw & 0xFF);
-
-  T* dst = reinterpret_cast<T*>(a.dst);
-  T const* src = reinterpret_cast<T const*>(a.src);
-  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
-  if (blockDim.x > 1024) return;
-
-  const uint64_t count_per_block = total_count / num_blocks;
-  const uint64_t block_offset = block_id * count_per_block;
-  const uint64_t my_count = (block_id + 1 == num_blocks)
-                                ? (total_count - block_offset)
-                                : count_per_block;
-
-  read_reduce_store<T>(dst + block_offset, src + block_offset,
-                       static_cast<size_t>(my_count), red, smem_buf);
-}
-
-// ── benchmarks ────────────────────────────────────────────────────────
+// Benchmarks
 
 __global__ void benchDispatchNopKernel() {}
 
@@ -164,7 +140,7 @@ __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
   run_reduce<float>(args, blockIdx.x, gridDim.x, nullptr);
 }
 
-// ── dispatch ──────────────────────────────────────────────────────────
+// Dispatch
 
 #define RUN_COPY_BODY(dtype, fn)                           \
   if (dtype == DataType::Int8)                             \
@@ -213,19 +189,13 @@ __device__ __forceinline__ void dispatch_task(Task const& task,
 
   switch (ttype) {
     case TaskType::CollCopy:
+    case TaskType::CollPut:
+      // CollPut: copy first; the signal ring write happens at task
+      // completion time (maybe_signal_ring_write), after all blocks.
       RUN_COPY_BODY(dtype, run_typed_copy);
-      break;
-    case TaskType::CollSend:
-      RUN_COPY_BODY(dtype, run_send);
       break;
     case TaskType::CollReduce:
       RUN_REDUCE_BODY(dtype);
-      break;
-    case TaskType::CollRecvReduce:
-      RUN_COPY_BODY(dtype, run_recv_reduce);
-      break;
-    case TaskType::CollRecv:
-      sm_wait_seq(args);
       break;
     default:
       break;
@@ -252,9 +222,17 @@ __device__ __forceinline__ void process_task(Task const& task,
   dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
 }
 
+__device__ __forceinline__ void idle_sleep() {
+#ifdef __HIP_PLATFORM_AMD__
+  __builtin_amdgcn_s_sleep(2);
+#else
+  __nanosleep(100);
+#endif
+}
+
 __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
-    bool* should_stop) {
+    bool* should_stop, bool* exited_flag, uint32_t exit_idle_iters) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -264,6 +242,7 @@ __global__ void singlePersistentKernel(
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
+  uint32_t idle_ticks = 0;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
 
   if (threadIdx.x == 0) {
@@ -288,7 +267,22 @@ __global__ void singlePersistentKernel(
           cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
               fifo.head, mscclpp::memoryOrderAcquire);
         }
-        if (cached_tail < cached_head) {
+        if (cached_tail >= cached_head) {
+          // Fifo is drained. With an idle grace configured, exit after
+          // exit_idle_iters consecutive empty polls so host-side
+          // device-wide syncs (torch etc.) can pass; the host relaunches
+          // us on the next enqueue.
+          if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
+            if (exited_flag) {
+              *exited_flag = true;
+              __threadfence_system();
+            }
+            command = kCommandExit;
+          } else {
+            idle_sleep();
+          }
+        } else {
+          idle_ticks = 0;
           current_task = fifo.buffer[cached_tail % fifo.size];
           has_current_args = false;
           command = kCommandRun;
@@ -319,6 +313,7 @@ __global__ void singlePersistentKernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
+      maybe_signal_ring_write(current_task, current_args);
       ++cached_tail;
       publish_tail_progress(fifo.tail, cached_tail);
     }
@@ -328,7 +323,8 @@ __global__ void singlePersistentKernel(
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
-                                      MultiBlockSync* d_sync) {
+                                      MultiBlockSync* d_sync, bool* exited_flag,
+                                      uint32_t exit_idle_iters) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -341,6 +337,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   uint32_t local_phase = 0;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
+  uint32_t idle_ticks = 0;
 
   if (bid == 0 && threadIdx.x == 0) {
     cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
@@ -375,8 +372,20 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
               fifo.head, mscclpp::memoryOrderAcquire);
         }
         if (cached_tail >= cached_head) {
+          // Fifo drained: exit after the idle grace so host-side
+          // device-wide syncs can pass; host relaunches on next enqueue.
+          if (exit_idle_iters && ++idle_ticks >= exit_idle_iters) {
+            if (exited_flag) {
+              *exited_flag = true;
+              __threadfence_system();
+            }
+            command = kCommandExit;
+            break;
+          }
+          idle_sleep();
           continue;
         }
+        idle_ticks = 0;
 
         next_task = fifo.buffer[cached_tail % fifo.size];
         if (next_task.type_u8() == static_cast<uint8_t>(TaskType::Stop)) {
@@ -439,6 +448,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         }
         // Same ordering requirement as the single-block path: all blocks'
         // writes must be visible before host observes task completion.
+        maybe_signal_ring_write(current_task, current_args);
         ++cached_tail;
         publish_tail_progress(fifo.tail, cached_tail);
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(

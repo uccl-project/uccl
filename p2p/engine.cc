@@ -1,9 +1,12 @@
 #include "engine.h"
 #include "compression.h"
+#include "device/ipc.h"
 #include "endpoint_wrapper.h"
+#include "transport_factory.h"
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/pause.h"
+#include "util/python_signal.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <cc/cc_state.h>
@@ -16,14 +19,57 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <thread>
-#include <Python.h>
+#include <unordered_map>
 #include <sys/socket.h>
 #include <unistd.h>
 
 thread_local bool inside_python = false;
+
+namespace {
+
+// Keys borrow immutable handles from this call's IpcTransferInfo vector.
+struct IpcMappings {
+  explicit IpcMappings(size_t num_iovs) : num_iovs(num_iovs) {
+    raw_ptrs.reserve(num_iovs);
+  }
+
+  void prepare(size_t iov, gpuIpcMemHandle_t const& handle) {
+    std::string_view key(reinterpret_cast<char const*>(&handle),
+                         sizeof(handle));
+    if (raw_ptrs.empty()) {
+      first_handle = key;
+      raw_ptrs.push_back(nullptr);
+      return;
+    }
+    if (key == first_handle) return;
+    if (iov_slots.empty()) iov_slots.resize(num_iovs);
+    auto [it, inserted] = other_handles.try_emplace(key, raw_ptrs.size());
+    if (inserted) raw_ptrs.push_back(nullptr);
+    iov_slots[iov] = it->second;
+  }
+
+  void* open(size_t iov, gpuIpcMemHandle_t const& handle) {
+    auto& raw_ptr = raw_ptrs[iov_slots.empty() ? 0 : iov_slots[iov]];
+    if (raw_ptr == nullptr) {
+      GPU_RT_CHECK(
+          gpuIpcOpenMemHandle(&raw_ptr, handle, gpuIpcMemLazyEnablePeerAccess));
+    }
+    return raw_ptr;
+  }
+
+  size_t num_iovs;
+  std::string_view first_handle;
+  std::vector<void*> raw_ptrs;
+  std::vector<size_t> iov_slots;
+  std::unordered_map<std::string_view, size_t> other_handles;
+};
+
+}  // namespace
 
 std::size_t VectorUint8Hash::operator()(std::vector<uint8_t> const& vec) const {
   std::size_t hash = vec.size();
@@ -117,17 +163,13 @@ UnifiedTask::SpecificData::SpecificData() : base{} {}
 
 UnifiedTask::SpecificData::~SpecificData() {}
 
-static inline void check_python_signals() {
-  PyGILState_STATE gstate = PyGILState_Ensure();
-  if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL) << "Python signal caught, exiting...";
-  }
-  PyGILState_Release(gstate);
-}
-
 static inline bool is_retryable_post_failure(int rc) {
   if (is_cxi_transport()) return rc == UCCL_POST_TRANSIENT;
   return rc == -1;
+}
+
+static inline bool is_terminal_post_failure(int rc) {
+  return rc == SendConnection::kPostError || (is_cxi_transport() && rc < 0);
 }
 
 static inline bool raw_one_sided_batch_eligible(
@@ -214,6 +256,7 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
 // -----------------------------------------------------------------------------
 
 Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
+  (void)get_transport_type();  // Validate before GPU setup.
   // gpu_idx is always a local CUDA device ordinal.
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
@@ -232,28 +275,17 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
             << " (bus_id: " << gpu_bus_id_ << ")" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
+  // IPC streams are created per device on first use (get_ipc_streams):
+  // creating them eagerly here initialized a ~0.5 GiB CUDA context on every
+  // visible GPU from every process (7 foreign contexts per GPU on an 8-rank
+  // node).
   ipc_streams_.resize(ngpus);
-  for (int i = 0; i < ngpus; ++i) {
-    GPU_RT_CHECK(gpuSetDevice(i));
-    ipc_streams_[i].resize(n_streams);
-    for (int j = 0; j < n_streams; ++j) {
-      GPU_RT_CHECK(
-          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
-    }
-  }
+  (void)n_streams;
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
 
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(local_gpu_idx_, 0);
-    numa_node_ = get_numa_node_from_iface();
-  } else {
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(local_gpu_idx_, 0));
-  }
+  ep_ = uccl_create_endpoint(local_gpu_idx_);
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -263,10 +295,7 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-  if (!is_nccl_transport() && !is_cxi_transport()) {
-    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-  }
+  numa_node_ = uccl_get_numa_node(ep_, local_gpu_idx_);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -293,7 +322,24 @@ Endpoint::Endpoint(uint32_t const gpu_idx) : passive_accept_(false) {
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
+std::vector<gpuStream_t>& Endpoint::get_ipc_streams(int dev) {
+  std::lock_guard<std::mutex> lock(ipc_streams_mu_);
+  auto& streams = ipc_streams_[dev];
+  if (streams.empty()) {
+    int cur_dev = 0;
+    GPU_RT_CHECK(gpuGetDevice(&cur_dev));
+    GPU_RT_CHECK(gpuSetDevice(dev));
+    streams.resize(std::max(1, (int)kNumGpuRtStreams));
+    for (auto& st : streams) {
+      GPU_RT_CHECK(gpuStreamCreateWithFlags(&st, gpuStreamNonBlocking));
+    }
+    GPU_RT_CHECK(gpuSetDevice(cur_dev));
+  }
+  return streams;
+}
+
 Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
+  (void)get_transport_type();  // Validate before GPU setup.
   std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -306,15 +352,12 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   int cur_dev = 0;
   GPU_RT_CHECK(gpuGetDevice(&cur_dev));
 
+  // IPC streams are created per device on first use (get_ipc_streams):
+  // creating them eagerly here initialized a ~0.5 GiB CUDA context on every
+  // visible GPU from every process (7 foreign contexts per GPU on an 8-rank
+  // node).
   ipc_streams_.resize(ngpus);
-  for (int i = 0; i < ngpus; ++i) {
-    GPU_RT_CHECK(gpuSetDevice(i));
-    ipc_streams_[i].resize(n_streams);
-    for (int j = 0; j < n_streams; ++j) {
-      GPU_RT_CHECK(
-          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
-    }
-  }
+  (void)n_streams;
   GPU_RT_CHECK(gpuSetDevice(cur_dev));
 
   // Get the current GPU's BDF for metadata (needed before lazy engine init).
@@ -322,13 +365,7 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
   GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
   gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
 
-  if (is_nccl_transport()) {
-    ep_ = std::make_shared<NCCLEndpoint>(local_gpu_idx_, 0);
-  } else if (is_cxi_transport()) {
-    ep_ = std::make_shared<CxiEndpoint>(INVALID_GPU, 0);
-  } else {
-    ep_ = std::shared_ptr<RDMAEndpoint>(new RDMAEndpoint(INVALID_GPU, 0));
-  }
+  ep_ = uccl_create_endpoint(INVALID_GPU);
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -337,6 +374,7 @@ Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
+  staging_.request_stop();
 
   if (passive_accept_) {
     passive_accept_stop_.store(true, std::memory_order_release);
@@ -357,6 +395,7 @@ Endpoint::~Endpoint() {
   if (ipc_poller_thread_.joinable()) {
     ipc_poller_thread_.join();
   }
+  staging_.shutdown();
 
   if (send_unified_task_ring_ != nullptr) {
     free(send_unified_task_ring_);
@@ -424,6 +463,12 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
+
+  // RDMA connect does not populate sock_fd; only peer_id indicates rejection
+  // across transports (including NCCL protocol-version mismatches).
+  if (uccl_conn_id.peer_id == UINT64_MAX) {
+    return false;
+  }
 
   // Store the connection ID.
   {
@@ -532,8 +577,16 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
-  // Wait until engine is intialized to get the correct local_gpu_idx_
+  // initialize_engine() runs from reg(), so accept may legitimately arrive
+  // first. The wait must also observe stop_accept(): an endpoint that never
+  // registers memory would otherwise spin here forever while ~Endpoint()
+  // blocks in join().
   while (!engine_initialized_) {
+    if (stop_.load(std::memory_order_acquire) ||
+        passive_accept_stop_.load(std::memory_order_acquire) ||
+        uccl_accept_stopped(ep_)) {
+      return false;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   std::future<ConnID> uccl_conn_id_future =
@@ -591,6 +644,44 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
   P2PMhandle* mhandle = new P2PMhandle();
   mhandle->compress_ctx = make_compress_ctx(float_type);
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
+    delete mhandle;
+    return false;
+  }
+  {
+    std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
+  }
+
+  return true;
+}
+
+bool Endpoint::reg_compress_only(void const* data, size_t size, uint64_t& mr_id,
+                                 FloatType float_type) {
+  mr_id = next_mr_id_.fetch_add(1);
+
+  if (!engine_initialized_) {
+    int idx = uccl::get_dev_idx((void*)data);
+    if (idx != -1) {
+      local_gpu_idx_ = idx;
+    } else {
+      local_gpu_idx_ = 0;
+    }
+    // Get PCI Bus ID for cross-process identity
+    char bdf_buf[64];
+    GPU_RT_CHECK(
+        gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), local_gpu_idx_));
+    gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
+    initialize_engine();
+    engine_initialized_ = true;
+  }
+
+  P2PMhandle* mhandle = new P2PMhandle();
+  mhandle->compress_ctx = make_compress_ctx(float_type);
+  mhandle->compress_only = true;
+  mhandle->registered_addr = data;
+  mhandle->registered_len = size;
+  if (!uccl_prepare_compress_ctx(ep_, const_cast<void*>(data), size,
+                                 mhandle->compress_ctx)) {
     delete mhandle;
     return false;
   }
@@ -679,6 +770,8 @@ bool Endpoint::dereg(uint64_t mr_id) {
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  if constexpr (uccl::device::Backend::staged_network)
+    return staging_.read(conn_id, dst, size, slot_item);
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[read] Error: Invalid conn_id " << conn_id << std::endl;
@@ -690,6 +783,11 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     std::cerr << "[read] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
+  if (unlikely(mhandle->compress_only)) {
+    std::cerr << "[read] Error: compress_only mr_id " << mr_id
+              << " cannot be a read destination" << std::endl;
+    return false;
+  }
 
   UcclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
@@ -699,7 +797,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   do {
     rc = uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
   } while (is_retryable_post_failure(rc));
-  if (is_cxi_transport() && rc < 0) {
+  if (is_terminal_post_failure(rc)) {
     UCCL_LOG(ERROR) << "read failed to post: rc=" << rc;
     return false;
   }
@@ -719,6 +817,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+  *transfer_id = 0;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -731,6 +830,11 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
       std::cerr << "[read_async] Error: Invalid mr_id " << mr_id << std::endl;
       return false;
     }
+    if (unlikely(mhandle->compress_only)) {
+      std::cerr << "[read_async] Error: compress_only mr_id " << mr_id
+                << " cannot be a read destination" << std::endl;
+      return false;
+    }
 
     UcclRequest ureq = {};
     FifoItem curr_slot_item = slot_item;
@@ -740,7 +844,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
       rc =
           uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item, &ureq);
     } while (is_retryable_post_failure(rc));
-    if (is_cxi_transport() && rc < 0) {
+    if (is_terminal_post_failure(rc)) {
       UCCL_LOG(ERROR) << "read_async failed to post: rc=" << rc;
       return false;
     }
@@ -752,6 +856,14 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     return true;
   }
 
+  {
+    P2PMhandle* mhandle = get_mhandle(mr_id);
+    if (unlikely(mhandle != nullptr && mhandle->compress_only)) {
+      std::cerr << "[read_async] Error: compress_only mr_id " << mr_id
+                << " cannot be a read destination" << std::endl;
+      return false;
+    }
+  }
   auto task_ptr =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
@@ -792,6 +904,11 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
       std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
       return false;
     }
+    if (unlikely(mhandle_v[i]->compress_only)) {
+      std::cerr << "[readv] Error: compress_only mr_id " << mr_id_v[i]
+                << " cannot be a read destination" << std::endl;
+      return false;
+    }
   }
 
   // Enable doorbell-batched posting for the duration of this call.
@@ -819,9 +936,11 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
+  bool post_failed = false;
 
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
+  while ((!post_failed && num_completed < num_iovs) || num_inflight > 0) {
+    while (!post_failed && next_iov < num_iovs &&
+           num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -845,10 +964,12 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
         break;
       }
-      if (is_cxi_transport() && rc < 0) {
+      if (is_terminal_post_failure(rc)) {
         UCCL_LOG(ERROR) << "readv failed to post iov " << next_iov
                         << ": rc=" << rc;
-        return false;
+        // Drain earlier iovs before callers can reuse their buffers.
+        post_failed = true;
+        break;
       }
       active[slot] = true;
       next_iov++;
@@ -886,7 +1007,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     }
   }
 
-  return true;
+  return !post_failed;
 }
 
 bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -1000,6 +1121,8 @@ bool Endpoint::run_raw_one_sided_pipeline(
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
   UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  if constexpr (uccl::device::Backend::staged_network)
+    return staging_.write(conn_id, src, size, slot_item);
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1024,7 +1147,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
              : uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                                 &ureq);
   } while (is_retryable_post_failure(rc));
-  if (is_cxi_transport() && rc < 0) {
+  if (is_terminal_post_failure(rc)) {
     UCCL_LOG(ERROR) << "write failed to post: rc=" << rc;
     return false;
   }
@@ -1043,6 +1166,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
+  *transfer_id = 0;
   if (size <= kDirectAsyncNetThreshold) {
     auto* conn = get_conn(conn_id);
     if (unlikely(conn == nullptr)) {
@@ -1064,7 +1188,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
       rc = uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                             &ureq);
     } while (is_retryable_post_failure(rc));
-    if (is_cxi_transport() && rc < 0) {
+    if (is_terminal_post_failure(rc)) {
       UCCL_LOG(ERROR) << "write_async failed to post: rc=" << rc;
       return false;
     }
@@ -1131,6 +1255,26 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   SendConnection* send_group =
       uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
 
+  // Validate every compress_only iov before posting anything: it must send
+  // exactly its registered buffer and be guaranteed to take the compression
+  // path (it has no user MR to fall back on).
+  for (size_t i = 0; i < num_iovs; ++i) {
+    P2PMhandle const* mh = mhandle_v[i];
+    if (likely(!mh->compress_only)) continue;
+    if (src_v[i] != mh->registered_addr || size_v[i] != mh->registered_len) {
+      std::cerr << "[writev] Error: compress_only mr_id " << mr_id_v[i]
+                << " must send exactly its registered buffer" << std::endl;
+      return false;
+    }
+    if (send_group == nullptr ||
+        !send_group->will_compress_write(SendType::Write, size_v[i],
+                                         mh->compress_ctx)) {
+      std::cerr << "[writev] Error: compress_only mr_id " << mr_id_v[i]
+                << " would not take the compression path" << std::endl;
+      return false;
+    }
+  }
+
   if (send_group != nullptr && raw_one_sided_batch_eligible(size_v, num_iovs) &&
       send_group->can_use_raw_one_sided_batch(
           SendType::Write, max_iov_bytes(size_v, num_iovs))) {
@@ -1145,9 +1289,11 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
   size_t next_iov = 0;
   size_t num_completed = 0;
   size_t num_inflight = 0;
+  bool post_failed = false;
 
-  while (num_completed < num_iovs) {
-    while (next_iov < num_iovs && num_inflight < max_inflight_ops) {
+  while ((!post_failed && num_completed < num_iovs) || num_inflight > 0) {
+    while (!post_failed && next_iov < num_iovs &&
+           num_inflight < max_inflight_ops) {
       size_t slot = 0;
       while (slot < kMaxInflightOps && active[slot]) {
         slot++;
@@ -1171,10 +1317,12 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
         }
         break;
       }
-      if (is_cxi_transport() && rc < 0) {
+      if (is_terminal_post_failure(rc)) {
         UCCL_LOG(ERROR) << "writev failed to post iov " << next_iov
                         << ": rc=" << rc;
-        return false;
+        // Drain earlier iovs before callers can reuse their buffers.
+        post_failed = true;
+        break;
       }
       active[slot] = true;
       next_iov++;
@@ -1212,7 +1360,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> const& mr_id_v,
     }
   }
 
-  return true;
+  return !post_failed;
 }
 
 bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -1245,9 +1393,17 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::advertise(uint64_t mr_id, void* addr, size_t len,
                          char* out_buf) {
+  if constexpr (uccl::device::Backend::staged_network)
+    return staging_.advertise(mr_id, addr, len, out_buf);
   auto mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[advertise] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
+  }
+  if (unlikely(mhandle->compress_only)) {
+    std::cerr << "[advertise] Error: compress_only mr_id " << mr_id
+              << " cannot be advertised as a write/read destination"
+              << std::endl;
     return false;
   }
   if (prepare_fifo_metadata(ep_, mhandle, addr, len, out_buf) == -1)
@@ -1264,6 +1420,12 @@ bool Endpoint::advertisev(std::vector<uint64_t> mr_id_v,
     mhandles[i] = get_mhandle(mr_id_v[i]);
     if (unlikely(mhandles[i] == nullptr)) {
       std::cerr << "[advertisev] Error: Invalid mr_id " << mr_id_v[i]
+                << std::endl;
+      return false;
+    }
+    if (unlikely(mhandles[i]->compress_only)) {
+      std::cerr << "[advertisev] Error: compress_only mr_id " << mr_id_v[i]
+                << " cannot be advertised as a write/read destination"
                 << std::endl;
       return false;
     }
@@ -1419,9 +1581,9 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
   void* raw_dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1430,7 +1592,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& dst_streams = ipc_streams_[local_gpu_idx_];
+  std::vector<gpuStream_t>& dst_streams = get_ipc_streams(ipc_dev);
   int num_streams =
       std::min(dst_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1444,8 +1606,9 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
-                                memcpy_kind, dst_streams[i]));
+    GPU_RT_CHECK(uccl::device::ipc_copy_async(
+        chunk_dst_ptr, ipc_dev, chunk_data, local_gpu_idx_, copy_size, is_host,
+        memcpy_kind, dst_streams[i]));
   }
 
   // Wait for all streams to complete
@@ -1478,9 +1641,9 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  int ipc_dev = uccl::device::ipc_open_device(local_gpu_idx_, info.gpu_idx);
   void* raw_src_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1489,7 +1652,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& src_streams = ipc_streams_[local_gpu_idx_];
+  std::vector<gpuStream_t>& src_streams = get_ipc_streams(ipc_dev);
   int num_streams =
       std::min(src_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1503,8 +1666,9 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
-                                memcpy_kind, src_streams[i]));
+    GPU_RT_CHECK(uccl::device::ipc_copy_async(
+        chunk_data, local_gpu_idx_, chunk_src_ptr, ipc_dev, copy_size, is_host,
+        memcpy_kind, src_streams[i]));
   }
 
   // Wait for all streams to complete
@@ -1537,18 +1701,22 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
+  int ipc_dev_w = uccl::device::ipc_open_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev_w));
+  std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_w);
 
-  // Open all handles and issue all memcpys before syncing any stream.
-  std::vector<void*> raw_ptrs(num_iovs, nullptr);
+  // Finish host allocations before submitting any copies.
+  IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    mappings.prepare(iov, info_v[iov].handle);
+  }
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
+    void* raw_ptr = mappings.open(iov, info_v[iov].handle);
     void* dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
+        reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
     bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     auto memcpy_kind =
@@ -1565,8 +1733,9 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
-                                  streams[i]));
+      GPU_RT_CHECK(uccl::device::ipc_copy_async(
+          chunk_dst, ipc_dev_w, chunk_src, local_gpu_idx_, copy_size, is_host,
+          memcpy_kind, streams[i]));
     }
   }
 
@@ -1574,8 +1743,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   for (auto& stream : streams) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptrs[iov]));
+  for (void* raw_ptr : mappings.raw_ptrs) {
+    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
   }
 
   return true;
@@ -1599,18 +1768,22 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
+  int ipc_dev_r = uccl::device::ipc_open_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1);
+  GPU_RT_CHECK(gpuSetDevice(ipc_dev_r));
+  std::vector<gpuStream_t>& streams = get_ipc_streams(ipc_dev_r);
 
-  // Open all handles and issue all memcpys before syncing any stream.
-  std::vector<void*> raw_ptrs(num_iovs, nullptr);
+  // Finish host allocations before submitting any copies.
+  IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    mappings.prepare(iov, info_v[iov].handle);
+  }
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     UCCL_CHECK(data_v[iov] != nullptr)
         << "readv_ipc: data_v[" << iov << "] is null";
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
+    void* raw_ptr = mappings.open(iov, info_v[iov].handle);
     void* src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
+        reinterpret_cast<uintptr_t>(raw_ptr) + info_v[iov].offset);
 
     bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
     auto memcpy_kind =
@@ -1627,8 +1800,9 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
-                                  streams[i]));
+      GPU_RT_CHECK(uccl::device::ipc_copy_async(
+          chunk_dst, local_gpu_idx_, chunk_src, ipc_dev_r, copy_size, is_host,
+          memcpy_kind, streams[i]));
     }
   }
 
@@ -1636,8 +1810,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   for (auto& stream : streams) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
-  for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptrs[iov]));
+  for (void* raw_ptr : mappings.raw_ptrs) {
+    GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_ptr));
   }
 
   return true;
@@ -1661,7 +1835,8 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
+                                                  info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_dst_ptr = nullptr;
@@ -1676,7 +1851,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1690,8 +1865,9 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     void* chunk_dst = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size, memcpy_kind,
-                                streams[i]));
+    GPU_RT_CHECK(uccl::device::ipc_copy_async(
+        chunk_dst, target_gpu, chunk_data, local_gpu_idx_, copy_size, is_host,
+        memcpy_kind, streams[i]));
     GPU_RT_CHECK(
         gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
@@ -1726,7 +1902,8 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
+  int target_gpu = uccl::device::ipc_async_device(local_gpu_idx_, info.gpu_idx,
+                                                  info.direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_src_ptr = nullptr;
@@ -1740,7 +1917,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                                       info.offset);
   }
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1754,8 +1931,9 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     void* chunk_data = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size, memcpy_kind,
-                                streams[i]));
+    GPU_RT_CHECK(uccl::device::ipc_copy_async(
+        chunk_data, local_gpu_idx_, chunk_src, target_gpu, copy_size, is_host,
+        memcpy_kind, streams[i]));
     GPU_RT_CHECK(
         gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
@@ -1796,26 +1974,48 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
-                                                            : local_gpu_idx_;
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
+
+  // Finish host allocations before submitting any copies.
+  IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    if (info_v[iov].direct_addr == 0) {
+      mappings.prepare(iov, info_v[iov].handle);
+    }
+  }
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
-  auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
-  op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, target_gpu);
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = -1;
+  op->gpu_idxs_v.assign(mappings.raw_ptrs.size(), target_gpu);
+  op->events.reserve(active_streams);
+  auto status = std::make_unique<TransferStatus>();
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* dst_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       dst_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                       gpuIpcMemLazyEnablePeerAccess));
-      dst_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
-          info_v[iov].offset);
+      void* raw_ptr = mappings.open(iov, info_v[iov].handle);
+      dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
+                                        info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
@@ -1833,20 +2033,26 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
-                                  streams[i]));
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      GPU_RT_CHECK(uccl::device::ipc_copy_async(
+          chunk_dst, target_gpu, chunk_src, local_gpu_idx_, copy_size, is_host,
+          memcpy_kind, streams[i]));
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
+  op->raw_ptrs_v = std::move(mappings.raw_ptrs);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
@@ -1876,26 +2082,48 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0) ? info_v[0].gpu_idx
-                                                            : local_gpu_idx_;
+  int target_gpu = uccl::device::ipc_async_device(
+      local_gpu_idx_, num_iovs > 0 ? info_v[0].gpu_idx : -1,
+      num_iovs > 0 && info_v[0].direct_addr != 0);
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
-  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
+  std::vector<gpuStream_t>& streams = get_ipc_streams(target_gpu);
 
+  std::array<size_t, kNumGpuRtStreams> last_iov{};
+  size_t active_streams = 0;
+  for (size_t iov = num_iovs; iov > 0 && active_streams < streams.size();) {
+    --iov;
+    size_t sz = size_v[iov];
+    auto num_streams = std::min(
+        streams.size(), sz < kIpcSizePerEngine ? 1 : sz / kIpcSizePerEngine);
+    if (num_streams > active_streams) {
+      std::fill(last_iov.begin() + active_streams,
+                last_iov.begin() + num_streams, iov);
+      active_streams = num_streams;
+    }
+  }
+
+  // Finish host allocations before submitting any copies.
+  IpcMappings mappings(num_iovs);
+  for (size_t iov = 0; iov < num_iovs; ++iov) {
+    if (info_v[iov].direct_addr == 0) {
+      mappings.prepare(iov, info_v[iov].handle);
+    }
+  }
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
-  auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
-  op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, target_gpu);
+  auto op = std::make_unique<IpcInflightOp>();
+  op->gpu_idx = -1;
+  op->gpu_idxs_v.assign(mappings.raw_ptrs.size(), target_gpu);
+  op->events.reserve(active_streams);
+  auto status = std::make_unique<TransferStatus>();
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     void* src_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       src_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
     } else {
-      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                       gpuIpcMemLazyEnablePeerAccess));
-      src_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
-          info_v[iov].offset);
+      void* raw_ptr = mappings.open(iov, info_v[iov].handle);
+      src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_ptr) +
+                                        info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
@@ -1913,20 +2141,26 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
-                                  streams[i]));
-      gpuEvent_t ev;
-      GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
-      GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
-      op->events.push_back(ev);
+      GPU_RT_CHECK(uccl::device::ipc_copy_async(
+          chunk_dst, local_gpu_idx_, chunk_src, target_gpu, copy_size, is_host,
+          memcpy_kind, streams[i]));
+      // Keep each shared stream's completion point at its last copy.
+      if (last_iov[i] == iov) {
+        gpuEvent_t ev;
+        GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
+        GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
+        op->events.push_back(ev);
+      }
     }
   }
 
-  auto* status = new TransferStatus();
-  op->status = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
+  op->raw_ptrs_v = std::move(mappings.raw_ptrs);
+  op->status = status.release();
+  *transfer_id = reinterpret_cast<uint64_t>(op->status);
+  auto* inflight = op.release();
 
-  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &inflight, 1, nullptr) !=
+         1) {
   }
   ipc_proxy_adaptive_sleeper_.maybe_wake_proxy_thread();
 
@@ -1950,13 +2184,15 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   transfer_info.size = len;
   transfer_info.operation = 1;  // response
 
-  // Calculate aligned address and offset
-  auto addr_aligned = reinterpret_cast<uintptr_t>(addr) & ~(kIpcAlignment - 1);
-  auto addr_offset = reinterpret_cast<uintptr_t>(addr) - addr_aligned;
-  transfer_info.offset = addr_offset;
-
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                  reinterpret_cast<void*>(addr_aligned)));
+  GpuIpcExport exported;
+  auto err = export_ipc_range(addr, len, &exported);
+  if (err != gpuSuccess) {
+    UCCL_LOG(ERROR) << "IPC export failed: " << gpuGetErrorString(err);
+    return false;
+  }
+  transfer_info.handle = exported.handle;
+  transfer_info.offset = exported.offset;
+  transfer_info.gpu_idx = exported.owner_device;
 
   // Copy the transfer info to output buffer
   std::memcpy(out_buf, &transfer_info, sizeof(transfer_info));
@@ -1989,14 +2225,15 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
     transfer_info.size = len_v[i];
     transfer_info.operation = 1;  // response
 
-    // Calculate aligned address and offset
-    auto addr_aligned =
-        reinterpret_cast<uintptr_t>(addr_v[i]) & ~(kIpcAlignment - 1);
-    auto addr_offset = reinterpret_cast<uintptr_t>(addr_v[i]) - addr_aligned;
-    transfer_info.offset = addr_offset;
-
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                    reinterpret_cast<void*>(addr_aligned)));
+    GpuIpcExport exported;
+    auto err = export_ipc_range(addr_v[i], len_v[i], &exported);
+    if (err != gpuSuccess) {
+      UCCL_LOG(ERROR) << "IPC vector export failed: " << gpuGetErrorString(err);
+      return false;
+    }
+    transfer_info.handle = exported.handle;
+    transfer_info.offset = exported.offset;
+    transfer_info.gpu_idx = exported.owner_device;
 
     // Copy the transfer info to output buffer
     std::memcpy(out_buf_v[i], &transfer_info, sizeof(transfer_info));
@@ -2107,7 +2344,9 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   }
   *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
+    bool success = status->success;
     delete status;
+    return success;
   }
   return true;
 }
@@ -2157,17 +2396,7 @@ int Endpoint::send_notification(uint64_t conn_id,
   if (peer_id == UINT64_MAX) {
     return -1;
   }
-  if (is_nccl_transport()) {
-    auto* nccl_ep = std::get_if<std::shared_ptr<NCCLEndpoint>>(&ep_);
-    if (!nccl_ep || !*nccl_ep) return -1;
-    return (*nccl_ep)->send_notification(peer_id, notification);
-  }
-  if (is_cxi_transport()) {
-    auto* cxi_ep = std::get_if<std::shared_ptr<CxiEndpoint>>(&ep_);
-    if (!cxi_ep || !*cxi_ep) return -1;
-    return (*cxi_ep)->send_notification(peer_id, notification);
-  }
-  return -1;
+  return uccl_send_notification(ep_, peer_id, notification);
 }
 
 MR* Endpoint::get_mr(uint64_t mr_id) const {
@@ -2198,18 +2427,16 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
 
 GenericEndpoint Endpoint::get_endpoint() const { return ep_; }
 
+gpuError_t Endpoint::export_ipc_range(void* ptr, size_t size,
+                                      GpuIpcExport* result) {
+  return gpuExportIpcRange(&ipc_export_context_, ptr, size, result);
+}
+
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  if (is_nccl_transport()) {
-    numa_node_ = get_numa_node_from_iface();
-  } else if (is_cxi_transport()) {
-    numa_node_ = get_numa_node_from_iface();
-  } else {
-    numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-        RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
-  }
+  numa_node_ = uccl_get_numa_node(ep_, local_gpu_idx_);
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
@@ -2259,15 +2486,17 @@ void Endpoint::send_proxy_thread_func() {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+      bool success = false;
       switch (task->type) {
         case TaskType::WRITE_NET:
-          write(task->conn_id, task->mr_id, task->data, task->size,
-                task->slot_item());
+          success = write(task->conn_id, task->mr_id, task->data, task->size,
+                          task->slot_item());
           break;
         case TaskType::WRITEV: {
           TaskBatch const& batch = task->task_batch();
-          writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
-                 *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
+          success =
+              writev(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                     *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         default:
@@ -2276,6 +2505,7 @@ void Endpoint::send_proxy_thread_func() {
           break;
       }
       auto* status = task->status_ptr;
+      status->success = success;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       send_proxy_adaptive_sleeper_.update_timer();
@@ -2297,15 +2527,17 @@ void Endpoint::recv_proxy_thread_func() {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
                               nullptr) == 1) {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+      bool success = false;
       switch (task->type) {
         case TaskType::READ_NET:
-          read(task->conn_id, task->mr_id, task->data, task->size,
-               task->slot_item());
+          success = read(task->conn_id, task->mr_id, task->data, task->size,
+                         task->slot_item());
           break;
         case TaskType::READV: {
           TaskBatch const& batch = task->task_batch();
-          readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
-                *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
+          success =
+              readv(task->conn_id, *batch.mr_id_ptr, *batch.data_ptr,
+                    *batch.size_ptr, *batch.slot_item_ptr, batch.num_iovs);
           break;
         }
         case TaskType::WRITE_NET:
@@ -2315,6 +2547,7 @@ void Endpoint::recv_proxy_thread_func() {
           break;
       }
       auto* status = task->status_ptr;
+      status->success = success;
       status->task_ptr.reset();
       status->done.store(true, std::memory_order_release);
       recv_proxy_adaptive_sleeper_.update_timer();

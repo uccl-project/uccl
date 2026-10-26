@@ -169,6 +169,15 @@ static inline bool get_aggressive_atomic_enabled() {
   return val != 0;
 }
 
+// Skip proxy-thread CPU pinning when UCCL_EP_DISABLE_CPU_AFFINITY=1.
+static inline bool get_cpu_affinity_disabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_DISABLE_CPU_AFFINITY");
+    return env ? static_cast<uint32_t>(atoi(env)) : 0;
+  }();
+  return val != 0;
+}
+
 // Runtime override for the CPU-side recv timeout.
 // Long training steps (e.g. Megatron-LM with large grad accumulation, heavy
 // checkpoint I/O, or EP groups initializing sequentially under PP >= 2) can

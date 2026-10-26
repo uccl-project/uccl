@@ -167,14 +167,24 @@ struct ibv_mr* RegMemBlock::get_mr_by_context_id(uint32_t context_id) const {
   return mr_array.get_key_by_context_id(context_id);
 }
 
-uint32_t RegMemBlock::get_key_by_channel_id(uint32_t channel_id) const {
+uint32_t RegMemBlock::get_rkey_by_channel_id(uint32_t channel_id) const {
   struct ibv_mr* mr = get_mr_by_channel_id(channel_id);
   return mr ? mr->rkey : 0;
 }
 
-uint32_t RegMemBlock::get_key_by_context_id(uint32_t context_id) const {
+uint32_t RegMemBlock::get_lkey_by_channel_id(uint32_t channel_id) const {
+  struct ibv_mr* mr = get_mr_by_channel_id(channel_id);
+  return mr ? mr->lkey : 0;
+}
+
+uint32_t RegMemBlock::get_rkey_by_context_id(uint32_t context_id) const {
   struct ibv_mr* mr = get_mr_by_context_id(context_id);
   return mr ? mr->rkey : 0;
+}
+
+uint32_t RegMemBlock::get_lkey_by_context_id(uint32_t context_id) const {
+  struct ibv_mr* mr = get_mr_by_context_id(context_id);
+  return mr ? mr->lkey : 0;
 }
 
 std::ostream& operator<<(std::ostream& os, RegMemBlock const& block) {
@@ -214,11 +224,11 @@ RemoteMemInfo::RemoteMemInfo(std::shared_ptr<RegMemBlock> const block)
   copy_rkey_array_from_mr_array(block->mr_array, rkey_array);
 }
 
-uint32_t RemoteMemInfo::get_key_by_channel_id(uint32_t channel_id) const {
+uint32_t RemoteMemInfo::get_rkey_by_channel_id(uint32_t channel_id) const {
   return rkey_array.get_key_by_channel_id(channel_id);
 }
 
-uint32_t RemoteMemInfo::get_key_by_context_id(size_t context_id) const {
+uint32_t RemoteMemInfo::get_rkey_by_context_id(size_t context_id) const {
   return rkey_array.get_key_by_context_id(context_id);
 }
 
@@ -255,11 +265,11 @@ RDMASendRequest::RDMASendRequest(RDMASendRequest const& other,
       need_signaled(signaled) {}
 
 uint32_t RDMASendRequest::get_local_key() const {
-  return local_mem->get_key_by_channel_id(channel_id);
+  return local_mem->get_lkey_by_channel_id(channel_id);
 }
 
 uint32_t RDMASendRequest::get_remote_key() const {
-  return remote_mem->get_key_by_channel_id(channel_id);
+  return remote_mem->get_rkey_by_channel_id(channel_id);
 }
 
 uint64_t RDMASendRequest::get_local_address() const {

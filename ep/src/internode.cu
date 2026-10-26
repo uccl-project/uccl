@@ -8,6 +8,14 @@
 #include <functional>
 #include <optional>
 
+// cached_notify moves NUM_MAX_NVL_PEERS ints per token with TMA, which needs
+// 16-byte multiples; builds for fewer than 4 GPUs per node use plain global
+// loads and stores instead.
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+    (NUM_MAX_NVL_PEERS * 4) % 16 == 0
+#define UCCL_EP_NOTIFY_TMA 1
+#endif
+
 namespace uccl {
 
 namespace internode {
@@ -49,6 +57,25 @@ pack_is_token_in_nvl_ranks(bool const* values) {
 }
 
 int get_source_meta_bytes() { return sizeof(SourceMeta); }
+
+// Largest hidden_size the internode TMA sender-warp staging buffer is sized
+// for. The dispatch/combine kernels stage each token through a per-sender-warp
+// buffer of kNumTMABytesPerWarp bytes and assert
+//   num_bytes_per_token + sizeof(uint64_t) <= kNumTMABytesPerWarp,
+// where num_bytes_per_token ~= hidden * sizeof(bf16) + SourceMeta + scales +
+// topk (combine always stages bf16, even when dispatch is fp8). hidden=8192 ->
+// 16384 B of bf16 payload alone overflows a 16384-byte buffer, so size it for
+// hidden up to 8192 with headroom for the metadata and the 8-byte TMA mbarrier.
+// 20480 keeps smem within H200's 227 KB opt-in limit:
+//   dispatch: 20480 * NUM_MAX_NVL_PEERS     = 160 KB
+//   combine : max(20480 * 8, 9248 * 16)     = 160 KB
+static constexpr int kMaxSupportedHidden = 8192;
+static constexpr int kNumTMABytesPerWarp = 20480;
+static constexpr int kMaxBf16TokenBytes =
+    kMaxSupportedHidden * static_cast<int>(sizeof(nv_bfloat16)) +
+    static_cast<int>(sizeof(uint64_t));
+EP_STATIC_ASSERT(kNumTMABytesPerWarp >= kMaxBf16TokenBytes,
+                 "TMA sender-warp buffer too small for max supported hidden");
 
 __host__ __device__ __forceinline__ int get_num_bytes_per_token(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights) {
@@ -646,7 +673,7 @@ __global__ void __launch_bounds__(
   };
 
 // TMA stuffs
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
   extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
   auto tma_buffer = smem_tma_buffer + target_rank * kNumTMABytesPerWarp;
   auto tma_mbarrier =
@@ -938,7 +965,7 @@ __global__ void __launch_bounds__(
       }
       __syncwarp();
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       // Release the transaction in the window
       if (is_token_in_rank_uint64 != 0) {
         // Acquire lock first
@@ -1351,7 +1378,7 @@ __global__ void __launch_bounds__(
                            reinterpret_cast<int4*>(dst_shifted),
                            reinterpret_cast<int4*>(shifted), ld_nc_global,
                            st_na_global);
-#else
+#elif !defined(DISABLE_SM90_FEATURES)
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, num_bytes_per_token,
                       false);
@@ -1370,7 +1397,7 @@ __global__ void __launch_bounds__(
         if ((++num_tokens_sent) == num_max_rdma_chunked_send_tokens)
           src_rdma_tail = i + 1;
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
         tma_store_wait();
         __syncwarp();
 #endif
@@ -1556,7 +1583,7 @@ __global__ void __launch_bounds__(
                              reinterpret_cast<float*>(shifted + hidden_bytes),
                              ld_nc_global, st_na_global);
 
-#else
+#elif !defined(DISABLE_SM90_FEATURES)
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, tma_load_bytes);
           mbarrier_arrive_and_expect_tx(tma_mbarrier, tma_load_bytes);
@@ -1610,7 +1637,7 @@ __global__ void __launch_bounds__(
           st_na_global(recv_topk_weights + recv_idx, weight_value);
         }
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
         // Wait TMA to be finished
         tma_store_wait();
 #endif
@@ -1660,7 +1687,6 @@ void dispatch(
     bool low_latency_mode, uint64_t const* d2h_channel_addrs,
     int num_d2h_channel_addrs, void* atomic_buffer_ptr) {
   constexpr int kNumDispatchRDMASenderWarps = 7;
-  constexpr int kNumTMABytesPerWarp = 16384;
   constexpr int smem_size = kNumTMABytesPerWarp * NUM_MAX_NVL_PEERS;
 
   // Make sure never OOB
@@ -1792,7 +1818,7 @@ __global__ void cached_notify(
   } else if (sm_id == 1) {
     if (is_cached_dispatch) return;
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     EP_DEVICE_ASSERT(num_warps >= num_channels);
 #endif
     EP_DEVICE_ASSERT(num_rdma_ranks <= WARP_SIZE);
@@ -1832,7 +1858,7 @@ __global__ void cached_notify(
   } else {
     if (is_cached_dispatch) return;
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     EP_DEVICE_ASSERT(num_warps >= num_channels);
 #endif
     EP_DEVICE_ASSERT(rdma_channel_prefix_matrix != nullptr and
@@ -1852,10 +1878,12 @@ __global__ void cached_notify(
         constexpr int num_bytes_per_token = sizeof(int) * NUM_MAX_NVL_PEERS;
         constexpr int num_tokens_per_batch =
             tma_batch_size / num_bytes_per_token;
+#ifdef UCCL_EP_NOTIFY_TMA
         EP_STATIC_ASSERT(num_bytes_per_token % 16 == 0,
                          "num_bytes_per_token should be divisible by 16");
+#endif
 
-#if defined(__NVCC__)
+#ifdef UCCL_EP_NOTIFY_TMA
         // TMA stuffs
         extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
         auto tma_buffer = smem_tma_buffer + warp_id * kNumTMABytesPerWarp;
@@ -1893,7 +1921,7 @@ __global__ void cached_notify(
             auto batch_start_idx =
                 max(token_start_idx, batch_end_idx - num_tokens_per_batch);
 
-#if defined(__NVCC__)
+#ifdef UCCL_EP_NOTIFY_TMA
             if (lane_id == 0) {
               tma_load_1d(
                   tma_buffer,
@@ -1911,17 +1939,18 @@ __global__ void cached_notify(
             for (int token_idx = batch_end_idx - 1;
                  token_idx >= batch_start_idx; --token_idx) {
               if (lane_id < NUM_MAX_NVL_PEERS) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) ||   \
+    (defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES) && \
+     !defined(UCCL_EP_NOTIFY_TMA))
                 auto current_head =
-                    __ldg(combined_nvl_head + token_idx * NUM_MAX_NVL_PEERS +
-                          lane_id);
+                    combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id];
                 if (current_head < 0) {
                   combined_nvl_head[token_idx * NUM_MAX_NVL_PEERS + lane_id] =
                       -last_head - 1;
                 } else {
                   last_head = current_head;
                 }
-#else
+#elif defined(UCCL_EP_NOTIFY_TMA)
               auto current_head = reinterpret_cast<int*>(tma_buffer)
                   [(token_idx - batch_start_idx) * NUM_MAX_NVL_PEERS + lane_id];
               if (current_head < 0) {
@@ -1936,7 +1965,7 @@ __global__ void cached_notify(
               }
             }
 
-#if defined(__NVCC__)
+#ifdef UCCL_EP_NOTIFY_TMA
             tma_store_fence();
             __syncwarp();
 
@@ -2312,7 +2341,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                         channel_id, num_channels, nvl_rank)
             .advance_also(local_buffer_ptr);
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     // TMA stuffs
     extern __shared__ __align__(1024) uint8_t smem_tma_buffer[];
     auto tma_buffer =
@@ -2441,7 +2470,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                          sizeof(SourceMeta) +
                                          lane_id * sizeof(float)),
                 ld_nc_global(topk_weights + token_idx * num_topk + lane_id));
-#else
+#elif !defined(DISABLE_SM90_FEATURES)
           if (lane_id == 0) {
             tma_store_wait();
             tma_load_1d(tma_buffer, shifted_x, tma_mbarrier, hidden_bytes);
@@ -2476,7 +2505,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       }
 
       // Move queue tail
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       tma_store_wait();
 #endif
       __syncwarp();
@@ -2580,7 +2609,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       EP_STATIC_ASSERT(kNumWarpsPerForwarder == 1 or kNumRDMARanks + 2 <= 16,
                        "Barriers are not enough");
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       // TMA stuffs
       constexpr int kNumStages = 2;
       constexpr int kNumTMALoadBytes = sizeof(int4) * 32;
@@ -2748,7 +2777,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               nullptr, nullptr, num_max_nvl_chunked_recv_tokens_per_rdma,
               get_addr_fn, recv_tw_fn, nullptr, dummy_tma_phases);
 
-#else
+#elif !defined(DISABLE_SM90_FEATURES)
           combine_token<NUM_MAX_NVL_PEERS, false, dtype_t, NUM_MAX_NVL_PEERS,
                         true, kNumStages, kNumTMALoadBytes>(
               expected_head >= 0, expected_head, lane_id, hidden_int4, num_topk,
@@ -3034,10 +3063,10 @@ void combine(cudaDataType_t type, void* combined_x,
              void* atomic_buffer_ptr) {
   // NOTE(MaoZiming): I changed here from 24 to 16.
   constexpr int kNumCombineForwarderWarps = 16;
-  constexpr int kNumTMABytesPerSenderWarp = 16384;
+  constexpr int kNumTMABytesPerSenderWarp = kNumTMABytesPerWarp;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
   constexpr int smem_size =
       std::max(kNumTMABytesPerSenderWarp * NUM_MAX_NVL_PEERS,
                kNumTMABytesPerForwarderWarp * kNumCombineForwarderWarps);

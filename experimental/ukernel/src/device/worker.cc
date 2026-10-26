@@ -6,6 +6,8 @@ namespace UKernel {
 namespace Device {
 
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
+  // ~100ns per idle poll (idle_sleep) → iterations for the grace window.
+  exit_idle_iters_ = cfg_.idleExitAfterUs * 10;
   if (cfg_.controlStream) {
     control_stream_ = cfg_.controlStream;
     owns_control_stream_ = false;
@@ -31,6 +33,8 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
     GPU_RT_CHECK(
         gpuMalloc(&wc->d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
+    GPU_RT_CHECK(gpuHostAlloc(&wc->h_exited, sizeof(bool), gpuHostAllocMapped));
+    *wc->h_exited = false;
     workers_.emplace_back(wc);
 
     bool* d_stop;
@@ -58,6 +62,9 @@ WorkerPool::~WorkerPool() {
     }
     if (wc->d_multi_sync) {
       GPU_RT_CHECK(gpuFree(wc->d_multi_sync));
+    }
+    if (wc->h_exited) {
+      GPU_RT_CHECK(gpuFreeHost(wc->h_exited));
     }
   }
   workers_.clear();
@@ -145,7 +152,6 @@ void WorkerPool::waitWorker(uint32_t fifoId) {
   int spin = 0;
   while (!pollWorker(fifoId)) {
     if (++spin < 10) {
-      // spin
     } else {
       spin = 0;
       std::this_thread::yield();
@@ -201,6 +207,11 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
         fifoId);
     return kInvalidTaskId;
   }
+
+  // Relaunch a kernel that exited on the idle grace timer. The new grid
+  // queues behind the exiting one on the same stream, so ordering is
+  // preserved and no task is lost.
+  relaunch_if_exited(fifoId);
 
   // Check if there's space in FIFO without blocking initially
   uint64_t tail = ctx.fifo.currentId();
@@ -272,6 +283,18 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   return (int64_t)(current - taskId) > 0;
 }
 
+void WorkerPool::relaunch_if_exited(uint32_t fifoId) {
+  if (!exit_idle_iters_ || fifoId >= fifos_.size()) return;
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    auto* wc = workers_[i].get();
+    if (wc->fifoId == fifoId && wc->launched && wc->h_exited && *wc->h_exited) {
+      *wc->h_exited = false;
+      launchWorkerForFifo(i);
+      return;
+    }
+  }
+}
+
 void WorkerPool::sync(uint64_t taskId, uint32_t fifoId) {
   if (fifoId >= fifos_.size()) return;
   fifos_[fifoId]->fifo.sync(taskId);
@@ -293,11 +316,15 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   dim3 block(cfg_.threadsPerBlock);
   size_t smem_size = cfg_.smemSize;
 
-  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
-                         &d_stop_flags_[workerIndex]};
+  if (worker.h_exited) *worker.h_exited = false;
 
-  void* args_multi[] = {&worker.d_fifo_handle, &d_task_args,
-                        &d_stop_flags_[workerIndex], &worker.d_multi_sync};
+  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
+                         &d_stop_flags_[workerIndex], &worker.h_exited,
+                         &exit_idle_iters_};
+
+  void* args_multi[] = {
+      &worker.d_fifo_handle, &d_task_args,     &d_stop_flags_[workerIndex],
+      &worker.d_multi_sync,  &worker.h_exited, &exit_idle_iters_};
 
   if (worker.numBlocks == 1) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,

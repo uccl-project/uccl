@@ -4,6 +4,7 @@
 #include "epoll_client.h"
 #include "epoll_server.h"
 #include "util/debug.h"
+#include "util/gpu_rt.h"
 #include <rdma/fabric.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
@@ -17,7 +18,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <cuda_runtime_api.h>
 
 struct CxiMemoryRegion {
   void* addr = nullptr;
@@ -57,6 +57,9 @@ class CxiEndpoint {
                       uint16_t remote_port);
   ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx);
   void stop_accept();
+  bool accept_stopped() const {
+    return stop_accept_.load(std::memory_order_acquire);
+  }
 
   int uccl_regmr(void* data, size_t len,
                  std::shared_ptr<CxiMemoryRegion>& region);

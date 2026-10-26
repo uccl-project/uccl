@@ -7,8 +7,6 @@ UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
-UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
-UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
@@ -36,14 +34,13 @@ CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)
 NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
-                  -lcudart -lcuda -lgflags -lz -libverbs \
-                  -lnl-3 -lnl-route-3 -lpthread \
-                  $(UCCL_RDMA_STATIC)
+                  -lcudart -lcuda -lz -libverbs \
+                  -lnl-3 -lnl-route-3 -lpthread
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := algo/topology.cc algo/chunk_graph.cc lower.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
-REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/async_backend.cc executor_factory.cc
+REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc backend/signal_backend.cc backend/backend.cc executor_factory.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/request_tracker.cc \
@@ -55,7 +52,6 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/shmring_exchanger.cc \
                   ../transport/adapter/tcp_adapter.cc \
-                  ../transport/adapter/uccl_adapter.cc \
                   ../transport/adapter/ipc_adapter.cc \
                   ../transport/adapter/rdma_adapter.cc \
                   ../transport/util/utils.cc
@@ -66,10 +62,9 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_memory_ipc_manager.o \
                  transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_socket.o \
-                 transport_adapter_shmring_exchanger.o \
-                  transport_adapter_tcp_adapter.o \
-                  transport_adapter_uccl_adapter.o \
-                  transport_adapter_ipc_adapter.o \
+                  transport_adapter_shmring_exchanger.o \
+                   transport_adapter_tcp_adapter.o \
+                   transport_adapter_ipc_adapter.o \
                   transport_adapter_rdma_adapter.o \
                   transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
@@ -77,8 +72,8 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-UNIT_TEST_BINS := test_modules test_async
-INTEGRATION_TEST_BINS := test_perf_async test_perf_p2p_copy
+UNIT_TEST_BINS := test_modules test_async test_spray_executor
+INTEGRATION_TEST_BINS := test_perf_p2p_copy test_transport_backend_e2e test_device_backend_e2e test_signal_backend_e2e test_put_signal_e2e test_spray_executor_e2e test_rdma_l2_flush test_perf_spray_allreduce
 TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
 .PHONY: all test test-unit test-integration unit integration real_backends clean
@@ -91,10 +86,10 @@ test: test-unit test-integration
 test-unit: $(UNIT_TEST_BINS)
 	./test_modules
 	./test_async
+	./test_spray_executor
 
 test-integration: $(INTEGRATION_TEST_BINS)
-	@echo "Running GPU performance test..."
-	CUDA_VISIBLE_DEVICES=6,7 ./test_perf_async
+	@echo "Built test_perf_p2p_copy. Run it manually in two terminals (server + client); see src/ccl/README.md."
 
 unit: test-unit
 
@@ -105,15 +100,17 @@ real_backends: $(REAL_BACKEND_OBJ)
 test_modules: $(CCL_CORE_OBJ) test/unit/test_modules.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-test_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o test/unit/test_async.o
-	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
+test_async: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_async.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
-test_perf_async: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o \
-		$(DEVICE_OBJ) test/integration/test_perf_async.o
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
-		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
+test_spray_executor: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_spray_executor.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
 
-test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/device_backend.o backend/transport_backend.o \
+test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o backend/transport_backend.o \
 		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_p2p_copy.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
@@ -121,8 +118,60 @@ test_perf_p2p_copy: $(CCL_CORE_OBJ) executor.o backend/async_backend.o backend/d
 test/integration/test_perf_p2p_copy.o: test/integration/test_perf_p2p_copy.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
+test_transport_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/transport_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_transport_backend_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/unit/test_transport_backend_e2e.o: test/unit/test_transport_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_device_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/device_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/unit/test_device_backend_e2e.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/unit/test_device_backend_e2e.o: test/unit/test_device_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_signal_backend_e2e: $(CCL_CORE_OBJ) executor.o backend/backend.o backend/signal_backend.o \
+		$(TRANSPORT_OBJ) test/unit/test_signal_backend_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/unit/test_signal_backend_e2e.o: test/unit/test_signal_backend_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_put_signal_e2e: $(CCL_CORE_OBJ) $(TRANSPORT_OBJ) test/integration/test_put_signal_e2e.o
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) -lpthread
+
+test/integration/test_put_signal_e2e.o: test/integration/test_put_signal_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_spray_executor_e2e: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_spray_executor_e2e.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_spray_executor_e2e.o: test/integration/test_spray_executor_e2e.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_rdma_l2_flush: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_rdma_l2_flush.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_rdma_l2_flush.o: test/integration/test_rdma_l2_flush.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+test_perf_spray_allreduce: $(CCL_CORE_OBJ) executor.o executor_factory.o backend/backend.o backend/device_backend.o backend/transport_backend.o backend/signal_backend.o \
+		$(DEVICE_OBJ) $(TRANSPORT_OBJ) test/integration/test_perf_spray_allreduce.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(TRANSPORT_LIBS) $(DEVICE_LIBS) -lpthread
+
+test/integration/test_perf_spray_allreduce.o: test/integration/test_perf_spray_allreduce.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -169,8 +218,7 @@ clean:
 		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
 	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
--include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
-	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/unit/test_modules.d test/unit/test_async.d \
-	test/integration/test_perf_async.d \
-	test/integration/test_perf_p2p_copy.d
+# Cover every generated .d (wildcard): the previous explicit list missed
+# several test objects, which then went stale on header changes (ODR).
+-include $(wildcard *.d algo/*.d backend/*.d test/common/*.d test/unit/*.d \
+		test/integration/*.d)

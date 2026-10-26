@@ -134,10 +134,13 @@ Notes:
 | UCCL_IB_MAX_INFLIGHT_BYTES | Max inflight bytes per GPU/NIC | SIZE_MAX (no limit) |
 | UCCL_IB_MAX_INFLIGHT_NORMAL | Max inflight writes per GPU/NIC in HT | 8 |
 | UCCL_IB_MAX_INFLIGHT_LOW_LATENCY | Max inflight writes per GPU/NIC in LL | 32 |
+| UCCL_EP_DEDICATED_NIC_PER_GPU | Assign all proxy threads for each GPU to one of its closest NICs, selected by physical GPU rank | 0 |
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
 | UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
 | UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC | Use relaxed atomics with manual `s_waitcnt vmcnt(0)` fences instead of acquire/release semantics. Required on AMD CDNA so the combine receiver actually sees the producer's tail-pointer updates over XGMI; without it the kernel deadlocks at scale. | 1 on AMD, 0 on CUDA |
+| UCCL_EP_DISABLE_CPU_AFFINITY | Skip proxy-thread CPU pinning; inherit parent process affinity | 0 |
 | UCCL_RDMA_ADAPTIVE_SLEEP | Enable adaptive sleeping on proxy threads, by putting the proxy threads into a sleeping state if there have been no new work requests / RDMA completion events after 120s. | null |
+| UCCL_UDP_SPORT_BASE | Base UDP source port for RoCEv2 QPs on mlx5 devices. Valid range: 1-65535. | 0 (driver decides) |
 
 ## Results
 

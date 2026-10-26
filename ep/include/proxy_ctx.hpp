@@ -74,6 +74,7 @@ struct ProxyCtx {
   // std::vector<ibv_cq*> extra_cqs;
   ibv_qp* ack_qp = nullptr;
   ibv_qp* recv_ack_qp = nullptr;
+  int udp_sport_base = 0;
   // EFA shared-QP model: when true, the QP and ack_recv_buf/mr fields above
   // alias another ProxyCtx (typically Proxy::ctx_) and must not be destroyed.
   bool qps_are_shared = false;
@@ -201,10 +202,10 @@ struct ProxyCtx {
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
   uint64_t barrier_seq = 0;
-  int barrier_wr = -1;
+  int64_t barrier_wr = -1;
 
   bool quiet_inflight = false;
-  int quiet_wr = -1;
+  int64_t quiet_wr = -1;
 
   // Rank-0 bookkeeping
   std::vector<uint8_t> barrier_arrived;  // size = num_ranks; 1 if arrival seen

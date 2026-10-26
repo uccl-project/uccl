@@ -134,11 +134,8 @@ jobs:
         run: |
           set -euo pipefail
           for host in amd0 amd1; do
-            ssh -o BatchMode=yes "$host" bash --norc --noprofile << 'EOF'
-              set -euo pipefail
-              sudo -n apt-get update
-              sudo -n apt-get install -y libfabric-dev libhwloc-dev
-          EOF
+            ssh -o BatchMode=yes "$host" bash --norc --noprofile -s \
+              < .github/workflows/install_cxi_apt_deps.sh
           done
 
       - name: Detect shared NFS between hosts

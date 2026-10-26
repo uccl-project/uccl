@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include <string>
 #include <vector>
 #include <stddef.h>
 #include <stdint.h>
@@ -17,10 +18,20 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef uint64_t uccl_mr_t;
 
+// Fixed-size notification. Existing NIXL plugin code strncpy/memcpy/memset
+// these fields and uses sizeof(notify_msg_t::msg) as a capacity. Payloads
+// larger than MSG_SIZE must use notify_msg_v_t / the _v entry points.
 typedef struct notify_msg {
   char name[MSG_SIZE];
   char msg[MSG_SIZE];
 } notify_msg_t;
+
+// Variable-length notification. The on-wire format is always variable-length;
+// this is the public type that does not truncate at MSG_SIZE.
+typedef struct notify_msg_v {
+  std::string name;
+  std::string msg;
+} notify_msg_v_t;
 
 typedef struct md {
   notify_msg_t notify_data;
@@ -187,7 +198,8 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
  * Check the status of a transfer.
  * @param conn          Connection handle.
  * @param transfer_id   Transfer ID.
- * @return              True if the transfer is done, false otherwise.
+ * @return              True if the transfer is done (including failure),
+ *                      false otherwise. Transfer failures are logged.
  */
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id);
 /**
@@ -213,17 +225,35 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
  * Get all notification messages and clear the list.
- * @return              Vector of notification messages.
+ * Truncates name/msg to MSG_SIZE for NIXL compatibility. Use
+ * uccl_engine_get_notifs_v for the full payload.
+ * @return              Vector of fixed-size notification messages.
  */
 std::vector<notify_msg_t> uccl_engine_get_notifs();
 
 /**
- * Send a notification message.
+ * Get all notification messages and clear the list, without truncation.
+ * @return              Vector of variable-length notification messages.
+ */
+std::vector<notify_msg_v_t> uccl_engine_get_notifs_v();
+
+/**
+ * Send a fixed-size notification message.
  * @param conn          Connection handle.
- * @param notify_msg    Notification message.
- * @return              Number of bytes sent, or -1 on failure.
+ * @param notify_msg    Notification message (name is a C string; msg is a
+ *                      MSG_SIZE-byte binary blob).
+ * @return              0 on success, -1 on failure.
  */
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
+
+/**
+ * Send a variable-length notification message.
+ * @param conn          Connection handle.
+ * @param notify_msg    Notification message.
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_send_notif_v(uccl_conn_t* conn,
+                             notify_msg_v_t const* notify_msg);
 
 /**
  * Prepare FifoItem metadata for a registered memory region (same as advertise).

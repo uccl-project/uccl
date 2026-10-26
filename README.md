@@ -152,6 +152,14 @@ pip install paramiko intervaltree pybind11 nanobind
 conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
 
+**Alternatively, use [uv](https://docs.astral.sh/uv/) for a faster, conda-free dev setup:**
+
+```bash
+source scripts/bootstrap.sh
+```
+
+This single command installs `uv` if missing, creates a `.venv` virtualenv with Python 3.12, pins all non-CUDA dev tools (`black`, `clang-format`, `pytest`, `paramiko`, etc.) from `uv.lock` via `uv sync --group dev`, and then runs `ep/install_deps.sh` to install CUDA-specific packages (torch, etc.) with automatic hardware detection.
+
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
 * [`UCCL-Collective EFA`](collective/efa/README.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)

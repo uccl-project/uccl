@@ -215,7 +215,14 @@ bool IBDataChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;
       cq_data.op_code = wc->opcode;
-      cq_data.len = wc->byte_len;
+      // SEND/WRITE send completions do not define byte_len. In particular,
+      // mlx5 leaves it untouched in the caller's WC array for these opcodes.
+      if (wc->opcode == IBV_WC_RECV ||
+          wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM ||
+          wc->opcode == IBV_WC_RDMA_READ || wc->opcode == IBV_WC_COMP_SWAP ||
+          wc->opcode == IBV_WC_FETCH_ADD) {
+        cq_data.len = wc->byte_len;
+      }
 
       if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
         cq_data.imm = wc->imm_data;

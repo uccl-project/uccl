@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../util/jring.h"
 #include "transport_adapter.h"
+#include "util/jring.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

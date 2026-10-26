@@ -1,8 +1,8 @@
 #pragma once
 
 #include "backend.h"
+#include <atomic>
 #include <cstdint>
-#include <unordered_map>
 
 namespace UKernel {
 namespace Transport {
@@ -16,31 +16,19 @@ class TransportBackend final : public BatchBackend {
   ~TransportBackend() override = default;
 
   char const* name() const override { return "transport"; }
-  bool supports(OpKind kind) const override;
+  bool supports(ExecOpKind kind) const override;
 
-  void init(BufSpec bufs[3]) override;
-  size_t enqueue(Cmd const* cmds, size_t n,
-                 uint32_t* out_indices = nullptr) override;
-  size_t drain(uint32_t* completed, size_t max) override;
-  size_t drain_signals(uint32_t* completed, size_t max);
+  size_t do_enqueue(Cmd const* cmds, size_t n,
+                    uint32_t* out_indices = nullptr) override;
+  uint32_t reserve_slot() override;
+  bool do_enqueue_reserved(Cmd const& cmd, uint32_t be_idx) override;
+  size_t do_drain(uint32_t* completed, size_t max) override;
   size_t capacity() const override { return 2048; }
-  void release(uint32_t cmd_idx) override;
-
-  std::unordered_map<unsigned, uint32_t> const& signal_rid_to_cmd() const {
-    return signal_rid_to_cmd_;
-  }
-  uint8_t cmd_transport(uint32_t idx) const {
-    auto it = cmd_transport_.find(idx);
-    return it != cmd_transport_.end() ? it->second : 0;
-  }
 
  private:
-  UKernel::Transport::Communicator* comm_;
-  std::unordered_map<unsigned, uint32_t> rid_to_cmd_;
-  std::unordered_map<unsigned, uint32_t> signal_rid_to_cmd_;
-  std::unordered_map<unsigned, uint32_t> signal_rid_to_caller_;
-  std::unordered_map<uint32_t, uint8_t> cmd_transport_;
-  uint32_t cmd_next_ = 0;
+  // Lock-free be_idx allocator. Values stay in [0, 2^30) so they fit in
+  // the tagged rid's low bits; failed enqueues leave harmless gaps.
+  std::atomic<uint32_t> cmd_next_{0};
 };
 
 }  // namespace CCL

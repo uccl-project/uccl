@@ -1,67 +1,43 @@
 #!/usr/bin/env python3
 """
 Torch-free end-to-end test of UCCL one-sided IPC (write_ipc / read_ipc) across
-two GPUs on one node: rank 0 (DCU 0) advertises buffers, rank 1 (DCU 1) runs
+two GPUs on one node: rank 0 (GPU 0) advertises buffers, rank 1 (GPU 1) runs
 write_ipc / read_ipc against them. The control plane uses multiprocessing.Pipe
 and buffers are allocated via ctypes, so torch is never imported.
 
-Requirements:
-  1. Build uccl.p2p with the native DTK Makefile (`make -f Makefile.dtk`); a
-     dtk-torch build drags torch's ROCm runtime in via RUNPATH even with no
-     `import torch` (symptom: undefined symbol hsa_amd_queue_intercept_register).
-  2. LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib (DTK needs
-     libNanoLog from /opt/hyhal/lib and the HSA runtime from /opt/dtk/hsa/lib).
+Runtime selection comes from uccl.p2p.backend_info(). UCCL_GPU_RT_LIB can
+optionally override the runtime library path in a test installation.
+
+Requirements (Hygon): build uccl.p2p with `make -f Makefile.dtk`, and
+  LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib
+Requirements (Cambricon): build with `make -f Makefile.cnrt`.
 
 Run:
-    PYTHONPATH=~/uccl LD_LIBRARY_PATH=/opt/dtk/lib:/opt/dtk/hsa/lib:/opt/hyhal/lib \
-        python3 p2p/tests/test_engine_onesided_ipc_native.py
+    PYTHONPATH=~/uccl python3 p2p/tests/test_engine_onesided_ipc_native.py
 """
 
 import ctypes
 import multiprocessing
-import os
 import sys
 import traceback
 
-# Override via UCCL_GPU_RT_LIB to run against another HIP runtime (e.g. ROCm).
-HIP_LIB = os.environ.get("UCCL_GPU_RT_LIB", "/opt/dtk/lib/libamdhip64.so")
-HIP_SUCCESS = 0
-H2D = 1
-D2H = 2
 BUF_ELEMS = 1024
 SIZE = BUF_ELEMS * 4  # float32 bytes
 
 
-def _hip():
-    lib = ctypes.CDLL(HIP_LIB)
-    lib.hipInit(ctypes.c_uint(0))
-    return lib
+from native_runtime import Rt
 
 
-def _chk(lib, err, name):
-    if err != HIP_SUCCESS:
-        raise RuntimeError(f"{name} failed err={err}")
-
-
-def alloc_fill(lib, val):
-    ptr = ctypes.c_void_p(0)
-    _chk(lib, lib.hipMalloc(ctypes.byref(ptr), ctypes.c_size_t(SIZE)), "hipMalloc")
+def alloc_fill(rt, val):
+    ptr = rt.malloc(SIZE)
     host = (ctypes.c_float * BUF_ELEMS)(*([val] * BUF_ELEMS))
-    _chk(
-        lib,
-        lib.hipMemcpy(ptr, host, ctypes.c_size_t(SIZE), ctypes.c_int(H2D)),
-        "hipMemcpy H2D",
-    )
+    rt.memcpy_h2d(ptr, host, SIZE)
     return ptr
 
 
-def read_back(lib, ptr):
+def read_back(rt, ptr):
     host = (ctypes.c_float * BUF_ELEMS)()
-    _chk(
-        lib,
-        lib.hipMemcpy(host, ptr, ctypes.c_size_t(SIZE), ctypes.c_int(D2H)),
-        "hipMemcpy D2H",
-    )
+    rt.memcpy_d2h(host, ptr, SIZE)
     return list(host)
 
 
@@ -73,8 +49,8 @@ def worker(rank, pipe, result_q):
     try:
         from uccl import p2p
 
-        lib = _hip()
-        _chk(lib, lib.hipSetDevice(rank), f"hipSetDevice({rank})")
+        rt = Rt()
+        rt.set_device(rank)
         ep = p2p.Endpoint(local_gpu_idx=rank)
 
         # Rendezvous: rank 1 needs rank 0's GPU BDF for connect_local.
@@ -92,16 +68,16 @@ def worker(rank, pipe, result_q):
 
         # --- write_ipc: client writes 1.0 into server's zero buffer ---
         if rank == 0:
-            dst = alloc_fill(lib, 0.0)
+            dst = alloc_fill(rt, 0.0)
             ok, info = ep.advertise_ipc(conn_id, dst.value, SIZE)
             assert ok, "advertise_ipc(write) failed"
             pipe.send(bytes(info))
             pipe.recv()  # wait for client to finish writing
-            vals = read_back(lib, dst)
+            vals = read_back(rt, dst)
             assert all_close(vals, 1.0), f"write_ipc dst mismatch sample={vals[:4]}"
             print("[rank0] write_ipc PASS  (server dst == 1.0)", flush=True)
         else:
-            src = alloc_fill(lib, 1.0)
+            src = alloc_fill(rt, 1.0)
             info = pipe.recv()
             ok = ep.write_ipc(conn_id, src.value, SIZE, info)
             assert ok, "write_ipc failed"
@@ -109,18 +85,18 @@ def worker(rank, pipe, result_q):
 
         # --- read_ipc: client reads server's 1.0 buffer into its zero buffer ---
         if rank == 0:
-            src = alloc_fill(lib, 1.0)
+            src = alloc_fill(rt, 1.0)
             ok, info = ep.advertise_ipc(conn_id, src.value, SIZE)
             assert ok, "advertise_ipc(read) failed"
             pipe.send(bytes(info))
             pipe.recv()  # wait for client to finish reading
             print("[rank0] read_ipc PASS  (buffer exposed for remote READ)", flush=True)
         else:
-            dst = alloc_fill(lib, 0.0)
+            dst = alloc_fill(rt, 0.0)
             info = pipe.recv()
             ok = ep.read_ipc(conn_id, dst.value, SIZE, info)
             assert ok, "read_ipc failed"
-            vals = read_back(lib, dst)
+            vals = read_back(rt, dst)
             assert all_close(vals, 1.0), f"read_ipc dst mismatch sample={vals[:4]}"
             print("[rank1] read_ipc PASS  (client dst == 1.0)", flush=True)
             pipe.send(b"done")

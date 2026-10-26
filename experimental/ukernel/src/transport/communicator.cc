@@ -2,21 +2,22 @@
 #include "adapter/ipc_adapter.h"
 #include "adapter/rdma_adapter.h"
 #include "adapter/tcp_adapter.h"
-#include "adapter/transport_adapter.h"
-#include "adapter/uccl_adapter.h"
+#include "util/jrqueue.h"
+#include "util/uk_debug.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_set>
-#include <ifaddrs.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -52,53 +53,6 @@ std::string get_local_ip() {
   return buf;
 }
 
-bool has_env_value(char const* name) {
-  char const* value = std::getenv(name);
-  return value != nullptr && value[0] != '\0';
-}
-
-bool is_unspecified_ip(std::string const& ip) {
-  return ip.empty() || ip == "0.0.0.0" || ip == "127.0.0.1" ||
-         ip == "localhost";
-}
-
-std::string find_ifname_for_local_ip(std::string const& ip) {
-  if (is_unspecified_ip(ip)) return {};
-
-  ifaddrs* ifs = nullptr;
-  if (::getifaddrs(&ifs) != 0) return {};
-
-  std::string ifname;
-  for (auto* it = ifs; it != nullptr; it = it->ifa_next) {
-    if (!it->ifa_addr || it->ifa_addr->sa_family != AF_INET) continue;
-
-    char buf[INET_ADDRSTRLEN] = {};
-    auto* addr = reinterpret_cast<sockaddr_in*>(it->ifa_addr);
-    if (!::inet_ntop(AF_INET, &addr->sin_addr, buf, sizeof(buf))) continue;
-    if (ip == buf) {
-      ifname = it->ifa_name;
-      break;
-    }
-  }
-
-  ::freeifaddrs(ifs);
-  return ifname;
-}
-
-void maybe_configure_uccl_socket_ifname(std::string const& local_hint_ip) {
-  if (has_env_value("UCCL_SOCKET_IFNAME") ||
-      has_env_value("NCCL_SOCKET_IFNAME")) {
-    return;
-  }
-
-  std::string ifname = find_ifname_for_local_ip(local_hint_ip);
-  if (ifname.empty()) return;
-
-  ::setenv("UCCL_SOCKET_IFNAME", ifname.c_str(), 0);
-  std::cout << "[INFO] Auto-selected UCCL_SOCKET_IFNAME=" << ifname
-            << std::endl;
-}
-
 int get_timeout_ms(char const* env_name, int default_ms) {
   char const* value = std::getenv(env_name);
   if (value == nullptr || value[0] == '\0') return default_ms;
@@ -111,11 +65,6 @@ int get_timeout_ms(char const* env_name, int default_ms) {
 
 int bootstrap_timeout_ms() {
   return get_timeout_ms("UHM_BOOTSTRAP_TIMEOUT_MS", kDefaultBootstrapTimeoutMs);
-}
-
-std::string uccl_p2p_key(int src_rank, int dst_rank) {
-  return "uccl_p2p_info_" + std::to_string(src_rank) + "_to_" +
-         std::to_string(dst_rank);
 }
 
 std::string tcp_p2p_key(int src_rank, int dst_rank) {
@@ -207,26 +156,45 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       /*timeout_ms=*/3000, /*max_line_bytes=*/1 * 1024 * 1024,
       /*local_id=*/config_->local_id);
   if (!exchanger_client_->valid()) {
-    fprintf(stderr, "[ERROR] Failed to connect to Exchanger\n");
-    return;
+    // Fail fast: an early return here used to leave a half-initialized
+    // Communicator (no peer metas, no completion rings), surfacing
+    // later as confusing "transport peer metadata is not established"
+    // errors that hide the real cause.
+    throw std::runtime_error("Communicator: exchanger init failed at " +
+                             config_->exchanger_ip + ":" +
+                             std::to_string(config_->exchanger_port) +
+                             " (see [oob] lines above for the exact stage)");
   }
 
   // Completion ring: adapters push CompletionEvent when ops finish.
   size_t ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
   if (ring_sz != (size_t)-1) {
-    completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
-    if (completion_ring_)
-      jring_init(completion_ring_, 2048, sizeof(CompletionEvent), 0, 0);
+    put_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (put_completion_ring_)
+      jring_init(put_completion_ring_, 2048, sizeof(CompletionEvent), 0, 0);
   }
-  if (completion_ring_) ipc_adapter_->set_completion_ring(completion_ring_);
+  if (put_completion_ring_)
+    ipc_adapter_->set_put_completion_ring(put_completion_ring_);
+
+  // Signal send completion ring — separate from data ring
+  ring_sz = jring_get_buf_ring_size(sizeof(CompletionEvent), 2048);
+  if (ring_sz != (size_t)-1) {
+    sig_send_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (sig_send_completion_ring_)
+      jring_init(sig_send_completion_ring_, 2048, sizeof(CompletionEvent), 0,
+                 1);
+  }
+  if (sig_send_completion_ring_)
+    ipc_adapter_->set_sig_send_completion_ring(sig_send_completion_ring_);
 
   // Signal completion ring: on_signal_received pushes here,
-  // try_complete_signals dequeues. MP/MC for thread safety.
+  // try_complete_sig_wait dequeues. MP/MC for thread safety.
   ring_sz = jring_get_buf_ring_size(sizeof(SignalCompletion), 2048);
   if (ring_sz != (size_t)-1) {
-    signal_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
-    if (signal_ring_)
-      jring_init(signal_ring_, 2048, sizeof(SignalCompletion), 1, 1);
+    sig_wait_completion_ring_ = static_cast<jring_t*>(calloc(1, ring_sz));
+    if (sig_wait_completion_ring_)
+      jring_init(sig_wait_completion_ring_, 2048, sizeof(SignalCompletion), 0,
+                 1);
   }
 
   exchange_peer_metas();
@@ -320,123 +288,71 @@ void Communicator::exchange_peer_metas() {
   }
 }
 
+void Communicator::stop_transports() {
+  if (rdma_adapter_) rdma_adapter_->shutdown_workers();
+  if (ipc_adapter_) ipc_adapter_->stop();
+}
+
 Communicator::~Communicator() {
-  if (ipc_adapter_) {
-    ipc_adapter_->shutdown();
-  }
+  stop_transports();
 
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
     uint64_t const registered_id = buffer_id;
-    if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_registered_mrs_.find(registered_id) !=
-          uccl_registered_mrs_.end()) {
-        uccl_adapter_->deregister_memory(registered_id);
-        uccl_registered_mrs_.erase(registered_id);
-      }
-      uccl_direct_reg_failed_mrs_.erase(registered_id);
-    }
+    // RDMA adapter destructor deregisters after QP teardown (flushes WRs).
+    // Just clean up bookkeeping here.
     if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
       std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_registered_mrs_.find(registered_id) !=
-          rdma_registered_mrs_.end()) {
-        rdma_adapter_->deregister_memory(registered_id);
-        rdma_registered_mrs_.erase(registered_id);
-      }
+      rdma_registered_mrs_.erase(registered_id);
       rdma_direct_reg_failed_mrs_.erase(registered_id);
     }
     (void)mr_manager_.delete_mr(static_cast<uint32_t>(buffer_id));
   }
 
-  std::vector<uint32_t> local_ipc_buffer_ids;
-  {
-    std::lock_guard<std::mutex> lk(resource_mu_);
-    local_ipc_buffer_ids.reserve(local_buffer_to_ipc_.size());
-    for (auto const& kv : local_buffer_to_ipc_) {
-      local_ipc_buffer_ids.push_back(kv.first);
-    }
-  }
-  for (uint32_t buffer_id : local_ipc_buffer_ids) {
-    (void)dereg_ipc(buffer_id);
-  }
-
-  for (int i = 0; i < world_size_; ++i) {
-    if (i == global_rank_) continue;
-    ipc_manager_.delete_ipc(i);
-  }
-
-  uccl_adapter_.reset();
   tcp_adapter_.reset();
   rdma_adapter_.reset();
+
+  // FIXME: gpuIpcCloseMemHandle hangs when GPU and NIC share PCIe topology.
+  // IPC dereg must happen after RDMA QP/PD destruction (all ibv_mr references
+  // released), but the CUDA driver still blocks on internal state.  Resources
+  // are reclaimed by the OS on process exit.
+  if (false) {
+    int orig_dev = -1;
+    gpuGetDevice(&orig_dev);
+    gpuSetDevice(local_gpu_idx_);
+
+    std::vector<uint32_t> local_ipc_buffer_ids;
+    {
+      std::lock_guard<std::mutex> lk(resource_mu_);
+      local_ipc_buffer_ids.reserve(local_buffer_to_ipc_.size());
+      for (auto const& kv : local_buffer_to_ipc_)
+        local_ipc_buffer_ids.push_back(kv.first);
+    }
+    for (uint32_t buffer_id : local_ipc_buffer_ids) (void)dereg_ipc(buffer_id);
+
+    for (int i = 0; i < world_size_; ++i) {
+      if (i == global_rank_) continue;
+      ipc_manager_.delete_ipc(i);
+    }
+
+    gpuSetDevice(orig_dev);
+  }
   ipc_adapter_.reset();
 
-  if (signal_ring_) {
-    free(signal_ring_);
-    signal_ring_ = nullptr;
+  if (sig_wait_completion_ring_) {
+    free(sig_wait_completion_ring_);
+    sig_wait_completion_ring_ = nullptr;
   }
-  if (completion_ring_) {
-    free(completion_ring_);
-    completion_ring_ = nullptr;
+  if (sig_send_completion_ring_) {
+    free(sig_send_completion_ring_);
+    sig_send_completion_ring_ = nullptr;
+  }
+  if (put_completion_ring_) {
+    free(put_completion_ring_);
+    put_completion_ring_ = nullptr;
   }
 
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
-}
-
-UcclTransportAdapter& Communicator::ensure_uccl_adapter(
-    CommunicatorMeta const& local_meta) {
-  if (!uccl_adapter_) {
-    maybe_configure_uccl_socket_ifname(local_meta.ip);
-    UcclTransportConfig uccl_cfg;
-    uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
-        local_gpu_idx_, world_size_, std::move(uccl_cfg));
-    if (completion_ring_) uccl_adapter_->set_completion_ring(completion_ring_);
-  }
-  return *uccl_adapter_;
-}
-
-bool Communicator::exchange_uccl_peer_info(int rank,
-                                           UcclTransportAdapter& uccl_adapter,
-                                           UCCLP2PInfo* out_remote_p2p_info) {
-  if (out_remote_p2p_info == nullptr) return false;
-
-  int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
-  if (dev_idx < 0) {
-    std::cerr << "[ERROR] Communicator " << global_rank_
-              << " UCCL get_best_dev_idx failed for local gpu "
-              << local_gpu_idx_ << std::endl;
-    return false;
-  }
-  uint16_t local_port = uccl_adapter.get_p2p_listen_port(dev_idx);
-  if (local_port == 0) {
-    std::cerr << "[ERROR] Communicator " << global_rank_
-              << " UCCL local listen port is invalid for dev " << dev_idx
-              << std::endl;
-    return false;
-  }
-  std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
-  if (local_ip_addr.empty()) {
-    std::cerr << "[ERROR] Communicator " << global_rank_
-              << " UCCL local listen ip is empty for dev " << dev_idx
-              << std::endl;
-    return false;
-  }
-
-  UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
-                             local_gpu_idx_);
-  std::string p2p_key = uccl_p2p_key(global_rank_, rank);
-  std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
-
-  bool ok =
-      oob_put(*exchanger_client_, oob_namespace(), p2p_key, local_p2p_info) &&
-      oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
-              *out_remote_p2p_info, bootstrap_timeout_ms());
-  if (ok && out_remote_p2p_info->gpu_idx >= 0) {
-    std::lock_guard<std::mutex> lk(peer_mu_);
-    peer_states_[static_cast<size_t>(rank)].gpu_idx =
-        out_remote_p2p_info->gpu_idx;
-  }
-  return ok;
 }
 
 RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
@@ -446,7 +362,10 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     RdmaTransportConfig rdma_cfg;
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(local_gpu_idx_,
                                                            std::move(rdma_cfg));
-    if (completion_ring_) rdma_adapter_->set_completion_ring(completion_ring_);
+    if (put_completion_ring_)
+      rdma_adapter_->set_put_completion_ring(put_completion_ring_);
+    if (sig_send_completion_ring_)
+      rdma_adapter_->set_sig_send_completion_ring(sig_send_completion_ring_);
     rdma_adapter_->set_communicator(this);
   }
   return *rdma_adapter_;
@@ -490,7 +409,8 @@ TcpTransportAdapter& Communicator::ensure_tcp_adapter(
   if (!tcp_adapter_) {
     tcp_adapter_ = std::make_unique<TcpTransportAdapter>(
         local_meta.ip, global_rank_, local_gpu_idx_);
-    if (completion_ring_) tcp_adapter_->set_completion_ring(completion_ring_);
+    if (put_completion_ring_)
+      tcp_adapter_->set_put_completion_ring(put_completion_ring_);
   }
   return *tcp_adapter_;
 }
@@ -606,16 +526,27 @@ bool Communicator::ensure_path(int rank, bool is_put,
   char const* dir_label = is_put ? "put" : "wait";
 
   auto fallback = [&] {
+    if (transport != PeerTransportKind::Unknown) return false;
     return try_fallback_tcp_accept(rank, resolved.local_meta);
   };
 
-  // UCCL transport removed; fall through to RDMA.
+  // Fall through to RDMA.
   if (resolved.kind == PeerTransportKind::Rdma) {
+    UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA ensure_rdma_adapter ...",
+           global_rank_);
     auto& rdma = ensure_rdma_adapter(resolved.local_meta);
+    UK_DBG(UK_DBG_LVL_TPT, "[ensure_path r%d] RDMA ensure_rdma_adapter done",
+           global_rank_);
     bool ready = is_put ? rdma.has_put_path(rank) : rdma.has_wait_path(rank);
     if (!ready) {
       RdmaP2PInfo remote;
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[ensure_path r%d] RDMA exchange_rdma_peer_info ...",
+             global_rank_);
       if (!exchange_rdma_peer_info(rank, rdma, &remote)) return fallback();
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[ensure_path r%d] RDMA exchange_rdma_peer_info done",
+             global_rank_);
 
       RdmaPeerConnectSpec rspec;
       rspec.num_qps = remote.num_qps;
@@ -839,240 +770,309 @@ bool Communicator::same_host(int rank) const {
   return local_peer.meta.host_id == remote_peer.meta.host_id;
 }
 
-void Communicator::register_existing_local_mrs_with_uccl() {
-  if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
-  for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
-    void* ptr = reinterpret_cast<void*>(item.mr.address);
-    size_t len = static_cast<size_t>(item.mr.length);
-    (void)ensure_uccl_memory_registered(buffer_id, ptr, len);
-  }
-}
-
-bool Communicator::ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr,
-                                                 size_t len) {
-  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    if (uccl_adapter_->is_memory_registered(buffer_id)) return true;
-
-    void* base_ptr = ptr;
-    size_t mr_len = len;
-    bool is_direct_local_mr = false;
-
-    MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
-    if (item.valid) {
-      base_ptr =
-          reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
-      mr_len = static_cast<size_t>(item.mr.length);
-      is_direct_local_mr = true;
-    }
-
-    if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_direct_reg_failed_mrs_.find(buffer_id) !=
-          uccl_direct_reg_failed_mrs_.end()) {
-        return false;
-      }
-    }
-
-    if (base_ptr == nullptr || mr_len == 0) {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " has invalid base pointer or length for UCCL registration, "
-                << "buffer_id=" << buffer_id << std::endl;
-      return false;
-    }
-
-    bool ok = uccl_adapter_->register_memory(buffer_id, base_ptr, mr_len);
-    if (!ok) {
-      if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-        uccl_direct_reg_failed_mrs_.insert(buffer_id);
-        std::cerr << "[WARN] Communicator " << global_rank_
-                  << " failed to register local GPU MR " << buffer_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
-                  << "; future requests will fallback to host bounce"
-                  << std::endl;
-      } else {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host bounce MR " << buffer_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
-                  << std::endl;
-      }
-    } else {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      uccl_registered_mrs_.insert(buffer_id);
-    }
-    return ok;
-  }
-
-  return true;
-}
-
 void Communicator::register_existing_local_mrs_with_rdma() {
   if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
   for (auto const& [buffer_id, item] : mr_manager_.list_local_mrs()) {
     void* ptr = reinterpret_cast<void*>(item.mr.address);
     size_t len = static_cast<size_t>(item.mr.length);
-    (void)ensure_rdma_memory_registered(buffer_id, ptr, len);
+    if (!ensure_rdma_memory_registered(buffer_id, ptr, len)) continue;
+
+    // Re-publish with correct rkey now that RDMA adapter is ready.
+    // Buffers registered before the RDMA adapter was created have
+    // rkey=0 in the published OOB entry.  Update it so the peer
+    // can use RDMA writes to this buffer.
+    if (rdma_adapter_->is_memory_registered(buffer_id)) {
+      uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
+      if (rkey != 0) {
+        MR mr = get_mr(buffer_id);
+        mr.key = rkey;
+        {
+          std::lock_guard<std::mutex> lk(resource_mu_);
+          local_buffer_to_mr_[buffer_id].key = rkey;
+        }
+        NamedMRInfos payload{};
+        payload.generation =
+            mr_generation_.fetch_add(1, std::memory_order_relaxed);
+        payload.entries.push_back(NamedMR{buffer_id, mr});
+        oob_put(*exchanger_client_, oob_namespace(),
+                mr_global_buffer_key(global_rank_, buffer_id), payload);
+      }
+    }
   }
 }
 
 bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
                                                  size_t len) {
-  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
 
-    void* base_ptr = ptr;
-    size_t mr_len = len;
-    bool is_direct_local_mr = false;
+  if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
 
-    MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
-    if (item.valid) {
-      base_ptr =
-          reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
-      mr_len = static_cast<size_t>(item.mr.length);
-      is_direct_local_mr = true;
-    }
+  void* base_ptr = ptr;
+  size_t mr_len = len;
+  bool is_direct_local_mr = false;
 
-    if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_direct_reg_failed_mrs_.find(buffer_id) !=
-          rdma_direct_reg_failed_mrs_.end()) {
-        return false;
-      }
-    }
-
-    if (base_ptr == nullptr || mr_len == 0) {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " invalid pointer or length for RDMA reg, buffer_id="
-                << buffer_id << std::endl;
-      return false;
-    }
-
-    bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
-    if (!ok) {
-      if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-        rdma_direct_reg_failed_mrs_.insert(buffer_id);
-        std::cerr << "[WARN] Communicator " << global_rank_
-                  << " failed to register local GPU MR " << buffer_id
-                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
-                  << std::endl;
-      } else {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host MR " << buffer_id << " with RDMA"
-                  << std::endl;
-      }
-    } else {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      rdma_registered_mrs_.insert(buffer_id);
-    }
-    return ok;
+  MRItem item = mr_manager_.get_mr(static_cast<uint32_t>(buffer_id));
+  if (item.valid) {
+    base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address));
+    mr_len = static_cast<size_t>(item.mr.length);
+    is_direct_local_mr = true;
   }
 
-  return true;
+  if (is_direct_local_mr) {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    if (rdma_direct_reg_failed_mrs_.find(buffer_id) !=
+        rdma_direct_reg_failed_mrs_.end()) {
+      return false;
+    }
+  }
+
+  if (base_ptr == nullptr || mr_len == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " invalid pointer or length for RDMA reg, buffer_id="
+              << buffer_id << std::endl;
+    return false;
+  }
+
+  bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
+  if (!ok) {
+    if (is_direct_local_mr) {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      rdma_direct_reg_failed_mrs_.insert(buffer_id);
+      std::cerr << "[WARN] Communicator " << global_rank_
+                << " failed to register local GPU MR " << buffer_id
+                << " with RDMA, base=" << base_ptr << " len=" << mr_len
+                << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to register host MR " << buffer_id << " with RDMA"
+                << std::endl;
+    }
+  } else {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    rdma_registered_mrs_.insert(buffer_id);
+  }
+  return ok;
 }
 
 unsigned Communicator::send_put_async(int peer, uint32_t src_buf,
                                       size_t src_off, uint32_t dst_buf,
                                       size_t dst_off, size_t bytes,
                                       PeerTransportKind transport) {
-  if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
+  unsigned rid = alloc_rid();
+  record_user_ctx(rid, 0);
+  if (!send_put_async_with_rid(peer, src_buf, src_off, dst_buf, dst_off, bytes,
+                               transport, rid)) {
+    consume_user_ctx(rid);
+    return 0;
+  }
+  return rid;
+}
+
+bool Communicator::send_put_async_with_rid(int peer, uint32_t src_buf,
+                                           size_t src_off, uint32_t dst_buf,
+                                           size_t dst_off, size_t bytes,
+                                           PeerTransportKind transport,
+                                           unsigned rid, uint32_t qp_affinity) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
   PeerTransportKind kind = get_put_transport_kind(peer, transport);
   auto* adapter = get_adapter(kind);
-  if (!adapter) return 0;
+  if (!adapter) return false;
 
   MR local_mr = get_mr(src_buf);
-  if (src_off > local_mr.length || bytes > local_mr.length - src_off) return 0;
+  if (src_off > local_mr.length || bytes > local_mr.length - src_off) {
+    UK_DBG(UK_DBG_LVL_TPT,
+           "[comm-send r%d] REJECT local bounds: src_buf=%u src_off=%zu "
+           "bytes=%zu mr.length=%llu",
+           global_rank_, src_buf, src_off, bytes,
+           (unsigned long long)local_mr.length);
+    return false;
+  }
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src_off);
 
-  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
-
-  // TCP: adapter's send worker handles GPU→host bounce internally
   if (kind == PeerTransportKind::Tcp) {
-    if (!adapter->send_put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid))
-      return 0;
-    return rid;
+    return adapter->send_put_async(peer, local_ptr, 0, nullptr, 0, bytes, rid);
   }
-
-  // RDMA
+  {
+    static int dbg_cnt = 0;
+    if (dbg_cnt++ < 5)
+      UK_DBG(UK_DBG_LVL_TPT, "[comm-send r%d] peer=%d kind=%d IPC-or-RDMA",
+             global_rank_, peer, (int)kind);
+  }
   if (kind == PeerTransportKind::Rdma) {
-    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return 0;
+    if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) {
+      static int once = 0;
+      if (!once++)
+        std::cerr << "[WARN] RDMA adapter not initialized" << std::endl;
+      return false;
+    }
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return false;
     uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
     MR remote_mr = get_mr(peer, remote_id);
+    if (remote_mr.length == 0 || remote_mr.key == 0) return false;
     void* remote_ptr = reinterpret_cast<void*>(
         static_cast<uint64_t>(remote_mr.address) + dst_off);
-    rdma_adapter_->register_remote_buffer(peer, remote_id, remote_mr.address,
-                                          remote_mr.key);
-    if (!adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr,
-                                 remote_id, bytes, rid))
-      return 0;
-    return rid;
+    rdma_adapter_->register_remote_buffer(
+        peer, remote_id, reinterpret_cast<uint64_t>(remote_ptr), remote_mr.key);
+    return rdma_adapter_->send_put_async(peer, local_ptr, src_buf, remote_ptr,
+                                         remote_id, bytes, qp_affinity,
+                                         rid) != 0;
   }
-
-  // IPC: resolve remote pointer, then put
   void* remote_ptr = nullptr;
   int remote_gpu = -1;
   if (dst_buf != 0) {
     if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
-                                        &remote_ptr, &remote_gpu))
-      return 0;
+                                        &remote_ptr, &remote_gpu)) {
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[comm-send r%d] REJECT remote resolve: peer=%d dst_buf=%u "
+             "dst_off=%zu bytes=%zu",
+             global_rank_, peer, dst_buf, dst_off, bytes);
+      return false;
+    }
   }
-  if (!adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf,
-                               bytes, rid))
-    return 0;
-  return rid;
+  return adapter->send_put_async(peer, local_ptr, src_buf, remote_ptr, dst_buf,
+                                 bytes, rid);
+}
+
+bool Communicator::send_put_signal_async_with_rid(
+    int peer, uint32_t src_buf, size_t src_off, uint32_t dst_buf,
+    size_t dst_off, size_t bytes, PeerTransportKind transport, uint64_t tag,
+    unsigned rid, uint32_t qp_affinity) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  auto* adapter = get_adapter(kind);
+  if (!adapter || !adapter->supports_put_signal()) return false;
+
+  MR local_mr = get_mr(src_buf);
+  if (src_off > local_mr.length || bytes > local_mr.length - src_off)
+    return false;
+  void* local_ptr = reinterpret_cast<void*>(
+      static_cast<uintptr_t>(local_mr.address) + src_off);
+
+  if (kind == PeerTransportKind::Rdma) {
+    if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
+    if (!ensure_rdma_memory_registered(src_buf, local_ptr, bytes)) return false;
+    uint32_t remote_id = dst_buf != 0 ? dst_buf : src_buf;
+    MR remote_mr = get_mr(peer, remote_id);
+    if (remote_mr.length == 0 || remote_mr.key == 0) return false;
+    void* remote_ptr = reinterpret_cast<void*>(
+        static_cast<uint64_t>(remote_mr.address) + dst_off);
+    rdma_adapter_->register_remote_buffer(
+        peer, remote_id, reinterpret_cast<uint64_t>(remote_ptr), remote_mr.key);
+    return rdma_adapter_->send_put_signal_async(peer, local_ptr, src_buf,
+                                                remote_ptr, remote_id, bytes,
+                                                tag, qp_affinity, rid) != 0;
+  }
+
+  // IPC: resolve the peer's buffer pointer and let the adapter's send
+  // worker write the signal ring after the copy completes.
+  void* remote_ptr = nullptr;
+  int remote_gpu = -1;
+  if (dst_buf != 0) {
+    if (!try_resolve_remote_ipc_pointer(peer, dst_buf, dst_off, bytes,
+                                        &remote_ptr, &remote_gpu)) {
+      UK_DBG(UK_DBG_LVL_TPT,
+             "[comm-send r%d] REJECT fused remote resolve: peer=%d dst_buf=%u "
+             "dst_off=%zu bytes=%zu",
+             global_rank_, peer, dst_buf, dst_off, bytes);
+      return false;
+    }
+  }
+  return adapter->send_put_signal_async(peer, local_ptr, src_buf, remote_ptr,
+                                        dst_buf, bytes, tag, rid) != 0;
+}
+
+bool Communicator::can_fuse_put_signal(int peer, PeerTransportKind transport) {
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  auto* adapter = get_adapter(kind);
+  return adapter && adapter->supports_put_signal();
+}
+
+void* Communicator::ipc_signal_ring_device_ptr(int peer) const {
+  return ipc_adapter_ ? ipc_adapter_->peer_signal_ring_device_ptr(peer)
+                      : nullptr;
 }
 
 unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
                                          PeerTransportKind transport) {
-  if (!ensure_path(peer, /*is_put=*/false, transport)) return 0;
+  unsigned rid = alloc_rid();
+  record_user_ctx(rid, 0);
+  if (!wait_signal_async_with_rid(peer, tag, transport, rid)) {
+    consume_user_ctx(rid);
+    return 0;
+  }
+  return rid;
+}
+
+bool Communicator::wait_signal_async_with_rid(int peer, uint64_t tag,
+                                              PeerTransportKind transport,
+                                              unsigned rid, uint32_t count) {
+  if (!ensure_path(peer, /*is_put=*/false, transport)) return false;
 
   PeerTransportKind kind = get_wait_transport_kind(peer, transport);
-  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
 
-  // TCP: delegate to adapter's recv_worker (request/response model).
-  // Completion goes to the data completion ring; try_complete_signals
-  // also checks the data ring for TCP signal completions.
   if (kind == PeerTransportKind::Tcp) {
+    // Counted waits are only produced by fused RDMA groups; a TCP peer
+    // never fuses, so count is always 1 here.
+    if (count > 1) return false;
     auto* adapter = get_adapter(kind);
     if (!adapter || !adapter->wait_signal_async(peer, tag, std::nullopt, rid))
-      return 0;
+      return false;
     {
       std::lock_guard<std::mutex> lk(signal_waits_mu_);
       tcp_signal_rids_[rid] = {peer, tag};
     }
-    return rid;
+    return true;
   }
 
-  // IPC / RDMA: check buffered signals before registering wait.
+  SignalCompletion ev{};
+  bool matched = false;
   {
     std::lock_guard<std::mutex> lk(signal_waits_mu_);
-
-    // Check if a matching signal already arrived.
     auto sig_it = pending_signals_.find(peer);
+    static int dbg = 0;
+    if (dbg++ < 5 && uk_dbg_lvl() >= UK_DBG_LVL_TPT) {
+      std::string tags;
+      if (sig_it != pending_signals_.end())
+        for (auto& t : sig_it->second) {
+          tags += std::to_string((unsigned long)t);
+          tags += ',';
+        }
+      UK_DBG(
+          UK_DBG_LVL_TPT,
+          "[wsig-wait r%d] peer=%d tag=%lu pending_sigs_has_peer=%d tags=[%s]",
+          global_rank_, peer, (unsigned long)tag,
+          sig_it != pending_signals_.end() ? 1 : 0, tags.c_str());
+    }
+    // Drain up to `count` buffered arrivals of this tag first.
+    uint32_t remaining = count;
     if (sig_it != pending_signals_.end()) {
       auto& sigs = sig_it->second;
-      for (auto sit = sigs.begin(); sit != sigs.end(); ++sit) {
+      auto sit = sigs.begin();
+      while (remaining > 0 && sit != sigs.end()) {
         if (*sit == tag) {
-          // Signal already arrived — dispatch immediately.
-          SignalCompletion ev;
-          ev.rid = rid;
-          ev.tag = tag;
-          ev.peer = peer;
-          ev.failed = false;
-          jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
-          sigs.erase(sit);
-          if (sigs.empty()) pending_signals_.erase(sig_it);
-          return rid;
+          sit = sigs.erase(sit);
+          --remaining;
+        } else {
+          ++sit;
         }
       }
+      if (sigs.empty()) pending_signals_.erase(sig_it);
     }
-
-    // No buffered signal — register the wait.
-    pending_signal_waits_[peer][tag].push_back(rid);
+    if (remaining == 0) {
+      ev.rid = rid;
+      ev.tag = tag;
+      ev.peer = peer;
+      ev.failed = false;
+      matched = true;
+    } else {
+      pending_signal_waits_[peer][tag].emplace_back(rid, remaining);
+    }
   }
-
-  return rid;
+  if (matched) {
+    jrpush(sig_wait_completion_ring_, ev);
+  }
+  return true;
 }
 
 unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
@@ -1116,60 +1116,92 @@ unsigned Communicator::wait_signal_async(int peer, uint64_t tag,
 
 unsigned Communicator::send_signal_async(int peer, uint64_t tag,
                                          PeerTransportKind transport) {
-  if (!ensure_path(peer, /*is_put=*/true, transport)) return 0;
-  PeerTransportKind kind = get_put_transport_kind(peer, transport);
-  auto* adapter = get_adapter(kind);
-  if (!adapter) return 0;
-
-  unsigned rid = next_rid_.fetch_add(1, std::memory_order_relaxed);
-  if (!adapter->send_signal_async(peer, tag, rid)) return 0;
+  unsigned rid = alloc_rid();
+  record_user_ctx(rid, 0);
+  if (!send_signal_async_with_rid(peer, tag, transport, rid)) {
+    consume_user_ctx(rid);
+    return 0;
+  }
   return rid;
 }
 
-size_t Communicator::try_complete(CompletionResult* results, size_t max) {
-  if (!completion_ring_) return 0;
+bool Communicator::send_signal_async_with_rid(int peer, uint64_t tag,
+                                              PeerTransportKind transport,
+                                              unsigned rid) {
+  if (!ensure_path(peer, /*is_put=*/true, transport)) return false;
+  PeerTransportKind kind = get_put_transport_kind(peer, transport);
+  auto* adapter = get_adapter(kind);
+  if (!adapter) return false;
+  return adapter->send_signal_async(peer, tag, rid);
+}
+
+size_t Communicator::try_complete_put(CompletionResult* results, size_t max) {
+  if (!put_completion_ring_) return 0;
   CompletionEvent ev;
   size_t count = 0;
   while (count < max &&
-         jring_mc_dequeue_bulk(completion_ring_, &ev, 1, nullptr) == 1) {
+         jring_mc_dequeue_bulk(put_completion_ring_, &ev, 1, nullptr) == 1) {
     results[count].rid = ev.rid;
     results[count].failed = (ev.failed != 0);
+    results[count].user_ctx = consume_user_ctx(ev.rid);
     count++;
   }
   return count;
 }
 
-size_t Communicator::try_complete_signals(SignalCompletion* events,
-                                          size_t max) {
+size_t Communicator::try_complete_sig_send(CompletionResult* results,
+                                           size_t max) {
+  if (!sig_send_completion_ring_) return 0;
+  CompletionEvent ev;
+  size_t count = 0;
+  while (count < max && jring_sc_dequeue_bulk(sig_send_completion_ring_, &ev, 1,
+                                              nullptr) == 1) {
+    results[count].rid = ev.rid;
+    results[count].failed = (ev.failed != 0);
+    results[count].user_ctx = consume_user_ctx(ev.rid);
+    count++;
+  }
+  return count;
+}
+
+size_t Communicator::try_complete_sig_wait(SignalCompletion* events,
+                                           size_t max) {
   drain_ipc_signals();
 
   size_t count = 0;
-  if (signal_ring_) {
-    while (count < max && jring_mc_dequeue_bulk(signal_ring_, events + count, 1,
-                                                nullptr) == 1) {
-      ++count;
+  if (sig_wait_completion_ring_) {
+    count = jring_sc_dequeue_burst(sig_wait_completion_ring_, events,
+                                   std::min(max, (size_t)256), nullptr);
+    if (count > 0) {
+      UK_DBG(UK_DBG_LVL_TPT, "[sig-wait-ring r%d] drained=%zu", global_rank_,
+             count);
+    } else {
+      static int dbg = 0;
+      if (uk_dbg_lvl() >= UK_DBG_LVL_ALL && ++dbg % 50000 == 0)
+        UK_DBG(UK_DBG_LVL_ALL, "[sig-wait-ring r%d] drained=0", global_rank_);
     }
+    for (size_t i = 0; i < count; ++i)
+      events[i].user_ctx = consume_user_ctx(events[i].rid);
   }
 
   // Drain data completion ring for TCP signal completions.
-  if (completion_ring_ && count < max) {
+  if (put_completion_ring_ && count < max) {
     CompletionEvent ce;
     {
       std::lock_guard<std::mutex> lk(signal_waits_mu_);
-      while (count < max &&
-             jring_mc_dequeue_bulk(completion_ring_, &ce, 1, nullptr) == 1) {
+      while (count < max && jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1,
+                                                  nullptr) == 1) {
         auto it = tcp_signal_rids_.find(ce.rid);
         if (it != tcp_signal_rids_.end()) {
           events[count].rid = ce.rid;
           events[count].tag = it->second.second;
           events[count].peer = it->second.first;
           events[count].failed = (ce.failed != 0);
+          events[count].user_ctx = consume_user_ctx(ce.rid);
           tcp_signal_rids_.erase(it);
           ++count;
         } else {
-          // Non-signal completion — re-enqueue and stop.
-          // Data completions are handled by try_complete.
-          jring_mp_enqueue_bulk(completion_ring_, &ce, 1, nullptr);
+          jring_mp_enqueue_bulk(put_completion_ring_, &ce, 1, nullptr);
           break;
         }
       }
@@ -1177,6 +1209,23 @@ size_t Communicator::try_complete_signals(SignalCompletion* events,
   }
 
   return count;
+}
+
+void Communicator::record_user_ctx(unsigned rid, uint32_t user_ctx) {
+  std::lock_guard<std::mutex> lk(user_ctx_mu_);
+  rid_to_user_ctx_[rid] = user_ctx;
+}
+
+uint32_t Communicator::consume_user_ctx(unsigned rid) {
+  // Backend-tagged rid: the low 30 bits are the be_idx itself; no map
+  // entry was ever recorded for it.
+  if (rid & kRidTagMask) return rid & kRidBeIdxMask;
+  std::lock_guard<std::mutex> lk(user_ctx_mu_);
+  auto it = rid_to_user_ctx_.find(rid);
+  if (it == rid_to_user_ctx_.end()) return 0;
+  uint32_t ctx = it->second;
+  rid_to_user_ctx_.erase(it);
+  return ctx;
 }
 
 void Communicator::drain_ipc_signals() {
@@ -1197,11 +1246,11 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
   size_t completed = 0;
 
   // Check data completion ring
-  if (completion_ring_ && completed < count) {
+  if (put_completion_ring_ && completed < count) {
     CompletionEvent ce;
     std::vector<CompletionEvent> stash;
     while (completed < count &&
-           jring_mc_dequeue_bulk(completion_ring_, &ce, 1, nullptr) == 1) {
+           jring_mc_dequeue_bulk(put_completion_ring_, &ce, 1, nullptr) == 1) {
       // Check if this rid is in the input array
       bool found = false;
       for (size_t i = 0; i < count; ++i) {
@@ -1215,15 +1264,15 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
       if (!found) stash.push_back(ce);
     }
     for (auto& ev : stash)
-      jring_mp_enqueue_bulk(completion_ring_, &ev, 1, nullptr);
+      jring_mp_enqueue_bulk(put_completion_ring_, &ev, 1, nullptr);
   }
 
   // Check signal completion ring
-  if (signal_ring_ && completed < count) {
+  if (sig_wait_completion_ring_ && completed < count) {
     SignalCompletion sc;
     std::vector<SignalCompletion> stash;
-    while (completed < count &&
-           jring_mc_dequeue_bulk(signal_ring_, &sc, 1, nullptr) == 1) {
+    while (completed < count && jring_sc_dequeue_bulk(sig_wait_completion_ring_,
+                                                      &sc, 1, nullptr) == 1) {
       bool found = false;
       for (size_t i = 0; i < count; ++i) {
         if (rids[i] == sc.rid) {
@@ -1234,39 +1283,70 @@ size_t Communicator::poll(unsigned* rids, size_t count) {
       }
       if (!found) stash.push_back(sc);
     }
-    for (auto& ev : stash) jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
+    for (auto& ev : stash)
+      jring_mp_enqueue_bulk(sig_wait_completion_ring_, &ev, 1, nullptr);
   }
 
   return completed;
 }
 
 void Communicator::on_signal_received(int peer, uint64_t tag) {
-  std::lock_guard<std::mutex> lk(signal_waits_mu_);
-
-  auto it = pending_signal_waits_.find(peer);
-  if (it != pending_signal_waits_.end()) {
-    auto it2 = it->second.find(tag);
-    if (it2 != it->second.end()) {
-      // Match found: dispatch to the first waiting rid only (1:1 signal->wait).
-      SignalCompletion ev;
-      ev.peer = peer;
-      ev.tag = tag;
-      ev.failed = false;
-      ev.rid = it2->second.front();
-      jring_mp_enqueue_bulk(signal_ring_, &ev, 1, nullptr);
-      it2->second.erase(it2->second.begin());
-      if (it2->second.empty()) it->second.erase(it2);
-      return;
+  SignalCompletion ev{};
+  bool matched = false;
+  bool consumed = false;
+  {
+    std::lock_guard<std::mutex> lk(signal_waits_mu_);
+    auto it = pending_signal_waits_.find(peer);
+    if (it != pending_signal_waits_.end()) {
+      auto it2 = it->second.find(tag);
+      if (it2 != it->second.end()) {
+        auto& front = it2->second.front();
+        consumed = true;
+        if (front.second > 1) {
+          // Counted wait (fused signal group): one arrival per tile.
+          --front.second;
+        } else {
+          ev.rid = front.first;
+          ev.tag = tag;
+          ev.peer = peer;
+          ev.failed = false;
+          it2->second.erase(it2->second.begin());
+          if (it2->second.empty()) it->second.erase(it2);
+          matched = true;
+        }
+      }
+    }
+    if (!consumed) {
+      pending_signals_[peer].push_back(tag);
     }
   }
-
-  // No matching wait — buffer the signal for later matching.
-  pending_signals_[peer].push_back(tag);
+  if (matched) {
+    jrpush(sig_wait_completion_ring_, ev);
+  }
 }
 
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
                           bool publish) {
   if (buffer_id == 0 || local_buf == nullptr || len == 0) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(resource_mu_);
+    auto it = local_buffer_to_mr_.find(buffer_id);
+    if (it != local_buffer_to_mr_.end()) {
+      // Idempotent re-registration of the same buffer is harmless;
+      // reject only when the pointer or size changed, which would
+      // race the remote side's OOB-based generation tracking.
+      if (it->second.address == reinterpret_cast<uintptr_t>(local_buf) &&
+          it->second.length == len) {
+        return true;  // same buffer, no-op
+      }
+      std::cerr << "[WARN] reg_mr: buffer_id " << buffer_id
+                << " already registered with different pointer/size;"
+                << " call dereg_mr first\n";
+      return false;
+    }
+  }
+
   MR mr = mr_manager_.create_local_mr(buffer_id, local_buf, len).mr;
   if (mr.address == 0 || mr.length == 0) return false;
 
@@ -1276,17 +1356,13 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   }
 
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    (void)ensure_rdma_memory_registered(buffer_id, local_buf, len);
+    if (!ensure_rdma_memory_registered(buffer_id, local_buf, len)) return false;
     uint32_t rkey = rdma_adapter_->get_memory_rkey(buffer_id);
     if (rkey != 0) {
       mr.key = rkey;
       std::lock_guard<std::mutex> lk(resource_mu_);
       local_buffer_to_mr_[buffer_id].key = rkey;
     }
-  }
-
-  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    (void)ensure_uccl_memory_registered(buffer_id, local_buf, len);
   }
 
   if (!publish || !exchanger_client_ || !exchanger_client_->valid()) {
@@ -1314,13 +1390,6 @@ bool Communicator::dereg_mr(uint32_t buffer_id) {
   }
   uint32_t const registered_id = buffer_id;
 
-  if (registered_id != 0 && uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-    if (uccl_registered_mrs_.erase(registered_id) > 0) {
-      uccl_adapter_->deregister_memory(registered_id);
-    }
-    uccl_direct_reg_failed_mrs_.erase(registered_id);
-  }
   if (registered_id != 0 && rdma_adapter_ && rdma_adapter_->is_initialized()) {
     std::lock_guard<std::mutex> lk(rdma_reg_mu_);
     if (rdma_registered_mrs_.erase(registered_id) > 0) {
@@ -1349,11 +1418,15 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
   uint64_t last_gen = 0;
+  bool have_last_gen = false;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
     auto it =
         last_mr_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
-    if (it != last_mr_generation_.end()) last_gen = it->second;
+    if (it != last_mr_generation_.end()) {
+      last_gen = it->second;
+      have_last_gen = true;
+    }
   }
 
   constexpr int kPollMs = 10;
@@ -1380,14 +1453,20 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
       continue;
     }
 
-    if (payload.generation != last_gen) break;  // new data — accept
+    // First-ever resolve must be accepted unconditionally: the initial publish
+    // generation (0) equals the default last_gen (0), so a pure generation
+    // comparison would loop forever. De-duplicate by generation only after
+    // that.
+    if (!have_last_gen || payload.generation != last_gen) break;
 
     // Same generation, check if we already have it cached (CCL repeat calls)
     {
       std::lock_guard<std::mutex> lk(resource_mu_);
       auto it = remote_buffer_to_mr_.find(owner_rank);
-      if (it != remote_buffer_to_mr_.end() && it->second.count(buffer_id))
-        return true;
+      if (it != remote_buffer_to_mr_.end()) {
+        auto jt = it->second.find(buffer_id);
+        if (jt != it->second.end() && jt->second.key != 0) return true;
+      }
     }
 
     if (timeout_ms >= 0) {
@@ -1455,6 +1534,20 @@ MR Communicator::get_mr(int owner_rank, uint32_t buffer_id) const {
 bool Communicator::reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
                            bool publish) {
   if (buffer_id == 0) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(resource_mu_);
+    auto it = local_buffer_to_ipc_.find(buffer_id);
+    if (it != local_buffer_to_ipc_.end()) {
+      if (it->second.bytes == len && it->second.is_local) {
+        // Same size, still local — idempotent re-registration.
+        return true;
+      }
+      std::cerr << "[WARN] reg_ipc: buffer_id " << buffer_id
+                << " already registered; call dereg_ipc first\n";
+      return false;
+    }
+  }
 
   IPCItem local{};
   if (local_buf != nullptr && len != 0) {
@@ -1526,11 +1619,15 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
   uint64_t last_gen = 0;
+  bool have_last_gen = false;
   {
     std::lock_guard<std::mutex> lk(mr_gen_mu_);
     auto it =
         last_ipc_generation_.find((uint64_t(owner_rank) << 32) | buffer_id);
-    if (it != last_ipc_generation_.end()) last_gen = it->second;
+    if (it != last_ipc_generation_.end()) {
+      last_gen = it->second;
+      have_last_gen = true;
+    }
   }
 
   constexpr int kPollMs = 10;
@@ -1548,25 +1645,24 @@ bool Communicator::wait_ipc(int owner_rank, uint32_t buffer_id,
       continue;
     }
 
-    // New generation — update tracking and check validity.
-    // If the entry is invalid (e.g. a dereg_ipc publish that raced
-    // ahead of the next reg_ipc), skip it and keep polling for a
-    // valid one.
-    if (info.generation != last_gen) {
+    // First-ever resolve, or a newer publish. The initial publish generation
+    // (0) equals the default last_gen (0); without the have_last_gen guard a
+    // re-resolve of an already-resolved buffer (generation unchanged) would
+    // spin forever. Skip stale (invalid) deregister entries.
+    if (!have_last_gen || info.generation != last_gen) {
       std::lock_guard<std::mutex> lk(mr_gen_mu_);
       last_ipc_generation_[(uint64_t(owner_rank) << 32) | buffer_id] =
           info.generation;
       last_gen = info.generation;
+      have_last_gen = true;
       if (!info.valid) {
         continue;  // stale deregister entry — wait for next publish
       }
       break;
     }
 
-    // Same generation — the remote peer may not have published a
-    // new entry yet (e.g., still running the previous iteration).
-    // Continue polling until a generation change is observed.
-    continue;
+    // Same generation we already resolved successfully before: reuse it.
+    return true;
   }
 
   IPCItem state{};
@@ -1708,8 +1804,21 @@ bool Communicator::register_buffer(uint32_t buffer_id, void* ptr, size_t len) {
 
 bool Communicator::resolve_remote_buffer(int peer_rank, uint32_t buffer_id,
                                          int timeout_ms) {
-  return wait_mr(peer_rank, buffer_id, timeout_ms) &&
-         wait_ipc(peer_rank, buffer_id, timeout_ms);
+  if (!wait_mr(peer_rank, buffer_id, timeout_ms) ||
+      !wait_ipc(peer_rank, buffer_id, timeout_ms))
+    return false;
+  for (int retry = 0; retry < 10; ++retry) {
+    MR mr = get_mr(peer_rank, buffer_id);
+    if (mr.key != 0) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!wait_mr(peer_rank, buffer_id, timeout_ms >= 0 ? timeout_ms : 30000))
+      break;
+    {
+      std::lock_guard<std::mutex> lk(mr_gen_mu_);
+      last_mr_generation_.erase((uint64_t(peer_rank) << 32) | buffer_id);
+    }
+  }
+  return true;
 }
 
 }  // namespace Transport

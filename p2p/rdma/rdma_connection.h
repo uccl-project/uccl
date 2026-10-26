@@ -107,7 +107,15 @@ class SendConnection : public RDMAConnection {
   }
 
   // ── One-sided transfer ─────────────────────────────────────────────────────
+  // Terminal posting failure; already-posted chunks have been drained.
+  static constexpr int kPostError = -3;
   int64_t post_write_or_read(std::shared_ptr<RDMASendRequest> req);
+
+  // True iff a write of msg_size bytes with this ctx would take the
+  // split-first compression path in post_write_or_read().
+  bool will_compress_write(SendType send_type, size_t msg_size,
+                           CompressCtx const& compress_ctx) const;
+  bool will_compress_write(std::shared_ptr<RDMASendRequest> const& req) const;
 
   // max_iov_bytes: largest iov in the batch. Small write batches below
   // kMinCompressBytes can stay on the raw path even when compression is
@@ -144,21 +152,24 @@ class SendConnection : public RDMAConnection {
   std::mutex send_routine_mu_;
 
   uccl::cc::CongestionControlState cc_;
+  // The poller updates CC state; senders only read this window snapshot.
+  std::atomic<size_t> cc_window_bytes_{0};
   std::atomic<uint32_t> chunk_tsc_counter_{0};
+  // Keep byte bookkeeping independent of CQ polling and CC updates.
+  std::mutex cc_send_mu_;
+  std::unordered_map<uint32_t, size_t> cc_send_bytes_;
 
   // Compressed-write state
   std::shared_ptr<RegMemBlock> ack_ring_;
   RemoteMemInfo remote_decompress_buf_;
-  std::atomic<uint64_t> next_ack_slot_{0};
   struct PendingCompressed {
     WriteReqMeta meta;
-    uint32_t ack_slot = 0;
     uint64_t arena_offset = 0;
     uint64_t arena_bytes = 0;
     bool meta_pushed = false;
   };
   std::mutex pending_compressed_mu_;
-  std::unordered_map<int64_t, PendingCompressed> pending_compressed_;
+  std::unordered_map<uint32_t, PendingCompressed> pending_compressed_;
   std::atomic<size_t> pending_compressed_count_{0};
 
   // Per-chunk inflight byte counter for CC window checks.
@@ -196,6 +207,12 @@ class SendConnection : public RDMAConnection {
   size_t current_inflight_bytes();
 
   // ── Internal posting ───────────────────────────────────────────────────────
+  int64_t submit_request(RDMADataChannel* channel,
+                         std::shared_ptr<RDMASendRequest> const& req,
+                         bool immediate = false);
+
+  void drain_failed_request(int64_t wr_id, size_t posted_chunks);
+
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
   bool post_request_on_channel(std::shared_ptr<RDMASendRequest> req);
@@ -208,17 +225,17 @@ class SendConnection : public RDMAConnection {
                          int& expected_chunk_count);
 
   // Post remaining chunks from a previously paused request.
-  // Returns true if all chunks are sent, false if still CC-blocked.
-  bool drain_pending_chunks();
+  // Returns 1 if done, 0 if CC-blocked, kPostError on posting failure.
+  int drain_pending_chunks();
 
-  void post_chunked_request(std::shared_ptr<RDMASendRequest> req);
+  bool post_chunked_request(std::shared_ptr<RDMASendRequest> req);
 
   // ── Compression send path ──────────────────────────────────────────────────
   // Post `num_chunks` equal-sized chunks of a compressed segment, round-robin
   // across data channels. Bypasses ChunkSplitStrategy to keep WR count low.
-  void post_compressed_segment(std::shared_ptr<RDMASendRequest> const& req,
+  bool post_compressed_segment(std::shared_ptr<RDMASendRequest> const& req,
                                size_t seg_size, size_t num_chunks,
-                               size_t num_channels);
+                               size_t num_channels, size_t posted_before);
 
   // Two-phase compressed RDMA WRITE into one decompress_buffer slot.
   // WriteReqMeta is pushed after all data WCs land (see poll_data_channels).
@@ -274,7 +291,6 @@ class RecvConnection : public RDMAConnection {
 
   void handle_compressed_write_arrival(WriteReqMeta const& m);
 
-  // Context for the async-decompress callback path (currently unused).
   struct AsyncAckCtx {
     int64_t wr_id;
     uint32_t ack_slot;

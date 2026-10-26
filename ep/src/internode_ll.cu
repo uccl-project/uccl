@@ -113,7 +113,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
 #ifdef PER_EXPERT_BATCHING
   // Global counter slots used for batching sends to each top-k destination.
-  constexpr int kNumMaxTopK = 9;
+  constexpr int kNumMaxTopK = 16;
   __shared__ int shared_send_slots[kNumMaxTopK];
   __shared__ int shared_dst_experts[kNumMaxTopK];
 #endif
@@ -349,9 +349,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #ifdef PER_EXPERT_BATCHING
   // Grid-wide sync before batch-send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  // Reset counter after sync so send-only launches (return_recv_hook) do not
-  // leave a stale value that deadlocks the next dispatch.
-  amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
+  // Each reset counter is used once per kernel so every CTA can observe zero.
+  amd::grid_sync_then_zero(grid_sync_barrier_ptr + 1, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -667,11 +666,11 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int max_nvl_peers, int low_latency_buffer_idx,
               void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
               void* atomic_buffer_ptr, int64_t* rdma_recv_count_internode) {
-  constexpr int kNumMaxTopK = 9;
+  constexpr int kNumMaxTopK = 16;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
   EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);
-  EP_HOST_ASSERT(kNumMaxTopK + 1 <= num_warp_groups * num_warps_per_group);
+  EP_HOST_ASSERT(num_topk + 1 <= num_warp_groups * num_warps_per_group);
 
   auto const num_warps = num_warp_groups * num_warps_per_group;
   auto const num_sms = ceil_div(num_experts, num_warp_groups);
@@ -685,7 +684,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
   auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
-  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+  EP_HOST_ASSERT((num_experts * 3 + 2) * sizeof(int) <= NUM_WORKSPACE_BYTES);
 #else
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;  // Unused in legacy path.
@@ -823,7 +822,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     int offset, num_tokens_to_send;
     unpack2(layout, num_tokens_to_send, offset);
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
     // TMA stuffs
     constexpr int kNumTMABufferBytes = sizeof(int4) * WARP_SIZE * kNumUnrolls;
     constexpr int kNumStages = 3;
@@ -908,6 +907,11 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         // TODO:  Simulated cast
         EP_DEVICE_ASSERT(not kUseLogFMT);
+        UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
+                           cpy_src_int4_ptr, ld_nc_global, st_na_global);
+
+#elif defined(DISABLE_SM90_FEATURES)
+        // Non-SM90 NVIDIA path: simple warp copy (no TMA available)
         UNROLLED_WARP_COPY(7, lane_id, hidden_bf16_int4, cpy_dst_int4_ptr,
                            cpy_src_int4_ptr, ld_nc_global, st_na_global);
 
@@ -1022,7 +1026,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 #endif
       }
 
-#if defined(__NVCC__)
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
       // Flush all stores
       tma_store_wait();
       __syncwarp();
@@ -1230,7 +1234,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
              void* rdma_buffer_ptr, void* atomic_buffer_ptr,
              int64_t* rdma_recv_flag_internode) {
-  constexpr int kNumMaxTopk = 9;
+  constexpr int kNumMaxTopk = 16;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
   EP_HOST_ASSERT(num_warp_groups > 0 and num_warps_per_group > 0);

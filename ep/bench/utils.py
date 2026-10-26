@@ -23,15 +23,6 @@ except ImportError as exc:
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
-# import deep_ep as ep
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
-
 
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
     x, y = x.double() + 1, y.double() + 1
@@ -60,7 +51,6 @@ def init_dist(local_rank: int, num_local_ranks: int):
         "world_size": world_size,
         "rank": node_rank,
     }
-    print(params)
     if "device_id" in sig.parameters:
         # noinspection PyTypeChecker
         params["device_id"] = torch.device(f"cuda:{local_rank}")

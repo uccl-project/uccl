@@ -1,6 +1,6 @@
 #pragma once
 
-#include "jring.h"
+#include "util/jring.h"
 #include <cstdarg>
 #include <cstddef>
 #include <cstdlib>

@@ -1,3 +1,30 @@
 [build-system]
 requires = ["setuptools>=42", "wheel", "pybind11>=2.6.0", "nanobind>=2.0.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "uccl"
+version = "0.1.1"
+description = "UCCL: Ultra and Unified CCL"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = ["intervaltree"]
+
+[project.optional-dependencies]
+rocm = []
+
+[project.urls]
+Homepage = "https://github.com/uccl-project/uccl"
+
+# Non-CUDA dev tools — install via `uv sync --group dev`
+# For torch + CUDA, use ep/install_deps.sh (which auto-detects the CUDA version).
+[dependency-groups]
+dev = [
+    "black>=24.0.0",
+    "clang-format==14.0.6",
+    "nanobind>=2.0.0",
+    "paramiko",
+    "pybind11>=2.6.0",
+    "pytest",
+]

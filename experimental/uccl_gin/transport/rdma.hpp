@@ -105,6 +105,9 @@ class AtomicsImm {
   constexpr static int kREORDERABLE = 28;
   constexpr static int kBUFFER_IDX = 29;
   constexpr static int kIS_COMBINE = 30;
+  // PackAtomicWithSeq reuses this legacy phase bit as seq[3]. Ordered
+  // UCCL-GIN atomics therefore must stay on the normal-mode receiver path,
+  // which decodes GetSeq() and never interprets this bit as IsCombine().
   constexpr static int kIS_ATOMICS = 31;
 
   constexpr static uint32_t kOFF_MASK = 0x1FFF;  // 13 bits
@@ -379,7 +382,6 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes);
 // signaling buffer path. If false, use host memory for the atomic buffer.
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
 
-// Returns true if at least one IB verbs device is visible on this host.
 bool has_any_nic();
 
 #ifdef USE_DMABUF
@@ -409,7 +411,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx, bool use_normal_mode);
+                             int my_rank, int thread_idx, bool use_normal_mode,
+                             int ranks_per_node);
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,

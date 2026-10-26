@@ -27,6 +27,11 @@
 
 using Endpoint = ::Endpoint;
 
+static_assert(sizeof(gpuIpcMemHandle_t) + sizeof(uintptr_t) + sizeof(size_t) +
+                      sizeof(int) <=
+                  IPC_INFO_SIZE,
+              "Device IPC handle does not fit the existing C API wire format");
+
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
   std::thread local_accept_thread;
@@ -123,6 +128,12 @@ static bool ipc_disabled() {
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+  try {
+    (void)get_transport_type();
+  } catch (std::invalid_argument const& error) {
+    std::cerr << error.what() << std::endl;
+    return nullptr;
+  }
   (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -272,18 +283,19 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   entry.size = size;
 
   // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
-  // can look it up without a per-transfer gpuIpcGetMemHandle call.
+  // can look it up without a per-transfer IPC export.
   int dev_idx = uccl::get_dev_idx((void*)data);
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
-    static constexpr size_t kIpcAlignment = 1ul << 20;
-    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
-    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
-                                        reinterpret_cast<void*>(aligned));
+    GpuIpcExport exported;
+    gpuError_t err = engine->endpoint->export_ipc_range(
+        reinterpret_cast<void*>(data), size, &exported);
     if (err == gpuSuccess) {
-      entry.ipc_info.offset = data - aligned;
+      entry.ipc_info.handle = exported.handle;
+      entry.ipc_info.offset = exported.offset;
       entry.ipc_info.size = size;
-      entry.ipc_info.gpu_idx = dev_idx;
+      entry.ipc_info.gpu_idx =
+          exported.owner_device >= 0 ? exported.owner_device : dev_idx;
       entry.has_ipc = true;
     }
   }
@@ -477,7 +489,9 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
   bool is_done;
-  conn->engine->endpoint->poll_async(transfer_id, &is_done);
+  if (!conn->engine->endpoint->poll_async(transfer_id, &is_done)) {
+    UCCL_LOG(ERROR) << "Transfer failed: " << transfer_id;
+  }
   return is_done;
 }
 
@@ -578,11 +592,13 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
+  result.reserve(notify_list.size());
   for (auto const& oob_msg : notify_list) {
-    notify_msg_t msg;
-    strncpy(msg.name, oob_msg.name, sizeof(msg.name) - 1);
+    notify_msg_t msg{};
+    std::strncpy(msg.name, oob_msg.name.c_str(), sizeof(msg.name) - 1);
     msg.name[sizeof(msg.name) - 1] = '\0';
-    memcpy(msg.msg, oob_msg.msg, sizeof(msg.msg));
+    size_t const n = std::min(oob_msg.msg.size(), sizeof(msg.msg));
+    std::memcpy(msg.msg, oob_msg.msg.data(), n);
     result.push_back(msg);
   }
 
@@ -591,20 +607,39 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   return result;
 }
 
-int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
-  if (!conn || !notify_msg) return -1;
+std::vector<notify_msg_v_t> uccl_engine_get_notifs_v() {
+  std::lock_guard<std::mutex> lock(notify_mutex);
 
-  NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+  std::vector<notify_msg_v_t> result;
+  result.reserve(notify_list.size());
+  for (auto& oob_msg : notify_list) {
+    result.push_back({std::move(oob_msg.name), std::move(oob_msg.msg)});
+  }
+
+  notify_list.clear();
+
+  return result;
+}
+
+static int send_notif_impl(uccl_conn_t* conn, NotifyMsg oob_msg) {
+  // Single choke point for the frame cap: every transport (OOB TCP, NCCL
+  // control socket, CXI) sends through this function, and both the wire
+  // header and the OOB framing prefix carry u32 lengths, so an unchecked
+  // frame >4 GiB would silently wrap and desync the stream.
+  size_t const frame_size =
+      NOTIFY_MSG_HDR_SIZE + oob_msg.name.size() + oob_msg.msg.size();
+  if (frame_size > NOTIFY_MSG_MAX_FRAME_BYTES) {
+    std::cerr << "Notification frame too large (" << frame_size
+              << " bytes, max " << NOTIFY_MSG_MAX_FRAME_BYTES << ")"
+              << std::endl;
+    return -1;
+  }
 
   // Same-process local connection: push notification directly to the local
   // list — no network path needed regardless of transport.
   if (conn->same_process) {
     std::lock_guard<std::mutex> lock(notify_mutex);
-    notify_list.push_back(oob_msg);
+    notify_list.push_back(std::move(oob_msg));
     return 0;
   }
 
@@ -620,10 +655,8 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
                 << std::endl;
       return -1;
     }
-    std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
-    return oob_client->send_meta(conn->oob_conn_key, payload)
-               ? sizeof(NotifyMsg)
-               : -1;
+    std::string payload = serialize_notify_msg(oob_msg);
+    return oob_client->send_meta(conn->oob_conn_key, payload) ? 0 : -1;
   }
 
   if (is_nccl_transport()) {
@@ -642,10 +675,29 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     return -1;
   }
 
-  std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
-  bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
+  std::string payload = serialize_notify_msg(oob_msg);
+  return oob_client->send_meta(conn->oob_conn_key, payload) ? 0 : -1;
+}
 
-  return ok ? sizeof(NotifyMsg) : -1;
+int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
+  if (!conn || !notify_msg) return -1;
+
+  NotifyMsg oob_msg;
+  oob_msg.name = notify_msg->name;
+  // NIXL memcpy's a binary blob into msg and reads it back with
+  // sizeof(notify_msg_t::msg), so copy the full fixed buffer.
+  oob_msg.msg.assign(notify_msg->msg, sizeof(notify_msg->msg));
+  return send_notif_impl(conn, std::move(oob_msg));
+}
+
+int uccl_engine_send_notif_v(uccl_conn_t* conn,
+                             notify_msg_v_t const* notify_msg) {
+  if (!conn || !notify_msg) return -1;
+
+  NotifyMsg oob_msg;
+  oob_msg.name = notify_msg->name;
+  oob_msg.msg = notify_msg->msg;
+  return send_notif_impl(conn, std::move(oob_msg));
 }
 
 // Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).

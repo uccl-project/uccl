@@ -1,9 +1,10 @@
 #pragma once
 
 #include "../memory/ipc_manager.h"
-#include "../util/jring.h"
 #include "gpu_rt.h"
+#include "ipc_signal_ring.h"
 #include "transport_adapter.h"
+#include "util/jring.h"
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -27,24 +28,15 @@ struct IpcDataCompletion {
   std::atomic<uint64_t> last_completed[2];  // [0] = dir 0, [1] = dir 1
 };
 
-static constexpr size_t kSignalRingSize = 4096;  // power of two
-
-struct SignalSlot {
-  std::atomic<bool> ready{false};
-  uint64_t tag{0};
-};
-
-struct PeerSignalRing {
-  SignalSlot slots[kSignalRingSize];
-  std::atomic<uint64_t> write_idx{0};
-  std::atomic<uint64_t> read_idx{0};
-};
-
 class IpcAdapter final : public TransportAdapter {
  public:
   IpcAdapter(Communicator* comm, std::string ring_namespace, int gpu_id);
   ~IpcAdapter() override;
   void shutdown();
+
+  // Signal worker loops to exit without joining or releasing resources.
+  // Use when external threads may still be calling into the adapter.
+  void stop();
 
   uint64_t next_send_match_seq(int peer);
   uint64_t next_recv_match_seq(int peer);
@@ -61,15 +53,25 @@ class IpcAdapter final : public TransportAdapter {
                              unsigned comm_rid) override;
   unsigned wait_signal_async(int peer, uint64_t tag, std::optional<WaitTarget>,
                              unsigned comm_rid) override;
+  bool supports_put_signal() const override { return true; }
+  unsigned send_put_signal_async(int peer, void* local_ptr, uint32_t local_buf,
+                                 void* remote_ptr, uint32_t remote_buf,
+                                 size_t len, uint64_t tag,
+                                 unsigned comm_rid) override;
 
   // Drain signal tags from the peer's shared-memory signal ring.
   // Called directly by Communicator::drain_ipc_signals().
   size_t drain_signal_tags(int peer_rank, uint64_t* tags, size_t max);
 
+  // GPU-visible address of the peer's signal ring (zero-copy host
+  // mapping registered when the peer path was opened), or nullptr when
+  // unavailable. Device kernels write fused PutSignal tags through it.
+  void* peer_signal_ring_device_ptr(int peer) const;
+
   void close_comp(int peer_rank);
 
  private:
-  enum class ReqType : uint8_t { DataPut, DataWait };
+  enum class ReqType : uint8_t { DataPut, DataWait, PutSignal };
 
   struct RingElem {
     unsigned comm_rid;
@@ -79,12 +81,14 @@ class IpcAdapter final : public TransportAdapter {
     void* local_ptr;
     void* remote_ptr;
     size_t bytes;
+    uint64_t tag = 0;  // PutSignal: signal tag written after data lands
   };
 
   struct PeerComp {
     IpcDataCompletion* local = nullptr;
     IpcDataCompletion* remote = nullptr;
     PeerSignalRing* signal_ring = nullptr;  // in same SHM as local
+    void* remote_device = nullptr;  // remote mapping, GPU-visible (zero-copy)
     int shm_fd = -1;
     size_t shm_size = 0;
     std::string shm_name;
@@ -94,6 +98,10 @@ class IpcAdapter final : public TransportAdapter {
   void recv_worker();
   bool send_one(RingElem* e);
   bool recv_one(RingElem* e);
+  // Write a signal tag into the peer's shm ring. Multi-producer safe:
+  // both the executor's enqueue thread (plain signals) and the send
+  // worker (fused PutSignal) publish through this.
+  bool write_signal_ring(int peer, uint64_t tag);
 
   bool connect_to(int rank);
   bool accept_from(int rank);

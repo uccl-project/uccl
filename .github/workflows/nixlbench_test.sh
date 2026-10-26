@@ -71,7 +71,10 @@ if [ ! -x "${NIXL_DEPS_DIR}/bin/cmake" ] || [ ! -e "${NIXL_DEPS_DIR}/lib/cmake/g
     fi
 fi
 
-export PATH="${NIXL_DEPS_DIR}/bin:${PATH}"
+# Prefer /usr/local/cuda (13.x) over apt's /usr/bin/nvcc (12.0). Meson's
+# add_languages('CUDA') picks nvcc from PATH; the older toolkit fails Ubuntu 24.04.
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+export PATH="${CUDA_HOME}/bin:${NIXL_DEPS_DIR}/bin:${PATH}"
 export CMAKE_PREFIX_PATH="${NIXL_INSTALL_DIR}:${NIXL_DEPS_DIR}:${CMAKE_PREFIX_PATH:-}"
 export PKG_CONFIG_PATH="${NIXL_DEPS_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 export LD_LIBRARY_PATH="${NIXL_DEPS_DIR}/lib:${LD_LIBRARY_PATH:-}"

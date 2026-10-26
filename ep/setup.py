@@ -245,6 +245,11 @@ if __name__ == "__main__":
 
         # GH200 (Grace Hopper) Detection
         has_gh200 = cpu_is_arm64 and gpu_is_hopper
+        # UCCL_EP_DISABLE_GH200=1: build the generic Hopper + RDMA path. The GH200
+        # path allocates the atomic buffer with cudaMallocManaged, which plain
+        # ibv_reg_mr cannot register on IB without ODP ("Bad address").
+        if os.getenv("UCCL_EP_DISABLE_GH200", "0") == "1":
+            has_gh200 = False
         if has_gh200:
             print(
                 f"GH200 detected (GPU: {gpu_name}, CPU: {arch}), building with GH200 support"
@@ -337,10 +342,9 @@ if __name__ == "__main__":
                     " (perhaps inside a container)"
                 )
 
-        # Fallback: gfx94x — the generic CDNA3/CDNA4 family target that
-        # covers both gfx942 (MI300X) and gfx950 (MI355X) on a sufficiently
-        # recent ROCm/LLVM.
-        device_arch = env_arch or detected_amd_arch or "gfx94x"
+        # Fallback: gfx942, the concrete compiler target for MI300A/MI300X
+        # supplied by TheRock's gfx94X-dcgpu package family.
+        device_arch = env_arch or detected_amd_arch or "gfx942"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
