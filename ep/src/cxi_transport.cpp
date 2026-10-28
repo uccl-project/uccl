@@ -8,8 +8,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <sys/uio.h>
+#include <unistd.h>
 
 CxiTransport::~CxiTransport() { destroy(); }
 
@@ -134,11 +136,7 @@ fi_info* select_cxi_info(fi_info* infos, int local_rank) {
                            "; available domains: " + available);
 }
 
-}  // namespace
-
-void CxiTransport::init(ProxyCtx& ctx) {
-  ctx_ = &ctx;
-
+fi_info* get_cxi_info() {
   fi_info* hints = fi_allocinfo();
   if (!hints) throw std::runtime_error("fi_allocinfo failed");
 
@@ -155,12 +153,61 @@ void CxiTransport::init(ProxyCtx& ctx) {
   int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints, &info);
   fi_freeinfo(hints);
   check_fi(rc, "fi_getinfo(cxi)");
+  return info;
+}
+
+// The proxy threads of a rank open their CXI resources at the same time. Some
+// HPE Slingshot builds of the CXI provider resolve the job's service id from
+// SLINGSHOT_DEVICES / SLINGSHOT_SVC_IDS inside fi_getinfo without locking:
+// concurrent calls can pick another NIC's service id (fatal when the NICs'
+// service ids differ: cxil_alloc_lni returns -EPERM and fi_domain -FI_EINVAL)
+// and can corrupt the heap. The bad id stays in that fi_info, so a retry has to
+// fetch a new one. Open one thread at a time.
+std::mutex& cxi_open_mutex() {
+  static std::mutex mu;
+  return mu;
+}
+
+// UCCL_CXI_DOMAIN_RETRIES: fi_domain retries with a fresh fi_info (default 3,
+// 50 ms apart; 0 = a single attempt).
+int cxi_domain_retries() {
+  static int const retries = [] {
+    char const* e = std::getenv("UCCL_CXI_DOMAIN_RETRIES");
+    return e ? std::atoi(e) : 3;
+  }();
+  return retries;
+}
+
+}  // namespace
+
+void CxiTransport::init(ProxyCtx& ctx) {
+  ctx_ = &ctx;
+
+  std::lock_guard<std::mutex> lock(cxi_open_mutex());
+  fi_info* info = get_cxi_info();
 
   try {
     fi_info* selected = select_cxi_info(info, ctx.local_rank);
 
     check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr), "fi_fabric");
-    check_fi(fi_domain(fabric_, selected, &domain_, nullptr), "fi_domain");
+    int rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    for (int attempt = 1; rc && attempt <= cxi_domain_retries(); ++attempt) {
+      std::fprintf(stderr,
+                   "[CXI] fi_domain(%s) failed: %s; retrying with a fresh "
+                   "fi_info (%d)\n",
+                   selected->domain_attr->name, fi_strerror(-rc), attempt);
+      fi_close(&fabric_->fid);
+      fabric_ = nullptr;
+      fi_freeinfo(info);
+      info = nullptr;
+      usleep(50000);
+      info = get_cxi_info();
+      selected = select_cxi_info(info, ctx.local_rank);
+      check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr),
+               "fi_fabric");
+      rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    }
+    check_fi(rc, "fi_domain");
 
     fi_cq_attr cq_attr = {};
     cq_attr.format = FI_CQ_FORMAT_DATA;
