@@ -28,17 +28,17 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
 
 ncclResult_t ncclSend(void const* sendbuff, size_t count,
                       ncclDataType_t datatype, int peer, ncclComm_t comm,
-                      cudaStream_t stream) {
+                      gpuStream_t stream) {
   using FnType = ncclResult_t (*)(void const*, size_t, ncclDataType_t, int,
-                                  ncclComm_t, cudaStream_t);
+                                  ncclComm_t, gpuStream_t);
   static FnType fn = reinterpret_cast<FnType>(nccl_resolve("ncclSend"));
   return fn(sendbuff, count, datatype, peer, comm, stream);
 }
 
 ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype,
-                      int peer, ncclComm_t comm, cudaStream_t stream) {
+                      int peer, ncclComm_t comm, gpuStream_t stream) {
   using FnType = ncclResult_t (*)(void*, size_t, ncclDataType_t, int,
-                                  ncclComm_t, cudaStream_t);
+                                  ncclComm_t, gpuStream_t);
   static FnType fn = reinterpret_cast<FnType>(nccl_resolve("ncclRecv"));
   return fn(recvbuff, count, datatype, peer, comm, stream);
 }

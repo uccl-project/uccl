@@ -162,6 +162,11 @@ class Proxy {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;
   std::vector<std::deque<std::pair<uint64_t, size_t>>> fifo_pending_;
+  // Destination rank of each pending FIFO command (in step with
+  // fifo_pending_; -1 when it posts on no peer QP) and pending commands per
+  // destination: each proxy thread has its own QPs per peer.
+  std::vector<std::deque<int>> fifo_pending_dst_;
+  std::vector<size_t> dst_pending_;
 #else
   std::vector<uint64_t> ring_tails_;
   std::vector<size_t> ring_seen_;

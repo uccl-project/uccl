@@ -112,6 +112,23 @@ class Buffer:
             raise NotImplementedError(
                 "UCCL EP does not currently support enable_shrink=True"
             )
+        # The high-throughput internode kernels split ranks by
+        # NUM_MAX_NVL_PEERS and assume full nodes; with fewer GPUs per node the
+        # RDMA buffer hint is 0 bytes and setup crashes later. Fail here.
+        local_world = int(os.environ.get("LOCAL_WORLD_SIZE", -1))
+        max_nvl_peers = (
+            ep.num_max_nvl_peers() if hasattr(ep, "num_max_nvl_peers") else 8
+        )
+        if (
+            not low_latency_mode
+            and 0 < local_world < group.size()
+            and local_world != max_nvl_peers
+        ):
+            raise RuntimeError(
+                f"this build's high-throughput kernels assume {max_nvl_peers} GPUs per node "
+                f"(LOCAL_WORLD_SIZE={local_world}); rebuild with NUM_MAX_NVL_PEERS={local_world} "
+                "or use the low-latency (dedup) path"
+            )
 
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
@@ -603,6 +620,194 @@ class Buffer:
             hook,
         )
 
+    def low_latency_dispatch_dedup(
+        self,
+        x: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        num_max_dispatch_tokens_per_rank: int,
+        num_experts: int,
+        use_fp8: bool = True,
+        round_scale: bool = False,
+        use_ue8m0: bool = False,
+        async_finish: bool = False,
+        return_recv_hook: bool = False,
+    ):
+        """
+        Like `low_latency_dispatch`, but each token is sent once per destination rank instead of once per
+        expert, carrying its top-k ids and weights; the receiver expands it into the same per-expert packed
+        layout. The weights are applied on the expert side by `low_latency_combine_dedup`, which sends one
+        reduced row per (token, rank). Requires top-k <= 8.
+
+        Returns the same tuple as `low_latency_dispatch`; the handle must be passed to
+        `low_latency_combine_dedup`.
+        """
+        for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
+        num_ranks = self.group.size()
+        num_local_experts = num_experts // num_ranks
+        num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
+        packed_recv_x = torch.empty(
+            (num_local_experts, num_recv_tokens, x.size(1)),
+            device=x.device,
+            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
+        )
+        packed_recv_count = torch.empty(
+            (num_local_experts,), device=x.device, dtype=torch.int32
+        )
+        packed_recv_src_info = torch.empty(
+            (num_local_experts, num_recv_tokens), device=x.device, dtype=torch.int32
+        )
+        packed_recv_layout_range = torch.empty(
+            (num_local_experts, num_ranks), device=x.device, dtype=torch.int64
+        )
+        # Per (source rank, slot): message header (src token, top-k ids, weights)
+        # [n, 16], packed position for each local top-k entry [n, 8], and
+        # per-source counts [num_ranks], in one int32 allocation. The kernels
+        # get byte offsets into it, so the host path adds no slicing ops (each
+        # torch op costs 15-30 us on a slow-clocked host).
+        dedup_aux = torch.empty(
+            (num_recv_tokens * 24 + num_ranks,), device=x.device, dtype=torch.int32
+        )
+        dedup_hdr_ptr = dedup_aux.data_ptr()
+        dedup_pos_ptr = dedup_hdr_ptr + num_recv_tokens * 16 * 4
+        dedup_count_ptr = dedup_hdr_ptr + num_recv_tokens * 24 * 4
+        packed_recv_x_scales_storage = None
+        packed_recv_x_scales = None
+        packed_recv_x_scales_ptr = 0
+        if use_fp8:
+            packed_recv_x_scales_storage = torch.empty(
+                (
+                    num_local_experts,
+                    x.size(1) // (512 if use_ue8m0 else 128),
+                    num_recv_tokens,
+                ),
+                device=x.device,
+                dtype=torch.int32 if use_ue8m0 else torch.float32,
+            )
+            packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
+            packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+
+        assert topk_weights.dtype == torch.float32 and topk_weights.is_contiguous()
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
+        event, hook = self.runtime.low_latency_dispatch_dedup(
+            x.data_ptr(),
+            x.size(0),
+            x.size(1),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            topk_weights.data_ptr(),
+            packed_recv_x.data_ptr(),
+            packed_recv_x_scales_ptr,
+            packed_recv_count.data_ptr(),
+            packed_recv_src_info.data_ptr(),
+            packed_recv_layout_range.data_ptr(),
+            dedup_hdr_ptr,
+            dedup_pos_ptr,
+            dedup_count_ptr,
+            compute_stream_ptr,
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(use_fp8),
+            bool(round_scale),
+            bool(use_ue8m0),
+            bool(async_finish),
+            bool(return_recv_hook),
+        )
+        handle = (
+            packed_recv_src_info,
+            packed_recv_layout_range,
+            num_max_dispatch_tokens_per_rank,
+            x.size(1),
+            num_experts,
+            dedup_aux,
+            (dedup_hdr_ptr, dedup_pos_ptr, dedup_count_ptr),
+        )
+        tensors_to_record = (
+            x,
+            topk_idx,
+            topk_weights,
+            packed_recv_x,
+            packed_recv_x_scales,
+            packed_recv_count,
+            packed_recv_src_info,
+            packed_recv_layout_range,
+            packed_recv_x_scales_storage,
+            dedup_aux,
+        )
+        if return_recv_hook and hook is None:
+            hook = lambda: None
+        return (
+            (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
+            packed_recv_count,
+            handle,
+            EventOverlap(event, tensors_to_record if async_finish else None),
+            hook,
+        )
+
+    def low_latency_combine_dedup(
+        self,
+        x: torch.Tensor,
+        topk_idx: torch.Tensor,
+        handle: tuple,
+        async_finish: bool = False,
+        return_recv_hook: bool = False,
+        out: Optional[torch.Tensor] = None,
+        compress: bool = False,
+    ):
+        """
+        Reduce-before-send combine for a `low_latency_dispatch_dedup` handle: the expert side sums
+        w_k * x_k over its local experts per received token (weights from the dispatch) and sends one
+        BF16 row; this rank adds one partial per destination rank.
+        With `compress`, rows sent over RDMA use an exact per-row window code (3-bit exponent codes
+        plus escapes); the result is bit-identical to the uncompressed combine.
+        """
+        for proxy in self.proxies:
+            proxy.notify_proxy_thread_adaptive_sleeper()
+        (
+            _src_info,
+            _layout_range,
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_experts,
+            dedup_aux,
+            (dedup_hdr_ptr, dedup_pos_ptr, dedup_count_ptr),
+        ) = handle
+        combined_x = (
+            out
+            if out is not None
+            else torch.empty((topk_idx.size(0), hidden), device=x.device, dtype=x.dtype)
+        )
+        compute_stream_ptr = self._ll_compute_stream_ptr(x.device)
+        event, hook = self.runtime.low_latency_combine_dedup(
+            x.data_ptr(),
+            x.size(0),
+            x.size(1),
+            x.size(2),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            dedup_hdr_ptr,
+            dedup_pos_ptr,
+            dedup_count_ptr,
+            compute_stream_ptr,
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(async_finish),
+            bool(return_recv_hook),
+            combined_x.data_ptr(),
+            bool(compress),
+        )
+        tensors_to_record = (x, topk_idx, dedup_aux, combined_x)
+        if return_recv_hook and hook is None:
+            hook = lambda: None
+        return (
+            combined_x,
+            EventOverlap(event, tensors_to_record if async_finish else None),
+            hook,
+        )
+
     def get_next_low_latency_combine_buffer(self, handle: object):
         """
         Get the raw registered RDMA buffer tensor for next low-latency combine, so that the next combine kernel can skip the copying.
@@ -652,6 +857,47 @@ class Buffer:
             size: the RDMA buffer size recommended.
         """
         return ep.get_low_latency_rdma_size_hint(
+            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+
+    @staticmethod
+    def get_low_latency_ab_rdma_size_hint(
+        num_max_dispatch_tokens_per_rank: int,
+        hidden: int,
+        num_ranks: int,
+        num_experts: int,
+    ) -> int:
+        """
+        RDMA buffer size for alternating the default and the dedup LL kernels on one buffer: the dedup data
+        regions are placed after the default layout so that a peer one call ahead never writes into the
+        other mode's regions.
+        """
+        return ep.get_low_latency_ab_rdma_size_hint(
+            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+
+    @staticmethod
+    def get_low_latency_dedup_rdma_size_hint(
+        num_max_dispatch_tokens_per_rank: int,
+        hidden: int,
+        num_ranks: int,
+        num_experts: int,
+    ) -> int:
+        """
+        Minimum RDMA buffer size for the per-rank dedup LL kernels only
+        (`low_latency_dispatch_dedup` / `low_latency_combine_dedup`): the data regions are sized by ranks,
+        not experts. A buffer of this size cannot run the default LL kernels.
+
+        Arguments:
+            num_max_dispatch_tokens_per_rank: the maximum number of tokens to dispatch, all the ranks must hold the same value.
+            hidden: the hidden dimension of each token.
+            num_ranks: the number of EP group ranks.
+            num_experts: the number of all experts.
+
+        Returns:
+            size: the RDMA buffer size recommended.
+        """
+        return ep.get_low_latency_dedup_rdma_size_hint(
             num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
         )
 
