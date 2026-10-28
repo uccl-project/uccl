@@ -46,6 +46,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+static int ep_gpu_mr_ro_flag() {
+  char const* e = std::getenv("UCCL_EP_GPU_MR_RO");
+  return (e && e[0] == '1') ? IBV_ACCESS_RELAXED_ORDERING : 0;
+}
+
 #ifdef USE_DMABUF
 // ---------------------------------------------------------------------------
 // DMA-BUF based GPU memory registration (avoids nvidia_peermem dependency)
@@ -675,8 +680,12 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
+  // UCCL_EP_GPU_MR_RO=1 adds PCIe relaxed ordering to the IB GPU MR. Without
+  // it, PCIe write ordering throttles RDMA writes into GPU memory (a cliff
+  // between 128 KB and 4 MB). Tails are native atomics, which cannot pass
+  // earlier relaxed writes, so ordering still holds.
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+                     IBV_ACCESS_REMOTE_ATOMIC | ep_gpu_mr_ro_flag();
 #else
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
@@ -902,7 +911,7 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
 
 #ifndef EFA
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+                     IBV_ACCESS_REMOTE_ATOMIC | ep_gpu_mr_ro_flag();
 #else
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
@@ -1544,8 +1553,10 @@ static void post_rdma_async_batched_normal_mode(
       std::abort();
       continue;
     } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
+                   (S.num_local_ranks > 0 ? S.num_local_ranks : MAX_NUM_GPUS) !=
                0) {
+      // Normal mode only crosses nodes to the same local GPU index; ranks per
+      // node is the node's local rank count (not always MAX_NUM_GPUS).
       // NOTE(MaoZiming): this should not happen.
       printf("Posting rdma to a different rank\n");
       std::abort();

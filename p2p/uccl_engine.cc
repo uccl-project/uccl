@@ -27,12 +27,10 @@
 
 using Endpoint = ::Endpoint;
 
-#if defined(UCCL_USE_MUSA)
 static_assert(sizeof(gpuIpcMemHandle_t) + sizeof(uintptr_t) + sizeof(size_t) +
                       sizeof(int) <=
                   IPC_INFO_SIZE,
-              "MUSA IPC handle does not fit the existing C API wire format");
-#endif
+              "Device IPC handle does not fit the existing C API wire format");
 
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
@@ -130,14 +128,12 @@ static bool ipc_disabled() {
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
-#if defined(UCCL_USE_MUSA)
   try {
     (void)get_transport_type();
   } catch (std::invalid_argument const& error) {
     std::cerr << error.what() << std::endl;
     return nullptr;
   }
-#endif
   (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
