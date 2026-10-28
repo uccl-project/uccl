@@ -1697,18 +1697,20 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
 int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
                              void** data, int* size, int n,
                              struct ucclRequest* ureq) {
+  ureq->context = flow;
+  ureq->type = ReqFlush;
+  ureq->rc_or_flush_done = true;
   flow->poll_flow_cq();
 
   int last = flow->check_need_flush(size, n);
   if (last == -1) return 0;
 
 #ifndef __HIP_PLATFORM_AMD__
+  ureq->rc_or_flush_done = false;
   flow->post_flush(mhandles, data, size, n, &ureq->rc_or_flush_done, last);
 #else
   ureq->rc_or_flush_done = true;
 #endif
-
-  ureq->type = ReqFlush;
 
   return 0;
 }
@@ -3094,17 +3096,10 @@ void RDMAContext::uc_rx_rtx_chunk(T* wc_or_cq_ex, uint64_t chunk_addr) {
          reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
-#ifndef __HIP_PLATFORM_AMD__
-  cudaMemcpy(
-      reinterpret_cast<void*>(hdr->remote_addr),
-      reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
-      chunk_len, cudaMemcpyHostToDevice);
-#else
-  UCCL_CHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
+  UCCL_CHECK(gpuMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
                        reinterpret_cast<void*>(chunk_addr +
                                                sizeof(struct retr_chunk_hdr)),
-                       chunk_len, hipMemcpyHostToDevice) == hipSuccess);
-#endif
+                       chunk_len, gpuMemcpyHostToDevice) == gpuSuccess);
 #endif
 
   subflow->pcb.stats_accept_retr++;

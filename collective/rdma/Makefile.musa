@@ -1,0 +1,44 @@
+ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
+
+MUSA_HOME ?= /usr/local/musa
+MUSA_LIBDIR ?= $(MUSA_HOME)/lib
+BUILD_DIR ?= .build/musa
+PLUGIN_SO ?= libmccl-net-uccl.so
+INSTALL_DIR ?= $(ABS_REPO_ROOT)/uccl/lib
+
+INC := -I./ -I$(ABS_REPO_ROOT)/include -I$(ABS_REPO_ROOT)/collective/mccl \
+	-I$(MUSA_HOME)/include
+LIBS_SHARED := -lz -lelf -libverbs -lpthread -ldl \
+	-L$(MUSA_LIBDIR) -lmusart -lmusa \
+	-Wl,-rpath,$(MUSA_LIBDIR)
+
+override CXXFLAGS += -O3 -g -std=c++17 -fPIC -DUCCL_USE_MUSA -MMD -MP \
+	-Wno-pointer-arith -Wno-interference-size
+
+TRANSPORT_SOURCES := eqds.cc param.cc rdma_io.cc transport.cc
+TRANSPORT_OBJECTS := $(addprefix $(BUILD_DIR)/,$(TRANSPORT_SOURCES:.cc=.o))
+PLUGIN_OBJECT := $(BUILD_DIR)/mccl_plugin_musa.o
+
+.PHONY: all clean install
+all: $(PLUGIN_SO)
+
+$(PLUGIN_SO): $(TRANSPORT_OBJECTS) $(PLUGIN_OBJECT)
+	$(CXX) -shared -Wl,--no-undefined -o $@ $^ $(LIBS_SHARED)
+
+$(BUILD_DIR)/%.o: %.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(INC) $(CXXFLAGS) -c $< -o $@
+
+$(PLUGIN_OBJECT): mccl_plugin_musa.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(INC) $(CXXFLAGS) -c $< -o $@
+
+-include $(TRANSPORT_OBJECTS:.o=.d) $(PLUGIN_OBJECT:.o=.d)
+
+install: $(PLUGIN_SO)
+	install -d $(INSTALL_DIR)
+	install -m 755 $(PLUGIN_SO) $(INSTALL_DIR)/
+
+clean:
+	rm -rf $(BUILD_DIR) $(PLUGIN_SO)
