@@ -1697,18 +1697,20 @@ bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
 int RDMAEndpoint::uccl_flush(UcclFlow* flow, struct Mhandle** mhandles,
                              void** data, int* size, int n,
                              struct ucclRequest* ureq) {
+  // Even a no-op flush returns a request that the caller can poll.
+  ureq->type = ReqFlush;
+  ureq->context = flow;
+  ureq->rc_or_flush_done = true;
+
   flow->poll_flow_cq();
 
   int last = flow->check_need_flush(size, n);
   if (last == -1) return 0;
 
 #ifndef __HIP_PLATFORM_AMD__
+  ureq->rc_or_flush_done = false;
   flow->post_flush(mhandles, data, size, n, &ureq->rc_or_flush_done, last);
-#else
-  ureq->rc_or_flush_done = true;
 #endif
-
-  ureq->type = ReqFlush;
 
   return 0;
 }
