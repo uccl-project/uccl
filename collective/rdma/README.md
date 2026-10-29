@@ -78,6 +78,21 @@ make -j
 ```
 </details>
 
+### Flush request regression test
+
+`flush_test` needs one active RDMA NIC and no remote host. It checks request
+initialization, completion polling, and reuse after both posted and no-op flushes.
+It uses registered host memory by default; `--gpu` uses registered GPU memory
+and requires GPUDirect RDMA support.
+
+```bash
+make -C collective/rdma flush_test
+export UCCL_IB_HCA=mlx5_0:1  # Select an active local port.
+./collective/rdma/flush_test --noop
+./collective/rdma/flush_test
+./collective/rdma/flush_test --gpu
+```
+
 ### Running `nccl-tests`:
 
 ```bash
