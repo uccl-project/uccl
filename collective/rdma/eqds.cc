@@ -24,23 +24,13 @@ PullQuanta EQDSCC::compute_pull_target(void* context, uint32_t chunk_size) {
 
   if (pull_target_bytes > kEQDSMaxCwnd) pull_target_bytes = kEQDSMaxCwnd;
 
-  if (pull_target_bytes > credit_pull_ + credit_spec_)
-    pull_target_bytes -= (credit_pull_ + credit_spec_);
+  auto available_credit = credit();
+  if (pull_target_bytes > available_credit)
+    pull_target_bytes -= available_credit;
   else
     pull_target_bytes = 0;
 
   pull_target_bytes += unquantize(pull_);
-
-  uint32_t old_pull_target_bytes = unquantize(last_sent_pull_target_);
-
-  if (!in_speculating_ && credit_spec_ > 0 &&
-      pull_target_bytes - old_pull_target_bytes < PULL_QUANTUM / 2) {
-    if (credit_spec_ > PULL_QUANTUM)
-      credit_spec_ -= PULL_QUANTUM;
-    else
-      credit_spec_ = 0;
-    pull_target_bytes += PULL_QUANTUM;
-  }
 
   last_sent_pull_target_ = quantize_ceil(pull_target_bytes);
 

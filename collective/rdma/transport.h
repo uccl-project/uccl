@@ -596,7 +596,8 @@ class EQDSRDMAContext : public RDMAContext {
     // After receiving a valid ACK, we can exit the pending retransmission
     // state.
     subflow->in_rtx = false;
-    subflow->pcb.eqds_cc.stop_speculating();
+    // An ACK does not supply pull credit. Keep speculation available until
+    // a credit packet arrives so short transfers can still make progress.
   }
 
   void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}
