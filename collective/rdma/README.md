@@ -25,6 +25,27 @@ UCCL_SOCKET_IFNAME:   The control NIC name you want to use for bootstrapping.
 
 For convenience, the NCCL versions, i.e., NCCL_IB_HCA and NCCL_SOCKET_IFNAME, are also available.
 
+### EQDS credit regression tests
+
+The credit-accounting test does not need a device or a remote host:
+
+```bash
+make -C collective/rdma eqds_credit_test
+./collective/rdma/eqds_credit_test
+```
+
+For a native data-integrity test, set `kReceiverCCA = RECEIVER_CCA_EQDS` in
+`transport_config.h`, keeping the default sender CCA, then rebuild and run:
+
+```bash
+make -C collective/rdma eqds_transfer_test
+UCCL_IB_HCA=mlx5_0:1 UCCL_NUM_ENGINES=1 ./collective/rdma/eqds_transfer_test
+```
+
+This uses two local processes and registered host buffers on one active RDMA
+NIC. It checks every byte at five message sizes from 1 byte through 32 MiB.
+Without EQDS enabled, it exits with status 77.
+
 ### run_nccl_test.sh:
 ```
 HOSTFILE:               The MPI host file (e.g., ${UCCL_HOME}/scripts/node_ips/default.txt)
