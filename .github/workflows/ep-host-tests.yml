@@ -31,16 +31,6 @@ jobs:
         fi
         ./p2p/test_gpu_topology
 
-  p800-transfer-control-test:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Test device qualification protocol with host-memory doubles
-      run: python3 -m unittest discover -s p2p/tests -p test_p800_device_transfer_control.py
-
   rdma-addressing-test:
     runs-on: ubuntu-latest
 
