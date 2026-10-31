@@ -2433,6 +2433,13 @@ gpuError_t Endpoint::export_ipc_range(void* ptr, size_t size,
 }
 
 void Endpoint::initialize_engine() {
+  // Host-memory registration can select a different device from the caller's
+  // current device. Keep lazy engine setup from changing subsequent GPU work
+  // on this thread, including when setup throws.
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 

@@ -12,8 +12,6 @@ struct Backend : BackendDefaults {
   static constexpr bool ipc_export_owner = true;
   static constexpr bool cache_ipc_exports = true;
   static constexpr bool staged_network = true;
-  static constexpr bool visible_nvidia_fallback = true;
-  static constexpr bool filter_pci_vendor = true;
   static constexpr RuntimeDiscovery runtime_discovery = RuntimeDiscovery::First;
 };
 }  // namespace uccl::device

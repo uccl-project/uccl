@@ -5,8 +5,6 @@
 namespace uccl::device {
 struct Backend : BackendDefaults {
   static constexpr bool scan_nvidia_proc = true;
-  static constexpr bool visible_nvidia_fallback = true;
-  static constexpr bool filter_pci_vendor = true;
   static constexpr char const* name = "cuda";
   static constexpr char const* runtime_prefix = "cuda";
   static constexpr char const* runtime_library = "libcudart.so";

@@ -15,8 +15,6 @@ struct BackendDefaults {
   static constexpr bool staged_network = false;
   static constexpr size_t dmabuf_granularity = 2ULL << 20;
   static constexpr bool scan_nvidia_proc = false;
-  static constexpr bool visible_nvidia_fallback = false;
   static constexpr RuntimeDiscovery runtime_discovery = RuntimeDiscovery::None;
-  static constexpr bool filter_pci_vendor = false;
 };
 }  // namespace uccl::device
