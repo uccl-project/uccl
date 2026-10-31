@@ -43,6 +43,10 @@ class CxiTransport final : public EpTransport {
   [[noreturn]] static void unavailable();
 
 #ifdef USE_LIBFABRIC_CXI
+  ssize_t read_cq(fi_cq_data_entry* entries, size_t max);
+  template <typename Post>
+  void post_with_backpressure(Post&& post, char const* what);
+
   ProxyCtx* ctx_ = nullptr;
   void* main_buffer_ = nullptr;
   void* atomic_buffer_ = nullptr;
@@ -72,5 +76,8 @@ class CxiTransport final : public EpTransport {
     size_t atomic_operand_slot = static_cast<size_t>(-1);
   };
   std::list<OpContext> op_contexts_;
+  // Completions read while a post waited for TX queue space; poll() returns
+  // them before reading the CQ again.
+  std::vector<fi_cq_data_entry> cq_stash_;
 #endif
 };
