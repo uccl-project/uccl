@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-# Exercise build.sh through its public CLI while replacing only the external
-# Apptainer executable. This keeps the command-line construction under test
-# without building an image or requiring a GPU.
+# Exercise build.sh through its public CLI with mocked Apptainer and host
+# probes, without building an image or requiring a GPU.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +30,13 @@ fi
 printf '%s\n' "$@" >"${UCCL_TEST_CAPTURE:?}"
 EOF
 chmod +x "${FAKE_BIN}/apptainer"
+
+# Use a fixed architecture so ROCm argument checks also run on ARM64 hosts.
+cat >"${FAKE_BIN}/uname" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'x86_64'
+EOF
+chmod +x "${FAKE_BIN}/uname"
 
 # build.sh only queries the libc version in this harness; avoid depending on
 # the host's Python launcher when the test runs under Git Bash on Windows.
