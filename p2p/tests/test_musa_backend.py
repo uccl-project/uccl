@@ -131,7 +131,13 @@ int main() {
 int main() {
   using namespace uccl::device;
   assert(ipc_open_device(0, 3) == 0);
+  // Without peer access the handle is opened in the owner's context.
+  assert(ipc_open_device(0, 5) == 5 && ipc_open_device(5, 1) == 1);
+  assert(ipc_open_device(4, 5) == 4);
+  assert(peer_queries == 4);
+  assert(ipc_open_device(0, 5) == 5 && peer_queries == 4);
   assert(ipc_async_device(0, 3, false) == 3);
+  assert(ipc_async_device(0, 5, false) == 5);
   assert(ipc_async_device(0, 3, true) == 3);
   assert(ipc_async_device(2, -1, false) == 2);
   assert(ipc_async_device(2, -1, true) == 2);
