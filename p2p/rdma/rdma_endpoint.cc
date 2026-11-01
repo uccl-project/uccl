@@ -52,6 +52,19 @@ bool RDMAEndpoint::initialize_rdma_ctx_for_gpu(
     actual_device_ids = device_ids;
   }
 
+  // Without an RDMA NIC there is nothing to build contexts on. Fail with an
+  // error the caller can see instead of tripping the assert in
+  // initialize_contexts (or dividing by zero there when asserts are off).
+  if (actual_device_ids.empty()) {
+    std::string msg = "No RDMA device found for GPU " +
+                      std::to_string(gpu_index) +
+                      "; select one with UCCL_P2P_RDMA_DEV";
+    if (UCCL_P2P_ENABLE_NCCL)
+      msg += ", or set UCCL_P2P_TRANSPORT=nccl on hosts without RDMA NICs";
+    UCCL_LOG(ERROR) << msg;
+    throw std::runtime_error(msg);
+  }
+
   initialize_contexts(actual_device_ids);
   UCCL_LOG(INFO, UCCL_RDMA)
       << "RDMAEndpoint initialized with " << contexts_.size()

@@ -45,6 +45,13 @@ void CxiTransport::destroy() {}
 
 namespace {
 
+// libfabric's CXI provider reads SLINGSHOT_DEVICES, SLINGSHOT_SVC_IDS and
+// SLINGSHOT_VNIS with strtok() during fi_getinfo() (up to at least v2.6), so
+// proxy threads that set up at the same time can misread each other's lists:
+// the NIC then gets no service ID and fi_domain() fails with -FI_ENOSYS, or
+// the process crashes. Serialize the provider calls that parse them.
+std::mutex g_cxi_setup_mu;
+
 void check_fi(int rc, char const* what) {
   if (rc < 0) {
     throw std::runtime_error(std::string(what) +
@@ -156,20 +163,9 @@ fi_info* get_cxi_info() {
   return info;
 }
 
-// The proxy threads of a rank open their CXI resources at the same time. Some
-// HPE Slingshot builds of the CXI provider resolve the job's service id from
-// SLINGSHOT_DEVICES / SLINGSHOT_SVC_IDS inside fi_getinfo without locking:
-// concurrent calls can pick another NIC's service id (fatal when the NICs'
-// service ids differ: cxil_alloc_lni returns -EPERM and fi_domain -FI_EINVAL)
-// and can corrupt the heap. The bad id stays in that fi_info, so a retry has to
-// fetch a new one. Open one thread at a time.
-std::mutex& cxi_open_mutex() {
-  static std::mutex mu;
-  return mu;
-}
-
 // UCCL_CXI_DOMAIN_RETRIES: fi_domain retries with a fresh fi_info (default 3,
-// 50 ms apart; 0 = a single attempt).
+// 50 ms apart; 0 = a single attempt). A service id picked wrongly during
+// fi_getinfo stays in that fi_info, so a retry has to fetch a new one.
 int cxi_domain_retries() {
   static int const retries = [] {
     char const* e = std::getenv("UCCL_CXI_DOMAIN_RETRIES");
@@ -183,7 +179,7 @@ int cxi_domain_retries() {
 void CxiTransport::init(ProxyCtx& ctx) {
   ctx_ = &ctx;
 
-  std::lock_guard<std::mutex> lock(cxi_open_mutex());
+  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
   fi_info* info = get_cxi_info();
 
   try {
@@ -208,6 +204,7 @@ void CxiTransport::init(ProxyCtx& ctx) {
       rc = fi_domain(fabric_, selected, &domain_, nullptr);
     }
     check_fi(rc, "fi_domain");
+    setup_lock.unlock();
 
     fi_cq_attr cq_attr = {};
     cq_attr.format = FI_CQ_FORMAT_DATA;
