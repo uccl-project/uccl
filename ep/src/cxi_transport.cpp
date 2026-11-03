@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <sys/uio.h>
 
@@ -42,6 +43,13 @@ void CxiTransport::destroy() {}
 #else
 
 namespace {
+
+// libfabric's CXI provider reads SLINGSHOT_DEVICES, SLINGSHOT_SVC_IDS and
+// SLINGSHOT_VNIS with strtok() during fi_getinfo() (up to at least v2.6), so
+// proxy threads that set up at the same time can misread each other's lists:
+// the NIC then gets no service ID and fi_domain() fails with -FI_ENOSYS, or
+// the process crashes. Serialize the provider calls that parse them.
+std::mutex g_cxi_setup_mu;
 
 void check_fi(int rc, char const* what) {
   if (rc < 0) {
@@ -152,6 +160,7 @@ void CxiTransport::init(ProxyCtx& ctx) {
   hints->domain_attr->threading = FI_THREAD_DOMAIN;
 
   fi_info* info = nullptr;
+  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
   int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints, &info);
   fi_freeinfo(hints);
   check_fi(rc, "fi_getinfo(cxi)");
@@ -161,6 +170,7 @@ void CxiTransport::init(ProxyCtx& ctx) {
 
     check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr), "fi_fabric");
     check_fi(fi_domain(fabric_, selected, &domain_, nullptr), "fi_domain");
+    setup_lock.unlock();
 
     fi_cq_attr cq_attr = {};
     cq_attr.format = FI_CQ_FORMAT_DATA;
