@@ -3096,17 +3096,10 @@ void RDMAContext::uc_rx_rtx_chunk(T* wc_or_cq_ex, uint64_t chunk_addr) {
          reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
          chunk_len);
 #else
-#ifndef __HIP_PLATFORM_AMD__
-  cudaMemcpy(
-      reinterpret_cast<void*>(hdr->remote_addr),
-      reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
-      chunk_len, cudaMemcpyHostToDevice);
-#else
-  UCCL_CHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
+  UCCL_CHECK(gpuMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
                        reinterpret_cast<void*>(chunk_addr +
                                                sizeof(struct retr_chunk_hdr)),
-                       chunk_len, hipMemcpyHostToDevice) == hipSuccess);
-#endif
+                       chunk_len, gpuMemcpyHostToDevice) == gpuSuccess);
 #endif
 
   subflow->pcb.stats_accept_retr++;
