@@ -236,9 +236,8 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
 
   if (factory_dev->dma_buf_support) props->ptrSupport |= NCCL_PTR_DMABUF;
 
-  if (props->ptrSupport == NCCL_PTR_HOST) {
-    UCCL_DCHECK(0) << "Lack of GPU Direct RDMA support.";
-  }
+  // Host-only support is valid: NCCL can stage network transfers through host
+  // buffers when neither peer memory nor DMA-BUF is available.
 
   // If you regMr has a fast registration cache, set to 1. If set to 0, user
   // buffer registration may be disabled.
