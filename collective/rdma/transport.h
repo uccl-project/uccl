@@ -185,7 +185,8 @@ class IMMDataEQDS : public IMMData {
   inline uint32_t GetTarget(void) { return (imm_data_ >> kPULL_TARGET) & 0xFF; }
 
   inline void SetTarget(uint32_t pull_target) {
-    imm_data_ |= (pull_target & 0xFF) << kPULL_TARGET;
+    imm_data_ = (imm_data_ & ~(0xFFu << kPULL_TARGET)) |
+                ((pull_target & 0xFFu) << kPULL_TARGET);
   }
 };
 
@@ -596,7 +597,8 @@ class EQDSRDMAContext : public RDMAContext {
     // After receiving a valid ACK, we can exit the pending retransmission
     // state.
     subflow->in_rtx = false;
-    subflow->pcb.eqds_cc.stop_speculating();
+    // An ACK does not supply pull credit. Keep speculation available until
+    // a credit packet arrives so short transfers can still make progress.
   }
 
   void EventOnRxNACK(SubUcclFlow* subflow, UcclSackHdr* sack_hdr) override {}

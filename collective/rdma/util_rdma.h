@@ -52,8 +52,8 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
 }
 
-static inline int util_rdma_get_link_speed_from_ibv_speed(int active_speed,
-                                                          int active_width) {
+static inline double util_rdma_get_link_speed_from_ibv_speed(int active_speed,
+                                                             int active_width) {
   return (ncclIbSpeed(active_speed) * ncclIbWidth(active_width)) * 1e6 / 8;
 }
 
