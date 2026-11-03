@@ -185,7 +185,8 @@ class IMMDataEQDS : public IMMData {
   inline uint32_t GetTarget(void) { return (imm_data_ >> kPULL_TARGET) & 0xFF; }
 
   inline void SetTarget(uint32_t pull_target) {
-    imm_data_ |= (pull_target & 0xFF) << kPULL_TARGET;
+    imm_data_ = (imm_data_ & ~(0xFFu << kPULL_TARGET)) |
+                ((pull_target & 0xFFu) << kPULL_TARGET);
   }
 };
 
