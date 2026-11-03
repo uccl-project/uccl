@@ -83,7 +83,8 @@ void EQDS::handle_grant_credit() {
       }
     }
   } else {
-    // No active sender.
+    // Visit each idle sender once; requeued senders wait for the next pass.
+    auto* last = idle_senders_.prev;
     list_for_each_safe(pos, n, &idle_senders_) {
       auto item = list_entry(pos, struct idle_item, idle_link);
       auto* sink = item->eqds_cc;
@@ -94,6 +95,8 @@ void EQDS::handle_grant_credit() {
         // sender.
         list_add_tail(&sink->idle_item.idle_link, &idle_senders_);
       }
+
+      if (pos == last) break;
     }
   }
 }
