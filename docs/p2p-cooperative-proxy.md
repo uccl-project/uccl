@@ -6,6 +6,14 @@ can therefore wait behind an entire large vector. This opt-in implementation
 lets eligible RDMA vectors share the proxy's submission budget and make progress
 before an earlier independent vector completes.
 
+Every NIXL transfer request arrives as one such vector: the NIXL backend's
+`postXfer` turns a request's whole descriptor list into one
+`uccl_engine_read_vector` / `uccl_engine_write_vector` call, which becomes one
+`readv_async` / `writev_async` task. In prefill/decode disaggregation that
+vector can be a sequence's entire KV cache, and an independent request behind
+it waits for the head vector's remaining wire time before its first IOV is
+posted.
+
 Set `UCCL_P2P_COOPERATIVE_PROXY=1` before creating an `Endpoint`. Unset it, or
 set it to `0`, to use the existing blocking scheduler. The shared MR ownership
 change also applies when the switch is off. Hardware correctness and
@@ -56,6 +64,14 @@ Admission is bounded, not prioritized: when every admitted request is blocked,
 for example behind a long transfer at the head of one connection's FIFO, a later
 independent request waits in the input ring until an admitted request finishes.
 
+This is the shape of NCCL's network proxy rather than a new design. In NCCL
+2.32.3, `progressOps` in `src/proxy.cc` calls each active operation's progress
+function once per pass, and `sendProxyProgress` in `src/transport/net.cc`
+posts at most `min(NCCL_STEPS, NCCL_SHARED_STEPS / nsubs)` steps ahead of the
+completed step per sub-operation before returning. Extra proxy threads would
+be a complementary measure, not a substitute: they cost pinned cores and
+still serialize the connections that share one thread.
+
 Completion credits count IOVs, not CQEs or completion records. IB can report one
 QP-tail wait covering several IOVs; EFA can report individual waits. Out-of-order
 completion returns exactly the represented credits. A request publishes its
@@ -77,6 +93,24 @@ On shutdown, admission stops and requests already owned by the scheduler are
 drained, including their unsent IOVs. Requests still in the input ring are outside
 that guarantee, as in the existing implementation. Pending work is actively
 polled because CQ completions do not wake the task eventfd.
+
+## Expected effect and trade-off
+
+The cooperative path changes waiting time, not link capacity. A small vector
+queued behind a large one on another connection waits about one submission
+quantum instead of the large vector's remaining wire time. The large vector's
+throughput should be unchanged as long as its in-flight credits cover the
+bandwidth-delay product. Both statements are expectations that the hardware
+benchmark has to confirm.
+
+Between vectors of similar size, round-robin behaves like processor sharing:
+the earlier vector completes later than under FIFO, and the later one no
+earlier. A consumer that needs a whole vector before it can proceed, such as a
+KV-cache fetch, gains nothing in that case and can lose. Keep the switch off
+for workloads of uniformly large vectors on one proxy, and consider it for
+workloads that mix latency-sensitive small vectors with large ones. A
+size-aware policy that favors the shorter remaining vector could remove this
+penalty and is not part of this change.
 
 ## Failure boundaries
 
@@ -127,9 +161,10 @@ The P2P Host Tests workflow runs the CPU checks without GPU runners.
 
 Use [the mixed-size benchmark](../p2p/benchmarks/benchmark_proxy_fairness.md) on
 approved machines to compare fresh processes with the switch off and on. It
-uses one initiating Endpoint and independent peer connections, validates payloads
-outside the timed region, and reports small-request p50/p99, large and aggregate
-throughput, and whole-process CPU usage. The script does not supply performance
+runs on one host over RDMA loopback or across two hosts, uses one initiating
+Endpoint and independent peer connections, validates payloads outside the timed
+region, and reports small-request p50/p99, large and aggregate throughput, and
+whole-process CPU usage. The script does not supply performance
 evidence until it is run against real hardware.
 
 Also validate single-connection workloads, read/write traffic, provider-specific

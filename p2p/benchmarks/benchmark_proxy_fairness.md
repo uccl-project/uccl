@@ -21,9 +21,15 @@ Python and performs no GPU or network operations.
 
 - A built and importable `uccl.p2p` containing the cooperative proxy change.
 - Real IB/RoCE connectivity and GPU memory registration on all three processes.
-  The two peer processes may occupy distinct GPUs on one remote machine or run
-  on two remote machines. Record which topology is used. Use the same topology,
-  GPU/NIC placement, CPU affinity and runtime versions in both arms.
+  Two topologies are supported. **Single host:** all three processes run on one
+  machine with one RDMA NIC and may share one GPU. The script connects with
+  `Endpoint.connect`, which takes the RDMA path even between processes on the
+  same host, so the transfers loop back through the NIC. Each Endpoint binds an
+  OS-assigned out-of-band port; only the control-plane `--port` values must
+  differ. **Two hosts:** the initiator runs on one machine and the two peers on
+  another, on distinct GPUs, or on two further machines. Record which topology
+  is used. Use the same topology, GPU/NIC placement, CPU affinity and runtime
+  versions in both arms.
 - Configure the site's `UCCL_SOCKET_IFNAME`, `UCCL_P2P_RDMA_DEV`, GID index and
   other required RDMA settings before launch. Metadata-advertised IPs must be
   reachable, in addition to the control-plane addresses given by `--peer`.
@@ -44,8 +50,34 @@ not launch remote jobs or request a benchmark through CI.
 
 ## Run one arm
 
-Start a fresh peer process for each flow. These commands run in separate terminals
-on the selected peer machines; substitute the actual build identifier.
+Start a fresh peer process for each flow and substitute the actual build
+identifier.
+
+**Single host.** Run the three commands in three terminals on the same machine.
+All three processes may use GPU 0. `--peer` carries the control-plane address;
+the RDMA handshake uses the IP that each peer advertises in its metadata.
+
+```bash
+UCCL_P2P_COOPERATIVE_PROXY=0 python3 p2p/benchmarks/benchmark_proxy_fairness.py \
+  --role peer --gpu 0 --port 29500 --build-label BUILD_ID
+
+UCCL_P2P_COOPERATIVE_PROXY=0 python3 p2p/benchmarks/benchmark_proxy_fairness.py \
+  --role peer --gpu 0 --port 29501 --build-label BUILD_ID
+
+UCCL_P2P_COOPERATIVE_PROXY=0 python3 p2p/benchmarks/benchmark_proxy_fairness.py \
+  --role initiator --gpu 0 --mode read \
+  --peer 127.0.0.1:29500 --peer 127.0.0.1:29501 \
+  --large-bytes 67108864 --large-iov-bytes 524288 --large-depth 2 \
+  --small-bytes 65536 --small-iov-bytes 4096 --small-depth 1 \
+  --chunk-bytes 524288 --warmup-seconds 2 --duration 10 \
+  --build-label BUILD_ID --output default-read.json
+```
+
+For the cooperative arm, repeat the three commands in three new processes with
+`UCCL_P2P_COOPERATIVE_PROXY=1` and `--output cooperative-read.json`.
+
+**Two hosts.** These commands run in separate terminals on the selected peer
+machines.
 
 ```bash
 # Large peer. On a shared remote machine, use a distinct GPU for the small peer.
