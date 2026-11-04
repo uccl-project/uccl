@@ -170,6 +170,29 @@ static void same_connection_and_conflicting_requests_keep_fifo() {
   }
 }
 
+// Three requests: A1 (lane 1, unfinished), A2 (lane 1, must wait for A1) and
+// B1 (lane 2, independent). B1 must post and finish while A1 is still pending
+// and A2 is still waiting; A2 must not pass A1. A scheduler that stalls on the
+// oldest unservable request would hold B1 behind A2.
+static void independent_lane_passes_while_same_lane_follow_up_waits() {
+  Scheduler scheduler({8, 4, 2, 8});
+  Transport transport;
+  auto a1 = make_task(1, 1, 6);
+  a1->release = 15;
+  auto a2 = make_task(2, 1, 1);
+  auto b1 = make_task(3, 2, 1);
+  CHECK(scheduler.enqueue(a1, a1->count));
+  CHECK(scheduler.enqueue(a2, a2->count));
+  CHECK(scheduler.enqueue(b1, b1->count));
+  for (int i = 0; i < 8; ++i) scheduler.progress(transport);
+  CHECK(a1->first_post != -1 && a1->finished == -1);
+  CHECK(a2->first_post == -1);
+  CHECK(b1->first_post != -1 && b1->finished != -1);
+  drain(scheduler, transport);
+  CHECK(a2->first_post >= a1->finished);
+  CHECK(transport.finish_order == std::vector<int>({3, 1, 2}));
+}
+
 static void grouped_and_out_of_order_completions_return_iov_credits() {
   for (size_t group : {size_t{1}, size_t{3}}) {
     Scheduler scheduler({7, 4, 3, 8});
@@ -335,6 +358,8 @@ int main() {
        independent_small_request_passes_unfinished_large_request},
       {"ordering and conflicts",
        same_connection_and_conflicting_requests_keep_fifo},
+      {"independent lane with waiting follow-up",
+       independent_lane_passes_while_same_lane_follow_up_waits},
       {"grouped completions",
        grouped_and_out_of_order_completions_return_iov_credits},
       {"retry backpressure",

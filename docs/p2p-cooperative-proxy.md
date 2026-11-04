@@ -137,7 +137,8 @@ make -C p2p/tests sanitize
 The first test compiles the actual scheduler header. Its fake backend controls
 submission acceptance and completion rounds; it does not choose requests,
 allocate scheduling credits or decide when a task finishes. Assertions cover
-small-request progress while a large request remains unfinished, FIFO and range
+small-request progress while a large request remains unfinished, an independent
+connection passing a same-connection follow-up that must wait, FIFO and range
 dependencies, grouped completions, limits, retries, partial submission failure,
 failure draining, fallback barriers, single-credit fairness, shutdown admission
 and empty-request ordering. Assertions use event order, not simulated latency.
