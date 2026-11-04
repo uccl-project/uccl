@@ -1,4 +1,11 @@
-"""deep_ep.EventHandle() must record on the current stream, as DeepEP's does (#1121)."""
+"""deep_ep.EventHandle() must record on the current stream, as DeepEP's does (#1121).
+
+Run with:
+    pytest -q ep/deep_ep_wrapper/tests
+
+from the repository root. There, ``python -m pytest`` would import the source ``uccl``
+package instead of the installed one and skip the GPU test.
+"""
 
 import ast
 import importlib
@@ -55,23 +62,11 @@ def test_event_handle_records_on_current_stream_by_default():
     assert recorded_on == [0x1234, 0x5678]
 
 
-def test_deep_ep_exports_stream_aware_event_handle():
-    init = ast.parse((WRAPPER_DIR / "deep_ep" / "__init__.py").read_text())
-    imported_from = {
-        alias.name: (node.module, node.level)
-        for node in init.body
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-
-    assert imported_from["EventHandle"] == ("utils", 1)
-
-
 @pytest.fixture
 def cuda_deep_ep(monkeypatch):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
-        pytest.skip("needs a CUDA device")
+        pytest.skip("CUDA not available")
     if os.environ.get("CUDA_DEVICE_MAX_CONNECTIONS") == "1":
         pytest.skip("one hardware queue hides a missing event dependency")
     pytest.importorskip("uccl.ep")
@@ -108,6 +103,4 @@ def test_event_handle_waits_for_work_on_current_stream(cuda_deep_ep):
         y = x.clone()
     torch.cuda.synchronize()
 
-    assert torch.all(
-        y == 1.0
-    ), "the consumer read the tensor before the producer wrote it"
+    assert torch.all(y == 1.0), "consumer read the tensor before it was written"

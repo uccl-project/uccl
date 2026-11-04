@@ -89,3 +89,9 @@ def test_enable_shrink_compatibility(isolated_deep_ep_import):
     cuda.current_device = mark_normal_initialization
     with pytest.raises(ReachedNormalInitialization):
         deep_ep.Buffer(group=object(), enable_shrink=False)
+
+
+def test_event_handle_is_the_stream_aware_wrapper(isolated_deep_ep_import):
+    deep_ep, _ = _load_deep_ep_wrapper(isolated_deep_ep_import, lambda: 0)
+
+    assert deep_ep.EventHandle is sys.modules["deep_ep.utils"].EventHandle
