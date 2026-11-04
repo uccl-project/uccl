@@ -26,7 +26,8 @@ qualify for `SendConnection::post_write_or_read_batch`: every IOV must fit one
 transport chunk, and the connection must permit raw submission. Congestion
 control, compression, multi-chunk IOVs and other ineligible work use the original
 blocking methods. Each fallback acts as a barrier in its proxy: older tasks drain
-first, and later tasks wait for it. Staged-network backends use the original proxy.
+first, and later tasks wait for it. The first such fallback of a vector request
+in a proxy is logged at WARN level, so a misconfigured opt-in is visible. Staged-network backends use the original proxy.
 Scalar requests are not split by this change; small direct-submit scalar requests
 also bypass these proxies as before.
 
@@ -122,7 +123,10 @@ used as a safe completion.
 
 The production adapter retains the existing transport's failure policy. Raw
 provider failures after tracker allocation can still terminate the process, and
-completion errors have not gained a new recovery protocol. Fake-backend failure
+completion errors have not gained a new recovery protocol. A completion that
+never arrives blocks the base path inside its blocking call and blocks the
+cooperative path's request and everything ordered behind it; neither path
+times out. Fake-backend failure
 tests establish scheduler accounting, not recovery from a real QP failure.
 
 ## CPU verification

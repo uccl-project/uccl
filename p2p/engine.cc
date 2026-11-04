@@ -2634,9 +2634,11 @@ struct Endpoint::CooperativeProxyBackend {
     }
     if (count == 0) return {uccl::ProxyPostStatus::Retry, 0, {}};
 
-    std::array<SendConnection::OneSidedBatchOp, kMaxInflightOps> ops{};
-    std::array<SendConnection::RawBatchWait, kMaxInflightOps> waits{};
-    std::array<int64_t, kMaxInflightOps> wr_ids{};
+    // One turn submits at most the scheduler quantum; size the batch for it.
+    constexpr size_t kMaxPostIovs = uccl::ProxySchedulerOptions{}.quantum;
+    std::array<SendConnection::OneSidedBatchOp, kMaxPostIovs> ops{};
+    std::array<SendConnection::RawBatchWait, kMaxPostIovs> waits{};
+    std::array<int64_t, kMaxPostIovs> wr_ids{};
     UCCL_CHECK(count <= ops.size());
     for (size_t i = 0; i < count; ++i) {
       size_t iov = offset + i;
@@ -2732,11 +2734,10 @@ void Endpoint::cooperative_proxy_thread_func(bool sending) {
       sending ? send_proxy_adaptive_sleeper_ : recv_proxy_adaptive_sleeper_;
   uccl::ProxySchedulerOptions options;
   options.max_inflight = max_one_sided_inflight_ops();
-  options.per_request_inflight =
-      std::min(options.per_request_inflight, options.max_inflight);
   uccl::ProxyScheduler<CooperativeProxyBackend::Task> scheduler(options);
   CooperativeProxyBackend backend{*this, sending};
   alignas(16) char task_buffer[16];
+  bool fallback_logged = false;
   sleeper.update_timer();
 
   for (;;) {
@@ -2749,10 +2750,20 @@ void Endpoint::cooperative_proxy_thread_func(bool sending) {
       if (jring_sc_dequeue_bulk(ring, task_buffer, 1, nullptr) != 1) break;
       auto state =
           backend.prepare(*reinterpret_cast<UnifiedTask**>(task_buffer));
-      if (!scheduler.enqueue(state, state->num_iovs, !state->raw)) {
-        backend.finish(state, false);
-        break;
+      // A vector request that is not raw-eligible runs as an exclusive
+      // barrier. Say so once, or a misconfigured opt-in looks like no effect.
+      if (!state->raw && !fallback_logged &&
+          state->task->type == (sending ? TaskType::WRITEV : TaskType::READV)) {
+        fallback_logged = true;
+        UCCL_LOG(WARN) << "cooperative proxy: a "
+                       << (sending ? "WRITEV" : "READV")
+                       << " request is not raw-eligible (congestion control, "
+                          "compression, chunked IOVs or connection state) and "
+                          "runs as an exclusive barrier; further cases are not "
+                          "logged";
       }
+      // The loop condition already guarantees admission; enqueue cannot fail.
+      UCCL_CHECK(scheduler.enqueue(state, state->num_iovs, !state->raw));
     }
 
     if (!scheduler.empty()) {
@@ -2770,10 +2781,14 @@ void Endpoint::cooperative_proxy_thread_func(bool sending) {
   }
 }
 
+static bool cooperative_proxy_enabled() {
+  char const* value = std::getenv("UCCL_P2P_COOPERATIVE_PROXY");
+  return value && std::strcmp(value, "1") == 0;
+}
+
 void Endpoint::send_proxy_thread_func() {
   if constexpr (!uccl::device::Backend::staged_network) {
-    char const* cooperative = std::getenv("UCCL_P2P_COOPERATIVE_PROXY");
-    if (cooperative && std::strcmp(cooperative, "1") == 0) {
+    if (cooperative_proxy_enabled()) {
       cooperative_proxy_thread_func(true);
       return;
     }
@@ -2820,8 +2835,7 @@ void Endpoint::send_proxy_thread_func() {
 
 void Endpoint::recv_proxy_thread_func() {
   if constexpr (!uccl::device::Backend::staged_network) {
-    char const* cooperative = std::getenv("UCCL_P2P_COOPERATIVE_PROXY");
-    if (cooperative && std::strcmp(cooperative, "1") == 0) {
+    if (cooperative_proxy_enabled()) {
       cooperative_proxy_thread_func(false);
       return;
     }
