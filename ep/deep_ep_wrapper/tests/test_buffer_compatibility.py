@@ -48,6 +48,7 @@ def _load_deep_ep_wrapper(monkeypatch, current_device):
     uccl.ep = uccl_ep
 
     wrapper_utils = ModuleType("deep_ep.utils")
+    wrapper_utils.EventHandle = type("EventHandle", (), {})
     wrapper_utils.EventOverlap = type("EventOverlap", (), {})
     wrapper_utils.check_nvlink_connections = lambda *args, **kwargs: None
     wrapper_utils.initialize_uccl = lambda *args, **kwargs: None
