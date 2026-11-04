@@ -49,3 +49,17 @@ inline musaError_t musaIpcGetMemHandle(musaIpcMemHandle_t* handle, void* base) {
   if (ipc_export_result == musaSuccess) handle->reserved[0] = 42;
   return ipc_export_result;
 }
+// Ordinals 0-3 and 4-5 are two peer groups without access to each other.
+inline int device_count = 6;
+inline int peer_queries = 0;
+inline musaError_t musaGetDeviceCount(int* count) {
+  *count = device_count;
+  return musaSuccess;
+}
+inline musaError_t musaDeviceCanAccessPeer(int* can_access, int device,
+                                           int peer) {
+  ++peer_queries;
+  *can_access = (device < 4) == (peer < 4);
+  return musaSuccess;
+}
+inline musaError_t musaGetLastError() { return musaSuccess; }
