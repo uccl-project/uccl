@@ -439,7 +439,8 @@ class Endpoint {
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
   std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
-  std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+  std::unordered_map<uint64_t, std::shared_ptr<MR>> mr_id_to_mr_;
+  std::shared_ptr<MR> make_mr(uint64_t id, P2PMhandle* handle);
   std::unordered_map<std::vector<uint8_t>, uint64_t, VectorUint8Hash>
       remote_endpoint_to_conn_id_;
   /* Single-threaded access only. */
@@ -480,6 +481,9 @@ class Endpoint {
   /* Background threads for read/write, IPC, and passive accept. */
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
+  struct ProxyTaskState;
+  struct CooperativeProxyBackend;
+  void cooperative_proxy_thread_func(bool sending);
   void passive_accept_thread_func();
   void passive_accept_local_thread_func();
   void ipc_poller_thread_func();
