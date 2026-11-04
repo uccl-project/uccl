@@ -52,6 +52,9 @@ turn submits at most 16 IOVs and the adapter bounds a batch to 1 MiB (or one IOV
 if a build permits larger individual IOVs). These are initial policy constants,
 not hardware-tuned defaults. A request can still wait for an occupied credit or
 an ordering dependency; the scheduler does not preempt already posted work.
+Admission is bounded, not prioritized: when every admitted request is blocked,
+for example behind a long transfer at the head of one connection's FIFO, a later
+independent request waits in the input ring until an admitted request finishes.
 
 Completion credits count IOVs, not CQEs or completion records. IB can report one
 QP-tail wait covering several IOVs; EFA can report individual waits. Out-of-order
@@ -66,6 +69,9 @@ prevents new acquisitions; its transport registration is released when the last
 owner finishes. These pins own registrations, **not the caller's data buffers**.
 They do not make freeing an in-flight buffer valid. A registration removed while
 a task is queued is detected before its first raw submission.
+Endpoint teardown is unchanged: registrations still in the registry when the
+Endpoint is destroyed are freed without a transport deregistration call, after
+the proxy threads have been joined.
 
 On shutdown, admission stops and requests already owned by the scheduler are
 drained, including their unsent IOVs. Requests still in the input ring are outside

@@ -434,6 +434,13 @@ Endpoint::~Endpoint() {
 
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
+    // Keep the previous teardown behavior: registrations still in the registry
+    // are freed without a transport deregistration call. The proxy threads were
+    // joined above, so no cooperative request still shares these entries.
+    for (auto& entry : mr_id_to_mr_) {
+      delete entry.second->mhandle_;
+      entry.second->mhandle_ = nullptr;
+    }
     mr_id_to_mr_.clear();
   }
 
@@ -753,9 +760,12 @@ std::shared_ptr<MR> Endpoint::make_mr(uint64_t id, P2PMhandle* handle) {
   // Capture the transport by value so a deferred release never accesses a
   // destroyed Endpoint or transport. No registry lock is held during DMA.
   return std::shared_ptr<MR>(new MR{id, handle}, [transport = ep_](MR* mr) {
-    mr->mhandle_->compress_ctx.reset();
-    uccl_deregmr(transport, mr->mhandle_);
-    delete mr->mhandle_;
+    // Endpoint teardown frees the handle itself and leaves this null.
+    if (mr->mhandle_ != nullptr) {
+      mr->mhandle_->compress_ctx.reset();
+      uccl_deregmr(transport, mr->mhandle_);
+      delete mr->mhandle_;
+    }
     delete mr;
   });
 }
