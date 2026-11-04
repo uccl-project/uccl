@@ -9,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 PLUGIN = ROOT / "collective" / "rdma" / "mccl_plugin_musa.cc"
 TRANSPORT = ROOT / "collective" / "rdma" / "transport.cc"
 MAKEFILE = ROOT / "collective" / "rdma" / "Makefile.musa"
+RDMA_MAKEFILE = ROOT / "collective" / "rdma" / "Makefile"
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
     assert "MCCL_PTR_DMABUF" not in source
     assert "dma_buf_support" not in source
 
-    subprocess.run(
+    musa_build = subprocess.run(
         (
             "make",
             "-f",
@@ -49,6 +50,16 @@ def main():
         text=True,
         cwd=MAKEFILE.parent,
     )
+    assert "mccl_plugin_musa.cc" in musa_build.stdout
+
+    cuda_build = subprocess.run(
+        ("make", "-n", "-f", str(RDMA_MAKEFILE), "build"),
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=RDMA_MAKEFILE.parent,
+    )
+    assert "mccl_plugin_musa" not in cuda_build.stdout
 
 
 if __name__ == "__main__":
