@@ -8,7 +8,6 @@ struct Backend : BackendDefaults {
   static constexpr char const* name = "hip";
   static constexpr char const* runtime_prefix = "hip";
   static constexpr char const* runtime_library = "libamdhip64.so";
-  static constexpr bool filter_pci_vendor = true;
 };
 }  // namespace uccl::device
 
