@@ -37,7 +37,10 @@ BUILD_DIR ?= .build/$(PROFILE)/nccl$(ENABLE_NCCL)-cxi$(ENABLE_CXI)-efa$(ENABLE_E
 override CPPFLAGS += -I. -I./util -I./rdma -I./rdma/providers -I../include \
   $(DEVICE_CPPFLAGS) -DUCCL_DEVICE_BACKEND_HEADER=\"util/device/$(DEVICE_BACKEND)/config.h\" \
   -DUCCL_P2P_ENABLE_NCCL=$(ENABLE_NCCL) -DUCCL_P2P_ENABLE_CXI=$(ENABLE_CXI) \
-  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA) -I$(EFA_HOME)/include
+  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA)
+ifeq ($(ENABLE_EFA),1)
+override CPPFLAGS += -I$(EFA_HOME)/include
+endif
 override CXXFLAGS += -O3 -std=c++17 -fPIC -MMD -MP \
   -Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable
 IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
@@ -64,8 +67,11 @@ CORE_SOURCES := engine.cc \
   rdma/compression.cc rdma/rdma_context.cc rdma/rdma_connection.cc \
   rdma/rdma_ctrl_channel.cc rdma/rdma_data_channel.cc \
   rdma/rdma_device.cc rdma/rdma_endpoint.cc \
-  rdma/providers/efa_data_channel_impl.cc rdma/providers/ib_data_channel_impl.cc \
-  rdma/ibverbs_dl.cc rdma/efadv_dl.cc $(DEVICE_SOURCES)
+  rdma/providers/ib_data_channel_impl.cc \
+  rdma/ibverbs_dl.cc $(DEVICE_SOURCES)
+ifeq ($(ENABLE_EFA),1)
+CORE_SOURCES += rdma/providers/efa_data_channel_impl.cc rdma/efadv_dl.cc
+endif
 ifeq ($(ENABLE_NCCL),1)
 override CPPFLAGS += -I./nccl
 CORE_SOURCES += nccl/nccl_endpoint.cc nccl/nccl_dl.cc
