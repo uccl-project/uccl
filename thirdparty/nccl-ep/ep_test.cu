@@ -230,8 +230,12 @@ int main(int argc, char* argv[])
   // calculating localRank based on hostname which is used in selecting a GPU
   uint64_t hostHashs[nRanks];
 
-  const unsigned int ELEMENTS_TESTED_PER_TOKEN = 10;
-  unsigned int top_k = std::min(8, nRanks); // DeepSeek v3 has 8, how many experts each token goes to
+  // Private qualification fixture: check the full hidden dimension.
+  const unsigned int ELEMENTS_TESTED_PER_TOKEN = hidden;
+  // HT EP2 needs four experts per node for the existing 16B probability layout.
+  // Sending to all four experts on the peer retains the deterministic oracle.
+  unsigned int top_k = (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT && nRanks == 2)
+      ? 4u : static_cast<unsigned int>(std::min(8, nRanks));
   unsigned int num_experts = std::min(256u, top_k * nRanks); // DeepSeek v3
   unsigned int num_local_experts = num_experts / nRanks;
   unsigned int local_experts_start = num_local_experts * myRank;
@@ -276,6 +280,9 @@ int main(int argc, char* argv[])
   ncclEpGroupConfig_t config;
   config.version = 1;                                    // Structure version
   config.algorithm = algorithm;                          // Algorithm type (set by command line)
+  printf("EP_TEST_GEOMETRY rank=%d P=%d local_rank=%d top_k=%u experts=%u experts_per_rank=%u tokens=%u hidden=%u checked_elements=%u\n",
+         myRank, nRanks, localRank, top_k, num_experts, num_local_experts,
+         num_tokens, hidden, ELEMENTS_TESTED_PER_TOKEN);
   config.num_experts = num_experts;
   // max_tokens_per_rank is the per-rank batch size (max tokens any single rank will send).
   config.max_tokens_per_rank = disable_max_tokens ? NCCL_EP_AUTO : num_tokens;
@@ -339,8 +346,15 @@ int main(int argc, char* argv[])
   CUDACHECK(cudaStreamSynchronize(s));
 
   unsigned int num_recv_tokens = 0;
-  if (disable_max_tokens) {
+  if (algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT || disable_max_tokens) {
+    // HT deduplicates tokens routed to several experts on one rank. Query the
+    // actual receive rows rather than allocating max_tokens * local_experts.
+    CUDACHECK(cudaStreamSynchronize(s));
     NCCLCHECK(ncclEpHandleGetNumRecvTokens(ep_handle, &num_recv_tokens));
+    printf("EP_TEST_RECV rank=%d actual_recv_tokens=%u\n", myRank, num_recv_tokens);
+    if (!random_mode && algorithm == NCCL_EP_ALGO_HIGH_THROUGHPUT) {
+      assert(num_recv_tokens == num_tokens && "deterministic peer routing receives each token once");
+    }
   }
   else {
   // Specific to this test
@@ -912,10 +926,6 @@ int main(int argc, char* argv[])
 
   NCCLCHECK(ncclEpHandleDestroy(ep_handle));
 
-  NCCLCHECK(ncclEpGroupDestroy(ep_group, s));
-
-  // finalizing NCCL
-  ncclCommDestroy(comm);
 
   delete[] topk_idx_host;
   ncclEpTensorDestroy(ep_group, topk_idx);
@@ -935,6 +945,14 @@ int main(int argc, char* argv[])
   if (algorithm == NCCL_EP_ALGO_LOW_LATENCY) {
     ncclEpTensorDestroy(ep_group, local_tensors[0]);
   }
+
+  // Every tensor still uses ep_group's allocator; free it before the group.
+  printf("EP_TEST_DESTROY_BEGIN rank=%d\n", myRank);
+  fflush(stdout);
+  NCCLCHECK(ncclEpGroupDestroy(ep_group, s));
+  NCCLCHECK(ncclCommDestroy(comm));
+  printf("EP_TEST_DESTROY_END rank=%d\n", myRank);
+  fflush(stdout);
 
   // finalizing MPI
   MPICHECK(MPI_Finalize());

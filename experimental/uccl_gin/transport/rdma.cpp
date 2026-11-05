@@ -372,6 +372,18 @@ void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
 
 namespace {
 
+// UCCL_GIN_GPU_MR_RO=1 registers GPU memory with PCIe relaxed ordering on IB.
+// Without it, PCIe write ordering throttles RDMA writes into GPU memory. Tail
+// updates are native ATOMICs, which PCIe never lets pass an earlier WRITE, so
+// a tail still becomes visible after its payload.
+bool gpu_mr_relaxed_ordering() {
+  static bool const on = [] {
+    char const* e = std::getenv("UCCL_GIN_GPU_MR_RO");
+    return e != nullptr && std::strcmp(e, "1") == 0;
+  }();
+  return on;
+}
+
 bool is_cuda_host_pointer(void* ptr) {
   cudaPointerAttributes attr{};
   cudaError_t err = cudaPointerGetAttributes(&attr, ptr);
@@ -646,6 +658,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #ifndef EFA
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_REMOTE_ATOMIC;
+  if (gpu_mr_relaxed_ordering()) access_flags |= IBV_ACCESS_RELAXED_ORDERING;
 #else
   int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
@@ -823,8 +836,9 @@ bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
   if (it != cache.end()) return it->second;
 
 #ifndef EFA
-  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                     IBV_ACCESS_REMOTE_ATOMIC;
+  int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+               IBV_ACCESS_REMOTE_ATOMIC;
+  if (gpu_mr_relaxed_ordering()) access |= IBV_ACCESS_RELAXED_ORDERING;
 #else
   int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                      IBV_ACCESS_RELAXED_ORDERING;
