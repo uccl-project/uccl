@@ -34,7 +34,8 @@ struct SharedBuffer {
   int local_world_size = 0;
   std::string shm_name;
   int fd = -1;
-  bool is_creator = false;  // rank 0 creates, others open
+  bool is_creator = false;     // rank 0 creates, others open
+  bool name_unlinked = false;  // creator already removed the /dev/shm name
 
   // Host pointer to a specific local rank's slice.
   void* host_slice(int lr) const {
@@ -155,6 +156,18 @@ inline SharedBuffer allocate_shared_buffer(
   return sb;
 }
 
+// Remove the segment's /dev/shm name once every local rank has mapped it.
+// Existing mappings stay valid and the kernel frees the memory when the last
+// process unmaps it, so the segment no longer leaks when a process exits
+// without free_shared_buffer() (e.g. os._exit in the tests, or a crash).
+// Only the creator unlinks, and only once.
+inline void unlink_shared_buffer_name(SharedBuffer& sb) {
+  if (sb.is_creator && !sb.name_unlinked) {
+    shm_unlink(sb.shm_name.c_str());
+    sb.name_unlinked = true;
+  }
+}
+
 inline void free_shared_buffer(SharedBuffer& sb) {
   if (sb.mmap_ptr && sb.mmap_ptr != MAP_FAILED) {
     if (sb.registered_host_ptr) cudaHostUnregister(sb.registered_host_ptr);
@@ -166,7 +179,6 @@ inline void free_shared_buffer(SharedBuffer& sb) {
     close(sb.fd);
     sb.fd = -1;
   }
-  if (sb.is_creator) {
-    shm_unlink(sb.shm_name.c_str());
-  }
+  // After an early unlink the name may already belong to a newer segment.
+  unlink_shared_buffer_name(sb);
 }

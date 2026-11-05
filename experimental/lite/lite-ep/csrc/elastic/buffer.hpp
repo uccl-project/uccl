@@ -440,6 +440,15 @@ class ElasticBuffer {
     EP_HOST_ASSERT(listen_ports.size() == ranks.size());
     EP_HOST_ASSERT(cuda_ipc_handles.size() == ranks.size());
 
+    // The Python side calls this after a group-wide all_gather, so every local
+    // rank has already mapped the shared windows in its constructor. Drop the
+    // /dev/shm names now so they cannot leak if a process exits without
+    // destroy().
+    if (uccl_use_shared_window) {
+      unlink_shared_buffer_name(uccl_window);
+      unlink_shared_buffer_name(uccl_atomic_window);
+    }
+
     std::vector<PeerMeta> peers(num_ranks);
     for (size_t i = 0; i < ranks.size(); ++i) {
       EP_HOST_ASSERT(ranks[i] >= 0 and ranks[i] < num_ranks);
