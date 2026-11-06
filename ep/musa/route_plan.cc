@@ -45,7 +45,7 @@ RoutePlan make_plan(size_t rank, size_t ranks, size_t experts, size_t tokens,
        {product(product(product(count, hidden), sizeof(float)), 3),
         product(product(tokens, hidden), sizeof(float)),
         product(count, sizeof(Route)), product(lanes, sizeof(size_t)),
-        product(ranks, 2 * sizeof(size_t))}) {
+        product(ranks, 2 * sizeof(size_t)), sizeof(size_t)}) {
     if (bytes > remaining) throw std::length_error("EP byte budget exceeded");
     remaining -= bytes;
   }
