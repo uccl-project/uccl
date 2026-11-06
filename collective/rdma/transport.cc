@@ -24,7 +24,12 @@ void UcclFlow::poll_flow_cq(void) {
   struct ibv_wc wcs[kMaxBatchCQ];
 
   int nb_cqe = ibv_poll_cq(cq, kMaxBatchCQ, wcs);
+  UCCL_CHECK(nb_cqe >= 0) << "Flow CQ poll failed, flow=" << this;
   for (auto i = 0; i < nb_cqe; i++) {
+    UCCL_CHECK(wcs[i].status == IBV_WC_SUCCESS)
+        << "Flow CQ state error: status=" << wcs[i].status
+        << " vendor_err=" << wcs[i].vendor_err << " qp=" << wcs[i].qp_num
+        << " flow=" << this;
     auto opcode = wcs[i].opcode;
     if (opcode == IBV_WC_RDMA_WRITE) {
       // RC send completion.

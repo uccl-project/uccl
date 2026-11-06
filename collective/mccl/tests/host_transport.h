@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -45,10 +46,13 @@ struct ibv_wc {
   uint64_t wr_id;
   uint32_t imm_data;
   uint32_t qp_num;
+  int status = 0;
+  uint32_t vendor_err = 0;
 };
 struct ibv_cq {
   std::deque<ibv_wc> completions;
   int polls = 0;
+  bool fail_poll = false;
 };
 struct ibv_qp {
   uint32_t qp_num = 1;
@@ -60,8 +64,10 @@ constexpr int IBV_WC_RECV_RDMA_WITH_IMM = 2;
 constexpr int IBV_WC_RDMA_READ = 3;
 constexpr int IBV_WR_RDMA_READ = 4;
 constexpr int IBV_SEND_SIGNALED = 1;
+constexpr int IBV_WC_SUCCESS = 0;
 inline int ibv_poll_cq(ibv_cq* cq, int count, ibv_wc* wcs) {
   ++cq->polls;
+  if (cq->fail_poll) return -1;
   int n = 0;
   while (n < count && !cq->completions.empty()) {
     wcs[n++] = cq->completions.front();
@@ -76,7 +82,19 @@ inline int ibv_post_send(ibv_qp* qp, ibv_send_wr* wr, ibv_send_wr**) {
   return 0;
 }
 #define UCCL_INIT_CHECK(condition, message) assert(condition)
-#define UCCL_CHECK(condition) assert(condition)
+struct HostCheck {
+  bool ok;
+  ~HostCheck() {
+    if (!ok) std::abort();
+  }
+  template <typename T>
+  HostCheck& operator<<(T const& value) {
+    if (!ok) std::cerr << value;
+    return *this;
+  }
+};
+#define UCCL_CHECK(condition) \
+  HostCheck { bool(condition) }
 inline std::ostringstream host_log;
 #define UCCL_LOG_EP host_log
 #include "util_buffpool.h"
@@ -107,15 +125,21 @@ class ConnectionGate {
   bool released_ = false;
 };
 
+inline thread_local int host_gpu = 0;
+inline int host_allocations = 0;
 inline int gpuGetDevice(int* gpu) {
-  *gpu = 0;
+  *gpu = host_gpu;
   return 0;
 }
 inline int gpuMalloc(void** data, size_t size) {
   *data = malloc(size);
+  if (*data) ++host_allocations;
   return *data ? 0 : 1;
 }
-inline void gpuFree(void* data) { free(data); }
+inline void gpuFree(void* data) {
+  if (data) --host_allocations;
+  free(data);
+}
 constexpr int gpuSuccess = 0;
 inline int ucclParamNUM_ENGINES() { return 4; }
 inline uint32_t str_to_ip(std::string const&) { return 0; }
@@ -186,9 +210,14 @@ class RDMAEndpoint {
   explicit RDMAEndpoint(int) {}
   ConnectionGate* gate = nullptr;
   bool fail_connection = false;
+  bool mr_support[2][2]{};
+  int registrations[2][2]{};
+  int active_mrs = 0;
+  int submissions = 0;
+  int initializations = 0;
   UcclFlow flow;
   int get_best_dev_idx(int) { return 0; }
-  void initialize_engine_by_dev(int, bool) {}
+  void initialize_engine_by_dev(int, bool) { ++initializations; }
   int get_num_devices() { return 1; }
   ConnID uccl_connect(int, int, int, int, std::string, uint16_t) {
     gate->arrive_and_wait();
@@ -203,18 +232,31 @@ class RDMAEndpoint {
     *gpu = 3;
     return {&flow, 43};
   }
-  template <typename Device>
-  int uccl_regmr(Device, void*, size_t, int, Mhandle**) {
-    return -1;
+  int uccl_regmr(int dev, void*, size_t, int, Mhandle** result) {
+    ++registrations[host_gpu][dev];
+    if (!mr_support[host_gpu][dev]) return -1;
+    *result = new Mhandle{new ibv_mr{}};
+    ++active_mrs;
+    return 0;
+  }
+  int uccl_regmr(UcclFlow*, void* data, size_t size, int type,
+                 Mhandle** result) {
+    return uccl_regmr(0, data, size, type, result);
   }
   int uccl_regmr_dmabuf(UcclFlow*, void*, size_t, int, int, int, Mhandle**) {
     return -1;
   }
-  void uccl_deregmr(Mhandle*) {}
+  void uccl_deregmr(Mhandle* mh) {
+    delete mh->mr;
+    delete mh;
+    --active_mrs;
+  }
   int uccl_send_async(UcclFlow*, Mhandle*, void*, size_t, ucclRequest*) {
+    ++submissions;
     return -1;
   }
   int uccl_recv_async(UcclFlow*, Mhandle**, void**, int*, int, ucclRequest*) {
+    ++submissions;
     return -1;
   }
   int uccl_flush(UcclFlow*, Mhandle**, void**, int*, int, ucclRequest*);
