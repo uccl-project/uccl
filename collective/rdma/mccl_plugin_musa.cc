@@ -12,11 +12,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <limits.h>
@@ -117,7 +117,7 @@ struct McclRecvComm {
 std::mutex g_endpoint_mu;
 std::shared_ptr<RDMAEndpoint> g_endpoint;
 std::mutex g_musa_mr_mu;
-std::unordered_map<int, bool> g_musa_mr_support;
+std::map<std::pair<int, int>, bool> g_musa_mr_support;
 
 std::shared_ptr<RDMAEndpoint> endpoint() {
   std::lock_guard<std::mutex> lock(g_endpoint_mu);
@@ -130,14 +130,19 @@ mcclResult_t initialize_device(McclContext* context, int* dev) {
   int gpu = 0;
   if (gpuGetDevice(&gpu) != gpuSuccess) return mcclUnhandledMusaError;
   int const best_dev = context->endpoint->get_best_dev_idx(gpu);
+  UCCL_LOG_EP << "MCCL device selection: gpu=" << gpu
+              << " requested_dev=" << *dev << " selected_dev=" << best_dev;
   if (*dev != best_dev) *dev = best_dev;
   context->endpoint->initialize_engine_by_dev(*dev, false);
   return mcclSuccess;
 }
 
 bool can_register_musa(RDMAEndpoint* endpoint_ptr, int dev) {
+  int gpu = 0;
+  if (gpuGetDevice(&gpu) != gpuSuccess) return false;
+  auto const key = std::make_pair(gpu, dev);
   std::lock_guard<std::mutex> lock(g_musa_mr_mu);
-  auto cached = g_musa_mr_support.find(dev);
+  auto cached = g_musa_mr_support.find(key);
   if (cached != g_musa_mr_support.end()) return cached->second;
 
   void* buffer = nullptr;
@@ -150,7 +155,7 @@ bool can_register_musa(RDMAEndpoint* endpoint_ptr, int dev) {
     if (mhandle != nullptr) endpoint_ptr->uccl_deregmr(mhandle);
     gpuFree(buffer);
   }
-  g_musa_mr_support.emplace(dev, supported);
+  g_musa_mr_support.emplace(key, supported);
   return supported;
 }
 
@@ -255,8 +260,8 @@ extern "C" mcclResult_t mcclPluginGetProperties(
   props->netDeviceVersion = MCCL_NET_DEVICE_INVALID_VERSION;
   props->vProps.ndevs = 1;
   props->vProps.devs[0] = dev;
-  props->maxP2pBytes = MCCL_MAX_NET_SIZE_BYTES;
-  props->maxCollBytes = MCCL_MAX_NET_SIZE_BYTES;
+  props->maxP2pBytes = INT_MAX;
+  props->maxCollBytes = INT_MAX;
   props->maxMultiRequestSize = 1;
   props->ptrSupport = MCCL_PTR_HOST;
   props->regIsGlobal = 0;
@@ -334,11 +339,10 @@ extern "C" mcclResult_t mcclPluginConnect(
   if (send_dev_comm != nullptr) *send_dev_comm = nullptr;
   auto* context = static_cast<McclContext*>(ctx);
   auto* handle = static_cast<McclHandle*>(opaque_handle);
-  if (initialize_device(context, &dev) != mcclSuccess) return mcclSystemError;
-
-  int gpu = 0;
-  if (gpuGetDevice(&gpu) != gpuSuccess) return mcclUnhandledMusaError;
   if (handle->state == ConnectionState::kInit) {
+    if (initialize_device(context, &dev) != mcclSuccess) return mcclSystemError;
+    int gpu = 0;
+    if (gpuGetDevice(&gpu) != gpuSuccess) return mcclUnhandledMusaError;
     try {
       auto pending = std::make_unique<McclPendingConnection>();
       auto* state = pending.get();
@@ -458,7 +462,10 @@ extern "C" mcclResult_t mcclPluginIsend(void* send_comm, void* data,
                                         size_t size, int /*tag*/, void* mhandle,
                                         void* /*p_handle*/, void** request) {
   auto* comm = static_cast<McclSendComm*>(send_comm);
-  if (comm == nullptr || request == nullptr || size > INT_MAX)
+  if (request == nullptr) return mcclInvalidArgument;
+  *request = nullptr;
+  if (comm == nullptr || size > INT_MAX || data == nullptr ||
+      mhandle == nullptr || static_cast<Mhandle*>(mhandle)->mr == nullptr)
     return mcclInvalidArgument;
   ucclRequest* req = nullptr;
   allocate_request(&comm->base, &req);
@@ -479,12 +486,16 @@ extern "C" mcclResult_t mcclPluginIrecv(void* recv_comm, int n, void** data,
                                         void** mhandles, void** /*p_handles*/,
                                         void** request) {
   auto* comm = static_cast<McclRecvComm*>(recv_comm);
-  if (comm == nullptr || request == nullptr || n <= 0 || data == nullptr ||
-      sizes == nullptr || mhandles == nullptr)
+  if (request == nullptr) return mcclInvalidArgument;
+  *request = nullptr;
+  if (comm == nullptr || n != 1 || data == nullptr || sizes == nullptr ||
+      mhandles == nullptr)
     return mcclInvalidArgument;
   std::vector<int> recv_sizes(n);
   for (int i = 0; i < n; ++i) {
-    if (sizes[i] > INT_MAX) return mcclInvalidArgument;
+    if (sizes[i] > INT_MAX || data[i] == nullptr || mhandles[i] == nullptr ||
+        static_cast<Mhandle*>(mhandles[i])->mr == nullptr)
+      return mcclInvalidArgument;
     recv_sizes[i] = static_cast<int>(sizes[i]);
   }
   ucclRequest* req = nullptr;
@@ -506,8 +517,14 @@ extern "C" mcclResult_t mcclPluginIflush(void* recv_comm, int n, void** data,
                                          int* sizes, void** mhandles,
                                          void** request) {
   auto* comm = static_cast<McclRecvComm*>(recv_comm);
-  if (comm == nullptr || request == nullptr || n <= 0 || data == nullptr ||
-      sizes == nullptr || mhandles == nullptr)
+  if (request == nullptr) return mcclInvalidArgument;
+  *request = nullptr;
+  if (comm == nullptr || n != 1 || data == nullptr || sizes == nullptr ||
+      mhandles == nullptr)
+    return mcclInvalidArgument;
+  if (sizes[0] < 0 ||
+      (sizes[0] != 0 && (data[0] == nullptr || mhandles[0] == nullptr ||
+                         static_cast<Mhandle*>(mhandles[0])->mr == nullptr)))
     return mcclInvalidArgument;
   ucclRequest* req = nullptr;
   allocate_request(&comm->base, &req);
@@ -525,7 +542,9 @@ extern "C" mcclResult_t mcclPluginIflush(void* recv_comm, int n, void** data,
 
 extern "C" mcclResult_t mcclPluginTest(void* opaque_request, int* done,
                                        int* sizes) {
-  if (opaque_request == nullptr || done == nullptr) return mcclInvalidArgument;
+  if (done == nullptr) return mcclInvalidArgument;
+  *done = 0;
+  if (opaque_request == nullptr) return mcclInvalidArgument;
   auto* request = static_cast<ucclRequest*>(opaque_request);
   auto ep = endpoint();
   if (!ep || request->context == nullptr) return mcclInternalError;

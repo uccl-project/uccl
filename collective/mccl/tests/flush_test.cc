@@ -41,8 +41,17 @@ struct FlushFixture {
     int count = multiple ? 3 : 1;
     auto available = comm.base.request_pool->size();
     void* request = nullptr;
-    assert(mcclPluginIflush(&comm, count, data, sizes, handles, &request) ==
-           mcclSuccess);
+    if (multiple) {
+      // The transport supports a batch; the MCCL plugin advertises maxRecvs=1.
+      ucclRequest* transport_request = nullptr;
+      assert(allocate_request(&comm.base, &transport_request) == mcclSuccess);
+      assert(ep->uccl_flush(&ep->flow, reinterpret_cast<Mhandle**>(handles),
+                            data, sizes, count, transport_request) == 0);
+      request = transport_request;
+    } else {
+      assert(mcclPluginIflush(&comm, count, data, sizes, handles, &request) ==
+             mcclSuccess);
+    }
     assert(request != nullptr);
     auto* req = static_cast<ucclRequest*>(request);
     if (reuse) assert(req == reused);

@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "collective" / "mccl" / "run_mccl_correctness.py"
 BINARIES = (
@@ -16,6 +15,10 @@ BINARIES = (
     "all_gather_perf",
     "reduce_scatter_perf",
     "alltoall_perf",
+)
+ROW = "67108864 16777216 float sum -1 2196.6 30.55 30.55 0 2694.3 24.91 24.91 0"
+ROWS = "\n".join(
+    f"{2 ** power} {2 ** power // 4} " + ROW.split(" ", 2)[2] for power in range(3, 27)
 )
 
 
@@ -50,7 +53,7 @@ def main():
         plugin = root / "libmccl-net-uccl.so"
         plugin.touch()
         for binary in BINARIES:
-            make_fake_test(root / binary, "UCCL-MCCL-RDMA correctness")
+            make_fake_test(root / binary, "UCCL-MCCL-RDMA correctness\n" + ROWS)
 
         passed = run_runner(root, plugin)
         assert passed.returncode == 0, passed.stderr
@@ -60,6 +63,15 @@ def main():
         rejected = run_runner(root, plugin, "--collective", "alltoall")
         assert rejected.returncode == 1
         assert "did not confirm" in rejected.stderr
+
+        for invalid in (
+            "UCCL-MCCL-RDMA PASS",
+            "UCCL-MCCL-RDMA\n" + ROW.replace("30.55 0", "30.55 1"),
+            "UCCL-MCCL-RDMA\n" + ROW,
+        ):
+            make_fake_test(root / "alltoall_perf", invalid)
+            rejected = run_runner(root, plugin, "--collective", "alltoall")
+            assert rejected.returncode == 1
 
         missing = root / "reduce_scatter_perf"
         missing.unlink()

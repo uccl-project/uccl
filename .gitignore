@@ -97,6 +97,8 @@ ep/*.log
 nodes.txt
 pcie_test
 transport_test
+collective/mccl/tests/musa_visibility_probe
+ep/musa/mccl_p2p_probe
 
 *.png
 ep/figs

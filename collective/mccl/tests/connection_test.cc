@@ -33,6 +33,7 @@ void test_connect() {
   }
   gate.release();
   auto* comm = static_cast<McclSendComm*>(await_connection(poll));
+  assert(ep->initializations == 1);
   assert(comm->base.context == &context);
   assert(comm->base.conn_id.context == &ep->flow);
   assert(comm->base.conn_id.sock_fd == 42);

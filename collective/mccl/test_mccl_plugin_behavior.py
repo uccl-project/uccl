@@ -4,11 +4,12 @@
 import argparse
 import os
 import pathlib
+import resource
+import signal
 import shlex
 import shutil
 import subprocess
 import tempfile
-
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MCCL = ROOT / "collective/mccl"
@@ -24,6 +25,7 @@ def copy_section(source, start, end, target):
 
 
 def main():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sanitize", choices=("thread", "address"))
     parser.add_argument("--backend", choices=("musa", "cuda", "hip"), default="musa")
@@ -84,6 +86,7 @@ def main():
         for test, cases in (
             ("connection_test", [None]),
             ("flush_test", ["fresh", "stale", "pending", "noop", "noop_stale", "last"]),
+            ("contract_test", ["pool", "bounds", "mr", "cq_poll", "cq_error"]),
         ):
             executable = tmp / test
             subprocess.run(
@@ -105,7 +108,14 @@ def main():
             for case in cases:
                 command = [str(executable)] + ([case] if case else [])
                 result = subprocess.run(command, timeout=120)
-                if result.returncode:
+                expected_abort = test == "contract_test" and case in (
+                    "cq_poll",
+                    "cq_error",
+                )
+                if expected_abort:
+                    if result.returncode != -signal.SIGABRT:
+                        failures.append((test, case, result.returncode))
+                elif result.returncode:
                     failures.append((test, case, result.returncode))
         if failures:
             raise SystemExit(f"Behavior tests failed: {failures}")

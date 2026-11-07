@@ -4,9 +4,10 @@
 import argparse
 import os
 import pathlib
-import subprocess
 import sys
 
+from mccl_bench import expected_sizes, parse_results, validate_coverage
+from mccl_process import run_command
 
 COLLECTIVES = {
     "allreduce": ("all_reduce_perf", "allreduce_perf"),
@@ -75,6 +76,11 @@ def parser():
     result.add_argument("--min-bytes", default="8")
     result.add_argument("--max-bytes", default="64M")
     result.add_argument("--factor", type=int, default=2)
+    result.add_argument(
+        "--coverage-file",
+        type=pathlib.Path,
+        help="frozen JSON {collective: [actual bytes]} for bench rounding",
+    )
     result.add_argument("--timeout", type=int, default=180)
     result.add_argument("--launcher", default="mpirun")
     result.add_argument("--launcher-arg", action="append", default=[])
@@ -113,6 +119,11 @@ def main(argv=None):
         return 2
 
     collectives = args.collectives or list(COLLECTIVES)
+    try:
+        coverage = {name: expected_sizes(args, name) for name in collectives}
+    except (ValueError, KeyError, OSError) as error:
+        print(f"invalid size coverage: {error}", file=sys.stderr)
+        return 2
     env = os.environ.copy()
     env["MCCL_NET_PLUGIN"] = "uccl"
     env["MCCL_NET"] = "UCCL-MCCL-RDMA"
@@ -134,34 +145,37 @@ def main(argv=None):
         command = build_command(args, binary)
         print(f"[MCCL][{collective}] {' '.join(command)}", flush=True)
         try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=args.timeout,
-            )
-        except subprocess.TimeoutExpired:
+            returncode, output, timed_out = run_command(command, env, args.timeout)
+        except OSError as error:
+            print(f"{collective}: {error}", file=sys.stderr)
+            return 1
+        print(output, end="")
+        if timed_out:
             print(f"{collective}: timed out after {args.timeout}s", file=sys.stderr)
             return 1
-        output = completed.stdout + completed.stderr
-        print(output, end="")
-        if completed.returncode != 0:
+        if returncode != 0:
             print(
-                f"{collective}: exited with {completed.returncode}",
+                f"{collective}: exited with {returncode}",
                 file=sys.stderr,
             )
             return 1
-        if (
-            not args.allow_plugin_log_missing
-            and "UCCL-MCCL-RDMA" not in output
-        ):
+        if not args.allow_plugin_log_missing and "UCCL-MCCL-RDMA" not in output:
             print(
                 f"{collective}: MCCL output did not confirm UCCL-MCCL-RDMA",
                 file=sys.stderr,
             )
             return 1
+        try:
+            rows = parse_results(output)
+            validate_coverage(rows, coverage[collective])
+        except (ValueError, KeyError, OSError) as error:
+            print(f"{collective}: {error}", file=sys.stderr)
+            return 1
+        if any(row["validation"] == "unsupported" for row in rows):
+            print(
+                f"[MCCL][{collective}] N/A modes are not numerically verified",
+                flush=True,
+            )
         print(f"[MCCL][{collective}] PASS", flush=True)
     return 0
 
