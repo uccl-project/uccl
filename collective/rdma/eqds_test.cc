@@ -129,6 +129,44 @@ TEST_F(EQDSPacerTest, ServicesActiveSendersBeforeIdleSenders) {
   EXPECT_FALSE(list_empty(&senders_[1].idle_item.idle_link));
 }
 
+TEST_F(EQDSPacerTest, StopsAtSenderBudgetBeforeCreditBudget) {
+  for (auto& sender : senders_) {
+    sender.init_active_item();
+    sender.init_idle_item();
+    sender.latest_pull_ = 50;
+    sender.highest_pull_target_.store(52);
+    sender.set_pacer_credit_qpw(&qpw_);
+  }
+  pacer_.request_pull(&senders_[0]);
+  pacer_.request_pull(&senders_[1]);
+  pacer_.handle_pull_request();
+  RestoreBuffers();
+
+  pacer_.handle_grant_credit();
+
+  // One sender may be visited per pass even though only two of the four
+  // credits were granted.
+  EXPECT_EQ(senders_[0].latest_pull_, 52);
+  EXPECT_TRUE(list_empty(&senders_[0].active_item.active_link));
+  EXPECT_EQ(senders_[1].latest_pull_, 50);
+  EXPECT_FALSE(list_empty(&senders_[1].active_item.active_link));
+}
+
+TEST_F(EQDSPacerTest, FailedPullDoesNotCountAsConsumedCredit) {
+  auto& sender = senders_[0];
+  sender.init_active_item();
+  sender.init_idle_item();
+  sender.latest_pull_ = 50;
+  sender.highest_pull_target_.store(52);
+  sender.set_pacer_credit_qpw(&qpw_);
+  ASSERT_TRUE(pool_.empty());
+
+  PullQuanta consumed = 99;
+  EXPECT_FALSE(pacer_.grant_credit(&sender, false, &consumed));
+  EXPECT_EQ(consumed, 0);
+  EXPECT_EQ(sender.latest_pull_, 50);
+}
+
 TEST_F(EQDSPacerTest, ReturnsOnBufferExhaustionAndRetriesBothSenders) {
   RegisterIdleSenders(2);
   ASSERT_TRUE(pool_.empty());

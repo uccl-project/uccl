@@ -59,7 +59,7 @@ void EQDS::handle_grant_credit() {
 
   if (!list_empty(&active_senders_)) {
     while (!list_empty(&active_senders_) &&
-           (budget < kSendersPerPull ||
+           (budget < kSendersPerPull &&
             total_consumed < kCreditPerPull * kSendersPerPull)) {
       list_for_each_safe(pos, n, &active_senders_) {
         auto item = list_entry(pos, struct active_item, active_link);
@@ -77,8 +77,10 @@ void EQDS::handle_grant_credit() {
 
         total_consumed += consumed;
 
+        // A zero-backlog sender needs no pull packet and therefore does not
+        // consume the per-pass grant budget.
         if (total_consumed >= kCreditPerPull * kSendersPerPull ||
-            ++budget >= kSendersPerPull)
+            (consumed > 0 && ++budget >= kSendersPerPull))
           break;
       }
     }
@@ -220,6 +222,8 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
   if (!send_pull_packet(eqds_cc)) {
     eqds_cc->latest_pull_ -= increment;
     UCCL_VLOG(5) << "Failed to send pull packet.";
+    *ret_increment = 0;
+    return eqds_cc->backlog() == 0;
   }
 
   *ret_increment = increment;
