@@ -1,5 +1,7 @@
 #include "rdma_data_channel.h"
+#if UCCL_P2P_ENABLE_EFA
 #include "providers/efa_data_channel_impl.h"
+#endif
 #include "providers/ib_data_channel_impl.h"
 #include "util/debug.h"
 #include "util/util.h"
@@ -12,10 +14,10 @@
 // ── Provider factory ─────────────────────────────────────────────────────────
 
 std::unique_ptr<RDMADataChannelImpl> create_rdma_data_channel_impl() {
-  if (is_efa_transport())
-    return std::make_unique<EFADataChannelImpl>();
-  else
-    return std::make_unique<IBDataChannelImpl>();
+#if UCCL_P2P_ENABLE_EFA
+  if (is_efa_transport()) return std::make_unique<EFADataChannelImpl>();
+#endif
+  return std::make_unique<IBDataChannelImpl>();
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────

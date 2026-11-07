@@ -42,7 +42,10 @@ BUILD_DIR ?= .build/$(PROFILE)/nccl$(ENABLE_NCCL)-cxi$(ENABLE_CXI)-efa$(ENABLE_E
 override CPPFLAGS += -I. -I./util -I./rdma -I./rdma/providers -I../include \
   $(DEVICE_CPPFLAGS) -DUCCL_DEVICE_BACKEND_HEADER=\"util/device/$(DEVICE_BACKEND)/config.h\" \
   -DUCCL_P2P_ENABLE_NCCL=$(ENABLE_NCCL) -DUCCL_P2P_ENABLE_CXI=$(ENABLE_CXI) \
-  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA) -I$(EFA_HOME)/include
+  -DUCCL_P2P_ENABLE_EFA=$(ENABLE_EFA)
+ifeq ($(ENABLE_EFA),1)
+override CPPFLAGS += -I$(EFA_HOME)/include
+endif
 override CXXFLAGS += -O3 -std=c++17 -fPIC -MMD -MP \
   -Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable
 IBV_WRAP_FLAGS := -Wl,--wrap=ibv_get_device_list \
@@ -69,8 +72,11 @@ CORE_SOURCES := engine.cc \
   rdma/compression.cc rdma/rdma_context.cc rdma/rdma_connection.cc \
   rdma/rdma_ctrl_channel.cc rdma/rdma_data_channel.cc \
   rdma/rdma_device.cc rdma/rdma_endpoint.cc \
-  rdma/providers/efa_data_channel_impl.cc rdma/providers/ib_data_channel_impl.cc \
-  rdma/ibverbs_dl.cc rdma/efadv_dl.cc $(DEVICE_SOURCES)
+  rdma/providers/ib_data_channel_impl.cc \
+  rdma/ibverbs_dl.cc $(DEVICE_SOURCES)
+ifeq ($(ENABLE_EFA),1)
+CORE_SOURCES += rdma/providers/efa_data_channel_impl.cc rdma/efadv_dl.cc
+endif
 ifeq ($(ENABLE_NCCL),1)
 override CPPFLAGS += -I./nccl
 CORE_SOURCES += nccl/nccl_endpoint.cc nccl/nccl_dl.cc
@@ -126,13 +132,16 @@ install: all
 clean:
 	rm -f $(CORE_OBJECTS) $(API_OBJECTS) $(NB_OBJECTS)
 	rm -f $(CORE_OBJECTS:.o=.d) $(API_OBJECTS:.o=.d) $(NB_OBJECTS:.o=.d) $(BUILD_DIR)/config
-	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server test_gpu_topology notif_e2e
+	rm -f $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e
 
 test_notify_serde: tests/test_notify_serde.cc util/common.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -o $@ tests/test_notify_serde.cc
 
 test_epoll_server: tests/test_epoll_server.cc util/epoll_server.cc util/epoll_server.h
 	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_server.cc util/epoll_server.cc -lpthread
+
+test_epoll_client: tests/test_epoll_client.cc util/epoll_client.cc util/epoll_client.h
+	$(CXX) -std=c++17 -O2 -I. -I./util -I../include -o $@ tests/test_epoll_client.cc util/epoll_client.cc -lpthread
 
 # Runtime ordinal preservation and sysfs mapping; no GPU or RDMA device needed.
 test_gpu_topology: ../include/util/gpu_topology_test.cc ../include/util/gpu_topology.h
@@ -142,9 +151,10 @@ notif_e2e: tests/test_notify_e2e.cc $(P2P_SHARED_LIB)
 	$(CXX) -std=c++17 -O2 $(CPPFLAGS) -o $@ tests/test_notify_e2e.cc \
 	  -L. -luccl_p2p $(DEVICE_LDLIBS) -Wl,-rpath,'$$ORIGIN'
 
-test: test_notify_serde test_epoll_server test_gpu_topology all
+test: test_notify_serde test_epoll_server test_epoll_client test_gpu_topology all
 	./test_notify_serde
 	./test_epoll_server
+	./test_epoll_client
 	./test_gpu_topology
 	$(PYTHON) tests/test_engine_write.py
 
@@ -152,7 +162,7 @@ install-deps:
 	$(PYTHON) -m pip install nanobind
 
 help:
-	@echo 'Targets: all install clean test test_notify_serde test_epoll_server test_gpu_topology notif_e2e install-deps'
+	@echo 'Targets: all install clean test test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e install-deps'
 	@echo 'Profiles: Makefile (CUDA), Makefile.rocm, Makefile.dtk, Makefile.therock, Makefile.cnrt, Makefile.musa'
 	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1'
 .PHONY: test install-deps help

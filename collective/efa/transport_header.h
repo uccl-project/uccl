@@ -53,7 +53,7 @@ struct __attribute__((packed)) UcclSackHdr {
   be64_t sack_bitmap[kSackBitmapSize /
                      swift::Pcb::kSackBitmapBucketSize];  // Bitmap of the
                                                           // SACKs received.
-  be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
+  be16_t sack_bitmap_count;  // Number of set bits in sack_bitmap.
   be32_t rwnd;               // Receiver window size in terms of packets.
 };
 

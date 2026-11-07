@@ -122,10 +122,8 @@ int RDMAFactory::init_devs() {
         dev.port_attr = port_attr;
         dev.ib_port_num = port_num;
 
-        double link_bw = (ncclIbSpeed(port_attr.active_speed) *
-                          ncclIbWidth(port_attr.active_width)) *
-                         1e6 / 8;
-        dev.link_bw = link_bw;
+        dev.link_bw = util_rdma_get_link_speed_from_ibv_speed(
+            port_attr.active_speed, port_attr.active_width);
 
         UCCL_CHECK(
             ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
@@ -373,7 +371,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
                                             RDMAContext* rdma_ctx,
                                             uint32_t num_acked_chunks,
                                             uint64_t t5, uint64_t t6,
-                                            uint64_t remote_queueing_tsc,
+                                            uint64_t remote_queueing_us,
                                             uint32_t* flow_unacked_bytes) {
   UCCL_DCHECK(num_acked_chunks <= unacked_chunks_.size());
 
@@ -405,35 +403,25 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
     num_acked_chunks--;
   }
 
-  if (unlikely(t5 <= t1)) {
-    // Invalid timestamp.
-    // We have found that t5 (transferred from NIC timestamp) may be
-    // occasionally smaller than t1 (timestamp of the oldest unacked chunk).
-    // When this happens, we use software timestamp to fix it.
-    t5 = rdtsc();
-  }
+  // NIC-to-host clock conversion can produce an invalid ACK timestamp.
+  // A new software timestamp would include time spent processing this ACK.
+  if (unlikely(t5 <= t1 || t5 > t6)) return 0;
 
-  auto endpoint_delay_tsc = t6 - t5 + remote_queueing_tsc;
-  auto fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
+  auto ack_delay_tsc = t5 - t1;
+  auto remote_queueing_cycles = remote_queueing_us * freq_ghz * 1000;
+  if (unlikely(remote_queueing_cycles >= ack_delay_tsc)) return 0;
+  auto remote_queueing_tsc = static_cast<uint64_t>(remote_queueing_cycles);
+  auto fabric_delay_tsc = ack_delay_tsc - remote_queueing_tsc;
+
   // Make RTT independent of segment size.
   auto serial_delay_tsc =
       us_to_cycles(seg_size * 1e6 / rdma_ctx->link_speed_, freq_ghz);
-  if (fabric_delay_tsc > serial_delay_tsc ||
-      to_usec(fabric_delay_tsc, freq_ghz) < kMAXRTTUS)
-    fabric_delay_tsc -= serial_delay_tsc;
-  else {
-    // Invalid timestamp.
-    // Recalculate delay.
-    t5 = rdtsc();
-    endpoint_delay_tsc = t6 - t5 + remote_queueing_tsc;
-    fabric_delay_tsc = (t6 - t1) - endpoint_delay_tsc;
-    if (fabric_delay_tsc > serial_delay_tsc)
-      fabric_delay_tsc -= serial_delay_tsc;
-    else {
-      // This may be caused by clock synchronization.
-      fabric_delay_tsc = 0;
-    }
-  }
+  if (unlikely(fabric_delay_tsc <= serial_delay_tsc ||
+               to_usec(fabric_delay_tsc, freq_ghz) >= kMAXRTTUS))
+    return 0;
+  fabric_delay_tsc -= serial_delay_tsc;
+
+  auto endpoint_delay_tsc = t6 - t5 + remote_queueing_tsc;
 
   UCCL_LOG_IO << "Total: " << to_usec(t6 - t1, freq_ghz)
               << ", Endpoint delay: " << to_usec(endpoint_delay_tsc, freq_ghz)
@@ -447,7 +435,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
   static bool first = true;
   static double avg_turnaround_delay = 0.0;
   static int count = 0;
-  auto turnaround_delay = to_usec(remote_queueing_tsc, freq_ghz);
+  auto turnaround_delay = remote_queueing_us;
 
   if (turnaround_delay <
           500 /* filter wrong values (probabaly due to clock sync) */

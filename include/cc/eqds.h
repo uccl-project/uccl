@@ -6,6 +6,7 @@
 #pragma once
 
 #include "util/list.h"
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 
@@ -91,36 +92,23 @@ struct EQDSCC {
   uint32_t fid_;
   struct PacerCreditQPWrapper* pc_qpw_;
 
-  inline uint32_t credit() { return credit_pull_ + credit_spec_; }
+  inline uint32_t credit() const {
+    return credit_pull_ + (in_speculating_ ? credit_spec_ : 0);
+  }
 
   // Called when transmitting a chunk.
   // Return true if we can transmit the chunk. Otherwise,
   // sender should pause sending this message until credit is received.
   inline bool spend_credit(uint32_t chunk_size) {
-    if (credit_pull_ > 0) {
-      if (credit_pull_ > chunk_size)
-        credit_pull_ -= chunk_size;
-      else
-        credit_pull_ = 0;
-      return true;
-    } else if (in_speculating_ && credit_spec_ > 0) {
-      if (credit_spec_ > chunk_size)
-        credit_spec_ -= chunk_size;
-      else
-        credit_spec_ = 0;
-      return true;
-    }
+    if (chunk_size > credit()) return false;
 
-    // let pull target can advance
-    if (credit_spec_ > chunk_size)
-      credit_spec_ -= chunk_size;
-    else
-      credit_spec_ = 0;
-
-    return false;
+    auto pull_bytes = std::min(credit_pull_, chunk_size);
+    credit_pull_ -= pull_bytes;
+    credit_spec_ -= chunk_size - pull_bytes;
+    return true;
   }
 
-  // Called when we receiving ACK or pull packet.
+  // Called when receiving a pull packet, which supplies receiver credit.
   inline void stop_speculating() { in_speculating_ = false; }
 
   PullQuanta compute_pull_target(void* context, uint32_t chunk_size);

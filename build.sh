@@ -382,7 +382,7 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
     --bind "$(pwd):/io"
   )
 
-  if [[ "$TARGET" == cuda* ]]; then
+  if [[ "$TARGET" == cu* ]]; then
     if $CONTAINER_ENGINE exec --help | grep -q -- --nv; then
       CONTAINER_RUN_ARGS+=(--nv)
       msg_info "Enabling NVIDIA GPU support with --nv flag"
