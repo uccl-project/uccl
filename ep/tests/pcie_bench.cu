@@ -95,11 +95,8 @@ __device__ __forceinline__ void copyGlobalMemory(void* dst, void* src,
   }
 
   // Handle the remaining tail bytes (if any)
-  if (i + 8 > len) {
-    i -= 8;
-    for (; i < len; i++) {
-      *(uint8_t*)(dst_addr + i) = *(uint8_t*)(src_addr + i);
-    }
+  for (; i < len; i++) {
+    *(uint8_t*)(dst_addr + i) = *(uint8_t*)(src_addr + i);
   }
 }
 
@@ -125,7 +122,7 @@ __device__ void kernelScatteredMemcpy(struct Iov* iov) {
     int iov_len = iov_lens[0];
 
     // Make it t-byte aligned to avoid GPU SEGV.
-    int num_packs = iov_len / 8;
+    int num_packs = divUp(iov_len, 8);
     int len_per_th = divUp(num_packs, nthreads) * 8;
     int start = len_per_th * tid;
     int end = min(start + len_per_th, iov_len);
@@ -153,7 +150,7 @@ __device__ void kernelScatteredMemcpy(struct Iov* iov) {
     char* src_ptr = (char*)iov->srcs[iov_idx];
     char* dst_ptr = (char*)iov->dsts[iov_idx];
     int iov_len = iov->lens[iov_idx];
-    if (iov_len == 0) return;
+    if (iov_len == 0) continue;
 
     // Copy t-byte chunks first (if possible)
     int num_full = iov_len / sizeof(T);
