@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <sys/uio.h>
+#include <unistd.h>
 
 CxiTransport::~CxiTransport() { destroy(); }
 
@@ -143,11 +144,7 @@ fi_info* select_cxi_info(fi_info* infos, int local_rank) {
                            "; available domains: " + available);
 }
 
-}  // namespace
-
-void CxiTransport::init(ProxyCtx& ctx) {
-  ctx_ = &ctx;
-
+fi_info* get_cxi_info() {
   fi_info* hints = fi_allocinfo();
   if (!hints) throw std::runtime_error("fi_allocinfo failed");
 
@@ -161,16 +158,53 @@ void CxiTransport::init(ProxyCtx& ctx) {
   hints->domain_attr->threading = FI_THREAD_DOMAIN;
 
   fi_info* info = nullptr;
-  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
   int rc = fi_getinfo(FI_VERSION(1, 15), nullptr, nullptr, 0, hints, &info);
   fi_freeinfo(hints);
   check_fi(rc, "fi_getinfo(cxi)");
+  return info;
+}
+
+// UCCL_CXI_DOMAIN_RETRIES: fi_domain retries with a fresh fi_info (default 3,
+// 50 ms apart; 0 = a single attempt). A service id picked wrongly during
+// fi_getinfo stays in that fi_info, so a retry has to fetch a new one.
+int cxi_domain_retries() {
+  static int const retries = [] {
+    char const* e = std::getenv("UCCL_CXI_DOMAIN_RETRIES");
+    return e ? std::atoi(e) : 3;
+  }();
+  return retries;
+}
+
+}  // namespace
+
+void CxiTransport::init(ProxyCtx& ctx) {
+  ctx_ = &ctx;
+
+  std::unique_lock<std::mutex> setup_lock(g_cxi_setup_mu);
+  fi_info* info = get_cxi_info();
 
   try {
     fi_info* selected = select_cxi_info(info, ctx.local_rank);
 
     check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr), "fi_fabric");
-    check_fi(fi_domain(fabric_, selected, &domain_, nullptr), "fi_domain");
+    int rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    for (int attempt = 1; rc && attempt <= cxi_domain_retries(); ++attempt) {
+      std::fprintf(stderr,
+                   "[CXI] fi_domain(%s) failed: %s; retrying with a fresh "
+                   "fi_info (%d)\n",
+                   selected->domain_attr->name, fi_strerror(-rc), attempt);
+      fi_close(&fabric_->fid);
+      fabric_ = nullptr;
+      fi_freeinfo(info);
+      info = nullptr;
+      usleep(50000);
+      info = get_cxi_info();
+      selected = select_cxi_info(info, ctx.local_rank);
+      check_fi(fi_fabric(selected->fabric_attr, &fabric_, nullptr),
+               "fi_fabric");
+      rc = fi_domain(fabric_, selected, &domain_, nullptr);
+    }
+    check_fi(rc, "fi_domain");
     setup_lock.unlock();
 
     fi_cq_attr cq_attr = {};
