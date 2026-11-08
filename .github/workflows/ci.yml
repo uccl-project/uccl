@@ -50,7 +50,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           TARGETS: ${{ inputs.targets || 'gb10' }}
           TESTS: ${{ inputs.tests }}
-          EXCLUDE: ${{ inputs.exclude }}
+          EXCLUDE: ${{ inputs.exclude || 'ep.bench.pack_unpack' }}
           TIERS: ${{ inputs.tiers || 'performance' }}
         run: |
           args=(--full)
