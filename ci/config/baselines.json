@@ -61,6 +61,36 @@
         "sample_max": 235.77
       }
     },
+    "gb10/ep.bench.pack_unpack/decode_triton_ms": {
+      "value": 7.188,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42525550867,
+        "source_commit": "055c3b23e9b6f22f505c79aa2558c836da249a0a",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 6.958,
+        "sample_max": 7.199
+      }
+    },
+    "gb10/ep.bench.pack_unpack/prefill_triton_ms": {
+      "value": 120.459,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42525550867,
+        "source_commit": "055c3b23e9b6f22f505c79aa2558c836da249a0a",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 120.23,
+        "sample_max": 120.768
+      }
+    },
     "gb10/ep.bench.pcie_bench/bandwidth_gb_s": {
       "value": 921.860571,
       "direction": "higher",

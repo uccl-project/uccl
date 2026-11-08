@@ -49,7 +49,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           TARGETS: ${{ inputs.targets || 'gb10' }}
-          TESTS: ${{ inputs.tests || 'ep.triton_pack_unpack,ep.bench.pack_unpack' }}
+          TESTS: ${{ inputs.tests || 'ep.triton_pack_unpack,ep.bench.*,p2p.bandwidth' }}
           EXCLUDE: ${{ inputs.exclude }}
           TIERS: ${{ inputs.tiers || 'integration,performance' }}
         run: |

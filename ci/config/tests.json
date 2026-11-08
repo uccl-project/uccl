@@ -4228,7 +4228,7 @@
       "sources": [
         "ep/bench/baseline/benchmark_pack_unpack.py"
       ],
-      "command": "for CI_SAMPLE in 1 2 3; do\npython3 ep/bench/baseline/benchmark_pack_unpack.py\ndone",
+      "command": "python3 ep/bench/baseline/benchmark_pack_unpack.py",
       "enabled": true,
       "targets": [
         "gh200",
@@ -4240,7 +4240,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 1800,
+      "timeout": 600,
       "requires": [
         "cuda"
       ],
