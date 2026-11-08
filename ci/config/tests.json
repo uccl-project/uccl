@@ -3092,7 +3092,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "python3 ep/bench/baseline/test_pack_unpack_triton.py",
+      "command": "python3 -m pytest -q ep/bench/baseline/test_pack_unpack_triton.py --junitxml=\"$CI_TEST_JUNIT\"",
       "setup": []
     },
     {
@@ -4228,7 +4228,7 @@
       "sources": [
         "ep/bench/baseline/benchmark_pack_unpack.py"
       ],
-      "command": "python3 ep/bench/baseline/benchmark_pack_unpack.py",
+      "command": "for CI_SAMPLE in 1 2 3; do\npython3 ep/bench/baseline/benchmark_pack_unpack.py\ndone",
       "enabled": true,
       "targets": [
         "gh200",
@@ -4240,7 +4240,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
+      "timeout": 1800,
       "requires": [
         "cuda"
       ],

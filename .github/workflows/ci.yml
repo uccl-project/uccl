@@ -48,10 +48,10 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          TARGETS: ${{ inputs.targets || 'l4' }}
-          TESTS: ${{ inputs.tests }}
-          EXCLUDE: ${{ inputs.exclude || 'ep.bench.pcie_bench' }}
-          TIERS: ${{ inputs.tiers || 'performance' }}
+          TARGETS: ${{ inputs.targets || 'gb10' }}
+          TESTS: ${{ inputs.tests || 'ep.triton_pack_unpack,ep.bench.pack_unpack' }}
+          EXCLUDE: ${{ inputs.exclude }}
+          TIERS: ${{ inputs.tiers || 'integration,performance' }}
         run: |
           args=(--full)
           if [[ $EVENT == pull_request ]]; then

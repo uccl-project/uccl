@@ -86,7 +86,8 @@
     "interface": "enP2p1s0f0np0",
     "env": {
       "UCCL_P2P_RDMA_GID_INDEX": "3",
-      "NCCL_IB_GID_INDEX": "3"
+      "NCCL_IB_GID_INDEX": "3",
+      "TRITON_PTXAS_PATH": "/usr/local/cuda-13.0/bin/ptxas"
     }
   },
   "amd": {
