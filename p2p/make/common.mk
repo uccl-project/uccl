@@ -128,7 +128,10 @@ rdma/tests/test_compression: rdma/tests/test_compression.cpp $(P2P_SHARED_LIB)
 	  -Wl,-rpath,'$$ORIGIN/../..'
 
 test-compression: rdma/tests/test_compression
-	@set -e; for type in fp16 bf16 fp32; do $< --float_type=$$type --iterations=2; done
+	@set -e; for type in fp16 bf16 fp32; do \
+	  UCCL_P2P_COMPRESS_STRATEGY=$${UCCL_P2P_COMPRESS_STRATEGY:-split_encode} \
+	    $< --float_type=$$type; \
+	done
 
 install: all
 	install -d $(INSTALL_DIR) $(LIBDIR) $(INCDIR)

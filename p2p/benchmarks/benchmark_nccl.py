@@ -5,7 +5,6 @@ import os
 import socket
 import sys
 import time
-import statistics
 from typing import List
 
 import numpy as np
@@ -67,53 +66,50 @@ def _recv(tensor, src, async_op=False):
 ################################################################################
 
 
-def _run_role(args, sending):
-    peer = 1 if sending else 0
-    role = "Client" if sending else "Server"
-    operation = _send if sending else _recv
+def _run_server(args):
+    peer = 0  # client rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
-        # Warm up communicator kernels and clocks before collecting samples.
-        for _ in range(args.warmup_iters):
-            operation(tensor, peer)
-        if args.device == "gpu":
-            torch.cuda.synchronize()
-        samples = []
-        iterations = args.iters
-        for _ in range(args.repeats):
-            while True:
-                dist.barrier()
-                if args.device == "gpu":
-                    torch.cuda.synchronize()
-                start = time.perf_counter()
-                for _ in range(iterations):
-                    operation(tensor, peer)
-                if args.device == "gpu":
-                    torch.cuda.synchronize()
-                elapsed = time.perf_counter() - start
-                # Both ranks must agree on the next iteration count. Use the
-                # slower participant so this measures completed transfers.
-                duration = torch.tensor(
-                    [elapsed],
-                    dtype=torch.float64,
-                    device=tensor.device if args.device == "gpu" else "cpu",
-                )
-                dist.all_reduce(duration, op=dist.ReduceOp.MAX)
-                elapsed = duration.item()
-                if elapsed >= args.min_seconds:
-                    break
-                iterations = max(
-                    iterations + 1, int(iterations * args.min_seconds / elapsed * 1.1)
-                )
-            samples.append(size * iterations * 8 / elapsed / 1e9)
-        gbps = statistics.median(samples)
+        # Warm-up receive
+        _recv(tensor, src=peer)
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            _recv(tensor, src=peer)
+            total += size
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
         print(
-            f"[{role}] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gbps / 8:7.2f} GB/s"
+            f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
+    print("[Server] Benchmark complete")
+
+
+def _run_client(args):
+    peer = 1  # server rank
+    for size in args.sizes:
+        tensor = _make_buffer(size, args.device, args.local_gpu_idx)
+        # Warm-up send
+        _send(tensor, dst=peer)
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            _send(tensor, dst=peer)
+            total += size
+        torch.cuda.synchronize() if isinstance(tensor, torch.Tensor) else None
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
         print(
-            f"[{role}] {args.repeats} trials: min={min(samples):.2f}, max={max(samples):.2f} Gbps, last_iters={iterations}"
+            f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-    print(f"[{role}] Benchmark complete")
+    print("[Client] Benchmark complete")
 
 
 def parse_size_list(val: str) -> List[int]:
@@ -154,26 +150,7 @@ def main():
         ],
     )
     p.add_argument("--iters", type=int, default=128)
-    p.add_argument("--warmup-iters", type=int, default=64)
-    p.add_argument("--repeats", type=int, default=7)
-    p.add_argument(
-        "--min-seconds",
-        type=float,
-        default=0.2,
-        help="Minimum duration per trial; 0 keeps the exact --iters count",
-    )
     args = p.parse_args()
-    if (
-        args.iters <= 0
-        or args.repeats <= 0
-        or args.warmup_iters < 0
-        or args.min_seconds < 0
-    ):
-        p.error(
-            "iters/repeats must be positive; warmup-iters/min-seconds must be nonnegative"
-        )
-    if args.device == "gpu":
-        torch.cuda.set_device(args.local_gpu_idx)
 
     backend = "nccl" if args.device == "gpu" else "gloo"
     dist.init_process_group(backend=backend)
@@ -190,9 +167,9 @@ def main():
 
     try:
         if rank == 0:
-            _run_role(args, sending=True)
+            _run_client(args)
         else:
-            _run_role(args, sending=False)
+            _run_server(args)
     finally:
         dist.destroy_process_group()
 

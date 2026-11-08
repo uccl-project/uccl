@@ -237,7 +237,6 @@ def benchmark_backend(
 
 failed = False
 for cfg in configs:
-    torch.manual_seed(0)
     print(f"Testing: {cfg['name']} ({cfg['tokens']} tokens, {cfg['hidden']} hidden)")
     print("=" * 70)
 
@@ -356,20 +355,18 @@ for cfg in configs:
     for result in results:
         if result is None:
             continue
-        total = result["pack"]["p50"] + result["unpack"]["p50"]
+        total = result["pack"]["mean"] + result["unpack"]["mean"]
         print(f"  {result['backend']:<12}: {total:>7.3f} ms")
-
-    print("  Total time uses median pack + median unpack over 100 samples.")
 
     # Speedup comparison
     if len(results) == 2 and results[0] is not None and results[1] is not None:
         print("\n🚀 Speedup (CUDA vs Triton):")
         print("-" * 70)
-        triton_total = results[0]["pack"]["p50"] + results[0]["unpack"]["p50"]
-        cuda_total = results[1]["pack"]["p50"] + results[1]["unpack"]["p50"]
+        triton_total = results[0]["pack"]["mean"] + results[0]["unpack"]["mean"]
+        cuda_total = results[1]["pack"]["mean"] + results[1]["unpack"]["mean"]
 
-        pack_speedup = results[0]["pack"]["p50"] / results[1]["pack"]["p50"]
-        unpack_speedup = results[0]["unpack"]["p50"] / results[1]["unpack"]["p50"]
+        pack_speedup = results[0]["pack"]["mean"] / results[1]["pack"]["mean"]
+        unpack_speedup = results[0]["unpack"]["mean"] / results[1]["unpack"]["mean"]
         total_speedup = triton_total / cuda_total
 
         print(f"  Pack:   {pack_speedup:.2f}x")

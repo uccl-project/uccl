@@ -332,9 +332,6 @@ bool test_bandwidth(Compressor& compressor, MemoryAllocator& allocator,
 
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  // Exercise compression even when the application default is disabled.
-  setenv("UCCL_P2P_COMPRESS_STRATEGY", "split_encode", 1);
-
   UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
   UCCL_LOG(INFO, UCCL_RDMA) << "   Compressor Unit Test";
   UCCL_LOG(INFO, UCCL_RDMA) << "========================================";

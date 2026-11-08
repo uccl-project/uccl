@@ -26,7 +26,7 @@ from utils import (
 def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     num_tokens = 512
     hidden = 2048
-    num_experts = 8 * num_ranks
+    num_experts = 3 * num_ranks
     num_topk = 4
     device_index = int(os.environ["LOCAL_RANK"])
     print(f"[simple-test] Running on device {device_index}", flush=True)
@@ -37,15 +37,13 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         dtype=torch.bfloat16,
         device=f"cuda:{device_index}",
     )
-    # Each token routes to distinct experts, as required by dispatch/combine.
-    topk_idx = (
-        torch.rand((num_tokens, num_experts), device=f"cuda:{device_index}")
-        .topk(num_topk, dim=-1)
-        .indices
+    topk_idx = torch.randint(
+        0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
     )
-    scratch_nbytes = Buffer.get_low_latency_rdma_size_hint(
-        num_tokens, hidden, num_ranks, num_experts
-    )
+    num_device_sms = torch.cuda.get_device_properties(
+        device_index
+    ).multi_processor_count
+    scratch_nbytes = int(1e9)
     buffer = None
 
     try:
@@ -54,7 +52,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
             num_nvl_bytes=0,
             num_rdma_bytes=int(scratch_nbytes),
             low_latency_mode=True,
-            num_qps_per_rank=num_experts // num_ranks,
+            num_qps_per_rank=num_device_sms,
             allow_nvlink_for_low_latency_mode=True,
             allow_mnnvl=False,
             explicitly_destroy=True,
