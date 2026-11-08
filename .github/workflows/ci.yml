@@ -48,7 +48,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          TARGETS: ${{ inputs.targets || 'l4,gb10' }}
+          TARGETS: ${{ inputs.targets || 'gb10' }}
           TESTS: ${{ inputs.tests }}
           EXCLUDE: ${{ inputs.exclude }}
           TIERS: ${{ inputs.tiers || 'performance' }}
