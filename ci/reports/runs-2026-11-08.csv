@@ -1,0 +1,12 @@
+phase,run_id,target,seconds,conclusion,started_at,completed_at,url
+full,42522891573,gh200,71.0,failure,2026-11-08T20:59:56Z,2026-11-08T21:01:07Z,https://github.com/uccl-project/uccl/actions/runs/42522891573/job/128860118509
+full,42522891573,l4,1357.0,failure,2026-11-08T20:59:56Z,2026-11-08T21:22:33Z,https://github.com/uccl-project/uccl/actions/runs/42522891573/job/128860118526
+full,42522891573,gb10,676.0,failure,2026-11-08T20:59:56Z,2026-11-08T21:11:12Z,https://github.com/uccl-project/uccl/actions/runs/42522891573/job/128860118534
+benchmark-retest,42523757108,l4,114.0,failure,2026-11-08T21:22:35Z,2026-11-08T21:24:29Z,https://github.com/uccl-project/uccl/actions/runs/42523757108/job/128862730512
+benchmark-retest,42523757108,gb10,74.0,failure,2026-11-08T21:11:14Z,2026-11-08T21:12:28Z,https://github.com/uccl-project/uccl/actions/runs/42523757108/job/128862730696
+gb10-calibration,42524257180,gb10,129.0,failure,2026-11-08T21:15:24Z,2026-11-08T21:17:33Z,https://github.com/uccl-project/uccl/actions/runs/42524257180/job/128864245344
+gb10-verification,42524909762,gb10,73.0,failure,2026-11-08T21:23:00Z,2026-11-08T21:24:13Z,https://github.com/uccl-project/uccl/actions/runs/42524909762/job/128866298524
+l4-calibration,42524998784,l4,182.0,success,2026-11-08T21:24:32Z,2026-11-08T21:27:34Z,https://github.com/uccl-project/uccl/actions/runs/42524998784/job/128866588400
+l4-verification,42525401610,l4,113.0,failure,2026-11-08T21:29:03Z,2026-11-08T21:30:56Z,https://github.com/uccl-project/uccl/actions/runs/42525401610/job/128867864862
+gb10-triton-calibration,42525550867,gb10,111.0,success,2026-11-08T21:30:47Z,2026-11-08T21:32:38Z,https://github.com/uccl-project/uccl/actions/runs/42525550867/job/128868307342
+gb10-final-verification,42525804181,gb10,103.0,failure,2026-11-08T21:33:45Z,2026-11-08T21:35:28Z,https://github.com/uccl-project/uccl/actions/runs/42525804181/job/128869080908

@@ -1,111 +1,121 @@
 # Migration validation — 2026-11-08
 
-Branch: `codex/structured-ci`, based on `78adb5dc`; PR: #1131. Local evidence is
-in ignored `ci-results/` directories, with source archive hashes in `source.json`.
-GitHub host/format checks have passed. Hardware dispatch still needs secrets;
-the upload attempt returned HTTP 403.
+PR: [#1131](https://github.com/uccl-project/uccl/pull/1131), branch
+`codex/structured-ci`. The three `UCCL_CI_*` secrets work from GitHub on L4 and
+GB10, including the jump host. Hardware runs used the isolated
+`codex/ci-validation-20261108` branch while the new workflow awaits merging.
 
 ## PR #1131 follow-up
 
-- Four host suites initially failed on missing `infiniband/verbs.h`; installing
-  `libibverbs-dev` fixed them. All 27 host suites subsequently passed on GitHub.
-- Python formatting now uses Black 26.5.1, matching `uv.lock` and the formatting
-  branch. Both format checks passed.
-- All 62 example/experimental entries are disabled, including GIN fixtures;
-  the separate GIN CUDA workflow is removed.
+- All 27 host suites and both formatting checks passed after installing
+  `libibverbs-dev` and aligning Black with version 26.5.1.
+- All 62 example/experimental entries remain disabled; GIN CI is removed.
+- CI now records suite timings and checks measured performance against a 90% floor.
 
 ## Planned GH200 pair restoration
 
-`gh200_0` is configured to match `gh200_1` with CUDA 13.2 and an assumed 400G
-RDMA link. Single-node tests use `gh200_1`; compatible two-node EP/P2P/NIXL and
-transport suites now include GH200. EP latency and host/GPU-buffer bandwidth
-benchmarks are registered, but the pair and link throughput remain untested.
-
-The SSH bundle includes the offline node's previously trusted keys. Its account,
-local storage and toolchain still need provisioning when it returns.
-
-All 16 harness tests pass, including host-interface selection and metric parsing.
-On `gh200_1`, `ep.triton_pack_unpack` passed 25 cases with two optional skips;
-artifacts and cleanup succeeded (`gh200-pair-worker`). No GH200 pair baseline
-has been installed.
+Both GH200 nodes are unreachable. The GitHub job lost SSH to `gh200_1` during
+source upload after 71 seconds; none of its 47 selected suites ran.
+`gh200_0` still needs provisioning. CUDA 13.2 and the 400G RDMA link remain
+configured assumptions; there is no GH200 pair performance baseline.
+Earlier single-node results do not establish current availability.
 
 ## Confirmed behavior
 
-| Target | Validated coverage |
-|---|---|
-| Host | All 27 suites; Apptainer mock corrected for ARM hosts |
-| L4 | Native P2P/GPU RDMA, IPC, compression, notifications, protocol utilities and bandwidth |
-| GH200 | Native P2P/shutdown, EP ordering/barrier, CUDA utilities and Triton packing |
-| GB10 | EP low-latency/dedup/dual-mode, all four NIXL suites, host P2P utilities and staged bandwidth |
+[Full GitHub sweep](https://github.com/uccl-project/uccl/actions/runs/42522891573):
 
-Machine locks rejected concurrent runs. Harness tests cover peer failure,
-timeout, disconnect and descendant cleanup. Workflow YAML passed actionlint.
+| Target | Selected | Initial result | Job time |
+|---|---:|---|---:|
+| L4 | 46 | 42 passed, 4 failed | 22m 37s |
+| GB10 | 26 | 18 valid passes, 6 failed, 2 false passes | 11m 16s |
+| GH200 | 47 | Blocked before tests | 1m 11s |
 
-Initial `p2p.bandwidth` samples: **385.68 Gbps on L4**, **124.59 Gbps on GB10**
-(1 MiB host-pinned buffers, 128 iterations). These single observations are
-baseline candidates only; `config/baselines.json` remains empty.
+GB10's false passes came from ignored pytest failures and a benchmark that
+caught compiler errors. Both are fixed: the Triton unit suite now passes 25
+cases with two optional skips, and packing produces valid metrics. Three CUDA
+13 benchmark build failures also passed retesting. Across the sweep and fixes,
+23/26 GB10 suite commands passed; three fixture failures remain. L4 still has
+four fixture failures. Threshold failures are counted separately below.
+
+[Suite times](reports/timings-2026-11-08.csv),
+[job times](reports/runs-2026-11-08.csv) and
+[performance samples](reports/performance-2026-11-08.csv) record every run and
+source commit. Suite time is the slowest participating rank, including builds
+inside its command; job time also includes shared setup and collection, but
+excludes queue waits. `INVALID` means a zero exit status concealed failure.
+
+[Baselines](config/baselines.json) contain 17 metrics, each calibrated from three
+benchmark repetitions, with sample ranges and source commits. Throughput must
+be at least baseline × 0.9; latency must be at most baseline / 0.9.
+
+| Metric | Baseline | Required |
+|---|---:|---:|
+| L4 pinned P2P | 380.44 Gbps | >=342.396 Gbps |
+| L4 GPU-buffer P2P | 164.85 Gbps | >=148.365 Gbps |
+| GB10 pinned P2P | 127.72 Gbps | >=114.948 Gbps |
+| GB10 EP dispatch + combine | 233.945 µs | <=259.939 µs |
+
+P2P uses 1 MiB transfers, 128 iterations. EP uses 32 tokens, hidden size 7168,
+top-k 8 and 16 experts. GB10's `pcie_bench` is a GPU-copy microbenchmark on
+unified memory; its GB/s result is not network/link throughput.
+
+Independent checks use normal single benchmark invocations. The latest checks
+passed **13/17 metrics**; four crossed their thresholds on unchanged benchmark
+code:
+
+| Metric | Measured | Required |
+|---|---:|---:|
+| GB10 batched GPU-to-CPU latency | 11.511 µs | <=8.44 µs |
+| GB10 Triton decode packing | 8.006 ms | <=7.987 ms |
+| L4 batched GPU-to-CPU latency | 6.505 µs | <=4.439 µs |
+| L4 NCCL bandwidth | 100.27 Gbps | >=105.507 Gbps |
+
+These expose same-code variability, not demonstrated code regressions. The
+90% thresholds remain enforced. [L4 verification](https://github.com/uccl-project/uccl/actions/runs/42525401610)
+and [GB10 verification](https://github.com/uccl-project/uccl/actions/runs/42525804181)
+contain the measured failures; the CSV includes earlier checks too.
 
 ## Hardware/configuration exclusions established by testing
 
-- **GB10:** native GPU registration fails with verbs and DMA-BUF; host-staged
-  EP/NIXL remains enabled.
-- **L4:** lacks native peer atomics/NVLink; full native EP builds require SM90.
-  Barrier and Triton fixtures remain eligible.
-- **GDRCopy:** no available `/dev/gdrdrv`; userspace libraries alone are insufficient.
-- **Legacy RDMA fixtures:** EQDS transfer needs a different CCA build; the raw
-  RDMA fixture hardcodes an incompatible NIC/GPU-memory configuration.
-- **Other exclusions:** AMD, EFA, MUSA/Hygon, privileged AF_XDP/DPDK, external
-  NVSHMEM/PPLX and eight-GPU comparisons. Exact reasons are in `config/tests.json`.
+- GB10 native GPU registration fails; host-staged EP/P2P/NIXL stays enabled.
+- L4 lacks peer atomics/NVLink; full native EP needs SM90.
+- GDRCopy needs unavailable `/dev/gdrdrv`; userspace libraries are insufficient.
+- AMD, EFA, MUSA/Hygon, privileged AF_XDP/DPDK and external-library fixtures
+  remain excluded. Exact reasons live in `config/tests.json`.
 
 ## Known failures exposed by broader coverage
 
-Enabled failures remain visible. Rows marked **excluded** are historical
-example/experimental results, outside current CI scope. Evidence paths below
-are relative to `ci-results/`.
-
-| Suite/family | Observed failure | Evidence directory |
+| Suite | Target | Failure |
 |---|---|---|
-| `collective.rdma.transport` | Initialization failure on L4/GB10 | `l4-extra`, `gb10-extra` |
-| `collective.multi_process_groups` — excluded | NCCL RDMA plugin SIGSEGV | `l4-retry`, `gb10-retry` |
-| `ukernel.transport.unit`, `ukernel.python.transport_paths.tcp` — excluded | L4 TCP payload mismatch | `l4`, `l4-local`, `gb10-libraries` |
-| `ukernel.ccl.test_transport_backend_e2e` — excluded | Native transport failure | `l4-bindings` |
-| `lite.ep.*` — excluded | Missing `pybind11` declarations | `l4-extra` |
-| `p2p.compression_unit` | Fixture uses removed/private APIs | `l4-extra` |
-| `ep.internode_simple` | Fixture uses outdated address/Buffer APIs | `gb10-extra` |
-| `lite.collective.sendrecv` — excluded | Communicator initialization error | `l4-bindings` |
-| `p2p.notifications` on GH200 | Receiver timeout; L4 passes | `gh200-notify`, `l4-final` |
-| `ukernel.python.transport_paths` — excluded | L4 barrier failure; GB10 GPU registration unsupported | `l4-ukernel`, `gb10-identity` |
+| `collective.rdma.transport` | L4, GB10 | No transfer progress; 300-second timeout |
+| `p2p.compression_unit` | L4, GB10 | Removed/private fixture APIs |
+| `ep.internode_simple` | GB10 | Outdated address/Buffer APIs |
+| `ep.bench.pcie_bench` | L4 | Illegal GPU memory access |
+| `nixl.internode.nccl` | L4 | Illegal GPU memory access, then timeout |
 
-Not every target/suite combination has run. Registration describes intended
-coverage; artifacts establish what passed. Hardware coverage is not all green.
+These stay enabled and visible. Broken benchmarks have no fabricated baseline;
+GH200-only benchmarks remain uncalibrated. Performance-only verification runs
+excluded known crashing fixtures after the full sweep had already tested them.
 
 ## Changes made to test harnesses
 
-- Propagate multiprocess failures and retry RDMA rendezvous during startup.
-- Update IPC/Ray-style fixtures to current APIs and valid GPU selection.
-- Make the Apptainer mock architecture-independent.
-- Pin NIXL sources and use ASIO coordination with bounded connection retries.
+- Propagate process failures; bound rendezvous, disconnect and descendant cleanup.
+- Update IPC/Ray fixtures, architecture handling and pinned NIXL setup.
+- Support CUDA 13's clock-rate query; use GB10's CUDA 13 assembler for Triton.
+- Invoke Triton tests through pytest with JUnit; reject swallowed benchmark errors.
+- Extract metrics, enforce thresholds and report per-suite times. All 18 CI
+  harness tests pass; registry validation accounts for 184 suites.
 
 ## Deployment state and remaining administrator actions
 
-L40/L41, GH200_1 and both GB10 servers have working `uccl` accounts and local
-storage. GH200's existing account retains administrator/Docker privileges;
-new CI accounts have neither. A separate `uccl` jump account reaches both GB10
-servers with the CI key; shell commands and unrelated-port forwarding were
-denied in verification.
+L4/GB10 run as `uccl` with local storage and no sudo, Docker or NFS. GH200's
+existing account retains administrator/Docker membership. The restricted jump
+account uses the same dedicated CI key. No further secret upload is needed.
 
-Before deployment:
+1. Restore both GH200 nodes, provision `gh200_0`, then validate the pair.
+2. Set branch protection to `CI status` plus formatting; remove retired checks
+   and the legacy jump secret after the new workflow is active.
+3. Resolve the visible fixture failures and performance variability before
+   treating the hardware/performance checks as reliably green.
 
-1. Upload the three `UCCL_CI_*` secrets, including the updated jump-host config,
-   with a token that can manage Actions secrets:
-
-   ```bash
-   bash ci/install-secrets.sh /Users/yangzhou/.ssh/uccl-ci-bootstrap uccl-project/uccl
-   ```
-
-2. Provision `gh200_0` when it returns and validate the pair.
-3. Update branch protection to `CI status` plus formatting checks; remove retired
-   checks. Remove the legacy jump-host secret after the new workflow is active.
-4. Review the enabled failures above before merging PR #1131.
-
-See [README.md](README.md#server-provisioning-and-credentials) for setup details.
+See [README.md](README.md#server-provisioning-and-credentials) for setup.
