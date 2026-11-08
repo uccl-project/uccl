@@ -22,6 +22,17 @@ constexpr int kBenchmarkIterations = 400000;
 constexpr int kWarmupTrials = 2;
 constexpr int kMeasuredTrials = 7;
 
+__device__ __forceinline__ unsigned long long timestamp() {
+#ifdef __CUDA_ARCH__
+  // The nanosecond timer does not need a fixed SM clock for conversion.
+  unsigned long long ticks;
+  asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(ticks) : : "memory");
+  return ticks;
+#else
+  return clock64();
+#endif
+}
+
 struct alignas(128) Fifo {
   // Using volatile and avoiding atomics.
   volatile uint64_t head;             // Next slot to produce
@@ -83,7 +94,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
       cur_tail = ld_volatile(&my_fifo->tail);
       // Snapshot the CPU's completion counter once per batch. Retire timestamps
       // before reusing their ring slots, even if the CPU has raced ahead.
-      unsigned long long completed_at = clock64();
+      unsigned long long completed_at = timestamp();
       while (complete < cur_tail) {
         cycle_accum_smem +=
             completed_at - start_cycle_smem[complete & kQueueMask];
@@ -104,7 +115,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
 #pragma unroll
     for (int i = 0; i < todo; ++i) {
       unsigned long long idx = (my_hdr + i) & kQueueMask;
-      unsigned long long t0 = clock64();
+      unsigned long long t0 = timestamp();
       unsigned long long cmd =
           (static_cast<uint64_t>(bid) << 32) | (it + i + 1);
 
@@ -115,7 +126,7 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
   }
   while (complete < kBenchmarkIterations) {
     uint64_t cur_tail = ld_volatile(&my_fifo->tail);
-    unsigned long long completed_at = clock64();
+    unsigned long long completed_at = timestamp();
     while (complete < cur_tail) {
       cycle_accum_smem +=
           completed_at - start_cycle_smem[complete & kQueueMask];
@@ -170,7 +181,7 @@ struct Trial {
   double wall_ms;
 };
 
-Trial run_trial(Fifo* fifos, gpuStream_t stream, int clock_rate_khz) {
+Trial run_trial(Fifo* fifos, gpuStream_t stream, double ticks_per_us) {
   for (int i = 0; i < kNumProxyThs; ++i) {
     fifos[i].head = 0;
     fifos[i].tail = 0;
@@ -204,7 +215,7 @@ Trial run_trial(Fifo* fifos, gpuStream_t stream, int clock_rate_khz) {
     total_ops += ops[i];
   }
   double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-  return {double(total_cycles) * 1000.0 / clock_rate_khz / total_ops,
+  return {double(total_cycles) / ticks_per_us / total_ops,
           double(total_ops) / (wall_ms * 1000.0), wall_ms};
 }
 
@@ -216,24 +227,29 @@ double median(std::vector<double> samples) {
 int main() {
   gpuStream_t stream;
   GPU_RT_CHECK(gpuStreamCreate(&stream));
-  int clock_rate_khz = 0;
-#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
-  GPU_RT_CHECK(
-      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, 0));
+#if defined(CUDART_VERSION)
+  double ticks_per_us = 1000.0;  // CUDA globaltimer is in nanoseconds.
+  printf("Timer: CUDA globaltimer (nanoseconds)\n");
 #else
   gpuDeviceProp prop;
   GPU_RT_CHECK(gpuGetDeviceProperties(&prop, 0));
-  clock_rate_khz = prop.clockRate;
+  double ticks_per_us = prop.clockRate / 1000.0;
+  printf("Timer: clock64 at %d kHz\n", prop.clockRate);
 #endif
-  printf("clock rate: %d kHz\n", clock_rate_khz);
   Fifo* fifos;
   GPU_RT_CHECK(
       gpuHostAlloc(&fifos, sizeof(Fifo) * kNumProxyThs, gpuHostAllocMapped));
-  for (int trial = 0; trial < kWarmupTrials; ++trial)
-    run_trial(fifos, stream, clock_rate_khz);
+  int warmups = 0;
+  auto warmup_start = std::chrono::steady_clock::now();
+  while (warmups < kWarmupTrials ||
+         std::chrono::steady_clock::now() - warmup_start <
+             std::chrono::seconds(1)) {
+    run_trial(fifos, stream, ticks_per_us);
+    ++warmups;
+  }
   std::vector<double> latencies, throughputs, wall_times;
   for (int trial = 0; trial < kMeasuredTrials; ++trial) {
-    auto sample = run_trial(fifos, stream, clock_rate_khz);
+    auto sample = run_trial(fifos, stream, ticks_per_us);
     latencies.push_back(sample.latency_us);
     throughputs.push_back(sample.throughput);
     wall_times.push_back(sample.wall_ms);
@@ -241,7 +257,7 @@ int main() {
            sample.throughput);
   }
   printf("Medians of %d trials after %d warmups (%d ops/block/trial)\n",
-         kMeasuredTrials, kWarmupTrials, kBenchmarkIterations);
+         kMeasuredTrials, warmups, kBenchmarkIterations);
   printf("Overall avg GPU-measured latency  : %.3f µs\n", median(latencies));
   printf("End-to-end Wall-clock time        : %.3f ms\n", median(wall_times));
   printf("Throughput                        : %.2f Mops/s\n",
