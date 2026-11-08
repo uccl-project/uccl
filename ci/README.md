@@ -11,22 +11,33 @@ machines orchestrate jobs. GPU tests execute over SSH on the lab servers as
 |---|---|---|---|
 | `cpu` | GitHub `ubuntu-24.04` | CPU | Python regressions, C++ host tests, CI self-tests |
 | `l4` | `l40`, `l41` | 4 L4 GPUs per node, IB, CUDA 12.9 | Native P2P, IPC, compression, two-node GPU RDMA, protocol tests, NIXL |
-| `gh200` | `gh200_1` | 1 GH200, IB, CUDA 13.2 | Single-GPU tests, EP barriers, CUDA utilities, local NIXL |
+| `gh200` | `gh200_1`, `gh200_0` | 1 GH200 per node, assumed 400G RDMA link, CUDA 13.2 | Two-node EP, native GPU RDMA, compression, NIXL and EP/P2P benchmarks |
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10 per node, RoCE, CUDA 13.0 | Two-node EP, host-staged communication, NIXL |
 | `amd` | Offline | ROCm | Explicitly disabled |
 
-`gh200_0` is not in any enabled target. L4 has GPU peer copies but no native
-peer atomics/NVLink. GB10's native GPU memory registration failed both ordinary
-verbs and DMA-BUF validation; two-node native GPU RDMA tests therefore select
-L4, while compatible single-node GPU-buffer tests also use GH200. This does
-not exclude GB10 host-staged EP or NIXL tests. GH200 has GDRCopy userspace
+The GH200 pair is configured in anticipation of `gh200_0` returning, with the
+same GPU/toolchain capabilities as `gh200_1` and a 400 Gbps RDMA link as specified
+by the pool owner. These are configuration assumptions, not fresh validation.
+Single-node GH200 suites use `gh200_1`, the first host in the inventory.
+Two-node suites require both hosts online and provisioned.
+
+GH200 control interfaces differ: `gh200_1` uses `enxc8a36290119d` and `gh200_0`
+uses `enx3c18a0d51943`, as in the former GH200 workflow. The `interfaces` mapping
+selects by SSH alias, including when `--hosts` changes rank order. Both hosts
+use `mlx5_0` for RDMA; 400 Gbps is recorded as nominal link metadata, not a
+measured throughput or regression threshold.
+
+L4 has GPU peer copies but no native peer atomics/NVLink. GB10's native GPU
+memory registration failed both ordinary verbs and DMA-BUF validation;
+two-node native GPU RDMA suites select L4/GH200. This does not exclude GB10
+host-staged EP or NIXL tests. GH200 has GDRCopy userspace
 libraries but no `/dev/gdrdrv`; tests requiring that kernel driver are disabled
 with reasons. These capabilities are separate from the presence of an RDMA NIC.
 
 ## Current coverage
 
-The registry currently contains **182 entries: 87 enabled and 95 disabled**.
-Of the enabled entries, 73 are in the default tiers and 14 are opt-in performance
+The registry currently contains **184 entries: 89 enabled and 95 disabled**.
+Of the enabled entries, 73 are in the default tiers and 16 are opt-in performance
 benchmarks. Entries represent suites, not individual pytest or C++ test cases.
 Enabled means eligible for selection, not necessarily passing; see
 [validation.md](validation.md) for execution evidence and known failures.
@@ -34,8 +45,8 @@ Enabled means eligible for selection, not necessarily passing; see
 | Enabled family | Entries | What it checks |
 |---|---:|---|
 | `ci.*` | 1 | Selection, inventory auditing, subprocess cleanup, cancellation, exit codes and baseline comparisons |
-| `p2p.*` | 40 | Host backend/wrapper tests, memory registration, IPC, native reads/writes, device binding, compression, notifications and benchmarks |
-| `ep.*` | 21 | Host compatibility, event ordering, barriers, low-latency/deduplicated/dual-mode communication, Triton packing and benchmarks |
+| `p2p.*` | 41 | Host backend/wrapper tests, memory registration, IPC, native reads/writes, device binding, compression, notifications and host/GPU-buffer benchmarks |
+| `ep.*` | 22 | Host compatibility, event ordering, barriers, low-latency/deduplicated/dual-mode communication, Triton packing and benchmarks |
 | `mccl.host.*` | 4 | MUSA plugin ABI and behavior using host fixtures; no MUSA GPU execution |
 | `collective.*` | 14 | Protocol utilities, congestion-control algorithms, RDMA transport and CUDA utilities; no example-driven process-group test |
 | `nixl.*` | 4 | Local transfers with the IPC option on/off, and two-node RDMA/NCCL smoke tests |
@@ -47,9 +58,9 @@ Full selection on each enabled target, before changed-file filtering:
 | Target | Default (`host,build,integration`) | Opt-in `performance` |
 |---|---:|---:|
 | `cpu` | 27 | 0 |
-| `l4` | 38 | 7 |
-| `gh200` | 19 | 10 |
-| `gb10` | 20 | 5 |
+| `l4` | 38 | 8 |
+| `gh200` | 31 | 16 |
+| `gb10` | 20 | 6 |
 
 Some suites run on multiple targets, so target counts overlap. The `host` tier
 describes the test type: 27 host suites use the GitHub CPU target, while seven
@@ -128,7 +139,9 @@ Supported targets are `all`, `cpu`, `l4`, `gb10`, and `gh200`:
 /run-ci all
 /run-ci cpu
 /run-ci l4 p2p.*
+/run-ci gh200 ep.*,p2p.rdma_native.*,nixl.*
 /run-benchmark l4 p2p.bandwidth
+/run-benchmark gh200 ep.bench.low_latency,p2p.bandwidth,p2p.bandwidth_gpu
 /run-benchmark all
 ```
 
@@ -163,6 +176,13 @@ they are not called by an enabled job. The runner currently implements Linux
 CPU and NVIDIA CUDA environments. Add and validate a ROCm worker environment
 when the AMD servers return before enabling that target.
 
+For the restored GH200 pair, `ep.bench.low_latency` records dispatch/combine
+latency using the existing two-node EP fixture. `p2p.bandwidth` measures pinned
+host buffers; `p2p.bandwidth_gpu` measures GPU-buffer RDMA writes. The latter is
+eligible on L4/GH200; EP latency is eligible on GH200/GB10. The EP fixture also
+checks correctness and prints timing output in its integration registration;
+only the performance registration extracts metrics and compares baselines.
+
 ## Server provisioning and credentials
 
 One-time administrator setup, on each machine:
@@ -180,6 +200,14 @@ isolation boundary against a malicious approved PR. Removing those existing
 privileges or moving to a freshly isolated machine is a separate administrator
 migration. CI itself does not use sudo, Docker, a password, a personal conda
 environment, agent forwarding, or NFS.
+
+`gh200_0` still needs this provisioning when it returns, including the dedicated
+CI public key, local storage, Python 3.12 and CUDA 13.2. The private SSH bundle
+has its alias and previously trusted host keys; verify the keys and interface
+names if the server is rebuilt, then refresh the repository CI secrets. No
+connection or account changes on the offline node are claimed. GH200 EP keeps
+the generic Hopper/RDMA build (`UCCL_EP_DISABLE_GH200=1`) because the managed
+atomic-buffer path requires RDMA capabilities not established on this pool.
 
 Install three repository Actions secrets using an Actions-secrets-capable token:
 

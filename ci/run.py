@@ -275,7 +275,7 @@ def main():
                 with open(archive, "rb") as stream:
                     check([*ssh, host, command], stdin=stream)
                 staged.append(host)
-                worker_cmd = f"cd {shlex.quote(remote + '/src')} && exec python3 ci/worker.py --target {shlex.quote(args.target)} --node {index} --root {shlex.quote(args.root)}"
+                worker_cmd = f"cd {shlex.quote(remote + '/src')} && exec python3 ci/worker.py --target {shlex.quote(args.target)} --node {index} --host {shlex.quote(host)} --root {shlex.quote(args.root)}"
                 command = [*ssh, host, worker_cmd]
             else:
                 local = Path(tmp) / "run" / "src"

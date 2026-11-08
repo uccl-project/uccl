@@ -71,6 +71,15 @@ def compatible(test, target):
     )
 
 
+def target_interface(target, host):
+    """Resolve by SSH alias, not rank: --hosts may reorder a hardware pool."""
+    if "interfaces" in target:
+        if host not in target["interfaces"]:
+            raise ValueError(f"No network interface configured for host {host!r}")
+        return target["interfaces"][host]
+    return target["interface"]
+
+
 def validate(catalog, targets, files=None):
     errors, ids, covered = [], set(), set()
     for name, target in targets.items():
@@ -78,6 +87,16 @@ def validate(catalog, targets, files=None):
             errors.append(f"Invalid target ID: {name}")
         if not target["enabled"] and not target.get("reason"):
             errors.append(f"{name}: disabled target needs a reason")
+        if "interfaces" in target:
+            interfaces = target["interfaces"]
+            if not isinstance(interfaces, dict) or set(interfaces) != set(
+                target["hosts"]
+            ):
+                errors.append(f"{name}: interfaces must cover exactly the target hosts")
+            elif any(
+                not isinstance(value, str) or not value for value in interfaces.values()
+            ):
+                errors.append(f"{name}: interface names must be nonempty strings")
     for test in catalog["tests"]:
         name = test["id"]
         if name in ids or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", name):

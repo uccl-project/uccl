@@ -38,7 +38,8 @@
   "gh200": {
     "enabled": true,
     "hosts": [
-      "gh200_1"
+      "gh200_1",
+      "gh200_0"
     ],
     "gpus": 1,
     "capabilities": [
@@ -53,7 +54,11 @@
     "python": "python3",
     "cuda": "/usr/local/cuda-13.2",
     "sm": "90",
-    "interface": "enxc8a36290119d",
+    "interfaces": {
+      "gh200_1": "enxc8a36290119d",
+      "gh200_0": "enx3c18a0d51943"
+    },
+    "nominal_rdma_gbps": 400,
     "env": {
       "UCCL_IB_HCA": "mlx5_0",
       "NCCL_IB_HCA": "mlx5_0",

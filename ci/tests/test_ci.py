@@ -123,6 +123,61 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "gpus must be a nonnegative"):
             catalog.validate(self.catalog, self.targets)
 
+    def test_host_interfaces_follow_alias_when_ranks_are_reordered(self):
+        target = self.targets["gpu"]
+        target["interfaces"] = {"a": "eth-a", "b": "eth-b"}
+        catalog.validate(self.catalog, self.targets)
+        self.assertEqual(
+            [catalog.target_interface(target, host) for host in ["b", "a"]],
+            ["eth-b", "eth-a"],
+        )
+        with self.assertRaisesRegex(ValueError, "No network interface"):
+            catalog.target_interface(target, "unknown")
+        self.assertEqual(catalog.target_interface({"interface": "ib0"}, "a"), "ib0")
+
+    def test_interface_inventory_rejects_missing_and_unknown_hosts(self):
+        for interfaces in [
+            {"a": "eth-a"},
+            {"a": "eth-a", "typo": "eth-b"},
+            {"a": "eth-a", "b": ""},
+        ]:
+            with self.subTest(interfaces=interfaces):
+                self.targets["gpu"]["interfaces"] = interfaces
+                with self.assertRaisesRegex(ValueError, "interface"):
+                    catalog.validate(self.catalog, self.targets)
+
+    def test_gh200_two_node_coverage_and_directory_exclusions(self):
+        registry, targets = catalog.read_catalog()
+        definitions = {test["id"]: test for test in registry["tests"]}
+        default = catalog.plan(registry, targets, target_names=["gh200"])
+        performance = catalog.plan(
+            registry, targets, tiers=["performance"], target_names=["gh200"]
+        )
+        normal_ids = set(default["include"][0]["tests"])
+        perf_ids = set(performance["include"][0]["tests"])
+        self.assertTrue(
+            {
+                "ep.low_latency",
+                "p2p.rdma_native.read",
+                "p2p.rdma_native.write",
+                "nixl.internode.rdma",
+            }
+            <= normal_ids
+        )
+        self.assertTrue(
+            {"ep.bench.low_latency", "p2p.bandwidth", "p2p.bandwidth_gpu"} <= perf_ids
+        )
+        self.assertFalse(normal_ids & perf_ids)
+        self.assertEqual(targets["gh200"]["hosts"], ["gh200_1", "gh200_0"])
+        for name in normal_ids | perf_ids:
+            self.assertFalse(
+                any(
+                    source.startswith(("examples/", "experimental/"))
+                    for source in definitions[name]["sources"]
+                ),
+                name,
+            )
+
 
 class ProcessTests(unittest.TestCase):
     def test_exit_status_timeout_and_owned_descendant_cleanup(self):
@@ -200,6 +255,42 @@ class ProcessTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_ep_latency_and_gpu_bandwidth_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gh200"
+            target.mkdir()
+            (target / "results.json").write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            {"id": name, "tier": "performance", "exit_code": 0}
+                            for name in ["ep.bench.low_latency", "p2p.bandwidth_gpu"]
+                        ]
+                    }
+                )
+            )
+            (target / "ep.bench.low_latency.log").write_text(
+                "[rank 0] Dispatch + combine bandwidth: 40.00 GB/s, avg_t=22.00 us, min_t=20.00 us, max_t=25.00 us\n"
+                "[rank 1] Dispatch + combine bandwidth: 42.00 GB/s, avg_t=20.00 us, min_t=19.00 us, max_t=24.00 us\n"
+            )
+            (target / "p2p.bandwidth_gpu.log").write_text(
+                "[Client] 1.0 MB : 300.00 Gbps | 37.50 GB/s | 27.96 us\n"
+            )
+            result = evaluate(root, {})
+            self.assertEqual(result["failures"], [])
+            measurements = {m["key"]: m for m in result["measurements"]}
+            self.assertEqual(
+                measurements["gh200/ep.bench.low_latency/dispatch_combine_us"]["value"],
+                21,
+            )
+            self.assertEqual(
+                measurements["gh200/p2p.bandwidth_gpu/bandwidth_gbps"]["value"], 300
+            )
+            self.assertTrue(
+                all(m["status"] == "unbaselined" for m in measurements.values())
+            )
+
     def test_thresholds_and_nonfinite(self):
         self.assertTrue(compare(90, dict(value=100, direction="higher", tolerance=0.1)))
         self.assertFalse(

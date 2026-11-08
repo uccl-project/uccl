@@ -23,6 +23,32 @@ the GIN routing/probability fixtures built through that tree, are now explicitly
 disabled by CI scope. The separate GIN CUDA workflow is removed. Historical
 results below include exploratory runs of those now-excluded suites.
 
+## Planned GH200 pair restoration
+
+The pool owner reports that `gh200_0` will return with a 400 Gbps RDMA connection
+to `gh200_1`, and that the pair previously ran EP/P2P performance tests. The
+inventory now assumes matching GH200 capabilities and CUDA 13.2 on both nodes.
+`gh200_1` remains first for single-node runs. Per-host control interfaces come
+from the prior GH200 workflow; RDMA remains pinned to `mlx5_0`.
+
+Existing compatible two-node EP/P2P/NIXL and transport entries now include
+GH200. New performance entries expose EP dispatch/combine latency and GPU-buffer
+P2P bandwidth; the existing host-pinned bandwidth benchmark also includes GH200.
+The 400 Gbps link rate is nominal metadata. No measured GH200 pair baseline has
+been installed, and none of these additions claims a fresh two-node pass.
+
+The dedicated SSH bundle includes `gh200_0` with its previously trusted host
+keys. Its CI account/key, local directories and toolchain must be provisioned
+and checked when it returns; no connection to that offline node was attempted.
+
+Validation of this change: all 16 CI harness tests pass, covering interface
+selection by host alias, reordered ranks, inventory validation, GH200 selection
+and the new metric parsers. The updated worker ran `ep.triton_pack_unpack` on
+`gh200_1` only: 25 cases passed and two optional CUDA-reference cases skipped.
+Artifacts in `ci-results/gh200-pair-worker` record the expected SSH alias and
+control interface; collection and cleanup completed successfully. This does
+not validate the restored pair or its link throughput.
+
 ## Confirmed behavior
 
 - All 27 host suites have passed, including 12 CI harness regression tests.
@@ -114,7 +140,8 @@ failed and passing cases must not be conflated.
 
 ## Deployment state and remaining administrator actions
 
-All five authorized servers have working `uccl` logins and local CI storage.
+The five previously provisioned servers have working `uccl` logins and local CI
+storage; the sixth machine, `gh200_0`, is pending its return and provisioning.
 New accounts on L40/L41/GB10 have no sudo or Docker membership. GH200 reuses its
 existing non-root `uccl` account, which still has Docker membership and existing
 administrator credentials. Those existing privileges were not removed because

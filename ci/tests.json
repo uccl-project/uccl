@@ -900,7 +900,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -926,7 +927,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -952,7 +954,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -980,7 +983,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -1033,7 +1037,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "ep/**"
@@ -1050,6 +1055,39 @@
       ]
     },
     {
+      "id": "ep.bench.low_latency",
+      "sources": [
+        "ep/bench/test_low_latency.py"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "gb10",
+        "gh200"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
+      "setup": [
+        "ep"
+      ],
+      "metrics": [
+        {
+          "name": "dispatch_combine_us",
+          "pattern": "Dispatch \\+ combine bandwidth: [0-9.]+ GB/s, avg_t=([0-9.]+) us",
+          "direction": "lower",
+          "unit": "us"
+        }
+      ]
+    },
+    {
       "id": "ep.ll_dedup",
       "sources": [
         "ep/bench/test_ll_dedup.py"
@@ -1057,7 +1095,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "ep/**"
@@ -1081,7 +1120,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "ep/**"
@@ -1105,7 +1145,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "ep/**"
@@ -1526,7 +1567,8 @@
       "enabled": true,
       "targets": [
         "l4",
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "collective/rdma/**"
@@ -3335,7 +3377,8 @@
       "tier": "integration",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -3429,7 +3472,8 @@
       "enabled": true,
       "targets": [
         "l4",
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "paths": [
         "p2p/**"
@@ -3455,6 +3499,41 @@
       ]
     },
     {
+      "id": "p2p.bandwidth_gpu",
+      "sources": [
+        "p2p/benchmarks/benchmark_uccl.py"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "setup": [
+        "p2p"
+      ],
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128",
+      "metrics": [
+        {
+          "name": "bandwidth_gbps",
+          "pattern": "([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        }
+      ]
+    },
+    {
       "id": "nixl.internode.rdma",
       "sources": [
         "ci/nixl.sh"
@@ -3463,7 +3542,8 @@
       "enabled": true,
       "targets": [
         "l4",
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "setup": [
         "p2p",
@@ -3490,7 +3570,8 @@
       "enabled": true,
       "targets": [
         "l4",
-        "gb10"
+        "gb10",
+        "gh200"
       ],
       "setup": [
         "p2p",
@@ -3808,7 +3889,8 @@
       "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "setup": [
         "p2p"
@@ -3832,7 +3914,8 @@
       "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "setup": [
         "p2p"
@@ -3856,7 +3939,8 @@
       "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16",
       "enabled": true,
       "targets": [
-        "l4"
+        "l4",
+        "gh200"
       ],
       "setup": [
         "compression"

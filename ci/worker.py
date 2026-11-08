@@ -14,7 +14,7 @@ import sys
 import traceback
 import xml.etree.ElementTree as ET
 
-from catalog import ROOT, read_catalog
+from catalog import ROOT, read_catalog, target_interface
 from process import run
 
 
@@ -36,6 +36,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
     parser.add_argument("--node", type=int, default=0)
+    parser.add_argument("--host", help="SSH alias used by the controller")
     parser.add_argument("--root", default="/var/lib/uccl-ci")
     parser.add_argument("--local", action="store_true")
     args = parser.parse_args()
@@ -90,6 +91,11 @@ def main():
         "source": str(ROOT),
     }
     if target["gpus"]:
+        host = args.host or target["hosts"][args.node]
+        interface = target_interface(target, host)
+        metadata.update(ssh_alias=host, interface=interface)
+        if "nominal_rdma_gbps" in target:
+            metadata["nominal_rdma_gbps"] = target["nominal_rdma_gbps"]
         gpu_info = subprocess.check_output(
             [
                 "nvidia-smi",
@@ -120,14 +126,14 @@ def main():
                 "TORCH_CUDA_ARCH_LIST": str(int(target["sm"]) // 10)
                 + "."
                 + target["sm"][-1],
-                "UCCL_SOCKET_IFNAME": target["interface"],
-                "NCCL_SOCKET_IFNAME": target["interface"],
-                "GLOO_SOCKET_IFNAME": target["interface"],
+                "UCCL_SOCKET_IFNAME": interface,
+                "NCCL_SOCKET_IFNAME": interface,
+                "GLOO_SOCKET_IFNAME": interface,
             }
         )
         interfaces = json.loads(
             subprocess.check_output(
-                ["ip", "-j", "-4", "addr", "show", "dev", target["interface"]]
+                ["ip", "-j", "-4", "addr", "show", "dev", interface]
             )
         )
         address = next(
