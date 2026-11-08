@@ -73,6 +73,10 @@ void EQDS::handle_grant_credit() {
           // We have not satisfied its demand, re-add it to the active
           // sender list.
           list_add_tail(pos, &active_senders_);
+          // A failed post consumes no credit and therefore cannot advance
+          // either loop budget. Return so run_pacer() can poll completions and
+          // free a pull buffer before this sender is retried.
+          if (consumed == 0) return;
         }
 
         total_consumed += consumed;
