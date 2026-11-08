@@ -84,21 +84,55 @@ change its registry entry deliberately to do that.
 
 ## GitHub entry points
 
-- `ci.yml`: inventory/selection, host suites, one matrix job per hardware target,
-  and the stable aggregate check **CI status**. PRs run host suites automatically.
-  Main pushes run affected host and hardware suites.
-- A maintainer with write/maintain/admin permission may comment
-  `/run-ci l4`, `/run-ci all p2p.*`, or `/run-benchmark l4 p2p.bandwidth` on an open
-  PR. The dispatcher runs the exact PR head SHA using `workflow_dispatch`.
-  Dispatch summaries contain the SHA; results are in the UCCL CI run artifacts.
-- The Actions UI exposes `targets`, `tests`, `exclude`, `tiers`, `sha`, and
-  `head_repo` for manual dispatch. Empty selectors mean all eligible entries.
-- Formatting remains an independent fast gate.
-  Docker image publication and release workflows remain separate from tests.
+`ci.yml` plans the run, starts a host job and one job per selected hardware
+target, and publishes the aggregate check **CI status**.
+
+| Trigger | Host tests | Hardware tests | Performance benchmarks |
+|---|---|---|---|
+| PR opened, updated or reopened | Affected CPU suites | Skipped | Skipped |
+| Merge or direct push to `main` | Affected CPU suites | Affected suites on compatible targets | Skipped |
+| `/run-ci all` on an open PR | All enabled CPU suites | All eligible non-performance suites | Skipped |
+| `/run-ci <target> [test IDs/globs]` | Only when targeting `cpu` | Only when targeting `l4`, `gb10` or `gh200` | Skipped |
+| `/run-benchmark <target> [test IDs/globs]` | No CPU performance suites are currently registered | Selected performance suites only | Enabled |
+
+Automatic runs use changed-file selection. Shared headers/build/CI changes,
+unknown source changes or an unavailable diff base select all eligible suites.
+Manual runs do not apply changed-file filtering. Disabled tests, including all
+example/experimental entries, remain excluded from every mode.
+
+Only collaborators with `write`, `maintain` or `admin` permission may use the
+comment commands. They run the PR's exact head SHA at dispatch time; later PR
+commits require another command. The command is `/run-benchmark` (singular).
+Supported targets are `all`, `cpu`, `l4`, `gb10`, and `gh200`:
+
+```text
+/run-ci all
+/run-ci cpu
+/run-ci l4 p2p.*
+/run-benchmark l4 p2p.bandwidth
+/run-benchmark all
+```
+
+The Actions UI also exposes `targets`, `tests`, `exclude`, `tiers`, `sha`, and
+`head_repo`. By default it runs all eligible host/build/integration suites;
+select the `performance` tier explicitly for benchmarks. Benchmarks do not
+implicitly run correctness suites first. There is no label trigger or nightly
+schedule. Main-push hardware checks happen after merging; the automatic PR gate
+does not require hardware results. Use `/run-ci` before merging when needed.
+
+Results, logs and JUnit reports are in the UCCL CI workflow summary/artifacts.
+The dispatcher summary identifies the PR SHA; it does not post follow-up PR
+comments. The dispatcher needs `contents: read` and `actions: write`; test jobs
+need only `contents: read`. Comment commands use the workflow on the default
+branch, so dispatcher changes take effect after merging to `main`.
+
+Formatting remains an independent fast gate. Docker publication and release
+workflows remain separate from tests.
 
 Lab credentials are never supplied to automatic PR jobs. Maintainer dispatch
 explicitly authorizes execution of the selected code on persistent lab hosts.
-GitHub concurrency serializes jobs per target; a machine-local `flock` also
+Host and hardware jobs can run in parallel after planning. GitHub concurrency
+serializes hardware jobs per target; a machine-local `flock` also
 prevents overlapping local/manual CI runs. A busy GPU fails preflight. The
 runner never terminates unrelated processes.
 
