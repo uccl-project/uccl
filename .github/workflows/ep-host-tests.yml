@@ -9,6 +9,28 @@ on:
       - main
 
 jobs:
+  runtime-gpu-topology-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Test runtime GPU ordinals without GPU hardware
+      run: |
+        make -C p2p test_gpu_topology
+        ./p2p/test_gpu_topology
+
+    - name: Verify topology test does not discover Python or nanobind
+      run: |
+        make -C p2p -B test_gpu_topology \
+          PYTHON=/nonexistent/uccl-host-tests-python 2> "$RUNNER_TEMP/uccl-host-tests.stderr"
+        if [ -s "$RUNNER_TEMP/uccl-host-tests.stderr" ]; then
+          cat "$RUNNER_TEMP/uccl-host-tests.stderr"
+          exit 1
+        fi
+        ./p2p/test_gpu_topology
+
   rdma-addressing-test:
     runs-on: ubuntu-latest
 
