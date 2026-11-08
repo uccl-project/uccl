@@ -122,13 +122,11 @@ jobs:
           CI_KEY: ${{ secrets.UCCL_CI_SSH_KEY }}
           CI_CONFIG: ${{ secrets.UCCL_CI_SSH_CONFIG }}
           CI_KNOWN_HOSTS: ${{ secrets.UCCL_CI_KNOWN_HOSTS }}
-          JUMP_KEY: ${{ secrets.UCCL_DEV_SSH_KEY }}
         run: |
           umask 077
           mkdir -p ~/.ssh
           test -n "$CI_KEY" && test -n "$CI_CONFIG" && test -n "$CI_KNOWN_HOSTS"
           printf '%s\n' "$CI_KEY" > ~/.ssh/uccl-ci
-          printf '%s\n' "$JUMP_KEY" > ~/.ssh/uccl-jump
           printf '%s\n' "$CI_CONFIG" > ~/.ssh/config
           printf '%s\n' "$CI_KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Run selected hardware suites
@@ -149,7 +147,7 @@ jobs:
           if-no-files-found: error
       - name: Remove runner credentials
         if: always()
-        run: rm -f ~/.ssh/uccl-ci ~/.ssh/uccl-jump ~/.ssh/config
+        run: rm -f ~/.ssh/uccl-ci ~/.ssh/config
 
   status:
     name: CI status

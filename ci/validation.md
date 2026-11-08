@@ -161,6 +161,12 @@ With a token allowed to write this repository's Actions secrets, run:
 bash ci/install-secrets.sh /Users/yangzhou/.ssh/uccl-ci-bootstrap uccl-project/uccl
 ```
 
-This installs the three new CI secrets; the existing jump-host key secret is
-reused. Review the known failures and required check-name migration before
+This installs the three CI secrets, including the same dedicated key for the
+GB10 jump host. The jump host uses a separate `uccl` account provisioned with
+`ci/provision-jump.sh`; the legacy jump-host key secret is no longer consumed.
+Both GB10 servers were reached as `uccl` through this jump account using only
+the dedicated CI key, with strict host checking and no agent forwarding. The
+jump account has no supplementary groups; shell commands and forwarding to
+the unrelated `localhost:22` destination were verified to fail.
+Review the known failures and required check-name migration before
 merging. The branch is published as PR #1131; no merge has been performed.

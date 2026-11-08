@@ -216,11 +216,28 @@ bash ci/install-secrets.sh /path/to/private-bundle uccl-project/uccl
 ```
 
 The bundle contains `id_ed25519`, `github-config`, and `known_hosts`. It stays
-outside the repository. `UCCL_CI_SSH_KEY` authenticates **only** the CI account;
+outside the repository. `UCCL_CI_SSH_KEY` authenticates the `uccl` account on
+both the test servers and the GB10 jump host;
 `UCCL_CI_SSH_CONFIG` maps the inventory aliases; `UCCL_CI_KNOWN_HOSTS` pins already
-verified server keys. The existing `UCCL_DEV_SSH_KEY` is used only for the GB10
-jump host. Host checking is strict and agent forwarding is disabled. Do not
-store the GH200 password in GitHub secrets for this workflow.
+verified server keys. These are the only repository secrets used by UCCL CI.
+Host checking is strict and agent forwarding is disabled. Do not store the
+GH200 password in GitHub secrets for this workflow.
+
+On the GB10 jump host, use the lightweight provisioner instead of the test
+server provisioner:
+
+```bash
+sudo bash ci/provision-jump.sh "$(cat /path/to/uccl-ci.pub)"
+```
+
+This creates `uccl` without adding sudo or Docker access and authorizes the same
+CI key. The key denies shell commands, PTYs and agent forwarding, while allowing
+SSH proxy connections to `localhost:57676` and `localhost:57677`. No build tools
+or CI workspaces are installed on the jump host. In `github-config`, `p4_gate`
+uses `User uccl` and `IdentityFile ~/.ssh/uccl-ci`; both GB10 aliases use
+`ProxyJump p4_gate`. Re-upload `UCCL_CI_SSH_CONFIG` when migrating from the old
+jump-host key. After the new workflow is active, `UCCL_DEV_SSH_KEY` is no longer
+needed by this CI system.
 
 ## Local execution and results
 
