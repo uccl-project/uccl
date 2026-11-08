@@ -10,49 +10,68 @@ machines orchestrate jobs. GPU tests execute over SSH on the lab servers as
 | Target | Machines | Hardware | Role |
 |---|---|---|---|
 | `cpu` | GitHub `ubuntu-24.04` | CPU | Python regressions, C++ host tests, CI self-tests |
-| `l4` | `l40`, `l41` | 4 L4 GPUs per node, IB, CUDA 12.9 | Native P2P, IPC, compression, two-node GPU RDMA, collectives |
-| `gh200` | `gh200_1` | 1 GH200, IB, CUDA 13.2 | Single-GPU tests, EP barriers, CUDA utilities |
+| `l4` | `l40`, `l41` | 4 L4 GPUs per node, IB, CUDA 12.9 | Native P2P, IPC, compression, two-node GPU RDMA, protocol tests, NIXL |
+| `gh200` | `gh200_1` | 1 GH200, IB, CUDA 13.2 | Single-GPU tests, EP barriers, CUDA utilities, local NIXL |
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10 per node, RoCE, CUDA 13.0 | Two-node EP, host-staged communication, NIXL |
 | `amd` | Offline | ROCm | Explicitly disabled |
 
 `gh200_0` is not in any enabled target. L4 has GPU peer copies but no native
 peer atomics/NVLink. GB10's native GPU memory registration failed both ordinary
-verbs and DMA-BUF validation; native GPU RDMA tests therefore select L4. This
-does not exclude GB10 host-staged EP or NIXL tests. GH200 has GDRCopy userspace
+verbs and DMA-BUF validation; two-node native GPU RDMA tests therefore select
+L4, while compatible single-node GPU-buffer tests also use GH200. This does
+not exclude GB10 host-staged EP or NIXL tests. GH200 has GDRCopy userspace
 libraries but no `/dev/gdrdrv`; tests requiring that kernel driver are disabled
 with reasons. These capabilities are separate from the presence of an RDMA NIC.
 
-## Test families and tiers
+## Current coverage
 
-| Family | What it checks |
-|---|---|
-| `ci.*` | Selection, inventory auditing, subprocess cleanup, cancellation, exit codes, baseline comparisons |
-| `p2p.host.*` | Backends, Python wrappers, memory registration and IPC metadata, signals, endpoint/control logic |
-| `p2p.*` | Native reads/writes, IPC, shutdown, device binding, compressed transfers, notifications and bandwidth |
-| `ep.host.*`, `ep.*` | Configuration and compatibility, event ordering, barriers, dispatch/combine, low-latency and dual-mode communication |
-| `mccl.host.*` | MUSA plugin ABI and behavior using host-side fixtures; no MUSA GPU claim |
-| `collective.*` | RDMA protocol utilities, transport, NCCL plugin process groups, congestion-control algorithms |
-| `gin.local.*` | Device API, compile-fail contracts, queues, cooperative operations, NCCL-EP adapter, routing and model fixtures |
-| `ukernel.*` | Transport, device and collective components, Python bindings and communication paths |
-| `lite.*` | UCCL-Lite EP and collective builds, correctness fixtures and staged-transfer benchmarks |
-| `misc.*` | PCIe, NUMA and peer-copy measurements |
+The registry currently contains **182 entries: 87 enabled and 95 disabled**.
+Of the enabled entries, 73 are in the default tiers and 14 are opt-in performance
+benchmarks. Entries represent suites, not individual pytest or C++ test cases.
+Enabled means eligible for selection, not necessarily passing; see
+[validation.md](validation.md) for execution evidence and known failures.
 
-Tiers are `host`, `build`, `integration`, and `performance`. The first three are
-the default. Compile-only success is reported in `build`; it is not runtime
-coverage. Performance jobs require explicit selection of that tier. No nightly
-schedule is enabled by this change. The inventory includes disabled hardware,
-legacy fixtures, and opted-out comparisons, each with an explanation.
+| Enabled family | Entries | What it checks |
+|---|---:|---|
+| `ci.*` | 1 | Selection, inventory auditing, subprocess cleanup, cancellation, exit codes and baseline comparisons |
+| `p2p.*` | 40 | Host backend/wrapper tests, memory registration, IPC, native reads/writes, device binding, compression, notifications and benchmarks |
+| `ep.*` | 21 | Host compatibility, event ordering, barriers, low-latency/deduplicated/dual-mode communication, Triton packing and benchmarks |
+| `mccl.host.*` | 4 | MUSA plugin ABI and behavior using host fixtures; no MUSA GPU execution |
+| `collective.*` | 14 | Protocol utilities, congestion-control algorithms, RDMA transport and CUDA utilities; no example-driven process-group test |
+| `nixl.*` | 4 | Local transfers with the IPC option on/off, and two-node RDMA/NCCL smoke tests |
+| `build.apptainer_flags` | 1 | Apptainer GPU-option handling using mocks |
+| `util.*` | 2 | GPU topology and runtime utilities |
 
-Tests and benchmarks under `examples/` and `experimental/` are explicitly
-disabled, including GIN fixtures that build through the experimental tree.
-They remain in the registry for auditing, but neither automatic selection nor
-an explicit `--tests` request runs them. The separate GIN CUDA workflow is
-removed as part of this exclusion. Formatting still checks experimental C++/CUDA.
+Full selection on each enabled target, before changed-file filtering:
 
-`python3 ci/catalog.py list` is the complete executable inventory. Tests are
-registered at suite granularity; a suite can contain many pytest or C++ cases.
-Vendored upstream test trees are not implicitly enrolled. Specific NCCL-EP
-fixtures are registered where used by UCCL's GIN adapter.
+| Target | Default (`host,build,integration`) | Opt-in `performance` |
+|---|---:|---:|
+| `cpu` | 27 | 0 |
+| `l4` | 38 | 7 |
+| `gh200` | 19 | 10 |
+| `gb10` | 20 | 5 |
+
+Some suites run on multiple targets, so target counts overlap. The `host` tier
+describes the test type: 27 host suites use the GitHub CPU target, while seven
+protocol suites use L4's build environment. There are currently no enabled
+standalone `build`-tier entries, although integration suites still build their
+dependencies. Performance jobs require explicit selection of that tier.
+
+**Excluded coverage:** 62 entries under `examples/` and `experimental/` are
+disabled by scope. This includes all `gin.local.*`, `ukernel.*`, `lite.*` and
+`misc.*` suites, `collective.multi_process_groups`, and GIN fixtures sourced
+from `thirdparty/nccl-ep` but built through the experimental tree. The other
+33 disabled entries record unavailable hardware, unsupported configurations,
+legacy fixtures or opted-out comparisons. Every disabled entry has a reason.
+
+Disabled entries remain registered for auditing; neither automatic selection
+nor an explicit `--tests` request runs them. The separate GIN CUDA workflow is
+removed. Formatting still checks experimental C++/CUDA. Vendored upstream
+test trees are not implicitly enrolled.
+
+`tests.json` and `targets.json` are the source of truth for these counts and
+assignments. Run `python3 ci/catalog.py list` to see enabled and disabled entries,
+or `python3 ci/catalog.py plan --full` to inspect the current default selection.
 
 ## Selection and explicit registration
 
@@ -226,9 +245,10 @@ artifacts; CI never updates the active baseline automatically. Benchmark success
 does not substitute for correctness suites.
 
 See [validation.md](validation.md) for measured coverage and known failures from
-the migration. Registration is not a claim that every legacy test currently
-passes. Failures remain visible; disabling a flaky or broken test requires an
-explicit registry change with a reason.
+the migration. Its historical example/experimental results are not current CI
+coverage. Registration is not a claim that every legacy test currently passes.
+Failures remain visible; disabling a flaky or broken test requires an explicit
+registry change with a reason.
 
 Developer checks:
 
