@@ -113,4 +113,5 @@ worktrees/
 *.csv
 *.egg-info/
 !ci/config/*.json
+!ci/reports/*.csv
 ci-results/

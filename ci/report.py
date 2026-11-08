@@ -54,7 +54,7 @@ def report_results(root):
         print("\nNo results were produced; inspect the job failure.")
     if timings:
         print(
-            "\n### Suite timings\n\nExecution time is the slowest participating rank; setup/build time is excluded.\n"
+            "\n### Suite timings\n\nTime is the slowest participating rank, including builds in the suite command but excluding shared environment/dependency setup.\n"
         )
         print("| Target | Suite | Result | Seconds |\n|---|---|---|---:|")
         for target, name, failed, seconds in timings:

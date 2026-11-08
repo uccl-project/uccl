@@ -3092,7 +3092,7 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 600,
-      "command": "python3 ep/bench/baseline/test_pack_unpack_triton.py",
+      "command": "python3 -m pytest -q ep/bench/baseline/test_pack_unpack_triton.py --junitxml=\"$CI_TEST_JUNIT\"",
       "setup": []
     },
     {

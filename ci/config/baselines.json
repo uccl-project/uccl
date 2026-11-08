@@ -1,4 +1,260 @@
 {
   "schema": 1,
-  "baselines": {}
+  "baselines": {
+    "gb10/ep.bench.batched_gpu_to_cpu_bench/latency_us": {
+      "value": 7.596,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 7.309,
+        "sample_max": 8.243
+      }
+    },
+    "gb10/ep.bench.batched_gpu_to_cpu_bench/throughput_mops": {
+      "value": 13.7,
+      "direction": "higher",
+      "unit": "Mops/s",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 13.6,
+        "sample_max": 15.03
+      }
+    },
+    "gb10/ep.bench.gpu_to_cpu_bench/latency_us": {
+      "value": 1.105,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 24,
+        "sample_min": 1.08,
+        "sample_max": 1.21
+      }
+    },
+    "gb10/ep.bench.low_latency/dispatch_combine_us": {
+      "value": 233.945,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 6,
+        "sample_min": 232.68,
+        "sample_max": 235.77
+      }
+    },
+    "gb10/ep.bench.pack_unpack/decode_triton_ms": {
+      "value": 7.188,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42525550867,
+        "source_commit": "055c3b23e9b6f22f505c79aa2558c836da249a0a",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 6.958,
+        "sample_max": 7.199
+      }
+    },
+    "gb10/ep.bench.pack_unpack/prefill_triton_ms": {
+      "value": 120.459,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42525550867,
+        "source_commit": "055c3b23e9b6f22f505c79aa2558c836da249a0a",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 120.23,
+        "sample_max": 120.768
+      }
+    },
+    "gb10/ep.bench.pcie_bench/bandwidth_gb_s": {
+      "value": 921.860571,
+      "direction": "higher",
+      "unit": "GB/s",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 24,
+        "sample_min": 896.253333,
+        "sample_max": 1040.810323
+      }
+    },
+    "gb10/p2p.bandwidth/bandwidth_gbps": {
+      "value": 127.72,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524257180,
+        "source_commit": "73ea18396debffd612097665dc8aac186f5e292b",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 124.88,
+        "sample_max": 128.01
+      }
+    },
+    "l4/ep.bench.batched_gpu_to_cpu_bench/latency_us": {
+      "value": 3.995,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 3.629,
+        "sample_max": 18.365
+      }
+    },
+    "l4/ep.bench.batched_gpu_to_cpu_bench/throughput_mops": {
+      "value": 22.69,
+      "direction": "higher",
+      "unit": "Mops/s",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 19.12,
+        "sample_max": 22.92
+      }
+    },
+    "l4/ep.bench.gpu_to_cpu_bench/latency_us": {
+      "value": 1.1,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 24,
+        "sample_min": 1.05,
+        "sample_max": 1.42
+      }
+    },
+    "l4/p2p.bandwidth/bandwidth_gbps": {
+      "value": 380.44,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 368.79,
+        "sample_max": 384.44
+      }
+    },
+    "l4/p2p.bandwidth_gpu/bandwidth_gbps": {
+      "value": 164.85,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 162.55,
+        "sample_max": 164.98
+      }
+    },
+    "l4/p2p.bench.nccl/bandwidth_gbps": {
+      "value": 117.23,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 115.08,
+        "sample_max": 120.37
+      }
+    },
+    "l4/p2p.bench.ray_p2p/read_bandwidth_gbps": {
+      "value": 117.94,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 117.76,
+        "sample_max": 118.49
+      }
+    },
+    "l4/p2p.bench.ray_p2p/write_bandwidth_gbps": {
+      "value": 154.76,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 152.68,
+        "sample_max": 156.28
+      }
+    },
+    "l4/p2p.bench.uccl_compression/bandwidth_gbps": {
+      "value": 157.86,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-08",
+        "run_id": 42524998784,
+        "source_commit": "99147fe542fda9d6d584e2fd1770403fbaede461",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 156.61,
+        "sample_max": 163.77
+      }
+    }
+  }
 }

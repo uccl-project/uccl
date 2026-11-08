@@ -15,7 +15,7 @@ host tests and orchestrates GPU jobs over SSH as `uccl`, using local
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
 | `amd` | Offline | ROCm | Disabled; worker support needs validation |
 
-`gh200_0` is configured for its expected return but remains unprovisioned and
+Both GH200 nodes are currently unreachable. `gh200_0` remains unprovisioned and
 untested. Single-node GH200 suites use `gh200_1`; two-node suites require both.
 The 400G link is an assumption, not measured throughput or a baseline.
 Per-host interfaces and RDMA devices are defined in `config/targets.json`.
@@ -210,7 +210,11 @@ Missing, nonfinite or nonpositive measurements and threshold violations fail;
 absent baselines are reported as `unbaselined`.
 Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
-Workflow summaries show each suite's execution time, excluding setup/builds.
+Workflow summaries show each suite's execution time, excluding shared setup.
+
+The 2026-11-08 baselines use medians from three benchmark repetitions and record
+sample ranges and source commits. See [validation.md](validation.md) for timings,
+independent threshold checks and known measurement variability.
 
 [validation.md](validation.md) records passes, known failures and untested
 coverage. Enabled suites may still fail; disabling one requires a registry
