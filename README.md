@@ -160,31 +160,14 @@ source scripts/bootstrap.sh
 
 This single command installs `uv` if missing, creates a `.venv` virtualenv with Python 3.12, pins all non-CUDA dev tools (`black`, `clang-format`, `pytest`, `paramiko`, etc.) from `uv.lock` via `uv sync --group dev`, installs the formatting commit hooks, and then runs `ep/install_deps.sh` to install CUDA-specific packages (torch, etc.) with automatic hardware detection.
 
-**Automatic formatting on commit**
-
-For formatting alone, run this once per clone (Python 3.10+; no CUDA required):
+Enable formatting on commit once per clone (Python 3.10+):
 
 ```bash
 bash scripts/install-hooks.sh
 ```
 
-Every normal `git commit` then runs the pinned clang-format and Black hooks on
-staged C++/CUDA and Python files covered by CI. If a hook changes files, the
-commit stops: review the formatting, `git add` the intended files or hunks, and
-commit again. Unstaged edits are temporarily set aside and restored; they are
-never automatically included in the commit. Formatter errors also block commits.
-Git hooks are local, so other clones must run the installer too.
-Older branches without `.pre-commit-config.yaml` skip the hook.
-
-Run `./format.sh` to format all tracked files covered by CI; it returns nonzero
-when it makes corrections or encounters an error. File scopes, exclusions and
-formatter versions are shared with CI in `.pre-commit-config.yaml`. The hooks
-use isolated environments, so a different system clang-format or Black version
-does not affect their output. Installation and the first run of a new formatter
-version require network access; subsequent runs reuse the installed tools.
-On Apple Silicon, the installer uses Homebrew's versioned `llvm@14` package
-because the pinned PyPI wheel is Intel-only. Alternatively, set `CLANG_FORMAT`
-to a native clang-format 14.0.6 executable. The hook rejects other versions.
+If a commit reformats files, review the changes, `git add` the intended files,
+and commit again. Run `./format.sh` to format all files covered by CI manually.
 
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
