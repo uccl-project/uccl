@@ -31,7 +31,7 @@ case $component in
     ;;
   nccl-headers)
     if [[ ! -f $NCCL_INCLUDE_DIR/nccl_device.h ]]; then
-      python3 -m pip install --require-hashes --no-deps --target "$CI_DEPS/nccl-2.30.4" -r ci/requirements-nccl.lock
+      python3 -m pip install --require-hashes --no-deps --target "$CI_DEPS/nccl-2.30.4" -r ci/requirements/nccl.lock
     fi
     ln -sfn libnccl.so.2 "$NCCL_ROOT/lib/libnccl.so"
     ;;

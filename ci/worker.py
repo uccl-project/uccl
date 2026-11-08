@@ -105,7 +105,7 @@ def main():
             text=True,
         )
         if len(gpu_info.strip().splitlines()) < target["gpus"]:
-            raise RuntimeError("Fewer GPUs than declared in targets.json")
+            raise RuntimeError("Fewer GPUs than declared in config/targets.json")
         active = subprocess.check_output(
             ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
             text=True,
@@ -147,7 +147,7 @@ def main():
     lock_name = (
         "host" if not target["gpus"] else ("cu128" if args.target == "l4" else "cu130")
     )
-    lockfile = ROOT / f"ci/requirements-{lock_name}.lock"
+    lockfile = ROOT / f"ci/requirements/{lock_name}.lock"
     fingerprint = hashlib.sha256(
         lockfile.read_bytes() + sys.version.encode()
     ).hexdigest()[:20]

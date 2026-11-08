@@ -1,9 +1,9 @@
 # UCCL CI
 
-`tests.json` registers suites, `targets.json` defines machines, `catalog.py`
-selects tests, and `run.py` executes them. GitHub-hosted Ubuntu runs host tests
-and orchestrates GPU jobs over SSH as `uccl`, using local `/var/lib/uccl-ci`
-storage on each server.
+`config/tests.json` registers suites, `config/targets.json` defines machines,
+`catalog.py` selects tests, and `run.py` executes them. GitHub-hosted Ubuntu runs
+host tests and orchestrates GPU jobs over SSH as `uccl`, using local
+`/var/lib/uccl-ci` storage on each server.
 
 ## Where jobs run
 
@@ -18,7 +18,7 @@ storage on each server.
 `gh200_0` is configured for its expected return but remains unprovisioned and
 untested. Single-node GH200 suites use `gh200_1`; two-node suites require both.
 The 400G link is an assumption, not measured throughput or a baseline.
-Per-host interfaces and RDMA devices are defined in `targets.json`.
+Per-host interfaces and RDMA devices are defined in `config/targets.json`.
 
 Hardware limits: GB10 native GPU-buffer registration fails; L4 lacks native
 peer atomics/NVLink; no available node has `/dev/gdrdrv`. Affected tests are
@@ -73,15 +73,16 @@ python3 ci/catalog.py plan --full --targets l4,gb10 --tests 'p2p.*,ep.low_latenc
 python3 ci/catalog.py plan --full --tiers performance --targets gh200
 ```
 
-Register each test in `tests.json` with an ID, sources, enabled state, tier, affected
-paths, targets/capabilities, resource needs, setup, timeout and command. Disabled
-entries require a reason; `support` identifies non-runnable helpers. Validation
-rejects unregistered first-party test sources and stale source references.
+Register each test in `config/tests.json` with an ID, sources, enabled state,
+tier, affected paths, targets/capabilities, resource needs, setup, timeout and
+command. Disabled entries require a reason; `support` identifies non-runnable
+helpers. Validation rejects unregistered first-party test sources and stale
+source references.
 
 Selection matches changed paths, tiers, targets and capabilities. Shared
-headers/build/CI changes, unknown non-documentation changes or unavailable diff bases
-select all eligible suites. PRs compare against their merge base; pushes compare
-against the previous SHA. Use `--full` for uncommitted changes.
+headers/build/CI changes, unknown non-documentation changes or unavailable diff
+bases select all eligible suites. PRs compare against their merge base; pushes
+compare against the previous SHA. Use `--full` for uncommitted changes.
 
 `--tests` overrides changed-file filtering; `--exclude` wins. Neither enables
 disabled entries. Invalid or empty explicit selections fail. `plan.json` records
@@ -129,8 +130,8 @@ formatting checks, and remove the GIN check.
 
 ## Server provisioning and credentials
 
-Prepare Python 3.12+, GPU drivers and the CUDA version in `targets.json`, then
-run once as administrator on each test server:
+Prepare Python 3.12+, GPU drivers and the CUDA version in `config/targets.json`,
+then run once as administrator on each test server:
 
 ```bash
 sudo bash ci/provision.sh "$(cat /path/to/uccl-ci.pub)"
@@ -186,10 +187,10 @@ python3 ci/run.py --target gh200 --ssh-config /path/to/config --tiers performanc
 python3 ci/performance.py ci-results/perf-run --candidate ci-results/perf-run/baseline-candidate.json
 ```
 
-Each run uses a fresh source workspace and output directory. Python dependencies
-use hashed locks; external source pins live in `dependencies.json`. Artifacts
-include the selection plan, results, JUnit, per-rank logs, source identity and
-machine/toolchain inventories.
+Each run uses a fresh source workspace and output directory. Python dependency
+inputs and hashed locks live in `requirements/`; external source pins live in
+`config/dependencies.json`. Artifacts include the selection plan, results, JUnit,
+per-rank logs, source identity and machine/toolchain inventories.
 
 Both ranks must succeed. Setup failures, timeouts, disconnects and all-skipped
 pytest suites fail the job; cancellation stops only owned processes. Workspaces
@@ -203,8 +204,8 @@ caches live in `/var/lib/uccl-ci/cache`; avoid filling L4's limited disk.
 `p2p.bandwidth` uses pinned host buffers; `p2p.bandwidth_gpu` uses GPU buffers on
 L4/GH200. Only performance registrations extract and compare metrics.
 
-`baselines.json` holds reviewed thresholds. Missing/nonfinite measurements and
-threshold violations fail; absent baselines are reported as `unbaselined`.
+`config/baselines.json` holds reviewed thresholds. Missing/nonfinite measurements
+and threshold violations fail; absent baselines are reported as `unbaselined`.
 Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
 

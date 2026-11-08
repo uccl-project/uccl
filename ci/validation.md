@@ -43,7 +43,7 @@ timeout, disconnect and descendant cleanup. Workflow YAML passed actionlint.
 
 Initial `p2p.bandwidth` samples: **385.68 Gbps on L4**, **124.59 Gbps on GB10**
 (1 MiB host-pinned buffers, 128 iterations). These single observations are
-baseline candidates only; `baselines.json` remains empty.
+baseline candidates only; `config/baselines.json` remains empty.
 
 ## Hardware/configuration exclusions established by testing
 
@@ -55,7 +55,7 @@ baseline candidates only; `baselines.json` remains empty.
 - **Legacy RDMA fixtures:** EQDS transfer needs a different CCA build; the raw
   RDMA fixture hardcodes an incompatible NIC/GPU-memory configuration.
 - **Other exclusions:** AMD, EFA, MUSA/Hygon, privileged AF_XDP/DPDK, external
-  NVSHMEM/PPLX and eight-GPU comparisons. Exact reasons are in `tests.json`.
+  NVSHMEM/PPLX and eight-GPU comparisons. Exact reasons are in `config/tests.json`.
 
 ## Known failures exposed by broader coverage
 

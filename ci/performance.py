@@ -80,7 +80,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
     parser.add_argument(
-        "--baselines", type=Path, default=Path(__file__).with_name("baselines.json")
+        "--baselines",
+        type=Path,
+        default=Path(__file__).parent / "config" / "baselines.json",
     )
     parser.add_argument(
         "--candidate",

@@ -24,8 +24,8 @@ GLOBAL = [
 
 def read_catalog(root=ROOT):
     return (
-        json.loads((root / "ci/tests.json").read_text()),
-        json.loads((root / "ci/targets.json").read_text()),
+        json.loads((root / "ci/config/tests.json").read_text()),
+        json.loads((root / "ci/config/targets.json").read_text()),
     )
 
 

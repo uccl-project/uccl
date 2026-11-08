@@ -112,5 +112,5 @@ thirdparty/gdrcopy/
 worktrees/
 *.csv
 *.egg-info/
-!ci/*.json
+!ci/config/*.json
 ci-results/

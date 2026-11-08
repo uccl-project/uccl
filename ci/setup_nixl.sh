@@ -4,7 +4,7 @@ source ci/env.sh
 prefix="$CI_REPO/.ci-nixl"
 mkdir -p "$prefix" "$CI_DEPS"
 if [[ ! -f $CI_DEPS/meson-1.9.1/mesonbuild/__init__.py ]]; then
-  python3 -m pip install --require-hashes --no-deps --target "$CI_DEPS/meson-1.9.1" -r ci/requirements-meson.lock
+  python3 -m pip install --require-hashes --no-deps --target "$CI_DEPS/meson-1.9.1" -r ci/requirements/meson.lock
 fi
 export PYTHONPATH="$CI_DEPS/meson-1.9.1:$PYTHONPATH"
 meson() { python3 -m mesonbuild.mesonmain "$@"; }
