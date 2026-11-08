@@ -1073,8 +1073,8 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
+      "timeout": 1800,
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16\ndone",
       "setup": [
         "ep"
       ],
@@ -1205,8 +1205,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 300,
-      "command": "make -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench",
+      "timeout": 900,
+      "command": "for CI_SAMPLE in 1 2 3; do\nmake -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench\ndone",
       "metrics": [
         {
           "name": "bandwidth_gb_s",
@@ -1236,8 +1236,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 300,
-      "command": "make -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench",
+      "timeout": 900,
+      "command": "for CI_SAMPLE in 1 2 3; do\nmake -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench\ndone",
       "metrics": [
         {
           "name": "latency_us",
@@ -1267,8 +1267,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 300,
-      "command": "make -C ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/batched_gpu_to_cpu_bench",
+      "timeout": 900,
+      "command": "for CI_SAMPLE in 1 2 3; do\nmake -C ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/batched_gpu_to_cpu_bench\ndone",
       "metrics": [
         {
           "name": "latency_us",
@@ -1302,8 +1302,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb cas"
+      "timeout": 1800,
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/suites.sh ep-rb cas\ndone"
     },
     {
       "id": "ep.rb.fc",
@@ -1323,8 +1323,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb fc"
+      "timeout": 1800,
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/suites.sh ep-rb fc\ndone"
     },
     {
       "id": "ep.rb.lock",
@@ -1344,8 +1344,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb lock"
+      "timeout": 1800,
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/suites.sh ep-rb lock\ndone"
     },
     {
       "id": "ep.rb.multi_ring",
@@ -1365,8 +1365,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb multi_ring"
+      "timeout": 1800,
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/suites.sh ep-rb multi_ring\ndone"
     },
     {
       "id": "util.runtime",
@@ -3514,11 +3514,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 180,
+      "timeout": 540,
       "setup": [
         "p2p"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128",
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128\ndone",
       "metrics": [
         {
           "name": "bandwidth_gbps",
@@ -3549,11 +3549,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 180,
+      "timeout": 540,
       "setup": [
         "p2p"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128",
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128\ndone",
       "metrics": [
         {
           "name": "bandwidth_gbps",
@@ -3916,7 +3916,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_nccl.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16",
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -3928,7 +3928,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -3949,7 +3949,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_ray_p2p.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16",
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -3961,7 +3961,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -3988,7 +3988,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_uccl_compression.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16",
+      "command": "for CI_SAMPLE in 1 2 3; do\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -4000,7 +4000,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -4228,7 +4228,7 @@
       "sources": [
         "ep/bench/baseline/benchmark_pack_unpack.py"
       ],
-      "command": "python3 ep/bench/baseline/benchmark_pack_unpack.py",
+      "command": "for CI_SAMPLE in 1 2 3; do\npython3 ep/bench/baseline/benchmark_pack_unpack.py\ndone",
       "enabled": true,
       "targets": [
         "gh200",
@@ -4240,7 +4240,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
+      "timeout": 1800,
       "requires": [
         "cuda"
       ],
@@ -4272,7 +4272,7 @@
         "ep/bench/fifo/benchmark.cpp",
         "ep/bench/fifo/benchmark.py"
       ],
-      "command": "make -C ep/bench/fifo -j\"$CI_JOBS\" GPU_ARCH=\"$SM\" && cd ep/bench/fifo && python3 benchmark.py -l",
+      "command": "for CI_SAMPLE in 1 2 3; do\nmake -C ep/bench/fifo -j\"$CI_JOBS\" GPU_ARCH=\"$SM\" && cd ep/bench/fifo && python3 benchmark.py -l\ndone",
       "enabled": true,
       "targets": [
         "gh200"
@@ -4281,7 +4281,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
+      "timeout": 1800,
       "requires": [
         "cuda"
       ],
@@ -4294,7 +4294,7 @@
       "sources": [
         "ep/bench/rb/benchmark_rdma_fifo.py"
       ],
-      "command": "python3 ep/bench/rb/benchmark_rdma_fifo.py --size-mb=16",
+      "command": "for CI_SAMPLE in 1 2 3; do\npython3 ep/bench/rb/benchmark_rdma_fifo.py --size-mb=16\ndone",
       "enabled": true,
       "targets": [
         "gh200"
@@ -4305,7 +4305,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
+      "timeout": 1800,
       "requires": [
         "cuda"
       ],
