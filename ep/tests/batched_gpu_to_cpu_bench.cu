@@ -3,6 +3,7 @@
  * CUDA_MODULE_LOADING=EAGER ./batched_gpu_to_cpu_bench
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -17,14 +18,18 @@
 #include <stdio.h>
 #include <unistd.h>
 
+constexpr int kBenchmarkIterations = 400000;
+constexpr int kWarmupTrials = 2;
+constexpr int kMeasuredTrials = 7;
+
 struct alignas(128) Fifo {
   // Using volatile and avoiding atomics.
-  uint64_t head;                      // Next slot to produce
-  uint64_t tail;                      // Next slot to consume
+  volatile uint64_t head;             // Next slot to produce
+  volatile uint64_t tail;             // Next slot to consume
   uint64_t volatile buf[kQueueSize];  // Payload buffer (8 bytes).
 };
 
-__device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
+__device__ __forceinline__ uint64_t ld_volatile(uint64_t volatile* ptr) {
 #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
 #ifdef __CUDA_ARCH__
   uint64_t ans;
@@ -64,18 +69,28 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
 
   extern __shared__ unsigned long long start_cycle_smem[];
 
-  for (int it = 0; it < kIterations; it += kBatchSize) {
+  for (int it = 0; it < kBenchmarkIterations; it += kBatchSize) {
     uint64_t my_hdr;
     uint64_t cur_tail;
 
-    unsigned int const todo =
-        (it + kBatchSize <= kIterations) ? kBatchSize : (kIterations - it);
+    unsigned int const todo = (it + kBatchSize <= kBenchmarkIterations)
+                                  ? kBatchSize
+                                  : (kBenchmarkIterations - it);
 
     while (true) {
       // CPU does not modify the head.
       uint64_t cur_head = my_fifo->head;
       cur_tail = ld_volatile(&my_fifo->tail);
-      if (cur_head - cur_tail + todo <= kQueueSize) {
+      // Snapshot the CPU's completion counter once per batch. Retire timestamps
+      // before reusing their ring slots, even if the CPU has raced ahead.
+      unsigned long long completed_at = clock64();
+      while (complete < cur_tail) {
+        cycle_accum_smem +=
+            completed_at - start_cycle_smem[complete & kQueueMask];
+        ++op_count_smem;
+        ++complete;
+      }
+      if (cur_head - complete + todo <= kQueueSize) {
         my_fifo->head = cur_head + todo;
         my_hdr = cur_head;
         break;
@@ -97,42 +112,32 @@ __global__ void gpu_issue_batched_commands(Fifo* fifos) {
       my_fifo->buf[idx] = cmd;
     }
     __threadfence_system();
-    while (complete < my_hdr + todo) {
-      uint32_t cidx = complete & kQueueMask;
-      if (complete < my_fifo->tail) {
-        unsigned long long t1 = clock64();
-        unsigned long long cycles = t1 - start_cycle_smem[cidx];
-        cycle_accum_smem += cycles;
-        op_count_smem++;
-        complete++;
-      } else {
-        break;
-      }
-    }
   }
-  while (complete < kIterations) {
-    uint32_t cidx = complete & kQueueMask;
-    while (complete >= my_fifo->tail) { /* spin */
+  while (complete < kBenchmarkIterations) {
+    uint64_t cur_tail = ld_volatile(&my_fifo->tail);
+    unsigned long long completed_at = clock64();
+    while (complete < cur_tail) {
+      cycle_accum_smem +=
+          completed_at - start_cycle_smem[complete & kQueueMask];
+      ++op_count_smem;
+      ++complete;
     }
-
-    unsigned long long t1 = clock64();
-    cycle_accum_smem += (t1 - start_cycle_smem[cidx]);
-    ++op_count_smem;
-    ++complete;
   }
 
   cycle_accum[bid] = cycle_accum_smem;
   op_count[bid] = op_count_smem;
 }
 
-void cpu_proxy(Fifo* fifo, int thread_idx) {
+void cpu_proxy(Fifo* fifo, int thread_idx, std::atomic<int>* ready) {
   // printf("CPU thread for block %d started\n", thread_idx);
-  pin_thread_to_cpu(thread_idx);
+  if (!pin_thread_to_cpu(thread_idx)) {
+    fprintf(stderr, "Unable to pin proxy thread %d\n", thread_idx);
+    std::abort();
+  }
+  ready->fetch_add(1, std::memory_order_release);
 
   uint64_t my_tail = 0;
-  for (int seen = 0; seen < kIterations; ++seen) {
-    // TODO: here, if CPU caches fifo->head, it may not see the updates from
-    // GPU.
+  for (int seen = 0; seen < kBenchmarkIterations; ++seen) {
     while (fifo->head == my_tail) {
       cpu_relax();
     }
@@ -151,76 +156,96 @@ void cpu_proxy(Fifo* fifo, int thread_idx) {
       exit(1);
     }
     fifo->buf[idx] = 0;
-    // std::atomic_thread_fence(std::memory_order_release);
+    // Publish a reusable slot only after clearing its payload (also on ARM).
+    std::atomic_thread_fence(std::memory_order_release);
     my_tail++;
     fifo->tail = my_tail;
     // _mm_clflush(&(fifo->tail));
   }
 }
 
-int main() {
-  gpuStream_t stream1;
-  GPU_RT_CHECK(gpuStreamCreate(&stream1));
+struct Trial {
+  double latency_us;
+  double throughput;
+  double wall_ms;
+};
 
-  gpuDeviceProp prop;
-  gpuGetDeviceProperties(&prop, 0);
-  printf("clock rate: %d kHz\n", prop.clockRate);
-
-  Fifo* fifos;
-  GPU_RT_CHECK(
-      gpuHostAlloc(&fifos, sizeof(Fifo) * kNumProxyThs, gpuHostAllocMapped));
-
+Trial run_trial(Fifo* fifos, gpuStream_t stream, int clock_rate_khz) {
   for (int i = 0; i < kNumProxyThs; ++i) {
     fifos[i].head = 0;
     fifos[i].tail = 0;
-    for (uint32_t j = 0; j < kQueueSize; ++j) {
-      fifos[i].buf[j] = 0;  // Initialize the buffer
-    }
+    for (uint32_t j = 0; j < kQueueSize; ++j) fifos[i].buf[j] = 0;
   }
-
-  // Launch one CPU polling thread per block
+  std::atomic<int> ready{0};
   std::vector<std::thread> cpu_threads;
-  for (int i = 0; i < kNumProxyThs; ++i) {
-    cpu_threads.emplace_back(cpu_proxy, &fifos[i], i);
-  }
-  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < kNumProxyThs; ++i)
+    cpu_threads.emplace_back(cpu_proxy, &fifos[i], i, &ready);
+  // Thread creation and CPU affinity setup are outside the measured interval.
+  while (ready.load(std::memory_order_acquire) != kNumProxyThs)
+    std::this_thread::yield();
+  auto t0 = std::chrono::steady_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   gpu_issue_batched_commands<<<kNumProxyThs, kTestNumGpuThPerBlock, shmem_bytes,
-                               stream1>>>(fifos);
+                               stream>>>(fifos);
   GPU_RT_CHECK_ERRORS("gpu_issue_command kernel failed");
-  GPU_RT_CHECK(gpuStreamSynchronize(stream1));
-  auto t1 = std::chrono::high_resolution_clock::now();
+  GPU_RT_CHECK(gpuStreamSynchronize(stream));
+  auto t1 = std::chrono::steady_clock::now();
+  for (auto& thread : cpu_threads) thread.join();
 
-  for (auto& t : cpu_threads) {
-    t.join();
-  }
-
-  unsigned long long h_cycles[kNumProxyThs];
-  unsigned int h_ops[kNumProxyThs];
-  gpuMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
-  gpuMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
-
-  unsigned int tot_ops = 0;
-  double total_us = 0;
-  unsigned long long tot_cycles = 0;
-  printf("\nPer-block avg latency:\n");
-  for (int b = 0; b < kNumProxyThs; ++b) {
-    double us = (double)h_cycles[b] * 1000.0 / prop.clockRate / h_ops[b];
-    printf("  Block %d : %.3f µs over %u ops\n", b, us, h_ops[b]);
-    total_us += us;
-    tot_cycles += h_cycles[b];
-    tot_ops += h_ops[b];
+  unsigned long long cycles[kNumProxyThs];
+  unsigned int ops[kNumProxyThs];
+  GPU_RT_CHECK(gpuMemcpyFromSymbol(cycles, cycle_accum, sizeof(cycles)));
+  GPU_RT_CHECK(gpuMemcpyFromSymbol(ops, op_count, sizeof(ops)));
+  unsigned long long total_cycles = 0;
+  unsigned int total_ops = 0;
+  for (int i = 0; i < kNumProxyThs; ++i) {
+    assert(ops[i] == kBenchmarkIterations);
+    total_cycles += cycles[i];
+    total_ops += ops[i];
   }
   double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-  double throughput = (double)(kNumProxyThs * kIterations) / (wall_ms * 1000.0);
+  return {double(total_cycles) * 1000.0 / clock_rate_khz / total_ops,
+          double(total_ops) / (wall_ms * 1000.0), wall_ms};
+}
 
-  printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
-         (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
-  printf("Total cycles                       : %llu\n", tot_cycles);
-  printf("Total ops                          : %u\n", tot_ops);
-  printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);
-  printf("Throughput                        : %.2f Mops/s\n", throughput);
+double median(std::vector<double> samples) {
+  std::sort(samples.begin(), samples.end());
+  return samples[samples.size() / 2];
+}
 
+int main() {
+  gpuStream_t stream;
+  GPU_RT_CHECK(gpuStreamCreate(&stream));
+  int clock_rate_khz = 0;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+  GPU_RT_CHECK(
+      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, 0));
+#else
+  gpuDeviceProp prop;
+  GPU_RT_CHECK(gpuGetDeviceProperties(&prop, 0));
+  clock_rate_khz = prop.clockRate;
+#endif
+  printf("clock rate: %d kHz\n", clock_rate_khz);
+  Fifo* fifos;
+  GPU_RT_CHECK(
+      gpuHostAlloc(&fifos, sizeof(Fifo) * kNumProxyThs, gpuHostAllocMapped));
+  for (int trial = 0; trial < kWarmupTrials; ++trial)
+    run_trial(fifos, stream, clock_rate_khz);
+  std::vector<double> latencies, throughputs, wall_times;
+  for (int trial = 0; trial < kMeasuredTrials; ++trial) {
+    auto sample = run_trial(fifos, stream, clock_rate_khz);
+    latencies.push_back(sample.latency_us);
+    throughputs.push_back(sample.throughput);
+    wall_times.push_back(sample.wall_ms);
+    printf("Trial %d: %.3f us, %.2f Mops/s\n", trial + 1, sample.latency_us,
+           sample.throughput);
+  }
+  printf("Medians of %d trials after %d warmups (%d ops/block/trial)\n",
+         kMeasuredTrials, kWarmupTrials, kBenchmarkIterations);
+  printf("Overall avg GPU-measured latency  : %.3f µs\n", median(latencies));
+  printf("End-to-end Wall-clock time        : %.3f ms\n", median(wall_times));
+  printf("Throughput                        : %.2f Mops/s\n",
+         median(throughputs));
   GPU_RT_CHECK(gpuFreeHost(fifos));
-  GPU_RT_CHECK(gpuStreamDestroy(stream1));
+  GPU_RT_CHECK(gpuStreamDestroy(stream));
 }

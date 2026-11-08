@@ -235,7 +235,9 @@ def benchmark_backend(
     }
 
 
+failed = False
 for cfg in configs:
+    torch.manual_seed(0)
     print(f"Testing: {cfg['name']} ({cfg['tokens']} tokens, {cfg['hidden']} hidden)")
     print("=" * 70)
 
@@ -280,6 +282,7 @@ for cfg in configs:
         )
         results.append(triton_result)
     except Exception as e:
+        failed = True
         print(f"  ❌ Triton backend failed: {e}")
         results.append(None)
 
@@ -301,6 +304,7 @@ for cfg in configs:
             )
             results.append(cuda_result)
         except Exception as e:
+            failed = True
             print(f"  ❌ CUDA backend failed: {e}")
             results.append(None)
     else:
@@ -352,18 +356,20 @@ for cfg in configs:
     for result in results:
         if result is None:
             continue
-        total = result["pack"]["mean"] + result["unpack"]["mean"]
+        total = result["pack"]["p50"] + result["unpack"]["p50"]
         print(f"  {result['backend']:<12}: {total:>7.3f} ms")
+
+    print("  Total time uses median pack + median unpack over 100 samples.")
 
     # Speedup comparison
     if len(results) == 2 and results[0] is not None and results[1] is not None:
         print("\n🚀 Speedup (CUDA vs Triton):")
         print("-" * 70)
-        triton_total = results[0]["pack"]["mean"] + results[0]["unpack"]["mean"]
-        cuda_total = results[1]["pack"]["mean"] + results[1]["unpack"]["mean"]
+        triton_total = results[0]["pack"]["p50"] + results[0]["unpack"]["p50"]
+        cuda_total = results[1]["pack"]["p50"] + results[1]["unpack"]["p50"]
 
-        pack_speedup = results[0]["pack"]["mean"] / results[1]["pack"]["mean"]
-        unpack_speedup = results[0]["unpack"]["mean"] / results[1]["unpack"]["mean"]
+        pack_speedup = results[0]["pack"]["p50"] / results[1]["pack"]["p50"]
+        unpack_speedup = results[0]["unpack"]["p50"] / results[1]["unpack"]["p50"]
         total_speedup = triton_total / cuda_total
 
         print(f"  Pack:   {pack_speedup:.2f}x")
@@ -388,9 +394,11 @@ for cfg in configs:
         if result is None:
             continue
         is_correct, msg = result["correctness"]
+        failed |= not is_correct
         status = "✓" if is_correct else "✗"
         print(f"  {result['backend']:<12}: {status} {msg}")
 
     print("\n" + "=" * 70 + "\n")
 
 print("Benchmark complete!")
+raise SystemExit(1 if failed else 0)
