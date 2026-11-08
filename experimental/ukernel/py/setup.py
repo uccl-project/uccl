@@ -16,7 +16,7 @@ except ImportError as exc:
 
 ROOT = Path(__file__).resolve().parent.parent
 UCCL_ROOT = ROOT.parent.parent
-CUDA_HOME = Path("/usr/local/cuda")
+CUDA_HOME = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
 ROCM_HOME = Path(os.environ.get("ROCM_HOME", "/opt/rocm"))
 USE_ROCM = getattr(torch.version, "hip", None) is not None
 

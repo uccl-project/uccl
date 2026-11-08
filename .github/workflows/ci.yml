@@ -1,0 +1,167 @@
+name: UCCL CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Target IDs, comma separated (empty = all enabled)'
+        default: ''
+      tests:
+        description: 'Test IDs/globs, comma separated (empty = all affected)'
+        default: ''
+      exclude:
+        description: 'Test IDs/globs to exclude'
+        default: ''
+      tiers:
+        description: 'host,build,integration,performance'
+        default: 'host,build,integration'
+      sha:
+        description: 'Exact source SHA (maintainer-approved PR testing)'
+        default: ''
+      head_repo:
+        description: 'Source owner/repo (empty = this repository)'
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      hardware: ${{ steps.plan.outputs.hardware }}
+      has_hardware: ${{ steps.plan.outputs.has_hardware }}
+      has_cpu: ${{ steps.plan.outputs.has_cpu }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.head_repo || github.repository }}
+          ref: ${{ inputs.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate inventory and determine affected suites
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGETS: ${{ inputs.targets }}
+          TESTS: ${{ inputs.tests }}
+          EXCLUDE: ${{ inputs.exclude }}
+          TIERS: ${{ inputs.tiers || 'host,build,integration' }}
+        run: |
+          args=(--full)
+          if [[ $EVENT == pull_request ]]; then
+            base=$(git merge-base "$BASE" "$HEAD") || base=""
+            args=(--base "$base" --head "$HEAD")
+          elif [[ $EVENT == push ]]; then
+            args=(--base "$BASE")
+          fi
+          python3 ci/catalog.py plan "${args[@]}" --targets "$TARGETS" \
+            --tests "$TESTS" --exclude "$EXCLUDE" --tiers "$TIERS" --output ci-plan.json
+          python3 ci/report.py plan ci-plan.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-plan
+          path: ci-plan.json
+
+  host:
+    needs: plan
+    if: needs.plan.outputs.has_cpu == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.head_repo || github.repository }}
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-plan
+      - name: Install host compiler and Python venv support
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-venv libgtest-dev
+      - name: Run host suites
+        run: python3 ci/run.py --local --target cpu --plan ci-plan.json
+      - name: Summarize results
+        if: always()
+        run: python3 ci/report.py results ci-results >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-host
+          path: ci-results/
+          if-no-files-found: error
+
+  hardware:
+    needs: plan
+    # PR code reaches lab machines only through a maintainer's workflow dispatch.
+    if: github.event_name != 'pull_request' && needs.plan.outputs.has_hardware == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.hardware) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    concurrency:
+      group: uccl-hardware-${{ matrix.target }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.head_repo || github.repository }}
+          ref: ${{ inputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-plan
+      - name: Configure dedicated CI credentials
+        env:
+          CI_KEY: ${{ secrets.UCCL_CI_SSH_KEY }}
+          CI_CONFIG: ${{ secrets.UCCL_CI_SSH_CONFIG }}
+          CI_KNOWN_HOSTS: ${{ secrets.UCCL_CI_KNOWN_HOSTS }}
+          JUMP_KEY: ${{ secrets.UCCL_DEV_SSH_KEY }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          test -n "$CI_KEY" && test -n "$CI_CONFIG" && test -n "$CI_KNOWN_HOSTS"
+          printf '%s\n' "$CI_KEY" > ~/.ssh/uccl-ci
+          printf '%s\n' "$JUMP_KEY" > ~/.ssh/uccl-jump
+          printf '%s\n' "$CI_CONFIG" > ~/.ssh/config
+          printf '%s\n' "$CI_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Run selected hardware suites
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python3 ci/run.py --target "$TARGET" --plan ci-plan.json --ssh-config ~/.ssh/config --run-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Check performance measurements
+        if: always()
+        run: python3 ci/performance.py ci-results --candidate ci-results/baseline-candidate.json
+      - name: Summarize results
+        if: always()
+        run: python3 ci/report.py results ci-results >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-${{ matrix.target }}
+          path: ci-results/
+          if-no-files-found: error
+      - name: Remove runner credentials
+        if: always()
+        run: rm -f ~/.ssh/uccl-ci ~/.ssh/uccl-jump ~/.ssh/config
+
+  status:
+    name: CI status
+    needs: [plan, host, hardware]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          PLAN: ${{ needs.plan.result }}
+          HOST: ${{ needs.host.result }}
+          HARDWARE: ${{ needs.hardware.result }}
+        run: |
+          [[ $PLAN == success ]]
+          [[ $HOST == success || $HOST == skipped ]]
+          [[ $HARDWARE == success || $HARDWARE == skipped ]]

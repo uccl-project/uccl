@@ -1,0 +1,4194 @@
+{
+  "schema": 1,
+  "tests": [
+    {
+      "id": "ci.selftest",
+      "enabled": true,
+      "tier": "host",
+      "sources": [
+        "ci/tests/test_ci.py"
+      ],
+      "paths": [
+        "ci/**",
+        ".github/workflows/**"
+      ],
+      "targets": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "requires": [
+        "cpu"
+      ],
+      "timeout": 60,
+      "command": "python3 -m unittest discover -s ci/tests -v"
+    },
+    {
+      "id": "p2p.host.backend_build",
+      "sources": [
+        "p2p/tests/test_backend_build.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_backend_build.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.backend_config",
+      "sources": [
+        "p2p/tests/test_backend_config.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_backend_config.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.cnrt_staging",
+      "sources": [
+        "p2p/tests/test_cnrt_staging.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_cnrt_staging.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.dmabuf_export",
+      "sources": [
+        "p2p/tests/test_dmabuf_export.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_dmabuf_export.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.endpoint_wrapper",
+      "sources": [
+        "p2p/tests/test_endpoint_wrapper.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_endpoint_wrapper.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.gpu_ipc_export",
+      "sources": [
+        "p2p/tests/test_gpu_ipc_export.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_gpu_ipc_export.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.musa_backend",
+      "sources": [
+        "p2p/tests/test_musa_backend.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_musa_backend.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.native_runtime",
+      "sources": [
+        "p2p/tests/test_native_runtime.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_native_runtime.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.nccl_completion",
+      "sources": [
+        "p2p/tests/test_nccl_completion.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_nccl_completion.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.p800_device_transfer_control",
+      "sources": [
+        "p2p/tests/test_p800_device_transfer_control.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_p800_device_transfer_control.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.python_signals",
+      "sources": [
+        "p2p/tests/test_python_signals.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_python_signals.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.transport_factory",
+      "sources": [
+        "p2p/tests/test_transport_factory.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_transport_factory.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "p2p.host.util_interval_tree",
+      "sources": [
+        "p2p/tests/test_util_interval_tree.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_util_interval_tree.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "ep.host.runtime_config",
+      "sources": [
+        "ep/tests/test_runtime_config.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/tests/test_runtime_config.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "ep.host.buffer_compatibility",
+      "sources": [
+        "ep/deep_ep_wrapper/tests/test_buffer_compatibility.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_buffer_compatibility.py --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "ep.host.event_handle",
+      "sources": [
+        "ep/deep_ep_wrapper/tests/test_event_handle.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_event_handle.py -k records_on_current_stream --junitxml=\"$CI_TEST_JUNIT\""
+    },
+    {
+      "id": "mccl.host.mccl_abi",
+      "sources": [
+        "collective/mccl/test_mccl_abi.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 collective/mccl/test_mccl_abi.py"
+    },
+    {
+      "id": "mccl.host.mccl_collectives",
+      "sources": [
+        "collective/mccl/test_mccl_collectives.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 collective/mccl/test_mccl_collectives.py"
+    },
+    {
+      "id": "mccl.host.mccl_plugin_behavior",
+      "sources": [
+        "collective/mccl/test_mccl_plugin_behavior.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 collective/mccl/test_mccl_plugin_behavior.py"
+    },
+    {
+      "id": "mccl.host.mccl_plugin_contract",
+      "sources": [
+        "collective/mccl/test_mccl_plugin_contract.py"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "python3 collective/mccl/test_mccl_plugin_contract.py"
+    },
+    {
+      "id": "build.apptainer_flags",
+      "sources": [
+        "scripts/test_build_apptainer_gpu_flags.sh"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "scripts/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "bash scripts/test_build_apptainer_gpu_flags.sh"
+    },
+    {
+      "id": "util.gpu_topology",
+      "sources": [
+        "include/util/gpu_topology_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "include/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C p2p test_gpu_topology PYTHON=/nonexistent/ci-python && ./p2p/test_gpu_topology"
+    },
+    {
+      "id": "ep.host.rdma_addressing",
+      "sources": [
+        "ep/tests/rdma_addressing_test.cpp"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C ep/tests test HOST_TEST_INCLUDES=-I../include"
+    },
+    {
+      "id": "p2p.host.notify_serde",
+      "sources": [
+        "p2p/tests/test_notify_serde.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_notify_serde.cc -o \"$CI_ARTIFACTS/notify_serde\" && \"$CI_ARTIFACTS/notify_serde\""
+    },
+    {
+      "id": "p2p.host.epoll_client",
+      "sources": [
+        "p2p/tests/test_epoll_client.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_client.cc p2p/util/epoll_client.cc -o \"$CI_ARTIFACTS/epoll_client\" && \"$CI_ARTIFACTS/epoll_client\""
+    },
+    {
+      "id": "p2p.host.epoll_server",
+      "sources": [
+        "p2p/tests/test_epoll_server.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "cpu"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "g++ -std=c++17 -O2 -pthread -Ip2p -Ip2p/util -Iinclude p2p/tests/test_epoll_server.cc p2p/util/epoll_server.cc -o \"$CI_ARTIFACTS/epoll_server\" && \"$CI_ARTIFACTS/epoll_server\""
+    },
+    {
+      "id": "p2p.engine_read",
+      "sources": [
+        "p2p/tests/test_engine_read.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 240,
+      "command": "python3 p2p/tests/test_engine_read.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_write",
+      "sources": [
+        "p2p/tests/test_engine_write.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 240,
+      "command": "python3 p2p/tests/test_engine_write.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.register_memory_cache",
+      "sources": [
+        "p2p/tests/test_register_memory_cache.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 240,
+      "command": "python3 p2p/tests/test_register_memory_cache.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_onesided_ipc_native",
+      "sources": [
+        "p2p/tests/test_engine_onesided_ipc_native.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "python3 p2p/tests/test_engine_onesided_ipc_native.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.accept_stop",
+      "sources": [
+        "p2p/tests/test_accept_stop.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_accept_stop.py --junitxml=\"$CI_TEST_JUNIT\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_device_binding",
+      "sources": [
+        "p2p/tests/test_engine_device_binding.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "python3 -m pytest -q p2p/tests/test_engine_device_binding.py --junitxml=\"$CI_TEST_JUNIT\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.host_registration_device",
+      "sources": [
+        "p2p/tests/test_host_registration_device.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 180,
+      "command": "python3 p2p/tests/test_host_registration_device.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.gpu_index_mapping",
+      "sources": [
+        "p2p/tests/test_gpu_index_mapping.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 180,
+      "command": "python3 p2p/tests/test_gpu_index_mapping.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_nvlink",
+      "sources": [
+        "p2p/tests/test_engine_nvlink.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "bash ci/torchrun.sh p2p/tests/test_engine_nvlink.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_nvlink_metadata",
+      "sources": [
+        "p2p/tests/test_engine_nvlink_metadata.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "bash ci/torchrun.sh p2p/tests/test_engine_nvlink_metadata.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_onesided_ipc",
+      "sources": [
+        "p2p/tests/test_engine_onesided_ipc.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "bash ci/torchrun.sh p2p/tests/test_engine_onesided_ipc.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.ray_api",
+      "sources": [
+        "p2p/tests/test_ray_api.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "bash ci/torchrun.sh p2p/tests/test_ray_api.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.remove_remote_endpoint",
+      "sources": [
+        "p2p/tests/test_remove_remote_endpoint.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 240,
+      "command": "bash ci/torchrun.sh p2p/tests/test_remove_remote_endpoint.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.rdma_native.write",
+      "sources": [
+        "p2p/tests/test_cross_node_rdma_native.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "if [[ $CI_NODE == 0 ]]; then role=acceptor; peer=(); else role=initiator; peer=(--peer-ip \"$MASTER_ADDR\"); fi\npython3 p2p/tests/test_cross_node_rdma_native.py --role \"$role\" --mode write --rendezvous-port \"$MASTER_PORT\" \"${peer[@]}\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.rdma_native.read",
+      "sources": [
+        "p2p/tests/test_cross_node_rdma_native.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "if [[ $CI_NODE == 0 ]]; then role=acceptor; peer=(); else role=initiator; peer=(--peer-ip \"$MASTER_ADDR\"); fi\npython3 p2p/tests/test_cross_node_rdma_native.py --role \"$role\" --mode read --rendezvous-port \"$MASTER_PORT\" \"${peer[@]}\"",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.engine_write_compress",
+      "sources": [
+        "p2p/tests/test_engine_write_compress.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/torchrun.sh p2p/tests/test_engine_write_compress.py",
+      "setup": [
+        "compression"
+      ],
+      "env": {
+        "UCCL_P2P_COMPRESS_STRATEGY": "split"
+      }
+    },
+    {
+      "id": "p2p.reg_compress_only",
+      "sources": [
+        "p2p/tests/test_reg_compress_only.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/torchrun.sh p2p/tests/test_reg_compress_only.py",
+      "setup": [
+        "compression"
+      ],
+      "env": {
+        "UCCL_P2P_COMPRESS_STRATEGY": "split_only"
+      }
+    },
+    {
+      "id": "ep.event_handle",
+      "sources": [
+        "ep/deep_ep_wrapper/tests/test_event_handle.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "python3 -m pytest -q ep/deep_ep_wrapper/tests/test_event_handle.py --junitxml=\"$CI_TEST_JUNIT\"",
+      "setup": [
+        "ep"
+      ]
+    },
+    {
+      "id": "ep.low_latency",
+      "sources": [
+        "ep/bench/test_low_latency.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
+      "setup": [
+        "ep"
+      ]
+    },
+    {
+      "id": "ep.ll_dedup",
+      "sources": [
+        "ep/bench/test_ll_dedup.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/torchrun.sh ep/bench/test_ll_dedup.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
+      "setup": [
+        "ep"
+      ]
+    },
+    {
+      "id": "ep.internode_simple",
+      "sources": [
+        "ep/bench/test_internode_simple.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/torchrun.sh ep/bench/test_internode_simple.py",
+      "setup": [
+        "ep"
+      ]
+    },
+    {
+      "id": "ep.dual_mode",
+      "sources": [
+        "ep/bench/test_dual_mode.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/torchrun.sh ep/bench/test_dual_mode.py",
+      "setup": [
+        "ep"
+      ]
+    },
+    {
+      "id": "ep.barrier_concurrent",
+      "sources": [
+        "ep/tests/barrier_concurrent.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "make -C ep/tests barrier_concurrent CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/barrier_concurrent local 2 400 2 serial 30"
+    },
+    {
+      "id": "ep.bench.pcie_bench",
+      "sources": [
+        "ep/tests/pcie_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench"
+    },
+    {
+      "id": "ep.bench.gpu_to_cpu_bench",
+      "sources": [
+        "ep/tests/gpu_to_cpu_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench"
+    },
+    {
+      "id": "ep.bench.batched_gpu_to_cpu_bench",
+      "sources": [
+        "ep/tests/batched_gpu_to_cpu_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/batched_gpu_to_cpu_bench"
+    },
+    {
+      "id": "ep.rb.cas",
+      "sources": [
+        "ep/bench/rb/test_cas_throughput.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ep-rb cas"
+    },
+    {
+      "id": "ep.rb.fc",
+      "sources": [
+        "ep/bench/rb/test_fc_throughput.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ep-rb fc"
+    },
+    {
+      "id": "ep.rb.lock",
+      "sources": [
+        "ep/bench/rb/test_lock_throughput.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ep-rb lock"
+    },
+    {
+      "id": "ep.rb.multi_ring",
+      "sources": [
+        "ep/bench/rb/test_multi_ring_throughput.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ep-rb multi_ring"
+    },
+    {
+      "id": "util.runtime",
+      "sources": [
+        "include/util/util_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "include/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 240,
+      "command": "make -C include/util util_test && include/util/util_test"
+    },
+    {
+      "id": "collective.sack_bitmap",
+      "sources": [
+        "collective/tests/sack_bitmap_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/tests/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 180,
+      "command": "make -C collective/tests test"
+    },
+    {
+      "id": "collective.rdma.eqds_credit",
+      "sources": [
+        "collective/rdma/eqds_credit_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test eqds_credit",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "collective.rdma.eqds",
+      "sources": [
+        "collective/rdma/eqds_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test eqds",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "collective.rdma.eqds_transfer",
+      "sources": [
+        "collective/rdma/eqds_transfer_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test eqds_transfer",
+      "setup": [
+        "collective"
+      ],
+      "reason": "The fixture exits with \"Rebuild with kReceiverCCA = RECEIVER_CCA_EQDS\" under the repository default CCA. Enable when an EQDS build variant is provided."
+    },
+    {
+      "id": "collective.rdma.imm_data",
+      "sources": [
+        "collective/rdma/imm_data_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test imm_data",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "collective.rdma.rdma",
+      "sources": [
+        "collective/rdma/rdma_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C collective/rdma rdma_test; if [[ $CI_NODE == 0 ]]; then exec collective/rdma/rdma_test; else exec collective/rdma/rdma_test \"$MASTER_ADDR\"; fi",
+      "setup": [
+        "collective"
+      ],
+      "reason": "This legacy fixture hardcodes RDMA device 2 and GPU memory registration. L4 has only two NICs; GB10 GPU memory registration fails. Native read/write coverage is active on L4."
+    },
+    {
+      "id": "collective.rdma.flush",
+      "sources": [
+        "collective/rdma/flush_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test flush",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "collective.rdma.pcie",
+      "sources": [
+        "collective/rdma/pcie_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh rdma-test pcie",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "collective.rdma.transport",
+      "sources": [
+        "collective/rdma/transport_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C collective/rdma transport_test\nif [[ $CI_NODE == 0 ]]; then args=(--server); else args=(--serverip=\"$MASTER_ADDR\"); fi\nstdbuf -oL -eL collective/rdma/transport_test \"${args[@]}\" --perftype=basic --iterations=16 --nflow=1 --nreq=1 --msize=65536 --oobport=\"$MASTER_PORT\"",
+      "setup": [
+        "collective"
+      ]
+    },
+    {
+      "id": "gin.local.compile_contracts",
+      "sources": [
+        "experimental/uccl_gin/tests/local/network_gate_compile.cu",
+        "experimental/uccl_gin/tests/local/unsupported_coop.cu",
+        "experimental/uccl_gin/tests/local/unsupported_signal_coop.cu"
+      ],
+      "tier": "build",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 60,
+      "command": "true",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.capabilities",
+      "sources": [
+        "experimental/uccl_gin/tests/local/capabilities.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/capabilities",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.queue_smoke",
+      "sources": [
+        "experimental/uccl_gin/tests/local/queue_smoke.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/queue_smoke",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.coop_flush",
+      "sources": [
+        "experimental/uccl_gin/tests/local/coop_flush.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/coop_flush",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.adapter_signal",
+      "sources": [
+        "experimental/uccl_gin/tests/local/adapter_signal.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/adapter_signal",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.ht_single_rank",
+      "sources": [
+        "experimental/uccl_gin/tests/local/ht_single_rank.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/ht_single_rank-nccl && experimental/uccl_gin/tests/local/build/sm$SM/ht_single_rank-uccl",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.local.model",
+      "sources": [
+        "experimental/uccl_gin/tests/local/model_e2e.py",
+        "experimental/uccl_gin/tests/local/model_transport.cu"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "python3 experimental/uccl_gin/tests/local/model_e2e.py --library experimental/uccl_gin/tests/local/build/sm$SM/libmodel_transport.so --arm v2 --native-only",
+      "setup": [
+        "gin-local"
+      ]
+    },
+    {
+      "id": "gin.network.context",
+      "sources": [
+        "experimental/uccl_gin/tests/test_context.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "efa"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+    },
+    {
+      "id": "gin.network.primitives",
+      "sources": [
+        "experimental/uccl_gin/tests/test_primitives.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "efa"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+    },
+    {
+      "id": "gin.network.microbench",
+      "sources": [
+        "experimental/uccl_gin/tests/test_microbench.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "efa"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "The NVIDIA GIN network implementation requires EFA; none of the available CI servers has an EFA NIC."
+    },
+    {
+      "id": "gin.network.binaries",
+      "sources": [
+        "experimental/uccl_gin/tests/microbench.cu",
+        "experimental/uccl_gin/tests/put_quiet_smoke.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/uccl_gin/**"
+      ],
+      "requires": [
+        "efa"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "NVIDIA GIN network transport requires EFA; no EFA CI target is available."
+    },
+    {
+      "id": "ukernel.transport.unit",
+      "sources": [
+        "experimental/ukernel/src/transport/test/unit/test_transport_core.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_host_bounce_pool.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_oob_exchangeable.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_oob_shm.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_oob_socket.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_tcp_adapter.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_unit_main.cc",
+        "experimental/ukernel/src/transport/test/unit/test_transport_utils.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "make -C experimental/ukernel/src/transport -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-unit"
+    },
+    {
+      "id": "ukernel.transport.integration",
+      "sources": [
+        "experimental/ukernel/src/transport/test/integration/test_transport_communicator.cc",
+        "experimental/ukernel/src/transport/test/integration/test_transport_integration_main.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "make -C experimental/ukernel/src/transport -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-integration"
+    },
+    {
+      "id": "ukernel.device.unit",
+      "sources": [
+        "experimental/ukernel/src/device/test/unit/test_all.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "gdrcopy",
+        "gdrcopy"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "make -C experimental/ukernel/src/device -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-unit",
+      "reason": "Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
+    },
+    {
+      "id": "ukernel.device.integration",
+      "sources": [
+        "experimental/ukernel/src/device/test/integration/simple_copy_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "gdrcopy",
+        "gdrcopy"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "make -C experimental/ukernel/src/device -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-integration",
+      "reason": "Requires the GDRCopy kernel driver (/dev/gdrdrv), absent on the current CI servers. GH200 has the userspace library only; enable after driver provisioning."
+    },
+    {
+      "id": "ukernel.ccl.unit",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/unit/test_async.cc",
+        "experimental/ukernel/src/ccl/test/unit/test_modules.cc",
+        "experimental/ukernel/src/ccl/test/unit/test_spray_executor.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "make -C experimental/ukernel/src/ccl -j\"$CI_JOBS\" SM=\"$SM\" CUDA_HOME=\"$CUDA_HOME\" CUDA_PATH=\"$CUDA_HOME\" test-unit",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_put_signal_e2e",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/integration/test_put_signal_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_put_signal_e2e",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_spray_executor_e2e",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/integration/test_spray_executor_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_spray_executor_e2e",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_device_backend_e2e",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/unit/test_device_backend_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_device_backend_e2e",
+      "reason": "Requires same-host GPU IPC and the GDRCopy kernel driver. The available multi-GPU L4 pool has no /dev/gdrdrv.",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_signal_backend_e2e",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/unit/test_signal_backend_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_signal_backend_e2e",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_transport_backend_e2e",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/unit/test_transport_backend_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_transport_backend_e2e",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.ccl.test_perf_p2p_copy",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/integration/test_perf_p2p_copy.cc"
+      ],
+      "tier": "performance",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_perf_p2p_copy",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ],
+      "reason": "Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
+    },
+    {
+      "id": "ukernel.ccl.test_perf_spray_allreduce",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/integration/test_perf_spray_allreduce.cc"
+      ],
+      "tier": "performance",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_perf_spray_allreduce",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ],
+      "reason": "Includes device-backend benchmarks requiring the GDRCopy kernel driver, absent on the current CI pool."
+    },
+    {
+      "id": "ukernel.ccl.test_rdma_l2_flush",
+      "sources": [
+        "experimental/ukernel/src/ccl/test/integration/test_rdma_l2_flush.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "bash ci/suites.sh ukernel-ccl test_rdma_l2_flush",
+      "failure_patterns": [
+        "\\bFAIL\\b",
+        "data: empty"
+      ],
+      "setup": [
+        "gdrcopy-lib"
+      ]
+    },
+    {
+      "id": "ukernel.python.bidirectional_p2p",
+      "sources": [
+        "experimental/ukernel/py/tests/test_bidirectional_p2p.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_bidirectional_p2p.py",
+      "setup": [
+        "ukernel-python"
+      ]
+    },
+    {
+      "id": "ukernel.python.collective",
+      "sources": [
+        "experimental/ukernel/py/tests/test_collective.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_collective.py",
+      "setup": [
+        "ukernel-python"
+      ],
+      "reason": "Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
+    },
+    {
+      "id": "ukernel.python.p2p",
+      "sources": [
+        "experimental/ukernel/py/tests/test_p2p.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_p2p.py",
+      "setup": [
+        "ukernel-python"
+      ]
+    },
+    {
+      "id": "ukernel.python.tile_signal",
+      "sources": [
+        "experimental/ukernel/py/tests/test_tile_signal.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_tile_signal.py",
+      "setup": [
+        "ukernel-python"
+      ]
+    },
+    {
+      "id": "ukernel.python.transport_paths",
+      "sources": [
+        "experimental/ukernel/py/tests/test_transport_paths.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_transport_paths.py",
+      "setup": [
+        "ukernel-python"
+      ]
+    },
+    {
+      "id": "lite.ep.ep",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/test_ep.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "bash ci/suites.sh lite-ep ep",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.agrs",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/test_agrs.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "bash ci/suites.sh lite-ep agrs",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.barrier",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/test_barrier.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "bash ci/suites.sh lite-ep barrier",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.engram",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/test_engram.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "bash ci/suites.sh lite-ep engram",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.pp",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/test_pp.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "bash ci/suites.sh lite-ep pp",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.gate",
+      "sources": [
+        "experimental/lite/lite-ep/tests/utils/test_gate.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 900,
+      "command": "cd experimental/lite/lite-ep; PYTHONPATH=\"$PWD\" python3 tests/utils/test_gate.py",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.full_path",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/run_full_path_bench.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "cd experimental/lite/lite-ep; PYTHONPATH=\"$PWD\" python3 tests/elastic/run_full_path_bench.py --transport nogdr --num-processes=2 --validate-only",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "disabled.collective.afxdp.ebpf-afxdp-test.c",
+      "sources": [
+        "collective/afxdp/ebpf_afxdp_test.c"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires privileged AF_XDP/XDP attachment, NIC queue configuration and a dedicated network interface; the non-root CI pool is not provisioned for this transport."
+    },
+    {
+      "id": "disabled.collective.afxdp.rss-hash-test.cc",
+      "sources": [
+        "collective/afxdp/rss_hash_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires privileged AF_XDP/XDP attachment, NIC queue configuration and a dedicated network interface; the non-root CI pool is not provisioned for this transport."
+    },
+    {
+      "id": "disabled.collective.afxdp.run-nccl-test.sh",
+      "sources": [
+        "collective/afxdp/run_nccl_test.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires privileged AF_XDP/XDP attachment, NIC queue configuration and a dedicated network interface; the non-root CI pool is not provisioned for this transport."
+    },
+    {
+      "id": "collective.afxdp.timely",
+      "sources": [
+        "collective/afxdp/timely_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host afxdp.timely",
+      "setup": []
+    },
+    {
+      "id": "collective.afxdp.timing_wheel",
+      "sources": [
+        "collective/afxdp/timing_wheel_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host afxdp.timing_wheel",
+      "setup": []
+    },
+    {
+      "id": "disabled.collective.afxdp.transport-test.cc",
+      "sources": [
+        "collective/afxdp/transport_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires privileged AF_XDP/XDP attachment, NIC queue configuration and a dedicated network interface; the non-root CI pool is not provisioned for this transport."
+    },
+    {
+      "id": "disabled.collective.afxdp.util-afxdp-test.cc",
+      "sources": [
+        "collective/afxdp/util_afxdp_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires privileged AF_XDP/XDP attachment, NIC queue configuration and a dedicated network interface; the non-root CI pool is not provisioned for this transport."
+    },
+    {
+      "id": "collective.afxdp.util_lrpc",
+      "sources": [
+        "collective/afxdp/util_lrpc_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/afxdp/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host afxdp.util_lrpc",
+      "setup": []
+    },
+    {
+      "id": "disabled.collective.dpdk.transport-test.cc",
+      "sources": [
+        "collective/dpdk/transport_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/dpdk/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires a dedicated DPDK-bound NIC, huge pages and elevated device access, absent from the non-root CI pool."
+    },
+    {
+      "id": "disabled.collective.dpdk.util-dpdk-test.cc",
+      "sources": [
+        "collective/dpdk/util_dpdk_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/dpdk/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires a dedicated DPDK-bound NIC, huge pages and elevated device access, absent from the non-root CI pool."
+    },
+    {
+      "id": "disabled.collective.efa.run-nccl-test.sh",
+      "sources": [
+        "collective/efa/run_nccl_test.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "disabled.collective.efa.run-nccl-test-single-proc.sh",
+      "sources": [
+        "collective/efa/run_nccl_test_single_proc.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "collective.efa.scattered_memcpy",
+      "sources": [
+        "collective/efa/scattered_memcpy_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "nvcc -O2 -std=c++17 -Iinclude -Icollective/efa -DUSE_CUDA collective/efa/scattered_memcpy_test.cc collective/efa/scattered_memcpy.cu -lgflags -o \"$CI_ARTIFACTS/scattered_memcpy\" && \"$CI_ARTIFACTS/scattered_memcpy\"",
+      "setup": []
+    },
+    {
+      "id": "collective.efa.timely",
+      "sources": [
+        "collective/efa/timely_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host efa.timely",
+      "setup": []
+    },
+    {
+      "id": "collective.efa.timing_wheel",
+      "sources": [
+        "collective/efa/timing_wheel_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host efa.timing_wheel",
+      "setup": []
+    },
+    {
+      "id": "disabled.collective.efa.transport-test.cc",
+      "sources": [
+        "collective/efa/transport_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "disabled.collective.efa.util-efa-device-name-list-test.cc",
+      "sources": [
+        "collective/efa/util_efa_device_name_list_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "disabled.collective.efa.util-efa-test.cc",
+      "sources": [
+        "collective/efa/util_efa_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "collective.efa.util_lrpc",
+      "sources": [
+        "collective/efa/util_lrpc_test.cc"
+      ],
+      "tier": "host",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "collective/efa/**"
+      ],
+      "requires": [
+        "cpu"
+      ],
+      "nodes": 1,
+      "gpus": 0,
+      "timeout": 300,
+      "command": "bash ci/suites.sh scalar-host efa.util_lrpc",
+      "setup": []
+    },
+    {
+      "id": "disabled.collective.mccl.tests.connection-test.cc",
+      "sources": [
+        "collective/mccl/tests/connection_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+    },
+    {
+      "id": "disabled.collective.mccl.tests.flush-test.cc",
+      "sources": [
+        "collective/mccl/tests/flush_test.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/mccl/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+    },
+    {
+      "id": "disabled.collective.rdma.run-nccl-test.sh",
+      "sources": [
+        "collective/rdma/run_nccl_test.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Legacy site-specific launcher contains fixed host/user paths; portable collective coverage is registered as collective.multi_process_groups."
+    },
+    {
+      "id": "disabled.collective.rdma.run-nccl-test-tcpx.sh",
+      "sources": [
+        "collective/rdma/run_nccl_test_tcpx.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires the Google Cloud TCPX environment, which is not part of the available CI pool."
+    },
+    {
+      "id": "disabled.collective.rdma.run-rccl-test.sh",
+      "sources": [
+        "collective/rdma/run_rccl_test.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+    },
+    {
+      "id": "disabled.collective.rdma.run-rccl-test-hpcfund.sh",
+      "sources": [
+        "collective/rdma/run_rccl_test_hpcfund.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "collective/rdma/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+    },
+    {
+      "id": "disabled.ep.bench.alltoall.test-alltoall.cpp",
+      "sources": [
+        "ep/bench/alltoall/test_alltoall.cpp"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "disabled.ep.bench.alltoall.test-alltoall-rail.cpp",
+      "sources": [
+        "ep/bench/alltoall/test_alltoall_rail.cpp"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires EFA hardware and its provider; available CI machines have ConnectX IB/RoCE NICs."
+    },
+    {
+      "id": "ep.triton_pack_unpack",
+      "sources": [
+        "ep/bench/baseline/test_pack_unpack_triton.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "command": "python3 ep/bench/baseline/test_pack_unpack_triton.py",
+      "setup": []
+    },
+    {
+      "id": "disabled.ep.bench.test-internode.py",
+      "sources": [
+        "ep/bench/test_internode.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires native peer atomics/NVLink among multiple GPUs per node. L4 supports peer copies but not native peer atomics; GH200/GB10 have one GPU per available node."
+    },
+    {
+      "id": "disabled.ep.bench.test-intranode.py",
+      "sources": [
+        "ep/bench/test_intranode.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires native peer atomics/NVLink among multiple GPUs per node. L4 supports peer copies but not native peer atomics; GH200/GB10 have one GPU per available node."
+    },
+    {
+      "id": "disabled.ep.bench.test-low-latency-pplx.py",
+      "sources": [
+        "ep/bench/test_low_latency_pplx.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "External PPLX comparison requires pplx_kernels and its own deployment; it is not a UCCL test executable."
+    },
+    {
+      "id": "disabled.ep.deep-ep-wrapper.deep-ep.test-internode.py",
+      "sources": [
+        "ep/deep_ep_wrapper/deep_ep/test_internode.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires native peer atomics/NVLink among multiple GPUs per node. L4 supports peer copies but not native peer atomics; GH200/GB10 have one GPU per available node."
+    },
+    {
+      "id": "disabled.ep.tests.intranode-combine-test.cu",
+      "sources": [
+        "ep/tests/intranode_combine_test.cu"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "ep/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires native peer atomics/NVLink among multiple GPUs per node. L4 supports peer copies but not native peer atomics; GH200/GB10 have one GPU per available node."
+    },
+    {
+      "id": "collective.multi_process_groups",
+      "sources": [
+        "examples/multi_pg_test.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "paths": [
+        "examples/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "NCCL_NET_PLUGIN=uccl NCCL_NET=RDMA_Plugin bash ci/torchrun.sh examples/multi_pg_test.py --iters=2 --tensor_size=1024",
+      "setup": [
+        "collective-plugin"
+      ]
+    },
+    {
+      "id": "lite.ep.batched_gpu_to_cpu_bench",
+      "sources": [
+        "experimental/lite/lite-ep/tests/batched_gpu_to_cpu_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C experimental/lite/lite-ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/batched_gpu_to_cpu_bench",
+      "setup": []
+    },
+    {
+      "id": "lite.ep.bench_decode_latency",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/bench_decode_latency.py"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "cd experimental/lite/lite-ep; PYTHONPATH=\"$PWD\" python3 tests/elastic/bench_decode_latency.py --num-processes=2",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.bench_nccl_a2a",
+      "sources": [
+        "experimental/lite/lite-ep/tests/elastic/bench_nccl_a2a.py"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 900,
+      "command": "cd experimental/lite/lite-ep; PYTHONPATH=\"$PWD\" python3 tests/elastic/bench_nccl_a2a.py --num-processes=2",
+      "setup": [
+        "lite-ep"
+      ]
+    },
+    {
+      "id": "lite.ep.gpu_to_cpu_bench",
+      "sources": [
+        "experimental/lite/lite-ep/tests/gpu_to_cpu_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C experimental/lite/lite-ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/gpu_to_cpu_bench",
+      "setup": []
+    },
+    {
+      "id": "lite.ep.pcie_bench",
+      "sources": [
+        "experimental/lite/lite-ep/tests/pcie_bench.cu"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/lite/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C experimental/lite/lite-ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && experimental/lite/lite-ep/tests/pcie_bench",
+      "setup": []
+    },
+    {
+      "id": "disabled.experimental.misc.run-nccl-test.sh",
+      "sources": [
+        "experimental/misc/run_nccl_test.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/misc/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Legacy site-specific launcher contains fixed host/user paths; portable collective coverage is registered as collective.multi_process_groups."
+    },
+    {
+      "id": "disabled.experimental.misc.run-nccl-test-nsys.sh",
+      "sources": [
+        "experimental/misc/run_nccl_test_nsys.sh"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "experimental/misc/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Profiling wrapper requires Nsight Systems and profiling permissions; use the registered correctness/benchmark suites in CI."
+    },
+    {
+      "id": "p2p.compression_unit",
+      "sources": [
+        "p2p/rdma/tests/test_compression.cpp"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/suites.sh compression",
+      "setup": [
+        "compression"
+      ]
+    },
+    {
+      "id": "p2p.compression_arena",
+      "sources": [
+        "p2p/tests/scenario_compressed_write_arena.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "bash ci/torchrun.sh p2p/tests/scenario_compressed_write_arena.py --rounds=2",
+      "setup": [
+        "compression"
+      ],
+      "env": {
+        "UCCL_P2P_COMPRESS_STRATEGY": "split_only",
+        "UCCL_P2P_COMPRESS_BUFFER_BYTES": "16777216"
+      }
+    },
+    {
+      "id": "disabled.p2p.tests.test-hygon-p2p-basic.py",
+      "sources": [
+        "p2p/tests/test_hygon_p2p_basic.py"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires AMD/Hygon hardware; the AMD CI servers are offline."
+    },
+    {
+      "id": "disabled.p2p.tests.test-musa-runtime-probe.cc",
+      "sources": [
+        "p2p/tests/test_musa_runtime_probe.cc"
+      ],
+      "tier": "integration",
+      "enabled": false,
+      "targets": [],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 180,
+      "reason": "Requires a MUSA GPU and SDK; no available CI machine has MUSA hardware."
+    },
+    {
+      "id": "p2p.notifications",
+      "sources": [
+        "p2p/tests/test_notify_e2e.cc"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "gpu-rdma"
+      ],
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "command": "make -C p2p notif_e2e ENABLE_EFA=0 ENABLE_CXI=1 && python3 ci/notification.py",
+      "setup": [
+        "p2p"
+      ]
+    },
+    {
+      "id": "p2p.bandwidth",
+      "sources": [
+        "p2p/benchmarks/benchmark_uccl.py"
+      ],
+      "tier": "performance",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "paths": [
+        "p2p/**"
+      ],
+      "requires": [
+        "cuda",
+        "rdma"
+      ],
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 180,
+      "setup": [
+        "p2p"
+      ],
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128",
+      "metrics": [
+        {
+          "name": "bandwidth_gbps",
+          "pattern": "([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        }
+      ]
+    },
+    {
+      "id": "nixl.internode.rdma",
+      "sources": [
+        "ci/nixl.sh"
+      ],
+      "command": "bash ci/nixl.sh rdma",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "setup": [
+        "p2p",
+        "nixl"
+      ],
+      "tier": "integration",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/**",
+        "ci/**"
+      ]
+    },
+    {
+      "id": "nixl.internode.nccl",
+      "sources": [
+        "ci/nixl.sh"
+      ],
+      "command": "bash ci/nixl.sh nccl",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "setup": [
+        "p2p",
+        "nixl"
+      ],
+      "tier": "integration",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/**",
+        "ci/**"
+      ]
+    },
+    {
+      "id": "nixl.local.enabled",
+      "sources": [
+        "ci/nixl.sh"
+      ],
+      "command": "bash ci/nixl.sh rdma 0",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "setup": [
+        "p2p",
+        "nixl"
+      ],
+      "tier": "integration",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/**",
+        "ci/**"
+      ]
+    },
+    {
+      "id": "nixl.local.disabled",
+      "sources": [
+        "ci/nixl.sh"
+      ],
+      "command": "bash ci/nixl.sh rdma 1",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "setup": [
+        "p2p",
+        "nixl"
+      ],
+      "tier": "integration",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/**",
+        "ci/**"
+      ]
+    },
+    {
+      "id": "gin.local.routing_bitmap",
+      "sources": [
+        "thirdparty/nccl-ep/tests/routing_bitmap.cu"
+      ],
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/routing_bitmap",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "setup": [
+        "gin-local"
+      ],
+      "tier": "integration",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**",
+        "thirdparty/nccl-ep/**"
+      ]
+    },
+    {
+      "id": "gin.local.probability_order",
+      "sources": [
+        "thirdparty/nccl-ep/tests/probability_order.cu"
+      ],
+      "command": "experimental/uccl_gin/tests/local/build/sm$SM/probability_order",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "setup": [
+        "gin-local"
+      ],
+      "tier": "integration",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/uccl_gin/**",
+        "thirdparty/nccl-ep/**"
+      ]
+    },
+    {
+      "id": "lite.collective.staged",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/benchmark_uccl_staged.py"
+      ],
+      "command": "bash ci/torchrun.sh experimental/lite/lite-collective/scripts/benchmark_uccl_staged.py --sizes=1048576 --iters=2 --warmup-iters=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**",
+        "p2p/**"
+      ]
+    },
+    {
+      "id": "lite.collective.staged_multiconn",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/benchmark_uccl_staged_multiconn.py"
+      ],
+      "command": "bash ci/torchrun.sh experimental/lite/lite-collective/scripts/benchmark_uccl_staged_multiconn.py --sizes=1048576 --iters=2 --warmup-iters=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**",
+        "p2p/**"
+      ]
+    },
+    {
+      "id": "lite.collective.staged_kernelcopy",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/benchmark_uccl_staged_kernelcopy.py"
+      ],
+      "command": "bash ci/torchrun.sh experimental/lite/lite-collective/scripts/benchmark_uccl_staged_kernelcopy.py --sizes=1048576 --iters=2 --warmup-iters=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**",
+        "p2p/**"
+      ]
+    },
+    {
+      "id": "lite.collective.staged_dualnuma",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/benchmark_uccl_staged_dualnuma.py"
+      ],
+      "command": "bash ci/torchrun.sh experimental/lite/lite-collective/scripts/benchmark_uccl_staged_dualnuma.py --sizes=1048576 --iters=2 --warmup-iters=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**",
+        "p2p/**"
+      ]
+    },
+    {
+      "id": "lite.collective.staged_singlegpu_dualnuma",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/benchmark_uccl_staged_singlegpu_dualnuma.py"
+      ],
+      "command": "bash ci/torchrun.sh experimental/lite/lite-collective/scripts/benchmark_uccl_staged_singlegpu_dualnuma.py --sizes=1048576 --iters=2 --warmup-iters=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**",
+        "p2p/**"
+      ]
+    },
+    {
+      "id": "lite.collective.build",
+      "sources": [
+        "experimental/lite/lite-collective/Makefile"
+      ],
+      "command": "test -s experimental/lite/lite-collective/nccl/build/libmscclpp_nccl.so",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "setup": [
+        "lite-collective"
+      ],
+      "tier": "build",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/**"
+      ]
+    },
+    {
+      "id": "lite.collective.sendrecv",
+      "sources": [
+        "experimental/lite/lite-collective/scripts/run-nccl-tests.sh"
+      ],
+      "command": "export MSCCLPP_NCCL_LIB_PATH=\"$NCCL_ROOT/lib/libnccl.so.2\"\nmkdir -p \"$CI_REPO/.ci-lite-sdk\"\nln -sf \"$CI_REPO/experimental/lite/lite-collective/nccl/build/libmscclpp_nccl.so\" \"$CI_REPO/.ci-lite-sdk/libnccl.so.2\"\nLD_LIBRARY_PATH=\"$CI_REPO/.ci-lite-sdk:$LD_LIBRARY_PATH\" .ci-nccl-tests/build/sendrecv_perf -g 2 -b 8 -e 1M -n 2 -w 1 -c 1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "lite-collective",
+        "nccl-tests"
+      ],
+      "tier": "integration",
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 15,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/lite/lite-collective/scripts/**"
+      ]
+    },
+    {
+      "id": "p2p.bench.nccl",
+      "sources": [
+        "p2p/benchmarks/benchmark_nccl.py"
+      ],
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/benchmarks/**"
+      ]
+    },
+    {
+      "id": "p2p.bench.ray_p2p",
+      "sources": [
+        "p2p/benchmarks/benchmark_ray_p2p.py"
+      ],
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/benchmarks/**"
+      ]
+    },
+    {
+      "id": "p2p.bench.uccl_compression",
+      "sources": [
+        "p2p/benchmarks/benchmark_uccl_compression.py"
+      ],
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "compression"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "p2p/benchmarks/**"
+      ]
+    },
+    {
+      "id": "p2p.bench.nixl_python",
+      "sources": [
+        "p2p/benchmarks/benchmark_nixl.py"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "Opted out: Python NIXL/UCX comparison environment is not installed. The UCCL plugin is covered by the registered native nixl.* suites.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "p2p.bench.nixl_8gpu",
+      "sources": [
+        "p2p/benchmarks/benchmark_nixl_8gpu.py"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "Requires eight GPUs per node; the largest available node has four.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "misc.pcie",
+      "sources": [
+        "experimental/misc/benchmark_pcie_bw.py"
+      ],
+      "command": "python3 -c 'from experimental.misc.benchmark_pcie_bw import measure_pcie_bandwidth; print(measure_pcie_bandwidth(1048576, 10, 0))'",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gh200",
+        "gb10"
+      ],
+      "setup": [],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/misc/**"
+      ]
+    },
+    {
+      "id": "misc.numa",
+      "sources": [
+        "experimental/misc/benchmark_numa_bw.py"
+      ],
+      "command": "python3 experimental/misc/benchmark_numa_bw.py --buffer-size-mb=16 --iters=2",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/misc/**"
+      ]
+    },
+    {
+      "id": "misc.peer_copy",
+      "sources": [
+        "experimental/misc/benchmark_memcpy_peer.py"
+      ],
+      "command": "python3 experimental/misc/benchmark_memcpy_peer.py --end-size=1M --iters=4 --warmup=1",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/misc/**"
+      ]
+    },
+    {
+      "id": "ukernel.python.bench_p2p",
+      "sources": [
+        "experimental/ukernel/py/benchmarks/bench_p2p.py"
+      ],
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/benchmarks/bench_p2p.py",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "setup": [
+        "ukernel-python",
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 600,
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "paths": [
+        "experimental/ukernel/py/benchmarks/**"
+      ]
+    },
+    {
+      "id": "ukernel.python.bench_collective",
+      "sources": [
+        "experimental/ukernel/py/benchmarks/bench_collective.py"
+      ],
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/benchmarks/bench_collective.py",
+      "enabled": false,
+      "targets": [],
+      "setup": [
+        "ukernel-python",
+        "p2p"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 600,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/ukernel/py/benchmarks/**"
+      ],
+      "reason": "Requires GDRCopy kernel device /dev/gdrdrv, absent on the current CI pool. The Python extensions build, but collective runtime initialization fails without it."
+    },
+    {
+      "id": "ukernel.bench.gdrcopy",
+      "sources": [
+        "experimental/ukernel/benchmarks/bench_gdrcopy.cc",
+        "experimental/ukernel/src/device/benchmarks/bench_device_launch_vs_worker.cu",
+        "experimental/ukernel/src/device/benchmarks/bench_device_sm_fifo.cu",
+        "experimental/ukernel/src/device/benchmarks/bench_device_fifo.cu",
+        "experimental/ukernel/src/device/benchmarks/bench_device_full_fifo.cu"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "GDRCopy kernel driver /dev/gdrdrv is absent from the current pool.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "ukernel.bench.transport",
+      "sources": [
+        "experimental/ukernel/benchmarks/bench_transport.cc"
+      ],
+      "command": "make -C experimental/ukernel -j\"$CI_JOBS\" SM=\"$SM\" bench_transport\nexperimental/ukernel/bench_transport --rank \"$CI_NODE\" --peer-rank \"$((1-CI_NODE))\" --gpu-id 0 --transport tcp --ip \"$MASTER_ADDR\" --port \"$MASTER_PORT\" --msg-size 4096 --iterations 16 --warmup 2",
+      "enabled": true,
+      "targets": [
+        "l4",
+        "gb10"
+      ],
+      "setup": [
+        "ukernel"
+      ],
+      "tier": "performance",
+      "nodes": 2,
+      "gpus": 1,
+      "timeout": 300,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "experimental/ukernel/benchmarks/**"
+      ]
+    },
+    {
+      "id": "ep.bench.nvshmem",
+      "sources": [
+        "ep/bench/baseline/bench_nvshmem_sparse_uccl.py"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "External NVSHMEM comparison requires an NVSHMEM installation and matching topology; not provisioned in this CI pool.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "ep.bench.alltoall",
+      "sources": [
+        "ep/bench/alltoall/benchmark.cpp"
+      ],
+      "enabled": false,
+      "tier": "performance",
+      "reason": "EFA all-to-all benchmark requires unavailable EFA hardware.",
+      "targets": [],
+      "requires": []
+    },
+    {
+      "id": "ep.bench.pack_unpack",
+      "sources": [
+        "ep/bench/baseline/benchmark_pack_unpack.py"
+      ],
+      "command": "python3 ep/bench/baseline/benchmark_pack_unpack.py",
+      "enabled": true,
+      "targets": [
+        "gh200",
+        "gb10"
+      ],
+      "setup": [
+        "ep"
+      ],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "ep/bench/baseline/**"
+      ]
+    },
+    {
+      "id": "ep.bench.fifo",
+      "sources": [
+        "ep/bench/fifo/benchmark.cpp",
+        "ep/bench/fifo/benchmark.py"
+      ],
+      "command": "make -C ep/bench/fifo -j\"$CI_JOBS\" GPU_ARCH=\"$SM\" && cd ep/bench/fifo && python3 benchmark.py -l",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "setup": [],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "ep/bench/fifo/**"
+      ]
+    },
+    {
+      "id": "ep.bench.rdma_fifo",
+      "sources": [
+        "ep/bench/rb/benchmark_rdma_fifo.py"
+      ],
+      "command": "python3 ep/bench/rb/benchmark_rdma_fifo.py --size-mb=16",
+      "enabled": true,
+      "targets": [
+        "gh200"
+      ],
+      "setup": [
+        "ep"
+      ],
+      "tier": "performance",
+      "nodes": 1,
+      "gpus": 1,
+      "timeout": 600,
+      "requires": [
+        "cuda"
+      ],
+      "paths": [
+        "ep/bench/rb/**"
+      ]
+    },
+    {
+      "id": "ukernel.python.transport_paths.ipc",
+      "sources": [
+        "experimental/ukernel/py/tests/test_transport_paths.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_transport_paths.py",
+      "setup": [
+        "ukernel-python"
+      ],
+      "env": {
+        "TRANSPORT": "ipc"
+      }
+    },
+    {
+      "id": "ukernel.python.transport_paths.tcp",
+      "sources": [
+        "experimental/ukernel/py/tests/test_transport_paths.py"
+      ],
+      "tier": "integration",
+      "enabled": true,
+      "targets": [
+        "l4"
+      ],
+      "paths": [
+        "experimental/ukernel/**"
+      ],
+      "requires": [
+        "cuda",
+        "multigpu"
+      ],
+      "nodes": 1,
+      "gpus": 2,
+      "timeout": 300,
+      "command": "PYTHONPATH=\"$CI_REPO/experimental/ukernel/py:$PYTHONPATH\" bash ci/torchrun.sh experimental/ukernel/py/tests/test_transport_paths.py",
+      "setup": [
+        "ukernel-python"
+      ],
+      "env": {
+        "TRANSPORT": "tcp"
+      }
+    }
+  ],
+  "support": [
+    {
+      "sources": [
+        "p2p/tests/native_runtime.py",
+        "p2p/tests/p800_device_transfer.py"
+      ],
+      "reason": "Helpers imported by registered native/P800 tests."
+    },
+    {
+      "sources": [
+        "p2p/tests/scenario_ipc_import_device.cc"
+      ],
+      "reason": "C++ fixture compiled by p2p.host.gpu_ipc_export and p2p.host.dmabuf_export."
+    },
+    {
+      "sources": [
+        "experimental/ukernel/py/tests/run_transport_paths_suite.sh",
+        "experimental/ukernel/src/transport/test/integration/run_transport_suite.sh"
+      ],
+      "reason": "Alternative manual launch wrappers for registered ukernel suites."
+    },
+    {
+      "sources": [
+        ".github/workflows/benchmark_comment.py",
+        "ep/src/bench_kernel.cu"
+      ],
+      "reason": "Workflow reporting helper and kernel implementation linked by registered benchmarks; not standalone test entry points."
+    }
+  ]
+}
