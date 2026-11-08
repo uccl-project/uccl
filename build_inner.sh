@@ -23,6 +23,7 @@
 #
 #   Build feature flags:
 #     USE_DIETGPU                   Enable DietGPU compression (default "0")
+#     USE_NFH                       Enable the NFH BF16 codec, CUDA only (default "0")
 #     USE_INTEL_RDMA_NIC            Enable Intel RDMA NIC / irdma driver (default "0")
 #     USE_DMABUF                    Enable EP DMA-BUF GPU memory registration (default "0")
 #     PER_EXPERT_BATCHING           Enable per-expert batching (default "0")
@@ -162,6 +163,13 @@ build_p2p() {
     fi
     cd ../../../..
     cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+  fi
+
+  if [[ "${USE_NFH:-0}" == "1" && "$TARGET" == cu* ]]; then
+    CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
+    echo "Building NFH codec for CUDA: $CUDA_GPU_ARCH"
+    make -C p2p/rdma/nfh clean && make -C p2p/rdma/nfh -j$(nproc) GPU_ARCH=$CUDA_GPU_ARCH
+    cp p2p/rdma/nfh/libnfh_codec.so uccl/lib
   fi
 
   cd p2p

@@ -8,6 +8,7 @@ ENABLE_NCCL ?= 1
 ENABLE_CXI ?= 1
 ENABLE_EFA ?= 1
 USE_DIETGPU ?= 0
+USE_NFH ?= 0
 PYTHON ?= python3
 PYTHON_CONFIG ?= $(PYTHON)-config
 PREFIX ?= /usr/local
@@ -38,7 +39,7 @@ endif
 
 # Isolate device, optional features and Python ABI. A config stamp below also
 # invalidates objects when compilers, SDK paths or user flags change in place.
-BUILD_DIR ?= .build/$(PROFILE)/nccl$(ENABLE_NCCL)-cxi$(ENABLE_CXI)-efa$(ENABLE_EFA)-diet$(USE_DIETGPU)/$(PYEXT)
+BUILD_DIR ?= .build/$(PROFILE)/nccl$(ENABLE_NCCL)-cxi$(ENABLE_CXI)-efa$(ENABLE_EFA)-diet$(USE_DIETGPU)-nfh$(USE_NFH)/$(PYEXT)
 override CPPFLAGS += -I. -I./util -I./rdma -I./rdma/providers -I../include \
   $(DEVICE_CPPFLAGS) -DUCCL_DEVICE_BACKEND_HEADER=\"util/device/$(DEVICE_BACKEND)/config.h\" \
   -DUCCL_P2P_ENABLE_NCCL=$(ENABLE_NCCL) -DUCCL_P2P_ENABLE_CXI=$(ENABLE_CXI) \
@@ -64,6 +65,17 @@ DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
 override CPPFLAGS += -DUSE_DIETGPU -I$(DIETGPU_ROOT)
 override LDLIBS += -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
   -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) -Wl,-rpath,'$$ORIGIN/lib'
+endif
+
+# NFH BF16 codec: build rdma/nfh/libnfh_codec.so first (make -C rdma/nfh).
+ifeq ($(USE_NFH),1)
+ifneq ($(NFH_SUPPORTED),1)
+$(error NFH is not supported by the $(PROFILE) profile)
+endif
+NFH_DIR := rdma/nfh
+override CPPFLAGS += -DUSE_NFH -I../thirdparty/dietgpu
+override LDLIBS += -L$(NFH_DIR) -lnfh_codec \
+  -Wl,-rpath,$(abspath $(NFH_DIR)) -Wl,-rpath,'$$ORIGIN/lib'
 endif
 
 CORE_SOURCES := engine.cc \
@@ -164,5 +176,5 @@ install-deps:
 help:
 	@echo 'Targets: all install clean test test_notify_serde test_epoll_server test_epoll_client test_gpu_topology notif_e2e install-deps'
 	@echo 'Profiles: Makefile (CUDA), Makefile.rocm, Makefile.dtk, Makefile.therock, Makefile.cnrt, Makefile.musa'
-	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1'
+	@echo 'Options: ENABLE_NCCL=0|1 ENABLE_CXI=0|1 ENABLE_EFA=0|1 USE_DIETGPU=0|1 USE_NFH=0|1'
 .PHONY: test install-deps help
