@@ -25,11 +25,22 @@ def report_results(root):
     )
     found = False
     failed_suites = []
+    timings = []
     for path in sorted(root.glob("*/results.json")):
         found = True
         data = json.loads(path.read_text())
         results = [r for r in data["results"] if not r.get("not_participating")]
         failed = [r for r in results if r["exit_code"]]
+        for name in dict.fromkeys(r["id"] for r in results):
+            ranks = [r for r in results if r["id"] == name]
+            timings.append(
+                (
+                    path.parent.name,
+                    name,
+                    any(r["exit_code"] for r in ranks),
+                    max(r["seconds"] for r in ranks),
+                )
+            )
         print(
             f"| {path.parent.name} | {len(results)-len(failed)} | {len(failed)} | {'FAILED' if data.get('infrastructure_error') else 'OK'} |"
         )
@@ -41,13 +52,28 @@ def report_results(root):
         print("\n" + "\n".join(failed_suites))
     if not found:
         print("\nNo results were produced; inspect the job failure.")
+    if timings:
+        print(
+            "\n### Suite timings\n\nExecution time is the slowest participating rank; setup/build time is excluded.\n"
+        )
+        print("| Target | Suite | Result | Seconds |\n|---|---|---|---:|")
+        for target, name, failed, seconds in timings:
+            print(
+                f"| {target} | `{name}` | {'FAIL' if failed else 'PASS'} | {seconds:.3f} |"
+            )
     performance = root / "performance.json"
     if performance.exists():
         data = json.loads(performance.read_text())
         print("\n### Performance\n")
         for metric in data["measurements"]:
+            limit = metric.get("threshold")
+            bar = (
+                ""
+                if limit is None
+                else f"; required {'>=' if metric['direction'] == 'higher' else '<='} {limit:.4g} {metric['unit']}"
+            )
             print(
-                f"- `{metric['key']}`: {metric['value']:.4g} {metric['unit']} ({metric['status']})"
+                f"- `{metric['key']}`: {metric['value']:.4g} {metric['unit']} ({metric['status']}{bar})"
             )
         for failure in data["failures"]:
             print(f"- FAILED: {failure}")

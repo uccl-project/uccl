@@ -204,10 +204,13 @@ caches live in `/var/lib/uccl-ci/cache`; avoid filling L4's limited disk.
 `p2p.bandwidth` uses pinned host buffers; `p2p.bandwidth_gpu` uses GPU buffers on
 L4/GH200. Only performance registrations extract and compare metrics.
 
-`config/baselines.json` holds reviewed thresholds. Missing/nonfinite measurements
-and threshold violations fail; absent baselines are reported as `unbaselined`.
+`config/baselines.json` records measured baselines. A 0.1 tolerance requires 90%
+of baseline performance: throughput >= baseline × 0.9; latency <= baseline / 0.9.
+Missing, nonfinite or nonpositive measurements and threshold violations fail;
+absent baselines are reported as `unbaselined`.
 Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
+Workflow summaries show each suite's execution time, excluding setup/builds.
 
 [validation.md](validation.md) records passes, known failures and untested
 coverage. Enabled suites may still fail; disabling one requires a registry

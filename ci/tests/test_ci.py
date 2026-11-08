@@ -1,6 +1,8 @@
 """Regression tests for test selection and the controller's failure contract."""
 
 import copy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import queue
@@ -15,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import catalog
 from performance import compare, evaluate
 from process import run
+from report import report_results
 from run import Worker, collect_results, write_summary
 
 
@@ -255,6 +258,76 @@ class ProcessTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_additional_benchmark_metrics(self):
+        fixtures = {
+            "ep.bench.pcie_bench": "CPU wait time: 100 us, bw: 12.5 GBps\n",
+            "ep.bench.gpu_to_cpu_bench": "Block 0: Average latency = 2.0 us over 1000 iterations\nBlock 1: Average latency = 4.0 us over 1000 iterations\n",
+            "ep.bench.batched_gpu_to_cpu_bench": "Overall avg GPU-measured latency  : 5.0 µs\nThroughput : 6.0 Mops/s\n",
+            "p2p.bench.nccl": "[Server] 1 MiB : 999 Gbps\n[Client] 1 MiB : 7.0 Gbps | 0.875 GB/s\n",
+            "p2p.bench.ray_p2p": "[Client/WRITE] 1 MiB : 8.0 Gbps | 1.0 GB/s\n[Client/READ] 1 MiB : 9.0 Gbps | 1.125 GB/s\n",
+            "p2p.bench.uccl_compression": "[Client] 1 MiB : 10.0 Gbps | 1.25 GB/s\n",
+            "ep.bench.pack_unpack": "Testing: Decode batch (128 tokens, 7168 hidden)\nTotal Time (Pack + Unpack):\n-----\n  Triton : 0.11 ms\nTesting: Prefill batch (4096 tokens, 7168 hidden)\nTotal Time (Pack + Unpack):\n-----\n  Triton : 0.22 ms\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gh200"
+            target.mkdir()
+            (target / "results.json").write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            dict(id=name, tier="performance", exit_code=0)
+                            for name in fixtures
+                        ]
+                    }
+                )
+            )
+            for name, content in fixtures.items():
+                (target / (name + ".log")).write_text(content)
+            result = evaluate(root, {})
+            self.assertFalse(result["failures"])
+            self.assertEqual(
+                sorted(m["value"] for m in result["measurements"]),
+                [0.11, 0.22, 3, 5, 6, 7, 8, 9, 10, 12.5],
+            )
+            # A missing decode result must not be replaced by the prefill result.
+            path = target / "ep.bench.pack_unpack.log"
+            path.write_text(
+                fixtures["ep.bench.pack_unpack"].replace("  Triton : 0.11 ms\n", "")
+            )
+            self.assertTrue(
+                any("decode_triton_ms" in f for f in evaluate(root, {})["failures"])
+            )
+
+    def test_report_uses_slowest_participating_rank(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "gpu"
+            target.mkdir()
+            (target / "results.json").write_text(
+                json.dumps(
+                    {
+                        "results": [
+                            dict(id="pair", node=0, exit_code=0, seconds=2),
+                            dict(id="pair", node=1, exit_code=1, seconds=3),
+                            dict(id="single", node=0, exit_code=0, seconds=1),
+                            dict(
+                                id="single",
+                                node=1,
+                                exit_code=0,
+                                seconds=99,
+                                not_participating=True,
+                            ),
+                        ]
+                    }
+                )
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                report_results(root)
+            self.assertIn("| gpu | `pair` | FAIL | 3.000 |", output.getvalue())
+            self.assertIn("| gpu | `single` | PASS | 1.000 |", output.getvalue())
+
     def test_ep_latency_and_gpu_bandwidth_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -297,11 +370,18 @@ class PerformanceTests(unittest.TestCase):
             compare(89, dict(value=100, direction="higher", tolerance=0.1))
         )
         self.assertTrue(compare(109, dict(value=100, direction="lower", tolerance=0.1)))
-        self.assertFalse(
-            compare(111, dict(value=100, direction="lower", tolerance=0.1))
+        self.assertTrue(
+            compare(100 / 0.9, dict(value=100, direction="lower", tolerance=0.1))
         )
-        with self.assertRaises(ValueError):
-            compare(float("nan"), dict(value=100, direction="lower"))
+        self.assertFalse(
+            compare(111.12, dict(value=100, direction="lower", tolerance=0.1))
+        )
+        for value in [float("nan"), float("inf"), 0, -1]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                compare(value, dict(value=100, direction="lower"))
+        for reference in [float("nan"), float("inf"), 0, -1]:
+            with self.subTest(reference=reference), self.assertRaises(ValueError):
+                compare(100, dict(value=reference, direction="higher"))
 
     def test_missing_measurement_and_reviewed_baseline(self):
         with tempfile.TemporaryDirectory() as tmp:

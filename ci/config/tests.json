@@ -1206,7 +1206,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 300,
-      "command": "make -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench"
+      "command": "make -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench",
+      "metrics": [
+        {
+          "name": "bandwidth_gb_s",
+          "pattern": "CPU wait time: [0-9]+ us, bw: ([0-9.]+) GBps",
+          "direction": "higher",
+          "unit": "GB/s"
+        }
+      ]
     },
     {
       "id": "ep.bench.gpu_to_cpu_bench",
@@ -1229,7 +1237,15 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 300,
-      "command": "make -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench"
+      "command": "make -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench",
+      "metrics": [
+        {
+          "name": "latency_us",
+          "pattern": "Block [0-9]+: Average latency = ([0-9.]+) us over",
+          "direction": "lower",
+          "unit": "us"
+        }
+      ]
     },
     {
       "id": "ep.bench.batched_gpu_to_cpu_bench",
@@ -1252,7 +1268,21 @@
       "nodes": 1,
       "gpus": 1,
       "timeout": 300,
-      "command": "make -C ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/batched_gpu_to_cpu_bench"
+      "command": "make -C ep/tests batched_gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/batched_gpu_to_cpu_bench",
+      "metrics": [
+        {
+          "name": "latency_us",
+          "pattern": "Overall avg GPU-measured latency\\s*:\\s*([0-9.]+) \u00b5s",
+          "direction": "lower",
+          "unit": "us"
+        },
+        {
+          "name": "throughput_mops",
+          "pattern": "Throughput\\s*:\\s*([0-9.]+) Mops/s",
+          "direction": "higher",
+          "unit": "Mops/s"
+        }
+      ]
     },
     {
       "id": "ep.rb.cas",
@@ -3904,6 +3934,14 @@
       ],
       "paths": [
         "p2p/benchmarks/**"
+      ],
+      "metrics": [
+        {
+          "name": "bandwidth_gbps",
+          "pattern": "\\[Client\\][^\\n]*:\\s*([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        }
       ]
     },
     {
@@ -3929,6 +3967,20 @@
       ],
       "paths": [
         "p2p/benchmarks/**"
+      ],
+      "metrics": [
+        {
+          "name": "write_bandwidth_gbps",
+          "pattern": "\\[Client/WRITE\\][^\\n]*:\\s*([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        },
+        {
+          "name": "read_bandwidth_gbps",
+          "pattern": "\\[Client/READ\\][^\\n]*:\\s*([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        }
       ]
     },
     {
@@ -3954,6 +4006,14 @@
       ],
       "paths": [
         "p2p/benchmarks/**"
+      ],
+      "metrics": [
+        {
+          "name": "bandwidth_gbps",
+          "pattern": "\\[Client\\][^\\n]*:\\s*([0-9.]+) Gbps",
+          "direction": "higher",
+          "unit": "Gbps"
+        }
       ]
     },
     {
@@ -4186,6 +4246,24 @@
       ],
       "paths": [
         "ep/bench/baseline/**"
+      ],
+      "metrics": [
+        {
+          "name": "decode_triton_ms",
+          "pattern": "(?s)Testing: Decode batch\\b(?:(?!Testing:).)*?Total Time \\(Pack \\+ Unpack\\):\\n-+\\n\\s*Triton\\s*:\\s*([0-9.]+) ms",
+          "direction": "lower",
+          "unit": "ms"
+        },
+        {
+          "name": "prefill_triton_ms",
+          "pattern": "(?s)Testing: Prefill batch\\b(?:(?!Testing:).)*?Total Time \\(Pack \\+ Unpack\\):\\n-+\\n\\s*Triton\\s*:\\s*([0-9.]+) ms",
+          "direction": "lower",
+          "unit": "ms"
+        }
+      ],
+      "failure_patterns": [
+        "\u274c .* backend failed:",
+        "(?:Triton|CUDA)\\s*:\\s*\u2717"
       ]
     },
     {

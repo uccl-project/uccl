@@ -10,16 +10,26 @@ import statistics
 from catalog import read_catalog
 
 
-def compare(value, baseline):
+def threshold(baseline):
     reference = baseline["value"]
     tolerance = baseline.get("tolerance", 0.1)
-    if reference <= 0 or not 0 <= tolerance < 1 or not math.isfinite(value):
-        raise ValueError("Baseline values must be positive and tolerance in [0, 1)")
+    if not math.isfinite(reference) or reference <= 0 or not 0 <= tolerance < 1:
+        raise ValueError(
+            "Baseline values must be finite and positive; tolerance must be in [0, 1)"
+        )
     if baseline["direction"] == "higher":
-        return value >= reference * (1 - tolerance)
+        return reference * (1 - tolerance)
     if baseline["direction"] == "lower":
-        return value <= reference * (1 + tolerance)
+        # Performance is inverse latency: a 90% floor allows baseline / 0.9.
+        return reference / (1 - tolerance)
     raise ValueError("Metric direction must be higher or lower")
+
+
+def compare(value, baseline):
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("Measurements must be finite and positive")
+    limit = threshold(baseline)
+    return value >= limit if baseline["direction"] == "higher" else value <= limit
 
 
 def evaluate(results_dir, baselines):
@@ -51,8 +61,8 @@ def evaluate(results_dir, baselines):
                         )
                     )
                 key = f"{target}/{name}/{metric['name']}"
-                if not samples or any(not math.isfinite(x) for x in samples):
-                    failures.append(f"{key}: missing/nonfinite measurement")
+                if not samples or any(not math.isfinite(x) or x <= 0 for x in samples):
+                    failures.append(f"{key}: missing/nonfinite/nonpositive measurement")
                     continue
                 value = statistics.median(samples)
                 baseline = baselines.get(key)
@@ -69,6 +79,7 @@ def evaluate(results_dir, baselines):
                         "unit": metric["unit"],
                         "direction": metric["direction"],
                         "status": status,
+                        "threshold": threshold(baseline) if baseline else None,
                     }
                 )
                 if status == "regression":
