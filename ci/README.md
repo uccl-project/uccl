@@ -10,9 +10,9 @@ machines orchestrate jobs. GPU tests execute over SSH on the lab servers as
 | Target | Machines | Hardware | Role |
 |---|---|---|---|
 | `cpu` | GitHub `ubuntu-24.04` | CPU | Python regressions, C++ host tests, CI self-tests |
-| `l4` | `l40`, `l41` | 4 L4 GPUs per node, IB, CUDA 12.9 | Native P2P, IPC, compression, two-node GPU RDMA, collectives, experimental suites |
-| `gh200` | `gh200_1` | 1 GH200, IB, CUDA 13.2 | Single-GPU tests, local GIN fixtures, EP barriers, CUDA utilities |
-| `gb10` | `gb10_0`, `gb10_1` | 1 GB10 per node, RoCE, CUDA 13.0 | Two-node EP, host-staged communication, NIXL, local GIN fixtures |
+| `l4` | `l40`, `l41` | 4 L4 GPUs per node, IB, CUDA 12.9 | Native P2P, IPC, compression, two-node GPU RDMA, collectives |
+| `gh200` | `gh200_1` | 1 GH200, IB, CUDA 13.2 | Single-GPU tests, EP barriers, CUDA utilities |
+| `gb10` | `gb10_0`, `gb10_1` | 1 GB10 per node, RoCE, CUDA 13.0 | Two-node EP, host-staged communication, NIXL |
 | `amd` | Offline | ROCm | Explicitly disabled |
 
 `gh200_0` is not in any enabled target. L4 has GPU peer copies but no native
@@ -42,6 +42,12 @@ the default. Compile-only success is reported in `build`; it is not runtime
 coverage. Performance jobs require explicit selection of that tier. No nightly
 schedule is enabled by this change. The inventory includes disabled hardware,
 legacy fixtures, and opted-out comparisons, each with an explanation.
+
+Tests and benchmarks under `examples/` and `experimental/` are explicitly
+disabled, including GIN fixtures that build through the experimental tree.
+They remain in the registry for auditing, but neither automatic selection nor
+an explicit `--tests` request runs them. The separate GIN CUDA workflow is
+removed as part of this exclusion. Formatting still checks experimental C++/CUDA.
 
 `python3 ci/catalog.py list` is the complete executable inventory. Tests are
 registered at suite granularity; a suite can contain many pytest or C++ cases.
@@ -87,7 +93,7 @@ change its registry entry deliberately to do that.
   Dispatch summaries contain the SHA; results are in the UCCL CI run artifacts.
 - The Actions UI exposes `targets`, `tests`, `exclude`, `tiers`, `sha`, and
   `head_repo` for manual dispatch. Empty selectors mean all eligible entries.
-- Formatting and the pinned CUDA GIN compile job remain independent fast gates.
+- Formatting remains an independent fast gate.
   Docker image publication and release workflows remain separate from tests.
 
 Lab credentials are never supplied to automatic PR jobs. Maintainer dispatch
@@ -98,7 +104,7 @@ runner never terminates unrelated processes.
 
 The old L4/GH200/GB10/AMD/AMD-zip workflows and duplicate EP host workflow are
 replaced. Update branch protection rules referring to removed workflow check
-names to `CI status`, keeping the formatting/GIN checks desired by maintainers.
+names to `CI status`, keeping the formatting checks and removing the GIN check.
 Existing AMD-specific shell helpers remain for future ROCm re-enablement;
 they are not called by an enabled job. The runner currently implements Linux
 CPU and NVIDIA CUDA environments. Add and validate a ROCm worker environment
@@ -140,6 +146,9 @@ store the GH200 password in GitHub secrets for this workflow.
 Use Python 3.12+ on Linux for `--local`, or Python 3.12+ with SSH/rsync as the
 controller on macOS/Linux. The SSH config must log in as `uccl` and expose the
 aliases above. Remote servers require Python 3.12 and their declared CUDA path.
+Local CPU runs need `build-essential`, `python3-venv`, `libgtest-dev` and
+`libibverbs-dev` on Ubuntu; several host tests include RDMA headers without
+requiring an RDMA device.
 
 ```bash
 python3 ci/run.py --local --target cpu --output ci-results/host-run

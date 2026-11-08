@@ -3,8 +3,25 @@
 Work is on `codex/structured-ci`, based on `78adb5dce345c1ba5c52c77c6de8e09bcd4fe4cb`.
 Runs use the working-tree source archive; their `source.json` records its SHA256.
 Raw results are in the ignored local `ci-results/` directory. The new GitHub
-workflow has not been activated or tested end-to-end on GitHub: the connected
-GitHub token returned HTTP 403 for Actions secret administration.
+workflow has run on GitHub in PR #1131. Hardware dispatch is not activated:
+the connected GitHub token returned HTTP 403 for Actions secret administration.
+
+## PR #1131 follow-up
+
+The initial GitHub host run passed 23 suites and failed four C++ host suites
+(`ep.host.rdma_addressing`, `p2p.host.notify_serde`, `p2p.host.epoll_client`,
+`p2p.host.epoll_server`). Every failure was a missing `infiniband/verbs.h` header;
+the workflow now installs `libibverbs-dev` alongside the compiler and GTest.
+The lab machines already had those headers, which explains the earlier passes.
+
+Python formatting failed on `p2p/tests/test_dmabuf_export.py` with Black 25.11.0.
+The formatter is now pinned to 26.5.1, matching `uv.lock` and the independent
+format-on-commit branch. Both formatting jobs use Ubuntu 24.04.
+
+All 62 registry entries sourced from `examples/` or `experimental/`, including
+the GIN routing/probability fixtures built through that tree, are now explicitly
+disabled by CI scope. The separate GIN CUDA workflow is removed. Historical
+results below include exploratory runs of those now-excluded suites.
 
 ## Confirmed behavior
 
@@ -57,7 +74,9 @@ accepted regression thresholds; `baselines.json` remains empty deliberately.
 
 ## Known failures exposed by broader coverage
 
-These are retained as failing registered suites, not converted into success.
+Failures in enabled suites remain failures, not converted into success.
+The examples and experimental suites below are now excluded by the requested
+directory scope, with explicit reasons in the registry.
 Several involve stale fixture APIs or failures within the library. The evidence
 records this pinned environment; it does not establish whether a different
 legacy environment would pass. Do not promote this branch on the assumption that all
@@ -76,13 +95,6 @@ hardware gates are already green.
 | `p2p.notifications` on GH200 | Client sends all messages, receiver does not finish before timeout; L4 passes | `gh200-notify`, `l4-final` |
 | `ukernel.python.transport_paths` | Cross-node bidirectional barrier failure on L4; GB10 retry confirms GPU MR registration is unsupported | `l4-ukernel`, `gb10-identity` |
 
-Ukernel Python bindings initially failed because their build hardcoded
-`/usr/local/cuda` headers while CI selected CUDA 12.9. `setup.py` now honors
-`CUDA_HOME`; the retry builds both Python extensions successfully. The same-host
-P2P fixtures now select two GPUs on L4 and pass. The collective
-fixture requires the unavailable GDRCopy kernel driver and is explicitly
-disabled. Cross-node transport checks remain distinct from local IPC/TCP checks.
-
 Not every target/suite combination or performance entry has been executed during
 this migration. The registry is the intended coverage, while result artifacts
 are the evidence of executed coverage. Build-only, disabled, unexecuted,
@@ -94,9 +106,6 @@ failed and passing cases must not be conflated.
 - Native RDMA rendezvous retries connection refusal during startup.
 - Local IPC and Ray-style API fixtures use current metadata, transfer and
   polling APIs and valid GPU selection.
-- The multi-process-group example checks all four collective results and
-  propagates verification failures; its producer streams are ordered before
-  communication streams.
 - The Apptainer CLI mock supplies a fixed x86 architecture so ROCm flag checks
   can execute on ARM without invoking a real ROCm build.
 - NIXL uses pinned sources and ASIO coordination, with a bounded retry only for
@@ -127,4 +136,4 @@ bash ci/install-secrets.sh /Users/yangzhou/.ssh/uccl-ci-bootstrap uccl-project/u
 
 This installs the three new CI secrets; the existing jump-host key secret is
 reused. Review the known failures and required check-name migration before
-merging. No branch push, PR publication or merge is included in this migration.
+merging. The branch is published as PR #1131; no merge has been performed.

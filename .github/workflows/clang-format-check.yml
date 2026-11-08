@@ -66,7 +66,7 @@ jobs:
         clang-format --dry-run --Werror "${FILES[@]}"
 
   python-format-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout code
@@ -75,11 +75,11 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.12'
 
     - name: Install black
       run: |
-        pip install black==25.11.0
+        pip install black==26.5.1
 
     - name: Check Python formatting
       run: |
