@@ -162,9 +162,16 @@ int main() {
   gpuStream_t stream1;
   GPU_RT_CHECK(gpuStreamCreate(&stream1));
 
+  int clock_rate_khz = 0;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+  GPU_RT_CHECK(
+      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, 0));
+#else
   gpuDeviceProp prop;
-  gpuGetDeviceProperties(&prop, 0);
-  printf("clock rate: %d kHz\n", prop.clockRate);
+  GPU_RT_CHECK(gpuGetDeviceProperties(&prop, 0));
+  clock_rate_khz = prop.clockRate;
+#endif
+  printf("clock rate: %d kHz\n", clock_rate_khz);
 
   Fifo* fifos;
   GPU_RT_CHECK(
@@ -205,7 +212,7 @@ int main() {
   unsigned long long tot_cycles = 0;
   printf("\nPer-block avg latency:\n");
   for (int b = 0; b < kNumProxyThs; ++b) {
-    double us = (double)h_cycles[b] * 1000.0 / prop.clockRate / h_ops[b];
+    double us = (double)h_cycles[b] * 1000.0 / clock_rate_khz / h_ops[b];
     printf("  Block %d : %.3f µs over %u ops\n", b, us, h_ops[b]);
     total_us += us;
     tot_cycles += h_cycles[b];
@@ -215,7 +222,7 @@ int main() {
   double throughput = (double)(kNumProxyThs * kIterations) / (wall_ms * 1000.0);
 
   printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
-         (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);
+         (double)tot_cycles * 1000.0 / clock_rate_khz / tot_ops);
   printf("Total cycles                       : %llu\n", tot_cycles);
   printf("Total ops                          : %u\n", tot_ops);
   printf("End-to-end Wall-clock time        : %.3f ms\n", wall_ms);

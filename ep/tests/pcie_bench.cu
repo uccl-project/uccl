@@ -371,10 +371,17 @@ int main() {
   GPU_RT_CHECK(gpuStreamCreate(&stream1));
   GPU_RT_CHECK(gpuStreamCreate(&stream2));
 
+  int clock_rate_khz = 0;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+  GPU_RT_CHECK(
+      cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, 0));
+#else
   gpuDeviceProp prop;
-  gpuGetDeviceProperties(&prop, 0);
+  GPU_RT_CHECK(gpuGetDeviceProperties(&prop, 0));
+  clock_rate_khz = prop.clockRate;
+#endif
   // Use printf for clock rate
-  printf("clock rate: %d\n", prop.clockRate);
+  printf("clock rate: %d\n", clock_rate_khz);
 
   // Preallocate a iov work item.
   struct Iov* cpu_iov = (struct Iov*)malloc(sizeof(struct Iov));
