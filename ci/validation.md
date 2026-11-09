@@ -2,23 +2,32 @@
 
 PR: [#1131](https://github.com/uccl-project/uccl/pull/1131), branch
 `codex/structured-ci`. The three `UCCL_CI_*` secrets work from GitHub on L4 and
-GB10, including the jump host. Hardware runs used the isolated
-`codex/ci-validation-20261108` branch while the new workflow awaits merging.
+GB10, including the jump host. The initial GitHub hardware sweep used isolated
+branch `codex/ci-validation-20261108`; busy-node follow-ups ran directly over SSH.
+The new workflow still awaits merging.
 
 ## PR #1131 follow-up
 
-- All 27 host suites and both formatting checks passed after installing
-  `libibverbs-dev` and aligning Black with version 26.5.1.
+- At `662cad7a`, all 27 host suites and aggregate `CI status` passed in
+  [GitHub CI](https://github.com/uccl-project/uccl/actions/runs/42540298845), along
+  with [both formatting checks](https://github.com/uccl-project/uccl/actions/runs/42540298790).
+  Automatic PR runs intentionally skip hardware.
 - All 62 example/experimental entries remain disabled; GIN CI is removed.
 - CI now records suite timings and checks measured performance against a 90% floor.
 - Removed six unused workflow helpers; the five remaining workflows handle CI,
   formatting, manual dispatch, Docker publication and releases.
 - Busy-node protection passed live checks: L4 skipped before source upload for
   another user's jobs; GB10 admitted both idle nodes and passed
-  `nixl.internode.nccl`. Skips produce no performance sample or baseline candidate.
+  `nixl.internode.nccl` on both ranks in **5.54 seconds**, excluding shared setup.
+  L4 reported two skipped ranks, zero passes and no performance sample/candidate.
 - All 34 CI harness tests passed on GB10 Linux, including recorded stale-CI
-  cleanup while preserving an unrelated process. AMD detection uses fixtures;
-  no new GH200/AMD hardware run was possible.
+  cleanup while preserving an unrelated process. Local checks passed with the
+  Linux-only case skipped; registry, formatter and workflow lint checks passed.
+  AMD detection uses fixtures; no new GH200/AMD hardware run was possible.
+
+These targeted checks do not replace the full sweep below. A busy-node skip is
+visible in artifacts/JUnit but does not fail the aggregate check; it is not
+evidence that the selected tests passed. Unreachable SSH remains a failure.
 
 ## Planned GH200 pair restoration
 
@@ -101,11 +110,12 @@ contain the measured failures; the CSV includes earlier checks too.
 | `ep.bench.pcie_bench` | L4 | Illegal GPU memory access |
 | `nixl.internode.nccl` | L4 | Illegal GPU memory access, then timeout |
 
-These stay enabled and visible. Fixes are in separate PR [#1135](https://github.com/uccl-project/uccl/pull/1135);
-the combined suite still needs retesting after integration.
-Broken benchmarks have no fabricated baseline;
-GH200-only benchmarks remain uncalibrated. Performance-only verification runs
-excluded known crashing fixtures after the full sweep had already tested them.
+These stay enabled and visible. Fixes are in separate PR
+[#1135](https://github.com/uccl-project/uccl/pull/1135); after integration, update
+the compression invocation, register its new NCCL test and rerun the combined
+suite. Broken benchmarks have no fabricated baseline; GH200-only benchmarks
+remain uncalibrated. Performance-only verification excluded known crashing
+fixtures after the full sweep had already tested them.
 
 ## Changes made to test harnesses
 

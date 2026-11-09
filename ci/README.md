@@ -90,8 +90,15 @@ inclusion and exclusion reasons.
 
 ## GitHub entry points
 
-`ci.yml` publishes the aggregate **CI status** check. Formatting, Docker
-publication and releases use separate workflows.
+Five workflows remain in `.github/workflows`; six unused helpers were removed:
+
+| Workflow | Purpose |
+|---|---|
+| `ci.yml` | Plan and run suites; publish aggregate **CI status** |
+| `run-benchmark.yml` | Dispatch `/run-ci` and `/run-benchmark` comments |
+| `clang-format-check.yml` | Check C++ and Python formatting |
+| `build-docker-images.yml` | Publish build images for releases, Dockerfile updates or manual runs |
+| `release.yml` | Build wheels/source archives and publish packages |
 
 | Trigger | Host tests | Hardware tests | Performance benchmarks |
 |---|---|---|---|
@@ -125,15 +132,17 @@ Host and hardware jobs can run in parallel. Hardware runs serialize per target
 and take a machine-local lock. Before source upload, CI checks every required
 node for NVIDIA/AMD compute contexts, GPU activity, waiting compute launchers,
 and CPU processes using at least 20% of one core. Idle shells/editors are ignored.
-If any node is busy, or activity cannot be verified, the target is **skipped**.
+If any node is busy, another CI run holds its lock, or activity cannot be
+verified, the target is **skipped**. SSH connection failures remain failures.
 
 Workers recheck before setup and each suite, and every five seconds while running.
 If a real job starts, CI stops its own processes and skips the remaining target.
 This is cooperative protection, not a scheduler reservation. Only recorded,
-same-user stale CI process groups may be cleaned, with PID identity and an
-unheld machine lease verified; unrelated jobs and active CI runs are never killed.
+same-user stale CI process groups may be cleaned after acquiring the node lock
+and verifying PID identity. Unrecorded jobs are not automatically killed.
 Artifacts/JUnit show skip reasons, and skipped benchmarks produce no performance
-measurement or baseline candidate. A skipped suite is not a passing test.
+measurement or baseline candidate. Skips do not fail `CI status`; check the
+summary's skipped counts before treating hardware coverage as validated.
 
 Replace retired workflow checks in branch protection with `CI status`, retain
 formatting checks, and remove the GIN check.
@@ -203,8 +212,8 @@ inputs and hashed locks live in `requirements/`; external source pins live in
 per-rank logs, source identity and machine/toolchain inventories.
 
 Both ranks must succeed unless the target is skipped for node activity.
-Setup failures, timeouts, disconnects and all-skipped
-pytest suites fail the job; cancellation stops only owned processes. Workspaces
+Setup failures, timeouts, disconnects and all-skipped pytest suites fail the job;
+cancellation stops only owned processes. Workspaces
 are removed after artifact collection, even for failed tests. Use `--keep-remote`
 to debug; collection failures preserve the workspace automatically. Reusable
 caches live in `/var/lib/uccl-ci/cache`; avoid filling L4's limited disk.
@@ -223,14 +232,15 @@ Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
 Workflow summaries show each suite's execution time, excluding shared setup.
 
-The 2026-11-08 baselines use medians from three benchmark repetitions and record
-sample ranges and source commits. See [validation.md](validation.md) for timings,
-independent threshold checks and known measurement variability.
+At `662cad7a`, all 27 GitHub host suites, both formatting checks and `CI status`
+passed. Direct SSH validation passed 34 harness tests and two-node NIXL on GB10;
+L4 correctly skipped a busy node. GH200/AMD remain unvalidated live.
 
-[validation.md](validation.md) records passes, known failures and untested
-coverage. Enabled suites may still fail; disabling one requires a registry
-change with a reason. Historical example/experimental results are excluded from
-current coverage.
+[validation.md](validation.md) links the runs, timings and 17 calibrated baseline
+metrics. Independent checks passed 13/17 metrics; four remain noisy. Fixture
+fixes in #1135 still need integration and a combined sweep. Enabled suites may
+fail; disabling one requires a registry reason. Historical example/experimental
+results are excluded from current coverage.
 
 Developer checks:
 
