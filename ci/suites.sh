@@ -17,7 +17,8 @@ case $suite in
       --exchanger-ip "$MASTER_ADDR" --exchanger-port "$MASTER_PORT" --transport rdma
     ;;
   ep-rb)
-    make -C ep/bench/rb -j"$CI_JOBS" SM="$SM" "test_${name}_throughput"
+    CPATH="$CI_REPO/include${CPATH:+:$CPATH}" \
+      make -C ep/bench/rb -j"$CI_JOBS" SM="$SM" "test_${name}_throughput"
     exec "ep/bench/rb/test_${name}_throughput"
     ;;
   lite-ep)

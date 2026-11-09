@@ -255,6 +255,63 @@
         "sample_min": 156.61,
         "sample_max": 163.77
       }
+    },
+    "gh200/p2p.bandwidth_gpu/bandwidth_gbps": {
+      "value": 274.75,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-09",
+        "run_id": 42713607053,
+        "source_commit": "7208846e2ba7baacf80e7c6adca44682d8411a5f",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 169.0,
+        "sample_max": 281.48,
+        "hosts": [
+          "gh200_1",
+          "gh200_0"
+        ]
+      }
+    },
+    "gh200/p2p.bandwidth/bandwidth_gbps": {
+      "value": 191.58,
+      "direction": "higher",
+      "unit": "Gbps",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-09",
+        "run_id": 42713607053,
+        "source_commit": "7208846e2ba7baacf80e7c6adca44682d8411a5f",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 147.94,
+        "sample_max": 209.16,
+        "hosts": [
+          "gh200_1",
+          "gh200_0"
+        ]
+      }
+    },
+    "gh200/ep.bench.low_latency/dispatch_combine_us": {
+      "value": 220.585,
+      "direction": "lower",
+      "unit": "us",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-09",
+        "run_id": 42713607053,
+        "source_commit": "7208846e2ba7baacf80e7c6adca44682d8411a5f",
+        "repetitions": 3,
+        "sample_count": 6,
+        "sample_min": 216.46,
+        "sample_max": 223.56,
+        "hosts": [
+          "gh200_1",
+          "gh200_0"
+        ]
+      }
     }
   }
 }
