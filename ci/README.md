@@ -11,14 +11,14 @@ host tests and orchestrates GPU jobs over SSH as `uccl`, using local
 |---|---|---|---|
 | `cpu` | GitHub `ubuntu-24.04` | CPU | Python/C++ host tests and CI self-tests |
 | `l4` | `l40`, `l41` | 4 L4 GPUs/node, IB, CUDA 12.9 | P2P, IPC, compression, GPU RDMA, NIXL |
-| `gh200` | `gh200_1`, `gh200_0` | 1 GH200/node, assumed 400G RDMA, CUDA 13.2 | EP, GPU RDMA, NIXL, EP/P2P benchmarks |
+| `gh200` | `gh200_1`, `gh200_0` | 1 GH200/node, 400G InfiniBand, CUDA 13.2 | EP, GPU RDMA, NIXL, EP/P2P benchmarks |
 | `gb10` | `gb10_0`, `gb10_1` | 1 GB10/node, RoCE, CUDA 13.0 | Host-staged EP/P2P and NIXL |
 | `amd` | Offline | ROCm | Disabled; worker support needs validation |
 
-Both GH200 nodes are currently unreachable. `gh200_0` remains unprovisioned and
-untested. Single-node GH200 suites use `gh200_1`; two-node suites require both.
-The 400G link is an assumption, not measured throughput or a baseline.
-Per-host interfaces and RDMA devices are defined in `config/targets.json`.
+Both GH200 nodes are provisioned and reachable as of 2026-11-09; both RDMA ports
+report active 400G links. Single-node suites use `gh200_1`; two-node suites
+require both. Link rate is not application throughput. Per-host interfaces and
+RDMA devices are defined in `config/targets.json`.
 
 Hardware limits: GB10 native GPU-buffer registration fails; L4 lacks native
 peer atomics/NVLink; no available node has `/dev/gdrdrv`. Affected tests are
@@ -161,9 +161,10 @@ unlimited memlock, and creates local storage. CI jobs use no sudo, Docker or
 NFS. Existing privileges are preserved: GH200's reused `uccl` account still has
 administrator/Docker access and is not an isolation boundary.
 
-When `gh200_0` returns, provision it and verify its host keys and interface.
-GH200 EP keeps `UCCL_EP_DISABLE_GH200=1` until the native managed-memory RDMA
-path is validated.
+GH200_0's `/var/lib/uccl-ci` points to `/ssd1/uccl-ci` on its local SSD because
+the root disk is nearly full. Existing host keys and the three CI secrets work
+for both nodes. GH200 EP keeps `UCCL_EP_DISABLE_GH200=1` until the native
+managed-memory RDMA path is validated.
 
 Provision the GB10 jump host with the same public key:
 
@@ -232,15 +233,18 @@ Benchmarks without configured metrics retain logs and exit status. Candidate
 baselines are artifacts and never replace active thresholds automatically.
 Workflow summaries show each suite's execution time, excluding shared setup.
 
-At `662cad7a`, all 27 GitHub host suites, both formatting checks and `CI status`
-passed. Direct SSH validation passed 34 harness tests and two-node NIXL on GB10;
-L4 correctly skipped a busy node. GH200/AMD remain unvalidated live.
+At `9d7aada6`, all 27 GitHub host suites, 35 harness tests, both formatting checks
+and `CI status` passed. Both GH200 nodes now run CI; their EP and host/GPU P2P
+benchmarks passed independent checks against the new baselines. Live busy-node
+skips protected other users on L4 and GH200. AMD remains unavailable.
 
-[validation.md](validation.md) links the runs, timings and 17 calibrated baseline
-metrics. Independent checks passed 13/17 metrics; four remain noisy. Fixture
-fixes in #1135 still need integration and a combined sweep. Enabled suites may
-fail; disabling one requires a registry reason. Historical example/experimental
-results are excluded from current coverage.
+[validation.md](validation.md) records hardware results, timings, baseline
+provenance and remaining failures. There are 28 calibrated metrics, including
+11 on GH200; independent checks passed 9/11, with Ray read/write below their floors. The November 8
+L4/GB10 checks passed 13/17
+metrics; four remain noisy. Fixture fixes in #1135 still need integration and
+a combined sweep. Enabled suites may fail; disabling one requires a registry
+reason. Historical example/experimental results are excluded from coverage.
 
 Developer checks:
 

@@ -1,0 +1,12 @@
+phase,run_id,target,seconds,conclusion,started_at,completed_at,url
+setup-failure,42709281256,gh200,34.0,failure,2026-11-09T22:09:49Z,2026-11-09T22:10:23Z,https://github.com/uccl-project/uccl/actions/runs/42709281256/job/129474312240
+status-helper-skip,42709957850,gh200,98.0,success,2026-11-09T22:14:38Z,2026-11-09T22:16:16Z,https://github.com/uccl-project/uccl/actions/runs/42709957850/job/129476961827
+interrupted-full,42710564907,gh200,204.0,success,2026-11-09T22:17:56Z,2026-11-09T22:21:20Z,https://github.com/uccl-project/uccl/actions/runs/42710564907/job/129478757619
+resumed-full,42711392070,gh200,276.0,success,2026-11-09T22:23:22Z,2026-11-09T22:27:58Z,https://github.com/uccl-project/uccl/actions/runs/42711392070/job/129481637928
+pair-calibration,42713607053,gh200,165.0,success,2026-11-09T22:38:11Z,2026-11-09T22:40:56Z,https://github.com/uccl-project/uccl/actions/runs/42713607053/job/129489370006
+coverage,42713846845,gh200,913.0,failure,2026-11-09T22:41:00Z,2026-11-09T22:56:13Z,https://github.com/uccl-project/uccl/actions/runs/42713846845/job/129490224132
+verification,42714441992,gh200,106.0,success,2026-11-09T22:56:15Z,2026-11-09T22:58:01Z,https://github.com/uccl-project/uccl/actions/runs/42714441992/job/129492304104
+extended-calibration,42718029464,gh200,11.0,success,2026-11-09T23:09:07Z,2026-11-09T23:09:18Z,https://github.com/uccl-project/uccl/actions/runs/42718029464/job/129504594284
+extended-calibration,42718246637,gh200,655.0,failure,2026-11-09T23:10:37Z,2026-11-09T23:21:32Z,https://github.com/uccl-project/uccl/actions/runs/42718246637/job/129505322400
+verification-and-packing-calibration,42719991618,gh200,182.0,failure,2026-11-09T23:23:12Z,2026-11-09T23:26:14Z,https://github.com/uccl-project/uccl/actions/runs/42719991618/job/129511282051
+packing-verification,42720574548,gh200,66.0,success,2026-11-09T23:27:35Z,2026-11-09T23:28:41Z,https://github.com/uccl-project/uccl/actions/runs/42720574548/job/129513293738
