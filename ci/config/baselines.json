@@ -158,6 +158,42 @@
         ]
       }
     },
+    "gh200/ep.bench.pack_unpack/decode_triton_ms": {
+      "value": 2.942,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-09",
+        "run_id": 42719991618,
+        "source_commit": "7a80180c3aa7f8061ad168a242d4f9adcc3fb383",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 2.879,
+        "sample_max": 2.989,
+        "hosts": [
+          "gh200_1"
+        ]
+      }
+    },
+    "gh200/ep.bench.pack_unpack/prefill_triton_ms": {
+      "value": 23.219,
+      "direction": "lower",
+      "unit": "ms",
+      "tolerance": 0.1,
+      "calibration": {
+        "date": "2026-11-09",
+        "run_id": 42719991618,
+        "source_commit": "7a80180c3aa7f8061ad168a242d4f9adcc3fb383",
+        "repetitions": 3,
+        "sample_count": 3,
+        "sample_min": 23.21,
+        "sample_max": 23.241,
+        "hosts": [
+          "gh200_1"
+        ]
+      }
+    },
     "gh200/ep.bench.pcie_bench/bandwidth_gb_s": {
       "value": 717.002667,
       "direction": "higher",
