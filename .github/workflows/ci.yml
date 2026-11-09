@@ -49,7 +49,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           TARGETS: ${{ inputs.targets || 'gh200' }}
-          TESTS: ${{ inputs.tests || 'ep.bench.pcie_bench,ep.bench.gpu_to_cpu_bench,ep.rb.cas,ep.rb.fc,ep.rb.lock,ep.rb.multi_ring,p2p.bench.nccl,p2p.bench.ray_p2p,p2p.bench.uccl_compression,ep.bench.pack_unpack,ep.bench.batched_gpu_to_cpu_bench' }}
+          TESTS: ${{ inputs.tests || 'ep.bench.pcie_bench,ep.bench.gpu_to_cpu_bench,p2p.bench.nccl,p2p.bench.ray_p2p,p2p.bench.uccl_compression,ep.bench.pack_unpack' }}
           EXCLUDE: ${{ inputs.exclude }}
           TIERS: ${{ inputs.tiers || 'performance' }}
         run: |

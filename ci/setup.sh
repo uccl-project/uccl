@@ -26,6 +26,8 @@ case $component in
     python3 -c 'import torch; from uccl import p2p; print(torch.__version__, p2p.__file__)'
     ;;
   ep)
+    # ep/tests also writes src/common.o, without the extension's PIC/ABI flags.
+    make -C ep clean
     make -C ep -j"$CI_JOBS" SM="$SM" NUM_MAX_NVL_PEERS=1 PYTHON=python3 INSTALL_DIR="$CI_REPO/uccl" install
     python3 -c 'import torch; import uccl.ep; print(uccl.ep.__file__)'
     ;;
