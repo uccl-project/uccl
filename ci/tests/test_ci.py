@@ -70,11 +70,15 @@ class AdmissionTests(unittest.TestCase):
         before = {
             10: dict(self.process(10, name="code"), ticks=100),
             20: dict(self.process(20, name="custom-job"), ticks=100),
+            30: dict(self.process(30, uid=0, name="landscape-sysin"), ticks=100),
+            40: dict(self.process(40, uid=0, name="root-job"), ticks=100),
         }
         after = copy.deepcopy(before)
-        after[20]["ticks"] += os.sysconf("SC_CLK_TCK")
+        for pid in (20, 30, 40):
+            after[pid]["ticks"] += os.sysconf("SC_CLK_TCK")
         self.assertEqual(
-            idle.user_jobs(after, set(), before, 1), ["PID 20 (custom-job, uid 1000)"]
+            idle.user_jobs(after, set(), before, 1),
+            ["PID 20 (custom-job, uid 1000)", "PID 40 (root-job, uid 0)"],
         )
 
     def test_idle_desktop_context_does_not_reserve_gpu(self):

@@ -49,6 +49,7 @@ ROOT_SERVICES = SESSION_PROCESSES | {
     "nvidia-fabricma",
     "nv-hostengine",
     "multipathd",
+    "landscape-sysin",  # Ubuntu login/MOTD status helper (comm is truncated).
 }
 
 
