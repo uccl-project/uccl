@@ -1073,8 +1073,8 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 1800,
-      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16\n)\ndone",
+      "timeout": 600,
+      "command": "bash ci/torchrun.sh ep/bench/test_low_latency.py --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16",
       "setup": [
         "ep"
       ],
@@ -3546,11 +3546,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 540,
+      "timeout": 180,
       "setup": [
         "p2p"
       ],
-      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128\n)\ndone",
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=cpu --pinned --sizes=1048576 --iters=128",
       "metrics": [
         {
           "name": "bandwidth_gbps",
@@ -3581,11 +3581,11 @@
       ],
       "nodes": 2,
       "gpus": 1,
-      "timeout": 540,
+      "timeout": 180,
       "setup": [
         "p2p"
       ],
-      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128\n)\ndone",
+      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl.py --device=gpu --mode=write --sizes=1048576 --iters=128",
       "metrics": [
         {
           "name": "bandwidth_gbps",
@@ -4304,7 +4304,7 @@
         "ep/bench/fifo/benchmark.cpp",
         "ep/bench/fifo/benchmark.py"
       ],
-      "command": "make -C ep/bench/fifo -j\"$CI_JOBS\" GPU_ARCH=\"$SM\" && cd ep/bench/fifo && python3 benchmark.py -l",
+      "command": "make -C ep/bench/fifo -j\"$CI_JOBS\" GPU_ARCH=\"$SM\" && cd ep/bench/fifo && bash \"$CI_REPO/ci/torchrun.sh\" benchmark.py -l",
       "enabled": true,
       "targets": [
         "gh200"
@@ -4326,7 +4326,7 @@
       "sources": [
         "ep/bench/rb/benchmark_rdma_fifo.py"
       ],
-      "command": "python3 ep/bench/rb/benchmark_rdma_fifo.py --size-mb=16",
+      "command": "PYTHONPATH=\"$CI_REPO/ep/bench:$PYTHONPATH\" bash ci/torchrun.sh ep/bench/rb/benchmark_rdma_fifo.py --size-mb=16",
       "enabled": true,
       "targets": [
         "gh200"
@@ -4335,7 +4335,7 @@
         "ep"
       ],
       "tier": "performance",
-      "nodes": 1,
+      "nodes": 2,
       "gpus": 1,
       "timeout": 600,
       "requires": [
@@ -4343,6 +4343,10 @@
       ],
       "paths": [
         "ep/bench/rb/**"
+      ],
+      "failure_patterns": [
+        "sync failed:",
+        "Error stopping proxies:"
       ]
     },
     {
