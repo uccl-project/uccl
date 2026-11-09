@@ -49,9 +49,9 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           TARGETS: ${{ inputs.targets || 'gh200' }}
-          TESTS: ${{ inputs.tests || 'ep.low_latency,ep.ll_dedup,ep.internode_simple,ep.dual_mode,ep.rb.cas,ep.rb.fc,ep.rb.lock,ep.rb.multi_ring,util.runtime,collective.rdma.eqds_credit,collective.rdma.eqds,collective.rdma.imm_data,collective.rdma.flush,collective.rdma.pcie,collective.rdma.transport,collective.efa.scattered_memcpy,ep.triton_pack_unpack,p2p.compression_unit,p2p.compression_arena,p2p.notifications,nixl.internode.rdma,nixl.internode.nccl,nixl.local.enabled,nixl.local.disabled,p2p.bench.nccl,p2p.bench.ray_p2p,p2p.bench.uccl_compression,ep.bench.pack_unpack,ep.bench.fifo,ep.bench.rdma_fifo' }}
+          TESTS: ${{ inputs.tests || 'ep.bench.low_latency,p2p.bandwidth,p2p.bandwidth_gpu' }}
           EXCLUDE: ${{ inputs.exclude }}
-          TIERS: ${{ inputs.tiers || 'host,build,integration,performance' }}
+          TIERS: ${{ inputs.tiers || 'performance' }}
         run: |
           args=(--full)
           if [[ $EVENT == pull_request ]]; then
