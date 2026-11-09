@@ -1205,8 +1205,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 300,
-      "command": "make -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench",
+      "timeout": 900,
+      "command": "for repetition in 1 2 3; do\n(\nmake -C ep/tests pcie_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/pcie_bench\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "bandwidth_gb_s",
@@ -1236,8 +1236,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 300,
-      "command": "make -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench",
+      "timeout": 900,
+      "command": "for repetition in 1 2 3; do\n(\nmake -C ep/tests gpu_to_cpu_bench CUDAFLAGS=\"-arch=sm_$SM\" && ep/tests/gpu_to_cpu_bench\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "latency_us",
@@ -1302,8 +1302,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb cas",
+      "timeout": 1800,
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/suites.sh ep-rb cas\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "throughput_w128_p4_mops",
@@ -1331,8 +1331,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb fc",
+      "timeout": 1800,
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/suites.sh ep-rb fc\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "throughput_w128_p4_mops",
@@ -1360,8 +1360,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb lock",
+      "timeout": 1800,
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/suites.sh ep-rb lock\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "throughput_w128_p4_mops",
@@ -1389,8 +1389,8 @@
       ],
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
-      "command": "bash ci/suites.sh ep-rb multi_ring",
+      "timeout": 1800,
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/suites.sh ep-rb multi_ring\n) || exit $?\ndone",
       "metrics": [
         {
           "name": "throughput_w128_p4_mops",
@@ -3948,7 +3948,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_nccl.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16",
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_nccl.py --sizes=1048576 --iters=16\n) || exit $?\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -3960,7 +3960,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -3981,7 +3981,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_ray_p2p.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16",
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_ray_p2p.py --sizes=1048576 --iters=16\n) || exit $?\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -3993,7 +3993,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -4020,7 +4020,7 @@
       "sources": [
         "p2p/benchmarks/benchmark_uccl_compression.py"
       ],
-      "command": "bash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16",
+      "command": "for repetition in 1 2 3; do\n(\nbash ci/torchrun.sh p2p/benchmarks/benchmark_uccl_compression.py --sizes=1048576 --iters=16\n) || exit $?\ndone",
       "enabled": true,
       "targets": [
         "l4",
@@ -4032,7 +4032,7 @@
       "tier": "performance",
       "nodes": 2,
       "gpus": 1,
-      "timeout": 300,
+      "timeout": 900,
       "requires": [
         "cuda"
       ],
@@ -4260,7 +4260,7 @@
       "sources": [
         "ep/bench/baseline/benchmark_pack_unpack.py"
       ],
-      "command": "python3 ep/bench/baseline/benchmark_pack_unpack.py",
+      "command": "for repetition in 1 2 3; do\n(\npython3 ep/bench/baseline/benchmark_pack_unpack.py\n) || exit $?\ndone",
       "enabled": true,
       "targets": [
         "gh200",
@@ -4272,7 +4272,7 @@
       "tier": "performance",
       "nodes": 1,
       "gpus": 1,
-      "timeout": 600,
+      "timeout": 1800,
       "requires": [
         "cuda"
       ],
@@ -4339,7 +4339,8 @@
       "gpus": 1,
       "timeout": 600,
       "requires": [
-        "cuda"
+        "cuda",
+        "rdma"
       ],
       "paths": [
         "ep/bench/rb/**"
